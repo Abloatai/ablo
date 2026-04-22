@@ -1,0 +1,94 @@
+# Docker Compose for sync engine E2E tests
+#
+# Starts Go sync server + PostgreSQL + Redis so the SDK test suite
+# can run real WebSocket + batchAck tests against a live server.
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d --wait
+#   npm run test:e2e
+#   docker compose -f docker-compose.test.yml down -v
+#
+# Or via the Makefile shorthand:
+#   make test-e2e
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sync_test
+      POSTGRES_USER: sync
+      POSTGRES_PASSWORD: sync_test_password
+    ports:
+      - "5433:5432"  # Non-default port to avoid conflicts with local Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sync -d sync_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    tmpfs:
+      - /var/lib/postgresql/data  # RAM-backed for speed — data is ephemeral
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"  # Non-default port to avoid conflicts
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  # Run Prisma migrations to create the schema
+  migrate:
+    image: node:22-alpine
+    working_dir: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://sync:sync_test_password@postgres:5432/sync_test?sslmode=disable
+    volumes:
+      - ../../packages/database:/app/packages/database:ro
+      - ../../node_modules:/app/node_modules:ro
+      - ../../package.json:/app/package.json:ro
+    command: >
+      sh -c "
+        cd packages/database &&
+        npx prisma migrate deploy &&
+        echo 'Migrations complete'
+      "
+
+  sync-server:
+    build:
+      context: ../../apps/sync-engine
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://sync:sync_test_password@postgres:5432/sync_test?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      PORT: "8080"
+      GO_ENV: test
+      FRONTEND_URL: http://localhost:3000
+      APP_BASE_URL: http://localhost:3000
+      LOG_LEVEL: warn
+      # Disable auth for E2E tests — accept any user/org
+      DISABLE_AUTH: "true"
+    ports:
+      - "8081:8080"  # Non-default to avoid conflicts with local dev server
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/health"]
+      interval: 3s
+      timeout: 5s
+      start_period: 10s
+      retries: 10
+
+volumes:
+  postgres_test_data:

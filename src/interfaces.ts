@@ -1,0 +1,435 @@
+/**
+ * Sync Engine SDK — Dependency Injection Interfaces
+ *
+ * These interfaces decouple the SDK from any specific app framework.
+ * Consumers implement them to wire in their own logging, observability,
+ * GraphQL client, session handling, and analytics.
+ */
+
+// ─────────────────────────────────────────────
+// Logger
+// ─────────────────────────────────────────────
+
+export interface SyncLogger {
+  debug(message: string, ...args: unknown[]): void;
+  info(message: string, ...args: unknown[]): void;
+  warn(message: string, ...args: unknown[]): void;
+  error(message: string, ...args: unknown[]): void;
+}
+
+// ─────────────────────────────────────────────
+// Observability (replaces Sentry coupling)
+// ─────────────────────────────────────────────
+
+/** Breadcrumb severity levels */
+export type BreadcrumbLevel = 'debug' | 'info' | 'warning' | 'error';
+
+/** Breadcrumb categories for sync engine lifecycle events */
+export type SyncBreadcrumbCategory =
+  | 'sync.bootstrap'
+  | 'sync.transaction'
+  | 'sync.websocket'
+  | 'sync.offline'
+  | 'sync.database'
+  | 'sync.conflict'
+  | 'sync.groups';
+
+export interface RollbackDetails {
+  transactionType: string;
+  modelName: string;
+  modelId: string;
+  reason: string;
+  error?: string;
+  connectionState: string;
+}
+
+export interface TransactionFailureDetails {
+  context: string;
+  modelName?: string;
+  modelId?: string;
+  transactionId?: string;
+  error: Error | string;
+}
+
+export interface BootstrapFailureDetails {
+  attempt?: number;
+  type?: string;
+  navigatorOnline?: boolean;
+}
+
+export interface ReconciliationDetails {
+  reason: string;
+  model: string;
+  modelId: string;
+  syncIdNeeded?: number;
+  lastSeenSyncId: number;
+  retryCount: number;
+  connectionState?: string;
+}
+
+export interface DeltaRetryExhaustedDetails {
+  txId: string;
+  model: string;
+  modelId: string;
+  retryCount: number;
+  syncIdNeeded?: number;
+}
+
+export interface WebSocketErrorDetails {
+  context: string;
+  error?: string;
+  code?: number;
+  reason?: string;
+}
+
+export interface SelfHealingDetails {
+  modelName: string;
+  modelId: string;
+  field: string;
+  action: string;
+}
+
+export interface BatchAckZeroSyncIdDetails {
+  operationCount: number;
+  operations: string[];
+}
+
+export interface OfflineFlushFailureDetails {
+  error: string;
+}
+
+/** Span attributes for performance monitoring */
+export interface SpanAttributes {
+  [key: string]: string | number | boolean | undefined;
+}
+
+/**
+ * Observability provider — replaces direct Sentry dependency.
+ * SDK ships a no-op default; consumers provide their own (e.g., Sentry, Datadog, OpenTelemetry).
+ */
+export interface SyncObservabilityProvider {
+  /** Set user/org context for error grouping */
+  setContext(userId: string, organizationId: string): void;
+
+  /** Update connection state tag */
+  setConnectionState(state: 'connected' | 'disconnected' | 'connecting'): void;
+
+  /** Add a breadcrumb for sync lifecycle events */
+  breadcrumb(
+    message: string,
+    category: SyncBreadcrumbCategory,
+    level?: BreadcrumbLevel,
+    data?: Record<string, string | number | boolean | undefined>
+  ): void;
+
+  /** Capture optimistic rollback (data reverted) */
+  captureRollback(details: RollbackDetails): void;
+
+  /** Capture permanent transaction failure */
+  captureTransactionFailure(details: TransactionFailureDetails): void;
+
+  /** Capture bootstrap failure */
+  captureBootstrapFailure(error: Error | unknown, details?: BootstrapFailureDetails): void;
+
+  /** Capture reconciliation needed (delta confirmation timeout) */
+  captureReconciliation(details: ReconciliationDetails): void;
+
+  /** Capture delta retry exhausted */
+  captureDeltaRetryExhausted(details: DeltaRetryExhaustedDetails): void;
+
+  /** Capture WebSocket error */
+  captureWebSocketError(details: WebSocketErrorDetails): void;
+
+  /** Capture offline flush failure */
+  captureOfflineFlushFailure(details: OfflineFlushFailureDetails): void;
+
+  /** Capture self-healing event */
+  captureSelfHealing(details: SelfHealingDetails): void;
+
+  /** Capture commit returning lastSyncId: 0 */
+  captureBatchAckZeroSyncId(details: BatchAckZeroSyncIdDetails): void;
+
+  /** Wrap a synchronous function in a performance span */
+  startSpan<T>(name: string, op: string, fn: () => T, attributes?: SpanAttributes): T;
+
+  /** Wrap an async function in a performance span */
+  startSpanAsync<T>(
+    name: string,
+    op: string,
+    fn: () => Promise<T>,
+    attributes?: SpanAttributes
+  ): Promise<T>;
+}
+
+// ─────────────────────────────────────────────
+// Analytics (replaces PostHog coupling)
+// ─────────────────────────────────────────────
+
+export interface SyncAnalytics {
+  capture(event: string, properties?: Record<string, unknown>): void;
+}
+
+// ─────────────────────────────────────────────
+// Session Error Detection
+// ─────────────────────────────────────────────
+
+/**
+ * Detects whether an error represents an expired/invalid session.
+ * The SDK uses this to decide whether to redirect to login vs retry.
+ */
+export interface SessionErrorDetector {
+  /** Check if an error is a session error (401/403) */
+  isSessionError(error: unknown): boolean;
+
+  /** Check if an HTTP response status indicates a session error */
+  isSessionErrorResponse(status: number, body?: string): boolean;
+}
+
+// ─────────────────────────────────────────────
+// Online Status
+// ─────────────────────────────────────────────
+
+export interface OnlineStatusProvider {
+  /** Returns true if the device is currently online */
+  isOnline(): boolean;
+}
+
+// ─────────────────────────────────────────────
+// Model Debug Logger
+// ─────────────────────────────────────────────
+
+export interface ModelDebugLoggerContract {
+  logOperation(info: {
+    modelName: string;
+    modelId?: string;
+    operation: string;
+    fields?: Record<string, unknown>;
+  }): void;
+  logDebug(message: string): void;
+  logError(modelName: string, operation: string, message: string, data?: unknown): void;
+  logCreation(modelName: string, data: unknown, constructor: unknown): void;
+  logObservableSetup(
+    modelName: string,
+    observableProps: string[],
+    computedProps: string[]
+  ): void;
+}
+
+// ─────────────────────────────────────────────
+// Mutation Execution (replaces GraphQLClient coupling)
+// ─────────────────────────────────────────────
+
+/** Result of a batch mutation acknowledgment */
+export interface BatchAckResult {
+  lastSyncId: number;
+}
+
+/**
+ * Per-call knobs attached to any mutation. Mirrors Stripe's options
+ * object — the last argument of every `stripe.X.Y(...)` call. Optional
+ * everywhere; omitted fields fall back to sensible defaults.
+ *
+ * - `idempotencyKey` — when set, the server caches the response for 24h
+ *   and returns the cached value on retries with the same key.
+ *   When omitted, the SDK auto-generates a UUIDv4 per mutation so every
+ *   call is retry-safe by default. Opt out with `{ idempotencyKey: null }`
+ *   if you genuinely want retry-unsafe writes (rare).
+ * - `timeout` — abort the request if it takes longer than this many ms.
+ *   No default (uses underlying transport's timeout).
+ * - `maxNetworkRetries` — retry with exponential backoff on 5xx / 429 /
+ *   network errors. The same `idempotencyKey` is reused across retries
+ *   so the server dedupes correctly. Default: 0.
+ * - `label` — human-readable audit tag. Flows to `mutation_log.label`
+ *   server-side for operator debugging ("nightly cleanup", "user click").
+ */
+export interface MutationOptions {
+  idempotencyKey?: string | null;
+  timeout?: number;
+  maxNetworkRetries?: number;
+  label?: string;
+}
+
+/** A single mutation operation in a batch. `options` rides along so the
+ *  server can cache+replay via `mutation_log`. */
+export interface MutationOperation {
+  type: string;
+  model: string;
+  id: string;
+  input?: Record<string, unknown>;
+  /**
+   * Per-op idempotency + audit metadata. `idempotencyKey` doubles as
+   * the `mutation_log.client_tx_id` cache key; `label` is persisted to
+   * `mutation_log.label` for debugging. Client-only fields (`timeout`,
+   * `maxNetworkRetries`) are handled at the transport layer and are
+   * NOT sent over the wire.
+   */
+  options?: Pick<MutationOptions, 'idempotencyKey' | 'label'>;
+}
+
+/**
+ * Executes mutations against the backend.
+ * The SDK calls this interface; consumers implement it with their
+ * specific GraphQL client, REST API, or other transport.
+ */
+export interface MutationExecutor {
+  /**
+   * Commit a batch of mutations atomically, returning the sync ack.
+   * `options` apply to the whole batch (timeout, retries) — per-op
+   * idempotencyKey/label live on each `MutationOperation`.
+   *
+   * Named `commit` (not `batchAck`) because the method is the customer-
+   * facing boundary — "commit these changes" is a universal mental
+   * model (DB transactions, git, Firestore). `batch_ack` stays as the
+   * wire-frame name for protocol-level compatibility.
+   */
+  commit(
+    operations: MutationOperation[],
+    options?: MutationOptions,
+  ): Promise<BatchAckResult>;
+
+  /** Execute a create mutation for a specific model */
+  executeCreate(
+    modelName: string,
+    id: string,
+    input: Record<string, unknown>,
+    clientMutationId?: string,
+    options?: MutationOptions,
+  ): Promise<void>;
+
+  /** Execute an update mutation for a specific model */
+  executeUpdate(
+    modelName: string,
+    modelId: string,
+    data: Record<string, unknown>,
+    clientMutationId?: string,
+    options?: MutationOptions,
+  ): Promise<BatchAckResult | null>;
+
+  /** Execute a delete mutation for a specific model */
+  executeDelete(
+    modelName: string,
+    modelId: string,
+    clientMutationId?: string,
+    options?: MutationOptions,
+  ): Promise<void>;
+
+  /** Execute an archive mutation for a specific model */
+  executeArchive(
+    modelName: string,
+    modelId: string,
+    clientMutationId?: string,
+    options?: MutationOptions,
+  ): Promise<void>;
+
+  /** Execute an unarchive mutation for a specific model */
+  executeUnarchive(
+    modelName: string,
+    modelId: string,
+    clientMutationId?: string,
+    options?: MutationOptions,
+  ): Promise<void>;
+
+  /** Upload an attachment (optional, not all consumers need this) */
+  uploadAttachment?(
+    id: string,
+    input: Record<string, unknown>
+  ): Promise<{ url: string }>;
+
+  /** Batch upload attachments (optional) */
+  batchUploadAttachments?(
+    items: Array<{ id: string; input: Record<string, unknown> }>
+  ): Promise<Array<{ id: string; url: string }>>;
+
+  /** Delete a subscription entity */
+  deleteSubscription?(entityType: string, entityId: string, txId: string): Promise<void>;
+
+  /** Delete a favorite entity */
+  deleteFavorite?(modelId: string, txId: string): Promise<void>;
+
+  /** Register a callback for session expiry detection */
+  onSessionExpired?(callback: () => void): void;
+}
+
+// ─────────────────────────────────────────────
+// Offline Mutation Dispatcher
+// ─────────────────────────────────────────────
+
+/**
+ * Dispatches queued offline mutations on reconnect.
+ * Replaces the massive switch statement in OfflineFlush.ts.
+ */
+export interface MutationDispatcher {
+  dispatch(operationName: string, variables: Record<string, unknown>): Promise<void>;
+}
+
+// ─────────────────────────────────────────────
+// Sync Engine Configuration
+// ─────────────────────────────────────────────
+
+/**
+ * Application-specific configuration for the sync engine.
+ * Replaces the 6 hardcoded config maps that were previously
+ * embedded in TransactionQueue, Database, and Model.
+ */
+export interface SyncEngineConfig {
+  /**
+   * @deprecated Vestigial — declared, populated from schema relations, but
+   * never read at runtime. The current `TransactionQueue` does not consult
+   * this map for ordering decisions. Safe to omit from `configOverrides`;
+   * scheduled for removal in v0.4.
+   */
+  modelCreatePriority: ReadonlyMap<string, number>;
+
+  /** @deprecated Vestigial alongside `modelCreatePriority`. Removal in v0.4. */
+  defaultCreatePriority: number;
+
+  /** @deprecated Vestigial alongside `modelCreatePriority`. Removal in v0.4. */
+  defaultNonCreatePriority: number;
+
+  /**
+   * @deprecated Vestigial — declared and populated but never read at
+   * runtime. Removal in v0.4.
+   */
+  batchableModels: ReadonlySet<string>;
+
+  /**
+   * @deprecated Vestigial — declared and populated but never read at
+   * runtime. Removal in v0.4.
+   */
+  dedicatedDeleteModels: ReadonlySet<string>;
+
+  /**
+   * Essential fields preserved during partial UPDATE merges in IndexedDB.
+   * Prevents losing critical fields when a delta only contains changed fields.
+   * e.g., { Task: ['title', 'projectId'], Slide: ['deckId', 'order'] }
+   */
+  essentialFields: Readonly<Record<string, readonly string[]>>;
+
+  /**
+   * Fallback class name → model name mapping for Model.getModelName().
+   * Used when the ModelRegistry lookup fails (e.g., minified class names).
+   * e.g., { TaskModel: 'Task', ProjectModel: 'Project' }
+   */
+  classNameFallbackMap: Readonly<Record<string, string>>;
+
+  /**
+   * @deprecated Vestigial — declared but never read at runtime. Case
+   * handling in the `commit` wire protocol does not consult this set.
+   * Removal in v0.4.
+   */
+  preserveCaseModels: ReadonlySet<string>;
+
+}
+
+// ─────────────────────────────────────────────
+// WebSocket Event Configuration
+// ─────────────────────────────────────────────
+
+/**
+ * Allows consumers to extend the WebSocket event map with
+ * application-specific collaboration events (cursors, selections, etc.).
+ */
+export interface WebSocketEventConfig {
+  /** Additional event type names beyond the core delta/presence/bootstrap events */
+  customEventTypes?: readonly string[];
+}

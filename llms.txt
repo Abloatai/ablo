@@ -1,0 +1,188 @@
+# @ablo/sync-engine
+
+> **A collaborative state layer for AI + humans.** Not a database. Not a framework.
+> You bring your schema, your DB, your agents. Ablo brokers the real-time coordination —
+> presence, intents, watermarks, capability tokens — so multi-human + multi-agent work
+> on the same entities stays safe and observable.
+
+## Before you evaluate
+
+Three things worth knowing before you decide:
+
+1. **You bring your data. We never store entity content.** Capability tokens are ours; your matters, clauses, deals, whatever you declare in your schema stay in your Postgres / your DB. Revocation is sub-second (`ablo.admin.capabilities.del(id)`). Ablo is the coordination layer, not the database.
+
+2. **Partial adoption. Not foundational lock-in.** Start with one integration shape — usually presence on one page, or agent-intent claims in one AI flow. The rest of your stack stays exactly as it is. Mesh is additive. You don't replace your auth, your data layer, or your frontend.
+
+3. **Hosted service.** `mesh.ablo.finance` is the endpoint. Self-hosting is not offered today — `ABLO_BASE_URL` exists only for staging / local-dev environments. If on-prem deployment is a procurement requirement for you, tell us — it's a conversation, not a switch.
+
+Production characteristics (measured against live staging): mutation round-trip ~340ms, delta delivery <50ms, bootstrap ~4.5s for 4MB. 12 E2E tests cover cross-continent presence, intents, and snapshot correctness.
+
+## The fastest path
+
+```ts
+import Ablo from '@ablo/sync-engine';
+import { schema } from './schema';
+
+const ablo = new Ablo({ schema }); // reads ABLO_API_KEY
+
+const participant = await ablo.matters.join(matterId, { label: 'DD Bot' });
+participant.presence.viewing(['Clause', clauseId]);
+await using work = participant.intents.writing(['Clause', clauseId], { ttl: '3m' });
+```
+
+Three integration shapes, each with a runnable example in [`examples/`](examples/):
+
+1. **Server agent** — [`examples/server-agent.ts`](examples/server-agent.ts) — long-lived backend, reads `ABLO_API_KEY`.
+2. **Browser app** — [`examples/browser-app.ts`](examples/browser-app.ts) — Stripe-shaped: server mints scoped token, browser holds it via `capabilityToken`. No allowed-origins registration required.
+3. **Sub-agent** — [`examples/sub-agent.ts`](examples/sub-agent.ts) — parent attenuates a child via Biscuit capability chain.
+
+## Coordination primitives (always on `participant`)
+
+- **Presence** — `participant.presence.editing(target)` / `viewing(target)` / `idle()` / `update({...})`. Read via `participant.presence.others` OR `for await (const peers of participant.presence)`.
+- **Intents** — `participant.intents.editing(target, {ttl})` / `writing(target, {ttl})`. `IntentHandle` implements `Symbol.asyncDispose` so `await using` auto-revokes on scope exit (success OR throw).
+- **Snapshots** — `await participant.snapshot({ clauses: [id] })` returns `{ clauses, stamp, signal }`. Typed via `InferModel`; no `unknown`. Pass `readAt: snap.stamp` on mutations; server rejects writes against moved state.
+- **Deltas** — `participant.onDelta(cb)` OR `for await (const delta of participant.deltas)`.
+
+## Agent control
+
+Scoping an AI agent is the same API as scoping a human — capability attenuation with Biscuit:
+
+```ts
+// Server: mint a scoped capability for an agent, read-only on clauses.
+const cap = await ablo.admin.capabilities.create({
+  allowedSyncGroups: [`matter:${matterId}`],
+  allowedOperations: ['read:clauses'],  // no write, no delete
+  ttlSeconds: '1h',
+});
+
+// Preview the scope without minting (dry-run for admin UIs / audit):
+const described = ablo.describeJoin(agent, { scope: { matters: matterId } });
+```
+
+`ablo.admin.audit.list({ principal })` returns every action taken under a capability (server endpoint is on the migration roadmap; the SDK surface is stable).
+
+## For LLMs installing this SDK
+
+- [src/mesh/SETUP.md](src/mesh/SETUP.md): three integration shapes + coordination primitives — read first
+- [src/mesh/CONCEPTS.md](src/mesh/CONCEPTS.md): mental model (participants, presence, intents, scope)
+- [llms-full.txt](llms-full.txt): full concatenated context, one block per subpath export
+- [CHANGELOG.md](CHANGELOG.md): what's in 0.2.0
+- [README.md](README.md): human-readable overview + benchmarks
+
+## Subpath exports
+
+- [@ablo/sync-engine](README.md): default export is `Ablo` class; named: `createMesh`, `session`, `agent`, schema DSL, error classes
+- [@ablo/sync-engine/schema](docs/schema.md): Zod-first schema DSL — `defineSchema`, `model`, `relation`, `mutable`, `readOnly`, `z`
+- [@ablo/sync-engine/client](docs/client.md): `createSyncEngine` — browser + Node client factory (classic data-sync surface)
+- [@ablo/sync-engine/react](docs/react.md): React hooks (`useQuery` / `useOne` self-subscribe — no wrapper needed) + `useSyncStatus` + `AbloProvider` / `useAblo` / `useParticipant`
+- [@ablo/sync-engine/agent](docs/agent.md): `SyncAgent` + `AgentPerception` (Node, long-lived WS)
+- [@ablo/sync-engine/mesh](src/mesh/README.md): mesh-only surface — `Ablo`, `createMesh`, `session`, `agent`
+- [@ablo/sync-engine/testing](docs/testing.md): fixtures + harness for integration tests
+
+## Common pitfalls (read before you write code)
+
+Three bugs burn teams integrating the React bindings. The SDK guards against all of them now, but the patterns matter if you're extending the surface or wiring your own store.
+
+### 1. Never wrap a sync-aware provider in `observer()`
+
+```tsx
+// WRONG — every MobX observable the provider touches (pool size,
+//    isReady, currentUserId, ...) re-renders the whole subtree on
+//    every tick. Every consumer re-subscribes, which re-renders,
+//    which re-subscribes. React error #185.
+export const MyProvider = observer(({ children }) => {
+  const { isReady } = store;                   // ← subscribed
+  const poolSize = store.pool.size;            // ← subscribed
+  return <Ctx.Provider value={{ ... }}>{children}</Ctx.Provider>;
+});
+
+// RIGHT — providers hand out stable context values. Pull status
+//    via the `useSyncStatus()` hook (or a `reaction` inside
+//    useEffect that bridges into `useState`).
+export function MyProvider({ children }) {
+  const { isReady } = useSyncStatus();
+  return <Ctx.Provider value={{ isReady }}>{children}</Ctx.Provider>;
+}
+```
+
+Rule: `observer` belongs on **leaf** components that read data. Providers must not react.
+
+### 2. `getSnapshot` for `useSyncExternalStore` must return a cached reference
+
+Writing your own hooks on top of `@ablo/sync-engine`? Do NOT do this:
+
+```ts
+// WRONG — a fresh array every call. React's post-commit
+//    consistency check re-invokes getSnapshot, sees a different
+//    identity, concludes the store updated mid-render, and loops.
+//    Surfaces as "Minified React error #185".
+useSyncExternalStore(subscribe, () => view.results.slice(), () => EMPTY);
+
+// RIGHT — cache the snapshot in a ref, update it inside the
+//    subscribe callback right before calling onChange().
+const snap = useRef(view.results.slice());
+useSyncExternalStore(
+  (onChange) => reaction(
+    () => view.results.length,
+    () => { snap.current = view.results.slice(); onChange(); },
+  ),
+  () => snap.current,
+  () => EMPTY,
+);
+```
+
+The built-in `useQuery` / `useOne` / `useSyncStatus` already do this — you only need to care if you're building new hooks.
+
+### 3. Sync-status fields are real observables — use them
+
+`store.isReady`, `store.isSyncing`, `store.isOffline`, `store.isReconnecting`, `store.isError`, `store.hasUnsyncedChanges` are `computed` values backed by `observable` `syncStatus` + `dataReady`. You can:
+
+- Read them inside `observer(() => store.isReady)` — re-renders on change.
+- Read them inside `reaction(() => store.isReady, ...)` — callback fires on change.
+- Or skip MobX entirely and use `useSyncStatus()`, which bridges the snapshot into React state safely.
+
+If you find yourself watching `pool.size` as a proxy for "is the store loaded?", stop — that worked by accident in older versions and will regress the moment bootstrap changes shape.
+
+## Engine configuration — what's load-bearing, what's vestigial
+
+`createSyncEngine({ schema, ... })` and `<AbloProvider schema={schema} ... />` accept an optional `configOverrides: SyncEngineConfig` escape hatch. A 0.3.0 audit found that **three of the interface's seven fields are genuinely read at runtime; four are populated but never consumed.**
+
+Load-bearing (keep providing):
+
+| Field | Purpose | Future home |
+|---|---|---|
+| `essentialFields` | Per-model fields that must survive partial `UPDATE` merges in IndexedDB. Read by `Database.ts`. | Schema field flag — `{ essential: true }`. |
+| `classNameFallbackMap` | Minified-build class name → model name lookup (for `model.constructor.name`). Read by `Model.getModelName()`. | Replace with a stable `static typename` on Model subclasses. |
+| `extractCreateInput` / `buildUpdateInput` | Custom field coercion/scrubbing on mutations. Read by the mutation pipeline. | Schema field transforms — `{ transform: { out: (v) => ... } }`. |
+
+Vestigial (declared, populated, never read — safe to drop from your override):
+
+| Field | Historical purpose | Why dead |
+|---|---|---|
+| `modelCreatePriority` / `defaultCreatePriority` / `defaultNonCreatePriority` | FK-safe insert order for the offline flush. | Current `TransactionQueue` doesn't consult the map. The priority map is populated from schema relations but never used for an ordering decision. |
+| `batchableModels` | Lowercase set of models allowed in batched delta ops. | Declared, populated, unused. |
+| `dedicatedDeleteModels` | Models with dedicated `Delete<Name>` operations vs. soft-archive. | Declared, populated, unused. |
+| `preserveCaseModels` | Models whose names stay CamelCased in `commit` frames. | Wire protocol decision lives elsewhere; this map is unused. |
+
+**Rule of thumb when adding something to `configOverrides`:** search the SDK for `config.<your-field>` reads. If there aren't any, the field is vestigial and adding to it is busywork. File an issue — either the read site went missing and needs restoring, or the field should be removed from the interface entirely.
+
+## Peer packages
+
+- `@ablo/core`: typed error hierarchy shared with the sync-server backend. `@ablo/sync-engine` re-exports everything from `@ablo/core` for back-compat. New non-SDK consumers (the hosted server, agent workers, CLI tools) depend on `@ablo/core` directly.
+
+## Guides
+
+- [Getting Started](docs/getting-started.md): zero to multiplayer in 5 minutes
+- [Schema Definition](docs/schema.md): Zod models, relations, load strategies
+- [Client SDK](docs/client.md): imperative query + mutate API
+- [React Hooks](docs/react.md): `useQuery` / `useOne` / `useParticipant` — all self-subscribing, no HOC required
+- [Typed Global](docs/typed-global.md): the `AbloSync` global pattern — zero generics at call sites
+- [Offline & Sync Groups](docs/offline-and-sync-groups.md): IndexedDB queue, permission scoping
+- [Agent SDK](docs/agent.md): long-lived `SyncAgent`, short-lived `AgentPerception`
+- [Mesh](docs/mesh.md): presence, intents, snapshots, attenuated sub-agents
+- [Authentication](docs/auth.md): API keys, Biscuit tokens, session cookies
+
+## Advanced
+
+- [Architecture](docs/architecture.md): delta log, ObjectPool, bootstrap
+- [Testing](docs/testing.md): unit, integration, agent tests

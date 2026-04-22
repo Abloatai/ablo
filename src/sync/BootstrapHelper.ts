@@ -1,0 +1,501 @@
+/**
+ * BootstrapHelper - Fixed to always fetch fresh data
+ * Removed problematic caching that was serving stale data
+ */
+
+export interface BootstrapData {
+  type: 'full' | 'partial';
+  lastSyncId: number;
+  models?: {
+    [key: string]: any[];
+  };
+  deltas?: any[];
+  deltaCount?: number;
+  /** Model types whose server-side query failed (timeout, RLS error, etc.) */
+  failedModels?: string[];
+  timestamp: number;
+}
+
+export interface BootstrapFetchResult {
+  notModified: boolean;
+  data?: BootstrapData;
+  etag?: string | null;
+}
+
+export interface BootstrapOptions {
+  /**
+   * Full base URL of the sync server's HTTP API, **including the `/api`
+   * prefix**. The bootstrap endpoint is appended as `/sync/bootstrap`, so
+   * the final request hits `${baseUrl}/sync/bootstrap`.
+   *
+   * Example: `'http://localhost:8080/api'` → `http://localhost:8080/api/sync/bootstrap`
+   *
+   * Default: `'http://localhost:8080/api'`.
+   */
+  baseUrl?: string;
+  organizationId: string;
+  syncGroups?: string[];
+  maxRetries?: number;
+  retryDelay?: number;
+  /** Timeout for individual fetch requests in ms (default: 30000) */
+  fetchTimeout?: number;
+  /**
+   * Model names to request in bootstrap. When set, the server only returns
+   * these models — everything else is skipped. Derived from the schema's
+   * `load` strategy: only models with `load: 'instant'` (or unset, which
+   * defaults to instant) are included.
+   *
+   * When absent, the server returns all models (backward compatible with
+   * old clients that don't send a models param).
+   */
+  instantModels?: string[];
+}
+
+import { getContext } from '../context';
+import { SyncSessionError, AbloConnectionError, translateHttpError } from '../errors';
+// SyncObservability replaced by getContext().observability
+import { parseBootstrapResponse } from './schemas';
+
+export class BootstrapHelper {
+  private options: Required<Omit<BootstrapOptions, 'baseUrl' | 'instantModels'>> & { baseUrl: string; instantModels?: string[] };
+  private abortController: AbortController | null = null;
+
+  get baseUrl(): string {
+    return this.options.baseUrl;
+  }
+
+  constructor(options: BootstrapOptions) {
+    // Defaults are spread first; the explicit `baseUrl` then takes precedence
+    // and is computed from `options.baseUrl` (or the localhost fallback).
+    //
+    // Historical note: a previous version of this constructor placed
+    // `baseUrl: \`${baseUrl}/api\`` BEFORE the `...options` spread, which
+    // meant the spread silently overwrote it back to the caller's value
+    // and the `/api` suffix was dead code. Both Ablo and `createSyncEngine`
+    // already pass `${url}/api` explicitly, so removing the suffix here
+    // preserves the actual on-the-wire behavior while making the contract
+    // explicit: callers pass the full base URL including `/api`.
+    this.options = {
+      syncGroups: ['default'],
+      maxRetries: 3,
+      retryDelay: 1000,
+      fetchTimeout: 10_000, // 10 second timeout per request - fail fast for good UX
+      ...options,
+      baseUrl: options.baseUrl || 'http://localhost:8080/api',
+    };
+
+    // Do not clear cache here; keep offline fallback available
+  }
+
+  /**
+   * Create a promise that rejects after a timeout
+   * Used to race against fetch requests that may hang indefinitely
+   */
+  private createTimeoutPromise<T>(ms: number, operation: string): Promise<T> {
+    return new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Bootstrap ${operation} timed out after ${ms}ms`));
+      }, ms);
+    });
+  }
+
+  /**
+   * Wrap a promise with a timeout - if the promise doesn't resolve within
+   * the timeout period, the AbortController is triggered and an error is thrown
+   */
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    operation: string
+  ): Promise<T> {
+    return Promise.race([promise, this.createTimeoutPromise<T>(timeoutMs, operation)]);
+  }
+
+  /**
+   * Fetch bootstrap data from sync engine with partial bootstrap support
+   * @param lastSyncId - Optional: client's current lastSyncId for partial bootstrap
+   * @returns Bootstrap data (either full snapshot or delta batch)
+   */
+  async fetchBootstrap(lastSyncId?: number): Promise<BootstrapData> {
+    const params = new URLSearchParams({
+      organizationId: this.options.organizationId,
+    });
+
+    // Add lastSyncId for partial bootstrap support
+    if (lastSyncId !== undefined && lastSyncId > 0) {
+      params.append('lastSyncId', lastSyncId.toString());
+    }
+
+    // Add sync groups
+    this.options.syncGroups.forEach((group) => {
+      params.append('syncGroups', group);
+    });
+
+    // Selective bootstrap: only request instant-strategy models.
+    // When present, the server skips all other models → smaller payload.
+    // When absent, server returns all models (backward compat).
+    if (this.options.instantModels && this.options.instantModels.length > 0) {
+      params.append('models', this.options.instantModels.join(','));
+    }
+
+    const url = `${this.options.baseUrl}/sync/bootstrap?${params.toString()}`;
+
+    // If offline, try cached bootstrap
+    if (typeof navigator !== 'undefined' && navigator && navigator.onLine === false) {
+      const cached = this.loadCachedBootstrap(this.options.organizationId);
+      if (cached) {
+        getContext().logger.info('Using cached bootstrap (offline)');
+        return cached;
+      }
+      throw new AbloConnectionError('Offline and no cached bootstrap available', {
+        code: 'bootstrap_offline_no_cache',
+      });
+    }
+
+    getContext().logger.info('Fetching fresh bootstrap data', { url });
+
+    // Fetch with retries
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < this.options.maxRetries; attempt++) {
+      try {
+        const data = await this.performFetch(url);
+
+        getContext().logger.info('Bootstrap data fetched', {
+          type: data.type,
+          lastSyncId: data.lastSyncId,
+          modelCount: data.models ? Object.keys(data.models).length : 0,
+          deltaCount: data.deltaCount || 0,
+          totalItems: data.models
+            ? Object.values(data.models).reduce(
+                (sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0),
+                0
+              )
+            : 0,
+        });
+
+        // Persist for offline fallback
+        this.saveCachedBootstrap(this.options.organizationId, data);
+        return data;
+      } catch (error) {
+        // SessionError should NOT be retried - the session is invalid and needs re-authentication
+        // Also do NOT fallback to cache - the user must sign in again
+        if (SyncSessionError.isSessionError(error)) {
+          getContext().observability.breadcrumb(
+            'Bootstrap session error - redirecting to sign-in',
+            'sync.bootstrap',
+            'warning',
+            {
+              statusCode: (error as SyncSessionError).statusCode,
+            }
+          );
+          throw error;
+        }
+
+        lastError = error as Error;
+        getContext().observability.breadcrumb('Bootstrap fetch failed', 'sync.bootstrap', 'warning', {
+          attempt: attempt + 1,
+        });
+
+        if (attempt < this.options.maxRetries - 1) {
+          await this.delay(this.options.retryDelay * Math.pow(2, attempt));
+        }
+      }
+    }
+
+    // On error, attempt cached fallback (but NOT for session errors - already handled above)
+    const cached = this.loadCachedBootstrap(this.options.organizationId);
+    if (cached) {
+      getContext().observability.breadcrumb('Bootstrap cache fallback', 'sync.bootstrap', 'warning', {
+        error: lastError?.message,
+      });
+      return cached;
+    }
+    throw lastError || new Error('Failed to fetch bootstrap data');
+  }
+
+  /**
+   * Fetch bootstrap with ETag, returning 304 hints
+   */
+  async fetchBootstrapWithETag(): Promise<BootstrapFetchResult> {
+    const params = new URLSearchParams({ organizationId: this.options.organizationId });
+    this.options.syncGroups.forEach((g) => params.append('syncGroups', g));
+    if (this.options.instantModels && this.options.instantModels.length > 0) {
+      params.append('models', this.options.instantModels.join(','));
+    }
+    const url = `${this.options.baseUrl}/sync/bootstrap?${params.toString()}`;
+
+    // Note: ETag caching is deliberately app-side, not SDK-side. The server
+    // still returns an ETag on responses, which is captured below and
+    // forwarded to callers via BootstrapFetchResult.etag — apps that want
+    // conditional revalidation (If-None-Match) implement it at their own
+    // level where they own the cache-key namespace. The 304 branch below
+    // remains defensively in place for when a caller enables revalidation.
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+
+    this.abortController = new AbortController();
+    const res = await fetch(url, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+      signal: this.abortController.signal,
+    });
+
+    const etag = res.headers.get('ETag');
+
+    if (res.status === 304) {
+      // Log for telemetry
+      getContext().logger.info('[Bootstrap] 304 Not Modified - using cached data');
+      return { notModified: true, etag };
+    }
+
+    if (!res.ok) {
+      // Check for session/auth errors - these should redirect to login
+      if (SyncSessionError.isSessionErrorResponse(res.status)) {
+        let body = '';
+        try {
+          body = await res.text();
+        } catch {
+          // Ignore body parsing errors
+        }
+        throw new SyncSessionError(body || `Session expired or invalid: ${res.status}`, res.status);
+      }
+      const bodyText = await res.text().catch(() => '');
+      let parsed: unknown = bodyText;
+      if (bodyText) {
+        try {
+          parsed = JSON.parse(bodyText);
+        } catch {
+          // Keep as string.
+        }
+      }
+      throw translateHttpError(
+        res.status,
+        parsed || `Bootstrap fetch failed: ${res.status} ${res.statusText}`,
+        res.headers.get('x-request-id') ?? undefined,
+      );
+    }
+
+    const rawJson = await res.json();
+    const data: BootstrapData = parseBootstrapResponse(rawJson);
+
+    // Persist payload for offline
+    try {
+      this.saveCachedBootstrap(this.options.organizationId, data);
+    } catch {}
+    getContext().logger.info('[Bootstrap] 200 OK - received new data');
+    return { notModified: false, data, etag };
+  }
+
+  /**
+   * Perform the actual fetch request with timeout protection
+   */
+  private async performFetch(url: string): Promise<BootstrapData> {
+    // Cancel any previous in-flight request
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    this.abortController = new AbortController();
+
+    const timeoutId = setTimeout(() => {
+      getContext().observability.breadcrumb('Bootstrap fetch timeout', 'sync.bootstrap', 'warning', {
+        timeoutMs: this.options.fetchTimeout,
+      });
+      this.abortController?.abort();
+    }, this.options.fetchTimeout);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+        },
+        credentials: 'include',
+        signal: this.abortController.signal,
+        cache: 'no-store', // Force browser to not cache
+      });
+    } catch (error) {
+      clearTimeout(timeoutId);
+      // Convert abort to timeout error for better error messaging
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new AbloConnectionError(
+          `Bootstrap fetch timed out after ${this.options.fetchTimeout}ms`,
+          { code: 'bootstrap_fetch_timeout', cause: error },
+        );
+      }
+      throw error;
+    }
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      // Check for session/auth errors - these should redirect to login
+      if (SyncSessionError.isSessionErrorResponse(response.status)) {
+        let body = '';
+        try {
+          body = await response.text();
+        } catch {
+          // Ignore body parsing errors
+        }
+        throw new SyncSessionError(
+          body || `Session expired or invalid: ${response.status}`,
+          response.status
+        );
+      }
+      const bodyText = await response.text().catch(() => '');
+      let parsed: unknown = bodyText;
+      if (bodyText) {
+        try {
+          parsed = JSON.parse(bodyText);
+        } catch {
+          // Keep as string.
+        }
+      }
+      throw translateHttpError(
+        response.status,
+        parsed || `Bootstrap fetch failed: ${response.status} ${response.statusText}`,
+        response.headers.get('x-request-id') ?? undefined,
+      );
+    }
+
+    const rawJson = await response.json();
+    const data = parseBootstrapResponse(rawJson);
+
+    // Save a copy for offline
+    try {
+      this.saveCachedBootstrap(this.options.organizationId, data);
+    } catch {}
+    return data;
+  }
+
+  /**
+   * Fetch a single entity by ID (on-demand self-healing).
+   * Returns `null` for 404 (entity deleted) — this is an expected state, not an error.
+   * Throws for unexpected HTTP errors (5xx, network failures).
+   */
+  async fetchEntity(modelName: string, id: string): Promise<Record<string, unknown> | null> {
+    const url = `${this.options.baseUrl}/sync/entity/${modelName}/${id}`;
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include',
+    });
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      let parsed: unknown = bodyText;
+      if (bodyText) {
+        try {
+          parsed = JSON.parse(bodyText);
+        } catch {
+          // Keep as string.
+        }
+      }
+      throw translateHttpError(
+        response.status,
+        parsed || `Entity fetch failed: ${response.status} ${response.statusText}`,
+        response.headers.get('x-request-id') ?? undefined,
+      );
+    }
+
+    return await response.json();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  /**
+   * Clear all cached bootstrap data
+   */
+  clearCache(): void {
+    if (typeof window === 'undefined') return;
+
+    try {
+      // Clear all bootstrap cache keys
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.includes('sync-bootstrap')) {
+          keysToRemove.push(key);
+        }
+      }
+
+      keysToRemove.forEach((key) => {
+        localStorage.removeItem(key);
+        getContext().logger.debug('Cleared cache key', { key });
+      });
+    } catch (error) {
+      getContext().logger.warn('Failed to clear cache', { error });
+    }
+  }
+
+  // Cache helpers for offline bootstrap
+  private getBootstrapCacheKey(orgId: string): string {
+    return `ablo:bootstrap:${orgId}`;
+  }
+  private saveCachedBootstrap(orgId: string, data: BootstrapData): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(this.getBootstrapCacheKey(orgId), JSON.stringify(data));
+    } catch (e) {
+      getContext().logger.warn('Failed to cache bootstrap payload', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  private loadCachedBootstrap(orgId: string): BootstrapData | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = localStorage.getItem(this.getBootstrapCacheKey(orgId));
+      if (!raw) return null;
+      return JSON.parse(raw) as BootstrapData;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Abort ongoing fetch request
+   */
+  abort(): void {
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+  }
+
+  /**
+   * Helper to delay execution
+   */
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Get health status of sync engine
+   */
+  async checkHealth(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.options.baseUrl}/health`, {
+        method: 'GET',
+        credentials: 'include',
+        signal: AbortSignal.timeout(5000),
+        cache: 'no-store',
+      });
+
+      if (!response.ok) return false;
+
+      const data = await response.json();
+      return data.status === 'healthy';
+    } catch (error) {
+      getContext().observability.breadcrumb('Health check failed', 'sync.bootstrap', 'warning');
+      return false;
+    }
+  }
+}
