@@ -1,42 +1,57 @@
 'use client';
 
-import { type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useSyncStatus } from './useSyncStatus';
 
 /**
- * Render `fallback` until the nearest `<AbloProvider>` reports
- * `connected`. Mirrors Liveblocks' `<ClientSideSuspense>` — a thin
- * gate component that replaces ad-hoc `if (!isReady) return <Skeleton />`
- * checks scattered across the tree.
+ * Nested bootstrap gate for a subtree. `<AbloProvider>` already ships
+ * its own built-in gate (via its `fallback` prop) that handles the
+ * common "wait for first bootstrap" case. Use `ClientSideSuspense`
+ * only when you need a SEPARATE gate inside an already-ready provider —
+ * for example, rendering app chrome immediately while gating a single
+ * heavy product surface on its own query resolving.
  *
- * v0.3.0 implementation is non-Suspense based: it reads
- * `useSyncStatus()` and conditionally renders. v0.3.1 will ship a
- * `@ablo/sync-engine/react/suspense` subpath where `useQuery` /
- * `useOne` actually throw Promises; at that point, this component
- * becomes a thin wrapper around `<Suspense>` and the gate logic
- * disappears.
+ * Like the provider-level gate, this component latches open on the
+ * first `connected` / `reconnecting` / `disconnected` transition and
+ * stays open. Subsequent transient `connecting` states (hard reconnect
+ * after offline) do NOT re-show the fallback — the app has already
+ * rendered once and its own reconnect UI should take over.
+ *
+ * v0.3.x implementation is non-Suspense: reads `useSyncStatus()` and
+ * conditionally renders. v0.3.x+ will ship a
+ * `@ablo/sync-engine/react/suspense` subpath where `useQuery` / `useOne`
+ * actually throw Promises; this component becomes a thin wrapper around
+ * React's real `<Suspense>` at that point.
  *
  * @example
- * <AbloProvider {...props}>
- *   <ClientSideSuspense fallback={<Skeleton />}>
- *     <App />
+ * <AbloProvider fallback={<AppSkeleton />}>
+ *   <AppChrome />
+ *   <ClientSideSuspense fallback={<CanvasSkeleton />}>
+ *     <HeavyCanvas />
  *   </ClientSideSuspense>
  * </AbloProvider>
  */
 export interface ClientSideSuspenseProps {
-  /** What to render before the sync engine is ready. */
+  /** What to render while the nested subtree is waiting for first bootstrap. */
   fallback: ReactNode;
-  /** What to render after the sync engine is ready. */
+  /** What to render once the subtree is cleared to render. */
   children: ReactNode;
 }
 
 export function ClientSideSuspense({ fallback, children }: ClientSideSuspenseProps) {
   const status = useSyncStatus();
-  // `connected`, `reconnecting`, and `disconnected` all mean the
-  // store has already hydrated — UI can render. Only gate on
-  // `initial` / `connecting` / `needs-auth` states.
-  if (status.name === 'initial' || status.name === 'connecting' || status.name === 'needs-auth') {
-    return <>{fallback}</>;
-  }
-  return <>{children}</>;
+  const [everConnected, setEverConnected] = useState(false);
+
+  useEffect(() => {
+    if (
+      status.name === 'connected' ||
+      status.name === 'reconnecting' ||
+      status.name === 'disconnected'
+    ) {
+      setEverConnected(true);
+    }
+  }, [status.name]);
+
+  const showFallback = !everConnected && status.name === 'connecting';
+  return <>{showFallback ? fallback : children}</>;
 }

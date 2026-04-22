@@ -1,6 +1,5 @@
-# @ablo/sync-engine
+# Ablo — The Collaboration Layer for AI and Humans
 
-> **A collaborative state layer for AI + humans.** Not a database. Not a framework.
 > You bring your schema, your DB, your agents. Ablo brokers the real-time coordination —
 > presence, intents, watermarks, capability tokens — so multi-human + multi-agent work
 > on the same entities stays safe and observable.
@@ -13,7 +12,7 @@ Three things worth knowing before you decide:
 
 2. **Partial adoption. Not foundational lock-in.** Start with one integration shape — usually presence on one page, or agent-intent claims in one AI flow. The rest of your stack stays exactly as it is. Mesh is additive. You don't replace your auth, your data layer, or your frontend.
 
-3. **Hosted service.** `mesh.ablo.finance` is the endpoint. Self-hosting is not offered today — `ABLO_BASE_URL` exists only for staging / local-dev environments. If on-prem deployment is a procurement requirement for you, tell us — it's a conversation, not a switch.
+3. **Hosted service.** Ablo runs it for you — the SDK connects automatically; no URL to configure. Self-hosting is not offered today; if on-prem deployment is a procurement requirement, it's a conversation, not a switch.
 
 Production characteristics (measured against live staging): mutation round-trip ~340ms, delta delivery <50ms, bootstrap ~4.5s for 4MB. 12 E2E tests cover cross-continent presence, intents, and snapshot correctness.
 
@@ -33,7 +32,7 @@ await using work = participant.intents.writing(['Clause', clauseId], { ttl: '3m'
 Three integration shapes, each with a runnable example in [`examples/`](examples/):
 
 1. **Server agent** — [`examples/server-agent.ts`](examples/server-agent.ts) — long-lived backend, reads `ABLO_API_KEY`.
-2. **Browser app** — [`examples/browser-app.ts`](examples/browser-app.ts) — Stripe-shaped: server mints scoped token, browser holds it via `capabilityToken`. No allowed-origins registration required.
+2. **Browser app** — [`examples/browser-app.ts`](examples/browser-app.ts) — server mints a scoped token; browser holds it via `capabilityToken`. No allowed-origins registration required.
 3. **Sub-agent** — [`examples/sub-agent.ts`](examples/sub-agent.ts) — parent attenuates a child via Biscuit capability chain.
 
 ## Coordination primitives (always on `participant`)
@@ -71,13 +70,11 @@ const described = ablo.describeJoin(agent, { scope: { matters: matterId } });
 
 ## Subpath exports
 
-- [@ablo/sync-engine](README.md): default export is `Ablo` class; named: `createMesh`, `session`, `agent`, schema DSL, error classes
+- [@ablo/sync-engine](README.md): default export is `Ablo` class — the canonical entrypoint
 - [@ablo/sync-engine/schema](docs/schema.md): Zod-first schema DSL — `defineSchema`, `model`, `relation`, `mutable`, `readOnly`, `z`
-- [@ablo/sync-engine/client](docs/client.md): `createSyncEngine` — browser + Node client factory (classic data-sync surface)
-- [@ablo/sync-engine/react](docs/react.md): React hooks (`useQuery` / `useOne` self-subscribe — no wrapper needed) + `useSyncStatus` + `AbloProvider` / `useAblo` / `useParticipant`
-- [@ablo/sync-engine/agent](docs/agent.md): `SyncAgent` + `AgentPerception` (Node, long-lived WS)
-- [@ablo/sync-engine/mesh](src/mesh/README.md): mesh-only surface — `Ablo`, `createMesh`, `session`, `agent`
+- [@ablo/sync-engine/react](docs/react.md): React hooks + components — `<AbloProvider fallback={...}>` (first-bootstrap gate, default `<DefaultFallback />`), `<ClientSideSuspense>` (nested gate), `useQuery`, `useOne`, `useMutate`, `useParticipant`, `useSyncStatus`
 - [@ablo/sync-engine/testing](docs/testing.md): fixtures + harness for integration tests
+- [docs/migrated.md](docs/migrated.md): porting reference for `createSyncEngine` / `SyncAgent` / `AgentPerception`
 
 ## Common pitfalls (read before you write code)
 
@@ -145,7 +142,7 @@ If you find yourself watching `pool.size` as a proxy for "is the store loaded?",
 
 ## Engine configuration — what's load-bearing, what's vestigial
 
-`createSyncEngine({ schema, ... })` and `<AbloProvider schema={schema} ... />` accept an optional `configOverrides: SyncEngineConfig` escape hatch. A 0.3.0 audit found that **three of the interface's seven fields are genuinely read at runtime; four are populated but never consumed.**
+`new Ablo({ schema, ... })` and `<AbloProvider schema={schema} ... />` accept an optional `configOverrides: SyncEngineConfig` escape hatch. A 0.3.0 audit found that **three of the interface's seven fields are genuinely read at runtime; four are populated but never consumed.**
 
 Load-bearing (keep providing):
 
@@ -172,15 +169,15 @@ Vestigial (declared, populated, never read — safe to drop from your override):
 
 ## Guides
 
-- [Getting Started](docs/getting-started.md): zero to multiplayer in 5 minutes
+- [Getting Started](docs/getting-started.md): zero to coordinated multiplayer in 5 minutes
+- [Mesh](docs/mesh.md): presence, intents, snapshots, attenuated sub-agents
+- [Agents](docs/agent.md): long-lived, per-matter, and short-lived agent patterns via `new Ablo()`
+- [Authentication](docs/auth.md): capability tokens, API keys, session cookies
 - [Schema Definition](docs/schema.md): Zod models, relations, load strategies
-- [Client SDK](docs/client.md): imperative query + mutate API
-- [React Hooks](docs/react.md): `useQuery` / `useOne` / `useParticipant` — all self-subscribing, no HOC required
+- [React Hooks](docs/react.md): `useQuery` / `useOne` / `useParticipant` — all self-subscribing
 - [Typed Global](docs/typed-global.md): the `AbloSync` global pattern — zero generics at call sites
 - [Offline & Sync Groups](docs/offline-and-sync-groups.md): IndexedDB queue, permission scoping
-- [Agent SDK](docs/agent.md): long-lived `SyncAgent`, short-lived `AgentPerception`
-- [Mesh](docs/mesh.md): presence, intents, snapshots, attenuated sub-agents
-- [Authentication](docs/auth.md): API keys, Biscuit tokens, session cookies
+- [Migrated APIs](docs/migrated.md): porting from `createSyncEngine` / `SyncAgent` / `AgentPerception`
 
 ## Advanced
 

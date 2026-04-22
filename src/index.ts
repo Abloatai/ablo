@@ -1,7 +1,5 @@
 /**
- * @ablo/sync-engine — Multiplayer Sync SDK
- *
- * Main entry. Most consumers only need this + @ablo/sync-engine/schema.
+ * @ablo/sync-engine — The Collaboration Layer for AI and Humans
  *
  * ```ts
  * import Ablo from '@ablo/sync-engine';
@@ -15,14 +13,16 @@
  * The named `createMesh` factory is still exported for functional-style
  * callers; both reach the same implementation.
  *
- * Subpaths:
- *   @ablo/sync-engine/schema  — defineSchema, model, z (Zod)
- *   @ablo/sync-engine/mesh    — mesh-only surface (advanced)
- *   @ablo/sync-engine/client  — createSyncEngine
- *   @ablo/sync-engine/react   — withSync
- *   @ablo/sync-engine/agent   — SyncAgent
- *   @ablo/sync-engine/config  — initSyncEngine, DI types (advanced)
- *   @ablo/sync-engine/core    — BaseSyncedStore, SyncClient, Model, etc. (internal)
+ * Public subpaths:
+ *   @ablo/sync-engine/schema   — defineSchema, model, z (Zod)
+ *   @ablo/sync-engine/react    — <AbloProvider>, useQuery, useMutate
+ *   @ablo/sync-engine/mesh     — mesh-only surface (advanced)
+ *   @ablo/sync-engine/testing  — test harnesses + mocks
+ *
+ * The `./client`, `./agent`, `./core`, `./config`, `./types` subpaths
+ * are internal — their symbols (`createSyncEngine`, `SyncAgent`,
+ * `AgentPerception`, etc.) are superseded by `new Ablo({ schema })`.
+ * See docs/migrated.md for porting guidance.
  */
 
 // ── Consumer API ──────────────────────────────────────────────────────────
@@ -90,11 +90,7 @@ export type {
   ResolveModelKey,
 } from './types/global';
 
-// Re-export client factory for convenience
-export { createSyncEngine } from './client/createSyncEngine';
-export type { SyncEngine, SyncEngineOptions, ModelOperations } from './client/createSyncEngine';
-
-// Custom mutators (Zero-style). Runtime is a thin pass-through + a Transaction
+// Custom mutators. Runtime is a thin pass-through + a Transaction
 // factory; the heavy lifting is type inference. The React-side invoker hook
 // lives in `./react/useMutators` (exported via the `/react` subpath).
 export { defineMutators } from './mutators/defineMutators';

@@ -2,10 +2,15 @@
  * @ablo/sync-engine/react — React bindings (v0.3.0)
  *
  * Umbrella provider:
- *   <AbloProvider schema={schema} url={...} userId={...} orgId={...} />
- *     — owns sync engine + mesh client lifecycle.
+ *   <AbloProvider schema={...} userId={...} orgId={...} fallback={<Skeleton/>}>
+ *     — owns sync engine + mesh client lifecycle; the `fallback` prop
+ *     gates children on first bootstrap. Pass `fallback="passthrough"`
+ *     to disable the gate.
  *   <SyncGroupProvider id="matter:...">         — per-entity scope
- *   <ClientSideSuspense fallback={<Skeleton/>}> — gate children on isReady
+ *   <ClientSideSuspense fallback={<Skeleton/>}> — NESTED gate inside an
+ *     already-ready provider. Use only when you need a separate gate
+ *     for a heavy subtree (e.g. a canvas) while app chrome renders
+ *     immediately. The provider-level `fallback` is the default path.
  *
  * Data hooks (no wrapper required — self-subscribing via useSyncExternalStore):
  *   useQuery(key, options?)   — reactive collection (IVM-backed)
@@ -71,6 +76,8 @@ export {
   ClientSideSuspense,
   type ClientSideSuspenseProps,
 } from './ClientSideSuspense';
+
+export { DefaultFallback } from './DefaultFallback';
 
 // ── Context types (for test doubles) ───────────────────────────────
 export type { SyncStoreContract } from './context';

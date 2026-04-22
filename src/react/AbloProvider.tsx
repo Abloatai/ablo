@@ -37,6 +37,8 @@ import { postBootstrapRegistry } from '../PostBootstrapRegistry';
 import { SyncContext, type SyncStoreContract } from './context';
 import { AbloInternalContext, type AbloInternalContextValue } from './internalContext';
 import { AbloValidationError } from '../errors';
+import { useSyncStatus } from './useSyncStatus';
+import { DefaultFallback } from './DefaultFallback';
 
 /**
  * Ablo umbrella provider — owns the sync engine, the mesh client, and
@@ -173,6 +175,28 @@ export interface AbloProviderProps<R extends SchemaRecord = SchemaRecord> {
   bootstrapBaseUrl?: string;
   maxPoolSize?: number;
 
+  /**
+   * Rendered in place of `children` during the *first* bootstrap pass —
+   * while the engine is actively transitioning from `initial` →
+   * `connected` and has never successfully connected before. Once the
+   * engine reaches `connected` the gate latches open for the lifetime
+   * of this provider instance; transient `reconnecting` / `needs-auth`
+   * states do NOT re-show the fallback (the app's own UI handles those
+   * by then).
+   *
+   * Defaults to `<DefaultFallback />` — a neutral theme-adaptive
+   * spinner that uses `currentColor`, ships with zero design-system
+   * dependencies, and self-centers in a full-parent container. Pass
+   * your own `<Skeleton />` for a branded loading UX. Pass `null` to
+   * render nothing during bootstrap. Pass the string literal
+   * `"passthrough"` to opt out of the gate entirely — children render
+   * immediately and consumers are responsible for their own gating
+   * (`<ClientSideSuspense>` or manual `useSyncStatus()` checks).
+   * Useful for pages that mount debug helpers, error boundaries, or
+   * analytics that must run pre-ready.
+   */
+  fallback?: ReactNode | 'passthrough';
+
   children: ReactNode;
 }
 
@@ -224,6 +248,7 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
     syncGroups,
     bootstrapBaseUrl,
     maxPoolSize,
+    fallback = <DefaultFallback />,
     children,
   } = props;
 
@@ -387,17 +412,32 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
   }), [userId, errorEmitter, engineState.engine]);
 
   // ── Render ───────────────────────────────────────────────────────
+  //
+  // Two-phase gate (see `BootstrapGate` below for the latch logic):
+  //
+  //   1. Engine is null on first render (constructed in the effect
+  //      above, not in render). We render `fallback` directly — there
+  //      is no SyncContext to read status from, and by definition the
+  //      engine hasn't started bootstrapping.
+  //   2. Engine exists. Mount SyncContext. `BootstrapGate` then reads
+  //      `useSyncStatus()` and shows `fallback` only during the very
+  //      first `connecting` transition; children render on every
+  //      subsequent state change, including reconnects and auth
+  //      failures (the app's own UI handles those).
+  //
+  // `fallback === 'passthrough'` short-circuits both branches — children
+  // render immediately without any gate, restoring pre-gate behavior
+  // for consumers who need debug helpers / error boundaries / analytics
+  // to mount before the engine is ready.
 
-  // Before the engine instance exists (first render before the
-  // bootstrap effect has run), render children without a SyncContext.
-  // Hooks that require it will throw — typically consumers wrap
-  // their tree with <ClientSideSuspense> to avoid rendering past the
-  // skeleton until `useSyncStatus()` reports `connected`.
+  const passthrough = fallback === 'passthrough';
+  const initialFallback = passthrough ? children : fallback;
+
   if (!syncValue) {
     return (
       <AbloInternalContext.Provider value={internalValue}>
         <MeshContext.Provider value={engineState.mesh as AbloClient<Schema> | null}>
-          {children}
+          {initialFallback}
         </MeshContext.Provider>
       </AbloInternalContext.Provider>
     );
@@ -406,10 +446,54 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
   return (
     <AbloInternalContext.Provider value={internalValue}>
       <MeshContext.Provider value={engineState.mesh as AbloClient<Schema> | null}>
-        <SyncContext.Provider value={syncValue}>{children}</SyncContext.Provider>
+        <SyncContext.Provider value={syncValue}>
+          {passthrough ? (
+            children
+          ) : (
+            <BootstrapGate key={engineState.key} fallback={fallback}>
+              {children}
+            </BootstrapGate>
+          )}
+        </SyncContext.Provider>
       </MeshContext.Provider>
     </AbloInternalContext.Provider>
   );
+}
+
+/**
+ * Internal gate that renders `fallback` only during the very first
+ * bootstrap pass. Latches open on the first `connected` / `reconnecting`
+ * / `disconnected` transition and stays open — subsequent transient
+ * `connecting` states (hard reconnect after an offline stretch) do NOT
+ * re-show the fallback, because by then the app has already rendered
+ * once and its own reconnect UI should take over.
+ *
+ * Re-keyed on `engineState.key` in the parent so engine rotations
+ * (userId/org/url change) reset the latch — a new engine genuinely IS
+ * a new "first bootstrap" cycle.
+ */
+function BootstrapGate({
+  fallback,
+  children,
+}: {
+  readonly fallback: ReactNode;
+  readonly children: ReactNode;
+}): React.ReactElement {
+  const status = useSyncStatus();
+  const [everConnected, setEverConnected] = useState(false);
+
+  useEffect(() => {
+    if (
+      status.name === 'connected' ||
+      status.name === 'reconnecting' ||
+      status.name === 'disconnected'
+    ) {
+      setEverConnected(true);
+    }
+  }, [status.name]);
+
+  const showFallback = !everConnected && status.name === 'connecting';
+  return <>{showFallback ? fallback : children}</>;
 }
 
 // ── Mesh hooks ───────────────────────────────────────────────────────

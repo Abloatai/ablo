@@ -1,15 +1,77 @@
 # Changelog
 
+## 0.4.0 (2026-04-22)
+
+Provider-level bootstrap gating + public-surface narrowing. The v0.3.0 umbrella provider made `<AbloProvider>` the one import; 0.4.0 finishes the job by making the provider own loading state end-to-end and tightening the entry points that are considered public.
+
+### Added
+
+- **`<AbloProvider fallback={...}>`** — built-in first-bootstrap gate. `fallback` renders during the initial `connecting` transition and latches open on the first `connected` / `reconnecting` / `disconnected`. Transient reconnects, `needs-auth`, and subsequent `connecting` states render `children` — the app's own UI handles those. Replaces the ad-hoc `<ClientSideSuspense>` wrap every consumer had to add. Pass `fallback="passthrough"` to opt out entirely (debug helpers, error boundaries, analytics that must mount pre-ready).
+- **`<DefaultFallback />`** — neutral inline-styled spinner, `currentColor`-based, zero design-system dependency, self-centering in a full-parent container. Default value of `<AbloProvider>`'s `fallback` prop so zero-config apps get a working loader without wiring their own. Consumers wanting branded UX pass their own skeleton; consumers wanting nothing pass `fallback={null}`.
+- **`BootstrapGate`** (internal) — latch keyed on engine rotation. A new engine (userId / org / url change) resets the latch because that genuinely IS a new first-bootstrap cycle.
+
+### Changed (breaking-ish — no external consumers yet, but surface tightens)
+
+- **`<ClientSideSuspense>` demoted to nested-only.** Still exported, still useful for gating a heavy subtree inside an already-ready provider (e.g. render app chrome immediately, gate the canvas on its own query). The provider-level `fallback` prop is now the default path. The component also got the same `everConnected` latch so nested gates don't flash on reconnect.
+- **Public subpath surface narrowed.** `@ablo/sync-engine/schema`, `/react`, `/mesh`, `/testing` are the public entry points. `./client`, `./agent`, `./core`, `./config`, `./types` are now marked internal — their symbols (`createSyncEngine`, `SyncAgent`, `AgentPerception`, etc.) are superseded by `new Ablo({ schema })`. The subpaths still exist for the migration window; direct imports are supported but discouraged.
+- **Top-level `createSyncEngine` re-export removed.** Consumers importing it directly from `@ablo/sync-engine` should migrate to `new Ablo({ schema })`, or reach into `@ablo/sync-engine/client` explicitly during the transition.
+- **Package framing updated.** Tagline is now "The Collaboration Layer for AI and Humans" — reflects what 0.3.x actually became.
+
+### Fixed
+
+- `<ClientSideSuspense>` and the new provider-level gate both stop flashing the fallback on transient reconnects. The old behavior (any `connecting` state → show fallback) was correct for cold boot but wrong for hard reconnects after an offline stretch — the app had already rendered once, re-gating was a regression. The `everConnected` latch fixes this: once the first `connected` lands, subsequent `connecting` states render children.
+- `<ClientSideSuspense>` no longer shows the fallback during `needs-auth`. Session-expired flows should show the sign-out / redirect UI, not a permanent skeleton on top of an about-to-unmount tree.
+
+### Migration
+
+Before (0.3.x):
+```tsx
+<AbloProvider {...props}>
+  <ClientSideSuspense fallback={<AppSkeleton />}>
+    <App />
+  </ClientSideSuspense>
+</AbloProvider>
+```
+
+After (0.4.0):
+```tsx
+<AbloProvider {...props} fallback={<AppSkeleton />}>
+  <App />
+</AbloProvider>
+```
+
+Or zero-config:
+```tsx
+<AbloProvider {...props}>
+  {/* <DefaultFallback /> renders during first bootstrap */}
+  <App />
+</AbloProvider>
+```
+
+If you imported `createSyncEngine` from the top level:
+```ts
+// Before
+import { createSyncEngine } from '@ablo/sync-engine';
+// After — prefer
+import Ablo from '@ablo/sync-engine';
+// or during migration
+import { createSyncEngine } from '@ablo/sync-engine/client';
+```
+
+### Why
+
+Ablo targets heavy-editor apps (decks, sheets, docs) where partial-data rendering causes layout pop. Every consumer of v0.3.0 wanted the same "hold the UI until bootstrap + show a skeleton" pattern — the SDK now ships that as the default rather than requiring each consumer to re-wire the gate themselves. Unlike Liveblocks (generic multiplayer, keeps the wrap explicit) and Zero (stale-data-first, no gate at all), `@ablo/sync-engine` can be opinionated because its product surface is.
+
 ## 0.3.0 (2026-04-22)
 
 Umbrella `<AbloProvider>` for React apps. One provider component now owns the full lifecycle — singleton rotation on auth change, Strict-Mode-safe bootstrap, `beforeunload` cleanup, session-expiry IndexedDB wipe, post-bootstrap hooks, mesh client construction. Replaces the ad-hoc provider glue every consumer had to write themselves.
 
-Inspired by Zero's `ZeroProvider` and Liveblocks' `LiveblocksProvider`: declarative props for app glue, tagged-union status hook, automatic lifecycle. `apps/web`'s integration shrank from 515 LOC of hand-rolled singleton/AbortController/beforeunload/reaction-bridge wiring to a 60-LOC thin wrapper that just passes props through.
+Declarative props absorb every class of lifecycle glue; the status hook returns a tagged union so impossible states are unrepresentable. The reference integration shrank from 515 LOC of hand-rolled singleton/AbortController/beforeunload/reaction-bridge wiring to a 60-LOC thin wrapper that just passes props through.
 
 ### Added
 
 - `<AbloProvider>` — umbrella provider at `@ablo/sync-engine/react`. Props include data config (`schema`, `url`, `userId`, `organizationId`), auth (`capabilityToken` / `apiKey` / session cookie fallback), declarative behavior (`preventUnsavedChanges`, `lostConnectionTimeout`, `postBootstrap`), callbacks (`onSessionExpired`, `onError`, `resolveUsers`), and DI escape hatches.
-- `<SyncGroupProvider id="matter:...">` + `useSyncGroup()` — Liveblocks-style per-entity scope context.
+- `<SyncGroupProvider id="matter:...">` + `useSyncGroup()` — per-entity scope context.
 - `<ClientSideSuspense fallback={...}>` — gate renders until the engine reports `connected`. Phase-1 non-Suspense; phase-2 upgrades to real Suspense.
 - `useSyncStatus()` rewritten as a tagged union: `{ name: 'initial' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'needs-auth', ... }`. Impossible states are unrepresentable.
 - `useCurrentUserId()` — returns the `userId` prop. Replaces downstream consumers' defineProperty hacks on the store.
@@ -141,7 +203,7 @@ The SDK covers exactly three integration shapes. Each has a canonical example in
 ### Test coverage
 
 - 53 mesh unit tests across 8 suites (`__tests__/unit/mesh/`)
-- New E2E test `e2e-browser-capability-token.ts` proves the Stripe-shaped browser flow end-to-end
+- New E2E test `e2e-browser-capability-token.ts` proves the server-mints / browser-holds flow end-to-end
 - Existing 12 mesh E2E tests (token refresh, watermark, chinese wall, etc.) still pass
 
 ---

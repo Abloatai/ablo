@@ -1,6 +1,8 @@
-# @ablo/sync-engine — Full Context for LLMs
+# Ablo — Full Context for LLMs
 
-> Real-time multiplayer sync SDK for TypeScript. Schema-driven, offline-first, React hooks, capability-token auth, and AI agents as first-class participants. Hosted service at `mesh.ablo.finance`.
+> **The Collaboration Layer for AI and Humans.** Real-time sync and mesh
+> coordination for multiplayer productivity tools. Agents and humans share
+> the same state, presence, and intents.
 
 This file is a single fetch for AI coding assistants that need complete
 integration context. Sections are ordered: concepts → quickstart →
@@ -14,15 +16,15 @@ per-subpath reference → architecture → troubleshooting.
 - **Sync groups** for multi-party permission scoping (`org:{id}`, `team:{id}`, `deal:{id}`)
 - **Capability-token auth** (Biscuit) for agent delegation with cryptographic attenuation
 - **React hooks** — `useQuery`, `useOne`, `useMutate`, `useReader`, `useMutators`, `useUndoScope`, `usePresence`, `useIntent`. Zero-arg when the typed-global is declared.
-- **Node agents** — `SyncAgent` (long-lived WS) and `AgentPerception` (short-lived / AI SDK v6 tool calls)
-- **Mesh (`Ablo` class)** — `new Ablo({ schema })` + `ablo.<model>.join(id)` for agent-multiplayer with presence, intents, snapshots (stale-context protection). Stripe-shaped browser flow via `capabilityToken`.
+- **Agents** — `new Ablo({ schema, capabilityToken })` where the token carries `participantKind: 'agent'` lifts presence/intents/snapshot to the top level. `ablo.<model>.perceive(id)` for per-request (AI SDK tool) short-lived views.
+- **Mesh (`Ablo` class)** — `new Ablo({ schema })` + `ablo.<model>.join(id)` for per-matter participants with presence, intents, snapshots (stale-context protection). Browser flow via server-minted `capabilityToken`.
 
 ## Quickstart
 
 ### 1. Install
 
 ```bash
-npm install @ablo/sync-engine mobx react
+npm install @ablo/sync-engine
 ```
 
 ### 2. Declare the typed-global once
@@ -71,23 +73,23 @@ export const schema = defineSchema({
 ### 4. Wire the client + provider
 
 ```tsx
-import { createSyncEngine } from '@ablo/sync-engine/client';
-import { SyncProvider, useQuery, useMutate } from '@ablo/sync-engine/react';
+import { AbloProvider, useQuery, useMutate } from '@ablo/sync-engine/react';
 import { schema } from './sync/schema';
 
-const sync = createSyncEngine({
-  url: 'wss://mesh.ablo.finance',
-  schema,
-  apiKey: process.env.ABLO_API_KEY!,
-  user: { id: userId, organizationId: orgId },
-});
-await sync.ready();
-
-function App() {
+function App({ userId, orgId, capabilityToken }) {
   return (
-    <SyncProvider store={sync} organizationId={orgId} schema={schema}>
+    <AbloProvider
+      schema={schema}
+      userId={userId}
+      organizationId={orgId}
+      capabilityToken={capabilityToken}
+      // Optional: render during first bootstrap only. Defaults to
+      // `<DefaultFallback />` (neutral spinner). Pass `null` for no
+      // visual during boot, or `"passthrough"` to disable the gate.
+      fallback={<AppSkeleton />}
+    >
       <TaskList />
-    </SyncProvider>
+    </AbloProvider>
   );
 }
 
@@ -163,46 +165,38 @@ Every model auto-includes: `id`, `createdAt`, `updatedAt`, `organizationId?`, `c
 
 ---
 
-## `@ablo/sync-engine/client` — imperative client
+## Node usage — `new Ablo({ schema })`
 
 ```ts
-import { createSyncEngine } from '@ablo/sync-engine/client';
+import Ablo from '@ablo/sync-engine';
 
-const sync = createSyncEngine({
-  url: 'wss://mesh.ablo.finance',
-  schema,
-  apiKey: 'sk_live_...',
-  user: { id: userId, organizationId: orgId },
-  bootstrapBaseUrl: 'https://mesh.ablo.finance/api',   // optional; inferred from url
-});
-
-await sync.ready();  // resolves after initial bootstrap + WS connect
+const ablo = new Ablo({ schema });  // reads ABLO_API_KEY; org from key
 
 // Reads
-const tasks = sync.tasks.findMany({ where: { status: 'todo' }, orderBy: { priority: 'desc' } });
-const task  = sync.tasks.findById(taskId);
-const count = sync.tasks.count({ where: { status: 'todo' } });
+const tasks = ablo.tasks.findMany({ where: { status: 'todo' }, orderBy: { priority: 'desc' } });
+const task  = ablo.tasks.findById(taskId);
+const count = ablo.tasks.count({ where: { status: 'todo' } });
 
 // Writes (optimistic, queued offline)
-const created = await sync.tasks.create({ title: 'Ship it' });
-await sync.tasks.update(created.id, { status: 'done' });
-await sync.tasks.delete(created.id);
-await sync.tasks.archive(created.id);
+const created = await ablo.tasks.create({ title: 'Ship it' });
+await ablo.tasks.update(created.id, { status: 'done' });
+await ablo.tasks.delete(created.id);
+await ablo.tasks.archive(created.id);
 
 // Subscriptions (outside React)
-const unsub = sync.tasks.subscribe(
-  (tasks) => console.log(tasks.length),
+const unsub = ablo.tasks.subscribe(
+  (task, delta) => console.log(task.id, delta.actionType),
   { where: { status: 'todo' } },
 );
 
 // Connection status
-sync.syncStatus.state
+ablo.status.state
 // 'syncing' | 'idle' | 'error' | 'offline' | 'reconnecting'
 ```
 
 ### The optimistic-first contract
 
-Mutations resolve when **queued locally**, not when the server confirms. The UI updates instantly. If the server rejects the mutation later, the ObjectPool rolls back automatically. Watch `sync.syncStatus` to detect rollbacks.
+Mutations resolve when **queued locally**, not when the server confirms. The UI updates instantly. If the server rejects the mutation later, the ObjectPool rolls back automatically. Watch `ablo.status` to detect rollbacks.
 
 ---
 
@@ -211,17 +205,19 @@ Mutations resolve when **queued locally**, not when the server confirms. The UI 
 ### Exports
 
 ```ts
-SyncProvider, SyncContext, useSyncContext
+AbloProvider, SyncGroupProvider, ClientSideSuspense, DefaultFallback
 useQuery(modelKey, options?)
 useOne(modelKey, id?)
 useMutate(modelKey)
 useReader(modelKey)
 useMutators(mutators, options?)
 useUndoScope(name, options?)
+useParticipant(options?)
 usePresence()
 useIntent(intentName)
-withSync                             // @deprecated — no longer required. kept as an
-                                     // alias of mobx-react-lite `observer` for back-compat
+useSyncStatus()
+useErrorListener(cb)
+useCurrentUserId()
 ModelScope                           // { live, archived, all }
 ```
 
@@ -263,60 +259,67 @@ edit({ taskId });                               // arg typed against Intents['ed
 ### Provider wiring
 
 ```tsx
-<SyncProvider
-  store={sync}
+<AbloProvider
   schema={schema}
+  userId={userId}
   organizationId={orgId}
-  presence={mobxObservablePresenceStore}        // optional — any MobX-observable source
-  beginIntent={(name, claim) => /* return handle */}  // optional — intent coordinator
+  capabilityToken={capabilityToken}
+  fallback={<AppSkeleton />}                       // optional — default <DefaultFallback />
+  postBootstrap={[prefetchA, prefetchB]}           // optional
+  onSessionExpired={() => router.replace('/signin')}
+  onError={(err) => Sentry.captureException(err)}
+  resolveUsers={({ userIds }) => fetchUsers(userIds)}
 >
   <App />
-</SyncProvider>
+</AbloProvider>
 ```
 
-The SDK doesn't own a wire format for presence or intents. `usePresence()` reads whatever MobX observable is handed in on `presence`; `useIntent('x')` wraps the consumer's `beginIntent` with compile-time narrowing.
+`<AbloProvider>` owns the full lifecycle: singleton rotation on auth change, Strict-Mode cleanup, `beforeunload`, session-expiry IndexedDB wipe, post-bootstrap hooks, mesh-client construction, AND first-bootstrap gating via the `fallback` prop. `useParticipant()` / `usePresence()` / `useIntent()` are available downstream without extra context wiring.
+
+The `fallback` renders during the *first* bootstrap pass only — once the engine reaches `connected` the gate latches open and subsequent transient `connecting` / `needs-auth` states render `children` (the app's own UI handles those). Pass `fallback={null}` for no loading visual, or `fallback="passthrough"` to disable the gate entirely (debug helpers, error boundaries, analytics that must mount pre-ready). `<ClientSideSuspense>` is still exported for **nested** gating inside an already-ready provider — use it when app chrome should render immediately while a heavy subtree (e.g. a canvas) waits for its own query.
 
 ---
 
-## `@ablo/sync-engine/agent` — long- and short-lived agents
+## Agents — `new Ablo({ schema, capabilityToken })`
 
-### `SyncAgent` (long-lived, Node)
+An agent is an `Ablo` instance whose capability token declares `participantKind: 'agent'`. Participant primitives (`presence`, `intents`, `snapshot`) lift to the top level so there's no `.join()` ceremony for long-lived workers.
+
+### Long-lived worker
 
 ```ts
-import { SyncAgent } from '@ablo/sync-engine/agent';
+import Ablo from '@ablo/sync-engine';
 
-const agent = new SyncAgent({
-  url: 'wss://mesh.ablo.finance',
-  agentId: 'reviewer-bot',
-  organizationId: 'org_...',
+const ablo = new Ablo({
+  schema,
   capabilityToken: process.env.ABLO_CAPABILITY_TOKEN!,
   syncGroups: ['org:default'],
 });
 
-await agent.connect();
+ablo.tasks.subscribe(
+  async (task, delta) => {
+    if (delta.actionType !== 'I' && delta.actionType !== 'U') return;
 
-agent.on('tasks', (task, delta) => {
-  // Delta callback: entity + the delta envelope
-  void agent.update('tasks', task.id, { priority: 10 });
-});
-
-agent.subscribe('tasks', { where: { status: 'pending_review' } }, async (task) => {
-  const intent = agent.beginIntent({
-    entityType: 'Task', entityId: task.id, action: 'reviewing',
-  });
-  try {
-    await agent.update('tasks', task.id, { status: 'approved' });
-  } finally {
-    intent.abandon();
-  }
-});
+    await using work = ablo.intents.writing(['Task', task.id], { ttl: '30s' });
+    await ablo.tasks.update(task.id, { status: 'approved' });
+    // Intent auto-releases on scope exit, whether the update succeeds or throws.
+  },
+  { where: { status: 'pending_review' } },
+);
 ```
 
-Mutations carry `createdBy: { kind: 'agent', id: 'reviewer-bot' }` in the delta log. Model keys are lowercase (`'tasks'`), not capitalized.
+Mutations carry `createdBy: { kind: 'agent', id: <from token> }` in the delta log — the token, not the consumer, supplies identity. Model keys are lowercase (`'tasks'`), not capitalized.
 
-### `AgentPerception` (short-lived, AI SDK v6)
+### Per-request (AI SDK tool call)
 
-For per-request agents whose lifetime is a single LLM call. Captures context, routes tool calls through the sync engine, surfaces staleness before commit. See `docs/agent.md`.
+Short-lived snapshot-and-go view, no persistent WebSocket:
+
+```ts
+const view = await ablo.matters.perceive(matterId);
+const answer = await yourLLM.ask({ context: view.data, signal: view.signal });
+await view.clauses.update(id, { body: answer }, { readAt: view.stamp });
+```
+
+`view` auto-disposes. See `docs/agent.md`.
 
 ---
 
@@ -330,9 +333,8 @@ For per-request agents whose lifetime is a single LLM call. Captures context, ro
 import Ablo, { session, agent } from '@ablo/sync-engine';
 import { schema } from './schema';
 
-// Reads ABLO_API_KEY from env; `ABLO_BASE_URL` is optional and
-// defaults to https://mesh.ablo.finance. Org is derived server-side
-// from the API key — `organizationId` is NOT required.
+// Reads ABLO_API_KEY from env. Org is derived server-side from the
+// API key — `organizationId` is NOT required.
 const ablo = new Ablo({ schema });
 
 // Browser variant: pre-minted capability token from your server.
@@ -351,7 +353,7 @@ const ablo = createMesh({ schema });
 ### Three integration shapes
 
 1. **Server agent:** `new Ablo({ schema })` + `ablo.matters.join(id)`. Reads env.
-2. **Browser:** server mints via `ablo.admin.capabilities.create({ allowedSyncGroups, ttlSeconds })`, browser holds `capabilityToken`. Stripe-shaped.
+2. **Browser:** server mints via `ablo.admin.capabilities.create({ allowedSyncGroups, ttlSeconds })`, browser holds `capabilityToken`.
 3. **Sub-agent:** `parent.join(childAgent, { scope })` — attenuates parent's capability.
 
 Runnable examples live in [`examples/`](examples/).
@@ -412,7 +414,7 @@ await p.archive('documents', [id]);
 await p.unarchive('documents', [id]);
 ```
 
-### Admin resources (Stripe-shaped)
+### Admin resources
 
 ```ts
 ablo.admin.capabilities.create({ allowedSyncGroups, ttlSeconds }) / .del(id)
@@ -448,13 +450,14 @@ SDK consumers keep importing errors from `@ablo/sync-engine` (the main barrel re
 ## `@ablo/sync-engine` (main barrel)
 
 ```ts
-defineSchema, createSyncEngine,
+Ablo (default export — the canonical client)
+defineSchema,
 defineMutators, UndoManager,
 postQuery,
 AbloError, AbloValidationError, AbloPermissionError,
 ```
 
-Custom mutators (Zero-style):
+Custom mutators:
 
 ```ts
 import { defineMutators } from '@ablo/sync-engine';
