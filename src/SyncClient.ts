@@ -13,7 +13,7 @@ import { Model } from './Model';
 // ModelRegistry instance accessed via this.objectPool.registry
 import { LoadStrategy } from './types';
 import { getContext } from './context';
-import { AbloAuthenticationError, AbloValidationError } from './errors';
+import { AbloAuthenticationError, AbloError, AbloValidationError } from './errors';
 import { EventEmitter } from 'events';
 import { NetworkMonitor } from './NetworkMonitor';
 import { TransactionQueue } from './transactions/TransactionQueue';
@@ -139,6 +139,23 @@ export class SyncClient extends EventEmitter {
         error?: Error;
       }) => {
         const { model, previousState, transaction, reason, error } = event;
+        // Surface the typed AbloError fields directly — `type`/`code`/
+        // `httpStatus`/`requestId` are what tell us the rollback cause
+        // (e.g. `AbloValidationError` with `code: 'schema_...'`,
+        // `AbloServerError` with `httpStatus: 500`). Falls back to generic
+        // message for unstructured errors.
+        const abloErr = error instanceof AbloError ? error : undefined;
+        getContext().logger.warn('[SyncClient.rollback]', {
+          txType: transaction.type,
+          modelName: transaction.modelName,
+          modelId: transaction.modelId.slice(0, 12),
+          reason: reason ?? 'unknown',
+          errorType: abloErr?.type ?? error?.name,
+          errorCode: abloErr?.code,
+          httpStatus: abloErr?.httpStatus,
+          requestId: abloErr?.requestId,
+          message: error?.message,
+        });
         getContext().observability.captureRollback({
           transactionType: transaction.type,
           modelName: transaction.modelName,

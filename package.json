@@ -1,6 +1,6 @@
 {
   "name": "@ablo/sync-engine",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Real-time sync engine for TypeScript apps. Schema-driven, offline-first, with React hooks and AI agent support.",
   "license": "Apache-2.0",
   "type": "module",

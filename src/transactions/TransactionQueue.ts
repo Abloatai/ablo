@@ -15,6 +15,7 @@ import { getContext } from '../context';
 import { getActiveRegistry } from '../ModelRegistry';
 import { MutationOperationType } from '../types';
 import { handleMutationError } from './mutation-error-handler';
+import { AbloError } from '../errors';
 
 export interface UserContext {
   userId: string;
@@ -198,14 +199,6 @@ const DEDICATED_DELETE_MODELS = new Set([
   'slidelayoutlayer',
 ]);
 
-const PRESERVE_CASE_MODELS = new Set([
-  'SlideLayer',
-  'Slide',
-  'Layout',
-  'SlideLayoutLayer',
-  'SpreadsheetSheet',
-  'SpreadsheetCell',
-]);
 
 const normalizeModelKey = (modelName: string): string =>
   modelName.replace('Model', '').toLowerCase();
@@ -1056,12 +1049,9 @@ export class TransactionQueue extends EventEmitter {
           }> = [];
 
           for (const tx of batch) {
-            const schemaName = stripModelSuffix(tx.modelName);
             const op = {
               type: TX_TYPE_TO_MUTATION_OP[tx.type],
-              model: PRESERVE_CASE_MODELS.has(schemaName)
-                ? schemaName
-                : tx.modelKey,
+              model: tx.modelKey,
               id: tx.modelId,
               input: tx.type === 'create' || tx.type === 'update' ? tx.data || {} : undefined,
             };
@@ -1150,6 +1140,20 @@ export class TransactionQueue extends EventEmitter {
               }
             } catch (error) {
               const errorMessage = (error as Error).message || '';
+              // Surface the raw server rejection for the whole batch so
+              // cascaded failures (e.g. FK violation that rolls back a
+              // multi-op transaction) are attributable to a specific cause
+              // instead of each op showing as a generic permanent error.
+              const abloErr = error instanceof AbloError ? error : undefined;
+              getContext().logger.warn('[TransactionQueue] Batch commit rejected', {
+                batchSize: batchOps.length,
+                models: batchOps.map(({ op }) => `${op.type}:${op.model}`),
+                errorType: abloErr?.type ?? (error as Error)?.name,
+                errorCode: abloErr?.code,
+                httpStatus: abloErr?.httpStatus,
+                requestId: abloErr?.requestId,
+                message: errorMessage,
+              });
 
               // LINEAR PATTERN: Handle "no rows in result set" gracefully
               // This error means the entity was already deleted - for UPDATE/DELETE ops, this is success
@@ -1700,9 +1704,7 @@ export class TransactionQueue extends EventEmitter {
     if (transactions.length === 0) return;
     const operations = transactions.map((tx) => ({
       type: MutationOperationType.CREATE,
-      model: PRESERVE_CASE_MODELS.has(stripModelSuffix(tx.modelName))
-        ? stripModelSuffix(tx.modelName)
-        : tx.modelKey,
+      model: tx.modelKey,
       id: tx.modelId,
       input: tx.data,
     }));
@@ -1713,9 +1715,7 @@ export class TransactionQueue extends EventEmitter {
     if (transactions.length === 0) return;
     const operations = transactions.map((tx) => ({
       type: MutationOperationType.UPDATE,
-      model: PRESERVE_CASE_MODELS.has(stripModelSuffix(tx.modelName))
-        ? stripModelSuffix(tx.modelName)
-        : tx.modelKey,
+      model: tx.modelKey,
       id: tx.modelId,
       input: tx.data,
     }));
@@ -1725,13 +1725,11 @@ export class TransactionQueue extends EventEmitter {
   private async executeBatchDelete(transactions: Transaction[]): Promise<void> {
     if (transactions.length === 0) return;
     const operations = transactions.map((tx) => {
-      const schemaName = stripModelSuffix(tx.modelName);
-      const model = PRESERVE_CASE_MODELS.has(schemaName) ? schemaName : tx.modelKey;
       // Subscription delete needs entityType/entityId in input for the server
       const input = tx.modelName === 'Subscription' && tx.previousData
         ? { entityType: (tx.previousData as Record<string, unknown>).entityType, entityId: (tx.previousData as Record<string, unknown>).entityId }
         : undefined;
-      return { type: MutationOperationType.DELETE, model, id: tx.modelId, input };
+      return { type: MutationOperationType.DELETE, model: tx.modelKey, id: tx.modelId, input };
     });
     await this.mutationExecutor.commit(operations);
   }
@@ -1815,12 +1813,25 @@ export class TransactionQueue extends EventEmitter {
 
     // Check if this is a permanent error that should NOT be retried
     if (this.isPermanentError(error)) {
-      // Use getContext().logger.debug for production-safe logging (not visible to users)
+      // Elevated to warn — permanent errors mean user writes were rejected
+      // by the server, so the user should be able to see WHY in the
+      // console (not just via Sentry). Include typed AbloError fields
+      // (`type`/`code`/`httpStatus`) so the cause is attributable:
+      // distinguishes FK-violation (AbloValidationError) from auth
+      // expiry (AbloAuthenticationError), etc.
       try {
-        getContext().logger.debug('[TransactionQueue] Permanent error - skipping retry', {
-          txId: transaction.id,
+        const abloErr = error instanceof AbloError ? error : undefined;
+        getContext().logger.warn('[TransactionQueue] Permanent error - rolling back', {
+          txId: transaction.id.slice(0, 8),
           type: transaction.type,
           model: transaction.modelName,
+          modelId: transaction.modelId.slice(0, 12),
+          errorType: abloErr?.type ?? error?.name,
+          errorCode: abloErr?.code,
+          httpStatus: abloErr?.httpStatus,
+          requestId: abloErr?.requestId,
+          message: error?.message,
+          inputKeys: transaction.data ? Object.keys(transaction.data) : undefined,
         });
       } catch {}
 
@@ -1967,7 +1978,7 @@ export class TransactionQueue extends EventEmitter {
     const { type, modelName, modelId, data } = transaction;
     const schemaName = stripModelSuffix(modelName);
     const mutationType = TX_TYPE_TO_MUTATION_OP[type];
-    const model = PRESERVE_CASE_MODELS.has(schemaName) ? schemaName : normalizeModelKey(modelName);
+    const model = normalizeModelKey(modelName);
     const input = (type === 'create' || type === 'update') ? data : undefined;
 
     try {

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.1 (2026-04-23)
+
+Data-integrity fixes for delta persistence. Decks and other entities created over a live session were silently failing to land in IndexedDB on some clients because every `put()` was rejecting with `DataError: key path did not yield a value` — the server delta payload didn't include `id` in the inner `data` field, and the failure was swallowed into telemetry with no console surfacing.
+
+### Fixed
+
+- **Partial / WS delta writes now persist.** Delta payloads from the server carry `id` in the envelope (`modelId`) but strip it from the inner `data` as redundant. IndexedDB object stores with `keyPath: 'id'` require the field on the record itself and reject the whole transaction when it's missing. Both `Database.processDelta` and `Database.processDeltaBatch` now inject `{ id: modelId, ...data }` before writing so the record always satisfies the keyPath contract. Without this, every CREATE arriving via partial bootstrap or WebSocket push was silently dropping.
+- **Cursor no longer advances past failed writes.** `processDeltaBatch` previously computed `highestSyncId` from all deltas up front and advanced the workspace-metadata cursor to it regardless of whether per-store transactions succeeded. A single IDB write failure would advance the cursor past rows that never persisted — the next partial bootstrap would ask "what's new since {cursor}?" and the skipped rows would fall into the already-seen range forever. The cursor now tracks a separate `highestPersistedSyncId` accumulated only from deltas whose store tx actually committed, and `updateWorkspaceMetadata` uses that.
+- **Bigint syncId coercion.** Postgres serializes `sync_deltas.id` as a string on the wire (bigint safety); the `typeof === 'number'` checks in the delta path were silently failing the type guard and never advancing `highestPersistedSyncId` even on successful writes. All comparisons now coerce via `Number(...)` with `isNaN` guard.
+- **Partial-bootstrap DELETEs now reach the ObjectPool.** `bootstrapFromServer` returns `deltaResults` on the partial branch so `BaseSyncedStore.applyBootstrapToPool` can route them through `syncClient.applyDeltaBatchToPool` — the same path WS-pushed deltas use. Previously, DELETEs persisted to IDB but ghost entities lingered in the in-memory pool until a full reload.
+
+### Improved
+
+- **Error surfacing on commit failures.** Permanent commit errors and rollback events now log with typed `AbloError` fields (`type`, `code`, `httpStatus`, `requestId`) at `warn` level through `getContext().logger`, not just via `captureTransactionFailure` into Sentry. `[TransactionQueue] Batch commit rejected`, `[TransactionQueue] Permanent error - rolling back`, `[SyncClient.rollback]`, and `[Database.processDeltaBatch] store tx FAILED` are the new anchor logs — each shows the specific server/IDB rejection reason instead of a generic "permanent_error".
+- **`[Database.processDeltaBatch] cursor withheld due to failed store tx`** fires whenever the cursor is held back due to failed writes, making the silent failure mode loud.
+
+### Removed
+
+- **`PRESERVE_CASE_MODELS` hardcoded whitelist.** The set forced PascalCase for `SlideLayer`, `Slide`, `Layout`, etc. while every other model shipped lowercase — inconsistent and misleading. The server has normalized `op.model` to lowercase at commit time for a long time, so the whitelist protected nothing. All `TransactionQueue` commit paths now use `tx.modelKey` (canonical schema-derived lowercase) uniformly. No wire-behavior change.
+
 ## 0.4.0 (2026-04-22)
 
 Provider-level bootstrap gating + public-surface narrowing. The v0.3.0 umbrella provider made `<AbloProvider>` the one import; 0.4.0 finishes the job by making the provider own loading state end-to-end and tightening the entry points that are considered public.

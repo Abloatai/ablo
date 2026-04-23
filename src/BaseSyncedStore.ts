@@ -734,7 +734,7 @@ export class BaseSyncedStore<
           organizationId: this.userContext.organizationId,
           teamIds: this.userContext.teamIds,
         });
-        this.applyBootstrapToPool(bootstrapResult.bootstrapData);
+        this.applyBootstrapToPool(bootstrapResult);
         await this.runPostBootstrapHooks();
         this.dataReady = true;
       } else if (!this.dataReady) {
@@ -967,13 +967,30 @@ export class BaseSyncedStore<
     }
   }
 
-  /** Apply bootstrap data to the ObjectPool with ghost removal */
   /** Apply bootstrap data to the ObjectPool. Delegates pool writes to SyncClient. */
   protected applyBootstrapToPool(
-    bootstrapData: BootstrapData,
+    bootstrapResult: BootstrapResult,
     protectedIds?: ReadonlySet<string>
   ): RehydrationStats {
-    if (bootstrapData.type === 'partial' || !bootstrapData.models) {
+    const { bootstrapData } = bootstrapResult;
+
+    // Partial bootstrap: Database.processDeltaBatch already wrote the deltas
+    // to IDB. Route the same results through the delta-apply path so the
+    // in-memory pool evicts deleted entities (and updates modified ones).
+    // Without this, reconnect DELETEs persist to IDB but the canvas keeps
+    // showing ghost layers until a full reload.
+    if (bootstrapData.type === 'partial') {
+      const deltaResults = bootstrapResult.deltaResults;
+      if (deltaResults && deltaResults.length > 0) {
+        this.syncClient.applyDeltaBatchToPool(
+          deltaResults,
+          (name, data) => this.enrichRelations(name, data),
+        );
+      }
+      return { added: 0, updated: 0, removed: 0, skipped: 0, healed: 0, elapsedMs: 0 };
+    }
+
+    if (!bootstrapData.models) {
       return { added: 0, updated: 0, removed: 0, skipped: 0, healed: 0, elapsedMs: 0 };
     }
 
@@ -1151,13 +1168,13 @@ export class BaseSyncedStore<
     await this.withDeltaQueuing(async () => {
       try {
         const preBootstrapIds = new Set(this.objectPool.getAllIds());
-        const { bootstrapData } = await this.database.bootstrapFromServer(requirements, {
+        const bootstrapResult = await this.database.bootstrapFromServer(requirements, {
           userId: context.userId,
           organizationId: context.organizationId,
           teamIds: context.teamIds,
         });
         const deltaProtectedIds = this.collectDeltaProtectedIds(preBootstrapIds);
-        this.applyBootstrapToPool(bootstrapData, deltaProtectedIds);
+        this.applyBootstrapToPool(bootstrapResult, deltaProtectedIds);
         this.updateSyncStatus({ state: 'idle', progress: 100 });
       } catch (error) {
         console.warn('[sync-engine] Background bootstrap failed:', error instanceof Error ? error.message : String(error), error);

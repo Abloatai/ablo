@@ -78,6 +78,20 @@ export interface BootstrapResult {
   modelsStored: number;
   /** The raw bootstrap response — callers can apply models directly to ObjectPool */
   bootstrapData: BootstrapData;
+  /**
+   * Results of applying partial-bootstrap deltas to IDB. Present only when
+   * `bootstrapData.type === 'partial'` and deltas were processed. Callers
+   * forward these to `syncClient.applyDeltaBatchToPool` so the in-memory
+   * pool reflects inserts/updates/deletes that arrived while the client
+   * was disconnected — without this, DELETE deltas persist to IDB but
+   * ghost entities linger in the pool until a full reload.
+   */
+  deltaResults?: Array<{
+    action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
+    modelName: string;
+    modelId: string;
+    data?: ModelData | null;
+  }>;
 }
 
 export class Database {
@@ -516,8 +530,13 @@ export class Database {
           toSyncId: bootstrapData.lastSyncId,
         });
 
-        // Apply deltas to IndexedDB using processDeltaBatch for better performance
+        // Apply deltas to IndexedDB using processDeltaBatch for better
+        // performance. Capture the return value so the pool can be updated by
+        // the caller — without this, partial-bootstrap DELETEs persist to IDB
+        // but don't evict entities from the in-memory ObjectPool, leaving
+        // ghost rows visible on the UI until a full reload rebuilds the pool.
         let deltasApplied = 0;
+        let deltaResults: BootstrapResult['deltaResults'];
 
         if (deltas.length > 0) {
           // Convert server delta format to processDelta format
@@ -530,7 +549,7 @@ export class Database {
           }));
 
           // Use batch processing for better performance
-          await this.processDeltaBatch(formattedDeltas);
+          deltaResults = await this.processDeltaBatch(formattedDeltas);
           deltasApplied = formattedDeltas.length;
           onProgress?.(deltasApplied);
         }
@@ -550,7 +569,7 @@ export class Database {
           lastSyncId: bootstrapData.lastSyncId,
         });
 
-        return { modelsLoaded: 0, modelsStored: deltasApplied, bootstrapData };
+        return { modelsLoaded: 0, modelsStored: deltasApplied, bootstrapData, deltaResults };
       }
 
       // Full bootstrap: Process model data
@@ -725,8 +744,19 @@ export class Database {
       }
     } catch {}
 
-    // Compact data before persistence; do not store redundant type markers
-    const compacted = data && typeof data === 'object' ? this.compactRecord(modelName, data) : data;
+    // Compact data before persistence; do not store redundant type markers.
+    // Inject `id` from the envelope — server deltas frequently strip it
+    // from the `data` payload as redundant with the envelope's `modelId`,
+    // but IDB object stores use keyPath='id' and require it on the record
+    // itself (`DataError: key path did not yield a value` otherwise).
+    const dataWithId =
+      data && typeof data === 'object'
+        ? { id: modelId, ...(data as Record<string, unknown>) }
+        : data;
+    const compacted =
+      dataWithId && typeof dataWithId === 'object'
+        ? this.compactRecord(modelName, dataWithId as ModelData)
+        : dataWithId;
 
     switch (actionType) {
       // 'C' (Covering) — client gained permission to see an existing entity.
@@ -958,9 +988,10 @@ export class Database {
       if (delta.actionType === 'D' && delta.syncId) {
         const key = `${delta.modelName}:${delta.modelId}`;
         const existing = deleteSyncIds.get(key);
-        // Keep the highest DELETE syncId for this entity
-        if (!existing || delta.syncId > existing) {
-          deleteSyncIds.set(key, delta.syncId);
+        // Normalize to number — postgres sends bigint as string on the wire.
+        const n = typeof delta.syncId === 'string' ? Number(delta.syncId) : delta.syncId;
+        if (typeof n === 'number' && !isNaN(n) && (!existing || n > existing)) {
+          deleteSyncIds.set(key, n);
         }
       }
     }
@@ -972,14 +1003,29 @@ export class Database {
       });
     }
 
-    // Group deltas by store for efficient transaction management
+    // Group deltas by store for efficient transaction management.
+    //
+    // Two highwater marks: `highestSyncId` is the total range seen;
+    // `highestPersistedSyncId` accumulates only from deltas whose store
+    // transaction actually succeeded. The cursor advance (via
+    // `updateWorkspaceMetadata`) uses ONLY the persisted one — without
+    // this split, a single store-level IDB failure (e.g. missing keyPath
+    // field, validation abort) silently advances the cursor past deltas
+    // that never wrote to IDB. Next partial bootstrap would then ask
+    // "what's new since {advanced cursor}?" and the skipped rows fall
+    // into the already-seen range forever.
     const deltasByStore = new Map<string, Array<{ idx: number; delta: (typeof deltas)[number] }>>();
     let highestSyncId = 0;
+    let highestPersistedSyncId = 0;
     let skippedDueToConflict = 0;
 
     deltas.forEach((delta, idx) => {
-      if (delta.syncId && delta.syncId > highestSyncId) {
-        highestSyncId = delta.syncId;
+      // Normalize to number — postgres sends bigint syncIds as strings.
+      const deltaSyncIdNum = typeof delta.syncId === 'string'
+        ? Number(delta.syncId)
+        : delta.syncId;
+      if (typeof deltaSyncIdNum === 'number' && !isNaN(deltaSyncIdNum) && deltaSyncIdNum > highestSyncId) {
+        highestSyncId = deltaSyncIdNum;
       }
 
       // ========================================================================
@@ -1143,8 +1189,21 @@ export class Database {
         // Step 4: Process all deltas synchronously within transaction (no await!)
         for (const { idx, delta } of storeDeltas) {
           const { actionType, modelId, data } = delta;
+          // Server deltas carry `id` in the envelope (modelId) but often
+          // strip it from the `data` payload as redundant. IDB object
+          // stores use keyPath='id' on the record itself, so the record
+          // MUST have `id` set — otherwise `put()` throws `DataError:
+          // Evaluating the object store's key path did not yield a value`
+          // and the entire transaction aborts, silently wiping every
+          // CREATE/UPDATE in the batch.
+          const dataWithId =
+            data && typeof data === 'object'
+              ? { id: modelId, ...(data as Record<string, unknown>) }
+              : data;
           const compacted =
-            data && typeof data === 'object' ? this.compactRecord(modelName, data) : data;
+            dataWithId && typeof dataWithId === 'object'
+              ? this.compactRecord(modelName, dataWithId as ModelData)
+              : dataWithId;
 
           switch (actionType) {
             case 'C': // Create
@@ -1254,8 +1313,10 @@ export class Database {
           tx.oncomplete = () => resolve();
           tx.onerror = () => reject(tx.error);
         });
-        // Only commit staged results to the global results if the transaction succeeded
-        // Commit staged results in their original delta positions
+        // Only commit staged results to the global results if the transaction
+        // succeeded. Also advance `highestPersistedSyncId` ONLY for deltas in
+        // this successful tx — so the cursor can't advance past rows that
+        // never wrote to IDB.
         for (const r of stagedResults) {
           results[r.idx] = {
             action: r.action,
@@ -1263,12 +1324,40 @@ export class Database {
             modelId: r.modelId,
             data: r.data,
           };
+          const rawSyncId = storeDeltas[
+            storeDeltas.findIndex(({ idx }) => idx === r.idx)
+          ]?.delta.syncId;
+          // SyncDelta.syncId is typed as number but postgres serializes bigint
+          // to string on the wire — coerce before compare.
+          const syncId = typeof rawSyncId === 'string' ? Number(rawSyncId) : rawSyncId;
+          if (typeof syncId === 'number' && !isNaN(syncId) && syncId > highestPersistedSyncId) {
+            highestPersistedSyncId = syncId;
+          }
         }
       } catch (err: any) {
+        // Surface the IDB error directly — during interactive debugging the
+        // console needs to show the specific failure (`ConstraintError`,
+        // `DataError`, `AbortError`) so we can find what's wrong with the
+        // `compacted` payload shape or store schema. `captureTransactionFailure`
+        // alone routes to Sentry only.
+        const idbErr = err instanceof Error ? err : new Error(String(err));
+        getContext().logger.warn('[Database.processDeltaBatch] store tx FAILED', {
+          modelName,
+          storeDeltasCount: storeDeltas.length,
+          errorName: idbErr.name,
+          message: idbErr.message,
+          sampleDeltas: storeDeltas.slice(0, 3).map(({ delta }) => ({
+            action: delta.actionType,
+            id: delta.modelId.slice(0, 12),
+            dataKeys: delta.data && typeof delta.data === 'object'
+              ? Object.keys(delta.data as Record<string, unknown>).slice(0, 8)
+              : typeof delta.data,
+          })),
+        });
         getContext().observability.captureTransactionFailure({
           context: 'batch-indexeddb-operation',
           modelName,
-          error: err instanceof Error ? err : String(err),
+          error: idbErr,
         });
         // Mark all store deltas as verify in their original positions
         for (const { idx, delta } of storeDeltas) {
@@ -1277,10 +1366,18 @@ export class Database {
       }
     }
 
-    // Update metadata only once with the highest syncId
-    if (highestSyncId > 0) {
+    // Update metadata only to the highest syncId whose store transaction
+    // actually committed. Using `highestSyncId` (the range-seen max) would
+    // advance the cursor past deltas that failed to persist — creating a
+    // cursor/IDB divergence that makes subsequent partial bootstraps skip
+    // the missing rows forever.
+    //
+    // If `highestPersistedSyncId === 0` (every store tx failed), we leave
+    // the metadata alone. Next partial bootstrap will re-deliver the deltas
+    // at the original cursor position.
+    if (highestPersistedSyncId > 0) {
       try {
-        await this.updateWorkspaceMetadata({ lastSyncId: highestSyncId });
+        await this.updateWorkspaceMetadata({ lastSyncId: highestPersistedSyncId });
       } catch (err: any) {
         getContext().observability.breadcrumb(
           'Failed to update metadata after batch',
@@ -1291,6 +1388,17 @@ export class Database {
           }
         );
       }
+    }
+    if (highestPersistedSyncId < highestSyncId) {
+      // Staging-visibility probe: makes the "some deltas seen but not
+      // persisted" signal loud when it actually happens. If this fires
+      // repeatedly on the same sync IDs, a specific row is un-writable
+      // (validation? compact issue?) and needs fixing at that layer.
+      getContext().logger.warn('[Database.processDeltaBatch] cursor withheld due to failed store tx', {
+        seen: highestSyncId,
+        persisted: highestPersistedSyncId,
+        gap: highestSyncId - highestPersistedSyncId,
+      });
     }
 
     return results;
