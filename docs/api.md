@@ -1,0 +1,230 @@
+# API
+
+Start with the schema client:
+
+For end-to-end app setup across React, existing backends, Data Source, and
+agents, read [Integration Guide](./integration-guide.md).
+
+
+```ts
+import Ablo from '@ablo/sync-engine';
+import { defineSchema, model, z } from '@ablo/sync-engine/schema';
+
+const schema = defineSchema({
+  tasks: model({
+    title: z.string(),
+    status: z.enum(['todo', 'doing', 'done']),
+  }),
+});
+
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+
+await ablo.ready();
+const [task] = await ablo.tasks.load({ where: { id: 'task_123' } });
+if (!task) throw new Error('Task not found');
+
+await ablo.tasks.update('task_123', { status: 'done' }, { wait: 'confirmed' });
+```
+
+## Model Methods
+
+Each schema model becomes a typed resource on the client:
+
+- `ablo.tasks.load({ where })` hydrates rows asynchronously.
+- `ablo.tasks.retrieve(id)` reads one already-loaded row synchronously.
+- `ablo.tasks.create(data)` creates a row.
+- `ablo.tasks.update(id, data, options?)` updates a row.
+- `ablo.tasks.delete(id, options?)` deletes a row.
+
+`load` and `retrieve` are not aliases. Use `load` when the row may not be in the
+local pool yet. Use `retrieve` after `ready()` or `load()` when you want a cheap
+local read.
+
+| Method | Returns | Use when |
+|---|---|---|
+| `load({ where })` | `Promise<T[]>` | You need to hydrate rows from local store and server. |
+| `retrieve(id)` | `T \| undefined` | You already loaded the row and want a synchronous local read. |
+| `list(options?)` | `T[]` | You want a synchronous local list. |
+| `count(options?)` | `number` | You want a synchronous local count. |
+| `create(data, options?)` | `Promise<T>` | You want to create through the schema model. |
+| `update(id, data, options?)` | `Promise<T>` | You want to update through the schema model. |
+| `delete(id, options?)` | `Promise<void>` | You want to delete through the schema model. |
+
+`list` and `count` read the local pool. They default to live rows and accept:
+
+```ts
+const activeDoneTasks = ablo.tasks.list({
+  where: { status: 'done' },
+  filter: (task) => !task.title.startsWith('[archived]'),
+  orderBy: { updatedAt: 'desc' },
+  limit: 20,
+  scope: 'live', // 'live' | 'archived' | 'all'
+});
+```
+
+## Protected Writes
+
+Use `snapshot` when a write should reject if the row changed mid-flight:
+
+```ts
+const snap = ablo.snapshot({ tasks: 'task_123' });
+
+await ablo.tasks.update(
+  'task_123',
+  { status: 'done' },
+  { readAt: snap.stamp, onStale: 'reject', wait: 'confirmed' },
+);
+```
+
+Protected write options:
+
+| Option | Purpose |
+|---|---|
+| `readAt` | The state cursor the write was based on. |
+| `onStale` | Stale-state policy. Prefer `reject` for agent writes. |
+| `intent` | Active work claim associated with the write. |
+| `wait` | `queued` resolves after local queueing; `confirmed` waits for server acceptance. |
+| `idempotencyKey` | Stable key for retry-safe writes. The SDK generates one when omitted. |
+| `timeout` | Maximum time to wait for the write call. |
+
+## Advanced Resource API
+
+Use `resource(name)` only when you intentionally need the raw protocol shape:
+generic server runtimes, MCP routes, batch tools, or code that has no schema.
+
+```ts
+const tasks = ablo.resource<{ status: string }>('tasks');
+
+const { data, stamp, intents } = await tasks.retrieve('task_123', {
+  ifBusy: 'return',
+});
+```
+
+`stamp` is the state watermark. Pass it as `readAt` to reject stale writes.
+
+`intents` lists active work on the target. Set `ifBusy: 'wait'` to wait for
+that work to clear, or `ifBusy: 'fail'` to throw `AbloBusyError`.
+
+## Intent
+
+Intent is the coordination signal. It tells humans and agents who is working on
+a target before the write lands.
+
+```ts
+const intent = await ablo.intents.create({
+  target: { resource: 'tasks', id: 'task_123', field: 'status' },
+  action: 'update',
+});
+
+try {
+  const snap = ablo.snapshot({ tasks: 'task_123' });
+  const task = await ablo.tasks.update(
+    'task_123',
+    { status: 'done' },
+    { intent, readAt: snap.stamp, onStale: 'reject', wait: 'confirmed' },
+  );
+
+  task.status; // done
+} finally {
+  await intent.release();
+}
+```
+
+`intents.waitFor(target)` waits until the live intent stream clears. Pass
+`timeout` only when your product needs an upper bound.
+
+## Advanced Commit API
+
+Most callers use `ablo.<model>.update(...)` or `resource.update(...)`. For atomic
+batches or custom runtimes, use `commits.create`.
+
+```ts
+await ablo.commits.create({
+  wait: 'confirmed',
+  operations: [
+    {
+      action: 'update',
+      resource: 'tasks',
+      id: 'task_123',
+      data: { status: 'done' },
+      readAt: stamp,
+      onStale: 'reject',
+    },
+  ],
+});
+```
+
+Every state change becomes a commit. Commits check authorization, stale state,
+intent conflicts, and idempotency.
+
+## Agent
+
+Most agents should import the same schema as the app and call
+`ablo.<model>.load(...)` plus `ablo.<model>.update(...)`. The schema-less
+`agent.run(...)` wrapper exists for advanced server workers that cannot import
+the app schema; it creates the capability and task internally and returns
+`done`, `failed`, or `cancelled`.
+
+## Data Source
+
+Use `dataSource(...)` only when the customer's app database remains canonical
+and Ablo should call a signed endpoint instead of storing customer rows itself.
+
+```ts
+import { dataSource } from '@ablo/sync-engine';
+import { schema } from './ablo.schema';
+
+export const POST = dataSource({
+  schema,
+  signingSecret: process.env.ABLO_DATA_SOURCE_SIGNING_SECRET,
+  async commit({ operations, clientTxId, context }) {
+    // Write operations to the customer's database transaction.
+    return { rows: [] };
+  },
+});
+```
+
+The SDK still uses `ablo.<model>.update(...)`. The Data Source endpoint is a
+server-to-server storage adapter. See [Connect Your Database](./data-sources.md).
+
+## Capability
+
+Capabilities are the lower-level permission boundary. Most apps should let
+`agent.run(...)` create and revoke them.
+
+```ts
+const capability = await api.capabilities.create({
+  participantKind: 'agent',
+  participantId: 'agent:task-writer',
+  // Strings derive from the schema's `identityRoles` templates
+  // (see integration-guide.md §1) or a model's `syncGroupFormat`.
+  syncGroups: ['org:acme', 'user:agent:task-writer'],
+  operations: ['tasks.retrieve', 'tasks.update'],
+  lease: '10m',
+});
+```
+
+Use `lease` as a crash cleanup window. Normal agent runs still close when the
+handler returns, fails, or is cancelled.
+
+For the design rationale — why capabilities instead of static API keys,
+why the lease + signature + revocation triple, and how this maps to AWS
+STS / Vault / Auth0 Token Vault — see [Capabilities](./capabilities.md#why-capabilities-not-api-keys).
+
+## Errors
+
+All SDK errors extend `AbloError` and expose a stable `type` string.
+
+| Error | Meaning |
+|---|---|
+| `AbloAuthenticationError` | Missing, invalid, or expired credential. |
+| `AbloPermissionError` | Credential is valid but the action is outside scope. |
+| `AbloRateLimitError` | Rate limit or quota exceeded. |
+| `AbloIdempotencyError` | Idempotency key was reused with a different request. |
+| `AbloConnectionError` | Network, timeout, abort, or transport failure. |
+| `AbloValidationError` | Invalid input. |
+| `AbloServerError` | Server-side 5xx. |
+| `AbloStaleContextError` | `readAt` no longer matches current state. |
+| `AbloBusyError` | Active intent conflict or busy wait timeout. |
+
+See [Client Behavior](./client-behavior.md) for retry and timeout guidance.

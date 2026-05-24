@@ -1,0 +1,452 @@
+# Ablo Full Context
+
+Ablo is the state coordination layer for apps where humans and agents edit the same data.
+
+Use AI SDK for the agent loop. Use Ablo when agent reads and writes must persist to the database, coordinate with concurrent human or agent work, and leave an audit trail.
+
+The product surface should read like Stripe, Turbopuffer, or Reducto: one product-name import, resources by dot access, optional subpaths only for schema, React, and tests.
+
+```ts
+import Ablo from '@ablo/sync-engine';
+```
+
+## Public Surface
+
+Public imports:
+
+- `@ablo/sync-engine` — `Ablo`, errors, typed model resources, intents, `dataSource`, and advanced schema-less protocol resources.
+- `@ablo/sync-engine/schema` — `defineSchema`, `model`, `z`, relations, schema types.
+- `@ablo/sync-engine/react` — React provider and hooks.
+- `@ablo/sync-engine/testing` — test harnesses and mocks.
+
+Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, `/source`, or `internal/*` as public imports.
+
+The canonical integration doc is `integration-guide`. It explains the end-to-end
+path for schema, React selectors, Ablo-managed state, Data Source-backed app
+databases, multiplayer, and agent workers. Use it before inventing a new setup
+flow.
+
+## Production Guarantees
+
+`wait: 'confirmed'` resolves after the server accepts the write. Schema model
+writes are optimistic; a server rejection rolls back local state and raises a
+typed `AbloError`.
+
+Use `snapshot(...)` and `readAt` when an agent write depends on state it already
+read. `onStale: 'reject'` prevents lost updates by rejecting if the target
+changed after the snapshot.
+
+Intents are live coordination signals, not database locks. Schema clients wait
+from the realtime intent stream. Schema-less HTTP clients must pass an explicit
+`busyPollInterval` for `ifBusy: 'wait'`; no hidden hard-coded polling.
+
+Agent runs resolve `done`, `failed`, or `cancelled`. Capabilities scope access;
+tasks group work for audit and cost attribution. Most users do not manually
+create either one.
+
+## Primary App Path
+
+Declare models in a schema, then use typed model resources:
+
+```ts
+import Ablo from '@ablo/sync-engine';
+import { defineSchema, model, z } from '@ablo/sync-engine/schema';
+
+const schema = defineSchema({
+  tasks: model({
+    id: z.string(),
+    title: z.string(),
+    status: z.enum(['todo', 'doing', 'done']),
+    summary: z.string().optional(),
+    updatedAt: z.string(),
+  }),
+  projects: model({
+    id: z.string(),
+    name: z.string(),
+  }),
+});
+
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+
+const [task] = await ablo.tasks.load({ where: { id: 'task_123' } });
+if (!task) throw new Error('Task not found');
+
+const intents = ablo.intents.list({ resource: 'tasks', id: 'task_123' });
+if (intents.length > 0) {
+  await ablo.intents.waitFor({ resource: 'tasks', id: 'task_123' }, { timeout: 30_000 });
+}
+
+const snap = ablo.snapshot({ tasks: 'task_123' });
+const updated = await ablo.tasks.update(
+  'task_123',
+  { status: 'done', summary: await summarize(task) },
+  {
+    readAt: snap.stamp,
+    onStale: 'reject',
+    wait: 'confirmed',
+  },
+);
+```
+
+The normal app API is:
+
+- `ablo.<model>.load(options?)` for async hydration from the server/local store
+- `ablo.<model>.retrieve(id)` for local synchronous reads after loading
+- `ablo.<model>.create(data, options?)`
+- `ablo.<model>.update(id, data, options?)`
+- `ablo.<model>.delete(id, options?)`
+- `ablo.intents.waitFor(target, options?)`
+
+`ablo.<model>.list(...)` and `count(...)` are synchronous local reads. They
+accept `where`, `filter`, `orderBy`, `limit`, `offset`, and `scope`; scope
+defaults to `'live'`, with `'archived'` and `'all'` for lifecycle-aware reads.
+
+Use `ablo.resource<T>(name)` only when the caller intentionally does not have a schema, such as custom server agents, MCP routes, migration scripts, or generic admin tools.
+
+React reads should use selector `useAblo`:
+
+```tsx
+const task = useAblo((ablo) => ablo.tasks.retrieve(id)) ?? serverTask;
+const visibleTasks = useAblo((ablo) =>
+  ablo.tasks.list({ where: { projectId } }),
+);
+```
+
+Use zero-argument `useAblo()` only for callbacks, effects, and writes that need
+the provider-owned client:
+
+```tsx
+const ablo = useAblo();
+await ablo?.tasks.update(id, patch, { wait: 'confirmed' });
+```
+
+Treat `useQuery`, `useOne`, `useReader`, and `useMutate` as compatibility hooks
+for older string-keyed integrations. Do not teach them as the first React API.
+
+## Multiplayer
+
+Multiplayer is an effect of the normal model API, not a separate setup path.
+When human UI, server actions, and agents use the same
+`Ablo({ schema, apiKey })` client and write through `ablo.<model>`, Ablo
+coordinates the shared resource stream:
+
+- confirmed model writes fan out as realtime deltas,
+- React hooks read the latest row and active intents,
+- intents announce active work before a commit,
+- `snapshot(...)` plus `readAt` protects against stale writes.
+
+Direct database writes outside Ablo are not coordinated until the app reports
+them through Data Source events. In Data Source mode, writes made through Ablo
+still coordinate normally because Ablo sends the signed commit request, receives
+canonical rows, and fans out the resulting deltas.
+
+For existing Python backends, keep the Python service layer and database as the
+source of truth. Add one signed Data Source endpoint, keep initial page loads on
+existing APIs if needed, use `useAblo((ablo) => ablo.<model>.retrieve(id)) ?? serverRow`
+for live rows, then migrate buttons one at a time from direct Python endpoint
+writes to `ablo.<model>.update(...)`.
+
+This applies to any API-backed app: Python, Rails, Go, or Node. The backend keeps
+its service layer and DB credentials. Ablo gets a Data Source URL and signing
+secret, not a database URL.
+
+## Client Behavior
+
+Important options: `schema`, `apiKey`, `baseURL`, `persistence`, `fetch`,
+`defaultHeaders`, `defaultQuery`, `logger`, and `dangerouslyAllowBrowser`.
+
+There is intentionally no `databaseURL` option on `Ablo(...)`. Application and
+agent code use `ABLO_API_KEY`. Customer-owned app databases stay private behind
+a signed Data Source endpoint.
+
+Important per-write options: `wait`, `readAt`, `onStale`, `intent`,
+`idempotencyKey`, and `timeout`.
+
+Errors: `AbloAuthenticationError`, `AbloPermissionError`, `AbloRateLimitError`,
+`AbloIdempotencyError`, `AbloConnectionError`, `AbloValidationError`,
+`AbloServerError`, `AbloStaleContextError`, and `AbloBusyError`.
+
+Retry transport failures and 5xx with backoff only when the operation is
+idempotent. Do not blindly retry validation, permission, idempotency, busy, or
+stale-context errors without changing the request.
+
+## Sandboxes
+
+There are two sandbox surfaces:
+
+- Public `/sandbox` is a deterministic visual playground. It demonstrates shared
+  state, active intents, stale-write rejection, receipts, and deltas without
+  making real Ablo calls. It is agent-first: it should expose a prompt that can
+  be pasted into Claude Code or Codex to wire one real resource through Ablo.
+- Authenticated org sandboxes are real test environments. The default sandbox is
+  the Stripe-style test mode for an org. It has an isolated sync group prefix,
+  can mint `sk_test_*` keys, and can be reset without touching live state.
+
+Additional org sandboxes can start blank or copy live configuration. Keep
+customer production traffic on `sk_live_*`; use `sk_test_*` for app setup, Data
+Source endpoint wiring, and agent integration testing.
+
+The coding-agent handoff should ask for a narrow integration: one schema model,
+one Ablo client module, one React selector read, one typed model write with
+`readAt`/`onStale: 'reject'`/`wait: 'confirmed'`, and one smoke test where two
+writers prove intent/stale behavior.
+
+## Data Sources
+
+Use these public environment names:
+
+- `ABLO_API_KEY` — SDK authentication for app and agent code.
+- `ABLO_BASE_URL` — optional hosted or private API URL override.
+- `ABLO_DATA_SOURCE_SIGNING_SECRET` — Standard Webhooks signing secret for Data Source calls.
+
+Do not ask customers to paste their app database URL into Ablo. If their app
+database is canonical, they add a Data Source URL in Ablo and keep database
+credentials inside their app.
+
+Every schema model has a backing store. In Ablo-managed mode, Ablo stores rows
+for declared models and `ablo.<model>.create/update/delete` write there. In Data
+Source mode, the same SDK methods produce a signed commit request to the
+customer route, and the customer route writes the app database.
+
+When the customer's database is canonical, expose one signed source route:
+
+```ts
+import { dataSource } from '@ablo/sync-engine';
+import { schema } from './ablo.schema';
+
+export const POST = dataSource({
+  schema,
+  signingSecret: process.env.ABLO_DATA_SOURCE_SIGNING_SECRET,
+  async commit({ operations, clientTxId, context }) {
+    return { rows: await writeCustomerTransaction(operations, clientTxId) };
+  },
+});
+```
+
+Commit request shape:
+
+```ts
+{
+  type: 'commit',
+  clientTxId: 'tx_...',
+  operations: [
+    { type: 'UPDATE', model: 'tasks', id: 'task_123', input, readAt, onStale: 'reject' },
+  ],
+  scope: { participantId, participantKind, organizationId, requiredSyncGroups, mode: 'live' },
+}
+```
+
+Return `{ rows }` for normal apps or `{ deltas }` for sources that already
+compute canonical change events. External writes come back through the source
+`events` handler or `POST /api/source/events`.
+
+## Advanced Schema Options
+
+Teach schema as model fields and relations first:
+
+```ts
+const schema = defineSchema({
+  tasks: model({
+    id: z.string(),
+    title: z.string(),
+  }),
+});
+```
+
+Advanced helpers such as `mutable`, `readOnly`, `field`, `indexed`, query definitions, `load` strategies, parent metadata, and sync-group formats are still part of the schema package for offline/cache/indexing-heavy apps. Do not put them in the first example unless the user asks for local persistence, offline sync, custom loading, or low-level indexing behavior.
+
+## Advanced Schema-Less Server Agent Path
+
+Server agents can use the same `Ablo` factory. Omitting `schema` returns the
+lower-level resource client. Do this only when the worker intentionally does not
+have a schema.
+
+```ts
+import Ablo from '@ablo/sync-engine';
+
+const api = Ablo({ apiKey: process.env.ABLO_API_KEY });
+
+const result = await api.agent('task-writer', {
+  can: ['tasks.update'],
+  syncGroups: ['workspace:acme'],
+}).run(
+  {
+    prompt: 'Summarize task_123 and mark it done.',
+    surface: 'agent_worker',
+    costInputTokens,
+    costOutputTokens,
+    costComputeMs,
+  },
+  async ({ resource }) => {
+    const tasks = resource<{ title: string; status: string; summary?: string }>('tasks');
+    const { data, stamp, intents } = await tasks.retrieve('task_123', {
+      ifBusy: 'return',
+    });
+    if (intents.length > 0) {
+      return { skipped: true, reason: 'busy' };
+    }
+
+    return tasks.update(
+      'task_123',
+      { status: 'done', summary: await summarize(data) },
+      {
+        intent: { action: 'summarize', field: 'summary' },
+        readAt: stamp,
+        onStale: 'reject',
+        wait: 'confirmed',
+      },
+    );
+  },
+);
+
+if (result.status === 'failed') throw result.error;
+if (result.status === 'cancelled') return;
+```
+
+`agent.run(...)` is the happy path for agent work. It opens the task, mints the scoped capability, executes the handler, records usage, closes the task, revokes the capability, and resolves to `done`, `failed`, or `cancelled`.
+
+Do not require users to manually create tasks and capabilities for the common agent path. The low-level nouns still exist for platform builders and custom runtimes.
+
+## Resource
+
+Every resource read returns state plus coordination metadata:
+
+```ts
+type ResourceRead<T> = {
+  data: T;
+  stamp: number;
+  intents: ResourceIntent[];
+};
+```
+
+`stamp` is the state watermark. Pass it to writes as `readAt`.
+
+`intents` lists active work on the target. Reads are allowed while another participant is working. The caller decides whether to return, fail, or wait.
+
+## Intent
+
+An intent declares active work on a resource:
+
+```ts
+await using intent = await ablo.intents.create({
+  target: { resource: 'tasks', id: 'task_123', field: 'summary' },
+  action: 'summarize',
+});
+```
+
+Use `await using` or `finally { await intent.release() }` so the intent clears when work finishes. Lease fields are crash cleanup, not the normal completion signal. Do not teach users to coordinate by TTL.
+
+## Busy Behavior
+
+Busy behavior is explicit:
+
+- `ifBusy: 'return'` returns the current intents with the read.
+- `ifBusy: 'fail'` throws `AbloBusyError`.
+- `ifBusy: 'wait'` waits for matching intents to clear.
+
+Schema clients use the realtime intent stream for waits.
+
+Schema-less HTTP clients cannot know when an intent clears unless the caller opts into polling. When using `ifBusy: 'wait'` over HTTP, provide `busyPollInterval` and usually `busyTimeout`.
+
+```ts
+await api.resource('tasks').retrieve('task_123', {
+  ifBusy: 'wait',
+  busyPollInterval: 1_000,
+  busyTimeout: 30_000,
+});
+```
+
+No hidden hard-coded busy polling. `busyTimeout` is a maximum wait, not the coordination mechanism.
+
+## Write
+
+Use resource methods as the normal write path:
+
+```ts
+const snap = ablo.snapshot({ tasks: 'task_123' });
+const updated = await ablo.tasks.update(
+  'task_123',
+  { status: 'done' },
+  {
+    readAt: snap.stamp,
+    onStale: 'reject',
+    wait: 'confirmed',
+  },
+);
+```
+
+Write checks:
+
+- authorization
+- stale state via `readAt`
+- active intent conflicts
+- idempotency when an idempotency key is provided
+
+Use `commits.create(...)` only for low-level batch writes.
+
+## Receipt
+
+Schema model writes return the updated row. Passing `wait: 'confirmed'` waits for
+the server confirmation before resolving. Lower-level resource writes return a
+receipt object for custom runtimes that need protocol-level proof.
+
+## Capability
+
+A capability is a signed grant of write access. For normal agents, `agent.run(...)` handles capability creation and revocation.
+
+Use `capabilities.create(...)` only for custom runtimes:
+
+```ts
+const cap = await api.capabilities.create({
+  participantKind: 'agent',
+  participantId: 'task-writer',
+  allowedSyncGroups: ['workspace:acme'],
+  allowedOperations: ['tasks.update'],
+  lease: '10m',
+});
+```
+
+The lease is for crash cleanup. It is not how a successful run reports completion.
+
+## Task
+
+A task is one agent run. It carries prompt, audit attribution, and cost stats.
+
+For normal agents, prefer `agent.run(...)`.
+
+Low-level runtimes can use:
+
+```ts
+const task = await api.tasks.create({
+  prompt: 'Summarize task_123 and mark it done.',
+  surface: 'agent_worker',
+});
+
+await task.close({ costInputTokens, costOutputTokens, costComputeMs });
+```
+
+## Interaction Model
+
+The common agent run is:
+
+1. `api.agent(id, options).run(...)` starts the run.
+2. The handler reads resources and receives `{ data, stamp, intents }`.
+3. If another participant is working, the handler chooses return, fail, or wait.
+4. The handler writes with `readAt`, `onStale`, and optional intent.
+5. The run resolves `done`, `failed`, or `cancelled`.
+
+The underlying primitives are Resource, Intent, Commit, Receipt, Capability, and Task. Most schema users should not call `commits.create(...)` directly.
+
+## Public HTTP Routes
+
+- `GET    /v1/resources/{resource}/{id}` — read state plus active intents
+- `POST   /v1/capabilities` — create a scoped capability
+- `GET    /v1/capabilities/{id}` — inspect scope
+- `DELETE /v1/capabilities/{id}` — revoke
+- `POST   /v1/tasks` — create a task
+- `POST   /v1/tasks/{id}/close` — close a task with cost stats
+- `GET    /v1/intents` — list active intents
+- `POST   /v1/intents` — declare intent
+- `DELETE /v1/intents/{id}` — release intent
+- `POST   /v1/commits` — apply mutations
+Use `Authorization: Bearer <api key>` for platform calls. Agent writes should use scoped capabilities, normally created through `agent.run(...)`.

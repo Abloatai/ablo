@@ -1,0 +1,53 @@
+name: Release
+
+# Publishes @abloatai/ablo to npm with provenance attestations.
+#
+# Trigger paths:
+#   - Push a tag matching v* (e.g. v0.3.0)         -> auto-publish
+#   - workflow_dispatch from the Actions tab       -> manual publish
+#
+# Required repository secrets:
+#   NPM_TOKEN  - an "Automation" or "Granular Access" token from
+#                npmjs.com with publish permission on @abloatai/ablo.
+#                Automation tokens bypass 2FA, which CI needs.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write        # required for npm provenance via OIDC
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        # No lockfile is shipped in the mirror (lockfile lives at the
+        # monorepo root, which doesn't exist here). `install` resolves
+        # against the published-version-range each release.
+        run: npm install --no-fund --no-audit
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify package contents
+        run: npm run pack:check
+
+      - name: Publish
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

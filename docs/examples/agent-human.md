@@ -1,0 +1,84 @@
+# Agent + Human
+
+A task-writing agent that yields when a human is editing the same task.
+
+## Scenario
+
+A product queue has tasks that humans and agents both update. They must not
+collide:
+
+- If the user is editing, the agent waits or yields.
+- If the agent is updating, the UI can show who is active.
+- If the task changes mid-run, the commit rejects instead of overwriting newer
+  state.
+
+## Schema-Backed Worker
+
+Use the same schema client the app uses. The worker loads the task, checks active
+intents, and writes through `ablo.tasks.update(...)`.
+
+```ts
+import Ablo from '@ablo/sync-engine';
+import { defineSchema, model, z } from '@ablo/sync-engine/schema';
+
+const schema = defineSchema({
+  tasks: model({
+    title: z.string(),
+    status: z.enum(['todo', 'doing', 'done']),
+  }),
+});
+
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+
+export async function markDone(taskId: string) {
+  await ablo.ready();
+
+  const [task] = await ablo.tasks.load({ where: { id: taskId } });
+  if (!task) return { status: 'not_found' };
+
+  const busy = ablo.intents.list({ resource: 'tasks', id: taskId });
+  if (busy.length > 0) return { status: 'busy', intents: busy };
+
+  const snap = ablo.snapshot({ tasks: taskId });
+  const updated = await ablo.tasks.update(
+    taskId,
+    { status: 'done' },
+    { readAt: snap.stamp, onStale: 'reject', wait: 'confirmed' },
+  );
+
+  return { status: 'done', task: updated };
+}
+```
+
+Advanced schema-less workers can use `Ablo({ apiKey }).agent(...)`, but that is
+not the first integration path.
+
+## UI
+
+```tsx
+'use client';
+
+import { useAblo } from '@ablo/sync-engine/react';
+
+export function TaskRow({ task: serverTask }: Props) {
+  const data = useAblo((ablo) => ablo.tasks.retrieve(serverTask.id)) ?? serverTask;
+  const intents = useAblo((ablo) =>
+    ablo.intents.list({ resource: 'tasks', id: serverTask.id }),
+  ) ?? [];
+  const agentActive = intents.some((i) => i.participantKind === 'agent');
+
+  return (
+    <div>
+      <span>{data.title}</span>
+      {agentActive ? <span>Agent is updating...</span> : null}
+    </div>
+  );
+}
+```
+
+## Why It Works
+
+- Intents are visible on read and over the live stream.
+- `ifBusy: 'wait'` lets agents wait for active work instead of racing.
+- `readAt` plus `onStale: 'reject'` turns mid-flight changes into typed errors.
+- Audit rows tie each accepted write back to the run that caused it.

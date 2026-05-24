@@ -1,0 +1,85 @@
+/**
+ * Conflict policy — the engine detects, the policy decides.
+ *
+ * Two conflict shapes today: `stale_context` (a write whose `readAt`
+ * is older than the latest delta on the target) and `intent_held`
+ * (a participant claims a target someone else is already claiming).
+ * Adding new shapes is additive on the discriminated union.
+ */
+
+import type { ParticipantRef } from '../types/streams.js';
+
+export type ConflictKind = 'stale_context' | 'intent_held';
+
+/** Fields shared by every conflict shape. */
+interface ConflictBase {
+  readonly committer: ParticipantRef;
+  readonly organizationId: string;
+  /** Human at the root of the committer's delegation chain (if any). */
+  readonly delegationChainRootUserId?: string | null;
+}
+
+/** The operation whose write conflicts. */
+export interface ConflictOperation {
+  readonly model: string;
+  readonly id: string;
+  readonly type: 'CREATE' | 'UPDATE' | 'DELETE' | 'ARCHIVE' | 'UNARCHIVE';
+  readonly input?: Readonly<Record<string, unknown>>;
+}
+
+export interface StaleContextConflict extends ConflictBase {
+  readonly kind: 'stale_context';
+  readonly operation: ConflictOperation;
+  /** Watermark the committer reasoned against. */
+  readonly readAt: number;
+  /** Most recent delta id on the target. */
+  readonly observedSyncId: number;
+}
+
+export interface IntentHeldConflict extends ConflictBase {
+  readonly kind: 'intent_held';
+  readonly heldBy: ParticipantRef;
+  readonly intentId: string;
+  readonly entityType: string;
+  readonly entityId: string;
+  /** Holder's intent expiry (ms since epoch). */
+  readonly expiresAt: number;
+}
+
+/**
+ * The discriminated union the policy receives. Switch on `.kind` to
+ * narrow to the variant.
+ */
+export type Conflict = StaleContextConflict | IntentHeldConflict;
+
+/** What the policy returns. */
+export type ConflictDecision =
+  | { readonly action: 'reject'; readonly reason?: string }
+  | { readonly action: 'allow'; readonly note?: string };
+
+/**
+ * Pluggable decision function. Sync or async.
+ *
+ * ```ts
+ * const policy: ConflictPolicy = (conflict) => {
+ *   if (conflict.committer.id.startsWith('linter:')) {
+ *     return { action: 'allow', note: 'cosmetic writer' };
+ *   }
+ *   return defaultPolicy(conflict);
+ * };
+ * ```
+ */
+export type ConflictPolicy = (
+  conflict: Conflict,
+) => ConflictDecision | Promise<ConflictDecision>;
+
+/**
+ * Default: reject every conflict. Safe fallback when no custom policy
+ * is wired — the engine never silently allows a stale or
+ * intent-conflicting write through.
+ */
+export const defaultPolicy: ConflictPolicy = (conflict) => ({
+  action: 'reject',
+  reason: conflict.kind === 'stale_context' ? 'stale_context' : 'intent_conflict',
+});
+

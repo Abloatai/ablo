@@ -1,0 +1,11 @@
+__tests__/
+src/
+examples/
+benchmarks/
+docs/
+*.config.ts
+tsconfig*.json
+jest*.config.ts
+docker-compose*.yml
+.claude/
+.github/

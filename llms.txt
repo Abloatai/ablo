@@ -1,0 +1,143 @@
+# Ablo
+
+Ablo is the state coordination layer for apps where humans and agents edit the same data.
+
+Use AI SDK for the agent loop. Use Ablo when agent reads and writes must persist, coordinate with concurrent work, and leave an audit trail.
+
+## Use this API
+
+```ts
+import Ablo from '@ablo/sync-engine';
+import { defineSchema, model, z } from '@ablo/sync-engine/schema';
+
+const schema = defineSchema({
+  tasks: model({
+    id: z.string(),
+    title: z.string(),
+    status: z.enum(['todo', 'doing', 'done']),
+    summary: z.string().optional(),
+  }),
+});
+
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+
+const [task] = await ablo.tasks.load({ where: { id: 'task_123' } });
+if (!task) throw new Error('Task not found');
+
+const intents = ablo.intents.list({ resource: 'tasks', id: 'task_123' });
+if (intents.length > 0) {
+  await ablo.intents.waitFor({ resource: 'tasks', id: 'task_123' }, { timeout: 30_000 });
+}
+
+const snap = ablo.snapshot({ tasks: 'task_123' });
+const updated = await ablo.tasks.update(
+  'task_123',
+  { status: 'done', summary: await summarize(task) },
+  {
+    readAt: snap.stamp,
+    onStale: 'reject',
+    wait: 'confirmed',
+  },
+);
+```
+
+That is the normal app path: declare models in a schema, then use `ablo.<model>.load(...)`, `ablo.<model>.retrieve(...)`, `ablo.<model>.create(...)`, `ablo.<model>.update(...)`, and `ablo.<model>.delete(...)`.
+
+For full integrations, use `integration-guide` as the canonical doc. It covers
+the same model API across Ablo-managed state, Data Source-backed app databases,
+React selectors, multiplayer, and future agent workers.
+
+`ablo.<model>.list(...)` and `count(...)` are synchronous local reads. They
+accept `where`, `filter`, `orderBy`, `limit`, `offset`, and `scope`; scope
+defaults to `'live'`, with `'archived'` and `'all'` for lifecycle-aware reads.
+
+Advanced schema-less agents exist for workers that cannot import the app schema,
+but do not teach that path first.
+
+React reads should use selector `useAblo`: `useAblo((ablo) => ablo.tasks.retrieve(id))`.
+Use zero-argument `useAblo()` only when a component needs the client for an
+event handler or effect. Treat `useQuery`, `useOne`, `useReader`, and
+`useMutate` as compatibility hooks for older string-keyed integrations, not the
+first integration path.
+
+## Multiplayer
+
+Multiplayer is not a separate mode. When human UI, server actions, and agents use
+the same schema client and write through `ablo.<model>`, Ablo coordinates the
+shared resource stream: confirmed deltas fan out to subscribers, active intents
+are visible, and stale writes can be rejected with `readAt`.
+
+If an app writes directly to its own database outside Ablo, that write bypasses
+coordination until the app reports it through Data Source events.
+
+## Nouns
+
+- `Model resource` is the typed `ablo.<model>` object generated from schema.
+- `Intent` declares active work on a resource so humans and agents can coordinate.
+- `Commit` is the durable protocol write behind `ablo.<model>.update(...)`.
+- `Receipt` confirms the commit.
+- `Capability` scopes what an agent may do. `agent.run(...)` handles the common case.
+- `Task` is one agent run, with audit and cost attribution.
+
+## Busy Behavior
+
+Reads never silently block. Pass `ifBusy: 'return'` to receive active intents, `ifBusy: 'fail'` to throw `AbloBusyError`, or `ifBusy: 'wait'` to wait until the active intent clears.
+
+Schema clients wait from the realtime intent stream. Schema-less HTTP callers must provide an explicit `busyPollInterval` when using `ifBusy: 'wait'`; Ablo does not hide a hard-coded polling loop.
+
+Use `busyTimeout` only as a maximum wait, not as the coordination mechanism.
+
+## Guarantees
+
+`wait: 'confirmed'` means the server accepted the write. Schema model writes are optimistic by default; server rejection rolls back local state. Use `snapshot(...)` plus `readAt` and `onStale: 'reject'` to prevent lost updates.
+
+Intents are coordination signals, not database locks. Capabilities and tasks are real protocol primitives, but most users let the SDK manage them through schema-backed writes or advanced `agent.run(...)`.
+
+All SDK errors extend `AbloError`. Important classes: `AbloBusyError`, `AbloStaleContextError`, `AbloAuthenticationError`, `AbloPermissionError`, `AbloRateLimitError`, `AbloIdempotencyError`, `AbloConnectionError`, `AbloValidationError`, and `AbloServerError`.
+
+## Schema Scope
+
+Teach schema as model fields and relations first. Advanced schema helpers such as `mutable`, `readOnly`, `field`, `indexed`, queries, and load strategies exist for offline/cache/indexing-heavy apps, but they should not be the first concept a new integration sees.
+
+## Storage Boundary
+
+Do not add `databaseURL` to `Ablo(...)`. Application and agent code use `ABLO_API_KEY`.
+
+Every schema model has a backing store. By default, Ablo stores rows for declared models, so `ablo.<model>.create/update/delete` write to Ablo-managed state. If the customer database is canonical, add a Data Source URL in Ablo, store `ABLO_DATA_SOURCE_SIGNING_SECRET` in the app, then expose a signed `dataSource({ schema, signingSecret, load, list, commit, events })` route from the customer app. Customer-owned app database credentials stay private.
+
+Use `dataSource` from the root import:
+
+```ts
+import { dataSource } from '@ablo/sync-engine';
+```
+
+## Sandboxes
+
+Public `/sandbox` is a deterministic visual demo. It should teach shared state,
+intents, stale-write rejection, receipts, and deltas, but it does not use a real
+API key. It also exposes a Claude Code / Codex handoff prompt. Prefer that shape
+when an agent is asked to "make Ablo work" in an existing app.
+
+Authenticated org sandboxes are real test environments. Treat the default
+sandbox like Stripe test mode: it has an isolated sync group prefix and mints
+`sk_test_*` keys. Extra sandboxes can start blank or copy live configuration.
+Resetting a sandbox creates a clean future stream without touching live data.
+Use `sk_live_*` only for production.
+
+For coding agents, the sandbox success path is: pick one shared resource,
+declare schema, create the Ablo client, replace one direct mutation with a typed
+`ablo.<model>.update(...)`, use selector `useAblo` for live reads, and add a
+two-writer stale/intent smoke test.
+
+## Public Surface
+
+Import from these public paths only:
+
+- `@ablo/sync-engine` — `Ablo`, errors, typed model resources, intents, `dataSource`, and advanced protocol resources.
+- `@ablo/sync-engine/schema` — schema DSL.
+- `@ablo/sync-engine/react` — React provider and hooks.
+- `@ablo/sync-engine/testing` — test harnesses and mocks.
+
+Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, `/source`, or internal subpaths.
+
+Canonical docs to read before integrating: `quickstart`, `integration-guide`, `guarantees`, `client-behavior`, `data-sources`, `examples/existing-python-backend`, `api`, `examples/ai-sdk-tool`, and `examples/server-agent`.

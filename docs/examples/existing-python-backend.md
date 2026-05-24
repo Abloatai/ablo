@@ -1,0 +1,249 @@
+# Existing Python Backend
+
+Use this path when a product already has a Python API server and every button
+currently calls an application endpoint.
+
+The goal is not to replace the backend. Keep the Python service layer and
+database as the source of truth. Add Ablo as the shared write path for records
+that need multiplayer now and agent-safe writes later.
+
+This also applies to any API-backed app, not only Python. A product like a YC
+company's existing dashboard can keep its current endpoint/service/database
+shape and migrate one coordinated resource at a time.
+
+```txt
+Browser UI
+  -> Ablo model write
+  -> Python Data Source endpoint
+  -> existing Python service layer
+  -> app database
+  -> Ablo realtime fanout
+  -> browser UI and agents
+```
+
+## 1. Declare The Shared Models
+
+Create a schema for the records that need realtime coordination.
+
+```ts
+// web/ablo.schema.ts
+import { defineSchema, model, z } from '@ablo/sync-engine/schema';
+
+export const schema = defineSchema({
+  tasks: model({
+    id: z.string(),
+    title: z.string(),
+    status: z.enum(['todo', 'doing', 'done']),
+    updatedAt: z.string(),
+  }),
+});
+```
+
+```ts
+// web/ablo.ts
+import Ablo from '@ablo/sync-engine';
+import { schema } from './ablo.schema';
+
+export const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+});
+```
+
+Mount the React provider near the app root so client components can subscribe to
+model resources without importing server credentials.
+
+```tsx
+// web/app/providers.tsx
+'use client';
+
+import { AbloProvider } from '@ablo/sync-engine/react';
+import { schema } from '@/ablo.schema';
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  return <AbloProvider schema={schema}>{children}</AbloProvider>;
+}
+```
+
+## 2. Add Live Reads In The UI
+
+Keep the first render backed by the existing Python endpoint. After that,
+subscribe to the same model resource Ablo writes through.
+
+```tsx
+'use client';
+
+import { useAblo } from '@ablo/sync-engine/react';
+
+export function TaskRow({ task: serverTask }: { task: Task }) {
+  const task = useAblo((ablo) => ablo.tasks.retrieve(serverTask.id)) ?? serverTask;
+  const intents = useAblo((ablo) =>
+    ablo.intents.list({ resource: 'tasks', id: serverTask.id }),
+  ) ?? [];
+  const busy = intents.length > 0;
+
+  return (
+    <button disabled={busy || task.status === 'done'}>
+      {busy ? 'Someone is editing' : task.title}
+    </button>
+  );
+}
+```
+
+No string model key is needed in the first example. The selector reads from
+`ablo.tasks`, so React uses the same model resource as writes and agents.
+
+## 3. Add One Python Data Source Endpoint
+
+In Ablo, configure the Data Source URL:
+
+```txt
+https://api.example.com/api/ablo/source
+```
+
+Store the signing secret in the Python server:
+
+```bash
+ABLO_DATA_SOURCE_SIGNING_SECRET=whsec_...
+```
+
+Then expose one route that verifies the signed request and calls the existing
+service functions.
+
+```py
+# app/ablo_source.py
+import base64
+import hashlib
+import hmac
+import json
+import os
+import time
+from fastapi import APIRouter, HTTPException, Request
+
+from app.services.tasks import get_task, list_tasks, apply_task_operations
+
+router = APIRouter()
+
+
+def verify_ablo_signature(request: Request, raw_body: bytes) -> None:
+    secret = os.environ["ABLO_DATA_SOURCE_SIGNING_SECRET"].encode()
+    message_id = request.headers.get("webhook-id")
+    timestamp = request.headers.get("webhook-timestamp")
+    signature_header = request.headers.get("webhook-signature", "")
+
+    if not message_id or not timestamp or not signature_header:
+        raise HTTPException(status_code=401, detail="missing signature")
+
+    signed_at = int(timestamp)
+    if abs(int(time.time() * 1000) - signed_at) > 5 * 60 * 1000:
+        raise HTTPException(status_code=401, detail="expired signature")
+
+    payload = message_id.encode() + b"." + timestamp.encode() + b"." + raw_body
+    expected = base64.b64encode(
+        hmac.new(secret, payload, hashlib.sha256).digest()
+    ).decode()
+
+    presented = [
+        part.removeprefix("v1,")
+        for part in signature_header.split()
+        if part.startswith("v1,")
+    ]
+
+    if not any(hmac.compare_digest(expected, value) for value in presented):
+        raise HTTPException(status_code=401, detail="invalid signature")
+
+
+@router.post("/api/ablo/source")
+async def ablo_source(request: Request):
+    raw_body = await request.body()
+    verify_ablo_signature(request, raw_body)
+    body = json.loads(raw_body)
+
+    if body["type"] == "load":
+        if body["model"] == "tasks":
+            return {"row": await get_task(body["id"])}
+
+    if body["type"] == "list":
+        if body["model"] == "tasks":
+            return {"rows": await list_tasks(body.get("query", {}))}
+
+    if body["type"] == "commit":
+        rows = await apply_task_operations(
+            operations=body["operations"],
+            client_tx_id=body.get("clientTxId"),
+            scope=body.get("scope", {}),
+        )
+        return {"rows": rows}
+
+    raise HTTPException(status_code=400, detail="unsupported request")
+```
+
+`apply_task_operations` should reuse the same transaction and validation logic
+the existing Python endpoints already use. Dedupe by `clientTxId` so retries are
+safe.
+
+## 4. Move Buttons Gradually
+
+Existing button path:
+
+```txt
+Button -> Python endpoint -> service -> database
+```
+
+Target button path:
+
+```txt
+Button -> ablo.tasks.update(...)
+Ablo -> Python Data Source endpoint
+Python service -> database
+Ablo -> realtime fanout and receipt
+```
+
+The app does not need a flag-day rewrite. Move one resource at a time.
+
+```ts
+const snap = ablo.snapshot({ tasks: taskId });
+
+await ablo.tasks.update(
+  taskId,
+  { status: 'done' },
+  { readAt: snap.stamp, onStale: 'reject', wait: 'confirmed' },
+);
+```
+
+Use `readAt` and `onStale: 'reject'` for actions that depend on state the user
+or agent already saw.
+
+## 5. Report Direct Database Writes
+
+Some writes will still happen through old Python endpoints, cron jobs, admin
+tools, or imports. Those bypass Ablo until the backend reports them.
+
+Add an outbox table in Python and expose it through Data Source `events`:
+
+```txt
+old Python endpoint -> service -> database -> outbox row
+Ablo polls events -> realtime fanout
+```
+
+Each event needs a stable event id, model name, entity id, event type, row data,
+and timestamp. If the change originated from an Ablo commit, include the same
+`clientTxId` so Ablo can ignore its own echo.
+
+## 6. Add Agents Later
+
+Agents use the same model API as the UI:
+
+```ts
+const [task] = await ablo.tasks.load({ where: { id: taskId } });
+const snap = ablo.snapshot({ tasks: taskId });
+
+await ablo.tasks.update(
+  taskId,
+  { status: 'done' },
+  { readAt: snap.stamp, onStale: 'reject', wait: 'confirmed' },
+);
+```
+
+That is the point of the migration: humans and agents share one write contract,
+while the Python backend remains the canonical business logic and database owner.

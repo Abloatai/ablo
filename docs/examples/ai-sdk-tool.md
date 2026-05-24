@@ -1,0 +1,92 @@
+# AI SDK Tool
+
+Use AI SDK for the loop and Ablo for the state boundary inside the tool.
+
+```ts
+import Ablo from '@ablo/sync-engine';
+import { defineSchema, model, z as schemaZ } from '@ablo/sync-engine/schema';
+import { streamText, tool } from 'ai';
+import { z } from 'zod';
+
+const schema = defineSchema({
+  tasks: model({
+    title: schemaZ.string(),
+    status: schemaZ.enum(['todo', 'doing', 'done']),
+    summary: schemaZ.string().optional(),
+  }),
+});
+
+const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+});
+
+const updateTask = tool({
+  description: 'Update a task in the product database.',
+  inputSchema: z.object({
+    taskId: z.string(),
+    status: z.enum(['todo', 'doing', 'done']).optional(),
+    summary: z.string().optional(),
+  }),
+  execute: async ({ taskId, status, summary }) => {
+    await ablo.ready();
+
+    const [task] = await ablo.tasks.load({ where: { id: taskId } });
+    if (!task) return { ok: false, reason: 'not_found' };
+
+    const busy = ablo.intents.list({ resource: 'tasks', id: taskId });
+    if (busy.length > 0) {
+      await ablo.intents.waitFor(
+        { resource: 'tasks', id: taskId },
+        { timeout: 30_000 },
+      );
+    }
+
+    const snap = ablo.snapshot({ tasks: taskId });
+    const intent = await ablo.intents.create({
+      target: { resource: 'tasks', id: taskId, field: 'status' },
+      action: 'update',
+    });
+
+    try {
+      const updated = await ablo.tasks.update(
+        taskId,
+        {
+          status: status ?? task.status,
+          summary: summary ?? task.summary,
+        },
+        {
+          intent,
+          readAt: snap.stamp,
+          onStale: 'reject',
+          wait: 'confirmed',
+        },
+      );
+
+      return { ok: true, task: updated };
+    } finally {
+      await intent.release();
+    }
+  },
+});
+
+export async function POST(req: Request) {
+  const { messages, model } = await req.json();
+
+  return streamText({
+    model,
+    messages,
+    tools: { updateTask },
+  }).toUIMessageStreamResponse();
+}
+```
+
+The important part is not the model provider. The important part is that the
+tool:
+
+- loads the latest task,
+- checks active intent,
+- writes with `readAt`,
+- rejects stale state,
+- waits for server confirmation.
+
