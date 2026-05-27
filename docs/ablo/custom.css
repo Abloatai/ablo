@@ -1,0 +1,115 @@
+/* ============================================================
+ * Ablo docs — design-system overrides for Mintlify
+ *
+ * Branding that docs.json owns (theme, brand colors, background
+ * tones, fonts) lives in docs.json — NOT here. This file only
+ * does what config can't: outline buttons, tighter radii,
+ * underline links, surface-toned code/tables.
+ *
+ * Per Mintlify guidance, selectors target STABLE hooks only:
+ *  - documented IDs: #navbar, #sidebar, #content-area
+ *  - real HTML elements: button, pre, code, table, a, input
+ * We deliberately avoid [class*="..."] Tailwind-class fragments,
+ * which change between Mintlify releases.
+ * ============================================================ */
+
+:root {
+  --ablo-surface: #fafafa;
+  --ablo-surface-foreground: #1a1a1a;
+  --ablo-border: #1a1a1a;
+  --ablo-border-subtle: #d8d4cc;
+  --ablo-radius-sm: 4px;
+  --ablo-radius-md: 6px;
+  /* Steel-blue accent — echoes the landing-page gradient. */
+  --ablo-accent: #4a6577;
+  --ablo-highlight: rgba(74, 101, 119, 0.14);
+}
+
+.dark {
+  --ablo-surface: #262522;
+  --ablo-surface-foreground: #f4f0e6;
+  --ablo-border: #f4f0e6;
+  --ablo-border-subtle: rgba(244, 240, 230, 0.18);
+  --ablo-accent: #98aebc;
+  --ablo-highlight: rgba(152, 174, 188, 0.16);
+}
+
+/* ---- CTA links styled as outline buttons -------------------- *
+ * ONLY anchor-based call-to-action buttons (a[role="button"]).
+ * We deliberately do NOT touch bare <button>, which Mintlify
+ * uses for functional controls — code-block copy/expand, tabs,
+ * dropdowns. Styling those breaks their native look.            */
+
+#content-area a[role="button"] {
+  background-color: var(--ablo-highlight) !important;
+  background-image: none !important;
+  color: var(--ablo-accent) !important;
+  border: none !important;
+  border-radius: var(--ablo-radius-sm) !important;
+  box-shadow: none !important;
+}
+
+#content-area a[role="button"]:hover {
+  background-color: var(--ablo-accent) !important;
+  color: var(--ablo-surface) !important;
+}
+
+/* Code blocks are owned by docs.json `codeblocks.theme` (Shiki).
+   We don't override `pre`/`code` chrome — that fights the theme. */
+
+/* ---- Sidebar + navbar: surface bg, subtle divider ----------- */
+
+#navbar,
+#sidebar {
+  background-color: var(--ablo-surface) !important;
+  border-color: var(--ablo-border-subtle) !important;
+}
+
+/* Active sidebar item: soft steel-blue tint, accent text (not a
+   black block). aria-current is a stable hook. */
+#sidebar a[aria-current="page"] {
+  background-color: var(--ablo-highlight) !important;
+  color: var(--ablo-accent) !important;
+  border-radius: 0 !important;
+}
+
+/* ---- Links in body copy: underline-on-hover ----------------- */
+
+#content-area a:not([role="button"]) {
+  color: var(--ablo-accent);
+  text-decoration: underline;
+  text-decoration-color: var(--ablo-border-subtle);
+  text-underline-offset: 3px;
+}
+
+#content-area a:not([role="button"]):hover {
+  text-decoration-color: var(--ablo-accent);
+}
+
+/* ---- Tables: subtle borders, square-ish corners ------------- */
+
+#content-area table {
+  border-radius: var(--ablo-radius-sm);
+  overflow: hidden;
+}
+
+#content-area th,
+#content-area td {
+  border-color: var(--ablo-border-subtle) !important;
+}
+
+/* ---- Search / text inputs: outline style -------------------- */
+
+input[type="search"],
+input[type="text"] {
+  background-color: transparent !important;
+  border: 1px solid var(--ablo-border-subtle) !important;
+  border-radius: var(--ablo-radius-sm) !important;
+  color: var(--ablo-surface-foreground) !important;
+}
+
+input[type="search"]:focus,
+input[type="text"]:focus {
+  border-color: var(--ablo-border) !important;
+  outline: none !important;
+}

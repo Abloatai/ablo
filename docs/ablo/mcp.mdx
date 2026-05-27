@@ -1,0 +1,59 @@
+---
+title: "Model Context Protocol"
+---
+
+Ablo Sync ships an MCP server at `/api/mcp`. Connect any MCP-compatible AI
+assistant — Claude Code, Cursor, Windsurf — and your sync resources become
+typed, callable tools.
+
+## Install
+
+Pick your client:
+
+- [Claude Code](/docs/mcp/claude-code)
+- [Cursor](/docs/mcp/cursor)
+- [Windsurf](/docs/mcp/windsurf)
+
+## How it works
+
+Each resource you declare becomes one or more MCP tools:
+
+| Resource method | MCP tool name | What it does |
+|---|---|---|
+| `retrieve` | `<resource>.retrieve` | Returns the row + a stamp. |
+| `list` | `<resource>.list` | Cursor-paginated discovery. |
+| `update` | `<resource>.update` | Write, requires the prior stamp. |
+| `intents.create` | `intent.create` | Declare a claim before writing. |
+
+The assistant gets typed JSON schemas, real argument types, and typed
+rejections when it writes stale state. No invention, no hallucinated IDs.
+
+## Auth
+
+The MCP transport requires a capability token. Create one scoped to the
+assistant's session:
+
+```ts
+const capability = await ablo.capabilities.create({
+  participantKind: 'agent',
+  participantId: 'agent:claude-code',
+  allowedSyncGroups: ['default'],
+  allowedOperations: ['tasks.retrieve', 'tasks.update'],
+  label: 'claude-code dev session',
+  lease: '8h',
+});
+```
+
+Pass `capability.token` into the MCP client's auth header configuration.
+See your client's setup guide for the exact mechanism.
+
+## Limits
+
+The MCP endpoint is rate-limited per token. Read-heavy bursts are fine;
+write-heavy bursts get throttled at the dashboard-configured cap.
+
+## More
+
+The [MCP landing page](/mcp) has the product pitch. The route handler
+itself is at `apps/sync-web/src/app/api/mcp/route.ts` if you want to read
+the implementation.

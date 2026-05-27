@@ -1,0 +1,97 @@
+---
+title: "Interaction Model"
+---
+
+Ablo separates the data path from the authority path.
+
+The data path is what your application does on every write:
+
+```
+Schema -> Model load -> Intent -> Model update -> Confirmation
+```
+
+The authority path is what makes that write defensible:
+
+```
+Capability -> Task -> Usage
+```
+
+## Primitives
+
+| Primitive | Plane | Purpose |
+|---|---|---|
+| `Schema` | State | Declares typed models the app and agents can read and write. |
+| `Model` | State | The generated `ablo.<model>` resource. Use `load`, `retrieve`, `create`, `update`, and `delete`. |
+| `Intent` | State | Pre-write coordination. It says what this actor is preparing to change. |
+| `Commit` | Protocol | The durable write underneath model updates. Most users do not call it directly. |
+| `Receipt` | Protocol | The lower-level durable result for custom runtimes. Schema writes use `wait: 'confirmed'`. |
+| `Capability` | Control | Signed credentials. It says who can do what, where, for how long, and on whose behalf. |
+| `Task` | Control | One agent run. It groups prompts, commits, child tasks, and cost. |
+| `Usage` | Control | Metering and audit rows derived from accepted work. |
+
+Capabilities, tasks, and usage do not mutate product data. They define and
+record the authority around mutation.
+
+## Run Loop
+
+A normal schema-backed run is:
+
+```
+const [task] = await ablo.tasks.load({ where: { id } });
+const busy = ablo.intents.list({ resource: 'tasks', id });
+const snap = ablo.snapshot({ tasks: id });
+await ablo.tasks.update(id, patch, {
+  readAt: snap.stamp,
+  onStale: 'reject',
+  wait: 'confirmed',
+});
+```
+
+## Participants
+
+Every action is performed by one of three kinds:
+
+- `user` — a human, authenticated via session.
+- `agent` — an AI process acting on behalf of a human, authenticated via a capability minted from that human's session.
+- `system` — a customer-backend process acting on behalf of an organization, authenticated via an API key.
+
+The participant kind is enforced at the boundary. An agent capability cannot impersonate a user. A user session cannot open a task.
+
+## Delegation chain
+
+Every capability resolves to a `delegationChainRootUserId` — the human at the head of the chain. The chain is denormalized onto every commit's `on_behalf_of_*` columns so audit queries answer "what did this human authorize" with one lookup, not a recursive join.
+
+## Enforcement
+
+Capabilities are enforced per operation, not per request. When a commit arrives, Ablo decodes the bearer token, checks each operation against `allowedOperations` and `allowedSyncGroups`, and rejects with `capability_scope_denied` if the scope is missing. Revocation takes effect within seconds of `DELETE /v1/capabilities/:id`.
+
+## Coordination
+
+Intents broadcast across the org. When `agent:task-writer` declares an intent to
+update a task, schema clients can see it through `ablo.intents.list(...)` or the
+live intent stream. Callers decide whether to yield, wait, or fail fast.
+
+## Conflict resolution
+
+Schema updates can carry `readAt` and `onStale`. If the state advanced past
+`readAt`, Ablo applies the `onStale` policy:
+
+- `reject` — fail the commit (first writer wins).
+- `merge` — apply the write if it does not overlap with concurrent changes.
+- `force` — apply the write unconditionally.
+
+The choice is per-commit. No CRDT default; the policy is explicit.
+
+## Audit
+
+Three tables observe the run:
+
+- `agent_tasks` — one row per open/close cycle. Cost stats, prompt hash, capability id.
+- `agent_actions_log` — one row per write, attributed to the task and the capability.
+- `usage_event` — one row per accounted API call, attributed to the api key, the participant, and the task.
+
+Joins between them answer "what did this agent do, on whose authority, at what cost." That answer is what makes giving an agent write access defensible.
+
+## The contract in one sentence
+
+Declare schema, load state, coordinate intent, update the model, and wait for confirmation.

@@ -1,0 +1,149 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "maple",
+  "name": "Ablo",
+  "description": "An open protocol for agent-native multiplayer state",
+  "search": {
+    "prompt": "Search the Ablo docs..."
+  },
+  "colors": {
+    "primary": "#4a6577",
+    "light": "#98aebc",
+    "dark": "#324a5a"
+  },
+  "background": {
+    "decoration": "gradient",
+    "color": {
+      "light": "#fafafa",
+      "dark": "#262522"
+    }
+  },
+  "styling": {
+    "eyebrows": "breadcrumbs",
+    "codeblocks": {
+      "theme": {
+        "light": "github-light",
+        "dark": "github-dark"
+      }
+    }
+  },
+  "favicon": {
+    "light": "/favicon-light.png",
+    "dark": "/favicon-dark.png"
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg",
+    "href": "https://abloatai.com"
+  },
+  "fonts": {
+    "heading": {
+      "family": "Inter",
+      "weight": 600
+    },
+    "body": {
+      "family": "Inter"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "index",
+              "quickstart",
+              "integration-guide"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "interaction-model",
+              "guarantees",
+              "client-behavior"
+            ]
+          },
+          {
+            "group": "Authority",
+            "pages": [
+              "capabilities",
+              "api-keys",
+              "audit"
+            ]
+          },
+          {
+            "group": "Storage",
+            "pages": [
+              "data-sources"
+            ]
+          },
+          {
+            "group": "Frontend",
+            "pages": [
+              "react"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/ai-sdk-tool",
+              "examples/agent-human",
+              "examples/server-agent",
+              "examples/existing-python-backend",
+              "examples/nextjs"
+            ]
+          },
+          {
+            "group": "MCP",
+            "pages": [
+              "mcp",
+              "mcp/claude-code",
+              "mcp/cursor",
+              "mcp/windsurf"
+            ]
+          },
+          {
+            "group": "SDK Reference",
+            "pages": [
+              "api"
+            ]
+          },
+          {
+            "group": "Roadmap",
+            "pages": [
+              "roadmap"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "openapi": "openapi.json"
+      },
+      {
+        "tab": "Changelog",
+        "pages": ["changelog"]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/Abloatai/ablo"
+      },
+      {
+        "label": "npm",
+        "href": "https://www.npmjs.com/package/@abloatai/ablo"
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Abloatai"
+    }
+  }
+}

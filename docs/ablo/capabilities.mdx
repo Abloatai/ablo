@@ -1,0 +1,68 @@
+---
+title: "Capabilities"
+---
+
+A capability is scoped credentials for a non-human actor.
+
+It is not a task and it is not an intent. It is the permission boundary that
+answers who may touch which resources.
+
+Most apps should use `api.agent(...).run(...)`; the SDK creates and revokes the
+capability for that run. Create capabilities directly only for custom runtimes,
+MCP sessions, or protocol-level integrations.
+
+## Create
+
+```ts
+import Ablo from '@abloatai/ablo';
+
+const admin = Ablo({ apiKey: process.env.ABLO_API_KEY });
+
+const capability = await admin.capabilities.create({
+  participantKind: 'agent',
+  participantId: 'agent:task-writer',
+  allowedSyncGroups: ['default'],
+  allowedOperations: ['tasks.retrieve', 'tasks.update'],
+  lease: '10m',
+});
+```
+
+Pass `capability.token` into the agent runtime. The agent never sees admin
+credentials.
+
+```ts
+const agent = capability.client();
+```
+
+## Inspect
+
+```ts
+const record = await admin.capabilities.retrieve(capability.id);
+
+record.status; // active | expired | revoked
+record.allowedOperations; // ['tasks.retrieve', 'tasks.update']
+```
+
+Inspection never returns the bearer token. Tokens are returned once at create
+time.
+
+## Revoke
+
+```ts
+await admin.capabilities.revoke(capability.id);
+```
+
+Revocation is forward-only. Already accepted commits stand; future requests with
+that token are rejected within seconds.
+
+## Scope Grammar
+
+| Field | Required | Meaning |
+|---|---|---|
+| `participantKind` | yes | `agent` or `system`. Capabilities cannot impersonate `user`. |
+| `participantId` | recommended | Stable actor id, for example `agent:task-writer`. |
+| `allowedSyncGroups` | yes | Sync groups the actor can touch. |
+| `allowedOperations` | yes | Typed operation names, for example `tasks.update`. |
+| `lease` / `leaseSeconds` | recommended | Crash cleanup window for abandoned actors. |
+| `label` | no | Human-readable label for dashboards and audit. |
+| `userMeta` | no | Customer-attested end-user metadata for B2B2C flows. |

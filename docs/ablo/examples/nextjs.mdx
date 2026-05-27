@@ -1,0 +1,90 @@
+---
+title: "Next.js Example"
+---
+
+A production-shaped Next.js + Ablo Sync app. App Router, Server Actions, React
+Server Components, and live client subscriptions.
+
+## Structure
+
+```txt
+app/
+  tasks/
+    [id]/
+      page.tsx          # RSC: retrieve + render
+      actions.ts        # Server Action: schema update with stale-state check
+      TaskEditor.tsx    # Client: live updates
+  lib/
+    ablo.ts             # Schema-backed Ablo client for server actions
+```
+
+## RSC Initial Render
+
+```tsx
+// app/tasks/[id]/page.tsx
+import { ablo } from '@/lib/ablo';
+
+export default async function TaskPage({
+  params,
+}: { params: { id: string } }) {
+  await ablo.ready();
+  const [task] = await ablo.tasks.load({ where: { id: params.id } });
+  if (!task) return null;
+
+  return <TaskEditor task={task} />;
+}
+```
+
+## Server Action Commit
+
+```ts
+// app/tasks/[id]/actions.ts
+'use server';
+
+import { ablo } from '@/lib/ablo';
+
+export async function markDone(id: string) {
+  const busy = ablo.intents.list({ resource: 'tasks', id });
+  if (busy.length > 0) return { status: 'busy', intents: busy };
+
+  const snap = ablo.snapshot({ tasks: id });
+  const task = await ablo.tasks.update(
+    id,
+    { status: 'done' },
+    { readAt: snap.stamp, onStale: 'reject', wait: 'confirmed' },
+  );
+
+  return { status: 'done', task };
+}
+```
+
+If another participant commits between the read and the write, the commit
+rejects. The action can re-fetch and ask the user to retry.
+
+## Live Client
+
+```tsx
+'use client';
+
+import { useAblo } from '@abloatai/ablo/react';
+
+export function TaskEditor({ task: serverTask }: Props) {
+  const data = useAblo((ablo) => ablo.tasks.retrieve(serverTask.id)) ?? serverTask;
+  const intents = useAblo((ablo) =>
+    ablo.intents.list({ resource: 'tasks', id: serverTask.id }),
+  ) ?? [];
+  const busy = intents.length > 0;
+
+  return (
+    <button disabled={busy || data.status === 'done'}>
+      {busy ? 'Someone is editing' : 'Mark done'}
+    </button>
+  );
+}
+```
+
+## More
+
+- [Next.js landing](/nextjs) — the product overview.
+- [React reference](/docs/react) — every option on `useAblo`.
+- [API reference](/docs/api) — every option on the write path.

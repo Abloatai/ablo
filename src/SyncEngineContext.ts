@@ -1,0 +1,130 @@
+/**
+ * SyncEngineContext — Runtime dependency container
+ *
+ * All SDK classes receive this context at construction time.
+ * It bundles every injectable dependency so constructors stay clean.
+ */
+
+import type {
+  SyncLogger,
+  SyncObservabilityProvider,
+  SyncAnalytics,
+  SessionErrorDetector,
+  OnlineStatusProvider,
+  ModelDebugLoggerContract,
+  MutationExecutor,
+  MutationDispatcher,
+  SyncEngineConfig,
+  BreadcrumbLevel,
+  SyncBreadcrumbCategory,
+  SpanAttributes,
+} from './interfaces/index.js';
+
+export interface SyncEngineContext {
+  /** Structured logger */
+  logger: SyncLogger;
+
+  /** Error tracking & performance monitoring */
+  observability: SyncObservabilityProvider;
+
+  /** Product analytics (optional) */
+  analytics?: SyncAnalytics;
+
+  /** Session error detection for auth redirect decisions */
+  sessionErrorDetector: SessionErrorDetector;
+
+  /** Network connectivity detection */
+  onlineStatus: OnlineStatusProvider;
+
+  /** Model operation debug logging (optional, dev-only) */
+  modelDebugLogger?: ModelDebugLoggerContract;
+
+  /** Backend mutation transport (GraphQL, REST, etc.) */
+  mutationExecutor: MutationExecutor;
+
+  /** Offline mutation replay dispatcher */
+  mutationDispatcher: MutationDispatcher;
+
+  /** Application-specific sync configuration */
+  config: SyncEngineConfig;
+}
+
+// ─────────────────────────────────────────────
+// No-op defaults for optional dependencies
+// ─────────────────────────────────────────────
+
+/** No-op logger — silently discards all log calls */
+export const noopLogger: SyncLogger = {
+  debug() {},
+  info() {},
+  warn() {},
+  error() {},
+};
+
+/** No-op observability — silently discards all observability calls */
+export const noopObservability: SyncObservabilityProvider = {
+  setContext() {},
+  setConnectionState() {},
+  breadcrumb() {},
+  captureRollback() {},
+  captureTransactionFailure() {},
+  captureBootstrapFailure() {},
+  captureReconciliation() {},
+  captureDeltaRetryExhausted() {},
+  captureWebSocketError() {},
+  captureOfflineFlushFailure() {},
+  captureSelfHealing() {},
+  captureCommitZeroSyncId() {},
+  startSpan<T>(_name: string, _op: string, fn: () => T, _attributes?: SpanAttributes): T {
+    return fn();
+  },
+  async startSpanAsync<T>(
+    _name: string,
+    _op: string,
+    fn: () => Promise<T>,
+    _attributes?: SpanAttributes
+  ): Promise<T> {
+    return fn();
+  },
+};
+
+/** No-op analytics — silently discards all analytics calls */
+export const noopAnalytics: SyncAnalytics = {
+  capture() {},
+};
+
+/** Browser-native online status provider */
+export const browserOnlineStatus: OnlineStatusProvider = {
+  isOnline(): boolean {
+    return typeof navigator !== 'undefined' ? navigator.onLine : true;
+  },
+};
+
+/** Permissive session error detector — treats 401/403 as session errors */
+export const defaultSessionErrorDetector: SessionErrorDetector = {
+  isSessionError(error: unknown): boolean {
+    if (error && typeof error === 'object' && 'isSessionError' in error) {
+      return (error as { isSessionError: boolean }).isSessionError === true;
+    }
+    return false;
+  },
+  isSessionErrorResponse(status: number): boolean {
+    return status === 401 || status === 403;
+  },
+};
+
+/**
+ * Fallback config used when the context is read before
+ * `createSyncEngine(...)` has initialized it (tests, early-boot code
+ * paths). An empty `modelCreatePriority` means every model falls through
+ * to `defaultCreatePriority`, so ordering is flat — fine for tests that
+ * never exercise FK ordering; consumers who do rely on it should finish
+ * wiring the engine before the first `create()` fires.
+ */
+export const emptyConfig: SyncEngineConfig = {
+  modelCreatePriority: new Map(),
+  defaultCreatePriority: 40,
+  defaultNonCreatePriority: 50,
+  essentialFields: {},
+  classNameFallbackMap: {},
+};

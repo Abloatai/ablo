@@ -1,0 +1,121 @@
+---
+title: "Changelog"
+description: "Product updates and releases for Ablo"
+---
+
+<Update label="May 25, 2026" description="v0.4.0">
+## Intents
+
+Coordinate writes to an entity with the same accessor you read it:
+`ablo.<model>.intent(id)`.
+
+```ts
+const lock = ablo.documents.intent(doc.id);
+
+lock.current;                              // who holds it (or null) — sync + reactive
+lock.status;                              // 'idle' when free
+
+await lock.claimOrWait();                // take it, or wait out the holder then take it
+await lock.update({ status: 'done' });   // optimistic, lease-guarded
+await lock.finish();
+```
+
+- `claimOrWait()` is the serialize-on-contention call — you never branch on who
+  holds the target; you just get it safely. Bind it to an agent's write tool so
+  agents never reason about coordination.
+- Handles are `AsyncDisposable` — `await using lock = …` finishes on scope exit.
+
+**Deprecated:** participant-level `intents.claim()` / `onRejected()` are superseded
+by the per-model handle and will be removed in a future release.
+</Update>
+
+<Update label="April 22, 2026" description="v0.3.0">
+  ## Umbrella `<AbloProvider>` for React
+
+  One provider component now owns the full lifecycle — singleton rotation on auth
+  change, Strict-Mode-safe bootstrap, `beforeunload` cleanup, session-expiry
+  IndexedDB wipe, post-bootstrap hooks, mesh client construction. The reference
+  integration shrank from 515 LOC of hand-rolled wiring to a 60-LOC wrapper.
+
+  ### Added
+
+  - `<AbloProvider>` — umbrella provider at `@abloatai/ablo/react` with declarative
+    data, auth, behavior, and callback props.
+  - `<SyncGroupProvider id="…">` + `useSyncGroup()` — per-entity scope context.
+  - `<ClientSideSuspense fallback={…}>` — gate renders until the engine is `connected`.
+  - `useSyncStatus()` rewritten as a tagged union — impossible states are unrepresentable.
+  - `useCurrentUserId()`, `useErrorListener(cb)`.
+  - Commit payload projection built into `TransactionQueue` — wire payloads derived
+    from the schema alone; hand-rolled extractor tables can be deleted.
+
+  ### Breaking
+
+  - Removed `<SyncProvider>` (folded into `<AbloProvider>`) and `createAbloContext()`
+    — mesh is always-on; `useAblo()` / `useParticipant()` always available.
+  - Removed `withSync` (import `observer` from `mobx-react-lite` directly).
+  - `useSyncStatus()` now returns a tagged union instead of six booleans:
+    `const isReady = useSyncStatus().name === 'connected'`.
+
+  No breaking change to `useQuery` / `useOne` / `useMutate` / `useReader` / `useMutators` /
+  `useUndoScope` / `usePresence` / `useIntent`.
+</Update>
+
+<Update label="April 22, 2026" description="v0.2.1">
+  ## React bindings hardening
+
+  Fixes two infinite-loop classes that surfaced downstream as React error #185
+  ("Maximum update depth exceeded"), and exposes sync-status reactivity as a
+  first-class observable + hook.
+
+  ### Fixed
+
+  - `useQuery` / `useOne` no longer loop on `getSnapshot` — the snapshot is cached
+    in a ref and refreshed only inside the subscribe callback.
+
+  ### Added
+
+  - `BaseSyncedStore` sync status is now properly observable (`isReady`, `isSyncing`,
+    `isOffline`, `isReconnecting`, `isError`, `hasUnsyncedChanges`).
+  - `useSyncStatus()` React hook — reactive snapshot bridged via `useSyncExternalStore`.
+
+  No breaking changes.
+</Update>
+
+<Update label="April 21, 2026" description="v0.2.0">
+  ## Mesh SDK — the canonical agent-multiplayer surface
+
+  The SDK covers exactly three integration shapes, each with a canonical example:
+  **server agent**, **browser app** (scoped capability token, Stripe `client_secret`
+  shape), and **sub-agent** (attenuated from the parent capability).
+
+  ### Ergonomics
+
+  - `Ablo` class — `import Ablo from '@abloatai/ablo'` / `new Ablo({ schema })`,
+    matching `new Stripe()` / `new OpenAI()`.
+  - Model-scoped joins — `ablo.matters.join(id, { label })`.
+  - `as` alias replaces `onBehalfOf`; duration strings (`ttl: '3m'`); auto-connect.
+
+  ### Coordination primitives
+
+  - Presence verbs — `presence.editing(target)` / `viewing(target)` / `idle()`.
+  - Intent verbs — `intents.editing(target)` / `writing(target)`, returning an
+    `IntentHandle` with `Symbol.asyncDispose` for `await using`.
+  - Snapshots and async iterables over presence, intents, and deltas.
+
+  ### Config
+
+  - `organizationId` no longer required — the API key or session binds the caller's org.
+  - `createMeshFromEnv` removed — `new Ablo({ schema })` auto-reads env.
+</Update>
+
+<Update label="April 10, 2026" description="v0.1.0">
+  ## Initial release
+
+  - **Schema DSL** — zero-codegen schema with full TypeScript inference.
+  - **React hooks** — reactive data binding for models, mutations, and queries.
+  - **Consumer API** — `createSyncEngine()` one-liner setup.
+  - **Offline-first** — IndexedDB persistence with an FK-safe offline mutation queue.
+  - **Real-time sync** — WebSocket delta streaming with optimistic updates and rollback.
+  - **AI Agent SDK** — `SyncAgent` for agents as first-class sync citizens.
+  - **Pluggable auth** — API key, JWT, and session providers.
+</Update>
