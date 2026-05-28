@@ -1,0 +1,68 @@
+# API Keys
+
+Trusted runtimes authenticate with an API key.
+
+```ts
+import Ablo from '@abloatai/ablo';
+
+const ablo = Ablo({ apiKey: process.env.ABLO_API_KEY });
+```
+
+The key identifies the Ablo account. Application code does not pass an organization id; Ablo derives scope from the credential.
+
+Use the root `@abloatai/ablo` import with a schema for app clients.
+
+## Server-Side API Keys
+
+Use API keys from trusted runtimes:
+
+- backend route handlers
+- workers and agents
+- CLI tools
+- webhooks
+
+Never ship a secret API key to a browser bundle.
+
+## Test mode and sandboxes
+
+Test and live keys are the same shape; the prefix names the environment:
+
+- `sk_test_…` — a key bound to a **sandbox**. Its reads and writes are isolated
+  to that sandbox and are invisible to live keys (and to other sandboxes).
+- `sk_live_…` — a key against your live data.
+
+Every org has a default **Test mode** sandbox, plus any number of additional
+sandboxes you create. **Data is isolated per sandbox; the schema is shared
+across the whole org.** A schema you push from a test key defines the same
+models your live keys see — only the rows differ. This mirrors how Stripe
+separates test and live data while keeping the API shape identical.
+
+## Scopes
+
+Keys carry scopes following the principle of least privilege — each key gets
+only what its job needs. A secret key with **no scopes** has full org authority
+(the default for a `sk_live_` backend key); a key with a non-empty scope set is
+restricted to exactly those grants:
+
+- `schema:push` — author the org schema (`ablo schema push`, `ablo dev`). A
+  high-risk, org-wide grant: because schema is shared, a push affects the live
+  table shape. A full-authority key has it implicitly; a *restricted* key (such
+  as a sandbox key) needs it granted explicitly.
+- `sandbox:<id>` — marks the key as belonging to a sandbox (its data isolation
+  comes from the sandbox binding, not this scope string).
+
+A key minted from the default **Test mode** sandbox carries `schema:push`, so
+`ablo dev` works out of the box. Keys from other sandboxes are **data-only** by
+default — enable "schema authoring" when minting if you want that key to push
+schema too. Hand data-only keys to embedded apps and CI agents; reserve
+schema-authoring keys for the developer running `ablo dev`.
+
+### `ablo dev`
+
+```sh
+ABLO_API_KEY=sk_test_… npx ablo dev
+```
+
+Pushes your `ablo/schema.ts` to the test sandbox, prints the one line you need
+in `.env.local`, and re-pushes on every save. It refuses `sk_live_` keys so a
+tight save loop can never churn production data.

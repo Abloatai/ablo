@@ -1,0 +1,117 @@
+---
+title: "React"
+---
+
+The React bindings for `@abloatai/ablo`. Use them when you want live
+data on the client without writing fetch + WebSocket plumbing yourself.
+
+For the full app structure, including server loads, existing backends, and
+agents, start with [Integration Guide](/docs/integration-guide).
+
+## Installation
+
+The React bindings ship with the main package — no extra install.
+
+```ts
+import { useAblo } from '@abloatai/ablo/react';
+```
+
+## useAblo — model resource
+
+```tsx
+'use client';
+
+import { useAblo } from '@abloatai/ablo/react';
+
+export function TaskView({ task: serverTask }: { task: { id: string; title: string } }) {
+  const task = useAblo((ablo) => ablo.tasks.retrieve(serverTask.id)) ?? serverTask;
+  const intents = useAblo((ablo) =>
+    ablo.intents.list({ resource: 'tasks', id: serverTask.id }),
+  ) ?? [];
+  const busy = intents.length > 0;
+
+  return <article>{task.title}</article>;
+}
+```
+
+The hook:
+
+1. Reads through the same `ablo.<model>` methods as the rest of the SDK.
+2. Tracks the model fields read by the selector and re-renders when confirmed
+   deltas arrive.
+3. Lets Server Component data stay outside the hook: use `?? serverTask` when a
+   parent already loaded the row.
+4. Works for coordination state too, such as `ablo.intents.list(...)`.
+
+Use the zero-argument form only when you need the full client for callbacks,
+effects, or writes:
+
+```tsx
+const abloClient = useAblo();
+```
+
+Prefer selector reads like `useAblo((ablo) => ablo.<model>.retrieve(id))`.
+String model names are kept on older hooks for compatibility, but first examples
+should use the same model-resource shape as the rest of the SDK.
+
+For collections, keep the selector on the model resource too:
+
+```tsx
+const tasks = useAblo((ablo) =>
+  ablo.tasks.list({
+    where: { projectId },
+    filter: (task) => task.status !== 'done',
+    scope: 'live',
+  }),
+);
+```
+
+## Server Load
+
+```tsx
+const [task] = await ablo.tasks.load({ where: { id } });
+```
+
+Use `load` in Server Components when the row may not be in the local pool yet.
+
+## Writes
+
+For Server Actions and route handlers, call the SDK directly:
+
+```ts
+import { ablo } from '@/lib/ablo';
+
+const snap = ablo.snapshot({ tasks: id });
+await ablo.tasks.update(id, patch, {
+  readAt: snap.stamp,
+  onStale: 'reject',
+  wait: 'confirmed',
+});
+```
+
+For client event handlers, get the provider-owned client and call the same
+model resource:
+
+```tsx
+const ablo = useAblo();
+
+async function markDone() {
+  if (!ablo) return;
+  const snap = ablo.snapshot({ tasks: id });
+  await ablo.tasks.update(
+    id,
+    { status: 'done' },
+    { readAt: snap.stamp, onStale: 'reject', wait: 'confirmed' },
+  );
+}
+```
+
+The selector form is for render-time reads. The zero-argument form is for
+imperative work after an event or effect.
+
+See [API reference](/docs/api) for the full options surface.
+
+## Next.js
+
+The Next.js [App Router landing](/nextjs) walks through Server Components
++ Server Actions + `useAblo` together.

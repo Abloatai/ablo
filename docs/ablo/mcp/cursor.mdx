@@ -1,0 +1,55 @@
+---
+title: "Cursor"
+---
+
+## Install
+
+Add the Ablo Sync MCP server to Cursor's `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "ablo-sync": {
+      "transport": "http",
+      "url": "https://<your-app>/api/mcp"
+    }
+  }
+}
+```
+
+The file lives at `~/.cursor/mcp.json` on macOS / Linux.
+
+Restart Cursor. The Ablo Sync tools appear under the MCP icon in the agent
+panel.
+
+## With auth
+
+Add a `headers` block:
+
+```json
+{
+  "mcpServers": {
+    "ablo-sync": {
+      "transport": "http",
+      "url": "https://<your-app>/api/mcp",
+      "headers": {
+        "Authorization": "Bearer $ABLO_MCP_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Cursor expands shell-style env vars in this block. Set `ABLO_MCP_TOKEN`
+in your shell config.
+
+## Verify
+
+In Cursor's agent panel, open the MCP tools list. You should see the
+Ablo Sync resource tools and their JSON schemas.
+
+## More
+
+- [MCP overview](/docs/mcp) — how the transport works.
+- [Claude Code setup](/docs/mcp/claude-code) — CLI install.
+- [Windsurf setup](/docs/mcp/windsurf) — same JSON shape.

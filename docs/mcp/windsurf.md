@@ -1,0 +1,46 @@
+# Windsurf
+
+## Install
+
+Add the Ablo Sync MCP server to Windsurf's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "ablo-sync": {
+      "transport": "http",
+      "url": "https://<your-app>/api/mcp"
+    }
+  }
+}
+```
+
+The config path differs by platform — Windsurf surfaces it in Settings →
+Cascade → MCP. Restart Windsurf after saving.
+
+## With auth
+
+```json
+{
+  "mcpServers": {
+    "ablo-sync": {
+      "transport": "http",
+      "url": "https://<your-app>/api/mcp",
+      "headers": {
+        "Authorization": "Bearer $ABLO_MCP_TOKEN"
+      }
+    }
+  }
+}
+```
+
+## Verify
+
+Cascade's MCP panel lists every configured server with its tools. You
+should see `ablo-sync` with model tools enumerated.
+
+## More
+
+- [MCP overview](/docs/mcp) — how the transport works.
+- [Claude Code setup](/docs/mcp/claude-code) — CLI install.
+- [Cursor setup](/docs/mcp/cursor) — same JSON shape.

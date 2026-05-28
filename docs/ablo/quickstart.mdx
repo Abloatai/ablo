@@ -1,0 +1,141 @@
+---
+title: "Quickstart"
+---
+
+Declare your state, point Ablo at your database, read it, and make one protected
+write.
+
+Today Ablo runs against **your own Postgres**, the same way Prisma does. You set
+`DATABASE_URL`, declare a schema, and Ablo provisions and operates on your
+tables. (An Ablo-managed, zero-database option is a [roadmap](/roadmap) item, not
+the current path.)
+
+## 1. Install
+
+```bash
+npm install @abloatai/ablo
+```
+
+## 2. Declare a Schema
+
+```ts
+import Ablo from '@abloatai/ablo';
+import { defineSchema, model, z } from '@abloatai/ablo/schema';
+
+const schema = defineSchema({
+  tasks: model({
+    title: z.string(),
+    status: z.enum(['todo', 'doing', 'done']),
+  }),
+});
+
+export const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+});
+```
+
+Customer apps should always pass `schema`. Treat it like Prisma's schema file:
+it is the source of truth for typed model resources, realtime subscriptions, and
+agent writes.
+
+## 3. Point Ablo at Your Database
+
+Set `DATABASE_URL` to your Postgres connection string and run `ablo migrate`.
+This is required — like Prisma, Ablo needs a database to back your models.
+
+```bash
+# .env
+DATABASE_URL=postgres://...
+ABLO_API_KEY=sk_test_...
+```
+
+```bash
+npx ablo migrate            # create your schema's tables in DATABASE_URL
+npx ablo migrate --dry-run  # preview the exact SQL first
+```
+
+`DATABASE_URL` stays in your environment. `ABLO_API_KEY` authorizes the SDK and
+agents. See the [CLI](/cli) for the full migrate flow.
+
+## 4. See it instantly
+
+`ablo init` adds a small agent at `ablo/agent.ts`. Run it:
+
+```bash
+npx tsx ablo/agent.ts
+```
+
+It adds two tasks and moves the urgent one to the top. Keep the app open in
+another tab while it runs — the tasks appear there as the agent writes them, no
+refresh. To watch the changes go by in your terminal:
+
+```bash
+npx ablo logs
+```
+
+You and the agent are editing the same tasks, and you both see every change the
+moment it happens.
+
+## 5. Read and Update
+
+```ts
+await ablo.ready();
+
+const [task] = await ablo.tasks.load({ where: { id: 'task_123' } });
+if (!task) throw new Error('task not found');
+
+const updated = await ablo.tasks.update('task_123', {
+  status: 'done',
+});
+
+console.log(updated.status);
+```
+
+## 6. Multiplayer and Busy Work
+
+There is no separate multiplayer mode. Use the same schema client for human UI,
+server actions, and agents; Ablo fans out confirmed writes and keeps active
+intents visible on the same resource.
+
+Intents tell you when another human or agent is active on the same target. For
+schema clients, wait on the intent stream and then write through the model.
+
+```ts
+const busy = ablo.intents.list({ resource: 'tasks', id: 'task_123' });
+
+if (busy.length > 0) {
+  await ablo.intents.waitFor(
+    { resource: 'tasks', id: 'task_123' },
+    { timeout: 30_000 },
+  );
+}
+
+const snap = ablo.snapshot({ tasks: 'task_123' });
+
+await ablo.tasks.update(
+  'task_123',
+  { status: 'done' },
+  { readAt: snap.stamp, onStale: 'reject', wait: 'confirmed' },
+);
+```
+
+`ifBusy` controls what happens when another human or agent is already working
+on the same target:
+
+- `return` returns immediately with active intents.
+- `wait` waits for the intent stream to clear.
+- `fail` throws `AbloBusyError` with the active intents attached.
+
+## 7. Next Steps
+
+Keep using the schema client for app and agent writes. Reach for the advanced
+schema-less agent wrapper only when a worker intentionally cannot import the
+app schema.
+
+- [CLI](/cli) covers `ablo migrate` and pointing Ablo at your `DATABASE_URL`.
+- [Integration Guide](/integration-guide) explains the full app, React, multiplayer, and agent path.
+- [Guarantees](/guarantees) explains what confirmed writes and stale checks mean.
+- [Client Behavior](/client-behavior) covers errors, retries, and public imports.
+- [Connect Your Database](/data-sources) covers keeping rows in your own database, including the signed Data Source endpoint.
+- [AI SDK Tool](/examples/ai-sdk-tool) shows the same write path inside a tool call.
