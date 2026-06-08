@@ -1,0 +1,172 @@
+---
+title: "Sessions"
+description: "Short-lived, scoped credentials your backend mints — one resource for both end-user browser sessions and scoped agents."
+---
+
+A **session** is a short-lived credential your backend mints with its `sk_` and
+hands to one actor — a signed-in **person's browser** or a scoped **agent**. It's
+the same primitive in both cases (backend-minted, short-lived, scoped); the only
+difference is the subject and how much authority it carries.
+
+One resource mints both:
+
+```ts Your backend (sk_)
+// A logged-in person's browser session — full authority within their org.
+const userSession = await ablo.sessions.create({
+  user: { id: currentUser.id },
+});
+
+// A scoped agent session — gated to exactly the operations you name.
+const agentSession = await ablo.sessions.create({
+  agent: { id: 'agent:task-writer' },
+  can: { Task: ['read', 'update'], Deck: ['read'] },
+});
+```
+
+`user` mints an `ek_` (ephemeral key); `agent` mints an `rk_` (restricted key).
+You pass `user` **or** `agent` — never both.
+
+It exists because of one rule: **the browser can never hold a secret.** Your
+`sk_` lives on the server; the browser only ever holds a minted session token
+(which already names your org). So the per-actor credential is minted
+server-side, scoped, and expires in minutes — the model Stripe uses for
+client-side SDKs.
+
+## Why
+
+Ablo doesn't authenticate your users — you do, however you like (your own
+sessions, an IdP, anything). Ablo authenticates your **project** (the `sk_` that
+minted the session) and trusts the identity you asserted at mint time. The
+session token *is* that assertion: "this connection is acting as `U`, in org
+`O`, until it expires."
+
+## End-user sessions (`ek_`)
+
+For a logged-in person using your app. Mint on a backend route that has already
+authenticated the user:
+
+```ts Your backend route (session-authed)
+const { token } = await ablo.sessions.create({
+  user: { id: currentUser.id },   // who the session acts as
+  // syncGroups: [...],           // optional; defaults to the user's org + user
+});
+return Response.json({ token });  // return ONLY the token to the browser
+```
+
+A user session has **full data authority** within its org — no operation
+allowlist. It's the human acting as themselves.
+
+Point [`<AbloProvider>`](/react) at that route with `authEndpoint`. The provider
+fetches the token, opens the connection, and re-mints before expiry — your app
+writes no token plumbing:
+
+```tsx
+<AbloProvider schema={schema} authEndpoint="/api/ablo-session">
+  {children}
+</AbloProvider>
+```
+
+That's the whole browser setup — one prop. The session token already names your
+project, so there's nothing else to configure. Prefer to manage it yourself?
+Pass `getToken={() => fetch('/api/ablo-session', { method: 'POST' }).then(r => r.json()).then(d => d.token)}` instead.
+
+## Agent sessions (`rk_`)
+
+For a non-human actor — an agent or automation that should only do **specific**
+operations. The `can` map is the permission boundary, and it's **typed against
+your schema** — the model keys are your schema's models, so a typo is a compile
+error, not a silent over-grant:
+
+```ts
+const session = await ablo.sessions.create({
+  agent: { id: 'agent:task-writer' },
+  can: { Task: ['read', 'update'] },  // typed off the schema — no magic strings
+  ttlSeconds: 600,
+});
+
+const agent = Ablo({ schema, apiKey: session.token }); // the agent's scoped client
+```
+
+`can: { Task: ['update'] }` serializes to the wire allowlist `task.update`; the
+server rejects any commit whose operation isn't listed. Operations are
+`'read' | 'create' | 'update' | 'delete'`.
+
+<Note>
+Most apps don't create agent sessions by hand — `api.agent(...).run(...)` mints
+and revokes one for that run automatically. Reach for `sessions.create({ agent })`
+only for custom runtimes, MCP sessions, or protocol-level integrations.
+</Note>
+
+## Mint
+
+Only a **secret key** (`sk_`) can mint a session — never another session token.
+The `sk_` is the trust anchor; minting is your backend vouching
+for the actor.
+
+| Param | For | Meaning |
+|---|---|---|
+| `user` / `agent` | both | The actor. `id` becomes the token's `participantId`. Pass exactly one. |
+| `can` | agent | Per-model operation allowlist, typed off the schema. |
+| `syncGroups` | both | Narrow the session below its default scope. Omit to inherit. |
+| `ttlSeconds` | both | Lifetime in seconds. Defaults to `900` (15m). |
+| `userMeta` | both | Opaque identity blob echoed back to the client. |
+
+## Lifecycle
+
+Sessions are **short-lived by design** (~15 minutes) and, for browsers,
+**auto-refreshed** — the provider re-mints ahead of expiry, so a session never
+drops at the boundary. A revoked or signed-out actor simply stops getting a fresh
+token; the old one expires on its own. There's nothing to revoke by hand.
+
+### Offline & sign-out
+
+The short session token is **not** your user's login — it's a minutes-long
+credential layered on top of whatever long-lived auth your `authEndpoint`
+already enforces (your own session cookie, an IdP, etc.). The provider keeps
+those two lifetimes separate, which means:
+
+- **Going offline never signs the user out.** The provider keeps working from
+  its local cache and treats a failed re-mint (no network, a timeout, a `5xx`
+  from your endpoint) as **transient** — it retries, and re-mints the instant
+  connectivity or tab focus returns. The user stays signed in for as long as
+  your underlying session is valid, however brief or long the network drop.
+- **The user is signed out only when the underlying session is genuinely
+  rejected** — i.e. your `authEndpoint` responds **`401`/`403`** because the
+  cookie (or IdP session) is missing, expired, or revoked. That's the one
+  signal the provider treats as terminal.
+
+This mirrors the OAuth refresh-token rule (Okta/Auth0/Authgear): only a
+rejection of the *long-lived* credential ends the session — a network failure
+never does.
+
+<Note>
+Your `authEndpoint` contract follows from this: return the token on success,
+respond **`401`/`403`** only when the user's session is actually gone, and let
+network/`5xx` failures surface as errors. Don't collapse "can't reach the mint
+endpoint" into "session expired" — returning a `401` for a transient blip will
+bounce a still-valid user to your sign-in page.
+</Note>
+
+## Scope
+
+A user session carries the user's **base** sync-groups (`org:`/`user:`/`team:`),
+derived from the identity you minted it for. **Dynamic, relation-driven
+membership** (e.g. a `dataroom:<id>` the user was just added to) is resolved
+**server-side at connect** and unioned on top — so scope stays live, not frozen
+at mint time. Pass `syncGroups` only when you want to *narrow* below the default.
+
+## Security
+
+The whole safety argument is the short TTL: a session token leaked from a
+browser (XSS) is valid for minutes, scoped to one actor's data, and can't mint
+anything or touch the control plane. Contrast `sk_`, which would be a full org
+compromise — which is exactly why it never leaves your server.
+
+## User vs. agent sessions
+
+| | User session (`ek_`) | Agent session (`rk_`) |
+|---|---|---|
+| For | a **person** in the browser | an **agent** / automation |
+| Authority | full, within their org | narrow (explicit `can` allowlist) |
+| Mint | `ablo.sessions.create({ user: { id } })` | `ablo.sessions.create({ agent: { id }, can })` |
+| Lives where | the user's **browser** | the agent runtime |

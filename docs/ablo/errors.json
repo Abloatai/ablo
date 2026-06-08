@@ -1,0 +1,1786 @@
+{
+  "$generated": "packages/sync-engine/scripts/generate-error-docs.mts",
+  "version": "2026-06-02",
+  "envelope": [
+    "type",
+    "code",
+    "message",
+    "doc_url",
+    "request_id"
+  ],
+  "codes": [
+    {
+      "code": "agent_perception_missing_context",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 422,
+      "retryable": false,
+      "message": "The agent perception request lacked required context.",
+      "docUrl": "https://docs.abloatai.com/errors#agent_perception_missing_context"
+    },
+    {
+      "code": "api_key_required",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "This operation requires an API key.",
+      "docUrl": "https://docs.abloatai.com/errors#api_key_required"
+    },
+    {
+      "code": "apikey_expired",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "API key has expired.",
+      "docUrl": "https://docs.abloatai.com/errors#apikey_expired"
+    },
+    {
+      "code": "apikey_invalid",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "API key is unknown or malformed.",
+      "docUrl": "https://docs.abloatai.com/errors#apikey_invalid"
+    },
+    {
+      "code": "apikey_missing",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "No API key was supplied on the request.",
+      "docUrl": "https://docs.abloatai.com/errors#apikey_missing"
+    },
+    {
+      "code": "apikey_revoked",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "API key has been revoked.",
+      "docUrl": "https://docs.abloatai.com/errors#apikey_revoked"
+    },
+    {
+      "code": "auth_no_credentials",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "No recognized authentication credential was presented — no API key and no bearer JWT. Send `Authorization: Bearer <token>`.",
+      "docUrl": "https://docs.abloatai.com/errors#auth_no_credentials"
+    },
+    {
+      "code": "base_url_missing",
+      "category": "transport",
+      "surface": "client",
+      "retryable": false,
+      "message": "No base URL was configured for the client.",
+      "docUrl": "https://docs.abloatai.com/errors#base_url_missing"
+    },
+    {
+      "code": "bootstrap_fetch_timeout",
+      "category": "bootstrap",
+      "surface": "wire",
+      "httpStatus": 504,
+      "retryable": true,
+      "message": "The bootstrap fetch timed out.",
+      "docUrl": "https://docs.abloatai.com/errors#bootstrap_fetch_timeout"
+    },
+    {
+      "code": "bootstrap_offline",
+      "category": "bootstrap",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "Bootstrap could not run because the client is offline.",
+      "docUrl": "https://docs.abloatai.com/errors#bootstrap_offline"
+    },
+    {
+      "code": "bootstrap_offline_no_cache",
+      "category": "bootstrap",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": false,
+      "message": "Bootstrap is offline and no cached snapshot is available.",
+      "docUrl": "https://docs.abloatai.com/errors#bootstrap_offline_no_cache"
+    },
+    {
+      "code": "bootstrap_response_invalid",
+      "category": "bootstrap",
+      "surface": "wire",
+      "httpStatus": 502,
+      "retryable": true,
+      "message": "The bootstrap response was malformed.",
+      "docUrl": "https://docs.abloatai.com/errors#bootstrap_response_invalid"
+    },
+    {
+      "code": "bootstrap_response_schema_invalid",
+      "category": "bootstrap",
+      "surface": "wire",
+      "httpStatus": 502,
+      "retryable": true,
+      "message": "The bootstrap response failed schema validation.",
+      "docUrl": "https://docs.abloatai.com/errors#bootstrap_response_schema_invalid"
+    },
+    {
+      "code": "browser_apikey_blocked",
+      "category": "auth",
+      "surface": "client",
+      "retryable": false,
+      "message": "Raw API keys must not be used from a browser context.",
+      "docUrl": "https://docs.abloatai.com/errors#browser_apikey_blocked"
+    },
+    {
+      "code": "browser_database_url_blocked",
+      "category": "auth",
+      "surface": "client",
+      "retryable": false,
+      "message": "A database connection string must not be used from a browser context — it carries DB credentials.",
+      "docUrl": "https://docs.abloatai.com/errors#browser_database_url_blocked"
+    },
+    {
+      "code": "byo_host_not_allowed",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The direct Postgres connector host resolves to a private, loopback, or link-local address and cannot be used.",
+      "docUrl": "https://docs.abloatai.com/errors#byo_host_not_allowed"
+    },
+    {
+      "code": "byo_role_cannot_enforce_rls",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The direct Postgres connector role cannot enforce row-level security.",
+      "docUrl": "https://docs.abloatai.com/errors#byo_role_cannot_enforce_rls"
+    },
+    {
+      "code": "byo_role_unreadable",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The direct Postgres connector role could not be introspected.",
+      "docUrl": "https://docs.abloatai.com/errors#byo_role_unreadable"
+    },
+    {
+      "code": "byo_tenant_tables_unforced_rls",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "Tenant tables do not have RLS forced under the direct Postgres connector role.",
+      "docUrl": "https://docs.abloatai.com/errors#byo_tenant_tables_unforced_rls"
+    },
+    {
+      "code": "capability_auth_disabled",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": false,
+      "message": "Capability authentication is disabled on this server.",
+      "docUrl": "https://docs.abloatai.com/errors#capability_auth_disabled"
+    },
+    {
+      "code": "capability_id_missing",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "A capability id was expected but not provided.",
+      "docUrl": "https://docs.abloatai.com/errors#capability_id_missing"
+    },
+    {
+      "code": "capability_id_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A capability id is required for this request.",
+      "docUrl": "https://docs.abloatai.com/errors#capability_id_required"
+    },
+    {
+      "code": "capability_invalid",
+      "category": "capability",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The capability is unknown, revoked, or expired.",
+      "docUrl": "https://docs.abloatai.com/errors#capability_invalid"
+    },
+    {
+      "code": "capability_not_found",
+      "category": "not_found",
+      "surface": "wire",
+      "httpStatus": 404,
+      "retryable": false,
+      "message": "No capability exists with the given id.",
+      "docUrl": "https://docs.abloatai.com/errors#capability_not_found"
+    },
+    {
+      "code": "capability_required",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "This operation requires a capability.",
+      "docUrl": "https://docs.abloatai.com/errors#capability_required"
+    },
+    {
+      "code": "capability_scope_denied",
+      "category": "capability",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The connection's resolved scope does not cover the attempted action.",
+      "docUrl": "https://docs.abloatai.com/errors#capability_scope_denied"
+    },
+    {
+      "code": "check_violation",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A value violates a database check constraint.",
+      "docUrl": "https://docs.abloatai.com/errors#check_violation"
+    },
+    {
+      "code": "claim_conflict",
+      "category": "claim",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "The target entity is claimed by another participant.",
+      "docUrl": "https://docs.abloatai.com/errors#claim_conflict"
+    },
+    {
+      "code": "claim_lost",
+      "category": "claim",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "A previously held claim was lost before the write applied.",
+      "docUrl": "https://docs.abloatai.com/errors#claim_lost"
+    },
+    {
+      "code": "commit_failed",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": true,
+      "message": "The commit failed to apply.",
+      "docUrl": "https://docs.abloatai.com/errors#commit_failed"
+    },
+    {
+      "code": "commit_no_result",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 504,
+      "retryable": true,
+      "message": "The commit was sent but no result frame arrived.",
+      "docUrl": "https://docs.abloatai.com/errors#commit_no_result"
+    },
+    {
+      "code": "commit_offline_grace_expired",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": false,
+      "message": "The offline grace window expired before the commit could be sent.",
+      "docUrl": "https://docs.abloatai.com/errors#commit_offline_grace_expired"
+    },
+    {
+      "code": "commit_operation_action_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A commit operation is missing its `action`.",
+      "docUrl": "https://docs.abloatai.com/errors#commit_operation_action_required"
+    },
+    {
+      "code": "commit_operation_model_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A commit operation is missing its `model`.",
+      "docUrl": "https://docs.abloatai.com/errors#commit_operation_model_required"
+    },
+    {
+      "code": "commit_operation_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A commit must carry `operation` or `operations`.",
+      "docUrl": "https://docs.abloatai.com/errors#commit_operation_required"
+    },
+    {
+      "code": "commit_operation_unsupported",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A commit operation used an unsupported `action`.",
+      "docUrl": "https://docs.abloatai.com/errors#commit_operation_unsupported"
+    },
+    {
+      "code": "commit_operations_ambiguous",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A commit supplied both `operation` and `operations`.",
+      "docUrl": "https://docs.abloatai.com/errors#commit_operations_ambiguous"
+    },
+    {
+      "code": "commit_too_many_operations",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A commit exceeded the per-commit operation limit; split it into smaller batches.",
+      "docUrl": "https://docs.abloatai.com/errors#commit_too_many_operations"
+    },
+    {
+      "code": "connection_limit_exceeded",
+      "category": "rate_limit",
+      "surface": "wire",
+      "httpStatus": 429,
+      "retryable": true,
+      "message": "Too many concurrent WebSocket connections for this principal or organization. Close idle connections, or retry once others drain.",
+      "docUrl": "https://docs.abloatai.com/errors#connection_limit_exceeded"
+    },
+    {
+      "code": "constraint_violation",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A database integrity constraint was violated.",
+      "docUrl": "https://docs.abloatai.com/errors#constraint_violation"
+    },
+    {
+      "code": "datasource_registration_failed",
+      "category": "auth",
+      "surface": "client",
+      "retryable": false,
+      "message": "Failed to register the provided databaseUrl for the direct Postgres connector.",
+      "docUrl": "https://docs.abloatai.com/errors#datasource_registration_failed"
+    },
+    {
+      "code": "db_not_opened",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The local database was accessed before it was opened.",
+      "docUrl": "https://docs.abloatai.com/errors#db_not_opened"
+    },
+    {
+      "code": "db_store_not_found",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The requested IndexedDB object store does not exist.",
+      "docUrl": "https://docs.abloatai.com/errors#db_store_not_found"
+    },
+    {
+      "code": "db_unknown_action_type",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "An unknown database action type was dispatched.",
+      "docUrl": "https://docs.abloatai.com/errors#db_unknown_action_type"
+    },
+    {
+      "code": "drop_field",
+      "category": "schema",
+      "surface": "client",
+      "retryable": false,
+      "message": "Migration would drop a field (destructive classification).",
+      "docUrl": "https://docs.abloatai.com/errors#drop_field"
+    },
+    {
+      "code": "drop_model",
+      "category": "schema",
+      "surface": "client",
+      "retryable": false,
+      "message": "Migration would drop a model (destructive classification).",
+      "docUrl": "https://docs.abloatai.com/errors#drop_model"
+    },
+    {
+      "code": "entity_claimed",
+      "category": "claim",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "The target entity is currently claimed; write was blocked.",
+      "docUrl": "https://docs.abloatai.com/errors#entity_claimed"
+    },
+    {
+      "code": "entity_fetch_failed",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": true,
+      "message": "The entity fetch failed.",
+      "docUrl": "https://docs.abloatai.com/errors#entity_fetch_failed"
+    },
+    {
+      "code": "entity_not_found",
+      "category": "not_found",
+      "surface": "wire",
+      "httpStatus": 404,
+      "retryable": false,
+      "message": "The referenced entity does not exist.",
+      "docUrl": "https://docs.abloatai.com/errors#entity_not_found"
+    },
+    {
+      "code": "enum_value_removed",
+      "category": "schema",
+      "surface": "client",
+      "retryable": false,
+      "message": "Migration removes an enum value (destructive classification).",
+      "docUrl": "https://docs.abloatai.com/errors#enum_value_removed"
+    },
+    {
+      "code": "events_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The request must include a non-empty events array.",
+      "docUrl": "https://docs.abloatai.com/errors#events_required"
+    },
+    {
+      "code": "exchange_failed",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The API-key credential exchange was rejected.",
+      "docUrl": "https://docs.abloatai.com/errors#exchange_failed"
+    },
+    {
+      "code": "exchange_malformed_response",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 502,
+      "retryable": true,
+      "message": "The credential exchange returned a malformed response.",
+      "docUrl": "https://docs.abloatai.com/errors#exchange_malformed_response"
+    },
+    {
+      "code": "exchange_network_error",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "A network error occurred during credential exchange.",
+      "docUrl": "https://docs.abloatai.com/errors#exchange_network_error"
+    },
+    {
+      "code": "fetch_unavailable",
+      "category": "transport",
+      "surface": "client",
+      "retryable": false,
+      "message": "No fetch implementation is available in this environment.",
+      "docUrl": "https://docs.abloatai.com/errors#fetch_unavailable"
+    },
+    {
+      "code": "file_upload_auth_required",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "File upload requires an authenticated session.",
+      "docUrl": "https://docs.abloatai.com/errors#file_upload_auth_required"
+    },
+    {
+      "code": "flush_timeout",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 504,
+      "retryable": true,
+      "message": "Timed out flushing the transaction queue.",
+      "docUrl": "https://docs.abloatai.com/errors#flush_timeout"
+    },
+    {
+      "code": "forbidden",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The caller lacks permission for this operation.",
+      "docUrl": "https://docs.abloatai.com/errors#forbidden"
+    },
+    {
+      "code": "foreign_key_violation",
+      "category": "conflict",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": false,
+      "message": "A referenced entity does not exist, or is still referenced (database foreign-key constraint).",
+      "docUrl": "https://docs.abloatai.com/errors#foreign_key_violation"
+    },
+    {
+      "code": "grant_timeout",
+      "category": "intent",
+      "surface": "wire",
+      "httpStatus": 504,
+      "retryable": true,
+      "message": "Timed out waiting for a capability grant.",
+      "docUrl": "https://docs.abloatai.com/errors#grant_timeout"
+    },
+    {
+      "code": "idb_unavailable",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "IndexedDB is unavailable in this environment.",
+      "docUrl": "https://docs.abloatai.com/errors#idb_unavailable"
+    },
+    {
+      "code": "idempotency_conflict",
+      "category": "conflict",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": false,
+      "message": "The same Idempotency-Key was reused with a different request body.",
+      "docUrl": "https://docs.abloatai.com/errors#idempotency_conflict"
+    },
+    {
+      "code": "idempotency_key_too_long",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The supplied Idempotency-Key exceeds the maximum length.",
+      "docUrl": "https://docs.abloatai.com/errors#idempotency_key_too_long"
+    },
+    {
+      "code": "identity_missing_organization",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "Authentication succeeded but resolved to no organization context.",
+      "docUrl": "https://docs.abloatai.com/errors#identity_missing_organization"
+    },
+    {
+      "code": "identity_network_error",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "A network error occurred resolving identity.",
+      "docUrl": "https://docs.abloatai.com/errors#identity_network_error"
+    },
+    {
+      "code": "identity_resolve_failed",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "Identity resolution was rejected.",
+      "docUrl": "https://docs.abloatai.com/errors#identity_resolve_failed"
+    },
+    {
+      "code": "incompatible_change",
+      "category": "conflict",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": false,
+      "message": "The schema change is incompatible with the current schema.",
+      "docUrl": "https://docs.abloatai.com/errors#incompatible_change"
+    },
+    {
+      "code": "ingest_failed",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The source-event ingest failed.",
+      "docUrl": "https://docs.abloatai.com/errors#ingest_failed"
+    },
+    {
+      "code": "instance_at_capacity",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "The server is at connection capacity. Retry shortly — transient and not specific to your credentials.",
+      "docUrl": "https://docs.abloatai.com/errors#instance_at_capacity"
+    },
+    {
+      "code": "intent_conflict",
+      "category": "claim",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "An intent on the target conflicts with an active intent (server-internal alias of claim_conflict).",
+      "docUrl": "https://docs.abloatai.com/errors#intent_conflict"
+    },
+    {
+      "code": "intent_id_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "An intent id is required for this request.",
+      "docUrl": "https://docs.abloatai.com/errors#intent_id_required"
+    },
+    {
+      "code": "intent_lease_unavailable",
+      "category": "intent",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "The intent-lease coordination subsystem is unavailable; retry.",
+      "docUrl": "https://docs.abloatai.com/errors#intent_lease_unavailable"
+    },
+    {
+      "code": "intent_not_wired",
+      "category": "intent",
+      "surface": "client",
+      "retryable": false,
+      "message": "Intent support was used but is not wired in this runtime.",
+      "docUrl": "https://docs.abloatai.com/errors#intent_not_wired"
+    },
+    {
+      "code": "intent_queued",
+      "category": "intent",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "The intent was queued behind an active lease holder.",
+      "docUrl": "https://docs.abloatai.com/errors#intent_queued"
+    },
+    {
+      "code": "intent_wait_aborted",
+      "category": "intent",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "Waiting for the intent lease was aborted.",
+      "docUrl": "https://docs.abloatai.com/errors#intent_wait_aborted"
+    },
+    {
+      "code": "intent_wait_poll_interval_required",
+      "category": "intent",
+      "surface": "client",
+      "retryable": false,
+      "message": "A poll interval is required when waiting on an intent.",
+      "docUrl": "https://docs.abloatai.com/errors#intent_wait_poll_interval_required"
+    },
+    {
+      "code": "internal_error",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": true,
+      "message": "An unexpected server error occurred.",
+      "docUrl": "https://docs.abloatai.com/errors#internal_error"
+    },
+    {
+      "code": "invalid_body",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The request body was missing, unparseable, or the wrong shape.",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_body"
+    },
+    {
+      "code": "invalid_id",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The request carried an invalid id.",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_id"
+    },
+    {
+      "code": "invalid_intent",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The intent request was invalid.",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_intent"
+    },
+    {
+      "code": "invalid_json",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The request body was not valid JSON.",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_json"
+    },
+    {
+      "code": "invalid_model",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The request named an invalid model.",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_model"
+    },
+    {
+      "code": "invalid_options",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The Ablo client was constructed with invalid or incomplete options.",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_options"
+    },
+    {
+      "code": "invalid_participant_kind",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The participant kind is invalid.",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_participant_kind"
+    },
+    {
+      "code": "invalid_request",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The request parameters were invalid.",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_request"
+    },
+    {
+      "code": "invalid_schema",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The submitted schema could not be parsed.",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_schema"
+    },
+    {
+      "code": "issuer_register_forbidden",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "Registering a trusted issuer requires a secret (sk_) API key.",
+      "docUrl": "https://docs.abloatai.com/errors#issuer_register_forbidden"
+    },
+    {
+      "code": "jwt_audience_mismatch",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The bearer JWT's `aud` (audience) claim does not match the audience this issuer is registered with.",
+      "docUrl": "https://docs.abloatai.com/errors#jwt_audience_mismatch"
+    },
+    {
+      "code": "jwt_expired",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The bearer JWT has expired; obtain a fresh token.",
+      "docUrl": "https://docs.abloatai.com/errors#jwt_expired"
+    },
+    {
+      "code": "jwt_invalid",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The bearer JWT could not be validated (unclassified).",
+      "docUrl": "https://docs.abloatai.com/errors#jwt_invalid"
+    },
+    {
+      "code": "jwt_issuer_untrusted",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The bearer JWT's `iss` is not a registered trusted issuer. Register it via POST /v1/trusted-issuers, or check the token's issuer claim.",
+      "docUrl": "https://docs.abloatai.com/errors#jwt_issuer_untrusted"
+    },
+    {
+      "code": "jwt_malformed",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The bearer JWT is not a well-formed JWT and could not be decoded.",
+      "docUrl": "https://docs.abloatai.com/errors#jwt_malformed"
+    },
+    {
+      "code": "jwt_missing_issuer",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The bearer JWT has no `iss` (issuer) claim, so it cannot be routed to a trusted issuer.",
+      "docUrl": "https://docs.abloatai.com/errors#jwt_missing_issuer"
+    },
+    {
+      "code": "jwt_missing_organization",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The bearer JWT carries no organization context — neither a fixed org for the issuer nor the configured organization claim.",
+      "docUrl": "https://docs.abloatai.com/errors#jwt_missing_organization"
+    },
+    {
+      "code": "jwt_missing_subject",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The bearer JWT has no `sub` (subject) claim to identify the user.",
+      "docUrl": "https://docs.abloatai.com/errors#jwt_missing_subject"
+    },
+    {
+      "code": "jwt_org_membership_denied",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The bearer JWT's subject is not an active member of the organization in its `org_id` claim (removed, suspended, or the claim does not match a membership).",
+      "docUrl": "https://docs.abloatai.com/errors#jwt_org_membership_denied"
+    },
+    {
+      "code": "jwt_signature_invalid",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The bearer JWT's signature could not be verified against the issuer's JWKS (wrong key, rotated key, or forged token).",
+      "docUrl": "https://docs.abloatai.com/errors#jwt_signature_invalid"
+    },
+    {
+      "code": "lazy_ref_db_missing",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A lazy reference was resolved without a database handle.",
+      "docUrl": "https://docs.abloatai.com/errors#lazy_ref_db_missing"
+    },
+    {
+      "code": "lazy_ref_pool_missing",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A lazy reference was resolved without a model pool.",
+      "docUrl": "https://docs.abloatai.com/errors#lazy_ref_pool_missing"
+    },
+    {
+      "code": "lossy_recreate",
+      "category": "schema",
+      "surface": "client",
+      "retryable": false,
+      "message": "Migration would require a lossy table recreate.",
+      "docUrl": "https://docs.abloatai.com/errors#lossy_recreate"
+    },
+    {
+      "code": "made_required",
+      "category": "schema",
+      "surface": "client",
+      "retryable": false,
+      "message": "Migration would make an existing field required.",
+      "docUrl": "https://docs.abloatai.com/errors#made_required"
+    },
+    {
+      "code": "malformed_claim",
+      "category": "claim",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The claim payload was malformed.",
+      "docUrl": "https://docs.abloatai.com/errors#malformed_claim"
+    },
+    {
+      "code": "mesh_message_from_id_spoof",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The mesh message `from` id does not match the authenticated sender.",
+      "docUrl": "https://docs.abloatai.com/errors#mesh_message_from_id_spoof"
+    },
+    {
+      "code": "mesh_message_from_kind_mismatch",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The mesh message `from` kind does not match the sender.",
+      "docUrl": "https://docs.abloatai.com/errors#mesh_message_from_kind_mismatch"
+    },
+    {
+      "code": "mesh_message_invalid_input",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The mesh message failed input validation.",
+      "docUrl": "https://docs.abloatai.com/errors#mesh_message_invalid_input"
+    },
+    {
+      "code": "meta_db_not_initialized",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The meta database was accessed before initialization.",
+      "docUrl": "https://docs.abloatai.com/errors#meta_db_not_initialized"
+    },
+    {
+      "code": "migration_failed",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": false,
+      "message": "The schema migration failed to apply.",
+      "docUrl": "https://docs.abloatai.com/errors#migration_failed"
+    },
+    {
+      "code": "mock_mutation_failed",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A mock mutation adapter was configured to fail.",
+      "docUrl": "https://docs.abloatai.com/errors#mock_mutation_failed"
+    },
+    {
+      "code": "mock_unsupported_operation",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A mock adapter received an unsupported operation.",
+      "docUrl": "https://docs.abloatai.com/errors#mock_unsupported_operation"
+    },
+    {
+      "code": "model_claim_not_configured",
+      "category": "claim",
+      "surface": "client",
+      "retryable": false,
+      "message": "Claiming was requested on a model that has no claim configuration.",
+      "docUrl": "https://docs.abloatai.com/errors#model_claim_not_configured"
+    },
+    {
+      "code": "model_claimed",
+      "category": "claim",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "The model instance is claimed by another participant.",
+      "docUrl": "https://docs.abloatai.com/errors#model_claimed"
+    },
+    {
+      "code": "model_claimed_timeout",
+      "category": "claim",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "Timed out waiting for a model claim to clear.",
+      "docUrl": "https://docs.abloatai.com/errors#model_claimed_timeout"
+    },
+    {
+      "code": "model_class_not_registered",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The model class is not registered with the store.",
+      "docUrl": "https://docs.abloatai.com/errors#model_class_not_registered"
+    },
+    {
+      "code": "model_disposed",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The model instance has been disposed.",
+      "docUrl": "https://docs.abloatai.com/errors#model_disposed"
+    },
+    {
+      "code": "model_identifier_missing",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The model payload is missing its identifier.",
+      "docUrl": "https://docs.abloatai.com/errors#model_identifier_missing"
+    },
+    {
+      "code": "model_not_found",
+      "category": "not_found",
+      "surface": "wire",
+      "httpStatus": 404,
+      "retryable": false,
+      "message": "The referenced model row does not exist.",
+      "docUrl": "https://docs.abloatai.com/errors#model_not_found"
+    },
+    {
+      "code": "model_not_registered",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The model is not registered with the store.",
+      "docUrl": "https://docs.abloatai.com/errors#model_not_registered"
+    },
+    {
+      "code": "model_not_tenant_scoped",
+      "category": "tenant",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The model is not tenant-scoped and cannot be queried this way.",
+      "docUrl": "https://docs.abloatai.com/errors#model_not_tenant_scoped"
+    },
+    {
+      "code": "model_query_failed",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The model query failed.",
+      "docUrl": "https://docs.abloatai.com/errors#model_query_failed"
+    },
+    {
+      "code": "model_required_field_missing",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A required field was absent from the model payload.",
+      "docUrl": "https://docs.abloatai.com/errors#model_required_field_missing"
+    },
+    {
+      "code": "mutate_create_unknown_model",
+      "category": "tenant",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A create targeted a model not in the tenant schema.",
+      "docUrl": "https://docs.abloatai.com/errors#mutate_create_unknown_model"
+    },
+    {
+      "code": "mutate_update_entity_not_found",
+      "category": "not_found",
+      "surface": "wire",
+      "httpStatus": 404,
+      "retryable": false,
+      "message": "The entity targeted by an update does not exist.",
+      "docUrl": "https://docs.abloatai.com/errors#mutate_update_entity_not_found"
+    },
+    {
+      "code": "mutator_registry_duplicate",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "Two mutator definitions registered under the same name.",
+      "docUrl": "https://docs.abloatai.com/errors#mutator_registry_duplicate"
+    },
+    {
+      "code": "mutator_registry_unnamed_def",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A mutator definition was registered without a name.",
+      "docUrl": "https://docs.abloatai.com/errors#mutator_registry_unnamed_def"
+    },
+    {
+      "code": "mutators_schema_missing",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "Mutators were registered without a schema.",
+      "docUrl": "https://docs.abloatai.com/errors#mutators_schema_missing"
+    },
+    {
+      "code": "narrow_scope_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A narrowed scope is required for this request.",
+      "docUrl": "https://docs.abloatai.com/errors#narrow_scope_required"
+    },
+    {
+      "code": "no_ablo_provider",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "An Ablo hook was used outside of an Ablo provider.",
+      "docUrl": "https://docs.abloatai.com/errors#no_ablo_provider"
+    },
+    {
+      "code": "no_sync_group_provider",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A sync-group hook was used outside of its provider.",
+      "docUrl": "https://docs.abloatai.com/errors#no_sync_group_provider"
+    },
+    {
+      "code": "not_null_violation",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A required field was missing (database not-null constraint).",
+      "docUrl": "https://docs.abloatai.com/errors#not_null_violation"
+    },
+    {
+      "code": "org_id_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "An organization id is required for this request.",
+      "docUrl": "https://docs.abloatai.com/errors#org_id_required"
+    },
+    {
+      "code": "organization_mismatch",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The request targeted an organization the caller is not scoped to.",
+      "docUrl": "https://docs.abloatai.com/errors#organization_mismatch"
+    },
+    {
+      "code": "parent_turn_foreign_agent",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The parent turn belongs to a different agent.",
+      "docUrl": "https://docs.abloatai.com/errors#parent_turn_foreign_agent"
+    },
+    {
+      "code": "parent_turn_not_found",
+      "category": "not_found",
+      "surface": "wire",
+      "httpStatus": 404,
+      "retryable": false,
+      "message": "The referenced parent turn does not exist.",
+      "docUrl": "https://docs.abloatai.com/errors#parent_turn_not_found"
+    },
+    {
+      "code": "pool_model_class_not_registered",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The model class is not registered with the pool.",
+      "docUrl": "https://docs.abloatai.com/errors#pool_model_class_not_registered"
+    },
+    {
+      "code": "pool_registry_missing",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The model pool registry is not initialized.",
+      "docUrl": "https://docs.abloatai.com/errors#pool_registry_missing"
+    },
+    {
+      "code": "pool_subscribe_unregistered",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "Subscribed to a model that is not registered with the pool.",
+      "docUrl": "https://docs.abloatai.com/errors#pool_subscribe_unregistered"
+    },
+    {
+      "code": "presence_identity_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "Both userId and organizationId are required.",
+      "docUrl": "https://docs.abloatai.com/errors#presence_identity_required"
+    },
+    {
+      "code": "presigned_url_failed",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": true,
+      "message": "Failed to generate a presigned upload URL.",
+      "docUrl": "https://docs.abloatai.com/errors#presigned_url_failed"
+    },
+    {
+      "code": "provisioner_unavailable",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": false,
+      "message": "No database provisioner is configured.",
+      "docUrl": "https://docs.abloatai.com/errors#provisioner_unavailable"
+    },
+    {
+      "code": "queries_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The request must include a non-empty queries array.",
+      "docUrl": "https://docs.abloatai.com/errors#queries_required"
+    },
+    {
+      "code": "query_invalid_identifier",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The query contained an invalid identifier.",
+      "docUrl": "https://docs.abloatai.com/errors#query_invalid_identifier"
+    },
+    {
+      "code": "query_relation_target_unknown",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": false,
+      "message": "A relation targets a model the schema does not define.",
+      "docUrl": "https://docs.abloatai.com/errors#query_relation_target_unknown"
+    },
+    {
+      "code": "query_returns_unknown_model",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A query returned a model the registry does not know.",
+      "docUrl": "https://docs.abloatai.com/errors#query_returns_unknown_model"
+    },
+    {
+      "code": "query_unknown_relation",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The query referenced an unknown relation.",
+      "docUrl": "https://docs.abloatai.com/errors#query_unknown_relation"
+    },
+    {
+      "code": "query_unsupported_operator",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The query used an unsupported operator.",
+      "docUrl": "https://docs.abloatai.com/errors#query_unsupported_operator"
+    },
+    {
+      "code": "queue_too_deep",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "The transaction queue exceeded its depth limit.",
+      "docUrl": "https://docs.abloatai.com/errors#queue_too_deep"
+    },
+    {
+      "code": "quota_exceeded",
+      "category": "rate_limit",
+      "surface": "wire",
+      "httpStatus": 429,
+      "retryable": true,
+      "message": "The organization exceeded its configured usage quota.",
+      "docUrl": "https://docs.abloatai.com/errors#quota_exceeded"
+    },
+    {
+      "code": "quota_lookup_failed",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "The quota decision could not be loaded.",
+      "docUrl": "https://docs.abloatai.com/errors#quota_lookup_failed"
+    },
+    {
+      "code": "registry_invalid_constructor",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A model was registered with an invalid constructor.",
+      "docUrl": "https://docs.abloatai.com/errors#registry_invalid_constructor"
+    },
+    {
+      "code": "registry_not_initialized",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The registry was used before initialization.",
+      "docUrl": "https://docs.abloatai.com/errors#registry_not_initialized"
+    },
+    {
+      "code": "registry_property_conflict",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "Two registered models declared a conflicting property.",
+      "docUrl": "https://docs.abloatai.com/errors#registry_property_conflict"
+    },
+    {
+      "code": "registry_reference_unknown_target",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A relation referenced an unknown target model.",
+      "docUrl": "https://docs.abloatai.com/errors#registry_reference_unknown_target"
+    },
+    {
+      "code": "registry_reference_unresolved",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A relation reference could not be resolved.",
+      "docUrl": "https://docs.abloatai.com/errors#registry_reference_unresolved"
+    },
+    {
+      "code": "registry_unknown_model",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The registry has no entry for the requested model.",
+      "docUrl": "https://docs.abloatai.com/errors#registry_unknown_model"
+    },
+    {
+      "code": "required_field_added",
+      "category": "schema",
+      "surface": "client",
+      "retryable": false,
+      "message": "Migration adds a new required field.",
+      "docUrl": "https://docs.abloatai.com/errors#required_field_added"
+    },
+    {
+      "code": "risky_cast",
+      "category": "schema",
+      "surface": "client",
+      "retryable": false,
+      "message": "Migration would perform a risky column type cast.",
+      "docUrl": "https://docs.abloatai.com/errors#risky_cast"
+    },
+    {
+      "code": "schema_field_consecutive_caps",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A schema field name has consecutive capital letters.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_field_consecutive_caps"
+    },
+    {
+      "code": "schema_field_not_camelcase",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A schema field name is not camelCase.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_field_not_camelcase"
+    },
+    {
+      "code": "schema_grants_identifier_unsafe",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A grants declaration referenced an unsafe identifier.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_grants_identifier_unsafe"
+    },
+    {
+      "code": "schema_grants_relation_kind",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A grants relation referenced an invalid kind.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_grants_relation_kind"
+    },
+    {
+      "code": "schema_grants_relation_missing",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A grants declaration referenced a missing relation.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_grants_relation_missing"
+    },
+    {
+      "code": "schema_grants_shape_invalid",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A grants declaration has an invalid shape.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_grants_shape_invalid"
+    },
+    {
+      "code": "schema_grants_target_not_scope_root",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A grants target is not a scope root.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_grants_target_not_scope_root"
+    },
+    {
+      "code": "schema_mutable_missing_meta",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A mutable schema is missing its required meta block.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_mutable_missing_meta"
+    },
+    {
+      "code": "schema_scope_invalid",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": false,
+      "message": "The model's scope predicate could not be built.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_scope_invalid"
+    },
+    {
+      "code": "schema_scope_kind_invalid",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A scope kind in the schema is invalid.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_scope_kind_invalid"
+    },
+    {
+      "code": "schema_table_invalid",
+      "category": "schema",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": false,
+      "message": "The model's table identifier is invalid.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_table_invalid"
+    },
+    {
+      "code": "schema_too_large",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 413,
+      "retryable": false,
+      "message": "The submitted schema exceeds the maximum size.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_too_large"
+    },
+    {
+      "code": "server_execute_unknown_model",
+      "category": "tenant",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The server-execute request named a model not in the tenant schema.",
+      "docUrl": "https://docs.abloatai.com/errors#server_execute_unknown_model"
+    },
+    {
+      "code": "session_expired",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The session is invalid or expired; re-authenticate.",
+      "docUrl": "https://docs.abloatai.com/errors#session_expired"
+    },
+    {
+      "code": "slide_intent_missing_deck_id",
+      "category": "intent",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A slide intent was missing its deck id.",
+      "docUrl": "https://docs.abloatai.com/errors#slide_intent_missing_deck_id"
+    },
+    {
+      "code": "slide_intent_unknown_sibling",
+      "category": "intent",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A slide intent referenced an unknown sibling slide.",
+      "docUrl": "https://docs.abloatai.com/errors#slide_intent_unknown_sibling"
+    },
+    {
+      "code": "snapshot_reserved_key",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A snapshot used a reserved key name.",
+      "docUrl": "https://docs.abloatai.com/errors#snapshot_reserved_key"
+    },
+    {
+      "code": "source_api_key_unresolved",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The source API key could not be resolved.",
+      "docUrl": "https://docs.abloatai.com/errors#source_api_key_unresolved"
+    },
+    {
+      "code": "source_network_error",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "A network error occurred talking to the source.",
+      "docUrl": "https://docs.abloatai.com/errors#source_network_error"
+    },
+    {
+      "code": "stale_context",
+      "category": "conflict",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "The write carried a readAt watermark that is now stale; re-read and retry.",
+      "docUrl": "https://docs.abloatai.com/errors#stale_context"
+    },
+    {
+      "code": "store_create_schema_missing",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "Store.create was called without a schema.",
+      "docUrl": "https://docs.abloatai.com/errors#store_create_schema_missing"
+    },
+    {
+      "code": "store_manager_unknown_model",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The store manager has no entry for the requested model.",
+      "docUrl": "https://docs.abloatai.com/errors#store_manager_unknown_model"
+    },
+    {
+      "code": "store_query_schema_missing",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "Store.query was called without a schema.",
+      "docUrl": "https://docs.abloatai.com/errors#store_query_schema_missing"
+    },
+    {
+      "code": "store_query_unknown_model",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "Store.query named a model the store does not know.",
+      "docUrl": "https://docs.abloatai.com/errors#store_query_unknown_model"
+    },
+    {
+      "code": "sync_client_db_missing",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The sync client has no database handle.",
+      "docUrl": "https://docs.abloatai.com/errors#sync_client_db_missing"
+    },
+    {
+      "code": "sync_context_missing_provider",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "Sync context was read outside of its provider.",
+      "docUrl": "https://docs.abloatai.com/errors#sync_context_missing_provider"
+    },
+    {
+      "code": "sync_not_ready",
+      "category": "transport",
+      "surface": "client",
+      "retryable": false,
+      "message": "A sync operation was attempted before the client was ready.",
+      "docUrl": "https://docs.abloatai.com/errors#sync_not_ready"
+    },
+    {
+      "code": "task_id_missing",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 502,
+      "retryable": true,
+      "message": "The task-create response did not include an id.",
+      "docUrl": "https://docs.abloatai.com/errors#task_id_missing"
+    },
+    {
+      "code": "task_id_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A task id is required for this request.",
+      "docUrl": "https://docs.abloatai.com/errors#task_id_required"
+    },
+    {
+      "code": "tenant_model_columns_unknown",
+      "category": "tenant",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The tenant model's columns could not be resolved.",
+      "docUrl": "https://docs.abloatai.com/errors#tenant_model_columns_unknown"
+    },
+    {
+      "code": "tenant_model_missing_organization_id",
+      "category": "tenant",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The tenant model is missing the organization_id column required for isolation.",
+      "docUrl": "https://docs.abloatai.com/errors#tenant_model_missing_organization_id"
+    },
+    {
+      "code": "transaction_mutate_unknown_model",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A transaction mutated a model the registry does not know.",
+      "docUrl": "https://docs.abloatai.com/errors#transaction_mutate_unknown_model"
+    },
+    {
+      "code": "transaction_read_unknown_model",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A transaction read a model the registry does not know.",
+      "docUrl": "https://docs.abloatai.com/errors#transaction_read_unknown_model"
+    },
+    {
+      "code": "turn_close_failed",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": true,
+      "message": "The agent turn failed to close cleanly.",
+      "docUrl": "https://docs.abloatai.com/errors#turn_close_failed"
+    },
+    {
+      "code": "turn_foreign_agent",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The turn belongs to a different agent.",
+      "docUrl": "https://docs.abloatai.com/errors#turn_foreign_agent"
+    },
+    {
+      "code": "turn_not_found",
+      "category": "not_found",
+      "surface": "wire",
+      "httpStatus": 404,
+      "retryable": false,
+      "message": "The referenced turn does not exist.",
+      "docUrl": "https://docs.abloatai.com/errors#turn_not_found"
+    },
+    {
+      "code": "turn_open_failed",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": true,
+      "message": "The agent turn failed to open.",
+      "docUrl": "https://docs.abloatai.com/errors#turn_open_failed"
+    },
+    {
+      "code": "turn_validation_failed",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 422,
+      "retryable": false,
+      "message": "The agent turn failed server-side validation.",
+      "docUrl": "https://docs.abloatai.com/errors#turn_validation_failed"
+    },
+    {
+      "code": "undo_scope_schema_missing",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "An undo scope was opened without a schema.",
+      "docUrl": "https://docs.abloatai.com/errors#undo_scope_schema_missing"
+    },
+    {
+      "code": "unique_violation",
+      "category": "conflict",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": false,
+      "message": "A value violates a uniqueness constraint.",
+      "docUrl": "https://docs.abloatai.com/errors#unique_violation"
+    },
+    {
+      "code": "unknown_model",
+      "category": "tenant",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The request named a model not in the tenant schema.",
+      "docUrl": "https://docs.abloatai.com/errors#unknown_model"
+    },
+    {
+      "code": "upload_fields_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A required upload field was missing.",
+      "docUrl": "https://docs.abloatai.com/errors#upload_fields_required"
+    },
+    {
+      "code": "upload_items_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The request must include a non-empty items array.",
+      "docUrl": "https://docs.abloatai.com/errors#upload_items_required"
+    },
+    {
+      "code": "usage_invalid",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The usage request was invalid.",
+      "docUrl": "https://docs.abloatai.com/errors#usage_invalid"
+    },
+    {
+      "code": "wait_for_timeout",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 504,
+      "retryable": true,
+      "message": "A wait-for condition timed out.",
+      "docUrl": "https://docs.abloatai.com/errors#wait_for_timeout"
+    },
+    {
+      "code": "wide_scope_forbidden",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "A wide scope is not permitted for this caller.",
+      "docUrl": "https://docs.abloatai.com/errors#wide_scope_forbidden"
+    },
+    {
+      "code": "ws_not_ready",
+      "category": "transport",
+      "surface": "client",
+      "retryable": false,
+      "message": "A frame was sent before the WebSocket was connected.",
+      "docUrl": "https://docs.abloatai.com/errors#ws_not_ready"
+    }
+  ]
+}

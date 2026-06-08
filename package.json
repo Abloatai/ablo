@@ -1,0 +1,199 @@
+{
+  "name": "@abloatai/ablo",
+  "version": "0.9.0",
+  "description": "State control API for AI agents and collaborative apps.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema/index.d.ts",
+      "import": "./dist/schema/index.js",
+      "default": "./dist/schema/index.js"
+    },
+    "./coordination": {
+      "types": "./dist/coordination/index.d.ts",
+      "import": "./dist/coordination/index.js",
+      "default": "./dist/coordination/index.js"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.js",
+      "default": "./dist/react/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "default": "./dist/testing/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js",
+      "default": "./dist/core/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "import": "./dist/agent/index.js",
+      "default": "./dist/agent/index.js"
+    },
+    "./ai-sdk": {
+      "types": "./dist/ai-sdk/index.d.ts",
+      "import": "./dist/ai-sdk/index.js",
+      "default": "./dist/ai-sdk/index.js"
+    },
+    "./source": {
+      "types": "./dist/source/index.d.ts",
+      "import": "./dist/source/index.js",
+      "default": "./dist/source/index.js"
+    },
+    "./source/conformance": {
+      "types": "./dist/source/conformance.d.ts",
+      "import": "./dist/source/conformance.js",
+      "default": "./dist/source/conformance.js"
+    },
+    "./source/drizzle": {
+      "types": "./dist/source/adapters/drizzle.d.ts",
+      "import": "./dist/source/adapters/drizzle.js",
+      "default": "./dist/source/adapters/drizzle.js"
+    },
+    "./source/next": {
+      "types": "./dist/source/next.d.ts",
+      "import": "./dist/source/next.js",
+      "default": "./dist/source/next.js"
+    },
+    "./keys": {
+      "types": "./dist/keys/index.d.ts",
+      "import": "./dist/keys/index.js",
+      "default": "./dist/keys/index.js"
+    },
+    "./wire": {
+      "types": "./dist/wire/index.d.ts",
+      "import": "./dist/wire/index.js",
+      "default": "./dist/wire/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js",
+      "default": "./dist/server/index.js"
+    },
+    "./server/next": {
+      "types": "./dist/server/next.d.ts",
+      "import": "./dist/server/next.js",
+      "default": "./dist/server/next.js"
+    },
+    "./webhooks": {
+      "types": "./dist/webhooks/index.d.ts",
+      "import": "./dist/webhooks/index.js",
+      "default": "./dist/webhooks/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/internal/**",
+    "!dist/__type_probe.*",
+    "docs/*.md",
+    "docs/examples/*.md",
+    "docs/mcp/*.md",
+    "examples",
+    "AGENTS.md",
+    "llms.txt",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "pack:check": "npm_config_cache=${TMPDIR:-/tmp}/ablo-npm-cache npm pack --dry-run",
+    "lint:imports": "node scripts/check-js-extensions.mjs",
+    "generate:errors": "tsx scripts/generate-error-docs.mts",
+    "lint:errors": "tsx scripts/check-error-docs.mts",
+    "lint:pkg": "publint",
+    "prepublishOnly": "npm run build && npm run lint:pkg",
+    "test": "jest",
+    "test:unit": "jest --testPathPattern=__tests__/unit",
+    "test:integration": "jest --testPathPattern=__tests__/integration",
+    "test:contract": "jest --testPathPattern=__tests__/contract",
+    "test:property": "jest --testPathPattern=__tests__/property",
+    "test:coverage": "jest --coverage",
+    "test:e2e": "E2E_TEST=true jest --config jest.e2e.config.ts",
+    "test:e2e:up": "docker compose -f docker-compose.test.yml up -d --wait",
+    "test:e2e:down": "docker compose -f docker-compose.test.yml down -v",
+    "test:e2e:run": "npm run test:e2e:up && npm run test:e2e; npm run test:e2e:down"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org"
+  },
+  "keywords": [
+    "state-management",
+    "realtime",
+    "multiplayer",
+    "local-first",
+    "collaborative",
+    "agents",
+    "ai",
+    "commit",
+    "intent",
+    "api",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Abloatai/ablo.git"
+  },
+  "homepage": "https://github.com/Abloatai/ablo#readme",
+  "bugs": {
+    "url": "https://github.com/Abloatai/ablo/issues"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "drizzle-orm": ">=0.30.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "drizzle-orm": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "mobx": "^6.13.7",
+    "mobx-react-lite": "^4.0.0",
+    "zod": "^4.0.17",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "^3.0.0",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/uuid": "^10.0.0",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/jest-dom": "^6.6.0",
+    "ai": "^6.0.0",
+    "drizzle-orm": "^0.45.2",
+    "fake-indexeddb": "^6.0.0",
+    "fast-check": "^3.0.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "mobx": "^6.13.7",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "ts-jest": "^29.4.0",
+    "typescript": "^5.8.3",
+    "publint": "^0.3.21"
+  }
+}

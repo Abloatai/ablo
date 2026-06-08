@@ -1,0 +1,96 @@
+---
+title: "API Keys"
+description: "The three-key model — and how your backend mints sessions for users and agents."
+---
+
+Ablo authenticates your **project**, not your **users**. You sign users in
+however you like; Ablo only needs to know which short-lived credential is acting.
+That splits into **three keys, two jobs**.
+
+## Secret key — you create this once
+
+Created in the dashboard, long-lived, configured into your app's backend.
+
+| Prefix | Kind | Use it from | Authority |
+|--------|------|-------------|-----------|
+| `sk_`  | **Secret** | Your **backend** | Full org access. Mints the session credentials below. |
+
+<Warning>
+Never ship an `sk_` to a browser — it's a secret with full org authority, like
+a Stripe `sk_` or a Supabase `service_role` key. The browser only ever holds a
+short-lived session credential it can't mint itself.
+</Warning>
+
+## Session credentials — your backend mints these per actor
+
+Short-lived, scoped, minted on demand with your `sk_`. This is how a *specific*
+person or agent acts — and the "who did what" Ablo records. Two shapes:
+
+| | `ek_` **User session** | `rk_` **Agent session** |
+|---|---|---|
+| Subject | a logged-in **person** | an **agent** / automation |
+| Authority | full, within their org | narrow — a typed `can` op allowlist |
+| Minted with | `ablo.sessions.create({ user: { id } })` | `ablo.sessions.create({ agent, can })` |
+| Lifetime | short (~15m), auto-refreshed | short, per run |
+| Lives where | the user's **browser** | the agent runtime |
+| Docs | [Sessions](/sessions) | [Sessions](/sessions) |
+
+They're the same primitive — a backend-minted, short-lived, scoped credential
+your `sk_` vouches for — minted by one resource, [`ablo.sessions`](/sessions),
+wearing two hats: one for humans, one for agents. (An `rk_` can also be a
+long-lived dashboard-created agent key, configured straight into a backend like
+`sk_`.)
+
+## Which key do I initialize with?
+
+There's **one** entry point — `Ablo()` — and the key depends on **where your
+code runs**. The browser never holds a static key at all: it fetches a minted
+session token from your backend.
+
+<CodeGroup>
+
+```ts Browser (end-user apps)
+import { AbloProvider } from '@abloatai/ablo/react';
+
+// authEndpoint points at YOUR backend route, which mints the user's session
+// token (ek_) — see below. The provider fetches + refreshes it; the browser
+// never holds a secret, and the ek_ already names your org. That's the whole setup.
+<AbloProvider schema={schema} authEndpoint="/api/ablo-session">
+  {children}
+</AbloProvider>
+```
+
+```ts Server / agents (backend)
+import Ablo from '@abloatai/ablo';
+
+// A secret (or restricted) key BOTH identifies the project AND authenticates,
+// so nothing else is needed. Never expose this in client code.
+const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_SECRET_KEY, // sk_live_… (or rk_live_… for an agent)
+});
+```
+
+</CodeGroup>
+
+Your `/api/ablo-session` route is one line — it mints the user session for the
+signed-in user and returns it:
+
+```ts Your backend route (session-authed)
+const { token } = await ablo.sessions.create({ user: { id: currentUser.id } });
+return Response.json({ token });
+```
+
+## Secret keys (`sk_`)
+
+Full backend authority — server-to-server calls, schema pushes, and minting the
+session credentials above. Pass as `apiKey`. Keep it in a server secret store;
+never in client code or version control. Use it only from trusted runtimes:
+backend route handlers, workers, CLI tools, webhooks.
+
+## Test vs live
+
+Every key is `…_live_…` or `…_test_…`. A `_test_` key transparently routes to a
+sandbox — an isolated data realm that looks like production but can't affect it
+(Stripe's test/live split). Build against `_test_`; switch to `_live_` for
+production.

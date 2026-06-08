@@ -1,0 +1,293 @@
+---
+title: "Changelog"
+description: "Product updates and releases for Ablo"
+---
+
+<Update label="June 5, 2026" description="v0.9.0">
+## Single options object for every model verb
+
+The model read and write verbs now take one options object instead of
+positional arguments, so the id, the data, and every modifier live as named
+siblings. `claim` returns a disposable handle instead of taking a callback.
+
+### Breaking
+
+- `create`, `update`, `delete`, and the async server `retrieve` each take a
+  single options object: `create({ data, id? })`, `update({ id, data, ...options })`,
+  `delete({ id, ...options })`, `retrieve({ id, ...options })`. Reactive local
+  reads use `get(id)` (synchronous) — `useAblo((ablo) => ablo.tasks.get(id))`.
+
+  ```diff
+  - await ablo.tasks.update(id, { status: 'done' }, { wait: 'confirmed' })
+  + await ablo.tasks.update({ id, data: { status: 'done' }, wait: 'confirmed' })
+
+  - await ablo.tasks.retrieve(id)
+  + await ablo.tasks.retrieve({ id })
+
+  - useAblo((ablo) => ablo.tasks.retrieve(id)) ?? serverTask
+  + useAblo((ablo) => ablo.tasks.get(id)) ?? serverTask
+  ```
+
+- `claim` returns a disposable handle instead of taking a callback. The handle
+  exposes the fresh row on `.data` and is released on scope exit (`await using`)
+  or explicitly via `.release()`. `claim.state`, `claim.queue`, `claim.release`,
+  and `claim.reorder` also take the options object.
+
+  ```diff
+  - await ablo.tasks.claim(id, async (task) => {
+  -   await ablo.tasks.update(task.id, { status: 'in_review' })
+  - })
+  + await using claim = await ablo.tasks.claim({ id })
+  + const task = claim.data
+  + await ablo.tasks.update({ id: task.id, data: { status: 'in_review' } })
+  ```
+
+</Update>
+
+<Update label="June 2, 2026" description="v0.8.0">
+## Callable `claim` namespace and direct Postgres connector
+
+Coordination collapses into a single callable `claim` accessor, and a new
+`databaseUrl` option lets you opt into the direct Postgres connector.
+
+### Added
+
+- Callable `claim` coordination namespace. `claim(id, work)` acquires a claim
+  and runs `work` while it's held; `claim.state(id)`, `claim.queue(id)`,
+  `claim.release(id)`, and `claim.reorder(id, order)` cover the rest of the
+  lifecycle.
+- `databaseUrl` option on `Ablo({ schema, apiKey, databaseUrl })` for the direct
+  Postgres connector. Server-side only; defaults to `process.env.DATABASE_URL`.
+  See the data-sources guide for setup and role requirements.
+
+### Breaking
+
+- Removed the flat coordination methods `claimState`, `queue`, `release`, and
+  `reorder`. Use the `claim` namespace instead.
+
+  ```diff
+  - await ablo.task.claimState(id)
+  - await ablo.task.release(id)
+  + await ablo.task.claim.state(id)
+  + await ablo.task.claim.release(id)
+  ```
+
+</Update>
+
+<Update label="May 28, 2026" description="v0.7.0">
+## Error contract, schema engine, and the `ablo` CLI
+
+A versioned error contract across HTTP and WebSocket, a schema diff/migration
+engine, and the `ablo` CLI for hosted, Data Source, and direct-connector
+workflows.
+
+### Added
+
+- Closed error-code registry as the `code` field of the error model. HTTP and
+  WebSocket errors share one envelope:
+  `{ type, code, message, doc_url, request_id, ...details }`.
+- `ERROR_CONTRACT_VERSION`, emitted in `errors.json` and on the `Ablo-Version`
+  response header. `errors.mdx` and `errors.json` are generated from the
+  registry, with a CI check that fails on drift.
+- Request correlation: every response includes a `req_…` id (or the inbound
+  `x-request-id`), also set as the envelope's `request_id`.
+- Schema diff and migration planning via `generateProvisionPlan` and
+  `generateMigrationPlan` (`@abloatai/ablo/schema`), with constant-value
+  backfill for new required fields.
+- `ablo generate` emits TypeScript types from the schema.
+- CLI commands: `init`, `login`, `logout`, `status`, `mode`, `dev`, and `logs`.
+  Authentication uses the OAuth 2.0 device flow; `login` provisions a test and a
+  live key.
+- Table-adoption commands run against your `DATABASE_URL`: `pull` generates
+  `defineSchema(...)` from existing tables, `check` verifies them with no DDL,
+  and `migrate` applies changes for the direct connector. `schema push` and
+  `dev` target the hosted sandbox, where the server diffs, migrates, and
+  activates the schema.
+
+### Breaking
+
+- Removed the React hooks `useQuery`, `useOne`, `useMutate`, and `useReader`.
+  Use `useAblo()` with `ablo.<model>.*`. The `MutateActions`, `ReaderActions`,
+  and `ReaderFindOptions` types are still exported.
+
+  ```diff
+  - const { data } = useQuery('task', { where: { done: false } })
+  + const ablo = useAblo()
+  + const tasks = ablo.task.list({ where: { done: false } })
+  ```
+
+- Replaced the `{ error, reason }` OpenAPI error schema with the envelope and a
+  generated `ErrorCode` enum.
+</Update>
+
+<Update label="May 26, 2026" description="v0.6.0">
+## Coordination: fair queue, wait-line, and lease renewal
+
+Claims acquire through a server-side FIFO queue. Reads are never gated by a
+claim, including for agents.
+
+### Added
+
+- Claims acquire through a FIFO queue. On contention a claim waits its turn and
+  re-reads before proceeding; a write blocked by another participant's claim
+  throws `AbloBusyError`.
+- `ablo.<model>.queue(id)` — reactive read of the wait-line behind a row: who is
+  queued, their action, and FIFO position. Synced to peers like `activity(id)`.
+- Backpressure on `claim`: `{ wait: false }` skips instead of waiting if the row
+  is held; `{ maxQueueDepth: n }` throws `AbloBusyError('queue_too_deep')`
+  rather than joining a line already that deep.
+- Lease renewal: a held claim renews while the holder's connection is alive, so
+  there is no TTL to size; it lapses only after the holder goes silent. An
+  abandoned queued claim is dequeued.
+- A waiting claim is an `Intent` with `status: 'queued'`; `position` carries its
+  place in line.
+
+### Breaking
+
+- Change listeners renamed to `.onChange(...)`: `ablo.<model>.subscribe(cb)`,
+  `presence.subscribe()`, `intents.subscribe()` → `.onChange(...)`.
+- Row-access API renamed Resource → Model: `Ablo.Resource.*` → `Ablo.Model.*`,
+  `ablo.resource(name)` → `ablo.model(name)`, `ModelTarget.resource` →
+  `ModelTarget.model`, error code `resource_not_found` → `model_not_found`.
+</Update>
+
+<Update label="May 26, 2026" description="v0.5.1">
+## Documentation
+
+- Added a React quick-start (provider + `useAblo`), a plain-language rewrite, and
+  a "Set up with Claude Code" section.
+</Update>
+
+<Update label="May 25, 2026" description="v0.5.0">
+## Claim vocabulary and `bootstrapMode`
+
+### Added
+
+- `<AbloProvider>` gains a `bootstrapMode` prop (`'full' | 'none'`) to skip the
+  baseline pull on read-light pages.
+- `StaleContextConflict` gains an optional `conflictingFields`.
+
+### Breaking
+
+- Renamed the model intent handle methods (`ablo.<model>.intent(id)`):
+  `acquire` → `claim`, `acquireOrAwait` → `claimOrWait`, `settled` → `whenFree`,
+  `release` → `finish`, `revoke` → `cancel`. The lower-level `IntentHandle` /
+  `IntentLeaseHandle` (`ablo.intents.*`) are unchanged.
+</Update>
+
+<Update label="May 25, 2026" description="v0.4.0">
+## Intents
+
+Coordinate writes to an entity with the same accessor you read it:
+`ablo.<model>.intent(id)`.
+
+```ts
+const lock = ablo.documents.intent(doc.id);
+
+lock.current;                              // who holds it (or null) — sync + reactive
+lock.status;                              // 'idle' when free
+
+await lock.claimOrWait();                // take it, or wait out the holder then take it
+await lock.update({ status: 'done' });   // optimistic, lease-guarded
+await lock.finish();
+```
+
+- `claimOrWait()` is the serialize-on-contention call — you never branch on who
+  holds the target; you just get it safely. Bind it to an agent's write tool so
+  agents never reason about coordination.
+- Handles are `AsyncDisposable` — `await using lock = …` finishes on scope exit.
+
+**Deprecated:** participant-level `intents.claim()` / `onRejected()` are superseded
+by the per-model handle and will be removed in a future release.
+</Update>
+
+<Update label="April 22, 2026" description="v0.3.0">
+  ## Umbrella `<AbloProvider>` for React
+
+  One provider component now owns the full lifecycle — singleton rotation on auth
+  change, Strict-Mode-safe bootstrap, `beforeunload` cleanup, session-expiry
+  IndexedDB wipe, post-bootstrap hooks, mesh client construction. The reference
+  integration shrank from 515 LOC of hand-rolled wiring to a 60-LOC wrapper.
+
+  ### Added
+
+  - `<AbloProvider>` — umbrella provider at `@abloatai/ablo/react` with declarative
+    data, auth, behavior, and callback props.
+  - `<SyncGroupProvider id="…">` + `useSyncGroup()` — per-entity scope context.
+  - `<ClientSideSuspense fallback={…}>` — gate renders until the engine is `connected`.
+  - `useSyncStatus()` rewritten as a tagged union — impossible states are unrepresentable.
+  - `useCurrentUserId()`, `useErrorListener(cb)`.
+  - Commit payload projection built into `TransactionQueue` — wire payloads derived
+    from the schema alone; hand-rolled extractor tables can be deleted.
+
+  ### Breaking
+
+  - Removed `<SyncProvider>` (folded into `<AbloProvider>`) and `createAbloContext()`
+    — mesh is always-on; `useAblo()` / `useParticipant()` always available.
+  - Removed `withSync` (import `observer` from `mobx-react-lite` directly).
+  - `useSyncStatus()` now returns a tagged union instead of six booleans:
+    `const isReady = useSyncStatus().name === 'connected'`.
+
+  No breaking change to `useQuery` / `useOne` / `useMutate` / `useReader` / `useMutators` /
+  `useUndoScope` / `usePresence` / `useIntent`.
+</Update>
+
+<Update label="April 22, 2026" description="v0.2.1">
+  ## React bindings hardening
+
+  Fixes two infinite-loop classes that surfaced downstream as React error #185
+  ("Maximum update depth exceeded"), and exposes sync-status reactivity as a
+  first-class observable + hook.
+
+  ### Fixed
+
+  - `useQuery` / `useOne` no longer loop on `getSnapshot` — the snapshot is cached
+    in a ref and refreshed only inside the subscribe callback.
+
+  ### Added
+
+  - `BaseSyncedStore` sync status is now properly observable (`isReady`, `isSyncing`,
+    `isOffline`, `isReconnecting`, `isError`, `hasUnsyncedChanges`).
+  - `useSyncStatus()` React hook — reactive snapshot bridged via `useSyncExternalStore`.
+
+  No breaking changes.
+</Update>
+
+<Update label="April 21, 2026" description="v0.2.0">
+  ## Mesh SDK — the canonical agent-multiplayer surface
+
+  The SDK covers exactly three integration shapes, each with a canonical example:
+  **server agent**, **browser app** (scoped capability token, Stripe `client_secret`
+  shape), and **sub-agent** (attenuated from the parent capability).
+
+  ### Ergonomics
+
+  - `Ablo` class — `import Ablo from '@abloatai/ablo'` / `new Ablo({ schema })`,
+    matching `new Stripe()` / `new OpenAI()`.
+  - Model-scoped joins — `ablo.matters.join(id, { label })`.
+  - `as` alias replaces `onBehalfOf`; duration strings (`ttl: '3m'`); auto-connect.
+
+  ### Coordination primitives
+
+  - Presence verbs — `presence.editing(target)` / `viewing(target)` / `idle()`.
+  - Intent verbs — `intents.editing(target)` / `writing(target)`, returning an
+    `IntentHandle` with `Symbol.asyncDispose` for `await using`.
+  - Snapshots and async iterables over presence, intents, and deltas.
+
+  ### Config
+
+  - `organizationId` no longer required — the API key or session binds the caller's org.
+  - `createMeshFromEnv` removed — `new Ablo({ schema })` auto-reads env.
+</Update>
+
+<Update label="April 10, 2026" description="v0.1.0">
+  ## Initial release
+
+  - **Schema DSL** — zero-codegen schema with full TypeScript inference.
+  - **React hooks** — reactive data binding for models, mutations, and queries.
+  - **Consumer API** — `createSyncEngine()` one-liner setup.
+  - **Offline-first** — IndexedDB persistence with an FK-safe offline mutation queue.
+  - **Real-time sync** — WebSocket delta streaming with optimistic updates and rollback.
+  - **AI Agent SDK** — `SyncAgent` for agents as first-class sync citizens.
+  - **Pluggable auth** — API key, JWT, and session providers.
+</Update>

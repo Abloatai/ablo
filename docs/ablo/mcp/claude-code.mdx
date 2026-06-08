@@ -1,0 +1,33 @@
+---
+title: "Claude Code"
+---
+
+## Install
+
+```bash
+claude mcp add --transport http ablo https://<your-app>/api/mcp
+```
+
+That's it. The next `/help` in Claude Code will list the Ablo Sync tools.
+
+## Verify
+
+In Claude Code, run:
+
+```
+/mcp list
+```
+
+You should see `ablo` with the Ablo Sync tools enumerated.
+
+## Removing
+
+```bash
+claude mcp remove ablo
+```
+
+## More
+
+- [MCP overview](/docs/mcp) — how the transport works.
+- [Cursor setup](/docs/mcp/cursor) — same JSON, different UI.
+- [Windsurf setup](/docs/mcp/windsurf) — same JSON, different UI.

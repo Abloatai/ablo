@@ -1,0 +1,94 @@
+---
+title: "Agents"
+---
+
+An agent is a **reactive** participant: it wakes on something happening, reads
+what it needs, writes a result, and goes idle. That's a request/response
+workload — so agents talk to Ablo over **plain HTTP**, holding no WebSocket. The
+credential *is* the identity; the server resolves the org, scope, and actor from
+the key on every request (the Stripe server-SDK / Liveblocks-node shape).
+
+Humans get the live plane (WebSocket: presence, optimistic, sub-100ms). Agents
+get the stateless plane (HTTP). **Both operate on the same typed, coordinated
+state — and coordinate *with each other*.**
+
+<Note>
+Agents transact against your **pushed schema**, same as everyone — `ablo.tasks`
+exists because you defined a `task` model and ran `ablo push`. The key
+authenticates; the [schema](/quickstart) defines what you can call.
+</Note>
+
+## The agent client
+
+`createAbloHttpClient` is the stateless, typed client. No socket, no connection
+state — just your schema (for types) and an API key.
+
+```ts
+import { createAbloHttpClient } from "@abloatai/ablo";
+import { schema } from "./schema";
+
+const ablo = createAbloHttpClient({ schema, apiKey: process.env.ABLO_API_KEY });
+
+// Reads + writes, fully typed off your schema — each is one HTTP round-trip:
+const open = await ablo.tasks.list({ where: { status: "todo" } });
+const { data } = await ablo.tasks.retrieve({ id: open[0].id });
+await ablo.tasks.update({ id: open[0].id, data: { status: "done" } });
+```
+
+It exposes `retrieve` / `list` / `create` / `update` / `delete`, plus `commits`
+and `beginTurn`. It does **not** expose the stateful-only surface (`get` /
+`getAll` / `getCount` local reads, `onChange` live subscription) — those need a
+live connection and are a *compile error* here, not a runtime surprise.
+
+## Coordination — claim, queue, reorder
+
+The differentiator. A claim is a **durable lease + FIFO wait-line** on a row —
+"who's working on this, who's waiting" — and it's request/response, so an agent
+holds it over HTTP. This is how two agents (or an agent and a human) don't
+clobber the same record.
+
+```ts
+// Acquire a lease, do work with the held row, release on scope exit:
+await using claim = await ablo.tasks.claim({ id: taskId });
+const task = claim.data;
+// …no one else can hold this row while you work…
+await ablo.tasks.update({ id: task.id, data: { status: "in_review" } });
+
+await ablo.tasks.claim.state({ id: taskId });   // who holds it now (or null)
+await ablo.tasks.claim.queue({ id: taskId });   // the FIFO wait-line behind the holder
+await ablo.tasks.claim.reorder({ id: taskId, order: line }); // re-rank the line (privileged)
+```
+
+Think of it as a queue per row — a durable, inspectable, reorderable lease line
+("SQS for entity contention"). Use `{ wait: false }` for fail-fast dedup: *if
+someone else has this job, skip it.*
+
+## Humans + agents on one state
+
+There's no separate "agent mode." A human editing a record over their WebSocket
+and an agent acting over HTTP share the same typed state and the same coordination
+plane: the agent can claim the row a human is editing (and wait in line), and the
+human sees the agent's committed changes stream in **live** — over the human's
+own socket, even though the agent committed over HTTP. You write the agent once;
+it's a first-class participant, not a bolt-on.
+
+## How an agent runs
+
+```text
+something happens ──▶ your agent (HTTP, no socket)
+  (a job, a webhook,     read context (list/retrieve)
+   a queue message)      claim → work → commit
+                         done — no held connection
+```
+
+Because it holds nothing open, an agent is a **stateless worker**: deploys and
+restarts are free, and you scale by adding workers. A long-running fleet of idle
+agents costs nothing on the live plane — that capacity stays for humans.
+
+## What stays on the live (human) plane
+
+`onChange` (live subscriptions) and `get`/`getAll`/`getCount` (local synced-pool
+reads) require a WebSocket and a local store — they're for interactive UIs, not
+stateless agents. An agent reacts to an external trigger (a job/queue/webhook),
+then reads with `list`/`retrieve`. See [client behavior](/client-behavior) for
+the full surface and [guarantees](/guarantees) for the coordination semantics.

@@ -1,0 +1,45 @@
+---
+title: "Model Context Protocol"
+---
+
+Ablo ships two MCP servers that do different jobs. The hosted one at `/api/mcp`
+helps a coding assistant write integration code; the `@ablo/mcp` package lets an
+agent operate on your actual data. Don't reach for the wrong one.
+
+## The docs server (`/api/mcp`)
+
+`https://<your-app>/api/mcp` is a public, no-auth endpoint. It exists so an AI
+coding assistant can integrate the SDK without hallucinating APIs: it searches
+the documentation (`search_ablo_docs`, `get_recipe`), validates a schema, and
+scaffolds a starter app. It never reads or returns your data, so there is no
+token to configure. It's rate-limited per IP.
+
+Connect it from your editor:
+
+- [Claude Code](/docs/mcp/claude-code)
+- [Cursor](/docs/mcp/cursor)
+- [Windsurf](/docs/mcp/windsurf)
+
+## The data-plane server (`@ablo/mcp`)
+
+To let an agent read, write, and coordinate on your rows, run the `@ablo/mcp`
+stdio server. It authenticates with your `ABLO_API_KEY` (an `sk_` key) and
+exposes one tool per model operation:
+
+- `get_model` / `list_models` — read latest state and any active claims
+- `create_model` / `update_model` / `delete_model` — guarded writes
+- `claim_model` / `release_claim` — acquire or release a coordination lease
+
+The intended loop is claim, read, write, release: claim the row, read it after
+claiming, write with the stamp you read, then release so others can proceed. A
+write against state that moved underneath you is rejected with `stale_context` —
+re-read and retry. The package's `skill.md` is the full playbook.
+
+```bash
+ABLO_API_KEY=sk_…   # ABLO_API_URL optional
+```
+
+## Limits
+
+Both servers are rate-limited. The docs endpoint throttles per IP; the
+data-plane server is bounded by your key's usage quota.

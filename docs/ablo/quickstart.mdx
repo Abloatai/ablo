@@ -1,0 +1,226 @@
+---
+title: "Quickstart"
+---
+
+Declare your state, expose a Data Source endpoint, read it, and make one
+protected write.
+
+This quickstart uses the primary existing-database path: a signed
+[Data Source](/data-sources). Your server writes your database. Ablo coordinates
+the realtime stream.
+
+<Note>
+**The schema *is* the API.** Before you can read or commit anything — over the
+client SDK, the HTTP API, or an agent — you must define a schema and push it
+(`ablo push`). Your models become the API surface: a `task` model is what makes
+`/v1/models/task` exist. An API key authenticates you; the **schema defines what
+you can call**. With no pushed schema there is nothing to transact against, and
+your generated **API Reference** reflects *your* pushed models.
+</Note>
+
+## 1. Install
+
+```bash
+npm install @abloatai/ablo
+```
+
+## 2. Declare a Schema
+
+```ts
+import Ablo from '@abloatai/ablo';
+import { defineSchema, model, z } from '@abloatai/ablo/schema';
+
+const schema = defineSchema({
+  tasks: model({
+    title: z.string(),
+    status: z.enum(['todo', 'doing', 'done']),
+  }),
+});
+
+export const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+});
+```
+
+Customer apps should always pass `schema`. Treat it like Prisma's schema file:
+it is the source of truth for typed model resources, realtime subscriptions, and
+agent writes.
+
+## 3. Add a Data Source Endpoint
+
+Keep your database credentials in your app/backend. Add one Ablo API key for
+signed Data Source requests; your existing database configuration stays where it
+already is.
+
+`npx ablo init` writes `ablo/data-source.ts` with the full idempotency/outbox
+scaffold. Mount it at `/api/ablo/source`. The core shape is:
+
+```ts
+// app/api/ablo/source/route.ts
+import { dataSource } from '@abloatai/ablo';
+import { schema } from '@/ablo/schema';
+import { prisma } from '@/lib/prisma';
+
+export const POST = dataSource({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+
+  authorize() {
+    return { prisma };
+  },
+
+  async commit({ operations, clientTxId, context }) {
+    return context.auth.prisma.$transaction(async (tx) => {
+      if (clientTxId) {
+        const cached = await tx.abloIdempotency.findUnique({
+          where: { clientTxId },
+        });
+        if (cached) return cached.response;
+      }
+
+      // Writes app rows and outbox rows in the same transaction.
+      const response = {
+        rows: await applyOperations(tx, operations, clientTxId),
+      };
+
+      if (clientTxId) {
+        await tx.abloIdempotency.create({
+          data: { clientTxId, response },
+        });
+      }
+
+      return response;
+    });
+  },
+
+  async events({ cursor, limit, context }) {
+    const page = await context.auth.prisma.abloOutbox.findMany({
+      where: cursor ? { id: { gt: cursor } } : undefined,
+      orderBy: { id: 'asc' },
+      take: limit ?? 100,
+    });
+
+    return {
+      events: page.map((row) => ({
+        id: row.id,
+        model: row.model,
+        entityId: row.entityId,
+        type: row.type,
+        data: row.data,
+        organizationId: row.organizationId,
+        clientTxId: row.clientTxId,
+        occurredAt: row.createdAt.getTime(),
+      })),
+      nextCursor: page.at(-1)?.id,
+    };
+  },
+});
+```
+
+`DATABASE_URL` stays in your server environment. `ABLO_API_KEY` lets the route
+verify signed Ablo requests before it opens a transaction.
+
+The optional direct Postgres connector is a shortcut for teams that explicitly
+want Ablo to open a database connection. It is covered in
+[Connect Your Database](/data-sources).
+
+## 4. Register The Endpoint
+
+Tell Ablo the URL of the route you mounted:
+
+```txt
+https://your-app.com/api/ablo/source
+```
+
+Self-serve hosted registration is still productization work. In the current
+source-mode path, that endpoint is provisioned for the Ablo deployment. Your app
+still only keeps `ABLO_API_KEY` and its own `DATABASE_URL`.
+
+## 5. See it instantly
+
+Once the sync server is using your Data Source endpoint, `ablo init` adds a
+small agent at `ablo/agent.ts`. Run it:
+
+```bash
+npx tsx ablo/agent.ts
+```
+
+It adds two tasks and moves the urgent one to the top. Keep the app open in
+another tab while it runs — the tasks appear there as the agent writes them, no
+refresh. To watch the changes go by in your terminal:
+
+```bash
+npx ablo logs
+```
+
+You and the agent are editing the same tasks, and you both see every change the
+moment it happens.
+
+## 6. Read and Update
+
+```ts
+await ablo.ready();
+
+const [task] = await ablo.tasks.load({ where: { id: 'task_123' } });
+if (!task) throw new Error('task not found');
+
+const updated = await ablo.tasks.update({
+  id: 'task_123',
+  data: { status: 'done' },
+});
+
+console.log(updated.status);
+```
+
+## 7. Multiplayer and Busy Work
+
+There is no separate multiplayer mode. Use the same schema client for human UI,
+server actions, and agents; Ablo fans out confirmed writes and keeps active
+intents visible on the same resource.
+
+Intents tell you when another human or agent is active on the same target. For
+schema clients, wait on the intent stream and then write through the model.
+
+```ts
+const busy = ablo.intents.list({ resource: 'tasks', id: 'task_123' });
+
+if (busy.length > 0) {
+  await ablo.intents.waitFor(
+    { resource: 'tasks', id: 'task_123' },
+    { timeout: 30_000 },
+  );
+}
+
+const snap = ablo.snapshot({ tasks: 'task_123' });
+
+await ablo.tasks.update({
+  id: 'task_123',
+  data: { status: 'done' },
+  readAt: snap.stamp,
+  onStale: 'reject',
+  wait: 'confirmed',
+});
+```
+
+`ifBusy` controls what happens when another human or agent is already working
+on the same target:
+
+- `return` returns immediately with active intents.
+- `wait` waits for the intent stream to clear.
+- `fail` throws `AbloBusyError` with the active intents attached.
+
+## 8. Next Steps
+
+Keep using the schema client for app and agent writes. Reach for the advanced
+schema-less agent wrapper only when a worker intentionally cannot import the
+app schema.
+
+- [CLI](/cli) covers `ablo init`, Data Source scaffolding, and the optional direct Postgres connector.
+- [Integration Guide](/integration-guide) explains the full app, React, multiplayer, and agent path.
+- [Guarantees](/guarantees) explains what confirmed writes and stale checks mean.
+- [Client Behavior](/client-behavior) covers errors, retries, and public imports.
+- [Connect Your Database](/data-sources) covers keeping rows canonical behind a signed Data Source endpoint.
+- [AI SDK Tool](/examples/ai-sdk-tool) shows the same write path inside a tool call.
+- `packages/sync-engine/examples/data-source` contains the runnable signed
+  Data Source contract demo.

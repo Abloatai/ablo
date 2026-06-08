@@ -1,0 +1,172 @@
+# Ablo
+
+Ablo is the state coordination layer for apps where humans and agents edit the same data.
+
+Here is the problem it solves. Two writers touch `report_stockholm` at once. The agent claims the row, does slow work (an LLM call, a fetch), and commits; the human's UI sees the claim live and never clobbers it. Claims don't lock. If another writer holds the row, `claim` waits for them, re-reads the fresh row, then hands it to you — so two writers serialize instead of clobbering.
+
+Use AI SDK for the agent loop. Use Ablo when agent reads and writes must persist, coordinate with concurrent work, and leave an audit trail.
+
+## Use this API
+
+```ts
+import Ablo from '@abloatai/ablo';
+import { defineSchema, model, z } from '@abloatai/ablo/schema';
+
+const schema = defineSchema({
+  weatherReports: model({
+    id: z.string(),
+    location: z.string(),
+    status: z.enum(['pending', 'ready']),
+    forecast: z.string().optional(),
+  }),
+});
+
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+
+const report = await ablo.weatherReports.retrieve('report_stockholm');
+if (!report) throw new Error('Row not found');
+
+const updated = await ablo.weatherReports.claim('report_stockholm', async (report) => {
+  return ablo.weatherReports.update(
+    report.id,
+    { status: 'ready', forecast: await getForecast(report) },
+    { wait: 'confirmed' },
+  );
+});
+```
+
+That is the normal app path: declare models in a schema, then use `ablo.<model>.retrieve(...)`, `ablo.<model>.create(...)`, `ablo.<model>.update(...)`, and `ablo.<model>.delete(...)`.
+
+Treat the schema as the integration contract. It drives typed model clients,
+React selectors, server and agent writes, Data Source request/response shape,
+hosted schema push, and schema-version gating. Do not invent a parallel
+string-keyed write path for rows that belong to a schema model.
+
+For full integrations, use `integration-guide` as the canonical doc. It covers
+the same model API across Ablo-managed state, Data Source-backed app databases,
+React selectors, multiplayer, and future agent workers.
+
+Reads come in two flavors, and you pick by whether you can wait. `retrieve(id)`
+(one row) and `list({ where })` (many) are async — they hit the server and return
+a Promise, so await them. `get(id)`, `getAll({ where })`, and `getCount({ where })`
+are synchronous — they read the local graph and are reactive in render, so no
+await. The query reads accept `where`, `filter`, `orderBy`, `limit`, `offset`,
+and `state`; state defaults to `'live'`, with `'archived'` and `'all'` to include
+retired rows.
+
+Workers that can't import the app schema can use a schema-less mode (covered in
+`integration-guide`).
+
+React reads should use selector `useAblo`: `useAblo((ablo) => ablo.weatherReports.get(id))` (synchronous local read, reactive in render).
+Use zero-argument `useAblo()` only when a component needs the client for an
+event handler or effect. Treat `useQuery`, `useOne`, `useReader`, and
+`useMutate` as compatibility hooks for older string-keyed integrations, not the
+first integration path.
+
+## Multiplayer
+
+Multiplayer is not a separate mode. When human UI, server actions, and agents use
+the same schema client and write through `ablo.<model>`, Ablo coordinates the
+shared model stream: confirmed deltas fan out to subscribers, active claims are
+visible through `claim.state(id)`, and stale writes can be rejected with `readAt`.
+
+If an app writes directly to its own database outside Ablo, that write bypasses
+coordination until the app reports it through Data Source events.
+
+## Nouns
+
+- `Model client` is the typed `ablo.<model>` object generated from schema.
+- `Claim` holds a model row while slow work runs; `claim.state(id)` observes it.
+- `Commit` is the durable protocol write behind `ablo.<model>.update(...)`.
+- `Receipt` confirms the commit.
+
+## Claimed Behavior
+
+Reads never silently block. Schema reads stay open while a row is claimed.
+Server reads through `ablo.model(name)` can pass `ifClaimed: 'return'` to
+receive active claims, `ifClaimed: 'fail'` to throw `AbloClaimedError`, or
+`ifClaimed: 'wait'` to wait until the active claim clears.
+
+Schema clients learn when a claim clears by listening to the live claim stream, so they don't need to poll. Schema-less HTTP callers must provide an explicit `claimedPollInterval` when using `ifClaimed: 'wait'`; Ablo does not hide a hard-coded polling loop.
+
+Use `claimedTimeout` only as a maximum wait, not as the coordination mechanism.
+
+## Guarantees
+
+`wait: 'confirmed'` means the server accepted the write. Schema model writes are optimistic by default; server rejection rolls back local state. To prevent lost updates, read with `snapshot(...)` to capture a `readAt`, then write with `onStale: 'reject'` — the server rejects your update if someone else changed the row after that `readAt`.
+
+Claims coordinate writers; they do not block readers. Most users should stay on
+schema-backed reads/writes and `claim(...)`; manual protocol bookkeeping is not
+part of the happy path.
+
+All SDK errors extend `AbloError`. Important classes: `AbloClaimedError`, `AbloStaleContextError`, `AbloAuthenticationError`, `AbloPermissionError`, `AbloRateLimitError`, `AbloIdempotencyError`, `AbloConnectionError`, `AbloValidationError`, and `AbloServerError`.
+
+## Schema Scope
+
+A schema is model fields and relations. Advanced schema helpers such as `mutable`, `readOnly`, `field`, `indexed`, queries, and load strategies exist for offline/cache/indexing-heavy apps; reach for them only after the basic field/relation schema is working.
+
+## Storage Boundary
+
+Do not add `databaseURL` to `Ablo(...)`. Application and agent code use `ABLO_API_KEY`.
+
+Every schema model has a backing store. By default, Ablo stores rows for declared models, so `ablo.<model>.create/update/delete` write to Ablo-managed state. If the customer database is canonical, expose a Data Source endpoint. With Prisma or Drizzle this is ONE line — pass an ORM `adapter` and it owns the transaction, idempotency, and outbox (no hand-written `commit`/`events`):
+
+```ts
+// app/api/ablo/source/route.ts
+import { dataSourceNext } from '@abloatai/ablo/source/next';
+import { prismaDataSource } from '@abloatai/ablo/source';
+import { schema } from '@/ablo/schema';
+import { prisma } from '@/lib/prisma';
+
+export const { POST } = dataSourceNext({
+  schema,
+  apiKey: process.env.ABLO_API_KEY!,
+  adapter: prismaDataSource(prisma, schema), // or drizzleDataSource(db, tables)
+});
+```
+
+`npx ablo init` generates this file for you (see CLI below). Customer-owned app database credentials stay private — Ablo only calls the endpoint.
+
+## Sandboxes
+
+Public `/sandbox` is a deterministic visual demo. It should teach shared state,
+claims, stale-write rejection, receipts, and deltas, but it does not use a real
+API key. It also exposes a Claude Code / Codex handoff prompt. Prefer that shape
+when an agent is asked to "make Ablo work" in an existing app.
+
+Authenticated org sandboxes are real test environments. Treat the default
+sandbox like Stripe test mode: it has an isolated sync group prefix and mints
+`sk_test_*` keys. Extra sandboxes can start blank or copy live configuration.
+Resetting a sandbox creates a clean future stream without touching live data.
+Use `sk_live_*` only for production.
+
+For coding agents, the sandbox success path is: pick one shared model,
+declare schema, create the Ablo client, replace one direct mutation with a typed
+`ablo.<model>.update(...)`, use selector `useAblo` for live reads, and add a
+two-writer stale/claim smoke test.
+
+## Public Surface
+
+Import from these public paths only:
+
+- `@abloatai/ablo` — `Ablo`, errors, typed model clients, claims, `dataSource`, and advanced protocol models.
+- `@abloatai/ablo/schema` — schema DSL.
+- `@abloatai/ablo/react` — React provider and hooks.
+- `@abloatai/ablo/testing` — test harnesses and mocks.
+- `@abloatai/ablo/source` — `dataSource`, the `DataSourceAdapter` spine, `prismaDataSource`. For a customer-canonical Data Source endpoint.
+- `@abloatai/ablo/source/next` — `dataSourceNext` (Next.js App Router `{ POST }`).
+- `@abloatai/ablo/source/drizzle` — `drizzleDataSource`.
+- `@abloatai/ablo/source/conformance` — `runDataSourceTests` to prove a custom adapter/handler.
+
+Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or internal subpaths. (`/source` IS public — it's the Data Source endpoint surface above.)
+
+## CLI — agents run it NON-INTERACTIVELY
+
+`ablo init` and other prompts need a TTY; an agent/CI run has none and will HANG. Always:
+
+- `npx ablo init --yes` (flags: `--framework`, `--auth`, `--storage`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login`). Generates `ablo/schema.ts` + the `ablo/data-source.ts` endpoint above.
+- Authenticate with the `ABLO_API_KEY` env var. Do NOT run `ablo login` (opens a browser).
+- Adopt an existing DB: `npx ablo pull prisma [path]` / `npx ablo pull drizzle <module>`.
+- `npx ablo dev --no-watch` (default watches forever); `npx ablo logs --no-follow` (default tails forever); `npx ablo mode test|live` (always pass the arg). `npx ablo push`/`status`/`pull`/`check`/`generate` are one-shot.
+
+Canonical docs to read before integrating: `quickstart`, `schema-contract`, `integration-guide`, `guarantees`, `client-behavior`, `data-sources`, `examples/existing-python-backend`, `api`, `examples/ai-sdk-tool`, and `examples/server-agent`.

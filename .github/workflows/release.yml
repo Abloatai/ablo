@@ -1,0 +1,75 @@
+name: Release
+
+# Publishes @abloatai/ablo to npm with provenance attestations.
+#
+# Version-gated, push-driven. The monorepo mirror force-pushes `main` to
+# this repo on every sync (a fresh history, no tags), so a tag trigger
+# would never fire here. Instead we publish on every push to main but ONLY
+# when package.json's version isn't already on npm — so the cadence is
+# driven entirely by version bumps (changesets `version` in the monorepo).
+# Pushes that don't change the version are a no-op.
+#
+# Trigger paths:
+#   - Push to main (mirror sync)              -> publish IF version is new
+#   - workflow_dispatch from the Actions tab  -> manual publish (same gate)
+#
+# Required repository secrets:
+#   NPM_TOKEN  - an "Automation" or "Granular Access" token from
+#                npmjs.com with publish permission on @abloatai/ablo.
+#                Automation tokens bypass 2FA, which CI needs.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write        # required for npm provenance via OIDC
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        # No lockfile is shipped in the mirror (lockfile lives at the
+        # monorepo root, which doesn't exist here). `install` resolves
+        # against the published-version-range each release.
+        run: npm install --no-fund --no-audit
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify package contents
+        run: npm run pack:check
+
+      - name: Publish if version is new
+        # Version gate: skip when this exact version is already on npm, so
+        # repeated mirror pushes don't error or republish. A version bump is
+        # the only thing that triggers an actual publish.
+        run: |
+          NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$NAME@$VERSION already published — skipping."
+          else
+            echo "Publishing $NAME@$VERSION"
+            npm publish --provenance --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
