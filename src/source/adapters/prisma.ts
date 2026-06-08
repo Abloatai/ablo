@@ -1,12 +1,12 @@
 /**
  * Prisma Data Source adapter. The first real ORM adapter (Auth.js pattern: one
- * package per ORM, all behind the `DataSourceAdapter` spine, all proven by the
+ * package per ORM, all behind the `DataSourceAdapter` interface, all proven by the
  * same conformance suite the in-memory reference passes).
  *
  * It owns the transactional outbox + idempotency so the customer never writes
  * them: `commit` runs the app-row mutations, the `ablo_outbox` append, and the
  * `ablo_idempotency` record in ONE `prisma.$transaction`. `migrations()` ships
- * the DDL for those two tables (`ablo init` emits it).
+ * the table-creation SQL for those two tables.
  *
  * No `@prisma/client` dependency: the client is accepted structurally
  * (`PrismaLike`), so this compiles in the SDK package and is unit-testable with
@@ -21,6 +21,7 @@ import type {
 } from '../adapter.js';
 import type { ChangeSet, EventsPage, Migration, Operation, OutboxEvent } from '../contract.js';
 import { outboxEventSchema } from '../contract.js';
+import { adapterTableMigrations } from '../migrations.js';
 import type { SchemaRecord, Schema } from '../../schema/schema.js';
 import type { SourceListQuery, SourceWhere } from '../index.js';
 
@@ -43,7 +44,7 @@ export interface PrismaRaw {
   $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>;
 }
 
-/** A Prisma client (or interactive-tx client) — structural, no SDK dependency. */
+/** A Prisma client (or interactive-transaction client) — structural, no SDK dependency. */
 export interface PrismaLike extends PrismaRaw {
   $transaction<T>(fn: (tx: PrismaLike & PrismaRaw) => Promise<T>): Promise<T>;
 }
@@ -61,7 +62,7 @@ const lowerFirst = (s: string): string => (s ? s[0].toLowerCase() + s.slice(1) :
  *
  *   - Inside `prisma.$transaction(tx => …)` the writes MUST go through the
  *     transactional client `tx`, and the model is only known as a runtime string.
- *   - Prisma's client/tx is NOMINALLY keyed (`{ task: TaskDelegate; … }`), so a
+ *   - Prisma's client (and transaction handle) is NOMINALLY keyed (`{ task: TaskDelegate; … }`), so a
  *     dynamic `tx[name]` is `unknown` to the compiler — there is no key to infer.
  *
  * Dynamic property access on a statically-keyed type cannot be typed without an
@@ -153,31 +154,7 @@ export function prismaDataSource<S extends SchemaRecord>(
     capabilities: { transactions: true, propose: false, schemaIntrospection: true },
 
     migrations(): readonly Migration[] {
-      return [
-        {
-          name: 'ablo_idempotency',
-          up: `CREATE TABLE IF NOT EXISTS ablo_idempotency (
-  client_tx_id TEXT PRIMARY KEY,
-  response     JSONB NOT NULL,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);`,
-        },
-        {
-          name: 'ablo_outbox',
-          up: `CREATE TABLE IF NOT EXISTS ablo_outbox (
-  cursor         BIGSERIAL PRIMARY KEY,
-  id             TEXT NOT NULL UNIQUE,
-  model          TEXT NOT NULL,
-  entity_id      TEXT NOT NULL,
-  type           TEXT NOT NULL,
-  data           JSONB,
-  organization_id TEXT,
-  client_tx_id   TEXT,
-  occurred_at    BIGINT,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-);`,
-        },
-      ];
+      return adapterTableMigrations();
     },
 
     async read(req: AdapterReadRequest): Promise<readonly Row[]> {
@@ -203,7 +180,7 @@ export function prismaDataSource<S extends SchemaRecord>(
           const row = await applyOperation(tx, op);
           rows.push(row);
           const entityId = String(row.id ?? rowId(op));
-          // Transactional outbox: one event per op, written in THIS tx.
+          // Transactional outbox: one event per op, written in THIS transaction.
           await tx.$executeRawUnsafe(
             `INSERT INTO ablo_outbox (id, model, entity_id, type, data, client_tx_id, occurred_at)
              VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)`,

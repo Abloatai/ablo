@@ -75,6 +75,17 @@ export function camelToSnake(identifier: string): string {
   return identifier.replace(/[A-Z]/g, (ch) => `_${ch.toLowerCase()}`);
 }
 
+/**
+ * Pure snake_case → camelCase — the inverse of {@link camelToSnake}, matching
+ * `postgres.toCamel` semantics. Read-side translation: a column read back from a
+ * BYO database (e.g. via `drizzleDataSource`) maps to the same JS field the SDK
+ * wrote, so `camelToSnake('operatorId') === 'operator_id'` and
+ * `snakeToCamel('operator_id') === 'operatorId'` round-trip.
+ */
+export function snakeToCamel(identifier: string): string {
+  return identifier.replace(/_+([a-z0-9])/g, (_, ch: string) => ch.toUpperCase());
+}
+
 /** Quote an identifier (defense-in-depth; inputs are already slug/snake). */
 export function q(identifier: string): string {
   return `"${identifier.replace(/"/g, '""')}"`;

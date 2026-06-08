@@ -865,8 +865,8 @@ export type Ablo<S extends SchemaRecord> = {
    * live `ek_`/`rk_` the WebSocket and HTTP transports currently carry (kept
    * fresh by the `getToken` refresh loop), falling back to a configured API
    * key. Returns `null` when no credential is set yet. Use it to authenticate
-   * a side-band request to the same sync-server (e.g. the S3 presign endpoint)
-   * with the very token this client already holds — no extra mint round-trip.
+   * a side-band request to the same server with the very token this client
+   * already holds — no extra mint round-trip.
    */
   getAuthToken(): Promise<string | null>;
 

@@ -384,7 +384,7 @@ contract; there are no retry or timeout knobs to tune.
 
 ## Production Reference
 
-- [Identity & Sync Groups](./docs/identity.md) — bring your own auth; tell Ablo who's connecting and how org / team / user map to sync-group scope.
+- [Identity & Sync Groups](./docs/identity.md) — use your own authentication; tell Ablo who's connecting and how org / team / user map to sync-group scope.
 - [Schema Contract](./docs/schema-contract.md) — one schema becomes typed model clients, React reads, agent writes, Data Source shape, and schema push.
 - [Guarantees](./docs/guarantees.md) — confirmed writes, stale-write protection, claim coordination, and agent lifecycle.
 - [Integration Guide](./docs/integration-guide.md) — pick the backing mode and integrate React, Data Source, multiplayer, and agents.

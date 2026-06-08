@@ -10,10 +10,42 @@ import type { SyncStatus } from '../BaseSyncedStore.js';
 import { AbloValidationError } from '../errors.js';
 
 /**
+ * A single LOCAL mutation as observed off the commit stream — the substrate
+ * the undo system records from. One is emitted per local create/update/
+ * delete/archive (remote/collaborator deltas never appear here: they apply
+ * through a separate pool path that doesn't queue mutations). `previousData`
+ * holds the pre-edit field values (captured from the model's
+ * `modifiedProperties` first-old-wins baseline), so an inverse op is fully
+ * derivable from the event alone — no separate snapshot pass.
+ *
+ * This mirrors how Yjs's `UndoManager` derives reverse-ops by observing the
+ * doc and Liveblocks' `room.history` records room ops: undo listens to the
+ * one place all local writes converge, rather than wrapping the write call.
+ */
+export interface LocalMutation {
+  type: 'create' | 'update' | 'delete' | 'archive' | 'unarchive';
+  /** Registered model name (e.g. `'SlideLayer'`); resolved to a schema key by the recorder. */
+  modelName: string;
+  modelId: string;
+  /** New field values (create/update). */
+  data?: Record<string, unknown> | null;
+  /** Pre-edit field values (update → inverse patch; delete → full re-create row). */
+  previousData?: Record<string, unknown> | null;
+}
+
+/**
  * Minimal store interface that the SDK hooks need.
  * Consumers provide their concrete store (e.g., SyncedStore) that implements this.
  */
 export interface SyncStoreContract {
+  /**
+   * Subscribe to the LOCAL mutation stream (optimistic, pre-ack) for undo
+   * recording. Optional so minimal test doubles can omit it — when absent,
+   * undo scopes simply record nothing. The concrete store
+   * (`BaseSyncedStore`) wires this to the TransactionQueue's
+   * `transaction:created` event. Returns an unsubscribe function.
+   */
+  subscribeLocalMutations?(handler: (mutation: LocalMutation) => void): () => void;
   retrieve(modelClass: abstract new (...args: never[]) => Model, id: string): Model | undefined;
   queryByClass(
     modelClass: abstract new (...args: never[]) => Model,

@@ -57,9 +57,9 @@ either mode) defines the same models test and live see; only the rows differ.
 | `ablo dev`                         | **Hosted** — push the schema to your test sandbox, then watch `ablo/schema.ts` and re-push on save.                                           | `--no-watch`, `--schema <path>`, `--export <name>`, `--url <url>`                                      |
 | `ablo logs`                        | Tail your scope's commit activity (`stripe logs tail`). Follows by default.                                                                   | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode test\|live` |
 | `ablo push`                        | **Hosted** — upload the schema to Ablo; the server diffs, migrates, and activates it.                                                         | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url`         |
-| `ablo migrate`                     | **Direct Postgres** — apply the schema to your own `DATABASE_URL` (you run the DDL).                                                          | `--dry-run`, `--output <file>`, `--schema`, `--export`                                                 |
+| `ablo migrate`                     | **Direct Postgres** — apply the schema to your own `DATABASE_URL` (you run the table-creation SQL).                                                          | `--dry-run`, `--output <file>`, `--schema`, `--export`                                                 |
 | `ablo pull`                        | **Direct Postgres** — generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`).                              | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force`                                     |
-| `ablo check`                       | **Direct Postgres** — verify your _existing_ tables fit the schema (read-only, no DDL).                                                       | `--schema <path>`, `--export <name>`, `--app-schema <name>`                                            |
+| `ablo check`                       | **Direct Postgres** — verify your _existing_ tables fit the schema (read-only, no schema changes).                                                       | `--schema <path>`, `--export <name>`, `--app-schema <name>`                                            |
 | `ablo generate`                    | Emit TypeScript types from the schema.                                                                                                        | `--out <path>`, `--schema`, `--export`                                                                 |
 
 ## `ablo dev`
@@ -145,7 +145,7 @@ reshaping it. `ablo check` is read-only; it never proposes a migration.
 
 Same engine, two setups. If you use the **Direct Postgres connector**, use
 `ablo migrate` — it applies the schema to your own `DATABASE_URL`, and you run
-the DDL. If Ablo manages the sandbox/hosted store, use `ablo push` and
+the table-creation SQL. If Ablo manages the sandbox/hosted store, use `ablo push` and
 `ablo dev` — the server applies the change and version-gates connecting clients.
 
 ```bash

@@ -2,7 +2,7 @@
  * Data Source adapter conformance suite — the shared "is this adapter correct?"
  * test set, in the Auth.js `@auth/adapter-test` mould. Every ORM adapter
  * (Prisma/Drizzle/Kysely) and any hand-written handler runs THIS to prove,
- * before production, the guarantees the spine promises. A new adapter is "done"
+ * before production, the guarantees the adapter interface promises. A new adapter is "done"
  * when it passes — not when it compiles.
  *
  * Runner-agnostic: checks are plain async functions that throw (node:assert) on
@@ -129,7 +129,7 @@ export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck
       },
     },
     {
-      name: 'a later UPDATE under a new clientTxId is applied (idempotency is per-tx)',
+      name: 'a later UPDATE under a new clientTxId is applied (idempotency is per-transaction)',
       run: async () => {
         const adapter = await make();
         await adapter.commit(change('tx_c1', [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }]));

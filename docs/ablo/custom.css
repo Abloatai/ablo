@@ -20,9 +20,9 @@
   --ablo-border-subtle: #d8d4cc;
   --ablo-radius-sm: 4px;
   --ablo-radius-md: 6px;
-  /* Steel-blue accent — echoes the landing-page gradient. */
-  --ablo-accent: #4a6577;
-  --ablo-highlight: rgba(74, 101, 119, 0.14);
+  /* Monochrome ink accent — no brand color, deliberately quiet. */
+  --ablo-accent: #1a1a1a;
+  --ablo-highlight: rgba(26, 26, 26, 0.06);
 }
 
 .dark {
@@ -30,8 +30,8 @@
   --ablo-surface-foreground: #f4f0e6;
   --ablo-border: #f4f0e6;
   --ablo-border-subtle: rgba(244, 240, 230, 0.18);
-  --ablo-accent: #98aebc;
-  --ablo-highlight: rgba(152, 174, 188, 0.16);
+  --ablo-accent: #f4f0e6;
+  --ablo-highlight: rgba(244, 240, 230, 0.08);
 }
 
 /* ---- CTA links styled as outline buttons -------------------- *

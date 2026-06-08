@@ -325,8 +325,8 @@ export interface AbloApi {
    * Resolve the active bearer credential this client authenticates with — the
    * same token its own requests carry in `Authorization`. Returns `null` when
    * no credential is configured. Async because the API key may be supplied as
-   * an async setter. Use it to authenticate side-band requests to the same
-   * sync-server (e.g. the S3 presign endpoint) without re-minting.
+   * an async setter. Use it to authenticate a side-band request to the same
+   * server with the credential this client already holds — no re-mint.
    */
   getAuthToken(): Promise<string | null>;
 }

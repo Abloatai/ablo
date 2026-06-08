@@ -1,18 +1,21 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "maple",
+  "theme": "aspen",
   "name": "Ablo",
+  "appearance": {
+    "default": "light",
+    "strict": true
+  },
   "description": "An open protocol for agent-native multiplayer state",
   "search": {
     "prompt": "Search the Ablo docs..."
   },
   "colors": {
-    "primary": "#4a6577",
-    "light": "#98aebc",
-    "dark": "#324a5a"
+    "primary": "#1a1a1a",
+    "light": "#e6e6e6",
+    "dark": "#1a1a1a"
   },
   "background": {
-    "decoration": "gradient",
     "color": {
       "light": "#fafafa",
       "dark": "#262522"

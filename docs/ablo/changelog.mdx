@@ -99,7 +99,7 @@ workflows.
   Authentication uses the OAuth 2.0 device flow; `login` provisions a test and a
   live key.
 - Table-adoption commands run against your `DATABASE_URL`: `pull` generates
-  `defineSchema(...)` from existing tables, `check` verifies them with no DDL,
+  `defineSchema(...)` from existing tables, `check` verifies them without changing your schema,
   and `migrate` applies changes for the direct connector. `schema push` and
   `dev` target the hosted sandbox, where the server diffs, migrates, and
   activates the schema.

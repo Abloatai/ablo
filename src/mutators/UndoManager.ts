@@ -19,7 +19,7 @@
  */
 
 import type { Schema } from '../schema/schema.js';
-import type { SyncStoreContract } from '../react/context.js';
+import type { SyncStoreContract, LocalMutation } from '../react/context.js';
 import { createTransaction, type Transaction } from './Transaction.js';
 import { type InverseOp, type UndoEntry, parseUndoEntry } from './inverseOp.js';
 import {
@@ -27,6 +27,11 @@ import {
   DEFAULT_UNDO_CONFLICT_POLICY,
   type UndoConflictPolicy,
 } from './undoApply.js';
+
+/** Normalize a registered model name to the queue's lowercased alias form
+ * (mirrors TransactionQueue's `normalizeModelKey`). */
+const normalizeModelAlias = (modelName: string): string =>
+  modelName.replace('Model', '').toLowerCase();
 
 // ── Inverse op model ──────────────────────────────────────────────────────
 //
@@ -50,6 +55,23 @@ export interface UndoScopeOptions {
    * {@link UndoConflictPolicy}.
    */
   conflictPolicy?: UndoConflictPolicy;
+  /**
+   * Which models this surface owns. The scope only records mutations whose
+   * resolved schema key passes this predicate, so a spreadsheet edit never
+   * lands on the deck editor's stack (the equivalent of Yjs scoping by
+   * shared-type set). Omit to track every model — fine for a single-surface
+   * app, wrong when two surfaces with independent Cmd+Z share one store.
+   */
+  tracksModel?: (schemaKey: string) => boolean;
+  /**
+   * Opt into recording undo entries by OBSERVING the local-mutation stream
+   * (the best-practice model: undo listens where all local writes converge —
+   * Yjs/Liveblocks). When false (default), the scope records nothing on its
+   * own and relies on legacy manual `record()` calls. Transitional: a scope
+   * must not mix the two, or shared writes double-count. Flip a surface to
+   * `true` only when its manual-record consumers are removed in the same step.
+   */
+  recordFromStream?: boolean;
 }
 
 /**
@@ -89,6 +111,31 @@ export class UndoScope<S extends Schema> {
    */
   private tail: Promise<unknown> = Promise.resolve();
 
+  /** Predicate selecting which models this surface records (see options). */
+  private readonly tracksModel?: (schemaKey: string) => boolean;
+  /** registered-name / alias → schema key, built once from the schema. */
+  private readonly schemaKeyByAlias = new Map<string, string>();
+  /** Unsubscribe from the local-mutation stream. */
+  private readonly unsubscribe: () => void;
+  /**
+   * True while `undo()`/`redo()` replays ops. Replays write through the same
+   * commit path, so they re-emit on the local-mutation stream; this flag tells
+   * our own listener to ignore them (no echo) — the engine equivalent of Yjs's
+   * `trackedOrigins` exclusion / Liveblocks pausing history during undo.
+   */
+  private replaying = false;
+  /** Ops collected during the current tick, flushed as ONE entry. */
+  private batch: Array<{ forward: InverseOp; inverse: InverseOp | null }> = [];
+  private flushScheduled = false;
+  /**
+   * Open grouping session (Liveblocks `history.pause()` / Yjs `stopCapturing`
+   * analogue). While set, stream ops accumulate here ACROSS ticks instead of
+   * flushing per-tick, so a multi-tick action (a drag, a whole streaming AI
+   * response) collapses into ONE Cmd+Z. `endGroup()` flushes it.
+   */
+  private group: { label?: string; ops: Array<{ forward: InverseOp; inverse: InverseOp | null }> } | null =
+    null;
+
   constructor(
     private readonly schema: S,
     private readonly store: SyncStoreContract,
@@ -97,6 +144,119 @@ export class UndoScope<S extends Schema> {
   ) {
     this.maxHistory = options.maxHistory ?? 100;
     this.conflictPolicy = options.conflictPolicy ?? DEFAULT_UNDO_CONFLICT_POLICY;
+    this.tracksModel = options.tracksModel;
+
+    // Build the registered-name → schema-key alias map. The mutation stream
+    // reports `model.getModelName()` (e.g. `'SlideLayer'`), but inverse ops
+    // and the replay transaction are keyed by the SCHEMA key (e.g.
+    // `'slideLayers'`). Map every reasonable spelling to the schema key.
+    for (const schemaKey of Object.keys(this.schema.models)) {
+      const def = (this.schema.models as Record<string, { typename?: string }>)[schemaKey];
+      const typename = def?.typename ?? schemaKey;
+      for (const alias of [schemaKey, typename]) {
+        this.schemaKeyByAlias.set(alias, schemaKey);
+        this.schemaKeyByAlias.set(alias.toLowerCase(), schemaKey);
+        this.schemaKeyByAlias.set(normalizeModelAlias(alias), schemaKey);
+      }
+    }
+
+    // Subscribe to the local-mutation stream ONLY when this scope opts into
+    // stream recording. Transitional flag: surfaces still on the legacy
+    // manual-record path (mutator `RecordingTransaction`, AI pipeline
+    // sessions) keep `recordFromStream: false` so writes aren't double-counted.
+    // Once every surface is migrated, stream recording becomes the only path
+    // and the flag is removed. Optional on the contract so minimal test
+    // doubles can omit it (undo then records nothing).
+    this.unsubscribe =
+      options.recordFromStream && this.store.subscribeLocalMutations
+        ? this.store.subscribeLocalMutations((m) => this.onLocalMutation(m))
+        : () => {};
+  }
+
+  /**
+   * Open a grouping session: every stream-recorded op until {@link endGroup}
+   * collapses into a single undo entry. Mirrors Liveblocks `history.pause()` —
+   * call on gesture start (pointerdown) or AI-response start. Idempotent-ish:
+   * a second call closes the previous group first.
+   */
+  beginGroup(label?: string): void {
+    if (this.group) this.endGroup();
+    this.group = { label, ops: [] };
+  }
+
+  /** Close the grouping session and record the accumulated ops as one entry. */
+  endGroup(label?: string): void {
+    const g = this.group;
+    if (!g) return;
+    this.group = null;
+    const forwards = g.ops.map((c) => c.forward);
+    const inverses = g.ops
+      .map((c) => c.inverse)
+      .filter((i): i is InverseOp => i !== null)
+      .reverse();
+    if (forwards.length === 0 && inverses.length === 0) return;
+    this.record({ label: label ?? g.label, inverses, forwards });
+  }
+
+  /** Resolve a stream mutation's registered name to its schema key, or null. */
+  private resolveSchemaKey(modelName: string): string | null {
+    return (
+      this.schemaKeyByAlias.get(modelName) ??
+      this.schemaKeyByAlias.get(normalizeModelAlias(modelName)) ??
+      null
+    );
+  }
+
+  /**
+   * Stream listener — the sole place entries are born. Skips replay echoes
+   * and out-of-scope models, derives the forward+inverse op from the
+   * mutation's `data`/`previousData`, and defers the stack push to a
+   * per-tick flush so a burst of writes (e.g. align 5 layers) becomes ONE
+   * undo step — riding the same tick boundary the TransactionQueue batches on.
+   */
+  private onLocalMutation(m: LocalMutation): void {
+    if (this.replaying) return;
+    const schemaKey = this.resolveSchemaKey(m.modelName);
+    if (!schemaKey) return;
+    if (this.tracksModel && !this.tracksModel(schemaKey)) return;
+
+    const ops = buildUndoOps(m, schemaKey);
+    if (!ops) return;
+
+    // Inside a grouping session, accumulate across ticks (flushed on
+    // endGroup); otherwise coalesce per-tick.
+    if (this.group) {
+      this.group.ops.push(ops);
+      return;
+    }
+    this.batch.push(ops);
+    this.scheduleFlush();
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushScheduled) return;
+    this.flushScheduled = true;
+    const run = () => {
+      this.flushScheduled = false;
+      this.flushBatch();
+    };
+    if (typeof queueMicrotask === 'function') queueMicrotask(run);
+    else void Promise.resolve().then(run);
+  }
+
+  /** Coalesce the tick's collected ops into one entry and record it. */
+  private flushBatch(): void {
+    if (this.batch.length === 0) return;
+    const collected = this.batch;
+    this.batch = [];
+    const forwards = collected.map((c) => c.forward);
+    // Undo applies inverses in REVERSE order of how the forwards ran.
+    const inverses = collected
+      .map((c) => c.inverse)
+      .filter((i): i is InverseOp => i !== null)
+      .reverse();
+    if (forwards.length === 0 && inverses.length === 0) return;
+    this.record({ inverses, forwards });
   }
 
   /**
@@ -116,23 +276,27 @@ export class UndoScope<S extends Schema> {
 
   /**
    * Run a recording mutator exclusively on the scope's serialization chain.
-   * `useMutators` calls this so the snapshot → write → `record()` sequence is
-   * atomic relative to other invocations, undo, and redo.
+   * Used by the legacy manual-record path (`useMutators` + `RecordingTransaction`)
+   * so the snapshot → write → `record()` sequence is atomic relative to undo/
+   * redo. The stream-recording path doesn't need this (it derives entries from
+   * already-committed mutations); kept until all surfaces migrate off manual.
    */
   runRecorded<T>(work: () => Promise<T>): Promise<T> {
     return this.enqueue(work);
   }
 
   /**
-   * Internal: record a mutator's inverses. Clears the redo stack.
-   *
-   * Entries here are produced internally by `RecordingTransaction` (trusted),
-   * so the schema check is DEV-ONLY: it catches recorder bugs in dev/test
-   * (rejecting a malformed op at ingestion, with its path, instead of letting
-   * it crash later inside `applyOps`) without paying a Zod parse on every user
-   * action in production. The real validation boundary is `parseUndoEntry`,
-   * applied when entries are deserialized from persistence (untrusted input).
-   * Best practice: validate at trust boundaries, type-check internal calls.
+   * Record one entry onto the undo stack. Clears the redo stack. Fed by
+   * {@link flushBatch}/{@link endGroup} from the local-mutation stream, and
+   * still called directly by the legacy manual-record consumers
+   * (`useMutators`, the AI mutation pipeline) until they migrate. Entries are
+   * built internally (trusted), so the schema check is DEV-ONLY: it catches
+   * recorder bugs in dev/test (rejecting a malformed op at ingestion, with its
+   * path, instead of letting it crash later inside `applyOps`) without paying a
+   * Zod parse on every user action in production. The real validation boundary
+   * is `parseUndoEntry`, applied when entries are deserialized from persistence
+   * (untrusted input). Best practice: validate at trust boundaries, type-check
+   * internal calls.
    */
   record(entry: UndoEntry): void {
     if (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') {
@@ -195,7 +359,14 @@ export class UndoScope<S extends Schema> {
       if (!entry) return;
       const tx = createTransaction(this.schema, this.store, this.organizationId);
       const ops = resolveOps(entry.inverses, entry.forwards, this.store, this.conflictPolicy);
-      await applyOps(tx, ops);
+      // Suppress our own stream listener so replayed writes don't record as
+      // new undo entries. Cleared in `finally` even if a replay op throws.
+      this.replaying = true;
+      try {
+        await applyOps(tx, ops);
+      } finally {
+        this.replaying = false;
+      }
       this.redoStack.push(entry);
       if (this.redoStack.length > this.maxHistory) this.redoStack.shift();
     });
@@ -213,7 +384,12 @@ export class UndoScope<S extends Schema> {
       if (!entry) return;
       const tx = createTransaction(this.schema, this.store, this.organizationId);
       const ops = resolveOps(entry.forwards, entry.inverses, this.store, this.conflictPolicy);
-      await applyOps(tx, ops);
+      this.replaying = true;
+      try {
+        await applyOps(tx, ops);
+      } finally {
+        this.replaying = false;
+      }
       this.undoStack.push(entry);
       if (this.undoStack.length > this.maxHistory) this.undoStack.shift();
     });
@@ -223,11 +399,77 @@ export class UndoScope<S extends Schema> {
   clear(): void {
     this.undoStack = [];
     this.redoStack = [];
+    this.batch = [];
   }
 
   /** Introspection — for debug panels / e2e tests. */
   size(): { undo: number; redo: number } {
     return { undo: this.undoStack.length, redo: this.redoStack.length };
+  }
+
+  /**
+   * Detach from the local-mutation stream and drop listeners. Scopes are
+   * cached for the store's lifetime by `UndoManager`, so this is mainly for
+   * tests and explicit teardown.
+   */
+  dispose(): void {
+    this.unsubscribe();
+    this.recordListeners.clear();
+    this.batch = [];
+  }
+}
+
+/**
+ * Derive the forward + inverse op for a single local mutation. Returns null
+ * when the mutation can't be reversed (e.g. an update with no captured
+ * previous values), so the caller can drop it rather than push a half-entry.
+ */
+function buildUndoOps(
+  m: LocalMutation,
+  modelKey: string,
+): { forward: InverseOp; inverse: InverseOp | null } | null {
+  const id = m.modelId;
+  const stripId = (o?: Record<string, unknown> | null): Record<string, unknown> => {
+    const out = { ...(o ?? {}) };
+    delete out.id;
+    return out;
+  };
+
+  switch (m.type) {
+    case 'create':
+      return {
+        forward: { kind: 'create', modelKey, data: { ...stripId(m.data), id } },
+        inverse: { kind: 'delete', modelKey, id },
+      };
+    case 'update': {
+      const next = stripId(m.data);
+      const prev = stripId(m.previousData);
+      return {
+        forward: { kind: 'update', modelKey, patch: { id, ...next } },
+        // No previous values captured → not reversible; drop the inverse.
+        inverse:
+          Object.keys(prev).length > 0
+            ? { kind: 'update', modelKey, patch: { id, ...prev } }
+            : null,
+      };
+    }
+    case 'delete':
+      return {
+        forward: { kind: 'delete', modelKey, id },
+        inverse: { kind: 'create', modelKey, data: { ...stripId(m.previousData), id } },
+      };
+    case 'archive':
+      return {
+        forward: { kind: 'update', modelKey, patch: { id, archivedAt: new Date() } },
+        inverse: { kind: 'update', modelKey, patch: { id, archivedAt: null } },
+      };
+    case 'unarchive':
+      return {
+        forward: { kind: 'update', modelKey, patch: { id, archivedAt: null } },
+        inverse: { kind: 'update', modelKey, patch: { id, archivedAt: new Date() } },
+      };
+    default:
+      return null;
   }
 }
 

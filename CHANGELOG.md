@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1
+
+### Patch Changes
+
+- 90b656c: `drizzleDataSource` now takes `(db, schema)` and derives snake_case columns from your schema, so it composes with `ablo migrate` with no parallel Drizzle table. Update calls from `drizzleDataSource(db, tables)` → `drizzleDataSource(db, schema)`. Also adds the `snakeToCamel` export and provisions the adapter's `ablo_outbox` / `ablo_idempotency` tables via `ablo migrate`.
+
 ## 0.9.0
 
 A single options object for every model verb, and a disposable `claim` handle.

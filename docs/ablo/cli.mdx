@@ -80,7 +80,7 @@ either mode) defines the same models test and live see; only the rows differ.
 | `ablo logs` | Tail your scope's commit activity (`stripe logs tail`). Follows by default. | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode test\|live` |
 | `ablo push` | **Hosted** — upload the schema to Ablo; the server diffs, migrates, and activates it. | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url` |
 | `ablo pull` | **Adoption** — generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`). | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force` |
-| `ablo check` | **Adoption** — verify your *existing* tables fit the schema (read-only, no DDL). | `--schema <path>`, `--export <name>`, `--app-schema <name>` |
+| `ablo check` | **Adoption** — verify your *existing* tables fit the schema (read-only, no schema changes). | `--schema <path>`, `--export <name>`, `--app-schema <name>` |
 | `ablo generate` | Emit TypeScript types from the schema. | `--out <path>`, `--schema`, `--export` |
 
 ## `ablo dev`
@@ -128,7 +128,7 @@ point: review it, then run `ablo check`.
 
 ## `ablo check`
 
-The table-adoption front door. Instead of migrating (DDL on your database), Ablo
+The table-adoption front door. Instead of migrating (running schema SQL on your database), Ablo
 checks the tables you already have: `ablo check` introspects `DATABASE_URL`,
 compares it to your `defineSchema(...)`, and reports — per model — whether the
 table is adoptable. It never writes or alters anything.

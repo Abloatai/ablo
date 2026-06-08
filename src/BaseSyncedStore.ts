@@ -42,7 +42,7 @@ import { ModelScope } from './ObjectPool.js';
 import { LazyReferenceCollection } from './LazyReferenceCollection.js';
 import type { Schema } from './schema/schema.js';
 import { createReaderActions, type ReaderActions } from './mutators/readerActions.js';
-import type { SyncStoreContract } from './react/context.js';
+import type { SyncStoreContract, LocalMutation } from './react/context.js';
 import type { AuthCredentialSource } from './auth/credentialSource.js';
 
 // ── Exported types ──────────────────────────────────────────────────────────
@@ -709,6 +709,28 @@ export class BaseSyncedStore<
    */
   waitForConfirmation(modelName: string, modelId: string): Promise<void> {
     return this.syncClient.waitForConfirmation(modelName, modelId);
+  }
+
+  /**
+   * Observe the LOCAL mutation stream for undo recording (see
+   * {@link import('./react/context.js').LocalMutation}). Taps the
+   * TransactionQueue's `transaction:created` event — fired once per local
+   * create/update/delete/archive with `previousData` already captured.
+   * Remote/collaborator deltas apply via `applyDeltaBatchToPool` and never
+   * emit here, so undo is naturally local-only (you can't undo a teammate).
+   */
+  subscribeLocalMutations(handler: (mutation: LocalMutation) => void): () => void {
+    return this.syncClient.subscribe('transaction:created', (data?: unknown) => {
+      const tx = data as import('./transactions/TransactionQueue.js').Transaction | undefined;
+      if (!tx || !tx.type || !tx.modelName || !tx.modelId) return;
+      handler({
+        type: tx.type,
+        modelName: tx.modelName,
+        modelId: tx.modelId,
+        data: tx.data ?? null,
+        previousData: tx.previousData ?? null,
+      });
+    });
   }
 
   // ── Bootstrap + Retry ────────────────────────────────────────────────────

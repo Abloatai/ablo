@@ -87,8 +87,9 @@ export const eventsPageSchema = z.object({
 export type EventsPage = z.infer<typeof eventsPageSchema>;
 
 /**
- * A DDL migration an adapter ships so a customer never hand-writes the
- * `ablo_idempotency` / `ablo_outbox` tables — `ablo init` emits these.
+ * A table-creation migration an adapter ships so a customer never hand-writes the
+ * `ablo_idempotency` / `ablo_outbox` tables — the adapter returns them from
+ * `migrations()`.
  */
 export const migrationSchema = z.object({
   /** Stable name, used as the migration filename + applied-ledger key. */

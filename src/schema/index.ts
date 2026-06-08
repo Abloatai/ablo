@@ -165,6 +165,7 @@ export {
   generateMigrationPlan,
   appSchemaName,
   camelToSnake,
+  snakeToCamel,
   q,
   sqlType,
   type ProvisionPlan,

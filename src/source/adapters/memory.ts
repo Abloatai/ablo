@@ -1,6 +1,6 @@
 /**
  * In-memory reference Data Source adapter — the canonical correct implementation
- * of the spine. It is the test double for the bridge/handler AND the thing the
+ * of the adapter interface. It is the test double for the bridge/handler AND the thing the
  * conformance suite runs against to prove the suite itself is real (same role as
  * the server's `memoryTenantDirectory`). A new ORM adapter is "done" when it
  * passes the same suite this one passes.
@@ -76,7 +76,7 @@ export function memoryDataSource(): DataSourceAdapter {
     capabilities: { transactions: true, propose: false, schemaIntrospection: false },
 
     migrations(): readonly Migration[] {
-      // In-memory: no DDL. A real ORM adapter ships ablo_idempotency + ablo_outbox here.
+      // In-memory: no table-creation SQL. A real ORM adapter ships ablo_idempotency + ablo_outbox here.
       return [];
     },
 

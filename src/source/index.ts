@@ -544,8 +544,8 @@ function json(data: unknown, status = 200): Response {
 }
 
 /**
- * Serve a request from an ORM `adapter`. Routes the four operations to the spine
- * (`read`/`commit`/`events`) and shapes the wire response. The adapter is the
+ * Serve a request from an ORM `adapter`. Routes the four operations to the adapter
+ * interface (`read`/`commit`/`events`) and shapes the wire response. The adapter is the
  * single point of dispatch — no per-model branching here.
  */
 async function handleViaAdapter(
@@ -1076,7 +1076,7 @@ export {
   type PushQueueStorage,
 } from './pushQueue.js';
 
-// ── Data Source adapter spine (Zod contract + one interface, per-ORM packages) ──
+// ── Data Source adapter interface (Zod contract + one interface, per-ORM packages) ──
 export {
   type DataSourceAdapter,
   type AdapterReadRequest,
@@ -1099,3 +1099,4 @@ export {
   type AdapterCapabilities,
 } from './contract.js';
 export { prismaDataSource, type PrismaLike, type PrismaDataSourceOptions } from './adapters/prisma.js';
+export { adapterTableMigrations } from './migrations.js';

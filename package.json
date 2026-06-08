@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "State control API for AI agents and collaborative apps.",
   "license": "Apache-2.0",
   "type": "module",
