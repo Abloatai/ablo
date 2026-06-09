@@ -64,12 +64,23 @@ Expected output:
 { id: '...', status: 'ready' }
 ```
 
-## Run the example
+## Push the schema, then run it
+
+The server keeps its own copy of the schema, so push it once before any write
+(or keep `npx ablo dev` running to push on every save):
 
 ```bash
-cd packages/sync-engine
-ABLO_API_KEY=sk_test_... npx tsx examples/quickstart.ts
+npx ablo push
 ```
+
+Then run the file above however you run TypeScript in your project, e.g.:
+
+```bash
+ABLO_API_KEY=sk_test_... npx tsx ablo/quickstart.ts
+```
+
+Writing to a model you have not pushed fails with `server_execute_unknown_model` —
+that error means "run `npx ablo push`".
 
 ## Add coordination for slow work
 
