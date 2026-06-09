@@ -1,20 +1,4 @@
 {
   "url": "https://context7.com/abloatai/ablo",
-  "public_key": "pk_hn2kO5oj5iFEmxGftFcZc",
-  "projectTitle": "Ablo",
-  "description": "Typed sync engine and coordination API for apps where humans, server code, and AI agents edit the same data. Current API (0.9.x): single-options-object model verbs and disposable claims.",
-  "branch": "main",
-  "folders": [],
-  "excludeFolders": ["src", "dist", "node_modules", "__tests__", "docs/internal"],
-  "excludeFiles": ["CHANGELOG.md", "docs/ablo/changelog.mdx"],
-  "rules": [
-    "Use the 0.9.x API only. Model writes take ONE options object: create({ data }), update({ id, data }), delete({ id }), retrieve({ id }). The positional forms update(id, data) / create(data, opts) / delete(id) are REMOVED — never generate them.",
-    "Coordinate concurrent writers with disposable claims: `await using claim = await ablo.<model>.claim({ id })`, read the fresh row from `claim.data`, then write, and the claim auto-releases at scope end. The callback form claim(id, cb) and claim('id', async (row) => {}) are REMOVED.",
-    "Reads come in two flavors: synchronous reactive local reads get(id) / getAll({ where }) (use in render and with useAblo selectors), and async server reads retrieve({ id }) / list({ where }). There is NO load() method.",
-    "Never pass databaseUrl to Ablo(...). Applications and agents authenticate with the ABLO_API_KEY env var; the client is `Ablo({ schema, apiKey })` server-side or `Ablo({ schema, authEndpoint })` for the browser.",
-    "In React, AbloProvider takes only a `client` prop (plus userId/fallback/onError): build `const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' })` then `<AbloProvider client={ablo}>`. withSync is REMOVED — wrap components with `observer` from mobx-react-lite, or prefer the useAblo selector.",
-    "There is no `ablo.ready()` to await and no `ablo.dispose()` — do not invent client lifecycle methods.",
-    "After creating or changing ablo/schema.ts you MUST run `npx ablo push` (or keep `npx ablo dev` running). The server keeps its own copy of the schema; writing to a model it has not seen fails with server_execute_unknown_model.",
-    "Start a new integration with `npx ablo init --yes` — it scaffolds the schema, client, provider, session route, and Data Source endpoint on the current API. Do not hand-write the client from memory."
-  ]
+  "public_key": "pk_hn2kO5oj5iFEmxGftFcZc"
 }
