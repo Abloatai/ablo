@@ -47,85 +47,80 @@ Customer apps should always pass `schema`. Treat it like Prisma's schema file:
 it is the source of truth for typed model resources, realtime subscriptions, and
 agent writes.
 
-## 3. Add a Data Source Endpoint
+## 3. Push Your Schema
+
+Declaring the schema in your code is not enough — the **server holds its own
+copy**. The sync server imports no app schema; it learns your models only from
+what you push, per tenant. Until you push, the server rejects every write to a
+model it hasn't seen:
+
+```bash
+npx ablo push   # or `npx ablo dev` to push + watch during development
+```
+
+The server validates the schema, version-bumps it, and activates it. Only then
+do your models become writable over the wire.
+
+<Warning>
+**Re-push after every schema change.** Adding a model, or marking one
+`mutable`, changes nothing on the server until you push again. If a write fails
+with `server_execute_unknown_model` —
+
+```
+Unknown model: "presentationSession". Mark the entity `mutable: true` in the
+schema to expose it over the wire.
+```
+
+— the cause is almost always a schema you changed locally but never pushed. The
+fix is `ablo push`, not a code edit. (If the model is brand new it also needs a
+table — `ablo migrate`, or your existing migration tool — so the row has
+somewhere to land.)
+</Warning>
+
+## 4. Add a Data Source Endpoint
 
 Keep your database credentials in your app/backend. Add one Ablo API key for
 signed Data Source requests; your existing database configuration stays where it
 already is.
 
 `npx ablo init` writes `ablo/data-source.ts` with the full idempotency/outbox
-scaffold. Mount it at `/api/ablo/source`. The core shape is:
+scaffold. Mount it at `/api/ablo/source`. The adapter (here `prismaDataSource`)
+handles idempotency, the outbox, and the events feed for you — you wire it once:
 
 ```ts
 // app/api/ablo/source/route.ts
-import { dataSource } from '@abloatai/ablo';
+import { dataSourceNext } from '@abloatai/ablo/source/next';
+import { prismaDataSource } from '@abloatai/ablo/source';
 import { schema } from '@/ablo/schema';
 import { prisma } from '@/lib/prisma';
 
-export const POST = dataSource({
+export const runtime = 'nodejs';
+
+export const { POST } = dataSourceNext({
   schema,
-  apiKey: process.env.ABLO_API_KEY,
-
-  authorize() {
-    return { prisma };
-  },
-
-  async commit({ operations, clientTxId, context }) {
-    return context.auth.prisma.$transaction(async (tx) => {
-      if (clientTxId) {
-        const cached = await tx.abloIdempotency.findUnique({
-          where: { clientTxId },
-        });
-        if (cached) return cached.response;
-      }
-
-      // Writes app rows and outbox rows in the same transaction.
-      const response = {
-        rows: await applyOperations(tx, operations, clientTxId),
-      };
-
-      if (clientTxId) {
-        await tx.abloIdempotency.create({
-          data: { clientTxId, response },
-        });
-      }
-
-      return response;
-    });
-  },
-
-  async events({ cursor, limit, context }) {
-    const page = await context.auth.prisma.abloOutbox.findMany({
-      where: cursor ? { id: { gt: cursor } } : undefined,
-      orderBy: { id: 'asc' },
-      take: limit ?? 100,
-    });
-
-    return {
-      events: page.map((row) => ({
-        id: row.id,
-        model: row.model,
-        entityId: row.entityId,
-        type: row.type,
-        data: row.data,
-        organizationId: row.organizationId,
-        clientTxId: row.clientTxId,
-        occurredAt: row.createdAt.getTime(),
-      })),
-      nextCursor: page.at(-1)?.id,
-    };
-  },
+  apiKey: process.env.ABLO_API_KEY!,
+  adapter: prismaDataSource(prisma, schema),
 });
 ```
 
+Using Drizzle instead of Prisma? Swap one line:
+
+```ts
+import { drizzleDataSource } from '@abloatai/ablo/source/drizzle';
+// ...
+  adapter: drizzleDataSource(db, schema),
+```
+
 `DATABASE_URL` stays in your server environment. `ABLO_API_KEY` lets the route
-verify signed Ablo requests before it opens a transaction.
+verify signed Ablo requests before it opens a transaction. The adapter is given
+your schema so it knows the synced models; the rest of your database — auth,
+billing, anything not in the Ablo schema — stays in your own ORM, untouched.
 
 The optional direct Postgres connector is a shortcut for teams that explicitly
 want Ablo to open a database connection. It is covered in
 [Connect Your Database](/data-sources).
 
-## 4. Register The Endpoint
+## 5. Register The Endpoint
 
 Tell Ablo the URL of the route you mounted:
 
@@ -137,7 +132,7 @@ Self-serve hosted registration is still productization work. In the current
 source-mode path, that endpoint is provisioned for the Ablo deployment. Your app
 still only keeps `ABLO_API_KEY` and its own `DATABASE_URL`.
 
-## 5. See it instantly
+## 6. See it instantly
 
 Once the sync server is using your Data Source endpoint, `ablo init` adds a
 small agent at `ablo/agent.ts`. Run it:
@@ -157,12 +152,12 @@ npx ablo logs
 You and the agent are editing the same tasks, and you both see every change the
 moment it happens.
 
-## 6. Read and Update
+## 7. Read and Update
 
 ```ts
 await ablo.ready();
 
-const [task] = await ablo.tasks.load({ where: { id: 'task_123' } });
+const task = await ablo.tasks.retrieve({ id: 'task_123' });
 if (!task) throw new Error('task not found');
 
 const updated = await ablo.tasks.update({
@@ -173,44 +168,40 @@ const updated = await ablo.tasks.update({
 console.log(updated.status);
 ```
 
-## 7. Multiplayer and Busy Work
+## 8. Multiplayer and Coordination
 
 There is no separate multiplayer mode. Use the same schema client for human UI,
-server actions, and agents; Ablo fans out confirmed writes and keeps active
-intents visible on the same resource.
+server actions, and agents; Ablo fans out confirmed writes and coordinates work
+on the same row.
 
-Intents tell you when another human or agent is active on the same target. For
-schema clients, wait on the intent stream and then write through the model.
+When a human or agent needs exclusive, ordered access to a row, take a **claim**.
+A claim is a disposable handle: it gives you the freshest row off `claim.data`,
+and auto-releases when it leaves scope (`await using`). Anyone else who claims
+the same row queues behind you.
 
 ```ts
-const busy = ablo.intents.list({ resource: 'tasks', id: 'task_123' });
+await using claim = await ablo.tasks.claim({ id: 'task_123', action: 'update' });
 
-if (busy.length > 0) {
-  await ablo.intents.waitFor(
-    { resource: 'tasks', id: 'task_123' },
-    { timeout: 30_000 },
-  );
+// claim.data is the fresh row at the moment you acquired it
+if (claim.data.status !== 'done') {
+  await ablo.tasks.update({
+    id: 'task_123',
+    data: { status: 'done' },
+    wait: 'confirmed',
+  });
 }
-
-const snap = ablo.snapshot({ tasks: 'task_123' });
-
-await ablo.tasks.update({
-  id: 'task_123',
-  data: { status: 'done' },
-  readAt: snap.stamp,
-  onStale: 'reject',
-  wait: 'confirmed',
-});
+// claim auto-releases here as the block exits
 ```
 
-`ifBusy` controls what happens when another human or agent is already working
-on the same target:
+The `claim` namespace exposes the rest of the coordination plane — each member
+takes an options object:
 
-- `return` returns immediately with active intents.
-- `wait` waits for the intent stream to clear.
-- `fail` throws `AbloBusyError` with the active intents attached.
+- `ablo.tasks.claim.state({ id })` — who currently holds the row, and the queue.
+- `ablo.tasks.claim.queue({ id })` — the ordered list of waiters.
+- `ablo.tasks.claim.release({ id })` — release a claim explicitly.
+- `ablo.tasks.claim.reorder({ id, order })` — reprioritize the queue.
 
-## 8. Next Steps
+## 9. Next Steps
 
 Keep using the schema client for app and agent writes. Reach for the advanced
 schema-less agent wrapper only when a worker intentionally cannot import the

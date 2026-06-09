@@ -81,23 +81,6 @@ import {
   type AbloApiIntents,
 } from './ApiClient.js';
 
-/**
- * Handle returned by `engine.beginTurn()`. While alive, every commit
- * automatically carries this turn's id on the wire. Call `close(stats?)`
- * when the turn finishes, or `dispose()` to abandon without recording
- * usage. Idempotent.
- */
-export interface Turn {
-  readonly turnId: string;
-  close(stats?: {
-    readonly costInputTokens?: number;
-    readonly costOutputTokens?: number;
-    readonly costComputeMs?: number;
-  }): Promise<void>;
-  dispose(): void;
-  [Symbol.asyncDispose](): Promise<void>;
-}
-
 // ── Options ───────────────────────────────────────────────────────────────
 
 /**
@@ -1001,10 +984,13 @@ export type Ablo<S extends SchemaRecord> = {
   readonly presence: PresenceStream;
 
   /**
-   * Cooperative-mutex layer over presence — announce "I'm about to do
-   * X on Y" so peers can yield before colliding. Server enforces the
-   * mutex; rejected announcements surface via `intents.onRejected(...)`.
-   * Same socket as entity sync, no second connection.
+   * @internal — the public coordination API is `ablo.<model>.claim`. This
+   * accessor is the internal stream `claim` is built on; it is NOT part of the
+   * supported public surface and will be moved off the public type (it currently
+   * stays only because internal SDK modules are still typed against it).
+   *
+   * Cooperative-mutex layer over presence — announce "I'm about to do X on Y" so
+   * peers can yield before colliding. Same socket as entity sync.
    */
   readonly intents: IntentResource;
 
@@ -1057,19 +1043,6 @@ export type Ablo<S extends SchemaRecord> = {
   snapshot<ModelName extends keyof S & string>(
     entities: { readonly [M in ModelName]: string | readonly string[] },
   ): Snapshot<Schema<S>, ModelName>;
-
-  /**
-   * Open a turn — every commit issued while the returned handle is
-   * alive carries `caused_by_task_id` on the wire so the server
-   * stamps it onto each delta. Powers `agent_tasks` audit trails.
-   * Server: `POST /api/agent/turn` with the capability bearer.
-   */
-  beginTurn(options: {
-    readonly prompt: string;
-    readonly parentTaskId?: string;
-    readonly surface?: string;
-    readonly metadata?: Record<string, unknown>;
-  }): Promise<Turn>;
 
   // ── Internal accessors for framework integration ─────────────────
 
@@ -1974,14 +1947,6 @@ export function Ablo<const S extends SchemaRecord>(
   // `ws_not_ready` forever (terminal AgentJob writes hang on retry).
   syncClient.getTransactionQueue().setMutationExecutor(executor);
 
-  // Active turn id, set by `beginTurn(...)`, cleared on close. While
-  // set, every batch commit attaches `causedByTaskId` so server
-  // delta rows get stamped with it. Single-turn-at-a-time per Ablo
-  // — opening a second turn overwrites the active id without closing
-  // the prior. Callers who need parallel turns construct multiple
-  // Ablo instances, matching the SyncAgent semantics.
-  let activeTurnId: string | null = null;
-
   // Presence + intent streams — built eagerly so `engine.presence`
   // and `engine.intents` return the same reference for the engine's
   // lifetime. The transport doesn't exist yet (BaseSyncedStore.initialize
@@ -2647,9 +2612,7 @@ export function Ablo<const S extends SchemaRecord>(
 	      // SyncClient we already hold from createInternalComponents —
 	      // no need to leak an accessor through BaseSyncedStore.
 	      const queue = syncClient.getTransactionQueue();
-	      queue.enqueueCommit(clientTxId, operations, {
-	        causedByTaskId: activeTurnId,
-	      });
+	      queue.enqueueCommit(clientTxId, operations);
 
 	      if (wait === 'queued') {
 	        return { id: clientTxId, status: 'queued' };
@@ -2981,121 +2944,6 @@ export function Ablo<const S extends SchemaRecord>(
         entities,
       });
     },
-
-    // ── Turn handles ────────────────────────────────────────────────
-    //
-    // Open a turn — every commit issued while the returned handle is
-    // alive carries `caused_by_task_id` on the wire so the server
-    // stamps it onto each delta. The product surface this powers:
-    // `agent_tasks` audit trails ("which AI prompt produced this
-    // mutation"), parent/child turn chains, cost accounting per turn.
-    //
-    // POST /api/agent/turn (capability bearer) → returns turnId.
-    // POST /api/agent/turn/:id/close (capability bearer) → records
-    //   final cost stats. Idempotent.
-    async beginTurn(beginOptions: {
-      readonly prompt: string;
-      readonly parentTaskId?: string;
-      readonly surface?: string;
-      readonly metadata?: Record<string, unknown>;
-    }): Promise<{
-      readonly turnId: string;
-      close(stats?: {
-        readonly costInputTokens?: number;
-        readonly costOutputTokens?: number;
-        readonly costComputeMs?: number;
-      }): Promise<void>;
-      dispose(): void;
-      [Symbol.asyncDispose](): Promise<void>;
-    }> {
-	      const baseUrl = url.replace(/\/+$/, '');
-	      const turnUrl = `${baseUrl.replace(/^ws/, 'http')}/api/agent/turn`;
-	      const headers = authCredentials.withAuthHeaders({ 'Content-Type': 'application/json' });
-      const res = await fetch(turnUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          prompt: beginOptions.prompt,
-          parentTaskId: beginOptions.parentTaskId,
-          surface: beginOptions.surface,
-          metadata: beginOptions.metadata,
-        }),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        let parsed: unknown = text;
-        if (text) {
-          try {
-            parsed = JSON.parse(text);
-          } catch {
-            /* keep raw text */
-          }
-        }
-        // Preserve the server's structured envelope (code/message/doc_url) when
-        // present; fall back to turn_open_failed for a bare/non-Ablo body.
-        throw hasWireCode(parsed)
-          ? translateHttpError(
-              res.status,
-              parsed,
-              res.headers.get('x-request-id') ?? undefined,
-            )
-          : new AbloError(`beginTurn failed: ${res.status} ${text}`, {
-              code: 'turn_open_failed',
-              httpStatus: res.status,
-            });
-      }
-      const json = (await res.json()) as { turnId: string };
-      const turnId = json.turnId;
-      activeTurnId = turnId;
-
-      let closed = false;
-      const close = async (stats?: {
-        readonly costInputTokens?: number;
-        readonly costOutputTokens?: number;
-        readonly costComputeMs?: number;
-      }): Promise<void> => {
-        if (closed) return;
-        closed = true;
-        if (activeTurnId === turnId) activeTurnId = null;
-        const closeUrl = `${turnUrl}/${encodeURIComponent(turnId)}/close`;
-        const closeRes = await fetch(closeUrl, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            costInputTokens: stats?.costInputTokens ?? 0,
-            costOutputTokens: stats?.costOutputTokens ?? 0,
-            costComputeMs: stats?.costComputeMs ?? 0,
-          }),
-        });
-        if (!closeRes.ok) {
-          const text = await closeRes.text().catch(() => '');
-          let parsed: unknown = text;
-          if (text) {
-            try {
-              parsed = JSON.parse(text);
-            } catch {
-              /* keep raw text */
-            }
-          }
-          throw hasWireCode(parsed)
-            ? translateHttpError(
-                closeRes.status,
-                parsed,
-                closeRes.headers.get('x-request-id') ?? undefined,
-              )
-            : new AbloError(`closeTurn failed: ${closeRes.status} ${text}`, {
-                code: 'turn_close_failed',
-                httpStatus: closeRes.status,
-              });
-        }
-      };
-      const dispose = (): void => {
-        if (closed) return;
-        closed = true;
-        if (activeTurnId === turnId) activeTurnId = null;
-      };
-      return { turnId, close, dispose, [Symbol.asyncDispose]: () => close() };
-    },
   } as Ablo<S>;
 
   return engine;
@@ -3154,20 +3002,6 @@ export namespace Ablo {
   export type Options<S extends SchemaRecord = SchemaRecord> = AbloOptions<S>;
   export type Api = AbloApi;
   export type ApiIntents = AbloApiIntents;
-  export type Agent = import('./ApiClient.js').Agent;
-  export type AgentOptions = import('./ApiClient.js').AgentOptions;
-  export type AgentRunOptions = import('./ApiClient.js').AgentRunOptions;
-  export type AgentRunStatus = import('./ApiClient.js').AgentRunStatus;
-  export type AgentRunResult<T> = import('./ApiClient.js').AgentRunResult<T>;
-  export type AgentRunContext = import('./ApiClient.js').AgentRunContext;
-  export type AgentModelClient<T = Record<string, unknown>> =
-    import('./ApiClient.js').AgentModelClient<T>;
-  export type AgentModelReadOptions =
-    import('./ApiClient.js').AgentModelReadOptions;
-  export type AgentModelMutationOptions =
-    import('./ApiClient.js').AgentModelMutationOptions;
-  export type AgentIntentOptions = import('./ApiClient.js').AgentIntentOptions;
-  export type AgentIntentInput = import('./ApiClient.js').AgentIntentInput;
   export type Capability = import('./ApiClient.js').Capability;
   export type CapabilityCreateOptions = import('./ApiClient.js').CapabilityCreateOptions;
   export type CapabilityRecord = import('./ApiClient.js').CapabilityRecord;
@@ -3175,11 +3009,6 @@ export namespace Ablo {
   export type CapabilityRevocation = import('./ApiClient.js').CapabilityRevocation;
   export type CapabilityRotateOptions = import('./ApiClient.js').CapabilityRotateOptions;
   export type RotatedCapability = import('./ApiClient.js').RotatedCapability;
-  export type Task = import('./ApiClient.js').Task;
-  export type TaskCreateOptions = import('./ApiClient.js').TaskCreateOptions;
-  export type TaskCloseOptions = import('./ApiClient.js').TaskCloseOptions;
-  export type TaskCloseResult = import('./ApiClient.js').TaskCloseResult;
-  export type TaskResource = import('./ApiClient.js').TaskResource;
   // Claimed-state options stay flat — same concept reused by claims and models.
   export type IfClaimedPolicy = import('./Ablo.js').IfClaimedPolicy;
   export type ClaimedOptions = import('./Ablo.js').ClaimedOptions;
@@ -3205,7 +3034,6 @@ export namespace Ablo {
     TSchema extends _SchemaTypes.Schema = _SchemaTypes.Schema,
     K extends keyof TSchema['models'] = keyof TSchema['models'],
   > = _Streams.Snapshot<TSchema, K>;
-  export type Turn = import('./Ablo.js').Turn;
 
   // ── Auth (sub-namespace — 4 names, shared concept) ────────────────
   // eslint-disable-next-line @typescript-eslint/no-namespace

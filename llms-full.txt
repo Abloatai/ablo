@@ -19,7 +19,7 @@ Public imports:
 - `@abloatai/ablo/react` — React provider and hooks.
 - `@abloatai/ablo/testing` — test harnesses and mocks.
 
-Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, `/source`, or `internal/*` as public imports.
+Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or `internal/*` as public imports. The Data Source surface — `/source`, `/source/next`, `/source/drizzle`, `/source/conformance` — IS public (it's how a customer-owned database is wired).
 
 The canonical integration doc is `integration-guide`. It explains the end-to-end
 path for schema, React selectors, Ablo-managed state, Data Source-backed app
@@ -67,41 +67,40 @@ const schema = defineSchema({
 
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
-const [report] = await ablo.weatherReports.load({ where: { id: 'report_stockholm' } });
+const report = await ablo.weatherReports.retrieve({ id: 'report_stockholm' });
 if (!report) throw new Error('Row not found');
 
-const updated = await ablo.weatherReports.claim('report_stockholm', async (report) => {
-  return ablo.weatherReports.update(
-    report.id,
-    { status: 'ready', forecast: await getForecast(report) },
-    { wait: 'confirmed' },
-  );
+await using claim = await ablo.weatherReports.claim({ id: 'report_stockholm' });
+const updated = await ablo.weatherReports.update({
+  id: claim.data.id,
+  data: { status: 'ready', forecast: await getForecast(claim.data) },
+  wait: 'confirmed',
 });
 ```
 
-The normal app API is:
+The normal app API (every verb takes ONE options object):
 
-- `ablo.<model>.load(options?)` for async hydration from the server/local store
-- `ablo.<model>.retrieve(id)` for local synchronous reads after loading
-- `ablo.<model>.create(data, options?)`
-- `ablo.<model>.update(id, data, options?)`
-- `ablo.<model>.delete(id, options?)`
-- `ablo.<model>.claim(id, work, options?)`
-- `ablo.<model>.claimState(id)`
-- `ablo.<model>.queue(id)`
+- `ablo.<model>.retrieve({ id })` — async read of one row from the server
+- `ablo.<model>.list({ where })` — async read of many from the server
+- `ablo.<model>.get(id)` / `getAll({ where })` / `getCount({ where })` — synchronous local-graph reads (reactive in React render)
+- `ablo.<model>.create({ data, id? })`
+- `ablo.<model>.update({ id, data })`
+- `ablo.<model>.delete({ id })`
+- `await using claim = await ablo.<model>.claim({ id })` — disposable claim handle; read the fresh row off `claim.data`; auto-releases on scope exit
+- `ablo.<model>.claim.state({ id })` / `claim.queue({ id })` / `claim.release({ id })` / `claim.reorder({ id, order })`
 
-`ablo.<model>.list(...)` and `count(...)` are synchronous local reads. They
-accept `where`, `filter`, `orderBy`, `limit`, `offset`, and `scope`; scope
-defaults to `'live'`, with `'archived'` and `'all'` for lifecycle-aware reads.
+The synchronous reads (`getAll`/`getCount`) accept `where`, `filter`, `orderBy`,
+`limit`, `offset`, and `state`; state defaults to `'live'`, with `'archived'`
+and `'all'` for lifecycle-aware reads.
 
 Use `ablo.model<T>(name)` only when the caller intentionally does not have a schema, such as custom server agents, MCP routes, migration scripts, or generic admin tools.
 
 React reads should use selector `useAblo`:
 
 ```tsx
-const report = useAblo((ablo) => ablo.weatherReports.retrieve(id)) ?? serverReport;
+const report = useAblo((ablo) => ablo.weatherReports.get(id)) ?? serverReport;
 const visibleReports = useAblo((ablo) =>
-  ablo.weatherReports.list({ where: { projectId } }),
+  ablo.weatherReports.getAll({ where: { projectId } }),
 );
 ```
 
@@ -110,7 +109,7 @@ the provider-owned client:
 
 ```tsx
 const ablo = useAblo();
-await ablo?.weatherReports.update(id, patch, { wait: 'confirmed' });
+await ablo?.weatherReports.update({ id, data: patch, wait: 'confirmed' });
 ```
 
 Treat `useQuery`, `useOne`, `useReader`, and `useMutate` as compatibility hooks
@@ -135,7 +134,7 @@ canonical rows, and fans out the resulting deltas.
 
 For existing Python backends, keep the Python service layer and database as the
 source of truth. Add one signed Data Source endpoint, keep initial page loads on
-existing APIs if needed, use `useAblo((ablo) => ablo.<model>.retrieve(id)) ?? serverRow`
+existing APIs if needed, use `useAblo((ablo) => ablo.<model>.get(id)) ?? serverRow`
 for live rows, then migrate buttons one at a time from direct Python endpoint
 writes to `ablo.<model>.update(...)`.
 
@@ -202,15 +201,16 @@ customer route, and the customer route writes the app database.
 When the customer's database is canonical, expose one signed source route:
 
 ```ts
-import { dataSource } from '@abloatai/ablo';
+import { dataSourceNext } from '@abloatai/ablo/source/next';
+import { prismaDataSource } from '@abloatai/ablo/source';
 import { schema } from './ablo.schema';
+import { prisma } from './lib/prisma';
 
-export const POST = dataSource({
+// The adapter owns commit / idempotency / outbox — no hand-written commit.
+export const { POST } = dataSourceNext({
   schema,
-  apiKey: process.env.ABLO_API_KEY,
-  async commit({ operations, clientTxId, context }) {
-    return { rows: await writeCustomerTransaction(operations, clientTxId) };
-  },
+  apiKey: process.env.ABLO_API_KEY!,
+  adapter: prismaDataSource(prisma, schema), // or drizzleDataSource(db, schema)
 });
 ```
 
@@ -256,13 +256,12 @@ import Ablo from '@abloatai/ablo';
 
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
-await ablo.weatherReports.claim('report_stockholm', async (report) => {
-  const forecast = await getForecast(report);
-  await ablo.weatherReports.update(
-    report.id,
-    { status: 'ready', forecast },
-    { wait: 'confirmed' },
-  );
+await using claim = await ablo.weatherReports.claim({ id: 'report_stockholm' });
+const forecast = await getForecast(claim.data);
+await ablo.weatherReports.update({
+  id: claim.data.id,
+  data: { status: 'ready', forecast },
+  wait: 'confirmed',
 });
 ```
 
@@ -298,7 +297,8 @@ Schema clients use the realtime claim stream for waits.
 Schema-less HTTP clients cannot know when a claim clears unless the caller opts into polling. When using `ifClaimed: 'wait'` over HTTP, provide `claimedPollInterval` and usually `claimedTimeout`.
 
 ```ts
-await api.model('reports').retrieve('report_stockholm', {
+await api.model('reports').retrieve({
+  id: 'report_stockholm',
   ifClaimed: 'wait',
   claimedPollInterval: 1_000,
   claimedTimeout: 30_000,
@@ -313,15 +313,13 @@ Use model methods as the normal write path:
 
 ```ts
 const snap = ablo.snapshot({ weatherReports: 'report_stockholm' });
-const updated = await ablo.weatherReports.update(
-  'report_stockholm',
-  { status: 'ready' },
-  {
-    readAt: snap.stamp,
-    onStale: 'reject',
-    wait: 'confirmed',
-  },
-);
+const updated = await ablo.weatherReports.update({
+  id: 'report_stockholm',
+  data: { status: 'ready' },
+  readAt: snap.stamp,
+  onStale: 'reject',
+  wait: 'confirmed',
+});
 ```
 
 Write checks:
@@ -343,11 +341,11 @@ receipt object for custom runtimes that need protocol-level proof.
 
 The common agent run is:
 
-1. Load the row through `ablo.<model>.load(...)`.
-2. Claim the row with `ablo.<model>.claim(id, async row => ...)`.
-3. Do the slow work from the claimed row.
-4. Write with `ablo.<model>.update(...)`.
-5. The claim releases when the callback returns or throws.
+1. Read the row through `ablo.<model>.retrieve({ id })` (or `list({ where })`).
+2. Claim it: `await using claim = await ablo.<model>.claim({ id })` — waits if held, hands you `claim.data`.
+3. Do the slow work from `claim.data`.
+4. Write with `ablo.<model>.update({ id, data })`.
+5. The claim auto-releases when it goes out of scope (`await using`).
 
 The underlying primitives are Model, Claim, Commit, and Receipt. Most schema
 users should not call `commits.create(...)` directly.

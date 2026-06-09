@@ -62,11 +62,10 @@ export interface CommitContext {
    */
   confirmationState?: ConfirmationState;
   /**
-   * FK to AgentTurn.id. Pinned at turn open by `SyncAgent.beginTurn`, threaded
-   * through the wire frame's `causedByTaskId`, validated by the commit handler
-   * (turn must belong to the same agent and be open), and written onto every
-   * delta this batch produces. Absent for human-direct commits and SDKs that
-   * predate the turn protocol (→ `caused_by_task_id = NULL`).
+   * Dormant FK to the agent-task id (`agent_tasks.id`). The SDK no longer
+   * sets it (turns/tasks removed; attribution rides on the claim/intent id
+   * + server-stamped actor/capability). Still validated + written onto
+   * `caused_by_task_id` when present, but client writes leave it `null`.
    */
   causedByTaskId?: string | null;
 }

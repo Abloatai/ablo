@@ -1618,6 +1618,24 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
+   * Subscribe to LOCAL transaction creation with the full {@link Transaction}
+   * payload (`type`, `modelName`, `modelId`, `data`, `previousData`). This is
+   * the feed `BaseSyncedStore.subscribeLocalMutations` taps for undo recording.
+   *
+   * MUST subscribe to the TransactionQueue's emitter directly — that is the
+   * ONLY emitter that fires `transaction:created`. SyncClient's own emitter
+   * (reached via `subscribe()`) never re-broadcasts it, so routing undo through
+   * `subscribe('transaction:created')` silently records nothing. Mirrors
+   * `onMutationFailure`, which taps the queue for the same reason.
+   */
+  onLocalTransaction(
+    listener: (tx: import('./transactions/TransactionQueue.js').Transaction) => void,
+  ): () => void {
+    this.transactionQueue.on('transaction:created', listener);
+    return () => this.transactionQueue.off('transaction:created', listener);
+  }
+
+  /**
    * Wait for the latest in-flight transaction for (modelName, modelId)
    * to be confirmed by the server, or reject if it's rolled back.
    * Resolves immediately when no transaction is in flight — see

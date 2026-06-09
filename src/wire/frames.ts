@@ -81,14 +81,12 @@ export interface CommitMessage {
     operations: CommitOperation[];
     clientTxId: string;
     /**
-     * Optional turn handle. When the SDK opens a turn via
-     * `SyncAgent.beginTurn(...)`, subsequent commits within the handle's
-     * scope auto-attach the `turnId` here. The Hub validates the turn
-     * belongs to the same agent and is open, then threads it onto every
-     * delta's `caused_by_task_id` column. Absent for human-direct commits
-     * and for SDKs that predate the turn protocol — those produce deltas
-     * with `caused_by_task_id = NULL`, which the audit pane treats as "no
-     * prompt-side context recorded."
+     * Dormant agent-task lineage field. The SDK no longer populates it —
+     * turns/tasks were removed and write attribution now rides on the
+     * claim (`intent`) id plus the server-stamped actor/capability. Kept
+     * optional for wire-compat; when present the Hub still validates and
+     * threads it onto `caused_by_task_id`, but client writes leave it
+     * `null` (the audit pane treats null as "no prompt-side context").
      */
     causedByTaskId?: string | null;
   };

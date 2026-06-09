@@ -16,8 +16,9 @@ collide:
 
 ## Schema-Backed Worker
 
-Use the same schema client the app uses. The worker loads the task, checks active
-intents, and writes through `ablo.tasks.update(...)`.
+Use the same schema client the app uses. The worker takes a **claim** on the
+task — a disposable handle that grants exclusive, ordered access and hands back
+the freshest row off `claim.data` — then writes through `ablo.tasks.update(...)`.
 
 ```ts
 import Ablo from '@abloatai/ablo';
@@ -35,27 +36,24 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 export async function markDone(taskId: string) {
   await ablo.ready();
 
-  const [task] = await ablo.tasks.load({ where: { id: taskId } });
-  if (!task) return { status: 'not_found' };
+  // Acquire the claim; anyone editing the same task queues behind us.
+  await using claim = await ablo.tasks.claim({ id: taskId, action: 'update' });
+  if (!claim.data) return { status: 'not_found' };
+  if (claim.data.status === 'done') return { status: 'noop' };
 
-  const busy = ablo.intents.list({ resource: 'tasks', id: taskId });
-  if (busy.length > 0) return { status: 'busy', intents: busy };
-
-  const snap = ablo.snapshot({ tasks: taskId });
   const updated = await ablo.tasks.update({
     id: taskId,
     data: { status: 'done' },
-    readAt: snap.stamp,
-    onStale: 'reject',
     wait: 'confirmed',
   });
 
   return { status: 'done', task: updated };
+  // claim auto-releases as this function returns
 }
 ```
 
-Advanced schema-less workers can use `Ablo({ apiKey }).agent(...)`, but that is
-not the first integration path.
+Advanced schema-less workers can use the protocol client
+(`Ablo({ apiKey }).commits.create(...)`), but that is not the first integration path.
 
 ## UI
 
@@ -66,10 +64,8 @@ import { useAblo } from '@abloatai/ablo/react';
 
 export function TaskRow({ task: serverTask }: Props) {
   const data = useAblo((ablo) => ablo.tasks.get(serverTask.id)) ?? serverTask;
-  const intents = useAblo((ablo) =>
-    ablo.intents.list({ resource: 'tasks', id: serverTask.id }),
-  ) ?? [];
-  const agentActive = intents.some((i) => i.participantKind === 'agent');
+  const holder = useAblo((ablo) => ablo.tasks.claim.state({ id: serverTask.id }));
+  const agentActive = holder?.actorKind === 'agent';
 
   return (
     <div>
@@ -82,7 +78,8 @@ export function TaskRow({ task: serverTask }: Props) {
 
 ## Why It Works
 
-- Intents are visible on read and over the live stream.
-- `ifBusy: 'wait'` lets agents wait for active work instead of racing.
-- `readAt` plus `onStale: 'reject'` turns mid-flight changes into typed errors.
+- The claim holder and queue are visible on read and over the live stream.
+- Taking a claim serializes concurrent writers instead of letting them race.
+- The claim hands back the freshest `claim.data`, so the agent never decides on
+  stale state.
 - Audit rows tie each accepted write back to the run that caused it.

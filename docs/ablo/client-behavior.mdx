@@ -47,7 +47,7 @@ Each schema model becomes a typed resource:
 ```ts
 await ablo.ready();
 
-const [task] = await ablo.tasks.load({ where: { id: 'task_123' } });
+const task = await ablo.tasks.retrieve({ id: 'task_123' });
 const local = ablo.tasks.get('task_123');
 
 await ablo.tasks.create({ data: { title: 'Draft launch plan', status: 'todo' } });
@@ -55,7 +55,7 @@ await ablo.tasks.update({ id: 'task_123', data: { status: 'done' }, wait: 'confi
 await ablo.tasks.delete({ id: 'task_123', wait: 'confirmed' });
 ```
 
-`load` is async hydration from local store and server. `get`, `getAll`, and
+`retrieve` is async hydration from local store and server. `get`, `getAll`, and
 `getCount` are synchronous local reads after data is loaded.
 
 `list` accepts the same practical read options the React selector path uses:
@@ -70,7 +70,7 @@ human Server Action, a browser view, and an agent worker can all use
 `ablo.tasks`:
 
 ```ts
-const [task] = await ablo.tasks.load({ where: { id } });
+const task = await ablo.tasks.retrieve({ id });
 const snap = ablo.snapshot({ tasks: id });
 
 await ablo.tasks.update({
@@ -84,8 +84,8 @@ await ablo.tasks.update({
 
 The confirmed write fans out over realtime subscriptions. React clients that use
 `useAblo((ablo) => ablo.tasks.get(id))` receive the new row, and selectors
-such as `useAblo((ablo) => ablo.intents.list({ resource: 'tasks', id }))`
-receive active intents. There is
+such as `useAblo((ablo) => ablo.tasks.claim.state({ id }))`
+receive the current claim holder. There is
 no extra multiplayer setup beyond routing shared state through Ablo.
 
 If an app writes directly to its database, Ablo cannot coordinate that write
@@ -100,7 +100,7 @@ await ablo.tasks.update({
   wait: 'confirmed',
   readAt: snap.stamp,
   onStale: 'reject',
-  intent,
+  claim,
   idempotencyKey: 'task_123:mark-done:v1',
   timeout: 20_000,
 });
@@ -111,31 +111,30 @@ await ablo.tasks.update({
 | `wait` | `queued` resolves after local queueing; `confirmed` waits for server acceptance. |
 | `readAt` | State cursor the write was based on. |
 | `onStale` | Policy when the target changed after `readAt`. Prefer `reject`. |
-| `intent` | Active work claim associated with this write. |
+| `claim` | Active work claim associated with this write. |
 | `idempotencyKey` | Stable key for retry-safe writes. The SDK generates one when omitted. |
 | `timeout` | Maximum time for the write call. |
 
 ## Busy Behavior
 
 ```ts
-const busy = ablo.intents.list({ resource: 'tasks', id: 'task_123' });
+const holder = ablo.tasks.claim.state({ id: 'task_123' });
 
-if (busy.length > 0) {
-  await ablo.intents.waitFor(
-    { resource: 'tasks', id: 'task_123' },
-    { timeout: 30_000 },
-  );
+if (holder) {
+  await using claim = await ablo.tasks.claim({ id: 'task_123' });
+  // claim is held here; it waits if another actor holds it.
 }
 ```
 
-Reads never silently block. For raw resource calls, use `ifBusy`:
+Reads never silently block. For a stateless read of a possibly-claimed row,
+use `ifClaimed`:
 
-- `return` returns active intents.
-- `wait` waits for matching intents to clear.
-- `fail` throws `AbloBusyError`.
+- `return` returns the row even while claimed.
+- `wait` waits for the active claim to clear.
+- `fail` throws `AbloClaimedError`.
 
 Schema clients use the realtime stream for waits. Schema-less HTTP clients must
-provide `busyPollInterval` when using `ifBusy: 'wait'`.
+provide `busyPollInterval` when using `ifClaimed: 'wait'`.
 
 ## Errors
 
@@ -151,16 +150,16 @@ All SDK errors extend `AbloError` and carry a stable `type`.
 | `AbloValidationError` | Invalid input or unsupported request shape. |
 | `AbloServerError` | Server-side 5xx. Retry with backoff if the operation is idempotent. |
 | `AbloStaleContextError` | Write was based on stale `readAt` state. Re-read and retry. |
-| `AbloBusyError` | Active intent conflicted with `ifBusy: 'fail'` or a busy wait timed out. |
+| `AbloClaimedError` | Target was claimed by another participant and `ifClaimed: 'fail'` was set, or a claim wait timed out. |
 
 ```ts
-import { AbloBusyError } from '@abloatai/ablo';
+import { AbloClaimedError } from '@abloatai/ablo';
 
 try {
   await ablo.tasks.update({ id: 'task_123', data: { status: 'done' }, wait: 'confirmed' });
 } catch (error) {
-  if (error instanceof AbloBusyError) {
-    return { status: 'busy', intents: error.intents };
+  if (error instanceof AbloClaimedError) {
+    return { status: 'claimed', claims: error.claims };
   }
   throw error;
 }

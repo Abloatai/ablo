@@ -1069,7 +1069,7 @@
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
-      "message": "A create targeted a model not in the tenant schema.",
+      "message": "Created a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` first — the server keeps its own copy of the schema.",
       "docUrl": "https://docs.abloatai.com/errors#mutate_create_unknown_model"
     },
     {
@@ -1484,7 +1484,7 @@
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
-      "message": "The server-execute request named a model not in the tenant schema.",
+      "message": "Wrote to a model the server does not know. The server keeps its own copy of the schema — run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` before writing to new or changed models.",
       "docUrl": "https://docs.abloatai.com/errors#server_execute_unknown_model"
     },
     {
@@ -1704,6 +1704,14 @@
       "docUrl": "https://docs.abloatai.com/errors#turn_validation_failed"
     },
     {
+      "code": "undo_entry_invalid",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "An undo entry failed inverse-op schema validation.",
+      "docUrl": "https://docs.abloatai.com/errors#undo_entry_invalid"
+    },
+    {
       "code": "undo_scope_schema_missing",
       "category": "client",
       "surface": "client",
@@ -1726,7 +1734,7 @@
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
-      "message": "The request named a model not in the tenant schema.",
+      "message": "Named a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` — the server keeps its own copy of the schema.",
       "docUrl": "https://docs.abloatai.com/errors#unknown_model"
     },
     {

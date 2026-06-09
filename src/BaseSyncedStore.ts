@@ -720,8 +720,12 @@ export class BaseSyncedStore<
    * emit here, so undo is naturally local-only (you can't undo a teammate).
    */
   subscribeLocalMutations(handler: (mutation: LocalMutation) => void): () => void {
-    return this.syncClient.subscribe('transaction:created', (data?: unknown) => {
-      const tx = data as import('./transactions/TransactionQueue.js').Transaction | undefined;
+    // Tap the TransactionQueue directly via `onLocalTransaction`. The previous
+    // `syncClient.subscribe('transaction:created', …)` route registered the
+    // handler on SyncClient's OWN emitter, which never fires that event (only
+    // the queue's emitter does) — so undo recorded nothing. See
+    // `SyncClient.onLocalTransaction` for the full rationale.
+    return this.syncClient.onLocalTransaction((tx) => {
       if (!tx || !tx.type || !tx.modelName || !tx.modelId) return;
       handler({
         type: tx.type,

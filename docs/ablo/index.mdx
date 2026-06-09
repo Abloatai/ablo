@@ -14,6 +14,43 @@ for every participant. **Humans** use the live client (`Ablo({ schema, apiKey })
 WebSocket); **agents** use the stateless [`createAbloHttpClient`](/agents) (HTTP,
 no socket) — same API, same coordination plane, different transport.
 
+## Two clients: server vs browser
+
+A typical app builds **two** Ablo clients, and the split is the most common
+setup mistake. The server holds your secret key; the browser never does — it
+fetches a short-lived per-user token from a backend route.
+
+<CodeGroup>
+
+```ts Server (sk_)
+import Ablo from '@abloatai/ablo';
+// Secret sk_ key. Identifies the project AND authenticates. Never bundled.
+export const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+```
+
+```tsx Browser (ek_)
+import Ablo from '@abloatai/ablo';
+import { AbloProvider } from '@abloatai/ablo/react';
+// No secret. getToken fetches a per-user ek_ from YOUR backend route.
+const ablo = Ablo({
+  schema,
+  getToken: () =>
+    fetch('/api/ablo-session', { method: 'POST' })
+      .then((r) => r.json())
+      .then((d) => d.token),
+});
+// <AbloProvider client={ablo}>{children}</AbloProvider>
+```
+
+</CodeGroup>
+
+<Warning>
+Shipping the server `apiKey` to the browser is blocked by default, and a browser
+client with **no** `getToken`/`apiKey` fails to initialize with `session_expired`.
+The backend route mints the token with [`ablo.sessions.create({ user })`](/sessions).
+See the full wiring in the [Next.js example](/examples/nextjs).
+</Warning>
+
 ## Start here
 
 - [Quickstart](/quickstart) — Make your first schema-backed write through a Data Source.

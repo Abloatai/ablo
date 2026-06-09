@@ -671,13 +671,13 @@ The model is not tenant-scoped and cannot be queried this way.
 
 `HTTP 400` · not retryable
 
-A create targeted a model not in the tenant schema.
+Created a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` first — the server keeps its own copy of the schema.
 
 ### server_execute_unknown_model
 
 `HTTP 400` · not retryable
 
-The server-execute request named a model not in the tenant schema.
+Wrote to a model the server does not know. The server keeps its own copy of the schema — run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` before writing to new or changed models.
 
 ### tenant_model_columns_unknown
 
@@ -695,7 +695,7 @@ The tenant model is missing the organization_id column required for isolation.
 
 `HTTP 400` · not retryable
 
-The request named a model not in the tenant schema.
+Named a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` — the server keeps its own copy of the schema.
 
 ## Schema
 
@@ -1294,6 +1294,12 @@ A transaction mutated a model the registry does not know.
 `client-only` · not sent over the network
 
 A transaction read a model the registry does not know.
+
+### undo_entry_invalid
+
+`client-only` · not sent over the network
+
+An undo entry failed inverse-op schema validation.
 
 ### undo_scope_schema_missing
 

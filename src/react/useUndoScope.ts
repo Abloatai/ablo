@@ -119,6 +119,14 @@ export function useUndoScope(
     setTick(0);
   }, [scope]);
 
+  // Re-render on ANY stack change — including entries recorded from the local-
+  // mutation stream, which don't otherwise trigger a React update. Without this
+  // `canUndo`/`canRedo` go stale in every consumer that didn't itself call
+  // undo/redo (e.g. a keyboard handler whose Cmd+Z gate then never fires).
+  useEffect(() => {
+    return scope.onChange(() => setTick((t: number) => t + 1));
+  }, [scope]);
+
   const size = scope.size();
 
   return {

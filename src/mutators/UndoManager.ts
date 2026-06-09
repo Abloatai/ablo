@@ -97,6 +97,16 @@ export class UndoScope<S extends Schema> {
   private readonly recordListeners = new Set<(entry: UndoEntry) => void>();
 
   /**
+   * Observers notified after ANY stack change — record, undo, redo, or clear.
+   * Distinct from {@link recordListeners} (forward actions only): this fires on
+   * reversals too, so React consumers can keep `canUndo`/`canRedo` live. The
+   * stream-recording path pushes entries WITHOUT a React render, so without this
+   * a freshly-recorded entry leaves `canUndo` stale (snapshot from last render)
+   * and a Cmd+Z handler gated on `canUndo !== false` silently no-ops.
+   */
+  private readonly changeListeners = new Set<() => void>();
+
+  /**
    * Serialization tail. Recording, undo, and redo all chain off this single
    * promise so they run strictly in the order they were *invoked* — never
    * interleaved. This is load-bearing for correctness, not just throughput:
@@ -306,6 +316,7 @@ export class UndoScope<S extends Schema> {
     if (this.undoStack.length > this.maxHistory) this.undoStack.shift();
     this.redoStack = [];
     this.emitRecord(entry);
+    this.emitChange();
   }
 
   /**
@@ -332,6 +343,31 @@ export class UndoScope<S extends Schema> {
         // A faulty observer must never break the editor's recording path.
         if (typeof console !== 'undefined') {
           console.error('[UndoScope] onRecord listener threw', err);
+        }
+      }
+    }
+  }
+
+  /**
+   * Subscribe to ANY stack change (record/undo/redo/clear). Used by
+   * `useUndoScope` to re-render so `canUndo`/`canRedo` stay live across every
+   * consumer — not just the component that invoked undo/redo. Returns an
+   * unsubscribe function.
+   */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => {
+      this.changeListeners.delete(listener);
+    };
+  }
+
+  private emitChange(): void {
+    for (const listener of this.changeListeners) {
+      try {
+        listener();
+      } catch (err) {
+        if (typeof console !== 'undefined') {
+          console.error('[UndoScope] onChange listener threw', err);
         }
       }
     }
@@ -364,11 +400,19 @@ export class UndoScope<S extends Schema> {
       this.replaying = true;
       try {
         await applyOps(tx, ops);
+      } catch (err) {
+        // The replay was rejected (e.g. a server 409): the world didn't change,
+        // so restore the entry to the undo stack rather than silently dropping
+        // it (which would also strand it off the redo stack — invisible undo).
+        this.undoStack.push(entry);
+        this.emitChange();
+        throw err;
       } finally {
         this.replaying = false;
       }
       this.redoStack.push(entry);
       if (this.redoStack.length > this.maxHistory) this.redoStack.shift();
+      this.emitChange();
     });
   }
 
@@ -387,11 +431,18 @@ export class UndoScope<S extends Schema> {
       this.replaying = true;
       try {
         await applyOps(tx, ops);
+      } catch (err) {
+        // Symmetric to undo: a rejected re-apply leaves state unchanged, so put
+        // the entry back on the redo stack instead of losing it.
+        this.redoStack.push(entry);
+        this.emitChange();
+        throw err;
       } finally {
         this.replaying = false;
       }
       this.undoStack.push(entry);
       if (this.undoStack.length > this.maxHistory) this.undoStack.shift();
+      this.emitChange();
     });
   }
 
@@ -400,6 +451,7 @@ export class UndoScope<S extends Schema> {
     this.undoStack = [];
     this.redoStack = [];
     this.batch = [];
+    this.emitChange();
   }
 
   /** Introspection — for debug panels / e2e tests. */
@@ -415,6 +467,7 @@ export class UndoScope<S extends Schema> {
   dispose(): void {
     this.unsubscribe();
     this.recordListeners.clear();
+    this.changeListeners.clear();
     this.batch = [];
   }
 }

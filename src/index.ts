@@ -101,7 +101,7 @@ export type { AbloPersistence } from './client/persistence.js';
 // Participant types live under `Ablo.Participant.*` —
 // `Ablo.Participant.Joined`, `Ablo.Participant.Manager`,
 // `Ablo.Participant.JoinOptions`, etc. Same dot-access shape as
-// `Ablo.Peer`, `Ablo.Claim`, `Ablo.Turn`. No flat re-exports.
+// `Ablo.Peer`, `Ablo.Claim`. No flat re-exports.
 
 // Advanced — most apps never import this. Principal constructors for
 // delegated agent paths (`Ablo({ kind: 'agent', as: session({...}) })`).

@@ -77,7 +77,8 @@ export interface AgentDelta {
   capabilityId?: string | null;
   /** Whether the human explicitly approved the change. */
   confirmationState?: ConfirmationState | null;
-  /** Turn handle that caused this commit. */
+  /** Agent-task id that caused this commit, if any. Dormant on new client
+   *  writes (turns/tasks removed); may hold historical values. */
   causedByTaskId?: string | null;
   createdAt: string;
 }

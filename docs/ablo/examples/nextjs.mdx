@@ -9,13 +9,100 @@ Server Components, and live client subscriptions.
 
 ```txt
 app/
+  layout.tsx                # wraps the tree in <Providers>
+  providers.tsx             # Client: browser Ablo client + <AbloProvider>
+  api/
+    ablo-session/
+      route.ts              # mints a per-user ek_ token for the browser
   tasks/
     [id]/
-      page.tsx          # RSC: retrieve + render
-      actions.ts        # Server Action: schema update with stale-state check
-      TaskEditor.tsx    # Client: live updates
-  lib/
-    ablo.ts             # Schema-backed Ablo client for server actions
+      page.tsx              # RSC: retrieve + render
+      actions.ts            # Server Action: schema update with stale-state check
+      TaskEditor.tsx        # Client: live updates
+lib/
+  ablo.ts                   # Server Ablo client (holds ABLO_API_KEY)
+  ablo.schema.ts            # shared schema
+```
+
+There are **two** Ablo clients, and the split is the whole point:
+
+- **Server** (`lib/ablo.ts`) holds the secret `apiKey` (`sk_`). Used by RSCs,
+  Server Actions, and route handlers. Never imported into a client component.
+- **Browser** (`app/providers.tsx`) holds **no secret**. It fetches a
+  short-lived per-user token (`ek_`) from a backend route via `getToken`.
+
+Skipping the browser half is the most common setup mistake — the client then
+has no credential and the engine fails to initialize with `session_expired`.
+
+## Server Client
+
+```ts
+// lib/ablo.ts — server-only
+import Ablo from '@abloatai/ablo';
+import { schema } from './ablo.schema';
+
+export const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+```
+
+## Session Route
+
+The browser can't hold `sk_`, so a backend route mints a scoped, short-lived
+`ek_` for the signed-in user. Guard it with your own auth.
+
+```ts
+// app/api/ablo-session/route.ts
+import { ablo } from '@/lib/ablo';
+import { getCurrentUser } from '@/auth';
+
+export async function POST() {
+  const user = await getCurrentUser();
+  if (!user) return new Response('Unauthorized', { status: 401 });
+
+  const session = await ablo.sessions.create({ user: { id: user.id } });
+  return Response.json({ token: session.token });
+}
+```
+
+## Provider
+
+The browser client points `getToken` at that route and is handed to
+`<AbloProvider>` as an instance (Stripe `<Elements stripe={...}>` model). Build
+it once at module scope so the socket isn't torn down on every render.
+
+```tsx
+// app/providers.tsx
+'use client';
+
+import Ablo from '@abloatai/ablo';
+import { AbloProvider } from '@abloatai/ablo/react';
+import { schema } from '@/lib/ablo.schema';
+
+const ablo = Ablo({
+  schema,
+  getToken: () =>
+    fetch('/api/ablo-session', { method: 'POST' })
+      .then((r) => r.json())
+      .then((d) => d.token),
+});
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  return <AbloProvider client={ablo}>{children}</AbloProvider>;
+}
+```
+
+```tsx
+// app/layout.tsx
+import { Providers } from './providers';
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  );
+}
 ```
 
 ## RSC Initial Render
@@ -26,9 +113,10 @@ import { ablo } from '@/lib/ablo';
 
 export default async function TaskPage({
   params,
-}: { params: { id: string } }) {
+}: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   await ablo.ready();
-  const [task] = await ablo.tasks.load({ where: { id: params.id } });
+  const task = await ablo.tasks.retrieve({ id });
   if (!task) return null;
 
   return <TaskEditor task={task} />;
@@ -44,19 +132,18 @@ export default async function TaskPage({
 import { ablo } from '@/lib/ablo';
 
 export async function markDone(id: string) {
-  const busy = ablo.intents.list({ resource: 'tasks', id });
-  if (busy.length > 0) return { status: 'busy', intents: busy };
+  // Claim grants exclusive, ordered access and hands back the fresh row.
+  await using claim = await ablo.tasks.claim({ id, action: 'update' });
+  if (!claim.data) return { status: 'not_found' };
 
-  const snap = ablo.snapshot({ tasks: id });
   const task = await ablo.tasks.update({
     id,
     data: { status: 'done' },
-    readAt: snap.stamp,
-    onStale: 'reject',
     wait: 'confirmed',
   });
 
   return { status: 'done', task };
+  // claim auto-releases as the action returns
 }
 ```
 
@@ -72,10 +159,8 @@ import { useAblo } from '@abloatai/ablo/react';
 
 export function TaskEditor({ task: serverTask }: Props) {
   const data = useAblo((ablo) => ablo.tasks.get(serverTask.id)) ?? serverTask;
-  const intents = useAblo((ablo) =>
-    ablo.intents.list({ resource: 'tasks', id: serverTask.id }),
-  ) ?? [];
-  const busy = intents.length > 0;
+  const holder = useAblo((ablo) => ablo.tasks.claim.state({ id: serverTask.id }));
+  const busy = Boolean(holder);
 
   return (
     <button disabled={busy || data.status === 'done'}>

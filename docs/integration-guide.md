@@ -170,17 +170,49 @@ export const ablo = Ablo({
 ```
 
 Browser apps should use the React provider or a scoped session token, not a
-server API key in the bundle.
+server API key in the bundle. Build the client first, then hand it to the
+provider — `AbloProvider` takes `{ client, userId?, onError?, fallback? }`, and
+nothing else (`schema`, `teamIds`, `scope`, and `authEndpoint` all live on the
+client now).
+
+```tsx
+// src/ablo-client.ts
+import Ablo from '@abloatai/ablo';
+import { schema } from '@/ablo/schema';
+
+// The browser never holds the API key. The client mints a short-lived token
+// from your session route (see below) and refreshes it before expiry.
+export const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+```
 
 ```tsx
 // app/providers.tsx
 'use client';
 
 import { AbloProvider } from '@abloatai/ablo/react';
-import { schema } from '@/ablo/schema';
+import { ablo } from '@/ablo-client';
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  return <AbloProvider schema={schema}>{children}</AbloProvider>;
+  return <AbloProvider client={ablo}>{children}</AbloProvider>;
+}
+```
+
+The session route mints the scoped token server-side, where the API key lives:
+
+```ts
+// app/api/ablo-session/route.ts
+import Ablo from '@abloatai/ablo';
+import { schema } from '@/ablo/schema';
+import { auth } from '@/auth';
+
+export const runtime = 'nodejs';
+
+const sync = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+
+export async function POST() {
+  const session = await auth(); // your own auth — returns the signed-in user
+  const { token } = await sync.sessions.create({ user: { id: session.userId } });
+  return Response.json({ token });
 }
 ```
 
@@ -214,10 +246,11 @@ refreshes before expiry.
 ## 3. Read State
 
 Reads come in two flavors, and you pick based on whether you can wait.
-`retrieve(id)` and `list({ where })` hit the server (and hydrate the local
-store) — they're async, so you `await` them. `get(id)`, `getAll({ where })`,
-and `getCount({ where })` read the already-synced local graph synchronously, so
-they're the ones you call in render.
+`retrieve({ id })` and `list({ where })` hit the server (and hydrate the local
+store) — they're async, so you `await` them. `get(id)` (positional),
+`getAll({ where })`, and `getCount({ where })` read the already-synced local
+graph synchronously, so they're the ones you call in render — and the ones you
+use inside a `useAblo` selector, never the async `retrieve`/`list`.
 
 Use `retrieve` when the row may not be local yet — it fetches from the server
 and waits.
@@ -345,47 +378,41 @@ For the full Python shape, see
 
 ## 7. Data Source Endpoint
 
-Use a Data Source when your app database remains the source of truth.
+Use a Data Source when your app database remains the source of truth. Wire the
+route with `dataSourceNext` and an adapter — `prismaDataSource(prisma, schema)`
+or `drizzleDataSource(db, schema)`. You don't hand-write `commit`; the adapter
+owns transactional commit, idempotency, and reads.
 
 ```ts
 // app/api/ablo/source/route.ts
-import { dataSource } from '@abloatai/ablo';
+import { dataSourceNext } from '@abloatai/ablo/source/next';
+import { prismaDataSource } from '@abloatai/ablo/source';
 import { schema } from '@/ablo/schema';
-import { db } from '@/db';
+import { prisma } from '@/db';
 
-export const POST = dataSource({
+export const runtime = 'nodejs';
+
+export const { POST } = dataSourceNext({
   schema,
-  apiKey: process.env.ABLO_API_KEY,
-
-  authorize() {
-    return { db };
-  },
-
-  async commit({ operations, clientTxId, context }) {
-    const rows = await context.auth.db.transaction(async (tx) => {
-      await tx.idempotency.upsert({ key: clientTxId });
-      return applyOperations(tx, operations);
-    });
-
-    return { rows };
-  },
-
-  reports: {
-    async load({ id, context }) {
-      return context.auth.db.report.findUnique({ where: { id } });
-    },
-
-    async list({ query, context }) {
-      return context.auth.db.report.findMany({
-        take: query.limit ?? 100,
-      });
-    },
-  },
+  apiKey: process.env.ABLO_API_KEY!,
+  adapter: prismaDataSource(prisma, schema),
 });
 ```
 
-Ablo needs your Data Source endpoint and API key. External writes can be
-reported through an optional `events` handler on the same route. Your app
+With Drizzle, pass `drizzleDataSource(db, schema)` instead — the adapter takes
+your Drizzle `db` and the Ablo `schema` (not your table objects):
+
+```ts
+import { drizzleDataSource } from '@abloatai/ablo/source/drizzle';
+
+export const { POST } = dataSourceNext({
+  schema,
+  apiKey: process.env.ABLO_API_KEY!,
+  adapter: drizzleDataSource(db, schema),
+});
+```
+
+Ablo needs your Data Source endpoint and API key. Your app
 stores one Ablo credential:
 
 ```bash
@@ -404,16 +431,18 @@ which a human might touch the same row. Wrap that work in a claim. Claims don't
 lock. If another writer holds the row, `claim` waits for them, re-reads the
 fresh row, then hands it to you — so two writers serialize instead of clobbering.
 
-```ts
-const report = await ablo.weatherReports.retrieve({ id: reportId });
-if (!report) return;
+A claim is a disposable handle (`await using`), not a callback: read the fresh
+row off `claim.data`, do your work, and the handle auto-releases when it leaves
+scope.
 
+```ts
 await using claim = await ablo.weatherReports.claim({
   id: reportId,
-  wait: false,
   action: 'forecasting',
 });
 const claimed = claim.data;
+if (!claimed) return;
+
 await ablo.weatherReports.update({
   id: claimed.id,
   data: { status: 'ready', forecast: await getForecast(claimed) },
@@ -464,17 +493,19 @@ them.
 
 ## Method Cheatsheet
 
-| Method                       | Use it for                                                                  |
-| ---------------------------- | --------------------------------------------------------------------------- |
-| `retrieve(id)`               | Async read of one row from the server (await it).                           |
-| `list({ where })`           | Async read of many rows from the server (await it).                         |
-| `get(id)`                    | Synchronous local read of one synced row (use in render).                   |
-| `getAll({ where })`         | Synchronous local read of many synced rows.                                 |
-| `getCount({ where })`       | Synchronous local count of synced rows.                                     |
-| `create(data, options?)`     | Create through the model client.                                            |
-| `update(id, data, options?)` | Update through the model client.                                            |
-| `delete(id, options?)`       | Delete through the model client.                                            |
-| `claim.state({ id })`            | See who is currently working on a row (synchronous).                       |
-| `claim(id, work, options?)`  | Wait for your turn, re-read, and hold the row while `work` runs.            |
+| Method                                 | Use it for                                                                       |
+| -------------------------------------- | -------------------------------------------------------------------------------- |
+| `retrieve({ id })`                     | Async read of one row from the server (await it).                                |
+| `list({ where })`                      | Async read of many rows from the server (await it).                              |
+| `get(id)`                              | Synchronous local read of one synced row (positional id; use in render).         |
+| `getAll({ where })`                    | Synchronous local read of many synced rows.                                      |
+| `getCount({ where })`                  | Synchronous local count of synced rows.                                          |
+| `create({ data, id? })`                | Create through the model client.                                                 |
+| `update({ id, data, ...opts })`        | Update through the model client.                                                 |
+| `delete({ id, ...opts })`              | Delete through the model client.                                                 |
+| `claim.state({ id })`                  | See who is currently working on a row (synchronous).                             |
+| `claim({ id, action?, ttl? })`         | Acquire a disposable handle: wait for your turn, re-read, and hold the row.       |
 
-Keep first integrations on the model methods above.
+Keep first integrations on the model methods above. Every mutation and
+server-read verb takes one options object; only the synchronous `get(id)` stays
+positional.

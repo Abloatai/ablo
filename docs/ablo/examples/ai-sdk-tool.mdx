@@ -5,10 +5,20 @@ title: "AI SDK Tool"
 Use AI SDK for the loop and Ablo for the state boundary inside the tool.
 
 ```ts
+// app/api/chat/route.ts
 import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z as schemaZ } from '@abloatai/ablo/schema';
-import { streamText, tool } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
+import {
+  streamText,
+  tool,
+  convertToModelMessages,
+  stepCountIs,
+  type UIMessage,
+} from 'ai';
 import { z } from 'zod';
+
+export const runtime = 'nodejs';
 
 const schema = defineSchema({
   tasks: model({
@@ -33,60 +43,45 @@ const updateTask = tool({
   execute: async ({ taskId, status, summary }) => {
     await ablo.ready();
 
-    const [task] = await ablo.tasks.load({ where: { id: taskId } });
-    if (!task) return { ok: false, reason: 'not_found' };
+    // Claim grants exclusive, ordered access and hands back the fresh row.
+    await using claim = await ablo.tasks.claim({ id: taskId, action: 'update' });
+    if (!claim.data) return { ok: false, reason: 'not_found' };
 
-    const busy = ablo.intents.list({ resource: 'tasks', id: taskId });
-    if (busy.length > 0) {
-      await ablo.intents.waitFor(
-        { resource: 'tasks', id: taskId },
-        { timeout: 30_000 },
-      );
-    }
-
-    const snap = ablo.snapshot({ tasks: taskId });
-    const intent = await ablo.intents.create({
-      target: { resource: 'tasks', id: taskId, field: 'status' },
-      action: 'update',
+    const updated = await ablo.tasks.update({
+      id: taskId,
+      data: {
+        status: status ?? claim.data.status,
+        summary: summary ?? claim.data.summary,
+      },
+      wait: 'confirmed',
     });
 
-    try {
-      const updated = await ablo.tasks.update({
-        id: taskId,
-        data: {
-          status: status ?? task.status,
-          summary: summary ?? task.summary,
-        },
-        intent,
-        readAt: snap.stamp,
-        onStale: 'reject',
-        wait: 'confirmed',
-      });
-
-      return { ok: true, task: updated };
-    } finally {
-      await intent.release();
-    }
+    return { ok: true, task: updated };
   },
 });
 
 export async function POST(req: Request) {
-  const { messages, model } = await req.json();
+  // useChat sends UIMessage[]; convert before handing to the model.
+  const { messages }: { messages: UIMessage[] } = await req.json();
 
-  return streamText({
-    model,
-    messages,
+  const result = streamText({
+    // The model is a SERVER-bound provider instance — never sent from the client.
+    model: anthropic('claude-sonnet-4-6'),
+    messages: await convertToModelMessages(messages),
     tools: { updateTask },
-  }).toUIMessageStreamResponse();
+    stopWhen: stepCountIs(5),
+    maxOutputTokens: 2048,
+  });
+
+  return result.toUIMessageStreamResponse();
 }
 ```
 
 The important part is not the model provider. The important part is that the
 tool:
 
-- loads the latest task,
-- checks active intent,
-- writes with `readAt`,
-- rejects stale state,
-- waits for server confirmation.
-
+- claims the task for exclusive, ordered access,
+- reads the freshest row off `claim.data`,
+- writes through the model resource,
+- waits for server confirmation,
+- and auto-releases the claim when the tool returns.

@@ -36,9 +36,10 @@ import { ablo } from '@/lib/ablo';
 
 export default async function ReportPage({
   params,
-}: { params: { id: string } }) {
+}: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   await ablo.ready();
-  const report = await ablo.weatherReports.retrieve({ id: params.id });
+  const report = await ablo.weatherReports.retrieve({ id });
   if (!report) return null;
 
   return <ReportEditor report={report} />;

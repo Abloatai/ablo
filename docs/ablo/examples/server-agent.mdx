@@ -25,69 +25,48 @@ const ablo = Ablo({
 export async function completeTask(taskId: string) {
   await ablo.ready();
 
-  const [task] = await ablo.tasks.load({ where: { id: taskId } });
-  if (!task) return { status: 'not_found' };
+  // Claim grants exclusive, ordered access and hands back the fresh row.
+  await using claim = await ablo.tasks.claim({ id: taskId, action: 'update' });
+  if (!claim.data) return { status: 'not_found' };
 
-  const busy = ablo.intents.list({ resource: 'tasks', id: taskId });
-  if (busy.length > 0) {
-    return { status: 'busy', intents: busy };
-  }
-
-  const snap = ablo.snapshot({ tasks: taskId });
   const updated = await ablo.tasks.update({
     id: taskId,
     data: { status: 'done' },
-    readAt: snap.stamp,
-    onStale: 'reject',
     wait: 'confirmed',
   });
 
   return { status: 'done', task: updated };
+  // claim auto-releases as the function returns
 }
 ```
 
-## Advanced Schema-Less Run
+## Schema-less writes
 
-Use `agent.run(...)` when the worker intentionally cannot import the app schema.
-It creates the run envelope and returns `done`, `failed`, or `cancelled`.
+When a worker intentionally cannot import the app schema, use the protocol
+client (`Ablo({ apiKey })`, no schema) and commit operations directly. There
+is no separate "run" envelope — a write is just a commit, and attribution is
+stamped server-side from the capability.
 
 ```ts
-const api = Ablo({ apiKey: process.env.ABLO_API_KEY });
+const ablo = Ablo({ apiKey: process.env.ABLO_API_KEY }); // protocol client
 
-const result = await api.agent('task-writer', {
-  can: ['tasks.retrieve', 'tasks.update'],
-  syncGroups: ['workspace:acme'],
-}).run(
-  {
-    prompt: 'Mark task_123 done.',
-    surface: 'agent_worker',
-  },
-  async ({ resource }) => {
-    const tasks = resource<{ title: string; status: string }>('tasks');
-
-    const { data, stamp, intents } = await tasks.retrieve({
-      id: 'task_123',
-      ifBusy: 'return',
-    });
-
-    if (intents.length > 0) {
-      return { skipped: true, reason: 'busy' };
-    }
-
-    return tasks.update({
-      id: 'task_123',
-      data: { status: 'done' },
-      readAt: stamp,
-      onStale: 'reject',
-      wait: 'confirmed',
-    });
-  },
-);
-
-if (result.status === 'failed') throw result.error;
-if (result.status === 'cancelled') return;
+await ablo.commits.create({
+  operations: [
+    { type: 'update', model: 'tasks', id: 'task_123', input: { status: 'done' } },
+  ],
+  wait: 'confirmed',
+});
 ```
 
-Use the schema-backed version first. The schema-less version is for generic
+When two writers may touch the same row, reach for the typed client's
+`claim` — it serializes writers, re-reads the fresh row on promotion, and is
+the causal link recorded on every write it guards:
+
+```ts
+await using claim = await ablo.tasks.claim({ id: 'task_123', action: 'update' });
+await ablo.tasks.update({ id: 'task_123', data: { status: 'done' }, wait: 'confirmed' });
+```
+
+Use the schema-backed version first. The schema-less commit path is for generic
 agent infrastructure, MCP routes, and platform code.
 

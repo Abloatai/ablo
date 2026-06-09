@@ -59,20 +59,30 @@ import { DefaultFallback } from './DefaultFallback.js';
 /**
  * Props for `<AbloProvider>`.
  *
- * The default path is one prop:
+ * The one required prop is a prebuilt {@link Ablo} client — the client
+ * owns auth and the credential lifecycle; this provider is the reactive
+ * binding over it (Stripe's `<Elements stripe={...}>` model):
  *
  * ```tsx
- * <AbloProvider schema={schema}>
+ * // Build once at module scope — a new instance per render tears down the socket.
+ * const ablo = Ablo({
+ *   schema,
+ *   getToken: () =>
+ *     fetch('/api/ablo-session', { method: 'POST' })
+ *       .then((r) => r.json())
+ *       .then((d) => d.token),
+ * });
+ *
+ * <AbloProvider client={ablo}>
  *   <App />
  * </AbloProvider>
  * ```
  *
- * That's it for most apps — the provider resolves identity, account
- * scope, and realtime permissions from auth. `userId`/`apiKey`/`url`
- * are situational; the `bootstrapMode`, `persistence`, and `fallback`
- * props are opt-in tuning; and the block tagged "Optional DI (advanced)"
- * below is escape-hatch wiring for tests and platform builders — if you
- * don't recognize a prop there, you don't need it.
+ * That's it for most apps. `userId` is informational; the `fallback`,
+ * `preventUnsavedChanges`, and `on*` props are opt-in app glue; and the
+ * block tagged "Optional DI (advanced)" below is escape-hatch wiring for
+ * tests and platform builders — if you don't recognize a prop there, you
+ * don't need it.
  */
 export interface AbloProviderProps<R extends SchemaRecord = SchemaRecord> {
   /**

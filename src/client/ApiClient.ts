@@ -40,7 +40,6 @@ import type {
   ModelReadOptions,
   ModelRead,
   ModelTarget,
-  Turn,
 } from './Ablo.js';
 import type {
   ClaimHandle,
@@ -177,150 +176,15 @@ export interface CapabilityResource {
 // against the schema, see Ablo.ts `CreateSessionParams`). There is no separate
 // `ephemeralKeys` resource — `sessions` is the one front door for both.
 
-export interface TaskCreateOptions {
-  readonly prompt: string;
-  readonly parentTaskId?: string;
-  readonly surface?: string;
-  readonly metadata?: Record<string, unknown>;
-}
-
-export interface TaskCloseOptions {
-  readonly costInputTokens?: number;
-  readonly costOutputTokens?: number;
-  readonly costComputeMs?: number;
-}
-
-export interface Task {
-  readonly id: string;
-  readonly turnId: string;
-  readonly promptHash?: string;
-  readonly openedAt?: string;
-  close(stats?: TaskCloseOptions): Promise<TaskCloseResult>;
-}
-
-export interface TaskCloseResult {
-  readonly id: string;
-  readonly turnId: string;
-  readonly closed: boolean;
-  readonly alreadyClosed?: boolean;
-  readonly endedAt?: string;
-}
-
-export interface TaskResource {
-  create(options: TaskCreateOptions): Promise<Task>;
-  close(id: string, stats?: TaskCloseOptions): Promise<TaskCloseResult>;
-  /**
-   * Alias for `create`. Kept for the agent-run vocabulary; `create` is
-   * the canonical SDK verb.
-   */
-  open(options: TaskCreateOptions): Promise<Task>;
-}
-
-export interface AgentOptions {
-  readonly can: readonly string[];
-  readonly syncGroups?: readonly string[];
-  readonly label?: string;
-  readonly userMeta?: Record<string, unknown>;
-  /**
-   * Internal lease for the run capability. Most callers should omit it.
-   * The SDK revokes the capability when `run` finishes; the lease exists
-   * to clean up crashed or abandoned runs.
-   */
-  readonly lease?: Duration;
-  readonly leaseSeconds?: number;
-}
-
-export interface AgentRunOptions extends TaskCreateOptions {
-  readonly signal?: AbortSignal;
-  readonly costInputTokens?: number;
-  readonly costOutputTokens?: number;
-  readonly costComputeMs?: number;
-}
-
-export type AgentRunStatus = 'done' | 'failed' | 'cancelled';
-
-export interface AgentRunDone<T> {
-  readonly status: 'done';
-  readonly task: Task;
-  readonly value: T;
-}
-
-export interface AgentRunFailed {
-  readonly status: 'failed';
-  readonly task?: Task;
-  readonly error: unknown;
-}
-
-export interface AgentRunCancelled {
-  readonly status: 'cancelled';
-  readonly task?: Task;
-  readonly error?: unknown;
-}
-
-export type AgentRunResult<T> =
-  | AgentRunDone<T>
-  | AgentRunFailed
-  | AgentRunCancelled;
-
-export interface AgentIntentOptions {
-  readonly action: string;
-  readonly field?: string;
-  readonly ttl?: Duration;
-  readonly target?: Partial<ModelTarget>;
-}
-
-export type AgentIntentInput = string | AgentIntentOptions;
-
-export interface AgentModelReadOptions extends ModelReadOptions {}
-
-export interface AgentModelMutationOptions
-  extends Omit<ModelMutationOptions, 'intent'> {
-  readonly intent?: AgentIntentInput | { readonly id: string } | null;
-}
-
-export interface AgentModelClient<T = Record<string, unknown>> {
-  retrieve(params: AgentModelReadOptions & { readonly id: string }): Promise<ModelRead<T>>;
-  create(
-    params: AgentModelMutationOptions & {
-      readonly data: Record<string, unknown>;
-      readonly id?: string | null;
-    },
-  ): Promise<CommitReceipt>;
-  update(
-    params: AgentModelMutationOptions & {
-      readonly id: string;
-      readonly data: Record<string, unknown>;
-    },
-  ): Promise<CommitReceipt>;
-  delete(params: AgentModelMutationOptions & { readonly id: string }): Promise<CommitReceipt>;
-}
-
-export interface AgentRunContext {
-  readonly task: Task;
-  readonly ablo: AbloApi;
-  model<T = Record<string, unknown>>(name: string): AgentModelClient<T>;
-}
-
-export interface Agent {
-  readonly id: string;
-  run<T>(
-    options: AgentRunOptions,
-    handler: (context: AgentRunContext) => Promise<T> | T,
-  ): Promise<AgentRunResult<T>>;
-}
-
 export interface AbloApi {
   ready(): Promise<void>;
   waitForFlush(): Promise<void>;
   dispose(): Promise<void>;
   purge(): Promise<void>;
   readonly capabilities: CapabilityResource;
-  readonly tasks: TaskResource;
   readonly intents: AbloApiIntents;
   readonly commits: CommitResource;
-  agent(id: string, options: AgentOptions): Agent;
   model<T = Record<string, unknown>>(name: string): ModelClient<T>;
-  beginTurn(options: TaskCreateOptions): Promise<Turn>;
   /**
    * Resolve the active bearer credential this client authenticates with — the
    * same token its own requests carry in `Authorization`. Returns `null` when
@@ -409,25 +273,7 @@ interface CapabilityRevokeResponse {
   readonly activeSessionsClosed?: number;
 }
 
-interface TaskCreateResponse {
-  readonly id?: string;
-  readonly taskId?: string;
-  readonly turnId?: string;
-  readonly promptHash?: string;
-  readonly openedAt?: string;
-}
-
-interface TaskCloseResponse {
-  readonly id?: string;
-  readonly taskId?: string;
-  readonly turnId?: string;
-  readonly closed?: boolean;
-  readonly alreadyClosed?: boolean;
-  readonly endedAt?: string;
-}
-
 const DEFAULT_AGENT_LEASE: Duration = '10m';
-const DEFAULT_INTENT_LEASE: Duration = '2m';
 
 export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   const env = readProcessEnv();
@@ -542,199 +388,6 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       authToken,
       schema: null,
     });
-  }
-
-  function createAgent(id: string, agentOptions: AgentOptions): Agent {
-    return {
-      id,
-      async run<T>(
-        runOptions: AgentRunOptions,
-        handler: (context: AgentRunContext) => Promise<T> | T,
-      ): Promise<AgentRunResult<T>> {
-        if (runOptions.signal?.aborted) {
-          return { status: 'cancelled' };
-        }
-
-        let capability: Capability | null = null;
-        let task: Task | null = null;
-        try {
-          const leaseOptions =
-            agentOptions.leaseSeconds !== undefined
-              ? { leaseSeconds: agentOptions.leaseSeconds }
-              : { lease: agentOptions.lease ?? DEFAULT_AGENT_LEASE };
-          capability = await capabilities.create({
-            participantKind: 'agent',
-            participantId: id,
-            syncGroups: agentOptions.syncGroups ?? ['default'],
-            operations: agentOptions.can,
-            label: agentOptions.label ?? id,
-            userMeta: agentOptions.userMeta,
-            ...leaseOptions,
-          } as CapabilityCreateOptions);
-
-          const agentClient = capability.client();
-          task = await agentClient.tasks.create({
-            prompt: runOptions.prompt,
-            parentTaskId: runOptions.parentTaskId,
-            surface: runOptions.surface ?? 'agent',
-            metadata: runOptions.metadata,
-          });
-
-          const context = createAgentRunContext(agentClient, task);
-          const value = await handler(context);
-          await task.close({
-            costInputTokens: runOptions.costInputTokens,
-            costOutputTokens: runOptions.costOutputTokens,
-            costComputeMs: runOptions.costComputeMs,
-          });
-          return { status: 'done', task, value };
-        } catch (error) {
-          if (task) {
-            await task.close({
-              costInputTokens: runOptions.costInputTokens,
-              costOutputTokens: runOptions.costOutputTokens,
-              costComputeMs: runOptions.costComputeMs,
-            }).catch(() => {});
-          }
-          if (isAbortError(error) || runOptions.signal?.aborted) {
-            return { status: 'cancelled', task: task ?? undefined, error };
-          }
-          return { status: 'failed', task: task ?? undefined, error };
-        } finally {
-          if (capability) {
-            await capabilities.revoke(capability.id).catch(() => {});
-          }
-        }
-      },
-    };
-  }
-
-  function createAgentRunContext(agentClient: AbloApi, task: Task): AgentRunContext {
-    return {
-      task,
-      ablo: agentClient,
-      model<T = Record<string, unknown>>(name: string): AgentModelClient<T> {
-        return createAgentModelClient<T>(agentClient, name);
-      },
-    };
-  }
-
-  function createAgentModelClient<T>(
-    agentClient: AbloApi,
-    name: string,
-  ): AgentModelClient<T> {
-    const base = agentClient.model<T>(name);
-
-    return {
-      retrieve(params: AgentModelReadOptions & { readonly id: string }): Promise<ModelRead<T>> {
-        // Reads are never blocked by a claim (coordination.md): a claim
-        // serializes WRITERS, not readers. So — unlike the create/update/
-        // delete paths below — retrieve does NOT apply the agent claimed
-        // default; options pass through and the read path's `'return'`
-        // default keeps a claimed row readable. A caller can still opt into
-        // gating with an explicit `ifClaimed` (developer's choice).
-        return base.retrieve(params);
-      },
-
-      create(
-        params: AgentModelMutationOptions & {
-          readonly data: Record<string, unknown>;
-          readonly id?: string | null;
-        },
-      ): Promise<CommitReceipt> {
-        const id = params.id ?? createModelId();
-        return withAgentIntent(
-          agentClient,
-          name,
-          id,
-          params,
-          (commitIntent) => base.create({
-            ...stripAgentRuntimeOptions(params),
-            id,
-            data: params.data,
-            intent: commitIntent,
-          }),
-        );
-      },
-
-      update(
-        params: AgentModelMutationOptions & {
-          readonly id: string;
-          readonly data: Record<string, unknown>;
-        },
-      ): Promise<CommitReceipt> {
-        return withAgentIntent(
-          agentClient,
-          name,
-          params.id,
-          params,
-          (commitIntent) => base.update({
-            ...stripAgentRuntimeOptions(params),
-            id: params.id,
-            data: params.data,
-            intent: commitIntent,
-          }),
-        );
-      },
-
-      delete(
-        params: AgentModelMutationOptions & { readonly id: string },
-      ): Promise<CommitReceipt> {
-        return withAgentIntent(
-          agentClient,
-          name,
-          params.id,
-          params,
-          (commitIntent) => base.delete({
-            ...stripAgentRuntimeOptions(params),
-            id: params.id,
-            intent: commitIntent,
-          }),
-        );
-      },
-    };
-  }
-
-  async function withAgentIntent(
-    agentClient: AbloApi,
-    modelName: string,
-    id: string,
-    mutationOptions: AgentModelMutationOptions | undefined,
-    commit: (intent: string | { readonly id: string } | null | undefined) => Promise<CommitReceipt>,
-  ): Promise<CommitReceipt> {
-    const intentInput = mutationOptions?.intent;
-    const targetOverride =
-      intentInput != null && typeof intentInput === 'object' && !isIntentHandleRef(intentInput)
-        ? intentInput.target ?? {}
-        : {};
-    const target: ModelTarget = {
-      ...targetOverride,
-      model: targetOverride.model ?? modelName,
-      id: targetOverride.id ?? id,
-      ...(intentInput != null && typeof intentInput === 'object' && !isIntentHandleRef(intentInput) && intentInput.field
-        ? { field: intentInput.field }
-        : {}),
-    };
-
-    await applyClaimedPolicy(target, withAgentClaimedDefault(mutationOptions), 'wait');
-
-    if (intentInput == null || isIntentHandleRef(intentInput)) {
-      return commit(intentInput);
-    }
-
-    const action = typeof intentInput === 'string' ? intentInput : intentInput.action;
-    const intent = await agentClient.intents.create({
-      target,
-      action,
-      ttl: typeof intentInput === 'object'
-        ? intentInput.ttl ?? DEFAULT_INTENT_LEASE
-        : DEFAULT_INTENT_LEASE,
-    });
-    try {
-      return await commit(intent);
-    } finally {
-      await intent.release().catch(() => {});
-    }
   }
 
   function normalizeCommitOperation(
@@ -1066,60 +719,6 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   };
 
 
-  const tasks: TaskResource = {
-    async create(taskOptions: TaskCreateOptions): Promise<Task> {
-      const body = await requestJson<TaskCreateResponse>('/v1/tasks', {
-        method: 'POST',
-        body: JSON.stringify({
-          prompt: taskOptions.prompt,
-          parentTaskId: taskOptions.parentTaskId,
-          surface: taskOptions.surface,
-          metadata: taskOptions.metadata,
-        }),
-      });
-      const id = body.id ?? body.taskId ?? body.turnId;
-      if (!id) {
-        throw new AbloValidationError(
-          'Task create response did not include an id.',
-          { code: 'task_id_missing' },
-        );
-      }
-      return {
-        id,
-        turnId: id,
-        promptHash: body.promptHash,
-        openedAt: body.openedAt,
-        close: (stats?: TaskCloseOptions) => tasks.close(id, stats),
-      };
-    },
-
-    async close(id: string, stats?: TaskCloseOptions): Promise<TaskCloseResult> {
-      const body = await requestJson<TaskCloseResponse>(
-        `/v1/tasks/${encodeURIComponent(id)}/close`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            costInputTokens: stats?.costInputTokens ?? 0,
-            costOutputTokens: stats?.costOutputTokens ?? 0,
-            costComputeMs: stats?.costComputeMs ?? 0,
-          }),
-        },
-      );
-      const closedId = body.id ?? body.taskId ?? body.turnId ?? id;
-      return {
-        id: closedId,
-        turnId: closedId,
-        closed: body.closed ?? body.alreadyClosed ?? true,
-        alreadyClosed: body.alreadyClosed,
-        endedAt: body.endedAt,
-      };
-    },
-
-    open(options: TaskCreateOptions): Promise<Task> {
-      return tasks.create(options);
-    },
-  };
-
   const intents: AbloApiIntents = {
     async create(intentOptions: IntentCreateOptions): Promise<IntentHandle> {
       const intentId = createIntentId();
@@ -1450,33 +1049,13 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     async dispose() {},
     async purge() {},
     capabilities,
-    tasks,
     intents,
     commits,
     model,
-    agent: createAgent,
     async getAuthToken(): Promise<string | null> {
       // Mirror `authHeaders()`: a configured API key wins, else the
       // construction-time auth token. Resolve the (possibly async) key setter.
       return (await resolveApiKeyValue(configuredApiKey)) ?? configuredAuthToken ?? null;
-    },
-    async beginTurn(turnOptions: TaskCreateOptions): Promise<Turn> {
-      const task = await tasks.create(turnOptions);
-      let closed = false;
-      const close = async (stats?: TaskCloseOptions): Promise<void> => {
-        if (closed) return;
-        closed = true;
-        await task.close(stats);
-      };
-      const dispose = (): void => {
-        closed = true;
-      };
-      return {
-        turnId: task.id,
-        close,
-        dispose,
-        [Symbol.asyncDispose]: close,
-      };
     },
   };
 }
@@ -1488,57 +1067,6 @@ function normalizeIntentId(
   return intent?.id;
 }
 
-function withAgentClaimedDefault<T extends ClaimedOptions | undefined>(
-  options: T,
-): ClaimedOptions & NonNullable<T> {
-  return {
-    ifClaimed: 'fail',
-    ...(options ?? {}),
-  } as ClaimedOptions & NonNullable<T>;
-}
-
-function stripAgentRuntimeOptions(
-  options: AgentModelMutationOptions | undefined,
-): Omit<
-  ModelMutationOptions,
-  'intent' | 'ifClaimed' | 'claimedTimeout' | 'claimedPollInterval' | 'maxQueueDepth'
-> | undefined {
-  if (!options) return undefined;
-  const {
-    intent: _intent,
-    ifClaimed: _ifClaimed,
-    claimedTimeout: _claimedTimeout,
-    claimedPollInterval: _claimedPollInterval,
-    maxQueueDepth: _maxQueueDepth,
-    ...rest
-  } = options;
-  return rest;
-}
-
-function isIntentHandleRef(
-  input: AgentIntentInput | { readonly id: string },
-): input is { readonly id: string } {
-  return (
-    typeof input === 'object' &&
-    input !== null &&
-    'id' in input &&
-    typeof input.id === 'string' &&
-    !('action' in input)
-  );
-}
-
-function isAbortError(error: unknown): boolean {
-  return (
-    typeof DOMException !== 'undefined' &&
-    error instanceof DOMException &&
-    error.name === 'AbortError'
-  ) || (
-    typeof error === 'object' &&
-    error !== null &&
-    'name' in error &&
-    error.name === 'AbortError'
-  );
-}
 
 function parseBody(bodyText: string): unknown {
   if (bodyText.length === 0) return null;

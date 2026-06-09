@@ -49,15 +49,23 @@ session token from your backend.
 
 <CodeGroup>
 
-```ts Browser (end-user apps)
+```tsx Browser (end-user apps)
+import Ablo from '@abloatai/ablo';
 import { AbloProvider } from '@abloatai/ablo/react';
 
-// authEndpoint points at YOUR backend route, which mints the user's session
-// token (ek_) — see below. The provider fetches + refreshes it; the browser
-// never holds a secret, and the ek_ already names your org. That's the whole setup.
-<AbloProvider schema={schema} authEndpoint="/api/ablo-session">
-  {children}
-</AbloProvider>
+// getToken fetches from YOUR backend route, which mints the user's session
+// token (ek_) — see below. The client fetches + refreshes it; the browser never
+// holds a secret, and the ek_ already names your org. Build it once at module
+// scope, then hand the instance to the provider.
+const ablo = Ablo({
+  schema,
+  getToken: () =>
+    fetch('/api/ablo-session', { method: 'POST' })
+      .then((r) => r.json())
+      .then((d) => d.token),
+});
+
+<AbloProvider client={ablo}>{children}</AbloProvider>;
 ```
 
 ```ts Server / agents (backend)

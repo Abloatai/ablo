@@ -46,7 +46,7 @@ export const schema = defineSchema({
 ```
 
 ```ts
-// web/ablo.ts
+// web/ablo.ts — SERVER-ONLY client (holds the sk_ key; never imported in the browser).
 import Ablo from '@abloatai/ablo';
 import { schema } from './ablo/schema';
 
@@ -56,18 +56,40 @@ export const ablo = Ablo({
 });
 ```
 
-Mount the React provider near the app root so client components can subscribe to
-model clients without importing server credentials.
+Mount the React provider near the app root. Build the browser client first —
+with an `authEndpoint` so it mints a short-lived session token instead of
+carrying the secret key — then pass it to the provider via `client`.
 
 ```tsx
 // web/app/providers.tsx
 'use client';
 
+import Ablo from '@abloatai/ablo';
 import { AbloProvider } from '@abloatai/ablo/react';
 import { schema } from '@/ablo/schema';
 
+// Browser client: no secret key — `authEndpoint` mints the session token
+// server-side (see the session route below).
+const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+
 export function Providers({ children }: { children: React.ReactNode }) {
-  return <AbloProvider schema={schema}>{children}</AbloProvider>;
+  return <AbloProvider client={ablo}>{children}</AbloProvider>;
+}
+```
+
+The session route mints with the server client that holds the `sk_` key — the
+browser only ever sees the short-lived token:
+
+```ts
+// web/app/api/ablo-session/route.ts
+import { ablo } from '@/ablo';
+
+export const runtime = 'nodejs';
+
+export async function POST() {
+  const userId = await currentUserId(); // your auth
+  const { token } = await ablo.sessions.create({ user: { id: userId } });
+  return Response.json({ token });
 }
 ```
 

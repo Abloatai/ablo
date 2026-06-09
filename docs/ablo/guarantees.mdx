@@ -74,38 +74,28 @@ acquires a durable lease + FIFO wait-line, request/response, no socket.
 When another human or agent is active on the same target, the caller chooses the
 behavior:
 
-- `ifBusy: 'return'` returns active intents immediately.
-- `ifBusy: 'wait'` waits until the matching intent clears.
-- `ifBusy: 'fail'` throws `AbloBusyError` with the active intents attached.
+- `ifClaimed: 'return'` returns the active claims immediately.
+- `ifClaimed: 'wait'` waits until the claim clears.
+- `ifClaimed: 'fail'` throws `AbloClaimedError` with the active claims attached.
 
-Schema clients wait from the realtime intent stream. Schema-less HTTP callers
-must pass an explicit `busyPollInterval` if they choose `ifBusy: 'wait'`; Ablo
-does not hide a hard-coded polling loop. `busyTimeout` is only a maximum wait.
+Schema clients wait from the realtime claim stream. Schema-less HTTP callers
+must pass an explicit `claimedPollInterval` if they choose `ifClaimed: 'wait'`; Ablo
+does not hide a hard-coded polling loop. `claimedTimeout` is only a maximum wait.
 
-## Agent Runs
+## Agent writes
 
-`agent.run(...)` is the advanced schema-less run envelope for workers that cannot
-import the app schema. It returns one of three statuses:
+Agents write shared state through the same surface as everything else:
+`ablo.<model>.update(...)` (schema-backed) or `ablo.commits.create(...)`
+(schema-less). When two writers may touch the same row, `ablo.<model>.claim(...)`
+serializes them, re-reads the fresh row on promotion, and is the causal link
+recorded on every write it guards. There is no separate run envelope.
 
-- `done` — the handler returned successfully.
-- `failed` — the handler threw or the commit failed.
-- `cancelled` — the run signal aborted.
+## Capabilities
 
-Normal schema-backed agents should import the same schema as the app and write
-through `ablo.<model>.update(...)`. The lower-level run envelope exists for
-platform runtimes that need capability and task management without app code.
-
-## Capabilities and Tasks
-
-Capabilities scope what an agent is allowed to do. Tasks group a run for audit
-and cost attribution.
-
-Most users do not create either one manually. The SDK and hosted API manage the
-common case. Manual capability and task APIs are for platform builders, custom
-agent runtimes, and internal infrastructure.
-
-Use `lease` as a crash cleanup window. A successful agent run still closes when
-the handler returns, fails, or is cancelled.
+Capabilities scope what an agent is allowed to do. Most users do not create one
+manually — the SDK and hosted API manage the common case; the manual capability
+API is for platform builders, custom agent runtimes, and internal infrastructure.
+Use `lease` as a crash cleanup window.
 
 ## Audit Trail
 
@@ -114,7 +104,7 @@ Accepted writes can be attributed to:
 - the actor that wrote,
 - the human or system the actor worked on behalf of,
 - the capability that scoped the write,
-- the task or run that caused it,
+- the claim (intent) that coordinated it,
 - the resource, operation, and state cursor.
 
 For agent work, this is what lets an audit surface answer: "what changed, who

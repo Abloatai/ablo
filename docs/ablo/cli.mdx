@@ -5,10 +5,13 @@ title: "CLI"
 The `ablo` CLI gets you from an empty project to live-syncing data: scaffold a
 schema, connect storage, and verify the model contract. For an existing backend,
 the normal path is a signed Data Source endpoint. For the optional direct
-Postgres connector, you set `DATABASE_URL` and `ablo migrate` provisions tables.
-Your `defineSchema(...)` is the single source of truth — the CLI lowers it to SQL
-through one engine (`generateProvisionPlan` / `generateMigrationPlan` in
-`@abloatai/ablo/schema`).
+Postgres connector, you set `DATABASE_URL` and `ablo migrate` provisions **just
+your synced models plus the adapter's `ablo_outbox` / `ablo_idempotency`
+tables** — never your whole database. Your `defineSchema(...)` is the single
+source of truth for those synced models; the CLI lowers it to SQL through one
+engine (`generateProvisionPlan` / `generateMigrationPlan` in
+`@abloatai/ablo/schema`). Everything else — auth, billing, non-synced tables —
+stays in your own ORM schema, provisioned by your own migrations.
 
 ```bash
 npx ablo init                 # choose "My database (Data Source endpoint)"
@@ -82,6 +85,17 @@ either mode) defines the same models test and live see; only the rows differ.
 | `ablo pull` | **Adoption** — generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`). | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force` |
 | `ablo check` | **Adoption** — verify your *existing* tables fit the schema (read-only, no schema changes). | `--schema <path>`, `--export <name>`, `--app-schema <name>` |
 | `ablo generate` | Emit TypeScript types from the schema. | `--out <path>`, `--schema`, `--export` |
+
+<Note>
+**A schema change is not live until you `ablo push`.** The sync server imports no
+app schema — it learns your models, and which ones are `mutable`, only from the
+copy you push (per tenant). Editing `ablo/schema.ts`, rebuilding, or redeploying
+your app changes nothing on the server by itself. After **any** schema change —
+new model, new field, flipping `mutable` — run `ablo push` (or keep `ablo dev`
+running, which re-pushes on save). A write to a model the active pushed schema
+hasn't seen fails with `server_execute_unknown_model` (see
+[Structured errors](#structured-errors)).
+</Note>
 
 ## `ablo dev`
 
@@ -164,14 +178,17 @@ reshaping it. `ablo check` is read-only; it never proposes a migration.
 ## `migrate` vs `push`
 
 Two front doors to the same engine. Use `migrate` when you opt into the direct
-Postgres connector and want Ablo to provision tables in `DATABASE_URL`. `push`
-(and `dev`) run the hosted path, where the server applies to Ablo-managed
-Postgres and version-gates connecting clients; that hosted storage is a
-[roadmap](/roadmap) offering.
+Postgres connector and want Ablo to provision your synced models in
+`DATABASE_URL`. It only creates the tables for the models in your Ablo schema,
+plus the adapter's `ablo_outbox` / `ablo_idempotency` tables — your other tables
+are left alone and stay owned by your own migration tool (drizzle-kit, prisma
+migrate). `push` (and `dev`) run the hosted path, where the server applies to
+Ablo-managed Postgres and version-gates connecting clients; that hosted storage
+is a [roadmap](/roadmap) offering.
 
 ```bash
 ablo migrate --dry-run            # preview the exact SQL
-ablo migrate                      # apply to DATABASE_URL
+ablo migrate                      # apply synced models to DATABASE_URL
 ablo migrate --output schema.sql  # write SQL to a file
 ```
 
@@ -220,6 +237,24 @@ which the SDK reconstructs as a typed `AbloServerError`:
 
 The pushed artifact is recorded `failed` and is never activated, so a broken
 migration can't leave clients gated against tables that don't match.
+
+### `server_execute_unknown_model`
+
+```json
+{
+  "type": "AbloValidationError",
+  "code": "server_execute_unknown_model",
+  "message": "Unknown model: \"presentationSession\". Mark the entity `mutable: true` in the schema to expose it over the wire."
+}
+```
+
+This is a **write rejected at commit time** (HTTP 400), not a migration error.
+The model is missing from the org's *active pushed schema* — almost always
+because you changed `ablo/schema.ts` locally but never ran `ablo push`, or the
+model exists but isn't marked `mutable: true`. Fix the schema if needed, then
+`ablo push`. (Mutability is opt-in by design: a model is read-only over the wire
+unless it explicitly declares `mutable: true`, so a new model can't become
+client-writable by accident.)
 
 ## Environment
 

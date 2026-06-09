@@ -56,19 +56,36 @@ return Response.json({ token });  // return ONLY the token to the browser
 A user session has **full data authority** within its org — no operation
 allowlist. It's the human acting as themselves.
 
-Point [`<AbloProvider>`](/react) at that route with `authEndpoint`. The provider
-fetches the token, opens the connection, and re-mints before expiry — your app
-writes no token plumbing:
+Build a browser `Ablo` client whose `getToken` fetches from that route, and pass
+the **instance** to [`<AbloProvider>`](/react). The client fetches the token,
+opens the connection, and re-mints before expiry — your app writes no token
+plumbing:
 
 ```tsx
-<AbloProvider schema={schema} authEndpoint="/api/ablo-session">
-  {children}
-</AbloProvider>
+'use client';
+
+import Ablo from '@abloatai/ablo';
+import { AbloProvider } from '@abloatai/ablo/react';
+import { schema } from '@/ablo.schema';
+
+const ablo = Ablo({
+  schema,
+  getToken: () =>
+    fetch('/api/ablo-session', { method: 'POST' })
+      .then((r) => r.json())
+      .then((d) => d.token),
+});
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  return <AbloProvider client={ablo}>{children}</AbloProvider>;
+}
 ```
 
-That's the whole browser setup — one prop. The session token already names your
-project, so there's nothing else to configure. Prefer to manage it yourself?
-Pass `getToken={() => fetch('/api/ablo-session', { method: 'POST' }).then(r => r.json()).then(d => d.token)}` instead.
+The client owns auth, the credential lifecycle, and the connection; the provider
+is the thin reactive binding over it (Stripe's `<Elements stripe={...}>` model).
+Build the client **once** at module scope — a new instance per render tears down
+the socket. `authEndpoint: '/api/ablo-session'` is accepted as sugar for the
+`getToken` fetch above if you prefer a URL.
 
 ## Agent sessions (`rk_`)
 
@@ -92,9 +109,9 @@ server rejects any commit whose operation isn't listed. Operations are
 `'read' | 'create' | 'update' | 'delete'`.
 
 <Note>
-Most apps don't create agent sessions by hand — `api.agent(...).run(...)` mints
-and revokes one for that run automatically. Reach for `sessions.create({ agent })`
-only for custom runtimes, MCP sessions, or protocol-level integrations.
+Use `sessions.create({ agent })` to mint a scoped agent credential, then write
+with `ablo.<model>.update(...)` / `ablo.commits.create(...)` under a `claim`.
+This is the path for custom runtimes, MCP sessions, and protocol-level integrations.
 </Note>
 
 ## Mint

@@ -123,7 +123,7 @@
 //   const ctx:  Agent.Context = { perception };
 //   const s:    Agent.SessionOptions = { ... };
 //
-// Everything else (Activity, Claim, Turn, Peer, ActiveIntent, ...)
+// Everything else (Activity, Claim, Peer, ActiveIntent, ...)
 // lives on the `Ablo.*` namespace via
 // `import type { Ablo } from '@abloatai/ablo'`.
 

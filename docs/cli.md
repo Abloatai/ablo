@@ -57,7 +57,7 @@ either mode) defines the same models test and live see; only the rows differ.
 | `ablo dev`                         | **Hosted** — push the schema to your test sandbox, then watch `ablo/schema.ts` and re-push on save.                                           | `--no-watch`, `--schema <path>`, `--export <name>`, `--url <url>`                                      |
 | `ablo logs`                        | Tail your scope's commit activity (`stripe logs tail`). Follows by default.                                                                   | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode test\|live` |
 | `ablo push`                        | **Hosted** — upload the schema to Ablo; the server diffs, migrates, and activates it.                                                         | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url`         |
-| `ablo migrate`                     | **Direct Postgres** — apply the schema to your own `DATABASE_URL` (you run the table-creation SQL).                                                          | `--dry-run`, `--output <file>`, `--schema`, `--export`                                                 |
+| `ablo migrate`                     | **Direct Postgres** — provision just the synced models (plus the adapter's `ablo_outbox` / `ablo_idempotency`) in your own `DATABASE_URL`. Leaves your other tables alone.                                                          | `--dry-run`, `--output <file>`, `--schema`, `--export`                                                 |
 | `ablo pull`                        | **Direct Postgres** — generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`).                              | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force`                                     |
 | `ablo check`                       | **Direct Postgres** — verify your _existing_ tables fit the schema (read-only, no schema changes).                                                       | `--schema <path>`, `--export <name>`, `--app-schema <name>`                                            |
 | `ablo generate`                    | Emit TypeScript types from the schema.                                                                                                        | `--out <path>`, `--schema`, `--export`                                                                 |
@@ -144,15 +144,28 @@ reshaping it. `ablo check` is read-only; it never proposes a migration.
 ## `migrate` (Direct Postgres) vs `push` (Hosted)
 
 Same engine, two setups. If you use the **Direct Postgres connector**, use
-`ablo migrate` — it applies the schema to your own `DATABASE_URL`, and you run
-the table-creation SQL. If Ablo manages the sandbox/hosted store, use `ablo push` and
-`ablo dev` — the server applies the change and version-gates connecting clients.
+`ablo migrate` — it provisions the synced models in your own `DATABASE_URL`. If
+Ablo manages the sandbox/hosted store, use `ablo push` and `ablo dev` — the
+server applies the change and version-gates connecting clients.
 
 ```bash
 ablo migrate --dry-run            # preview the exact SQL
 ablo migrate                      # apply to DATABASE_URL
 ablo migrate --output schema.sql  # write SQL to a file
 ```
+
+### One database, two schemas
+
+`ablo migrate` does **not** own your whole database. It creates exactly the
+models in your `defineSchema(...)` — the synced, collaborative tables — plus the
+adapter's bookkeeping tables (`ablo_outbox`, `ablo_idempotency`). Nothing else.
+
+Your auth, billing, and any other non-synced tables stay in **your own ORM
+schema** (Drizzle's `schema.ts`, Prisma's `schema.prisma`) and are provisioned by
+**your own migrations** (`drizzle-kit push` / `prisma migrate`). The Ablo schema
+is not a replacement for `schema.prisma`, and `ablo migrate` won't touch, drop,
+or adopt the tables it doesn't manage. One database, two schemas, side by side —
+each owned by its own migration tool.
 
 ## Zod → Postgres type mapping
 

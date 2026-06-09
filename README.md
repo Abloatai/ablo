@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/@abloatai/ablo.svg)](https://www.npmjs.com/package/@abloatai/ablo)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![types](https://img.shields.io/badge/types-included-blue.svg)](#)
-[![runtime](https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg)](#keys--runtime)
+[![runtime](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](#keys--runtime)
 
 **Let people and AI agents work on the same data without overwriting each other.**
 
@@ -46,7 +46,7 @@ anywhere people and agents change shared state and everyone has to see it live.
 npm install @abloatai/ablo
 ```
 
-**Keys & runtime.** Ablo needs Node 22+ and TypeScript 5+. Grab an `sk_test_*`
+**Keys & runtime.** Ablo needs Node 24+ and TypeScript 5+. Grab an `sk_test_*`
 key for a sandbox
 (`export ABLO_API_KEY=sk_test_...`); keep keys in trusted server runtimes only.
 In the browser, `<AbloProvider>` authenticates with the signed-in user's
@@ -218,12 +218,16 @@ provider and read with hooks, from `@abloatai/ablo/react`. Wrap your tree once;
 everything inside is live.
 
 ```tsx
+import Ablo from '@abloatai/ablo';
 import { AbloProvider, useAblo } from '@abloatai/ablo/react';
 import { schema } from './ablo/schema';
 
+// Build the client once — it authenticates via your session route, no key in the browser.
+const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+
 function App() {
   return (
-    <AbloProvider schema={schema}>
+    <AbloProvider client={ablo}>
       <Report id="report_stockholm" />
     </AbloProvider>
   );
@@ -250,8 +254,9 @@ method as the server example above.
 `<AbloProvider>` owns the connection — no API key in the browser. That's the
 whole loop: read with `useAblo(selector)`, write with `ablo.<model>`, and every
 other client (human or agent) on that row sees it in real time. See
-[React](./docs/react.md) for the full `<AbloProvider>` prop surface (`userId`,
-`teamIds`, `syncGroups`, `fallback`, `bootstrapMode`) and status hooks.
+[React](./docs/react.md) for the `<AbloProvider>` prop surface (`client`,
+`userId`, `fallback`, `onError`) — schema, scope, and team membership live on the
+`Ablo({ … })` client you pass it — plus status hooks.
 
 ## Identity & Sync Groups
 
@@ -270,7 +275,10 @@ to sync-group strings.
 `userId` / `teamIds` come from your auth, resolved server-side:
 
 ```tsx
-<AbloProvider schema={schema} userId={user.id} teamIds={user.teamIds}>
+// team membership is asserted server-side when the session route mints the token.
+const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+
+<AbloProvider client={ablo} userId={user.id}>
   <App />
 </AbloProvider>
 ```

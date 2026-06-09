@@ -10,10 +10,16 @@ That default makes Ablo the managed state store for your models, the same way
 Stripe stores `Customer` and `PaymentIntent` objects that you create through
 Stripe's API.
 
-Either way, you define an Ablo schema with `defineSchema`, `model`, and Zod —
-the same way a Prisma project starts with a `schema.prisma`. Your schema
-describes your data once, and everything else (the SDK, agents, and your
-database connection) relies on that one definition.
+Either way, you define an Ablo schema with `defineSchema`, `model`, and Zod. The
+Ablo schema describes **only your synced, collaborative models** — the rows Ablo
+coordinates and fans out in realtime. It is *not* your whole-database schema and
+does *not* replace your `schema.prisma` (or your Drizzle schema). Your auth,
+billing, and any other non-synced tables stay in your own ORM schema, owned by
+your own migrations. One database, two schemas, side by side: Ablo owns the
+synced models (plus the small `ablo_outbox` / `ablo_idempotency` bookkeeping
+tables its adapter needs); you keep owning everything else. `ablo check` reflects
+this — it reports your other tables as "ignored / owned by you," which is exactly
+right.
 
 Your app can keep using its own `DATABASE_URL`. Store that value in your app or
 backend environment, not in Ablo. The integration boundary is the HTTPS
@@ -66,8 +72,8 @@ Multiplayer behavior is the same in both modes. Writes made through
 fan out to subscribers. If something writes to your database without going
 through Ablo (a cron job, an admin tool), Ablo can't know about it
 automatically. To keep everyone's screen up to date, your app reports those
-outside changes back through an events feed — shown below in
-[External Writes](#external-writes).
+outside changes back through the outbox feed — shown below in
+[Outbox Events](#outbox-events).
 
 ## When To Use A Data Source
 
@@ -100,58 +106,52 @@ The shape is the same as a production webhook integration:
 
 ## Route
 
+You don't hand-write the commit transaction, the idempotency upsert, or the
+outbox writes. You pass an ORM **adapter** and it does all of that for you —
+transaction, exactly-once idempotency, and outbox — driven by the same Ablo
+schema. The whole route is three fields:
+
 ```ts
 // app/api/ablo/source/route.ts
-import { dataSource, sourceEventForOperation } from '@abloatai/ablo';
+import { dataSourceNext } from '@abloatai/ablo/source/next';
+import { prismaDataSource } from '@abloatai/ablo/source';
+import { schema } from '@/ablo/schema';
+import { prisma } from '@/lib/prisma';
+
+// Data Source routes touch the database, so they run on the Node runtime.
+export const runtime = 'nodejs';
+
+export const { POST } = dataSourceNext({
+  schema,
+  apiKey: process.env.ABLO_API_KEY!,
+  adapter: prismaDataSource(prisma, schema),
+});
+```
+
+Using Drizzle instead of Prisma is the same shape — swap the adapter for
+`drizzleDataSource(db, schema)`:
+
+```ts
+// app/api/ablo/source/route.ts
+import { dataSourceNext } from '@abloatai/ablo/source/next';
+import { drizzleDataSource } from '@abloatai/ablo/source/drizzle';
 import { schema } from '@/ablo/schema';
 import { db } from '@/db';
 
-export const POST = dataSource({
+export const runtime = 'nodejs';
+
+export const { POST } = dataSourceNext({
   schema,
-  apiKey: process.env.ABLO_API_KEY,
-
-  authorize() {
-    return { db };
-  },
-
-  async commit({ operations, clientTxId, context }) {
-    const rows = await context.auth.db.transaction(async (tx) => {
-      await tx.idempotency.upsert({ key: clientTxId, operations });
-      const changes = await applyOperations(tx, operations);
-      await tx.outbox.createMany({
-        data: changes.map(({ eventId, operation, entityId, data }) =>
-          sourceEventForOperation({
-            eventId,
-            operation,
-            entityId,
-            data,
-            ...(clientTxId ? { clientTxId } : {}),
-            ...(context.scope?.organizationId
-              ? { organizationId: context.scope.organizationId }
-              : {}),
-            occurredAt: Date.now(),
-          }),
-        ),
-      });
-      return changes.map(({ row }) => row);
-    });
-
-    return { rows };
-  },
-
-  reports: {
-    async load({ id, context }) {
-      return context.auth.db.report.findUnique({ where: { id } });
-    },
-
-    async list({ query, context }) {
-      return context.auth.db.report.findMany({
-        take: query.limit ?? 100,
-      });
-    },
-  },
+  apiKey: process.env.ABLO_API_KEY!,
+  adapter: drizzleDataSource(db, schema),
 });
 ```
+
+The adapter is constructed from your ORM client and the Ablo `schema` —
+`prismaDataSource(prisma, schema)` or `drizzleDataSource(db, schema)`. It maps
+each synced model to your table, wraps every commit in one transaction, dedupes
+on `clientTxId` via `ablo_idempotency`, and appends `ablo_outbox` rows for the
+external-write feed — the bookkeeping you used to write by hand.
 
 Your app code still writes through the normal model API:
 
@@ -208,37 +208,18 @@ events.
 
 ## Outbox Events
 
-Return your outbox feed from an `events` handler so connected humans and agents
-stay current. Include SDK-origin events too. If Ablo already appended the commit
-directly, `clientTxId` lets Ablo filter the echo; if the direct append failed,
-the same outbox row repairs it on the next poll or push.
+The adapter serves the outbox feed for you. Every `commit` it runs appends one
+`ablo_outbox` row per operation in the same transaction, and the adapter's
+built-in events handler streams those rows back to Ablo by cursor — so connected
+humans and agents stay current with no extra code. If Ablo already appended the
+commit directly, `clientTxId` lets Ablo filter the echo; if the direct append
+failed, the same outbox row repairs it on the next poll or push.
 
-```ts
-export const POST = dataSource({
-  schema,
-  apiKey: process.env.ABLO_API_KEY,
-
-  async events({ cursor, limit, context }) {
-    const page = await context.auth.db.outbox.after(cursor, { limit });
-
-    return {
-      events: page.rows.map((row) => ({
-        id: row.id,
-        model: row.model,
-        entityId: row.entityId,
-        type: row.type,
-        data: row.data,
-        organizationId: row.organizationId,
-        clientTxId: row.clientTxId,
-        occurredAt: row.createdAt.getTime(),
-      })),
-      nextCursor: page.nextCursor,
-    };
-  },
-});
-```
-
-Events without `clientTxId` are treated as external writes.
+Events without `clientTxId` are treated as external writes. The only thing you
+add by hand is recording *outside* writes — changes made to your tables by a
+cron job or admin tool that never went through Ablo. Append an `ablo_outbox` row
+(with no `clientTxId`) for those in the same transaction as the change, and the
+adapter's feed carries them to every connected screen.
 
 ## Production Checklist
 
@@ -246,13 +227,17 @@ Before using a customer-owned database in production:
 
 - Keep `DATABASE_URL` in the customer app or backend environment.
 - Use only the Data Source endpoint and `ABLO_API_KEY` as the customer-facing integration boundary.
-- Verify signatures before opening a database transaction.
-- Store `clientTxId` in an idempotency table before applying writes.
-- Return canonical rows after each commit.
-- Write outbox events in the same transaction as every app-row write, including
-  Data Source `commit` writes.
-- Dedupe outbox events by event `id`.
+- Run the adapter migrations so `ablo_outbox` and `ablo_idempotency` exist
+  alongside your synced tables (`ablo migrate`).
+- Set `export const runtime = 'nodejs'` on the route so it can reach the database.
+- For writes that bypass Ablo (cron, admin tools), append an `ablo_outbox` row
+  (no `clientTxId`) in the same transaction as the change.
 - Monitor last success, last error, retry count, event lag, and cursor.
+
+The adapter already handles the rest — signature verification, the commit
+transaction, `clientTxId` idempotency, returning canonical rows, the outbox
+append per operation, and deduping the feed by event `id`. You don't write any of
+that by hand.
 
 Don't give Ablo your database URL for this integration — Ablo never connects to
 your database directly. (Direct database access would be a separate product with

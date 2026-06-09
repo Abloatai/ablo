@@ -245,10 +245,10 @@ export interface MutationOptions {
   onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
   intent?: string | { readonly id: string } | null;
   /**
-   * Active agent turn id to stamp on every delta row produced by this
-   * commit. Forwarded as the wire-level `causedByTaskId` field on the
-   * `{ type: 'commit' }` envelope. Set automatically by the SDK while
-   * `beginTurn(...)` is open.
+   * Dormant agent-task lineage field, forwarded as the wire-level
+   * `causedByTaskId`. Turns/tasks were removed from the SDK; nothing
+   * populates this anymore (write attribution rides on the claim/intent
+   * id). Kept optional for wire-compat; always `null` from the client.
    */
   causedByTaskId?: string | null;
 }

@@ -6,6 +6,12 @@ Here is the problem it solves. Two writers touch `report_stockholm` at once. The
 
 Use AI SDK for the agent loop. Use Ablo when agent reads and writes must persist, coordinate with concurrent work, and leave an audit trail.
 
+## Start here
+
+First action when integrating into an app: run `npx ablo init --yes --framework <nextjs|vite|remix|vanilla> --storage datasource`. Agents have no TTY — `--yes` is REQUIRED or it HANGS. It scaffolds `ablo/schema.ts`, the client, the Data Source endpoint, and (for Next.js) the browser provider + session route, all on the current API. Edit the generated files rather than hand-writing from this doc.
+
+Then PUSH — this is the step everything depends on. The server keeps its OWN copy of the schema. After you create or change `ablo/schema.ts`, run `npx ablo push` (one-shot). Until you push, EVERY write to a new or changed model fails with `server_execute_unknown_model`. (Or keep `npx ablo dev` running — it pushes on save.)
+
 ## Use this API
 
 ```ts
@@ -23,15 +29,16 @@ const schema = defineSchema({
 
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
-const report = await ablo.weatherReports.retrieve('report_stockholm');
+const report = await ablo.weatherReports.retrieve({ id: 'report_stockholm' });
 if (!report) throw new Error('Row not found');
 
-const updated = await ablo.weatherReports.claim('report_stockholm', async (report) => {
-  return ablo.weatherReports.update(
-    report.id,
-    { status: 'ready', forecast: await getForecast(report) },
-    { wait: 'confirmed' },
-  );
+// Claim the row (waits if someone else holds it), read the fresh copy off
+// `claim.data`, write, then auto-release at the end of this scope (`await using`).
+await using claim = await ablo.weatherReports.claim({ id: 'report_stockholm' });
+const updated = await ablo.weatherReports.update({
+  id: claim.data.id,
+  data: { status: 'ready', forecast: await getForecast(claim.data) },
+  wait: 'confirmed',
 });
 ```
 
@@ -46,7 +53,7 @@ For full integrations, use `integration-guide` as the canonical doc. It covers
 the same model API across Ablo-managed state, Data Source-backed app databases,
 React selectors, multiplayer, and future agent workers.
 
-Reads come in two flavors, and you pick by whether you can wait. `retrieve(id)`
+Reads come in two flavors, and you pick by whether you can wait. `retrieve({ id })`
 (one row) and `list({ where })` (many) are async — they hit the server and return
 a Promise, so await them. `get(id)`, `getAll({ where })`, and `getCount({ where })`
 are synchronous — they read the local graph and are reactive in render, so no
@@ -68,7 +75,7 @@ first integration path.
 Multiplayer is not a separate mode. When human UI, server actions, and agents use
 the same schema client and write through `ablo.<model>`, Ablo coordinates the
 shared model stream: confirmed deltas fan out to subscribers, active claims are
-visible through `claim.state(id)`, and stale writes can be rejected with `readAt`.
+visible through `claim.state({ id })`, and stale writes can be rejected with `readAt`.
 
 If an app writes directly to its own database outside Ablo, that write bypasses
 coordination until the app reports it through Data Source events.
@@ -76,7 +83,7 @@ coordination until the app reports it through Data Source events.
 ## Nouns
 
 - `Model client` is the typed `ablo.<model>` object generated from schema.
-- `Claim` holds a model row while slow work runs; `claim.state(id)` observes it.
+- `Claim` holds a model row while slow work runs; `claim.state({ id })` observes it.
 - `Commit` is the durable protocol write behind `ablo.<model>.update(...)`.
 - `Receipt` confirms the commit.
 
@@ -121,7 +128,7 @@ import { prisma } from '@/lib/prisma';
 export const { POST } = dataSourceNext({
   schema,
   apiKey: process.env.ABLO_API_KEY!,
-  adapter: prismaDataSource(prisma, schema), // or drizzleDataSource(db, tables)
+  adapter: prismaDataSource(prisma, schema), // or drizzleDataSource(db, schema)
 });
 ```
 

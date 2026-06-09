@@ -26,7 +26,6 @@ import {
   createProtocolClient,
   type AbloApi,
   type AbloApiClientOptions,
-  type TaskCreateOptions,
 } from './ApiClient.js';
 import type {
   CommitReceipt,
@@ -35,7 +34,6 @@ import type {
   ModelRead,
   ModelReadOptions,
   ModelMutationOptions,
-  Turn,
 } from './Ablo.js';
 import type {
   ClaimHandle,
@@ -74,7 +72,7 @@ export interface HttpModelClient<T, C = T> {
 
 /**
  * The honest type of the stateless HTTP client: typed model proxies (the
- * request/response subset) + `commits` + `beginTurn` + `dispose`. Reaching for a
+ * request/response subset) + `commits` + `dispose`. Reaching for a
  * stateful-only capability (`get`/`getAll`/`getCount`, `onChange`,
  * `claim.state`/`queue`/`reorder`) is a COMPILE error here, not a latent runtime
  * `undefined` — the type matches what the transport can actually do.
@@ -86,7 +84,6 @@ export type AbloHttpClient<S extends SchemaRecord> = {
   >;
 } & {
   readonly commits: CommitResource;
-  beginTurn(options: TaskCreateOptions): Promise<Turn>;
   dispose(): Promise<void>;
   /** Resolve the bearer credential this client authenticates with (see `AbloApi.getAuthToken`). */
   getAuthToken(): Promise<string | null>;
@@ -107,15 +104,14 @@ const PROTOCOL_MEMBERS = new Set<string>([
   'dispose',
   'purge',
   'commits',
-  'beginTurn',
   'model',
   'getAuthToken',
 ]);
 
 /**
  * Stateless, typed HTTP client. Each `client.<model>` resolves to the protocol
- * client's `model(name)`; `commits`, `beginTurn`, `tasks`, `dispose`, etc. pass
- * through. No socket is ever opened; identity is the Bearer credential.
+ * client's `model(name)`; `commits`, `dispose`, etc. pass through. No socket is
+ * ever opened; identity is the Bearer credential.
  */
 export function createAbloHttpClient<S extends SchemaRecord>(
   options: AbloHttpClientOptions<S>,

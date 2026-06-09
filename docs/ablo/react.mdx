@@ -25,10 +25,10 @@ import { useAblo } from '@abloatai/ablo/react';
 
 export function TaskView({ task: serverTask }: { task: { id: string; title: string } }) {
   const task = useAblo((ablo) => ablo.tasks.get(serverTask.id)) ?? serverTask;
-  const intents = useAblo((ablo) =>
-    ablo.intents.list({ resource: 'tasks', id: serverTask.id }),
-  ) ?? [];
-  const busy = intents.length > 0;
+  const holder = useAblo((ablo) =>
+    ablo.tasks.claim.state({ id: serverTask.id }),
+  );
+  const busy = holder !== null;
 
   return <article>{task.title}</article>;
 }
@@ -41,7 +41,7 @@ The hook:
    deltas arrive.
 3. Lets Server Component data stay outside the hook: use `?? serverTask` when a
    parent already loaded the row.
-4. Works for coordination state too, such as `ablo.intents.list(...)`.
+4. Works for coordination state too, such as `ablo.<model>.claim.state(...)`.
 
 Use the zero-argument form only when you need the full client for callbacks,
 effects, or writes:
@@ -69,10 +69,10 @@ const tasks = useAblo((ablo) =>
 ## Server Load
 
 ```tsx
-const [task] = await ablo.tasks.load({ where: { id } });
+const task = await ablo.tasks.retrieve({ id });
 ```
 
-Use `load` in Server Components when the row may not be in the local pool yet.
+Use `retrieve` in Server Components when the row may not be in the local pool yet.
 
 ## Writes
 

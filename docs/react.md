@@ -14,6 +14,27 @@ The React bindings ship with the main package — no extra install.
 import { useAblo } from '@abloatai/ablo/react';
 ```
 
+## Building the client
+
+You build the Ablo client once — that's where the schema, the session endpoint,
+and connection config live — then hand it to the provider. The provider takes
+the already-built `client`; it no longer takes `schema`, `url`, `apiKey`, etc.
+as props. This mirrors Stripe's `<Elements stripe={stripePromise}>`: construct
+the thing, then pass it.
+
+```ts
+// lib/ablo.ts
+import Ablo from '@abloatai/ablo';
+import { schema } from '@/ablo/schema';
+
+// The browser never holds your API key. It mints a short-lived session token
+// from your own server route (see Identity below).
+export const ablo = Ablo({
+  schema,
+  authEndpoint: '/api/ablo-session',
+});
+```
+
 ## AbloProvider
 
 Mount it once near the root of your tree. It owns the connection, the local
@@ -23,48 +44,38 @@ pool, and the engine lifecycle; everything below it reads with `useAblo`.
 'use client';
 
 import { AbloProvider } from '@abloatai/ablo/react';
-import { schema } from '@/ablo/schema';
+import { ablo } from '@/lib/ablo';
 
 export function Providers({
   children,
   user, // resolved server-side from YOUR auth
 }: {
   children: React.ReactNode;
-  user: { id: string; teamIds: string[] };
+  user: { id: string };
 }) {
   return (
-    <AbloProvider
-      schema={schema}
-      userId={user.id}
-      teamIds={user.teamIds}
-      fallback={<AppSkeleton />}
-    >
+    <AbloProvider client={ablo} userId={user.id} fallback={<AppSkeleton />}>
       {children}
     </AbloProvider>
   );
 }
 ```
 
-`schema` is the only required prop. The rest are situational:
+`client` is the only required prop. The rest are situational:
 
-| Prop                | Default                | Purpose                                                                                                   |
-| ------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
-| `schema`            | —                      | **Required.** From `defineSchema()`. Determines the typed hook surface.                                   |
-| `userId`            | resolved from auth     | App participant id for app-owned fields and your `identityRoles.extract`. Not the security boundary.      |
-| `teamIds`           | resolved from auth     | Team ids expanded into team sync groups via `identityRoles`.                                               |
-| `syncGroups`        | full allowed set       | **Narrows** the subscription to a subset of what auth allows (e.g. `['deck:abc123']`). Never widens it.   |
-| `url`               | hosted endpoint        | WebSocket URL of the sync server (`wss://…`). Hosted apps omit it.                                         |
-| `apiKey`            | session/cookie         | Bootstrap auth. Browser apps **omit this** — the key stays server-side. See Identity below.               |
-| `fallback`          | neutral spinner        | Rendered during the *first* bootstrap only. Pass a branded skeleton, `null`, or `'passthrough'`.          |
-| `bootstrapMode`     | `'full'`               | `'full'` loads existing rows before the app renders, so reads are populated on first paint; `'none'` skips that initial load and only streams changes as they happen.|
-| `persistence`       | `'volatile'`           | `'indexeddb'` opts into a durable browser cache that survives reloads.                                     |
-| `onSessionExpired`  | —                      | Fired after the engine has already purged on a rejected session — use for redirect-to-sign-in.            |
-| `onError`           | —                      | Engine / WebSocket / `postBootstrap` errors. Wire to Sentry / Datadog.                                    |
+| Prop        | Default          | Purpose                                                                                                   |
+| ----------- | ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `client`    | —                | **Required.** The `Ablo({ schema, authEndpoint })` instance. It carries the schema and connection config. |
+| `userId`    | resolved from auth | App participant id for app-owned fields and your `identityRoles`. Not the security boundary.            |
+| `fallback`  | neutral spinner  | Rendered during the *first* bootstrap only. Pass a branded skeleton, `null`, or `'passthrough'`.          |
+| `onError`   | —                | Engine / WebSocket / bootstrap errors. Wire to Sentry / Datadog.                                          |
 
-Where `userId` / `teamIds` / `syncGroups` come from, and why the API key never
-reaches the browser, is the whole of
-[Identity & Sync Groups](./identity.md) — read that if it isn't obvious how org
-/ team / user map to what a participant can see.
+Everything that used to be a provider prop — `schema`, `url`, `apiKey`,
+`teamIds`, `syncGroups`/`scope`, `persistence`, `bootstrapMode` — now lives on
+the `Ablo({ ... })` client you build before mounting the provider. Where the
+identity comes from, and why the API key never reaches the browser, is the whole
+of [Identity & Sync Groups](./identity.md) — read that if it isn't obvious how
+org / team / user map to what a participant can see.
 
 ## useAblo — model client
 

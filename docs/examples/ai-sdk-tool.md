@@ -7,7 +7,8 @@ Claims don't lock. If another writer holds the row, `claim` waits for them, re-r
 ```ts
 import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z as schemaZ } from '@abloatai/ablo/schema';
-import { streamText, tool } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
+import { convertToModelMessages, streamText, tool, type UIMessage } from 'ai';
 import { z } from 'zod';
 
 const schema = defineSchema({
@@ -62,17 +63,22 @@ const updateReport = tool({
 });
 
 export async function POST(req: Request) {
-  const { messages, model } = await req.json();
+  // `useChat` posts UIMessage[]; the model is a server-bound provider instance,
+  // never read off the request body.
+  const { messages }: { messages: UIMessage[] } = await req.json();
 
   return streamText({
-    model,
-    messages,
+    model: anthropic('claude-sonnet-4-6'),
+    messages: await convertToModelMessages(messages),
     tools: { updateReport },
   }).toUIMessageStreamResponse();
 }
 ```
 
-The model provider is interchangeable. What matters is that the tool:
+The model provider is interchangeable — swap `anthropic(...)` for any
+server-bound provider instance. What matters is that the route binds the model
+on the server (never trusting one sent in the request body), converts the
+incoming `UIMessage[]` with `convertToModelMessages`, and that the tool:
 
 - reads the latest weather report with `retrieve` (a server read),
 - claims the row — if someone else holds it, the claim waits for them, then re-reads,

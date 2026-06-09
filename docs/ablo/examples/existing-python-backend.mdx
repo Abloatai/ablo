@@ -59,11 +59,22 @@ model resources without importing server credentials.
 // web/app/providers.tsx
 'use client';
 
+import Ablo from '@abloatai/ablo';
 import { AbloProvider } from '@abloatai/ablo/react';
 import { schema } from '@/ablo.schema';
 
+// getToken fetches a per-user ek_ from your Python backend — the browser holds
+// no secret. Build the client once at module scope, not per render.
+const ablo = Ablo({
+  schema,
+  getToken: () =>
+    fetch('/api/ablo-session', { method: 'POST' })
+      .then((r) => r.json())
+      .then((d) => d.token),
+});
+
 export function Providers({ children }: { children: React.ReactNode }) {
-  return <AbloProvider schema={schema}>{children}</AbloProvider>;
+  return <AbloProvider client={ablo}>{children}</AbloProvider>;
 }
 ```
 
@@ -79,10 +90,8 @@ import { useAblo } from '@abloatai/ablo/react';
 
 export function TaskRow({ task: serverTask }: { task: Task }) {
   const task = useAblo((ablo) => ablo.tasks.get(serverTask.id)) ?? serverTask;
-  const intents = useAblo((ablo) =>
-    ablo.intents.list({ resource: 'tasks', id: serverTask.id }),
-  ) ?? [];
-  const busy = intents.length > 0;
+  const holder = useAblo((ablo) => ablo.tasks.claim.state({ id: serverTask.id }));
+  const busy = Boolean(holder);
 
   return (
     <button disabled={busy || task.status === 'done'}>
@@ -92,8 +101,9 @@ export function TaskRow({ task: serverTask }: { task: Task }) {
 }
 ```
 
-No string model key is needed in the first example. The selector reads from
-`ablo.tasks`, so React uses the same model resource as writes and agents.
+The selector reads through the synchronous `get` / `claim.state` reads (never
+the async `retrieve`/`list`), so React uses the same model resource as writes
+and agents.
 
 ## 3. Add One Python Data Source Endpoint
 
@@ -239,7 +249,7 @@ and timestamp. If the change originated from an Ablo commit, include the same
 Agents use the same model API as the UI:
 
 ```ts
-const [task] = await ablo.tasks.load({ where: { id: taskId } });
+const task = await ablo.tasks.retrieve({ id: taskId });
 const snap = ablo.snapshot({ tasks: taskId });
 
 await ablo.tasks.update({

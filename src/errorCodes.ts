@@ -246,8 +246,8 @@ export const ERROR_CODES = {
   constraint_violation: wire('validation', 400, false, 'A database integrity constraint was violated.'),
 
   // ── tenant / unknown model (400) ───────────────────────────────────
-  server_execute_unknown_model: wire('tenant', 400, false, 'The server-execute request named a model not in the tenant schema.'),
-  mutate_create_unknown_model: wire('tenant', 400, false, 'A create targeted a model not in the tenant schema.'),
+  server_execute_unknown_model: wire('tenant', 400, false, 'Wrote to a model the server does not know. The server keeps its own copy of the schema — run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` before writing to new or changed models.'),
+  mutate_create_unknown_model: wire('tenant', 400, false, 'Created a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` first — the server keeps its own copy of the schema.'),
   tenant_model_columns_unknown: wire('tenant', 400, false, "The tenant model's columns could not be resolved."),
   tenant_model_missing_organization_id: wire('tenant', 400, false, 'The tenant model is missing the organization_id column required for isolation.'),
 
@@ -364,7 +364,7 @@ export const ERROR_CODES = {
   provisioner_unavailable: wire('server', 503, false, 'No database provisioner is configured.'),
   invalid_model: wire('validation', 400, false, 'The request named an invalid model.'),
   invalid_id: wire('validation', 400, false, 'The request carried an invalid id.'),
-  unknown_model: wire('tenant', 400, false, 'The request named a model not in the tenant schema.'),
+  unknown_model: wire('tenant', 400, false, 'Named a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` — the server keeps its own copy of the schema.'),
   model_not_tenant_scoped: wire('tenant', 400, false, 'The model is not tenant-scoped and cannot be queried this way.'),
   schema_table_invalid: wire('schema', 500, false, "The model's table identifier is invalid."),
   schema_scope_invalid: wire('schema', 500, false, "The model's scope predicate could not be built."),

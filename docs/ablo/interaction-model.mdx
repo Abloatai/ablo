@@ -7,7 +7,7 @@ Ablo separates the data path from the authority path.
 The data path is what your application does on every write:
 
 ```
-Schema -> Model load -> Intent -> Model update -> Confirmation
+Schema -> Model read -> Claim -> Model update -> Confirmation
 ```
 
 The authority path is what makes that write defensible:
@@ -21,8 +21,8 @@ Capability -> Task -> Usage
 | Primitive | Plane | Purpose |
 |---|---|---|
 | `Schema` | State | Declares typed models the app and agents can read and write. |
-| `Model` | State | The generated `ablo.<model>` resource. Use `load`, `retrieve`, `create`, `update`, and `delete`. |
-| `Intent` | State | Pre-write coordination. It says what this actor is preparing to change. |
+| `Model` | State | The generated `ablo.<model>` resource. Use `retrieve`, `get`, `create`, `update`, and `delete`. |
+| `Claim` | State | Pre-write coordination. It says what this actor is preparing to change. |
 | `Commit` | Protocol | The durable write underneath model updates. Most users do not call it directly. |
 | `Receipt` | Protocol | The lower-level durable result for custom runtimes. Schema writes use `wait: 'confirmed'`. |
 | `Capability` | Control | Signed credentials. It says who can do what, where, for how long, and on whose behalf. |
@@ -37,8 +37,8 @@ record the authority around mutation.
 A normal schema-backed run is:
 
 ```
-const [task] = await ablo.tasks.load({ where: { id } });
-const busy = ablo.intents.list({ resource: 'tasks', id });
+await using claim = await ablo.tasks.claim({ id });
+const task = claim.data;
 const snap = ablo.snapshot({ tasks: id });
 await ablo.tasks.update({
   id,
@@ -69,9 +69,11 @@ Capabilities are enforced per operation, not per request. When a commit arrives,
 
 ## Coordination
 
-Intents broadcast across the org. When `agent:task-writer` declares an intent to
-update a task, schema clients can see it through `ablo.intents.list(...)` or the
-live intent stream. Callers decide whether to yield, wait, or fail fast.
+Claims broadcast across the org. When `agent:task-writer` claims a task to
+update it, schema clients can see the current holder through
+`ablo.tasks.claim.state({ id })` and the waiting line through
+`ablo.tasks.claim.queue({ id })`. Callers decide whether to yield, wait, or
+fail fast.
 
 ## Conflict resolution
 
@@ -96,4 +98,4 @@ Joins between them answer "what did this agent do, on whose authority, at what c
 
 ## The contract in one sentence
 
-Declare schema, load state, coordinate intent, update the model, and wait for confirmation.
+Declare schema, read state, claim the row, update the model, and wait for confirmation.

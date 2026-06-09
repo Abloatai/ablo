@@ -8,7 +8,7 @@ row, you can optionally `claim` it so they serialize instead of clobbering
 each other.
 
 Two things to know before the method list. **Reads come in two flavors:**
-`retrieve(id)` / `list({ where })` are async and hit the server (use them when
+`retrieve({ id })` / `list({ where })` are async and hit the server (use them when
 the row may not be local yet); `get(id)` / `getAll({ where })` / `getCount({ where })`
 are synchronous reads off the local graph (use them in render, after data has
 synced). **Claims don't lock.** If another writer holds the row, `claim` waits

@@ -27,7 +27,7 @@
  *   useCurrentUserId()        — the provider's userId prop
  *
  * Multiplayer (always available — `<AbloProvider>` always constructs a client):
- *   useAblo((ablo) => ablo.intents.list(...)) — reactive coordination reads
+ *   useAblo((ablo) => ablo.<model>.claim.state(...)) — reactive coordination reads
  *   useParticipant({ scope }) — join multiplayer for a scope, get peers/claims
  *   usePresence()             — typed presence view
  *   useIntent(name)           — typed intent dispatcher

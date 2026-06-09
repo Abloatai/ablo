@@ -200,8 +200,37 @@ export function resolveBootstrapBaseUrl(input: {
     // legitimately arrive as `wss://…` — normalize it here rather than
     // faceplanting at fetch time. The derive branch below already does this;
     // the override branch silently skipped it.
-    return normalizeAbloHostedBaseUrl(input.bootstrapBaseUrl).replace(/^ws/, 'http');
+    return ensureApiSuffix(normalizeAbloHostedBaseUrl(input.bootstrapBaseUrl).replace(/^ws/, 'http'));
   }
   const url = normalizeAbloHostedBaseUrl(input.url);
-  return `${url.replace(/^ws/, 'http')}/api`;
+  return ensureApiSuffix(url.replace(/^ws/, 'http'));
+}
+
+/**
+ * Guarantee the HTTP base ends in the `/api` route segment the sync-server
+ * mounts every endpoint under (`apps/sync-server/src/index.ts` — `app.route('/api', …)`).
+ *
+ * The derive branch always appended `/api`; the override branch did NOT,
+ * trusting the caller (apps/web passes `${baseUrl}/api`). But a hosted
+ * customer setting a custom `baseURL`/`bootstrapBaseUrl` (their own subdomain,
+ * staging, etc.) without the suffix sent every credential exchange to
+ * `…/auth/capability` instead of `…/api/auth/capability` → a 404 surfaced as
+ * `exchange_failed`. Since the SDK hardcodes routes relative to this base and
+ * there is no valid Ablo deployment that serves them off the root, normalizing
+ * to a single trailing `/api` here is always correct — and idempotent for
+ * callers who already include it.
+ */
+function ensureApiSuffix(httpBase: string): string {
+  const trimmed = httpBase.replace(/\/+$/, '');
+  try {
+    const u = new URL(trimmed);
+    const segments = u.pathname.split('/').filter(Boolean);
+    if (segments[segments.length - 1] === 'api') return trimmed;
+    u.pathname = `${u.pathname.replace(/\/+$/, '')}/api`;
+    return u.toString().replace(/\/+$/, '');
+  } catch {
+    // Should be unreachable post-`normalizeAbloHostedBaseUrl` (which yields an
+    // absolute URL), but fall back to a string check rather than throwing.
+    return /\/api$/.test(trimmed) ? trimmed : `${trimmed}/api`;
+  }
 }

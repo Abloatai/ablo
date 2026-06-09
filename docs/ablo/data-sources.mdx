@@ -8,8 +8,11 @@ your server, your server writes its database, and Ablo coordinates the confirmed
 stream.
 
 Customer apps must define an Ablo schema. The schema is the contract between
-the SDK, agents, realtime subscriptions, and your database. Use `defineSchema`,
-`model`, and Zod the same way a Prisma project starts with a `schema.prisma`.
+the SDK, agents, realtime subscriptions, and your database — for the **synced**
+models only. Use `defineSchema`, `model`, and Zod alongside your existing ORM
+schema; the Ablo schema describes the collaborative tables, your own
+Drizzle/Prisma schema keeps describing everything else (auth, billing, anything
+not synced). One database, two schemas, side by side.
 
 The Data Source path keeps database credentials inside your app. Store one Ablo
 API key in the app, and keep using your existing database configuration for your
@@ -22,8 +25,9 @@ database transaction.
 
 The Data Source contract is implemented and tested:
 
-- `dataSource(...)` verifies signed requests before your handlers run.
-- Ablo's source client calls `load`, `list`, `commit`, and `events`.
+- `dataSourceNext(...)` verifies signed requests before your adapter runs.
+- The adapter (`prismaDataSource` / `drizzleDataSource`) handles reads, commits,
+  idempotency, and the outbox events feed.
 - Source-mode commits append confirmed rows into Ablo's `sync_deltas`.
 - Source events are polled and deduped by event id.
 - SDK-origin outbox echoes are filtered by `clientTxId`.
@@ -63,9 +67,14 @@ connection to Postgres and provision tables for the models you declare. It uses
 a server-only `DATABASE_URL`.
 
 ```bash
-npx ablo migrate            # create your schema's tables in DATABASE_URL
+npx ablo migrate            # provision your synced models + ablo_outbox/ablo_idempotency in DATABASE_URL
 npx ablo migrate --dry-run  # preview the exact SQL first
 ```
+
+`ablo migrate` only provisions the models in your Ablo schema plus the adapter's
+`ablo_outbox` / `ablo_idempotency` tables. It never touches your other tables —
+auth, billing, anything outside the Ablo schema stays owned by your own ORM
+migrations.
 
 See the [CLI](/cli) for the full migrate flow and Zod-to-Postgres type mapping.
 
@@ -124,7 +133,7 @@ When you add a Data Source, the integration has:
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | Data Source endpoint | The public HTTPS endpoint in your app that Ablo calls.                                                                 |
 | API key              | Stored in your app as `ABLO_API_KEY`; used by the SDK and the Data Source endpoint.                                    |
-| External-write feed  | Optional `events` handler on the same Data Source endpoint.                                                            |
+| External-write feed  | The adapter's `ablo_outbox` table, served as the events feed Ablo polls.                                               |
 | Status               | Last successful request, last error, and delivery attempts. Hosted status UI is planned with per-project registration. |
 
 The shape is the same as a production webhook integration:
@@ -137,80 +146,38 @@ The shape is the same as a production webhook integration:
 
 ## Route
 
+Wire your ORM through an adapter. The adapter knows how to read rows, run the
+commit transaction, dedupe by `clientTxId` (idempotency), and serve the outbox
+events feed — so the route is a one-liner:
+
 ```ts
 // app/api/ablo/source/route.ts
-import { dataSource } from '@abloatai/ablo';
+import { dataSourceNext } from '@abloatai/ablo/source/next';
+import { prismaDataSource } from '@abloatai/ablo/source';
 import { schema } from '@/ablo.schema';
-import { db } from '@/db';
+import { prisma } from '@/db';
 
-export const POST = dataSource({
+export const runtime = 'nodejs';
+
+export const { POST } = dataSourceNext({
   schema,
-  apiKey: process.env.ABLO_API_KEY,
-
-  authorize() {
-    return { db };
-  },
-
-  async commit({ operations, clientTxId, context }) {
-    return context.auth.db.transaction(async (tx) => {
-      if (clientTxId) {
-        const cached = await tx.abloIdempotency.findUnique({
-          where: { clientTxId },
-        });
-        if (cached) return cached.response;
-      }
-
-      // applyOperations writes app rows and one outbox row per change
-      // in this same transaction.
-      const response = {
-        rows: await applyOperations(tx, operations, clientTxId),
-      };
-
-      if (clientTxId) {
-        await tx.abloIdempotency.create({
-          data: { clientTxId, response },
-        });
-      }
-
-      return response;
-    });
-  },
-
-  async events({ cursor, limit, context }) {
-    const page = await context.auth.db.abloOutbox.findMany({
-      where: cursor ? { id: { gt: cursor } } : undefined,
-      orderBy: { id: 'asc' },
-      take: limit ?? 100,
-    });
-
-    return {
-      events: page.map((row) => ({
-        id: row.id,
-        model: row.model,
-        entityId: row.entityId,
-        type: row.type,
-        data: row.data,
-        organizationId: row.organizationId,
-        clientTxId: row.clientTxId,
-        occurredAt: row.createdAt.getTime(),
-      })),
-      nextCursor: page.at(-1)?.id,
-    };
-  },
-
-  tasks: {
-    async load({ id, context }) {
-      return context.auth.db.task.findUnique({ where: { id } });
-    },
-
-    async list({ query, context }) {
-      return context.auth.db.task.findMany({
-        take: query.limit ?? 100,
-      });
-    },
-  },
+  apiKey: process.env.ABLO_API_KEY!,
+  adapter: prismaDataSource(prisma, schema),
 });
 ```
+
+On Drizzle, swap one line — the adapter takes the Drizzle db and your Ablo
+`schema` (not your table objects):
+
+```ts
+import { drizzleDataSource } from '@abloatai/ablo/source/drizzle';
+// ...
+  adapter: drizzleDataSource(db, schema),
+```
+
+The adapter only touches the synced models named in your Ablo `schema`. The rest
+of your database — auth, billing, any non-synced tables — stays owned by your
+own ORM schema and migrations.
 
 Your app code still writes through the normal model API:
 
@@ -267,36 +234,29 @@ events.
 
 ## External Writes
 
-If your app changes data outside Ablo, return those changes from an `events`
-handler so connected humans and agents stay current:
+If your app changes data outside Ablo — old endpoints, cron jobs, admin tools,
+imports — write a row into the adapter's `ablo_outbox` table in the same
+transaction as the change. The adapter serves those rows as the events feed Ablo
+polls, so connected humans and agents stay current:
 
 ```ts
-export const POST = dataSource({
-  schema,
-  apiKey: process.env.ABLO_API_KEY,
-
-  async events({ cursor, limit, context }) {
-    const page = await context.auth.db.outbox.after(cursor, { limit });
-
-    return {
-      events: page.rows.map((row) => ({
-        id: row.id,
-        model: row.model,
-        entityId: row.entityId,
-        type: row.type,
-        data: row.data,
-        organizationId: row.organizationId,
-        clientTxId: row.clientTxId,
-        occurredAt: row.createdAt.getTime(),
-      })),
-      nextCursor: page.nextCursor,
-    };
+// inside your own (non-Ablo) write transaction
+await tx.abloOutbox.create({
+  data: {
+    model: 'tasks',
+    entityId: task.id,
+    type: 'UPDATE',
+    data: task,
+    organizationId: task.organizationId,
+    // include the originating clientTxId if this change came from an Ablo commit
   },
 });
 ```
 
 `clientTxId` lets Ablo drop SDK echoes that already produced a realtime update.
-Events without `clientTxId` are treated as external writes.
+Outbox rows without `clientTxId` are treated as external writes. The
+`ablo_outbox` and `ablo_idempotency` tables are provisioned by `ablo migrate`
+(or the adapter's own setup) — they live alongside your application tables.
 
 ## Production Checklist
 

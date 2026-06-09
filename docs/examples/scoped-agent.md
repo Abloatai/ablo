@@ -46,26 +46,53 @@ export const schema = defineSchema(
 ## 2. Dispatch — narrow the agent to the deck it's working on
 
 An agent can never reach more than the user who triggered it — that's the upper
-limit. From there you narrow it to a single deck with `scope`. You pass the
-**model and id** — `{ decks: deckId }`, never a `deck:<id>` string; the engine
-builds the group from the `decks` model's `scope`.
+limit. From there you narrow it to a single deck by minting the agent's session
+against **just that deck's sync group**. You build the group from the **model
+kind and id** with the typed `syncGroup` helper — `syncGroup('deck', deckId)`,
+never a hand-assembled `deck:<id>` string — where `'deck'` is the kind declared
+by the `decks` model's `scope`.
+
+Mint the scoped session on your backend (it holds the `sk_` key; the browser
+never does), then hand the short-lived token to the browser client:
+
+```ts
+// server — mints a scoped agent session for one deck
+import Ablo from '@abloatai/ablo';
+import { syncGroup } from '@abloatai/ablo/schema';
+import { schema } from './schema';
+
+const server = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+
+export async function mintDeckAgentSession(deckId: string, agentId: string) {
+  const { token } = await server.sessions.create({
+    agent: { id: agentId },
+    can: { slides: ['read', 'update'] }, // operation allowlist for this run
+    syncGroups: [syncGroup('deck', deckId)], // narrowed to just this deck
+  });
+  return token;
+}
+```
 
 ```tsx
+// client — the browser client carries only the scoped token.
+import Ablo from '@abloatai/ablo';
 import { AbloProvider } from '@abloatai/ablo/react';
+import { schema } from './schema';
+
+const ablo = Ablo({
+  schema,
+  getToken: async () => mintDeckAgentSession(deckId, agentId),
+});
 
 // The agent run is mounted on behalf of its triggering user.
-<AbloProvider
-  schema={schema}
-  userId={triggeringUser.id}   // ceiling: can't exceed this user's reach
-  scope={{ decks: deckId }}    // floor: narrowed to just this deck → deck:<deckId>
->
+<AbloProvider client={ablo} userId={triggeringUser.id}>
   {children}
 </AbloProvider>
 ```
 
-`scope` requests, it never grants: at connect the server intersects the groups
-you ask for with the groups the identity is actually allowed, so the agent can
-never reach a deck its triggering user couldn't.
+`syncGroups` requests, it never grants: at connect the server intersects the
+groups the session asks for with the groups the identity is actually allowed,
+so the agent can never reach a deck its triggering user couldn't.
 
 ## 3. Write — it fans out to everyone on that deck
 

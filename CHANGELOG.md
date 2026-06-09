@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.9.2
+
+### Patch Changes
+
+- Developer-onboarding overhaul so an LLM or a person gets a working integration on the first try.
+  - **`ablo init` scaffolds a project that builds and is current-API.** The Next.js scaffold now ships `app/providers.tsx` + an `app/api/ablo-session` route, uses `useAblo` (the removed `withSync` is gone), object-param verbs, and never bundles your `sk_` key into the browser. The webhook receiver moved off the `[...all]` catch-all.
+  - **Agent docs are accurate and ship.** `AGENTS.md`, `llms.txt`, and `llms-full.txt` are on the 0.9.x API (object-param `create`/`update`/`delete`/`retrieve`, disposable `await using claim`, `AbloProvider client` prop), lead with `ablo init`, and `AGENTS.md` now ships in the package.
+  - **`ablo push` is self-documenting.** Writing to a model the server hasn't seen now fails with an error that tells you to run `ablo push` (the `server_execute_unknown_model` / `unknown_model` messages), instead of a cryptic "unknown model."
+  - **`intents` is deprecated in favor of `claim`** everywhere the docs and the MCP scaffold/prompts teach or generate coordination; the public `ablo.intents` accessor is marked `@internal`.
+  - Docs say Node 24+, and the `drizzle-orm` peer floor is `>=0.44`.
+
+- a88747a: Remove the `turn` primitive and the agent-work `tasks` resource from the client surface — the SDK is now purely `ablo.<model>` + `claim`.
+
+  **Breaking**
+  - `engine.beginTurn()`, the `Turn` handle interface, and the `Ablo.Turn` type are removed. `AbloApi.beginTurn` and the HTTP client's `beginTurn` are gone too.
+  - `CommitCreateOptions.causedByTaskId` is removed. (Lineage is no longer stamped from the client.)
+  - The engine no longer exposes a `protocol` accessor or a public `tasks` work-unit resource. `ablo.tasks` is, and always was, the schema `tasks` model proxy.
+  - The **`agent().run()` helper and the low-level agent/task type family are removed**: `AbloApi.agent(id, options)` and `AbloApi.tasks` (the `TaskResource`), plus the exported types `Agent`, `AgentOptions`, `AgentRunOptions`, `AgentRunResult`/`Done`/`Failed`/`Cancelled`, `AgentRunStatus`, `AgentRunContext`, `AgentModelClient`, `AgentModelReadOptions`, `AgentModelMutationOptions`, `AgentIntentOptions`, `AgentIntentInput`, `Task`, `TaskResource`, `TaskCreateOptions`, `TaskCloseOptions`, `TaskCloseResult` (and the `Ablo.*` namespace aliases for all of them). The `Ablo.Auth.Agent` principal constructor and the schema-backed `tasks` model are unaffected.
+
+  **Why**
+
+  `turn`/`agent_tasks` was a second coordination-and-attribution mechanism living alongside `claim`. It is redundant on the client:
+  - `claim` already serializes writers **and** carries the causal link — its `intent` id rides on every guarded write.
+  - The server stamps `actor` / `onBehalfOf` / `capabilityId` onto each delta from the auth context.
+  - Per-run token/cost is recorded in Langfuse, not the `agent_tasks` table.
+
+  So the only thing the client lost is the audit pane's "show everything this exact prompt produced" filter, which keyed off `caused_by_task_id`; new writes leave that column null.
+
+  **Migration**
+
+  Agents stop opening/closing tasks — just issue `ablo.<model>` writes (schema-backed) or `ablo.commits.create(...)` (schema-less) under a `claim`. Replace `Ablo({ apiKey }).agent(id, opts).run(prompt, handler)` with: mint a scoped credential via `sessions.create({ agent })`, then `claim` the row and `update` / `commits.create`.
+
+  The **server** `agent_tasks` table, the `caused_by_task_id` delta column, the `/api/sync/commit` wire field, and the `agent_actions_log` compliance hash-chain remain in place but **dormant** (client writes leave the field null) — they are load-bearing for the tamper-evident audit chain and historical-row audit JOINs, so they are intentionally NOT dropped. The dead `/v1/tasks` + `/api/agent/turn` route handlers ARE removed (zero live callers).
+
 ## 0.9.1
 
 ### Patch Changes
