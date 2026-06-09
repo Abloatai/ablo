@@ -79,6 +79,14 @@ export interface UndoScopeOptions {
  * Consumers call `record(entry)` after each mutator; `undo()` / `redo()` to
  * traverse the stacks.
  */
+/**
+ * How long a marked replay-echo stays armed before it's pruned. The real echo
+ * arrives within a couple of IndexedDB round-trips (tens of ms); this is a
+ * generous safety ceiling so a never-arriving echo (e.g. the commit was skipped
+ * offline) can't suppress a genuine later edit to the same row indefinitely.
+ */
+const REPLAY_ECHO_TTL_MS = 5000;
+
 export class UndoScope<S extends Schema> {
   private undoStack: UndoEntry[] = [];
   private redoStack: UndoEntry[] = [];
@@ -145,6 +153,23 @@ export class UndoScope<S extends Schema> {
    */
   private group: { label?: string; ops: Array<{ forward: InverseOp; inverse: InverseOp | null }> } | null =
     null;
+  /**
+   * ASYNC replay-echo suppression, keyed by `${modelKey}:${id}`.
+   *
+   * The synchronous {@link replaying} flag only catches echoes delivered INLINE
+   * during `applyOps`. The real engine doesn't emit `transaction:created`
+   * synchronously: `SyncClient` defers the commit behind `scheduleSync()` +
+   * `await persistMutationQueue()` (an IndexedDB write), so a replayed write's
+   * echo lands on the stream AFTER `undo()`/`redo()` has already reset
+   * `replaying` and pushed the entry. That late echo would be recorded as a
+   * NEW edit — and `record()` clears the redo stack, so every undo silently
+   * destroyed its own redo. We mark the (modelKey,id) of every op we're about
+   * to replay here (synchronously, before the write), and consume one mark when
+   * the matching mutation arrives — independent of WHEN it arrives. Entries
+   * carry a TTL so a never-arriving echo (offline: the commit is skipped) can't
+   * leak and wrongly suppress a much-later genuine edit to the same row.
+   */
+  private readonly pendingReplayEchoes = new Map<string, { count: number; expiresAt: number }>();
 
   constructor(
     private readonly schema: S,
@@ -208,6 +233,74 @@ export class UndoScope<S extends Schema> {
     this.record({ label: label ?? g.label, inverses, forwards });
   }
 
+  /** Every `${modelKey}:${id}` a set of ops will touch (all op kinds). */
+  private *replayEchoKeys(ops: InverseOp[]): Iterable<string> {
+    for (const op of ops) {
+      switch (op.kind) {
+        case 'create': {
+          const id = op.data.id;
+          if (typeof id === 'string') yield `${op.modelKey}:${id}`;
+          break;
+        }
+        case 'update':
+          yield `${op.modelKey}:${op.patch.id}`;
+          break;
+        case 'delete':
+          yield `${op.modelKey}:${op.id}`;
+          break;
+        case 'createMany':
+          for (const d of op.data) {
+            const id = d.id;
+            if (typeof id === 'string') yield `${op.modelKey}:${id}`;
+          }
+          break;
+        case 'updateMany':
+          for (const p of op.patches) yield `${op.modelKey}:${p.id}`;
+          break;
+        case 'deleteMany':
+          for (const id of op.ids) yield `${op.modelKey}:${id}`;
+          break;
+      }
+    }
+  }
+
+  /**
+   * Arm async-echo suppression for the rows a replay is about to write. Called
+   * synchronously, before `applyOps`, so the marks exist no matter how long the
+   * engine takes to surface the echo on the stream. See {@link pendingReplayEchoes}.
+   */
+  private markReplayEchoes(ops: InverseOp[]): void {
+    const expiresAt = Date.now() + REPLAY_ECHO_TTL_MS;
+    for (const key of this.replayEchoKeys(ops)) {
+      const existing = this.pendingReplayEchoes.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.expiresAt = expiresAt;
+      } else {
+        this.pendingReplayEchoes.set(key, { count: 1, expiresAt });
+      }
+    }
+  }
+
+  /**
+   * If `${schemaKey}:${modelId}` has an armed echo mark, consume one and report
+   * that this mutation is our own replay echo (caller drops it). Prunes expired
+   * marks opportunistically so a skipped/never-arriving echo can't leak.
+   */
+  private consumeReplayEcho(schemaKey: string, modelId: string): boolean {
+    if (this.pendingReplayEchoes.size === 0) return false;
+    const now = Date.now();
+    for (const [k, v] of this.pendingReplayEchoes) {
+      if (v.expiresAt <= now) this.pendingReplayEchoes.delete(k);
+    }
+    const key = `${schemaKey}:${modelId}`;
+    const pending = this.pendingReplayEchoes.get(key);
+    if (!pending) return false;
+    pending.count -= 1;
+    if (pending.count <= 0) this.pendingReplayEchoes.delete(key);
+    return true;
+  }
+
   /** Resolve a stream mutation's registered name to its schema key, or null. */
   private resolveSchemaKey(modelName: string): string | null {
     return (
@@ -228,6 +321,12 @@ export class UndoScope<S extends Schema> {
     if (this.replaying) return;
     const schemaKey = this.resolveSchemaKey(m.modelName);
     if (!schemaKey) return;
+    // Drop the ASYNC echo of our own replayed writes. The engine surfaces a
+    // replay's `transaction:created` only after an IndexedDB-gated commit, i.e.
+    // after `replaying` has already reset — so the synchronous flag above misses
+    // it. The (modelKey,id) marks armed in `markReplayEchoes` catch it whenever
+    // it lands, which is what stops every undo from wiping its own redo stack.
+    if (this.consumeReplayEcho(schemaKey, m.modelId)) return;
     if (this.tracksModel && !this.tracksModel(schemaKey)) return;
 
     const ops = buildUndoOps(m, schemaKey);
@@ -396,7 +495,10 @@ export class UndoScope<S extends Schema> {
       const tx = createTransaction(this.schema, this.store, this.organizationId);
       const ops = resolveOps(entry.inverses, entry.forwards, this.store, this.conflictPolicy);
       // Suppress our own stream listener so replayed writes don't record as
-      // new undo entries. Cleared in `finally` even if a replay op throws.
+      // new undo entries. `replaying` covers inline echoes; `markReplayEchoes`
+      // covers the engine's async (IDB-gated) echo that lands after this method
+      // returns. Cleared in `finally` even if a replay op throws.
+      this.markReplayEchoes(ops);
       this.replaying = true;
       try {
         await applyOps(tx, ops);
@@ -428,6 +530,8 @@ export class UndoScope<S extends Schema> {
       if (!entry) return;
       const tx = createTransaction(this.schema, this.store, this.organizationId);
       const ops = resolveOps(entry.forwards, entry.inverses, this.store, this.conflictPolicy);
+      // See undo(): arm async-echo suppression before the replayed writes.
+      this.markReplayEchoes(ops);
       this.replaying = true;
       try {
         await applyOps(tx, ops);
@@ -451,6 +555,7 @@ export class UndoScope<S extends Schema> {
     this.undoStack = [];
     this.redoStack = [];
     this.batch = [];
+    this.pendingReplayEchoes.clear();
     this.emitChange();
   }
 
@@ -469,6 +574,7 @@ export class UndoScope<S extends Schema> {
     this.recordListeners.clear();
     this.changeListeners.clear();
     this.batch = [];
+    this.pendingReplayEchoes.clear();
   }
 }
 
