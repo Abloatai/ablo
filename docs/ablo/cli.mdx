@@ -40,9 +40,9 @@ agent then uses). One-shot commands (`status`, `push`, `pull`, `check`,
 `generate`) are safe as-is.
 </Warning>
 
-The hosted commands below (`ablo login`, `ablo dev`, `ablo push`) target
-**Ablo-managed Postgres**, which is a [roadmap](/roadmap) offering. Use a
-[Data Source](/data-sources) for existing app tables, or `ablo migrate` when you
+The hosted commands below (`ablo login`, `ablo dev`, `ablo push`) authenticate
+and sync your Ablo schema to the hosted control plane. Use a
+[Data Source](/data-sources) for your app tables, or `ablo migrate` when you
 opt into the direct Postgres connector.
 
 ## Authenticate
@@ -182,9 +182,8 @@ Postgres connector and want Ablo to provision your synced models in
 `DATABASE_URL`. It only creates the tables for the models in your Ablo schema,
 plus the adapter's `ablo_outbox` / `ablo_idempotency` tables — your other tables
 are left alone and stay owned by your own migration tool (drizzle-kit, prisma
-migrate). `push` (and `dev`) run the hosted path, where the server applies to
-Ablo-managed Postgres and version-gates connecting clients; that hosted storage
-is a [roadmap](/roadmap) offering.
+migrate). `push` (and `dev`) run the hosted path: the server registers your
+schema version and version-gates connecting clients.
 
 ```bash
 ablo migrate --dry-run            # preview the exact SQL

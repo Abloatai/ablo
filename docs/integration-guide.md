@@ -42,14 +42,11 @@ schema -> ablo.<model>.list(...) -> ablo.<model>.update(...)
 Commits and receipts exist under the hood. Most apps do not create protocol
 objects by hand.
 
-## Pick The Backing Mode
+## Your Database
 
-Every schema model has a backing store. The SDK call shape stays the same.
-
-| Mode         | Rows live in      | Use when                                                                         |
-| ------------ | ----------------- | -------------------------------------------------------------------------------- |
-| Ablo-managed | Ablo              | New collaborative or agent-written state can live in Ablo.                       |
-| Data Source  | Your app database | You already have tables, service logic, and API endpoints that remain canonical. |
+Every schema model is backed by **your own database**. You expose a signed Data
+Source endpoint; Ablo coordinates each write and your app commits it to your
+Postgres. The SDK call shape is the same everywhere.
 
 Do not pass a database URL to `Ablo(...)`. Application and agent code use
 `ABLO_API_KEY`. If your database stays canonical, expose a signed Data Source

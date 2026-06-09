@@ -83,7 +83,7 @@ Per-client walkthroughs:
 | `get_recipe` | Returns the full markdown of one doc by name (e.g. `readme`, `quickstart`, `schema-contract`, `integration-guide`, `api`, `guarantees`). |
 | `get_api_surface` | Returns the structured export list for an SDK subpath (`@abloatai/ablo`, `./react`, `./schema`, `./testing`, …). Call with no argument to list every subpath. |
 | `validate_schema` | Lints `defineSchema` source against the DSL rules (camelCase fields, lowercase model keys, `scope`/`grants` sync groups, valid `load` strategies, no legacy builders) and returns a structured issue list. Runs no code. |
-| `scaffold_app` | Emits a starter file tree for a schema-first integration — `next`, `node-agent`, or `plain`, with `managed` or `data-source` storage. |
+| `scaffold_app` | Emits a starter file tree for a schema-first integration — `next`, `node-agent`, or `plain`, with a `data-source` (your own database) endpoint. |
 
 #### Resources
 

@@ -43,7 +43,6 @@ integration boundary stays the same: `ABLO_API_KEY` plus the public endpoint URL
 | ------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | Data Source               | Your app database | Sends a signed commit request to your route; your app writes its DB and returns canonical rows.        | Existing app tables, regulated data, or service logic must stay source of truth. |
 | Direct Postgres connector | Your Postgres     | Ablo applies the write to provisioned tables, returns the confirmed row, and fans out realtime deltas. | You explicitly want Ablo to own the database connection and provisioning flow.   |
-| Ablo-managed              | Ablo              | —                                                                                                      | [Roadmap](/roadmap). Zero-database hosted storage, not yet available.            |
 
 Both available modes use the same SDK call:
 
@@ -109,10 +108,6 @@ already exports it needs nothing extra.
   (`byo_role_cannot_enforce_rls`; legacy wire-code prefix, Direct Postgres connector behavior). A
   restricted role is what lets the database — not just app code — guarantee isolation.
 </Note>
-
-An Ablo-managed store — where Ablo hosts the rows with no database of your own,
-the way Stripe stores `Customer` and `PaymentIntent` objects — is a
-[roadmap](/roadmap) item, not the current path.
 
 ## When To Use A Data Source
 

@@ -43,7 +43,7 @@ Three things stay true no matter how you use Ablo:
 - [Schema Contract](./schema-contract.md) — One schema becomes typed model clients, React reads, agent writes, Data Source shape, and schema push.
 - [CLI & Migrations](./cli.md) — `init` / `migrate` / `push` / `generate`, the shared Zod→Postgres type map, and structured migration errors.
 - [Identity & Sync Groups](./identity.md) — Use your own authentication; tell Ablo who's connecting and how org / team / user map to sync-group scope.
-- [Integration Guide](./integration-guide.md) — Choose Ablo-managed state, Data Source, React, multiplayer, and agent patterns.
+- [Integration Guide](./integration-guide.md) — Connect your database via Data Source, plus React, multiplayer, and agent patterns.
 - [Guarantees](./guarantees.md) — What confirmed writes, stale checks, and claims guarantee.
 - [Interaction Model](./interaction-model.md) — The schema, claim, update, confirmation loop.
 - [API Reference](./api.md) — Model-by-model method shape.
@@ -57,7 +57,7 @@ Three things stay true no matter how you use Ablo:
 | Plane | Primitives | Purpose |
 |---|---|---|
 | State | `Schema`, `Model`, `Claim`, `Receipt` | The product path. Load, coordinate, write, confirm. |
-| Storage | `Managed State`, `Data Source` | Ablo stores declared models by default; existing app tables use a signed Data Source. |
+| Storage | `Data Source` | Your rows live in your own database behind a signed Data Source endpoint. |
 
 ## Use cases
 

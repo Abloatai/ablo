@@ -1,86 +1,114 @@
 # Quickstart
 
-Start building with Ablo in two steps: install, then declare one model and write
-through its generated client.
+Build with Ablo on **your own database**. You declare a small Ablo schema for the
+models humans and agents edit together, point Ablo at your Postgres through a Data
+Source adapter, and coordinate every write through `ablo.<model>`. You own the
+`DATABASE_URL` — Ablo never connects to your database, it only calls an endpoint
+you expose.
 
-If you already have a backend and database, still start here. The SDK call shape
-is the same; [Integration Guide](./integration-guide.md) explains when to use
-Ablo-managed state versus a Data Source that calls your existing API service.
-
-## 1. Install and set a sandbox key
+## 1. Install and get a key
 
 ```bash
 npm install @abloatai/ablo
+```
+
+Sign up and copy a sandbox key from your org dashboard (or run `npx ablo login`),
+then keep it in a trusted server runtime — never the browser:
+
+```bash
 export ABLO_API_KEY=sk_test_...
 ```
 
-`ABLO_API_KEY` is for trusted server runtimes. Browser apps should use the React
-provider with a scoped session route, not a bundled API key.
+Every SDK and CLI call needs a key (`sk_test_*` for sandbox, `sk_live_*` for
+production). There is no keyless mode; the public `/sandbox` page is a hosted demo,
+not your app.
 
-## 2. Declare schema and write state
+## 2. Declare your Ablo schema
 
-Your schema is the contract. It generates `ablo.<model>` methods for app code,
-server actions, agents, React reads, and Data Source requests.
+The schema is the contract — it generates `ablo.<model>` methods for app code,
+server actions, agents, and React reads. Declare **only the synced models** Ablo
+coordinates; your auth, billing, and other tables stay in your own Drizzle schema,
+owned by your own migrations.
 
 ```ts
-import Ablo from '@abloatai/ablo';
+// ablo/schema.ts
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
-const schema = defineSchema({
+export const schema = defineSchema({
   weatherReports: model({
     location: z.string(),
     status: z.enum(['pending', 'ready']),
     forecast: z.string().optional(),
   }),
 });
+```
 
-export const ablo = Ablo({
+## 3. Point Ablo at your database (Drizzle)
+
+You own the connection. Keep `DATABASE_URL` in your app environment and expose one
+endpoint that hands Ablo a `drizzleDataSource` adapter built from your Drizzle `db`
+and the Ablo `schema`. Ablo signs a commit request; the adapter runs it in one
+transaction against your Postgres and returns the canonical row.
+
+```bash
+# .env — both live in YOUR app, never inside Ablo(...)
+DATABASE_URL=postgres://...
+ABLO_API_KEY=sk_test_...
+```
+
+```ts
+// app/api/ablo/source/route.ts
+import { dataSourceNext } from '@abloatai/ablo/source/next';
+import { drizzleDataSource } from '@abloatai/ablo/source/drizzle';
+import { schema } from '@/ablo/schema';
+import { db } from '@/db';
+
+export const runtime = 'nodejs'; // the route touches your database
+
+export const { POST } = dataSourceNext({
   schema,
-  apiKey: process.env.ABLO_API_KEY,
+  apiKey: process.env.ABLO_API_KEY!,
+  adapter: drizzleDataSource(db, schema),
 });
+```
+
+Do not pass a database URL to `Ablo(...)` — the connection belongs to your app.
+(On Prisma? Swap one line: `adapter: prismaDataSource(prisma, schema)`.)
+
+## 4. Provision your tables, then push the schema
+
+```bash
+npx ablo migrate   # creates your synced-model tables + ablo_outbox / ablo_idempotency
+                   # in YOUR database — your other tables are left untouched
+npx ablo push      # uploads the schema to Ablo (REQUIRED before any write; or `ablo dev` to watch)
+```
+
+Skipping `push` makes every write to a new or changed model fail with
+`server_execute_unknown_model` — that error literally means "run `npx ablo push`."
+
+## 5. Write through the model
+
+The client takes only your `ABLO_API_KEY`; the rows land in your Postgres.
+
+```ts
+// ablo/client.ts
+import Ablo from '@abloatai/ablo';
+import { schema } from './schema';
+
+export const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 await ablo.ready();
 
 const created = await ablo.weatherReports.create({
-  data: {
-    location: 'Stockholm',
-    status: 'pending',
-  },
+  data: { location: 'Stockholm', status: 'pending' },
 });
 
 const updated = await ablo.weatherReports.update({
   id: created.id,
-  data: {
-    status: 'ready',
-    forecast: 'Light rain, 13C',
-  },
+  data: { status: 'ready', forecast: 'Light rain, 13C' },
 });
 
-console.log({ id: updated.id, status: updated.status });
+console.log({ id: updated.id, status: updated.status }); // { id: '...', status: 'ready' }
 ```
-
-Expected output:
-
-```txt
-{ id: '...', status: 'ready' }
-```
-
-## Push the schema, then run it
-
-The server keeps its own copy of the schema, so push it once before any write
-(or keep `npx ablo dev` running to push on every save):
-
-```bash
-npx ablo push
-```
-
-Then run the file above however you run TypeScript in your project, e.g.:
-
-```bash
-ABLO_API_KEY=sk_test_... npx tsx ablo/quickstart.ts
-```
-
-Writing to a model you have not pushed fails with `server_execute_unknown_model` —
-that error means "run `npx ablo push`".
 
 ## Add coordination for slow work
 

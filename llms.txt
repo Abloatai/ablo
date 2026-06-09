@@ -50,7 +50,7 @@ hosted schema push, and schema-version gating. Do not invent a parallel
 string-keyed write path for rows that belong to a schema model.
 
 For full integrations, use `integration-guide` as the canonical doc. It covers
-the same model API across Ablo-managed state, Data Source-backed app databases,
+the same model API across your own Data Source-backed app databases,
 React selectors, multiplayer, and future agent workers.
 
 Reads come in two flavors, and you pick by whether you can wait. `retrieve({ id })`
@@ -116,23 +116,25 @@ A schema is model fields and relations. Advanced schema helpers such as `mutable
 
 Do not add `databaseURL` to `Ablo(...)`. Application and agent code use `ABLO_API_KEY`.
 
-Every schema model has a backing store. By default, Ablo stores rows for declared models, so `ablo.<model>.create/update/delete` write to Ablo-managed state. If the customer database is canonical, expose a Data Source endpoint. With Prisma or Drizzle this is ONE line — pass an ORM `adapter` and it owns the transaction, idempotency, and outbox (no hand-written `commit`/`events`):
+Every schema model is backed by a database, and the default is YOUR OWN. Keep your rows in your Postgres and expose a Data Source endpoint that hands Ablo an ORM `adapter` (Drizzle is the default; Prisma is also supported) — it owns the transaction, exactly-once idempotency, and outbox in ONE pass (no hand-written `commit`/`events`). Your `DATABASE_URL` lives in your app, never in `Ablo(...)`; run `npx ablo migrate` to provision the synced-model tables in your DB.
 
 ```ts
 // app/api/ablo/source/route.ts
 import { dataSourceNext } from '@abloatai/ablo/source/next';
-import { prismaDataSource } from '@abloatai/ablo/source';
+import { drizzleDataSource } from '@abloatai/ablo/source/drizzle';
 import { schema } from '@/ablo/schema';
-import { prisma } from '@/lib/prisma';
+import { db } from '@/db';
+
+export const runtime = 'nodejs'; // the route touches your database
 
 export const { POST } = dataSourceNext({
   schema,
   apiKey: process.env.ABLO_API_KEY!,
-  adapter: prismaDataSource(prisma, schema), // or drizzleDataSource(db, schema)
+  adapter: drizzleDataSource(db, schema), // or prismaDataSource(prisma, schema)
 });
 ```
 
-`npx ablo init` generates this file for you (see CLI below). Customer-owned app database credentials stay private — Ablo only calls the endpoint.
+`npx ablo init` defaults to this — it scaffolds the endpoint and the `DATABASE_URL` for you (see CLI below). Your app database credentials stay private — Ablo only calls the endpoint.
 
 ## Sandboxes
 

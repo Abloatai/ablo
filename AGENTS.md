@@ -8,7 +8,7 @@ Claims don't lock. If another writer holds the row, `claim` waits for them and r
 
 Don't hand-write the integration. Run the CLI; it generates the current-API schema, client, Data Source endpoint, and (for Next.js) the browser provider + session route:
 
-- **Scaffold:** `npx ablo init --yes` — flag-driven, never prompts. Override defaults with `--framework <nextjs|vite|remix|vanilla>`, `--auth <apikey|…>`, `--storage <datasource|managed>`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login`. (Plain `ablo init` needs a TTY and will **HANG** in an agent/CI run — always pass `--yes`.)
+- **Scaffold:** `npx ablo init --yes` — flag-driven, never prompts. Override defaults with `--framework <nextjs|vite|remix|vanilla>`, `--auth <apikey|…>`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login`. (Plain `ablo init` needs a TTY and will **HANG** in an agent/CI run — always pass `--yes`.)
 - **Auth:** set `ABLO_API_KEY` in the environment. Do **NOT** run `ablo login` — it opens a browser device flow and blocks an agent.
 - **Provision your DB (Data Source mode):** `npx ablo migrate` creates the tables for your Ablo models plus the adapter's bookkeeping tables (`ablo_outbox`, `ablo_idempotency`). It does **not** touch your other tables — keep your own migrations (drizzle-kit / prisma migrate) for auth and anything not in the Ablo schema.
 - **Adopt an existing DB schema:** `npx ablo pull prisma [path]` / `pull drizzle <module>` (lossless) or `pull` (live DB, lossy). Writes `ablo/schema.ts`.

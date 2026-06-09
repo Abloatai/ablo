@@ -31,7 +31,6 @@ Every schema model has a backing store. The SDK call shape stays the same.
 | Data Source | Your app database | Your existing service writes the database and stays source of truth. This is the default existing-backend path. |
 | Direct Postgres connector | Your Postgres | Optional convenience connector. You explicitly let Ablo open a database connection and provision tables. |
 | Schema-less resource API | Custom runtime | A server worker, MCP route, or migration script intentionally cannot import the app schema. |
-| Ablo-managed | Ablo | [Roadmap](/roadmap). Zero-database hosted storage, not yet available. |
 
 For an existing backend, expose a signed Data Source endpoint and keep
 `DATABASE_URL` inside your app. Application and agent code authenticate with

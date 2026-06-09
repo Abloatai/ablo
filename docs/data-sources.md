@@ -1,14 +1,10 @@
 # Connect Your Database
 
-By default, Ablo stores the rows for the models you define, so you don't need a
-database to get started. But if you already have your own application database
-and want it to stay the source of truth, you can attach it as a Data Source —
-then Ablo coordinates each write and calls your app to commit it, instead of
-storing the data itself.
-
-That default makes Ablo the managed state store for your models, the same way
-Stripe stores `Customer` and `PaymentIntent` objects that you create through
-Stripe's API.
+The default integration keeps your rows in **your own database**. You define an
+Ablo schema for the models humans and agents edit together, expose one Data Source
+endpoint, and Ablo coordinates each write and calls your app to commit it to your
+Postgres. Ablo never stores the data and never sees your `DATABASE_URL` — it only
+calls the endpoint you expose.
 
 Either way, you define an Ablo schema with `defineSchema`, `model`, and Zod. The
 Ablo schema describes **only your synced, collaborative models** — the rows Ablo
@@ -54,10 +50,9 @@ ABLO_API_KEY=sk_live_...
 
 | Mode | Where rows live | What `create/update/delete` does | Use when |
 |---|---|---|---|
-| Ablo-managed | Ablo | Writes directly to Ablo's managed state store, then returns the confirmed row and fans out realtime deltas. | New collaborative/agent state that can live in Ablo. |
-| Data Source | Your app database | Sends a signed commit request to your route; your app writes its DB and returns canonical rows. | Existing app tables, regulated data, or teams that need their DB to stay canonical. |
+| Data Source | Your own database | Sends a signed commit request to your route; your app writes its DB in one transaction and returns canonical rows. | Always — you own the data: your app tables, regulated data, anything that lives in your Postgres. |
 
-The SDK call is the same in both modes:
+The SDK call:
 
 ```ts
 await ablo.weatherReports.create({ data: { location: 'Stockholm', status: 'pending' } });
@@ -65,9 +60,7 @@ await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'read
 const report = ablo.weatherReports.get('report_stockholm');
 ```
 
-Only the backing store changes.
-
-Multiplayer behavior is the same in both modes. Writes made through
+Multiplayer behavior is built in. Writes made through
 `ablo.<model>.create/update/delete` are coordinated by Ablo, then confirmed rows
 fan out to subscribers. If something writes to your database without going
 through Ablo (a cron job, an admin tool), Ablo can't know about it
@@ -75,10 +68,10 @@ automatically. To keep everyone's screen up to date, your app reports those
 outside changes back through the outbox feed — shown below in
 [Outbox Events](#outbox-events).
 
-## When To Use A Data Source
+## Your Database Stays Canonical
 
-Use a Data Source only when your existing application database remains the
-source of truth and Ablo should coordinate writes against it.
+Your application database remains the source of truth and Ablo coordinates writes
+against it.
 
 If you are migrating an app where every button already calls a backend endpoint,
 read [Integration Guide](./integration-guide.md) first, then

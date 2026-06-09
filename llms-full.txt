@@ -22,8 +22,8 @@ Public imports:
 Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or `internal/*` as public imports. The Data Source surface — `/source`, `/source/next`, `/source/drizzle`, `/source/conformance` — IS public (it's how a customer-owned database is wired).
 
 The canonical integration doc is `integration-guide`. It explains the end-to-end
-path for schema, React selectors, Ablo-managed state, Data Source-backed app
-databases, multiplayer, and agent workers. Use it before inventing a new setup
+path for schema, React selectors, your Data Source-backed database, multiplayer,
+and agent workers. Use it before inventing a new setup
 flow.
 
 ## Production Guarantees
@@ -193,10 +193,9 @@ Do not ask customers to paste their app database URL into Ablo. If their app
 database is canonical, they expose a Data Source endpoint and keep database
 credentials inside their app.
 
-Every schema model has a backing store. In Ablo-managed mode, Ablo stores rows
-for declared models and `ablo.<model>.create/update/delete` write there. In Data
-Source mode, the same SDK methods produce a signed commit request to the
-customer route, and the customer route writes the app database.
+Every schema model is backed by the customer's own database. The SDK methods
+`ablo.<model>.create/update/delete` produce a signed commit request to the
+customer's Data Source route, and that route writes the app database.
 
 When the customer's database is canonical, expose one signed source route:
 

@@ -326,11 +326,7 @@ curl https://api.abloatai.com/v1/commits \
 
 ## Connect Your Database
 
-Every schema model has a backing store. By default, Ablo stores rows for the
-models you declare, so `ablo.weatherReports.create({ data })` and `ablo.weatherReports.update({ id, data })`
-write to Ablo-managed state.
-
-If your existing database stays the source of truth, connect it as a Data
+Every schema model is backed by **your own database**, connected as a Data
 Source: Ablo sends signed commit requests to an endpoint you host, and your app
 writes its own database. Your `DATABASE_URL` stays in your app — Ablo only ever
 sees the API key.

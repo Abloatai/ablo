@@ -88,10 +88,8 @@ the fresh row. Reads stay open; only acting on the row serializes.
 
 ## Storage boundary
 
-Every schema model needs a backing store:
-
-- Use Ablo-managed state when the row can live in Ablo.
-- Use a Data Source when your app database remains canonical.
+Every schema model is backed by your own database through a Data Source — Ablo
+coordinates each write and your app commits it to your Postgres.
 
 Do not pass a database URL to `Ablo(...)`. Trusted runtimes use `ABLO_API_KEY`.
 Browser code goes through `<AbloProvider>` or a scoped session route, never a raw
