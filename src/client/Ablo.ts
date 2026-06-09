@@ -196,7 +196,7 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * Local persistence mode. Pass `indexeddb` only when you want offline
    * queueing and a reload-surviving browser cache.
    *
-   * @default 'volatile'
+   * @default 'memory'
    */
   persistence?: AbloPersistence;
 
@@ -359,7 +359,7 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
   maxPoolSize?: number;
 
   /**
-   * Local persistence mode. Defaults to `volatile` so Ablo behaves like a
+   * Local persistence mode. Defaults to `memory` so Ablo behaves like a
    * point solution for shared state instead of silently bolting IndexedDB
    * durability onto every browser consumer.
    *
@@ -373,7 +373,7 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
 
   /**
    * @deprecated Internal/testing escape hatch. Use `persistence` in
-   * production code. `true` maps to `volatile`; `false` maps to
+   * production code. `true` maps to `memory`; `false` maps to
    * `indexeddb` in browsers.
    */
   inMemory?: boolean;
@@ -533,6 +533,7 @@ import type {
   ModelLoadOptions,
 } from './createModelProxy.js';
 import { createModelProxy } from './createModelProxy.js';
+import { assertWriteOptions } from './writeOptionsSchema.js';
 
 export type ModelOperationAction =
   | 'create'
@@ -641,6 +642,15 @@ export interface CommitCreateOptions {
   readonly idempotencyKey?: string | null;
   readonly readAt?: number | null;
   readonly onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
+  /**
+   * A claim handle from `ablo.<model>.claim({ id })` (or the HTTP claim
+   * surface). Same vocabulary as the per-model writes: the handle's
+   * snapshot watermark becomes the batch `readAt` default and `onStale`
+   * defaults to `'reject'`, so a commit that follows a claim is guarded
+   * against concurrent edits without re-stating the watermark by hand.
+   * Explicit `readAt`/`onStale` on the options win.
+   */
+  readonly claim?: ClaimHandle<Record<string, unknown>> | null;
   readonly operation?: CommitOperationInput;
   readonly operations?: readonly CommitOperationInput[];
   readonly wait?: CommitWait;
@@ -2241,6 +2251,17 @@ export function Ablo<const S extends SchemaRecord>(
 	    return intent?.id;
 	  }
 
+	  function isClaimHandleValue(
+	    value: unknown,
+	  ): value is ClaimHandle<Record<string, unknown>> {
+	    return (
+	      typeof value === 'object' &&
+	      value !== null &&
+	      (value as { object?: unknown }).object === 'claim' &&
+	      typeof (value as { claimId?: unknown }).claimId === 'string'
+	    );
+	  }
+
 	  function normalizeCommitOperation(
 	    op: CommitOperationInput,
 	    defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
@@ -2596,10 +2617,31 @@ export function Ablo<const S extends SchemaRecord>(
 	  const commits: CommitResource = {
 	    async create(commitOptions: CommitCreateOptions): Promise<CommitReceipt> {
 	      await ready();
+	      // Same runtime contract as the per-model writes — one schema.
+	      assertWriteOptions(
+	        {
+	          idempotencyKey: commitOptions.idempotencyKey,
+	          readAt: commitOptions.readAt,
+	          onStale: commitOptions.onStale,
+	          wait: commitOptions.wait,
+	          intent: commitOptions.intent,
+	        },
+	        'commits.create',
+	      );
 	      const clientTxId = createClientTxId(commitOptions.idempotencyKey);
-	      const operations = normalizeCommitOperations(commitOptions);
+	      // A claim handle supplies the batch stale-guard defaults — same
+	      // semantics as `ablo.<model>.update({ id, data, claim })`, so the
+	      // two write doors speak one claim vocabulary. Explicit options win.
+	      const claim = commitOptions.claim ?? null;
+	      const operations = normalizeCommitOperations({
+	        ...commitOptions,
+	        readAt: commitOptions.readAt ?? claim?.readAt ?? null,
+	        onStale:
+	          commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
+	      });
 	      const wait = commitOptions.wait ?? 'confirmed';
-	      const intentId = normalizeIntentId(commitOptions.intent);
+	      const intentId =
+	        normalizeIntentId(commitOptions.intent) ?? claim?.claimId;
 	      void intentId; // The current wire clears intents by entity after commit.
 
 	      // Route through the TransactionQueue's commit lane so the call
@@ -2695,6 +2737,7 @@ export function Ablo<const S extends SchemaRecord>(
 	          idempotencyKey: params.idempotencyKey,
 	          readAt: params.readAt,
 	          onStale: params.onStale,
+	          ...(isClaimHandleValue(params.claim) ? { claim: params.claim } : {}),
 	          wait: params.wait,
 	          operations: [
 	            {
@@ -2715,6 +2758,7 @@ export function Ablo<const S extends SchemaRecord>(
 	          idempotencyKey: params.idempotencyKey,
 	          readAt: params.readAt,
 	          onStale: params.onStale,
+	          ...(isClaimHandleValue(params.claim) ? { claim: params.claim } : {}),
 	          wait: params.wait,
 	          operations: [
 	            {
@@ -2735,6 +2779,7 @@ export function Ablo<const S extends SchemaRecord>(
 	          idempotencyKey: params.idempotencyKey,
 	          readAt: params.readAt,
 	          onStale: params.onStale,
+	          ...(isClaimHandleValue(params.claim) ? { claim: params.claim } : {}),
 	          wait: params.wait,
 	          operations: [
 	            {

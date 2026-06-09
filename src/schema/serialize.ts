@@ -26,6 +26,7 @@
  */
 
 import { z } from 'zod';
+import { AbloValidationError } from '../errors.js';
 import type { FieldMeta } from './field.js';
 import type { Tenancy } from './tenancy.js';
 import type { SchemaPlane } from './plane.js';
@@ -273,8 +274,9 @@ export function fromSchemaJSON(json: SchemaJSON): Schema<SchemaRecord> {
 export function parseSchema(json: string): Schema<SchemaRecord> {
   const parsed = JSON.parse(json) as SchemaJSON;
   if (parsed.v !== SCHEMA_JSON_VERSION) {
-    throw new Error(
+    throw new AbloValidationError(
       `parseSchema: unsupported schema-JSON version ${parsed.v} (expected ${SCHEMA_JSON_VERSION})`,
+      { code: 'schema_definition_invalid' },
     );
   }
   return fromSchemaJSON(parsed);

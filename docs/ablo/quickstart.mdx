@@ -2,12 +2,13 @@
 title: "Quickstart"
 ---
 
-Declare your state, expose a Data Source endpoint, read it, and make one
+Declare your state, hand Ablo your `DATABASE_URL`, read it, and make one
 protected write.
 
-This quickstart uses the primary existing-database path: a signed
-[Data Source](/data-sources). Your server writes your database. Ablo coordinates
-the realtime stream.
+**Your database is the system of record — Ablo never hosts your data.** Ablo is
+the transaction layer on top of it: the client registers your Postgres
+connection once, every write commits there behind row-level security, and the
+confirmed rows fan out live to every connected client.
 
 <Note>
 **The schema *is* the API.** Before you can read or commit anything — over the
@@ -40,12 +41,18 @@ const schema = defineSchema({
 export const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
+  databaseUrl: process.env.DATABASE_URL, // your Postgres — rows live here, never with Ablo
 });
 ```
 
 Customer apps should always pass `schema`. Treat it like Prisma's schema file:
 it is the source of truth for typed model resources, realtime subscriptions, and
 agent writes.
+
+`databaseUrl` is server-only (the SDK throws if it sees one in a browser) and is
+sent once over TLS to register the connection — it is stored sealed and never
+echoed back. Use a dedicated **non-superuser role**: Ablo enforces tenant
+isolation with row-level security and rejects superuser or `BYPASSRLS` roles.
 
 ## 3. Push Your Schema
 
@@ -77,65 +84,30 @@ table — `ablo migrate`, or your existing migration tool — so the row has
 somewhere to land.)
 </Warning>
 
-## 4. Add a Data Source Endpoint
+## 4. Provision Your Tables
 
-Keep your database credentials in your app/backend. Add one Ablo API key for
-signed Data Source requests; your existing database configuration stays where it
-already is.
-
-`npx ablo init` writes `ablo/data-source.ts` with the full idempotency/outbox
-scaffold. Mount it at `/api/ablo/source`. The adapter (here `prismaDataSource`)
-handles idempotency, the outbox, and the events feed for you — you wire it once:
-
-```ts
-// app/api/ablo/source/route.ts
-import { dataSourceNext } from '@abloatai/ablo/source/next';
-import { prismaDataSource } from '@abloatai/ablo/source';
-import { schema } from '@/ablo/schema';
-import { prisma } from '@/lib/prisma';
-
-export const runtime = 'nodejs';
-
-export const { POST } = dataSourceNext({
-  schema,
-  apiKey: process.env.ABLO_API_KEY!,
-  adapter: prismaDataSource(prisma, schema),
-});
+```bash
+npx ablo migrate
 ```
 
-Using Drizzle instead of Prisma? Swap one line:
+This creates the synced-model tables (with row-level security) in **your**
+database and leaves every other table untouched. Your auth, billing, and
+anything not in the Ablo schema stay in your own ORM, owned by your own
+migrations.
 
-```ts
-import { drizzleDataSource } from '@abloatai/ablo/source/drizzle';
-// ...
-  adapter: drizzleDataSource(db, schema),
-```
+<Note>
+**Don't want a connection string to leave your infrastructure?** Keep
+`DATABASE_URL` in your app only and expose one signed **Data Source endpoint**
+instead — `npx ablo init --storage endpoint` scaffolds it from an ORM adapter
+(`prismaDataSource` / `drizzleDataSource`), and you omit `databaseUrl` from
+`Ablo(...)`. Same product, same writes, same truth: your database is the system
+of record. The full shape is in [Connect Your Database](/data-sources).
+</Note>
 
-`DATABASE_URL` stays in your server environment. `ABLO_API_KEY` lets the route
-verify signed Ablo requests before it opens a transaction. The adapter is given
-your schema so it knows the synced models; the rest of your database — auth,
-billing, anything not in the Ablo schema — stays in your own ORM, untouched.
+## 5. See it instantly
 
-The optional direct Postgres connector is a shortcut for teams that explicitly
-want Ablo to open a database connection. It is covered in
-[Connect Your Database](/data-sources).
-
-## 5. Register The Endpoint
-
-Tell Ablo the URL of the route you mounted:
-
-```txt
-https://your-app.com/api/ablo/source
-```
-
-Self-serve hosted registration is still productization work. In the current
-source-mode path, that endpoint is provisioned for the Ablo deployment. Your app
-still only keeps `ABLO_API_KEY` and its own `DATABASE_URL`.
-
-## 6. See it instantly
-
-Once the sync server is using your Data Source endpoint, `ablo init` adds a
-small agent at `ablo/agent.ts`. Run it:
+Once your schema is pushed and your tables exist, `ablo init` adds a small agent
+at `ablo/agent.ts`. Run it:
 
 ```bash
 npx tsx ablo/agent.ts
@@ -152,7 +124,7 @@ npx ablo logs
 You and the agent are editing the same tasks, and you both see every change the
 moment it happens.
 
-## 7. Read and Update
+## 6. Read and Update
 
 ```ts
 await ablo.ready();
@@ -168,7 +140,7 @@ const updated = await ablo.tasks.update({
 console.log(updated.status);
 ```
 
-## 8. Multiplayer and Coordination
+## 7. Multiplayer and Coordination
 
 There is no separate multiplayer mode. Use the same schema client for human UI,
 server actions, and agents; Ablo fans out confirmed writes and coordinates work
@@ -201,17 +173,17 @@ takes an options object:
 - `ablo.tasks.claim.release({ id })` — release a claim explicitly.
 - `ablo.tasks.claim.reorder({ id, order })` — reprioritize the queue.
 
-## 9. Next Steps
+## 8. Next Steps
 
 Keep using the schema client for app and agent writes. Reach for the advanced
 schema-less agent wrapper only when a worker intentionally cannot import the
 app schema.
 
-- [CLI](/cli) covers `ablo init`, Data Source scaffolding, and the optional direct Postgres connector.
+- [CLI](/cli) covers `ablo init`, schema push, and migrations.
 - [Integration Guide](/integration-guide) explains the full app, React, multiplayer, and agent path.
 - [Guarantees](/guarantees) explains what confirmed writes and stale checks mean.
 - [Client Behavior](/client-behavior) covers errors, retries, and public imports.
-- [Connect Your Database](/data-sources) covers keeping rows canonical behind a signed Data Source endpoint.
+- [Connect Your Database](/data-sources) covers both connection shapes — `databaseUrl` and the signed Data Source endpoint.
 - [AI SDK Tool](/examples/ai-sdk-tool) shows the same write path inside a tool call.
 - `packages/sync-engine/examples/data-source` contains the runnable signed
   Data Source contract demo.

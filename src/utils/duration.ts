@@ -17,6 +17,8 @@
  * the input type.
  */
 
+import { AbloValidationError } from '../errors.js';
+
 export type Duration = number | `${number}ms` | `${number}s` | `${number}m` | `${number}h`;
 
 const PATTERN = /^(\d+(?:\.\d+)?)(ms|s|m|h)$/;
@@ -38,9 +40,10 @@ export function toMs(input: Duration): number {
   if (typeof input === 'number') return input * 1_000;
   const match = PATTERN.exec(input);
   if (!match) {
-    throw new Error(
+    throw new AbloValidationError(
       `Invalid duration "${input}" — expected number (seconds) or ` +
         `a string like "500ms" | "30s" | "3m" | "24h".`,
+      { code: 'duration_invalid' },
     );
   }
   const value = Number(match[1]);

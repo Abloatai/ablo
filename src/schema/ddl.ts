@@ -18,6 +18,7 @@
  *    {@link diffSchema} step list (drops, renames, type casts, backfills).
  */
 
+import { AbloValidationError } from '../errors.js';
 import type { SchemaJSON, ModelJSON } from './serialize.js';
 import type { MigrationStep, BackfillValue, FieldType } from './diff.js';
 import type { FieldMeta } from './field.js';
@@ -370,7 +371,7 @@ function sqlLiteral(value: BackfillValue['value'], fieldType: FieldType): string
   switch (fieldType) {
     case 'number':
       if (typeof value !== 'number' || !Number.isFinite(value)) {
-        throw new Error(`backfill for a number field must be a finite number, got ${JSON.stringify(value)}`);
+        throw new AbloValidationError(`backfill for a number field must be a finite number, got ${JSON.stringify(value)}`, { code: 'schema_definition_invalid' });
       }
       return String(value);
     case 'boolean':

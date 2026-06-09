@@ -29,6 +29,7 @@
  * adapter is one small, fully-typed unit with no per-driver builder generics.
  */
 
+import { AbloValidationError } from '../../errors.js';
 import { sql, type SQL } from 'drizzle-orm';
 import type {
   AdapterCommitResult,
@@ -60,7 +61,7 @@ function rowsOf(result: DrizzleExecuteResult): readonly Row[] {
 function rowId(op: Operation): string {
   const id = op.id ?? (op.input?.id as string | undefined);
   if (typeof id !== 'string' || id.length === 0) {
-    throw new Error(`operation on "${op.model}" requires an id`);
+    throw new AbloValidationError(`operation on "${op.model}" requires an id`, { code: 'source_operation_id_required' });
   }
   return id;
 }
@@ -112,7 +113,7 @@ export function drizzleDataSource<S extends SchemaRecord>(
   const maps = buildColumnMaps(schema);
   const modelColumns = (model: string): ModelColumns => {
     const mc = maps.get(model);
-    if (!mc) throw new Error(`drizzleDataSource: no model "${model}" in schema`);
+    if (!mc) throw new AbloValidationError(`drizzleDataSource: no model "${model}" in schema`, { code: 'source_adapter_misconfigured' });
     return mc;
   };
 

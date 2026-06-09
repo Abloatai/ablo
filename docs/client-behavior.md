@@ -30,7 +30,7 @@ Common options:
 | `schema` | Required for typed model clients. |
 | `apiKey` | Bearer credential for trusted server runtimes. Defaults to `ABLO_API_KEY` when available. |
 | `baseURL` | Override the hosted sync endpoint for staging or private deployments. |
-| `persistence` | `volatile` by default. Use `indexeddb` for a durable browser cache that survives reloads. |
+| `persistence` | `memory` by default. Use `indexeddb` for a durable browser cache that survives reloads. |
 | `fetch` | Custom fetch implementation for tests or non-standard runtimes. |
 | `defaultHeaders` | Extra headers attached to every HTTP request. |
 | `defaultQuery` | Extra query parameters attached to every HTTP request. |

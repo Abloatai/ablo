@@ -91,7 +91,7 @@ This operation requires a capability.
 
 `client-only` · not sent over the network
 
-Failed to register the provided databaseUrl for the direct Postgres connector.
+Failed to register the provided databaseUrl as a datasource.
 
 ### exchange_failed
 
@@ -217,6 +217,30 @@ The direct Postgres connector role could not be introspected.
 
 Tenant tables do not have RLS forced under the direct Postgres connector role.
 
+### database_host_not_allowed
+
+`HTTP 403` · not retryable
+
+The connected database host resolves to a private, loopback, or link-local address and cannot be used.
+
+### database_role_cannot_enforce_rls
+
+`HTTP 403` · not retryable
+
+The connected database role cannot enforce row-level security (superuser or BYPASSRLS).
+
+### database_role_unreadable
+
+`HTTP 403` · not retryable
+
+The connected database role could not be introspected.
+
+### database_tables_unforced_rls
+
+`HTTP 403` · not retryable
+
+Synced tables in the connected database do not have FORCE ROW LEVEL SECURITY applied.
+
 ### forbidden
 
 `HTTP 403` · not retryable
@@ -240,6 +264,12 @@ The request targeted an organization the caller is not scoped to.
 `HTTP 403` · not retryable
 
 The parent turn belongs to a different agent.
+
+### test_database_not_registered
+
+`HTTP 403` · not retryable
+
+Test mode requires a registered dev database for this org — run `npx ablo init`, or construct the client with `databaseUrl` using your test key.
 
 ### turn_foreign_agent
 
@@ -377,6 +407,12 @@ A capability id is required for this request.
 
 A value violates a database check constraint.
 
+### cli_invalid_arguments
+
+`client-only` · not sent over the network
+
+The CLI was invoked with an unknown flag or a malformed flag value.
+
 ### commit_operation_action_required
 
 `HTTP 400` · not retryable
@@ -418,6 +454,18 @@ A commit exceeded the per-commit operation limit; split it into smaller batches.
 `HTTP 400` · not retryable
 
 A database integrity constraint was violated.
+
+### datasource_connection_unsupported
+
+`HTTP 400` · not retryable
+
+This deployment cannot register a direct (connection string) datasource — use the signed endpoint kind.
+
+### duration_invalid
+
+`client-only` · not sent over the network
+
+A duration value was not a number of seconds or a "500ms" | "30s" | "3m" | "24h" string.
 
 ### events_required
 
@@ -575,6 +623,12 @@ The query referenced an unknown relation.
 
 The query used an unsupported operator.
 
+### schema_definition_invalid
+
+`client-only` · not sent over the network
+
+A schema definition value was invalid (bad column identifier, non-finite backfill, or unsupported schema-JSON version).
+
 ### schema_too_large
 
 `HTTP 413` · not retryable
@@ -586,6 +640,24 @@ The submitted schema exceeds the maximum size.
 `HTTP 400` · not retryable
 
 A snapshot used a reserved key name.
+
+### source_adapter_misconfigured
+
+`client-only` · not sent over the network
+
+The data-source ORM adapter could not map a schema model onto the backing client (missing delegate or model).
+
+### source_event_invalid
+
+`client-only` · not sent over the network
+
+A data-source outbox event could not be built — the operation carries no entity id and none was supplied.
+
+### source_operation_id_required
+
+`client-only` · not sent over the network
+
+A data-source operation arrived without the entity `id` it targets.
 
 ### task_id_required
 
@@ -616,6 +688,12 @@ The request must include a non-empty items array.
 `HTTP 400` · not retryable
 
 The usage request was invalid.
+
+### write_options_invalid
+
+`client-only` · not sent over the network
+
+The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `intent`) failed validation against the write-options schema.
 
 ## Not found
 

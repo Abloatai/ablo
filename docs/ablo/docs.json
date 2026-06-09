@@ -65,6 +65,7 @@
           {
             "group": "Concepts",
             "pages": [
+              "coordination",
               "interaction-model",
               "guarantees",
               "client-behavior"
@@ -142,7 +143,9 @@
       },
       {
         "tab": "Changelog",
-        "pages": ["changelog"]
+        "pages": [
+          "changelog"
+        ]
       }
     ]
   },

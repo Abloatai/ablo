@@ -1,27 +1,32 @@
 # Quickstart
 
 Build with Ablo on **your own database**. You declare a small Ablo schema for the
-models humans and agents edit together, point Ablo at your Postgres through a Data
-Source adapter, and coordinate every write through `ablo.<model>`. You own the
-`DATABASE_URL` — Ablo never connects to your database, it only calls an endpoint
-you expose.
+models humans and agents edit together, hand the client your Postgres
+`DATABASE_URL`, and coordinate every write through `ablo.<model>`. Your database
+is the system of record — Ablo never hosts your data. It is the transaction
+layer on top: it registers your connection, commits every write there behind
+row-level security, and fans the confirmed rows out to every connected client.
 
 ## 1. Install and get a key
 
 ```bash
 npm install @abloatai/ablo
+npx ablo login
 ```
 
-Sign up and copy a sandbox key from your org dashboard (or run `npx ablo login`),
-then keep it in a trusted server runtime — never the browser:
+`ablo login` opens the browser — sign in (or sign up) and a `sk_test_` key is
+saved locally for the CLI. Later, `npx ablo dev` (step 4) writes
+`ABLO_API_KEY` into your `.env.local` so the SDK finds it too — no manual
+copy-paste. In CI, or to manage it by hand, set it yourself instead:
 
 ```bash
 export ABLO_API_KEY=sk_test_...
 ```
 
-Every SDK and CLI call needs a key (`sk_test_*` for sandbox, `sk_live_*` for
-production). There is no keyless mode; the public `/sandbox` page is a hosted demo,
-not your app.
+Every SDK and CLI call needs a key. Test and live keys work like Stripe's —
+except both point at databases *you* own: `sk_test_*` for your dev database,
+`sk_live_*` for production. There is no keyless mode; the public `/sandbox` page
+is a hosted demo, not your app.
 
 ## 2. Declare your Ablo schema
 
@@ -43,59 +48,62 @@ export const schema = defineSchema({
 });
 ```
 
-## 3. Point Ablo at your database (Drizzle)
+## 3. Point Ablo at your database
 
-You own the connection. Keep `DATABASE_URL` in your app environment and expose one
-endpoint that hands Ablo a `drizzleDataSource` adapter built from your Drizzle `db`
-and the Ablo `schema`. Ablo signs a commit request; the adapter runs it in one
-transaction against your Postgres and returns the canonical row.
+The client takes your schema, your key, and your `DATABASE_URL`. On first
+connect Ablo registers the connection (sent once over TLS, stored sealed, never
+echoed back) and from then on commits every write directly to your Postgres.
 
 ```bash
-# .env — both live in YOUR app, never inside Ablo(...)
-DATABASE_URL=postgres://...
+# .env — server runtime only, never the browser
+DATABASE_URL=postgres://ablo_app:...@host:5432/db
 ABLO_API_KEY=sk_test_...
 ```
-
-```ts
-// app/api/ablo/source/route.ts
-import { dataSourceNext } from '@abloatai/ablo/source/next';
-import { drizzleDataSource } from '@abloatai/ablo/source/drizzle';
-import { schema } from '@/ablo/schema';
-import { db } from '@/db';
-
-export const runtime = 'nodejs'; // the route touches your database
-
-export const { POST } = dataSourceNext({
-  schema,
-  apiKey: process.env.ABLO_API_KEY!,
-  adapter: drizzleDataSource(db, schema),
-});
-```
-
-Do not pass a database URL to `Ablo(...)` — the connection belongs to your app.
-(On Prisma? Swap one line: `adapter: prismaDataSource(prisma, schema)`.)
-
-## 4. Provision your tables, then push the schema
-
-```bash
-npx ablo migrate   # creates your synced-model tables + ablo_outbox / ablo_idempotency
-                   # in YOUR database — your other tables are left untouched
-npx ablo push      # uploads the schema to Ablo (REQUIRED before any write; or `ablo dev` to watch)
-```
-
-Skipping `push` makes every write to a new or changed model fail with
-`server_execute_unknown_model` — that error literally means "run `npx ablo push`."
-
-## 5. Write through the model
-
-The client takes only your `ABLO_API_KEY`; the rows land in your Postgres.
 
 ```ts
 // ablo/client.ts
 import Ablo from '@abloatai/ablo';
 import { schema } from './schema';
 
-export const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+export const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+  databaseUrl: process.env.DATABASE_URL, // your Postgres — rows live here, never with Ablo
+});
+```
+
+Use a dedicated **non-superuser role** for the connection — Ablo enforces
+tenant isolation with row-level security, so the server rejects superuser or
+`BYPASSRLS` roles outright.
+
+Don't want a connection string to leave your infrastructure? Keep
+`DATABASE_URL` in your app only and expose one signed **Data Source endpoint**
+built from an ORM adapter instead — same product, same writes, see
+[Connect Your Database](./data-sources.md). In that setup, omit `databaseUrl`
+from `Ablo(...)`.
+
+## 4. Provision your tables, then push the schema
+
+```bash
+npx ablo migrate   # creates your synced-model tables (with row-level security)
+                   # in YOUR database — your other tables are left untouched
+npx ablo dev       # pushes the schema (test mode), writes ABLO_API_KEY to
+                   # .env.local, and re-pushes on every save — the dev loop
+```
+
+`ablo dev` (or one-shot `npx ablo push`) uploads the schema *definition* —
+model names, fields, types. That metadata is the only thing Ablo keeps; the
+rows stay in your database. Skipping the push makes every write to a new or
+changed model fail with `server_execute_unknown_model` — that error literally
+means "run `npx ablo push`."
+
+## 5. Write through the model
+
+The rows land in your Postgres; every connected client sees them live.
+
+```ts
+import { ablo } from './ablo/client';
+
 await ablo.ready();
 
 const created = await ablo.weatherReports.create({
@@ -185,5 +193,5 @@ Keep using the schema client for app and agent writes.
 - [Schema Contract](./schema-contract.md) explains what the schema drives across SDK, React, agents, Data Source, and schema push.
 - [Guarantees](./guarantees.md) explains what confirmed writes and stale checks mean.
 - [Client Behavior](./client-behavior.md) covers errors, retries, and public imports.
-- [Connect Your Database](./data-sources.md) covers the optional route for teams keeping rows in their own database.
+- [Connect Your Database](./data-sources.md) covers both connection shapes — `databaseUrl` and the signed Data Source endpoint.
 - [AI SDK Tool](./examples/ai-sdk-tool.md) shows the same write path inside a tool call.

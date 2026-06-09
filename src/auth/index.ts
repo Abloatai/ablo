@@ -42,7 +42,9 @@ export async function exchangeApiKey(
 ): Promise<CapabilityExchangeResponse> {
   if (!options.apiKey) {
     throw new AbloAuthenticationError(
-      'apiKey is required for capability exchange',
+      'No API key found. Set ABLO_API_KEY in your environment — `npx ablo login` ' +
+        'then `npx ablo dev` writes it into .env.local for you — or pass ' +
+        '`apiKey` to Ablo({ ... }) directly.',
       { code: 'apikey_missing' },
     );
   }

@@ -51,6 +51,7 @@ import type {
 } from './createModelProxy.js';
 import type { Duration } from '../utils/duration.js';
 import type { Intent } from '../types/streams.js';
+import { assertWriteOptions } from './writeOptionsSchema.js';
 
 export type AbloApiClientOptions = Omit<AbloOptions, 'schema'> & {
   readonly schema?: null | undefined;
@@ -574,15 +575,34 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
 
   const commits: CommitResource = {
     async create(commitOptions: CommitCreateOptions): Promise<CommitReceipt> {
+      // Same runtime contract as every other write door — one schema.
+      assertWriteOptions(
+        {
+          idempotencyKey: commitOptions.idempotencyKey,
+          readAt: commitOptions.readAt,
+          onStale: commitOptions.onStale,
+          wait: commitOptions.wait,
+          intent: commitOptions.intent,
+        },
+        'commits.create',
+      );
       const clientTxId = createClientTxId(commitOptions.idempotencyKey);
-      const operations = normalizeCommitOperations(commitOptions);
+      // Same claim vocabulary as the WS client's `commits.create`: a handle
+      // supplies the batch stale-guard defaults; explicit options win.
+      const claim = commitOptions.claim ?? null;
+      const operations = normalizeCommitOperations({
+        ...commitOptions,
+        readAt: commitOptions.readAt ?? claim?.readAt ?? null,
+        onStale:
+          commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
+      });
       const body = await requestJson<CommitResponse>('/v1/commits', {
         method: 'POST',
         idempotencyKey: clientTxId,
         body: JSON.stringify({
           clientTxId,
           idempotencyKey: clientTxId,
-          intent: normalizeIntentId(commitOptions.intent),
+          intent: normalizeIntentId(commitOptions.intent) ?? claim?.claimId,
           operations,
         }),
       });
@@ -849,6 +869,16 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     data: Record<string, unknown> | undefined,
     options: ModelMutationOptions | undefined,
   ): Promise<CommitReceipt> {
+    assertWriteOptions(
+      options && {
+        idempotencyKey: options.idempotencyKey,
+        readAt: options.readAt,
+        onStale: options.onStale,
+        wait: options.wait,
+        intent: options.intent,
+      },
+      `${modelName} ${action}`,
+    );
     const clientTxId = createClientTxId(options?.idempotencyKey);
     const encModel = encodeURIComponent(modelName);
     const path =
@@ -857,11 +887,22 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         : `/v1/models/${encModel}/${encodeURIComponent(id)}`;
     const method = action === 'create' ? 'POST' : action === 'update' ? 'PATCH' : 'DELETE';
 
+    // A carried claim handle supplies the stale-guard defaults — one claim
+    // vocabulary across the WS proxy, `commits.create`, and these routes.
+    const claimHandle =
+      typeof options?.claim === 'object' &&
+      options?.claim !== null &&
+      (options.claim as { object?: unknown }).object === 'claim' &&
+      typeof (options.claim as { claimId?: unknown }).claimId === 'string'
+        ? (options.claim as ClaimHandle)
+        : undefined;
+    const readAt = options?.readAt ?? claimHandle?.readAt;
     const requestBody: Record<string, unknown> = {
       idempotencyKey: clientTxId,
-      intent: normalizeIntentId(options?.intent),
-      onStale: options?.onStale,
-      readAt: options?.readAt,
+      intent: normalizeIntentId(options?.intent) ?? claimHandle?.claimId,
+      onStale:
+        options?.onStale ?? (claimHandle?.readAt !== undefined ? 'reject' : undefined),
+      readAt,
     };
     if (action === 'create') requestBody.id = id;
     if (data !== undefined) requestBody.data = data;
@@ -935,11 +976,12 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
 
     async function claimImpl(params: ClaimParams<T>): Promise<ClaimHandle<T>> {
       const claimId = await acquireClaim(params);
-      const { data } = await retrieveModel<T>(name, { id: params.id });
+      const { data, stamp } = await retrieveModel<T>(name, { id: params.id });
       const release = () => releaseClaim(params);
       return {
         object: 'claim',
         claimId,
+        readAt: stamp,
         target: {
           model: name,
           id: params.id,

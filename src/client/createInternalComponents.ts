@@ -80,7 +80,7 @@ export function createInternalComponents<S extends SchemaRecord>(
   const database = new Database(modelRegistry, bootstrapHelper, {
     // Point-solution default: no browser-local durable store unless the
     // caller explicitly asks for it. Node/edge runtimes always use the
-    // volatile store because IndexedDB is unavailable there.
+    // in-memory store because IndexedDB is unavailable there.
     inMemory: shouldUseInMemoryPersistence(options),
   });
   const syncClient = new SyncClient(objectPool, database);

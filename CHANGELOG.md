@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.3
+
+### Patch Changes
+
+- Onboarding: quickstart leads with your-own-database (Drizzle Data Source), drop Ablo-managed mode, add `ablo push` step; context7 library-claim config.
+
 ## 0.9.2
 
 ### Patch Changes

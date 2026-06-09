@@ -253,6 +253,20 @@ export interface MutationOptions {
   causedByTaskId?: string | null;
 }
 
+/**
+ * The `MutationOptions` subset carried per-write through the offline
+ * transaction lane (SyncClient → TransactionQueue → wire operation).
+ * ONE shared type so the proxy's public params, the queue, and the wire
+ * can never narrow each other silently again — `wait` and `intent` are
+ * deliberately absent because they resolve client-side before staging
+ * (`wait` at the proxy's confirmation await, `intent` server-side via
+ * the active lease on the entity).
+ */
+export type WriteOptions = Pick<
+  MutationOptions,
+  'readAt' | 'onStale' | 'idempotencyKey' | 'label'
+>;
+
 /** A single mutation operation in a batch. `options` rides along so the
  *  server can cache+replay via `mutation_log`. */
 export interface MutationOperation {

@@ -167,6 +167,20 @@ export {
 export type { CommitReceipt, RequiredCapability } from './errors.js';
 export type { ErrorCode, WireErrorCode, ErrorCategory, ErrorCodeSpec, RecoveryClass } from './errors.js';
 export { WS_BEARER_SUBPROTOCOL_PREFIX, WS_SYNC_SUBPROTOCOL } from './auth/credentialSource.js';
+
+// THE write-options contract — the one Zod schema for the option bag every
+// write door accepts (`ablo.<model>.create/update/delete`, `commits.create`,
+// the HTTP model routes). The SDK validates against it at each boundary;
+// it's exported so consumers can validate/compose options ahead of a call
+// (e.g. an agent tool's input schema). Runtime twin of `MutationOptions`,
+// drift-guarded at compile time.
+export {
+  writeOptionsSchema,
+  onStaleModeSchema,
+  assertWriteOptions,
+} from './client/writeOptionsSchema.js';
+export type { WriteOptionsInput } from './client/writeOptionsSchema.js';
+export type { WriteOptions, MutationOptions } from './interfaces/index.js';
 // Storage-wedge detection — lets app shells render a recovery screen when the
 // IndexedDB backing store is stuck (see core/openIDBWithTimeout.ts).
 export { IDBOpenTimeoutError, isStorageOpenTimeout } from './core/openIDBWithTimeout.js';

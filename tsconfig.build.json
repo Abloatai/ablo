@@ -13,6 +13,7 @@
     "src/**/__tests__/**",
     "src/testing/setup/**",
     "src/internal/**",
-    "src/__type_probe.*"
+    "src/__type_probe.*",
+    "src/cli/**"
   ]
 }

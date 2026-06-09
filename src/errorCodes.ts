@@ -186,12 +186,20 @@ export const ERROR_CODES = {
   file_upload_auth_required: wire('auth', 401, false, 'File upload requires an authenticated session.'),
   browser_apikey_blocked: client('auth', 'Raw API keys must not be used from a browser context.'),
   browser_database_url_blocked: client('auth', 'A database connection string must not be used from a browser context — it carries DB credentials.'),
-  datasource_registration_failed: client('auth', 'Failed to register the provided databaseUrl for the direct Postgres connector.'),
+  datasource_registration_failed: client('auth', 'Failed to register the provided databaseUrl as a datasource.'),
+  datasource_connection_unsupported: wire('validation', 400, false, 'This deployment cannot register a direct (connection string) datasource — use the signed endpoint kind.'),
 
   // ── permission / capability (403) ──────────────────────────────────
   capability_scope_denied: wire('capability', 403, false, "The connection's resolved scope does not cover the attempted action."),
   issuer_register_forbidden: wire('permission', 403, false, 'Registering a trusted issuer requires a secret (sk_) API key.'),
   capability_invalid: wire('capability', 403, false, 'The capability is unknown, revoked, or expired.'),
+  test_database_not_registered: wire('permission', 403, false, 'Test mode requires a registered dev database for this org — run `npx ablo init`, or construct the client with `databaseUrl` using your test key.'),
+  database_role_cannot_enforce_rls: wire('permission', 403, false, 'The connected database role cannot enforce row-level security (superuser or BYPASSRLS).'),
+  database_role_unreadable: wire('permission', 403, false, 'The connected database role could not be introspected.'),
+  database_tables_unforced_rls: wire('permission', 403, false, 'Synced tables in the connected database do not have FORCE ROW LEVEL SECURITY applied.'),
+  database_host_not_allowed: wire('permission', 403, false, 'The connected database host resolves to a private, loopback, or link-local address and cannot be used.'),
+  // Deprecated spellings of the `database_*` codes above — still emitted by
+  // older servers; kept so they classify identically. Do not use in new code.
   byo_role_cannot_enforce_rls: wire('permission', 403, false, 'The direct Postgres connector role cannot enforce row-level security.'),
   byo_role_unreadable: wire('permission', 403, false, 'The direct Postgres connector role could not be introspected.'),
   byo_tenant_tables_unforced_rls: wire('permission', 403, false, 'Tenant tables do not have RLS forced under the direct Postgres connector role.'),
@@ -213,6 +221,13 @@ export const ERROR_CODES = {
   idempotency_key_too_long: wire('validation', 400, false, 'The supplied Idempotency-Key exceeds the maximum length.'),
 
   // ── validation (400 / 422) ─────────────────────────────────────────
+  write_options_invalid: client('validation', 'The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `intent`) failed validation against the write-options schema.'),
+  source_operation_id_required: client('validation', 'A data-source operation arrived without the entity `id` it targets.'),
+  source_adapter_misconfigured: client('validation', 'The data-source ORM adapter could not map a schema model onto the backing client (missing delegate or model).'),
+  source_event_invalid: client('validation', 'A data-source outbox event could not be built — the operation carries no entity id and none was supplied.'),
+  duration_invalid: client('validation', 'A duration value was not a number of seconds or a "500ms" | "30s" | "3m" | "24h" string.'),
+  schema_definition_invalid: client('validation', 'A schema definition value was invalid (bad column identifier, non-finite backfill, or unsupported schema-JSON version).'),
+  cli_invalid_arguments: client('validation', 'The CLI was invoked with an unknown flag or a malformed flag value.'),
   turn_validation_failed: wire('validation', 422, false, 'The agent turn failed server-side validation.'),
   commit_operation_required: wire('validation', 400, false, 'A commit must carry `operation` or `operations`.'),
   commit_operation_model_required: wire('validation', 400, false, 'A commit operation is missing its `model`.'),

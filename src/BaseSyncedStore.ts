@@ -41,7 +41,6 @@ import { SyncSessionError } from './errors.js';
 import { ModelScope } from './ObjectPool.js';
 import { LazyReferenceCollection } from './LazyReferenceCollection.js';
 import type { Schema } from './schema/schema.js';
-import { createReaderActions, type ReaderActions } from './mutators/readerActions.js';
 import type { SyncStoreContract, LocalMutation } from './react/context.js';
 import type { AuthCredentialSource } from './auth/credentialSource.js';
 
@@ -313,19 +312,6 @@ export function deriveSyncPlanFromSchema(schema: Schema): {
   return { versionVectorKeys, enrichmentPlan, foreignKeyIndexes };
 }
 
-/**
- * Schema-derived accessor namespace exposed on `store.query`. Each key is
- * a model name from the schema and resolves to a `ReaderActions<S, K>`
- * with `findById` / `findMany` / `findFirst` / `count`. Return types are
- * inferred from the schema (`InferModel<S, K>`) so callers don't need to
- * cast or pass class constructors.
- *
- * Prisma / Drizzle / Zero all use this shape: `store.query.<modelKey>.*`.
- */
-export type QueryNamespace<S extends Schema> = {
-  readonly [K in keyof S['models'] & string]: ReaderActions<S, K>;
-};
-
 export class BaseSyncedStore<
   // The collaboration event map. Each key maps to a handler args tuple.
   // `EventMap<T>` (defined in sync/SyncWebSocket.ts) is a homomorphic mapped
@@ -357,13 +343,10 @@ export class BaseSyncedStore<
   protected readonly modelRegistry: ModelRegistry;
   protected readonly auth?: AuthCredentialSource;
   /**
-   * Schema the store was constructed with. Persisted so the `query`
-   * accessor namespace can build typed per-model reader actions lazily
-   * without callers having to pass the schema at every lookup site.
+   * Schema the store was constructed with. Used by the schema-typed
+   * `create(key, data)` factory and model self-healing.
    */
   protected readonly schema?: TSchema;
-  /** Lazily-built `query.<modelKey>.*` accessor namespace. */
-  private _queryProxy?: QueryNamespace<TSchema>;
 
 
   // ── Real-time sync ──
@@ -2255,62 +2238,9 @@ export class BaseSyncedStore<
 
 
   // ── Query API ────────────────────────────────────────────────────────────
-
-  /**
-   * Schema-keyed accessor namespace — the primary type-safe lookup surface.
-   *
-   * ```ts
-   * const chat = store.query.chats.retrieve(chatId);  // Chat | undefined
-   * const slides = store.query.slides.findMany({ where: { deckId } });  // Slide[]
-   * ```
-   *
-   * Each `query.<modelKey>` is a `ReaderActions<Schema, K>` built lazily on
-   * first access via `createReaderActions`. The returned types are inferred
-   * from the schema (`InferModel<S, K>`), including `InferRelations` — so
-   * `chat.messages`, `slide.layers`, etc. are typed without a cast.
-   *
-   * Throws if the store was constructed without a schema (class-based
-   * subclasses that wire models via `modelRegistry.registerModel` directly
-   * don't have access to schema-derived inference).
-   */
-  get query(): QueryNamespace<TSchema> {
-    if (!this.schema) {
-      throw new AbloValidationError(
-        'store.query requires a schema to be passed to the BaseSyncedStore constructor. ' +
-          'Pass `{ schema }` in the dependencies argument.',
-        { code: 'store_query_schema_missing' },
-      );
-    }
-    if (!this._queryProxy) {
-      const schema = this.schema;
-      // BaseSyncedStore satisfies SyncStoreContract structurally via
-      // `findById` / `queryByClass` / `save` / `delete`. Pass `this`
-      // directly — `createReaderActions` accepts the contract shape.
-      const store: SyncStoreContract = this;
-      const cache = new Map<string, unknown>();
-      this._queryProxy = new Proxy({} as QueryNamespace<TSchema>, {
-        get: (_target, prop) => {
-          if (typeof prop !== 'string') return undefined;
-          const cached = cache.get(prop);
-          if (cached) return cached;
-          if (!(prop in schema.models)) {
-            throw new AbloValidationError(
-              `store.query: unknown model key "${prop}". Known keys: ${Object.keys(schema.models).join(', ')}`,
-              { code: 'store_query_unknown_model' },
-            );
-          }
-          const actions = createReaderActions(
-            schema,
-            prop as keyof TSchema['models'] & string,
-            store,
-          );
-          cache.set(prop, actions);
-          return actions;
-        },
-      });
-    }
-    return this._queryProxy;
-  }
+  // `store.query.<model>.*` was DELETED — `ablo.<model>.get/getAll` is the
+  // one read surface. Custom mutators still read transactionally through
+  // `tx.<model>` (mutators/Transaction.ts), which owns `createReaderActions`.
 
   /** Retrieve a single entity by id. Synchronous pool read. */
   retrieve(_modelClass: ModelConstructor<Model>, id: string): Model | undefined {

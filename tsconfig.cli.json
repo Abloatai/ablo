@@ -1,0 +1,16 @@
+{
+  // Typecheck config for the `ablo` CLI (src/cli). The CLI is bundled by tsup
+  // (esbuild) rather than the library's NodeNext `tsc` build, so it uses
+  // bundler module resolution and extensionless relative imports. The
+  // `@ablo/source` custom condition resolves `@abloatai/ablo/*` straight to
+  // the package's own `src` (no prior build required).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "customConditions": ["@ablo/source"],
+    "noEmit": true
+  },
+  "include": ["src/cli/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src/cli/__tests__"]
+}

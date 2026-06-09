@@ -109,7 +109,7 @@ authorized it, which run did it, and what state was it based on?"
 
 ## Persistence
 
-Ablo defaults to volatile in-memory persistence, so nothing is written to disk
+Ablo defaults to in-memory persistence ('memory'), so nothing is written to disk
 unless you ask for it.
 
 Opt into a durable browser cache that survives reloads when you need it:
@@ -122,7 +122,7 @@ const ablo = Ablo({
 });
 ```
 
-Node, SSR, tests, and agents use volatile in-memory persistence automatically.
+Node, SSR, tests, and agents use in-memory persistence ('memory') automatically.
 
 ## Storage Boundary
 

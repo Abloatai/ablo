@@ -24,6 +24,7 @@ import {
 } from '../errors.js';
 import type { MutationOptions } from '../interfaces/index.js';
 import { Model, modelAsRow } from '../Model.js';
+import { assertWriteOptions } from './writeOptionsSchema.js';
 import type { ModelRegistry } from '../ModelRegistry.js';
 import type { ObjectPool } from '../ObjectPool.js';
 import type { SyncClient } from '../SyncClient.js';
@@ -238,6 +239,15 @@ export interface ClaimReorderParams<T = Record<string, unknown>>
 export interface ClaimHandle<T = Record<string, unknown>> extends AsyncDisposable {
   readonly object: 'claim';
   readonly claimId: string;
+  /**
+   * Sync watermark of the held snapshot (`data` was read at this stamp).
+   * Writes that carry the handle — `update({ id, data, claim })` or
+   * `commits.create({ claim, ... })` — use it as the `readAt` stale guard,
+   * so a concurrent commit between snapshot and write is rejected instead
+   * of clobbered. Optional for wire/duck-type compat with externally
+   * constructed handles.
+   */
+  readonly readAt?: number;
   readonly target: {
     readonly model: string;
     readonly id: string;
@@ -504,6 +514,10 @@ export function createModelProxy<T, C>(
   ): MutationOptions => {
     const { id: _id, data: _data, claim: _claim, ...rest } =
       params as unknown as Record<string, unknown>;
+    // THE write-options schema — runtime twin of the compile-time params.
+    // Catches plain-JS callers (`onStale: 'rejct'`) at the call site with
+    // a typed error instead of a silent no-op or a server 400.
+    assertWriteOptions(rest, `${schemaKey} write`);
     return rest as MutationOptions;
   };
 
@@ -599,6 +613,7 @@ export function createModelProxy<T, C>(
     return {
       object: 'claim',
       claimId: lease.id,
+      readAt: snapshot.stamp,
       target,
       action: options?.action ?? 'editing',
       ...(options?.description ? { description: options.description } : {}),
@@ -700,8 +715,6 @@ export function createModelProxy<T, C>(
     },
 
     create: guard(async (params: ModelCreateParams<T, C>): Promise<T> => {
-      // TODO(options-persistence): stash `params` alongside the
-      // queued transaction so idempotencyKey survives offline flush.
       const id = params.id ?? Model.generateId();
       const opts = mutationOptions(params);
       const claim = params.claim;
@@ -729,8 +742,16 @@ export function createModelProxy<T, C>(
         });
       }
 
+      // Default `organizationId` from the client's identity exactly like the
+      // mutator path (`buildModelForCreate`) — without this, a caller that
+      // omits it creates an org-unscoped row on one write door but not the
+      // other. An explicit value in `data` still wins via the spread.
+      const orgDefault =
+        (params.data as Record<string, unknown>).organizationId ??
+        syncClient.getOrganizationId();
       const model = new ModelClass({
         id,
+        ...(orgDefault != null ? { organizationId: orgDefault } : {}),
         ...(params.data as Record<string, unknown>),
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -772,9 +793,7 @@ export function createModelProxy<T, C>(
         // watermark + lease so it's stale-rejected and attributed to the claim.
         const claimed = activeClaims.get(id);
         const opts = mutationOptions(params);
-        const handleIntent = isClaimHandle(params.claim)
-          ? { id: params.claim.claimId }
-          : undefined;
+        const handle = isClaimHandle(params.claim) ? params.claim : undefined;
         const effective: MutationOptions | undefined = claimed
           ? {
               wait: 'confirmed',
@@ -784,8 +803,18 @@ export function createModelProxy<T, C>(
               ...opts,
             }
           : {
+              // A carried handle engages the same stale guard as a claim this
+              // proxy took itself — the watermark rides on the handle, so it
+              // works across clients (HTTP-minted handles included).
+              ...(handle?.readAt !== undefined
+                ? {
+                    wait: 'confirmed' as const,
+                    readAt: handle.readAt,
+                    onStale: 'reject' as const,
+                  }
+                : {}),
               ...opts,
-              ...(handleIntent ? { intent: handleIntent } : {}),
+              ...(handle ? { intent: { id: handle.claimId } } : {}),
             };
         // Local user update: `applyChanges` keeps change tracking ON so
         // the edited fields land in `modifiedProperties` and actually get
@@ -819,9 +848,7 @@ export function createModelProxy<T, C>(
         );
       const claimed = activeClaims.get(id);
       const opts = mutationOptions(params);
-      const handleIntent = isClaimHandle(params.claim)
-        ? { id: params.claim.claimId }
-        : undefined;
+      const handle = isClaimHandle(params.claim) ? params.claim : undefined;
       const effective: MutationOptions | undefined = claimed
         ? {
             wait: 'confirmed',
@@ -831,8 +858,15 @@ export function createModelProxy<T, C>(
             ...opts,
           }
         : {
+            ...(handle?.readAt !== undefined
+              ? {
+                  wait: 'confirmed' as const,
+                  readAt: handle.readAt,
+                  onStale: 'reject' as const,
+                }
+              : {}),
             ...opts,
-            ...(handleIntent ? { intent: handleIntent } : {}),
+            ...(handle ? { intent: { id: handle.claimId } } : {}),
           };
       syncClient.delete(model, effective);
       await waitForMutation(model, effective);

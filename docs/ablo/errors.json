@@ -268,6 +268,14 @@
       "docUrl": "https://docs.abloatai.com/errors#claim_lost"
     },
     {
+      "code": "cli_invalid_arguments",
+      "category": "validation",
+      "surface": "client",
+      "retryable": false,
+      "message": "The CLI was invoked with an unknown flag or a malformed flag value.",
+      "docUrl": "https://docs.abloatai.com/errors#cli_invalid_arguments"
+    },
+    {
       "code": "commit_failed",
       "category": "transport",
       "surface": "wire",
@@ -367,11 +375,56 @@
       "docUrl": "https://docs.abloatai.com/errors#constraint_violation"
     },
     {
+      "code": "database_host_not_allowed",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The connected database host resolves to a private, loopback, or link-local address and cannot be used.",
+      "docUrl": "https://docs.abloatai.com/errors#database_host_not_allowed"
+    },
+    {
+      "code": "database_role_cannot_enforce_rls",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The connected database role cannot enforce row-level security (superuser or BYPASSRLS).",
+      "docUrl": "https://docs.abloatai.com/errors#database_role_cannot_enforce_rls"
+    },
+    {
+      "code": "database_role_unreadable",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The connected database role could not be introspected.",
+      "docUrl": "https://docs.abloatai.com/errors#database_role_unreadable"
+    },
+    {
+      "code": "database_tables_unforced_rls",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "Synced tables in the connected database do not have FORCE ROW LEVEL SECURITY applied.",
+      "docUrl": "https://docs.abloatai.com/errors#database_tables_unforced_rls"
+    },
+    {
+      "code": "datasource_connection_unsupported",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "This deployment cannot register a direct (connection string) datasource — use the signed endpoint kind.",
+      "docUrl": "https://docs.abloatai.com/errors#datasource_connection_unsupported"
+    },
+    {
       "code": "datasource_registration_failed",
       "category": "auth",
       "surface": "client",
       "retryable": false,
-      "message": "Failed to register the provided databaseUrl for the direct Postgres connector.",
+      "message": "Failed to register the provided databaseUrl as a datasource.",
       "docUrl": "https://docs.abloatai.com/errors#datasource_registration_failed"
     },
     {
@@ -413,6 +466,14 @@
       "retryable": false,
       "message": "Migration would drop a model (destructive classification).",
       "docUrl": "https://docs.abloatai.com/errors#drop_model"
+    },
+    {
+      "code": "duration_invalid",
+      "category": "validation",
+      "surface": "client",
+      "retryable": false,
+      "message": "A duration value was not a number of seconds or a \"500ms\" | \"30s\" | \"3m\" | \"24h\" string.",
+      "docUrl": "https://docs.abloatai.com/errors#duration_invalid"
     },
     {
       "code": "entity_claimed",
@@ -1371,6 +1432,14 @@
       "docUrl": "https://docs.abloatai.com/errors#risky_cast"
     },
     {
+      "code": "schema_definition_invalid",
+      "category": "validation",
+      "surface": "client",
+      "retryable": false,
+      "message": "A schema definition value was invalid (bad column identifier, non-finite backfill, or unsupported schema-JSON version).",
+      "docUrl": "https://docs.abloatai.com/errors#schema_definition_invalid"
+    },
+    {
       "code": "schema_field_consecutive_caps",
       "category": "schema",
       "surface": "wire",
@@ -1524,6 +1593,14 @@
       "docUrl": "https://docs.abloatai.com/errors#snapshot_reserved_key"
     },
     {
+      "code": "source_adapter_misconfigured",
+      "category": "validation",
+      "surface": "client",
+      "retryable": false,
+      "message": "The data-source ORM adapter could not map a schema model onto the backing client (missing delegate or model).",
+      "docUrl": "https://docs.abloatai.com/errors#source_adapter_misconfigured"
+    },
+    {
       "code": "source_api_key_unresolved",
       "category": "auth",
       "surface": "wire",
@@ -1533,6 +1610,14 @@
       "docUrl": "https://docs.abloatai.com/errors#source_api_key_unresolved"
     },
     {
+      "code": "source_event_invalid",
+      "category": "validation",
+      "surface": "client",
+      "retryable": false,
+      "message": "A data-source outbox event could not be built — the operation carries no entity id and none was supplied.",
+      "docUrl": "https://docs.abloatai.com/errors#source_event_invalid"
+    },
+    {
       "code": "source_network_error",
       "category": "transport",
       "surface": "wire",
@@ -1540,6 +1625,14 @@
       "retryable": true,
       "message": "A network error occurred talking to the source.",
       "docUrl": "https://docs.abloatai.com/errors#source_network_error"
+    },
+    {
+      "code": "source_operation_id_required",
+      "category": "validation",
+      "surface": "client",
+      "retryable": false,
+      "message": "A data-source operation arrived without the entity `id` it targets.",
+      "docUrl": "https://docs.abloatai.com/errors#source_operation_id_required"
     },
     {
       "code": "stale_context",
@@ -1641,6 +1734,15 @@
       "retryable": false,
       "message": "The tenant model is missing the organization_id column required for isolation.",
       "docUrl": "https://docs.abloatai.com/errors#tenant_model_missing_organization_id"
+    },
+    {
+      "code": "test_database_not_registered",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "Test mode requires a registered dev database for this org — run `npx ablo init`, or construct the client with `databaseUrl` using your test key.",
+      "docUrl": "https://docs.abloatai.com/errors#test_database_not_registered"
     },
     {
       "code": "transaction_mutate_unknown_model",
@@ -1781,6 +1883,14 @@
       "retryable": false,
       "message": "A wide scope is not permitted for this caller.",
       "docUrl": "https://docs.abloatai.com/errors#wide_scope_forbidden"
+    },
+    {
+      "code": "write_options_invalid",
+      "category": "validation",
+      "surface": "client",
+      "retryable": false,
+      "message": "The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `intent`) failed validation against the write-options schema.",
+      "docUrl": "https://docs.abloatai.com/errors#write_options_invalid"
     },
     {
       "code": "ws_not_ready",

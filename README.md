@@ -33,27 +33,43 @@ claims are visible while the work is still in progress.
 
 [Get started ↓](#quick-start) · point your coding agent at the shipped `llms.txt`
 
-It works with the auth and database you already have: realtime data is scoped to
-*sync groups* from your own identity, and your database can stay the source of
-truth via a Data Source.
+It works with the auth and database you already have. **Your database is the
+system of record — Ablo never hosts your data.** Ablo is the transaction layer
+on top of it: realtime data is scoped to *sync groups* from your own identity,
+and every committed row lives in your Postgres.
 
 **Built for** collaborative editors, AI agent workflows, and internal tools —
 anywhere people and agents change shared state and everyone has to see it live.
 
 ## Set up
 
+The CLI takes you from nothing to a synced schema — it handles the account,
+the key, and the env file. You bring one thing: a Postgres `DATABASE_URL`
+(local, Neon, RDS — any will do; **your database is the system of record,
+Ablo never hosts your data**).
+
 ```bash
 npm install @abloatai/ablo
+npx ablo login     # opens the browser: sign in (or sign up) → a sk_test_ key is saved locally
+npx ablo init      # scaffolds ablo/schema.ts (offers to log in if you skipped it)
+npx ablo migrate   # creates the synced tables in YOUR Postgres (reads DATABASE_URL)
+npx ablo dev       # pushes your schema (test mode), writes ABLO_API_KEY to .env.local, watches for changes
 ```
 
-**Keys & runtime.** Ablo needs Node 24+ and TypeScript 5+. Grab an `sk_test_*`
-key for a sandbox
-(`export ABLO_API_KEY=sk_test_...`); keep keys in trusted server runtimes only.
-In the browser, `<AbloProvider>` authenticates with the signed-in user's
-session — never the raw key.
+After `ablo dev`, the [Quick Start](#quick-start) below runs as-is —
+`ABLO_API_KEY` is already in `.env.local` (frameworks load it automatically;
+plain Node: `node --env-file=.env.local app.ts`). `npx ablo status` shows
+what's configured at any time.
 
-Then wire it by hand — the [Quick Start](#quick-start) below is the shape to
-copy. For production (React, an existing backend, Data Source, agents), the
+**Keys & runtime.** Ablo needs Node 24+ and TypeScript 5+. Keys come in two of
+*your* environments — `sk_test_` and `sk_live_`, like Stripe — and `ablo login`
+mints both. Keep the key and the database URL in trusted server runtimes only.
+In the browser, `<AbloProvider>` authenticates with the signed-in user's
+session — never the raw key, never the database URL. Prefer the connection
+string never leaving your infrastructure? Expose a signed
+[Data Source endpoint](./docs/data-sources.md) instead and omit `databaseUrl`.
+
+For production (React, an existing backend, Data Source, agents), the
 [Integration Guide](./docs/integration-guide.md) is the deeper map.
 
 **Prefer to let an agent wire it?** The package ships an `llms.txt` — a precise
@@ -78,7 +94,8 @@ const schema = defineSchema({
 
 const ablo = Ablo({
   schema,
-  apiKey: process.env.ABLO_API_KEY,
+  apiKey: process.env.ABLO_API_KEY, // written to .env.local by `npx ablo dev`
+  databaseUrl: process.env.DATABASE_URL, // your Postgres — rows live here, never with Ablo
 });
 
 await ablo.ready();
@@ -99,7 +116,7 @@ const forecast = await fetchForecast(report.location); // slow: API or LLM call
 await ablo.weatherReports.update({ id: report.id, data: { status: 'ready', forecast } });
 
 const ready = ablo.weatherReports.get(created.id);
-console.log({ id: ready.id, status: ready.status });
+console.log({ id: ready?.id, status: ready?.status });
 
 await ablo.dispose();
 ```
@@ -324,14 +341,18 @@ curl https://api.abloatai.com/v1/commits \
 { "object": "commit_receipt", "status": "confirmed", "serverTxId": "tx_…", "lastSyncId": 1042, "ops": 1 }
 ```
 
-## Connect Your Database
+## Your Database
 
-Every schema model is backed by **your own database**, connected as a Data
-Source: Ablo sends signed commit requests to an endpoint you host, and your app
-writes its own database. Your `DATABASE_URL` stays in your app — Ablo only ever
-sees the API key.
+Every schema model is backed by **your own database** — Ablo is the transaction
+layer on top of it, never the home for your rows. Two ways to connect it:
 
-See [Connect Your Database](./docs/data-sources.md) for the integration shape.
+| | How Ablo reaches your Postgres | Use when |
+| --- | --- | --- |
+| **Connection string** (default) | `databaseUrl` at init. Ablo registers the connection once (sent over TLS, stored sealed, never echoed back) and commits each write directly — through a non-superuser role, behind row-level security. | You can hand over a scoped connection string. |
+| **Signed endpoint** | Your app exposes one route built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`); Ablo sends signed commit requests and your app writes its own database. | Database credentials must never leave your infrastructure. |
+
+Same product, same truth either way: your database is the system of record. See
+[Connect Your Database](./docs/data-sources.md) for both shapes.
 
 ## Configuration
 
@@ -341,6 +362,7 @@ See [Connect Your Database](./docs/data-sources.md) for the integration shape.
 | --- | --- | --- | --- |
 | `schema` | `Schema` | — (required) | Typed model proxies (`ablo.<model>.*`) |
 | `apiKey` | `string \| ApiKeySetter \| null` | `process.env.ABLO_API_KEY` | Server key — a string, or an async function for rotation |
+| `databaseUrl` | `string \| null` | `process.env.DATABASE_URL` | Your Postgres, registered as the data plane. Server runtimes only — the SDK throws if it sees this in a browser. Omit it when your app exposes a signed [Data Source endpoint](./docs/data-sources.md) instead. |
 | `baseURL` | `string` | `wss://api.abloatai.com` | Point at a self-hosted or private API |
 
 Keep `apiKey` in trusted server runtimes. In the browser, `<AbloProvider>`
@@ -391,11 +413,11 @@ contract; there are no retry or timeout knobs to tune.
 - [Identity & Sync Groups](./docs/identity.md) — use your own authentication; tell Ablo who's connecting and how org / team / user map to sync-group scope.
 - [Schema Contract](./docs/schema-contract.md) — one schema becomes typed model clients, React reads, agent writes, Data Source shape, and schema push.
 - [Guarantees](./docs/guarantees.md) — confirmed writes, stale-write protection, claim coordination, and agent lifecycle.
-- [Integration Guide](./docs/integration-guide.md) — pick the backing mode and integrate React, Data Source, multiplayer, and agents.
+- [Integration Guide](./docs/integration-guide.md) — integrate React, your database, multiplayer, and agents.
 - [React](./docs/react.md) — `<AbloProvider>`, `useAblo`, presence, status, and bootstrap gating.
 - [Coordination](./docs/coordination.md) — `claim` / `claim.state` / `claim.queue` / `claim.release` reference: hold a row across slow agent work, and observe the line waiting behind it.
 - [Client Behavior](./docs/client-behavior.md) — options, errors, retries, timeouts, and public imports.
-- [Connect Your Database](./docs/data-sources.md) — keep canonical rows in your app database without giving Ablo database credentials.
+- [Connect Your Database](./docs/data-sources.md) — connect your Postgres by connection string (`databaseUrl`) or signed endpoint; your database is the system of record either way.
 - [Existing Python Backend](./docs/examples/existing-python-backend.md) — migrate existing Python endpoints to multiplayer and agent-safe writes gradually.
 - [AI SDK Tool](./docs/examples/ai-sdk-tool.md) — use Ablo inside an AI SDK tool call.
 - [Server Agent](./docs/examples/server-agent.md) — schema-backed worker.

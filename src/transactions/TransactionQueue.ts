@@ -16,7 +16,7 @@ import { getActiveRegistry } from '../ModelRegistry.js';
 import { MutationOperationType } from '../types/index.js';
 import { handleMutationError } from './mutation-error-handler.js';
 import { AbloError, AbloConnectionError, errorCodeSpec } from '../errors.js';
-import type { MutationOptions } from '../interfaces/index.js';
+import type { MutationOptions, WriteOptions } from '../interfaces/index.js';
 
 export interface UserContext {
   userId: string;
@@ -27,7 +27,6 @@ export interface UserContext {
 
 /** Wire-format mutation payload (post-projection). */
 type MutationInput = Record<string, unknown>;
-type TransactionWriteOptions = Pick<MutationOptions, 'readAt' | 'onStale'>;
 
 /**
  * Framework-internal keys added by `Model.toJSON()` that must never
@@ -117,7 +116,7 @@ export interface Transaction {
   attempts: number;
   priority: 'normal' | 'high';
   priorityScore: number; // derived FK-aware priority used for sorting
-  writeOptions?: TransactionWriteOptions;
+  writeOptions?: WriteOptions;
   batchId?: string;
   /** LINEAR PATTERN: syncId threshold - transaction confirms when delta.id >= this value */
   syncIdNeededForCompletion?: number;
@@ -197,28 +196,46 @@ const TX_TYPE_TO_MUTATION_OP: Record<Transaction['type'], MutationOperationType>
   unarchive: MutationOperationType.UNARCHIVE,
 };
 
-function hasStaleWriteOptions(options?: TransactionWriteOptions): boolean {
+function hasStaleWriteOptions(options?: WriteOptions): boolean {
   return (
     options?.readAt !== undefined ||
     options?.onStale !== undefined
   );
 }
 
-type StaleWriteOperationFields = {
+type WriteOperationFields = {
   readAt?: number | null;
   onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
+  options?: Pick<MutationOptions, 'idempotencyKey' | 'label'>;
 };
 
-function applyStaleWriteOptions<T extends object>(
+/**
+ * Project a transaction's `writeOptions` onto the wire operation. Stale
+ * guards (`readAt`/`onStale`) ride at the op root; `idempotencyKey`/`label`
+ * ride in the op's `options` slot (`MutationOperation.options` — the
+ * mutation_log cache key + audit tag). This is the single place the
+ * caller-supplied write vocabulary crosses onto the wire.
+ */
+function applyWriteOptions<T extends object>(
   op: T,
   transaction: Transaction,
-): T & StaleWriteOperationFields {
-  const operation = op as T & StaleWriteOperationFields;
-  if (transaction.writeOptions?.readAt !== undefined) {
-    operation.readAt = transaction.writeOptions.readAt;
+): T & WriteOperationFields {
+  const operation = op as T & WriteOperationFields;
+  const writeOptions = transaction.writeOptions;
+  if (!writeOptions) return operation;
+  if (writeOptions.readAt !== undefined) {
+    operation.readAt = writeOptions.readAt;
   }
-  if (transaction.writeOptions?.onStale !== undefined) {
-    operation.onStale = transaction.writeOptions.onStale;
+  if (writeOptions.onStale !== undefined) {
+    operation.onStale = writeOptions.onStale;
+  }
+  if (writeOptions.idempotencyKey != null || writeOptions.label !== undefined) {
+    operation.options = {
+      ...(writeOptions.idempotencyKey != null
+        ? { idempotencyKey: writeOptions.idempotencyKey }
+        : {}),
+      ...(writeOptions.label !== undefined ? { label: writeOptions.label } : {}),
+    };
   }
   return operation;
 }
@@ -788,7 +805,7 @@ export class TransactionQueue extends EventEmitter {
     // Build operations list
     const operations = pending.map((tx) => {
       this.ensureDerivedFields(tx);
-      return applyStaleWriteOptions({
+      return applyWriteOptions({
         type: TX_TYPE_TO_MUTATION_OP[tx.type],
         model: tx.modelKey,
         id: tx.modelId,
@@ -839,7 +856,7 @@ export class TransactionQueue extends EventEmitter {
   async create(
     model: Model,
     context: UserContext,
-    writeOptions?: TransactionWriteOptions,
+    writeOptions?: WriteOptions,
   ): Promise<Transaction> {
     const actualModelName = model.getModelName();
 
@@ -885,7 +902,7 @@ export class TransactionQueue extends EventEmitter {
     model: Model,
     context: UserContext,
     precomputedChanges?: Record<string, unknown>,
-    writeOptions?: TransactionWriteOptions,
+    writeOptions?: WriteOptions,
   ): Promise<Transaction> {
     const actualModelName = model.getModelName();
 
@@ -937,7 +954,7 @@ export class TransactionQueue extends EventEmitter {
   async delete(
     model: Model,
     context: UserContext,
-    writeOptions?: TransactionWriteOptions,
+    writeOptions?: WriteOptions,
   ): Promise<Transaction> {
     // 🔧 FIXED: Use getModelName() instead of constructor.name (production-safe)
     const actualModelName = model.getModelName();
@@ -1049,7 +1066,7 @@ export class TransactionQueue extends EventEmitter {
   async archive(
     model: Model,
     context: UserContext,
-    writeOptions?: TransactionWriteOptions,
+    writeOptions?: WriteOptions,
   ): Promise<Transaction> {
     // 🔧 FIXED: Use getModelName() instead of constructor.name (production-safe)
     const actualModelName = model.getModelName();
@@ -1260,9 +1277,7 @@ export class TransactionQueue extends EventEmitter {
               id: string;
               input?: Record<string, unknown>;
               transactionId: string;
-              readAt?: number | null;
-              onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
-            };
+            } & WriteOperationFields;
           }> = [];
 
           for (const tx of batch) {
@@ -1272,7 +1287,7 @@ export class TransactionQueue extends EventEmitter {
             // matches it via `OptimisticEchoTracker.consumeEcho` to suppress
             // double-applying optimistic mutations. Distinct from the
             // batch-level idempotency key in mutation_log.
-            const op = applyStaleWriteOptions({
+            const op = applyWriteOptions({
               type: TX_TYPE_TO_MUTATION_OP[tx.type],
               model: tx.modelKey,
               id: tx.modelId,
@@ -1747,6 +1762,12 @@ export class TransactionQueue extends EventEmitter {
     };
     this.commitStore.set(clientTxId, tx);
     this.commitLane.push(tx);
+    // Surface the envelope on its OWN event so the undo stream can record
+    // commit-lane writes too (`SyncClient.onLocalTransaction` enriches each
+    // operation with pool-captured previous state). Deliberately NOT
+    // `transaction:created` — that event also feeds the optimistic-echo
+    // tracker, and commit-lane ops have no optimistic pool apply to echo.
+    this.emit('commit:created', { clientTxId, operations: tx.operations });
     void this.processCommitLane();
   }
 
@@ -2099,7 +2120,7 @@ export class TransactionQueue extends EventEmitter {
 
     try {
       await this.mutationExecutor.commit([
-        applyStaleWriteOptions({ type: mutationType, model, id: modelId, input }, transaction),
+        applyWriteOptions({ type: mutationType, model, id: modelId, input }, transaction),
       ]);
     } catch (error) {
       handleMutationError(error, `${type}-mutation`, schemaName, modelId);

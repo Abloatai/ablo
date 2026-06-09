@@ -97,7 +97,11 @@ export const noopAnalytics: SyncAnalytics = {
 /** Browser-native online status provider */
 export const browserOnlineStatus: OnlineStatusProvider = {
   isOnline(): boolean {
-    return typeof navigator !== 'undefined' ? navigator.onLine : true;
+    // Only `navigator.onLine === false` is the MDN-reliable "definitely offline"
+    // signal. Don't use `!navigator.onLine`: Node 18+ exposes a global
+    // `navigator` whose `onLine` is `undefined`, which `!` would read as offline —
+    // wedging every Node/server client (agents, worker, MCP) into a false offline.
+    return !(typeof navigator !== 'undefined' && navigator.onLine === false);
   },
 };
 

@@ -1,3 +1,4 @@
+import { AbloValidationError } from '../errors.js';
 import type {
   Schema,
   SchemaRecord,
@@ -198,8 +199,9 @@ export function sourceEventForOperation(
 ): SourceEvent {
   const entityId = options.entityId ?? options.operation.id;
   if (typeof entityId !== 'string' || entityId.length === 0) {
-    throw new Error(
+    throw new AbloValidationError(
       'sourceEventForOperation requires operation.id or an explicit entityId',
+      { code: 'source_event_invalid' },
     );
   }
   const occurredAt = normalizeEventOccurredAt(options.occurredAt);

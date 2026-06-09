@@ -1,10 +1,14 @@
 # Connect Your Database
 
-The default integration keeps your rows in **your own database**. You define an
-Ablo schema for the models humans and agents edit together, expose one Data Source
-endpoint, and Ablo coordinates each write and calls your app to commit it to your
-Postgres. Ablo never stores the data and never sees your `DATABASE_URL` — it only
-calls the endpoint you expose.
+**Your database is the system of record — Ablo never hosts your data.** Every
+synced model is backed by your own Postgres; Ablo is the transaction layer on
+top of it. There are two ways to connect, and they are the same product with the
+same writes — the only difference is where your database credential lives:
+
+| | How Ablo reaches your Postgres | Use when |
+|---|---|---|
+| **Connection string** (default) | You pass `databaseUrl` to `Ablo(...)`; Ablo registers the connection and commits each write directly, behind row-level security. | You can hand over a scoped connection string. |
+| **Signed endpoint** | Your app exposes one route built from an ORM adapter; Ablo sends signed commit requests and your app writes its own database. | Database credentials must never leave your infrastructure. |
 
 Either way, you define an Ablo schema with `defineSchema`, `model`, and Zod. The
 Ablo schema describes **only your synced, collaborative models** — the rows Ablo
@@ -12,17 +16,18 @@ coordinates and fans out in realtime. It is *not* your whole-database schema and
 does *not* replace your `schema.prisma` (or your Drizzle schema). Your auth,
 billing, and any other non-synced tables stay in your own ORM schema, owned by
 your own migrations. One database, two schemas, side by side: Ablo owns the
-synced models (plus the small `ablo_outbox` / `ablo_idempotency` bookkeeping
-tables its adapter needs); you keep owning everything else. `ablo check` reflects
-this — it reports your other tables as "ignored / owned by you," which is exactly
-right.
+synced models; you keep owning everything else. `ablo check` reflects this — it
+reports your other tables as "ignored / owned by you," which is exactly right.
 
-Your app can keep using its own `DATABASE_URL`. Store that value in your app or
-backend environment, not in Ablo. The integration boundary is the HTTPS
-endpoint your app exposes. The happy path uses the same server-side
-`ABLO_API_KEY` to verify Ablo calls.
+What Ablo stores, in both shapes: your schema *definition* (model names, fields,
+types — pushed with `ablo push`), your hashed API keys, a safe projection of the
+connection registration (host, database, schema — the connection string itself
+is sealed and never echoed back), and the commit log that drives sync. Never
+your rows.
 
-Use the SDK with an API key:
+## Connection String (default)
+
+The canonical client carries all three values:
 
 ```ts
 import Ablo from '@abloatai/ablo';
@@ -31,28 +36,50 @@ import { schema } from './ablo/schema';
 export const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
+  databaseUrl: process.env.DATABASE_URL, // your Postgres — rows live here, never with Ablo
 });
 ```
 
-Do not pass a database URL to `Ablo(...)`.
-
-For the first production integration, prefer this shape:
-
 ```bash
-# Stored only in your app/backend
-DATABASE_URL=postgres://...
-
-# The only Ablo credential in the customer app
+# .env — server runtime only, never the browser
+DATABASE_URL=postgres://ablo_app:...@host:5432/db
 ABLO_API_KEY=sk_live_...
 ```
 
-## Backing Modes
+On first connect the SDK registers the connection — sent once over TLS, stored
+sealed, never returned by any API. From then on Ablo commits every confirmed
+write directly to your database and reads canonical rows from it.
 
-| Mode | Where rows live | What `create/update/delete` does | Use when |
-|---|---|---|---|
-| Data Source | Your own database | Sends a signed commit request to your route; your app writes its DB in one transaction and returns canonical rows. | Always — you own the data: your app tables, regulated data, anything that lives in your Postgres. |
+Safety requirements, enforced server-side before the first write:
 
-The SDK call:
+- **Non-superuser role.** The connection must not be a superuser or hold
+  `BYPASSRLS` — Ablo's tenant isolation is row-level security, and a role that
+  can bypass it is rejected outright.
+- **Row-level security on synced tables.** `npx ablo migrate` provisions your
+  synced-model tables with `FORCE ROW LEVEL SECURITY` already applied; tables
+  you create yourself must do the same.
+- **Public hosts only.** Connection strings resolving to loopback or private
+  address ranges are rejected.
+
+`databaseUrl` is server-only: the SDK throws if it sees one in a browser-like
+environment, and `dangerouslyAllowBrowser` does not override that.
+
+## Signed Endpoint
+
+When a connection string must not leave your infrastructure, keep
+`DATABASE_URL` in your app and expose one HTTPS endpoint instead. Ablo signs a
+commit request; an ORM adapter in your route runs it in one transaction against
+your Postgres and returns the canonical rows. Omit `databaseUrl` from
+`Ablo(...)` in this setup — the client takes only the schema and the API key:
+
+```ts
+export const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+});
+```
+
+The SDK call is identical in both shapes:
 
 ```ts
 await ablo.weatherReports.create({ data: { location: 'Stockholm', status: 'pending' } });
@@ -214,9 +241,9 @@ cron job or admin tool that never went through Ablo. Append an `ablo_outbox` row
 (with no `clientTxId`) for those in the same transaction as the change, and the
 adapter's feed carries them to every connected screen.
 
-## Production Checklist
+## Production Checklist (signed endpoint)
 
-Before using a customer-owned database in production:
+Before using the signed-endpoint shape in production:
 
 - Keep `DATABASE_URL` in the customer app or backend environment.
 - Use only the Data Source endpoint and `ABLO_API_KEY` as the customer-facing integration boundary.
@@ -232,9 +259,8 @@ transaction, `clientTxId` idempotency, returning canonical rows, the outbox
 append per operation, and deduping the feed by event `id`. You don't write any of
 that by hand.
 
-Don't give Ablo your database URL for this integration — Ablo never connects to
-your database directly. (Direct database access would be a separate product with
-its own security model.)
+In this shape, leave `databaseUrl` out of `Ablo(...)` — the endpoint *is* the
+connection, and registering both would point Ablo at your database twice.
 
 ## Security
 

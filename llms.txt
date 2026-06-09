@@ -10,7 +10,9 @@ Use AI SDK for the agent loop. Use Ablo when agent reads and writes must persist
 
 First action when integrating into an app: run `npx ablo init --yes --framework <nextjs|vite|remix|vanilla> --storage datasource`. Agents have no TTY — `--yes` is REQUIRED or it HANGS. It scaffolds `ablo/schema.ts`, the client, the Data Source endpoint, and (for Next.js) the browser provider + session route, all on the current API. Edit the generated files rather than hand-writing from this doc.
 
-Then PUSH — this is the step everything depends on. The server keeps its OWN copy of the schema. After you create or change `ablo/schema.ts`, run `npx ablo push` (one-shot). Until you push, EVERY write to a new or changed model fails with `server_execute_unknown_model`. (Or keep `npx ablo dev` running — it pushes on save.)
+Second: make sure a key exists. Check `ABLO_API_KEY` in the environment, then `.env.local`. If neither has one, ask the HUMAN to run `npx ablo login` once — it opens a browser and saves a `sk_test_` key locally; an agent must NOT run it. You never copy the key by hand: the next step writes it into `.env.local` for you.
+
+Then PUSH — this is the step everything depends on. The server keeps its OWN copy of the schema. Run `npx ablo dev --no-watch`: it pushes `ablo/schema.ts` (test mode) AND writes `ABLO_API_KEY` into `.env.local` from the stored login. Until the schema is pushed, EVERY write to a new or changed model fails with `server_execute_unknown_model`. Re-run it after schema changes (`npx ablo push` also works once the key is wired; bare `npx ablo dev` watches forever — don't, you have no TTY).
 
 ## Use this API
 
@@ -116,7 +118,7 @@ A schema is model fields and relations. Advanced schema helpers such as `mutable
 
 Do not add `databaseURL` to `Ablo(...)`. Application and agent code use `ABLO_API_KEY`.
 
-Every schema model is backed by a database, and the default is YOUR OWN. Keep your rows in your Postgres and expose a Data Source endpoint that hands Ablo an ORM `adapter` (Drizzle is the default; Prisma is also supported) — it owns the transaction, exactly-once idempotency, and outbox in ONE pass (no hand-written `commit`/`events`). Your `DATABASE_URL` lives in your app, never in `Ablo(...)`; run `npx ablo migrate` to provision the synced-model tables in your DB.
+Every schema model is backed by a database, and the default is YOUR OWN. Keep your rows in your Postgres and expose a Data Source endpoint that hands Ablo an ORM `adapter` (Drizzle is the default; Prisma and Kysely are also supported) — it owns the transaction, exactly-once idempotency, and outbox in ONE pass (no hand-written `commit`/`events`). Your `DATABASE_URL` lives in your app, never in `Ablo(...)`; run `npx ablo migrate` to provision the synced-model tables in your DB.
 
 ```ts
 // app/api/ablo/source/route.ts
@@ -130,7 +132,7 @@ export const runtime = 'nodejs'; // the route touches your database
 export const { POST } = dataSourceNext({
   schema,
   apiKey: process.env.ABLO_API_KEY!,
-  adapter: drizzleDataSource(db, schema), // or prismaDataSource(prisma, schema)
+  adapter: drizzleDataSource(db, schema), // or prismaDataSource(prisma, schema) / kyselyDataSource(db, schema)
 });
 ```
 
@@ -165,6 +167,7 @@ Import from these public paths only:
 - `@abloatai/ablo/source` — `dataSource`, the `DataSourceAdapter` spine, `prismaDataSource`. For a customer-canonical Data Source endpoint.
 - `@abloatai/ablo/source/next` — `dataSourceNext` (Next.js App Router `{ POST }`).
 - `@abloatai/ablo/source/drizzle` — `drizzleDataSource`.
+- `@abloatai/ablo/source/kysely` — `kyselyDataSource`.
 - `@abloatai/ablo/source/conformance` — `runDataSourceTests` to prove a custom adapter/handler.
 
 Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or internal subpaths. (`/source` IS public — it's the Data Source endpoint surface above.)
@@ -174,8 +177,8 @@ Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or internal subp
 `ablo init` and other prompts need a TTY; an agent/CI run has none and will HANG. Always:
 
 - `npx ablo init --yes` (flags: `--framework`, `--auth`, `--storage`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login`). Generates `ablo/schema.ts` + the `ablo/data-source.ts` endpoint above.
-- Authenticate with the `ABLO_API_KEY` env var. Do NOT run `ablo login` (opens a browser).
+- Key: see "Start here" — env → `.env.local` → ask the human to `npx ablo login`; never run `login` yourself, never copy keys by hand (`ablo dev` writes `.env.local`).
 - Adopt an existing DB: `npx ablo pull prisma [path]` / `npx ablo pull drizzle <module>`.
-- `npx ablo dev --no-watch` (default watches forever); `npx ablo logs --no-follow` (default tails forever); `npx ablo mode test|live` (always pass the arg). `npx ablo push`/`status`/`pull`/`check`/`generate` are one-shot.
+- `npx ablo dev --no-watch` pushes the schema (test mode) AND writes `ABLO_API_KEY` to `.env.local` (default watches forever); `npx ablo logs --no-follow` (default tails forever); `npx ablo mode test|live` (always pass the arg). `npx ablo push`/`status`/`pull`/`check`/`generate` are one-shot.
 
 Canonical docs to read before integrating: `quickstart`, `schema-contract`, `integration-guide`, `guarantees`, `client-behavior`, `data-sources`, `examples/existing-python-backend`, `api`, `examples/ai-sdk-tool`, and `examples/server-agent`.

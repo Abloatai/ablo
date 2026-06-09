@@ -9,6 +9,7 @@
  * per model, an idempotency ledger keyed by `clientTxId`, and a monotonic outbox.
  */
 
+import { AbloValidationError } from '../../errors.js';
 import type {
   AdapterCommitResult,
   AdapterReadRequest,
@@ -20,7 +21,7 @@ import type { ChangeSet, EventsPage, Migration, Operation, OutboxEvent } from '.
 function rowId(op: Operation): string {
   const id = op.id ?? (op.input?.id as string | undefined);
   if (typeof id !== 'string' || id.length === 0) {
-    throw new Error(`operation on "${op.model}" requires an id`);
+    throw new AbloValidationError(`operation on "${op.model}" requires an id`, { code: 'source_operation_id_required' });
   }
   return id;
 }

@@ -24,6 +24,7 @@
  */
 
 import { z } from 'zod';
+import { AbloValidationError } from '../errors.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -221,7 +222,7 @@ export type FieldBuilder<T extends z.ZodType> = T & {
 
 function assertColumnName(column: string): void {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/.test(column)) {
-    throw new Error(`field.from(): invalid column identifier ${JSON.stringify(column)}`);
+    throw new AbloValidationError(`field.from(): invalid column identifier ${JSON.stringify(column)}`, { code: 'schema_definition_invalid' });
   }
 }
 

@@ -13,6 +13,7 @@
  * a fake, while a real `PrismaClient` satisfies it at the call site.
  */
 
+import { AbloValidationError } from '../../errors.js';
 import type {
   AdapterCommitResult,
   AdapterReadRequest,
@@ -73,7 +74,7 @@ const lowerFirst = (s: string): string => (s ? s[0].toLowerCase() + s.slice(1) :
 function delegateFor(client: PrismaLike, name: string): PrismaDelegate {
   const delegate = (client as unknown as Record<string, PrismaDelegate | undefined>)[name];
   if (!delegate || typeof delegate.findMany !== 'function') {
-    throw new Error(`prismaDataSource: no Prisma delegate "${name}" on the client`);
+    throw new AbloValidationError(`prismaDataSource: no Prisma delegate "${name}" on the client`, { code: 'source_adapter_misconfigured' });
   }
   return delegate;
 }
@@ -120,7 +121,7 @@ function findManyArgs(query: SourceListQuery | undefined): {
 function rowId(op: Operation): string {
   const id = op.id ?? (op.input?.id as string | undefined);
   if (typeof id !== 'string' || id.length === 0) {
-    throw new Error(`operation on "${op.model}" requires an id`);
+    throw new AbloValidationError(`operation on "${op.model}" requires an id`, { code: 'source_operation_id_required' });
   }
   return id;
 }

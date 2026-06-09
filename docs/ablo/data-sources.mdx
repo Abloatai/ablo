@@ -2,10 +2,15 @@
 title: 'Connect Your Database'
 ---
 
-Every schema model has a backing store. If your existing app database is the
-source of truth, connect it as a **Data Source**: Ablo sends signed requests to
-your server, your server writes its database, and Ablo coordinates the confirmed
-stream.
+**Your database is the system of record — Ablo never hosts your data.** Every
+schema model is backed by your own Postgres; Ablo is the transaction layer on
+top of it. There are two ways to connect, and they are the same product with the
+same writes — the only difference is where your database credential lives:
+
+| | How Ablo reaches your Postgres | Use when |
+| --- | --- | --- |
+| **Connection string** (default) | You pass `databaseUrl` to `Ablo(...)`; Ablo registers the connection and commits each write directly, behind row-level security. | You can hand over a scoped connection string. |
+| **Signed endpoint** | Your app exposes one route built from an ORM adapter; Ablo sends signed commit requests and your app writes its own database. | Database credentials must never leave your infrastructure. |
 
 Customer apps must define an Ablo schema. The schema is the contract between
 the SDK, agents, realtime subscriptions, and your database — for the **synced**
@@ -14,37 +19,13 @@ schema; the Ablo schema describes the collaborative tables, your own
 Drizzle/Prisma schema keeps describing everything else (auth, billing, anything
 not synced). One database, two schemas, side by side.
 
-The Data Source path keeps database credentials inside your app. Store one Ablo
-API key in the app, and keep using your existing database configuration for your
-own database client.
+What Ablo stores, in both shapes: your schema *definition* (model names,
+fields, types — pushed with `ablo push`), your hashed API keys, a safe
+projection of the connection registration (host, database, schema — the
+connection string itself is sealed and never returned by any API), and the
+commit log that drives sync. Never your rows.
 
-You expose one endpoint that verifies Ablo's signed request before opening a
-database transaction.
-
-## What Works Today
-
-The Data Source contract is implemented and tested:
-
-- `dataSourceNext(...)` verifies signed requests before your adapter runs.
-- The adapter (`prismaDataSource` / `drizzleDataSource`) handles reads, commits,
-  idempotency, and the outbox events feed.
-- Source-mode commits append confirmed rows into Ablo's `sync_deltas`.
-- Source events are polled and deduped by event id.
-- SDK-origin outbox echoes are filtered by `clientTxId`.
-
-For the current source-mode path, the Data Source endpoint is provisioned for
-the Ablo deployment. The hosted dashboard/API flow that lets every project
-self-register a different endpoint is still productization work. Your app's
-integration boundary stays the same: `ABLO_API_KEY` plus the public endpoint URL.
-
-## Backing Modes
-
-| Mode                      | Where rows live   | What `create/update/delete` does                                                                       | Use when                                                                         |
-| ------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| Data Source               | Your app database | Sends a signed commit request to your route; your app writes its DB and returns canonical rows.        | Existing app tables, regulated data, or service logic must stay source of truth. |
-| Direct Postgres connector | Your Postgres     | Ablo applies the write to provisioned tables, returns the confirmed row, and fans out realtime deltas. | You explicitly want Ablo to own the database connection and provisioning flow.   |
-
-Both available modes use the same SDK call:
+Both shapes use the same SDK call:
 
 ```ts
 await ablo.tasks.create({ data: { title: 'Draft launch plan', status: 'todo' } });
@@ -52,49 +33,42 @@ await ablo.tasks.update({ id: 'task_123', data: { status: 'done' } });
 const task = ablo.tasks.get('task_123');
 ```
 
-Only the backing store changes.
-
-Multiplayer behavior is the same in both modes. Writes made through
+Multiplayer behavior is the same in both shapes. Writes made through
 `ablo.<model>.create/update/delete` are coordinated by Ablo, then confirmed rows
-fan out to subscribers. Direct database writes outside Ablo need Data Source
-events so connected humans and agents see the change.
+fan out to subscribers. Database writes that bypass Ablo need outbox events so
+connected humans and agents see the change.
 
-## Direct Postgres Connector
+## Connection String (default)
 
-The optional direct connector is different: you explicitly let Ablo open a
-connection to Postgres and provision tables for the models you declare. It uses
-a server-only `DATABASE_URL`.
-
-```bash
-npx ablo migrate            # provision your synced models + ablo_outbox/ablo_idempotency in DATABASE_URL
-npx ablo migrate --dry-run  # preview the exact SQL first
-```
-
-`ablo migrate` only provisions the models in your Ablo schema plus the adapter's
-`ablo_outbox` / `ablo_idempotency` tables. It never touches your other tables —
-auth, billing, anything outside the Ablo schema stays owned by your own ORM
-migrations.
-
-See the [CLI](/cli) for the full migrate flow and Zod-to-Postgres type mapping.
-
-### Register a direct connector from the SDK
-
-Instead of registering the direct connector out of band, pass `databaseUrl`
-straight to the client. On `ready()` — before the first sync — the SDK registers
-that connection as your project's store and Ablo writes synced rows back into it:
+Pass `databaseUrl` straight to the client. On `ready()` — before the first sync
+— the SDK registers that connection as your project's store, and Ablo commits
+every confirmed write directly to your database:
 
 ```ts
 const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
-  databaseUrl: process.env.DATABASE_URL, // your Postgres
+  databaseUrl: process.env.DATABASE_URL, // your Postgres — rows live here, never with Ablo
 });
 
 await ablo.ready();
 ```
 
 `databaseUrl` defaults to `process.env.DATABASE_URL`, so a server-side app that
-already exports it needs nothing extra.
+already exports it needs nothing extra. The connection string is sent once over
+TLS, stored sealed, and never returned by any API.
+
+Provision your synced-model tables in that database:
+
+```bash
+npx ablo migrate            # provision your synced models in DATABASE_URL
+npx ablo migrate --dry-run  # preview the exact SQL first
+```
+
+`ablo migrate` only provisions the models in your Ablo schema (with row-level
+security already applied). It never touches your other tables — auth, billing,
+anything outside the Ablo schema stays owned by your own ORM migrations. See
+the [CLI](/cli) for the full migrate flow and Zod-to-Postgres type mapping.
 
 <Warning>
   `databaseUrl` is **server-only** — it carries your database credentials. Constructing a client
@@ -104,32 +78,46 @@ already exports it needs nothing extra.
 
 <Note>
   Give Ablo a **non-superuser, non-`BYPASSRLS` role**, not your owner connection. Ablo runs your
-  tenant plane with row-level security **forced**, and rejects a role that could bypass it
-  (`byo_role_cannot_enforce_rls`; legacy wire-code prefix, Direct Postgres connector behavior). A
-  restricted role is what lets the database — not just app code — guarantee isolation.
+  tenant plane with row-level security **forced**, and rejects a role that could bypass it. A
+  restricted role is what lets the database — not just app code — guarantee isolation. Connection
+  strings resolving to loopback or private address ranges are rejected too.
 </Note>
 
-## When To Use A Data Source
+## Signed Endpoint
 
-Use a Data Source when your existing service layer already owns writes, the data
-is regulated, or the database must stay behind your own API. This is the
-Zero-shaped path: Ablo coordinates, your server writes the database.
+When a connection string must not leave your infrastructure, keep
+`DATABASE_URL` in your app and expose one HTTPS endpoint instead: Ablo sends
+signed requests to your server, your server writes its database, and Ablo
+coordinates the confirmed stream. Omit `databaseUrl` from `Ablo(...)` in this
+shape — the endpoint *is* the connection, and registering both would point Ablo
+at your database twice.
 
-If you are migrating an app where every button already calls a backend endpoint,
-read [Integration Guide](/integration-guide) first, then
+You expose one endpoint that verifies Ablo's signed request before opening a
+database transaction. The contract is implemented and tested:
+
+- `dataSourceNext(...)` verifies signed requests before your adapter runs.
+- The adapter (`prismaDataSource` / `drizzleDataSource`) handles reads, commits,
+  idempotency, and the outbox events feed.
+- Endpoint commits append confirmed rows into Ablo's commit log for realtime
+  fan-out.
+- Outbox events are polled and deduped by event id.
+- SDK-origin outbox echoes are filtered by `clientTxId`.
+
+Choose this shape when your existing service layer already owns writes, the
+data is regulated, or the database must stay behind your own API. If you are
+migrating an app where every button already calls a backend endpoint, read
+[Integration Guide](/integration-guide) first, then
 [Existing Python Backend](/examples/existing-python-backend) for a concrete
 service-owned database example.
 
-## What Ablo Gives You
+### What the integration has
 
-When you add a Data Source, the integration has:
-
-| Field                | Purpose                                                                                                                |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Data Source endpoint | The public HTTPS endpoint in your app that Ablo calls.                                                                 |
-| API key              | Stored in your app as `ABLO_API_KEY`; used by the SDK and the Data Source endpoint.                                    |
-| External-write feed  | The adapter's `ablo_outbox` table, served as the events feed Ablo polls.                                               |
-| Status               | Last successful request, last error, and delivery attempts. Hosted status UI is planned with per-project registration. |
+| Field                | Purpose                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| Data Source endpoint | The public HTTPS endpoint in your app that Ablo calls.                               |
+| API key              | Stored in your app as `ABLO_API_KEY`; used by the SDK and the Data Source endpoint.  |
+| External-write feed  | The adapter's `ablo_outbox` table, served as the events feed Ablo polls.             |
+| Status               | Last successful request, last error, and delivery attempts.                          |
 
 The shape is the same as a production webhook integration:
 
@@ -139,7 +127,7 @@ The shape is the same as a production webhook integration:
 4. Keep your database credentials in your app.
 5. Write an outbox row when data changes outside Ablo.
 
-## Route
+### Route
 
 Wire your ORM through an adapter. The adapter knows how to read rows, run the
 commit transaction, dedupe by `clientTxId` (idempotency), and serve the outbox
@@ -186,7 +174,7 @@ await ablo.tasks.update({
 });
 ```
 
-## Commit Request
+### Commit Request
 
 When Ablo calls your Data Source, it sends a signed JSON request:
 
@@ -227,7 +215,7 @@ Return canonical rows:
 Use explicit `deltas` only when your source already computes canonical change
 events.
 
-## External Writes
+### External Writes
 
 If your app changes data outside Ablo — old endpoints, cron jobs, admin tools,
 imports — write a row into the adapter's `ablo_outbox` table in the same
@@ -253,9 +241,9 @@ Outbox rows without `clientTxId` are treated as external writes. The
 `ablo_outbox` and `ablo_idempotency` tables are provisioned by `ablo migrate`
 (or the adapter's own setup) — they live alongside your application tables.
 
-## Production Checklist
+### Production Checklist
 
-Before using a customer-owned database in production:
+Before using the signed-endpoint shape in production:
 
 - Keep `DATABASE_URL` in the customer app or backend environment.
 - Use only the Data Source endpoint and `ABLO_API_KEY` as the customer-facing integration boundary.
@@ -266,15 +254,10 @@ Before using a customer-owned database in production:
 - Dedupe outbox events by event `id`.
 - Monitor last success, last error, retry count, event lag, and cursor.
 
-In Data Source mode the integration boundary is the HTTPS endpoint, so you do
-not send a database URL — the endpoint is what keeps your credentials private.
-This is the path to choose when your server should write the database. The
-direct Postgres connector is the opt-in path where Ablo holds a connection.
-
 ## Security
 
-- Verify requests with `ABLO_API_KEY`.
-- Keep database credentials in your app.
+- Verify endpoint requests with `ABLO_API_KEY`.
+- Keep database credentials in server runtimes (your app, or the sealed Ablo registration).
 - Dedupe commits by `clientTxId`.
 - Dedupe external events by event `id`.
 - Use HTTPS in production.

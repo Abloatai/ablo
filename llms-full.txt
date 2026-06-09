@@ -19,7 +19,7 @@ Public imports:
 - `@abloatai/ablo/react` — React provider and hooks.
 - `@abloatai/ablo/testing` — test harnesses and mocks.
 
-Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or `internal/*` as public imports. The Data Source surface — `/source`, `/source/next`, `/source/drizzle`, `/source/conformance` — IS public (it's how a customer-owned database is wired).
+Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or `internal/*` as public imports. The Data Source surface — `/source`, `/source/next`, `/source/drizzle`, `/source/kysely`, `/source/conformance` — IS public (it's how a customer-owned database is wired).
 
 The canonical integration doc is `integration-guide`. It explains the end-to-end
 path for schema, React selectors, your Data Source-backed database, multiplayer,
@@ -187,7 +187,11 @@ writers prove claim/stale behavior.
 
 Use these public environment names:
 
-- `ABLO_API_KEY` — SDK authentication for app and agent code.
+- `ABLO_API_KEY` — SDK authentication for app and agent code. Where it comes
+  from: the human runs `npx ablo login` once (browser; an agent must not run
+  it), and `npx ablo dev` then writes `ABLO_API_KEY=sk_test_…` into
+  `.env.local` automatically. Check the environment and `.env.local` before
+  asking the human for a key.
 
 Do not ask customers to paste their app database URL into Ablo. If their app
 database is canonical, they expose a Data Source endpoint and keep database
@@ -209,7 +213,7 @@ import { prisma } from './lib/prisma';
 export const { POST } = dataSourceNext({
   schema,
   apiKey: process.env.ABLO_API_KEY!,
-  adapter: prismaDataSource(prisma, schema), // or drizzleDataSource(db, schema)
+  adapter: prismaDataSource(prisma, schema), // or drizzleDataSource(db, schema) / kyselyDataSource(db, schema)
 });
 ```
 

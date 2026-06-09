@@ -7,8 +7,15 @@
  *   - `hosted`     — Ablo's control-plane database.
  *   - `selfHosted` — the customer's database, same execution path as hosted.
  *   - `source`     — a customer-owned endpoint (credentialless ingestion).
+ *
+ * @internal Deployment topology, not product vocabulary. Customers never see a
+ * "storage mode" — their story is `Ablo({ schema, apiKey, databaseUrl })` and
+ * one `datasource` resource (docs/plans/sync-engine-stripe-story-scope.md).
+ * This export exists for the sync-server host only.
  */
 import { z } from 'zod';
 
+/** @internal See module note — host-deployment vocabulary, never customer-facing. */
 export const storageModeSchema = z.enum(['hosted', 'source', 'selfHosted']);
+/** @internal See module note — host-deployment vocabulary, never customer-facing. */
 export type StorageMode = z.infer<typeof storageModeSchema>;

@@ -23,7 +23,7 @@ import {
   type OptimisticEchoMetrics,
 } from './transactions/OptimisticEchoTracker.js';
 import type { Database } from './Database.js';
-import type { MutationOptions } from './interfaces/index.js';
+import type { WriteOptions } from './interfaces/index.js';
 
 interface SyncObserver {
   onSync?: (event: SyncEvent) => void;
@@ -55,7 +55,6 @@ export interface RehydrationStats {
 
 type EventHandler = () => void;
 
-type MutationWriteOptions = Pick<MutationOptions, 'readAt' | 'onStale'>;
 
 export class SyncClient extends EventEmitter {
   private objectPool: ObjectPool;
@@ -75,7 +74,7 @@ export class SyncClient extends EventEmitter {
     model: Model;
     timestamp: Date;
     capturedChanges?: Record<string, unknown>;
-    writeOptions?: MutationWriteOptions;
+    writeOptions?: WriteOptions;
   }> = [];
 
   /**
@@ -429,6 +428,15 @@ export class SyncClient extends EventEmitter {
       this.offlineSince = new Date();
       this.emit('sync:offline');
     }
+  }
+
+  /**
+   * The organization this client writes under (set by `initialize`).
+   * Read by the model proxy so `create()` defaults `organizationId` the
+   * same way the mutator path does — `null` until identity is wired.
+   */
+  getOrganizationId(): string | null {
+    return this.organizationId;
   }
 
   /**
@@ -815,7 +823,7 @@ export class SyncClient extends EventEmitter {
     type: 'create' | 'update' | 'delete' | 'archive',
     model: Model,
     poolAction: () => void,
-    writeOptions?: MutationWriteOptions,
+    writeOptions?: WriteOptions,
   ): void {
     // CRITICAL FIX: Capture changes BEFORE pool action
     // Pool operations (especially upsert) can clear _local changes
@@ -868,12 +876,12 @@ export class SyncClient extends EventEmitter {
   }
 
   /** Add new model (CREATE) - works offline */
-  add(model: Model, options?: MutationWriteOptions): void {
+  add(model: Model, options?: WriteOptions): void {
     this.mutate('create', model, () => this.objectPool.add(model, ModelScope.live), options);
   }
 
   /** Update existing model (UPDATE) - works offline */
-  update(model: Model, options?: MutationWriteOptions): void {
+  update(model: Model, options?: WriteOptions): void {
     this.mutate('update', model, () => this.objectPool.upsert(model, ModelScope.live), options);
   }
 
@@ -912,7 +920,7 @@ export class SyncClient extends EventEmitter {
   }
 
   /** Delete model (DELETE) - works offline */
-  delete(model: Model, options?: MutationWriteOptions): void {
+  delete(model: Model, options?: WriteOptions): void {
     // Clear pending mutations first to prevent "not found" errors on fast delete
     this.clearPendingMutationsForModel(model.id);
     this.mutate('delete', model, () => this.objectPool.remove(model.id), options);
@@ -1079,7 +1087,7 @@ export class SyncClient extends EventEmitter {
     model: Model;
     timestamp: Date;
     capturedChanges?: Record<string, unknown>;
-    writeOptions?: MutationWriteOptions;
+    writeOptions?: WriteOptions;
   }): void {
     this.pendingMutations.push(mutation);
     this.scheduleSync();
@@ -1218,7 +1226,7 @@ export class SyncClient extends EventEmitter {
     model: Model;
     timestamp: Date;
     capturedChanges?: Record<string, unknown>;
-    writeOptions?: MutationWriteOptions;
+    writeOptions?: WriteOptions;
   }): void {
     if (!this.userId || !this.organizationId) return;
 
@@ -1632,7 +1640,74 @@ export class SyncClient extends EventEmitter {
     listener: (tx: import('./transactions/TransactionQueue.js').Transaction) => void,
   ): () => void {
     this.transactionQueue.on('transaction:created', listener);
-    return () => this.transactionQueue.off('transaction:created', listener);
+    // Commit-lane writes (`ablo.commits.create` — the agent/atomic door) ride
+    // their own `commit:created` event: they have no optimistic pool apply,
+    // so they must not feed the echo tracker's `transaction:created` path.
+    // Enrich each operation with previous state captured from the pool HERE
+    // (the queue is pool-free) and hand the synthesized transaction to the
+    // same listener, so undo observes every write door — one stream.
+    const onCommitCreated = (payload: {
+      clientTxId: string;
+      operations: ReadonlyArray<{
+        type: string;
+        model: string;
+        id: string;
+        input?: Record<string, unknown>;
+      }>;
+    }): void => {
+      const TYPE_BY_WIRE: Record<
+        string,
+        import('./transactions/TransactionQueue.js').Transaction['type']
+      > = {
+        CREATE: 'create',
+        UPDATE: 'update',
+        DELETE: 'delete',
+        ARCHIVE: 'archive',
+        UNARCHIVE: 'unarchive',
+      };
+      payload.operations.forEach((op, index) => {
+        const type = TYPE_BY_WIRE[op.type];
+        if (!type || !op.id) return;
+        const resident = this.objectPool.get(op.id);
+        const snapshot =
+          type === 'create' ? undefined : (resident?.toJSON() as Record<string, unknown> | undefined);
+        // A DELETE of a row the local graph never saw is not invertible —
+        // recording it would make undo "restore" an empty husk. Skip it.
+        if (type === 'delete' && !snapshot) return;
+        // UPDATE inverse must only revert the fields this op actually wrote;
+        // handing undo the FULL row would clobber concurrent edits to
+        // unrelated fields on revert.
+        const previousData =
+          type === 'update' && snapshot && op.input
+            ? Object.fromEntries(
+                Object.keys(op.input).map((key) => [key, snapshot[key]]),
+              )
+            : snapshot ?? null;
+        listener({
+          id: `${payload.clientTxId}_op${index}`,
+          type,
+          modelName: op.model,
+          modelId: op.id,
+          modelKey: op.model,
+          data: op.input ?? undefined,
+          previousData,
+          context: {
+            userId: this.userId ?? '',
+            organizationId: this.organizationId ?? '',
+          },
+          status: 'pending',
+          createdAt: Date.now(),
+          attempts: 0,
+          priority: 'normal',
+          priorityScore: 0,
+        });
+      });
+    };
+    this.transactionQueue.on('commit:created', onCommitCreated);
+    return () => {
+      this.transactionQueue.off('transaction:created', listener);
+      this.transactionQueue.off('commit:created', onCommitCreated);
+    };
   }
 
   /**

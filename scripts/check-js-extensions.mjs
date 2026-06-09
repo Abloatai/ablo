@@ -34,6 +34,9 @@ const violations = [];
 
 for (const file of walk(SRC)) {
   if (file.includes("/__tests__/")) continue;
+  // The CLI (src/cli) is bundled by tsup with bundler resolution, not the
+  // library's NodeNext build, so it uses extensionless relative imports.
+  if (file.includes("/cli/")) continue;
   const src = readFileSync(file, "utf8");
   const stripped = src
     .replace(/\/\*[\s\S]*?\*\//g, "")
