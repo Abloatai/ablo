@@ -120,6 +120,8 @@ Do not add `databaseURL` to `Ablo(...)`. Application and agent code use `ABLO_AP
 
 Every schema model is backed by a database, and the default is YOUR OWN. Keep your rows in your Postgres and expose a Data Source endpoint that hands Ablo an ORM `adapter` (Drizzle is the default; Prisma and Kysely are also supported) — it owns the transaction, exactly-once idempotency, and outbox in ONE pass (no hand-written `commit`/`events`). Your `DATABASE_URL` lives in your app, never in `Ablo(...)`; run `npx ablo migrate` to provision the synced-model tables in your DB.
 
+GOTCHA the user WILL hit: `DATABASE_URL` must use a NON-superuser, NON-BYPASSRLS role (Ablo enforces row-level security; owner roles are rejected with `database_role_cannot_enforce_rls`). Neon's and Supabase's default dashboard connection strings use the database OWNER (e.g. `neondb_owner`) and are rejected. EASIEST: `npx ablo migrate` detects the unsafe role and creates the scoped one automatically from the user's machine (owner credential never reaches Ablo; new DATABASE_URL written to the env file). Manual alternative — create a scoped role first: `CREATE ROLE ablo_app LOGIN PASSWORD '...' NOSUPERUSER NOBYPASSRLS; GRANT CREATE, CONNECT ON DATABASE <db> TO ablo_app; GRANT CREATE, USAGE ON SCHEMA public TO ablo_app;` — then swap user/password into the same host/db string.
+
 ```ts
 // app/api/ablo/source/route.ts
 import { dataSourceNext } from '@abloatai/ablo/source/next';

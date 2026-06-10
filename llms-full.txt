@@ -142,6 +142,15 @@ This applies to any API-backed app: Python, Rails, Go, or Node. The backend keep
 its service layer and DB credentials. Ablo gets a Data Source endpoint and uses
 `ABLO_API_KEY`, not a database URL.
 
+When the user DOES use the connection-string path (`Ablo({ databaseUrl })` /
+`DATABASE_URL` at init): the role must be NON-superuser and NON-BYPASSRLS —
+Ablo enforces row-level security and rejects owner roles with
+`database_role_cannot_enforce_rls`. Neon's and Supabase's default dashboard
+strings use the database OWNER (e.g. `neondb_owner`) and ARE rejected. EASIEST: have the user run `npx ablo migrate` — it detects the unsafe role and creates the scoped one automatically from their machine (owner credential never reaches Ablo; new DATABASE_URL written to the env file). Manual alternative — create a scoped role first (`CREATE ROLE ablo_app LOGIN PASSWORD '...'
+NOSUPERUSER NOBYPASSRLS; GRANT CREATE, CONNECT ON DATABASE <db> TO ablo_app;
+GRANT CREATE, USAGE ON SCHEMA public TO ablo_app;`), then swap user/password
+into the same host/db string.
+
 ## Client Behavior
 
 The options that matter: `schema` and `apiKey`. Everything else

@@ -194,6 +194,7 @@ export const ERROR_CODES = {
   issuer_register_forbidden: wire('permission', 403, false, 'Registering a trusted issuer requires a secret (sk_) API key.'),
   capability_invalid: wire('capability', 403, false, 'The capability is unknown, revoked, or expired.'),
   test_database_not_registered: wire('permission', 403, false, 'Test mode requires a registered dev database for this org — run `npx ablo init`, or construct the client with `databaseUrl` using your test key.'),
+  tenant_routing_failed: wire('server', 500, true, "The org's registered database could not be resolved or dialed. Ablo never falls back to shared storage for a dedicated tenant — retry, and check the datasource status if it persists."),
   database_role_cannot_enforce_rls: wire('permission', 403, false, 'The connected database role cannot enforce row-level security (superuser or BYPASSRLS).'),
   database_role_unreadable: wire('permission', 403, false, 'The connected database role could not be introspected.'),
   database_tables_unforced_rls: wire('permission', 403, false, 'Synced tables in the connected database do not have FORCE ROW LEVEL SECURITY applied.'),

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.5
+
+### Patch Changes
+
+- Scoped-role automation + tenant-routing fix. `ablo migrate` now auto-creates the RLS-gated scoped role (zero SQL) with a log-safe SCRAM-SHA-256 password verifier, plus a Neon/Supabase scoped-role `databaseUrl` recipe. Fix a jsonb double-encode that corrupted per-tenant routing and silently fell back to the shared pool.
+
 ## 0.9.4
 
 ### Patch Changes

@@ -74,7 +74,26 @@ export const ablo = Ablo({
 
 Use a dedicated **non-superuser role** for the connection — Ablo enforces
 tenant isolation with row-level security, so the server rejects superuser or
-`BYPASSRLS` roles outright.
+`BYPASSRLS` roles outright (`database_role_cannot_enforce_rls`).
+
+> **Neon / Supabase note:** the connection string those dashboards hand you
+> uses the database OWNER role (e.g. `neondb_owner`), which is `BYPASSRLS` —
+> Ablo will reject it. You don't have to fix that by hand: `npx ablo migrate`
+> detects the unsafe role and offers to create the scoped one for you — from
+> your machine, so the owner credential never reaches Ablo. It writes the new
+> `DATABASE_URL` into your env file (the generated password is never printed).
+>
+> Prefer to do it manually? The equivalent SQL:
+>
+> ```sql
+> CREATE ROLE ablo_app LOGIN PASSWORD '<strong password>'
+>   NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+> GRANT CREATE, CONNECT ON DATABASE <your_db> TO ablo_app;
+> GRANT CREATE, USAGE ON SCHEMA public TO ablo_app;
+> ```
+>
+> Then swap the user/password in the dashboard's string:
+> `postgres://ablo_app:<password>@<same-host>/<same-db>?sslmode=require`.
 
 Don't want a connection string to leave your infrastructure? Keep
 `DATABASE_URL` in your app only and expose one signed **Data Source endpoint**

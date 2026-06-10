@@ -190,16 +190,25 @@ async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; me
     return { ok: false, message: lines.join('\n') };
   }
   if (status === 403) {
+    // Stripe-shaped errors carry the actionable text in `message` (e.g.
+    // `test_database_not_registered` tells you to register a dev database).
+    // Guessing "missing scope" here MASKED that instruction — print the
+    // server's words first, fall back to the scope hint only when absent.
+    const serverSays = (body.message ?? body.reason) as string | undefined;
+    // The RLS gate has a one-command fix — say so instead of leaving the
+    // user to hand-write SQL (the gate is hit by every Neon/Supabase
+    // dashboard connection string, whose default role is BYPASSRLS).
+    const hint =
+      body.code === 'database_role_cannot_enforce_rls'
+        ? `Run ${pc.bold('npx ablo migrate')} — it creates the scoped role for you (your DB credential never leaves this machine).`
+        : `Schema authoring needs a ${pc.bold('sandbox')} key with ${pc.bold('schema:push')} — manage keys at ${pc.cyan('https://abloatai.com')}.`;
     return {
       ok: false,
       message:
-        `This key can't author schema (${body.reason ?? 'missing schema:push scope'}).\n` +
-        pc.dim(
-          `Use a ${pc.bold('sandbox')} key, or one with ${pc.bold('schema authoring')} enabled at ${pc.cyan('https://abloatai.com')}.`,
-        ),
+        `${serverSays ?? "This key can't author schema (missing schema:push scope)."}\n` + pc.dim(hint),
     };
   }
-  return { ok: false, message: `Push failed (${status}): ${body.reason ?? bodyText}` };
+  return { ok: false, message: `Push failed (${status}): ${body.message ?? body.reason ?? bodyText}` };
 }
 
 export async function dev(argv: readonly string[]): Promise<void> {

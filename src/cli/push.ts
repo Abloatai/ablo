@@ -242,9 +242,9 @@ export async function push(argv: readonly string[]): Promise<void> {
     }
     console.error(pc.dim(`  Re-push with ${pc.bold('--force')} to override, or use ${pc.bold('--rename old:new')} if you renamed a model.`));
   } else if (status === 403) {
-    console.error(pc.red(`  Forbidden: ${body.reason ?? 'key lacks schema:push scope'}.`));
+    console.error(pc.red(`  Forbidden: ${body.message ?? body.reason ?? 'key lacks schema:push scope'}`));
   } else {
-    console.error(pc.red(`  Push failed (${status}): ${body.reason ?? bodyText}`));
+    console.error(pc.red(`  Push failed (${status}): ${body.message ?? body.reason ?? bodyText}`));
   }
   process.exit(1);
 }
