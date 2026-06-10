@@ -75,7 +75,7 @@ export function resolveDatabaseUrl(input: AuthResolveInput): string | null {
 
 export const ABLO_HOSTED_API_DOMAIN = 'api.abloatai.com';
 export const ABLO_HOSTED_HTTP_BASE_URL = `https://${ABLO_HOSTED_API_DOMAIN}`;
-export const ABLO_DEFAULT_BASE_URL = `wss://${ABLO_HOSTED_API_DOMAIN}`;
+export const ABLO_DEFAULT_BASE_URL = `https://${ABLO_HOSTED_API_DOMAIN}`;
 
 const LEGACY_HOSTED_API_HOSTS = new Set([
   'mesh.ablo.finance',
@@ -103,11 +103,21 @@ export function normalizeAbloHostedBaseUrl(rawUrl: string): string {
 
   try {
     const url = new URL(schemed);
-    if (!LEGACY_HOSTED_API_HOSTS.has(url.hostname)) return schemed.replace(/\/+$/, '');
+    // Canonicalize the scheme to the HTTP family — the WHATWG WebSocket
+    // model: accept all four schemes (`http`/`https`/`ws`/`wss`), normalize
+    // ONCE at the entry point, and let each layer derive its own protocol
+    // (the socket layer maps http→ws / https→wss; fetch uses it as-is).
+    // Before this, a `ws://` baseURL reached HTTP consumers un-normalized
+    // and the client wedged at startup instead of connecting.
+    if (url.protocol === 'ws:') url.protocol = 'http:';
+    if (url.protocol === 'wss:') url.protocol = 'https:';
+
+    if (!LEGACY_HOSTED_API_HOSTS.has(url.hostname)) {
+      return url.toString().replace(/\/+$/, '');
+    }
 
     url.hostname = ABLO_HOSTED_API_DOMAIN;
     if (url.protocol === 'http:') url.protocol = 'https:';
-    if (url.protocol === 'ws:') url.protocol = 'wss:';
     return url.toString().replace(/\/+$/, '');
   } catch {
     return schemed;

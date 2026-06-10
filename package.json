@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "State control API for AI agents and collaborative apps.",
   "license": "Apache-2.0",
   "type": "module",
@@ -134,6 +134,7 @@
     "check:dist": "node scripts/check-dist-fresh.mjs",
     "pretest": "node scripts/check-dist-fresh.mjs",
     "test": "jest",
+    "test:quickstart": "node scripts/test-quickstart.mjs",
     "test:unit": "jest --testPathPattern=__tests__/unit",
     "test:integration": "jest --testPathPattern=__tests__/integration",
     "test:contract": "jest --testPathPattern=__tests__/contract",
@@ -183,10 +184,11 @@
     }
   },
   "dependencies": {
+    "jiti": "^2.7.0",
     "mobx": "^6.13.7",
     "mobx-react-lite": "^4.0.0",
-    "zod": "^4.0.17",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "zod": "^4.0.17"
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.0",

@@ -32,7 +32,7 @@ mirrors `stripe login`.
 | `ablo login`             | Authorize in the browser; provisions + stores a test and a live key.       |
 | `ablo logout`            | Remove the stored keys.                                                    |
 | `ablo status`            | Show the active org, mode, both keys (prefix + expiry), and server health. |
-| `ablo mode [test\|live]` | Switch the active mode. With no argument, prompts.                         |
+| `ablo mode [sandbox\|production]` | Switch the active environment. With no argument, prompts.                         |
 
 Keys are stored in `~/.config/ablo/config.json` (mode `0600`). In **CI**, don't
 log in — set `ABLO_API_KEY`, which always overrides the stored key.
@@ -41,11 +41,11 @@ log in — set `ABLO_API_KEY`, which always overrides the stored key.
 
 Like Stripe, every account has a **test** mode and a **live** mode, and a key
 belongs to one of them. Test keys are bound to an isolated sandbox: their reads
-and writes never touch live data. Switch with `ablo mode`; `ablo dev` is always
-test mode by design.
+and writes never touch production data. Switch with `ablo mode`; `ablo dev` is always
+the sandbox by design.
 
 The schema, however, is **shared** across the org — pushing a schema (from
-either mode) defines the same models test and live see; only the rows differ.
+either environment) defines the same models sandbox and production see; only the rows differ.
 
 ## Commands
 
@@ -53,9 +53,9 @@ either mode) defines the same models test and live see; only the rows differ.
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `ablo init`                        | Scaffold `ablo/` (`schema.ts`, client, optional Data Source / agent / component), write `.env`, install the SDK. Offers to log in at the end. | —                                                                                                      |
 | `ablo login` / `logout` / `status` | Authentication & status (above).                                                                                                              | —                                                                                                      |
-| `ablo mode [test\|live]`           | Switch active mode.                                                                                                                           | —                                                                                                      |
+| `ablo mode [sandbox\|production]`   | Switch active environment.                                                                                                                           | —                                                                                                      |
 | `ablo dev`                         | **Hosted** — push the schema to your test sandbox, then watch `ablo/schema.ts` and re-push on save.                                           | `--no-watch`, `--schema <path>`, `--export <name>`, `--url <url>`                                      |
-| `ablo logs`                        | Tail your scope's commit activity (`stripe logs tail`). Follows by default.                                                                   | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode test\|live` |
+| `ablo logs`                        | Tail your scope's commit activity (`stripe logs tail`). Follows by default.                                                                   | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode sandbox\|production` |
 | `ablo push`                        | **Hosted** — upload the schema to Ablo; the server diffs, migrates, and activates it.                                                         | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url`         |
 | `ablo migrate`                     | **Direct Postgres** — provision just the synced models (plus the adapter's `ablo_outbox` / `ablo_idempotency`) in your own `DATABASE_URL`. Leaves your other tables alone.                                                          | `--dry-run`, `--output <file>`, `--schema`, `--export`                                                 |
 | `ablo pull`                        | **Direct Postgres** — generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`).                              | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force`                                     |

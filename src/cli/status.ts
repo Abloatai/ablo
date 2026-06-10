@@ -48,14 +48,14 @@ export async function status(): Promise<void> {
 
   console.log(`  ${pc.dim('mode')}    ${pc.bold(mode)}`);
 
-  for (const m of ['test', 'live'] as Mode[]) {
+  for (const m of ['sandbox', 'production'] as Mode[]) {
     const entry = getKeyEntry(m);
     const marker = m === mode ? pc.green('●') : pc.dim('○');
     if (entry) {
       const exp = entry.expiresAt ? ` ${expiryLabel(entry.expiresAt)}` : '';
-      console.log(`  ${marker} ${m.padEnd(4)}  ${pc.dim(`${entry.apiKey.slice(0, 12)}…`)}${exp}`);
+      console.log(`  ${marker} ${m.padEnd(10)}  ${pc.dim(`${entry.apiKey.slice(0, 12)}…`)}${exp}`);
     } else {
-      console.log(`  ${marker} ${m.padEnd(4)}  ${pc.dim('— no key')}`);
+      console.log(`  ${marker} ${m.padEnd(10)}  ${pc.dim('— no key')}`);
     }
   }
 

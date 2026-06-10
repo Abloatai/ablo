@@ -16,6 +16,7 @@ import { getActiveRegistry } from '../ModelRegistry.js';
 import { MutationOperationType } from '../types/index.js';
 import { handleMutationError } from './mutation-error-handler.js';
 import { AbloError, AbloConnectionError, errorCodeSpec } from '../errors.js';
+import { SyncPosition } from '../sync/syncPosition.js';
 import type { MutationOptions, WriteOptions } from '../interfaces/index.js';
 
 export interface UserContext {
@@ -275,6 +276,8 @@ interface ConflictResolution {
 }
 
 interface TransactionQueueConfig {
+  /** Shared client position (see sync/syncPosition.ts). One per client. */
+  position?: SyncPosition;
   maxBatchSize: number;
   batchDelay: number;
   maxRetries: number;
@@ -525,10 +528,23 @@ export class TransactionQueue extends EventEmitter {
   // is preserved for brief blips; this only catches persistent disconnects.
   private commitOfflineGraceTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Track the highest syncId received from WebSocket deltas
-  // Used to immediately confirm transactions when HTTP response arrives AFTER the delta
-  // (fixes race condition where WebSocket delta arrives before HTTP response)
-  private lastSeenSyncId: number = 0;
+  /**
+   * THE client's place in the global delta order — the SHARED instance
+   * (injected by SyncClient; standalone construction gets its own). The
+   * queue advances `acked` on commit responses; the store advances
+   * `applied`/`persisted`; snapshots/claims read `readFloor`. Contract +
+   * rationale live in `sync/syncPosition.ts`.
+   */
+  readonly position: SyncPosition;
+
+  /** Applied-cursor alias, kept so the many internal read sites stay legible. */
+  private get lastSeenSyncId(): number {
+    return this.position.applied;
+  }
+
+  private noteAck(lastSyncId: number | undefined): void {
+    this.position.noteAck(lastSyncId);
+  }
 
   // Delta confirmation retry config (Replicache-style exponential backoff)
   // Max retries before requesting full reconciliation
@@ -555,6 +571,7 @@ export class TransactionQueue extends EventEmitter {
 
   constructor(config?: Partial<TransactionQueueConfig>) {
     super();
+    this.position = config?.position ?? new SyncPosition();
 
         if (config) {
       this.config = { ...this.config, ...config };
@@ -1313,6 +1330,7 @@ export class TransactionQueue extends EventEmitter {
               // the coalescing test's tight bound on batch count.
               const result = await this.mutationExecutor.commit(operations);
               const lastSyncId: number = result?.lastSyncId ?? 0;
+              this.noteAck(lastSyncId);
 
               // Detect server bug: lastSyncId 0 means mutation succeeded but no sync delta was emitted
               if (lastSyncId === 0) {
@@ -1346,34 +1364,43 @@ export class TransactionQueue extends EventEmitter {
                   continue;
                 }
 
-                // FIX: Check if delta already arrived before HTTP response (race condition)
-                // WebSocket can be faster than HTTP, so the delta might already be here
-                // Guard: only do immediate confirm if lastSyncId > 0 (valid server response)
-                if (lastSyncId > 0 && this.lastSeenSyncId >= lastSyncId) {
-                  // Delta already arrived! Confirm immediately without timeout
+                // ACK-BASED CONFIRMATION. A successful commit response with a
+                // real watermark means the server durably applied the write —
+                // that IS the confirmation (the documented `wait: 'confirmed'`
+                // contract, and how Replicache/Zero treat the push response's
+                // lastMutationID). The delta echo is NOT an acknowledgement
+                // channel: it's replication for OTHER clients, and this
+                // client's own echo is suppressed by the OptimisticEchoTracker
+                // anyway. Gating confirmation on the echo coupled "did my
+                // write land" to subscription-stream health — a bare-Node
+                // client with no live delta stream hung forever in
+                // `awaiting_delta` on a write the server had already applied.
+                if (lastSyncId > 0) {
                   this.store.updateStatus(tx.id, 'completed');
                   this.emit('transaction:completed', tx);
                   this.emit(`transaction:completed:${tx.id}`, tx);
                   this.optimisticUpdates.delete(tx.id);
-                  getContext().logger.debug('tx:confirm_immediate', {
+                  getContext().logger.debug('tx:confirm_ack', {
                     txId: tx.id.slice(0, 8),
                     model: tx.modelName,
-                    neededSyncId: lastSyncId,
+                    serverSyncId: lastSyncId,
                     lastSeenSyncId: this.lastSeenSyncId,
-                    reason: 'delta_arrived_before_http',
                   });
                 } else {
-                  // Delta hasn't arrived yet, wait for it
+                  // lastSyncId === 0 on a non-DELETE: the server accepted the
+                  // commit but emitted no delta — a server-side anomaly
+                  // (already captured via captureCommitZeroSyncId above). Keep
+                  // the delta-wait + reconciliation timeout for THIS case
+                  // only, so the anomaly surfaces instead of silently
+                  // confirming a write with no watermark.
                   this.store.updateStatus(tx.id, 'awaiting_delta');
                   getContext().logger.debug('tx:awaiting_delta', {
                     txId: tx.id.slice(0, 8),
                     model: tx.modelName,
                     neededSyncId: lastSyncId,
                     lastSeenSyncId: this.lastSeenSyncId,
-                    gap: lastSyncId - this.lastSeenSyncId,
+                    reason: 'zero_sync_id_anomaly',
                   });
-
-                  // Schedule timeout-based rollback for unconfirmed transactions
                   this.scheduleDeltaConfirmationTimeout(tx, this.config.deltaConfirmationTimeout);
                 }
               }
@@ -1506,17 +1533,9 @@ export class TransactionQueue extends EventEmitter {
    * @param syncId - The sync ID of the received delta
    */
   onDeltaReceived(syncId: number): void {
-    const prevLastSeen = this.lastSeenSyncId;
-
-    // Track highest syncId seen (fixes race: delta arrives before HTTP response)
-    if (syncId > this.lastSeenSyncId) {
-      this.lastSeenSyncId = syncId;
-      getContext().logger.debug('tx:highwater_update', {
-        prev: prevLastSeen,
-        new: syncId,
-        delta: syncId - prevLastSeen,
-      });
-    }
+    // Cursor advancing happens where the delta is APPLIED (the store calls
+    // position.advanceApplied / advancePersisted); this hook only resolves
+    // confirmation thresholds against the incoming id.
 
     const awaitingTxs = this.store.getByStatus('awaiting_delta');
     const executingTxs = this.store.getByStatus('executing');
@@ -1795,6 +1814,7 @@ export class TransactionQueue extends EventEmitter {
             causedByTaskId: tx.causedByTaskId ?? undefined,
           });
           tx.lastSyncId = result?.lastSyncId ?? 0;
+          this.noteAck(tx.lastSyncId);
           tx.status = 'completed';
           this.commitLane.shift();
           this.emit('transaction:completed', tx);

@@ -144,8 +144,11 @@ its service layer and DB credentials. Ablo gets a Data Source endpoint and uses
 
 ## Client Behavior
 
-Important options: `schema`, `apiKey`, `baseURL`, `persistence`, `fetch`,
-`defaultHeaders`, `defaultQuery`, `logger`, and `dangerouslyAllowBrowser`.
+The options that matter: `schema` and `apiKey`. Everything else
+(`persistence`, `logger`, transport tuning) has correct defaults — do NOT set
+`baseURL`; the default already routes to the hosted API, and overriding it
+breaks the connection. It exists only for self-hosted/proxy setups the human
+explicitly asks for.
 
 There is intentionally no `databaseURL` option on `Ablo(...)`. Application and
 agent code use `ABLO_API_KEY`. Customer-owned app databases stay private behind
@@ -171,7 +174,7 @@ There are two sandbox surfaces:
   making real Ablo calls. It is agent-first: it should expose a prompt that can
   be pasted into Claude Code or Codex to wire one real model through Ablo.
 - Authenticated org sandboxes are real test environments. The default sandbox is
-  the Stripe-style test mode for an org. It has an isolated sync group prefix,
+  the Stripe-style sandbox for an org. It has an isolated sync group prefix,
   can mint `sk_test_*` keys, and can be reset without touching live state.
 
 Additional org sandboxes can start blank or copy live configuration. Keep
@@ -190,8 +193,10 @@ Use these public environment names:
 - `ABLO_API_KEY` — SDK authentication for app and agent code. Where it comes
   from: the human runs `npx ablo login` once (browser; an agent must not run
   it), and `npx ablo dev` then writes `ABLO_API_KEY=sk_test_…` into
-  `.env.local` automatically. Check the environment and `.env.local` before
-  asking the human for a key.
+  `.env.local` automatically (and gitignores it). Check the environment and
+  `.env.local` for PRESENCE only (`grep -cq '^ABLO_API_KEY=' .env.local`)
+  before asking the human for a key — never print or echo the key value; a
+  secret in agent output lives in the conversation history forever.
 
 Do not ask customers to paste their app database URL into Ablo. If their app
 database is canonical, they expose a Data Source endpoint and keep database

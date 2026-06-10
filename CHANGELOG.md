@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.4
+
+### Patch Changes
+
+- Sync-position correctness + CLI hardening. Consolidate five scattered sync cursors into one typed `syncPosition` (persisted/applied/acked with a derived `readFloor`), fixing a claim taken right after an ack-confirmed write reading stale against that write's own delta. Add transaction ack-confirmation, schema DDL-first-push, and a reworked CLI (config/dev/login/mode/drizzle-pull).
+
 ## 0.9.3
 
 ### Patch Changes

@@ -15,12 +15,19 @@
 import { spawn } from 'child_process';
 import pc from 'picocolors';
 import { intro, outro, note, spinner, log, select, isCancel, cancel } from '@clack/prompts';
-import { writeConfig, clearCredential, configPath, type KeyEntry } from './config';
+import { writeConfig, clearCredential, configDir, type KeyEntry } from './config';
 import { brand } from './theme';
 
 const CLIENT_ID = 'ablo-cli';
-/** Dashboard origin (Better Auth + /cli + provision-key live here). */
-const AUTH_URL = (process.env.ABLO_AUTH_URL ?? 'https://abloatai.com').replace(/\/+$/, '');
+/**
+ * Dashboard origin (Better Auth + /cli + provision-key live here). MUST be the
+ * canonical `www` host: the apex 307-redirects to www, and `fetch` strips the
+ * `Authorization` header on that cross-origin hop — so the authenticated
+ * provision call silently arrives tokenless and 401s while every other step
+ * (no auth header) works. Symptom: browser says "Approved", CLI says
+ * "Could not provision a key".
+ */
+const AUTH_URL = (process.env.ABLO_AUTH_URL ?? 'https://www.abloatai.com').replace(/\/+$/, '');
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -153,7 +160,7 @@ async function deviceLogin(): Promise<void> {
     process.exit(1);
   }
 
-  s.message('Provisioning a test key…');
+  s.message('Provisioning a sandbox key…');
   const provRes = await fetch(`${AUTH_URL}/api/cli/provision-key`, {
     method: 'POST',
     headers: { authorization: `Bearer ${accessToken}` },
@@ -163,6 +170,10 @@ async function deviceLogin(): Promise<void> {
     s.stop('Could not provision a key.');
     const reason = provRes ? ((await provRes.json().catch(() => ({}))) as ProvisionResponse).error : undefined;
     if (reason) log.error(reason);
+    else if (provRes) log.error(`Key provisioning returned ${provRes.status} from ${AUTH_URL}/api/cli/provision-key.`);
+    log.error(
+      `The browser approval succeeded but the key handoff failed. Try again, or grab a ${pc.bold('sk_test_')} key from the dashboard and set ${pc.bold('ABLO_API_KEY')}.`,
+    );
     process.exit(1);
   }
   const prov = (await provRes.json()) as ProvisionResponse;
@@ -171,15 +182,17 @@ async function deviceLogin(): Promise<void> {
     ...(prov.organizationId ? { organizationId: prov.organizationId } : {}),
     ...(k.expiresAt ? { expiresAt: k.expiresAt } : {}),
   });
-  // Default to test mode (the dev loop); store the live key too so
-  // `ablo mode live` works without re-auth (Stripe mints both at login).
+  // Default to sandbox (the dev loop); store the production key too so
+  // `ablo mode production` works without re-auth (Stripe mints both at
+  // login). The provision wire keeps test/live field names — sk_test_ keys
+  // are sandbox, sk_live_ keys are production.
   const path = writeConfig({
-    mode: 'test',
-    test: entry(prov.test),
-    ...(prov.live ? { live: entry(prov.live) } : {}),
+    mode: 'sandbox',
+    sandbox: entry(prov.test),
+    ...(prov.live ? { production: entry(prov.live) } : {}),
   });
   s.stop(`Saved keys to ${path}`);
-  outro(`${pc.green('✓')} Logged in ${pc.dim('(test mode)')}. Run ${pc.bold('ablo dev')}, or ${pc.bold('ablo mode live')} to switch.`);
+  outro(`${pc.green('✓')} Logged in ${pc.dim('(sandbox)')}. Run ${pc.bold('ablo dev')}, or ${pc.bold('ablo mode production')} to switch.`);
 }
 
 export async function login(): Promise<void> {
@@ -189,7 +202,7 @@ export async function login(): Promise<void> {
 export function logout(): void {
   const removed = clearCredential();
   if (removed) {
-    console.log(`  ${pc.green('✓')} Logged out ${pc.dim(`(${configPath()} removed)`)}`);
+    console.log(`  ${pc.green('✓')} Logged out ${pc.dim(`(credentials removed from ${configDir()})`)}`);
   } else {
     console.log(`  ${pc.dim('○')} Not logged in — nothing to remove.`);
   }

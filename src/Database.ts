@@ -11,6 +11,7 @@ import { getContext } from './context.js';
 import { AbloConnectionError, AbloValidationError } from './errors.js';
 import type { BootstrapHelper, BootstrapData } from './sync/BootstrapHelper.js';
 import { InMemoryObjectStore } from './adapters/inMemoryStorage.js';
+import { syncPositionSchema } from './sync/syncPosition.js';
 
 /** Generic record type for model data */
 type ModelData = Record<string, unknown>;
@@ -421,7 +422,13 @@ export class Database {
     const lazyModels = this.modelRegistry.getModelsByLoadStrategy(LoadStrategy.lazy);
     const modelsToLoad = [...instantModels, ...lazyModels];
 
-    const metadataLastSyncId = metadata?.lastSyncId || 0;
+    // Gate the PERSISTED cursor through the sync-position schema field —
+    // the one trust boundary for resume state. IDB can hand back anything
+    // (a corrupted negative/float cursor would previously pass `|| 0`,
+    // which only catches falsy, and get sent to the server as the resume
+    // point). Invalid → 0 → full bootstrap, the safe degradation.
+    const metadataLastSyncId =
+      syncPositionSchema.shape.persisted.safeParse(metadata?.lastSyncId).data ?? 0;
     const dataAge = metadata?.updatedAt ? Date.now() - metadata.updatedAt.getTime() : Infinity;
 
     // ── Zero-style cache-validity check ──────────────────────────

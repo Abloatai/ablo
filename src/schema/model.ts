@@ -219,14 +219,16 @@ export interface ModelOptions {
 
   /**
    * Whether clients may issue CREATE/UPDATE/DELETE mutations for this
-   * model via the `commit` wire protocol. Default: false.
+   * model via the `commit` wire protocol. Default: **true** — declaring a
+   * model in the schema IS the opt-in; if you put an entity in your synced
+   * schema, you almost always want to write it (product decision
+   * 2026-06-10, reversing the earlier default-deny that made every fresh
+   * quickstart's first write die with `server_execute_unknown_model`).
    *
-   * Safety-by-default: a newly-declared schema entity is read-only from
-   * the client side until the author explicitly opts into wire mutability.
-   * Prevents the class of bug where adding a new entity to the schema
-   * silently exposes it as a write surface (the 2026-04-20 `AgentJob`
-   * incident) OR where internal tables (`sync_deltas`, `presences`,
-   * digest/ingestion tables) become writable by accident.
+   * Opt OUT for server-managed projections (stats, digests, audit views):
+   * `mutable: false`, or the `readOnly.*` sugar which sets it for you.
+   * That keeps the 2026-04-20 `AgentJob`-class protection available where
+   * it matters, as a deliberate marking instead of a silent default.
    *
    * The server's `buildModelMap` (src/server/commit.ts) derives
    * the mutation allowlist from this flag — no parallel hardcoded list.
@@ -473,7 +475,7 @@ export function model<
     scope: options?.scope,
     grants: options?.grants,
     entityRoles: normalizeEntityRoles(options?.entityRoles),
-    mutable: options?.mutable,
+    mutable: options?.mutable ?? true,
     lazyObservable: options?.lazyObservable,
     computed: options?.computed,
     autoFill: options?.autoFill,

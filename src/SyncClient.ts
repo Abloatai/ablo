@@ -24,6 +24,7 @@ import {
 } from './transactions/OptimisticEchoTracker.js';
 import type { Database } from './Database.js';
 import type { WriteOptions } from './interfaces/index.js';
+import { SyncPosition } from './sync/syncPosition.js';
 
 interface SyncObserver {
   onSync?: (event: SyncEvent) => void;
@@ -102,6 +103,14 @@ export class SyncClient extends EventEmitter {
   private maxRetries: number = 3;
   private isDisposed: boolean = false;
 
+  /**
+   * THE client's place in the global delta order — the one canonical
+   * instance (see `sync/syncPosition.ts`). The store advances
+   * `applied`/`persisted` as deltas land; the queue advances `acked` on
+   * commit responses; snapshots/claims read `readFloor`.
+   */
+  readonly position = new SyncPosition();
+
   constructor(objectPool: ObjectPool, database: Database) {
     super();
     this.objectPool = objectPool;
@@ -110,6 +119,7 @@ export class SyncClient extends EventEmitter {
 
     // Initialize TransactionQueue with proper configuration
     this.transactionQueue = new TransactionQueue({
+      position: this.position,
       maxBatchSize: 50, // Increased from 10 to reduce batch count for large operations
       // Lower delay for snappier dev UX; batching still happens via coalescing
       batchDelay: 150,

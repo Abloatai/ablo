@@ -33,8 +33,18 @@ export default defineConfig({
   outDir: 'dist',
   target: 'node24',
   platform: 'node',
-  // Inline everything by default; only the specifiers below stay external.
-  noExternal: [/.*/],
+  // Bundling split = the package.json split (tsup's default): runtime
+  // `dependencies` stay EXTERNAL (resolved from the installed package),
+  // `devDependencies` (@clack/prompts, picocolors, postgres, ts-morph, …)
+  // get INLINED into cli.cjs so the published dependency list stays lean.
+  //
+  // Do NOT bring back `noExternal: [/.*/]` — it OVERRIDES `external` for any
+  // resolvable specifier (the prisma/drizzle entries below only ever worked
+  // because they aren't installed here). It force-inlined jiti, whose
+  // `lazyTransform` requires `../dist/babel.cjs` relative to its own install
+  // dir at runtime — unrelocatable by design — so `ablo dev`/`push` crashed
+  // with MODULE_NOT_FOUND on every fresh project. jiti is a declared runtime
+  // dependency instead, the way every jiti consumer (Nuxt, Tailwind) ships it.
   external: [
     /^@ablo\/sync-engine(\/.*)?$/,
     /^@abloatai\/ablo(\/.*)?$/,
@@ -47,5 +57,10 @@ export default defineConfig({
   clean: false, // the lib `tsc` build owns dist/; don't wipe it
   dts: false,
   sourcemap: false,
-  shims: false,
+  // REQUIRED: jiti (inlined above, used by `loadSchema` to import the user's
+  // TS schema) reads `import.meta.url` internally. In a CJS bundle without
+  // shims that expression compiles to `undefined`, and jiti's lazyTransform
+  // crashes with `createRequire(undefined)` — `ablo dev`/`push` die on every
+  // fresh project. `shims: true` injects a `__filename`-based shim.
+  shims: true,
 });

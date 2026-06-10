@@ -12,7 +12,7 @@
 
 import { AbloValidationError } from '../errors.js';
 import pc from 'picocolors';
-import { resolveApiKey, type Mode } from './config';
+import { resolveApiKey, normalizeMode, type Mode } from './config';
 import { brand } from './theme';
 import { DEFAULT_URL } from './push';
 
@@ -72,8 +72,9 @@ export function parseLogsArgs(argv: readonly string[]): LogsArgs {
         args.json = true;
         break;
       case '--mode': {
-        const m = argv[++i];
-        if (m !== 'test' && m !== 'live') throw new AbloValidationError(`--mode expects "test" or "live", got "${m}"`, { code: 'cli_invalid_arguments' });
+        const raw = argv[++i];
+        const m = normalizeMode(raw);
+        if (!m) throw new AbloValidationError(`--mode expects "sandbox" or "production", got "${raw}"`, { code: 'cli_invalid_arguments' });
         args.mode = m;
         break;
       }

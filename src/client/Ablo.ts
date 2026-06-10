@@ -2568,8 +2568,14 @@ export function Ablo<const S extends SchemaRecord>(
           createSnapshot({
             pool: objectPool,
             transport: store.getSyncWebSocket(),
-            getLastSyncId: () =>
-              store.getSyncWebSocket()?.getLastSyncId() ?? store.lastSyncId ?? 0,
+            // `position.readFloor` is THE value claims/snapshots stamp as
+            // `readAt` (max of the pool-applied cursor and the acked
+            // watermark for our own writes — see sync/syncPosition.ts).
+            // Stamping a bare stream cursor made a claim taken right after
+            // an ack-confirmed write stale against that write's own delta.
+            // The socket/store cursors are persistence-gated and therefore
+            // never ahead of `applied` — no extra max() needed here.
+            getLastSyncId: () => syncClient.position.readFloor,
             entities: { [modelKey]: id },
           }),
         queue: (target) =>

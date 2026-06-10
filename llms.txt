@@ -10,9 +10,9 @@ Use AI SDK for the agent loop. Use Ablo when agent reads and writes must persist
 
 First action when integrating into an app: run `npx ablo init --yes --framework <nextjs|vite|remix|vanilla> --storage datasource`. Agents have no TTY — `--yes` is REQUIRED or it HANGS. It scaffolds `ablo/schema.ts`, the client, the Data Source endpoint, and (for Next.js) the browser provider + session route, all on the current API. Edit the generated files rather than hand-writing from this doc.
 
-Second: make sure a key exists. Check `ABLO_API_KEY` in the environment, then `.env.local`. If neither has one, ask the HUMAN to run `npx ablo login` once — it opens a browser and saves a `sk_test_` key locally; an agent must NOT run it. You never copy the key by hand: the next step writes it into `.env.local` for you.
+Second: make sure a key exists — WITHOUT printing it. The key is a secret; it must never appear in your output, your reasoning, or a file you echo (it would live in the conversation history forever). Check PRESENCE only: `[ -n "$ABLO_API_KEY" ] && echo set` and `grep -cq '^ABLO_API_KEY=' .env.local && echo wired` — never `cat .env.local`, never `echo $ABLO_API_KEY`. If neither check passes, ask the HUMAN to run `npx ablo login` once — it opens a browser and saves a `sk_test_` key locally; an agent must NOT run it. You never copy the key by hand: the next step writes it into `.env.local` (and gitignores it) for you.
 
-Then PUSH — this is the step everything depends on. The server keeps its OWN copy of the schema. Run `npx ablo dev --no-watch`: it pushes `ablo/schema.ts` (test mode) AND writes `ABLO_API_KEY` into `.env.local` from the stored login. Until the schema is pushed, EVERY write to a new or changed model fails with `server_execute_unknown_model`. Re-run it after schema changes (`npx ablo push` also works once the key is wired; bare `npx ablo dev` watches forever — don't, you have no TTY).
+Then PUSH — this is the step everything depends on. The server keeps its OWN copy of the schema. Run `npx ablo dev --no-watch`: it pushes `ablo/schema.ts` (sandbox) AND writes `ABLO_API_KEY` into `.env.local` from the stored login. Until the schema is pushed, EVERY write to a new or changed model fails with `server_execute_unknown_model`. Re-run it after schema changes (`npx ablo push` also works once the key is wired; bare `npx ablo dev` watches forever — don't, you have no TTY).
 
 ## Use this API
 
@@ -179,6 +179,6 @@ Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or internal subp
 - `npx ablo init --yes` (flags: `--framework`, `--auth`, `--storage`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login`). Generates `ablo/schema.ts` + the `ablo/data-source.ts` endpoint above.
 - Key: see "Start here" — env → `.env.local` → ask the human to `npx ablo login`; never run `login` yourself, never copy keys by hand (`ablo dev` writes `.env.local`).
 - Adopt an existing DB: `npx ablo pull prisma [path]` / `npx ablo pull drizzle <module>`.
-- `npx ablo dev --no-watch` pushes the schema (test mode) AND writes `ABLO_API_KEY` to `.env.local` (default watches forever); `npx ablo logs --no-follow` (default tails forever); `npx ablo mode test|live` (always pass the arg). `npx ablo push`/`status`/`pull`/`check`/`generate` are one-shot.
+- `npx ablo dev --no-watch` pushes the schema (sandbox) AND writes `ABLO_API_KEY` to `.env.local` (default watches forever); `npx ablo logs --no-follow` (default tails forever); `npx ablo mode sandbox|production` (always pass the arg). `npx ablo push`/`status`/`pull`/`check`/`generate` are one-shot.
 
 Canonical docs to read before integrating: `quickstart`, `schema-contract`, `integration-guide`, `guarantees`, `client-behavior`, `data-sources`, `examples/existing-python-backend`, `api`, `examples/ai-sdk-tool`, and `examples/server-agent`.

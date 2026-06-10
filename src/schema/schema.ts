@@ -454,8 +454,14 @@ export function defineSchema<const S extends SchemaRecord>(
     const persist = def.persist
       ? { ...def.persist, store: def.persist.store ?? typename }
       : undefined;
+    // Physical table defaults to the schema key — the SAME rule the
+    // provisioner/planner use (`tableName ?? key`), resolved here once so the
+    // serialized artifact always carries it. Required now that models are
+    // mutable by default: the server's `buildModelMap` rejects a mutable
+    // model with no `tableName`, which would otherwise break every commit.
+    const tableName = def.tableName ?? name;
 
-    resolvedModels[name] = { ...def, typename, persist };
+    resolvedModels[name] = { ...def, typename, tableName, persist };
   }
 
   validateSyncGroupSchema(resolvedModels);

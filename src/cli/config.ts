@@ -1,15 +1,25 @@
 /**
- * Local credential store for the Ablo CLI.
+ * Local credential store for the Ablo CLI — AWS-shaped: two files, and the
+ * config file holds NO secrets.
  *
- * Stripe-style test/live: the file holds a key per mode plus the active mode,
- * so `ablo mode test|live` toggles which key `dev` / `push` use — the
- * same mental model as Stripe's dashboard toggle, made possible by Ablo's
- * sandbox data isolation. `ABLO_API_KEY` in the environment always wins (CI).
+ *   config.json       non-secret settings: the active environment (mode).
+ *                     Safe to open, print, or let an agent read.
+ *   credentials.json  the sk_ keys, one per environment. 0600, never printed.
+ *
+ * (Same split as `~/.aws/config` vs `~/.aws/credentials` — tooling that
+ * inspects "the config" never sees a secret.)
+ *
+ * Sandbox/production: a key per environment plus the active one, so
+ * `ablo mode sandbox|production` toggles which key `dev` / `push` use — the
+ * Stripe dashboard-toggle mental model. Key PREFIXES stay `sk_test_` /
+ * `sk_live_` (a wire contract the server validates); only the human-facing
+ * vocabulary is sandbox/production. `ABLO_API_KEY` in the environment always
+ * wins (CI).
  *
  * Path: `$ABLO_CONFIG_DIR` → `$XDG_CONFIG_HOME/ablo` → `~/.config/ablo`.
- * The file is written `0600` (owner read/write only); the dir `0700`.
+ * `credentials.json` is written `0600` (owner read/write only); the dir `0700`.
  *
- * v1 stores plaintext, like Stripe. An OS-keychain backend
+ * v1 stores plaintext, like the AWS CLI. An OS-keychain backend
  * (`@napi-rs/keyring`) is a later hardening.
  */
 
@@ -17,10 +27,10 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
 
-export type Mode = 'test' | 'live';
+export type Mode = 'sandbox' | 'production';
 
-/** A stored key for one mode. `organizationId`/`expiresAt` come from the
- *  device-login flow; `--api-key` login sets only `apiKey`. */
+/** A stored key for one environment. `organizationId`/`expiresAt` come from
+ *  the device-login flow; `--api-key` login sets only `apiKey`. */
 export interface KeyEntry {
   apiKey: string;
   organizationId?: string;
@@ -30,8 +40,8 @@ export interface KeyEntry {
 
 export interface StoredConfig {
   mode: Mode;
-  test?: KeyEntry;
-  live?: KeyEntry;
+  sandbox?: KeyEntry;
+  production?: KeyEntry;
 }
 
 export function configDir(): string {
@@ -40,8 +50,14 @@ export function configDir(): string {
   return xdg ? join(xdg, 'ablo') : join(homedir(), '.config', 'ablo');
 }
 
+/** The non-secret settings file. */
 export function configPath(): string {
   return join(configDir(), 'config.json');
+}
+
+/** The secrets file — keys only, 0600. */
+export function credentialsPath(): string {
+  return join(configDir(), 'credentials.json');
 }
 
 function asKeyEntry(value: unknown): KeyEntry | undefined {
@@ -55,50 +71,81 @@ function asKeyEntry(value: unknown): KeyEntry | undefined {
   return undefined;
 }
 
-/** Read the stored config, or null if none / unreadable / malformed. */
-export function readConfig(): StoredConfig | null {
-  const path = configPath();
+function readJson(path: string): Record<string, unknown> | null {
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown;
-    if (!parsed || typeof parsed !== 'object') return null;
-    const obj = parsed as Record<string, unknown>;
-
-    // Current shape: { mode, test?, live? }.
-    if (obj.mode === 'test' || obj.mode === 'live') {
-      return {
-        mode: obj.mode,
-        ...(asKeyEntry(obj.test) ? { test: asKeyEntry(obj.test) } : {}),
-        ...(asKeyEntry(obj.live) ? { live: asKeyEntry(obj.live) } : {}),
-      };
-    }
-
-    // Legacy flat shape: { apiKey, organizationId?, expiresAt? } → test slot.
-    const legacy = asKeyEntry(obj);
-    if (legacy) return { mode: 'test', test: legacy };
-    return null;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
   } catch {
     return null;
   }
 }
 
-/** Persist the whole config, creating the dir with locked-down perms. */
+function normalizeStoredMode(value: unknown): Mode | undefined {
+  // Pre-rename files stored 'test'/'live'.
+  if (value === 'sandbox' || value === 'test') return 'sandbox';
+  if (value === 'production' || value === 'live') return 'production';
+  return undefined;
+}
+
+/** Pull key entries out of any historical object shape (sandbox/production
+ *  buckets, pre-rename test/live buckets, or the legacy flat single key). */
+function extractEntries(obj: Record<string, unknown>): Pick<StoredConfig, 'sandbox' | 'production'> {
+  const sandbox = asKeyEntry(obj.sandbox) ?? asKeyEntry(obj.test);
+  const production = asKeyEntry(obj.production) ?? asKeyEntry(obj.live);
+  if (sandbox || production) {
+    return { ...(sandbox ? { sandbox } : {}), ...(production ? { production } : {}) };
+  }
+  const flat = asKeyEntry(obj); // legacy: { apiKey, ... } at the top level
+  return flat ? { sandbox: flat } : {};
+}
+
+/**
+ * Read the stored config, or null if none / unreadable / malformed. Reads the
+ * two-file layout; transparently MIGRATES any single-file layout (keys inside
+ * config.json, test/live names) by rewriting into the split files.
+ */
+export function readConfig(): StoredConfig | null {
+  const cfgObj = readJson(configPath());
+  const credObj = readJson(credentialsPath());
+
+  const mode = normalizeStoredMode(cfgObj?.mode) ?? normalizeStoredMode(credObj?.mode);
+  const cfgEntries = cfgObj ? extractEntries(cfgObj) : {};
+  const entries = {
+    ...cfgEntries,
+    ...(credObj ? extractEntries(credObj) : {}), // credentials file wins
+  };
+
+  if (!mode && !entries.sandbox && !entries.production) return null;
+  const config: StoredConfig = { mode: mode ?? 'sandbox', ...entries };
+
+  // Secrets found inside config.json (the old combined layout) → split now,
+  // so the non-secret file stops carrying keys.
+  if (cfgEntries.sandbox || cfgEntries.production) writeConfig(config);
+  return config;
+}
+
+/** Persist the whole config across the two files, with locked-down perms. */
 export function writeConfig(cfg: StoredConfig): string {
   const dir = configDir();
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const path = configPath();
-  writeFileSync(path, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 });
-  return path;
+  writeFileSync(configPath(), `${JSON.stringify({ mode: cfg.mode }, null, 2)}\n`, { mode: 0o600 });
+  const credentials = {
+    ...(cfg.sandbox ? { sandbox: cfg.sandbox } : {}),
+    ...(cfg.production ? { production: cfg.production } : {}),
+  };
+  writeFileSync(credentialsPath(), `${JSON.stringify(credentials, null, 2)}\n`, { mode: 0o600 });
+  return credentialsPath();
 }
 
-/** Store a key for one mode, preserving the other mode's key. */
+/** Store a key for one environment, preserving the other one's key. */
 export function setKey(mode: Mode, entry: KeyEntry): string {
   const cfg = readConfig() ?? { mode };
   cfg[mode] = entry;
   return writeConfig(cfg);
 }
 
-/** Set the active mode. */
+/** Set the active environment. */
 export function setMode(mode: Mode): string {
   const cfg = readConfig() ?? { mode };
   cfg.mode = mode;
@@ -106,33 +153,45 @@ export function setMode(mode: Mode): string {
 }
 
 export function getMode(): Mode {
-  return readConfig()?.mode ?? 'test';
+  return readConfig()?.mode ?? 'sandbox';
 }
 
 export function getKeyEntry(mode: Mode): KeyEntry | undefined {
   return readConfig()?.[mode];
 }
 
-/** Infer the mode a key belongs to from its prefix. */
+/** Infer the environment a key belongs to from its prefix. */
 export function modeFromKey(key: string): Mode | undefined {
-  if (/^(sk|rk)_test_/.test(key)) return 'test';
-  if (/^(sk|rk)_live_/.test(key)) return 'live';
+  if (/^(sk|rk)_test_/.test(key)) return 'sandbox';
+  if (/^(sk|rk)_live_/.test(key)) return 'production';
   return undefined;
 }
 
-/** Remove the stored config. Returns true if a file was deleted. */
+/**
+ * Normalize a user-supplied mode word. Accepts the canonical
+ * `sandbox`/`production` plus the pre-rename `test`/`live` as aliases.
+ */
+export function normalizeMode(value: string | undefined): Mode | undefined {
+  return normalizeStoredMode(value);
+}
+
+/** Remove the stored credential files. Returns true if anything was deleted. */
 export function clearCredential(): boolean {
-  const path = configPath();
-  if (!existsSync(path)) return false;
-  rmSync(path);
-  return true;
+  let removed = false;
+  for (const path of [configPath(), credentialsPath()]) {
+    if (existsSync(path)) {
+      rmSync(path);
+      removed = true;
+    }
+  }
+  return removed;
 }
 
 /**
  * The key the CLI should authenticate with: `ABLO_API_KEY` (CI / one-off
- * overrides always win), else the stored key for the active mode (or the
- * `modeOverride`, e.g. `dev` which is always test). A key past its `expiresAt`
- * is treated as absent so the caller prompts a fresh `ablo login`.
+ * overrides always win), else the stored key for the active environment (or
+ * the `modeOverride`, e.g. `dev` which is always sandbox). A key past its
+ * `expiresAt` is treated as absent so the caller prompts a fresh `ablo login`.
  */
 export function resolveApiKey(modeOverride?: Mode): string | undefined {
   if (process.env.ABLO_API_KEY) return process.env.ABLO_API_KEY;

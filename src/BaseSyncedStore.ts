@@ -407,8 +407,15 @@ export class BaseSyncedStore<
   protected pendingDeltas: SyncDelta[] = [];
   protected batchTimer: ReturnType<typeof setTimeout> | null = null;
   protected syncPromise: Promise<void> | null = null;
-  protected lastAckedId: number = 0;
-  protected highestProcessedSyncId: number = 0;
+  /** Resume/ack cursor — delegates to the shared SyncPosition (see
+   *  sync/syncPosition.ts). Advances only after IDB persistence. */
+  protected get lastAckedId(): number {
+    return this.syncClient.position.persisted;
+  }
+  /** Pool-applied cursor — delegates to the shared SyncPosition. */
+  protected get highestProcessedSyncId(): number {
+    return this.syncClient.position.applied;
+  }
 
   // ── Delta queuing during bootstrap ──
   protected bootstrapDeltaQueue: SyncDelta[] | null = null;
@@ -1335,8 +1342,7 @@ export class BaseSyncedStore<
 
       // Get sync baseline for WebSocket
       const lastSyncId = (yield this.database.getLastSyncId()) as number;
-      this.lastAckedId = Math.max(this.lastAckedId, lastSyncId || 0);
-      this.highestProcessedSyncId = this.lastAckedId;
+      this.syncClient.position.advancePersisted(lastSyncId || 0);
 
       try {
         const versions = (yield this.database.getVersionVector()) as Record<string, number> | null;
@@ -1982,9 +1988,7 @@ export class BaseSyncedStore<
     }
 
     // Advance watermark
-    if (delta.id > this.highestProcessedSyncId) {
-      this.highestProcessedSyncId = delta.id;
-    }
+    this.syncClient.position.advanceApplied(delta.id);
 
     // Sync group added — handle immediately. Supports both legacy
     // (addedGroups/removedGroups) and incremental (group/userId) payloads.
@@ -2135,8 +2139,7 @@ export class BaseSyncedStore<
     const persistedSyncId = batch.persistedSyncId;
     if (persistedSyncId > this.lastAckedId) {
       this.syncWebSocket?.acknowledge?.(persistedSyncId);
-      this.lastAckedId = persistedSyncId;
-      this.highestProcessedSyncId = Math.max(this.highestProcessedSyncId, persistedSyncId);
+      this.syncClient.position.advancePersisted(persistedSyncId);
     }
 
     // Cache invalidation is automatic via SyncClient 'models:changed' event
@@ -2394,11 +2397,9 @@ export class BaseSyncedStore<
       (name, data) => this.enrichRelations(name, data),
     );
 
-    // Advance sync ID
-    if (delta.id > this.lastAckedId) {
-      this.lastAckedId = delta.id;
-      this.highestProcessedSyncId = Math.max(this.highestProcessedSyncId, delta.id);
-    }
+    // This path runs after the delta was written to IDB — advance both
+    // cursors through the shared position.
+    this.syncClient.position.advancePersisted(delta.id);
   }
 
   /** Handle bootstrap_required event */

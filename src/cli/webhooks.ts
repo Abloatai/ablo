@@ -15,7 +15,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import pc from 'picocolors';
-import { resolveApiKey, type Mode } from './config';
+import { resolveApiKey, normalizeMode, type Mode } from './config';
 import { brand } from './theme';
 import { DEFAULT_URL } from './push';
 
@@ -48,8 +48,7 @@ function flag(args: readonly string[], name: string): string | undefined {
 }
 
 function parseMode(args: readonly string[]): Mode | undefined {
-  const m = flag(args, '--mode');
-  return m === 'test' || m === 'live' ? m : undefined;
+  return normalizeMode(flag(args, '--mode'));
 }
 
 /** First positional (non-flag, not consumed by a flag) argument. */

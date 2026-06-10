@@ -1,20 +1,20 @@
 /**
- * `ablo dev` — the local development loop against the hosted test sandbox.
+ * `ablo dev` — the local development loop against the hosted sandbox.
  *
  * The missing onboarding step between `ablo init` and a hosted account: it
  * takes a developer's `sk_test_` key, pushes their `ablo/schema.ts` to the
- * test environment, writes `ABLO_API_KEY` into `.env.local` (so the SDK finds
+ * sandbox environment, writes `ABLO_API_KEY` into `.env.local` (so the SDK finds
  * the key with zero copy-paste), then watches the schema file and re-pushes
  * on every save.
  *
  * Why hosted (not a bundled local server): the sync-server is the proprietary
- * hosted backend. A `sk_test_` key hits the same hosted API as live, so the
+ * hosted backend. A `sk_test_` key hits the same hosted API as production, so the
  * SDK needs nothing changed but the key — the default `baseURL`
  * (`wss://api.abloatai.com`) already routes there. `ablo dev` is therefore a
  * thin client-side command, not a server.
  *
  * Safety: `ablo dev` refuses `sk_live_` keys. Re-pushing schema in a tight
- * save loop against live data is exactly the hazard test mode exists to
+ * save loop against production data is exactly the hazard the sandbox exists to
  * avoid, so the command hard-stops rather than warn.
  *
  * Usage:
@@ -80,7 +80,7 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
 }
 
 /**
- * Classify the configured key. `ablo dev` only accepts a secret TEST key:
+ * Classify the configured key. `ablo dev` only accepts a secret SANDBOX key (sk_test_):
  *  - `sk_test_` → ok
  *  - `sk_live_` → refused (don't churn live data in a watch loop)
  *  - `rk_*`     → wrong kind (restricted/agent key can't push schema)
@@ -99,7 +99,7 @@ function classifyKey(
   if (apiKey.startsWith('sk_live_')) {
     return {
       ok: false,
-      reason: `${pc.bold('ablo dev')} refuses live keys. Use a ${pc.bold('sk_test_')} key so the watch loop can't churn production data.`,
+      reason: `${pc.bold('ablo dev')} refuses production keys. Use a ${pc.bold('sk_test_')} key so the watch loop can't churn production data.`,
     };
   }
   if (apiKey.startsWith('rk_')) {
@@ -112,7 +112,7 @@ function classifyKey(
 }
 
 /**
- * Wire the resolved test key into `.env.local` so the SDK finds it without a
+ * Wire the resolved sandbox key into `.env.local` so the SDK finds it without a
  * copy-paste step (frameworks load `.env.local`; vanilla Node uses
  * `node --env-file=.env.local`). Idempotent: creates the file, appends the
  * line, or updates a differing value — and says which it did. Never touches
@@ -140,16 +140,23 @@ export function wireEnvLocal(apiKey: string, cwd: string = process.cwd()): strin
     }
   }
 
-  // `.env.local` carries a secret — make sure it can't be committed.
+  // `.env.local` carries a secret — make sure it can never be committed.
+  // Most people forget, and a key in git history is a leak forever, so the
+  // CLI adds the ignore entry itself rather than printing a warning nobody
+  // reads. Idempotent: skipped when an existing pattern already covers it.
   const gitignorePath = resolve(cwd, '.gitignore');
-  const ignored =
-    existsSync(gitignorePath) &&
-    /^(\.env\.local|\.env\*|\.env\.\*|\.env.*)$/m.test(readFileSync(gitignorePath, 'utf8'));
-  const warning = ignored
-    ? ''
-    : `\n  ${pc.yellow('!')} ${pc.bold('.env.local')} is not covered by ${pc.bold('.gitignore')} — add it so the key never lands in git.`;
+  const gitignore = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf8') : '';
+  const ignored = /^(\.env\.local|\.env\*|\.env\.\*|\.env.*)$/m.test(gitignore);
+  let gitignoreNote = '';
+  if (!ignored) {
+    writeFileSync(
+      gitignorePath,
+      `${gitignore.endsWith('\n') || gitignore.length === 0 ? gitignore : `${gitignore}\n`}.env.local\n`,
+    );
+    gitignoreNote = ` Added ${pc.bold('.env.local')} to ${pc.bold('.gitignore')} so the key can't be committed.`;
+  }
 
-  return `${action}.${warning}`;
+  return `${action}.${gitignoreNote}`;
 }
 
 /** Push once and return a rendered result for a spinner to display. */
@@ -167,7 +174,7 @@ async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; me
       ok: true,
       message: body.unchanged
         ? `schema unchanged ${pc.dim(`(v${body.version})`)}`
-        : `schema pushed (test mode) ${pc.dim(`(v${body.version}, hash ${body.hash})`)}`,
+        : `schema pushed (sandbox) ${pc.dim(`(v${body.version}, hash ${body.hash})`)}`,
     };
   }
 
@@ -188,7 +195,7 @@ async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; me
       message:
         `This key can't author schema (${body.reason ?? 'missing schema:push scope'}).\n` +
         pc.dim(
-          `Use a ${pc.bold('Test mode')} key, or one with ${pc.bold('schema authoring')} enabled at ${pc.cyan('https://abloatai.com')}.`,
+          `Use a ${pc.bold('sandbox')} key, or one with ${pc.bold('schema authoring')} enabled at ${pc.cyan('https://abloatai.com')}.`,
         ),
     };
   }
@@ -205,8 +212,8 @@ export async function dev(argv: readonly string[]): Promise<void> {
   }
 
   // Fall back to the stored credential when no env var is set. `dev` is always
-  // the TEST loop, so it resolves the test key regardless of the active mode.
-  if (!args.apiKey) args.apiKey = resolveApiKey('test');
+  // the SANDBOX loop, so it resolves the sandbox key regardless of the active mode.
+  if (!args.apiKey) args.apiKey = resolveApiKey('sandbox');
 
   const key = classifyKey(args.apiKey);
   if (!key.ok) {
@@ -214,7 +221,7 @@ export async function dev(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`\n  ${brand('ablo')} ${pc.dim('sync engine — dev')} ${pc.dim('(test mode)')}\n`);
+  console.log(`\n  ${brand('ablo')} ${pc.dim('sync engine — dev')} ${pc.dim('(sandbox)')}\n`);
 
   const schema = await loadSchema(args.schemaPath, args.exportName);
   const modelCount = Object.keys(schema.models).length;
@@ -225,7 +232,7 @@ export async function dev(argv: readonly string[]): Promise<void> {
   console.log(`  ${pc.dim('api')}     ${args.url}\n`);
 
   const s = spinner();
-  s.start('Pushing schema definition (test mode)');
+  s.start('Pushing schema definition (sandbox)');
   const first = await runPush(schema, args);
   s.stop(first.message, first.ok ? 0 : 1);
   if (!first.ok) process.exit(1);
@@ -239,7 +246,7 @@ export async function dev(argv: readonly string[]): Promise<void> {
     console.log(`\n  ${pc.green('✓')} ${wireEnvLocal(args.apiKey!)}`);
     console.log(`  ${pc.dim('Frameworks load it automatically; plain Node: node --env-file=.env.local app.ts')}`);
   }
-  console.log(`  Your app is wired for test mode.`);
+  console.log(`  Your app is wired for the sandbox.`);
 
   if (!args.watch) return;
 

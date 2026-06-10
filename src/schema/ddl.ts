@@ -411,6 +411,15 @@ export function generateMigrationPlan(
   const statements: string[] = [];
   const concurrent: string[] = [];
 
+  // The app schema must exist before any statement targets it. On a fresh
+  // org's FIRST push (`prev = null`) the migration plan IS the provisioning —
+  // `app_<orgId>` has never been created, and skipping this line made every
+  // first push die with `3F000 invalid_schema_name` at statement 0. Idempotent
+  // (`IF NOT EXISTS`), so emitting it on every later migration is free.
+  if (steps.length > 0 && targetSchema !== 'public') {
+    statements.push(`CREATE SCHEMA IF NOT EXISTS ${qs};`);
+  }
+
   const qtFor = (table: string) => `${qs}.${q(table)}`;
   const tableOfModel = (schema: SchemaJSON | null, key: string): string | null => {
     const m = schema?.models[key];
@@ -424,8 +433,8 @@ export function generateMigrationPlan(
     switch (step.kind) {
       case 'create_model': {
         // Reuse the provisioner for the full table (base cols + fields + enum
-        // checks + RLS), minus its `CREATE SCHEMA` (the schema already exists
-        // mid-migration).
+        // checks + RLS), minus its `CREATE SCHEMA` (the plan header above
+        // already emitted it once — don't repeat it per model).
         const def = next.models[step.model];
         if (!def) break;
         const sub: SchemaJSON = { v: next.v, models: { [step.model]: def }, identityRoles: next.identityRoles };

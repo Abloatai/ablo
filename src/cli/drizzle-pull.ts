@@ -20,8 +20,13 @@ import pc from 'picocolors';
 import { AbloValidationError } from '../errors.js';
 import { existsSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
-import { is, getTableName, getTableColumns, type Column } from 'drizzle-orm';
-import { PgTable, getTableConfig } from 'drizzle-orm/pg-core';
+// TYPE-ONLY at module scope — erased at compile time. The VALUE imports load
+// lazily inside `loadDrizzle()`: drizzle-orm is the CUSTOMER's dependency
+// (resolved from their project), and a top-level import becomes a startup
+// `require("drizzle-orm")` in the CJS bundle that crashes EVERY `ablo`
+// command in projects that don't use Drizzle.
+import type { Column } from 'drizzle-orm';
+import type { PgTable } from 'drizzle-orm/pg-core';
 import { brand } from './theme';
 import { camelToSnake, emitSchemaSource, type IRField, type IRModel, type IRRelation, type IRSchema } from './schema-ir';
 
@@ -66,11 +71,25 @@ function stripIdSuffix(field: string): string {
   return field;
 }
 
+/** Lazy-load the customer's drizzle-orm. See the type-only import note above. */
+async function loadDrizzle() {
+  const [orm, pgCore] = await Promise.all([import('drizzle-orm'), import('drizzle-orm/pg-core')]);
+  return {
+    is: orm.is,
+    getTableName: orm.getTableName,
+    getTableColumns: orm.getTableColumns,
+    PgTable: pgCore.PgTable,
+    getTableConfig: pgCore.getTableConfig,
+  };
+}
+
 /**
- * Reflect an imported Drizzle schema module into the shared IR. Pure: no I/O,
- * no DB. `mod` is the module namespace object (its exported tables).
+ * Reflect an imported Drizzle schema module into the shared IR. No I/O, no
+ * DB; async only because drizzle-orm itself loads lazily. `mod` is the module
+ * namespace object (its exported tables).
  */
-export function lowerDrizzleModule(mod: Record<string, unknown>): IRSchema {
+export async function lowerDrizzleModule(mod: Record<string, unknown>): Promise<IRSchema> {
+  const { is, getTableName, getTableColumns, PgTable, getTableConfig } = await loadDrizzle();
   const tables = Object.values(mod).filter((v): v is PgTable => is(v, PgTable));
 
   const models: IRModel[] = [];
@@ -130,11 +149,11 @@ export interface PulledDrizzleSchema {
   skipped: IRSchema['skipped'];
 }
 
-export function buildSchemaSourceFromDrizzle(opts: {
+export async function buildSchemaSourceFromDrizzle(opts: {
   mod: Record<string, unknown>;
   importPath: string;
-}): PulledDrizzleSchema {
-  const ir = lowerDrizzleModule(opts.mod);
+}): Promise<PulledDrizzleSchema> {
+  const ir = await lowerDrizzleModule(opts.mod);
   return {
     source: emitSchemaSource(ir, opts.importPath),
     models: ir.models.map((m) => m.key),
@@ -220,7 +239,7 @@ export async function drizzlePull(argv: readonly string[]): Promise<void> {
   let result: PulledDrizzleSchema;
   try {
     const mod = await loadModule(args.schema);
-    result = buildSchemaSourceFromDrizzle({ mod, importPath: args.importPath });
+    result = await buildSchemaSourceFromDrizzle({ mod, importPath: args.importPath });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const hint = /Cannot find package 'drizzle-orm'/.test(msg)

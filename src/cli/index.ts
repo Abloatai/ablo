@@ -79,14 +79,14 @@ async function main() {
     console.log(`    npx ablo init                          Scaffold ablo/ directory + starter schema`);
     console.log(`    npx ablo init --yes [--framework nextjs] Non-interactive (agents/CI): no prompts, flag-driven`);
     console.log(`                  [--auth apikey] [--storage direct|endpoint] [--no-agent] [--no-pull] [--no-install] [--no-login]`);
-    console.log(`    npx ablo login                         Authorize in your browser (provisions test + live keys)`);
+    console.log(`    npx ablo login                         Authorize in your browser (provisions sandbox + production keys)`);
     console.log(`    npx ablo logout                        Remove the stored API key`);
-    console.log(`    npx ablo mode [test|live]              Switch active mode (test/live), like Stripe`);
+    console.log(`    npx ablo mode [sandbox|production]     Switch active environment, like Stripe`);
     console.log(`    npx ablo status                        Show org, mode, keys, and server health`);
     console.log(`    npx ablo logs [-n N] [--since 15m]     Tail commit activity (follows; --no-follow to exit)`);
     console.log(`    npx ablo webhooks create <url>         Register an outbound webhook endpoint (writes ABLO_WEBHOOK_SECRET)`);
     console.log(`    npx ablo webhooks list|roll|enable|rm  Manage webhook endpoints + delivery health`);
-    console.log(`    npx ablo dev                           Push your schema definition (test mode) + watch for changes`);
+    console.log(`    npx ablo dev                           Push your schema definition (sandbox) + watch for changes`);
     console.log(`    npx ablo dev --no-watch                Push once and exit (no file watcher)`);
     console.log(`    npx ablo pull                          Generate schema.ts from your existing database (read-only, lossy)`);
     console.log(`    npx ablo pull prisma [path]            Generate schema.ts from a Prisma schema (keeps enums + relations)`);
@@ -457,6 +457,9 @@ function generateSchema(): string {
   return `import { defineSchema, model, relation, z } from '@abloatai/ablo/schema';
 
 export const schema = defineSchema({
+  // Models are writable (mutable) by default — declaring one here is the
+  // opt-in. For server-managed read-only projections, pass
+  // \`{ mutable: false }\` as the model's third argument.
   projects: model({
     name: z.string(),
     status: z.enum(['active', 'archived']).default('active'),

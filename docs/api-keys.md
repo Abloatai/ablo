@@ -23,7 +23,7 @@ Use API keys from trusted (server-side) runtimes:
 
 Never ship a secret API key to a browser bundle.
 
-## Test mode and sandboxes
+## Sandboxes and production
 
 Test and live keys are the same shape; the prefix names the environment:
 
@@ -31,11 +31,11 @@ Test and live keys are the same shape; the prefix names the environment:
   to that sandbox and are invisible to live keys (and to other sandboxes).
 - `sk_live_…` — a key against your live data.
 
-Every org has a default **Test mode** sandbox, plus any number of additional
+Every org has a default sandbox, plus any number of additional
 sandboxes you create. **Data is isolated per sandbox; the schema is shared
 across the whole org.** A schema you push from a test key defines the same
 models your live keys see — only the rows differ. This mirrors how Stripe
-separates test and live data while keeping the API shape identical.
+separates sandbox and production data while keeping the API shape identical.
 
 ## Scopes
 
@@ -51,7 +51,7 @@ restricted to exactly those grants:
 - `sandbox:<id>` — identifies which sandbox the key belongs to. (The key's data
   isolation comes from that sandbox binding, not from this scope string.)
 
-A key minted from the default **Test mode** sandbox carries `schema:push`, so
+A key minted from the default sandbox carries `schema:push`, so
 `ablo dev` works out of the box. Keys from other sandboxes are **data-only** by
 default — enable "schema authoring" when minting if you want that key to push
 schema too. Hand data-only keys to embedded apps and CI agents; reserve

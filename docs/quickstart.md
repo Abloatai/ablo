@@ -87,7 +87,7 @@ from `Ablo(...)`.
 ```bash
 npx ablo migrate   # creates your synced-model tables (with row-level security)
                    # in YOUR database — your other tables are left untouched
-npx ablo dev       # pushes the schema (test mode), writes ABLO_API_KEY to
+npx ablo dev       # pushes the schema (sandbox), writes ABLO_API_KEY to
                    # .env.local, and re-pushes on every save — the dev loop
 ```
 

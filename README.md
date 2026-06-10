@@ -53,7 +53,7 @@ npm install @abloatai/ablo
 npx ablo login     # opens the browser: sign in (or sign up) → a sk_test_ key is saved locally
 npx ablo init      # scaffolds ablo/schema.ts (offers to log in if you skipped it)
 npx ablo migrate   # creates the synced tables in YOUR Postgres (reads DATABASE_URL)
-npx ablo dev       # pushes your schema (test mode), writes ABLO_API_KEY to .env.local, watches for changes
+npx ablo dev       # pushes your schema (sandbox), writes ABLO_API_KEY to .env.local, watches for changes
 ```
 
 After `ablo dev`, the [Quick Start](#quick-start) below runs as-is —
@@ -356,20 +356,22 @@ Same product, same truth either way: your database is the system of record. See
 
 ## Configuration
 
-`Ablo({ ... })` takes one required option and a couple of transport overrides:
+`Ablo({ ... })` takes three things: your schema, your key, and your database —
+the last either as `databaseUrl` here or as a signed
+[Data Source endpoint](./docs/data-sources.md) in your app. Every other option
+has correct defaults:
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `schema` | `Schema` | — (required) | Typed model proxies (`ablo.<model>.*`) |
 | `apiKey` | `string \| ApiKeySetter \| null` | `process.env.ABLO_API_KEY` | Server key — a string, or an async function for rotation |
 | `databaseUrl` | `string \| null` | `process.env.DATABASE_URL` | Your Postgres, registered as the data plane. Server runtimes only — the SDK throws if it sees this in a browser. Omit it when your app exposes a signed [Data Source endpoint](./docs/data-sources.md) instead. |
-| `baseURL` | `string` | `wss://api.abloatai.com` | Point at a self-hosted or private API |
 
 Keep `apiKey` in trusted server runtimes. In the browser, `<AbloProvider>`
 authenticates with the signed-in user's session; the raw-key path is gated
-behind `dangerouslyAllowBrowser` for server-proxy setups only. Self-hosted
-deployments can pass `authToken` instead of `apiKey`. Advanced hooks (custom
-`fetch`, logging, observability) live in [Client Behavior](./docs/client-behavior.md).
+behind `dangerouslyAllowBrowser` for server-proxy setups only. Advanced hooks
+(custom `fetch`, logging, observability, transport overrides) live in
+[Client Behavior](./docs/client-behavior.md).
 
 ## Errors
 
