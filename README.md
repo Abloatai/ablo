@@ -7,15 +7,15 @@
 </p>
 
 <p align="center">
-  <a href="https://abloatai.com">Docs</a> &nbsp;|&nbsp;
-  <a href="https://abloatai.com/quickstart">Quickstart</a> &nbsp;|&nbsp;
-  <a href="https://abloatai.com/api">API</a> &nbsp;|&nbsp;
+  <a href="https://docs.abloatai.com">Docs</a> &nbsp;|&nbsp;
+  <a href="https://docs.abloatai.com/quickstart">Quickstart</a> &nbsp;|&nbsp;
+  <a href="https://docs.abloatai.com/api">API</a> &nbsp;|&nbsp;
   <a href="https://github.com/Abloatai/ablo">GitHub</a>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@abloatai/ablo"><img src="https://img.shields.io/npm/v/@abloatai/ablo?style=flat-square&color=2563eb" alt="npm" /></a>
-  <a href="https://abloatai.com"><img src="https://img.shields.io/badge/docs-abloatai.com-2563eb?style=flat-square" alt="docs" /></a>
+  <a href="https://docs.abloatai.com"><img src="https://img.shields.io/badge/docs-docs.abloatai.com-2563eb?style=flat-square" alt="docs" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2563eb?style=flat-square" alt="license" /></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A524-22c55e?style=flat-square" alt="node >=24" />
   <img src="https://img.shields.io/badge/types-included-2563eb?style=flat-square" alt="types included" />

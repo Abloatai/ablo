@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.12
+
+### Patch Changes
+
+- README: point the Docs / Quickstart / API header links at `docs.abloatai.com` (the real docs) instead of `abloatai.com`, which 307-redirects to the marketing site.
+
 ## 0.9.11
 
 ### Patch Changes
