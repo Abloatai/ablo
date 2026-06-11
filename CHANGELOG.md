@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.14
+
+### Patch Changes
+
+- README: replace the `schema -> ablo.<model>...` pseudo-diagram with a real typed snippet (`create`/`retrieve`/`update`/`claim`), and tidy the Get-started line.
+
 ## 0.9.13
 
 ### Patch Changes
