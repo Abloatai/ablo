@@ -7,10 +7,9 @@
 </p>
 
 <p align="center">
-  <a href="https://abloatai.com">Docs</a> ·
-  <a href="https://abloatai.com/quickstart">Quickstart</a> ·
-  <a href="https://abloatai.com/data-sources">Self-host</a> ·
-  <a href="https://abloatai.com/api">API</a> ·
+  <a href="https://abloatai.com">Docs</a> &nbsp;|&nbsp;
+  <a href="https://abloatai.com/quickstart">Quickstart</a> &nbsp;|&nbsp;
+  <a href="https://abloatai.com/api">API</a> &nbsp;|&nbsp;
   <a href="https://github.com/Abloatai/ablo">GitHub</a>
 </p>
 
@@ -36,14 +35,11 @@ agent claims the row. If someone else is already working on it, `claim` waits,
 re-reads the fresh row, then hands it over. No stale overwrite, no separate
 agent mutation path.
 
-Under the hood, you define your data once with a Zod schema and get the same
-typed model client for every actor — people, server actions, and agents:
+Under the hood, you define a Zod schema once and get typed model clients for
+every actor:
 
-```ts
-await ablo.task.create({ data })                  // create
-await ablo.task.retrieve({ id })                  // read
-await ablo.task.update({ id, data })              // update
-await using task = await ablo.task.claim({ id })  // claim for safe, slow agent work
+```txt
+schema -> ablo.<model>.create/retrieve/update/claim(...)
 ```
 
 The schema is the public contract. It gives you typed model methods, realtime
@@ -51,9 +47,8 @@ fanout, React selectors, agent writes, and the HTTP/Data Source shape for
 non-JavaScript services. Every confirmed change shows up everywhere, and active
 claims are visible while the work is still in progress.
 
-**[Get started](#set-up)** &nbsp;·&nbsp; point your coding agent at the shipped
-`llms.txt` &nbsp;·&nbsp; **upgrading?** see the
-[Version History &amp; Migration Guide](./docs/migration.md)
+[Get started ↓](#quick-start) · point your coding agent at the shipped `llms.txt`
+· **upgrading?** see the [Version History & Migration Guide](./docs/migration.md)
 
 It works with the auth and database you already have. **Your database is the
 system of record — Ablo never hosts your data.** Ablo is the transaction layer
@@ -105,6 +100,29 @@ instead of guessing:
 ```ts
 import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
+
+Register the schema once (init scaffolds this `ablo.d.ts`), and every type
+is one parameter away — no `typeof schema` re-stating, anywhere:
+
+```ts
+// ablo.d.ts — once per project
+import type { schema } from './ablo/schema';
+declare module '@abloatai/ablo' {
+  interface Register { Schema: typeof schema }
+}
+export {};
+```
+
+```ts
+import type { Model } from '@abloatai/ablo/schema';
+
+type WeatherReport = Model<'weatherReports'>; // fully typed from YOUR schema
+```
+
+(The same `Register` binding types every hook and client — it's the
+TanStack-Router pattern: declare the source of truth once, everything
+infers from it.)
+
 
 const schema = defineSchema({
   weatherReports: model({

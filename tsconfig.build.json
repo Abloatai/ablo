@@ -5,6 +5,7 @@
     "rootDir": "./src",
     "declaration": true,
     "declarationMap": false,
+    "stripInternal": true,
     "sourceMap": false,
     "noEmit": false
   },

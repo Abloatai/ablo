@@ -38,7 +38,7 @@ async function main() {
   } else if (command === 'mode') {
     await mode(process.argv.slice(3));
   } else if (command === 'status') {
-    await status();
+    await status(process.argv.slice(3));
   } else if (command === 'logs') {
     await logs(process.argv.slice(3));
   } else if (command === 'webhooks') {
@@ -96,6 +96,7 @@ async function main() {
     console.log(`    npx ablo logout                        Remove the stored API key`);
     console.log(`    npx ablo mode [sandbox|production]     Switch active environment, like Stripe`);
     console.log(`    npx ablo status                        Show org, mode, keys, and server health`);
+    console.log(`    npx ablo status --json                 Same, machine-readable (mode, key prefix, org id, api host)`);
     console.log(`    npx ablo logs [-n N] [--since 15m]     Tail commit activity (follows; --no-follow to exit)`);
     console.log(`    npx ablo webhooks create <url>         Register an outbound webhook endpoint (writes ABLO_WEBHOOK_SECRET)`);
     console.log(`    npx ablo webhooks list|roll|enable|rm  Manage webhook endpoints + delivery health`);

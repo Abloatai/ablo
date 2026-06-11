@@ -31,10 +31,30 @@ async function ping(apiUrl: string): Promise<boolean> {
   }
 }
 
-export async function status(): Promise<void> {
+export async function status(args: string[] = []): Promise<void> {
   const apiUrl = (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
   const cfg = readConfig();
   const mode = getMode();
+
+  // Machine-readable mode — `ablo status --json`. Integrators and agents
+  // previously regex-scraped the human output for the org id (the 2026-06-11
+  // Pulse cascade); this is the supported surface. In-process consumers
+  // should prefer `ablo.organizationId` on the client after `ready()`.
+  if (args.includes('--json')) {
+    const entry = getKeyEntry(mode);
+    const out = {
+      mode,
+      keyPrefix: process.env.ABLO_API_KEY
+        ? process.env.ABLO_API_KEY.slice(0, 12)
+        : (entry?.apiKey.slice(0, 12) ?? null),
+      keySource: process.env.ABLO_API_KEY ? 'env' : entry ? 'stored' : null,
+      organizationId: entry?.organizationId ?? null,
+      apiUrl,
+      reachable: await ping(apiUrl),
+    };
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
 
   console.log(`\n  ${brand('ablo')} ${pc.dim('status')}\n`);
 

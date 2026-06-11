@@ -50,6 +50,29 @@ export const schema = defineSchema({
 });
 ```
 
+
+Register the schema once (init scaffolds this `ablo.d.ts`), and every type
+is one parameter away — no `typeof schema` re-stating, anywhere:
+
+```ts
+// ablo.d.ts — once per project
+import type { schema } from './ablo/schema';
+declare module '@abloatai/ablo' {
+  interface Register { Schema: typeof schema }
+}
+export {};
+```
+
+```ts
+import type { Model } from '@abloatai/ablo/schema';
+
+type WeatherReport = Model<'weatherReports'>; // fully typed from YOUR schema
+```
+
+(The same `Register` binding types every hook and client — it's the
+TanStack-Router pattern: declare the source of truth once, everything
+infers from it.)
+
 ## 3. Point Ablo at your database
 
 The client takes your schema, your key, and your `DATABASE_URL`. On first

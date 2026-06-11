@@ -20,6 +20,9 @@ Then PUSH — this is the step everything depends on. The server keeps its OWN c
 import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
+TYPES: have the project register its schema ONCE via declaration merging (init scaffolds `ablo.d.ts`): `declare module '@abloatai/ablo' { interface Register { Schema: typeof schema } }`. Then model types are one parameter: `type Task = Model<'tasks'>` (import type { Model } from '@abloatai/ablo/schema'). Do NOT teach `InferModel` (deprecated) or the two-param `Model<typeof schema,'tasks'>` unless multiple schemas exist. Never hand-write model interfaces — derive from the schema.
+
+
 const schema = defineSchema({
   weatherReports: model({
     id: z.string(),

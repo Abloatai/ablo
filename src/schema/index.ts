@@ -17,7 +17,7 @@
  *   }),
  * });
  *
- * type Task = InferModel<typeof schema, 'tasks'>;
+ * type Task = Model<typeof schema, 'tasks'>;
  * ```
  */
 
@@ -108,6 +108,7 @@ export {
   composeIdentitySyncGroups,
   type Schema,
   type SchemaRecord,
+  type Model,
   type InferModel,
   type InferCreate,
   type InferModelNames,
@@ -130,12 +131,15 @@ export {
   type RoleSource,
   type RoleContext,
   type SyncGroup,
+  type SyncGroupInput,
   identityRole,
   entityRole,
   extractIdentityIds,
   extractEntityIds,
   syncGroup,
   syncGroupSchema,
+  syncGroupInputSchema,
+  isSyncGroupInput,
   identityRoleSchema,
   entityRoleSchema,
   roleSchema,

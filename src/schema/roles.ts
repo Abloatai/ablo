@@ -46,6 +46,29 @@ export function syncGroup(kind: string, id: string): SyncGroup {
   return `${kind}:${id}` as SyncGroup;
 }
 
+/**
+ * Caller-facing input form of a sync group. Accepts a constructor-minted
+ * {@link SyncGroup}, a contextually-typed template literal of the right shape
+ * (`` `org:${orgId}` `` checks without importing the constructor), or the
+ * server-reserved `'default'` anchor. A bare colon-less string is a COMPILE
+ * error — it would subscribe to nothing and fail silently (the `['default']`
+ * zero-fan-out ghost made flesh).
+ */
+export type SyncGroupInput = SyncGroup | `${string}:${string}` | 'default';
+
+/**
+ * Runtime gate for {@link SyncGroupInput} at parse boundaries (capability
+ * mint, ephemeral-key mint). One schema, every door — a malformed group is
+ * rejected loudly (`invalid_sync_group`) instead of stored and silently
+ * subscribed-to-nothing.
+ */
+export const syncGroupInputSchema = z.union([z.literal('default'), syncGroupSchema]);
+
+/** Runtime guard matching {@link SyncGroupInput}. */
+export function isSyncGroupInput(value: unknown): value is SyncGroupInput {
+  return syncGroupInputSchema.safeParse(value).success;
+}
+
 // ── Role source ─────────────────────────────────────────────────────────────
 
 /** Validates how a role pulls ids out of a context (identity or record). */

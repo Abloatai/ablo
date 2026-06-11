@@ -1,10 +1,21 @@
 # Changelog
 
+## 0.9.11
+
+### Patch Changes
+
+- `Model<'name'>` type helper via the `Register` binding — name your model in one parameter (`Model<'tasks'>`) instead of restating `typeof schema`; `Model<S, 'name'>` is also supported and `InferModel` is deprecated. CLI: retire the stale `dev` wording from the login outro and `push` header. Docs: cover the `Register` binding end-to-end and document the `pk_` publishable key + the `/v1/commits` HTTP path.
+- 3024593: Fix `sessions.create({ user })` 403 — user sessions now mint via the sk\_-gated ephemeral-key door
+  - `sessions.create({ user })` mints an `ek_` user session via `/auth/ephemeral-keys` (was wrongly routed through `/auth/capability`, which rejects human participants — writes were being attributed to agents).
+  - Control-plane calls always present your original `sk_`, never the client's exchanged sync credential.
+  - `sessions.create({ agent, can })` no longer requires hand-built `syncGroups` — the org anchor is the server default — and the `can` allowlist is now honored at commit time (model-alias matching).
+  - New: `ablo.organizationId` (resolved after `ready()`), `ablo status --json`, typed sync-group inputs (`SyncGroupInput` + `invalid_sync_group` rejection for malformed groups).
+
 ## 0.9.10
 
 ### Patch Changes
 
-- README: add a centered brand header (Ablo banner, tagline, Docs/Quickstart/Self-host/API/GitHub nav, and status badges).
+- README: add a centered brand header (Ablo banner, tagline, doc nav links, and status badges).
 
 ## 0.9.9
 

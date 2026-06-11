@@ -19,6 +19,9 @@ Public imports:
 - `@abloatai/ablo/react` — React provider and hooks.
 - `@abloatai/ablo/testing` — test harnesses and mocks.
 
+TYPES: have the project register its schema ONCE via declaration merging (init scaffolds `ablo.d.ts`): `declare module '@abloatai/ablo' { interface Register { Schema: typeof schema } }`. Then model types are one parameter: `type Task = Model<'tasks'>` (import type { Model } from '@abloatai/ablo/schema'). Do NOT teach `InferModel` (deprecated) or the two-param `Model<typeof schema,'tasks'>` unless multiple schemas exist. Never hand-write model interfaces — derive from the schema.
+
+
 Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or `internal/*` as public imports. The Data Source surface — `/source`, `/source/next`, `/source/drizzle`, `/source/kysely`, `/source/conformance` — IS public (it's how a customer-owned database is wired).
 
 The canonical integration doc is `integration-guide`. It explains the end-to-end

@@ -14,13 +14,19 @@
 
 import {
   type CapabilityExchangeResponse,
+  type EphemeralKeyResponse,
   type IdentityResolveResponse,
   parseCapabilityExchangeResponse,
+  parseEphemeralKeyResponse,
   parseIdentityResolveResponse,
 } from './schemas.js';
 import { AbloAuthenticationError, hasWireCode, translateHttpError } from '../errors.js';
 
-export type { CapabilityExchangeResponse, IdentityResolveResponse } from './schemas.js';
+export type {
+  CapabilityExchangeResponse,
+  EphemeralKeyResponse,
+  IdentityResolveResponse,
+} from './schemas.js';
 
 export interface ExchangeApiKeyRequest {
   readonly apiKey: string;
@@ -29,6 +35,14 @@ export interface ExchangeApiKeyRequest {
   readonly participantId?: string;
   readonly syncGroups?: readonly string[];
   readonly operations?: readonly string[];
+  /**
+   * Bypass narrow-by-default scoping (admin/apikey callers only). SDK-internal:
+   * only the startup exchange (`identity.ts` `resolveHosted`) sets it. Stripped
+   * from the published `.d.ts` (`stripInternal`) — agents read declaration
+   * files as API, and this flag advertised an escalation knob consumers should
+   * never reach for (`sessions.create` scopes via `can` + `syncGroups`).
+   * @internal
+   */
   readonly wideScope?: boolean;
   readonly ttlSeconds: number;
   readonly label?: string;
@@ -114,6 +128,99 @@ export async function exchangeApiKey(
   }
 
   return parseCapabilityExchangeResponse(await response.json());
+}
+
+// ─────────────────────────────────────────────────────────────────────
+
+export interface MintUserSessionRequest {
+  /** The ORIGINAL secret (`sk_`) key — control-plane calls always present it,
+   *  never the exchanged sync credential. */
+  readonly apiKey: string;
+  readonly baseUrl: string;
+  /** The end user's external IdP id — becomes the session's `participantId`. */
+  readonly userId: string;
+  readonly syncGroups?: readonly string[];
+  readonly ttlSeconds: number;
+  readonly label?: string;
+  readonly fetch?: typeof fetch;
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Mint an END-USER session key (`ek_`) via `POST /auth/ephemeral-keys` — the
+ * sk_-gated user-session door. This is deliberately a DIFFERENT endpoint from
+ * `/auth/capability`: that route can never mint humans (its
+ * `invalid_participant_kind` gate is what fired in the 2026-06-11 Pulse
+ * cascade, when `sessions.create({ user })` was funneled through the agent
+ * door). The server trusts the `ek_` because a secret key minted it; the
+ * browser presents it as its bearer.
+ */
+export async function mintUserSessionKey(
+  options: MintUserSessionRequest,
+): Promise<EphemeralKeyResponse> {
+  if (!options.apiKey) {
+    throw new AbloAuthenticationError(
+      'No API key found. Set ABLO_API_KEY in your environment or pass `apiKey` ' +
+        'to Ablo({ ... }) directly — user sessions are minted by your backend.',
+      { code: 'apikey_missing' },
+    );
+  }
+  if (!options.baseUrl) {
+    throw new AbloAuthenticationError(
+      'baseUrl is required for user-session mint',
+      { code: 'base_url_missing' },
+    );
+  }
+
+  const fetcher = options.fetch ?? fetch;
+  const url = `${options.baseUrl.replace(/\/+$/, '')}/auth/ephemeral-keys`;
+  const timeoutMs = options.timeoutMs ?? 10_000;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetcher(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${options.apiKey}`,
+      },
+      body: JSON.stringify({
+        user: { id: options.userId },
+        ...(options.syncGroups ? { syncGroups: options.syncGroups } : {}),
+        ttlSeconds: options.ttlSeconds,
+        ...(options.label ? { label: options.label } : {}),
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    throw new AbloAuthenticationError(
+      `user-session mint failed: ${err instanceof Error ? err.message : String(err)}`,
+      { code: 'exchange_network_error', cause: err },
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) {
+    let body: unknown = null;
+    try {
+      body = await response.json();
+    } catch {
+      // ignore — server returned non-JSON error
+    }
+    const requestId = response.headers.get('x-request-id') ?? undefined;
+    throw hasWireCode(body)
+      ? translateHttpError(response.status, body, requestId)
+      : new AbloAuthenticationError(
+          `user-session mint rejected (${response.status})`,
+          { code: 'exchange_failed', httpStatus: response.status },
+        );
+  }
+
+  return parseEphemeralKeyResponse(await response.json());
 }
 
 // ─────────────────────────────────────────────────────────────────────

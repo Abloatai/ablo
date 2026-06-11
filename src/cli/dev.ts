@@ -240,7 +240,7 @@ export async function dev(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`\n  ${brand('ablo')} ${pc.dim('sync engine — dev')} ${pc.dim('(sandbox)')}\n`);
+  console.log(`\n  ${brand('ablo')} ${pc.dim('push')} ${pc.dim('(sandbox)')}\n`);
 
   // Direct-databaseUrl projects: check the configured role BEFORE the push.
   // Neon/Supabase dashboard strings connect as the BYPASSRLS owner, which the

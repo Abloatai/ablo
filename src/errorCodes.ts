@@ -416,6 +416,7 @@ export const ERROR_CODES = {
   invalid_request: wire('validation', 400, false, 'The request parameters were invalid.'),
   capability_not_found: wire('not_found', 404, false, 'No capability exists with the given id.'),
   invalid_participant_kind: wire('validation', 400, false, 'The participant kind is invalid.'),
+  invalid_sync_group: wire('validation', 400, false, 'Sync groups must be "default" or "<namespace>:<id>".'),
   narrow_scope_required: wire('validation', 400, false, 'A narrowed scope is required for this request.'),
   wide_scope_forbidden: wire('permission', 403, false, 'A wide scope is not permitted for this caller.'),
   capability_required: wire('auth', 401, false, 'This operation requires a capability.'),

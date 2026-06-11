@@ -40,6 +40,7 @@ export {
   type RoleSource,
   type RoleContext,
   type SyncGroup,
+  type SyncGroupInput,
   identityRole,
   entityRole,
   extractIdentityIds,
@@ -48,6 +49,8 @@ export {
   composeEntitySyncGroups,
   syncGroup,
   syncGroupSchema,
+  syncGroupInputSchema,
+  isSyncGroupInput,
   identityRoleSchema,
   entityRoleSchema,
   roleSchema,
@@ -194,6 +197,39 @@ export interface Schema<S extends SchemaRecord = SchemaRecord> {
  * ```ts
  * type Task = InferModel<typeof schema, 'tasks'>;
  * ```
+ */
+/** The schema bound via `declare module … interface Register { Schema: … }`
+ *  (the `ablo.d.ts` the scaffold writes). `never` when not registered. */
+type RegisteredSchema = import('../types/global.js').Register extends {
+  Schema: infer S extends Schema;
+}
+  ? S
+  : never;
+
+/**
+ * THE model type helper. With the scaffold's `ablo.d.ts` registration in
+ * place, one parameter is all it takes:
+ *
+ * ```ts
+ * type Task = Model<'tasks'>;
+ * ```
+ *
+ * Without registration (or for a second schema), pass the schema explicitly:
+ * `Model<typeof schema, 'tasks'>`.
+ */
+export type Model<A, B = never> = [B] extends [never]
+  ? A extends keyof RegisteredSchema['models']
+    ? InferModel<RegisteredSchema, A>
+    : never
+  : A extends Schema
+    ? InferModel<A, B extends keyof A['models'] ? B : never>
+    : never;
+
+/**
+ * @deprecated Use {@link Model} — `type Task = Model<typeof schema, 'tasks'>`
+ * reads as the domain ("the Task model from my schema"), not the machinery.
+ * Drizzle deprecated its own `InferModel` for the same reason. Kept as an
+ * alias; no behavior difference.
  */
 export type InferModel<S extends Schema, ModelName extends keyof S['models']> =
   S['models'][ModelName] extends ModelDef<infer Shape, infer R, infer C>

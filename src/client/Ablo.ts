@@ -54,7 +54,8 @@ import { Database } from '../Database.js';
 import { SyncClient } from '../SyncClient.js';
 import { BootstrapHelper } from '../sync/BootstrapHelper.js';
 import { HydrationCoordinator } from '../sync/HydrationCoordinator.js';
-import { type RefreshScheduler, exchangeApiKey } from '../auth/index.js';
+import { type RefreshScheduler, exchangeApiKey, mintUserSessionKey } from '../auth/index.js';
+import type { SyncGroupInput } from '../schema/roles.js';
 import { createAuthCredentialSource } from '../auth/credentialSource.js';
 import { createInternalComponents } from './createInternalComponents.js';
 import { resolveParticipantIdentity } from './identity.js';
@@ -747,8 +748,11 @@ export type SessionOperation = 'read' | 'create' | 'update' | 'delete';
 export interface CreateUserSessionParams {
   /** Your end user. `id` becomes the token's `participantId`. */
   user: { id: string };
-  /** Sync groups this session may subscribe to. Omit to inherit the key's scope. */
-  syncGroups?: readonly string[];
+  /** Sync groups this session may subscribe to — typed (`'default'` or
+   *  `<namespace>:<id>`; build with `syncGroup.org()/user()/of()` from
+   *  `@abloatai/ablo/schema`). Omit for the server default:
+   *  `[org:<your org>, user:<user.id>]`. */
+  syncGroups?: readonly SyncGroupInput[];
   /** Token lifetime in seconds. Defaults to 900 (15m, the Stripe ephemeral default). */
   ttlSeconds?: number;
   /** Opaque identity blob echoed back to the client as `ablo.user`. */
@@ -766,8 +770,11 @@ export interface CreateAgentSessionParams<S extends SchemaRecord> {
   agent: { id: string };
   /** Per-model operation allowlist, typed against the schema's model names. */
   can: { [M in keyof S & string]?: readonly SessionOperation[] };
-  /** Sync groups this session may subscribe to. Omit to inherit the key's scope. */
-  syncGroups?: readonly string[];
+  /** Sync groups this session may subscribe to — typed (`'default'` or
+   *  `<namespace>:<id>`; build with `syncGroup.org()/user()/of()` from
+   *  `@abloatai/ablo/schema`). Omit for the server default: the org
+   *  anchor (`org:<your org>`) + the agent's own anchor. */
+  syncGroups?: readonly SyncGroupInput[];
   /** Token lifetime in seconds. Defaults to 900 (15m, the Stripe ephemeral default). */
   ttlSeconds?: number;
   /** Opaque identity blob echoed back to the client as `ablo.agent`. */
@@ -782,13 +789,14 @@ export type CreateSessionParams<S extends SchemaRecord> =
   | CreateUserSessionParams
   | CreateAgentSessionParams<S>;
 
-/** A minted end-user session token — the Stripe ephemeral-key / Supabase
- *  session resource. `token` is the secret the browser presents as its bearer. */
+/** A minted session token — the Stripe ephemeral-key / Supabase session
+ *  resource. `token` is the secret the holder presents as its bearer. */
 export interface AbloSession {
   object: 'session';
   /** Stable id of the minted credential (for revocation). */
   id: string;
-  /** The short-lived `rk_` session token. Hand this to the user's browser. */
+  /** The short-lived session token — `ek_` for a `{ user }` session, `rk_`
+   *  for an `{ agent }` session. Hand this to the participant's runtime. */
   token: string;
   /** ISO-8601 expiry. */
   expiresAt: string;
@@ -898,17 +906,30 @@ export type Ablo<S extends SchemaRecord> = {
    * BACKEND (where the `sk_` secret key lives), then hand the returned
    * `token` to that user's browser (typically via an authEndpoint the client
    * fetches). The browser presents it as the bearer; the sync-server verifies
-   * the scoped `rk_` token via `apiKeyProvider`.
+   * it via `apiKeyProvider`.
    *
    * The browser must NEVER see the `sk_` key — only the per-user session token.
    *
-   * Pass `{ user: { id } }` for a full-authority end-user session (mints `ek_`),
-   * or `{ agent: { id }, can: { Task: ['update'] } }` for a scoped agent
-   * session (mints `rk_`); `can` is typed against your schema's model names.
+   * Pass `{ user: { id } }` for a full-authority end-user session (mints `ek_`,
+   * `actor_kind: 'user'` attribution), or `{ agent: { id }, can: { tasks:
+   * ['update'] } }` for a scoped agent session (mints `rk_`); `can` is typed
+   * against your schema's model names. Always authenticates with the original
+   * `sk_` — never the client's exchanged sync credential.
    */
   sessions: {
     create(params: CreateSessionParams<S>): Promise<AbloSession>;
   };
+
+  /**
+   * The organization this client resolved to — `null` until `ready()`
+   * completes. Use it instead of scraping CLI output or hardcoding env vars:
+   *
+   * ```ts
+   * await ablo.ready();
+   * const org = ablo.organizationId; // 'org_…'
+   * ```
+   */
+  readonly organizationId: string | null;
 
   /**
    * Destroy every IndexedDB database owned by this engine. Disconnects
@@ -2016,6 +2037,9 @@ export function Ablo<const S extends SchemaRecord>(
   //    source of truth. No duplicate closure variables.
 	  let _readyPromise: Promise<void> | null = null;
 	  let _refreshScheduler: RefreshScheduler | null = null;
+	  /** Resolved account scope — set once identity resolution completes in
+	   *  `ready()`; exposed as the readonly `ablo.organizationId` accessor. */
+	  let _resolvedOrganizationId: string | null = null;
 
   async function ready(): Promise<void> {
     if (_readyPromise) return _readyPromise;
@@ -2118,6 +2142,8 @@ export function Ablo<const S extends SchemaRecord>(
 	            { participantKind, resolvedSyncGroups },
 	          );
 	        }
+
+        _resolvedOrganizationId = accountScope;
 
         if (resolved.refreshScheduler) {
           _refreshScheduler = resolved.refreshScheduler;
@@ -2810,6 +2836,17 @@ export function Ablo<const S extends SchemaRecord>(
 	    };
 	  }
 
+	  /**
+	   * The CONTROL-PLANE credential: always the original configured secret key.
+	   * Never reads `authCredentials` — that holds the exchanged sync credential
+	   * (a wide-scope `rk_` on the hosted path), which control-plane routes
+	   * rightly refuse (e.g. the user-session mint is sk_-gated). Counterpart to
+	   * `getAuthToken()`, which resolves the sync-plane token.
+	   */
+	  async function controlPlaneApiKey(): Promise<string | null> {
+	    return resolveApiKeyValue(configuredApiKey);
+	  }
+
 	  const engine = {
     ...modelProxies,
 
@@ -2831,6 +2868,13 @@ export function Ablo<const S extends SchemaRecord>(
     async getAuthToken(): Promise<string | null> {
       // The live short-lived bearer (set via `setAuthToken`/`getToken` refresh)
       // is the canonical credential; fall back to a configured API key.
+      //
+      // This is the SYNC-PLANE token (bootstrap, WS, query HTTP). Control-plane
+      // calls (sessions.create, datasource registration) never use it — they
+      // present the ORIGINAL secret key via `controlPlaneApiKey()` below. The
+      // split matters: after the startup exchange this resolver returns the
+      // derived wide-scope `rk_`, a credential the control-plane routes
+      // correctly refuse (an agent token must never mint humans).
       return (
         authCredentials.getAuthToken() ??
         (await resolveApiKeyValue(configuredApiKey)) ??
@@ -2843,16 +2887,28 @@ export function Ablo<const S extends SchemaRecord>(
       store.setCredentialRefresher(refresher);
     },
 
+    // The org this client resolved to — null until `ready()` completes.
+    // Integrators previously had no programmatic way to learn it (the Pulse
+    // agent regex-scraped `ablo status` output); now it's a property.
+    get organizationId(): string | null {
+      return _resolvedOrganizationId;
+    },
+
     nudgeReconnect() {
       store.nudgeReconnect();
     },
 
     sessions: {
       // Stripe `ephemeralKeys.create` shape: a BACKEND (holding `sk_`) mints a
-      // short-lived scoped token for one end user OR one agent. Thin wrapper over
-      // the `/auth/capability` exchange, reshaped to a Stripe-style resource.
+      // short-lived scoped token for one end user OR one agent.
+      //
+      // CONTROL-PLANE CREDENTIAL RULE: both arms authenticate with the
+      // ORIGINAL secret key (`controlPlaneApiKey()`), never the wide-scope
+      // `rk_` the startup exchange installed as the sync credential. A derived
+      // agent credential silently replacing the secret key on control-plane
+      // calls is how humans get minted as agents — attribution is the product.
       async create(params: CreateSessionParams<S>): Promise<AbloSession> {
-        const apiKey = await resolveApiKeyValue(configuredApiKey);
+        const apiKey = await controlPlaneApiKey();
         if (!apiKey) {
           throw new AbloAuthenticationError(
             'sessions.create requires a secret (sk_) API key — call it from your backend, not the browser.',
@@ -2863,31 +2919,55 @@ export function Ablo<const S extends SchemaRecord>(
           url,
           bootstrapBaseUrl: internalOptions.bootstrapBaseUrl,
         });
-        // Discriminate the union: `{ user }` → full-authority `ek_` (no op
-        // allowlist); `{ agent, can }` → scoped `rk_`. `can: { Task: ['update'] }`
-        // serializes to the wire allowlist `['task.update']` — the Hub matches
-        // `${model.toLowerCase()}.${op}` (Hub.ts handleCommit).
-        let participantKind: 'user' | 'agent';
-        let participantId: string;
-        let operations: string[] | undefined;
+        // Discriminate the union onto the server's TWO mint doors:
+        //   `{ user }`  → POST /auth/ephemeral-keys → `ek_` (sk_-gated; the
+        //                 user-session door). Routing this arm through
+        //                 /auth/capability is structurally impossible — that
+        //                 route rejects participantKind 'user' outright
+        //                 (`invalid_participant_kind`, the 2026-06-11 Pulse
+        //                 cascade: the SDK's own blessed pattern 403'd and
+        //                 integrators fell back to minting humans as agents).
+        //   `{ agent }` → POST /auth/capability → scoped `rk_`.
+        //                 `can: { tasks: ['update'] }` serializes to the wire
+        //                 allowlist (`tasks.update`); the Hub matches it
+        //                 against every registered alias of the model.
         if (params.user) {
-          participantKind = 'user';
-          participantId = params.user.id;
-          operations = undefined;
-        } else {
-          participantKind = 'agent';
-          participantId = params.agent.id;
-          operations = Object.entries(params.can).flatMap(([model, ops]) =>
-            (ops ?? []).map((op) => `${model.toLowerCase()}.${op}`),
-          );
+          const res = await mintUserSessionKey({
+            apiKey,
+            baseUrl,
+            userId: params.user.id,
+            ...(params.syncGroups ? { syncGroups: [...params.syncGroups] } : {}),
+            ttlSeconds: params.ttlSeconds ?? 900,
+            ...(internalOptions.fetch ? { fetch: internalOptions.fetch } : {}),
+          });
+          return {
+            object: 'session',
+            id: res.id,
+            token: res.token,
+            expiresAt: res.expiresAt,
+            organizationId: res.organizationId,
+            // The ephemeral mint stores scope on the key row; reshape its flat
+            // response into the session resource's scope block.
+            scope: {
+              organizationId: res.organizationId,
+              syncGroups: res.syncGroups,
+              operations: [],
+              participantKind: 'user',
+              participantId: res.participantId,
+            },
+            userMeta: params.userMeta ?? { id: res.participantId },
+          };
         }
+        const operations = Object.entries(params.can).flatMap(([model, ops]) =>
+          (ops ?? []).map((op) => `${model.toLowerCase()}.${op}`),
+        );
         const res = await exchangeApiKey({
           apiKey,
           baseUrl,
-          participantKind,
-          participantId,
+          participantKind: 'agent',
+          participantId: params.agent.id,
           ...(params.syncGroups ? { syncGroups: [...params.syncGroups] } : {}),
-          ...(operations ? { operations } : {}),
+          operations,
           ttlSeconds: params.ttlSeconds ?? 900,
           ...(params.userMeta ? { userMeta: params.userMeta } : {}),
           ...(internalOptions.fetch ? { fetch: internalOptions.fetch } : {}),

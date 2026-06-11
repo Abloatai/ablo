@@ -203,7 +203,7 @@ async function deviceLogin(): Promise<void> {
     ...(prov.live ? { production: entry(prov.live) } : {}),
   });
   s.stop(`Saved keys to ${path}`);
-  outro(`${pc.green('✓')} Logged in ${pc.dim('(sandbox)')}. Run ${pc.bold('ablo dev')}, or ${pc.bold('ablo mode production')} to switch.`);
+  outro(`${pc.green('✓')} Logged in ${pc.dim('(sandbox)')}. Run ${pc.bold('npx ablo push')} to push your schema.`);
 }
 
 export async function login(): Promise<void> {
