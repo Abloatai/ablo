@@ -183,4 +183,4 @@ Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or internal subp
 - Adopt an existing DB: `npx ablo pull prisma [path]` / `npx ablo pull drizzle <module>`.
 - `npx ablo push --no-watch` pushes the schema (sandbox) AND writes `ABLO_API_KEY` to `.env.local` (default watches forever); `npx ablo logs --no-follow` (default tails forever); `npx ablo mode sandbox|production` (always pass the arg). `npx ablo push`/`status`/`pull`/`check`/`generate` are one-shot.
 
-Canonical docs to read before integrating: `quickstart`, `schema-contract`, `integration-guide`, `guarantees`, `client-behavior`, `data-sources`, `examples/existing-python-backend`, `api`, `examples/ai-sdk-tool`, and `examples/server-agent`.
+Canonical docs to read before integrating: `quickstart`, `schema-contract`, `integration-guide`, `guarantees`, `client-behavior`, `data-sources`, `examples/existing-python-backend`, `api`, `examples/ai-sdk-tool`, and `examples/server-agent`. When upgrading an existing integration, read `migration` — every breaking change, what to change, and which version introduced it.

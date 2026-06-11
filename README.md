@@ -32,6 +32,7 @@ non-JavaScript services. Every confirmed change shows up everywhere, and active
 claims are visible while the work is still in progress.
 
 [Get started ↓](#quick-start) · point your coding agent at the shipped `llms.txt`
+· **upgrading?** see the [Version History & Migration Guide](./docs/migration.md)
 
 It works with the auth and database you already have. **Your database is the
 system of record — Ablo never hosts your data.** Ablo is the transaction layer
@@ -412,6 +413,7 @@ contract; there are no retry or timeout knobs to tune.
 
 ## Production Reference
 
+- [Version History & Migration Guide](./docs/migration.md) — every breaking change, what to change, and which version introduced it. Read before bumping a minor.
 - [Identity & Sync Groups](./docs/identity.md) — use your own authentication; tell Ablo who's connecting and how org / team / user map to sync-group scope.
 - [Schema Contract](./docs/schema-contract.md) — one schema becomes typed model clients, React reads, agent writes, Data Source shape, and schema push.
 - [Guarantees](./docs/guarantees.md) — confirmed writes, stale-write protection, claim coordination, and agent lifecycle.

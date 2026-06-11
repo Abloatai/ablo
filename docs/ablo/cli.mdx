@@ -23,7 +23,7 @@ npx ablo init                 # choose "My database (Data Source endpoint)"
 two things to know:
 
 - **Prompts hang** — `ablo init` and bare `ablo mode` prompt. Use
-  `ablo init --yes` and `ablo mode test|live` (with the argument). `init` also
+  `ablo init --yes` and `ablo mode sandbox|production` (with the argument). `init` also
   auto-detects no-TTY, but pass `--yes` to be explicit. Bare `ablo mode` now
   errors with the right form instead of hanging.
 - **Long-runners never return** — `ablo dev` watches and `ablo logs` follows by
@@ -57,7 +57,7 @@ mirrors `stripe login`.
 | `ablo login` | Authorize in the browser; provisions + stores a test and a live key. |
 | `ablo logout` | Remove the stored keys. |
 | `ablo status` | Show the active org, mode, both keys (prefix + expiry), and server health. |
-| `ablo mode [test\|live]` | Switch the active mode. With no argument, prompts. |
+| `ablo mode [sandbox\|production]` | Switch the active mode. With no argument, prompts. |
 
 Keys are stored in `~/.config/ablo/config.json` (mode `0600`). In **CI**, don't
 log in — set `ABLO_API_KEY`, which always overrides the stored key.
@@ -78,9 +78,9 @@ either mode) defines the same models test and live see; only the rows differ.
 | --- | --- | --- |
 | `ablo init` | Scaffold `ablo/` (`schema.ts`, client, Data Source endpoint, optional agent / component), write `.env`, install the SDK. Offers to log in at the end. Interactive by default; non-interactive with `--yes`/no-TTY. | `--yes`, `--framework`, `--auth`, `--storage`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login` |
 | `ablo login` / `logout` / `status` | Authentication & status (above). | — |
-| `ablo mode [test\|live]` | Switch active mode. | — |
+| `ablo mode [sandbox\|production]` | Switch active mode. | — |
 | `ablo dev` | **Hosted** — push the schema to your test sandbox, then watch `ablo/schema.ts` and re-push on save. | `--no-watch`, `--schema <path>`, `--export <name>`, `--url <url>` |
-| `ablo logs` | Tail your scope's commit activity (`stripe logs tail`). Follows by default. | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode test\|live` |
+| `ablo logs` | Tail your scope's commit activity (`stripe logs tail`). Follows by default. | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode sandbox\|production` |
 | `ablo push` | **Hosted** — upload the schema to Ablo; the server diffs, migrates, and activates it. | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url` |
 | `ablo pull` | **Adoption** — generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`). | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force` |
 | `ablo check` | **Adoption** — verify your *existing* tables fit the schema (read-only, no schema changes). | `--schema <path>`, `--export <name>`, `--app-schema <name>` |

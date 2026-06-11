@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.8
+
+### Patch Changes
+
+- Docs: add a Version History & Migration Guide, bring the changelog current, and sync doc trees. Drop the dormant `causedByTaskId` from the audit-row docs and fix the `ablo mode` argument vocabulary.
+
 ## 0.9.7
 
 ### Patch Changes

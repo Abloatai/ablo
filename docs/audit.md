@@ -16,10 +16,9 @@ Every commit becomes one row.
   actorId:              string,
   onBehalfOfKind:       'user' | 'agent' | 'system' | null,
   onBehalfOfId:         string | null,
-  credentialId:         string | null,    // the API key/credential used for the write
-  credentialLabel:      string | null,    // its human-readable name, for scanning the log
+  capabilityId:         string | null,    // the API key/capability used for the write
+  capabilityLabel:      string | null,    // its human-readable name, for scanning the log
   delegationChainRoot:  string | null,    // always points at a human
-  causedByRunId:        string | null,    // the agent run that produced this write — group every change from one run
   actionType:           string,           // e.g. 'weatherReport.update'
   modelName:            string | null,    // e.g. 'claude-opus-4-7'
   diffSummary:          unknown,

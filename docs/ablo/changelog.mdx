@@ -3,6 +3,52 @@ title: "Changelog"
 description: "Product updates and releases for Ablo"
 ---
 
+<Update label="June 11, 2026" description="v0.9.7">
+## Docs: correct `commits.create` operation shape
+
+The advanced commit example now uses the public `{ action, model, data }`
+operation shape that the SDK actually accepts (it previously showed `resource:`
+and an internal wire form). No code changes.
+</Update>
+
+<Update label="June 11, 2026" description="v0.9.6">
+## CLI quickstart down to three commands
+
+`ablo init` now owns login, the standalone `migrate` step is dropped from the
+`databaseUrl` quickstart (`dev` handles it), and the watch command is renamed
+for honest naming. Also fixes three production bugs surfaced by the new
+end-to-end journey test harness.
+
+### Breaking
+
+- **`ablo dev` is now `ablo push`.** Update any scripts that called `ablo dev`.
+</Update>
+
+<Update label="June 10, 2026" description="v0.9.5">
+## Scoped-role automation and tenant-routing fix
+
+`ablo migrate` now auto-creates the RLS-gated scoped role with zero SQL, using a
+log-safe SCRAM-SHA-256 password verifier, plus a Neon/Supabase scoped-role
+`databaseUrl` recipe. Fixes a JSONB double-encode that corrupted per-tenant
+routing and silently fell back to the shared pool.
+</Update>
+
+<Update label="June 10, 2026" description="v0.9.4">
+## Sync-position correctness and CLI hardening
+
+Five scattered sync cursors are consolidated into one typed `syncPosition`
+(persisted / applied / acked with a derived `readFloor`), fixing a claim taken
+right after an ack-confirmed write reading stale against that write's own delta.
+Adds transaction ack-confirmation, schema DDL-first push, and a reworked CLI.
+</Update>
+
+<Update label="June 9, 2026" description="v0.9.3">
+## Onboarding leads with your own database
+
+The quickstart now leads with the bring-your-own-database path (Drizzle Data
+Source), drops the Ablo-managed mode, and adds the `ablo push` step.
+</Update>
+
 <Update label="June 9, 2026" description="v0.9.2">
 ## First-try setup for people and AI agents
 

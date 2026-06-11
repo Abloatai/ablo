@@ -1,5 +1,8 @@
 # API
 
+> **Upgrading?** Every breaking change and its migration is on the
+> [Version History & Migration Guide](./migration.md).
+
 This is the per-method reference for reading and writing rows that stay in
 sync across sessions. You declare your models once, then call the same
 `ablo.<model>` methods from React, a server action, or an agent — and every
