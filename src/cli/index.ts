@@ -10,6 +10,7 @@ import { push } from './push';
 import { generate } from './generate';
 import { dev } from './dev';
 import { login, logout } from './login';
+import { resolveApiKey } from './config';
 import { mode } from './mode';
 import { status } from './status';
 import { logs } from './logs';
@@ -43,7 +44,9 @@ async function main() {
   } else if (command === 'webhooks') {
     await webhooks(process.argv.slice(3));
   } else if (command === 'dev') {
-    await dev(process.argv.slice(3));
+    // Renamed: nothing runs locally, so `dev` was a lie. Kept as an alias.
+    console.log(pc.dim('  `ablo dev` is now `ablo push --watch` — running that.'));
+    await dev([...process.argv.slice(3), '--watch']);
   } else if (command === 'check') {
     await check(process.argv.slice(3));
   } else if (command === 'pull') {
@@ -61,7 +64,17 @@ async function main() {
   } else if (command === 'migrate') {
     await migrate(process.argv.slice(3));
   } else if (command === 'push') {
-    await push(process.argv.slice(3));
+    // The quickstart flow (sandbox key: role check, env wiring, server-side
+    // provisioning, optional --watch). Advanced flags (--force/--rename/
+    // --backfill) and live keys route to the raw one-shot pusher.
+    const rest = process.argv.slice(3);
+    const advanced = rest.some((a) => ['--force', '--rename', '--backfill', '--url'].includes(a));
+    const liveKey = (process.env.ABLO_API_KEY ?? '').startsWith('sk_live_');
+    if (advanced || liveKey) {
+      await push(rest);
+    } else {
+      await dev(rest);
+    }
   } else if (command === 'upgrade') {
     await upgrade(process.argv.slice(3));
   } else if (command === 'generate') {
@@ -440,6 +453,13 @@ async function init(args: readonly string[] = []) {
 
   // Offer to authorize right away — the device flow opens the browser, so it's
   // ONLY offered interactively (never from an agent / CI / `--no-login`).
+  // Skipped when a credential already exists: login is part of init, not a
+  // separate quickstart step, and a logged-in user shouldn't be re-asked.
+  const existingKey = resolveApiKey('sandbox');
+  if (existingKey) {
+    outro(`Already authorized ${pc.dim(`(${existingKey.slice(0, 11)}…)`)} — run ${pc.bold('npx ablo push')} next. ${pc.dim('Docs:')} https://abloatai.com/docs`);
+    return;
+  }
   if (interactive && opts.login) {
     const loginNow = await confirm({ message: 'Log in now? (opens your browser)', initialValue: true });
     if (!isCancel(loginNow) && loginNow) {

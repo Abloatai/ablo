@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.6
+
+### Patch Changes
+
+- CLI quickstart simplification (3 commands). `init` now owns login, `migrate` is dropped from the direct-`databaseUrl` quickstart (dev handles it), and the `dev` command is renamed to `push` for honest naming with headless-safe login. **Note:** `ablo dev` is now `ablo push` — update any scripts. Also fixes 3 production bugs surfaced by the new end-to-end journey test harness.
+
 ## 0.9.5
 
 ### Patch Changes

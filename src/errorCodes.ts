@@ -207,13 +207,22 @@ export const ERROR_CODES = {
   byo_host_not_allowed: wire('permission', 403, false, 'The direct Postgres connector host resolves to a private, loopback, or link-local address and cannot be used.'),
 
   // ── claim / intent conflict (409) ──────────────────────────────────
-  claim_conflict: wire('claim', 409, true, 'The target entity is claimed by another participant.'),
-  claim_lost: wire('claim', 409, true, 'A previously held claim was lost before the write applied.'),
-  entity_claimed: wire('claim', 409, true, 'The target entity is currently claimed; write was blocked.'),
-  intent_conflict: wire('claim', 409, true, 'An intent on the target conflicts with an active intent (server-internal alias of claim_conflict).'),
+  // Held-claim rejections are NOT queue-retryable (gRPC FAILED_PRECONDITION /
+  // ABORTED semantics; Replicache/Zero SETTLE a rejected mutation — reject the
+  // caller, roll back the optimistic effect — instead of resending it).
+  // Blindly re-sending the same payload cannot succeed while the lease is
+  // held, and a lease can outlive any sane retry budget. The correct recovery
+  // lives at the CALLER: take a claim (`ablo.<model>.claim` queues fairly
+  // behind the holder) or re-read and rebase. `retryable: true` here turned
+  // every cross-client claim conflict into an infinite client resend loop
+  // (~150ms storm — found by the claims journey, 2026-06-10).
+  claim_conflict: wire('claim', 409, false, 'The target entity is claimed by another participant.'),
+  claim_lost: wire('claim', 409, false, 'A previously held claim was lost before the write applied.'),
+  entity_claimed: wire('claim', 409, false, 'The target entity is currently claimed; write was blocked.'),
+  intent_conflict: wire('claim', 409, false, 'An intent on the target conflicts with an active intent (server-internal alias of claim_conflict).'),
   malformed_claim: wire('claim', 400, false, 'The claim payload was malformed.'),
-  model_claimed: wire('claim', 409, true, 'The model instance is claimed by another participant.'),
-  model_claimed_timeout: wire('claim', 409, true, 'Timed out waiting for a model claim to clear.'),
+  model_claimed: wire('claim', 409, false, 'The model instance is claimed by another participant.'),
+  model_claimed_timeout: wire('claim', 409, false, 'Timed out waiting for a model claim to clear.'),
   model_claim_not_configured: client('claim', 'Claiming was requested on a model that has no claim configuration.'),
 
   // ── stale context / idempotency (409) ──────────────────────────────

@@ -53,10 +53,10 @@ npm install @abloatai/ablo
 npx ablo login     # opens the browser: sign in (or sign up) → a sk_test_ key is saved locally
 npx ablo init      # scaffolds ablo/schema.ts (offers to log in if you skipped it)
 npx ablo migrate   # creates the synced tables in YOUR Postgres (reads DATABASE_URL)
-npx ablo dev       # pushes your schema (sandbox), writes ABLO_API_KEY to .env.local, watches for changes
+npx ablo push       # pushes your schema (sandbox), writes ABLO_API_KEY to .env.local, watches for changes
 ```
 
-After `ablo dev`, the [Quick Start](#quick-start) below runs as-is —
+After `ablo push`, the [Quick Start](#quick-start) below runs as-is —
 `ABLO_API_KEY` is already in `.env.local` (frameworks load it automatically;
 plain Node: `node --env-file=.env.local app.ts`). `npx ablo status` shows
 what's configured at any time.
@@ -94,7 +94,7 @@ const schema = defineSchema({
 
 const ablo = Ablo({
   schema,
-  apiKey: process.env.ABLO_API_KEY, // written to .env.local by `npx ablo dev`
+  apiKey: process.env.ABLO_API_KEY, // written to .env.local by `npx ablo push`
   databaseUrl: process.env.DATABASE_URL, // your Postgres — rows live here, never with Ablo
 });
 

@@ -254,7 +254,7 @@
       "category": "claim",
       "surface": "wire",
       "httpStatus": 409,
-      "retryable": true,
+      "retryable": false,
       "message": "The target entity is claimed by another participant.",
       "docUrl": "https://docs.abloatai.com/errors#claim_conflict"
     },
@@ -263,7 +263,7 @@
       "category": "claim",
       "surface": "wire",
       "httpStatus": 409,
-      "retryable": true,
+      "retryable": false,
       "message": "A previously held claim was lost before the write applied.",
       "docUrl": "https://docs.abloatai.com/errors#claim_lost"
     },
@@ -480,7 +480,7 @@
       "category": "claim",
       "surface": "wire",
       "httpStatus": 409,
-      "retryable": true,
+      "retryable": false,
       "message": "The target entity is currently claimed; write was blocked.",
       "docUrl": "https://docs.abloatai.com/errors#entity_claimed"
     },
@@ -684,7 +684,7 @@
       "category": "claim",
       "surface": "wire",
       "httpStatus": 409,
-      "retryable": true,
+      "retryable": false,
       "message": "An intent on the target conflicts with an active intent (server-internal alias of claim_conflict).",
       "docUrl": "https://docs.abloatai.com/errors#intent_conflict"
     },
@@ -1042,7 +1042,7 @@
       "category": "claim",
       "surface": "wire",
       "httpStatus": 409,
-      "retryable": true,
+      "retryable": false,
       "message": "The model instance is claimed by another participant.",
       "docUrl": "https://docs.abloatai.com/errors#model_claimed"
     },
@@ -1051,7 +1051,7 @@
       "category": "claim",
       "surface": "wire",
       "httpStatus": 409,
-      "retryable": true,
+      "retryable": false,
       "message": "Timed out waiting for a model claim to clear.",
       "docUrl": "https://docs.abloatai.com/errors#model_claimed_timeout"
     },
@@ -1734,6 +1734,15 @@
       "retryable": false,
       "message": "The tenant model is missing the organization_id column required for isolation.",
       "docUrl": "https://docs.abloatai.com/errors#tenant_model_missing_organization_id"
+    },
+    {
+      "code": "tenant_routing_failed",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": true,
+      "message": "The org's registered database could not be resolved or dialed. Ablo never falls back to shared storage for a dedicated tenant — retry, and check the datasource status if it persists.",
+      "docUrl": "https://docs.abloatai.com/errors#tenant_routing_failed"
     },
     {
       "code": "test_database_not_registered",

@@ -305,25 +305,25 @@ The target is held by another participant. Usually retryable once the holder rel
 
 ### claim_conflict
 
-`HTTP 409` · retryable
+`HTTP 409` · not retryable
 
 The target entity is claimed by another participant.
 
 ### claim_lost
 
-`HTTP 409` · retryable
+`HTTP 409` · not retryable
 
 A previously held claim was lost before the write applied.
 
 ### entity_claimed
 
-`HTTP 409` · retryable
+`HTTP 409` · not retryable
 
 The target entity is currently claimed; write was blocked.
 
 ### intent_conflict
 
-`HTTP 409` · retryable
+`HTTP 409` · not retryable
 
 An intent on the target conflicts with an active intent (server-internal alias of claim_conflict).
 
@@ -341,13 +341,13 @@ Claiming was requested on a model that has no claim configuration.
 
 ### model_claimed
 
-`HTTP 409` · retryable
+`HTTP 409` · not retryable
 
 The model instance is claimed by another participant.
 
 ### model_claimed_timeout
 
-`HTTP 409` · retryable
+`HTTP 409` · not retryable
 
 Timed out waiting for a model claim to clear.
 
@@ -1140,6 +1140,12 @@ The quota decision could not be loaded.
 `HTTP 502` · retryable
 
 The task-create response did not include an id.
+
+### tenant_routing_failed
+
+`HTTP 500` · retryable
+
+The org's registered database could not be resolved or dialed. Ablo never falls back to shared storage for a dedicated tenant — retry, and check the datasource status if it persists.
 
 ### turn_close_failed
 

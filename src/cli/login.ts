@@ -73,18 +73,29 @@ interface ProvisionResponse {
 async function deviceLogin(): Promise<void> {
   intro(`${brand('ablo')} login`);
 
-  // Account choice — both paths complete in the browser; the CLI just opens the
-  // right page (sign-in vs sign-up) and then the same /cli approval.
-  const account = await select({
-    message: 'Ablo account',
-    options: [
-      { value: 'login' as const, label: 'Log in to an existing account' },
-      { value: 'signup' as const, label: 'Create a new account' },
-    ],
-  });
-  if (isCancel(account)) {
-    cancel('Cancelled.');
-    process.exit(0);
+  // Account choice — both paths complete in the browser; the CLI just opens
+  // the right page (sign-in vs sign-up) and then the same /cli approval.
+  // NON-TTY (agents — Claude Code, CI wrappers): skip the prompt entirely; a
+  // clack select can't receive input without a TTY and would HANG the agent.
+  // Default to the sign-in URL — the /cli approval page offers sign-up
+  // itself, and the device flow below is already agent-shaped: it PRINTS the
+  // approval URL + code (the agent relays it to the human) and polls until
+  // the human approves in their own browser.
+  const interactive = Boolean(process.stdout.isTTY && process.stdin.isTTY);
+  let account: 'login' | 'signup' = 'login';
+  if (interactive) {
+    const choice = await select({
+      message: 'Ablo account',
+      options: [
+        { value: 'login' as const, label: 'Log in to an existing account' },
+        { value: 'signup' as const, label: 'Create a new account' },
+      ],
+    });
+    if (isCancel(choice)) {
+      cancel('Cancelled.');
+      process.exit(0);
+    }
+    account = choice;
   }
 
   const codeRes = await fetch(`${AUTH_URL}/api/auth/device/code`, {

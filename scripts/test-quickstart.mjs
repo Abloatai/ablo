@@ -7,11 +7,11 @@
  * script is the only thing standing between those bugs and `npx ablo`.
  *
  * TIER 1 (always, offline): pack → fresh project → install tarball →
- *   `ablo` boots, `init --yes` scaffolds, keyless `dev --no-watch` fails
+ *   `ablo` boots, `init --yes` scaffolds, keyless `push` fails
  *   GRACEFULLY (exit 1 + "ablo login" guidance, never a stack trace).
  *
  * TIER 2 (opt-in, networked): ABLO_QUICKSTART_LIVE=1 with ABLO_API_KEY (or a
- *   stored login) additionally runs the real `dev --no-watch` push and
+ *   stored login) additionally runs the real `push` push and
  *   asserts `.env.local` + `.gitignore` wiring.
  *
  * Run: npm run test:quickstart        (tier 1)
@@ -96,11 +96,11 @@ check('`ablo init --yes` scaffolds the project', () => {
   }
 });
 
-check('keyless `ablo dev --no-watch` fails GRACEFULLY with login guidance', () => {
+check('keyless `ablo push` fails GRACEFULLY with login guidance', () => {
   let out = '';
   let code = 0;
   try {
-    out = run('node', [cli, 'dev', '--no-watch'], { cwd: proj, env: keylessEnv });
+    out = run('node', [cli, 'push'], { cwd: proj, env: keylessEnv });
   } catch (err) {
     code = err.status ?? 1;
     out = `${err.stdout ?? ''}${err.stderr ?? ''}`;
@@ -118,8 +118,8 @@ check('`ablo status` runs keyless without crashing', () => {
 // ── Tier 2 (opt-in): the real push against the hosted sandbox ───────────────
 if (process.env.ABLO_QUICKSTART_LIVE === '1') {
   const liveEnv = { ...process.env }; // real config dir / ABLO_API_KEY
-  check('LIVE: `ablo dev --no-watch` pushes the schema', () => {
-    const out = run('node', [cli, 'dev', '--no-watch'], { cwd: proj, env: liveEnv });
+  check('LIVE: `ablo push` pushes the schema', () => {
+    const out = run('node', [cli, 'push'], { cwd: proj, env: liveEnv });
     expect(/schema (pushed|unchanged)/.test(out), `push did not succeed:\n${out.slice(-600)}`);
   });
   check('LIVE: ABLO_API_KEY landed in .env.local and is gitignored', () => {

@@ -698,9 +698,11 @@ export class SyncWebSocket<
             clearTimeout(pending.timeout);
             this.pendingMutations.delete(clientTxId);
             if (success) {
+              // Coerce defensively — bigint columns serialize as strings
+              // from older servers (see normalizeWireDelta).
+              const ackedSyncId = Number(lastSyncId);
               pending.resolve({
-                lastSyncId:
-                  typeof lastSyncId === 'number' ? lastSyncId : 0,
+                lastSyncId: Number.isFinite(ackedSyncId) ? ackedSyncId : 0,
               });
             } else {
               // Capture the FULL server error so the user can see what
@@ -1043,9 +1045,28 @@ export class SyncWebSocket<
   }
 
   /**
+   * Normalize a wire delta at the receive boundary. The contract
+   * (`syncDeltaWireCoreSchema`) says `id: number`, but deployed servers
+   * have sent the raw Postgres BIGINT serialization — a STRING — and
+   * every downstream watermark gate (`typeof syncId === 'number'` in
+   * `Database.processDeltaBatch`, the metadata-cursor update, numeric
+   * `>=` threshold comparisons in TransactionQueue) silently breaks on
+   * strings: acks are withheld, the resume cursor never advances, and
+   * every reconnect replays from 0 (or force-bootstraps once the gap
+   * exceeds maxDeltaGapForPartial). Coerce ONCE here so the rest of the
+   * client can trust the declared type — and old servers stay compatible.
+   */
+  private normalizeWireDelta(delta: SyncDelta): SyncDelta {
+    if (typeof (delta as { id: unknown }).id === 'number') return delta;
+    const coerced = Number((delta as { id: unknown }).id);
+    return { ...delta, id: Number.isFinite(coerced) ? coerced : 0 };
+  }
+
+  /**
    * Handle incoming sync delta
    */
-  private handleDelta(delta: SyncDelta): void {
+  private handleDelta(rawDelta: SyncDelta): void {
+    const delta = this.normalizeWireDelta(rawDelta);
     getContext().logger.debug('Received delta', {
       action: delta.actionType,
       model: delta.modelName,
@@ -1882,8 +1903,10 @@ export class SyncWebSocket<
 
     // Process incremental deltas
     if (payload.deltas && Array.isArray(payload.deltas)) {
-      // Process all deltas from sync response - store handles idempotency
-      const newDeltas = payload.deltas;
+      // Process all deltas from sync response - store handles idempotency.
+      // Same receive-boundary normalization as handleDelta — catch-up
+      // replays from older servers carry string ids too.
+      const newDeltas = (payload.deltas as SyncDelta[]).map((d) => this.normalizeWireDelta(d));
 
       if (newDeltas.length > 0) {
         // DO NOT pre-advance `this.lastSyncId` here. Same reasoning as

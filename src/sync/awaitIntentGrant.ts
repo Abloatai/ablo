@@ -22,6 +22,21 @@ export interface GrantTransport {
   ): () => void;
 }
 
+export interface IntentGrantInfo {
+  /**
+   * True when the grant arrived as `intent_granted` — i.e. the target was
+   * HELD when we asked and we waited in the FIFO line behind the holder.
+   * False for the immediate `intent_acquired` (target was free).
+   *
+   * Callers use this to know the row may have changed while we queued:
+   * intent VISIBILITY is entity-scoped (org-wide subscriptions receive no
+   * presence/intent fan-out — see Hub.broadcastPresenceChange), so the
+   * local coordination snapshot cannot be trusted to detect "we waited".
+   * The grant frame itself is the authoritative signal.
+   */
+  readonly waited: boolean;
+}
+
 export function awaitIntentGrant(
   transport: GrantTransport,
   intentId: string,
@@ -34,8 +49,8 @@ export function awaitIntentGrant(
      */
     maxQueueDepth?: number;
   },
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
+): Promise<IntentGrantInfo> {
+  return new Promise<IntentGrantInfo>((resolve, reject) => {
     const unsubs: Array<() => void> = [];
     let timer: ReturnType<typeof setTimeout> | undefined;
     const settle = (fn: () => void): void => {
@@ -44,14 +59,19 @@ export function awaitIntentGrant(
       fn();
     };
 
-    const onGrant = (p: Record<string, unknown>): void => {
-      if (p?.intentId === intentId) settle(resolve);
-    };
     // The target was free → `intent_acquired` (immediate); it was contended,
     // we waited in line, and reached the head → `intent_granted`. Either frame
-    // means the lease is now ours, so one await covers both grant paths.
-    unsubs.push(transport.subscribe('intent_acquired', onGrant));
-    unsubs.push(transport.subscribe('intent_granted', onGrant));
+    // means the lease is now ours; `waited` records which path it was.
+    unsubs.push(
+      transport.subscribe('intent_acquired', (p) => {
+        if (p?.intentId === intentId) settle(() => resolve({ waited: false }));
+      }),
+    );
+    unsubs.push(
+      transport.subscribe('intent_granted', (p) => {
+        if (p?.intentId === intentId) settle(() => resolve({ waited: true }));
+      }),
+    );
     if (options?.maxQueueDepth !== undefined) {
       const max = options.maxQueueDepth;
       unsubs.push(

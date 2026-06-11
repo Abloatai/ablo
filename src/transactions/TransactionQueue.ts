@@ -1160,7 +1160,17 @@ export class TransactionQueue extends EventEmitter {
     // LINEAR PATTERN: Simplified coalescing for updates
     // Staging already batches all transactions in same event loop tick
     // We only need to handle: (1) in-flight merging, (2) same-entity merging
-    if (transaction.type === 'update') {
+    //
+    // RETRIES (attempts > 0) must NEVER take either merge path. A retry is
+    // re-enqueued from `handleFailure` while its own modelKey is still in
+    // `inFlightByModel` (the post-batch cleanup runs after the catch), so the
+    // in-flight merge mistook the retry for a concurrent user edit: it moved
+    // the data into `pendingMergeByModel`, REMOVED the transaction, and the
+    // post-batch block minted a fresh follow-up with `attempts: 0`. The
+    // attempt counter never accumulated and `maxRetries` never tripped — an
+    // infinite ~`batchDelay` resend storm of self-laundering transaction
+    // clones (found by the claims journey, 2026-06-10).
+    if (transaction.type === 'update' && transaction.attempts === 0) {
       const preserveWatermark = hasStaleWriteOptions(transaction.writeOptions);
       // If there is an in-flight update for this model, merge into post-flight buffer
       if (!preserveWatermark && this.inFlightByModel.has(modelKey)) {
@@ -2006,29 +2016,39 @@ export class TransactionQueue extends EventEmitter {
       }
 
       this.emit('transaction:failed', { transaction, error, permanent: true });
+      // The id-suffixed event is what `waitForConfirmation` (the
+      // `wait:'confirmed'` path) listens on — without it a permanently
+      // rejected write left the caller's promise hanging forever.
+      this.emit(`transaction:failed:${transaction.id}`, { error });
       return;
     }
 
     if (transaction.attempts < this.config.maxRetries) {
-      // Backoff for retryable server responses (HTTP 429/503).
-      // Exponential with jitter, capped — tunable via
-      // `TransactionQueueConfig.retryBackoff`.
+      // Exponential backoff with FULL jitter for EVERY transient retry
+      // (AWS-standard shape: `sleep = random(0, min(cap, base × 2^attempt))`
+      // — see the Exponential Backoff And Jitter analysis). Throttling
+      // signals (429/503) get a longer base, mirroring the AWS SDK's
+      // transient-vs-throttle split. Previously only 429/503 backed off
+      // AND the sleep blocked the whole batch loop — every other failure
+      // retried at raw `batchDelay` cadence. The re-enqueue is scheduled
+      // (never awaited) so one backing-off transaction can't stall
+      // unrelated commits.
+      const { baseMs, capMs } = this.config.retryBackoff;
+      let base = baseMs;
       try {
         const status = extractStatusCode(error);
-        if (status === 429 || status === 503) {
-          const { baseMs, capMs } = this.config.retryBackoff;
-          const delay = Math.min(
-            capMs,
-            Math.floor(baseMs * Math.pow(2, transaction.attempts - 1)),
-          );
-          const jitter = Math.floor(Math.random() * 100);
-          await new Promise((r) => setTimeout(r, delay + jitter));
-        }
+        if (status === 429 || status === 503) base = Math.max(baseMs, 1_000);
       } catch {}
+      const ceiling = Math.min(capMs, base * Math.pow(2, transaction.attempts - 1));
+      const delay = Math.floor(Math.random() * ceiling);
 
-      // Retry
       this.store.updateStatus(transaction.id, 'pending');
-      this.enqueue(transaction);
+      setTimeout(() => {
+        // The queue may have shut down or the tx may have been settled
+        // (e.g. delta-confirmed) while we backed off.
+        if (this.store.get(transaction.id)?.status !== 'pending') return;
+        this.enqueue(transaction);
+      }, delay);
     } else {
       // Mark as failed and rollback
       this.store.updateStatus(transaction.id, 'failed');
@@ -2038,6 +2058,8 @@ export class TransactionQueue extends EventEmitter {
       }
 
       this.emit('transaction:failed', { transaction, error });
+      // Settle `waitForConfirmation` waiters (see the permanent branch above).
+      this.emit(`transaction:failed:${transaction.id}`, { error });
     }
   }
 

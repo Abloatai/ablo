@@ -156,3 +156,120 @@ export async function createScopedRole(
   }
   return { role, databaseUrl: rewriteDatabaseUrl(ownerUrl, role, password) };
 }
+
+import pc from 'picocolors';
+import { confirm, isCancel } from '@clack/prompts';
+import { writeFileSync, existsSync, readFileSync, appendFileSync } from 'fs';
+import { resolve } from 'path';
+
+/**
+ * The CLI side of the server's RLS gate. Neon/Supabase dashboard connection
+ * strings use the database OWNER role (BYPASSRLS) — Ablo's server refuses
+ * those (`database_role_cannot_enforce_rls`) because row-level security
+ * would be unenforceable. Instead of making the user hand-write SQL, offer
+ * to create the scoped role HERE, from their machine, with the credential
+ * they already configured — the owner string never reaches Ablo's servers,
+ * and the generated password is written to the env file, never printed.
+ *
+ * Returns the URL the migration (and the app) should use from now on.
+ */
+export async function ensureScopedRoleInteractive(dbUrl: string): Promise<string> {
+  let safety;
+  try {
+    const sql = postgres(dbUrl, { max: 1, prepare: false, onnotice: () => {} });
+    try {
+      safety = await detectRoleSafety(sql);
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  } catch {
+    return dbUrl; // unreachable DB — let the migration produce the real error
+  }
+  if (!safety.unsafe) return dbUrl;
+
+  const why = safety.superuser ? 'a superuser' : 'BYPASSRLS';
+  console.log(
+    `\n  ${pc.yellow('!')} DATABASE_URL connects as ${pc.bold(safety.role)} — ${why}, so ` +
+      `row-level security can't be enforced.\n    Ablo's server will refuse this connection ` +
+      `(${pc.bold('database_role_cannot_enforce_rls')}).`,
+  );
+
+  // CI / agents (no TTY): don't block, don't guess — point at the recipe.
+  if (!process.stdout.isTTY) {
+    console.log(
+      pc.dim(
+        `    Create a scoped role and update DATABASE_URL — run \`npx ablo migrate\` interactively\n` +
+          `    to do it automatically, or see https://docs.abloatai.com/quickstart#scoped-role`,
+      ),
+    );
+    return dbUrl;
+  }
+
+  const proceed = await confirm({
+    message: `Create a scoped role ${DEFAULT_SCOPED_ROLE} (NOSUPERUSER, NOBYPASSRLS) and update DATABASE_URL?`,
+    initialValue: true,
+  });
+  if (isCancel(proceed) || !proceed) {
+    console.log(pc.dim('    Skipped — see https://docs.abloatai.com/quickstart#scoped-role for the manual recipe.'));
+    return dbUrl;
+  }
+
+  const { role, databaseUrl } = await createScopedRole(dbUrl);
+  const where = persistDatabaseUrl(databaseUrl);
+  console.log(
+    `  ${pc.green('✓')} Created role ${pc.bold(role)} and updated ${pc.bold('DATABASE_URL')} in ${pc.bold(where)}.\n` +
+      pc.dim(`    The owner credential never left this machine; the new password was written, not printed.`),
+  );
+  return databaseUrl;
+}
+
+/**
+ * Update DATABASE_URL where the user keeps it: the env file that already
+ * defines it (.env.local, then .env), else append to .env.local (0600) and
+ * make sure it's gitignored. Mirrors \`wireEnvLocal\`'s behavior for keys.
+ */
+export function persistDatabaseUrl(databaseUrl: string, cwd: string = process.cwd()): string {
+  const line = `DATABASE_URL=${databaseUrl}`;
+  for (const name of ['.env.local', '.env']) {
+    const path = resolve(cwd, name);
+    if (!existsSync(path)) continue;
+    const content = readFileSync(path, 'utf8');
+    if (/^DATABASE_URL=/m.test(content)) {
+      writeFileSync(path, content.replace(/^DATABASE_URL=.*$/m, line));
+      return name;
+    }
+  }
+  const envLocal = resolve(cwd, '.env.local');
+  if (existsSync(envLocal)) {
+    const content = readFileSync(envLocal, 'utf8');
+    appendFileSync(envLocal, `${content.endsWith('\n') || content.length === 0 ? '' : '\n'}${line}\n`);
+  } else {
+    writeFileSync(envLocal, `${line}\n`, { mode: 0o600 });
+  }
+  const gitignorePath = resolve(cwd, '.gitignore');
+  const gitignore = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf8') : '';
+  if (!/^(\.env\.local|\.env\*|\.env\.\*|\.env.*)$/m.test(gitignore)) {
+    writeFileSync(
+      gitignorePath,
+      `${gitignore.endsWith('\n') || gitignore.length === 0 ? gitignore : `${gitignore}\n`}.env.local\n`,
+    );
+  }
+  return '.env.local';
+}
+
+/**
+ * Resolve the project's DATABASE_URL the way the app will: process env
+ * first, then the env files frameworks load (`.env.local`, `.env`). The CLI
+ * runs via `npx` without the app's env loader, so it reads the files itself.
+ */
+export function readProjectDatabaseUrl(cwd: string = process.cwd()): string | null {
+  const fromEnv = process.env.DATABASE_URL ?? process.env.ABLO_DATABASE_URL;
+  if (fromEnv) return fromEnv;
+  for (const name of ['.env.local', '.env']) {
+    const path = resolve(cwd, name);
+    if (!existsSync(path)) continue;
+    const match = readFileSync(path, 'utf8').match(/^DATABASE_URL=(.+)$/m);
+    if (match?.[1]) return match[1].trim().replace(/^["']|["']$/g, '');
+  }
+  return null;
+}

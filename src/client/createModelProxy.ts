@@ -103,6 +103,14 @@ export type ModelRetrieveOptions = Pick<ModelLoadOptions<unknown>, 'type' | 'exp
 
 export interface IntentLeaseHandle {
   readonly id: string;
+  /**
+   * True when the grant came AFTER waiting in the server's FIFO line
+   * (`intent_granted`) — the authoritative "the row may have changed
+   * underneath us" signal. The local `observe()` snapshot can't stand in
+   * for this: intent fan-out is entity-scoped, so org-wide subscriptions
+   * (the default hosted client) never see peers' claims at all.
+   */
+  readonly waited?: boolean;
   release(): Promise<void>;
   revoke(): void;
 }
@@ -448,6 +456,17 @@ export function createModelProxy<T, C>(
     );
   }
 
+  // The coordination plane (claims/intents) must speak the SAME wire dialect
+  // as the commit plane: the lowercased TYPENAME (`task`), not the schema key
+  // (`tasks`). The server's commit-time intent guard probes the lease store
+  // with the commit op's model name; a lease recorded under the schema key
+  // never collides with it — which silently disarmed the guard for every
+  // model whose schema key differs from its typename (i.e. nearly all of
+  // them, plural key vs singular typename). Public surfaces (ClaimHandle.
+  // target.model) keep the schema key; only the wire/coordination targets
+  // use this.
+  const wireModel = registeredModelName.toLowerCase();
+
   // Last-line guarantee for the public surface: any rejection from a lower
   // layer (transport timeout, IndexedDB failure, a third-party throw) is
   // coerced to an AbloError before it reaches the consumer. The SDK's
@@ -541,7 +560,7 @@ export function createModelProxy<T, C>(
     // Is someone ELSE already on this target? Read the local coordination
     // snapshot up front — it decides whether we'll need to re-read after the
     // claim (a free / already-mine target can't have changed under us).
-    const held = collaboration.observe({ model: schemaKey, id });
+    const held = collaboration.observe({ model: wireModel, id });
     const contended = !!held && held.heldBy !== collaboration.selfParticipantId;
     const failFast = options?.wait === false;
 
@@ -561,7 +580,7 @@ export function createModelProxy<T, C>(
     // Ensure the row exists locally before claiming.
     let model = objectPool.get(id);
     if (!model) {
-      await load({ where: { id } as unknown as LoadWhere<T> });
+      await load({ where: [['id', id]] });
       model = objectPool.get(id);
     }
     if (!model) {
@@ -578,7 +597,7 @@ export function createModelProxy<T, C>(
     // observed conflict above, so this just records our lease.
     const lease = await collaboration.createIntent({
       target: {
-        model: schemaKey,
+        model: wireModel,
         id,
         ...(options?.field ? { field: options.field } : {}),
         ...(options?.path ? { path: options.path } : {}),
@@ -593,9 +612,19 @@ export function createModelProxy<T, C>(
 
     // Only when we actually waited behind another holder can the row have
     // changed underneath us — re-read so the claimed snapshot reflects what
-    // they committed before releasing.
-    if (contended && !failFast) {
-      await load({ where: { id } as unknown as LoadWhere<T> });
+    // they committed before releasing. Two signals, either suffices:
+    //   - `lease.waited` — the server granted via `intent_granted`, i.e. we
+    //     provably queued behind a holder. Authoritative; works even when
+    //     the local snapshot is blind (intent fan-out is entity-scoped, so
+    //     org-wide-subscribed clients never observe peers' claims).
+    //   - `contended` — the local snapshot saw a holder up front. Kept for
+    //     the no-queue paths where no grant frame exists.
+    if ((contended || lease.waited === true) && !failFast) {
+      // `type: 'complete'` forces the round-trip: the hydration ledger
+      // otherwise serves the LOCAL row for an already-hydrated id, and the
+      // holder's final write may not have fanned out to us yet — the exact
+      // stale-snapshot race this re-read exists to close.
+      await load({ where: [['id', id]], type: 'complete' });
       model = objectPool.get(id) ?? model;
     }
 
@@ -635,18 +664,18 @@ export function createModelProxy<T, C>(
   // are the same object.
   const claimApi: ClaimApi<T> = Object.assign(guard(claim) as typeof claim, {
     state(params: ClaimLookupParams<T>): Intent | null {
-      return collaboration?.observe({ model: schemaKey, id: params.id }) ?? null;
+      return collaboration?.observe({ model: wireModel, id: params.id }) ?? null;
     },
 
     queue(params: ClaimLookupParams<T>): { readonly object: 'list'; readonly data: readonly Intent[] } {
       return {
         object: 'list',
-        data: collaboration?.queue({ model: schemaKey, id: params.id }) ?? [],
+        data: collaboration?.queue({ model: wireModel, id: params.id }) ?? [],
       };
     },
 
     reorder(params: ClaimReorderParams<T>): void {
-      collaboration?.reorder({ model: schemaKey, id: params.id }, params.order);
+      collaboration?.reorder({ model: wireModel, id: params.id }, params.order);
     },
 
     release: guard((params: ClaimLookupParams<T> | ClaimHandle<T>): Promise<void> =>
@@ -659,7 +688,7 @@ export function createModelProxy<T, C>(
       async (params: ModelRetrieveParams): Promise<T | undefined> => {
         const rows = await load({
           ...params,
-          where: { id: params.id } as unknown as LoadWhere<T>,
+          where: [['id', params.id]],
           limit: 1,
         });
         return rows[0];
@@ -728,7 +757,7 @@ export function createModelProxy<T, C>(
         }
         autoLease = await collaboration.createIntent({
           target: {
-            model: schemaKey,
+            model: wireModel,
             id,
             ...(claim.field ? { field: claim.field } : {}),
             ...(claim.path ? { path: claim.path } : {}),

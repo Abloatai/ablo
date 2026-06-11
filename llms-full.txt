@@ -201,7 +201,7 @@ Use these public environment names:
 
 - `ABLO_API_KEY` — SDK authentication for app and agent code. Where it comes
   from: the human runs `npx ablo login` once (browser; an agent must not run
-  it), and `npx ablo dev` then writes `ABLO_API_KEY=sk_test_…` into
+  it), and `npx ablo push` then writes `ABLO_API_KEY=sk_test_…` into
   `.env.local` automatically (and gitignores it). Check the environment and
   `.env.local` for PRESENCE only (`grep -cq '^ABLO_API_KEY=' .env.local`)
   before asking the human for a key — never print or echo the key value; a

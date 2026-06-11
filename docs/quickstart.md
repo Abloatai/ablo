@@ -7,17 +7,19 @@ is the system of record — Ablo never hosts your data. It is the transaction
 layer on top: it registers your connection, commits every write there behind
 row-level security, and fans the confirmed rows out to every connected client.
 
-## 1. Install and get a key
+## 1. Install and initialize
 
 ```bash
 npm install @abloatai/ablo
-npx ablo login
+npx ablo init
 ```
 
-`ablo login` opens the browser — sign in (or sign up) and a `sk_test_` key is
-saved locally for the CLI. Later, `npx ablo dev` (step 4) writes
-`ABLO_API_KEY` into your `.env.local` so the SDK finds it too — no manual
-copy-paste. In CI, or to manage it by hand, set it yourself instead:
+`ablo init` scaffolds your project (next step shows what it creates) and ends
+by signing you in — one browser click, and a `sk_test_` key is saved locally
+for the CLI. Later, `npx ablo push` (step 4) writes `ABLO_API_KEY` into your
+`.env.local` so the SDK finds it too — no manual copy-paste. `npx ablo login`
+also exists standalone. In CI, or to manage the key by hand, set it yourself
+instead:
 
 ```bash
 export ABLO_API_KEY=sk_test_...
@@ -28,7 +30,7 @@ except both point at databases *you* own: `sk_test_*` for your dev database,
 `sk_live_*` for production. There is no keyless mode; the public `/sandbox` page
 is a hosted demo, not your app.
 
-## 2. Declare your Ablo schema
+## 2. Your Ablo schema (init scaffolded it)
 
 The schema is the contract — it generates `ablo.<model>` methods for app code,
 server actions, agents, and React reads. Declare **only the synced models** Ablo
@@ -78,10 +80,11 @@ tenant isolation with row-level security, so the server rejects superuser or
 
 > **Neon / Supabase note:** the connection string those dashboards hand you
 > uses the database OWNER role (e.g. `neondb_owner`), which is `BYPASSRLS` —
-> Ablo will reject it. You don't have to fix that by hand: `npx ablo migrate`
-> detects the unsafe role and offers to create the scoped one for you — from
-> your machine, so the owner credential never reaches Ablo. It writes the new
-> `DATABASE_URL` into your env file (the generated password is never printed).
+> Ablo will reject it. You don't have to fix that by hand: `npx ablo dev`
+> (next step) detects the unsafe role and offers to create the scoped one for
+> you — from your machine, so the owner credential never reaches Ablo. It
+> writes the new `DATABASE_URL` into your env file (the generated password is
+> never printed).
 >
 > Prefer to do it manually? The equivalent SQL:
 >
@@ -101,16 +104,25 @@ built from an ORM adapter instead — same product, same writes, see
 [Connect Your Database](./data-sources.md). In that setup, omit `databaseUrl`
 from `Ablo(...)`.
 
-## 4. Provision your tables, then push the schema
+## 4. Push — Ablo provisions your tables for you
 
 ```bash
-npx ablo migrate   # creates your synced-model tables (with row-level security)
-                   # in YOUR database — your other tables are left untouched
-npx ablo dev       # pushes the schema (sandbox), writes ABLO_API_KEY to
-                   # .env.local, and re-pushes on every save — the dev loop
+npx ablo push      # checks your DATABASE_URL role, pushes the schema (sandbox),
+                   # provisions your synced-model tables (with row-level
+                   # security) IN YOUR database, and writes ABLO_API_KEY to
+                   # .env.local. Add --watch to re-push on every save.
 ```
 
-`ablo dev` (or one-shot `npx ablo push`) uploads the schema *definition* —
+Nothing runs locally — there is no dev server to start. Your app talks to
+Ablo's hosted API with the sandbox key; the rows land in your database.
+
+There is no separate migration step: the push provisions your synced-model
+tables in the registered database server-side — your other tables are left
+untouched. (`npx ablo migrate` still exists for the signed Data Source
+endpoint mode, where Ablo never touches your database and DDL must run from
+your side.)
+
+`ablo push` uploads the schema *definition* —
 model names, fields, types. That metadata is the only thing Ablo keeps; the
 rows stay in your database. Skipping the push makes every write to a new or
 changed model fail with `server_execute_unknown_model` — that error literally

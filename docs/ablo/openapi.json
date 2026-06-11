@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "state — Ablo Sync Engine API",
+    "title": "state \u2014 Ablo Sync Engine API",
     "version": "0.1.0",
     "description": "The HTTP surface of the Ablo sync engine. Most production traffic flows over WebSocket via `@abloatai/ablo`; this HTTP API is the Vercel-safe transport for environments that cannot hold long-lived sockets, plus the control plane for capabilities, tasks, and usage."
   },
@@ -25,7 +25,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "API key (`sk_live_…`) or a scoped capability token. The same header carries both — the server discriminates by token shape."
+        "description": "API key (`sk_live_\u2026`) or a scoped capability token. The same header carries both \u2014 the server discriminates by token shape."
       }
     },
     "schemas": {
@@ -160,7 +160,7 @@
               "agent",
               "system"
             ],
-            "description": "User caps cannot be minted via API — only `agent` or `system`."
+            "description": "User caps cannot be minted via API \u2014 only `agent` or `system`."
           },
           "participantId": {
             "type": "string",
@@ -7188,6 +7188,201 @@
           }
         },
         "x-generated": "commit-inputs"
+      },
+      "Datasource": {
+        "type": "object",
+        "description": "A database connection registered for the caller's org. `connection` discriminates the kind; credentials never appear (no field exists for them).",
+        "required": [
+          "object",
+          "id",
+          "connection",
+          "status",
+          "livemode",
+          "metadata",
+          "created"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "datasource"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "Typed id: `ds_\u2026` (direct, live), `ds_test_\u2026` (direct, sandbox), `dse_\u2026` (endpoint)."
+          },
+          "connection": {
+            "type": "string",
+            "enum": [
+              "direct",
+              "endpoint"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "active",
+              "rejected"
+            ]
+          },
+          "livemode": {
+            "type": "boolean"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "created": {
+            "type": "integer",
+            "description": "Unix seconds."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "postgresql"
+            ],
+            "description": "Direct kind only."
+          },
+          "host": {
+            "type": "string",
+            "description": "Direct kind only \u2014 safe to display."
+          },
+          "database": {
+            "type": "string",
+            "description": "Direct kind only."
+          },
+          "schema": {
+            "type": "string",
+            "description": "Direct kind only \u2014 Postgres schema of the synced tables."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "Direct kind only \u2014 credential-free summary."
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "test",
+              "live"
+            ],
+            "description": "Endpoint kind only."
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "Endpoint kind only \u2014 the signed HTTPS endpoint URL."
+          },
+          "key_last4": {
+            "type": "string",
+            "nullable": true,
+            "description": "Endpoint kind only \u2014 last 4 chars of the signing key."
+          },
+          "cursor": {
+            "type": "string",
+            "nullable": true,
+            "description": "Endpoint kind only \u2014 event-feed cursor."
+          },
+          "event_lag": {
+            "type": "integer",
+            "description": "Endpoint kind only."
+          },
+          "retry_count": {
+            "type": "integer",
+            "description": "Endpoint kind only."
+          },
+          "last_request_at": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Endpoint kind only \u2014 Unix seconds."
+          },
+          "last_success_at": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Endpoint kind only \u2014 Unix seconds."
+          },
+          "last_error": {
+            "type": "string",
+            "nullable": true,
+            "description": "Endpoint kind only."
+          }
+        }
+      },
+      "DatasourceCreateRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "Direct (connection string)",
+            "description": "Register your Postgres by connection string \u2014 what `Ablo({ databaseUrl })` calls. Sent once over TLS, stored sealed, never returned. The calling key's mode picks the environment (an `sk_test_` key registers your sandbox data plane).",
+            "required": [
+              "connectionString"
+            ],
+            "properties": {
+              "connection": {
+                "type": "string",
+                "enum": [
+                  "direct"
+                ]
+              },
+              "connectionString": {
+                "type": "string",
+                "description": "`postgres://` / `postgresql://` URL. Use a non-superuser, non-BYPASSRLS role; public hosts only."
+              },
+              "schema": {
+                "type": "string",
+                "description": "Postgres schema of the synced tables (default `public`)."
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "title": "Signed endpoint",
+            "description": "Register a signed Data Source endpoint your app exposes \u2014 the credential never leaves your infrastructure. `environment` defaults to the calling key's mode.",
+            "required": [
+              "endpoint",
+              "signingKey"
+            ],
+            "properties": {
+              "connection": {
+                "type": "string",
+                "enum": [
+                  "endpoint"
+                ]
+              },
+              "environment": {
+                "type": "string",
+                "enum": [
+                  "test",
+                  "live"
+                ]
+              },
+              "endpoint": {
+                "type": "string",
+                "format": "uri"
+              },
+              "signingKey": {
+                "type": "string",
+                "description": "Write-only; stored by reference, never returned (only `key_last4`)."
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
       }
     }
   },
@@ -7252,7 +7447,7 @@
             }
           },
           "403": {
-            "description": "Capability denied — body carries `requiredCapability`.",
+            "description": "Capability denied \u2014 body carries `requiredCapability`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7277,7 +7472,7 @@
     "/v1/capabilities": {
       "post": {
         "summary": "Mint a capability token",
-        "description": "Mints a capability scoped to the requested sync-groups and operations. Returns the token only once — store it client-side. Mintable by human sessions and API-key principals; agents cannot self-mint.",
+        "description": "Mints a capability scoped to the requested sync-groups and operations. Returns the token only once \u2014 store it client-side. Mintable by human sessions and API-key principals; agents cannot self-mint.",
         "operationId": "createCapability",
         "tags": [
           "Capabilities"
@@ -7304,7 +7499,7 @@
             }
           },
           "400": {
-            "description": "Invalid request — e.g. narrow-scope required.",
+            "description": "Invalid request \u2014 e.g. narrow-scope required.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7339,7 +7534,7 @@
       ],
       "get": {
         "summary": "Inspect a capability",
-        "description": "Returns the metadata for a capability — does NOT return the token. Use to audit allowedSyncGroups/operations/expiry/revocation status.",
+        "description": "Returns the metadata for a capability \u2014 does NOT return the token. Use to audit allowedSyncGroups/operations/expiry/revocation status.",
         "operationId": "getCapability",
         "tags": [
           "Capabilities"
@@ -7369,7 +7564,7 @@
       },
       "delete": {
         "summary": "Revoke a capability",
-        "description": "Marks the capability as revoked. Future verifications fail with `capability_invalid`. In-flight WS connections holding this cap are not actively disconnected — TTL is the dominant constraint.",
+        "description": "Marks the capability as revoked. Future verifications fail with `capability_invalid`. In-flight WS connections holding this cap are not actively disconnected \u2014 TTL is the dominant constraint.",
         "operationId": "revokeCapability",
         "tags": [
           "Capabilities"
@@ -7510,7 +7705,7 @@
       ],
       "delete": {
         "summary": "Release an intent",
-        "description": "Releases the intent immediately. Idempotent — releasing an already-released intent returns 200.",
+        "description": "Releases the intent immediately. Idempotent \u2014 releasing an already-released intent returns 200.",
         "operationId": "releaseIntent",
         "tags": [
           "Intents"
@@ -26385,24 +26580,236 @@
           }
         }
       }
+    },
+    "/v1/datasources": {
+      "post": {
+        "summary": "Register a datasource",
+        "description": "Connect your database. The body's distinguishing field selects the kind: `connectionString` (direct) or `endpoint` + `signingKey` (signed endpoint). Requires a secret key; the org comes from the key, never the body.",
+        "operationId": "createDatasource",
+        "tags": [
+          "Datasources"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasourceCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The registered datasource (safe projection \u2014 no credential).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Datasource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List datasources",
+        "description": "All of the org's datasources \u2014 both kinds, both environments.",
+        "operationId": "listDatasources",
+        "tags": [
+          "Datasources"
+        ],
+        "responses": {
+          "200": {
+            "description": "List envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Datasource"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/datasources/{id}": {
+      "get": {
+        "summary": "Retrieve a datasource",
+        "description": "One datasource by its typed id (status + operational health).",
+        "operationId": "getDatasource",
+        "tags": [
+          "Datasources"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The datasource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Datasource"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/datasources/{id}/rotate_key": {
+      "post": {
+        "summary": "Rotate an endpoint signing key",
+        "description": "Replace the signing key of an endpoint datasource in place. Direct datasources rotate by re-registering their connection string via `POST /v1/datasources`.",
+        "operationId": "rotateDatasourceKey",
+        "tags": [
+          "Datasources"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "signingKey"
+                ],
+                "properties": {
+                  "signingKey": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated datasource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Datasource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "tags": [
     {
       "name": "State",
-      "description": "Commits — write typed mutations to shared state."
+      "description": "Commits \u2014 write typed mutations to shared state."
     },
     {
       "name": "Capabilities",
-      "description": "Authority — mint, inspect, revoke capability tokens."
+      "description": "Authority \u2014 mint, inspect, revoke capability tokens."
     },
     {
       "name": "Intents",
-      "description": "Coordination — pre-write declarations for multi-writer workflows."
+      "description": "Coordination \u2014 pre-write declarations for multi-writer workflows."
     },
     {
       "name": "Tasks",
-      "description": "Audit envelope — group commits under a single agent run."
+      "description": "Audit envelope \u2014 group commits under a single agent run."
     },
     {
       "name": "Resources",
@@ -26411,6 +26818,10 @@
     {
       "name": "Usage",
       "description": "Metering aggregates."
+    },
+    {
+      "name": "Datasources",
+      "description": "Your database, connected to Ablo. One resource covers both connection kinds \u2014 `connection: 'direct'` (you hand Ablo a connection string; the `Ablo({ databaseUrl })` path) and `connection: 'endpoint'` (your app exposes a signed Data Source endpoint and keeps the credential). The org is always derived from the calling secret key; credentials are stored sealed and never returned."
     }
   ]
 }

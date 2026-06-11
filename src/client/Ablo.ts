@@ -621,6 +621,15 @@ export interface IntentCreateOptions {
 
 export interface IntentHandle extends AsyncDisposable {
   readonly id: string;
+  /**
+   * True when the lease was granted AFTER waiting in the server's FIFO
+   * queue behind a holder (`intent_granted`), false/absent for an
+   * immediate grant (`intent_acquired`). Consumers re-read the target
+   * row when this is set — the row may have changed while we queued, and
+   * the local coordination snapshot can't detect that for org-scoped
+   * subscriptions (intent fan-out is entity-scoped).
+   */
+  readonly waited?: boolean;
   release(): Promise<void>;
   revoke(): void;
 }
@@ -2487,12 +2496,13 @@ export function Ablo<const S extends SchemaRecord>(
 	    await waitForModelUnclaimed(target, { timeout: options?.claimedTimeout });
 	  }
 
-	  function wrapIntentHandle(claim: Claim): IntentHandle {
+	  function wrapIntentHandle(claim: Claim, waited = false): IntentHandle {
 	    const release = async (): Promise<void> => {
 	      claim.revoke();
 	    };
 	    return {
 	      id: claim.id,
+	      waited,
 	      release,
 	      revoke: claim.revoke,
 	      [Symbol.asyncDispose]: release,
@@ -2522,14 +2532,15 @@ export function Ablo<const S extends SchemaRecord>(
 	      // we reach the head of the FIFO line). Block here on that grant so
 	      // callers — chiefly `ablo.<model>.claim` — get a handle that already
 	      // holds the lease, never a half-claimed one racing the queue.
+	      let waited = false;
 	      if (intentOptions.queue) {
 	        const ws = store.getSyncWebSocket();
 	        if (ws) {
 	          try {
-	            await awaitIntentGrant(ws, claim.id, {
+	            ({ waited } = await awaitIntentGrant(ws, claim.id, {
 	              timeoutMs: intentOptions.waitTimeoutMs,
 	              maxQueueDepth: intentOptions.maxQueueDepth,
-	            });
+	            }));
 	          } catch (err) {
 	            // Gave up waiting (queue too deep, timed out, or lost) — abandon
 	            // the queued intent so we don't leave a phantom entry in the
@@ -2539,7 +2550,7 @@ export function Ablo<const S extends SchemaRecord>(
 	          }
 	        }
 	      }
-	      return wrapIntentHandle(claim);
+	      return wrapIntentHandle(claim, waited);
 	    },
 	    list(target?: Partial<ModelTarget>): readonly ModelClaim[] {
 	      return listModelClaims(target);

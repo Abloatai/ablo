@@ -1,5 +1,11 @@
 /**
- * `ablo dev` — the local development loop against the hosted sandbox.
+ * `ablo push` (sandbox flow) — push your schema to the hosted API.
+ *
+ * Named for what it DOES: nothing runs locally (no dev server) — your app
+ * talks to Ablo's hosted API with a sandbox key. `push` checks your
+ * DATABASE_URL role, pushes the schema definition, provisions your tables
+ * server-side in YOUR registered database, and wires ABLO_API_KEY into
+ * .env.local. `--watch` re-pushes on every schema save (the dev loop).
  *
  * The missing onboarding step between `ablo init` and a hosted account: it
  * takes a developer's `sk_test_` key, pushes their `ablo/schema.ts` to the
@@ -38,6 +44,7 @@ import {
   DEFAULT_URL,
 } from './push';
 import { resolveApiKey } from './config';
+import { ensureScopedRoleInteractive, readProjectDatabaseUrl } from './dbRole';
 import { brand } from './theme';
 
 export interface DevArgs {
@@ -53,7 +60,7 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
   let schemaPath = DEFAULT_SCHEMA_PATH;
   let exportName = DEFAULT_EXPORT;
   let url = process.env.ABLO_API_URL ?? DEFAULT_URL;
-  let watchEnabled = true;
+  let watchEnabled = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -67,7 +74,10 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
       case '--url':
         url = argv[++i] ?? url;
         break;
-      case '--no-watch':
+      case '--watch':
+        watchEnabled = true;
+        break;
+      case '--no-watch': // historical alias; one-shot is the default now
         watchEnabled = false;
         break;
       default:
@@ -231,6 +241,15 @@ export async function dev(argv: readonly string[]): Promise<void> {
   }
 
   console.log(`\n  ${brand('ablo')} ${pc.dim('sync engine — dev')} ${pc.dim('(sandbox)')}\n`);
+
+  // Direct-databaseUrl projects: check the configured role BEFORE the push.
+  // Neon/Supabase dashboard strings connect as the BYPASSRLS owner, which the
+  // server's RLS gate refuses — `dev` offers to create the scoped role here
+  // (from this machine; the owner credential never reaches Ablo), so the
+  // quickstart needs no separate `ablo migrate` step: the push provisions the
+  // tables server-side in the registered database.
+  const projectDbUrl = readProjectDatabaseUrl();
+  if (projectDbUrl) await ensureScopedRoleInteractive(projectDbUrl);
 
   const schema = await loadSchema(args.schemaPath, args.exportName);
   const modelCount = Object.keys(schema.models).length;
