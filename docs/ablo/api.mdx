@@ -164,8 +164,10 @@ await ablo.commits.create({
 });
 ```
 
-Every state change becomes a commit. Commits check authorization, stale state,
-claim conflicts, and idempotency.
+Over HTTP this is `POST /v1/commits` with `Authorization: Bearer <key>` and a
+body of `{ operations, wait, idempotencyKey? }` — the same path a non-TypeScript
+client posts to directly. Every state change becomes a commit; commits check
+authorization, stale state, claim conflicts, and idempotency.
 
 ## Agent
 

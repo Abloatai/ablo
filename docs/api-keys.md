@@ -23,6 +23,22 @@ Use API keys from trusted (server-side) runtimes:
 
 Never ship a secret API key to a browser bundle.
 
+## Publishable key (`pk_`) — browser-safe, read-only
+
+For a read-only browser experience, a publishable key is safe to ship in the
+bundle. Like a Stripe `pk_` or a Supabase anon key, it is long-lived,
+org-scoped, and used **directly as the bearer** — never exchanged, never
+expires, nothing to refresh:
+
+```ts
+const ablo = Ablo({ apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY }); // pk_live_…
+```
+
+A `pk_` grants **read-only** access to the org's data plane: it cannot write and
+cannot reach any control-plane operation. The moment the browser needs to write
+on a specific user's behalf, mint a short-lived `ek_` user session from your
+backend instead (see the Sessions guide).
+
 ## Sandboxes and production
 
 Test and live keys are the same shape; the prefix names the environment:

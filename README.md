@@ -1,11 +1,28 @@
-# Ablo
+<p align="center">
+  <a href="https://abloatai.com"><img src="assets/banner.png" alt="Ablo" width="480" /></a>
+</p>
 
-[![npm](https://img.shields.io/npm/v/@abloatai/ablo.svg)](https://www.npmjs.com/package/@abloatai/ablo)
-[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
-[![types](https://img.shields.io/badge/types-included-blue.svg)](#)
-[![runtime](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](#keys--runtime)
+<p align="center">
+  <strong>Let people and AI agents work on the same data without overwriting each other.</strong>
+</p>
 
-**Let people and AI agents work on the same data without overwriting each other.**
+<p align="center">
+  <a href="https://abloatai.com">Docs</a> ·
+  <a href="https://abloatai.com/quickstart">Quickstart</a> ·
+  <a href="https://abloatai.com/data-sources">Self-host</a> ·
+  <a href="https://abloatai.com/api">API</a> ·
+  <a href="https://github.com/Abloatai/ablo">GitHub</a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@abloatai/ablo"><img src="https://img.shields.io/npm/v/@abloatai/ablo?style=flat-square&color=2563eb" alt="npm" /></a>
+  <a href="https://abloatai.com"><img src="https://img.shields.io/badge/docs-abloatai.com-2563eb?style=flat-square" alt="docs" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2563eb?style=flat-square" alt="license" /></a>
+  <img src="https://img.shields.io/badge/node-%E2%89%A524-22c55e?style=flat-square" alt="node >=24" />
+  <img src="https://img.shields.io/badge/types-included-2563eb?style=flat-square" alt="types included" />
+</p>
+
+---
 
 When an agent and a person change the same thing at once, work gets lost: one
 edit silently clobbers another, or the agent acts on data that already moved.
@@ -19,11 +36,14 @@ agent claims the row. If someone else is already working on it, `claim` waits,
 re-reads the fresh row, then hands it over. No stale overwrite, no separate
 agent mutation path.
 
-Under the hood, you define a Zod schema once and get typed model clients for
-every actor:
+Under the hood, you define your data once with a Zod schema and get the same
+typed model client for every actor — people, server actions, and agents:
 
-```txt
-schema -> ablo.<model>.create/retrieve/update/claim(...)
+```ts
+await ablo.task.create({ data })                  // create
+await ablo.task.retrieve({ id })                  // read
+await ablo.task.update({ id, data })              // update
+await using task = await ablo.task.claim({ id })  // claim for safe, slow agent work
 ```
 
 The schema is the public contract. It gives you typed model methods, realtime
@@ -31,8 +51,9 @@ fanout, React selectors, agent writes, and the HTTP/Data Source shape for
 non-JavaScript services. Every confirmed change shows up everywhere, and active
 claims are visible while the work is still in progress.
 
-[Get started ↓](#quick-start) · point your coding agent at the shipped `llms.txt`
-· **upgrading?** see the [Version History & Migration Guide](./docs/migration.md)
+**[Get started](#set-up)** &nbsp;·&nbsp; point your coding agent at the shipped
+`llms.txt` &nbsp;·&nbsp; **upgrading?** see the
+[Version History &amp; Migration Guide](./docs/migration.md)
 
 It works with the auth and database you already have. **Your database is the
 system of record — Ablo never hosts your data.** Ablo is the transaction layer

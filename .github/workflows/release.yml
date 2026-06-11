@@ -13,6 +13,13 @@ name: Release
 #   - Push to main (mirror sync)              -> publish IF version is new
 #   - workflow_dispatch from the Actions tab  -> manual publish (same gate)
 #
+# Publishes to TWO registries on each version bump:
+#   - npmjs.com         -> the primary registry; public `npm install` with no auth.
+#   - GitHub Packages   -> a mirror copy so the repo's right-hand "Packages" panel
+#                          surfaces the package. Uses the auto-provided GITHUB_TOKEN
+#                          (no secret needed) and is non-fatal — a hiccup here never
+#                          fails the real npm publish.
+#
 # Required repository secrets:
 #   NPM_TOKEN  - an "Automation" or "Granular Access" token from
 #                npmjs.com with publish permission on @abloatai/ablo.
@@ -31,6 +38,7 @@ concurrency:
 permissions:
   contents: read
   id-token: write        # required for npm provenance via OIDC
+  packages: write        # required to publish to GitHub Packages
 
 jobs:
   publish:
@@ -73,3 +81,23 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to GitHub Packages if version is new
+        # Mirror the publish to GitHub Packages (npm.pkg.github.com) so the repo's
+        # right-hand "Packages" panel surfaces the package and links to it. npmjs.com
+        # (above) stays the primary registry for public installs; this copy is for
+        # discovery on the repo page. Non-fatal: a GitHub Packages problem must never
+        # fail the real npm publish. The scope (@abloatai) matches the repo owner, and
+        # the package.json `repository` field links the package back to this repo.
+        run: |
+          NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "$NAME@$VERSION" version --registry=https://npm.pkg.github.com >/dev/null 2>&1; then
+            echo "$NAME@$VERSION already on GitHub Packages — skipping."
+          else
+            echo "Publishing $NAME@$VERSION to GitHub Packages"
+            npm publish --registry=https://npm.pkg.github.com --access public \
+              || echo "GitHub Packages publish skipped (non-fatal)."
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

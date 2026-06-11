@@ -1,11 +1,13 @@
 ---
 title: "API Keys"
-description: "The three-key model — and how your backend mints sessions for users and agents."
+description: "The key model — a secret key, the sessions it mints, and a read-only publishable key."
 ---
 
 Ablo authenticates your **project**, not your **users**. You sign users in
-however you like; Ablo only needs to know which short-lived credential is acting.
-That splits into **three keys, two jobs**.
+however you like; Ablo only needs to know which credential is acting. That gives
+you a **secret key** your backend holds, the short-lived **sessions** it mints
+per user or agent, and a read-only **publishable key** for browser apps that
+don't need per-user writes.
 
 ## Secret key — you create this once
 
@@ -40,6 +42,27 @@ your `sk_` vouches for — minted by one resource, [`ablo.sessions`](/sessions),
 wearing two hats: one for humans, one for agents. (An `rk_` can also be a
 long-lived dashboard-created agent key, configured straight into a backend like
 `sk_`.)
+
+## Publishable key (`pk_`) — read-only, browser-safe
+
+For a read-only browser experience with **no session route**, a publishable key
+is the simplest path. Like a Stripe `pk_` or a Supabase anon key, it is
+long-lived, org-scoped, and safe to ship in a browser bundle.
+
+| Prefix | Kind | Use it from | Authority |
+|--------|------|-------------|-----------|
+| `pk_`  | **Publishable** | The **browser**, directly | **Read-only** data plane for the org. Cannot write, and cannot reach any control-plane operation. |
+
+It is used **directly as the bearer** — never exchanged, never expires, nothing
+to refresh — so the browser holds it as-is:
+
+```tsx Browser (read-only)
+const ablo = Ablo({ schema, apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY }); // pk_live_…
+```
+
+Reach for a minted `ek_` session instead the moment the browser needs to **write**
+on a specific user's behalf or read data scoped to that user — `pk_` grants the
+whole org's readable data plane, not a per-user slice.
 
 ## Which key do I initialize with?
 

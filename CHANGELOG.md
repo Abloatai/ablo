@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.10
+
+### Patch Changes
+
+- README: add a centered brand header (Ablo banner, tagline, Docs/Quickstart/Self-host/API/GitHub nav, and status badges).
+
 ## 0.9.9
 
 ### Patch Changes
