@@ -305,7 +305,13 @@ export type WarningCode =
   | 'drop_field'
   | 'risky_cast'
   | 'lossy_recreate'
-  | 'enum_value_removed';
+  | 'enum_value_removed'
+  /** A model disappears from what this plane's READERS resolve, without any
+   *  table being dropped. Emitted by the server's push gate (not
+   *  `classifyMigration`) when a first sandbox push shadows the production
+   *  artifact that sandbox readers were served via the registry's test→live
+   *  fallback. The data plane is untouched — the loss is visibility. */
+  | 'remove_model';
 
 export type BlockerCode = 'required_field_added' | 'made_required';
 

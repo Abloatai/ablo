@@ -69,6 +69,28 @@ export function isSyncGroupInput(value: unknown): value is SyncGroupInput {
   return syncGroupInputSchema.safeParse(value).success;
 }
 
+// ── Identity anchors (closed vocabulary) ────────────────────────────────────
+
+/**
+ * The sync-group kinds the AUTH PROVIDER mints directly onto identities — a
+ * CLOSED vocabulary: extend this list, never inline a new namespace string.
+ *
+ *   - `org:<organizationId>`  — every member of the organization
+ *   - `user:<participantId>`  — the participant itself
+ *   - `project:<projectId>`   — every credential scoped to the project
+ *     (project axis, 2026-06-11; the org-default project's id IS the org id)
+ *
+ * Schema-declared roles ({@link identityRole} / {@link entityRole}) extend the
+ * vocabulary per app; these are the engine-reserved anchors.
+ */
+export const IDENTITY_ANCHOR_KINDS = ['org', 'user', 'project'] as const;
+export type IdentityAnchorKind = (typeof IDENTITY_ANCHOR_KINDS)[number];
+
+/** Mint an engine-reserved identity anchor (typed wrapper over {@link syncGroup}). */
+export function identityAnchor(kind: IdentityAnchorKind, id: string): SyncGroup {
+  return syncGroup(kind, id);
+}
+
 // ── Role source ─────────────────────────────────────────────────────────────
 
 /** Validates how a role pulls ids out of a context (identity or record). */

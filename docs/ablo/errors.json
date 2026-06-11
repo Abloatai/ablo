@@ -830,6 +830,15 @@
       "docUrl": "https://docs.abloatai.com/errors#invalid_schema"
     },
     {
+      "code": "invalid_sync_group",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "Sync groups must be \"default\" or \"<namespace>:<id>\".",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_sync_group"
+    },
+    {
       "code": "issuer_register_forbidden",
       "category": "permission",
       "surface": "wire",
@@ -1277,6 +1286,24 @@
       "retryable": true,
       "message": "Failed to generate a presigned upload URL.",
       "docUrl": "https://docs.abloatai.com/errors#presigned_url_failed"
+    },
+    {
+      "code": "project_scope_denied",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The request targeted a project the caller's key is not scoped to.",
+      "docUrl": "https://docs.abloatai.com/errors#project_scope_denied"
+    },
+    {
+      "code": "project_slug_taken",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": false,
+      "message": "A project with this slug already exists in the organization.",
+      "docUrl": "https://docs.abloatai.com/errors#project_slug_taken"
     },
     {
       "code": "provisioner_unavailable",

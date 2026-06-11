@@ -383,6 +383,8 @@ export const ERROR_CODES = {
   invalid_json: wire('validation', 400, false, 'The request body was not valid JSON.'),
   capability_id_required: wire('validation', 400, false, 'A capability id is required for this request.'),
   organization_mismatch: wire('permission', 403, false, 'The request targeted an organization the caller is not scoped to.'),
+  project_scope_denied: wire('permission', 403, false, "The request targeted a project the caller's key is not scoped to."),
+  project_slug_taken: wire('validation', 409, false, 'A project with this slug already exists in the organization.'),
   forbidden: wire('permission', 403, false, 'The caller lacks permission for this operation.'),
   source_api_key_unresolved: wire('auth', 401, false, 'The source API key could not be resolved.'),
   capability_auth_disabled: wire('server', 503, false, 'Capability authentication is disabled on this server.'),

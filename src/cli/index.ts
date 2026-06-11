@@ -10,8 +10,9 @@ import { push } from './push';
 import { generate } from './generate';
 import { dev } from './dev';
 import { login, logout } from './login';
-import { resolveApiKey } from './config';
+import { resolveApiKey, resolvePushPlan } from './config';
 import { mode } from './mode';
+import { projects, ensureProject, projectSlugFromPackageName } from './projects';
 import { status } from './status';
 import { logs } from './logs';
 import { webhooks } from './webhooks';
@@ -37,6 +38,8 @@ async function main() {
     logout();
   } else if (command === 'mode') {
     await mode(process.argv.slice(3));
+  } else if (command === 'projects') {
+    await projects(process.argv.slice(3));
   } else if (command === 'status') {
     await status(process.argv.slice(3));
   } else if (command === 'logs') {
@@ -64,13 +67,19 @@ async function main() {
   } else if (command === 'migrate') {
     await migrate(process.argv.slice(3));
   } else if (command === 'push') {
-    // The quickstart flow (sandbox key: role check, env wiring, server-side
-    // provisioning, optional --watch). Advanced flags (--force/--rename/
-    // --backfill) and live keys route to the raw one-shot pusher.
+    // Two flows: the sandbox dev flow (role check, env wiring, server-side
+    // provisioning, optional --watch) and the raw one-shot pusher (production
+    // deploys, advanced flags). The credential resolves explicit ABLO_API_KEY
+    // → the ACTIVE mode's stored credential (`resolvePushPlan`), so
+    // `ablo login` + `ablo mode production` + `npx ablo push` deploys to
+    // production instead of demanding sk_test_. `--watch` stays sandbox-only:
+    // it routes to the dev flow, whose live-key refusal names the supported
+    // production path.
     const rest = process.argv.slice(3);
     const advanced = rest.some((a) => ['--force', '--rename', '--backfill', '--url'].includes(a));
-    const liveKey = (process.env.ABLO_API_KEY ?? '').startsWith('sk_live_');
-    if (advanced || liveKey) {
+    const watching = rest.includes('--watch');
+    const plan = resolvePushPlan();
+    if (advanced || (plan.flow === 'production' && !watching)) {
       await push(rest);
     } else {
       await dev(rest);
@@ -91,10 +100,14 @@ async function main() {
     console.log(`  ${pc.bold('Usage:')}`);
     console.log(`    npx ablo init                          Scaffold ablo/ directory + starter schema`);
     console.log(`    npx ablo init --yes [--framework nextjs] Non-interactive (agents/CI): no prompts, flag-driven`);
-    console.log(`                  [--auth apikey] [--storage direct|endpoint] [--no-agent] [--no-pull] [--no-install] [--no-login]`);
+    console.log(`                  [--auth apikey] [--storage direct|endpoint] [--project <slug>] [--no-project]`);
+    console.log(`                  [--no-agent] [--no-pull] [--no-install] [--no-login]`);
     console.log(`    npx ablo login                         Authorize in your browser (provisions sandbox + production keys)`);
     console.log(`    npx ablo logout                        Remove the stored API key`);
     console.log(`    npx ablo mode [sandbox|production]     Switch active environment, like Stripe`);
+    console.log(`    npx ablo projects list                 List the org's projects (default + your own)`);
+    console.log(`    npx ablo projects create <slug>        Create a project (its keys/schema/data are isolated)`);
+    console.log(`    npx ablo projects use <slug|default>   Set the active project for new key mints`);
     console.log(`    npx ablo status                        Show org, mode, keys, and server health`);
     console.log(`    npx ablo status --json                 Same, machine-readable (mode, key prefix, org id, api host)`);
     console.log(`    npx ablo logs [-n N] [--since 15m]     Tail commit activity (follows; --no-follow to exit)`);
@@ -151,6 +164,10 @@ interface InitOptions {
   readonly install: boolean;
   readonly login: boolean;
   readonly orm?: string;
+  /** Explicit project slug (`--project my-app`); default derives from the
+   *  package.json name. `--no-project` opts out (org-default project). */
+  readonly project?: string;
+  readonly useProject: boolean;
 }
 
 function parseInitArgs(args: readonly string[]): InitOptions {
@@ -172,7 +189,38 @@ function parseInitArgs(args: readonly string[]): InitOptions {
     install: !has('--no-install'),
     login: !has('--no-login'),
     orm: val('--orm'),
+    project: val('--project'),
+    useProject: !has('--no-project'),
   };
+}
+
+/**
+ * Init's project step: every app gets its OWN Ablo project (the Neon/
+ * Supabase shape — its keys, schema, and data plane are isolated from the
+ * org's other apps). Slug = `--project` or the package.json name. Requires
+ * an authorized credential; keyless init skips silently (the org-default
+ * project keeps working) and `ablo projects create` picks it up later.
+ */
+async function ensureInitProject(opts: InitOptions): Promise<void> {
+  if (!opts.useProject) return;
+  const slug =
+    opts.project ??
+    projectSlugFromPackageName(
+      (() => {
+        try {
+          return (JSON.parse(readFileSync('package.json', 'utf-8')) as { name?: unknown }).name;
+        } catch {
+          return undefined;
+        }
+      })(),
+    );
+  if (!slug) return;
+  const ensured = await ensureProject(slug);
+  if (ensured) {
+    console.log(
+      `  ${pc.green('✓')} ${ensured.created ? 'Created' : 'Using'} project ${pc.bold(ensured.slug)} ${pc.dim(`(${ensured.id})`)} — keys you mint for it are isolated from the org's other apps.`,
+    );
+  }
 }
 
 const INIT_ORMS = ['prisma', 'drizzle', 'none'] as const;
@@ -458,6 +506,7 @@ async function init(args: readonly string[] = []) {
   // separate quickstart step, and a logged-in user shouldn't be re-asked.
   const existingKey = resolveApiKey('sandbox');
   if (existingKey) {
+    await ensureInitProject(opts);
     outro(`Already authorized ${pc.dim(`(${existingKey.slice(0, 11)}…)`)} — run ${pc.bold('npx ablo push')} next. ${pc.dim('Docs:')} https://abloatai.com/docs`);
     return;
   }
@@ -466,6 +515,8 @@ async function init(args: readonly string[] = []) {
     if (!isCancel(loginNow) && loginNow) {
       outro(`${pc.dim('Docs:')} https://abloatai.com/docs`);
       await login();
+      // Login just provisioned the credential — claim the app's project now.
+      await ensureInitProject(opts);
       return;
     }
   }

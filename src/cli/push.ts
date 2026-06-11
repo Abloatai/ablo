@@ -22,7 +22,7 @@ import { AbloValidationError } from '../errors.js';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { serializeSchema, schemaHash, type Schema } from '@abloatai/ablo/schema';
-import { resolveApiKey } from './config';
+import { resolveApiKey, getMode } from './config';
 
 export interface PushArgs {
   schemaPath: string;
@@ -197,9 +197,14 @@ export async function push(argv: readonly string[]): Promise<void> {
   if (!args.apiKey) args.apiKey = resolveApiKey();
 
   if (!args.apiKey) {
+    // Message contract: enumerate the doors — both environments exist.
     console.error(
       pc.red(`  No API key.`) +
-        pc.dim(` Run ${pc.bold('ablo login')} or set ${pc.bold('ABLO_API_KEY')} (a secret sk_ key with schema:push).`),
+        pc.dim(
+          ` Run ${pc.bold('npx ablo login')} for the sandbox dev loop — or set ${pc.bold('ABLO_API_KEY')} ` +
+            `(${pc.bold('sk_test_')} = sandbox; ${pc.bold('sk_live_')} = deliberate production deploy). ` +
+            `Mode is currently '${getMode()}'.`,
+        ),
     );
     process.exit(1);
   }
@@ -243,6 +248,16 @@ export async function push(argv: readonly string[]): Promise<void> {
     console.error(pc.dim(`  Re-push with ${pc.bold('--force')} to override, or use ${pc.bold('--rename old:new')} if you renamed a model.`));
   } else if (status === 403) {
     console.error(pc.red(`  Forbidden: ${body.message ?? body.reason ?? 'key lacks schema:push scope'}`));
+    // The login-minted production key is a restricted (rk_) observe-only key
+    // by design — name the door that works instead of leaving a dead end.
+    if (args.apiKey?.startsWith('rk_')) {
+      console.error(
+        pc.dim(
+          `  Schema pushes need a SECRET key: ${pc.bold('sk_test_')} (sandbox dev loop) or a dashboard ` +
+            `${pc.bold('sk_live_')} (production deploy: ${pc.bold('ABLO_API_KEY=sk_live_… npx ablo push')}).`,
+        ),
+      );
+    }
   } else {
     console.error(pc.red(`  Push failed (${status}): ${body.message ?? body.reason ?? bodyText}`));
   }

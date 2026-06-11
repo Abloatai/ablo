@@ -6,7 +6,7 @@
  */
 
 import pc from 'picocolors';
-import { readConfig, getMode, getKeyEntry, type Mode } from './config';
+import { readConfig, getMode, getKeyEntry, resolvePushPlan, getActiveProject, type Mode } from './config';
 import { brand } from './theme';
 import { DEFAULT_URL } from './push';
 
@@ -42,13 +42,24 @@ export async function status(args: string[] = []): Promise<void> {
   // should prefer `ablo.organizationId` on the client after `ready()`.
   if (args.includes('--json')) {
     const entry = getKeyEntry(mode);
+    const plan = resolvePushPlan();
+    const activeProject = getActiveProject();
     const out = {
       mode,
+      // The locally-active project (`ablo projects use`); null = org-default.
+      project: activeProject ?? null,
       keyPrefix: process.env.ABLO_API_KEY
         ? process.env.ABLO_API_KEY.slice(0, 12)
         : (entry?.apiKey.slice(0, 12) ?? null),
       keySource: process.env.ABLO_API_KEY ? 'env' : entry ? 'stored' : null,
       organizationId: entry?.organizationId ?? null,
+      // What `ablo push` would do right now — the one-command answer to
+      // "why did push demand a different key" (2026-06-11 live-key incident).
+      push: {
+        flow: plan.flow,
+        keyPrefix: plan.apiKey?.slice(0, 12) ?? null,
+        keySource: plan.source,
+      },
       apiUrl,
       reachable: await ping(apiUrl),
     };
@@ -67,6 +78,10 @@ export async function status(args: string[] = []): Promise<void> {
   }
 
   console.log(`  ${pc.dim('mode')}    ${pc.bold(mode)}`);
+  const activeProject = getActiveProject();
+  console.log(
+    `  ${pc.dim('project')} ${activeProject ? `${pc.bold(activeProject.slug)} ${pc.dim(`(${activeProject.id})`)}` : pc.bold('default')}`,
+  );
 
   for (const m of ['sandbox', 'production'] as Mode[]) {
     const entry = getKeyEntry(m);
@@ -81,6 +96,13 @@ export async function status(args: string[] = []): Promise<void> {
 
   const org = getKeyEntry(mode)?.organizationId;
   if (org) console.log(`  ${pc.dim('org')}     ${org}`);
+
+  // Which credential `ablo push` would present, and to which environment —
+  // the diagnostic for "push demanded sk_test_ but I have a live key".
+  const plan = resolvePushPlan();
+  console.log(
+    `  ${pc.dim('push')}    ${plan.apiKey ? `${pc.bold(plan.flow)} ${pc.dim(`with ${plan.apiKey.slice(0, 12)}… (${plan.source})`)}` : `${pc.bold(plan.flow)} ${pc.yellow('— no credential')} ${pc.dim(`(run ${pc.bold('ablo login')} or set ${pc.bold('ABLO_API_KEY')})`)}`}`,
+  );
 
   process.stdout.write(`  ${pc.dim('api')}     ${apiUrl}  `);
   console.log((await ping(apiUrl)) ? pc.green('reachable') : pc.red('unreachable'));

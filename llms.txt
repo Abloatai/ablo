@@ -14,6 +14,10 @@ Second: make sure a key exists — WITHOUT printing it. The key is a secret; it 
 
 Then PUSH — this is the step everything depends on. The server keeps its OWN copy of the schema. Run `npx ablo push --no-watch`: it pushes `ablo/schema.ts` (sandbox) AND writes `ABLO_API_KEY` into `.env.local` from the stored login. Until the schema is pushed, EVERY write to a new or changed model fails with `server_execute_unknown_model`. Re-run it after schema changes (`npx ablo push` also works once the key is wired; bare `npx ablo push` watches forever — don't, you have no TTY).
 
+## Projects (one org, many apps)
+
+Each app gets its own PROJECT inside the org — its own schema, its own sandbox/production data planes, its own keys (the Neon/Supabase shape). `npx ablo init` creates one automatically (slug from package.json name; `--project <slug>` to choose, `--no-project` for the org default). A key belongs to exactly ONE project, fixed at mint; everything it mints inherits it. Touching another project's models fails typed: `project_scope_denied` (403) — the fix is a key minted for THAT project, never `ablo push`. Manage: `npx ablo projects list|create <slug>|use <slug|default>`; `npx ablo status` shows the active project. Wire: `GET/POST /api/v1/projects` (sk_ bearer; duplicate slug → `project_slug_taken` 409).
+
 ## Use this API
 
 ```ts

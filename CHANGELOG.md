@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.13
+
+### Patch Changes
+
+- Per-project axis: schemas, planes, routing, and enforcement scoped per project. Adds the control plane, per-project key scoping with identity threading, a `remove_model` gate, and the CLI/docs to drive it.
+
 ## 0.9.12
 
 ### Patch Changes

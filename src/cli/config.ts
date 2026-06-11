@@ -38,8 +38,19 @@ export interface KeyEntry {
   expiresAt?: string;
 }
 
+/** The ACTIVE project (`ablo projects use`) — a non-secret targeting
+ *  preference, stored in config.json like `mode`. Absent = the org-default
+ *  project. */
+export interface ActiveProject {
+  id: string;
+  slug: string;
+}
+
 export interface StoredConfig {
   mode: Mode;
+  /** Active project for project-scoped operations (key mints pick it up in
+   *  the dashboard/CLI; push/status display it). */
+  activeProject?: ActiveProject;
   sandbox?: KeyEntry;
   production?: KeyEntry;
 }
@@ -81,6 +92,19 @@ function readJson(path: string): Record<string, unknown> | null {
   }
 }
 
+function asActiveProject(value: unknown): ActiveProject | undefined {
+  if (
+    value &&
+    typeof value === 'object' &&
+    typeof (value as { id?: unknown }).id === 'string' &&
+    typeof (value as { slug?: unknown }).slug === 'string'
+  ) {
+    const v = value as { id: string; slug: string };
+    return { id: v.id, slug: v.slug };
+  }
+  return undefined;
+}
+
 function normalizeStoredMode(value: unknown): Mode | undefined {
   // Pre-rename files stored 'test'/'live'.
   if (value === 'sandbox' || value === 'test') return 'sandbox';
@@ -110,6 +134,7 @@ export function readConfig(): StoredConfig | null {
   const credObj = readJson(credentialsPath());
 
   const mode = normalizeStoredMode(cfgObj?.mode) ?? normalizeStoredMode(credObj?.mode);
+  const activeProject = asActiveProject(cfgObj?.activeProject);
   const cfgEntries = cfgObj ? extractEntries(cfgObj) : {};
   const entries = {
     ...cfgEntries,
@@ -117,7 +142,11 @@ export function readConfig(): StoredConfig | null {
   };
 
   if (!mode && !entries.sandbox && !entries.production) return null;
-  const config: StoredConfig = { mode: mode ?? 'sandbox', ...entries };
+  const config: StoredConfig = {
+    mode: mode ?? 'sandbox',
+    ...(activeProject ? { activeProject } : {}),
+    ...entries,
+  };
 
   // Secrets found inside config.json (the old combined layout) → split now,
   // so the non-secret file stops carrying keys.
@@ -129,7 +158,15 @@ export function readConfig(): StoredConfig | null {
 export function writeConfig(cfg: StoredConfig): string {
   const dir = configDir();
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(configPath(), `${JSON.stringify({ mode: cfg.mode }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(
+    configPath(),
+    `${JSON.stringify(
+      { mode: cfg.mode, ...(cfg.activeProject ? { activeProject: cfg.activeProject } : {}) },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
   const credentials = {
     ...(cfg.sandbox ? { sandbox: cfg.sandbox } : {}),
     ...(cfg.production ? { production: cfg.production } : {}),
@@ -154,6 +191,19 @@ export function setMode(mode: Mode): string {
 
 export function getMode(): Mode {
   return readConfig()?.mode ?? 'sandbox';
+}
+
+/** The active project, or undefined for the org-default. */
+export function getActiveProject(): ActiveProject | undefined {
+  return readConfig()?.activeProject;
+}
+
+/** Set (or with `undefined`, clear back to org-default) the active project. */
+export function setActiveProject(project: ActiveProject | undefined): string {
+  const cfg = readConfig() ?? { mode: 'sandbox' as Mode };
+  if (project) cfg.activeProject = project;
+  else delete cfg.activeProject;
+  return writeConfig(cfg);
 }
 
 export function getKeyEntry(mode: Mode): KeyEntry | undefined {
@@ -201,4 +251,32 @@ export function resolveApiKey(modeOverride?: Mode): string | undefined {
   if (!entry) return undefined;
   if (entry.expiresAt && Date.parse(entry.expiresAt) <= Date.now()) return undefined;
   return entry.apiKey;
+}
+
+/** What `ablo push` would do right now: which environment it deploys to and
+ *  the credential it would present. */
+export interface PushPlan {
+  /** `production` → the raw one-shot pusher; `sandbox` → the dev flow
+   *  (role check, `.env.local` wiring, optional `--watch`). */
+  flow: Mode;
+  apiKey: string | undefined;
+  /** Where the credential came from — `null` when none resolves. */
+  source: 'env' | 'stored' | null;
+}
+
+/**
+ * Resolve the credential + flow `ablo push` uses, in order: an explicit
+ * `ABLO_API_KEY` (its prefix names the environment) → the ACTIVE mode's
+ * stored credential. The active mode is honored even when no credential is
+ * stored for it, so a production-mode push fails asking for a production
+ * key instead of silently running the sandbox flow. (Pre-fix, only the env
+ * var was consulted: `ablo login` + `ablo mode production` + `npx ablo push`
+ * still landed in the sandbox flow and demanded `sk_test_`.)
+ */
+export function resolvePushPlan(): PushPlan {
+  const envKey = process.env.ABLO_API_KEY;
+  if (envKey) return { flow: modeFromKey(envKey) ?? getMode(), apiKey: envKey, source: 'env' };
+  const mode = getMode();
+  const apiKey = resolveApiKey(mode);
+  return { flow: mode, apiKey, source: apiKey ? 'stored' : null };
 }

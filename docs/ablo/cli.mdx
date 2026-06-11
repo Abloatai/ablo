@@ -76,9 +76,10 @@ either mode) defines the same models test and live see; only the rows differ.
 
 | Command | What it does | Flags |
 | --- | --- | --- |
-| `ablo init` | Scaffold `ablo/` (`schema.ts`, client, Data Source endpoint, optional agent / component), write `.env`, install the SDK. Offers to log in at the end. Interactive by default; non-interactive with `--yes`/no-TTY. | `--yes`, `--framework`, `--auth`, `--storage`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login` |
-| `ablo login` / `logout` / `status` | Authentication & status (above). | — |
+| `ablo init` | Scaffold `ablo/` (`schema.ts`, client, Data Source endpoint, optional agent / component), write `.env`, install the SDK, and create the app's [project](/projects) when you're logged in. Offers to log in at the end. Interactive by default; non-interactive with `--yes`/no-TTY. | `--yes`, `--framework`, `--auth`, `--storage`, `--project <slug>`, `--no-project`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login` |
+| `ablo login` / `logout` / `status` | Authentication & status (above). `status` shows the active mode AND project. | — |
 | `ablo mode [sandbox\|production]` | Switch active mode. | — |
+| `ablo projects list\|create\|use` | Manage the org's [projects](/projects) — each app's isolated schema/planes/keys. `use` sets the local active project for new key mints. | `create <slug> [--name]`, `use <slug\|id\|default>` |
 | `ablo dev` | **Hosted** — push the schema to your test sandbox, then watch `ablo/schema.ts` and re-push on save. | `--no-watch`, `--schema <path>`, `--export <name>`, `--url <url>` |
 | `ablo logs` | Tail your scope's commit activity (`stripe logs tail`). Follows by default. | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode sandbox\|production` |
 | `ablo push` | **Hosted** — upload the schema to Ablo; the server diffs, migrates, and activates it. | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url` |

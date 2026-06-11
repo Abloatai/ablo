@@ -107,6 +107,12 @@ check('keyless `ablo push` fails GRACEFULLY with login guidance', () => {
   }
   expect(code !== 0, 'keyless dev must exit non-zero');
   expect(/ablo login/.test(out), `failure must point at \`ablo login\`, got:\n${out.slice(0, 400)}`);
+  // Message contract: guidance must enumerate the DOORS — agents parrot this
+  // line into READMEs, so it must name BOTH key kinds, not just the sandbox
+  // one (the 2026-06-11 live-key incident: a valid sk_live_ holder was told
+  // only sk_test_ exists).
+  expect(/sk_test_/.test(out), `keyless guidance must mention sk_test_ (sandbox), got:\n${out.slice(0, 400)}`);
+  expect(/sk_live_/.test(out), `keyless guidance must mention sk_live_ (production deploy), got:\n${out.slice(0, 400)}`);
   expect(!/at .*\(.*:\d+:\d+\)/.test(out), `keyless dev printed a STACK TRACE:\n${out.slice(0, 600)}`);
 });
 

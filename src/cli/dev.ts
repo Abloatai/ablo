@@ -43,7 +43,7 @@ import {
   DEFAULT_EXPORT,
   DEFAULT_URL,
 } from './push';
-import { resolveApiKey } from './config';
+import { resolveApiKey, getMode, type Mode } from './config';
 import { ensureScopedRoleInteractive, readProjectDatabaseUrl } from './dbRole';
 import { brand } from './theme';
 
@@ -90,35 +90,54 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
 }
 
 /**
- * Classify the configured key. `ablo dev` only accepts a secret SANDBOX key (sk_test_):
+ * Classify the configured key. The sandbox flow only accepts a secret SANDBOX
+ * key (sk_test_):
  *  - `sk_test_` → ok
- *  - `sk_live_` → refused (don't churn live data in a watch loop)
+ *  - `sk_live_` → refused here, but the refusal NAMES the production path
  *  - `rk_*`     → wrong kind (restricted/agent key can't push schema)
  *  - anything else → not an Ablo key
+ *
+ * Message contract (suite-wide): error guidance must enumerate the DOORS, not
+ * just the nearest one — every refusal here names both the sandbox path and
+ * the production path, because "guidance by omission" is how a user with a
+ * perfectly valid live key ends up believing only sk_test_ exists.
  */
-function classifyKey(
+export function classifyKey(
   apiKey: string | undefined,
+  activeMode: Mode,
 ): { ok: true } | { ok: false; reason: string } {
   if (!apiKey) {
     return {
       ok: false,
-      reason: `No API key. Run ${pc.bold('ablo login')} (or set ${pc.bold('ABLO_API_KEY')}) with a ${pc.bold('sk_test_')} key from ${pc.cyan('https://abloatai.com')}.`,
+      reason:
+        `No API key. Run ${pc.bold('npx ablo login')} for the sandbox dev loop — or set ${pc.bold('ABLO_API_KEY')} ` +
+        `(${pc.bold('sk_test_')} = sandbox; ${pc.bold('sk_live_')} = deliberate production deploy). ` +
+        pc.dim(`Mode is currently '${activeMode}'.`),
     };
   }
   if (apiKey.startsWith('sk_test_')) return { ok: true };
   if (apiKey.startsWith('sk_live_')) {
     return {
       ok: false,
-      reason: `${pc.bold('ablo dev')} refuses production keys. Use a ${pc.bold('sk_test_')} key so the watch loop can't churn production data.`,
+      reason:
+        `Production schema deploys run one-shot: ${pc.bold('ABLO_API_KEY=sk_live_… npx ablo push')} ` +
+        `(or ${pc.bold('ablo mode production')}). ${pc.bold('--watch')} is sandbox-only.`,
     };
   }
   if (apiKey.startsWith('rk_')) {
     return {
       ok: false,
-      reason: `Restricted (${pc.bold('rk_')}) keys can't push schema. Use a secret ${pc.bold('sk_test_')} key.`,
+      reason:
+        `Restricted (${pc.bold('rk_')}) keys can't push schema. Use a secret key: ${pc.bold('sk_test_')} for the ` +
+        `sandbox dev loop, or ${pc.bold('sk_live_')} with ${pc.bold('npx ablo push')} for a production deploy.`,
     };
   }
-  return { ok: false, reason: `${pc.bold('ABLO_API_KEY')} is not an Ablo key (expected ${pc.bold('sk_test_…')}).` };
+  return {
+    ok: false,
+    reason:
+      `${pc.bold('ABLO_API_KEY')} is not an Ablo key — expected ${pc.bold('sk_test_…')} (sandbox) or ` +
+      `${pc.bold('sk_live_…')} (production deploy via ${pc.bold('npx ablo push')}).`,
+  };
 }
 
 /**
@@ -234,7 +253,7 @@ export async function dev(argv: readonly string[]): Promise<void> {
   // the SANDBOX loop, so it resolves the sandbox key regardless of the active mode.
   if (!args.apiKey) args.apiKey = resolveApiKey('sandbox');
 
-  const key = classifyKey(args.apiKey);
+  const key = classifyKey(args.apiKey, getMode());
   if (!key.ok) {
     console.error(pc.red(`  ${key.reason}`));
     process.exit(1);

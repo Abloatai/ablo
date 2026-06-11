@@ -265,6 +265,12 @@ The request targeted an organization the caller is not scoped to.
 
 The parent turn belongs to a different agent.
 
+### project_scope_denied
+
+`HTTP 403` · not retryable
+
+The request targeted a project the caller's key is not scoped to.
+
 ### test_database_not_registered
 
 `HTTP 403` · not retryable
@@ -539,6 +545,12 @@ The request parameters were invalid.
 
 The submitted schema could not be parsed.
 
+### invalid_sync_group
+
+`HTTP 400` · not retryable
+
+Sync groups must be "default" or "<namespace>:<id>".
+
 ### mesh_message_from_id_spoof
 
 `HTTP 403` · not retryable
@@ -598,6 +610,12 @@ An organization id is required for this request.
 `HTTP 400` · not retryable
 
 Both userId and organizationId are required.
+
+### project_slug_taken
+
+`HTTP 409` · not retryable
+
+A project with this slug already exists in the organization.
 
 ### queries_required
 

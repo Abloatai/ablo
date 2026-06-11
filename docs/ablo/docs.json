@@ -74,6 +74,7 @@
           {
             "group": "Authority",
             "pages": [
+              "projects",
               "api-keys",
               "sessions",
               "audit"
