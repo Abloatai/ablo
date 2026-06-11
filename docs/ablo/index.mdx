@@ -69,7 +69,7 @@ See the full wiring in the [Next.js example](/examples/nextjs).
 |---|---|---|
 | State | `Schema`, `Model`, `Intent`, `Receipt` | The product path. Load, coordinate, write, confirm. |
 | Commit | `Resource`, `Commit` | Advanced protocol path for custom runtimes and batches. |
-| Control | `Capability`, `Task`, `Usage` | The authority path. Scope, attribute, meter, audit. |
+| Control | `Capability`, `Usage` | The authority path. Scope, attribute, meter, audit. |
 | Storage | `Data Source`, `Direct Postgres Connector` | Existing app tables stay canonical behind a signed Data Source. The direct connector is an opt-in path where Ablo opens a Postgres connection. |
 
 ## Use cases
@@ -91,8 +91,7 @@ See the full wiring in the [Next.js example](/examples/nextjs).
 - [Connect Your Database](/data-sources) — Where data lands when your app database is canonical.
 - [Receipt](./api.md#receipt) — Confirm what landed.
 - [Capability](./api.md#capability) — Signed credentials for a bounded actor, operation set, sync group, and lease.
-- [Task](./api.md#task) — One agent run; the audit envelope for commits and cost.
-- [Usage](./api.md#usage) — Metering and audit dimensions.
+- [Usage](./api.md#usage) — Metering and audit dimensions. One agent run is a `claim` (its `intent` id is the causal link recorded on every write); cost and audit surface through Usage, not a separate run envelope.
 
 ## Examples
 

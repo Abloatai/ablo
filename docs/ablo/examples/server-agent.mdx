@@ -52,7 +52,7 @@ const ablo = Ablo({ apiKey: process.env.ABLO_API_KEY }); // protocol client
 
 await ablo.commits.create({
   operations: [
-    { type: 'update', model: 'tasks', id: 'task_123', input: { status: 'done' } },
+    { action: 'update', model: 'tasks', id: 'task_123', data: { status: 'done' } },
   ],
   wait: 'confirmed',
 });

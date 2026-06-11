@@ -149,7 +149,7 @@ await ablo.commits.create({
   operations: [
     {
       action: 'update',
-      resource: 'tasks',
+      model: 'tasks',
       id: 'task_123',
       data: { status: 'done' },
       readAt: stamp,

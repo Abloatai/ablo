@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.7
+
+### Patch Changes
+
+- Docs: fix the `commits.create` operation shape to the public `{ action, model, data }` form.
+
 ## 0.9.6
 
 ### Patch Changes
