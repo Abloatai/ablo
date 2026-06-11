@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.9
+
+### Patch Changes
+
+- Docs: version history & migration guide refinements plus changelog, audit, and link fixes.
+
 ## 0.9.8
 
 ### Patch Changes
