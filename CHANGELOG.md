@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.1
+
+### Patch Changes
+
+- Docs: add the 0.10.0 entry to the Version History & Migration Guide — the `test`/`live` → `sandbox`/`production` environment enum rename (key prefixes unchanged) and the new `transport: 'http'` stateless client.
+
 ## 0.10.0
 
 ### Minor Changes
