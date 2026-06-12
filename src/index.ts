@@ -167,6 +167,15 @@ export {
 export type { CommitReceipt, RequiredCapability } from './errors.js';
 export type { ErrorCode, WireErrorCode, ErrorCategory, ErrorCodeSpec, RecoveryClass } from './errors.js';
 export { WS_BEARER_SUBPROTOCOL_PREFIX, WS_SYNC_SUBPROTOCOL } from './auth/credentialSource.js';
+export {
+  ENVIRONMENTS,
+  environmentSchema,
+  normalizeEnvironment,
+  environmentFromKeyPrefix,
+  environmentToKeyPrefix,
+  isSandboxEnvironment,
+} from './environment.js';
+export type { Environment, KeyPrefixEnvironment } from './environment.js';
 
 // THE write-options contract — the one Zod schema for the option bag every
 // write door accepts (`ablo.<model>.create/update/delete`, `commits.create`,

@@ -1279,6 +1279,10 @@ export class TransactionQueue extends EventEmitter {
             // Ensure derived fields exist (covers restored/persisted transactions)
             this.ensureDerivedFields(a);
             this.ensureDerivedFields(b);
+            if (a.modelName === b.modelName && a.modelId === b.modelId && a.type !== b.type) {
+              if (a.type === 'create') return -1;
+              if (b.type === 'create') return 1;
+            }
             return a.priorityScore - b.priorityScore;
           });
 

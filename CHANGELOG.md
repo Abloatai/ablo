@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.15
+
+### Patch Changes
+
+- Package metadata: set the npm description to "The Collaboration Layer For AI Agents" (matching the GitHub repo About) so it stops reverting to the old "State control API…" text on publish.
+
 ## 0.9.14
 
 ### Patch Changes

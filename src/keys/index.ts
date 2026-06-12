@@ -10,7 +10,9 @@
  * client bundle never pulls in `node:crypto`.
  *
  * Format (GitHub-style): `<sk|rk|ek>_<live|test>_<30 base62 body><6-char
- * base62 CRC32 checksum>`. The identifiable prefix + CRC32 checksum let
+ * base62 CRC32 checksum>`. The environment segment is the stable key-prefix
+ * contract; parsed values are immediately mapped to `production` / `sandbox`.
+ * The identifiable prefix + CRC32 checksum let
  * secret scanners detect leaks and let us reject typo'd/forged keys OFFLINE
  * (no DB round-trip). Legacy keys (a ~43-char base64url body, no checksum)
  * still validate by hash — they parse here as `checksummed: false`.
@@ -18,6 +20,13 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import {
+  ENVIRONMENTS,
+  environmentFromKeyPrefix,
+  environmentToKeyPrefix,
+  type Environment,
+  type KeyPrefixEnvironment,
+} from '../environment.js';
 
 // ── Vocabulary ──────────────────────────────────────────────────────────
 
@@ -34,8 +43,8 @@ import { z } from 'zod';
 export const API_KEY_KINDS = ['secret', 'restricted', 'ephemeral', 'publishable'] as const;
 export type ApiKeyKind = (typeof API_KEY_KINDS)[number];
 
-export const API_KEY_ENVS = ['live', 'test'] as const;
-export type ApiKeyEnv = (typeof API_KEY_ENVS)[number];
+export const API_KEY_ENVS = ENVIRONMENTS;
+export type ApiKeyEnv = Environment;
 
 const PREFIX_BY_KIND: Record<ApiKeyKind, string> = {
   secret: 'sk',
@@ -143,7 +152,13 @@ export const apiKeySchema = z.string().transform((raw, ctx): ParsedApiKey => {
     ctx.addIssue({ code: 'custom', message: 'API key checksum mismatch' });
     return z.NEVER;
   }
-  return { raw, kind: KIND_BY_PREFIX[prefix], env: env as ApiKeyEnv, body, checksummed };
+  return {
+    raw,
+    kind: KIND_BY_PREFIX[prefix],
+    env: environmentFromKeyPrefix(env as KeyPrefixEnvironment),
+    body,
+    checksummed,
+  };
 });
 
 // ── Derived validators (thin wrappers over the same spec) ───────────────
@@ -174,11 +189,11 @@ export function keyChecksumMatches(raw: string): boolean {
  * once), its SHA-256 hash (persisted), and the 12-char display prefix.
  */
 export function generateApiKey(
-  env: ApiKeyEnv = 'live',
+  env: ApiKeyEnv = 'production',
   kind: ApiKeyKind = 'secret',
 ): { plaintext: string; hash: string; prefix: string } {
   const body = randomBase62(KEY_BODY_LEN);
-  const payload = `${PREFIX_BY_KIND[kind]}_${env}_${body}`;
+  const payload = `${PREFIX_BY_KIND[kind]}_${environmentToKeyPrefix(env)}_${body}`;
   const plaintext = `${payload}${checksum6(payload)}`;
   return { plaintext, hash: hashApiKey(plaintext), prefix: plaintext.slice(0, 12) };
 }

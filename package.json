@@ -1,7 +1,7 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.9.14",
-  "description": "State control API for AI agents and collaborative apps.",
+  "version": "0.9.15",
+  "description": "The Collaboration Layer For AI Agents",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
@@ -82,6 +82,11 @@
       "types": "./dist/keys/index.d.ts",
       "import": "./dist/keys/index.js",
       "default": "./dist/keys/index.js"
+    },
+    "./environment": {
+      "types": "./dist/environment.d.ts",
+      "import": "./dist/environment.js",
+      "default": "./dist/environment.js"
     },
     "./wire": {
       "types": "./dist/wire/index.d.ts",

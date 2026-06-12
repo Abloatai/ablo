@@ -148,11 +148,19 @@ export abstract class Model {
         ? data.createdAt
         : new Date(data.createdAt)
       : new Date();
+    // A record that arrives WITH `createdAt` but WITHOUT `updatedAt` is
+    // server/IDB data whose update timestamp didn't survive the wire —
+    // falling back to "now" here fabricated an edit time for every such
+    // record on every bootstrap (the decks gallery sorted everything to
+    // "edited just now"). Fall back to createdAt instead; only a genuinely
+    // new local model (no dates at all) stamps the current time.
     this.updatedAt = data.updatedAt
       ? data.updatedAt instanceof Date
         ? data.updatedAt
         : new Date(data.updatedAt)
-      : new Date();
+      : data.createdAt
+        ? new Date(this.createdAt)
+        : new Date();
     this.syncStatus = data.syncStatus || 'pending';
   }
 
