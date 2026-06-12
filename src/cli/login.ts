@@ -195,8 +195,8 @@ async function deviceLogin(): Promise<void> {
   });
   // Default to sandbox (the dev loop); store the production key too so
   // `ablo mode production` works without re-auth (Stripe mints both at
-  // login). The provision wire keeps test/live field names — sk_test_ keys
-  // are sandbox, sk_live_ keys are production.
+  // login). The provision response names the key-prefix buckets: sk_test_
+  // keys are sandbox, sk_live_ keys are production.
   const path = writeConfig({
     mode: 'sandbox',
     sandbox: entry(prov.test),

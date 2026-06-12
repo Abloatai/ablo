@@ -160,8 +160,9 @@ export interface UserContext {
    *  `kind=agent` and the server applies capability-token auth. */
   kind?: 'user' | 'agent' | 'system';
   /** Restricted (`rk_`) API key for `kind: 'agent'` — the agent's
-   *  bearer credential. Sent as `?authorization=Bearer <token>` on the
-   *  WS upgrade. (Field name predates the Biscuit→opaque-key migration.) */
+   *  bearer credential. Sent in the `ablo.bearer.<token>` WebSocket
+   *  subprotocol, never in the URL. (Field name predates the
+   *  Biscuit→opaque-key migration.) */
   capabilityToken?: string;
   /** Server-authoritative sync groups, supplied by auth/capability
    *  exchange. The SDK does not invent org/user/default groups; app

@@ -81,6 +81,13 @@ import {
   type AbloApiClientOptions,
   type AbloApiIntents,
 } from './ApiClient.js';
+// Value import is cycle-safe: httpClient.js only value-imports ApiClient.js,
+// which imports this module type-only.
+import {
+  createAbloHttpClient,
+  type AbloHttpClient,
+  type AbloHttpClientOptions,
+} from './httpClient.js';
 
 // ── Options ───────────────────────────────────────────────────────────────
 
@@ -200,6 +207,20 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * @default 'memory'
    */
   persistence?: AbloPersistence;
+
+  /**
+   * Transport selector. `'websocket'` (default) is the live client —
+   * persistent socket, local synced pool, `onChange` subscriptions. `'http'`
+   * returns the STATELESS client for server-side actors (agents, workers,
+   * serverless): same `ablo.<model>` surface and coordination plane, but each
+   * call is one HTTP round-trip, identity rides the Bearer credential, and no
+   * socket is ever opened. With `'http'` the return type narrows to
+   * `AbloHttpClient<S>`, so stateful-only capabilities (`get`/`getAll`,
+   * `onChange`) are compile errors rather than latent runtime gaps.
+   *
+   * @default 'websocket'
+   */
+  transport?: 'websocket' | 'http' | undefined;
 
   // ── Advanced (you usually don't need these) ─────────────────────────
   // Connection/transport tuning, mirroring the Stripe/OpenAI/Anthropic
@@ -1824,7 +1845,18 @@ function resolveCredentialResolver<S extends SchemaRecord>(
  * const reports = sync.weatherReports.list({ where: { status: 'pending' } });
  * await sync.weatherReports.create({ location: 'Stockholm', status: 'pending' });
  * ```
+ *
+ * Pass `transport: 'http'` for the stateless server-side client (agents,
+ * workers, serverless) — same `ablo.<model>` surface, no socket:
+ *
+ * ```ts
+ * const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: 'http' });
+ * await ablo.tasks.update({ id, data: { status: 'done' } });
+ * ```
  */
+export function Ablo<const S extends SchemaRecord>(
+  options: AbloHttpClientOptions<S> & { transport: 'http' },
+): AbloHttpClient<S>;
 export function Ablo<const S extends SchemaRecord>(
   options: AbloOptions<S>,
 ): Ablo<S>;
@@ -1833,9 +1865,14 @@ export function Ablo(
 ): AbloApi;
 export function Ablo<const S extends SchemaRecord>(
   options: AbloOptions<S> | AbloApiClientOptions,
-): Ablo<S> | AbloApi {
+): Ablo<S> | AbloApi | AbloHttpClient<S> {
   if (options.schema == null) {
+    // The protocol client IS the stateless HTTP plane (string-keyed models),
+    // so `transport: 'http'` needs no special-casing here.
     return createProtocolClient(options as AbloApiClientOptions);
+  }
+  if (options.transport === 'http') {
+    return createAbloHttpClient(options as AbloHttpClientOptions<S>);
   }
 
   const internalOptions = options as InternalAbloOptions<S>;

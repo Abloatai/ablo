@@ -106,17 +106,14 @@ function asActiveProject(value: unknown): ActiveProject | undefined {
 }
 
 function normalizeStoredMode(value: unknown): Mode | undefined {
-  // Pre-rename files stored 'test'/'live'.
-  if (value === 'sandbox' || value === 'test') return 'sandbox';
-  if (value === 'production' || value === 'live') return 'production';
+  if (value === 'sandbox' || value === 'production') return value;
   return undefined;
 }
 
-/** Pull key entries out of any historical object shape (sandbox/production
- *  buckets, pre-rename test/live buckets, or the legacy flat single key). */
+/** Pull key entries out of the stored credential shape. */
 function extractEntries(obj: Record<string, unknown>): Pick<StoredConfig, 'sandbox' | 'production'> {
-  const sandbox = asKeyEntry(obj.sandbox) ?? asKeyEntry(obj.test);
-  const production = asKeyEntry(obj.production) ?? asKeyEntry(obj.live);
+  const sandbox = asKeyEntry(obj.sandbox);
+  const production = asKeyEntry(obj.production);
   if (sandbox || production) {
     return { ...(sandbox ? { sandbox } : {}), ...(production ? { production } : {}) };
   }
@@ -126,8 +123,8 @@ function extractEntries(obj: Record<string, unknown>): Pick<StoredConfig, 'sandb
 
 /**
  * Read the stored config, or null if none / unreadable / malformed. Reads the
- * two-file layout; transparently MIGRATES any single-file layout (keys inside
- * config.json, test/live names) by rewriting into the split files.
+ * two-file layout; transparently MIGRATES any single-file layout with keys
+ * inside config.json by rewriting into the split files.
  */
 export function readConfig(): StoredConfig | null {
   const cfgObj = readJson(configPath());
@@ -218,8 +215,7 @@ export function modeFromKey(key: string): Mode | undefined {
 }
 
 /**
- * Normalize a user-supplied mode word. Accepts the canonical
- * `sandbox`/`production` plus the pre-rename `test`/`live` as aliases.
+ * Normalize a user-supplied mode word.
  */
 export function normalizeMode(value: string | undefined): Mode | undefined {
   return normalizeStoredMode(value);

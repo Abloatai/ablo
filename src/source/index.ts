@@ -4,6 +4,7 @@ import type {
   SchemaRecord,
   InferCreate,
 } from '../schema/schema.js';
+import type { Environment } from '../environment.js';
 import type { DataSourceAdapter } from './adapter.js';
 import { changeSetSchema } from './contract.js';
 
@@ -77,21 +78,21 @@ export interface SourceRequestContext {
   readonly organizationId?: string;
   readonly requiredSyncGroups?: readonly string[];
   /**
-   * Test/live mode for this request. Customers branch their source
-   * handlers on this (`if (mode === 'test') db = testDb`) so test
+   * Production/sandbox mode for this request. Customers branch their source
+   * handlers on this (`if (mode === 'sandbox') db = sandboxDb`) so sandbox
    * traffic exercises the same code path against an isolated store.
    *
-   * Mirrors Stripe's `sk_test_` / `sk_live_` distinction: same wire
+   * Mirrors Stripe's `sk_test_` / `sk_live_` prefixes: same wire
    * shape, same handler code, different namespace. Ablo's server-side
    * fan-out does not yet partition deltas by mode — that lands when
    * `sync_deltas.mode` ships. Until then, isolation is enforced
    * customer-side via this field, which is the right boundary anyway
    * (the customer's database is where the canonical data lives).
    *
-   * Defaults to `'live'` when omitted so callers that don't opt in
+   * Defaults to `'production'` when omitted so callers that don't opt in
    * keep the existing behavior.
    */
-  readonly mode?: 'test' | 'live';
+  readonly mode?: Environment;
 }
 
 export interface SourceOperation {

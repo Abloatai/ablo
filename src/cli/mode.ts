@@ -4,7 +4,7 @@
  * Sets which stored key `ablo push` (and the SDK, via `ABLO_API_KEY`
  * resolution) uses. `ablo dev` is always sandbox by design. With no argument,
  * a clack `select` shows both environments, which is current, and whether a
- * key exists. `test`/`live` are accepted as aliases of the pre-rename words.
+ * key exists.
  */
 
 import pc from 'picocolors';

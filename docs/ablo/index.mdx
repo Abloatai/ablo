@@ -10,9 +10,10 @@ It gives agents a narrow way to write production state: declare models, load cur
 Multiplayer is not a separate product mode. Humans, server actions, and agents
 write through the same `ablo.<model>` surface on one typed, coordinated state —
 Ablo fans out confirmed deltas, exposes active intents, and rejects stale writes
-for every participant. **Humans** use the live client (`Ablo({ schema, apiKey })`,
-WebSocket); **agents** use the stateless [`createAbloHttpClient`](/agents) (HTTP,
-no socket) — same API, same coordination plane, different transport.
+for every participant. Everyone constructs the same client: interactive apps
+call `Ablo({ schema, apiKey })` and get the live WebSocket plane; [agents](/agents)
+add `transport: 'http'` and get a stateless client — same API, same coordination
+plane, no socket.
 
 ## Two clients: server vs browser
 

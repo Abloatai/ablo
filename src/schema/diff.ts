@@ -309,7 +309,7 @@ export type WarningCode =
   /** A model disappears from what this plane's READERS resolve, without any
    *  table being dropped. Emitted by the server's push gate (not
    *  `classifyMigration`) when a first sandbox push shadows the production
-   *  artifact that sandbox readers were served via the registry's test→live
+   *  artifact that sandbox readers were served via the registry's sandbox→production
    *  fallback. The data plane is untouched — the loss is visibility. */
   | 'remove_model';
 

@@ -15,6 +15,7 @@
  */
 import type { ParticipantKind, ConfirmationState } from '../schema/sync-delta-row.js';
 import type { ParticipantRef } from '../schema/sync-delta-wire.js';
+import type { Environment } from '../environment.js';
 
 export interface CommitContext {
   participantId: string;
@@ -25,6 +26,19 @@ export interface CommitContext {
    */
   participantKind: ParticipantKind;
   organizationId: string;
+  /**
+   * Product/project scope for routing source-mode storage. Omitted means the
+   * org-default project (the legacy behavior).
+   */
+  projectId?: string;
+  /** Optional external account scope forwarded to storage resolvers. */
+  accountScope?: string;
+  /**
+   * Canonical environment for this commit. Source-mode adapters forward this to
+   * customer handlers so sandbox and production traffic can hit distinct
+   * customer-owned stores.
+   */
+  environment?: Environment;
   /**
    * The participant's own subscribed sync groups (from the WS upgrade or
    * capability token). Appended to every delta's `sync_groups` so writes fan

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.0
+
+### Minor Changes
+
+- Rename environment enum values to `production` and `sandbox` while preserving the existing `*_live_`/`*_test_` key prefix format.
+
+### Patch Changes
+
+- Stateless HTTP transport for server-side actors, and a canonical environment vocabulary.
+  - **`Ablo({ transport: 'http' })`** returns a stateless `AbloHttpClient` for agents, workers, and serverless — the same `ablo.<model>` surface and coordination plane with no websocket: each call is one HTTP round-trip and identity rides the Bearer credential. The return type narrows so stateful-only APIs (`get`/`getAll`/`onChange`) are compile errors instead of latent runtime gaps.
+  - **Canonical `production` / `sandbox` environments** (new `environment.ts`, exported from the root): `sk_test_` / `sk_live_` remain the wire-level key prefixes but now map to `production` / `sandbox` everywhere — key parsing, source `mode`, and the CLI (which drops the legacy test/live config migration).
+  - **Source-mode commit scoping**: `commit` now forwards `projectId`, `accountScope`, and `environment` to customer storage resolvers, so per-project and sandbox/production traffic can be routed to distinct stores.
+  - **Fixes**: the WebSocket bearer credential is sent in the `ablo.bearer.<token>` subprotocol (never in the URL or proxy logs); `Model` no longer fabricates an `updatedAt` of "now" for records that arrive with only `createdAt`.
+
 ## 0.9.15
 
 ### Patch Changes

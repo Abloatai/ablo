@@ -120,11 +120,10 @@ export interface SyncWebSocketOptions {
   kind?: 'user' | 'agent' | 'system';
   /**
    * The agent's bearer credential — a restricted (`rk_`) API key. When
-   * set, sent as `?authorization=Bearer+<token>` on the WS upgrade —
-   * query-param form so it works in both Node (no header support) and
-   * browsers. The server's auth path accepts either form. Required for
-   * `kind: 'agent'`; ignored for `kind: 'user'`. (Field name predates
-   * the Biscuit→opaque-key migration.)
+   * set, sent in the `ablo.bearer.<token>` WebSocket subprotocol so the
+   * credential stays out of URLs and proxy logs. Required for `kind: 'agent'`;
+   * ignored for `kind: 'user'`. (Field name predates the Biscuit→opaque-key
+   * migration.)
    */
   capabilityToken?: string;
   /**
