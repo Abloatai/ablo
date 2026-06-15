@@ -62,7 +62,7 @@ function readModelResult<T, C>(
   const data = snapshotValue(modelClient.get(id) ?? initial);
   const meta = getModelClientMeta(modelClient);
   const claims = meta && engine
-    ? engine.intents.list({ model: meta.key, id })
+    ? engine.claims.list({ model: meta.key, id })
     : EMPTY_CLAIMS;
 
   return { data, claims, claimed: claims.length > 0 };
@@ -162,17 +162,17 @@ export function useAblo<
         ? undefined
         : modelOrSelect;
 
-  // Claims live on a non-MobX event emitter (engine.intents), so the useReactive
+  // Claims live on a non-MobX event emitter (engine.claims), so the useReactive
   // reactions below cannot track them — we bridge changes through a setState bump.
   // ONLY the model-row form (`id !== undefined`) actually reads claims, so gate the
   // subscription on `id`. The selector-only form (`useAblo((a) => a.x.get/getAll)`)
-  // never reads claims; subscribing it to the workspace-global intent stream would
-  // re-render + double-compute it on every intent/presence delta anywhere (a real
+  // never reads claims; subscribing it to the workspace-global claim stream would
+  // re-render + double-compute it on every claim/presence delta anywhere (a real
   // storm during AI editing / live collaboration) for a value that can't change.
   const [claimVersion, setClaimVersion] = useState(0);
   useEffect(() => {
     if (!engine || id === undefined) return;
-    return engine.intents.onChange(() => setClaimVersion((version) => version + 1));
+    return engine.claims.onChange(() => setClaimVersion((version) => version + 1));
   }, [engine, id]);
 
   const selected = useReactive<T | undefined>(

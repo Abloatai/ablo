@@ -8,7 +8,7 @@
  * ─────────────────────────────────────────────────────────────────────────
  * Use the unified `Ablo({...})` factory directly with `kind: 'agent'`.
  * The factory holds the WebSocket, reactive subscriptions, mutations, and
- * presence/intents — same surface as a browser user, just with a
+ * presence/claims — same surface as a browser user, just with a
  * server-issued capability token instead of session cookies.
  *
  * ```ts
@@ -123,7 +123,7 @@
 //   const ctx:  Agent.Context = { perception };
 //   const s:    Agent.SessionOptions = { ... };
 //
-// Everything else (Activity, Claim, Peer, ActiveIntent, ...)
+// Everything else (Activity, Claim, Peer, ActiveClaim, ...)
 // lives on the `Ablo.*` namespace via
 // `import type { Ablo } from '@abloatai/ablo'`.
 

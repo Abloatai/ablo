@@ -56,7 +56,7 @@ export interface CommitOperation {
 
 /**
  * Client → Server single named-mutation frame. The named-mutator write
- * primitive (intent + args), as opposed to the raw-op {@link CommitMessage}
+ * primitive (claim + args), as opposed to the raw-op {@link CommitMessage}
  * batch. Server-side mutator dispatch resolves `mutatorName` against the
  * host-provided registry.
  */
@@ -83,7 +83,7 @@ export interface CommitMessage {
     /**
      * Dormant agent-task lineage field. The SDK no longer populates it —
      * turns/tasks were removed and write attribution now rides on the
-     * claim (`intent`) id plus the server-stamped actor/capability. Kept
+     * claim (`claim`) id plus the server-stamped actor/capability. Kept
      * optional for wire-compat; when present the Hub still validates and
      * threads it onto `caused_by_task_id`, but client writes leave it
      * `null` (the audit pane treats null as "no prompt-side context").

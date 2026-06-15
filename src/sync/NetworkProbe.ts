@@ -33,7 +33,7 @@ import { withAuthHeaders, type AuthTokenGetter } from '../auth/credentialSource.
 /**
  * The closed set of probe outcomes — one value carrying both reachability and
  * credential disposition, so the {@link ConnectionManager} branches on a single
- * exhaustive discriminant instead of reconstructing intent from a trio of
+ * exhaustive discriminant instead of reconstructing claim from a trio of
  * booleans. Mirrors the {@link RecoveryClass} taxonomy at the connectivity tier.
  */
 export const PROBE_OUTCOMES = [

@@ -5,7 +5,7 @@
  * The inputs are two functions:
  *
  *   - `subscribe(onChange): unsubscribe` — the existing reactivity
- *     primitive on `PresenceStream` / `IntentStream`. We register a
+ *     primitive on `PresenceStream` / `ClaimStream`. We register a
  *     listener that enqueues a value every time the source mutates;
  *     we tear it down in `return()`.
  *   - `getSnapshot()` — read the latest value to hand to the

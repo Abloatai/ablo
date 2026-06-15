@@ -97,7 +97,7 @@ export {
   type GrantsRef,
 } from './model.js';
 
-// Intent-first shorthand: `mutable.lazy({...})` and friends. Read the
+// Claim-first shorthand: `mutable.lazy({...})` and friends. Read the
 // safety posture and load shape off the verb tokens; everything else
 // falls back to sensible defaults. See sugar.ts for the full pattern.
 export { mutable, readOnly, type SugarOptions } from './sugar.js';

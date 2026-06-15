@@ -1,9 +1,9 @@
 /**
  * Type registration point for SDK consumers.
  *
- * A consumer registers their Schema, Presence, Intents, and UserMeta ONCE by
+ * A consumer registers their Schema, Presence, Claims, and UserMeta ONCE by
  * augmenting the {@link Register} interface, and every SDK hook — `useAblo`,
- * `useQuery`, `useOne`, `usePresence`, `useIntent` — reads its types from the
+ * `useQuery`, `useOne`, `usePresence`, `useClaim` — reads its types from the
  * resolved registration. No generics at call sites, no `schema` arg per call.
  *
  * Registration is done via **module augmentation** of `@abloatai/ablo` —
@@ -22,7 +22,7 @@
  *   interface Register {
  *     Schema: typeof schema;
  *     Presence: { cursor: { x: number; y: number } | null };
- *     Intents: { editLayer: { layerId: string } };
+ *     Claims: { editLayer: { layerId: string } };
  *     UserMeta: { id: string; email: string };
  *   }
  * }
@@ -43,7 +43,7 @@
 export interface DefaultSyncShape {
   readonly Schema: { readonly models: Record<string, unknown> };
   readonly Presence: Record<string, unknown>;
-  readonly Intents: Record<string, unknown>;
+  readonly Claims: Record<string, unknown>;
   readonly UserMeta: { readonly id: string };
 }
 
@@ -76,13 +76,13 @@ export type ResolvePresence = Register extends { Presence: infer P }
   : DefaultSyncShape['Presence'];
 
 /**
- * The consumer's intent vocabulary, or the default if unregistered. Keys are
- * intent names; values are the claim payload for each intent. Used by
- * `useIntent(intentName)`.
+ * The consumer's claim vocabulary, or the default if unregistered. Keys are
+ * claim names; values are the claim payload for each claim. Used by
+ * `useClaim(claimName)`.
  */
-export type ResolveIntents = Register extends { Intents: infer I }
+export type ResolveClaims = Register extends { Claims: infer I }
   ? I
-  : DefaultSyncShape['Intents'];
+  : DefaultSyncShape['Claims'];
 
 /**
  * The consumer's user-metadata shape, or the default if unregistered. Carries

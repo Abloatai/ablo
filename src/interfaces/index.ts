@@ -6,6 +6,7 @@
  * GraphQL client, session handling, and analytics.
  */
 
+
 // ─────────────────────────────────────────────
 // Logger
 // ─────────────────────────────────────────────
@@ -243,11 +244,15 @@ export interface MutationOptions {
   wait?: 'queued' | 'confirmed';
   readAt?: number | null;
   onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
-  intent?: string | { readonly id: string } | null;
+  /** Claim-pin attribution: the id (or `{ id }`) of the claim this write
+   *  belongs to. Distinct from the `claim` HANDLE on the model write params —
+   *  this is the low-level reference the commit carries to bypass the holder's
+   *  own pin. (Was `intent` before the claim-vocabulary unification.) */
+  claimRef?: string | { readonly id: string } | null;
   /**
    * Dormant agent-task lineage field, forwarded as the wire-level
    * `causedByTaskId`. Turns/tasks were removed from the SDK; nothing
-   * populates this anymore (write attribution rides on the claim/intent
+   * populates this anymore (write attribution rides on the claim
    * id). Kept optional for wire-compat; always `null` from the client.
    */
   causedByTaskId?: string | null;
@@ -257,9 +262,9 @@ export interface MutationOptions {
  * The `MutationOptions` subset carried per-write through the offline
  * transaction lane (SyncClient → TransactionQueue → wire operation).
  * ONE shared type so the proxy's public params, the queue, and the wire
- * can never narrow each other silently again — `wait` and `intent` are
+ * can never narrow each other silently again — `wait` and `claim` are
  * deliberately absent because they resolve client-side before staging
- * (`wait` at the proxy's confirmation await, `intent` server-side via
+ * (`wait` at the proxy's confirmation await, `claim` server-side via
  * the active lease on the entity).
  */
 export type WriteOptions = Pick<

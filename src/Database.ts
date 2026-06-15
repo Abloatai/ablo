@@ -121,6 +121,20 @@ export class Database {
     return this.bootstrapHelper;
   }
 
+  /**
+   * PURE scoped snapshot fetch for hydrate-on-enter (P4). Returns the FULL
+   * current rows of the given sync groups, with NO side effects — unlike
+   * {@link bootstrapFromServer}, it does not persist to IndexedDB and does not
+   * touch the connection's `subscribedSyncGroups` (which the shrinkage check
+   * owns). The caller applies the result to the pool via the SCOPED apply path.
+   */
+  async fetchScopedBootstrapData(
+    syncGroups: readonly string[],
+  ): Promise<BootstrapData> {
+    // No lastSyncId → a full snapshot of exactly these groups.
+    return this.bootstrapHelper.fetchBootstrap(undefined, syncGroups);
+  }
+
   // Database state
   private currentDbInfo: DatabaseInfo | null = null;
   private workspaceDb: IDBDatabase | null = null;
@@ -564,7 +578,7 @@ export class Database {
           // Convert server delta format to processDelta format
           const formattedDeltas = (deltas as ServerDelta[]).map((delta) => ({
             syncId: delta.id,
-            actionType: delta.operation as 'I' | 'U' | 'D' | 'A' | 'V' | 'C' | 'G' | 'S',
+            actionType: delta.operation as 'I' | 'U' | 'D' | 'A' | 'V' | 'C' | 'G' | 'S' | 'M',
             modelName: delta.modelName,
             modelId: delta.entityId,
             data: delta.data,
@@ -733,7 +747,7 @@ export class Database {
      * but the switch returns a no-op verify if one slips through (e.g.
      * replayed from the bootstrap queue) rather than crashing the engine.
      */
-    actionType: 'I' | 'U' | 'D' | 'A' | 'V' | 'C' | 'G' | 'S';
+    actionType: 'I' | 'U' | 'D' | 'A' | 'V' | 'C' | 'G' | 'S' | 'M';
     modelName: string;
     modelId: string;
     data: ModelData | null;
@@ -964,7 +978,7 @@ export class Database {
        * shouldn't reach batch processing, but the switch inside returns
        * no-op verify for them if one slips through.
        */
-      actionType: 'I' | 'U' | 'D' | 'A' | 'V' | 'C' | 'G' | 'S';
+      actionType: 'I' | 'U' | 'D' | 'A' | 'V' | 'C' | 'G' | 'S' | 'M';
       modelName: string;
       modelId: string;
       data: ModelData | null;
@@ -1112,7 +1126,12 @@ export class Database {
       // ========================================================================
       // CONFLICT CHECK: Skip UPDATE/INSERT if DELETE exists with higher syncId
       // ========================================================================
-      if (delta.actionType === 'U' || delta.actionType === 'I' || delta.actionType === 'C') {
+      if (
+        delta.actionType === 'U' ||
+        delta.actionType === 'I' ||
+        delta.actionType === 'C' ||
+        delta.actionType === 'M'
+      ) {
         const key = `${delta.modelName}:${delta.modelId}`;
         const deleteSyncId = deleteSyncIds.get(key);
 

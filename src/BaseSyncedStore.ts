@@ -15,6 +15,11 @@
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
 import { AbloConnectionError, AbloValidationError, toAbloError } from './errors.js';
 import { ConnectionManager } from './sync/ConnectionManager.js';
+import { AreaOfInterestManager } from './sync/AreaOfInterestManager.js';
+import {
+  resolveParticipantSyncGroups,
+  type ParticipantScope,
+} from './sync/participants.js';
 import type { SyncClient } from './SyncClient.js';
 import type { Database, BootstrapResult } from './Database.js';
 import type { BootstrapData } from './sync/BootstrapHelper.js';
@@ -352,6 +357,20 @@ export class BaseSyncedStore<
 
   // ── Real-time sync ──
   protected syncWebSocket: SyncWebSocket<TCollaboration> | null = null;
+  /**
+   * Dynamic read interest (area-of-interest) over the connection's sync
+   * groups. Lives alongside `syncWebSocket` and is recreated with it; the
+   * stable `enterScope`/`leaveScope`/`pinScope`/`unpinScope` methods forward
+   * to whichever instance is current, so callers (the React participant
+   * hook) never hold a stale reference. Null until `setupWebSocketSync`.
+   */
+  protected areaOfInterest: AreaOfInterestManager | null = null;
+  /** Sync groups whose current state has been backfilled into the pool
+   *  (hydrate-on-enter). Cleared when the pool is reset on (re)bootstrap. */
+  private readonly hydratedGroups = new Set<string>();
+  /** In-flight scoped hydrations, keyed by group — single-flights concurrent
+   *  enters of the same scope so they share one fetch. */
+  private readonly hydratingGroups = new Map<string, Promise<void>>();
   private _syncServerUrl?: string;
 
   /**
@@ -364,6 +383,105 @@ export class BaseSyncedStore<
    */
   getSyncWebSocket(): SyncWebSocket<TCollaboration> | null {
     return this.syncWebSocket;
+  }
+
+  // ── Area-of-interest (dynamic read subscription) ─────────────────
+  //
+  // `enterScope`/`leaveScope` move the connection's read interest as the
+  // user navigates (open/close a deck, sheet, doc); `pinScope`/`unpinScope`
+  // express prominence (an active claim keeps a group subscribed). All four
+  // resolve the scope to sync-group strings through the SAME resolver the
+  // claim path uses (`resolveParticipantSyncGroups`), so read interest and
+  // write claims always agree on the string for a given entity. No-ops
+  // before the socket exists. Soft state — they never reject for an offline
+  // transport (see `AreaOfInterestManager.reconcile`).
+
+  private scopeToGroups(scope: ParticipantScope): string[] {
+    return resolveParticipantSyncGroups(scope, this.schema);
+  }
+
+  /**
+   * Bring a scope into view → subscribe to its groups. With
+   * `{ hydrate: true }`, ALSO backfill the groups' current state into the pool
+   * after the subscription is active (the game "spawn snapshot + delta stream"
+   * pattern): subscribe-first so no live delta is missed in the gap, then
+   * snapshot. Hydration is soft — a failed backfill never rejects `enterScope`
+   * and the live tail still flows.
+   */
+  enterScope(scope: ParticipantScope, opts?: { hydrate?: boolean }): Promise<void> {
+    const mgr = this.areaOfInterest;
+    if (!mgr) return Promise.resolve();
+    const groups = this.scopeToGroups(scope);
+    const subscribed = Promise.all(groups.map((g) => mgr.enter(g))).then(() => undefined);
+    if (!opts?.hydrate) return subscribed;
+    return subscribed.then(() => this.hydrateGroups(groups));
+  }
+
+  /**
+   * Backfill the current state of `syncGroups` into the pool via a PURE scoped
+   * snapshot fetch + the version-guarded, ghost-free scoped apply. Idempotent
+   * (skips groups already hydrated) and single-flight (concurrent enters of the
+   * same group share one fetch). Soft-fails: on error the groups are NOT marked
+   * hydrated, so a later re-enter retries.
+   */
+  protected async hydrateGroups(syncGroups: readonly string[]): Promise<void> {
+    const need = syncGroups.filter(
+      (g) => !this.hydratedGroups.has(g) && !this.hydratingGroups.has(g),
+    );
+    if (need.length === 0) {
+      // Nothing new to fetch, but await any in-flight hydration for the
+      // requested groups so callers can sequence on completion.
+      await Promise.all(
+        syncGroups
+          .map((g) => this.hydratingGroups.get(g))
+          .filter((p): p is Promise<void> => p !== undefined),
+      );
+      return;
+    }
+    const work = (async () => {
+      try {
+        const data = await this.database.fetchScopedBootstrapData(need);
+        this.syncClient.applyBootstrapDataToPool(data, undefined, { scoped: true });
+        for (const g of need) this.hydratedGroups.add(g);
+      } catch (err) {
+        getContext().logger.warn('[BaseSyncedStore] scoped hydrate failed', {
+          syncGroups: need,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // Soft-fail — leave `need` un-hydrated so a re-enter retries.
+      } finally {
+        for (const g of need) this.hydratingGroups.delete(g);
+      }
+    })();
+    for (const g of need) this.hydratingGroups.set(g, work);
+    await work;
+  }
+
+  /** Leave a scope → its groups go warm (hysteresis), then drop on sweep. */
+  leaveScope(scope: ParticipantScope): Promise<void> {
+    const mgr = this.areaOfInterest;
+    if (!mgr) return Promise.resolve();
+    return Promise.all(this.scopeToGroups(scope).map((g) => mgr.leave(g))).then(
+      () => undefined,
+    );
+  }
+
+  /** Pin a scope (active claim / prominence) → never warms while pinned. */
+  pinScope(scope: ParticipantScope): Promise<void> {
+    const mgr = this.areaOfInterest;
+    if (!mgr) return Promise.resolve();
+    return Promise.all(this.scopeToGroups(scope).map((g) => mgr.pin(g))).then(
+      () => undefined,
+    );
+  }
+
+  /** Release a pin → the group transitions to warm rather than dropping. */
+  unpinScope(scope: ParticipantScope): Promise<void> {
+    const mgr = this.areaOfInterest;
+    if (!mgr) return Promise.resolve();
+    return Promise.all(this.scopeToGroups(scope).map((g) => mgr.unpin(g))).then(
+      () => undefined,
+    );
   }
 
   // ── Internal helpers ──
@@ -835,6 +953,10 @@ export class BaseSyncedStore<
       runInAction(() => { this.dataReady = false; });
       this.modelTypesHydrated.clear();
       this.modelTypeHydrationInFlight.clear();
+      // The pool is being wiped + re-bootstrapped, so the scoped-hydrate ledger
+      // is stale — clear it so re-entered groups backfill again.
+      this.hydratedGroups.clear();
+      this.hydratingGroups.clear();
       getContext().logger.info('[BaseSyncedStore] Bootstrap state reset complete');
     } catch {
       getContext().observability.breadcrumb('Error resetting bootstrap state', 'sync.bootstrap', 'warning');
@@ -1528,7 +1650,10 @@ export class BaseSyncedStore<
     const queue = this.bootstrapDeltaQueue;
     this.bootstrapDeltaQueue = null;
     if (!queue || queue.length === 0) return;
-    for (const delta of queue) this.processDeltaWithBatching(delta);
+    // Deltas that landed during bootstrap are a complete frame — apply
+    // them atomically (one flush, one re-render) rather than dribbling
+    // each back through the live debounce path.
+    this.applyDeltaFrame(queue);
   }
 
   /**
@@ -1703,6 +1828,15 @@ export class BaseSyncedStore<
       },
     });
 
+    // Area-of-interest manager — owns dynamic read-subscription over this
+    // connection. baseGroups (the org/user scopes) are always subscribed;
+    // enterScope/leaveScope move per-entity interest. Recreated with the
+    // socket; torn down via the disposer pushed below.
+    this.areaOfInterest = new AreaOfInterestManager({
+      transport: this.syncWebSocket,
+      baseGroups: this.resolveSyncGroups(context),
+    });
+
     // Connection events → forward to connection lifecycle callback
     const onConnected = this.syncWebSocket.subscribe('connected', () => {
       this.syncClient.markConnected();
@@ -1712,6 +1846,12 @@ export class BaseSyncedStore<
       } else {
         this.updateSyncStatus({ offlineSince: undefined });
       }
+      // Re-assert read interest on every (re)connect. After a transient
+      // reconnect the socket re-sends its URL groups, but interest may have
+      // changed while offline; after a full reconnect the new socket's URL
+      // carries only base groups. `resync` re-pushes the current desired set
+      // so the server-side index matches what the user is actually viewing.
+      void this.areaOfInterest?.resync();
     });
 
     const onDisconnected = this.syncWebSocket.subscribe('disconnected', () => {
@@ -1731,7 +1871,10 @@ export class BaseSyncedStore<
     });
 
     const onDeltaBatch = this.syncWebSocket.subscribe('delta_batch', (deltas: SyncDelta[]) => {
-      deltas.forEach((delta) => this.processDeltaWithBatching(delta));
+      // A catch-up/reconnect frame is already complete — apply it as ONE
+      // atomic flush so the gallery re-renders once, not once per 50-delta
+      // chunk. See `applyDeltaFrame`.
+      this.applyDeltaFrame(deltas);
     });
 
     // Bootstrap events
@@ -1792,7 +1935,8 @@ export class BaseSyncedStore<
       onConnected, onDisconnected, onReconnecting,
       onDelta, onDeltaBatch, onBootstrapRequired,
       onBootstrapData, onPresenceUpdate,
-      onError, onSessionError, onHandshakeFailed, onReconnectFailed
+      onError, onSessionError, onHandshakeFailed, onReconnectFailed,
+      () => { this.areaOfInterest?.dispose(); this.areaOfInterest = null; },
     );
 
     // ── Connection FSM ────────────────────────────────────────────
@@ -1970,8 +2114,55 @@ export class BaseSyncedStore<
 
   /** Process incoming delta with smart batching */
   protected processDeltaWithBatching(delta: SyncDelta): void {
+    if (!this.enqueueDelta(delta)) return;
+    this.scheduleDeltaFlush();
+  }
+
+  /**
+   * Apply a complete, server-delivered delta frame atomically.
+   *
+   * A `delta_batch` WS event (reconnect/catch-up replay) already carries
+   * the FULL set of missed deltas. Routing it through the per-delta
+   * `processDeltaWithBatching` path re-chunks it via the live-traffic
+   * debounce timer + `maxBatchSize` force-flush, so a 300-delta catch-up
+   * fans out into ~6 separate `flushPendingDeltas` cycles — each its own
+   * IDB write, pool mutation, `models:changed` emit, and React re-render.
+   * The decks gallery visibly re-sorts and "pops in" once per chunk.
+   *
+   * Here we run the per-delta bookkeeping (dedup, ack, version vector,
+   * watermark, G/S routing, D cascade) for every delta WITHOUT scheduling
+   * a flush, then flush ONCE — collapsing the whole frame into a single
+   * IDB write + pool mutation + `models:changed` + re-render. Same code
+   * for the post-bootstrap replay of deltas queued during bootstrap.
+   *
+   * (Named `applyDeltaFrame`, not `processDeltaBatch`, to avoid confusion
+   * with `Database.processDeltaBatch` — the lower-level IDB write this
+   * eventually drives through `flushPendingDeltas`.)
+   */
+  protected applyDeltaFrame(deltas: SyncDelta[]): void {
+    let enqueuedAny = false;
+    for (const delta of deltas) {
+      if (this.enqueueDelta(delta)) enqueuedAny = true;
+    }
+    if (!enqueuedAny) return;
+
+    // Cancel any pending live-traffic timer — the frame is complete, so
+    // there is nothing to wait for. Flush everything in one pass.
+    if (this.batchTimer) { clearTimeout(this.batchTimer); this.batchTimer = null; }
+    void this.flushPendingDeltas().catch(this.handleFlushError);
+  }
+
+  /**
+   * Per-delta bookkeeping + enqueue. Returns `true` when the delta was
+   * pushed onto `pendingDeltas` (a regular batchable I/U/C/D delta that a
+   * subsequent flush must drain), `false` when it was skipped (dedup),
+   * deferred (bootstrap queue), or handled immediately out-of-band (G/S
+   * sync-group mutations). Does NOT schedule a flush — callers decide
+   * whether to debounce (live) or flush atomically (catch-up frame).
+   */
+  protected enqueueDelta(delta: SyncDelta): boolean {
     // Dedup guard — skip already-processed deltas
-    if (delta.id > 0 && delta.id <= this.highestProcessedSyncId) return;
+    if (delta.id > 0 && delta.id <= this.highestProcessedSyncId) return false;
 
     // Confirm awaiting transactions via sync ID threshold (before batching)
     this.syncClient.onDeltaReceived(delta.id);
@@ -1985,7 +2176,7 @@ export class BaseSyncedStore<
     // Queue during active bootstrap
     if (this.bootstrapDeltaQueue !== null) {
       this.bootstrapDeltaQueue.push(delta);
-      return;
+      return false;
     }
 
     // Advance watermark
@@ -1995,14 +2186,14 @@ export class BaseSyncedStore<
     // (addedGroups/removedGroups) and incremental (group/userId) payloads.
     if (delta.actionType === 'G') {
       void this.handleSyncGroupChange(delta);
-      return;
+      return false;
     }
 
     // Sync group removed — handle immediately. Clears affected local state
     // and forces re-bootstrap with the updated group list.
     if (delta.actionType === 'S') {
       void this.handleGroupRemoved(delta);
-      return;
+      return false;
     }
 
     // DELETE — fire the cascade cancel immediately (O(1) via FK index;
@@ -2020,7 +2211,11 @@ export class BaseSyncedStore<
     }
 
     this.pendingDeltas.push(delta);
+    return true;
+  }
 
+  /** Debounce a flush for live single-delta traffic. */
+  protected scheduleDeltaFlush(): void {
     if (this.batchTimer) clearTimeout(this.batchTimer);
 
     if (this.pendingDeltas.length >= this.smartSyncOptions.maxBatchSize) {

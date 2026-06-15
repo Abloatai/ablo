@@ -30,6 +30,7 @@ import type {
   PresenceTarget,
 } from '../types/streams.js';
 import { asyncIteratorFrom } from '../utils/asyncIterator.js';
+import { participantKindFromWire } from '../coordination/schema.js';
 
 export interface PresenceStreamConfig {
   /** Identity used to filter our own echoed frames out of `others`. */
@@ -61,7 +62,7 @@ export function createPresenceStream(
 
   // ── Self ─────────────────────────────────────────────────────────
   const self: Peer = {
-    participantKind: isAgent ? 'agent' : 'human',
+    participantKind: isAgent ? 'agent' : 'user',
     participantId,
     label,
     syncGroups: [...syncGroups],
@@ -123,7 +124,10 @@ export function createPresenceStream(
           case 'update':
           case undefined: {
             const entry: Peer = {
-              participantKind: event.isAgent ? 'agent' : 'human',
+              participantKind: participantKindFromWire(
+                event.participantKind,
+                event.isAgent,
+              ),
               participantId: event.userId,
               syncGroups: event.syncGroups ?? [],
               activity: event.activity

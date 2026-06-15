@@ -1,7 +1,7 @@
 /**
  * `@abloatai/ablo/server` — the COMMIT contract types.
  *
- * `CommitContext` is the attribution/intent envelope the host's commit executor
+ * `CommitContext` is the attribution/claim envelope the host's commit executor
  * stamps onto every delta a batch produces; `CommitResult` is the receipt. Both
  * are PURE descriptors (no `postgres`, no SQL, no functions), which is why they
  * live in the portable package while the SQL engine that consumes them
@@ -77,7 +77,7 @@ export interface CommitContext {
   confirmationState?: ConfirmationState;
   /**
    * Dormant FK to the agent-task id (`agent_tasks.id`). The SDK no longer
-   * sets it (turns/tasks removed; attribution rides on the claim/intent id
+   * sets it (turns/tasks removed; attribution rides on the claim/claim id
    * + server-stamped actor/capability). Still validated + written onto
    * `caused_by_task_id` when present, but client writes leave it `null`.
    */

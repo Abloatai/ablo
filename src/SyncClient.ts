@@ -8,6 +8,7 @@
  * - Handle conflict resolution for local changes
  */
 
+import { runInAction } from 'mobx';
 import { ObjectPool, ModelScope } from './ObjectPool.js';
 import { Model } from './Model.js';
 import type { ModelData } from './BaseSyncedStore.js';
@@ -56,6 +57,30 @@ export interface RehydrationStats {
 
 type EventHandler = () => void;
 
+/**
+ * Is the raw snapshot record strictly newer than the pooled model? Compares
+ * server-stamped `updatedAt` (the engine has no numeric row version; the delta
+ * pipeline is arrival-ordered last-write-wins). An undefined incoming time is
+ * treated as NOT newer (don't clobber a known row); an undefined existing time
+ * means the pool row is unversioned, so the incoming record wins. Used by the
+ * scoped hydrate-on-enter apply to drop snapshot rows a live delta already
+ * advanced past the snapshot watermark.
+ */
+function rawRecordIsNewer(data: Record<string, unknown>, existing: Model): boolean {
+  const raw = data.updatedAt;
+  const inMs =
+    raw instanceof Date
+      ? raw.getTime()
+      : typeof raw === 'string'
+        ? (Number.isNaN(Date.parse(raw)) ? undefined : Date.parse(raw))
+        : typeof raw === 'number'
+          ? raw
+          : undefined;
+  const exMs = existing.updatedAt instanceof Date ? existing.updatedAt.getTime() : undefined;
+  if (inMs === undefined) return false;
+  if (exMs === undefined) return true;
+  return inMs > exMs;
+}
 
 export class SyncClient extends EventEmitter {
   private objectPool: ObjectPool;
@@ -402,7 +427,9 @@ export class SyncClient extends EventEmitter {
     // (vanishingly unlikely for UUIDs, but cheap insurance).
     this.transactionQueue.on(
       'transaction:created',
-      (tx: { id: string }) => this.echoTracker.markPending(tx.id),
+      (tx: { id: string; localOnly?: boolean }) => {
+        if (!tx.localOnly) this.echoTracker.markPending(tx.id);
+      },
     );
     this.transactionQueue.on(
       'optimistic:rollback',
@@ -835,6 +862,20 @@ export class SyncClient extends EventEmitter {
     poolAction: () => void,
     writeOptions?: WriteOptions,
   ): void {
+    // No-op UPDATE guard (O(1)). An update with no dirty fields would travel
+    // to the server, get dropped by `coalesceOperations` Rule 4 (empty input),
+    // and — if it was the only op — come back as `lastSyncId: 0`. That trips
+    // `captureCommitZeroSyncId` (false-positive Sentry anomaly) AND parks the
+    // tx in `awaiting_delta` for a 30s reconciliation timeout on a write that
+    // changed nothing. `Model.hasChanges` reads `modifiedProperties.size`, so
+    // this costs O(1) with no allocation (vs. O(N) materializing getChanges()).
+    //
+    // Strict `=== false` is deliberate: `rowAsModel` only casts, so a non-Model
+    // object can reach here with `hasChanges === undefined`. `undefined === false`
+    // is false → we fall through to the normal path rather than risk dropping a
+    // real write. Only a genuine Model with an empty dirty-set is skipped.
+    if (type === 'update' && model.hasChanges === false) return;
+
     // CRITICAL FIX: Capture changes BEFORE pool action
     // Pool operations (especially upsert) can clear _local changes
     // By capturing first, we ensure changes are never lost
@@ -911,6 +952,13 @@ export class SyncClient extends EventEmitter {
       changes && Object.keys(changes).length > 0
         ? Object.freeze({ ...changes })
         : this.captureModelChanges(model);
+
+    // No-op UPDATE guard: neither an explicit change set nor model dirty-fields.
+    // `captureModelChanges` already returns undefined for an empty dirty-set, so
+    // an undefined here means there is genuinely nothing to send — skip rather
+    // than emit an empty-input update that the server coalesces to lastSyncId 0
+    // (see the same guard in `mutate`).
+    if (capturedChanges === undefined) return;
 
     this.objectPool.upsert(model, ModelScope.live);
     this.queueMutation({ type: 'update', model, timestamp: new Date(), capturedChanges });
@@ -1921,15 +1969,29 @@ export class SyncClient extends EventEmitter {
       }
     }
 
-    // Batch ObjectPool mutations — minimal MobX actions
-    if (modelsToAdd.length > 0) this.objectPool.addBatch(modelsToAdd, ModelScope.live);
-    if (modelsToUpsert.length > 0) this.objectPool.upsertBatch(modelsToUpsert, ModelScope.live);
-    if (idsToRemove.length > 0) this.objectPool.removeBatch(idsToRemove);
-    for (const id of idsToArchive) this.objectPool.updateScope(id, ModelScope.archived);
+    // Reveal the whole frame in ONE MobX action. `addBatch`/`upsertBatch`/
+    // `removeBatch`/`updateScope` are each individually `action`-wrapped,
+    // so calling them sequentially flushes reactions at every action
+    // boundary — a catch-up frame that adds + updates + removes would fire
+    // every dependent reaction (the decks gallery, each open editor) 3-4×
+    // in a row, re-rendering and re-sorting on each. Wrapping them in a
+    // single outer `runInAction` defers all reaction flushes to ONE
+    // boundary: dependents recompute exactly once regardless of how many
+    // models or how many op-kinds the frame touched. This is the MobX
+    // equivalent of Replicache's "atomically reveal the new state" — the
+    // app never observes a partially-applied frame.
+    runInAction(() => {
+      if (modelsToAdd.length > 0) this.objectPool.addBatch(modelsToAdd, ModelScope.live);
+      if (modelsToUpsert.length > 0) this.objectPool.upsertBatch(modelsToUpsert, ModelScope.live);
+      if (idsToRemove.length > 0) this.objectPool.removeBatch(idsToRemove);
+      for (const id of idsToArchive) this.objectPool.updateScope(id, ModelScope.archived);
 
-    // Emit changed model types so QueryProcessor can auto-invalidate
-    const changedTypes = new Set(dbResults.map(r => r.modelName));
-    if (changedTypes.size > 0) this.emit('models:changed', changedTypes);
+      // Emit changed model types so QueryProcessor can auto-invalidate.
+      // Kept inside the action so any observable query-cache state it
+      // flips is part of the same atomic reveal.
+      const changedTypes = new Set(dbResults.map(r => r.modelName));
+      if (changedTypes.size > 0) this.emit('models:changed', changedTypes);
+    });
   }
 
   /**
@@ -1939,6 +2001,18 @@ export class SyncClient extends EventEmitter {
   applyBootstrapDataToPool(
     bootstrapData: { models?: Record<string, unknown[]>; failedModels?: string[] },
     protectedIds?: ReadonlySet<string>,
+    options?: {
+      /**
+       * SCOPED backfill (P4 hydrate-on-enter): the snapshot covers only the
+       * groups just entered, NOT the whole type. Two behaviors change to keep
+       * it from corrupting the pool:
+       *   - upsert is version-guarded ({@link ObjectPool.upsertIfNewer}) so a
+       *     concurrent live delta isn't clobbered back to the snapshot version;
+       *   - ghost removal is SKIPPED — a subset snapshot must never evict rows
+       *     of the same type that belong to other (unhydrated) groups.
+       */
+      scoped?: boolean;
+    },
   ): { added: number; updated: number; removed: number; skipped: number; healed: number } {
     if (!bootstrapData.models) {
       return { added: 0, updated: 0, removed: 0, skipped: 0, healed: 0 };
@@ -1973,6 +2047,17 @@ export class SyncClient extends EventEmitter {
         const recordId = data.id as string | undefined;
         if (recordId) idsForType.add(recordId);
 
+        // Scoped backfill (P4 hydrate-on-enter): a subset snapshot is taken at
+        // a server watermark. If a concurrent live delta already advanced this
+        // row past the snapshot, skip it — `createFromData` mutates the pooled
+        // model IN PLACE (the "keep instances alive" Linear pattern), so this
+        // version guard MUST run BEFORE it; an upsert-layer guard would be too
+        // late, the row would already be clobbered.
+        if (options?.scoped && recordId) {
+          const existing = this.objectPool.get(recordId);
+          if (existing && !rawRecordIsNewer(data, existing)) { skippedCount++; continue; }
+        }
+
         try {
           const model = this.objectPool.createFromData(data);
           if (model) allModels.push(model);
@@ -1982,22 +2067,29 @@ export class SyncClient extends EventEmitter {
       }
     }
 
-    // Batch upsert
+    // Upsert. The scoped stale-skip above already guarded the version, so a
+    // plain upsert is correct here for both paths.
     const beforeSize = this.objectPool.size;
     this.objectPool.upsertBatch(allModels, ModelScope.live);
     const addedCount = this.objectPool.size - beforeSize;
     const updatedCount = allModels.length - addedCount;
 
-    // Ghost removal — remove pool entities not in server snapshot
-    const ghostIds: string[] = [];
-    for (const [modelType, serverIds] of serverIdsByType) {
-      const poolIds = this.objectPool.getIdsByModelType(modelType);
-      if (!poolIds) continue;
-      for (const poolId of poolIds) {
-        if (!serverIds.has(poolId) && !protectedIds?.has(poolId)) ghostIds.push(poolId);
+    // Ghost removal — remove pool entities not in the server snapshot. Only
+    // valid for a FULL bootstrap, where the snapshot is authoritative for each
+    // returned type. A SCOPED subset snapshot must NOT remove rows of the same
+    // type that belong to other (unhydrated) groups.
+    let removedCount = 0;
+    if (!options?.scoped) {
+      const ghostIds: string[] = [];
+      for (const [modelType, serverIds] of serverIdsByType) {
+        const poolIds = this.objectPool.getIdsByModelType(modelType);
+        if (!poolIds) continue;
+        for (const poolId of poolIds) {
+          if (!serverIds.has(poolId) && !protectedIds?.has(poolId)) ghostIds.push(poolId);
+        }
       }
+      removedCount = this.objectPool.removeBatch(ghostIds);
     }
-    const removedCount = this.objectPool.removeBatch(ghostIds);
 
     // Emit changed model types so QueryProcessor can auto-invalidate
     const changedTypes = new Set(Object.keys(bootstrapData.models));

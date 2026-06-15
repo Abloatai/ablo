@@ -1,6 +1,6 @@
 /**
  * Agent-SDK abstractions. The engine's data vocabulary
- * (`Peer`, `Activity`, `IntentClaim`, `ActiveIntent`,
+ * (`Peer`, `Activity`, `Claim`, `ActiveClaim`,
  * `PresenceUpdatePayload`, `PresenceKind`) lives in
  * `../types/streams.ts`. This file holds only the bits that are
  * specific to the agent module: the `PresenceAnnouncer` abstraction

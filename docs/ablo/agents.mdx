@@ -64,6 +64,17 @@ Think of it as a queue per row — a durable, inspectable, reorderable lease lin
 ("SQS for entity contention"). Use `{ wait: false }` for fail-fast dedup: *if
 someone else has this job, skip it.*
 
+## Messaging between agents
+
+Use claim `description` and `meta` for live "what I am doing now" context. Use
+ordinary synced rows for handoffs, status notes, and requests that must survive
+reconnects or be readable by HTTP agents. The recipe is a `messages` model
+scoped by the same syncGroup field as the work row, with `aboutIntentId` linking
+a message back to the claim it discusses.
+
+See [Agent Messaging](/agent-messaging) for the schema and direct
+`databaseUrl` setup.
+
 ## Humans + agents on one state
 
 There's no separate "agent mode." A human editing a record over their WebSocket

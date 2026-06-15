@@ -22,6 +22,14 @@
 import { z } from 'zod';
 import type { ErrorCode } from './errorCodes.js';
 import { errorCodeSpec, classifyRecovery } from './errorCodes.js';
+import {
+  wireClaimSummarySchema,
+  descriptionFromMeta,
+  type WireClaimSummary,
+  type ModelClaim,
+  type ModelTarget,
+  type ParticipantKind,
+} from './coordination/schema.js';
 
 export type { ErrorCode, WireErrorCode, ErrorCategory, ErrorCodeSpec, RecoveryClass } from './errorCodes.js';
 export {
@@ -227,6 +235,90 @@ export class AbloStaleContextError extends AbloError {
   }
 }
 
+export interface ClaimContext {
+  readonly id?: string;
+  readonly claimId?: string;
+  readonly actor?: string;
+  readonly participantKind?: ParticipantKind;
+  readonly action?: string;
+  readonly description?: string;
+  readonly field?: string;
+  readonly status?: string;
+  readonly position?: number;
+  /** Epoch-ms the claim expires. One timestamp encoding everywhere. */
+  readonly expiresAt?: number;
+  readonly declaredAt?: number;
+  readonly entityType?: string;
+  readonly entityId?: string;
+  // The claim target reuses the canonical {@link ModelTarget} (Partial: an
+  // error-context locator may be sparse) rather than re-declaring the
+  // model/id/path/range/field/meta shape inline — see
+  // docs/plans/ablo-claim-resource-canonicalization.md.
+  readonly target?: Partial<ModelTarget>;
+  readonly meta?: Record<string, unknown>;
+}
+
+export type ClaimErrorClaim = WireClaimSummary | ClaimContext;
+
+function claimAction(claim: ClaimErrorClaim | undefined): string | undefined {
+  return claim?.action;
+}
+
+function claimDescription(claim: ClaimErrorClaim | undefined): string | undefined {
+  if (!claim) return undefined;
+  if ('description' in claim && typeof claim.description === 'string') {
+    return claim.description;
+  }
+  const meta = 'target' in claim ? claim.target?.meta ?? claim.meta : claim.meta;
+  return descriptionFromMeta(meta);
+}
+
+function claimExpiresAt(claim: ClaimErrorClaim | undefined): number | undefined {
+  return claim?.expiresAt;
+}
+
+function claimActor(
+  claim: ClaimErrorClaim | undefined,
+  fallback: string | undefined,
+): string | undefined {
+  if (claim && 'actor' in claim && typeof claim.actor === 'string') {
+    return claim.actor;
+  }
+  return fallback;
+}
+
+function secondsUntil(ms: number | undefined, now = Date.now()): number | undefined {
+  if (ms === undefined || !Number.isFinite(ms)) return undefined;
+  return Math.max(0, Math.ceil((ms - now) / 1000));
+}
+
+export function formatClaimedErrorMessage(args: {
+  readonly targetLabel: string;
+  readonly heldBy?: string;
+  readonly claim?: ClaimErrorClaim;
+  readonly policyReason?: string;
+  readonly fallback?: string;
+}): string {
+  const holder = claimActor(args.claim, args.heldBy);
+  const action = claimAction(args.claim);
+  const description = claimDescription(args.claim);
+  const expiresIn = secondsUntil(claimExpiresAt(args.claim));
+
+  if (!holder && !action && !description) {
+    return args.fallback ?? `Model row is claimed: ${args.targetLabel}.`;
+  }
+
+  const actor = holder ?? 'another participant';
+  const actionPart = action ? ` (${action})` : '';
+  const descriptionPart = description ? `: ${description}` : '';
+  const expiresPart =
+    expiresIn !== undefined ? ` - expires in ${expiresIn}s` : '';
+  const policyPart = args.policyReason
+    ? ` Policy reason: ${args.policyReason}.`
+    : '';
+  return `Claimed by ${actor}${actionPart}${descriptionPart}${expiresPart} on ${args.targetLabel}.${policyPart}`;
+}
+
 /**
  * The target entity is currently claimed by another participant and the caller
  * asked the SDK not to read/write through that claim.
@@ -236,7 +328,7 @@ export class AbloStaleContextError extends AbloError {
  */
 export class AbloClaimedError extends AbloError {
   readonly type = 'AbloClaimedError' as const;
-  readonly claims?: ReadonlyArray<unknown>;
+  readonly claims?: ReadonlyArray<ClaimErrorClaim>;
 
   constructor(
     message: string,
@@ -245,12 +337,49 @@ export class AbloClaimedError extends AbloError {
       httpStatus?: number;
       requestId?: string;
       cause?: unknown;
-      claims?: ReadonlyArray<unknown>;
+      claims?: ReadonlyArray<ClaimErrorClaim>;
     },
   ) {
     super(message, options);
     if (options?.claims !== undefined) this.claims = options.claims;
   }
+}
+
+/**
+ * The `/`-joined human label for a claim target — `model/id/field`, dropping
+ * absent parts, falling back to `'target'`. The one place this join lived in
+ * three copies (client `Ablo`, HTTP `ApiClient`, `awaitClaimGrant`).
+ */
+export function claimTargetLabel(target: {
+  readonly model?: string;
+  readonly id?: string;
+  readonly field?: string;
+}): string {
+  return [target.model, target.id, target.field].filter(Boolean).join('/') || 'target';
+}
+
+/**
+ * Build the {@link AbloClaimedError} for a contended `ablo.<model>` write — the
+ * single factory shared by the realtime client (`Ablo`) and the HTTP client
+ * (`ApiClient`), which carried byte-identical copies. The first claim is the
+ * holder whose metadata shapes the message.
+ */
+export function claimedError(
+  target: { readonly model?: string; readonly id?: string; readonly field?: string },
+  claims: readonly ModelClaim[],
+  code: 'model_claimed' | 'model_claimed_timeout' | 'queue_too_deep',
+): AbloClaimedError {
+  const label = claimTargetLabel(target);
+  const holder = claims[0];
+  return new AbloClaimedError(
+    formatClaimedErrorMessage({
+      targetLabel: label,
+      heldBy: holder?.actor,
+      claim: holder,
+      fallback: `Model row is claimed: ${label} held by another participant.`,
+    }),
+    { code, claims },
+  );
 }
 
 // ── Domain-specific subclasses ───────────────────────────────────────
@@ -438,6 +567,10 @@ const NestedErrorShapeSchema = z
     message: OptionalWireStringSchema,
     field: OptionalWireStringSchema,
     requiredCapability: RequiredCapabilityWireSchema.optional().catch(undefined),
+    heldBy: OptionalWireStringSchema,
+    policyReason: OptionalWireStringSchema,
+    heldByClaim: wireClaimSummarySchema.optional().catch(undefined),
+    claims: z.array(wireClaimSummarySchema).optional().catch(undefined),
   })
   .passthrough();
 
@@ -460,6 +593,10 @@ const ErrorBodyShapeSchema = z
     reason: OptionalWireStringSchema,
     message: OptionalWireStringSchema,
     requiredCapability: RequiredCapabilityWireSchema.optional().catch(undefined),
+    heldBy: OptionalWireStringSchema,
+    policyReason: OptionalWireStringSchema,
+    heldByClaim: wireClaimSummarySchema.optional().catch(undefined),
+    claims: z.array(wireClaimSummarySchema).optional().catch(undefined),
   })
   .passthrough();
 
@@ -515,9 +652,10 @@ export function errorFromWire(
     httpStatus?: number;
     requestId?: string;
     requiredCapability?: RequiredCapability;
+    claims?: ReadonlyArray<ClaimErrorClaim>;
   } = {},
 ): AbloError {
-  const { code, requestId, requiredCapability } = opts;
+  const { code, requestId, requiredCapability, claims } = opts;
   // Effective status: an explicit HTTP status wins; otherwise fall back to
   // the code's canonical status from the registry (undefined for unknown /
   // forward-compat codes, which then map to the base AbloError).
@@ -525,7 +663,7 @@ export function errorFromWire(
   // Wire boundary: an incoming code is an arbitrary string (a newer server
   // may send a code this SDK predates). Cast to ErrorCode here — the one
   // sanctioned crossing — so internal producers stay statically checked.
-  const publicCode = (code === 'intent_conflict' ? 'claim_conflict' : code) as
+  const publicCode = (code === 'claim_conflict' ? 'claim_conflict' : code) as
     | ErrorCode
     | undefined;
   const baseOpts = { code: publicCode, httpStatus, requestId };
@@ -539,8 +677,8 @@ export function errorFromWire(
   // Claim enforcement (rides 409): the target entity is held by another
   // participant. Discriminate on code BEFORE the generic 409→idempotency
   // mapping so a claim rejection surfaces as AbloClaimedError.
-  if (code === 'intent_conflict' || code === 'claim_conflict' || code === 'entity_claimed') {
-    return new AbloClaimedError(message, baseOpts);
+  if (code === 'claim_conflict' || code === 'claim_conflict' || code === 'entity_claimed') {
+    return new AbloClaimedError(message, { ...baseOpts, claims });
   }
   // A write whose `readAt` watermark went stale — callers re-read and retry.
   if (code === 'stale_context') {
@@ -586,8 +724,22 @@ export function translateHttpError(
     (typeof body === 'string' ? body : `HTTP ${status}`);
   const requiredCapability =
     nested?.requiredCapability ?? parsed.requiredCapability;
+  const claims =
+    parsed.claims ??
+    nested?.claims ??
+    (parsed.heldByClaim
+      ? [parsed.heldByClaim]
+      : nested?.heldByClaim
+        ? [nested.heldByClaim]
+        : undefined);
 
-  return errorFromWire(message, { code, httpStatus: status, requestId, requiredCapability });
+  return errorFromWire(message, {
+    code,
+    httpStatus: status,
+    requestId,
+    requiredCapability,
+    claims,
+  });
 }
 
 /**

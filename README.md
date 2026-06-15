@@ -104,6 +104,7 @@ instead of guessing:
 ```ts
 import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
+```
 
 Register the schema once (init scaffolds this `ablo.d.ts`), and every type
 is one parameter away — no `typeof schema` re-stating, anywhere:
@@ -127,7 +128,7 @@ type WeatherReport = Model<'weatherReports'>; // fully typed from YOUR schema
 TanStack-Router pattern: declare the source of truth once, everything
 infers from it.)
 
-
+```ts
 const schema = defineSchema({
   weatherReports: model({
     location: z.string(),

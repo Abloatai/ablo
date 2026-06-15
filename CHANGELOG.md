@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.0
+
+### Minor Changes
+
+- Canonical `claim` vocabulary, sync-group area-of-interest, and richer claim-rejection errors.
+  - **`intent` → `claim` everywhere.** The coordination primitive is now a `Claim` across the public surface: `useClaim` replaces `useIntent`, the `Ablo.Claim.*` namespace replaces `Ablo.Intent.*`, and module augmentation registers `Claims` instead of `Intents` on the `Register` interface. The underlying wire frames moved from `intent_*` to `claim_*` — clients and servers must run a `claim_*`-aware build together.
+  - **Sync-group area of interest.** A client's read interest is no longer frozen at connect: the new `update_subscription` frame drives live re-indexing, and `enterScope` / `leaveScope` / `pinScope` / `unpinScope` let a store narrow or widen what it streams. `AreaOfInterestManager` adds hysteresis (warm-TTL), claim-pinning, reconcile coalescing, and an LRU cap so narrowing the view never shrinks the write allowlist.
+  - **Richer claim-rejection errors.** Rejections (over WebSocket and HTTP) now carry `heldByClaim` and `policyReason`, and `AbloClaimedError` exposes a typed `claims` array so callers can see exactly who holds the contested rows.
+  - **Coordination vocabulary consolidation.** Participant identity is canonical `user` | `agent` | `system`; the server stamps `participantKind` on every presence emit and clients read it, so non-human peers surface correctly.
+
 ## 0.10.1
 
 ### Patch Changes

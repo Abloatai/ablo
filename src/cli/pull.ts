@@ -155,7 +155,7 @@ export async function buildSchemaSourceFromDb(opts: {
       // Prefer a camelCase field name, but only when it maps back to the EXACT
       // column (the engine derives the column via `camelToSnake(field)`). When it
       // wouldn't round-trip (e.g. `step_2` → `step2` → `step2`), keep the raw
-      // column name so the mapping is 1:1 — Prisma's `@map` intent, the exact
+      // column name so the mapping is 1:1 — Prisma's `@map` claim, the exact
       // column, never an approximation.
       const camel = snakeToCamel(col.column_name);
       const fieldName = camelToSnake(camel) === col.column_name ? camel : col.column_name;

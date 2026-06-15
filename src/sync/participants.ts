@@ -3,13 +3,13 @@ import type { Schema, SchemaRecord } from '../schema/schema.js';
 import { scopeKindOf, type ModelDef } from '../schema/model.js';
 import { AbloConnectionError, AbloValidationError } from '../errors.js';
 import type {
-  ActiveIntent,
+  ActiveClaim,
   Activity,
   EntityRef,
-  IntentDeclaration,
-  Claim,
-  IntentOptions,
-  IntentStream,
+  ClaimDeclaration,
+  ClaimHandle,
+  ClaimLeaseOptions,
+  ClaimStream,
   Peer,
   PresenceStream,
   PresenceTarget,
@@ -38,7 +38,7 @@ export type ParticipantStatus =
 
 export interface EngineParticipant {
   readonly presence: PresenceStream;
-  readonly intents: IntentStream;
+  readonly claims: ClaimStream;
 }
 
 export interface ParticipantJoinOptions {
@@ -93,17 +93,17 @@ export interface ScopedClaimOptions {
   readonly ttl?: import('../types/streams.js').Duration;
 }
 
-export interface ScopedIntents {
+export interface ScopedClaims {
   readonly focus: EntityRef | null;
-  readonly others: ReadonlyArray<ActiveIntent>;
+  readonly others: ReadonlyArray<ActiveClaim>;
   /**
-   * Claim an exclusive intent on the participant's focus target (or
+   * Claim an exclusive claim on the participant's focus target (or
    * an explicit override via `opts.target`). Single verb — the old
    * `editing / writing / announce / claim(reason, opts)` overloads
    * collapsed into this one method.
    */
-  claim(opts?: ScopedClaimOptions): Claim;
-  onRejected(listener: Parameters<IntentStream['onRejected']>[0]): () => void;
+  claim(opts?: ScopedClaimOptions): ClaimHandle;
+  onRejected(listener: Parameters<ClaimStream['onRejected']>[0]): () => void;
   onChange(listener: () => void): () => void;
 }
 
@@ -119,9 +119,9 @@ export interface JoinedParticipant {
   /** Transport scopes this participant is joined to for visibility/fan-out. */
   readonly syncGroups: readonly string[];
   readonly presence: ScopedPresence;
-  readonly intents: ScopedIntents;
+  readonly claims: ScopedClaims;
   readonly peers: ReadonlyArray<Peer>;
-  readonly claims: ReadonlyArray<ActiveIntent>;
+  readonly activeClaims: ReadonlyArray<ActiveClaim>;
   focus(target: PresenceTarget, options?: ParticipantFocusOptions): JoinedParticipant;
   leave(): void;
   [Symbol.asyncDispose](): Promise<void>;
@@ -136,7 +136,7 @@ export interface ParticipantManagerConfig {
   readonly ready: () => Promise<void>;
   readonly getTransport: () => SyncWebSocket | null;
   readonly presence: PresenceStream;
-  readonly intents: IntentStream;
+  readonly claims: ClaimStream;
   readonly schema?: Schema<SchemaRecord>;
 }
 
@@ -179,7 +179,7 @@ export function createParticipantManager(
         claimId,
         transport,
         presence: config.presence,
-        intents: config.intents,
+        claims: config.claims,
       });
 
       if (target && options.activity !== false) {
@@ -327,9 +327,9 @@ function createJoinedParticipant(args: {
   readonly claimId: string;
   readonly transport: SyncWebSocket;
   readonly presence: PresenceStream;
-  readonly intents: IntentStream;
+  readonly claims: ClaimStream;
 }): JoinedParticipant {
-  const ownHandles = new Set<Claim>();
+  const ownHandles = new Set<ClaimHandle>();
   let currentTarget = args.target;
   let left = false;
 
@@ -407,10 +407,17 @@ function createJoinedParticipant(args: {
     },
   };
 
-  const track = (handle: Claim): Claim => {
+  const track = (handle: ClaimHandle): ClaimHandle => {
     ownHandles.add(handle);
     return {
-      id: handle.id,
+      object: 'claim',
+      claimId: handle.claimId,
+      action: handle.action,
+      target: handle.target,
+      async release(): Promise<void> {
+        ownHandles.delete(handle);
+        await handle.release();
+      },
       revoke(): void {
         ownHandles.delete(handle);
         handle.revoke();
@@ -422,28 +429,28 @@ function createJoinedParticipant(args: {
     };
   };
 
-  const scopedIntents: ScopedIntents = {
+  const scopedClaims: ScopedClaims = {
     get focus() {
       return currentTarget;
     },
     get others() {
-      return args.intents.others.filter((intent) =>
-        currentTarget ? targetsOverlap(intent.target, currentTarget) : true,
+      return args.claims.others.filter((claim) =>
+        currentTarget ? targetsOverlap(claim.target, currentTarget) : true,
       );
     },
-    claim(opts?: ScopedClaimOptions): Claim {
+    claim(opts?: ScopedClaimOptions): ClaimHandle {
       return track(
-        args.intents.claim(requireTarget(opts?.target), {
+        args.claims.claim(requireTarget(opts?.target), {
           reason: opts?.reason,
           ttl: opts?.ttl,
         }),
       );
     },
     onRejected(listener) {
-      return args.intents.onRejected(listener);
+      return args.claims.onRejected(listener);
     },
     onChange(listener: () => void): () => void {
-      return args.intents.onChange(listener);
+      return args.claims.onChange(listener);
     },
   };
 
@@ -469,12 +476,12 @@ function createJoinedParticipant(args: {
     },
     syncGroups: [...args.syncGroups],
     presence: scopedPresence,
-    intents: scopedIntents,
+    claims: scopedClaims,
     get peers() {
       return scopedPresence.others;
     },
-    get claims() {
-      return scopedIntents.others;
+    get activeClaims() {
+      return scopedClaims.others;
     },
     focus: setFocus,
     leave,

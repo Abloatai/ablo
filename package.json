@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "The Collaboration Layer For AI Agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -221,6 +221,7 @@
     "ts-morph": "^26.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.8.3",
-    "publint": "^0.3.21"
+    "publint": "^0.3.21",
+    "yjs": "^13.6.29"
   }
 }

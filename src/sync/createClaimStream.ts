@@ -1,24 +1,24 @@
 /**
- * Transport-driven IntentStream factory.
+ * Transport-driven ClaimStream factory.
  *
  * Mirrors `createPresenceStream` — built directly on `SyncWebSocket`,
- * no SyncAgent wrapper. Intents derive their `others` view from the
+ * no SyncAgent wrapper. Claims derive their `others` view from the
  * same `presence_update` frames the presence stream consumes (the
- * Hub piggybacks `activeIntents` on every presence frame). Outbound
- * announce/revoke ride the same socket via `intent_begin` /
- * `intent_abandon` frames.
+ * Hub piggybacks `activeClaims` on every presence frame). Outbound
+ * announce/revoke ride the same socket via `claim_begin` /
+ * `claim_abandon` frames.
  *
  * Wire contract (apps/sync-server/src/hub/types.ts):
- *   • Outbound: `{ type: 'intent_begin', payload: { intentId,
+ *   • Outbound: `{ type: 'claim_begin', payload: { claimId,
  *       entityType, entityId, action, field?, estimatedMs? } }`
- *   • Outbound: `{ type: 'intent_abandon', payload: { intentId,
+ *   • Outbound: `{ type: 'claim_abandon', payload: { claimId,
  *       entityType?, entityId? } }`
- *   • Inbound (via presence): `event.activeIntents: IntentClaim[]`
+ *   • Inbound (via presence): `event.activeClaims: Claim[]`
  *     stamped with `declaredAt`, `expiresAt`.
- *   • Inbound: `intent_rejected` event with conflict metadata.
+ *   • Inbound: `claim_rejected` event with conflict metadata.
  *
  * After the dual-engine collapse (step #36), this is the only
- * IntentStream factory in the SDK; the older compatibility path
+ * ClaimStream factory in the SDK; the older compatibility path
  * deletes.
  */
 
@@ -27,31 +27,35 @@ import type {
   PresenceUpdateEvent,
 } from './SyncWebSocket.js';
 import type {
-  ActiveIntent,
+  ActiveClaim,
   ClaimOptions,
   EntityRef,
+  ClaimHandle,
   Claim,
-  Intent,
-  IntentOptions,
-  IntentRejection,
-  IntentLost,
-  IntentStream,
+  ClaimLeaseOptions,
+  ClaimRejection,
+  ClaimLost,
+  ClaimStream,
   PresenceTarget,
 } from '../types/streams.js';
 import { asyncIteratorFrom } from '../utils/asyncIterator.js';
 import { toMs } from '../utils/duration.js';
+import {
+  descriptionFromMeta,
+  participantKindFromWire,
+} from '../coordination/schema.js';
 
-export interface IntentStreamConfig {
-  /** Identity used to filter our own active intents out of `others`. */
+export interface ClaimStreamConfig {
+  /** Identity used to filter our own active claims out of `others`. */
   participantId: string;
 }
 
-export interface AttachableIntentStream extends IntentStream {
+export interface AttachableClaimStream extends ClaimStream {
   attach(transport: SyncWebSocket): void;
   dispose(): void;
 }
 
-interface OwnIntent {
+interface OwnClaim {
   readonly entityType: string;
   readonly entityId: string;
   readonly path?: string;
@@ -64,33 +68,33 @@ interface OwnIntent {
   readonly queue?: boolean;
 }
 
-export function createIntentStream(
-  config: IntentStreamConfig,
+export function createClaimStream(
+  config: ClaimStreamConfig,
   transport: SyncWebSocket | null = null,
-): AttachableIntentStream {
+): AttachableClaimStream {
   const { participantId } = config;
 
-  // ── State: others' open intents, keyed by intentId ───────────────
-  const activeByIntentId = new Map<string, ActiveIntent>();
-  let intentsSnapshot: ReadonlyArray<ActiveIntent> = Object.freeze([]);
+  // ── State: others' open claims, keyed by claimId ───────────────
+  const activeByClaimId = new Map<string, ActiveClaim>();
+  let claimsSnapshot: ReadonlyArray<ActiveClaim> = Object.freeze([]);
 
-  // ── State: our own open intents (for re-announce on reconnect) ───
-  const ownIntents = new Map<string, OwnIntent>();
+  // ── State: our own open claims (for re-announce on reconnect) ───
+  const ownClaims = new Map<string, OwnClaim>();
 
-  // ── State: per-entity wait queues, from `intent_queue` frames ────
-  // Keyed `type:id`; the value is the FIFO line of queued intents. Powers
+  // ── State: per-entity wait queues, from `claim_queue` frames ────
+  // Keyed `type:id`; the value is the FIFO line of queued claims. Powers
   // the reactive `queue(target)` read — who's waiting and what they intend.
-  const queueByEntity = new Map<string, ReadonlyArray<Intent>>();
+  const queueByEntity = new Map<string, ReadonlyArray<Claim>>();
   const entityKey = (type: string, id: string): string => `${type}:${id}`;
-  const EMPTY_QUEUE: readonly Intent[] = Object.freeze([]);
+  const EMPTY_QUEUE: readonly Claim[] = Object.freeze([]);
 
   // ── Subscribers ──────────────────────────────────────────────────
   const listeners = new Set<() => void>();
-  const rejectionListeners = new Set<(r: IntentRejection) => void>();
-  const lostListeners = new Set<(l: IntentLost) => void>();
+  const rejectionListeners = new Set<(r: ClaimRejection) => void>();
+  const lostListeners = new Set<(l: ClaimLost) => void>();
 
   const notifyListeners = () => {
-    intentsSnapshot = Object.freeze(Array.from(activeByIntentId.values()));
+    claimsSnapshot = Object.freeze(Array.from(activeByClaimId.values()));
     for (const l of listeners) {
       try {
         l();
@@ -109,9 +113,9 @@ export function createIntentStream(
     attached = t;
 
     // (1) Inbound presence frames carry every participant's full
-    //     active-intent set. Prune previous claims by holder, then
+    //     active-claim set. Prune previous claims by holder, then
     //     re-add from the frame — the frame is authoritative for that
-    //     participant's open intents at that moment.
+    //     participant's open claims at that moment.
     unsubs.push(
       t.subscribe('presence_update', (event: PresenceUpdateEvent) => {
         if (!event.userId) return;
@@ -120,9 +124,9 @@ export function createIntentStream(
         let mutated = false;
 
         if (event.kind === 'leave') {
-          for (const [id, intent] of activeByIntentId) {
-            if (intent.heldBy === event.userId) {
-              activeByIntentId.delete(id);
+          for (const [id, claim] of activeByClaimId) {
+            if (claim.heldBy === event.userId) {
+              activeByClaimId.delete(id);
               mutated = true;
             }
           }
@@ -130,27 +134,27 @@ export function createIntentStream(
           return;
         }
 
-        for (const [id, intent] of activeByIntentId) {
-          if (intent.heldBy === event.userId) {
-            activeByIntentId.delete(id);
+        for (const [id, claim] of activeByClaimId) {
+          if (claim.heldBy === event.userId) {
+            activeByClaimId.delete(id);
             mutated = true;
           }
         }
-        for (const claim of event.activeIntents ?? []) {
+        for (const claim of event.activeClaims ?? []) {
           // Terminal-status entries (committed / expired / canceled) are
           // one-shot "this claim ended" signals. The holder sweep above
           // already removed the prior active entry; skipping the re-add
           // drops it from `others`, which is what resolves a contender's
           // `settled()`. Absent status means active (wire back-compat).
           if (claim.status && claim.status !== 'active') continue;
-          const description =
-            typeof claim.meta?.description === 'string'
-              ? claim.meta.description
-              : undefined;
-          activeByIntentId.set(claim.intentId, {
-            id: claim.intentId,
+          const description = descriptionFromMeta(claim.meta);
+          activeByClaimId.set(claim.claimId, {
+            id: claim.claimId,
             heldBy: event.userId,
-            participantKind: event.isAgent ? 'agent' : 'human',
+            participantKind: participantKindFromWire(
+              event.participantKind,
+              event.isAgent,
+            ),
             target: {
               type: claim.entityType,
               id: claim.entityId,
@@ -165,8 +169,8 @@ export function createIntentStream(
               0,
               Math.floor((claim.expiresAt - Date.now()) / 1000),
             ),
-            announcedAt: new Date(claim.declaredAt).toISOString(),
-            expiresAt: new Date(claim.expiresAt).toISOString(),
+            announcedAt: claim.declaredAt,
+            expiresAt: claim.expiresAt,
           });
           mutated = true;
         }
@@ -176,13 +180,12 @@ export function createIntentStream(
 
     // (2) Server-side rejection frames.
     unsubs.push(
-      t.subscribe('intent_rejected', (payload) => {
-        const rejection = payload as unknown as IntentRejection;
-        if (!rejection.intentId) return;
+      t.subscribe('claim_rejected', (rejection) => {
+        if (!rejection.claimId) return;
         // Drop the rejected own-claim so reconnect doesn't re-announce
         // a claim the server already rejected (would just spam both
         // sides with conflicts).
-        ownIntents.delete(rejection.intentId);
+        ownClaims.delete(rejection.claimId);
         for (const l of rejectionListeners) {
           try {
             l(rejection);
@@ -196,12 +199,12 @@ export function createIntentStream(
     // (2a) Server-side LOSS frames — you held it, then lost it (preempted /
     //      expired). Distinct from a rejection (a claim the server refused).
     unsubs.push(
-      t.subscribe('intent_lost', (payload) => {
-        const lost = payload as unknown as IntentLost;
-        if (!lost.intentId) return;
+      t.subscribe('claim_lost', (payload) => {
+        const lost = payload as unknown as ClaimLost;
+        if (!lost.claimId) return;
         // Drop the lost own-claim so reconnect doesn't re-announce a lease we
         // no longer hold.
-        ownIntents.delete(lost.intentId);
+        ownClaims.delete(lost.claimId);
         for (const l of lostListeners) {
           try {
             l(lost);
@@ -216,10 +219,10 @@ export function createIntentStream(
     //      out on every queue mutation; we replace our cached line for that
     //      entity and notify so `queue(target)` reads reactively.
     unsubs.push(
-      t.subscribe('intent_queue', (payload) => {
+      t.subscribe('claim_queue', (payload) => {
         const p = payload as {
           target?: { type?: string; id?: string };
-          queue?: Intent[];
+          queue?: Claim[];
         };
         if (!p.target?.type || !p.target.id) return;
         const key = entityKey(p.target.type, p.target.id);
@@ -231,13 +234,13 @@ export function createIntentStream(
     );
 
     // (3) On reconnect, re-announce every open self-claim — the
-    //     server's intent state is in-memory and is lost across
+    //     server's claim state is in-memory and is lost across
     //     restarts. Without this, peers would see our claims vanish
     //     whenever the connection blipped.
     unsubs.push(
       t.subscribe('connected', () => {
-        for (const [intentId, intent] of ownIntents) {
-          sendBegin(intentId, intent);
+        for (const [claimId, claim] of ownClaims) {
+          sendBegin(claimId, claim);
         }
       }),
     );
@@ -246,21 +249,21 @@ export function createIntentStream(
   if (transport) attach(transport);
 
   // ── Outbound ────────────────────────────────────────────────────
-  function sendBegin(intentId: string, intent: OwnIntent): void {
+  function sendBegin(claimId: string, claim: OwnClaim): void {
     if (!attached?.isConnected()) return;
     attached.send({
-      type: 'intent_begin',
+      type: 'claim_begin',
       payload: {
-        intentId,
-        entityType: intent.entityType,
-        entityId: intent.entityId,
-        path: intent.path,
-        range: intent.range,
-        action: intent.action,
-        field: intent.field,
-        meta: intent.meta,
-        estimatedMs: intent.estimatedMs,
-        queue: intent.queue,
+        claimId,
+        entityType: claim.entityType,
+        entityId: claim.entityId,
+        path: claim.path,
+        range: claim.range,
+        action: claim.action,
+        field: claim.field,
+        meta: claim.meta,
+        estimatedMs: claim.estimatedMs,
+        queue: claim.queue,
       },
     });
   }
@@ -268,32 +271,32 @@ export function createIntentStream(
   function sendReorder(
     entityType: string,
     entityId: string,
-    order: readonly Intent[],
+    order: readonly Claim[],
   ): void {
     if (!attached?.isConnected()) return;
     attached.send({
-      type: 'intent_reorder',
+      type: 'claim_reorder',
       payload: {
         entityType,
         entityId,
-        // The wire shape identifies a waiter by heldBy + intentId; map the
-        // ergonomic `Intent[]` (what `queueFor` returns) down to that.
-        order: order.map((i) => ({ heldBy: i.heldBy, intentId: i.id })),
+        // The wire shape identifies a waiter by heldBy + claimId; map the
+        // ergonomic `Claim[]` (what `queueFor` returns) down to that.
+        order: order.map((i) => ({ heldBy: i.heldBy, claimId: i.id })),
       },
     });
   }
 
-  function sendAbandon(intentId: string, intent?: OwnIntent): void {
+  function sendAbandon(claimId: string, claim?: OwnClaim): void {
     if (!attached?.isConnected()) return;
     // Carry the target so the server can dequeue us if we were only *waiting*
     // (a queued claim isn't in the holder set it would otherwise scan). Held
-    // claims are found by intentId regardless; the target is harmless there.
+    // claims are found by claimId regardless; the target is harmless there.
     attached.send({
-      type: 'intent_abandon',
+      type: 'claim_abandon',
       payload: {
-        intentId,
-        entityType: intent?.entityType,
-        entityId: intent?.entityId,
+        claimId,
+        entityType: claim?.entityType,
+        entityId: claim?.entityId,
       },
     });
   }
@@ -314,12 +317,12 @@ export function createIntentStream(
     field?: string;
     meta?: EntityRef['meta'];
     action: string;
-    ttl?: IntentOptions['ttl'];
+    ttl?: ClaimLeaseOptions['ttl'];
     queue?: boolean;
-  }): Claim {
-    const intentId = crypto.randomUUID();
+  }): ClaimHandle {
+    const claimId = crypto.randomUUID();
     const estimatedMs = args.ttl !== undefined ? toMs(args.ttl) : undefined;
-    const intent: OwnIntent = {
+    const claim: OwnClaim = {
       entityType: args.entityType,
       entityId: args.entityId,
       path: args.path,
@@ -330,19 +333,32 @@ export function createIntentStream(
       estimatedMs,
       queue: args.queue,
     };
-    ownIntents.set(intentId, intent);
-    sendBegin(intentId, intent);
+    ownClaims.set(claimId, claim);
+    sendBegin(claimId, claim);
 
     let revoked = false;
     const revoke = () => {
       if (revoked) return;
       revoked = true;
-      ownIntents.delete(intentId);
-      sendAbandon(intentId, intent);
+      ownClaims.delete(claimId);
+      sendAbandon(claimId, claim);
     };
 
     return {
-      id: intentId,
+      object: 'claim',
+      claimId,
+      action: args.action,
+      target: {
+        model: args.entityType,
+        id: args.entityId,
+        path: args.path,
+        range: args.range,
+        field: args.field,
+        meta: args.meta,
+      },
+      release: async () => {
+        revoke();
+      },
       revoke,
       [Symbol.asyncDispose]: async () => {
         revoke();
@@ -359,7 +375,7 @@ export function createIntentStream(
     claim(
       target: PresenceTarget,
       opts?: ClaimOptions,
-    ): Claim {
+    ): ClaimHandle {
       const resolved = resolveTarget(target);
       return mintHandle({
         entityType: resolved.type,
@@ -374,13 +390,13 @@ export function createIntentStream(
       });
     },
     get others() {
-      return intentsSnapshot;
+      return claimsSnapshot;
     },
-    queueFor(target: PresenceTarget): readonly Intent[] {
+    queueFor(target: PresenceTarget): readonly Claim[] {
       const ref = resolveTarget(target);
       return queueByEntity.get(entityKey(ref.type, ref.id)) ?? EMPTY_QUEUE;
     },
-    reorder(target: PresenceTarget, order: readonly Intent[]): void {
+    reorder(target: PresenceTarget, order: readonly Claim[]): void {
       const ref = resolveTarget(target);
       sendReorder(ref.type, ref.id, order);
     },
@@ -390,27 +406,27 @@ export function createIntentStream(
         listeners.delete(listener);
       };
     },
-    onRejected: (listener: (rejection: IntentRejection) => void) => {
+    onRejected: (listener: (rejection: ClaimRejection) => void) => {
       rejectionListeners.add(listener);
       return () => {
         rejectionListeners.delete(listener);
       };
     },
-    onLost: (listener: (lost: IntentLost) => void) => {
+    onLost: (listener: (lost: ClaimLost) => void) => {
       lostListeners.add(listener);
       return () => {
         lostListeners.delete(listener);
       };
     },
     [Symbol.asyncIterator]() {
-      return asyncIteratorFrom<ReadonlyArray<ActiveIntent>>(
+      return asyncIteratorFrom<ReadonlyArray<ActiveClaim>>(
         (onChange) => {
           listeners.add(onChange);
           return () => {
             listeners.delete(onChange);
           };
         },
-        () => intentsSnapshot,
+        () => claimsSnapshot,
       );
     },
     attach,
@@ -420,10 +436,10 @@ export function createIntentStream(
       listeners.clear();
       rejectionListeners.clear();
       lostListeners.clear();
-      activeByIntentId.clear();
-      ownIntents.clear();
+      activeByClaimId.clear();
+      ownClaims.clear();
       queueByEntity.clear();
-      intentsSnapshot = Object.freeze([]);
+      claimsSnapshot = Object.freeze([]);
       attached = null;
     },
   };

@@ -1,7 +1,7 @@
 /**
- * Intent broadcast middleware — wraps a language model so the agent
+ * Claim broadcast middleware — wraps a language model so the agent
  * declares "I'm about to edit entity X" over the sync engine's
- * intent primitive at stream start, and abandons the claim at
+ * claim primitive at stream start, and abandons the claim at
  * stream end.
  *
  * Cross-cutting by design — composes via the AI SDK's
@@ -13,23 +13,23 @@
  * the package's own `SyncAgent`. No app-specific assumptions —
  * Ablo's web app uses this, but so can any consumer of `@abloatai/ablo`.
  *
- * Cost: one WS frame at stream start (`intent_begin`), one at end
- * (`intent_abandon`). No DB I/O, no extra LLM tokens.
+ * Cost: one WS frame at stream start (`claim_begin`), one at end
+ * (`claim_abandon`). No DB I/O, no extra LLM tokens.
  */
 
 import type { LanguageModelV3Middleware } from '@ai-sdk/provider';
 import type { Ablo } from '../client/Ablo.js';
 import type { SchemaRecord } from '../schema/schema.js';
-import type { Claim } from '../types/streams.js';
+import type { ClaimHandle } from '../types/streams.js';
 
 /**
- * Target entity for the intent broadcast.
+ * Target entity for the claim broadcast.
  *
  * `entityType` is a free-form string — convention is the schema's
  * typename (e.g. `'SlideDeck'`, `'Task'`, `'Matter'`) so peers can
  * filter consistently. The wire format treats it opaquely.
  */
-export interface IntentTarget {
+export interface ClaimTarget {
   readonly entityType: string;
   readonly entityId: string;
   /** Optional path for file/document-like targets. */
@@ -56,11 +56,11 @@ export interface IntentTarget {
   readonly estimatedMs?: number;
 }
 
-export interface IntentBroadcastMiddlewareOptions<R extends SchemaRecord = SchemaRecord> {
+export interface ClaimBroadcastMiddlewareOptions<R extends SchemaRecord = SchemaRecord> {
   /** Connected Ablo. Null disables the middleware (no-op). */
   readonly agent: Ablo<R> | null;
   /** Target entity. Null skips the broadcast (purely conversational). */
-  readonly target: IntentTarget | null;
+  readonly target: ClaimTarget | null;
   /**
    * Action verb describing what the agent is doing. Convention:
    * `'edit'`, `'read'`, `'review'`, `'generate'`. Default `'edit'`.
@@ -68,7 +68,7 @@ export interface IntentBroadcastMiddlewareOptions<R extends SchemaRecord = Schem
   readonly action?: string;
   /**
    * Peer-visible explanation of the specific work this model call is about to
-   * perform. Surfaces to other agents through `ActiveIntent.description`.
+   * perform. Surfaces to other agents through `ActiveClaim.description`.
    */
   readonly description?: string;
 }
@@ -84,16 +84,16 @@ export interface IntentBroadcastMiddlewareOptions<R extends SchemaRecord = Schem
  * widened version collapses model proxies to an index signature
  * that clashes with the named methods (`ready`, `dispose`, etc.).
  */
-export function intentBroadcastMiddleware<R extends SchemaRecord = SchemaRecord>(
-  options: IntentBroadcastMiddlewareOptions<R>,
+export function claimBroadcastMiddleware<R extends SchemaRecord = SchemaRecord>(
+  options: ClaimBroadcastMiddlewareOptions<R>,
 ): LanguageModelV3Middleware {
   const { agent, target } = options;
   const action = options.action ?? 'edit';
   const description = options.description;
 
-  const openClaim = (): Claim | null => {
+  const openClaim = (): ClaimHandle | null => {
     if (!agent || !target) return null;
-    return agent.intents.claim(
+    return agent.claims.claim(
       {
         type: target.entityType,
         id: target.entityId,

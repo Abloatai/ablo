@@ -74,10 +74,10 @@
  */
 
 export {
-  intentBroadcastMiddleware,
-  type IntentTarget,
-  type IntentBroadcastMiddlewareOptions,
-} from './intent-broadcast.js';
+  claimBroadcastMiddleware,
+  type ClaimTarget,
+  type ClaimBroadcastMiddlewareOptions,
+} from './claim-broadcast.js';
 
 export {
   coordinationContextMiddleware,

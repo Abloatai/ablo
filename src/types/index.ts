@@ -5,6 +5,8 @@
  * These types define how properties are tracked, loaded, and synchronized.
  */
 
+import type { FieldMeta } from '../schema/field.js';
+
 /**
  * Model Scope - lifecycle filter for queries.
  * Controls whether live, archived, or all entities are returned.
@@ -125,12 +127,15 @@ export interface ModelMetadata {
    * JSON-typed values) inside the transaction queue.
    *
    * Populated by `registerModelsFromSchema`. Each entry carries the
-   * sync-engine type tag (`'string' | 'number' | 'boolean' | 'date' |
-   * 'enum' | 'json'`), which tells the wire serializer how to handle
-   * the value. Missing → projection becomes identity pass-through
-   * (back-compat for models registered outside the schema path).
+   * sync-engine type tag (the canonical {@link FieldMeta.type} union),
+   * which tells the wire serializer how to handle the value. Missing →
+   * projection becomes identity pass-through (back-compat for models
+   * registered outside the schema path).
+   *
+   * Narrowed to the canonical union via `Pick` rather than re-declared —
+   * a hand-rolled copy silently drifts when a new field type lands.
    */
-  fields?: Readonly<Record<string, { type: 'string' | 'number' | 'boolean' | 'date' | 'enum' | 'json' }>>;
+  fields?: Readonly<Record<string, Pick<FieldMeta, 'type'>>>;
   /**
    * Fields to back-fill from the sync client identity when missing
    * during IndexedDB self-healing. Populated from
@@ -274,6 +279,6 @@ export interface PartialIndexInfo {
 
 // Re-export stream + snapshot + principal types for the engine surface
 // (PresenceStream,
-// IntentStream, Snapshot, etc.) consumed by `Ablo({...}).presence`,
-// `.intents`, `.snapshot()`.
+// ClaimStream, Snapshot, etc.) consumed by `Ablo({...}).presence`,
+// `.claims`, `.snapshot()`.
 export * from "./streams.js";

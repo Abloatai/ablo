@@ -174,7 +174,17 @@ export class BootstrapHelper {
    * @param lastSyncId - Optional: client's current lastSyncId for partial bootstrap
    * @returns Bootstrap data (either full snapshot or delta batch)
    */
-  async fetchBootstrap(lastSyncId?: number): Promise<BootstrapData> {
+  async fetchBootstrap(
+    lastSyncId?: number,
+    /**
+     * Per-call sync-group override for SCOPED hydrate-on-enter. When provided,
+     * the request uses THESE groups instead of `this.options.syncGroups`,
+     * WITHOUT mutating the shared options (so a concurrent full bootstrap is
+     * unaffected). Also bypasses the offline full-snapshot cache below, which
+     * holds the connection's full bootstrap and would be wrong for a subset.
+     */
+    syncGroupsOverride?: readonly string[],
+  ): Promise<BootstrapData> {
     // organizationId omitted — server reads it from auth identity.
     // See `fetchBootstrapWithETag` for the full rationale.
     const params = new URLSearchParams();
@@ -184,8 +194,8 @@ export class BootstrapHelper {
       params.append('lastSyncId', lastSyncId.toString());
     }
 
-    // Add sync groups
-    this.options.syncGroups.forEach((group) => {
+    // Add sync groups (per-call override wins over the configured set).
+    (syncGroupsOverride ?? this.options.syncGroups).forEach((group) => {
       params.append('syncGroups', group);
     });
 
@@ -198,8 +208,10 @@ export class BootstrapHelper {
 
     const url = `${this.options.baseUrl}/sync/bootstrap?${params.toString()}`;
 
-    // If offline, try cached bootstrap
-    if (typeof navigator !== 'undefined' && navigator && navigator.onLine === false) {
+    // If offline, try cached bootstrap. Skipped for a scoped override — the
+    // cache holds the FULL snapshot, which is not a valid answer to a subset
+    // request; a scoped hydrate just soft-fails offline and retries on re-enter.
+    if (!syncGroupsOverride && typeof navigator !== 'undefined' && navigator && navigator.onLine === false) {
       const cached = this.options.cacheScope
         ? this.loadCachedBootstrap(this.options.cacheScope)
         : null;

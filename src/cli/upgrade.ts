@@ -17,7 +17,7 @@
  * Reports for manual review (structural — too risky to auto-rewrite):
  *   - drizzleDataSource(db, tables) → (db, schema)
  *   - <AbloProvider schema|teamIds|authEndpoint=...>  → build a client, pass client={ablo}
- *   - ablo.intents.* → ablo.<model>.claim.*
+ *   - ablo.claims.* → ablo.<model>.claim.*
  *   - callback claim(id, async (row) => …) → `await using claim = await …claim({ id })`
  *
  * Usage:
@@ -209,8 +209,8 @@ export async function upgrade(argv: readonly string[]): Promise<void> {
         // (db, { tables }) shape — schema-driven form is (db, schema)
         flag(call, 'drizzleDataSource(db, tables)', 'now `drizzleDataSource(db, schema)` — pass your Ablo schema, drop the tables map.');
       }
-      if (/\.intents\b/.test(t) && /^(ablo|sync)\b/.test(t)) {
-        flag(call, 'ablo.intents.*', 'use `ablo.<model>.claim` (claim.state / claim.queue / `await using claim = await …claim({ id })`).');
+      if (/\.claims\b/.test(t) && /^(ablo|sync)\b/.test(t)) {
+        flag(call, 'ablo.claims.*', 'use `ablo.<model>.claim` (claim.state / claim.queue / `await using claim = await …claim({ id })`).');
       }
     }
     for (const jsx of sf.getDescendantsOfKind(SyntaxKind.JsxOpeningElement)) {

@@ -21,6 +21,7 @@
 
 import { z } from 'zod';
 import type { Schema, SchemaRecord, InferModel, InferCreate, InferModelNames } from '../schema/schema.js';
+import { baseFieldsSchema } from '../schema/schema.js';
 import type { ModelDef } from '../schema/model.js';
 import type { RelationDef } from '../schema/relation.js';
 import type {
@@ -35,7 +36,15 @@ import type {
   SessionErrorDetector,
   OnlineStatusProvider,
 } from '../interfaces/index.js';
-import { AbloClaimedError, AbloError, AbloAuthenticationError, AbloConnectionError, AbloValidationError, translateHttpError, hasWireCode, toAbloError } from '../errors.js';
+import { AbloError, AbloAuthenticationError, AbloConnectionError, AbloValidationError, translateHttpError, hasWireCode, toAbloError, claimedError } from '../errors.js';
+import { descriptionFromMeta } from '../coordination/schema.js';
+// `ModelTarget` (the `model`/`id` locator) and `ModelClaim` (the resolved claim
+// view) are canonical in `../coordination/schema` — derived there from one zod
+// schema so the SDK, the HTTP client, and the sync-server routes share a single
+// definition instead of hand-redeclaring it. Imported for local use AND
+// re-exported so `ablo.ModelTarget` / `ablo.ModelClaim` stay stable.
+import type { ModelTarget, ModelClaim } from '../coordination/schema.js';
+export type { ModelTarget, ModelClaim };
 import { LoadStrategy, PropertyType } from '../types/index.js';
 import { initSyncEngine } from '../context.js';
 import {
@@ -63,23 +72,23 @@ import { Model, modelAsRow } from '../Model.js';
 import { BaseSyncedStore, type SyncStatus } from '../BaseSyncedStore.js';
 import type { DefaultCollaborationEvents } from '../sync/SyncWebSocket.js';
 import { createPresenceStream } from '../sync/createPresenceStream.js';
-import { createIntentStream } from '../sync/createIntentStream.js';
-import { awaitIntentGrant } from '../sync/awaitIntentGrant.js';
+import { createClaimStream } from '../sync/createClaimStream.js';
+import { awaitClaimGrant } from '../sync/awaitClaimGrant.js';
 import { createSnapshot } from '../sync/createSnapshot.js';
 import { createParticipantManager } from '../sync/participants.js';
 import type {
-  IntentStream,
-  IntentWaitOptions,
+  ClaimStream,
+  ClaimWaitOptions,
   PresenceStream,
   Snapshot,
 } from '../types/streams.js';
 import type { ParticipantManager } from '../sync/participants.js';
-import type { ActiveIntent, Claim, Duration, Intent, TargetRange } from '../types/streams.js';
+import type { ActiveClaim, ClaimHandle, Duration, Claim, TargetRange } from '../types/streams.js';
 import {
   createProtocolClient,
   type AbloApi,
   type AbloApiClientOptions,
-  type AbloApiIntents,
+  type AbloApiClaims,
 } from './ApiClient.js';
 // Value import is cycle-safe: httpClient.js only value-imports ApiClient.js,
 // which imports this module type-only.
@@ -551,7 +560,6 @@ import type {
   ClaimParams,
   ClaimLookupParams,
   ClaimReorderParams,
-  ClaimHandle,
   ModelLoadOptions,
 } from './createModelProxy.js';
 import { createModelProxy } from './createModelProxy.js';
@@ -565,29 +573,6 @@ export type ModelOperationAction =
   | 'unarchive';
 
 export type CommitWait = 'queued' | 'confirmed';
-
-export interface ModelTarget {
-  /** The model name — matches `ablo.<model>` and the schema's `model()`. */
-  readonly model: string;
-  readonly id: string;
-  readonly path?: string;
-  readonly range?: TargetRange;
-  readonly field?: string;
-  readonly meta?: Record<string, unknown>;
-}
-
-export interface ModelClaim {
-  readonly id: string;
-  readonly actor: string;
-  readonly participantKind: ActiveIntent['participantKind'];
-  readonly action: string;
-  readonly description?: string;
-  readonly field?: string;
-  readonly status?: 'active' | 'queued';
-  readonly position?: number;
-  readonly expiresAt: string;
-  readonly target: ModelTarget;
-}
 
 export interface ModelRead<T = Record<string, unknown>> {
   readonly data: T;
@@ -615,19 +600,19 @@ export interface ClaimedOptions {
   readonly maxQueueDepth?: number;
 }
 
-export type { IntentWaitOptions } from '../types/streams.js';
+export type { ClaimWaitOptions } from '../types/streams.js';
 
 export interface ModelReadOptions extends ClaimedOptions {}
 
-export interface IntentCreateOptions {
+export interface ClaimCreateOptions {
   readonly target: ModelTarget;
   readonly action: string;
   readonly ttl?: Duration;
   /**
    * Join the server's fair FIFO queue when the target is already claimed,
    * rather than failing immediately. `create` then resolves only once the
-   * lease is actually ours (the server pushes `intent_acquired` if the target
-   * was free, or `intent_granted` when we reach the head of the line). Without
+   * lease is actually ours (the server pushes `claim_acquired` if the target
+   * was free, or `claim_granted` when we reach the head of the line). Without
    * this, a contended claim throws. Used by `ablo.<model>.claim` so writers
    * serialize instead of racing.
    */
@@ -639,21 +624,6 @@ export interface IntentCreateOptions {
    * waiting if the queue is already `>= maxQueueDepth` when we join.
    */
   readonly maxQueueDepth?: number;
-}
-
-export interface IntentHandle extends AsyncDisposable {
-  readonly id: string;
-  /**
-   * True when the lease was granted AFTER waiting in the server's FIFO
-   * queue behind a holder (`intent_granted`), false/absent for an
-   * immediate grant (`intent_acquired`). Consumers re-read the target
-   * row when this is set — the row may have changed while we queued, and
-   * the local coordination snapshot can't detect that for org-scoped
-   * subscriptions (intent fan-out is entity-scoped).
-   */
-  readonly waited?: boolean;
-  release(): Promise<void>;
-  revoke(): void;
 }
 
 export interface CommitOperationInput {
@@ -669,7 +639,7 @@ export interface CommitOperationInput {
 }
 
 export interface CommitCreateOptions {
-  readonly intent?: string | { readonly id: string } | null;
+  readonly claimRef?: string | { readonly id: string } | null;
   readonly idempotencyKey?: string | null;
   readonly readAt?: number | null;
   readonly onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
@@ -697,14 +667,14 @@ export interface CommitResource {
   create(options: CommitCreateOptions): Promise<CommitReceipt>;
 }
 
-export interface IntentResource extends IntentStream {
-  create(options: IntentCreateOptions): Promise<IntentHandle>;
+export interface ClaimResource extends ClaimStream {
+  create(options: ClaimCreateOptions): Promise<ClaimHandle>;
   list(target?: Partial<ModelTarget>): readonly ModelClaim[];
-  waitFor(target: Partial<ModelTarget>, options?: IntentWaitOptions): Promise<void>;
+  waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void>;
 }
 
 export interface ModelMutationOptions extends ClaimedOptions {
-  readonly intent?: string | { readonly id: string } | null;
+  readonly claimRef?: string | { readonly id: string } | null;
   readonly idempotencyKey?: string | null;
   readonly readAt?: number | null;
   readonly onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
@@ -726,12 +696,12 @@ export interface HttpClaimApi<T> {
    * Current holder of the lease on a row, or `null` when free. For UI badges,
    * preflight checks, and operators.
    */
-  state(params: ClaimLookupParams<T>): Promise<Intent | null>;
+  state(params: ClaimLookupParams<T>): Promise<Claim | null>;
   /**
    * FIFO wait line behind the holder. Advanced: useful for operator UIs and
    * schedulers.
    */
-  queue(params: ClaimLookupParams<T>): Promise<{ readonly object: 'list'; readonly data: readonly Intent[] }>;
+  queue(params: ClaimLookupParams<T>): Promise<{ readonly object: 'list'; readonly data: readonly Claim[] }>;
   /**
    * Re-rank the wait line. Advanced and permission-gated.
    */
@@ -1053,7 +1023,7 @@ export type Ablo<S extends SchemaRecord> = {
    * Cooperative-mutex layer over presence — announce "I'm about to do X on Y" so
    * peers can yield before colliding. Same socket as entity sync.
    */
-  readonly intents: IntentResource;
+  readonly claims: ClaimResource;
 
   /**
    * Canonical low-level mutation API. Every untyped model write compiles
@@ -1072,7 +1042,7 @@ export type Ablo<S extends SchemaRecord> = {
    * Canonical multiplayer participant surface. Joins a structured app
    * target, derives the transport scope internally, opens a scoped
    * claim on the existing WebSocket, and returns target-bound presence
-   * + intent helpers.
+   * + claim helpers.
    *
    * ```ts
    * const participant = await ablo.participants.join({
@@ -1082,7 +1052,7 @@ export type Ablo<S extends SchemaRecord> = {
    *   range: { startLine: 10, endLine: 40 },
    * });
    * participant.presence.editing();
-   * const claim = participant.intents.claim('rewrite imports');
+   * const claim = participant.claims.claim('rewrite imports');
    * ```
    */
   readonly participants: ParticipantManager;
@@ -1327,7 +1297,20 @@ function registerModelsFromSchema(schema: Schema, registry: ModelRegistry): void
 
     // Create a dynamic Model subclass with JSON sub-property getters
     const isLazy = modelDef.lazyObservable === true;
-    const fieldNames = Object.keys(modelDef.shape);
+    // Base provenance fields (`organizationId`, `createdBy`) live in
+    // `baseFieldsSchema`, not the per-model `shape`. The server stamps + emits
+    // them (camelCased on the wire), but hydration (`Model.assignFieldsFromData`)
+    // only assigns keys that already exist as an own/prototype property — so
+    // without a slot here, `deck.createdBy` / `deck.organizationId` silently read
+    // `undefined` (this is why the profile decks tab showed nothing: it filters
+    // `decks.filter(d => d.createdBy === userId)`). `id`/`createdAt`/`updatedAt`
+    // are already seeded by the base Model constructor, so they're excluded.
+    const fieldNames = [
+      ...Object.keys(modelDef.shape),
+      ...Object.keys(baseFieldsSchema.shape).filter(
+        (f) => f !== 'id' && f !== 'createdAt' && f !== 'updatedAt' && !(f in modelDef.shape),
+      ),
+    ];
     const computed = (modelDef as { computed?: Record<string, (self: Record<string, unknown>) => unknown> }).computed;
     const DynamicModel = createDynamicModelClass(modelName, jsonSubFields, fieldNames, computed, isLazy);
 
@@ -2024,8 +2007,8 @@ export function Ablo<const S extends SchemaRecord>(
   // `ws_not_ready` forever (terminal AgentJob writes hang on retry).
   syncClient.getTransactionQueue().setMutationExecutor(executor);
 
-  // Presence + intent streams — built eagerly so `engine.presence`
-  // and `engine.intents` return the same reference for the engine's
+  // Presence + claim streams — built eagerly so `engine.presence`
+  // and `engine.claims` return the same reference for the engine's
   // lifetime. The transport doesn't exist yet (BaseSyncedStore.initialize
   // creates it during ready()), so both streams are constructed in
   // deferred-attach mode and wired after initialize() resolves below.
@@ -2041,12 +2024,12 @@ export function Ablo<const S extends SchemaRecord>(
     syncGroups: internalOptions.syncGroups ?? [],
     isAgent: internalOptions.kind === 'agent',
   });
-  const intentStream = createIntentStream({ participantId });
+  const claimStream = createClaimStream({ participantId });
   const participantManager = createParticipantManager({
     ready,
     getTransport: () => store.getSyncWebSocket() ?? null,
     presence: presenceStream,
-    intents: intentStream,
+    claims: claimStream,
     schema,
   });
 
@@ -2223,14 +2206,14 @@ export function Ablo<const S extends SchemaRecord>(
               });
         }
 
-        // Wire presence + intents to the now-open transport.
+        // Wire presence + claims to the now-open transport.
         // `getSyncWebSocket()` returns non-null after a successful
         // initialize() — the WS is created during the generator's
         // connect step.
         const ws = store.getSyncWebSocket();
         if (ws) {
           presenceStream.attach(ws);
-          intentStream.attach(ws);
+          claimStream.attach(ws);
         }
 
         logger.info('Sync engine ready', { models: Object.keys(schema.models).length });
@@ -2316,11 +2299,11 @@ export function Ablo<const S extends SchemaRecord>(
 	      : `id_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 	  }
 
-	  function normalizeIntentId(
-	    intent: string | { readonly id: string } | null | undefined,
+	  function normalizeClaimId(
+	    claim: string | { readonly id: string } | null | undefined,
 	  ): string | undefined {
-	    if (typeof intent === 'string') return intent;
-	    return intent?.id;
+	    if (typeof claim === 'string') return claim;
+	    return claim?.id;
 	  }
 
 	  function isClaimHandleValue(
@@ -2381,101 +2364,82 @@ export function Ablo<const S extends SchemaRecord>(
 	    );
 	  }
 
-	  function modelClaimFromActive(intent: ActiveIntent): ModelClaim {
-	    const description =
-	      typeof intent.target.meta?.description === 'string'
-	        ? intent.target.meta.description
-	        : undefined;
+	  function modelClaimFromActive(claim: ActiveClaim): ModelClaim {
+	    const description = descriptionFromMeta(claim.target.meta);
 	    return {
-	      id: intent.id,
-	      actor: intent.heldBy,
-	      participantKind: intent.participantKind,
-	      action: intent.reason,
+	      id: claim.id,
+	      actor: claim.heldBy,
+	      participantKind: claim.participantKind,
+	      action: claim.reason,
 	      ...(description ? { description } : {}),
-	      field: intent.target.field,
+	      field: claim.target.field,
 	      status: 'active',
-	      expiresAt: intent.expiresAt,
+	      expiresAt: claim.expiresAt,
 	      target: {
-	        model: intent.target.type,
-	        id: intent.target.id,
-	        path: intent.target.path,
-	        range: intent.target.range,
-	        field: intent.target.field,
-	        meta: intent.target.meta,
+	        model: claim.target.type,
+	        id: claim.target.id,
+	        path: claim.target.path,
+	        range: claim.target.range,
+	        field: claim.target.field,
+	        meta: claim.target.meta,
 	      },
 	    };
 	  }
 
-	  function modelClaimFromQueued(intent: Intent): ModelClaim {
+	  function modelClaimFromQueued(claim: Claim): ModelClaim {
 	    return {
-	      id: intent.id,
-	      actor: intent.heldBy,
-	      participantKind: intent.participantKind,
-	      action: intent.action,
-	      ...(intent.description ? { description: intent.description } : {}),
-	      field: intent.target.field,
+	      id: claim.id,
+	      actor: claim.heldBy,
+	      participantKind: claim.participantKind,
+	      action: claim.action,
+	      ...(claim.description ? { description: claim.description } : {}),
+	      field: claim.target.field,
 	      status: 'queued',
-	      position: intent.position,
-	      expiresAt: intent.expiresAt,
+	      position: claim.position,
+	      expiresAt: claim.expiresAt,
 	      target: {
-	        model: intent.target.type,
-	        id: intent.target.id,
-	        path: intent.target.path,
-	        range: intent.target.range,
-	        field: intent.target.field,
-	        meta: intent.target.meta,
+	        model: claim.target.type,
+	        id: claim.target.id,
+	        path: claim.target.path,
+	        range: claim.target.range,
+	        field: claim.target.field,
+	        meta: claim.target.meta,
 	      },
 	    };
 	  }
 
 	  function targetMatchesModel(
 	    target: { readonly model?: string; readonly id?: string; readonly field?: string },
-	    intent: ActiveIntent,
+	    claim: ActiveClaim,
 	  ): boolean {
 	    if (
 	      target.model &&
-	      intent.target.type.toLowerCase() !== target.model.toLowerCase()
+	      claim.target.type.toLowerCase() !== target.model.toLowerCase()
 	    ) {
 	      return false;
 	    }
-	    if (target.id && intent.target.id !== target.id) return false;
-	    if (target.field && intent.target.field !== target.field) return false;
+	    if (target.id && claim.target.id !== target.id) return false;
+	    if (target.field && claim.target.field !== target.field) return false;
 	    return true;
 	  }
 
 	  function listModelClaims(target?: Partial<ModelTarget>): readonly ModelClaim[] {
-	    return intentStream.others
-	      .filter((intent) => (target ? targetMatchesModel(target, intent) : true))
+	    return claimStream.others
+	      .filter((claim) => (target ? targetMatchesModel(target, claim) : true))
 	      .map(modelClaimFromActive);
 	  }
 
 	  function listModelClaimQueue(target?: Partial<ModelTarget>): readonly ModelClaim[] {
 	    if (!target?.model || !target.id) return [];
-	    return publicIntents
+	    return publicClaims
 	      .queueFor({ type: target.model, id: target.id })
-	      .filter((intent) => (target.field ? intent.target.field === target.field : true))
+	      .filter((claim) => (target.field ? claim.target.field === target.field : true))
 	      .map(modelClaimFromQueued);
-	  }
-
-	  function claimedError(
-	    target: Partial<ModelTarget>,
-	    claims: readonly ModelClaim[],
-	    code: 'model_claimed' | 'model_claimed_timeout' | 'queue_too_deep',
-	  ): AbloClaimedError {
-	    const label = [target.model, target.id, target.field].filter(Boolean).join('/');
-	    const holder = claims[0];
-	    const suffix = holder
-	      ? ` held by ${holder.actor} (${holder.action})`
-	      : ' held by another participant';
-	    return new AbloClaimedError(
-	      `Model row is claimed: ${label || 'target'}${suffix}.`,
-	      { code, claims },
-	    );
 	  }
 
 	  function waitForModelUnclaimed(
 	    target: Partial<ModelTarget>,
-	    options?: IntentWaitOptions,
+	    options?: ClaimWaitOptions,
 	  ): Promise<void> {
 	    if (listModelClaims(target).length === 0) return Promise.resolve();
 
@@ -2506,8 +2470,8 @@ export function Ablo<const S extends SchemaRecord>(
 	      const onAbort = () => {
 	        finish(() =>
 	          reject(
-	            new AbloConnectionError('Intent wait aborted.', {
-	              code: 'intent_wait_aborted',
+	            new AbloConnectionError('Claim wait aborted.', {
+	              code: 'claim_wait_aborted',
 	              cause: options?.signal?.reason,
 	            }),
 	          ),
@@ -2519,7 +2483,7 @@ export function Ablo<const S extends SchemaRecord>(
 	        return;
 	      }
 
-	      unsubscribe = intentStream.onChange(check);
+	      unsubscribe = claimStream.onChange(check);
 	      options?.signal?.addEventListener('abort', onAbort, { once: true });
 
 	      if (options?.timeout != null) {
@@ -2559,12 +2523,15 @@ export function Ablo<const S extends SchemaRecord>(
 	    await waitForModelUnclaimed(target, { timeout: options?.claimedTimeout });
 	  }
 
-	  function wrapIntentHandle(claim: Claim, waited = false): IntentHandle {
+	  function wrapClaimHandle(claim: ClaimHandle, waited = false): ClaimHandle {
 	    const release = async (): Promise<void> => {
 	      claim.revoke();
 	    };
 	    return {
-	      id: claim.id,
+	      object: 'claim',
+	      claimId: claim.claimId,
+	      action: claim.action,
+	      target: claim.target,
 	      waited,
 	      release,
 	      revoke: claim.revoke,
@@ -2572,58 +2539,58 @@ export function Ablo<const S extends SchemaRecord>(
 	    };
 	  }
 
-	  const publicIntents: IntentResource = Object.assign(intentStream, {
-	    async create(intentOptions: IntentCreateOptions): Promise<IntentHandle> {
+	  const publicClaims: ClaimResource = Object.assign(claimStream, {
+	    async create(claimOptions: ClaimCreateOptions): Promise<ClaimHandle> {
 	      await ready();
-	      const claim = intentStream.claim(
+	      const claim = claimStream.claim(
 	        {
-	          type: intentOptions.target.model,
-	          id: intentOptions.target.id,
-	          path: intentOptions.target.path,
-	          range: intentOptions.target.range,
-	          field: intentOptions.target.field,
-	          meta: intentOptions.target.meta,
+	          type: claimOptions.target.model,
+	          id: claimOptions.target.id,
+	          path: claimOptions.target.path,
+	          range: claimOptions.target.range,
+	          field: claimOptions.target.field,
+	          meta: claimOptions.target.meta,
 	        },
 	        {
-	          reason: intentOptions.action,
-	          ttl: intentOptions.ttl,
-	          queue: intentOptions.queue,
+	          reason: claimOptions.action,
+	          ttl: claimOptions.ttl,
+	          queue: claimOptions.queue,
 	        },
 	      );
 	      // With `queue`, the claim is only really *ours* once the server says
-	      // so (`intent_acquired` if the target was free, `intent_granted` once
+	      // so (`claim_acquired` if the target was free, `claim_granted` once
 	      // we reach the head of the FIFO line). Block here on that grant so
 	      // callers — chiefly `ablo.<model>.claim` — get a handle that already
 	      // holds the lease, never a half-claimed one racing the queue.
 	      let waited = false;
-	      if (intentOptions.queue) {
+	      if (claimOptions.queue) {
 	        const ws = store.getSyncWebSocket();
 	        if (ws) {
 	          try {
-	            ({ waited } = await awaitIntentGrant(ws, claim.id, {
-	              timeoutMs: intentOptions.waitTimeoutMs,
-	              maxQueueDepth: intentOptions.maxQueueDepth,
+	            ({ waited } = await awaitClaimGrant(ws, claim.claimId, {
+	              timeoutMs: claimOptions.waitTimeoutMs,
+	              maxQueueDepth: claimOptions.maxQueueDepth,
 	            }));
 	          } catch (err) {
 	            // Gave up waiting (queue too deep, timed out, or lost) — abandon
-	            // the queued intent so we don't leave a phantom entry in the
+	            // the queued claim so we don't leave a phantom entry in the
 	            // line that would block or mislead other claimers.
 	            claim.revoke();
 	            throw err;
 	          }
 	        }
 	      }
-	      return wrapIntentHandle(claim, waited);
+	      return wrapClaimHandle(claim, waited);
 	    },
 	    list(target?: Partial<ModelTarget>): readonly ModelClaim[] {
 	      return listModelClaims(target);
 	    },
-	    waitFor(target: Partial<ModelTarget>, options?: IntentWaitOptions): Promise<void> {
+	    waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void> {
 	      return waitForModelUnclaimed(target, options);
 	    },
 	  });
 
-  // Build the typed proxy — one property per model. Done after publicIntents
+  // Build the typed proxy — one property per model. Done after publicClaims
   // exists so model clients can expose workflow helpers such as
   // `ablo.files.edit(...)` without importing protocol wiring.
   const modelProxies: Record<string, ModelOperations<unknown, unknown>> = {};
@@ -2637,7 +2604,7 @@ export function Ablo<const S extends SchemaRecord>(
       modelRegistry,
       hydration,
       {
-        createIntent: (intentOptions) => publicIntents.create(intentOptions),
+        createClaim: (claimOptions) => publicClaims.create(claimOptions),
         createSnapshot: (modelKey, id) =>
           createSnapshot({
             pool: objectPool,
@@ -2653,21 +2620,21 @@ export function Ablo<const S extends SchemaRecord>(
             entities: { [modelKey]: id },
           }),
         queue: (target) =>
-          publicIntents.queueFor({ type: target.model, id: target.id }),
+          publicClaims.queueFor({ type: target.model, id: target.id }),
         reorder: (target, order) =>
-          publicIntents.reorder({ type: target.model, id: target.id }, order),
+          publicClaims.reorder({ type: target.model, id: target.id }, order),
         observe: (target) => {
-          // The live intent stream only tracks *open* (active) claims;
+          // The live claim stream only tracks *open* (active) claims;
           // terminal states (committed / expired / canceled) drop out of
           // the list entirely — exactly the ephemeral coordination model.
           // So a present entry is, by definition, `status: 'active'`.
-          const held = publicIntents.list({
+          const held = publicClaims.list({
             model: target.model,
             id: target.id,
           })[0];
           if (!held) return null;
           return {
-            object: 'intent',
+            object: 'claim',
             id: held.id,
             status: 'active',
             target: {
@@ -2685,7 +2652,7 @@ export function Ablo<const S extends SchemaRecord>(
           };
         },
         waitFor: (target, waitOptions) =>
-          publicIntents.waitFor(
+          publicClaims.waitFor(
             { model: target.model, id: target.id },
             waitOptions,
           ),
@@ -2704,7 +2671,7 @@ export function Ablo<const S extends SchemaRecord>(
 	          readAt: commitOptions.readAt,
 	          onStale: commitOptions.onStale,
 	          wait: commitOptions.wait,
-	          intent: commitOptions.intent,
+	          claim: commitOptions.claim,
 	        },
 	        'commits.create',
 	      );
@@ -2720,9 +2687,9 @@ export function Ablo<const S extends SchemaRecord>(
 	          commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
 	      });
 	      const wait = commitOptions.wait ?? 'confirmed';
-	      const intentId =
-	        normalizeIntentId(commitOptions.intent) ?? claim?.claimId;
-	      void intentId; // The current wire clears intents by entity after commit.
+	      const claimId =
+	        normalizeClaimId(commitOptions.claimRef) ?? claim?.claimId;
+	      void claimId; // The current wire clears claims by entity after commit.
 
 	      // Route through the TransactionQueue's commit lane so the call
 	      // tolerates WS disconnects: the envelope stays in memory until
@@ -2813,7 +2780,7 @@ export function Ablo<const S extends SchemaRecord>(
 	        const id = params.id ?? createModelId();
 	        await applyClaimedPolicy({ model: name, id }, params);
 	        return commits.create({
-	          intent: params.intent,
+	          claimRef: params.claimRef,
 	          idempotencyKey: params.idempotencyKey,
 	          readAt: params.readAt,
 	          onStale: params.onStale,
@@ -2834,7 +2801,7 @@ export function Ablo<const S extends SchemaRecord>(
 	      ): Promise<CommitReceipt> {
 	        await applyClaimedPolicy({ model: name, id: params.id }, params);
 	        return commits.create({
-	          intent: params.intent,
+	          claimRef: params.claimRef,
 	          idempotencyKey: params.idempotencyKey,
 	          readAt: params.readAt,
 	          onStale: params.onStale,
@@ -2855,7 +2822,7 @@ export function Ablo<const S extends SchemaRecord>(
 	      ): Promise<CommitReceipt> {
 	        await applyClaimedPolicy({ model: name, id: params.id }, params);
 	        return commits.create({
-	          intent: params.intent,
+	          claimRef: params.claimRef,
 	          idempotencyKey: params.idempotencyKey,
 	          readAt: params.readAt,
 	          onStale: params.onStale,
@@ -3030,7 +2997,7 @@ export function Ablo<const S extends SchemaRecord>(
         logger.warn('Error during sync engine disposal', { error: (err as Error).message });
       }
       presenceStream.dispose();
-      intentStream.dispose();
+      claimStream.dispose();
       syncClient.dispose();
     },
 
@@ -3100,8 +3067,8 @@ export function Ablo<const S extends SchemaRecord>(
      *  connection. Stable reference across the engine's lifetime. */
     presence: presenceStream,
 
-	    /** Intent livestream — same socket. Stable reference. */
-	    intents: publicIntents,
+	    /** Claim livestream — same socket. Stable reference. */
+	    claims: publicClaims,
 
 	    commits,
 
@@ -3180,7 +3147,7 @@ export namespace Ablo {
   // ── Factory options ────────────────────────────────────────────────
   export type Options<S extends SchemaRecord = SchemaRecord> = AbloOptions<S>;
   export type Api = AbloApi;
-  export type ApiIntents = AbloApiIntents;
+  export type ApiClaims = AbloApiClaims;
   export type Capability = import('./ApiClient.js').Capability;
   export type CapabilityCreateOptions = import('./ApiClient.js').CapabilityCreateOptions;
   export type CapabilityRecord = import('./ApiClient.js').CapabilityRecord;
@@ -3200,13 +3167,13 @@ export namespace Ablo {
 
   // ── Real-time multiplayer (flat — heterogeneous cluster) ──────────
   export type PresenceStream = _Streams.PresenceStream;
-  export type IntentStream = _Streams.IntentStream;
+  export type ClaimStream = _Streams.ClaimStream;
   export type Peer = _Streams.Peer;
   export type Activity = _Streams.Activity;
-  export type ActiveIntent = _Streams.ActiveIntent;
-  export type Claim = _Streams.Claim;
-  export type IntentRejection = _Streams.IntentRejection;
-  export type IntentLost = _Streams.IntentLost;
+  export type ActiveClaim = _Streams.ActiveClaim;
+  export type ClaimHandle = _Streams.ClaimHandle;
+  export type ClaimRejection = _Streams.ClaimRejection;
+  export type ClaimLost = _Streams.ClaimLost;
 
   // ── Singletons (flat — no cohort) ─────────────────────────────────
   export type Snapshot<
@@ -3269,13 +3236,13 @@ export namespace Ablo {
     export type Client = import('./Ablo.js').CommitResource;
   }
 
-  // ── Intent (sub-namespace — peer-claim cohort) ────────────────────
+  // ── Claim (sub-namespace — peer-claim cohort) ────────────────────
   // eslint-disable-next-line @typescript-eslint/no-namespace
-  export namespace Intent {
-    export type Handle = import('./Ablo.js').IntentHandle;
-    export type CreateOptions = import('./Ablo.js').IntentCreateOptions;
-    export type WaitOptions = import('./Ablo.js').IntentWaitOptions;
-    export type Client = import('./Ablo.js').IntentResource;
+  export namespace Claim {
+    export type Handle = import('./Ablo.js').ClaimHandle;
+    export type CreateOptions = import('./Ablo.js').ClaimCreateOptions;
+    export type WaitOptions = import('./Ablo.js').ClaimWaitOptions;
+    export type Client = import('./Ablo.js').ClaimResource;
   }
 
   // ── Model (sub-namespace — typed-row read/write cohort) ───────────

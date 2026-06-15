@@ -1,5 +1,5 @@
 /**
- * Intent-first shorthand for `model(...)` — the Modal-inspired DX layer.
+ * Claim-first shorthand for `model(...)` — the Modal-inspired DX layer.
  *
  * The factory verbs encode the two orthogonal axes that matter for
  * safety and bootstrap behavior:
@@ -12,7 +12,7 @@
  *     `.lazy` loads on first access, `.manual` requires explicit
  *     queries.
  *
- * The two-token form (`mutable.lazy({...})`) reads the safety intent
+ * The two-token form (`mutable.lazy({...})`) reads the safety claim
  * in the first token and the load shape in the second — you know both
  * key facts about the entity before scanning its fields.
  *
@@ -28,7 +28,7 @@
  *   load: 'lazy', lazyObservable: true, computed: tasksComputed,
  * }),
  *
- * // After — intent reads off the verb; options carry only the
+ * // After — claim reads off the verb; options carry only the
  * // fields that actually diverge from defaults
  * tasks: mutable.lazy({ title: z.string() }, {
  *   typename: 'Task', tableName: 'tasks',

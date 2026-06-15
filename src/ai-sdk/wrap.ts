@@ -36,9 +36,9 @@ import type {
 import type { Ablo } from '../client/Ablo.js';
 import type { SchemaRecord } from '../schema/schema.js';
 import {
-  intentBroadcastMiddleware,
-  type IntentTarget,
-} from './intent-broadcast.js';
+  claimBroadcastMiddleware,
+  type ClaimTarget,
+} from './claim-broadcast.js';
 import { coordinationContextMiddleware } from './coordination-context.js';
 
 export interface WrapWithMultiplayerOptions {
@@ -47,7 +47,7 @@ export interface WrapWithMultiplayerOptions {
   /** Connected SyncAgent. Null = pass-through wrap (no broadcast, no read). */
   readonly agent: Ablo<SchemaRecord> | null;
   /** Target entity. Null = pass-through wrap. */
-  readonly target: IntentTarget | null;
+  readonly target: ClaimTarget | null;
   /**
    * Optional action verb for the broadcast. Default `'edit'`.
    * Convention: `'edit'`, `'read'`, `'review'`, `'generate'`.
@@ -59,11 +59,11 @@ export interface WrapWithMultiplayerOptions {
    */
   readonly description?: string;
   /**
-   * Optional intentIds to exclude from the coordination-context
+   * Optional claimIds to exclude from the coordination-context
    * read — typically the caller's own claim if they're composing
    * multiple wrappings. Most consumers leave this empty.
    */
-  readonly excludeIntentIds?: readonly string[];
+  readonly excludeClaimIds?: readonly string[];
   /**
    * Optional extra middleware to compose. Runs in the order given,
    * INSIDE the multiplayer middlewares (so the multiplayer wrap is
@@ -80,14 +80,14 @@ export interface WrapWithMultiplayerOptions {
 export function wrapWithMultiplayer(
   options: WrapWithMultiplayerOptions,
 ): ReturnType<typeof wrapLanguageModel> {
-  const { model, agent, target, action, description, excludeIntentIds, extraMiddleware } =
+  const { model, agent, target, action, description, excludeClaimIds, extraMiddleware } =
     options;
 
   return wrapLanguageModel({
     model,
     middleware: [
-      coordinationContextMiddleware({ agent, target, excludeIntentIds }),
-      intentBroadcastMiddleware({ agent, target, action, description }),
+      coordinationContextMiddleware({ agent, target, excludeClaimIds }),
+      claimBroadcastMiddleware({ agent, target, action, description }),
       ...(extraMiddleware ?? []),
     ],
   });

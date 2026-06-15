@@ -65,20 +65,20 @@ export {
 } from '../sync/SyncWebSocket.js';
 export { BootstrapHelper } from '../sync/BootstrapHelper.js';
 
-// Intent coordination primitives (the lower-level pieces behind the
+// Claim coordination primitives (the lower-level pieces behind the
 // consumer-facing `ablo.<model>.claim`). The stream factory builds the
-// announce/await machinery on a SyncWebSocket; `awaitIntentGrant` is the
+// announce/await machinery on a SyncWebSocket; `awaitClaimGrant` is the
 // fair-queue grant coordinator. Exposed on /core for framework-level
 // orchestration and e2e harnesses — NOT on the consumer `.` root.
 export {
-  createIntentStream,
-  type AttachableIntentStream,
-  type IntentStreamConfig,
-} from '../sync/createIntentStream.js';
+  createClaimStream,
+  type AttachableClaimStream,
+  type ClaimStreamConfig,
+} from '../sync/createClaimStream.js';
 export {
-  awaitIntentGrant,
+  awaitClaimGrant,
   type GrantTransport,
-} from '../sync/awaitIntentGrant.js';
+} from '../sync/awaitClaimGrant.js';
 
 // Schema/model load strategy enum — referenced by model registration in
 // framework code.

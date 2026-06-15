@@ -89,7 +89,8 @@
           {
             "group": "Agents",
             "pages": [
-              "agents"
+              "agents",
+              "agent-messaging"
             ]
           },
           {

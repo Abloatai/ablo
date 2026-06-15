@@ -2,14 +2,14 @@
  * Conflict policy — the engine detects, the policy decides.
  *
  * Two conflict shapes today: `stale_context` (a write whose `readAt`
- * is older than the latest delta on the target) and `intent_held`
+ * is older than the latest delta on the target) and `claim_held`
  * (a participant claims a target someone else is already claiming).
  * Adding new shapes is additive on the discriminated union.
  */
 
 import type { ParticipantRef } from '../types/streams.js';
 
-export type ConflictKind = 'stale_context' | 'intent_held';
+export type ConflictKind = 'stale_context' | 'claim_held';
 
 /** Fields shared by every conflict shape. */
 interface ConflictBase {
@@ -46,19 +46,19 @@ export interface StaleContextConflict extends ConflictBase {
   readonly conflictingFields?: readonly string[];
 }
 
-export interface IntentHeldConflict extends ConflictBase {
-  readonly kind: 'intent_held';
+export interface ClaimHeldConflict extends ConflictBase {
+  readonly kind: 'claim_held';
   readonly heldBy: ParticipantRef;
-  readonly intentId: string;
+  readonly claimId: string;
   readonly entityType: string;
   readonly entityId: string;
-  /** Holder's intent expiry (ms since epoch). */
+  /** Holder's claim expiry (ms since epoch). */
   readonly expiresAt: number;
   /**
    * The committer's granted capability operations (the key's allowlist). A
    * policy is a pure function of the conflict value, so it can only authorize
    * on what's carried here — this is what lets a policy express "preempt iff
-   * the committer holds `intent.preempt`" (see `capabilityPreemptPolicy`).
+   * the committer holds `claim.preempt`" (see `capabilityPreemptPolicy`).
    * Empty for a human session with no allowlist.
    */
   readonly committerOperations: readonly string[];
@@ -68,7 +68,7 @@ export interface IntentHeldConflict extends ConflictBase {
  * The discriminated union the policy receives. Switch on `.kind` to
  * narrow to the variant.
  */
-export type Conflict = StaleContextConflict | IntentHeldConflict;
+export type Conflict = StaleContextConflict | ClaimHeldConflict;
 
 /** What the policy returns. */
 export type ConflictDecision =
@@ -76,8 +76,8 @@ export type ConflictDecision =
   | { readonly action: 'allow'; readonly note?: string }
   /**
    * Evict the current holder and grant the target to the committer. Only
-   * meaningful for an `intent_held` conflict at claim time (`intent_begin`):
-   * the holder receives an `intent_lost` (reason `'preempted'`) and the
+   * meaningful for an `claim_held` conflict at claim time (`claim_begin`):
+   * the holder receives an `claim_lost` (reason `'preempted'`) and the
    * preemptor takes the lease, jumping ahead of any FIFO waiters. This is the
    * authorization seam for preemption — a policy returns `preempt` only for a
    * committer it deems higher-priority (e.g. a supervisor over its sub-agents,
@@ -105,16 +105,16 @@ export type ConflictPolicy = (
 /**
  * Default: reject every conflict. Safe fallback when no custom policy
  * is wired — the engine never silently allows a stale or
- * intent-conflicting write through.
+ * claim-conflicting write through.
  */
 export const defaultPolicy: ConflictPolicy = (conflict) => ({
   action: 'reject',
-  reason: conflict.kind === 'stale_context' ? 'stale_context' : 'intent_conflict',
+  reason: conflict.kind === 'stale_context' ? 'stale_context' : 'claim_conflict',
 });
 
 /**
- * Capability-gated preemption. An `intent_held` conflict is PREEMPTED when the
- * committer holds the `intent.preempt` operation in its capability allowlist
+ * Capability-gated preemption. An `claim_held` conflict is PREEMPTED when the
+ * committer holds the `claim.preempt` operation in its capability allowlist
  * (the holder is evicted, the committer takes the lease); everything else falls
  * back to `defaultPolicy` (reject). Opt-in — wire it as a `conflictPolicies`
  * global to let a privileged identity jump a held entity without a bespoke
@@ -122,10 +122,10 @@ export const defaultPolicy: ConflictPolicy = (conflict) => ({
  */
 export const capabilityPreemptPolicy: ConflictPolicy = (conflict) => {
   if (
-    conflict.kind === 'intent_held' &&
-    conflict.committerOperations.includes('intent.preempt')
+    conflict.kind === 'claim_held' &&
+    conflict.committerOperations.includes('claim.preempt')
   ) {
-    return { action: 'preempt', reason: 'capability:intent.preempt' };
+    return { action: 'preempt', reason: 'capability:claim.preempt' };
   }
   return defaultPolicy(conflict);
 };

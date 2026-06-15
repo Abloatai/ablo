@@ -83,6 +83,8 @@ export type AbloHttpClient<S extends SchemaRecord> = {
     InferCreate<Schema<S>, K>
   >;
 } & {
+  /** Register `databaseUrl` when configured. Also runs lazily before the first request. */
+  ready(): Promise<void>;
   readonly commits: CommitResource;
   dispose(): Promise<void>;
   /** Resolve the bearer credential this client authenticates with (see `AbloApi.getAuthToken`). */
@@ -94,7 +96,7 @@ export type AbloHttpClient<S extends SchemaRecord> = {
 /**
  * Members of the underlying `AbloApi` that pass straight through the facade.
  * Deliberately EXCLUDES the resource names that collide with common schema model
- * names — `tasks`, `intents`, `capabilities`, `agent` — so `client.tasks` resolves
+ * names — `tasks`, `claims`, `capabilities`, `agent` — so `client.tasks` resolves
  * to the schema model `tasks`, not the protocol `TaskResource`. Only lifecycle +
  * the genuinely-protocol methods an agent uses pass through.
  */

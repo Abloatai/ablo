@@ -11,6 +11,8 @@ import {
   AbloAuthenticationError,
   AbloConnectionError,
   AbloValidationError,
+  formatClaimedErrorMessage,
+  claimedError,
   translateHttpError,
 } from '../errors.js';
 import {
@@ -21,7 +23,9 @@ import {
   resolveAuthToken,
   resolveBaseURL,
   resolveBootstrapBaseUrl,
+  resolveDatabaseUrl,
 } from './auth.js';
+import { registerDataSource } from './registerDataSource.js';
 import { toSeconds } from '../utils/duration.js';
 import type {
   AbloOptions,
@@ -30,9 +34,8 @@ import type {
   CommitOperationInput,
   CommitReceipt,
   CommitResource,
-  IntentCreateOptions,
-  IntentHandle,
-  IntentWaitOptions,
+  ClaimCreateOptions,
+  ClaimWaitOptions,
   HttpClaimApi,
   ModelClient,
   ModelClaim,
@@ -50,7 +53,7 @@ import type {
   ModelLoadOptions,
 } from './createModelProxy.js';
 import type { Duration } from '../utils/duration.js';
-import type { Intent } from '../types/streams.js';
+import type { Claim } from '../types/streams.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
 
 export type AbloApiClientOptions = Omit<AbloOptions, 'schema'> & {
@@ -58,10 +61,10 @@ export type AbloApiClientOptions = Omit<AbloOptions, 'schema'> & {
   readonly bootstrapBaseUrl?: string | undefined;
 };
 
-export interface AbloApiIntents {
-  create(options: IntentCreateOptions): Promise<IntentHandle>;
+export interface AbloApiClaims {
+  create(options: ClaimCreateOptions): Promise<ClaimHandle>;
   list(target?: Partial<ModelTarget>): Promise<readonly ModelClaim[]>;
-  waitFor(target: Partial<ModelTarget>, options?: IntentWaitOptions): Promise<void>;
+  waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void>;
 }
 
 export type CapabilityParticipantKind = 'agent' | 'system';
@@ -183,7 +186,7 @@ export interface AbloApi {
   dispose(): Promise<void>;
   purge(): Promise<void>;
   readonly capabilities: CapabilityResource;
-  readonly intents: AbloApiIntents;
+  readonly claims: AbloApiClaims;
   readonly commits: CommitResource;
   model<T = Record<string, unknown>>(name: string): ModelClient<T>;
   /**
@@ -213,16 +216,16 @@ interface CommitResponse {
   readonly ops?: number;
 }
 
-interface IntentListResponse {
-  readonly intents?: readonly ModelClaim[];
+interface ClaimListResponse {
+  readonly claims?: readonly ModelClaim[];
   readonly queue?: readonly ModelClaim[];
 }
 
-interface IntentCreateResponse {
-  readonly intent?: ModelClaim;
+interface ClaimCreateResponse {
+  readonly claim?: ModelClaim;
   /** Present (with HTTP 202) when `queue` was set and the target was held. */
   readonly status?: 'queued';
-  readonly intentId?: string;
+  readonly claimId?: string;
   readonly position?: number;
 }
 
@@ -281,8 +284,10 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   const authInput = { options, env };
   const configuredApiKey = resolveApiKey(authInput);
   const configuredAuthToken = resolveAuthToken(authInput);
+  const configuredDatabaseUrl = resolveDatabaseUrl(authInput);
   assertBrowserSafety({
     apiKey: configuredApiKey,
+    databaseUrl: configuredDatabaseUrl,
     dangerouslyAllowBrowser: options.dangerouslyAllowBrowser,
   });
 
@@ -299,6 +304,29 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     url,
     bootstrapBaseUrl: options.bootstrapBaseUrl,
   }).replace(/\/+$/, '');
+
+  let readyPromise: Promise<void> | null = null;
+
+  async function ready(): Promise<void> {
+    if (readyPromise) return readyPromise;
+
+    readyPromise = (async () => {
+      if (!configuredDatabaseUrl) return;
+      await registerDataSource({
+        baseUrl: apiBaseUrl,
+        apiKey: await resolveApiKeyValue(configuredApiKey),
+        databaseUrl: configuredDatabaseUrl,
+        ...(options.fetch ? { fetchImpl: options.fetch } : {}),
+      });
+    })();
+
+    try {
+      await readyPromise;
+    } catch (error) {
+      readyPromise = null;
+      throw error;
+    }
+  }
 
   async function authHeaders(): Promise<Record<string, string>> {
     const apiKey = await resolveApiKeyValue(configuredApiKey);
@@ -338,6 +366,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     path: string,
     init: RequestInit & { readonly idempotencyKey?: string | null },
   ): Promise<T> {
+    await ready();
     const { idempotencyKey, ...requestInit } = init;
     const headers = await authHeaders();
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
@@ -370,7 +399,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       : `tx_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  function createIntentId(): string {
+  function createClaimId(): string {
     return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? `int_${crypto.randomUUID()}`
       : `int_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -436,7 +465,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     return inputOperations.map((op) => normalizeCommitOperation(op, commitOptions));
   }
 
-  async function listIntents(
+  async function listClaims(
     target?: Partial<ModelTarget>,
   ): Promise<readonly ModelClaim[]> {
     const state = await listClaimState(target);
@@ -452,37 +481,21 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     if (target?.field) params.set('field', target.field);
 
     const suffix = params.toString();
-    const body = await requestJson<IntentListResponse>(
-      `/v1/intents${suffix ? `?${suffix}` : ''}`,
+    const body = await requestJson<ClaimListResponse>(
+      `/v1/claims${suffix ? `?${suffix}` : ''}`,
       { method: 'GET' },
     );
     return {
-      active: body.intents ?? [],
+      active: body.claims ?? [],
       queue: body.queue ?? [],
     };
-  }
-
-  function claimedError(
-    target: Partial<ModelTarget>,
-    claims: readonly ModelClaim[],
-    code: 'model_claimed' | 'model_claimed_timeout' | 'queue_too_deep',
-  ): AbloClaimedError {
-    const label = [target.model, target.id, target.field].filter(Boolean).join('/');
-    const holder = claims[0];
-    const suffix = holder
-      ? ` held by ${holder.actor} (${holder.action})`
-      : ' held by another participant';
-    return new AbloClaimedError(
-      `Model row is claimed: ${label || 'target'}${suffix}.`,
-      { code, claims },
-    );
   }
 
   function delay(ms: number, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) {
       return Promise.reject(
-        new AbloConnectionError('Intent wait aborted.', {
-          code: 'intent_wait_aborted',
+        new AbloConnectionError('Claim wait aborted.', {
+          code: 'claim_wait_aborted',
           cause: signal.reason,
         }),
       );
@@ -504,8 +517,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       function onAbort(): void {
         cleanup();
         reject(
-          new AbloConnectionError('Intent wait aborted.', {
-            code: 'intent_wait_aborted',
+          new AbloConnectionError('Claim wait aborted.', {
+            code: 'claim_wait_aborted',
             cause: signal?.reason,
           }),
         );
@@ -515,28 +528,28 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     });
   }
 
-  async function waitForNoIntents(
+  async function waitForNoClaims(
     target: Partial<ModelTarget>,
-    options?: IntentWaitOptions,
+    options?: ClaimWaitOptions,
   ): Promise<void> {
     const startedAt = Date.now();
     const pollInterval = options?.pollInterval;
 
     for (;;) {
-      const intents = await listIntents(target);
-      if (intents.length === 0) return;
+      const claims = await listClaims(target);
+      if (claims.length === 0) return;
 
       if (pollInterval == null) {
         throw new AbloValidationError(
           'Cannot wait for claims over the HTTP client without `pollInterval`. ' +
             'Use the schema client for event-driven claim waits, pass `ifClaimed: "return"`, ' +
             'or provide an explicit poll interval for this runtime.',
-          { code: 'intent_wait_poll_interval_required' },
+          { code: 'claim_wait_poll_interval_required' },
         );
       }
 
       if (options?.timeout != null && Date.now() - startedAt >= options.timeout) {
-        throw claimedError(target, intents, 'model_claimed_timeout');
+        throw claimedError(target, claims, 'model_claimed_timeout');
       }
 
       const remaining =
@@ -567,7 +580,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       throw claimedError(target, state.active, 'queue_too_deep');
     }
 
-    await waitForNoIntents(target, {
+    await waitForNoClaims(target, {
       timeout: options?.claimedTimeout,
       pollInterval: options?.claimedPollInterval,
     });
@@ -582,7 +595,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           readAt: commitOptions.readAt,
           onStale: commitOptions.onStale,
           wait: commitOptions.wait,
-          intent: commitOptions.intent,
+          claim: commitOptions.claim,
         },
         'commits.create',
       );
@@ -602,7 +615,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         body: JSON.stringify({
           clientTxId,
           idempotencyKey: clientTxId,
-          intent: normalizeIntentId(commitOptions.intent) ?? claim?.claimId,
+          claim: normalizeClaimId(commitOptions.claimRef) ?? claim?.claimId,
           operations,
         }),
       });
@@ -739,46 +752,49 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   };
 
 
-  const intents: AbloApiIntents = {
-    async create(intentOptions: IntentCreateOptions): Promise<IntentHandle> {
-      const intentId = createIntentId();
-      const body = await requestJson<IntentCreateResponse>('/v1/intents', {
+  const claims: AbloApiClaims = {
+    async create(claimOptions: ClaimCreateOptions): Promise<ClaimHandle> {
+      const claimId = createClaimId();
+      const body = await requestJson<ClaimCreateResponse>('/v1/claims', {
         method: 'POST',
         body: JSON.stringify({
-          intentId,
-          target: intentOptions.target,
-          action: intentOptions.action,
-          ttl: intentOptions.ttl,
-          queue: intentOptions.queue,
+          claimId,
+          target: claimOptions.target,
+          action: claimOptions.action,
+          ttl: claimOptions.ttl,
+          queue: claimOptions.queue,
         }),
       });
-      // The fair-queue grant is PUSHED over a WebSocket (`intent_granted`),
+      // The fair-queue grant is PUSHED over a WebSocket (`claim_granted`),
       // which this stateless HTTP client doesn't hold. Returning a handle here
       // would be a phantom holder — a lease we can't confirm is ours. So a
       // queued response is surfaced as a typed claimed signal; callers that need
       // to *wait* in line use the realtime (WS-backed) `ablo.<model>.claim`.
       if (body.status === 'queued') {
         throw new AbloClaimedError(
-          `Target ${intentOptions.target.model}/${intentOptions.target.id} is held; ` +
+          `Target ${claimOptions.target.model}/${claimOptions.target.id} is held; ` +
             `queued at position ${body.position ?? 0}. The HTTP client can't await ` +
             `the grant (no socket) — use the realtime client to wait in line.`,
-          { code: 'intent_queued' },
+          { code: 'claim_queued' },
         );
       }
-      const id = body.intent?.id ?? intentId;
+      const id = body.claim?.id ?? claimId;
       let released = false;
 
       const release = async (): Promise<void> => {
         if (released) return;
         released = true;
         await requestJson<{ ok: true }>(
-          `/v1/intents/${encodeURIComponent(id)}`,
+          `/v1/claims/${encodeURIComponent(id)}`,
           { method: 'DELETE' },
         );
       };
 
       return {
-        id,
+        object: 'claim',
+        claimId: id,
+        action: claimOptions.action,
+        target: claimOptions.target,
         release,
         revoke: () => {
           void release().catch(() => {});
@@ -787,9 +803,9 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       };
     },
 
-    list: listIntents,
-    waitFor(target: Partial<ModelTarget>, options?: IntentWaitOptions): Promise<void> {
-      return waitForNoIntents(target, options);
+    list: listClaims,
+    waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void> {
+      return waitForNoClaims(target, options);
     },
   };
 
@@ -875,7 +891,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         readAt: options.readAt,
         onStale: options.onStale,
         wait: options.wait,
-        intent: options.intent,
+        claim: options.claim,
       },
       `${modelName} ${action}`,
     );
@@ -899,7 +915,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     const readAt = options?.readAt ?? claimHandle?.readAt;
     const requestBody: Record<string, unknown> = {
       idempotencyKey: clientTxId,
-      intent: normalizeIntentId(options?.intent) ?? claimHandle?.claimId,
+      claim: normalizeClaimId(options?.claimRef) ?? claimHandle?.claimId,
       onStale:
         options?.onStale ?? (claimHandle?.readAt !== undefined ? 'reject' : undefined),
       readAt,
@@ -943,8 +959,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     const acquireClaim = async (params: ClaimParams<T>): Promise<string> => {
       const body = await requestJson<{
         id?: string;
-        intent?: { id?: string };
-        intentId?: string;
+        claim?: { id?: string };
+        claimId?: string;
         status?: 'queued';
         position?: number;
       }>(claimPath(params.id), {
@@ -963,10 +979,10 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         throw new AbloClaimedError(
           `Target ${name}/${params.id} is held; queued at position ${body.position ?? 0}. ` +
             `The HTTP client cannot await the grant without a WebSocket.`,
-          { code: 'intent_queued' },
+          { code: 'claim_queued' },
         );
       }
-      return body.intent?.id ?? body.id ?? body.intentId ?? createIntentId();
+      return body.claim?.id ?? body.id ?? body.claimId ?? createClaimId();
     };
     const releaseClaim = (params: ClaimLookupParams<T> | ClaimHandle<T>): Promise<void> =>
       requestJson<unknown>(
@@ -1000,31 +1016,31 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         [Symbol.asyncDispose]: release,
       };
     }
-    const intentsForEntity = async (params: ClaimLookupParams<T>): Promise<{ intents?: Intent[]; queue?: Intent[] }> =>
-      requestJson<{ intents?: Intent[]; queue?: Intent[] }>(
-        `/v1/intents?model=${encodeURIComponent(name)}&id=${encodeURIComponent(params.id)}${
+    const claimsForEntity = async (params: ClaimLookupParams<T>): Promise<{ claims?: Claim[]; queue?: Claim[] }> =>
+      requestJson<{ claims?: Claim[]; queue?: Claim[] }>(
+        `/v1/claims?model=${encodeURIComponent(name)}&id=${encodeURIComponent(params.id)}${
           params.field ? `&field=${encodeURIComponent(params.field)}` : ''
         }`,
         { method: 'GET' },
       );
     const claim = Object.assign(claimImpl, {
       release: releaseClaim,
-      state: async (params: ClaimLookupParams<T>): Promise<Intent | null> => {
-        const res = await intentsForEntity(params);
-        return res.intents?.[0] ?? null;
+      state: async (params: ClaimLookupParams<T>): Promise<Claim | null> => {
+        const res = await claimsForEntity(params);
+        return res.claims?.[0] ?? null;
       },
       queue: async (
         params: ClaimLookupParams<T>,
-      ): Promise<{ readonly object: 'list'; readonly data: readonly Intent[] }> => {
-        const res = await intentsForEntity(params);
+      ): Promise<{ readonly object: 'list'; readonly data: readonly Claim[] }> => {
+        const res = await claimsForEntity(params);
         return { object: 'list', data: res.queue ?? [] };
       },
       reorder: async (params: ClaimReorderParams<T>): Promise<void> => {
         await requestJson<unknown>(`${claimPath(params.id)}/reorder`, {
           method: 'POST',
-          // The reorder route's payload is `{ heldBy, intentId }[]` — Intent's id
-          // IS the intentId.
-          body: JSON.stringify({ order: params.order.map((i) => ({ heldBy: i.heldBy, intentId: i.id })) }),
+          // The reorder route's payload is `{ heldBy, claimId }[]` — Claim's id
+          // IS the claimId.
+          body: JSON.stringify({ order: params.order.map((i) => ({ heldBy: i.heldBy, claimId: i.id })) }),
         });
       },
     }) as HttpClaimApi<T>;
@@ -1038,12 +1054,12 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       if (!claimInput) return run(input);
 
       if (isClaimHandle(claimInput)) {
-        return run({ ...input, intent: { id: claimInput.claimId }, claim: undefined });
+        return run({ ...input, claimRef: { id: claimInput.claimId }, claim: undefined });
       }
 
       const claimId = await acquireClaim({ id, ...claimInput });
       try {
-        return await run({ ...input, intent: { id: claimId }, claim: undefined });
+        return await run({ ...input, claimRef: { id: claimId }, claim: undefined });
       } finally {
         await releaseClaim({ id }).catch(() => {});
       }
@@ -1086,12 +1102,12 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   }
 
   return {
-    async ready() {},
+    ready,
     async waitForFlush() {},
     async dispose() {},
     async purge() {},
     capabilities,
-    intents,
+    claims,
     commits,
     model,
     async getAuthToken(): Promise<string | null> {
@@ -1102,11 +1118,11 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   };
 }
 
-function normalizeIntentId(
-  intent: string | { readonly id: string } | null | undefined,
+function normalizeClaimId(
+  claim: string | { readonly id: string } | null | undefined,
 ): string | undefined {
-  if (typeof intent === 'string') return intent;
-  return intent?.id;
+  if (typeof claim === 'string') return claim;
+  return claim?.id;
 }
 
 

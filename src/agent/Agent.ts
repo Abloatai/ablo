@@ -43,13 +43,13 @@
 // ── Types ─────────────────────────────────────────────────────────────────
 
 // PresenceAnnouncer + AgentContext are agent-SDK abstractions that
-// live in ./types. The engine vocabulary (Activity, IntentClaim) lives
+// live in ./types. The engine vocabulary (Activity, WireClaim) lives
 // in ../types/streams.
 import type { PresenceAnnouncer, AgentContext } from './types.js';
-import type { Activity, IntentClaim } from '../types/streams.js';
+import type { Activity, WireClaim } from '../types/streams.js';
 import { createAgentSession } from './session.js';
 export type { AgentContext } from './types.js';
-export type { IntentClaim } from '../types/streams.js';
+export type { WireClaim } from '../types/streams.js';
 
 /**
  * Shape returned by the sync server's REST `/api/presence` endpoint.
@@ -69,7 +69,7 @@ interface WirePeer {
   activity?: Activity;
   updatedAt?: number;
   organizationId?: string;
-  activeIntents?: IntentClaim[];
+  activeClaims?: WireClaim[];
 }
 import { AbloValidationError } from '../errors.js';
 import type { SyncLogger } from '../interfaces/index.js';
@@ -138,13 +138,13 @@ export interface FreshnessCheck {
   /** Human-readable summary — feed this back to the LLM when stale. */
   summary?: string;
   /**
-   * Pending-mutation intents from OTHER participants targeting this
-   * entity (self-intents filtered out). Empty = no one else is
+   * Pending-mutation claims from OTHER participants targeting this
+   * entity (self-claims filtered out). Empty = no one else is
    * currently generating against this entity. Non-empty is ADVISORY
    * — the agent can proceed, wait, or defer. Stale-read protection
    * that predates committed deltas.
    */
-  pendingIntents?: IntentClaim[];
+  pendingClaims?: WireClaim[];
 }
 
 // ── AI SDK v6 structural types ─────────────────────────────────────────────
@@ -440,14 +440,14 @@ export class Agent implements PresenceAnnouncer {
     lastSeenAt: number,
   ): Promise<FreshnessCheck> {
     // Parallel fan-out: freshness (entity state vs lastSeenAt) + pending
-    // intents (other agents about to mutate). Both are advisory — if
+    // claims (other agents about to mutate). Both are advisory — if
     // either request fails the check still returns a usable result.
-    const [queryRes, pendingIntents] = await Promise.all([
+    const [queryRes, pendingClaims] = await Promise.all([
       this.request('POST', '/api/sync/query', {
         organizationId: this.opts.organizationId,
         queries: [{ model: entityType, ids: [entityId] }],
       }).catch((err) => ({ ok: false, status: 0, _err: err }) as const),
-      this.fetchPendingIntentsFor(entityType, entityId),
+      this.fetchPendingClaimsFor(entityType, entityId),
     ]);
 
     try {
@@ -457,7 +457,7 @@ export class Agent implements PresenceAnnouncer {
           stale: false,
           reason: 'ok',
           summary: `Freshness check inconclusive: ${('status' in res ? res.status : 'error')}`,
-          pendingIntents,
+          pendingClaims,
         };
       }
 
@@ -471,7 +471,7 @@ export class Agent implements PresenceAnnouncer {
           stale: true,
           reason: 'not_found',
           summary: `${entityType} ${entityId} no longer exists. Another actor may have deleted it.`,
-          pendingIntents,
+          pendingClaims,
         };
       }
 
@@ -501,7 +501,7 @@ export class Agent implements PresenceAnnouncer {
             `${entityType} ${entityId} was modified by ${lastModifiedBy ?? 'another actor'} ` +
             `${ago}s ago. Your planned change is based on stale state. ` +
             `Re-read the entity and adjust your approach.`,
-          pendingIntents,
+          pendingClaims,
         };
       }
 
@@ -511,7 +511,7 @@ export class Agent implements PresenceAnnouncer {
         currentState: entity,
         lastModifiedBy,
         lastModifiedAt,
-        pendingIntents,
+        pendingClaims,
       };
     } catch (err) {
       // Freshness check is advisory — on error, assume ok and let the
@@ -520,34 +520,34 @@ export class Agent implements PresenceAnnouncer {
         stale: false,
         reason: 'ok',
         summary: `Freshness check error: ${(err as Error).message}`,
-        pendingIntents,
+        pendingClaims,
       };
     }
   }
 
   /**
-   * Pull the org's presence, filter to intents targeting the given
-   * entity (self-intents excluded). Advisory — returns empty on any
+   * Pull the org's presence, filter to claims targeting the given
+   * entity (self-claims excluded). Advisory — returns empty on any
    * error so `checkFreshness` stays usable when the presence endpoint
    * is down. Case-insensitive match on entityType + entityId to absorb
    * PascalCase / lowercase divergence.
    */
-  private async fetchPendingIntentsFor(
+  private async fetchPendingClaimsFor(
     entityType: string,
     entityId: string,
-  ): Promise<IntentClaim[]> {
+  ): Promise<WireClaim[]> {
     const etLower = entityType.toLowerCase();
     const idLower = entityId.toLowerCase();
     const entries = await this.fetchPresence(true);
-    const result: IntentClaim[] = [];
+    const result: WireClaim[] = [];
     for (const entry of entries) {
-      if (!entry.activeIntents) continue;
-      for (const intent of entry.activeIntents) {
+      if (!entry.activeClaims) continue;
+      for (const claim of entry.activeClaims) {
         if (
-          intent.entityType.toLowerCase() === etLower &&
-          intent.entityId.toLowerCase() === idLower
+          claim.entityType.toLowerCase() === etLower &&
+          claim.entityId.toLowerCase() === idLower
         ) {
-          result.push(intent);
+          result.push(claim);
         }
       }
     }

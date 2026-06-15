@@ -20,8 +20,11 @@ import {
   AbloClaimedError,
   AbloStaleContextError,
   AbloValidationError,
+  formatClaimedErrorMessage,
   toAbloError,
+  type ClaimErrorClaim,
 } from '../errors.js';
+import { descriptionFromMeta } from '../coordination/schema.js';
 import type { MutationOptions } from '../interfaces/index.js';
 import { Model, modelAsRow } from '../Model.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
@@ -33,8 +36,9 @@ import type { LoadWhere } from '../query/types.js';
 import { ModelScope } from '../types/index.js';
 import type {
   Duration,
-  Intent,
-  IntentWaitOptions,
+  Claim,
+  ClaimHandle,
+  ClaimWaitOptions,
   Snapshot,
   TargetRange,
 } from '../types/streams.js';
@@ -101,22 +105,8 @@ export interface ModelLoadOptions<T> {
  *  {@link ModelLoadOptions} — `where`/`limit`/`orderBy` are fixed by the id. */
 export type ModelRetrieveOptions = Pick<ModelLoadOptions<unknown>, 'type' | 'expand'>;
 
-export interface IntentLeaseHandle {
-  readonly id: string;
-  /**
-   * True when the grant came AFTER waiting in the server's FIFO line
-   * (`intent_granted`) — the authoritative "the row may have changed
-   * underneath us" signal. The local `observe()` snapshot can't stand in
-   * for this: intent fan-out is entity-scoped, so org-wide subscriptions
-   * (the default hosted client) never see peers' claims at all.
-   */
-  readonly waited?: boolean;
-  release(): Promise<void>;
-  revoke(): void;
-}
-
 export interface ModelCollaboration<T> {
-  createIntent(options: {
+  createClaim(options: {
     target: {
       model: string;
       id: string;
@@ -135,34 +125,34 @@ export interface ModelCollaboration<T> {
     queue?: boolean;
     /** Reject (don't wait) if the queue is already this deep when we join. */
     maxQueueDepth?: number;
-  }): Promise<IntentLeaseHandle>;
+  }): Promise<ClaimHandle>;
   createSnapshot(modelKey: string, id: string): Snapshot;
   /**
    * Current coordination state on a target — who (if anyone) holds it.
-   * Synchronous reactive snapshot read off the presence/intent stream;
+   * Synchronous reactive snapshot read off the presence/claim stream;
    * `null` when the target is free. The wiring site computes it because
    * only it knows the local participant id (needed to distinguish "I
    * hold it" from "someone else holds it").
    */
-  observe(target: { model: string; id: string }): Intent | null;
+  observe(target: { model: string; id: string }): Claim | null;
   /**
-   * The reactive wait queue on a target — the FIFO line of queued intents
-   * behind the holder. Synchronous snapshot off the synced intent stream.
+   * The reactive wait queue on a target — the FIFO line of queued claims
+   * behind the holder. Synchronous snapshot off the synced claim stream.
    */
-  queue(target: { model: string; id: string }): readonly Intent[];
+  queue(target: { model: string; id: string }): readonly Claim[];
   /**
    * Re-rank the wait queue on a target (privileged — server-gated). `order` is
    * the desired front-of-line ordering, taken from `queue(target)`.
    */
-  reorder(target: { model: string; id: string }, order: readonly Intent[]): void;
+  reorder(target: { model: string; id: string }, order: readonly Claim[]): void;
   /**
-   * Resolve once no participant holds an active intent on the target.
-   * The contender's "wait until it's free" — delegates to the intent
+   * Resolve once no participant holds an active claim on the target.
+   * The contender's "wait until it's free" — delegates to the claim
    * stream's `waitFor`.
    */
   waitFor(
     target: { model: string; id: string },
-    options?: IntentWaitOptions,
+    options?: ClaimWaitOptions,
   ): Promise<void>;
   /**
    * The local participant's id. Used to distinguish "I already hold this"
@@ -217,7 +207,7 @@ export interface ClaimLookupParams<T = Record<string, unknown>> {
 
 export interface ClaimReorderParams<T = Record<string, unknown>>
   extends ClaimLookupParams<T> {
-  readonly order: readonly Intent[];
+  readonly order: readonly Claim[];
 }
 
 /**
@@ -244,32 +234,9 @@ export interface ClaimReorderParams<T = Record<string, unknown>>
  * `ablo.<model>.update({ id, data, claim })` verb — the handle carries the
  * lease id and snapshot watermark for attribution + stale protection.
  */
-export interface ClaimHandle<T = Record<string, unknown>> extends AsyncDisposable {
-  readonly object: 'claim';
-  readonly claimId: string;
-  /**
-   * Sync watermark of the held snapshot (`data` was read at this stamp).
-   * Writes that carry the handle — `update({ id, data, claim })` or
-   * `commits.create({ claim, ... })` — use it as the `readAt` stale guard,
-   * so a concurrent commit between snapshot and write is rejected instead
-   * of clobbered. Optional for wire/duck-type compat with externally
-   * constructed handles.
-   */
-  readonly readAt?: number;
-  readonly target: {
-    readonly model: string;
-    readonly id: string;
-    readonly field?: string;
-    readonly path?: string;
-    readonly range?: TargetRange;
-    readonly meta?: Record<string, unknown>;
-  };
-  readonly action: string;
-  readonly description?: string;
-  readonly data: T;
-  release(): Promise<void>;
-  revoke(): void;
-}
+// THE one claim handle lives in `../types/streams` (canonical). Re-exported
+// here so existing `from '.../createModelProxy'` import paths keep working.
+export type { ClaimHandle };
 
 export type ClaimOptions<T = Record<string, unknown>> = ClaimTargetOptions<T>;
 
@@ -303,13 +270,13 @@ export interface ClaimApi<T> {
    * Current holder for a row, or `null` when free. Use this for UI badges and
    * preflight checks, not for the normal write path.
    */
-  state(params: ClaimLookupParams<T>): Intent | null;
+  state(params: ClaimLookupParams<T>): Claim | null;
 
   /**
    * FIFO wait line behind the current holder. Advanced: useful for operator
    * UIs and schedulers.
    */
-  queue(params: ClaimLookupParams<T>): { readonly object: 'list'; readonly data: readonly Intent[] };
+  queue(params: ClaimLookupParams<T>): { readonly object: 'list'; readonly data: readonly Claim[] };
 
   /**
    * Re-rank the wait line. Advanced and permission-gated.
@@ -456,9 +423,9 @@ export function createModelProxy<T, C>(
     );
   }
 
-  // The coordination plane (claims/intents) must speak the SAME wire dialect
+  // The coordination plane (claims/claims) must speak the SAME wire dialect
   // as the commit plane: the lowercased TYPENAME (`task`), not the schema key
-  // (`tasks`). The server's commit-time intent guard probes the lease store
+  // (`tasks`). The server's commit-time claim guard probes the lease store
   // with the commit op's model name; a lease recorded under the schema key
   // never collides with it — which silently disarmed the guard for every
   // model whose schema key differs from its typename (i.e. nearly all of
@@ -508,7 +475,7 @@ export function createModelProxy<T, C>(
   // took — no per-call handle. Released on dispose, explicit release, or TTL.
   const activeClaims = new Map<
     string,
-    { lease: IntentLeaseHandle; snapshot: Snapshot }
+    { lease: ClaimHandle; snapshot: Snapshot }
   >();
 
   const isClaimHandle = (value: unknown): value is ClaimHandle<T> =>
@@ -523,6 +490,29 @@ export function createModelProxy<T, C>(
   ): Record<string, unknown> | undefined => {
     if (!options?.description) return options?.meta;
     return { ...(options.meta ?? {}), description: options.description };
+  };
+
+  const claimContextFromClaim = (claim: Claim): ClaimErrorClaim => {
+    const description =
+      claim.description ?? descriptionFromMeta(claim.target.meta);
+    return {
+      id: claim.id,
+      actor: claim.heldBy,
+      participantKind: claim.participantKind,
+      action: claim.action,
+      ...(description ? { description } : {}),
+      field: claim.target.field,
+      status: claim.status,
+      expiresAt: claim.expiresAt,
+      target: {
+        model: claim.target.type,
+        id: claim.target.id,
+        path: claim.target.path,
+        range: claim.target.range,
+        field: claim.target.field,
+        meta: claim.target.meta,
+      },
+    };
   };
 
   const mutationOptions = (
@@ -567,13 +557,19 @@ export function createModelProxy<T, C>(
     // Fail-fast (`wait: false`): if another participant already holds it,
     // reject now instead of queuing. Best-effort at the client (a racing
     // claim not yet synced into our snapshot slips through here) — the
-    // commit-time intent guard is the authoritative backstop that rejects
+    // commit-time claim guard is the authoritative backstop that rejects
     // the loser's first write. For work-distribution dedup that's exactly
     // right: don't wait (that would double-process), skip.
     if (failFast && contended) {
+      const claim = held ? claimContextFromClaim(held) : undefined;
       throw new AbloClaimedError(
-        `${registeredModelName}/${id} is held by ${held?.heldBy ?? 'another participant'}.`,
-        { code: 'entity_claimed' },
+        formatClaimedErrorMessage({
+          targetLabel: `${registeredModelName}/${id}`,
+          heldBy: held?.heldBy,
+          claim,
+          fallback: `${registeredModelName}/${id} is held by ${held?.heldBy ?? 'another participant'}.`,
+        }),
+        { code: 'entity_claimed', claims: claim ? [claim] : undefined },
       );
     }
 
@@ -595,7 +591,7 @@ export function createModelProxy<T, C>(
     // ours, blocking behind any current holder, with no TOCTOU gap (the server
     // orders contenders). Fail-fast skips the queue: we already rejected an
     // observed conflict above, so this just records our lease.
-    const lease = await collaboration.createIntent({
+    const lease = await collaboration.createClaim({
       target: {
         model: wireModel,
         id,
@@ -613,9 +609,9 @@ export function createModelProxy<T, C>(
     // Only when we actually waited behind another holder can the row have
     // changed underneath us — re-read so the claimed snapshot reflects what
     // they committed before releasing. Two signals, either suffices:
-    //   - `lease.waited` — the server granted via `intent_granted`, i.e. we
+    //   - `lease.waited` — the server granted via `claim_granted`, i.e. we
     //     provably queued behind a holder. Authoritative; works even when
-    //     the local snapshot is blind (intent fan-out is entity-scoped, so
+    //     the local snapshot is blind (claim fan-out is entity-scoped, so
     //     org-wide-subscribed clients never observe peers' claims).
     //   - `contended` — the local snapshot saw a holder up front. Kept for
     //     the no-queue paths where no grant frame exists.
@@ -641,7 +637,7 @@ export function createModelProxy<T, C>(
     const release = () => releaseClaim(id);
     return {
       object: 'claim',
-      claimId: lease.id,
+      claimId: lease.claimId,
       readAt: snapshot.stamp,
       target,
       action: options?.action ?? 'editing',
@@ -663,11 +659,11 @@ export function createModelProxy<T, C>(
   // guarded callable so `ablo.<model>.claim(...)` and `ablo.<model>.claim.state(...)`
   // are the same object.
   const claimApi: ClaimApi<T> = Object.assign(guard(claim) as typeof claim, {
-    state(params: ClaimLookupParams<T>): Intent | null {
+    state(params: ClaimLookupParams<T>): Claim | null {
       return collaboration?.observe({ model: wireModel, id: params.id }) ?? null;
     },
 
-    queue(params: ClaimLookupParams<T>): { readonly object: 'list'; readonly data: readonly Intent[] } {
+    queue(params: ClaimLookupParams<T>): { readonly object: 'list'; readonly data: readonly Claim[] } {
       return {
         object: 'list',
         data: collaboration?.queue({ model: wireModel, id: params.id }) ?? [],
@@ -747,7 +743,7 @@ export function createModelProxy<T, C>(
       const id = params.id ?? Model.generateId();
       const opts = mutationOptions(params);
       const claim = params.claim;
-      let autoLease: IntentLeaseHandle | undefined;
+      let autoLease: ClaimHandle | undefined;
       if (claim && !isClaimHandle(claim)) {
         if (!collaboration) {
           throw new AbloValidationError(
@@ -755,7 +751,7 @@ export function createModelProxy<T, C>(
             { code: 'model_claim_not_configured' },
           );
         }
-        autoLease = await collaboration.createIntent({
+        autoLease = await collaboration.createClaim({
           target: {
             model: wireModel,
             id,
@@ -787,8 +783,8 @@ export function createModelProxy<T, C>(
       });
       const effective: MutationOptions = {
         ...opts,
-        ...(autoLease ? { intent: autoLease } : {}),
-        ...(isClaimHandle(claim) ? { intent: { id: claim.claimId } } : {}),
+        ...(autoLease ? { claim: autoLease } : {}),
+        ...(isClaimHandle(claim) ? { claim: { id: claim.claimId } } : {}),
       };
       try {
         syncClient.add(model, effective);
@@ -828,7 +824,7 @@ export function createModelProxy<T, C>(
               wait: 'confirmed',
               readAt: claimed.snapshot.stamp,
               onStale: 'reject',
-              intent: claimed.lease,
+              claimRef: { id: claimed.lease.claimId },
               ...opts,
             }
           : {
@@ -843,7 +839,7 @@ export function createModelProxy<T, C>(
                   }
                 : {}),
               ...opts,
-              ...(handle ? { intent: { id: handle.claimId } } : {}),
+              ...(handle ? { claim: { id: handle.claimId } } : {}),
             };
         // Local user update: `applyChanges` keeps change tracking ON so
         // the edited fields land in `modifiedProperties` and actually get
@@ -883,7 +879,7 @@ export function createModelProxy<T, C>(
             wait: 'confirmed',
             readAt: claimed.snapshot.stamp,
             onStale: 'reject',
-            intent: claimed.lease,
+            claimRef: { id: claimed.lease.claimId },
             ...opts,
           }
         : {
@@ -895,7 +891,7 @@ export function createModelProxy<T, C>(
                 }
               : {}),
             ...opts,
-            ...(handle ? { intent: { id: handle.claimId } } : {}),
+            ...(handle ? { claim: { id: handle.claimId } } : {}),
           };
       syncClient.delete(model, effective);
       await waitForMutation(model, effective);

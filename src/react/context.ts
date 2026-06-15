@@ -7,6 +7,7 @@ import type { QueryView, QueryViewOptions } from '../core/QueryView.js';
 import type { ViewRegistry } from '../core/ViewRegistry.js';
 import type { Schema } from '../schema/schema.js';
 import type { SyncStatus } from '../BaseSyncedStore.js';
+import type { ParticipantScope } from '../sync/participants.js';
 import { AbloValidationError } from '../errors.js';
 
 /**
@@ -98,6 +99,20 @@ export interface SyncStoreContract {
   readonly isError: boolean;
   readonly hasUnsyncedChanges: boolean;
   /**
+   * Area-of-interest (dynamic read subscription). `enterScope`/`leaveScope`
+   * move the connection's read interest as the user navigates (open/close a
+   * deck, sheet, doc); `pinScope`/`unpinScope` express prominence (an active
+   * claim keeps a group subscribed). Each resolves the scope through the same
+   * resolver the claim path uses, so read interest and write claims agree on
+   * the sync-group string. Optional so minimal test doubles can omit them;
+   * no-ops before the socket exists. The concrete store (`BaseSyncedStore`)
+   * forwards to its `AreaOfInterestManager`.
+   */
+  enterScope?(scope: ParticipantScope, opts?: { hydrate?: boolean }): Promise<void>;
+  leaveScope?(scope: ParticipantScope): Promise<void>;
+  pinScope?(scope: ParticipantScope): Promise<void>;
+  unpinScope?(scope: ParticipantScope): Promise<void>;
+  /**
    * Raw MobX-observable `SyncStatus` record. `useSyncStatus()` reads
    * `state`, `progress`, `pendingChanges`, `isSessionError`, `error`
    * from this to build its tagged union. Exposed on the contract so
@@ -136,13 +151,13 @@ export interface SyncReactContext {
    */
   presence?: unknown;
   /**
-   * Optional intent initiator. Same pattern as presence — consumers
-   * plug a function that turns an intent claim into a handle they
+   * Optional claim initiator. Same pattern as presence — consumers
+   * plug a function that turns an claim claim into a handle they
    * control (WebSocket send, optimistic local update, whatever).
-   * `useIntent(name)` returns a typed invoker for the named intent
-   * from `interface Register { Intents: ... }`.
+   * `useClaim(name)` returns a typed invoker for the named claim
+   * from `interface Register { Claims: ... }`.
    */
-  beginIntent?: (intentName: string, claim: unknown) => unknown;
+  beginClaim?: (claimName: string, claim: unknown) => unknown;
 }
 
 export const SyncContext = createContext<SyncReactContext | null>(null);
@@ -184,10 +199,10 @@ export interface SyncProviderProps {
    */
   presence?: unknown;
   /**
-   * Optional intent initiator for `useIntent()`. See
-   * {@link SyncReactContext.beginIntent}.
+   * Optional claim initiator for `useClaim()`. See
+   * {@link SyncReactContext.beginClaim}.
    */
-  beginIntent?: (intentName: string, claim: unknown) => unknown;
+  beginClaim?: (claimName: string, claim: unknown) => unknown;
   children?: ReactNode;
 }
 
@@ -211,12 +226,12 @@ export function SyncProvider({
   organizationId,
   schema,
   presence,
-  beginIntent,
+  beginClaim,
   children,
 }: SyncProviderProps) {
   return createElement(
     SyncContext.Provider,
-    { value: { store, organizationId, schema, presence, beginIntent } },
+    { value: { store, organizationId, schema, presence, beginClaim } },
     children
   );
 }

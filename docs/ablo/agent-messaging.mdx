@@ -1,0 +1,151 @@
+---
+title: "Agent Messaging"
+---
+
+Use a normal model when agents or humans need durable communication inside a
+syncGroup. Use claim `description` and `meta` for live coordination context.
+Use a `messages` row when the information must survive reconnects, work over
+HTTP, or be replayed from the sync cursor.
+
+## The rule
+
+| Need | Use | Why |
+| --- | --- | --- |
+| "I am holding this row because..." | `claim({ action, description, meta })` | Live and low-latency. Peers see it through presence while the claim exists. |
+| "Remember this handoff/status/request" | A `messages` model | Durable row. Ordered in `sync_deltas`, replayed after reconnect, readable by HTTP agents. |
+
+Claim context is ephemeral. If a participant was offline, reconnected later, or
+only uses `transport: "http"`, it can miss claim/presence frames. Message rows
+are facts in your database and in the sync log.
+
+## Schema
+
+Add a `messages` model to the same schema as the work it discusses. Scope it
+with the same field that scopes the work row.
+
+```ts
+import Ablo from "@abloatai/ablo";
+import { defineSchema, entityRole, model, z } from "@abloatai/ablo/schema";
+
+export const schema = defineSchema({
+  workItems: model(
+    {
+      title: z.string(),
+      status: z.string(),
+      teamId: z.string(),
+    },
+    {},
+    { entityRoles: [entityRole({ kind: "team", source: "teamId" })] },
+  ),
+
+  messages: model(
+    {
+      body: z.string(),
+      kind: z.enum(["status", "request", "handoff"]),
+      teamId: z.string(),
+
+      // Causal link back to coordination or the row being discussed.
+      aboutEntityType: z.string().optional(),
+      aboutEntityId: z.string().optional(),
+      aboutIntentId: z.string().optional(),
+    },
+    {},
+    { entityRoles: [entityRole({ kind: "team", source: "teamId" })] },
+  ),
+});
+```
+
+Push the schema before agents call it:
+
+```bash
+npx ablo push
+```
+
+## Server-side agent
+
+Most server-side agents use the direct database path. Pass the schema, API key,
+database URL, and transport selector:
+
+```ts
+const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+  databaseUrl: process.env.DATABASE_URL,
+  transport: "http",
+});
+
+await ablo.ready();
+```
+
+`databaseUrl` is server-only. Browser clients must not receive it; live UIs use
+the default WebSocket transport with a minted user/session token.
+
+If your backend mints restricted agent tokens, register the database once from a
+secret-key server process as above. Workers using the restricted token can then
+construct `Ablo({ schema, authToken, transport: "http" })` because the project
+already has a registered data plane.
+
+## Link a message to a claim
+
+The claim id is the causal id. Store it in `aboutIntentId` when the message is
+about work currently protected by a claim.
+
+```ts
+const claim = await ablo.workItems.claim({
+  id: workItemId,
+  action: "reformatting",
+  description: "normalizing the pricing table",
+  meta: { estimateSeconds: 120 },
+  wait: false,
+});
+
+try {
+  await ablo.messages.create({
+    id: crypto.randomUUID(),
+    data: {
+      body: "Taking the pricing table for about two minutes.",
+      kind: "status",
+      teamId,
+      aboutEntityType: "workItems",
+      aboutEntityId: workItemId,
+      aboutIntentId: claim.claimId,
+    },
+    wait: "confirmed",
+  });
+} finally {
+  await claim.release();
+}
+```
+
+Peers in `team:${teamId}` receive the message through the normal delta stream.
+Peers outside that syncGroup do not.
+
+## Reading messages
+
+Live clients read locally and update when deltas arrive:
+
+```ts
+const rows = ablo.messages.getAll({
+  where: { teamId },
+  orderBy: { createdAt: "asc" },
+});
+```
+
+HTTP agents read by request:
+
+```ts
+const rows = await ablo.messages.list({
+  where: { teamId },
+  orderBy: { createdAt: "asc" },
+});
+```
+
+Because messages are ordinary synced rows, reconnecting clients catch up from
+their cursor and see the rows they missed while offline.
+
+## Retention
+
+Deleting or archiving old `messages` rows is your app's policy. The sync log is
+still durable audit/history: `sync_deltas` has no message-specific TTL. That is
+useful for coordination and compliance, but a chat-scale product should plan
+retention before writing high-volume conversation traffic.

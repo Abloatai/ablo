@@ -4,7 +4,7 @@
  *
  * Why this exists separately from `pull.ts`:
  *   `ablo pull` introspects the live DATABASE (`information_schema`). By the
- *   time a schema reaches Postgres, the ORM's intent is gone — enums have
+ *   time a schema reaches Postgres, the ORM's claim is gone — enums have
  *   collapsed to `text` + a check constraint, relations to bare columns, JSON
  *   shape to `jsonb`. So DB-pull is lossy *by construction*.
  *

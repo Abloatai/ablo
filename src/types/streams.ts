@@ -3,7 +3,7 @@
  *
  * Ablo treats humans and agents as participants on live application
  * entities. Participants announce what they are reading or editing,
- * claim intent before writing, and capture context watermarks before
+ * claim before writing, and capture context watermarks before
  * long-running AI work. The customer keeps their own schema, agent
  * stack, tools, prompts, and product policy; the sync engine provides
  * the shared coordination substrate.
@@ -19,10 +19,12 @@ import type { InferCreate, InferModel, Schema } from '../schema/schema.js';
 import type {
   TargetRange,
   OnStaleMode,
-  IntentClaim,
+  WireClaim,
+  ClaimRejection,
   PresenceKind,
+  ParticipantKind,
 } from '../coordination/schema.js';
-export type { TargetRange, OnStaleMode, IntentClaim, PresenceKind };
+export type { TargetRange, OnStaleMode, WireClaim, ClaimRejection, PresenceKind, ParticipantKind };
 
 /**
  * Any JSON-serializable value. Used where the SDK accepts free-form
@@ -379,23 +381,23 @@ export interface Activity {
  * writes this shape only.
  */
 export interface Peer {
-  readonly participantKind: 'human' | 'agent';
+  readonly participantKind: ParticipantKind;
   readonly participantId: string;
   readonly label?: string;
   readonly syncGroups: readonly string[];
   readonly activity: Activity;
   /** Server timestamp of the most recent frame from this participant. */
   readonly lastActive: string;
-  /** Pending-mutation intents this participant has declared. */
-  readonly activeIntents?: ReadonlyArray<IntentClaim>;
+  /** Pending-mutation claims this participant has declared. */
+  readonly activeClaims?: ReadonlyArray<Claim>;
 }
 
 // ─────────────────────────────────────────────────────────────────────
 //  Wire-format extras — same file, no second module
 // ─────────────────────────────────────────────────────────────────────
 
-// `IntentClaim` and `PresenceKind` are canonical in `../coordination/schema`
-// (re-exported above). The canonical `IntentClaim` carries optional
+// `Claim` and `PresenceKind` are canonical in `../coordination/schema`
+// (re-exported above). The canonical `Claim` carries optional
 // `status`/`error` (server-set lifecycle); SDK code that ignores them is
 // unaffected — the superset is structurally assignable to the old view.
 
@@ -407,24 +409,24 @@ export interface PresenceUpdatePayload {
 }
 
 /**
- * Intent broadcasts — "I'm about to do X on Y." Broadcasts flow on
+ * Claim broadcasts — "I'm about to do X on Y." Broadcasts flow on
  * the same WS as presence, so every participant sees them in real
- * time. Cooperative mutex: the intent doesn't enforce exclusion; it
+ * time. Cooperative mutex: the claim doesn't enforce exclusion; it
  * announces. Other agents observe and yield. This is cheaper and
  * more flexible than a central lock table and composes with presence.
  */
 /**
- * Options common to every verb-style intent announcement
- * (`intents.analyzing`, `.drafting`, etc.).
+ * Options common to every verb-style claim announcement
+ * (`claims.analyzing`, `.drafting`, etc.).
  *
  * The one required field is the *target* — everything else is a
- * sensible default. Prefer the verb methods in `IntentStream` below
+ * sensible default. Prefer the verb methods in `ClaimStream` below
  * (`analyzing(entity, { ttl: '3m' })`) over the raw `announce(...)`
  * escape hatch.
  */
-export interface IntentOptions {
+export interface ClaimLeaseOptions {
   /**
-   * How long before the server auto-expires this intent if the
+   * How long before the server auto-expires this claim if the
    * participant doesn't finish the work. Accepts either a number (in
    * seconds — back-compat with `ttlSeconds`) or a duration string:
    * `'500ms'`, `'30s'`, `'3m'`, `'24h'`.
@@ -435,7 +437,7 @@ export interface IntentOptions {
 /** Re-export of the duration helper shape. See `./duration.ts`. */
 export type Duration = import('../utils/duration.js').Duration;
 
-export interface ClaimOptions extends IntentOptions {
+export interface ClaimOptions extends ClaimLeaseOptions {
   /**
    * Free-form reason describing why you're claiming. Surfaces in conflict
    * messages and the activity overlay. Defaults to `'editing'`. Common
@@ -451,22 +453,22 @@ export interface ClaimOptions extends IntentOptions {
   readonly description?: string;
   /**
    * Join the server's fair FIFO queue on contention instead of being
-   * rejected. The grant arrives asynchronously (`intent_acquired` if the
-   * target was free, `intent_granted` once promoted to the head of the line).
+   * rejected. The grant arrives asynchronously (`claim_acquired` if the
+   * target was free, `claim_granted` once promoted to the head of the line).
    * The low-level `claim` returns its handle immediately regardless; callers
    * that need to *wait* for the grant use the awaiting wrappers
-   * (`ablo.<model>.claim`), which pair this flag with `awaitIntentGrant`.
+   * (`ablo.<model>.claim`), which pair this flag with `awaitClaimGrant`.
    */
   readonly queue?: boolean;
 }
 
-export interface IntentStream {
+export interface ClaimStream {
   /**
-   * Claim an exclusive intent on a target. Returns a handle — call
+   * Claim an exclusive claim on a target. Returns a handle — call
    * `.revoke()` to cancel, let it expire via TTL, or use `await using`
    * (TC39 explicit resource management) to auto-revoke on scope exit.
    *
-   * Server rejects via `intent_rejected` when another participant
+   * Server rejects via `claim_rejected` when another participant
    * already holds a claim on the same target. Default `reason` is
    * `'editing'`; pass `{reason: 'writing'}` (or any string) to override.
    *
@@ -475,33 +477,33 @@ export interface IntentStream {
    * scoped `claim(reason, opts)` overload were collapsed into this
    * single primitive.
    */
-  claim(target: PresenceTarget, opts?: ClaimOptions): Claim;
+  claim(target: PresenceTarget, opts?: ClaimOptions): ClaimHandle;
 
   /**
-   * Reactive view of every other participant's active intents.
+   * Reactive view of every other participant's active claims.
    * Reads return the current snapshot; pair with `subscribe(...)`
    * below to get notified on change.
    */
-  readonly others: ReadonlyArray<ActiveIntent>;
+  readonly others: ReadonlyArray<ActiveClaim>;
 
   /**
    * Reactive view of the wait queue on one target — the FIFO line of
-   * `status: 'queued'` intents behind the current holder, each with its
+   * `status: 'queued'` claims behind the current holder, each with its
    * `action`, `heldBy`, and `position`. Synced from the server's per-entity
-   * `intent_queue` frame; empty when no one's waiting. Pair with
+   * `claim_queue` frame; empty when no one's waiting. Pair with
    * `subscribe(...)` for change notifications.
    */
-  queueFor(target: PresenceTarget): readonly Intent[];
+  queueFor(target: PresenceTarget): readonly Claim[];
 
   /**
    * Re-rank the wait queue on a target — move the listed waiters to the front
    * in the given order; unlisted waiters keep their relative FIFO order behind
-   * them. Pass the `Intent[]` from `queueFor(target)` in the order you want
-   * (each `Intent` carries its `heldBy` + `id`). Privileged: the server gates
-   * it (a participant lacking the `intent.reorder` capability is denied), so
+   * them. Pass the `Claim[]` from `queueFor(target)` in the order you want
+   * (each `Claim` carries its `heldBy` + `id`). Privileged: the server gates
+   * it (a participant lacking the `claim.reorder` capability is denied), so
    * this is fire-and-forget — the new order arrives reactively via `queueFor`.
    */
-  reorder(target: PresenceTarget, order: readonly Intent[]): void;
+  reorder(target: PresenceTarget, order: readonly Claim[]): void;
 
   /**
    * Framework-agnostic reactivity. Same contract as
@@ -513,31 +515,31 @@ export interface IntentStream {
   onChange(listener: () => void): () => void;
 
   /**
-   * Observe server-side intent rejections. Fires when the server
-   * rejects an `intents.writing(...)` / `announce(...)` call because
+   * Observe server-side claim rejections. Fires when the server
+   * rejects an `claims.writing(...)` / `announce(...)` call because
    * another participant already holds an open claim on the same
    * target (cooperative mutex → enforced at the server boundary).
    *
    * Use this to surface conflicts to the user:
    * ```ts
-   * participant.intents.onRejected((r) => {
+   * participant.claims.onRejected((r) => {
    *   toast.error(`${r.heldBy} is editing — try again in a moment`);
    * });
    * ```
    *
    * Returns an unsubscribe fn.
    */
-  onRejected(listener: (rejection: IntentRejection) => void): () => void;
+  onRejected(listener: (rejection: ClaimRejection) => void): () => void;
 
   /**
-   * Observe LOSING an intent you held — distinct from `onRejected` (a claim the
-   * server refused). Fires on the server's `intent_lost` frame, carrying why:
+   * Observe LOSING an claim you held — distinct from `onRejected` (a claim the
+   * server refused). Fires on the server's `claim_lost` frame, carrying why:
    * `'preempted'` (a privileged participant evicted you) or `'expired'` (your
    * TTL lapsed). Lets a holder react — re-plan vs re-claim — instead of
    * silently discovering the lease gone via presence.
    *
    * ```ts
-   * participant.intents.onLost((lost) => {
+   * participant.claims.onLost((lost) => {
    *   if (lost.reason === 'preempted') replanAgainst(lost.target);
    *   else reclaim(lost.target);
    * });
@@ -545,58 +547,31 @@ export interface IntentStream {
    *
    * Returns an unsubscribe fn.
    */
-  onLost(listener: (lost: IntentLost) => void): () => void;
+  onLost(listener: (lost: ClaimLost) => void): () => void;
 
   /**
-   * Async-iterable view of everyone else's open intents. Each
+   * Async-iterable view of everyone else's open claims. Each
    * iteration yields the current snapshot on every mutation.
    *
    * ```ts
-   * for await (const openIntents of participant.intents) {
-   *   if (openIntents.some((i) => i.target.id === clauseId)) wait();
+   * for await (const openClaims of participant.claims) {
+   *   if (openClaims.some((i) => i.target.id === clauseId)) wait();
    * }
    * ```
    */
-  [Symbol.asyncIterator](): AsyncIterableIterator<ReadonlyArray<ActiveIntent>>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<ReadonlyArray<ActiveClaim>>;
 }
 
 /**
- * Shape of an `intent_rejected` event delivered to
- * `IntentStream.onRejected`. Server rejects an incoming claim when
- * another participant already holds an open intent on the same target.
- */
-export interface IntentRejection {
-  /** The rejected claim's id (the one the caller just tried to mint). */
-  readonly intentId: string;
-  /** Why the server rejected it — currently always `'conflict'`. */
-  readonly reason: 'conflict';
-  /** The target that's already held. */
-  readonly target: {
-    readonly entityType: string;
-    readonly entityId: string;
-    readonly path?: string;
-    readonly range?: TargetRange;
-    readonly field?: string;
-    readonly meta?: Record<string, unknown>;
-  };
-  /** Participant id holding the existing claim. */
-  readonly heldBy: string;
-  /** The existing claim's id (for audit / retry correlation). */
-  readonly heldByIntentId: string;
-  /** When the existing claim expires (ms since epoch). */
-  readonly heldByExpiresAt: number;
-}
-
-/**
- * You LOST an intent you were HOLDING — distinct from `IntentRejection` (a
+ * You LOST an claim you were HOLDING — distinct from `ClaimRejection` (a
  * claim the server refused you). Delivered via `onLost`.
  */
-export interface IntentLost {
+export interface ClaimLost {
   /** The held claim's id that you just lost. */
-  readonly intentId: string;
+  readonly claimId: string;
   /**
    * How you lost it. `'preempted'`: a privileged participant (one holding the
-   * `intent.preempt` capability) evicted you and took the lease — its work now
+   * `claim.preempt` capability) evicted you and took the lease — its work now
    * supersedes yours, so re-plan against the new holder rather than blindly
    * re-claiming. `'expired'`: your TTL lapsed without finishing — re-claim if
    * you still need it.
@@ -613,7 +588,7 @@ export interface IntentLost {
   };
 }
 
-export interface IntentDeclaration {
+export interface ClaimDeclaration {
   readonly target: EntityRef;
   /** Human-readable reason — "rewriting title" / "restyling chart". */
   readonly reason: string;
@@ -631,40 +606,82 @@ export interface IntentDeclaration {
  *
  * ```ts
  * {
- *   await using work = participant.intents.analyzing(clause, { ttl: '3m' });
- *   // ... do the work; intent auto-revokes when the block exits
+ *   await using work = participant.claims.analyzing(clause, { ttl: '3m' });
+ *   // ... do the work; claim auto-revokes when the block exits
  * }
  * ```
  */
-export interface Claim extends AsyncDisposable {
-  readonly id: string;
+/**
+ * THE one claim handle. Returned by every claim door — the typed
+ * `ablo.<model>.claim({ id })` (rich: `data`/`readAt`/`target` populated) and
+ * the low-level `participant.claims.claim()` lease (minimal: `claimId` +
+ * `revoke`/`release`). Row-level fields are optional precisely because the
+ * low-level lease has no row snapshot; the model door fills them in.
+ *
+ * Implements `Symbol.asyncDispose` so callers can `await using claim = ...`
+ * and have it auto-release on scope exit.
+ */
+export interface ClaimHandle<T = Record<string, unknown>> extends AsyncDisposable {
+  readonly object: 'claim';
+  readonly claimId: string;
+  /**
+   * True when the grant came AFTER waiting in the server's FIFO line
+   * (`claim_granted`) — the authoritative "the row may have changed under us"
+   * signal. Absent for an immediate grant or a non-queued lease.
+   */
+  readonly waited?: boolean;
+  /**
+   * Sync watermark of the held snapshot (`data` was read at this stamp). Writes
+   * carrying the handle use it as the `readAt` stale guard. Present for
+   * model-scoped claims; absent for low-level leases.
+   */
+  readonly readAt?: number;
+  readonly target: {
+    readonly model: string;
+    readonly id: string;
+    readonly field?: string;
+    readonly path?: string;
+    readonly range?: TargetRange;
+    readonly meta?: Record<string, unknown>;
+  };
+  readonly action: string;
+  readonly description?: string;
+  /** Row snapshot — populated by `ablo.<model>.claim`; absent on low-level leases. */
+  readonly data?: T;
+  release(): Promise<void>;
   revoke(): void;
 }
 
-export interface ActiveIntent extends IntentDeclaration {
+export interface ActiveClaim extends ClaimDeclaration {
   readonly id: string;
   readonly heldBy: string;
   /**
-   * Whether the holding participant is a human (session) or an agent.
-   * First-class field so UIs can style "agent editing X" differently
-   * from "user editing X" without string-parsing `heldBy`.
+   * Whether the holding participant is a user (session), an agent, or a
+   * system actor. First-class field so UIs can style "agent editing X"
+   * differently from "user editing X" without string-parsing `heldBy`.
+   * Canonical `'user' | 'agent' | 'system'` — the presence/claim stream
+   * derives the value from the boolean `isAgent` wire flag (so it produces
+   * only `'user'`/`'agent'`), but the type stays the full union it shares
+   * with the HTTP claim surface and lease store.
    */
-  readonly participantKind: 'human' | 'agent';
+  readonly participantKind: ParticipantKind;
   readonly description?: string;
-  readonly announcedAt: string;
-  readonly expiresAt: string;
+  /** Epoch-ms the claim was announced. */
+  readonly announcedAt: number;
+  /** Epoch-ms the server auto-expires it. */
+  readonly expiresAt: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  Intent — the canonical, Stripe-shaped coordination object
+//  Claim — the canonical, Stripe-shaped coordination object
 // ─────────────────────────────────────────────────────────────────────
 //
 // One self-describing claim carries the whole coordination lifecycle
 // in a single `status` field — the same move Stripe makes with
 // `PaymentIntent` (`requires_confirmation → processing → succeeded`).
-// This supersedes the sprawl of `IntentClaim` / `ActiveIntent` /
-// `ModelClaim` / `IntentRejection` / `Claim`: those were five half-
-// shapes of one idea. `Intent` is the idea.
+// This supersedes the sprawl of `Claim` / `ActiveClaim` /
+// `ModelClaim` / `ClaimRejection` / `Claim`: those were five half-
+// shapes of one idea. `Claim` is the idea.
 //
 // It stays on the *coordination plane* — ephemeral, TTL'd, broadcast on
 // the presence frame, never persisted to IndexedDB and never emitted as
@@ -672,12 +689,12 @@ export interface ActiveIntent extends IntentDeclaration {
 // `defineSchema`.
 
 /**
- * Every lifecycle state of a coordination intent, in one enum.
+ * Every lifecycle state of a coordination claim, in one enum.
  * `active` = the current holder (the lock). `queued` = waiting in the FIFO
  * line behind the holder (carries `position`). The terminal states drop the
- * intent from the synced set.
+ * claim from the synced set.
  */
-export type IntentStatus =
+export type ClaimStatus =
   | 'active'
   | 'queued'
   | 'committed'
@@ -685,7 +702,7 @@ export type IntentStatus =
   | 'canceled';
 
 /** Options for waiting on a target to become free. */
-export interface IntentWaitOptions {
+export interface ClaimWaitOptions {
   readonly timeout?: number;
   readonly pollInterval?: number;
   readonly signal?: AbortSignal;
@@ -693,21 +710,21 @@ export interface IntentWaitOptions {
 
 /**
  * The coordination state of one entity. Self-describing on the wire via
- * `object: 'intent'`. Existence with `status: 'active'` *is* the lock;
+ * `object: 'claim'`. Existence with `status: 'active'` *is* the lock;
  * the fields *are* the awareness ("agent X is editing this until Y").
  *
  * Deliberately omits a Stripe-style `next_action`: a contender's only
  * response is "wait until free, then re-read", and the runtime performs
  * that uniformly — `claim` serializes behind the holder via the server
- * FIFO queue (or low-level `intents.waitFor` to wait without claiming), and the
+ * FIFO queue (or low-level `claims.waitFor` to wait without claiming), and the
  * stale-context guard forces the re-read. Encoding a constant instruction
  * the engine always takes would be the kind of ceremony this object exists
  * to remove.
  */
-export interface Intent {
-  readonly object: 'intent';
+export interface Claim {
+  readonly object: 'claim';
   readonly id: string;
-  readonly status: IntentStatus;
+  readonly status: ClaimStatus;
   /** What is being coordinated. */
   readonly target: EntityRef;
   /** Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. */
@@ -716,14 +733,14 @@ export interface Intent {
   readonly description?: string;
   /** Participant holding it. */
   readonly heldBy: string;
-  readonly participantKind: 'human' | 'agent';
+  readonly participantKind: ParticipantKind;
   /**
-   * Ms-epoch the holder opened it. Optional until the lease wire carries
+   * Epoch-ms the holder opened it. Optional until the lease wire carries
    * it — derived shapes (e.g. mapped from a presence frame) may omit it.
    */
-  readonly createdAt?: string;
-  /** Ms-epoch the server auto-expires it if the holder doesn't finish. */
-  readonly expiresAt: string;
+  readonly createdAt?: number;
+  /** Epoch-ms the server auto-expires it if the holder doesn't finish. */
+  readonly expiresAt: number;
   /**
    * 0-based place in the FIFO line — present only when `status: 'queued'`
    * (`0` = next in line behind the holder). Absent for the active holder.

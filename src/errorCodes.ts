@@ -39,7 +39,7 @@ import { z } from 'zod';
  * code, a changed HTTP status, an envelope field. Emitted in `errors.json`
  * and on the `Ablo-Version` response header so a consumer can detect drift.
  */
-export const ERROR_CONTRACT_VERSION = '2026-06-02';
+export const ERROR_CONTRACT_VERSION = '2026-06-13';
 
 /** Coarse grouping for metrics dashboards and docs sectioning. */
 export type ErrorCategory =
@@ -52,7 +52,7 @@ export type ErrorCategory =
   | 'not_found'
   | 'tenant'
   | 'schema'
-  | 'intent'
+  | 'claim'
   | 'bootstrap'
   | 'transport'
   | 'rate_limit'
@@ -206,7 +206,7 @@ export const ERROR_CODES = {
   byo_tenant_tables_unforced_rls: wire('permission', 403, false, 'Tenant tables do not have RLS forced under the direct Postgres connector role.'),
   byo_host_not_allowed: wire('permission', 403, false, 'The direct Postgres connector host resolves to a private, loopback, or link-local address and cannot be used.'),
 
-  // ── claim / intent conflict (409) ──────────────────────────────────
+  // ── claim / claim conflict (409) ──────────────────────────────────
   // Held-claim rejections are NOT queue-retryable (gRPC FAILED_PRECONDITION /
   // ABORTED semantics; Replicache/Zero SETTLE a rejected mutation — reject the
   // caller, roll back the optimistic effect — instead of resending it).
@@ -219,8 +219,8 @@ export const ERROR_CODES = {
   claim_conflict: wire('claim', 409, false, 'The target entity is claimed by another participant.'),
   claim_lost: wire('claim', 409, false, 'A previously held claim was lost before the write applied.'),
   entity_claimed: wire('claim', 409, false, 'The target entity is currently claimed; write was blocked.'),
-  intent_conflict: wire('claim', 409, false, 'An intent on the target conflicts with an active intent (server-internal alias of claim_conflict).'),
   malformed_claim: wire('claim', 400, false, 'The claim payload was malformed.'),
+  malformed_subscription: wire('validation', 400, false, 'The update_subscription payload was malformed; expected { syncGroups: string[] }.'),
   model_claimed: wire('claim', 409, false, 'The model instance is claimed by another participant.'),
   model_claimed_timeout: wire('claim', 409, false, 'Timed out waiting for a model claim to clear.'),
   model_claim_not_configured: client('claim', 'Claiming was requested on a model that has no claim configuration.'),
@@ -231,7 +231,7 @@ export const ERROR_CODES = {
   idempotency_key_too_long: wire('validation', 400, false, 'The supplied Idempotency-Key exceeds the maximum length.'),
 
   // ── validation (400 / 422) ─────────────────────────────────────────
-  write_options_invalid: client('validation', 'The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `intent`) failed validation against the write-options schema.'),
+  write_options_invalid: client('validation', 'The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `claim`) failed validation against the write-options schema.'),
   source_operation_id_required: client('validation', 'A data-source operation arrived without the entity `id` it targets.'),
   source_adapter_misconfigured: client('validation', 'The data-source ORM adapter could not map a schema model onto the backing client (missing delegate or model).'),
   source_event_invalid: client('validation', 'A data-source outbox event could not be built — the operation carries no entity id and none was supplied.'),
@@ -294,15 +294,15 @@ export const ERROR_CODES = {
   enum_value_removed: client('schema', 'Migration removes an enum value (destructive classification).'),
   risky_cast: client('schema', 'Migration would perform a risky column type cast.'),
 
-  // ── intent / lease (409 / transport) ───────────────────────────────
-  intent_lease_unavailable: wire('intent', 503, true, 'The intent-lease coordination subsystem is unavailable; retry.'),
-  intent_not_wired: client('intent', 'Intent support was used but is not wired in this runtime.'),
-  intent_queued: wire('intent', 409, true, 'The intent was queued behind an active lease holder.'),
-  intent_wait_aborted: wire('intent', 409, true, 'Waiting for the intent lease was aborted.'),
-  intent_wait_poll_interval_required: client('intent', 'A poll interval is required when waiting on an intent.'),
-  grant_timeout: wire('intent', 504, true, 'Timed out waiting for a capability grant.'),
-  slide_intent_missing_deck_id: wire('intent', 400, false, 'A slide intent was missing its deck id.'),
-  slide_intent_unknown_sibling: wire('intent', 400, false, 'A slide intent referenced an unknown sibling slide.'),
+  // ── claim / lease (409 / transport) ───────────────────────────────
+  claim_lease_unavailable: wire('claim', 503, true, 'The claim-lease coordination subsystem is unavailable; retry.'),
+  claim_not_wired: client('claim', 'Claim support was used but is not wired in this runtime.'),
+  claim_queued: wire('claim', 409, true, 'The claim was queued behind an active lease holder.'),
+  claim_wait_aborted: wire('claim', 409, true, 'Waiting for the claim lease was aborted.'),
+  claim_wait_poll_interval_required: client('claim', 'A poll interval is required when waiting on an claim.'),
+  grant_timeout: wire('claim', 504, true, 'Timed out waiting for a capability grant.'),
+  slide_intent_missing_deck_id: wire('claim', 400, false, 'A slide claim was missing its deck id.'),
+  slide_intent_unknown_sibling: wire('claim', 400, false, 'A slide claim referenced an unknown sibling slide.'),
 
   // ── bootstrap (transport) ──────────────────────────────────────────
   bootstrap_fetch_timeout: wire('bootstrap', 504, true, 'The bootstrap fetch timed out.'),
@@ -411,7 +411,7 @@ export const ERROR_CODES = {
   upload_items_required: wire('validation', 400, false, 'The request must include a non-empty items array.'),
   presigned_url_failed: wire('server', 500, true, 'Failed to generate a presigned upload URL.'),
   task_id_required: wire('validation', 400, false, 'A task id is required for this request.'),
-  intent_id_required: wire('validation', 400, false, 'An intent id is required for this request.'),
+  claim_id_required: wire('validation', 400, false, 'An claim id is required for this request.'),
   commit_operation_action_required: wire('validation', 400, false, 'A commit operation is missing its `action`.'),
   commit_operation_unsupported: wire('validation', 400, false, 'A commit operation used an unsupported `action`.'),
   usage_invalid: wire('validation', 400, false, 'The usage request was invalid.'),
@@ -426,7 +426,7 @@ export const ERROR_CODES = {
   parent_turn_foreign_agent: wire('permission', 403, false, 'The parent turn belongs to a different agent.'),
   turn_not_found: wire('not_found', 404, false, 'The referenced turn does not exist.'),
   turn_foreign_agent: wire('permission', 403, false, 'The turn belongs to a different agent.'),
-  invalid_intent: wire('validation', 400, false, 'The intent request was invalid.'),
+  invalid_intent: wire('validation', 400, false, 'The claim request was invalid.'),
   schema_too_large: wire('validation', 413, false, 'The submitted schema exceeds the maximum size.'),
   invalid_schema: wire('validation', 400, false, 'The submitted schema could not be parsed.'),
   incompatible_change: wire('conflict', 409, false, 'The schema change is incompatible with the current schema.'),

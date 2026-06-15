@@ -78,8 +78,8 @@ export {
 // Flat surface stays small on purpose: `AbloOptions` is what every
 // consumer sees on `Ablo({...})`, and `Model*Params` are the single
 // params objects you pass into `ablo.<model>.{retrieve,create,update,delete}`. Every
-// other shape — Commit/Intent/Model/Claimed — lives under
-// `Ablo.Commit.*`, `Ablo.Intent.*`, `Ablo.Model.*`, `Ablo.ClaimedOptions`.
+// other shape — Commit/Claim/Model/Claimed — lives under
+// `Ablo.Commit.*`, `Ablo.Claim.*`, `Ablo.Model.*`, `Ablo.ClaimedOptions`.
 export type {
   AbloOptions,
   ModelCountOptions,
@@ -194,7 +194,7 @@ export type { WriteOptions, MutationOptions } from './interfaces/index.js';
 // IndexedDB backing store is stuck (see core/openIDBWithTimeout.ts).
 export { IDBOpenTimeoutError, isStorageOpenTimeout } from './core/openIDBWithTimeout.js';
 
-// Type registration point. Consumers register their Schema/Presence/Intents/
+// Type registration point. Consumers register their Schema/Presence/Claims/
 // UserMeta once via module augmentation:
 //   declare module '@abloatai/ablo' { interface Register { Schema: ... } }
 // Exported here so that augmentation merges into the canonical declaration.

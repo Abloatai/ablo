@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { syncGroupInputSchema } from '../schema/roles.js';
 
 /**
  * Coordination wire schema — the ONE canonical source for the three layers
@@ -7,7 +8,7 @@ import { z } from 'zod';
  * one decision") for the conceptual model. The layers, outer-to-inner:
  *
  *   1. PRESENCE       (observation)    — who is working where; NEVER enforces.
- *   2. PESSIMISTIC    (claims/leases)  — `intent_begin`/`intent_abandon`;
+ *   2. PESSIMISTIC    (claims/leases)  — `claim_begin`/`claim_abandon`;
  *                                        mutual exclusion between participants.
  *   3. OPTIMISTIC     (stale-context)  — `readAt` + `onStale` write-guard;
  *                                        last-writer-wins lost-update detection.
@@ -15,8 +16,8 @@ import { z } from 'zod';
  * Both the SDK (`types/streams.ts`) and the sync-server (`hub/types.ts`,
  * `presence/*`) derive their TypeScript types from THESE schemas via
  * `z.infer`, instead of re-declaring overlapping shapes. That collapses the
- * field drift this surface accreted — e.g. the SDK's intent view dropping
- * `status`/`error`, `onStale` declared 5×, `IntentStatus` declared 2× — into
+ * field drift this surface accreted — e.g. the SDK's claim view dropping
+ * `status`/`error`, `onStale` declared 5×, `ClaimStatus` declared 2× — into
  * a single definition that the wire ingest can also validate at runtime.
  */
 
@@ -37,7 +38,49 @@ export const participantKindSchema = z.enum(['user', 'agent', 'system']);
 export type ParticipantKind = z.infer<typeof participantKindSchema>;
 
 /**
- * What a claim / intent / activity points at. The common locator shared by
+ * Wire-tolerant participant kind for INGEST. The claim/presence streams
+ * historically labelled a non-agent participant `'human'`, while the
+ * capability/identity/lease surfaces all say `'user'` — the same participant,
+ * two dialects. This normalizes the legacy `'human'` to the canonical `'user'`
+ * on read so every consumer switches on ONE vocabulary. Producers emit
+ * canonical {@link participantKindSchema} values; this only forgives an older
+ * frame still carrying `'human'`. Additive — never widens the output union.
+ */
+export const wireParticipantKindSchema = z.preprocess(
+  (value) => (value === 'human' ? 'user' : value),
+  participantKindSchema,
+);
+
+/**
+ * Resolve a peer's kind from an inbound presence/claim frame. Prefers the
+ * server-stamped `participantKind` (normalized via
+ * {@link wireParticipantKindSchema}); frames from servers that predate the
+ * field fall back to the lossy `isAgent` boolean — which can say 'agent' or
+ * 'user' but never 'system' (the flatten this field exists to remove).
+ */
+export function participantKindFromWire(
+  wireKind: unknown,
+  isAgent: boolean | undefined,
+): ParticipantKind {
+  const parsed = wireParticipantKindSchema.safeParse(wireKind);
+  if (parsed.success) return parsed.data;
+  return isAgent ? 'agent' : 'user';
+}
+
+/**
+ * The peer-visible explanation a claim/claim carries, lifted from its opaque
+ * `meta.description`. One place for the `typeof meta?.description === 'string'`
+ * unfold that the claim/claim/presence surfaces each re-implemented — callers
+ * with an explicit `description` field still prefer it (`explicit ?? fromMeta`).
+ */
+export function descriptionFromMeta(
+  meta: Record<string, unknown> | undefined | null,
+): string | undefined {
+  return typeof meta?.description === 'string' ? meta.description : undefined;
+}
+
+/**
+ * What a claim / claim / activity points at. The common locator shared by
  * all three layers — an entity, optionally narrowed to a path, range, or
  * field, with opaque app metadata.
  */
@@ -78,39 +121,66 @@ export const writeGuardSchema = z.object({
 export type WriteGuard = z.infer<typeof writeGuardSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────
-//  Layer 2 — PESSIMISTIC claim / intent-lease
+//  Layer 2 — PESSIMISTIC claim / claim-lease
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
- * Lifecycle of an intent — the Stripe `PaymentIntent.status` shape. Absent on
+ * Lifecycle of an claim — the Stripe `PaymentIntent.status` shape. Absent on
  * the wire ⇒ `'active'` (additive back-compat). The server stamps `'active'`
- * on `intent_begin` and emits a single terminal frame (`committed` /
+ * on `claim_begin` and emits a single terminal frame (`committed` /
  * `canceled` / `expired`) as the claim ends, so contenders learn *how* it
  * resolved, not merely that it vanished.
  */
-export const intentStatusSchema = z.enum([
+export const claimStatusSchema = z.enum([
   'active',
   'committed',
   'expired',
   'canceled',
 ]);
-export type IntentStatus = z.infer<typeof intentStatusSchema>;
+export type ClaimStatus = z.infer<typeof claimStatusSchema>;
+
+const wireClaimBaseSchema = targetRefSchema.extend({
+  claimId: z.string(),
+  /** Verb the agent expects: 'update' | 'create' | 'editing' | 'reviewing' … */
+  action: z.string(),
+  /** Server-stamped declaration time (epoch ms). */
+  declaredAt: z.number(),
+  /** Server-computed TTL deadline (epoch ms). Readers treat as advisory. */
+  expiresAt: z.number(),
+  status: claimStatusSchema.optional(),
+});
+
+export const wireClaimSummarySchema = wireClaimBaseSchema.pick({
+  claimId: true,
+  action: true,
+  declaredAt: true,
+  expiresAt: true,
+  entityType: true,
+  entityId: true,
+  field: true,
+  meta: true,
+});
+export type WireClaimSummary = z.infer<typeof wireClaimSummarySchema>;
 
 /** Why a claim ended in a non-success terminal state. */
-export const intentErrorSchema = z.object({
+export const claimErrorSchema = z.object({
   code: z.string(),
   message: z.string().optional(),
   /** Participant already holding the target (conflict rejections). */
   heldBy: z.string().optional(),
-  heldByIntentId: z.string().optional(),
+  heldByClaimId: z.string().optional(),
   heldByExpiresAt: z.number().optional(),
+  /** Rich holder context for conflict rejections. Additive: older frames omit it. */
+  heldByClaim: wireClaimSummarySchema.optional(),
+  /** Optional conflict-policy explanation. Additive: older frames omit it. */
+  policyReason: z.string().optional(),
 });
-export type IntentError = z.infer<typeof intentErrorSchema>;
+export type ClaimError = z.infer<typeof claimErrorSchema>;
 
 /**
- * A declared pending-mutation intent — the unit broadcast in presence
- * `activeIntents`. Clients supply the descriptive `targetRef` fields, an
- * `action`, and a chosen `intentId`; the SERVER stamps `declaredAt` /
+ * A declared pending-mutation claim — the unit broadcast in presence
+ * `activeClaims`. Clients supply the descriptive `targetRef` fields, an
+ * `action`, and a chosen `claimId`; the SERVER stamps `declaredAt` /
  * `expiresAt` and may set `status` / `error`.
  *
  * `status` and `error` are OPTIONAL: this single shape serves both the
@@ -119,69 +189,155 @@ export type IntentError = z.infer<typeof intentErrorSchema>;
  * was used, so the two prior copies collapse into this one without breaking
  * SDK consumers.
  */
-export const intentClaimSchema = targetRefSchema.extend({
-  intentId: z.string(),
-  /** Verb the agent expects: 'update' | 'create' | 'editing' | 'reviewing' … */
-  action: z.string(),
-  /** Server-stamped declaration time (epoch ms). */
-  declaredAt: z.number(),
-  /** Server-computed TTL deadline (epoch ms). Readers treat as advisory. */
-  expiresAt: z.number(),
-  status: intentStatusSchema.optional(),
-  error: intentErrorSchema.optional(),
+export const wireClaimSchema = wireClaimBaseSchema.extend({
+  error: claimErrorSchema.optional(),
 });
-export type IntentClaim = z.infer<typeof intentClaimSchema>;
+export type WireClaim = z.infer<typeof wireClaimSchema>;
+
+export const claimRejectionSchema = z.object({
+  claimId: z.string(),
+  reason: z.string(),
+  target: targetRefSchema.optional(),
+  heldBy: z.string().optional(),
+  heldByClaimId: z.string().optional(),
+  heldByExpiresAt: z.number().optional(),
+  heldByClaim: wireClaimSummarySchema.optional(),
+  policyReason: z.string().optional(),
+});
+export type ClaimRejection = z.infer<typeof claimRejectionSchema>;
 
 /**
- * `intent_begin` payload (client → server). The descriptive target + action,
+ * What a {@link ModelClaim} points at — the SDK-facing target locator, keyed by
+ * `model`/`id` (the `ablo.<model>` vocabulary) rather than the wire's
+ * `entityType`/`entityId`. Structurally the public `ModelTarget`.
+ */
+export const modelTargetSchema = z
+  .object({
+    model: z.string(),
+    id: z.string(),
+    path: z.string().optional(),
+    range: targetRangeSchema.optional(),
+    field: z.string().optional(),
+    meta: z.record(z.string(), z.unknown()).optional(),
+  })
+  .readonly();
+export type ModelTarget = z.infer<typeof modelTargetSchema>;
+
+/**
+ * A claim as surfaced to SDK callers and the HTTP claim routes
+ * (`ablo.<model>.claim.state`, `/v1/claims`) — the resolved, peer-readable
+ * view of one active or queued claim. The ONE canonical shape: the client
+ * (`Ablo.ts`) derives its `ModelClaim` from this, and the sync-server's two
+ * route copies adopt it once the engine dist is rebuilt.
+ *
+ * `expiresAt` is **epoch-ms** (a number) here — the same representation as the
+ * WS `WireClaim`, so there is ONE timestamp encoding across wire, SDK, HTTP,
+ * and errors (Stripe-style integer unix timestamps; no ISO string anywhere).
+ * `participantKind` ingests via {@link wireParticipantKindSchema} so a legacy
+ * `'human'` frame normalizes to `'user'`.
+ */
+export const modelClaimSchema = z
+  .object({
+    id: z.string(),
+    actor: z.string(),
+    participantKind: wireParticipantKindSchema,
+    action: z.string(),
+    description: z.string().optional(),
+    field: z.string().optional(),
+    status: z.enum(['active', 'queued']).optional(),
+    position: z.number().optional(),
+    expiresAt: z.number(),
+    target: modelTargetSchema,
+  })
+  .readonly();
+export type ModelClaim = z.infer<typeof modelClaimSchema>;
+
+/**
+ * `claim_begin` payload (client → server). The descriptive target + action,
  * plus an optional duration hint and the opt-in fair-queue flag. The server
  * stamps the lifecycle/timestamp fields, so they are NOT part of the inbound
  * shape — this is exactly what the WS ingest validates.
  */
-export const intentBeginPayloadSchema = targetRefSchema.extend({
-  intentId: z.string(),
+export const claimBeginPayloadSchema = targetRefSchema.extend({
+  claimId: z.string(),
   action: z.string(),
   /** Hint for `expiresAt`; the server caps it. */
   estimatedMs: z.number().optional(),
   /**
    * Opt into the fair wait queue: when the target is already held, the server
-   * enqueues this claim (FIFO) and replies `intent_queued` → later
-   * `intent_granted`, instead of `intent_rejected`. Clients that set this MUST
+   * enqueues this claim (FIFO) and replies `claim_queued` → later
+   * `claim_granted`, instead of `claim_rejected`. Clients that set this MUST
    * handle the grant.
    */
   queue: z.boolean().optional(),
 });
-export type IntentBeginPayload = z.infer<typeof intentBeginPayloadSchema>;
+export type ClaimBeginPayload = z.infer<typeof claimBeginPayloadSchema>;
 
 /**
- * `intent_abandon` payload (client → server). `entityType`/`entityId` are
- * carried so the server can DEQUEUE a still-*waiting* (not held) intent from
- * the FIFO line — the held-intent path needs only `intentId`. (The previous
+ * `claim_abandon` payload (client → server). `entityType`/`entityId` are
+ * carried so the server can DEQUEUE a still-*waiting* (not held) claim from
+ * the FIFO line — the held-claim path needs only `claimId`. (The previous
  * wire type omitted these two even though the handler reads them; the schema
  * documents what the code actually uses.)
  */
-export const intentAbandonPayloadSchema = z.object({
-  intentId: z.string(),
+export const claimAbandonPayloadSchema = z.object({
+  claimId: z.string(),
   entityType: z.string().optional(),
   entityId: z.string().optional(),
 });
-export type IntentAbandonPayload = z.infer<typeof intentAbandonPayloadSchema>;
+export type ClaimAbandonPayload = z.infer<typeof claimAbandonPayloadSchema>;
 
 /**
- * `intent_reorder` payload (client → server). A privileged participant (e.g. a
+ * `claim_reorder` payload (client → server). A privileged participant (e.g. a
  * supervisor over its sub-agents) re-ranks the FIFO wait queue for an entity:
- * `order` lists waiters by `heldBy`+`intentId` in the desired priority. Waiters
+ * `order` lists waiters by `heldBy`+`claimId` in the desired priority. Waiters
  * not listed keep their relative order behind the listed ones. The server gates
- * who may call this; an unauthorized sender is dropped. Unlike `intent_abandon`
+ * who may call this; an unauthorized sender is dropped. Unlike `claim_abandon`
  * (acts on the caller's own entry), reorder acts on OTHER participants' queue
  * positions — hence the authorization gate.
  */
-export const intentReorderPayloadSchema = z.object({
+export const claimReorderPayloadSchema = z.object({
   entityType: z.string(),
   entityId: z.string(),
-  order: z.array(z.object({ heldBy: z.string(), intentId: z.string() })),
+  order: z.array(z.object({ heldBy: z.string(), claimId: z.string() })),
 });
-export type IntentReorderPayload = z.infer<typeof intentReorderPayloadSchema>;
+export type ClaimReorderPayload = z.infer<typeof claimReorderPayloadSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Read interest — area-of-interest navigation (update_subscription)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * `update_subscription` payload (client → server). Replaces the connection's
+ * connection-level read interest with the COMPLETE set of sync groups — the
+ * READ counterpart to a claim (no write-claim, no TTL). Each entry is a
+ * {@link syncGroupInputSchema} (`'default'` or a branded `kind:id`), so a
+ * malformed group is rejected at ingest instead of being silently indexed.
+ * This is untrusted client input, so the element type is strict.
+ */
+export const updateSubscriptionPayloadSchema = z.object({
+  syncGroups: z.array(syncGroupInputSchema),
+});
+export type UpdateSubscriptionPayload = z.infer<
+  typeof updateSubscriptionPayloadSchema
+>;
+
+/**
+ * `subscription_ack` payload (server → client). Echoes the connection's
+ * effective read set after the update (unchanged on rejection — the update is
+ * atomic). `error` is present iff `success` is false (e.g. a scoped key
+ * requesting a group outside its grant). `syncGroups` is lenient
+ * (`z.string()`) here, not branded: it is the server's own echo for display,
+ * not untrusted input, and includes base anchors like `org:<id>`.
+ */
+export const subscriptionAckPayloadSchema = z.object({
+  success: z.boolean(),
+  syncGroups: z.array(z.string()),
+  error: z.object({ code: z.string(), message: z.string() }).optional(),
+});
+export type SubscriptionAckPayload = z.infer<
+  typeof subscriptionAckPayloadSchema
+>;
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Commit operation — carries the optimistic write-guard (Layer 3)
@@ -212,6 +368,15 @@ export const commitOperationSchema = writeGuardSchema.extend({
 });
 export type CommitOperation = z.infer<typeof commitOperationSchema>;
 
+/**
+ * Any commit op on the wire — the runtime-validated ingest contract. Commit
+ * ops carry replace (last-write-wins) semantics, guarded by the optimistic
+ * `writeGuard`. Kept as a distinct alias from {@link CommitOperation} so the
+ * ingest boundary in the server reads as "any op on the wire" even though the
+ * two are currently structurally identical.
+ */
+export type AnyCommitOperation = CommitOperation;
+
 // ─────────────────────────────────────────────────────────────────────────
 //  Layer 1 — PRESENCE (observation only; never enforces)
 // ─────────────────────────────────────────────────────────────────────────
@@ -228,7 +393,7 @@ export type PresenceActivity = z.infer<typeof presenceActivitySchema>;
 
 /**
  * Full `presence_update` frame as the server broadcasts it. The activity +
- * `activeIntents` are the observation surface for the other two layers —
+ * `activeClaims` are the observation surface for the other two layers —
  * rendered, never acted on as enforcement.
  */
 export const presenceUpdateFrameSchema = z.object({
@@ -241,7 +406,12 @@ export const presenceUpdateFrameSchema = z.object({
   customStatus: z.string().optional(),
   activity: presenceActivitySchema.optional(),
   isAgent: z.boolean().optional(),
-  activeIntents: z.array(intentClaimSchema).optional(),
+  /**
+   * Server-stamped canonical kind. Additive — older servers omit it and
+   * readers fall back to `isAgent` (see {@link participantKindFromWire}).
+   */
+  participantKind: wireParticipantKindSchema.optional(),
+  activeClaims: z.array(wireClaimSchema).optional(),
   delegatedFrom: z.string().nullish(),
 });
 export type PresenceUpdateFrame = z.infer<typeof presenceUpdateFrameSchema>;

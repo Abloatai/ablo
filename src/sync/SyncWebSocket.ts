@@ -26,6 +26,8 @@ import {
 import type { CommitMessage, CommitOperation } from '../wire/index.js';
 import type { MutationOperation } from '../interfaces/index.js';
 import type { ClientSyncDelta } from '../schema/sync-delta-wire.js';
+import type { ClaimError, ClaimRejection } from '../coordination/schema.js';
+import { subscriptionAckPayloadSchema } from '../coordination/schema.js';
 import {
   WS_BEARER_SUBPROTOCOL_PREFIX,
   WS_SYNC_SUBPROTOCOL,
@@ -191,12 +193,19 @@ export interface PresenceUpdateEvent {
   /** Server-derived from the connection's userId prefix. Clients must
    *  not self-declare — server is the source of truth. */
   isAgent?: boolean;
+  /**
+   * Server-stamped canonical kind (`'user' | 'agent' | 'system'`). Additive:
+   * older servers omit it and readers fall back to the lossy `isAgent`
+   * boolean (which cannot express `'system'`). Typed `string` because it is
+   * raw wire input — normalize via `participantKindFromWire`.
+   */
+  participantKind?: string;
   timestamp?: number;
   /** Server stamps every presence frame with this participant's open
-   *  intent claims so peers see them without a separate channel. Wire
-   *  shape mirrors `apps/sync-server/src/hub/types.ts IntentClaim`. */
-  activeIntents?: Array<{
-    intentId: string;
+   *  claim claims so peers see them without a separate channel. Wire
+   *  shape mirrors `apps/sync-server/src/hub/types.ts Claim`. */
+  activeClaims?: Array<{
+    claimId: string;
     entityType: string;
     entityId: string;
     path?: string;
@@ -218,13 +227,7 @@ export interface PresenceUpdateEvent {
      * learn *how* it resolved before it drops from the active set.
      */
     status?: 'active' | 'committed' | 'expired' | 'canceled';
-    error?: {
-      code: string;
-      message?: string;
-      heldBy?: string;
-      heldByIntentId?: string;
-      heldByExpiresAt?: number;
-    };
+    error?: ClaimError;
   }>;
   // Legacy/optional fields kept for back-compat with the web's
   // simpler online/offline cache.
@@ -267,30 +270,30 @@ export interface CoreSyncEventMap {
    */
   claim_expired: [{ claimId: string }];
   /**
-   * Server rejected an `intent_begin` because another participant
+   * Server rejected an `claim_begin` because another participant
    * already holds an open claim on the same target (cooperative
    * mutex enforced server-side). Surfaces to the participant-level
-   * IntentStream so the caller knows their announce was denied.
+   * ClaimStream so the caller knows their announce was denied.
    * Payload mirrors the wire frame's `payload`.
    */
-  intent_rejected: [Record<string, unknown>];
+  claim_rejected: [ClaimRejection];
   /**
-   * Fair-queue frames (opt-in `queue: true` on `intent_begin`). `intent_acquired`
-   * means the target was free and the lease is ours immediately; `intent_queued`
-   * means the claim is waiting in line (carries `position`); `intent_granted`
-   * means it reached the head and the lease is now ours; `intent_lost` means a
+   * Fair-queue frames (opt-in `queue: true` on `claim_begin`). `claim_acquired`
+   * means the target was free and the lease is ours immediately; `claim_queued`
+   * means the claim is waiting in line (carries `position`); `claim_granted`
+   * means it reached the head and the lease is now ours; `claim_lost` means a
    * held/granted claim was taken away (TTL lapse on disconnect, revoke).
    */
   /**
-   * Per-entity wait-queue snapshot: `{ target, queue: Intent[] }` with each
+   * Per-entity wait-queue snapshot: `{ target, queue: Claim[] }` with each
    * entry `status: 'queued'` + `position`. Broadcast to entity peers on every
    * queue mutation — powers the reactive `ablo.<model>.claim.queue({ id })` read.
    */
-  intent_queue: [Record<string, unknown>];
-  intent_acquired: [Record<string, unknown>];
-  intent_queued: [Record<string, unknown>];
-  intent_granted: [Record<string, unknown>];
-  intent_lost: [Record<string, unknown>];
+  claim_queue: [Record<string, unknown>];
+  claim_acquired: [Record<string, unknown>];
+  claim_queued: [Record<string, unknown>];
+  claim_granted: [Record<string, unknown>];
+  claim_lost: [Record<string, unknown>];
 }
 
 /**
@@ -455,6 +458,20 @@ export class SyncWebSocket<
       timeout: ReturnType<typeof setTimeout>;
     }
   >();
+
+  /**
+   * In-flight `update_subscription` frames awaiting `subscription_ack`.
+   * A FIFO queue rather than a keyed Map because the wire ack carries no
+   * correlation id — the server applies subscription updates in receive
+   * order and acks in the same order, so `shift()` on ack matches the
+   * oldest pending request. (Read-interest changes are infrequent and
+   * usually settle before the next one, so depth is ~1 in practice.)
+   */
+  private pendingSubscriptions: Array<{
+    resolve: (value: { syncGroups: string[] }) => void;
+    reject: (err: Error) => void;
+    timeout: ReturnType<typeof setTimeout>;
+  }> = [];
 
   constructor(options: SyncWebSocketOptions) {
     super();
@@ -814,6 +831,42 @@ export class SyncWebSocket<
             }
             break;
           }
+          case 'subscription_ack': {
+            // Ack for a prior `update_subscription`. The wire carries no
+            // correlation id, so FIFO-match against the oldest pending
+            // request — the server applies and acks subscription updates
+            // in receive order. Validated through the canonical zod schema
+            // (mirrors how the Hub validates inbound frames).
+            const pending = this.pendingSubscriptions.shift();
+            if (!pending) break;
+            clearTimeout(pending.timeout);
+            const parsed = subscriptionAckPayloadSchema.safeParse(message.payload);
+            if (!parsed.success) {
+              // Unreadable ack — resolve the pending request as a failure
+              // rather than hang it until timeout.
+              pending.reject(
+                errorFromWire('malformed subscription_ack from server', {
+                  code: 'malformed_subscription',
+                }),
+              );
+              break;
+            }
+            const ack = parsed.data;
+            if (ack.success) {
+              // Keep the reconnect URL aligned with current interest: a
+              // reconnect re-subscribes from `this.options.syncGroups`.
+              this.options.syncGroups = ack.syncGroups;
+              pending.resolve({ syncGroups: ack.syncGroups });
+            } else {
+              pending.reject(
+                errorFromWire(
+                  ack.error?.message ?? 'update_subscription rejected by server',
+                  { code: ack.error?.code ?? 'malformed_subscription' },
+                ),
+              );
+            }
+            break;
+          }
           case 'claim_expired': {
             // Server-initiated expiry notification. Emit as a typed
             // event so consumers can react (re-claim with a fresh
@@ -825,39 +878,39 @@ export class SyncWebSocket<
             }
             break;
           }
-          case 'intent_rejected': {
-            // Server denied an `intent_begin` because the target is
+          case 'claim_rejected': {
+            // Server denied an `claim_begin` because the target is
             // already claimed by another participant. Forward the
-            // payload as-is — the IntentStream consumer interprets
+            // payload as-is — the ClaimStream consumer interprets
             // the conflict shape (peerId, target, etc.).
-            this.emit('intent_rejected', message.payload ?? {});
+            this.emit('claim_rejected', message.payload ?? {});
             break;
           }
-          case 'intent_acquired': {
+          case 'claim_acquired': {
             // Opt-in fair queue: the target was free, so the lease is ours
-            // immediately (no waiting). Payload carries { intentId, target }.
-            this.emit('intent_acquired', message.payload ?? {});
+            // immediately (no waiting). Payload carries { claimId, target }.
+            this.emit('claim_acquired', message.payload ?? {});
             break;
           }
-          case 'intent_queue': {
+          case 'claim_queue': {
             // Per-entity wait-queue snapshot for reactive `queue(id)`.
-            this.emit('intent_queue', message.payload ?? {});
+            this.emit('claim_queue', message.payload ?? {});
             break;
           }
-          case 'intent_queued': {
+          case 'claim_queued': {
             // Opt-in fair queue: our claim is waiting in line. Payload
-            // carries { intentId, target, position }.
-            this.emit('intent_queued', message.payload ?? {});
+            // carries { claimId, target, position }.
+            this.emit('claim_queued', message.payload ?? {});
             break;
           }
-          case 'intent_granted': {
+          case 'claim_granted': {
             // Our queued claim reached the head — the lease is now ours.
-            this.emit('intent_granted', message.payload ?? {});
+            this.emit('claim_granted', message.payload ?? {});
             break;
           }
-          case 'intent_lost': {
+          case 'claim_lost': {
             // A held/granted claim was taken from us (TTL lapse, revoke).
-            this.emit('intent_lost', message.payload ?? {});
+            this.emit('claim_lost', message.payload ?? {});
             break;
           }
           case 'delta': {
@@ -988,6 +1041,22 @@ export class SyncWebSocket<
         this.pendingClaims.clear();
       }
 
+      // Cancel in-flight subscription updates — the reconnect handshake
+      // re-sends `options.syncGroups` (the last acked interest) in the
+      // upgrade URL, so a pending change that never acked is simply
+      // retried by the caller against the fresh connection.
+      if (this.pendingSubscriptions.length > 0) {
+        for (const pending of this.pendingSubscriptions) {
+          clearTimeout(pending.timeout);
+          pending.reject(
+            new AbloConnectionError(
+              `WebSocket closed while update_subscription was in flight (code=${event.code})`,
+            ),
+          );
+        }
+        this.pendingSubscriptions = [];
+      }
+
       // Check for session-related close codes
       // 1008 = Policy Violation (often auth)
       // 4001 = Unauthorized (custom)
@@ -1114,9 +1183,7 @@ export class SyncWebSocket<
     this.send({
       type: 'ack',
       payload: {
-        lastSyncId: syncId,
-        versions: this.versionVector,
-      },
+        lastSyncId: syncId,      },
     });
   }
 
@@ -1337,14 +1404,14 @@ export class SyncWebSocket<
   sendRelease(claimId: string): void {
     // Cancel any in-flight claim that hadn't acked yet — the user
     // changed their mind. Without this the timer would eventually
-    // reject; doing it now matches the user's intent immediately.
+    // reject; doing it now matches the user's claim immediately.
     const pending = this.pendingClaims.get(claimId);
     if (pending) {
       clearTimeout(pending.timeout);
       this.pendingClaims.delete(claimId);
       pending.reject(
         new AbloError(`claim ${claimId} released before ack`, {
-          code: 'intent_wait_aborted',
+          code: 'claim_wait_aborted',
           httpStatus: 409,
         }),
       );
@@ -1357,6 +1424,68 @@ export class SyncWebSocket<
     } catch {
       // Idempotent contract — silent failure is acceptable here.
     }
+  }
+
+  /**
+   * Move this connection's READ interest — replace the connection-level
+   * sync groups mid-session as the user opens/closes entities. This is the
+   * area-of-interest (AOI) navigation primitive: the server fans out
+   * deltas only for groups currently in view, instead of the frozen set
+   * chosen at connect.
+   *
+   * Full-set replace semantics — pass the complete new group list, not a
+   * delta. Resolves with the server's effective set once `subscription_ack`
+   * arrives; rejects (typed) on a scope denial (a restricted `rk_` key
+   * requesting a group outside its allowlist), timeout, or disconnect. On
+   * success the new set is recorded as `options.syncGroups` so a later
+   * reconnect re-subscribes to current interest, not the connect-time set.
+   *
+   * Distinct from {@link sendClaim} (write-claim, per-op, TTL'd) — this is
+   * the read side and carries no capability token of its own; it's bounded
+   * by the connection credential's grant.
+   */
+  updateSubscription(
+    syncGroups: ReadonlyArray<string>,
+    options?: { timeoutMs?: number },
+  ): Promise<{ syncGroups: string[] }> {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      return Promise.reject(this.notConnectedError('update_subscription'));
+    }
+    const timeoutMs = options?.timeoutMs ?? 15_000;
+    return new Promise<{ syncGroups: string[] }>((resolve, reject) => {
+      const entry: {
+        resolve: (value: { syncGroups: string[] }) => void;
+        reject: (err: Error) => void;
+        timeout: ReturnType<typeof setTimeout>;
+      } = {
+        resolve,
+        reject,
+        timeout: setTimeout(() => {
+          const idx = this.pendingSubscriptions.indexOf(entry);
+          if (idx !== -1) this.pendingSubscriptions.splice(idx, 1);
+          reject(
+            new AbloConnectionError(
+              `update_subscription timed out after ${timeoutMs}ms`,
+              { code: 'wait_for_timeout' },
+            ),
+          );
+        }, timeoutMs),
+      };
+      this.pendingSubscriptions.push(entry);
+      try {
+        this.ws!.send(
+          JSON.stringify({
+            type: 'update_subscription',
+            payload: { syncGroups: [...syncGroups] },
+          }),
+        );
+      } catch (error) {
+        clearTimeout(entry.timeout);
+        const idx = this.pendingSubscriptions.indexOf(entry);
+        if (idx !== -1) this.pendingSubscriptions.splice(idx, 1);
+        reject(toAbloError(error));
+      }
+    });
   }
 
   /**
@@ -1808,9 +1937,7 @@ export class SyncWebSocket<
     this.send({
       type: 'sync_request',
       payload: {
-        cursor: this.syncCursor,
-        versions: this.versionVector,
-        // Always send lastSyncId to ensure server uses client's current position
+        cursor: this.syncCursor,        // Always send lastSyncId to ensure server uses client's current position
         lastSyncId: this.lastSyncId,
         capabilities: capsArr,
       },
@@ -1836,9 +1963,7 @@ export class SyncWebSocket<
     this.send({
       type: 'bootstrap_request',
       payload: {
-        entities: entities || [],
-        versions: this.versionVector,
-        capabilities: this.options.capabilities,
+        entities: entities || [],        capabilities: this.options.capabilities,
       },
     });
   }
@@ -1960,7 +2085,7 @@ export class SyncWebSocket<
    *
    * Wire frame (apps/sync-server/src/hub/types.ts PresenceUpdateMessage):
    *   { type: 'presence_update', payload: { kind, userId, status,
-   *     syncGroups, activity, isAgent, timestamp, activeIntents } }
+   *     syncGroups, activity, isAgent, timestamp, activeClaims } }
    */
   private handlePresenceUpdate(message: {
     payload?: PresenceUpdateEvent;

@@ -3,7 +3,7 @@
  *
  * The lossless counterpart to `ablo pull` (which reads the live database and so
  * can't recover enums or relations). This reads `schema.prisma` directly, where
- * the ORM's intent is still declared:
+ * the ORM's claim is still declared:
  *
  *   - `enum Status { … }`              → `field.enum([...])`  (members preserved)
  *   - `@relation(fields:[x], references:[y])` → `relation.belongsTo(target, x)`

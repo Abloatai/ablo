@@ -37,7 +37,7 @@ export {
   type InternalAbloOptions,
   type ClaimedOptions,
   type IfClaimedPolicy,
-  type IntentWaitOptions,
+  type ClaimWaitOptions,
   type ModelCountOptions,
   type ModelListOptions,
   type ModelListScope,
@@ -55,7 +55,7 @@ export type { AbloPersistence } from './persistence.js';
 export type {
   AbloApi,
   AbloApiClientOptions,
-  AbloApiIntents,
+  AbloApiClaims,
   Capability,
   CapabilityCreateOptions,
   CapabilityParticipantKind,
@@ -72,6 +72,6 @@ export type {
   ParticipantManager,
   ParticipantScope,
   ParticipantStatus,
-  ScopedIntents,
+  ScopedClaims,
   ScopedPresence,
 } from '../sync/participants.js';

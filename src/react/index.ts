@@ -30,7 +30,7 @@
  *   useAblo((ablo) => ablo.<model>.claim.state(...)) — reactive coordination reads
  *   useParticipant({ scope }) — join multiplayer for a scope, get peers/claims
  *   usePresence()             — typed presence view
- *   useIntent(name)           — typed intent dispatcher
+ *   useClaim(name)           — typed claim dispatcher
  *
  * ── Breaking changes from v0.2.x ───────────────────────────────────
  * Removed: <SyncProvider>, SyncContext, useSyncContext — folded into
@@ -49,7 +49,7 @@ export type {
   DefaultSyncShape,
   ResolveSchema,
   ResolvePresence,
-  ResolveIntents,
+  ResolveClaims,
   ResolveUserMeta,
   ResolveModelKey,
 } from '../types/global.js';
@@ -58,6 +58,7 @@ export type {
 export {
   AbloProvider,
   useParticipant,
+  usePeers,
   useSync,
   useSyncStore,
   type AbloProviderProps,
@@ -125,9 +126,9 @@ export {
   type UseAbloModelResult,
 } from './useAblo.js';
 
-// ── Presence + intent (typed via Register module augmentation) ─────
+// ── Presence + claim (typed via Register module augmentation) ─────
 export { usePresence } from './usePresence.js';
-export { useIntent } from './useIntent.js';
+export { useClaim } from './useClaim.js';
 
 // ── ModelScope re-export ───────────────────────────────────────────
 export { ModelScope } from '../types/index.js';

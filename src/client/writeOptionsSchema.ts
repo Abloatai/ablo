@@ -10,8 +10,8 @@
  * bottom so the two can never silently diverge.
  *
  * Validation-only by design: callers keep their ORIGINAL options object.
- * Zod's parse output strips unknown keys, and the `intent` slot legally
- * carries live handles (`IntentLeaseHandle` / claim leases) whose
+ * Zod's parse output strips unknown keys, and the `claim` slot legally
+ * carries live handles (`ClaimHandle` / claim leases) whose
  * `release`/`revoke` functions must survive — so we assert, never replace.
  */
 
@@ -32,9 +32,9 @@ export const writeOptionsSchema = z.object({
   readAt: z.number().int().nonnegative().nullish(),
   /** What the server does when the target moved past `readAt`. */
   onStale: onStaleModeSchema.nullish(),
-  /** Claim/intent attribution — an id, or a live lease handle (loose: the
+  /** Claim/claim attribution — an id, or a live lease handle (loose: the
    *  handle's `release`/`revoke` functions ride along untouched). */
-  intent: z.union([z.string(), z.looseObject({ id: z.string() })]).nullish(),
+  claim: z.union([z.string(), z.looseObject({ id: z.string() })]).nullish(),
   /** Dormant wire-compat field; always `null` from current clients. */
   causedByTaskId: z.string().nullish(),
 });

@@ -119,6 +119,8 @@ export interface Transaction {
   priorityScore: number; // derived FK-aware priority used for sorting
   writeOptions?: WriteOptions;
   batchId?: string;
+  /** Completed locally without a server operation; no sync echo will arrive. */
+  localOnly?: boolean;
   /** LINEAR PATTERN: syncId threshold - transaction confirms when delta.id >= this value */
   syncIdNeededForCompletion?: number;
   /**
@@ -401,6 +403,7 @@ export class TransactionQueue extends EventEmitter {
   // Per-model in-flight tracking and merge buffer
   private inFlightByModel = new Set<string>();
   private pendingMergeByModel = new Map<string, any>();
+  private deferredDeletesByCreate = new Map<string, Transaction[]>();
 
   // Commit lane: pre-built atomic multi-op envelopes from `ablo.commits.create()`.
   // Drained serially (one envelope at a time) since each is atomic; no
@@ -422,6 +425,128 @@ export class TransactionQueue extends EventEmitter {
         transaction.type,
         transaction.modelName
       );
+    }
+  }
+
+  private entityKey(modelName: string, modelId: string): string {
+    return `${modelName}:${modelId}`;
+  }
+
+  private isTransactionForModel(
+    transaction: Transaction,
+    modelName: string,
+    modelId: string,
+  ): boolean {
+    return transaction.modelName === modelName && transaction.modelId === modelId;
+  }
+
+  private resolveConfirmation(transaction: Transaction): void {
+    const resolver = this.confirmationResolvers.get(transaction.id);
+    if (!resolver) return;
+    this.confirmationResolvers.delete(transaction.id);
+    resolver.resolve();
+  }
+
+  private takeUnsentCreateForModel(modelName: string, modelId: string): Transaction | undefined {
+    const isUnsentCreate = (tx: Transaction): boolean =>
+      tx.type === 'create' &&
+      tx.status === 'pending' &&
+      tx.attempts === 0 &&
+      this.isTransactionForModel(tx, modelName, modelId);
+
+    const stagedIndex = this.createdTransactions.findIndex(isUnsentCreate);
+    if (stagedIndex >= 0) {
+      return this.createdTransactions.splice(stagedIndex, 1)[0];
+    }
+
+    const queuedIndex = this.executionQueue.findIndex(isUnsentCreate);
+    if (queuedIndex >= 0) {
+      return this.executionQueue.splice(queuedIndex, 1)[0];
+    }
+
+    return this.store.getByStatus('pending').find(isUnsentCreate);
+  }
+
+  private async cancelUnsentCreateForDelete(transaction: Transaction): Promise<void> {
+    this.store.updateStatus(transaction.id, 'rolled_back');
+    if (this.config.enableOptimistic) {
+      await this.rollbackOptimistic(transaction, 'model_cancelled');
+    }
+    this.resolveConfirmation(transaction);
+  }
+
+  private findCreateBarrierForDelete(modelName: string, modelId: string): Transaction | undefined {
+    const liveCreates = [
+      ...this.store.getByStatus('pending'),
+      ...this.store.getByStatus('executing'),
+      ...this.store.getByStatus('awaiting_delta'),
+    ].filter((tx) =>
+      tx.type === 'create' &&
+      this.isTransactionForModel(tx, modelName, modelId) &&
+      // A never-attempted pending create can be cancelled instead. Once the
+      // create has been sent, even a retry-pending state is a causal barrier:
+      // the server may already have applied it and only the response was lost.
+      (tx.status !== 'pending' || tx.attempts > 0)
+    );
+
+    return liveCreates.sort((a, b) => b.createdAt - a.createdAt)[0];
+  }
+
+  private completeLocalDelete(
+    model: Model,
+    context: UserContext,
+    writeOptions: WriteOptions | undefined,
+  ): Transaction {
+    const actualModelName = model.getModelName();
+    const modelKey = normalizeModelKey(actualModelName);
+    const transaction: Transaction = {
+      id: this.generateId(),
+      type: 'delete',
+      modelName: actualModelName,
+      modelId: model.id,
+      modelKey,
+      priorityScore: this.computePriorityScore('delete', actualModelName),
+      previousData: model.toJSON ? model.toJSON() : { ...model },
+      context,
+      status: 'completed',
+      createdAt: Date.now(),
+      attempts: 0,
+      priority: 'high',
+      writeOptions,
+      localOnly: true,
+    };
+
+    this.attachConfirmation(transaction);
+    this.store.add(transaction);
+
+    if (this.config.enableOptimistic) {
+      this.applyOptimisticDelete(model, transaction);
+    }
+
+    this.emit('transaction:created', transaction);
+    this.emit('transaction:completed', transaction);
+    this.emit(`transaction:completed:${transaction.id}`, transaction);
+    this.optimisticUpdates.delete(transaction.id);
+    return transaction;
+  }
+
+  private deferDeleteUntilCreateSettles(createTransaction: Transaction, deleteTransaction: Transaction): void {
+    const key = this.entityKey(createTransaction.modelName, createTransaction.modelId);
+    const deferred = this.deferredDeletesByCreate.get(key) ?? [];
+    deferred.push(deleteTransaction);
+    this.deferredDeletesByCreate.set(key, deferred);
+  }
+
+  private releaseDeferredDeletesForCreate(createTransaction: Transaction): void {
+    const key = this.entityKey(createTransaction.modelName, createTransaction.modelId);
+    const deferred = this.deferredDeletesByCreate.get(key);
+    if (!deferred || deferred.length === 0) return;
+
+    this.deferredDeletesByCreate.delete(key);
+
+    for (const deleteTransaction of deferred) {
+      if (this.store.get(deleteTransaction.id)?.status !== 'pending') continue;
+      this.enqueue(deleteTransaction);
     }
   }
 
@@ -589,6 +714,9 @@ export class TransactionQueue extends EventEmitter {
         this.confirmationResolvers.delete(tx.id);
         r.resolve();
       }
+      if (tx.type === 'create') {
+        this.releaseDeferredDeletesForCreate(tx);
+      }
     });
     this.on(
       'transaction:failed',
@@ -597,6 +725,9 @@ export class TransactionQueue extends EventEmitter {
         if (r) {
           this.confirmationResolvers.delete(transaction.id);
           r.reject(error);
+        }
+        if (transaction.type === 'create') {
+          this.releaseDeferredDeletesForCreate(transaction);
         }
       }
     );
@@ -999,6 +1130,7 @@ export class TransactionQueue extends EventEmitter {
         attempts: 0,
         priority: 'high',
         writeOptions,
+        localOnly: true,
         // Activity deletes complete synchronously (audit-record skip path).
         // Pre-resolved so consumers can still `await tx.confirmation` uniformly.
         confirmation: Promise.resolve(),
@@ -1016,6 +1148,12 @@ export class TransactionQueue extends EventEmitter {
 
     const modelKey = normalizeModelKey(actualModelName);
     const priorityScore = this.computePriorityScore('delete', actualModelName);
+
+    const unsentCreate = this.takeUnsentCreateForModel(actualModelName, model.id);
+    if (unsentCreate) {
+      await this.cancelUnsentCreateForDelete(unsentCreate);
+      return this.completeLocalDelete(model, context, writeOptions);
+    }
 
     const transaction: Transaction = {
       id: this.generateId(),
@@ -1039,17 +1177,23 @@ export class TransactionQueue extends EventEmitter {
     // Cancel any pending/in-flight updates for this model to prevent "no rows" errors
     // when the delete executes before the update (race condition fix)
     this.cancelTransactionsForModel(model.id, 'update');
-    this.pendingMergeByModel.delete(`${actualModelName}:${model.id}`);
-    this.inFlightByModel.delete(`${actualModelName}:${model.id}`);
+    const entityKey = this.entityKey(actualModelName, model.id);
+    this.pendingMergeByModel.delete(entityKey);
+    this.inFlightByModel.delete(entityKey);
 
     // Apply optimistic delete
     if (this.config.enableOptimistic) {
       this.applyOptimisticDelete(model, transaction);
     }
 
-    // LINEAR PATTERN: Stage transaction for microtask commit
-    // All deletes in same event loop will be batched together
-    this.stageTransaction(transaction);
+    const createBarrier = this.findCreateBarrierForDelete(actualModelName, model.id);
+    if (createBarrier) {
+      this.deferDeleteUntilCreateSettles(createBarrier, transaction);
+    } else {
+      // LINEAR PATTERN: Stage transaction for microtask commit
+      // All deletes in same event loop will be batched together
+      this.stageTransaction(transaction);
+    }
 
     this.emit('transaction:created', transaction);
     return transaction;
@@ -1363,7 +1507,7 @@ export class TransactionQueue extends EventEmitter {
 
                 // Safety net: when lastSyncId is 0, DELETE transactions should be confirmed
                 // immediately. DELETEs are idempotent — if no delta was emitted, the entity
-                // is already gone and the intent was achieved. Parking DELETEs in awaiting_delta
+                // is already gone and the claim was achieved. Parking DELETEs in awaiting_delta
                 // with threshold 0 causes 30s reconciliation delays.
                 if (lastSyncId === 0 && tx.type === 'delete') {
                   this.store.updateStatus(tx.id, 'completed');
@@ -1458,7 +1602,7 @@ export class TransactionQueue extends EventEmitter {
 
               // LINEAR PATTERN: Handle "no rows in result set" gracefully
               // This error means the entity was already deleted - for UPDATE/DELETE ops, this is success
-              // The intent was achieved (the data doesn't exist), so treat as completed
+              // The claim was achieved (the data doesn't exist), so treat as completed
               if (errorMessage.includes('no rows in result set')) {
                 getContext().logger.info('[TransactionQueue] Graceful handling: entity already deleted', {
                   batchSize: batchOps.length,
@@ -1466,7 +1610,7 @@ export class TransactionQueue extends EventEmitter {
 
                 for (const { tx, op } of batchOps) {
                   if (op.type === 'UPDATE' || op.type === 'DELETE') {
-                    // Entity gone = intent achieved, mark as completed
+                    // Entity gone = claim achieved, mark as completed
                     this.store.updateStatus(tx.id, 'completed');
                     this.emit('transaction:completed', tx);
 
@@ -2424,6 +2568,8 @@ export class TransactionQueue extends EventEmitter {
     this.store.clear();
     this.optimisticUpdates.clear();
     this.executionQueue = [];
+    this.createdTransactions = [];
+    this.deferredDeletesByCreate.clear();
 
     // Clear event listeners
     this.removeAllListeners();

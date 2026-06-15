@@ -23,6 +23,6 @@ export type {
   ConflictOperation,
   ConflictPolicy,
   StaleContextConflict,
-  IntentHeldConflict,
+  ClaimHeldConflict,
 } from './types.js';
 export { defaultPolicy, capabilityPreemptPolicy } from './types.js';

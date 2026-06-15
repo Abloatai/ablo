@@ -13,7 +13,7 @@ import {
 import type { Schema, SchemaRecord } from '../schema/schema.js';
 import { Ablo } from '../client/Ablo.js';
 import type {
-  ActiveIntent,
+  ActiveClaim,
   Peer,
 } from '../types/streams.js';
 import type {
@@ -412,6 +412,29 @@ export interface UseParticipantOptions {
   readonly autoRefreshThresholdSeconds?: number | null;
   /** Tear down + don't re-join while true. */
   readonly paused?: boolean;
+  /**
+   * Acquire a write-claim CLAIM on the scope, in addition to read interest.
+   *
+   * Default `false`: opening a scope subscribes the connection to its deltas
+   * (read interest, via `update_subscription`) but does NOT claim it — a
+   * viewer is not a claimant. Set `true` when the participant intends to
+   * WRITE (editing a deck, an agent staking work): the claim is sent so peers
+   * observe it, and the scope is pinned so it stays subscribed (never warms)
+   * for as long as the claim is held.
+   */
+  readonly claim?: boolean;
+  /**
+   * Backfill the scope's CURRENT state into the pool on enter, in addition to
+   * tailing live changes.
+   *
+   * Default `false`: entering a scope subscribes to its FUTURE deltas only — if
+   * the scope's rows aren't already loaded, the view is empty until something
+   * changes. Set `true` when opening an entity that may not be loaded yet (a
+   * deep-linked deck, a never-opened sheet) so its current rows are fetched and
+   * injected once, then kept fresh by the live tail. The fetch is single-flight
+   * and runs once per group; a failure soft-fails (the live tail still flows).
+   */
+  readonly hydrate?: boolean;
 }
 
 /** @deprecated Use `ParticipantStatus`. */
@@ -421,14 +444,14 @@ export interface UseParticipantReturn {
   readonly participant: EngineParticipant | null;
   /** Everyone else on the engine's sync groups (`participant.presence.others`), bridged to React. */
   readonly peers: ReadonlyArray<Peer>;
-  /** Active intent claims by peers (`participant.intents.others`), bridged to React. */
-  readonly claims: ReadonlyArray<ActiveIntent>;
+  /** Active claim claims by peers (`participant.claims.others`), bridged to React. */
+  readonly claims: ReadonlyArray<ActiveClaim>;
   readonly status: ParticipantStatus;
   readonly error: Error | null;
 }
 
 const EMPTY_PRESENCE: ReadonlyArray<Peer> = Object.freeze([]);
-const EMPTY_INTENTS: ReadonlyArray<ActiveIntent> = Object.freeze([]);
+const EMPTY_INTENTS: ReadonlyArray<ActiveClaim> = Object.freeze([]);
 
 /**
  * Join multiplayer for a given scope. Returns the participant and its
@@ -436,7 +459,7 @@ const EMPTY_INTENTS: ReadonlyArray<ActiveIntent> = Object.freeze([]);
  * flips to true.
  *
  * The returned `participant` is an `EngineParticipant` — `.presence`
- * + `.intents` only — backed by the engine's existing socket. For
+ * + `.claims` only — backed by the engine's existing socket. For
  * headless-bot patterns (a separate identity in the same browser
  * tab), construct a second `Ablo({ kind: 'agent', ... })` directly.
  */
@@ -461,10 +484,10 @@ export function useParticipant(opts: UseParticipantOptions): UseParticipantRetur
   // Reference-stable participant facade — same socket as entity sync,
   // so there is no `connect()` / `disconnect()` lifecycle here. The
   // engine manages the connection; the hook is a thin window onto its
-  // already-attached presence + intent streams.
+  // already-attached presence + claim streams.
   const participant: EngineParticipant | null = useMemo(() => {
     if (!engine) return null;
-    return { presence: engine.presence, intents: engine.intents };
+    return { presence: engine.presence, claims: engine.claims };
   }, [engine]);
 
   // Status maps to the engine's sync state. `connecting` while the
@@ -472,7 +495,10 @@ export function useParticipant(opts: UseParticipantOptions): UseParticipantRetur
   // any scoped participant claim has acked; `error` if the claim
   // fails; `disconnected` while paused or before the engine exists.
   const syncStatus = useSyncStatus();
-  const needsClaim = scopedSyncGroups.length > 0;
+  // Only a write-claim participant waits on a claim ack. A pure reader
+  // (the default) is `connected` as soon as the engine is — its read
+  // interest is fire-and-forget `update_subscription`, not a claim.
+  const needsClaim = !!opts.claim && scopedSyncGroups.length > 0;
   const status: ParticipantStatus = paused || !engine
     ? 'disconnected'
     : claimError
@@ -486,13 +512,42 @@ export function useParticipant(opts: UseParticipantOptions): UseParticipantRetur
         : 'connecting';
   const error: Error | null = claimError;
 
+  // ── Read interest (always) ───────────────────────────────────────
+  // Subscribe the connection to the scope's sync groups while mounted +
+  // connected — the area-of-interest navigation primitive. No claim, no
+  // TTL: a viewer just receives the scope's deltas. Hysteresis (warm TTL)
+  // lives in the store's AreaOfInterestManager, so a quick unmount/remount
+  // (tab flip) doesn't re-bootstrap.
+  useEffect(() => {
+    const scope = opts.scope;
+    if (paused || !engine || !scope || scopedSyncGroups.length === 0) return;
+    if (syncStatus.name !== 'connected') return;
+    const store = engine._store;
+    // `hydrate` backfills the scope's current state after subscribing
+    // (store handles subscribe-first ordering + single-flight). leaveScope
+    // only moves read interest; the hydrated rows stay in the pool.
+    void store.enterScope?.(scope, { hydrate: opts.hydrate });
+    return () => {
+      void store.leaveScope?.(scope);
+    };
+    // scopeKey is the stable proxy for the resolved groups; same idiom as
+    // the claim effect below.
+  }, [engine, paused, scopeKey, syncStatus.name, opts.hydrate]);
+
+  // ── Write claim (opt-in: `claim: true`) ─────────────────────────
+  // A claim is the write-claim primitive — distinct from read interest
+  // above. Only sent when the caller opts in; it makes peers observe the
+  // claim and pins the scope so it never warms while held.
   useEffect(() => {
     setClaimError(null);
     setClaimConnected(false);
-    if (paused || !engine || scopedSyncGroups.length === 0) return;
+    const scope = opts.scope;
+    if (paused || !engine || !opts.claim || !scope || scopedSyncGroups.length === 0)
+      return;
     if (syncStatus.name !== 'connected') return;
     const ws = engine._ws;
     if (!ws) return;
+    const store = engine._store;
 
     let cancelled = false;
     const claimId = createParticipantClaimId();
@@ -507,20 +562,23 @@ export function useParticipant(opts: UseParticipantOptions): UseParticipantRetur
           setClaimError(err instanceof Error ? err : new Error(String(err)));
         }
       });
+    // Prominence: hold the scope subscribed for as long as the claim lives.
+    void store.pinScope?.(scope);
 
     return () => {
       cancelled = true;
       ws.sendRelease(claimId);
+      void store.unpinScope?.(scope);
     };
-  }, [engine, paused, scopeKey, syncStatus.name, opts.ttlSeconds]);
+  }, [engine, paused, scopeKey, syncStatus.name, opts.ttlSeconds, opts.claim]);
 
-  // Bridge the engine's presence + intents streams into React state.
+  // Bridge the engine's presence + claims streams into React state.
   // Plain useState + useEffect is sufficient — mid-frame tearing on a
   // peer list is harmless (users won't notice one frame of stale
   // presence). Queries and sync status use useSyncExternalStore
   // because transactions CAN tear visibly; presence can't.
   const [peers, setPeers] = useState<ReadonlyArray<Peer>>(EMPTY_PRESENCE);
-  const [claims, setClaims] = useState<ReadonlyArray<ActiveIntent>>(EMPTY_INTENTS);
+  const [claims, setClaims] = useState<ReadonlyArray<ActiveClaim>>(EMPTY_INTENTS);
 
   useEffect(() => {
     if (!participant || paused) {
@@ -529,16 +587,16 @@ export function useParticipant(opts: UseParticipantOptions): UseParticipantRetur
       return;
     }
     setPeers(participant.presence.others);
-    setClaims(participant.intents.others);
+    setClaims(participant.claims.others);
     const unsubPresence = participant.presence.onChange(() => {
       setPeers(participant.presence.others);
     });
-    const unsubIntents = participant.intents.onChange(() => {
-      setClaims(participant.intents.others);
+    const unsubClaims = participant.claims.onChange(() => {
+      setClaims(participant.claims.others);
     });
     return () => {
       unsubPresence();
-      unsubIntents();
+      unsubClaims();
     };
   }, [participant, paused]);
 
@@ -548,6 +606,65 @@ export function useParticipant(opts: UseParticipantOptions): UseParticipantRetur
   // active: it opens a multiplexed claim on the engine WebSocket.
 
   return { participant, peers, claims, status, error };
+}
+
+/**
+ * Read-only presence: the OTHER participants currently visible to this
+ * connection, bridged to React. Unlike {@link useParticipant}, this does
+ * NOT enter/leave a scope (no `update_subscription`, no warm-TTL churn) —
+ * it is a pure reader of the engine's already-flowing presence stream.
+ *
+ * Pass `scope` to narrow to the peers on that scope's sync group(s); omit
+ * it to get everyone on the engine's groups. Membership is driven entirely
+ * by the presence channel (set server-side on connect, independent of any
+ * cursor/collaboration traffic), so reading it never affects what the
+ * connection is subscribed to and can't deadlock against a gated channel.
+ *
+ * Use this to answer "is anyone else here?" — e.g. suppressing live-cursor
+ * broadcasts while alone — when some OTHER mount already owns the scope's
+ * read interest (scope `leave` is not reference-counted, so a second
+ * `useParticipant` on the same scope would warm-drop the owner's
+ * subscription on unmount).
+ *
+ * ```ts
+ * const peers = usePeers({ slideDecks: deckId });
+ * const alone = !peers.some((p) => p.participantKind === 'user');
+ * ```
+ */
+export function usePeers(scope?: ParticipantScope): ReadonlyArray<Peer> {
+  const ctx = useContext(AbloInternalContext);
+  const engine = ctx?.engine ?? null;
+
+  // Resolve scope → groups through the schema (same idiom as useParticipant).
+  // The stringified, sorted key is the stable effect dependency.
+  const scopeKey = JSON.stringify(
+    resolveParticipantSyncGroups(scope, engine?.schema).sort(),
+  );
+  const groups = useMemo(() => JSON.parse(scopeKey) as string[], [scopeKey]);
+
+  const [peers, setPeers] = useState<ReadonlyArray<Peer>>(EMPTY_PRESENCE);
+
+  useEffect(() => {
+    if (!engine) {
+      setPeers(EMPTY_PRESENCE);
+      return;
+    }
+    const presence = engine.presence;
+    const compute = (): ReadonlyArray<Peer> =>
+      groups.length === 0
+        ? presence.others
+        : presence.others.filter((p) =>
+            p.syncGroups.some((g) => groups.includes(g)),
+          );
+    // Plain useState + onChange — presence changes on join/leave/activity
+    // only (never on cursor traffic, a separate channel), so this fires
+    // rarely; a frame of stale presence is harmless (same rationale as
+    // useParticipant's peers bridge).
+    setPeers(compute());
+    return presence.onChange(() => setPeers(compute()));
+  }, [engine, scopeKey]);
+
+  return peers;
 }
 
 // ── Escape-hatches: raw engine/store access ──────────────────────────
