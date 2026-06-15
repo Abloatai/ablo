@@ -199,7 +199,7 @@ export interface Schema<S extends SchemaRecord = SchemaRecord> {
  * ```
  */
 /** The schema bound via `declare module … interface Register { Schema: … }`
- *  (the `ablo.d.ts` the scaffold writes). `never` when not registered. */
+ *  (the `ablo/register.ts` the scaffold writes). `never` when not registered. */
 type RegisteredSchema = import('../types/global.js').Register extends {
   Schema: infer S extends Schema;
 }
@@ -207,8 +207,8 @@ type RegisteredSchema = import('../types/global.js').Register extends {
   : never;
 
 /**
- * THE model type helper. With the scaffold's `ablo.d.ts` registration in
- * place, one parameter is all it takes:
+ * THE model type helper. With the scaffold's `ablo/register.ts` registration
+ * in place, one parameter is all it takes:
  *
  * ```ts
  * type Task = Model<'tasks'>;

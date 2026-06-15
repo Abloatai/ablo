@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.11.1
+
+### Patch Changes
+
+- 7f91f6e: DX hardening from a real onboarding session — onboarding, CLI, coordination, types, and docs.
+
+  **Client behavior**
+  - `databaseUrl` is now an explicit, server-only option: `Ablo(...)` no longer auto-reads `process.env.DATABASE_URL`. A stray `DATABASE_URL` (common — Prisma/Drizzle/docker set it) no longer silently flips the client into connection-string mode; a one-time warning points at the explicit option. Passing `databaseUrl: process.env.DATABASE_URL` explicitly is unchanged.
+  - Claims/presence are now observable from any client (including Node agents): reading a row enters its entity sync group (read-interest) and claiming pins it (write-intent), so `ablo.<model>.claim.state({ id })` reports co-participants without any manual subscribe step — whether the observer arrives before the claim (live delta) or after it (subscribe-time backfill). The claim **holder** now also sees its own claim via `claim.state`. **Requires a coordinated `sync-server` deploy** (the subscribe-time claim backfill + the entity-scope subscription gate that lets an org-authority agent key narrow into a row's group live server-side); the client package change alone does not deliver cross-client agent observation.
+
+  **CLI**
+  - `ablo init` detects the `src/app` layout (routes + the `@/ablo` import alias resolve correctly), writes the **real** stored sandbox key into `.env.local` instead of a placeholder, and scaffolds `ablo/register.ts` (a regular module, not a colliding `ablo.d.ts`).
+  - `ablo <command> --help` / `-h` now prints usage instead of erroring with "unknown flag", and `migrate` is listed in the top-level help.
+  - `ablo dev --no-watch` now exits after one push instead of watching forever.
+
+  **Types**
+  - Name the client with `typeof sync` (the value-inferred idiom, like tRPC's `typeof appRouter` / Drizzle's `typeof db`) — `ReturnType<typeof Ablo>` collapses to the untyped client and should not be used. No bespoke client-type generic is needed.
+  - `model_claim_not_configured` message clarified: claiming needs no per-model schema configuration; every model is claimable through the standard client.
+
+  **Docs**
+  - Reconciled the self-contradictory `databaseUrl` story (it is an explicit, server-only option, not auto-read from the environment; consistent casing), documented that the sandbox can host rows (apiKey only, no database), explained why a localhost Postgres can't be the system of record, and led the connect-your-database flow with `ablo pull`/`ablo check` over `ablo migrate`. Fixed stale `api.md` vocabulary (`object: 'claim'`, `participantKind: 'user' | 'agent' | 'system'`).
+
+- 7f91f6e: Docs: document the completed `intent` → `claim` rename. Adds a 0.11.0 migration entry (`useIntent` → `useClaim`, `Register.Intents` → `Register.Claims`, `Ablo.Intent.*` → `Ablo.Claim.*`, and the coordinated client/server deploy for the `claim_*` wire frames), a `useClaim` section in the React reference, and fixes the stale `participantKind` union to the canonical `'user' | 'agent' | 'system'`.
+
 ## 0.11.0
 
 ### Minor Changes

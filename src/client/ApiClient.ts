@@ -24,6 +24,7 @@ import {
   resolveBaseURL,
   resolveBootstrapBaseUrl,
   resolveDatabaseUrl,
+  warnIfDatabaseUrlEnvIgnored,
 } from './auth.js';
 import { registerDataSource } from './registerDataSource.js';
 import { toSeconds } from '../utils/duration.js';
@@ -285,6 +286,9 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   const configuredApiKey = resolveApiKey(authInput);
   const configuredAuthToken = resolveAuthToken(authInput);
   const configuredDatabaseUrl = resolveDatabaseUrl(authInput);
+  // Nudge (once) if a stray DATABASE_URL is in the env but `databaseUrl` wasn't
+  // passed — no logger on this path, so the helper falls back to console.warn.
+  warnIfDatabaseUrlEnvIgnored(authInput);
   assertBrowserSafety({
     apiKey: configuredApiKey,
     databaseUrl: configuredDatabaseUrl,

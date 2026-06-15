@@ -3,6 +3,8 @@
  *
  *   ablo projects list                 List projects (marks active + default)
  *   ablo projects create <slug>        Create a project (--name "Display Name")
+ *   ablo projects rename <ref> <name>  Rename a project's display name (the
+ *                                      slug is the stable handle, never changes)
  *   ablo projects use <slug|id>        Set the ACTIVE project (stored in
  *                                      config.json like `mode`)
  *   ablo projects use default          Back to the org-default project
@@ -191,6 +193,42 @@ export async function projects(argv: readonly string[]): Promise<void> {
     return;
   }
 
+  if (sub === 'rename') {
+    const ref = argv[1];
+    // Everything after the ref is the new name, so an unquoted multi-word name
+    // (`ablo projects rename epsilon Epsilon Team`) still works.
+    const name = argv.slice(2).join(' ').trim();
+    if (!ref || ref.startsWith('-') || !name) {
+      console.error(pc.red('  usage: ablo projects rename <slug|id> <new name>'));
+      process.exit(1);
+    }
+    const all = await fetchProjects();
+    const target = all.find((p) => p.slug === ref || p.id === ref);
+    if (!target) {
+      console.error(pc.red(`  No project "${ref}".`) + pc.dim(' Run ablo projects list.'));
+      process.exit(1);
+    }
+    if (target.default) {
+      console.error(pc.red('  The default project cannot be renamed.'));
+      process.exit(1);
+    }
+    const { status, body } = await request(`/api/v1/projects/${target.id}`, requireKey(), {
+      method: 'PATCH',
+      body: { name },
+    });
+    if (status !== 200) {
+      console.error(
+        pc.red(`  Rename failed (${status}): ${String(body.message ?? body.code ?? '')}`),
+      );
+      process.exit(1);
+    }
+    const updated = body as unknown as ProjectObject;
+    console.log(
+      `  ${pc.green('✓')} Renamed ${pc.bold(updated.slug)} → ${pc.bold(updated.name ?? updated.slug)} ${pc.dim(`(${updated.id})`)}`,
+    );
+    return;
+  }
+
   if (sub === 'use') {
     const ref = argv[1];
     if (!ref) {
@@ -220,7 +258,9 @@ export async function projects(argv: readonly string[]): Promise<void> {
 
   console.error(
     pc.red(`  unknown subcommand: ${sub}`) +
-      pc.dim(` (expected ${pc.bold('list')}, ${pc.bold('create')}, or ${pc.bold('use')})`),
+      pc.dim(
+        ` (expected ${pc.bold('list')}, ${pc.bold('create')}, ${pc.bold('rename')}, or ${pc.bold('use')})`,
+      ),
   );
   process.exit(1);
 }

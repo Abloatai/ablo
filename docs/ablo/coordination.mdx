@@ -72,7 +72,7 @@ a model row. It's what `claim.state()` returns and what observers render.
 | `target` | `EntityRef` | What is being coordinated (`{ model, id, field? }`). |
 | `action` | `string` | Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. |
 | `heldBy` | `string` | Participant holding (or waiting on) it (e.g. `'agent:forecaster'`). |
-| `participantKind` | `'human' \| 'agent'` | Who's behind it. |
+| `participantKind` | `'user' \| 'agent' \| 'system'` | Who's behind it — a human (`user`), an AI (`agent`), or automated infrastructure (`system`). |
 | `position` | `number?` | 0-based place in the FIFO line — present only when `status: 'queued'` (`0` = next behind the holder). |
 | `createdAt` | `string?` | Ms-epoch the holder opened it. Optional — derived shapes may omit it. |
 | `expiresAt` | `string` | Ms-epoch the server reclaims it if the holder goes **silent**. Renewed automatically while the holder's connection stays alive — a crash-cleanup floor, not a duration you size. |

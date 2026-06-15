@@ -1,11 +1,16 @@
 # Quickstart
 
-Build with Ablo on **your own database**. You declare a small Ablo schema for the
-models humans and agents edit together, hand the client your Postgres
-`DATABASE_URL`, and coordinate every write through `ablo.<model>`. Your database
-is the system of record — Ablo never hosts your data. It is the transaction
-layer on top: it registers your connection, commits every write there behind
-row-level security, and fans the confirmed rows out to every connected client.
+Build with Ablo on **the Postgres you already have**. You declare a small Ablo
+schema for the models humans and agents edit together, hand the client your
+Postgres `DATABASE_URL` (passed explicitly), and coordinate every write through
+`ablo.<model>`. In production, your database is the system of record. Ablo is the
+transaction layer on top: it registers your connection, commits every write there
+behind row-level security, and fans the confirmed rows out to every connected
+client.
+
+> No database yet? The hosted **sandbox** can host rows in Ablo's test plane —
+> pass an `apiKey` only and omit `databaseUrl`, like Stripe test mode — so you can
+> try Ablo before pointing it at your Postgres.
 
 ## 1. Install and initialize
 
@@ -25,10 +30,12 @@ instead:
 export ABLO_API_KEY=sk_test_...
 ```
 
-Every SDK and CLI call needs a key. Test and live keys work like Stripe's —
-except both point at databases *you* own: `sk_test_*` for your dev database,
-`sk_live_*` for production. There is no keyless mode; the public `/sandbox` page
-is a hosted demo, not your app.
+Every SDK and CLI call needs a key. Test and live keys work like Stripe's:
+`sk_test_*` for the sandbox, `sk_live_*` for production. In production a key
+points at the database *you* own; in the sandbox you can skip the database
+entirely and let Ablo's test plane host the rows (apiKey only). There is no
+keyless mode — a key is always required. (The public `/sandbox` page is a
+separate hosted demo, not your app.)
 
 ## 2. Your Ablo schema (init scaffolded it)
 
@@ -51,17 +58,23 @@ export const schema = defineSchema({
 ```
 
 
-Register the schema once (init scaffolds this `ablo.d.ts`), and every type
-is one parameter away — no `typeof schema` re-stating, anywhere:
+The schema is registered once (init scaffolds `ablo/register.ts` for you), and
+every type is one parameter away — no `typeof schema` re-stating, anywhere:
 
 ```ts
-// ablo.d.ts — once per project
-import type { schema } from './ablo/schema';
+// ablo/register.ts — scaffolded by `npx ablo init`, sits beside ablo/schema.ts
+import type { schema } from './schema';
 declare module '@abloatai/ablo' {
   interface Register { Schema: typeof schema }
 }
 export {};
 ```
+
+It's a regular `.ts` module, not a hand-authored `.d.ts`. The top-level
+`import type { schema }` makes the `declare module` block *merge* into (augment)
+the SDK's `Register` interface instead of colliding with it — the same shape
+[TanStack Router uses in `src/router.tsx`](https://tanstack.com/router/latest/docs/framework/react/guide/type-safety). Any `.ts` file in your
+`tsconfig` `include` works; it never needs to be imported.
 
 ```ts
 import type { Model } from '@abloatai/ablo/schema';
@@ -72,6 +85,12 @@ type WeatherReport = Model<'weatherReports'>; // fully typed from YOUR schema
 (The same `Register` binding types every hook and client — it's the
 TanStack-Router pattern: declare the source of truth once, everything
 infers from it.)
+
+When you need to name the client type — to pass it to a function or store it in
+a context — **infer it from the value**: `type Sync = typeof sync`. That's the
+same idiom as tRPC's `typeof appRouter` and Drizzle's `typeof db`; it resolves
+the typed overload at the call site. Avoid `ReturnType<typeof Ablo>`, which
+collapses to the untyped client.
 
 ## 3. Point Ablo at your database
 
@@ -93,9 +112,13 @@ import { schema } from './schema';
 export const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
-  databaseUrl: process.env.DATABASE_URL, // your Postgres — rows live here, never with Ablo
+  databaseUrl: process.env.DATABASE_URL, // your Postgres, passed explicitly — rows live here
 });
 ```
+
+`databaseUrl` is not auto-read from the environment — you pass it explicitly
+(as above). If a `DATABASE_URL` is set for another tool, `Ablo()` ignores it
+unless you wire it in like this.
 
 Use a dedicated **non-superuser role** for the connection — Ablo enforces
 tenant isolation with row-level security, so the server rejects superuser or
@@ -127,29 +150,34 @@ built from an ORM adapter instead — same product, same writes, see
 [Connect Your Database](./data-sources.md). In that setup, omit `databaseUrl`
 from `Ablo(...)`.
 
-## 4. Push — Ablo provisions your tables for you
+## 4. Push the schema, then map it to tables
 
 ```bash
 npx ablo push      # checks your DATABASE_URL role, pushes the schema (sandbox),
-                   # provisions your synced-model tables (with row-level
-                   # security) IN YOUR database, and writes ABLO_API_KEY to
-                   # .env.local. Add --watch to re-push on every save.
+                   # and writes ABLO_API_KEY to .env.local. Add --watch to
+                   # re-push on every save.
 ```
 
-Nothing runs locally — there is no dev server to start. Your app talks to
-Ablo's hosted API with the sandbox key; the rows land in your database.
+`ablo push` uploads the schema *definition* — model names, fields, types. That
+metadata is what tells Ablo which models to coordinate. Skipping it makes every
+write to a new or changed model fail with `server_execute_unknown_model` — that
+error literally means "run `npx ablo push`."
 
-There is no separate migration step: the push provisions your synced-model
-tables in the registered database server-side — your other tables are left
-untouched. (`npx ablo migrate` still exists for the signed Data Source
-endpoint mode, where Ablo never touches your database and DDL must run from
-your side.)
+Now Ablo needs real Postgres tables behind those models. Two ways, depending on
+who owns the tables:
 
-`ablo push` uploads the schema *definition* —
-model names, fields, types. That metadata is the only thing Ablo keeps; the
-rows stay in your database. Skipping the push makes every write to a new or
-changed model fail with `server_execute_unknown_model` — that error literally
-means "run `npx ablo push`."
+- **Adopt existing tables (the common case).** Most teams already have the
+  tables — created by Prisma, Drizzle, or hand-written migrations. Run
+  `npx ablo pull` to import their shape into your schema, or `npx ablo check`
+  to verify your schema and the live tables agree. Keep managing the tables
+  with your own migration tool; Ablo just syncs the subset of models you
+  declared.
+- **Let Ablo provision them.** If Ablo should own the tables, `npx ablo migrate`
+  creates your synced-model tables (with row-level security) in the registered
+  database. Your other tables are left untouched.
+
+Nothing runs locally — there is no dev server to start. Your app talks to Ablo's
+hosted API with the sandbox key; the rows land in your database.
 
 ## 5. Write through the model
 

@@ -115,6 +115,52 @@ imperative work after an event or effect.
 
 See [API reference](/docs/api) for the full options surface.
 
+## useClaim — named-claim dispatcher
+
+`useClaim` (renamed from `useIntent` in 0.11.0) is typed sugar for invoking a
+*named* claim from your own coordination vocabulary — distinct from the
+row-level `ablo.<model>.claim({ id })` resource claim. Use it when you want to
+broadcast a semantic claim like "I'm editing this layer" or "the agent is
+generating here" and let your transport turn it into a network effect.
+
+Declare the vocabulary once via module augmentation on the `Register` interface
+(the `Claims` key — previously `Intents`):
+
+```ts
+declare module '@abloatai/ablo' {
+  interface Register {
+    Claims: {
+      editLayer: { slideId: string; layerId: string };
+      generateWithAI: { entityId: string; tool: string };
+    };
+  }
+}
+```
+
+Then `useClaim('editLayer')` returns a function whose sole argument is the
+`editLayer` shape — purely compile-time narrowing, no runtime checks:
+
+```tsx
+'use client';
+
+import { useClaim } from '@abloatai/ablo/react';
+
+export function LayerToolbar({ slideId, layerId }: { slideId: string; layerId: string }) {
+  const claimEditLayer = useClaim('editLayer');
+
+  return (
+    <button onClick={() => claimEditLayer({ slideId, layerId })}>
+      Edit layer
+    </button>
+  );
+}
+```
+
+The hook is pure sugar: the actual network effect lives in the `beginClaim`
+function wired into the provider (bound to your transport). If no `beginClaim`
+is wired, the returned invoker throws `AbloValidationError` with code
+`claim_not_wired`.
+
 ## Next.js
 
 The Next.js [App Router landing](/nextjs) walks through Server Components

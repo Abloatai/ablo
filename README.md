@@ -54,10 +54,12 @@ claims are visible while the work is still in progress.
 `llms.txt` &nbsp;·&nbsp; **upgrading?** see the
 [Version History &amp; Migration Guide](./docs/migration.md)
 
-It works with the auth and database you already have. **Your database is the
-system of record — Ablo never hosts your data.** Ablo is the transaction layer
-on top of it: realtime data is scoped to *sync groups* from your own identity,
-and every committed row lives in your Postgres.
+It works with the auth and database you already have. **In production, your
+database is the system of record.** Ablo is the transaction layer on top of it:
+realtime data is scoped to *sync groups* from your own identity, and every
+committed row lives in your Postgres. (Trying Ablo with no database yet? The
+hosted **sandbox** can host rows in Ablo's test plane — apiKey only, like
+Stripe test mode — so you can explore before pointing it at your Postgres.)
 
 **Built for** collaborative editors, AI agent workflows, and internal tools —
 anywhere people and agents change shared state and everyone has to see it live.
@@ -65,17 +67,23 @@ anywhere people and agents change shared state and everyone has to see it live.
 ## Set up
 
 The CLI takes you from nothing to a synced schema — it handles the account,
-the key, and the env file. You bring one thing: a Postgres `DATABASE_URL`
-(local, Neon, RDS — any will do; **your database is the system of record,
-Ablo never hosts your data**).
+the key, and the env file. You bring one thing: a Postgres you already have —
+the same `DATABASE_URL` (local, Neon, RDS — any will do) that backs your auth,
+audit, and log tables. Ablo syncs a *subset* of models against it; **in
+production, your database is the system of record**.
 
 ```bash
 npm install @abloatai/ablo
 npx ablo login     # opens the browser: sign in (or sign up) → a sk_test_ key is saved locally
 npx ablo init      # scaffolds ablo/schema.ts (offers to log in if you skipped it)
-npx ablo migrate   # creates the synced tables in YOUR Postgres (reads DATABASE_URL)
-npx ablo push       # pushes your schema (sandbox), writes ABLO_API_KEY to .env.local, watches for changes
+npx ablo push      # pushes your schema (sandbox), writes ABLO_API_KEY to .env.local, watches for changes
 ```
+
+Then point Ablo at the tables for your synced models. Most teams **already
+have those tables** (often Prisma- or Drizzle-managed) — adopt them with
+`npx ablo pull` / `npx ablo check`, the common case. Let Ablo own its own
+tables instead? `npx ablo migrate` provisions them in your Postgres (reads
+`DATABASE_URL`). Either way your other tables are left untouched.
 
 After `ablo push`, the [Quick Start](#quick-start) below runs as-is —
 `ABLO_API_KEY` is already in `.env.local` (frameworks load it automatically;
@@ -106,17 +114,23 @@ import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 ```
 
-Register the schema once (init scaffolds this `ablo.d.ts`), and every type
-is one parameter away — no `typeof schema` re-stating, anywhere:
+The schema is registered once (init scaffolds `ablo/register.ts` for you), and
+every type is one parameter away — no `typeof schema` re-stating, anywhere:
 
 ```ts
-// ablo.d.ts — once per project
-import type { schema } from './ablo/schema';
+// ablo/register.ts — scaffolded by `npx ablo init`, sits beside ablo/schema.ts
+import type { schema } from './schema';
 declare module '@abloatai/ablo' {
   interface Register { Schema: typeof schema }
 }
 export {};
 ```
+
+It's a regular `.ts` module, not a hand-authored `.d.ts`. The top-level
+`import type { schema }` makes the `declare module` block *merge* into (augment)
+the SDK's `Register` interface instead of colliding with it — the same shape
+[TanStack Router uses in `src/router.tsx`](https://tanstack.com/router/latest/docs/framework/react/guide/type-safety). Any `.ts` file in your
+`tsconfig` `include` works; it never needs to be imported.
 
 ```ts
 import type { Model } from '@abloatai/ablo/schema';
@@ -127,6 +141,25 @@ type WeatherReport = Model<'weatherReports'>; // fully typed from YOUR schema
 (The same `Register` binding types every hook and client — it's the
 TanStack-Router pattern: declare the source of truth once, everything
 infers from it.)
+
+### Naming the client type
+
+When you need to pass the client around (a function parameter, a context value),
+**infer the type from the value** — `type Sync = typeof sync`:
+
+```ts
+export const sync = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+export type Sync = typeof sync; // fully-typed, schema-aware
+
+function persist(client: Sync) { /* ... */ }
+```
+
+This is the same idiom as tRPC's `type AppRouter = typeof appRouter` and
+Drizzle's `typeof db` — the factory resolves the typed overload at the call
+site, so `typeof sync` carries your schema. Do **not** write
+`ReturnType<typeof Ablo>`: that collapses to the untyped last overload and
+loses your model types. There is no bespoke client-type generic to import —
+`typeof` your client value is the type.
 
 ```ts
 const schema = defineSchema({
@@ -140,7 +173,7 @@ const schema = defineSchema({
 const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY, // written to .env.local by `npx ablo push`
-  databaseUrl: process.env.DATABASE_URL, // your Postgres — rows live here, never with Ablo
+  databaseUrl: process.env.DATABASE_URL, // your Postgres, passed explicitly — rows live here
 });
 
 await ablo.ready();
@@ -388,29 +421,35 @@ curl https://api.abloatai.com/v1/commits \
 
 ## Your Database
 
-Every schema model is backed by **your own database** — Ablo is the transaction
-layer on top of it, never the home for your rows. Two ways to connect it:
+In production, every schema model is backed by **your own database** — Ablo is
+the transaction layer on top of it. Two ways to connect it:
 
 | | How Ablo reaches your Postgres | Use when |
 | --- | --- | --- |
-| **Connection string** (default) | `databaseUrl` at init. Ablo registers the connection once (sent over TLS, stored sealed, never echoed back) and commits each write directly — through a non-superuser role, behind row-level security. | You can hand over a scoped connection string. |
+| **Connection string** (primary) | `databaseUrl` at init — passed explicitly, never auto-read from the environment. Ablo registers the connection once (sent over TLS, stored sealed, never echoed back) and commits each write directly — through a non-superuser role, behind row-level security. | You can hand over a scoped connection string. |
 | **Signed endpoint** | Your app exposes one route built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`); Ablo sends signed commit requests and your app writes its own database. | Database credentials must never leave your infrastructure. |
 
-Same product, same truth either way: your database is the system of record. See
+(No database yet? The hosted **sandbox** can host rows in Ablo's test plane —
+omit `databaseUrl` and pass an `apiKey` only, like Stripe test mode — so you can
+try Ablo before connecting your Postgres.)
+
+Same product, same truth either way: in production your database is the system of
+record. See
 [Connect Your Database](./docs/data-sources.md) for both shapes.
 
 ## Configuration
 
-`Ablo({ ... })` takes three things: your schema, your key, and your database —
-the last either as `databaseUrl` here or as a signed
-[Data Source endpoint](./docs/data-sources.md) in your app. Every other option
-has correct defaults:
+`Ablo({ ... })` takes your schema, your key, and — in production — your database,
+either as an explicit `databaseUrl` here or as a signed
+[Data Source endpoint](./docs/data-sources.md) in your app. (`databaseUrl` is
+never auto-read from the environment; omit it to try Ablo against the hosted
+sandbox.) Every other option has correct defaults:
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `schema` | `Schema` | — (required) | Typed model proxies (`ablo.<model>.*`) |
 | `apiKey` | `string \| ApiKeySetter \| null` | `process.env.ABLO_API_KEY` | Server key — a string, or an async function for rotation |
-| `databaseUrl` | `string \| null` | `process.env.DATABASE_URL` | Your Postgres, registered as the data plane. Server runtimes only — the SDK throws if it sees this in a browser. Omit it when your app exposes a signed [Data Source endpoint](./docs/data-sources.md) instead. |
+| `databaseUrl` | `string \| null` | `—` | Your Postgres, registered as the data plane. **Must be passed explicitly — it is not auto-read from the environment.** If you have a `DATABASE_URL` set for another tool (Prisma, Drizzle, docker-compose), `Ablo()` ignores it unless you pass `databaseUrl` explicitly. Server runtimes only — the SDK throws if it sees this in a browser. Omit it when your app exposes a signed [Data Source endpoint](./docs/data-sources.md) instead, or when trying Ablo against the hosted sandbox. |
 
 Keep `apiKey` in trusted server runtimes. In the browser, `<AbloProvider>`
 authenticates with the signed-in user's session; the raw-key path is gated

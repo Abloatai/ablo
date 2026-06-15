@@ -8,7 +8,7 @@ Use AI SDK for the agent loop. Use Ablo when agent reads and writes must persist
 
 ## Start here
 
-First action when integrating into an app: run `npx ablo init --yes --framework <nextjs|vite|remix|vanilla> --storage datasource`. Agents have no TTY — `--yes` is REQUIRED or it HANGS. It scaffolds `ablo/schema.ts`, the client, the Data Source endpoint, and (for Next.js) the browser provider + session route, all on the current API. Edit the generated files rather than hand-writing from this doc.
+First action when integrating into an app: run `npx ablo init --yes --framework <nextjs|vite|remix|vanilla>`. Agents have no TTY — `--yes` is REQUIRED or it HANGS. The default `--storage direct` (connection string) scaffolds `ablo/schema.ts`, the client, and (for Next.js) the browser provider + session route; pass `--storage endpoint` instead when database credentials must stay inside the app — that variant scaffolds a signed Data Source endpoint. All on the current API. Edit the generated files rather than hand-writing from this doc.
 
 Second: make sure a key exists — WITHOUT printing it. The key is a secret; it must never appear in your output, your reasoning, or a file you echo (it would live in the conversation history forever). Check PRESENCE only: `[ -n "$ABLO_API_KEY" ] && echo set` and `grep -cq '^ABLO_API_KEY=' .env.local && echo wired` — never `cat .env.local`, never `echo $ABLO_API_KEY`. If neither check passes, ask the HUMAN to run `npx ablo login` once — it opens a browser and saves a `sk_test_` key locally; an agent must NOT run it. You never copy the key by hand: the next step writes it into `.env.local` (and gitignores it) for you.
 
@@ -24,7 +24,7 @@ Each app gets its own PROJECT inside the org — its own schema, its own sandbox
 import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
-TYPES: have the project register its schema ONCE via declaration merging (init scaffolds `ablo.d.ts`): `declare module '@abloatai/ablo' { interface Register { Schema: typeof schema } }`. Then model types are one parameter: `type Task = Model<'tasks'>` (import type { Model } from '@abloatai/ablo/schema'). Do NOT teach `InferModel` (deprecated) or the two-param `Model<typeof schema,'tasks'>` unless multiple schemas exist. Never hand-write model interfaces — derive from the schema.
+TYPES: the project registers its schema ONCE via declaration merging — `npx ablo init` scaffolds `ablo/register.ts` (a regular `.ts` module beside schema.ts, NOT a hand-authored `.d.ts`): `import type { schema } from './schema'; declare module '@abloatai/ablo' { interface Register { Schema: typeof schema } }`. The top-level `import type` makes `declare module` MERGE (augment) the SDK's Register interface rather than collide — same shape TanStack Router uses in src/router.tsx; any `.ts` file in tsconfig include works, never imported. Then model types are one parameter: `type Task = Model<'tasks'>` (import type { Model } from '@abloatai/ablo/schema'). Do NOT teach `InferModel` (deprecated) or the two-param `Model<typeof schema,'tasks'>` unless multiple schemas exist. Never hand-write model interfaces — derive from the schema. To NAME the client type (function param, context value), infer from the value: `type Sync = typeof sync` — same idiom as tRPC `typeof appRouter` / Drizzle `typeof db`; it resolves the typed overload at the call site. Do NOT use `ReturnType<typeof Ablo>` (collapses to the untyped last overload) and do NOT import a bespoke client-type generic — there is none.
 
 
 const schema = defineSchema({
@@ -123,9 +123,9 @@ A schema is model fields and relations. Advanced schema helpers such as `mutable
 
 ## Storage Boundary
 
-Do not add `databaseURL` to `Ablo(...)`. Application and agent code use `ABLO_API_KEY`.
+`databaseUrl` is an OPTIONAL, server-only constructor option on `Ablo(...)`. It is NOT auto-read from the environment — pass it EXPLICITLY to register your Postgres directly. Omit it when you expose a signed Data Source endpoint, or when trying Ablo against the hosted sandbox (apiKey only). A `DATABASE_URL` set for another tool (Prisma, Drizzle, docker-compose) is ignored unless you pass `databaseUrl` explicitly.
 
-Every schema model is backed by a database, and the default is YOUR OWN. Keep your rows in your Postgres and expose a Data Source endpoint that hands Ablo an ORM `adapter` (Drizzle is the default; Prisma and Kysely are also supported) — it owns the transaction, exactly-once idempotency, and outbox in ONE pass (no hand-written `commit`/`events`). Your `DATABASE_URL` lives in your app, never in `Ablo(...)`; run `npx ablo migrate` to provision the synced-model tables in your DB.
+In production, every schema model is backed by YOUR OWN database. The PRIMARY path is the connection string: pass `databaseUrl` (most users already have a Postgres — often Prisma- or Drizzle-managed for auth/audit/log tables that are NOT in the Ablo schema; Ablo syncs a SUBSET of models against it). Most users do NOT run `ablo migrate` — they ADOPT existing tables with `npx ablo pull` / `npx ablo check`, or keep managing tables with their own migration tool. Run `npx ablo migrate` only when Ablo should OWN the tables (it provisions the synced-model tables in your DB). The alternative to the connection string is a signed Data Source endpoint that hands Ablo an ORM `adapter` (Drizzle is the default; Prisma and Kysely are also supported) — it owns the transaction, exactly-once idempotency, and outbox in ONE pass (no hand-written `commit`/`events`); use it when database credentials must never leave your infrastructure (or for a local/private-range DB, which Ablo's cloud cannot reach over the network).
 
 GOTCHA the user WILL hit: `DATABASE_URL` must use a NON-superuser, NON-BYPASSRLS role (Ablo enforces row-level security; owner roles are rejected with `database_role_cannot_enforce_rls`). Neon's and Supabase's default dashboard connection strings use the database OWNER (e.g. `neondb_owner`) and are rejected. EASIEST: `npx ablo migrate` detects the unsafe role and creates the scoped one automatically from the user's machine (owner credential never reaches Ablo; new DATABASE_URL written to the env file). Manual alternative — create a scoped role first: `CREATE ROLE ablo_app LOGIN PASSWORD '...' NOSUPERUSER NOBYPASSRLS; GRANT CREATE, CONNECT ON DATABASE <db> TO ablo_app; GRANT CREATE, USAGE ON SCHEMA public TO ablo_app;` — then swap user/password into the same host/db string.
 
@@ -145,7 +145,7 @@ export const { POST } = dataSourceNext({
 });
 ```
 
-`npx ablo init` defaults to this — it scaffolds the endpoint and the `DATABASE_URL` for you (see CLI below). Your app database credentials stay private — Ablo only calls the endpoint.
+`npx ablo init` defaults to `--storage direct` (the connection-string path — it scaffolds the client carrying `databaseUrl` and the `DATABASE_URL` env entry; see CLI below). Pass `--storage endpoint` to scaffold the signed Data Source endpoint above instead, when app database credentials must stay private — Ablo only calls the endpoint.
 
 ## Sandboxes
 
@@ -156,9 +156,11 @@ when an agent is asked to "make Ablo work" in an existing app.
 
 Authenticated org sandboxes are real test environments. Treat the default
 sandbox like Stripe test mode: it has an isolated sync group prefix and mints
-`sk_test_*` keys. Extra sandboxes can start blank or copy live configuration.
-Resetting a sandbox creates a clean future stream without touching live data.
-Use `sk_live_*` only for production.
+`sk_test_*` keys. The sandbox CAN host rows in Ablo's test plane, so you can try
+Ablo with NO database — `apiKey` only, no `databaseUrl`. (In production, your own
+Postgres is the system of record.) Extra sandboxes can start blank or copy live
+configuration. Resetting a sandbox creates a clean future stream without
+touching live data. Use `sk_live_*` only for production.
 
 For coding agents, the sandbox success path is: pick one shared model,
 declare schema, create the Ablo client, replace one direct mutation with a typed
@@ -185,7 +187,7 @@ Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or internal subp
 
 `ablo init` and other prompts need a TTY; an agent/CI run has none and will HANG. Always:
 
-- `npx ablo init --yes` (flags: `--framework`, `--auth`, `--storage`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login`). Generates `ablo/schema.ts` + the `ablo/data-source.ts` endpoint above.
+- `npx ablo init --yes` (flags: `--framework`, `--auth`, `--storage direct|endpoint` (default `direct`), `--no-agent`, `--no-pull`, `--no-install`, `--no-login`). Generates `ablo/schema.ts` + the client; `--storage direct` (default) wires `databaseUrl`, `--storage endpoint` scaffolds the `ablo/data-source.ts` endpoint above instead.
 - Key: see "Start here" — env → `.env.local` → ask the human to `npx ablo login`; never run `login` yourself, never copy keys by hand (`ablo push` writes `.env.local`).
 - Adopt an existing DB: `npx ablo pull prisma [path]` / `npx ablo pull drizzle <module>`.
 - `npx ablo push --no-watch` pushes the schema (sandbox) AND writes `ABLO_API_KEY` to `.env.local` (default watches forever); `npx ablo logs --no-follow` (default tails forever); `npx ablo mode sandbox|production` (always pass the arg). `npx ablo push`/`status`/`pull`/`check`/`generate` are one-shot.

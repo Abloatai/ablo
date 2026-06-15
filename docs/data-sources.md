@@ -1,14 +1,19 @@
 # Connect Your Database
 
-**Your database is the system of record — Ablo never hosts your data.** Every
-synced model is backed by your own Postgres; Ablo is the transaction layer on
-top of it. There are two ways to connect, and they are the same product with the
-same writes — the only difference is where your database credential lives:
+**In production, your database is the system of record.** Every synced model is
+backed by your own Postgres; Ablo is the transaction layer on top of it. There
+are two ways to connect, and they are the same product with the same writes — the
+only difference is where your database credential lives:
 
 | | How Ablo reaches your Postgres | Use when |
 |---|---|---|
-| **Connection string** (default) | You pass `databaseUrl` to `Ablo(...)`; Ablo registers the connection and commits each write directly, behind row-level security. | You can hand over a scoped connection string. |
+| **Connection string** (primary) | You pass `databaseUrl` to `Ablo(...)` explicitly (it is never auto-read from the environment); Ablo registers the connection and commits each write directly, behind row-level security. | You can hand over a scoped connection string. |
 | **Signed endpoint** | Your app exposes one route built from an ORM adapter; Ablo sends signed commit requests and your app writes its own database. | Database credentials must never leave your infrastructure. |
+
+> Just trying Ablo? You don't need a database at all to start: the hosted
+> **sandbox** can host rows in Ablo's test plane — pass an `apiKey` only and omit
+> `databaseUrl`, like Stripe test mode. Connect your Postgres (either shape
+> below) when you're ready for it to be the system of record.
 
 Either way, you define an Ablo schema with `defineSchema`, `model`, and Zod. The
 Ablo schema describes **only your synced, collaborative models** — the rows Ablo
@@ -36,7 +41,7 @@ import { schema } from './ablo/schema';
 export const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
-  databaseUrl: process.env.DATABASE_URL, // your Postgres — rows live here, never with Ablo
+  databaseUrl: process.env.DATABASE_URL, // your Postgres, passed explicitly — rows live here
 });
 ```
 
@@ -50,6 +55,20 @@ On first connect the SDK registers the connection — sent once over TLS, stored
 sealed, never returned by any API. From then on Ablo commits every confirmed
 write directly to your database and reads canonical rows from it.
 
+### A localhost Postgres can't be the system of record
+
+This is the connection-string fact people hit first. Ablo's **cloud** registers
+your connection string and connects to your Postgres **over the network**. A
+`localhost` / private-range database (`127.0.0.1`, `192.168.*`, Docker's
+`db:5432`) is unreachable from Ablo's side, so such connection strings are
+**rejected**. Two escape hatches for local development against your own DB:
+
+- **Expose a signed Data Source endpoint.** Your app — which *can* reach your
+  local DB — proxies Ablo's commits to it. See [Signed Endpoint](#signed-endpoint)
+  below. This is the right answer for "my dev DB stays on my machine."
+- **Use the hosted sandbox.** Skip the database entirely: pass an `apiKey` only,
+  omit `databaseUrl`, and let Ablo's test plane host the rows while you build.
+
 Safety requirements, enforced server-side before the first write:
 
 - **Non-superuser role.** The connection must not be a superuser or hold
@@ -58,11 +77,12 @@ Safety requirements, enforced server-side before the first write:
 - **Row-level security on synced tables.** `npx ablo migrate` provisions your
   synced-model tables with `FORCE ROW LEVEL SECURITY` already applied; tables
   you create yourself must do the same.
-- **Public hosts only.** Connection strings resolving to loopback or private
-  address ranges are rejected.
+- **Network-reachable host.** As above, connection strings resolving to loopback
+  or private address ranges are rejected — Ablo connects from its cloud.
 
 `databaseUrl` is server-only: the SDK throws if it sees one in a browser-like
-environment, and `dangerouslyAllowBrowser` does not override that.
+environment, and `dangerouslyAllowBrowser` does not override that. It is also
+never auto-read from the environment — pass it explicitly to `Ablo(...)`.
 
 ## Signed Endpoint
 

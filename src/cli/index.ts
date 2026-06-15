@@ -5,10 +5,10 @@ import pc from 'picocolors';
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
-import { migrate } from './migrate';
+import { migrate, MIGRATE_USAGE } from './migrate';
 import { push } from './push';
 import { generate } from './generate';
-import { dev } from './dev';
+import { dev, wireEnvLocal } from './dev';
 import { login, logout } from './login';
 import { resolveApiKey, resolvePushPlan } from './config';
 import { mode } from './mode';
@@ -27,8 +27,30 @@ const LOGO = `
   ${brand('ablo')} ${pc.dim('sync engine')}
 `;
 
+/**
+ * Per-subcommand usage shown by `ablo <cmd> --help`. Sourced from each command
+ * module so the help text can't drift from the parser. Commands without an entry
+ * fall through to the top-level command list.
+ */
+const SUBCOMMAND_USAGE: Readonly<Record<string, string>> = {
+  migrate: MIGRATE_USAGE,
+};
+
 async function main() {
-  const command = process.argv[2];
+  let command: string | undefined = process.argv[2];
+
+  // `ablo <command> --help` / `-h` should print usage, not forward `--help` into
+  // the command's own arg parser — which throws "unknown flag: --help" and reads
+  // as "the command doesn't exist" (a real user's agent drew exactly that wrong
+  // conclusion about `ablo migrate`). Print command-specific usage when we have
+  // it; otherwise fall through to the top-level command list below.
+  if (command && process.argv.slice(3).some((a) => a === '--help' || a === '-h')) {
+    if (SUBCOMMAND_USAGE[command]) {
+      console.log(SUBCOMMAND_USAGE[command]);
+      return;
+    }
+    command = undefined;
+  }
 
   if (command === 'init') {
     await init(process.argv.slice(3));
@@ -47,9 +69,21 @@ async function main() {
   } else if (command === 'webhooks') {
     await webhooks(process.argv.slice(3));
   } else if (command === 'dev') {
-    // Renamed: nothing runs locally, so `dev` was a lie. Kept as an alias.
-    console.log(pc.dim('  `ablo dev` is now `ablo push --watch` — running that.'));
-    await dev([...process.argv.slice(3), '--watch']);
+    // Renamed: nothing runs locally, so `dev` was a lie. Kept as an alias for
+    // `ablo push --watch`. Honor an explicit `--no-watch` (push once, then exit):
+    // appending `--watch` unconditionally clobbered it (last-flag-wins parsing),
+    // so `ablo dev --no-watch` watched forever — the exact runaway-in-an-agent
+    // footgun the `--no-watch` escape hatch exists to prevent.
+    const devArgs = process.argv.slice(3);
+    const oneShot = devArgs.includes('--no-watch');
+    console.log(
+      pc.dim(
+        oneShot
+          ? '  `ablo dev --no-watch` is `ablo push` (push once, no watcher) — running that.'
+          : '  `ablo dev` is now `ablo push --watch` — running that.',
+      ),
+    );
+    await dev(oneShot ? devArgs : [...devArgs, '--watch']);
   } else if (command === 'check') {
     await check(process.argv.slice(3));
   } else if (command === 'pull') {
@@ -119,6 +153,8 @@ async function main() {
     console.log(`    npx ablo pull prisma [path]            Generate schema.ts from a Prisma schema (keeps enums + relations)`);
     console.log(`    npx ablo pull drizzle <module>         Generate schema.ts from a Drizzle schema (keeps enums + relations)`);
     console.log(`    npx ablo check                         Check your existing database fits the schema (read-only, creates no tables)`);
+    console.log(`    npx ablo migrate                       Provision your synced-model tables in your own Postgres (DATABASE_URL)`);
+    console.log(`    npx ablo migrate --dry-run             Print the SQL without executing (preview)`);
     console.log(`    npx ablo push                          Upload your schema definition to Ablo (metadata only — rows stay in your DB)`);
     console.log(`    npx ablo push --force                  Allow destructive/unexecutable changes`);
     console.log(`    npx ablo push --rename a:b             Treat model "a" as renamed to "b"`);
@@ -250,6 +286,21 @@ function detectOrm(override?: string): DetectedOrm {
   return 'none';
 }
 
+/**
+ * Detect the Next.js layout: routes at `app/` (root) or `src/app/`. create-next-app
+ * maps the `@/*` alias to the project root in the first and to `src/` in the second.
+ * The generated route/provider files import the `ablo/` dir via `@/ablo`, so init
+ * must place BOTH the routes (`appBase`) and the `ablo/` dir (under `aliasBase`)
+ * to match — otherwise the routes land where Next.js can't see them, or the
+ * `@/ablo` imports dangle.
+ */
+function detectNextLayout(): { appBase: string; aliasBase: string } {
+  const useSrc = existsSync(join('src', 'app')) || (!existsSync('app') && existsSync('src'));
+  return useSrc
+    ? { appBase: join('src', 'app'), aliasBase: 'src' }
+    : { appBase: 'app', aliasBase: '.' };
+}
+
 /** Resolve a choice: flag (validated) → interactive prompt → default. Never prompts when non-interactive. */
 async function chooseOption(
   name: string,
@@ -361,7 +412,12 @@ async function init(args: readonly string[] = []) {
     );
   }
 
-  const abloDir = 'ablo';
+  // Place `ablo/` under the same base the `@/` alias resolves to, so the
+  // generated `@/ablo` imports in the Next.js routes resolve correctly (root for
+  // an `app/` project, `src/` for a `src/app/` project). Non-Next frameworks keep
+  // `ablo/` at the project root.
+  const layout = framework === 'nextjs' ? detectNextLayout() : { appBase: 'app', aliasBase: '.' };
+  const abloDir = join(layout.aliasBase, 'ablo');
   mkdirSync(abloDir, { recursive: true });
   const created: string[] = [];
 
@@ -401,6 +457,9 @@ async function init(args: readonly string[] = []) {
   writeFileSync(join(abloDir, 'index.ts'), generateSyncConfig(auth, storage));
   created.push(`${abloDir}/index.ts`);
 
+  writeFileSync(join(abloDir, 'register.ts'), generateRegister());
+  created.push(`${abloDir}/register.ts`);
+
   // The ORM we scaffold every "Ablo → your database" path against — detected once from
   // the project's deps (or `--orm`), so the data-source endpoint and the webhook
   // route agree and the developer is never shown an adapter menu.
@@ -412,17 +471,30 @@ async function init(args: readonly string[] = []) {
   }
 
   const envFile = framework === 'nextjs' ? '.env.local' : '.env';
+  // When the user is already authenticated (and isn't passing ABLO_API_KEY via
+  // the shell), wire the REAL stored sandbox key instead of a placeholder, so
+  // `init` + `push` runs without an "unknown key" detour. `wireEnvLocal` owns the
+  // ABLO_API_KEY line and only targets `.env.local`, so this applies to the
+  // Next.js path; other frameworks keep the documented placeholder.
+  const resolvedKey = process.env.ABLO_API_KEY ? undefined : resolveApiKey('sandbox');
+  const wireRealKey = envFile === '.env.local' && Boolean(resolvedKey);
+  const envBody = generateEnv(storage, { includeApiKey: !wireRealKey });
   if (!existsSync(envFile)) {
-    writeFileSync(envFile, generateEnv(storage));
+    writeFileSync(envFile, envBody);
     created.push(envFile);
   } else {
     const existing = readFileSync(envFile, 'utf-8');
     if (!existing.includes('ABLO_')) {
-      writeFileSync(envFile, existing + '\n' + generateEnv(storage));
+      writeFileSync(envFile, existing + '\n' + envBody);
       created.push(`${envFile} ${pc.dim('(appended)')}`);
     } else {
       created.push(`${envFile} ${pc.dim('(already configured)')}`);
     }
+  }
+  if (wireRealKey && resolvedKey) {
+    // Idempotent: creates/replaces the ABLO_API_KEY line and .gitignores the file.
+    wireEnvLocal(resolvedKey);
+    created.push(`.env.local ${pc.dim('(ABLO_API_KEY set from your login)')}`);
   }
 
   if (agent) {
@@ -437,7 +509,7 @@ async function init(args: readonly string[] = []) {
     if (storage === 'endpoint') {
       // Webhook receiver at a DEDICATED path (not a catch-all), so it can't collide
       // with the Ablo HTTP handler's `[...all]` mount or the `/api/ablo/source` route.
-      const webhookDir = join('app', 'api', 'ablo', 'webhooks');
+      const webhookDir = join(layout.appBase, 'api', 'ablo', 'webhooks');
       mkdirSync(webhookDir, { recursive: true });
       writeFileSync(join(webhookDir, 'route.ts'), generateWebhookRoute(orm));
       created.push(`${webhookDir}/route.ts${orm === 'prisma' ? ' (Prisma mirror)' : ' (add your database write)'}`);
@@ -445,13 +517,14 @@ async function init(args: readonly string[] = []) {
 
     // Browser side: the provider (mounts one client) + the session route it
     // authenticates against (mints a short-lived token from your sk_ key).
-    writeFileSync(join('app', 'providers.tsx'), generateProviders());
-    created.push(`app/providers.tsx ${pc.dim('(wrap app/layout.tsx in <Providers>)')}`);
+    const providersPath = join(layout.appBase, 'providers.tsx');
+    writeFileSync(providersPath, generateProviders());
+    created.push(`${providersPath} ${pc.dim(`(wrap ${join(layout.appBase, 'layout.tsx')} in <Providers>)`)}`);
 
-    const sessionDir = join('app', 'api', 'ablo-session');
+    const sessionDir = join(layout.appBase, 'api', 'ablo-session');
     mkdirSync(sessionDir, { recursive: true });
     writeFileSync(join(sessionDir, 'route.ts'), generateSessionRoute());
-    created.push(`app/api/ablo-session/route.ts ${pc.dim('(wire your auth)')}`);
+    created.push(`${join(sessionDir, 'route.ts')} ${pc.dim('(wire your auth)')}`);
   }
 
   if (framework !== 'vanilla') {
@@ -487,7 +560,7 @@ async function init(args: readonly string[] = []) {
         ]),
     ...(framework === 'nextjs'
       ? [
-          `Wrap ${pc.bold('app/layout.tsx')} in ${pc.bold('<Providers>')} (app/providers.tsx) and add your auth to ${pc.bold('app/api/ablo-session/route.ts')}`,
+          `Wrap ${pc.bold(join(layout.appBase, 'layout.tsx'))} in ${pc.bold('<Providers>')} (${join(layout.appBase, 'providers.tsx')}) and add your auth to ${pc.bold(join(layout.appBase, 'api', 'ablo-session', 'route.ts'))}`,
         ]
       : []),
     `Run ${pc.bold(`${pm} run dev`)} and open two browser tabs — changes sync in real-time`,
@@ -586,10 +659,36 @@ export const sync = Ablo({
   apiKey: process.env.ABLO_API_KEY,${databaseLine}${authLine}
   schema,
 });
+
+// Name the client's type off the constructed value — the overload resolves at
+// this call site, so this carries the full typed surface. (Like tRPC's
+// \`typeof appRouter\`, Drizzle's \`typeof db\`.) Prefer this over \`ReturnType<typeof Ablo>\`.
+export type Sync = typeof sync;
 `;
 }
 
-function generateEnv(storage: InitStorage): string {
+// Register the project's schema into the SDK's global `Register` interface so
+// `ablo.<model>` is typed across the project without re-passing the schema type.
+// Emitted as a REGULAR `.ts` module (`ablo/register.ts`, a sibling of schema.ts).
+// It's never imported anywhere — the `declare module` augmentation merges purely
+// because the file is a module in the tsconfig `include` (the `import type` +
+// `export {}` make it a module). TanStack Router relies on the same mechanism for
+// its `Register` augmentation living in `src/router.tsx`. A `.d.ts` is NOT needed.
+function generateRegister(): string {
+  return `import type { schema } from './schema';
+
+declare module '@abloatai/ablo' {
+  interface Register {
+    Schema: typeof schema;
+  }
+}
+
+export {};
+`;
+}
+
+function generateEnv(storage: InitStorage, opts: { includeApiKey?: boolean } = {}): string {
+  const { includeApiKey = true } = opts;
   const databaseBlock = storage === 'direct'
     ? '# Your Postgres — the system of record. The client registers this connection\n' +
       '# (sent once over TLS, stored sealed) and every row lives HERE, never with Ablo.\n' +
@@ -604,9 +703,12 @@ function generateEnv(storage: InitStorage): string {
       '# or the dashboard) and returns it once — paste it here.\n' +
       'ABLO_WEBHOOK_SECRET=whsec_your_endpoint_secret_here\n'
     : '';
-  return `# Ablo Sync Engine — use a sk_test_ key for local dev (\`npx ablo dev\`)
-ABLO_API_KEY=sk_test_your_key_here
-${webhookBlock}${databaseBlock}`;
+  // Omit the placeholder ABLO_API_KEY when init will wire the real stored key
+  // afterward (via wireEnvLocal), so the file ends with exactly one key line.
+  const apiKeyBlock = includeApiKey
+    ? '# Ablo Sync Engine — use a sk_test_ key for local dev (`npx ablo push`)\nABLO_API_KEY=sk_test_your_key_here\n'
+    : '';
+  return `${apiKeyBlock}${webhookBlock}${databaseBlock}`;
 }
 
 /**

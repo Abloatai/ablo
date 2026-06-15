@@ -29,7 +29,7 @@ make:
 
 | layer | kind | what it does | enforces? |
 |---|---|---|---|
-| **Presence** (`claim.state`, observers) | observation | Broadcasts who is working where, live. Renders cursors / "agent X is editing." | **No.** Advisory only — it never blocks or rejects a write. |
+| **Presence** (`claim.state`, observers) | observation | Broadcasts who is working where, live. Renders cursors / "agent X is editing." Reading or claiming a row auto-enrolls you in its sync group, so `claim.state({ id })` observes co-participants from any client (browser or Node agent) with no manual subscribe step. | **No.** Advisory only — it never blocks or rejects a write. |
 | **Claim** (`claim`/`claim.queue`/`claim.release`) | pessimistic | Reserves a row for one participant. Foreign writers are rejected server-side; contenders join a fair FIFO queue. | **Yes**, between participants — mutual exclusion. |
 | **Stale-context** (`readAt` + `onStale`) | optimistic (LWW) | On commit, rejects a write whose snapshot is older than the row's latest delta. Last-writer-wins detection. | **Yes**, against time — lost-update detection. |
 
@@ -70,7 +70,7 @@ a model row. It's what `claim.state()` returns and what observers render.
 | `target` | `EntityRef` | What is being coordinated (`{ model, id, field? }`). |
 | `action` | `string` | Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. |
 | `heldBy` | `string` | Participant holding (or waiting on) it (e.g. `'agent:forecaster'`). |
-| `participantKind` | `'human' \| 'agent'` | Who's behind it. |
+| `participantKind` | `'user' \| 'agent' \| 'system'` | Who's behind it — a human (`user`), an AI (`agent`), or automated infrastructure (`system`). |
 | `position` | `number?` | 0-based place in the FIFO line — present only when `status: 'queued'` (`0` = next behind the holder). |
 | `createdAt` | `string?` | Ms-epoch the holder opened it. Optional — derived shapes may omit it. |
 | `expiresAt` | `string` | Ms-epoch the server reclaims it if the holder goes **silent**. Renewed automatically while the holder's connection stays alive — a crash-cleanup floor, not a duration you size. |
@@ -166,6 +166,16 @@ ablo.<model>.claim.state({ id })
 
 Read who's currently working on a row, for observers and UI. Synchronous and
 reactive (it reads the local coordination snapshot). Never blocks.
+
+**You don't subscribe to anything first.** Reading or claiming a row
+automatically enrolls you in that row's sync group: reading it (including
+`retrieve`/`get`, or `claim.state` itself) gives you **read-interest**, and
+`claim`-ing it gives you a **pinned write-intent**. So `claim.state({ id })`
+observes co-participants on that row from **any** client — a browser, a Server
+Action, or a Node agent — and a holder sees its own claim, with no manual
+subscribe step. There is no `participants.join` to call: the typed
+`ablo.<model>` surface (read / `claim` / `claim.state` / `claim.queue`) is the
+whole coordination API.
 
 **Parameters**
 
@@ -306,7 +316,7 @@ inspect the `code`.
 | `AbloClaimedError` | `claim_conflict` | An `update`/`delete` targets a row another participant holds — the server's pre-commit check rejected it. | — |
 | `AbloClaimedError` | `entity_claimed` | Same conflict, from the commit guard backstop. | — |
 | `AbloStaleContextError` | — | A guarded `update` (under a claim, or any write carrying `readAt`) targets a row that received deltas since the snapshot — your reasoning is stale. | `readAt`, `conflicts[]` |
-| `AbloValidationError` | `model_claim_not_configured` | `claim` called on a model without collaboration wiring. | — |
+| `AbloValidationError` | `model_claim_not_configured` | `claim` called on a model proxy built without the collaboration runtime — an internal/advanced construction path. The standard `Ablo({ schema, apiKey })` client enables claiming for **every** model; there is no per-model claim config to add. | — |
 | `AbloValidationError` | `entity_not_found` | The row id doesn't exist locally or on load. | — |
 
 `AbloStaleContextError.conflicts` lists the `(model, id, observedSyncId)` rows

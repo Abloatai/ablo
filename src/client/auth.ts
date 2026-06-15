@@ -64,13 +64,48 @@ export function resolveAuthToken(input: AuthResolveInput): string | null {
 /**
  * Resolve the direct-URL connector's Postgres connection string.
  *
- * The default Data Source path should not call this: the customer keeps
- * `DATABASE_URL` in their app and exposes `dataSource(...)`. This helper exists
- * only for the opt-in direct connector where Ablo registers a dedicated tenant
- * database. Returns null for Ablo-managed storage.
+ * `databaseUrl` is an EXPLICIT, opt-in option: Ablo registers a dedicated
+ * tenant database only when the caller passes it to `Ablo(...)`. It is NOT
+ * read from `process.env.DATABASE_URL` — per this module's invariant
+ * (`ABLO_API_KEY` is the only environment fallback), an app's `DATABASE_URL`
+ * (commonly set for Prisma/Drizzle/docker) must never silently flip the client
+ * into connection-string mode. The default Data Source path keeps `DATABASE_URL`
+ * in the app and exposes `dataSource(...)`; that path leaves this null.
+ * `warnIfDatabaseUrlEnvIgnored` nudges callers who set the env but omitted the option.
  */
 export function resolveDatabaseUrl(input: AuthResolveInput): string | null {
-  return input.options.databaseUrl ?? input.env.DATABASE_URL ?? null;
+  return input.options.databaseUrl ?? null;
+}
+
+/**
+ * One-time migration nudge for the dropped `DATABASE_URL` env fallback.
+ *
+ * Earlier versions silently adopted `process.env.DATABASE_URL` when `databaseUrl`
+ * was not passed, registering a direct connector behind the caller's back — which
+ * surprised any app that keeps `DATABASE_URL` for another tool (Prisma, Drizzle,
+ * docker-compose) and, on localhost, tried to register a database Ablo's cloud
+ * cannot reach. The env value is now ignored; this points the developer at the
+ * explicit option instead of flipping their mode for them. Warns once per process
+ * so it never spams, and falls back to `console.warn` when no logger is supplied
+ * (the `transport: 'api'` client has none).
+ */
+let warnedDatabaseUrlEnvIgnored = false;
+export function warnIfDatabaseUrlEnvIgnored(
+  input: AuthResolveInput,
+  warn?: (message: string) => void,
+): void {
+  if (warnedDatabaseUrlEnvIgnored) return;
+  if (input.options.databaseUrl != null) return;
+  const envUrl = input.env.DATABASE_URL;
+  if (typeof envUrl !== 'string' || envUrl.length === 0) return;
+  warnedDatabaseUrlEnvIgnored = true;
+  const message =
+    'Found DATABASE_URL in the environment but `databaseUrl` was not passed to Ablo(...). ' +
+    'Ablo no longer auto-adopts DATABASE_URL — the environment value is ignored. ' +
+    'To register your Postgres directly, pass `databaseUrl: process.env.DATABASE_URL` explicitly; ' +
+    'otherwise ignore this (the hosted sandbox and signed Data Source endpoints need no databaseUrl).';
+  if (warn) warn(message);
+  else if (typeof console !== 'undefined') console.warn('[sync]', message);
 }
 
 export const ABLO_HOSTED_API_DOMAIN = 'api.abloatai.com';

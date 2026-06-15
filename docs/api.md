@@ -120,18 +120,18 @@ coordination surface is `claim.state({ id })` / `claim.queue({ id })` /
 
 | Field | Type | Description |
 |---|---|---|
-| `object` | `'intent'` | String representing the object's type. |
+| `object` | `'claim'` | String representing the object's type. |
 | `id` | string | Unique identifier for the claim. |
 | `status` | `'active' \| 'queued' \| 'committed' \| 'expired' \| 'canceled'` | The whole lifecycle, in one field. `active` is the holder; `queued` is a waiter in the FIFO line behind it. |
 | `target` | `{ type, id, field? }` | What is being coordinated. |
 | `action` | string | Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. |
 | `heldBy` | string | Participant id holding the claim. |
-| `participantKind` | `'human' \| 'agent'` | Whether a human session or an agent holds it. |
+| `participantKind` | `'user' \| 'agent' \| 'system'` | Who's behind it — a human (`user`), an AI (`agent`), or automated infrastructure (`system`). |
 | `expiresAt` | string | Ms-epoch at which the server auto-expires it if the holder doesn't finish. |
 
 ```json
 {
-  "object": "intent",
+  "object": "claim",
   "id": "claim_3MtwBwLkdIwHu7ix",
   "status": "active",
   "target": { "type": "weatherReports", "id": "report_stockholm", "field": "status" },

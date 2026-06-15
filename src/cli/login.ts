@@ -174,7 +174,10 @@ async function deviceLogin(): Promise<void> {
   s.message('Provisioning a sandbox key…');
   const provRes = await fetch(`${AUTH_URL}/api/cli/provision-key`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${accessToken}` },
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+    // Pass the device_code so the server can scope the minted keys to the
+    // project the user picked at /cli (login project picker). Harmless if none.
+    body: JSON.stringify({ device_code: code.device_code }),
   }).catch(() => null);
 
   if (!provRes || !provRes.ok) {

@@ -1059,6 +1059,15 @@ export class TransactionQueue extends EventEmitter {
       ? this.mapChangesToInput(actualModelName, precomputedChanges)
       : this.extractUpdateData(model);
     const previousData = this.extractPreviousData(model, updateInput);
+    // Advance the per-field baseline for the keys we just froze into this
+    // transaction. `Model.propertyChanged` is first-old-wins and only cleared on
+    // sync-ack, so without this a SECOND update to the same field before the
+    // first acks would re-capture the original `.old` (the pre-session value)
+    // instead of THIS update's result — corrupting the stream-recorded undo
+    // inverse (the second move's "before" would point all the way back). The
+    // wire payload is already frozen in `transaction.data`, so dropping the
+    // consumed entries is safe. Mirrors `RecordingTransaction.consumeModifiedFields`.
+    this.consumeModifiedFields(model, updateInput);
     const modelKey = normalizeModelKey(actualModelName);
     const priorityScore = this.computePriorityScore('update', actualModelName);
 
@@ -2461,16 +2470,62 @@ export class TransactionQueue extends EventEmitter {
   // expose a typed `getPreviousData()` accessor on Model and call that.
   private extractPreviousData(model: Model, updateInput?: MutationInput): MutationInput {
     const prev: MutationInput = { id: model.id };
+    const modified = model.modifiedProperties instanceof Map ? model.modifiedProperties : null;
 
-    if (model.modifiedProperties instanceof Map && model.modifiedProperties.size > 0) {
-      for (const [key, change] of model.modifiedProperties) {
-        // Only include keys that are part of this update if provided
-        if (updateInput && !(key in updateInput)) continue;
+    // When the update's written keys are known, capture a before-image for
+    // EXACTLY those keys so the recorded undo inverse can revert them and only
+    // them (a full-row inverse would clobber concurrent edits to unrelated
+    // fields). Resolution order mirrors `RecordingTransaction.snapshotFields`:
+    //   1. `modifiedProperties.old` — first-old-wins pre-session baseline, set
+    //      whenever the caller mutated the field in place before committing.
+    //   2. `getOriginalSnapshot()` — the last loaded/acked row, the correct
+    //      before-image for a key written WITHOUT a prior in-place mutation
+    //      (e.g. a `precomputedChanges` write).
+    // Without (2) such a key yields an empty `previousData`, and `buildUndoOps`
+    // nulls the inverse entirely — making updates silently un-undoable where a
+    // create's `delete(id)` inverse never is. This closes that asymmetry.
+    if (updateInput) {
+      const original = model.getOriginalSnapshot();
+      for (const key of Object.keys(updateInput)) {
+        if (key === 'id') continue;
+        const mod = modified?.get(key);
+        if (mod) {
+          prev[key] = mod.old;
+        } else if (original && key in original) {
+          prev[key] = original[key];
+        }
+      }
+      return prev;
+    }
+
+    if (modified && modified.size > 0) {
+      for (const [key, change] of modified) {
         prev[key] = change.old;
       }
     }
 
     return prev;
+  }
+
+  /**
+   * Re-baseline `modifiedProperties` for the fields a freshly-staged update just
+   * committed. Called right after {@link extractPreviousData} freezes their
+   * `.old` into the transaction, so the NEXT update to the same field sees this
+   * update's result as its baseline rather than the stale pre-session `.old`
+   * preserved by `Model.propertyChanged`'s first-old-wins policy. Only consumes
+   * keys present in this update — untouched fields keep their baselines. Safe
+   * because the wire payload lives on `transaction.data` and rollback restores
+   * from `transaction.previousData`; neither re-reads `modifiedProperties`.
+   */
+  private consumeModifiedFields(model: Model, updateInput?: MutationInput): void {
+    if (!(model.modifiedProperties instanceof Map) || model.modifiedProperties.size === 0) {
+      return;
+    }
+    for (const key of [...model.modifiedProperties.keys()]) {
+      if (key === 'id') continue;
+      if (updateInput && !(key in updateInput)) continue;
+      model.modifiedProperties.delete(key);
+    }
   }
 
   /**

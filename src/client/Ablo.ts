@@ -122,6 +122,7 @@ import {
   resolveBaseURL,
   resolveBootstrapBaseUrl,
   resolveDatabaseUrl,
+  warnIfDatabaseUrlEnvIgnored,
 } from './auth.js';
 import { registerDataSource } from './registerDataSource.js';
 import {
@@ -1879,6 +1880,9 @@ export function Ablo<const S extends SchemaRecord>(
   });
 
   const { logger = consoleLogger } = internalOptions;
+  // Nudge (once) if a stray DATABASE_URL is in the env but `databaseUrl` wasn't
+  // passed — the env value is no longer auto-adopted (see resolveDatabaseUrl).
+  warnIfDatabaseUrlEnvIgnored(authInput, (m) => logger.warn(m));
   const schema = options.schema as Schema<S>;
   const url = resolveBaseURL(authInput);
 
@@ -2657,6 +2661,18 @@ export function Ablo<const S extends SchemaRecord>(
             waitOptions,
           ),
         selfParticipantId: participantId,
+        selfParticipantKind: kind,
+        // Read-interest / write-intent enrolment for the typed surface.
+        // `enterScope`/`pinScope` resolve the `{ [schemaKey]: id }` scope
+        // through the SAME resolver the claim path uses, landing this client in
+        // the entity-scoped group the holder's claim presence fans out on.
+        // Return the store promise so the claim write path can AWAIT pinScope
+        // BEFORE acquiring the lease (closing the subscribe-vs-broadcast race);
+        // read-interest callers (`retrieve`/`claim.state`) still `void` it and
+        // stay fire-and-forget. SOFT either way — the store swallows reconcile
+        // errors so read interest never makes a read reject or stall.
+        enterScope: (scope) => store.enterScope(scope),
+        pinScope: (scope) => store.pinScope(scope),
       },
     );
   }

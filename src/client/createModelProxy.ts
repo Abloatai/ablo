@@ -27,6 +27,7 @@ import {
 import { descriptionFromMeta } from '../coordination/schema.js';
 import type { MutationOptions } from '../interfaces/index.js';
 import { Model, modelAsRow } from '../Model.js';
+import { toMs } from '../utils/duration.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
 import type { ModelRegistry } from '../ModelRegistry.js';
 import type { ObjectPool } from '../ObjectPool.js';
@@ -39,6 +40,7 @@ import type {
   Claim,
   ClaimHandle,
   ClaimWaitOptions,
+  EntityRef,
   Snapshot,
   TargetRange,
 } from '../types/streams.js';
@@ -159,6 +161,31 @@ export interface ModelCollaboration<T> {
    * from "someone else holds it" in `claimOrWait`.
    */
   readonly selfParticipantId: string;
+  /**
+   * The local participant's kind (`'user' | 'agent' | 'system'`). Used to
+   * stamp the synthesized self-claim returned from `claim.state` when the
+   * LOCAL proxy holds the lease (server presence frames exclude one's own
+   * claims, so the holder must build its own view).
+   */
+  readonly selfParticipantKind?: 'user' | 'agent' | 'system';
+  /**
+   * Subscribe the connection to a scope's sync group(s) (read-interest).
+   * The typed surface calls this on single-entity reads/claim observation so
+   * a Node/agent client lands in the SAME entity-scoped group the holder's
+   * claim presence fans out on — otherwise a peer subscribed only to
+   * `org:`/`user:` groups never sees claim broadcasts. Fire-and-forget and
+   * SOFT: read interest is best-effort and must never make a read reject or
+   * stall (see `AreaOfInterestManager.reconcile`). Optional so minimal test
+   * doubles can omit it. Forwards to `BaseSyncedStore.enterScope`.
+   */
+  enterScope?(scope: Record<string, string>): void | Promise<void>;
+  /**
+   * Pin a scope's sync group(s) (write-intent / prominence): a row this
+   * client holds an active claim on stays subscribed regardless of
+   * navigation. Same fire-and-forget, soft semantics as `enterScope`.
+   * Forwards to `BaseSyncedStore.pinScope`.
+   */
+  pinScope?(scope: Record<string, string>): void | Promise<void>;
 }
 
 export interface ClaimTargetOptions<T = Record<string, unknown>> {
@@ -473,10 +500,27 @@ export function createModelProxy<T, C>(
   // Claims this proxy currently holds, keyed by entity id. Lets the flat
   // `release({ id })` and `update({ id, data })` find the lease + snapshot a `claim({ id })`
   // took — no per-call handle. Released on dispose, explicit release, or TTL.
+  //
+  // `target` / `action` / `expiresAt` are kept alongside the lease so
+  // `claim.state` can synthesize a self-claim: the server excludes a holder's
+  // own presence frames, so the local proxy is the ONLY place that knows "I
+  // hold this." `expiresAt` is the client's best estimate from the requested
+  // TTL (a genuine epoch-ms expiry, not a fabricated watermark), defaulting to
+  // the server's keepalive lease window when no TTL was requested.
   const activeClaims = new Map<
     string,
-    { lease: ClaimHandle; snapshot: Snapshot }
+    {
+      lease: ClaimHandle;
+      snapshot: Snapshot;
+      target: EntityRef;
+      action: string;
+      expiresAt: number;
+    }
   >();
+
+  // Server keepalive lease window (Hub `LEASE_RENEW_TTL_MS`). The fallback
+  // expiry estimate when a claim is taken without an explicit TTL.
+  const DEFAULT_LEASE_TTL_MS = 90_000;
 
   const isClaimHandle = (value: unknown): value is ClaimHandle<T> =>
     typeof value === 'object' &&
@@ -542,7 +586,7 @@ export function createModelProxy<T, C>(
   ): Promise<ClaimHandle<T>> => {
     if (!collaboration) {
       throw new AbloValidationError(
-        `Model "${schemaKey}" cannot claim a row without collaboration wiring.`,
+        `Model "${schemaKey}" was built without the collaboration runtime, so claim() is unavailable here. Claiming needs no per-model config — use the standard Ablo({ schema, apiKey }) client and every model is claimable.`,
         { code: 'model_claim_not_configured' },
       );
     }
@@ -586,6 +630,15 @@ export function createModelProxy<T, C>(
       );
     }
 
+    // Write-intent: enter the entity scope BEFORE acquiring the lease so the
+    // holder's claim presence broadcasts to whoever is in this entity group —
+    // including a peer that subscribed just before us. Pinning before the
+    // lease (rather than after) closes the subscribe-vs-broadcast race: the
+    // server fans `broadcastPresenceChange` out at claim time, so we must be
+    // in the group when `createClaim` lands. Awaited because the broadcast
+    // ordering depends on it; still soft (the store swallows reconcile errors).
+    await collaboration.pinScope?.({ [schemaKey]: id });
+
     // Acquire the lease. Default (`wait` !== false) goes through the server's
     // fair FIFO queue — `queue: true` resolves only once the lease is genuinely
     // ours, blocking behind any current holder, with no TOCTOU gap (the server
@@ -625,7 +678,28 @@ export function createModelProxy<T, C>(
     }
 
     const snapshot = collaboration.createSnapshot(schemaKey, id);
-    activeClaims.set(id, { lease, snapshot });
+    const action = options?.action ?? 'editing';
+    // The self-claim's `EntityRef` mirrors what a peer's `claim.state` would
+    // report (`observe` maps `held.target.model` → `type`), so a holder and a
+    // peer see the SAME target.type for one row — the wire model token.
+    const selfTarget: EntityRef = {
+      type: wireModel,
+      id,
+      ...(options?.field ? { field: options.field } : {}),
+      ...(options?.path ? { path: options.path } : {}),
+      ...(options?.range ? { range: options.range } : {}),
+      ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
+    };
+    const expiresAt =
+      Date.now() +
+      (options?.ttl !== undefined ? toMs(options.ttl) : DEFAULT_LEASE_TTL_MS);
+    activeClaims.set(id, {
+      lease,
+      snapshot,
+      target: selfTarget,
+      action,
+      expiresAt,
+    });
     const target = {
       model: schemaKey,
       id,
@@ -640,7 +714,7 @@ export function createModelProxy<T, C>(
       claimId: lease.claimId,
       readAt: snapshot.stamp,
       target,
-      action: options?.action ?? 'editing',
+      action,
       ...(options?.description ? { description: options.description } : {}),
       data: modelAsRow<T>(model),
       release,
@@ -660,6 +734,28 @@ export function createModelProxy<T, C>(
   // are the same object.
   const claimApi: ClaimApi<T> = Object.assign(guard(claim) as typeof claim, {
     state(params: ClaimLookupParams<T>): Claim | null {
+      // Read-interest: a passive observer subscribing to a row's claim state
+      // must enter that row's entity scope, or it sits on `org:`/`user:`
+      // groups only and never receives the holder's entity-scoped claim
+      // presence. Soft + fire-and-forget — never blocks or rejects the read.
+      void collaboration?.enterScope?.({ [schemaKey]: params.id });
+      // Self-awareness: the server excludes a holder's OWN presence frames and
+      // the client skips them, so `observe` returns null for a row WE hold.
+      // Synthesize the active claim for self from the stored lease so the
+      // holder sees its own claim (the JSDoc contract on `claim.state`).
+      const own = activeClaims.get(params.id);
+      if (own) {
+        return {
+          object: 'claim',
+          id: own.lease.claimId,
+          status: 'active',
+          target: own.target,
+          action: own.action,
+          heldBy: collaboration?.selfParticipantId ?? '',
+          participantKind: collaboration?.selfParticipantKind ?? 'user',
+          expiresAt: own.expiresAt,
+        };
+      }
       return collaboration?.observe({ model: wireModel, id: params.id }) ?? null;
     },
 
@@ -682,6 +778,11 @@ export function createModelProxy<T, C>(
   const operations: ModelOperations<T, C> = {
     retrieve: guard(
       async (params: ModelRetrieveParams): Promise<T | undefined> => {
+        // Read-interest enrolment: READ a row → enter its entity scope, so a
+        // Node/agent client lands in the same group the holder's claim presence
+        // fans out on and `claim.state`/`claim.queue` report peers. Soft +
+        // fire-and-forget — never make the read reject or slower.
+        void collaboration?.enterScope?.({ [schemaKey]: params.id });
         const rows = await load({
           ...params,
           where: [['id', params.id]],
@@ -691,6 +792,9 @@ export function createModelProxy<T, C>(
       },
     ),
 
+    // NB: no auto scope enrolment on bulk `list`/`getAll` — that would
+    // subscribe to an unbounded set of rows' entity groups. Bulk-list scope
+    // enrolment is a deliberate follow-up (a bounded, opt-in policy).
     list: guard(load),
 
     get(id: string): T | undefined {
@@ -747,10 +851,16 @@ export function createModelProxy<T, C>(
       if (claim && !isClaimHandle(claim)) {
         if (!collaboration) {
           throw new AbloValidationError(
-            `Model "${schemaKey}" cannot claim a row without collaboration wiring.`,
+            `Model "${schemaKey}" was built without the collaboration runtime, so claim() is unavailable here. Claiming needs no per-model config — use the standard Ablo({ schema, apiKey }) client and every model is claimable.`,
             { code: 'model_claim_not_configured' },
           );
         }
+        // Write-intent: enter the new row's entity scope BEFORE acquiring the
+        // create-claim so the holder's claim presence broadcasts to whoever is
+        // already in this entity group (closing the subscribe-vs-broadcast
+        // race — see `takeClaim`). Released with the lease in the `finally`
+        // below. Awaited for broadcast ordering; still soft.
+        await collaboration.pinScope?.({ [schemaKey]: id });
         autoLease = await collaboration.createClaim({
           target: {
             model: wireModel,

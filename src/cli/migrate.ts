@@ -23,6 +23,20 @@ import { serializeSchema, generateProvisionPlan, type Schema, type SchemaJSON } 
 import { adapterTableMigrations } from '@abloatai/ablo/source';
 import { loadSchema } from './push';
 
+/**
+ * Usage text for `ablo migrate --help`. Kept beside the parser (and exported so
+ * the CLI dispatcher can print it) so the two never drift. Mirrors the flags in
+ * `parseMigrateArgs` below.
+ */
+export const MIGRATE_USAGE = `  ablo migrate — provision your schema's tables in your own Postgres (DATABASE_URL)
+
+  Usage:
+    npx ablo migrate                      Create the synced-model tables (with row-level security)
+    npx ablo migrate --dry-run            Print the SQL without executing it
+    npx ablo migrate --output schema.sql  Write the SQL to a file instead of applying
+    npx ablo migrate --schema <path>      Use a schema file other than ablo/schema.ts
+    npx ablo migrate --export <name>      Use a named export other than \`schema\``;
+
 export interface MigrateArgs {
   schemaPath: string;
   exportName: string;

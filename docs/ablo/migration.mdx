@@ -16,6 +16,8 @@ versions (`0.x.y`) never do. Pin a minor and read this page before bumping it.
 
 | Version | What changed | What to do |
 |---|---|---|
+| **0.11.0** | `intent` → `claim` rename completed across the React hook, type namespace, and wire frames | `useIntent` → `useClaim`; `Register.Intents` → `Register.Claims`; `Ablo.Intent.*` → `Ablo.Claim.*`. Upgrade client **and** server together (wire frames moved `intent_*` → `claim_*`) |
+| **0.10.0** | Environment enum renamed `test`/`live` → `sandbox`/`production` | Update code that branches on the environment (e.g. source `mode`): `'test'`→`'sandbox'`, `'live'`→`'production'`. Key prefixes `sk_test_`/`sk_live_` are unchanged |
 | **0.9.2** | `turn` primitive + agent-work `tasks` resource removed | Coordinate with `claim`; mint a scoped session instead of `agent().run()` |
 | **0.9.2** | `intents` deprecated in favor of `claim` | Use `ablo.<model>.claim`; `ablo.intents` is now `@internal` |
 | **0.9.0** | One options object per verb | `update(id, data, opts)` → `update({ id, data, ...opts })` |
@@ -25,6 +27,100 @@ versions (`0.x.y`) never do. Pin a minor and read this page before bumping it.
 | **0.6.0** | `subscribe` → `onChange`; `Resource` → `Model` rename | Rename listeners and `ablo.resource()` → `ablo.model()` |
 | **0.5.0** | Intent-handle method renames | `acquire`→`claim`, `acquireOrAwait`→`claimOrWait`, … |
 | **0.3.0** | `<SyncProvider>` / `createAbloContext()` / `withSync` removed | Use the umbrella `<AbloProvider>` |
+
+---
+
+## 0.11.0 — `intent` → `claim` rename completed
+
+The coordination primitive has been `claim` since 0.9.2, but a few `intent`-named
+surfaces lingered. 0.11.0 finishes the rename. There are three edits, all
+mechanical:
+
+**1. React hook.** `useIntent` is now `useClaim` (same signature):
+
+```diff
+- import { useIntent } from '@abloatai/ablo/react';
+- const claimEditLayer = useIntent('editLayer');
++ import { useClaim } from '@abloatai/ablo/react';
++ const claimEditLayer = useClaim('editLayer');
+```
+
+**2. Type registration.** The `Register` interface key is `Claims`, not `Intents`:
+
+```diff
+  declare module '@abloatai/ablo' {
+    interface Register {
+-     Intents: { editLayer: { slideId: string; layerId: string } };
++     Claims: { editLayer: { slideId: string; layerId: string } };
+    }
+  }
+```
+
+**3. Type namespace.** The `Ablo.Intent.*` helper types moved to `Ablo.Claim.*`.
+If you referenced them directly, rename the namespace; the shapes are unchanged.
+
+<Warning>
+  **Coordinated deploy required.** The on-the-wire frames moved from `intent_*`
+  to `claim_*`. A `claim_*`-aware client cannot coordinate with an `intent_*`
+  server (and vice-versa), so ship the client and server together. If you run a
+  self-managed sync server, deploy it first.
+</Warning>
+
+Two non-breaking improvements ride along: claim-rejection errors now surface the
+contending holders (`AbloClaimedError.claims` and a policy reason folded into the
+message), and `participantKind` is the canonical `'user' | 'agent' | 'system'`
+on presence and claim state.
+
+## 0.10.0 — environment enum `sandbox` / `production`; stateless HTTP transport
+
+### Environment enum rename (the only breaking change)
+
+The canonical environment values are now **`production`** and **`sandbox`** (was
+`live` and `test`). This is a *vocabulary* change at the type/API layer — the
+on-the-wire key prefixes are **unchanged**: keys are still `sk_test_…` /
+`sk_live_…` and parse exactly as before. What changed is the enum you see in
+code: `Environment`, the source-handler `mode` field, and `ApiKeyEnv` now read
+`production` / `sandbox`.
+
+You only need to act if your code branches on the environment value — most
+commonly a Data Source handler keyed on `mode`. The mapping is exactly
+`test → sandbox`, `live → production`:
+
+```diff
+  const handler = createSourceHandler({
+    read: async ({ mode }) => {
+-     const db = mode === 'test' ? testDb : liveDb;
++     const db = mode === 'sandbox' ? sandboxDb : productionDb;
+      // …
+    },
+  });
+```
+
+`commit` now also forwards `projectId`, `accountScope`, and `environment` to
+source resolvers, so per-project and per-environment traffic can be routed to
+distinct stores.
+
+<Note>
+  **CLI note:** the legacy single-file config that stored `test`/`live` key
+  buckets is no longer auto-migrated. If `ablo status` can't find your keys after
+  upgrading, re-run `ablo login` to write the current `sandbox`/`production`
+  layout.
+</Note>
+
+### New (non-breaking): `transport: 'http'`
+
+`Ablo({ transport: 'http' })` returns a stateless `AbloHttpClient` for
+server-side actors (agents, workers, serverless): the same `ablo.<model>` surface
+and `claim` coordination, but each call is one HTTP round-trip with identity on
+the Bearer credential — no websocket, no local synced pool. The return type
+narrows, so stateful-only APIs (`get` / `getAll` / `onChange`) become compile
+errors instead of latent runtime gaps. Existing code keeps the default
+`'websocket'` transport, unchanged.
+
+```ts
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: 'http' });
+await ablo.tasks.update({ id, data: { status: 'done' } });
+```
 
 ---
 

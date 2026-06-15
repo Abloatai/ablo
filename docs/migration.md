@@ -11,6 +11,7 @@ change when you upgrade.
 
 | Version | What changed | What to do |
 |---|---|---|
+| **0.11.0** | `intent` → `claim` rename completed across the React hook, type namespace, and wire frames | `useIntent` → `useClaim`; `Register.Intents` → `Register.Claims`; `Ablo.Intent.*` → `Ablo.Claim.*`. Upgrade client **and** server together (wire frames moved `intent_*` → `claim_*`) |
 | **0.10.0** | Environment enum renamed `test`/`live` → `sandbox`/`production` | Update code that branches on the environment (e.g. source `mode`): `'test'`→`'sandbox'`, `'live'`→`'production'`. Key prefixes `sk_test_`/`sk_live_` are unchanged |
 | **0.9.2** | `turn` primitive + agent-work `tasks` resource removed | Coordinate with `claim`; mint a scoped session instead of `agent().run()` |
 | **0.9.2** | `intents` deprecated in favor of `claim` | Use `ablo.<model>.claim`; `ablo.intents` is now `@internal` |
@@ -23,6 +24,45 @@ change when you upgrade.
 | **0.3.0** | `<SyncProvider>` / `createAbloContext()` / `withSync` removed | Use the umbrella `<AbloProvider>` |
 
 ---
+
+## 0.11.0 — `intent` → `claim` rename completed
+
+The coordination primitive has been `claim` since 0.9.2, but a few `intent`-named
+surfaces lingered. 0.11.0 finishes the rename. There are three edits, all
+mechanical:
+
+**1. React hook.** `useIntent` is now `useClaim` (same signature):
+
+```diff
+- import { useIntent } from '@abloatai/ablo/react';
+- const claimEditLayer = useIntent('editLayer');
++ import { useClaim } from '@abloatai/ablo/react';
++ const claimEditLayer = useClaim('editLayer');
+```
+
+**2. Type registration.** The `Register` interface key is `Claims`, not `Intents`:
+
+```diff
+  declare module '@abloatai/ablo' {
+    interface Register {
+-     Intents: { editLayer: { slideId: string; layerId: string } };
++     Claims: { editLayer: { slideId: string; layerId: string } };
+    }
+  }
+```
+
+**3. Type namespace.** The `Ablo.Intent.*` helper types moved to `Ablo.Claim.*`.
+If you referenced them directly, rename the namespace; the shapes are unchanged.
+
+> **Coordinated deploy required.** The on-the-wire frames moved from `intent_*`
+> to `claim_*`. A `claim_*`-aware client cannot coordinate with an `intent_*`
+> server (and vice-versa), so ship the client and server together. If you run a
+> self-managed sync server, deploy it first.
+
+Two non-breaking improvements ride along: claim-rejection errors now surface the
+contending holders (`AbloClaimedError.claims` and a policy reason folded into the
+message), and `participantKind` is the canonical `'user' | 'agent' | 'system'`
+on presence and claim state.
 
 ## 0.10.0 — environment enum `sandbox` / `production`; stateless HTTP transport
 

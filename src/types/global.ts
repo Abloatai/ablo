@@ -12,11 +12,16 @@
  * global, not prefixed). It's a language feature, not a library trick: any file
  * in the compilation can augment it and every resolver below picks it up.
  *
- * Consumer example:
+ * Consumer example (`npx ablo init` scaffolds this as `ablo/register.ts`, a
+ * sibling of `ablo/schema.ts`). It's a regular `.ts` module, NOT a hand-authored
+ * `.d.ts`: the top-level `import type { schema }` makes the `declare module`
+ * block MERGE (augment) this interface rather than collide with it — the same
+ * shape TanStack Router uses in `src/router.tsx`. Any `.ts` file in the
+ * `tsconfig` `include` works; it never needs to be imported.
  *
  * ```ts
- * // apps/your-app/src/ablo.d.ts
- * import type { schema } from './your-schema';
+ * // ablo/register.ts
+ * import type { schema } from './schema';
  *
  * declare module '@abloatai/ablo' {
  *   interface Register {

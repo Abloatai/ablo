@@ -223,7 +223,7 @@ export const ERROR_CODES = {
   malformed_subscription: wire('validation', 400, false, 'The update_subscription payload was malformed; expected { syncGroups: string[] }.'),
   model_claimed: wire('claim', 409, false, 'The model instance is claimed by another participant.'),
   model_claimed_timeout: wire('claim', 409, false, 'Timed out waiting for a model claim to clear.'),
-  model_claim_not_configured: client('claim', 'Claiming was requested on a model that has no claim configuration.'),
+  model_claim_not_configured: client('claim', 'Claiming requires the collaboration runtime, which the standard Ablo({ schema, apiKey }) client wires up for every model automatically — there is no per-model claim configuration to add. This appears only when a model proxy is constructed directly without that runtime (an internal/advanced path).'),
 
   // ── stale context / idempotency (409) ──────────────────────────────
   stale_context: wire('conflict', 409, true, 'The write carried a readAt watermark that is now stale; re-read and retry.'),
