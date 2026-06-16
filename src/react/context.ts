@@ -140,24 +140,6 @@ export interface SyncReactContext {
    * augmentation — see `src/types/global.ts`.
    */
   schema?: Schema;
-  /**
-   * Optional presence source. When set, `usePresence()` returns this
-   * value cast to the consumer's `ResolvePresence` type (declared via
-   * `interface Register { Presence: ... }`). The SDK doesn't own a
-   * presence wire format — consumers plug whatever backs their cursors,
-   * status, or activity state (a MobX store, a Zustand slice, a custom
-   * subscription). The typed-global gives it a call-site-ergonomic
-   * type without the SDK dictating the transport.
-   */
-  presence?: unknown;
-  /**
-   * Optional claim initiator. Same pattern as presence — consumers
-   * plug a function that turns an claim claim into a handle they
-   * control (WebSocket send, optimistic local update, whatever).
-   * `useClaim(name)` returns a typed invoker for the named claim
-   * from `interface Register { Claims: ... }`.
-   */
-  beginClaim?: (claimName: string, claim: unknown) => unknown;
 }
 
 export const SyncContext = createContext<SyncReactContext | null>(null);
@@ -191,18 +173,6 @@ export interface SyncProviderProps {
    * their legacy `(schema, modelKey, …)` signatures.
    */
   schema?: Schema;
-  /**
-   * Optional presence source for `usePresence()`. See
-   * {@link SyncReactContext.presence} — the consumer plugs whatever
-   * backs their presence state; the hook returns it with
-   * `ResolvePresence` typing.
-   */
-  presence?: unknown;
-  /**
-   * Optional claim initiator for `useClaim()`. See
-   * {@link SyncReactContext.beginClaim}.
-   */
-  beginClaim?: (claimName: string, claim: unknown) => unknown;
   children?: ReactNode;
 }
 
@@ -225,13 +195,11 @@ export function SyncProvider({
   store,
   organizationId,
   schema,
-  presence,
-  beginClaim,
   children,
 }: SyncProviderProps) {
   return createElement(
     SyncContext.Provider,
-    { value: { store, organizationId, schema, presence, beginClaim } },
+    { value: { store, organizationId, schema } },
     children
   );
 }

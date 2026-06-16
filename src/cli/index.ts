@@ -1000,9 +1000,23 @@ import Ablo from '@abloatai/ablo';
 import { AbloProvider } from '@abloatai/ablo/react';
 import { schema } from '@/ablo/schema';
 
-// The browser client holds NO secret. \`authEndpoint\` points at the route below,
-// which mints a short-lived session token (already scoped to the org + user).
-const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+// The browser client holds NO secret. The \`apiKey\` resolver fetches the route
+// below, which mints a short-lived session token (already scoped to the org +
+// user); the client keeps it fresh (refresh timer + wake/online/focus re-mint).
+// Contract: return the token, return \`null\` when the user is signed out
+// (→ the client signs out), or throw on a transient failure (→ it retries).
+const ablo = Ablo({
+  schema,
+  apiKey: async () => {
+    const res = await fetch('/api/ablo-session', {
+      method: 'POST',
+      credentials: 'include',
+    });
+    if (!res.ok) return null;
+    const { token } = (await res.json()) as { token: string | null };
+    return token;
+  },
+});
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return <AbloProvider client={ablo}>{children}</AbloProvider>;

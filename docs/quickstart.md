@@ -57,6 +57,9 @@ export const schema = defineSchema({
 });
 ```
 
+**Reserved fields** — `id`, `createdAt`, `updatedAt`, `organizationId`, and
+`createdBy` are provided by the SDK automatically. Don't declare them in your
+`model(...)` fields; declare only your own.
 
 The schema is registered once (init scaffolds `ablo/register.ts` for you), and
 every type is one parameter away — no `typeof schema` re-stating, anywhere:
@@ -210,8 +213,9 @@ and you write the usual way with `ablo.<model>.update({ id, data })`.
 Claims don't lock. If another writer holds the row, `claim` waits for them,
 re-reads the fresh row, then hands it to you — so two writers serialize instead
 of clobbering. Normal reads still work while the claim is held. If a server read
-should not return a row while someone else is mid-edit, pass `ifClaimed: 'wait'`
-to wait for the claim to clear, or `ifClaimed: 'fail'` to error out instead.
+should not return a row while someone else is mid-edit, pass `ifClaimed: 'fail'`
+to error out instead. Reads never block on a claim — to wait for a row to free
+up, `claim({ id })` it (the claim queues fairly behind the holder).
 Call `handle.release()` when your work is done.
 
 ```ts

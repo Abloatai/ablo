@@ -19,6 +19,7 @@
 
 import pc from 'picocolors';
 import { AbloValidationError } from '../errors.js';
+import { classifyCredentialKind } from '../auth/credentialPolicy.js';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { serializeSchema, schemaHash, type Schema } from '@abloatai/ablo/schema';
@@ -250,7 +251,7 @@ export async function push(argv: readonly string[]): Promise<void> {
     console.error(pc.red(`  Forbidden: ${body.message ?? body.reason ?? 'key lacks schema:push scope'}`));
     // The login-minted production key is a restricted (rk_) observe-only key
     // by design — name the door that works instead of leaving a dead end.
-    if (args.apiKey?.startsWith('rk_')) {
+    if (args.apiKey != null && classifyCredentialKind(args.apiKey) === 'restricted') {
       console.error(
         pc.dim(
           `  Schema pushes need a SECRET key: ${pc.bold('sk_test_')} (sandbox dev loop) or a dashboard ` +

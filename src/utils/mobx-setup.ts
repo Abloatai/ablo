@@ -183,6 +183,7 @@ export function M1<T extends M1Target>(
     'propertyChanged',
     'markAsPersisted',
     'clearChanges',
+    'consumeModifiedFields',
     'updateFromData',
     'applyChanges',
   ];

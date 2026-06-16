@@ -36,8 +36,8 @@ runnable place, so the concepts below have code to attach to.
 ## Declare it, end to end
 
 The entire declaration surface is: `identityRoles` (who may see what), and on
-each model `scope` / `parent` / `grants` (which group a row fans out on), plus an
-optional `scope` setting on the client (narrowing). Read the three blocks first —
+each model `scope` / `parent` / `grants` (which group a row fans out on), plus
+optional `syncGroups` at session-mint time (narrowing). Read the three blocks first —
 a human gets their `org` / `team` scope, an agent gets one `deck` — then the
 sections after explain each.
 
@@ -84,18 +84,17 @@ export const schema = defineSchema(
 
 ```ts
 // 3. an AGENT run inherits its user, narrowed to the entities in play.
-// Pass the MODEL form — { decks: id } — not a hand-built `deck:<id>` string;
-// the engine derives the group from each model's `scope`. The narrowing lives
-// on the client you build, then the provider mounts it.
-const ablo = Ablo({
-  schema,
-  authEndpoint: '/api/ablo-session',
-  scope: { decks: deckId }, // floor: just the deck it's working on
+// You narrow at SESSION-MINT time: your backend calls `sessions.create` with the
+// agent's allowed `syncGroups`, built from each model's scope via the
+// `syncGroup(kind, id)` helper — never a hand-built `deck:<id>` string. The agent's
+// runtime then connects with the minted token.
+const session = await server.sessions.create({
+  agent: { id: agentId },
+  can: { Deck: ['read', 'update'] },
+  syncGroups: [syncGroup('deck', deckId)], // floor: just the deck it's working on
 });
-
-<AbloProvider client={ablo} userId={user.id /* ceiling: the triggering user */}>
-  {children}
-</AbloProvider>;
+// the agent runtime authenticates with the minted token
+const ablo = Ablo({ schema, apiKey: session.token });
 ```
 
 That's the whole surface. The rest of this doc is the *why* behind each line.
@@ -127,11 +126,12 @@ so you pass them in code when you start the run.
 > **One line:** humans subscribe by who they are; agents subscribe by what
 > they've been given.
 
-That's why you never write per-user scope code, but you always pass an agent's
-scope at the call site. A user's org/team/user don't change per request, so
+That's why you never write per-user scope code, but you always choose an agent's
+groups at the dispatch site. A user's org/team/user don't change per request, so
 their scope is a **rule the schema derives automatically**. An agent's reach
 depends on *what it's working on*, which is only knowable at dispatch — so you
-set its `scope` on the client **at the dispatch site, in code**. The schema's
+pass its `syncGroups` **when your backend mints the agent session**
+(`sessions.create({ agent, can, syncGroups })`). The schema's
 only job for entities is to declare *that* a model is
 entity-scopable and *what its group is named* (`scope: 'deck'` → `deck:{id}`);
 it never declares *which* entities a given agent gets. (A human can opt into the
@@ -305,8 +305,9 @@ server, never by the browser.**
 
 The identity your server resolved is carried by the client you build and the
 `userId` prop. In a Next.js app, resolve the user in a Server Component and pass
-it down. Build the client once (the schema, `teamIds`, and any `scope` narrowing
-live here), then hand it to the provider:
+it down. Build the client once (the schema, `teamIds`, and the `apiKey` resolver
+live here; entity narrowing rides the minted session's `syncGroups`), then hand
+it to the provider:
 
 ```ts
 // lib/ablo.ts
@@ -318,7 +319,10 @@ import { schema } from '@/ablo/schema';
 export function makeAblo(user: { teamIds: string[] }) {
   return Ablo({
     schema,
-    authEndpoint: '/api/ablo-session',
+    // The browser holds no secret — the `apiKey` resolver fetches the
+    // short-lived session token your `/api/ablo-session` route minted, and the
+    // client keeps it fresh before expiry.
+    apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
     teamIds: user.teamIds,
   });
 }
@@ -354,7 +358,7 @@ What carries identity — and just as importantly, what does *not* set the bound
 | ------------ | ------------------------------------------------------------------------------------------------ |
 | `userId` prop | App-level participant id, used for app-owned fields and read by your `identityRole` `source`. **Not** the security boundary — the server enforces scope from the authenticated request. |
 | `teamIds` (on the client) | Team ids expanded into team sync groups via your `identityRoles`.                   |
-| `scope` (on the client) | Optional. **Narrows** the subscription to a subset of what auth already allows — it can never widen it. Use it to scope a page to one entity (e.g. `{ decks: 'abc123' }`). |
+| `syncGroups` (at session mint) | Optional. **Narrows** a minted session's subscription to a subset of what auth already allows — it can never widen it. Passed to `sessions.create({ user \| agent, syncGroups })`; build entries with `syncGroup(kind, id)`. Use it to scope an agent (or a focused page's session) to one entity, e.g. `[syncGroup('deck', 'abc123')]`. |
 
 Because the server is the boundary, a client that changes `userId` to another
 user's id does not gain their data — the server resolves and enforces the real
@@ -398,20 +402,20 @@ subset of what its user could see:
 
 ```ts
 // agent run triggered by `user`, working on one document + one deck.
-// The narrowing lives on the client; the provider just mounts it.
-const ablo = Ablo({
-  schema,
-  authEndpoint: '/api/ablo-session',
-  // authority narrowed to just the entities in play (the floor).
-  // Model form — keyed by model, resolved to groups via each model's `scope`.
-  scope: { documents: documentId, decks: deckId },
+// Your backend mints the agent session narrowed to just the entities in play
+// (the floor). Build each group from the model's scope with `syncGroup(kind, id)`.
+const session = await server.sessions.create({
+  agent: { id: agentId },
+  can: { Document: ['read', 'update'], Deck: ['read', 'update'] },
+  syncGroups: [syncGroup('document', documentId), syncGroup('deck', deckId)],
 });
-
-// identity inherited from the triggering user (the ceiling)
-<AbloProvider client={ablo} userId={user.id}>
+// identity (the ceiling) is inherited from the triggering user via your
+// session-mint logic; the agent runtime connects with the minted token.
+const ablo = Ablo({ schema, apiKey: session.token });
 ```
 
-As the run touches more entities its set **accretes** to cover them; it never
+As the run touches more entities, claim or read them and the client auto-enrolls
+in their entity groups — its set **accretes** to cover them; it never
 widens past the user's ceiling, and it carries no standing access to entities it
 isn't working on. The `identityRoles` need no agent-specific entry: the agent
 carries the triggering user's `userId`, so the same `user:{id}` role that scopes
@@ -444,52 +448,55 @@ runs the [Coordinating long agent work](../README.md#coordinating-long-agent-wor
 `claim` loop is, to the scoping layer, that same participant — scoped to the row
 it claimed.
 
-## Narrowing to specific entities — the `scope` setting
+## Narrowing to specific entities
 
-A human gets their full membership automatically (`identityRoles`). To narrow a
-session — a page on one deck, or an agent pointed at the entities it's working
-on — set `scope` on the client you build (`Ablo({ schema, scope })`). You give it
-the **model and id(s)**; the engine builds the group string from the model's
-`scope` (Half 2), so you never hand-write `deck:<id>`.
+A human gets their full membership automatically (`identityRoles`). There are
+three ways to narrow a participant to specific entities — a page on one deck, or
+an agent pointed at the entities it's working on. You **never hand-write**
+`deck:<id>`; build groups from the model's `scope` (Half 2) with the typed
+`syncGroup(kind, id)` helper from `@abloatai/ablo/schema`.
 
-`scope` accepts four shapes, all resolved through the schema:
+1. **At session mint — `syncGroups`.** When your backend mints a session, pass the
+   exact groups it may subscribe to. This is the floor for a delegated agent (and
+   the way to scope a focused page's session):
 
-| You pass | Resolves to | Use it for |
-| --- | --- | --- |
-| `{ decks: deckId }` | `deck:<deckId>` | one entity (a page, a focused agent) |
-| `{ decks: [id1, id2] }` | `deck:<id1>`, `deck:<id2>` | several of one model |
-| `{ decks: deckId, documents: docId }` | `deck:<deckId>`, `document:<docId>` | a mix across models |
-| `[{ type: 'Deck', id: deckId }]` | `deck:<deckId>` | entity refs (e.g. from a list) |
+   ```ts
+   // an agent working across two decks and a document
+   const session = await server.sessions.create({
+     agent: { id: agentId },
+     can: { Deck: ['read', 'update'], Document: ['read'] },
+     syncGroups: [
+       syncGroup('deck', deckA),
+       syncGroup('deck', deckB),
+       syncGroup('document', docId),
+     ],
+   });
+   const ablo = Ablo({ schema, apiKey: session.token });
+   ```
 
-```tsx
-// a page on one deck
-const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session', scope: { decks: deckId } });
-<AbloProvider client={ablo} userId={user.id} />;
+2. **Automatically, on read or claim.** Reading a row (`retrieve`/`get`/
+   `claim.state`) auto-enrolls the client in that row's entity group
+   (**read-interest**), and `claim`-ing it pins a **write-intent** subscription.
+   So an agent's reachable set **accretes** as it works — no extra subscribe call.
 
-// an agent working across two decks and a document
-const ablo = Ablo({
-  schema,
-  authEndpoint: '/api/ablo-session',
-  scope: { decks: [deckA, deckB], documents: docId },
-});
-<AbloProvider client={ablo} userId={user.id} />;
-```
+3. **Explicitly, for presence — `watch`.** To hold presence on a known set of rows
+   and react to peers, use the WebSocket-only `ablo.<model>.watch(ids, { ttl })`
+   (it returns a participant handle with `.peers`). See
+   [Coordination](./coordination.md).
 
-The key is the **model** (`decks`), the value is **which id(s)** — the `deck:`
-prefix comes from that model's `scope: 'deck'`, never from a string you compose.
+> **`scope` is the schema model option, not a client setting.** `scope: 'deck'`
+> in `model(...)` declares a scope root ([Half 2](#half-2--per-model-scope-row--group)) —
+> it names the group (`deck:<id>`) that the mechanisms above then subscribe to.
+> There is no `Ablo({ scope })` constructor option. The lifecycle filter on
+> [`list()`](./api.md#model-methods) is a separate axis named **`state`**
+> (`'live' | 'archived' | 'all'`, GitHub's open/closed/all), precisely so it
+> doesn't share the word.
 
-> **`scope` means one thing: sync-group scope.** It appears in two places that
-> are the same concept — the model option `scope: 'deck'` (declares a scope root,
-> [Half 2](#half-2--per-model-scope-row--group)) and this `scope` client setting
-> (subscribe to it). The lifecycle filter on [`list()`](./api.md#model-methods) is a separate
-> axis and is named **`state`** (`'live' | 'archived' | 'all'`, GitHub's
-> open/closed/all), precisely so it doesn't share the word.
-
-> **`scope` requests, it never grants.** At connect, the server intersects your
-> requested groups with what the identity is actually allowed (`requested ∩
-> allowed`). So `scope` only ever *narrows* within a participant's ceiling — an
-> agent can't reach a deck its capability doesn't already permit, no matter what
-> it passes. Smaller bootstrap, less fan-out, same server-enforced boundary.
+> **Requested groups never grant.** At connect, the server intersects the session's
+> `syncGroups` with what the identity is actually allowed (`requested ∩ allowed`).
+> So `syncGroups` only ever *narrows* within a participant's ceiling — an agent
+> can't reach a deck its capability doesn't already permit, no matter what it
+> passes. Smaller bootstrap, less fan-out, same server-enforced boundary.
 
 ## How this compares — and the best practices it follows
 
@@ -512,7 +519,7 @@ how to reason about it.
   the room/shape and the server signs off, as in
   [Pusher's channel authorization endpoint](https://pusher.com/docs/channels/server_api/authorizing-users/),
   [ElectricSQL **gatekeeper auth**](https://github.com/electric-sql/electric/blob/main/examples/gatekeeper-auth/README.md),
-  and Liveblocks **access tokens**. Ablo's client `scope` setting is the
+  and Liveblocks **access tokens**. Ablo's session-mint `syncGroups` is the
   *narrowing* half of this — but it can only ever shrink the server-derived set,
   never grow it.
 
@@ -529,10 +536,10 @@ The best practices Ablo inherits from that lineage:
 2. **Trusted vs untrusted claims is the whole security argument.** PowerSync draws
    the line precisely: [token parameters are trusted and usable for access
    control; client parameters are not](https://docs.powersync.com/usage/sync-rules/advanced-topics/client-parameters).
-   In Ablo terms, the identity your server vouches for is the *trusted* claim that
-   sets scope; the `userId` prop and the client's `scope` setting are *untrusted
-   client input* — convenient for app-owned fields and narrowing, but never the
-   boundary. This is why changing `userId` in the browser grants nothing.
+   In Ablo terms, the identity your server vouches for — and the session's
+   `syncGroups`, minted server-side — are the *trusted* claims that set scope; the
+   `userId` prop is *untrusted client input* — convenient for app-owned fields, but
+   never the boundary. This is why changing `userId` in the browser grants nothing.
 
 3. **Scope by a hierarchical naming convention, declared once.** Ablo's `kind:id`
    group naming (`org:…` / `team:…` from `identityRoles`, `deck:…` from a model's

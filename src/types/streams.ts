@@ -86,35 +86,6 @@ export interface AgentDelta {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  Principals — who sets the ceiling
-// ─────────────────────────────────────────────────────────────────────
-
-/**
- * A reference to whoever's authority bounds a joined participant.
- * The spawned participant can never see or do more than this principal.
- * Enforced server-side: the spawned agent gets its own restricted
- * (`rk_`) key whose scope is a subset of the parent's.
- *
- *   • `SessionRef`     — human is joining an agent (chat assistant flow)
- *   • `AgentRef`       — agent spawning a sub-agent (attenuation chain)
- *   • omitted          — the API key on the Ablo client is the ceiling
- */
-export type Principal = SessionRef | AgentRef;
-
-export interface SessionRef {
-  readonly kind: 'session';
-  readonly id: string;
-  readonly userId: string;
-  readonly organizationId: string;
-}
-
-export interface AgentRef {
-  readonly kind: 'agent';
-  readonly id: string;
-  readonly capabilityToken: string;
-}
-
-// ─────────────────────────────────────────────────────────────────────
 //  Snapshots — context watermarks for long-running work
 // ─────────────────────────────────────────────────────────────────────
 

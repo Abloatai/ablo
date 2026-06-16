@@ -44,13 +44,18 @@ objects by hand.
 
 ## Your Database
 
-Every schema model is backed by **your own database**. You expose a signed Data
-Source endpoint; Ablo coordinates each write and your app commits it to your
-Postgres. The SDK call shape is the same everywhere.
+Every schema model is backed by **your own database**. The SDK call shape is the
+same everywhere.
 
-Do not pass a database URL to `Ablo(...)`. Application and agent code use
-`ABLO_API_KEY`. If your database stays canonical, expose a signed Data Source
-endpoint from your app and keep the database credentials inside your app.
+In this guide — an app that already owns its backend and database — keep
+`DATABASE_URL` inside your app and expose a signed Data Source endpoint: Ablo
+coordinates each write and your app commits it to your Postgres. Do not pass
+`databaseUrl` to `Ablo(...)` here; application and agent code use `ABLO_API_KEY`.
+
+If instead you want Ablo to connect to your Postgres directly, pass `databaseUrl`
+(a live, server-only option) to `Ablo(...)`. That and the sandbox-only `apiKey`
+shape are the other two start states — [Connect Your Database](./data-sources.md)
+is the single source of truth for all three.
 
 ## Test With Sandboxes
 
@@ -94,12 +99,13 @@ import { defineSchema, model, z } from '@abloatai/ablo/schema';
 export const schema = defineSchema(
   {
     weatherReports: model({
-      id: z.string(),
+      // Reserved fields (id, createdAt, updatedAt, organizationId, createdBy)
+      // are SDK-provided automatically — never declare them. Declare only your
+      // own fields.
       projectId: z.string(),
       location: z.string(),
       status: z.enum(['pending', 'ready']),
       assigneeId: z.string().nullable(),
-      updatedAt: z.string(),
     }),
   },
   {
@@ -169,7 +175,7 @@ export const ablo = Ablo({
 Browser apps should use the React provider or a scoped session token, not a
 server API key in the bundle. Build the client first, then hand it to the
 provider — `AbloProvider` takes `{ client, userId?, onError?, fallback? }`, and
-nothing else (`schema`, `teamIds`, `scope`, and `authEndpoint` all live on the
+nothing else (`schema`, `teamIds`, and `apiKey` all live on the
 client now).
 
 ```tsx
@@ -179,7 +185,10 @@ import { schema } from '@/ablo/schema';
 
 // The browser never holds the API key. The client mints a short-lived token
 // from your session route (see below) and refreshes it before expiry.
-export const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+export const ablo = Ablo({
+  schema,
+  apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
+});
 ```
 
 ```tsx

@@ -58,6 +58,9 @@ export interface DefaultSyncShape {
  * Empty by default — every SDK resolver falls back to {@link DefaultSyncShape}
  * when an expected key is absent. Exported from the package root so the module
  * augmentation merges into this declaration.
+ *
+ * The `Schema` augmentation key holds the type produced by `defineSchema`, so
+ * the same noun reads consistently here and in {@link ResolveSchema}.
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface Register {}

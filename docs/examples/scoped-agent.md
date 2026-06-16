@@ -81,7 +81,7 @@ import { schema } from './schema';
 
 const ablo = Ablo({
   schema,
-  getToken: async () => mintDeckAgentSession(deckId, agentId),
+  apiKey: async () => mintDeckAgentSession(deckId, agentId),
 });
 
 // The agent run is mounted on behalf of its triggering user.

@@ -30,6 +30,7 @@
  */
 
 import { AbloValidationError } from '../errors.js';
+import { classifyCredentialKind } from '../auth/credentialPolicy.js';
 import pc from 'picocolors';
 import { spinner } from '@clack/prompts';
 import { watch, existsSync, readFileSync, writeFileSync, appendFileSync } from 'fs';
@@ -124,7 +125,7 @@ export function classifyKey(
         `(or ${pc.bold('ablo mode production')}). ${pc.bold('--watch')} is sandbox-only.`,
     };
   }
-  if (apiKey.startsWith('rk_')) {
+  if (classifyCredentialKind(apiKey) === 'restricted') {
     return {
       ok: false,
       reason:

@@ -1066,8 +1066,8 @@ export class TransactionQueue extends EventEmitter {
     // instead of THIS update's result — corrupting the stream-recorded undo
     // inverse (the second move's "before" would point all the way back). The
     // wire payload is already frozen in `transaction.data`, so dropping the
-    // consumed entries is safe. Mirrors `RecordingTransaction.consumeModifiedFields`.
-    this.consumeModifiedFields(model, updateInput);
+    // consumed entries is safe.
+    model.consumeModifiedFields(Object.keys(updateInput));
     const modelKey = normalizeModelKey(actualModelName);
     const priorityScore = this.computePriorityScore('update', actualModelName);
 
@@ -2469,63 +2469,19 @@ export class TransactionQueue extends EventEmitter {
   // model ever needs to surface previous-state outside `modifiedProperties`,
   // expose a typed `getPreviousData()` accessor on Model and call that.
   private extractPreviousData(model: Model, updateInput?: MutationInput): MutationInput {
-    const prev: MutationInput = { id: model.id };
-    const modified = model.modifiedProperties instanceof Map ? model.modifiedProperties : null;
-
     // When the update's written keys are known, capture a before-image for
     // EXACTLY those keys so the recorded undo inverse can revert them and only
     // them (a full-row inverse would clobber concurrent edits to unrelated
-    // fields). Resolution order mirrors `RecordingTransaction.snapshotFields`:
-    //   1. `modifiedProperties.old` — first-old-wins pre-session baseline, set
-    //      whenever the caller mutated the field in place before committing.
-    //   2. `getOriginalSnapshot()` — the last loaded/acked row, the correct
-    //      before-image for a key written WITHOUT a prior in-place mutation
-    //      (e.g. a `precomputedChanges` write).
-    // Without (2) such a key yields an empty `previousData`, and `buildUndoOps`
-    // nulls the inverse entirely — making updates silently un-undoable where a
-    // create's `delete(id)` inverse never is. This closes that asymmetry.
-    if (updateInput) {
-      const original = model.getOriginalSnapshot();
-      for (const key of Object.keys(updateInput)) {
-        if (key === 'id') continue;
-        const mod = modified?.get(key);
-        if (mod) {
-          prev[key] = mod.old;
-        } else if (original && key in original) {
-          prev[key] = original[key];
-        }
-      }
-      return prev;
-    }
-
-    if (modified && modified.size > 0) {
-      for (const [key, change] of modified) {
-        prev[key] = change.old;
-      }
-    }
-
-    return prev;
-  }
-
-  /**
-   * Re-baseline `modifiedProperties` for the fields a freshly-staged update just
-   * committed. Called right after {@link extractPreviousData} freezes their
-   * `.old` into the transaction, so the NEXT update to the same field sees this
-   * update's result as its baseline rather than the stale pre-session `.old`
-   * preserved by `Model.propertyChanged`'s first-old-wins policy. Only consumes
-   * keys present in this update — untouched fields keep their baselines. Safe
-   * because the wire payload lives on `transaction.data` and rollback restores
-   * from `transaction.previousData`; neither re-reads `modifiedProperties`.
-   */
-  private consumeModifiedFields(model: Model, updateInput?: MutationInput): void {
-    if (!(model.modifiedProperties instanceof Map) || model.modifiedProperties.size === 0) {
-      return;
-    }
-    for (const key of [...model.modifiedProperties.keys()]) {
-      if (key === 'id') continue;
-      if (updateInput && !(key in updateInput)) continue;
-      model.modifiedProperties.delete(key);
-    }
+    // fields). `fallbackToLive: false` makes `Model.capturePreviousValues` OMIT
+    // any key it can't resolve from `modifiedProperties.old` / the original
+    // snapshot — `buildUndoOps` then drops an un-revertible inverse rather than
+    // inventing one. With no `updateInput` (full extract) fall back to every
+    // tracked field. `Model.capturePreviousValues` is the single before-image
+    // source shared with `RecordingTransaction.snapshotFields`.
+    const keys = updateInput
+      ? Object.keys(updateInput)
+      : [...(model.modifiedProperties instanceof Map ? model.modifiedProperties.keys() : [])];
+    return { id: model.id, ...model.capturePreviousValues(keys, { fallbackToLive: false }) };
   }
 
   /**

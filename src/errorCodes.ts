@@ -224,6 +224,7 @@ export const ERROR_CODES = {
   model_claimed: wire('claim', 409, false, 'The model instance is claimed by another participant.'),
   model_claimed_timeout: wire('claim', 409, false, 'Timed out waiting for a model claim to clear.'),
   model_claim_not_configured: client('claim', 'Claiming requires the collaboration runtime, which the standard Ablo({ schema, apiKey }) client wires up for every model automatically — there is no per-model claim configuration to add. This appears only when a model proxy is constructed directly without that runtime (an internal/advanced path).'),
+  model_watch_not_configured: client('claim', 'watch() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo({ schema, apiKey }) client (default WebSocket transport).'),
 
   // ── stale context / idempotency (409) ──────────────────────────────
   stale_context: wire('conflict', 409, true, 'The write carried a readAt watermark that is now stale; re-read and retry.'),
@@ -281,6 +282,7 @@ export const ERROR_CODES = {
   schema_scope_kind_invalid: wire('schema', 400, false, 'A scope kind in the schema is invalid.'),
   schema_field_not_camelcase: wire('schema', 400, false, 'A schema field name is not camelCase.'),
   schema_field_consecutive_caps: wire('schema', 400, false, 'A schema field name has consecutive capital letters.'),
+  schema_reserved_field: client('schema', 'A model redeclared a reserved base field (id, createdAt, updatedAt, organizationId, createdBy) that the SDK provides automatically.'),
   schema_grants_shape_invalid: wire('schema', 400, false, 'A grants declaration has an invalid shape.'),
   schema_grants_identifier_unsafe: wire('schema', 400, false, 'A grants declaration referenced an unsafe identifier.'),
   schema_grants_relation_kind: wire('schema', 400, false, 'A grants relation referenced an invalid kind.'),

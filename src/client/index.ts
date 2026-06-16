@@ -38,10 +38,10 @@ export {
   type ClaimedOptions,
   type IfClaimedPolicy,
   type ClaimWaitOptions,
-  type ModelCountOptions,
-  type ModelListOptions,
+  type LocalCountOptions,
+  type LocalReadOptions,
   type ModelListScope,
-  type ModelLoadOptions,
+  type ServerReadOptions,
   type ModelOperations,
   type ModelReadOptions,
 } from './Ablo.js';

@@ -32,6 +32,7 @@ Common options:
 | `databaseUrl` | Optional, server-only. Registers your Postgres directly (the connection-string path). Pass it explicitly — it is **not** auto-read from the environment. Omit it for a signed Data Source endpoint or the hosted sandbox. The SDK throws if it sees this in a browser. |
 | `baseURL` | Override the hosted sync endpoint for staging or private deployments. |
 | `persistence` | `memory` by default. Use `indexeddb` for a durable browser cache that survives reloads. |
+| `transport` | `'websocket'` (default) is the live, stateful client — a persistent socket, a local synced pool, and `onChange` subscriptions. `'http'` returns the **stateless** client for server-side actors (agents, workers, serverless): the same `ablo.<model>` read/write/claim surface, but each call is one HTTP round-trip with no socket. Under `'http'` the return type narrows to `AbloHttpClient`, so stateful-only methods (`get`/`getAll`, `onChange`, `watch`) are compile errors rather than runtime gaps. |
 | `fetch` | Custom fetch implementation for tests or non-standard runtimes. |
 | `defaultHeaders` | Extra headers attached to every HTTP request. |
 | `defaultQuery` | Extra query parameters attached to every HTTP request. |

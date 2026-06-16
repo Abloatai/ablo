@@ -67,7 +67,7 @@ import { DefaultFallback } from './DefaultFallback.js';
  * // Build once at module scope — a new instance per render tears down the socket.
  * const ablo = Ablo({
  *   schema,
- *   getToken: () =>
+ *   apiKey: () =>
  *     fetch('/api/ablo-session', { method: 'POST' })
  *       .then((r) => r.json())
  *       .then((d) => d.token),
@@ -191,7 +191,7 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
   // REACTIVE binding over it (context + bootstrap gate + error/session
   // forwarding); it does NOT construct, configure, or own the connection. The
   // client owns auth, the credential lifecycle (first mint, refresh, and
-  // wake/online/focus re-mint — see `Ablo({ getToken })`), transport, and
+  // wake/online/focus re-mint — see `Ablo({ apiKey })`), transport, and
   // `dispose()`. The CONSUMER built the client, so the consumer owns teardown;
   // the provider never disposes it.
   const engine = client;
@@ -404,12 +404,7 @@ export type { EngineParticipant, ParticipantScope, ParticipantStatus };
  */
 export interface UseParticipantOptions {
   readonly scope?: ParticipantScope;
-  readonly label?: string;
-  readonly as?: unknown;
   readonly ttlSeconds?: number | string | null;
-  readonly agent?: unknown;
-  readonly idempotencyKey?: string | null;
-  readonly autoRefreshThresholdSeconds?: number | null;
   /** Tear down + don't re-join while true. */
   readonly paused?: boolean;
   /**
@@ -599,11 +594,6 @@ export function useParticipant(opts: UseParticipantOptions): UseParticipantRetur
       unsubClaims();
     };
   }, [participant, paused]);
-
-  // `opts.as`, `opts.agent`, `opts.idempotencyKey`, and
-  // `opts.autoRefreshThresholdSeconds` remain migration placeholders
-  // for future capability-mint/attenuation wiring. `scope` is already
-  // active: it opens a multiplexed claim on the engine WebSocket.
 
   return { participant, peers, claims, status, error };
 }

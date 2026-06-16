@@ -43,7 +43,6 @@
  * Advanced — opt-in, most apps never import these (each is tagged
  * "Advanced —" at its export below, with the one situation it's for):
  *   • `dataSource` / `abloSource`  — only if your own DB stays canonical
- *   • `session` / `agent`          — only for delegated agent principals
  *   • `defaultPolicy`              — only to customize conflict resolution
  *   • `defineMutators` / `createTransaction` — only for custom mutators
  * If you don't recognize one, you don't need it — the default path covers you.
@@ -63,8 +62,11 @@ export type { MutationExecutor } from './interfaces/index.js';
 // + DI + sync groups) that app shells need to build a client to hand to
 // `<AbloProvider client={...}>`. `AbloOptions` is the trimmed public shape.
 export type { HttpClaimApi, InternalAbloOptions } from './client/Ablo.js';
+// The stateless HTTP client is constructed ONLY via `Ablo({ transport: 'http' })`
+// (one factory, explicit transport). The `createAbloHttpClient` function stays
+// internal — the factory calls it — but is NOT a public export. Consumers still
+// annotate with the `AbloHttpClient` type (the narrowed return of `transport:'http'`).
 export {
-  createAbloHttpClient,
   type AbloHttpClientOptions,
   type AbloHttpClient,
   type HttpModelClient,
@@ -82,10 +84,10 @@ export {
 // `Ablo.Commit.*`, `Ablo.Claim.*`, `Ablo.Model.*`, `Ablo.ClaimedOptions`.
 export type {
   AbloOptions,
-  ModelCountOptions,
-  ModelListOptions,
+  LocalCountOptions,
+  LocalReadOptions,
   ModelListScope,
-  ModelLoadOptions,
+  ServerReadOptions,
   ModelRetrieveParams,
   ModelCreateParams,
   ModelUpdateParams,
@@ -102,12 +104,6 @@ export type { AbloPersistence } from './client/persistence.js';
 // `Ablo.Participant.Joined`, `Ablo.Participant.Manager`,
 // `Ablo.Participant.JoinOptions`, etc. Same dot-access shape as
 // `Ablo.Peer`, `Ablo.Claim`. No flat re-exports.
-
-// Advanced — most apps never import this. Principal constructors for
-// delegated agent paths (`Ablo({ kind: 'agent', as: session({...}) })`).
-// The default `Ablo({ schema, apiKey })` resolves identity from the key;
-// reach for these only when minting a delegated agent principal.
-export { session, agent } from './principal.js';
 
 import { Ablo } from './client/Ablo.js';
 export default Ablo;
@@ -193,6 +189,16 @@ export type { WriteOptions, MutationOptions } from './interfaces/index.js';
 // Storage-wedge detection — lets app shells render a recovery screen when the
 // IndexedDB backing store is stuck (see core/openIDBWithTimeout.ts).
 export { IDBOpenTimeoutError, isStorageOpenTimeout } from './core/openIDBWithTimeout.js';
+
+// Machine-checked surface manifest — the SDK's own description of its public
+// verb/option names, compile-time-bound to the real types (see surface.ts).
+// The MCP `get_api_surface` imports these so docs can't name a phantom verb.
+export {
+  PUBLIC_MODEL_VERBS,
+  PUBLIC_LIST_OPTION_KEYS,
+  PUBLIC_ABLO_OPTION_KEYS,
+} from './surface.js';
+export type { ModelVerb, ListOptionKey, AbloOptionKey } from './surface.js';
 
 // Type registration point. Consumers register their Schema/Presence/Claims/
 // UserMeta once via module augmentation:

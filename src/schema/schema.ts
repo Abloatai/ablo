@@ -152,6 +152,22 @@ export const baseFieldsSchema = z.object({
   createdBy: z.string().optional(),
 });
 
+/**
+ * The base-column names every model carries automatically (the keys of
+ * {@link baseFieldsSchema}). The single source of truth — `generate.ts`
+ * imports this to avoid double-emitting a redeclared base column, and the
+ * `defineSchema` field loop uses it to reject a model that tries to redeclare
+ * one (Zod `.merge` would otherwise silently overwrite the base field with the
+ * user's, producing a `string & Date` type that breaks the build).
+ */
+export const BASE_FIELDS = [
+  'id',
+  'createdAt',
+  'updatedAt',
+  'organizationId',
+  'createdBy',
+] as const;
+
 /** The base fields type — pure data columns. */
 export type BaseModelFields = z.infer<typeof baseFieldsSchema>;
 
@@ -233,7 +249,14 @@ export type Model<A, B = never> = [B] extends [never]
  */
 export type InferModel<S extends Schema, ModelName extends keyof S['models']> =
   S['models'][ModelName] extends ModelDef<infer Shape, infer R, infer C>
-    ? z.infer<z.ZodObject<Shape>>
+    ? // `Omit<…, keyof BaseModelFields>` so a model that (wrongly) redeclares a
+      // reserved field degrades to "framework field wins" (e.g. `createdAt: Date`)
+      // instead of intersecting to `never` (`string & Date`, which then surfaces
+      // as a baffling "missing field" error three layers away). defineSchema also
+      // throws on such a redeclaration at runtime (code `schema_reserved_field`);
+      // this is the type-level belt to that runtime suspenders. No-op for correct
+      // schemas — they never carry a base-field key, so nothing is omitted.
+      Omit<z.infer<z.ZodObject<Shape>>, keyof BaseModelFields>
         & BaseModelFields
         & BaseModelMethods
         & InferComputed<C>
@@ -320,7 +343,10 @@ export type InferComputed<C> =
  */
 export type InferCreate<S extends Schema, ModelName extends keyof S['models']> =
   S['models'][ModelName] extends ModelDef<infer Shape>
-    ? z.input<z.ZodObject<Shape>> & Partial<BaseModelFields>
+    ? // Same reserved-field guard as InferModel: drop any (wrongly) redeclared
+      // base field so the input degrades to "framework field wins" rather than
+      // collapsing to `never`. No-op for correct schemas.
+      Omit<z.input<z.ZodObject<Shape>>, keyof BaseModelFields> & Partial<BaseModelFields>
     : never;
 
 /**
@@ -466,6 +492,20 @@ export function defineSchema<const S extends SchemaRecord>(
     // failure immediate and unambiguous.
     for (const fieldName of Object.keys(def.shape)) {
       assertRoundTrippableCamelCase(name, fieldName);
+      // Reserved base columns are merged in below via `baseFieldsSchema.merge`,
+      // and Zod `.merge` silently OVERWRITES the base field with the user's —
+      // e.g. a model declaring `createdAt: z.string()` ends up with a field
+      // typed `string & Date`, which breaks the build. Reject the collision at
+      // definition time so the author sees an unambiguous error instead.
+      if ((BASE_FIELDS as readonly string[]).includes(fieldName)) {
+        throw new AbloValidationError(
+          `[defineSchema] ${name}.${fieldName}: field \`${fieldName}\` collides with a ` +
+            `reserved field that the SDK provides automatically ` +
+            `(${BASE_FIELDS.join(', ')}). Remove it from your model — redeclaring it ` +
+            `produces a \`string & Date\` type and breaks the build.`,
+          { code: 'schema_reserved_field', param: `${name}.${fieldName}` },
+        );
+      }
     }
 
     validators[name] = baseFieldsSchema.merge(def.schema);

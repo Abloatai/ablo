@@ -163,6 +163,8 @@ loses your model types. There is no bespoke client-type generic to import —
 
 ```ts
 const schema = defineSchema({
+  // Reserved fields (id, createdAt, updatedAt, organizationId, createdBy) are
+  // provided automatically — don't declare them.
   weatherReports: model({
     location: z.string(),
     status: z.enum(['pending', 'ready']),
@@ -318,7 +320,10 @@ import { AbloProvider, useAblo } from '@abloatai/ablo/react';
 import { schema } from './ablo/schema';
 
 // Build the client once — it authenticates via your session route, no key in the browser.
-const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+const ablo = Ablo({
+  schema,
+  apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
+});
 
 function App() {
   return (
@@ -371,7 +376,10 @@ to sync-group strings.
 
 ```tsx
 // team membership is asserted server-side when the session route mints the token.
-const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+const ablo = Ablo({
+  schema,
+  apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
+});
 
 <AbloProvider client={ablo} userId={user.id}>
   <App />

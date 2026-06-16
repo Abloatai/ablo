@@ -89,50 +89,27 @@ function wrapMutateForKey<S extends Schema, K extends keyof S['models'] & string
     return model.toJSON();
   };
 
+  // Before-image for the undo inverse. Delegates to `Model.capturePreviousValues`
+  // — the SINGLE shared implementation (the stream path's
+  // `TransactionQueue.extractPreviousData` calls the same method). `fallbackToLive`
+  // is ON here: the manual-record path wants the live value as a last resort for
+  // a field that was neither pre-mutated nor in the original snapshot. (The
+  // stream path passes `false` so it can omit-and-drop instead — that flag is
+  // the one intentional difference between the two callers.)
   const snapshotFields = (id: string, fieldNames: string[]): Record<string, unknown> | null => {
     const model = store.pool.get(id);
     if (!model) return null;
-    const out: Record<string, unknown> = {};
-    // `modifiedProperties` is populated by M1's `observe()` listener the
-    // moment the caller mutates an observable field directly. Thanks to
-    // `Model.propertyChanged`'s first-old-wins policy, `.old` holds the TRUE
-    // pre-session baseline even after many in-place mutations (e.g. a drag
-    // frame loop). That makes it the authoritative source for the undo
-    // inverse when the caller pre-mutates before invoking the mutator.
-    //
-    // Fallback chain for models/fields that weren't pre-mutated (so no
-    // `modifiedProperties` entry exists yet): `getOriginalSnapshot()`
-    // (populated on load/`markAsPersisted`/sync-ack), then the live
-    // observable. The live read is correct only when the caller didn't
-    // touch the field first.
-    const original = model.getOriginalSnapshot();
-    for (const f of fieldNames) {
-      if (f === 'id') continue;
-      const mod = model.modifiedProperties.get(f);
-      if (mod) {
-        out[f] = mod.old;
-      } else if (original && f in original) {
-        out[f] = original[f];
-      } else {
-        out[f] = Reflect.get(model, f);
-      }
-    }
-    return out;
+    return model.capturePreviousValues(fieldNames, { fallbackToLive: true });
   };
 
   // After a mutator's `base.update` succeeds, drop the `modifiedProperties`
-  // entries we snapshotted from. The next mutator call should see THIS
-  // update's result as its baseline, not the pre-session old value. The
-  // transaction queue already captured its frozen copy synchronously inside
-  // `store.save` (via `captureModelChanges`/`extractPreviousData`), so this
-  // clear is safe for server rollback.
+  // entries we snapshotted from so the next mutator call sees THIS update's
+  // result as its baseline, not the pre-session old value. The transaction
+  // queue already captured its frozen copy synchronously inside `store.save`,
+  // so this clear is safe for server rollback. Shared with the stream path via
+  // `Model.consumeModifiedFields`.
   const consumeModifiedFields = (id: string, fieldNames: string[]): void => {
-    const model = store.pool.get(id);
-    if (!model) return;
-    for (const f of fieldNames) {
-      if (f === 'id') continue;
-      model.modifiedProperties.delete(f);
-    }
+    store.pool.get(id)?.consumeModifiedFields(fieldNames);
   };
 
   type Patch = { id: string } & Partial<InferModel<S, K>>;

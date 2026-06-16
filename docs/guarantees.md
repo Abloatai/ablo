@@ -82,9 +82,10 @@ Claims are live coordination signals. They are not database locks.
 already holds the row, the claim waits for them to finish, then re-reads the row
 before handing it back, so you proceed from fresh state. Reads stay open while a
 claim is held — `ablo.<model>.claim.state({ id })` returns the current claim state
-(or `null`) without ever blocking. A server read can pass `ifClaimed: 'wait'` to
-wait for the claim to clear, or `ifClaimed: 'fail'` to error out, when it should
-not return a row while someone else is mid-edit.
+(or `null`) without ever blocking. A server read can pass `ifClaimed: 'fail'` to
+error out, when it should not return a row while someone else is mid-edit. Reads
+never block on a claim — to wait for a row to free up, `claim({ id })` it (the
+claim queues fairly behind the holder).
 
 A claim does not reject or block other writers; it announces work so peers
 serialize behind it rather than racing. While you hold a claim, the matching

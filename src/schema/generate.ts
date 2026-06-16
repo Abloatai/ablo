@@ -16,10 +16,8 @@
  */
 
 import type { FieldMeta } from './field.js';
+import { BASE_FIELDS } from './schema.js';
 import type { SchemaJSON, ModelJSON } from './serialize.js';
-
-/** The base columns every model carries (mirrors `baseFieldsSchema`). */
-const BASE_FIELDS = ['id', 'createdAt', 'updatedAt', 'organizationId', 'createdBy'] as const;
 
 function tsType(meta: FieldMeta): string {
   switch (meta.type) {

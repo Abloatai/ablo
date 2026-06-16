@@ -57,8 +57,9 @@ export const ablo = Ablo({
 ```
 
 Mount the React provider near the app root. Build the browser client first —
-with an `authEndpoint` so it mints a short-lived session token instead of
-carrying the secret key — then pass it to the provider via `client`.
+with an `apiKey` resolver (an async `() => Promise<string | null>`) that fetches
+the short-lived session token your backend minted, instead of carrying the
+secret key — then pass it to the provider via `client`.
 
 ```tsx
 // web/app/providers.tsx
@@ -68,9 +69,12 @@ import Ablo from '@abloatai/ablo';
 import { AbloProvider } from '@abloatai/ablo/react';
 import { schema } from '@/ablo/schema';
 
-// Browser client: no secret key — `authEndpoint` mints the session token
-// server-side (see the session route below).
-const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+// Browser client: no secret key — the `apiKey` resolver fetches the session
+// token your server route mints (see the session route below).
+const ablo = Ablo({
+  schema,
+  apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
+});
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return <AbloProvider client={ablo}>{children}</AbloProvider>;

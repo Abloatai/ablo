@@ -49,6 +49,20 @@ The model key (`weatherReports`) becomes the client namespace
 contract. You should not create a parallel string-keyed write path for the same
 data.
 
+### Reserved fields
+
+The SDK provides these on every row automatically — do **not** declare them in
+your `model(...)` fields:
+
+- `id`
+- `createdAt`
+- `updatedAt`
+- `organizationId`
+- `createdBy`
+
+Declare only your own fields; the reserved ones are still present on the row and
+readable, you just don't author them.
+
 ## Reads and writes
 
 Use async reads when the row may not be local:
@@ -88,12 +102,16 @@ the fresh row. Reads stay open; only acting on the row serializes.
 
 ## Storage boundary
 
-Every schema model is backed by your own database through a Data Source — Ablo
-coordinates each write and your app commits it to your Postgres.
+Every schema model is backed by your own database. There are three start states,
+all covered in [Connect Your Database](./data-sources.md) (the single source of
+truth): the sandbox (`apiKey` only, no database), a direct connection string
+(`databaseUrl` passed to `Ablo(...)`, a live, server-only option), or a signed
+Data Source endpoint where your app keeps the database credential and commits
+each write itself.
 
-Do not pass a database URL to `Ablo(...)`. Trusted runtimes use `ABLO_API_KEY`.
-Browser code goes through `<AbloProvider>` or a scoped session route, never a raw
-API key.
+If your database stays canonical behind a Data Source endpoint, do not pass
+`databaseUrl` to `Ablo(...)` — trusted runtimes use `ABLO_API_KEY`. Browser code
+goes through `<AbloProvider>` or a scoped session route, never a raw API key.
 
 ## Rules of thumb
 

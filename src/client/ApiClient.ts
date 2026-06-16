@@ -44,14 +44,18 @@ import type {
   ModelReadOptions,
   ModelRead,
   ModelTarget,
+  CreateSessionParams,
+  AbloSession,
 } from './Ablo.js';
+import { mintSession } from './sessionMint.js';
+import type { SchemaRecord } from '../schema/schema.js';
 import type {
   ClaimHandle,
   ClaimLookupParams,
   ClaimOptions,
   ClaimParams,
   ClaimReorderParams,
-  ModelLoadOptions,
+  ServerReadOptions,
 } from './createModelProxy.js';
 import type { Duration } from '../utils/duration.js';
 import type { Claim } from '../types/streams.js';
@@ -198,6 +202,14 @@ export interface AbloApi {
    * server with the credential this client already holds — no re-mint.
    */
   getAuthToken(): Promise<string | null>;
+  /**
+   * Mint a short-lived scoped session — the Stripe `ephemeralKeys.create` shape.
+   * Minting is a control-plane HTTP call (no socket), so it lives on this stateless
+   * client too, not only the realtime one. `{ user }` → `ek_`, `{ agent, can }` → `rk_`.
+   */
+  readonly sessions: {
+    create(params: CreateSessionParams<SchemaRecord>): Promise<AbloSession>;
+  };
 }
 
 interface QueryResponse {
@@ -572,22 +584,10 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     const policy = options?.ifClaimed ?? defaultPolicy;
     if (policy === 'return') return;
 
+    // policy === 'fail' — gate the read only when the caller opts in.
     const state = await listClaimState(target);
     if (state.active.length === 0) return;
-    if (policy === 'fail') {
-      throw claimedError(target, state.active, 'model_claimed');
-    }
-    if (
-      options?.maxQueueDepth !== undefined &&
-      state.queue.length >= options.maxQueueDepth
-    ) {
-      throw claimedError(target, state.active, 'queue_too_deep');
-    }
-
-    await waitForNoClaims(target, {
-      timeout: options?.claimedTimeout,
-      pollInterval: options?.claimedPollInterval,
-    });
+    throw claimedError(target, state.active, 'model_claimed');
   }
 
   const commits: CommitResource = {
@@ -815,7 +815,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
 
   async function listModel<T>(
     modelName: string,
-    options?: ModelLoadOptions<T>,
+    options?: ServerReadOptions<T>,
   ): Promise<T[]> {
     const params = new URLSearchParams();
     if (options?.limit !== undefined) params.set('limit', String(options.limit));
@@ -1074,7 +1074,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       retrieve(params: ModelReadOptions & { readonly id: string }): Promise<ModelRead<T>> {
         return retrieveModel<T>(name, params);
       },
-      list(options?: ModelLoadOptions<T>): Promise<T[]> {
+      list(options?: ServerReadOptions<T>): Promise<T[]> {
         return listModel<T>(name, options);
       },
       async create(
@@ -1114,6 +1114,25 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     claims,
     commits,
     model,
+    sessions: {
+      async create(params: CreateSessionParams<SchemaRecord>): Promise<AbloSession> {
+        // Stateless mint: the configured key IS the control-plane credential here
+        // (no startup `rk_` exchange runs on this client). Reuse the resolved base
+        // URL + fetch; the shared `mintSession` owns the two server doors.
+        const apiKey = await resolveApiKeyValue(configuredApiKey);
+        if (!apiKey) {
+          throw new AbloAuthenticationError(
+            'sessions.create requires a secret (sk_) API key — call it from your backend, not the browser.',
+            { code: 'apikey_missing' },
+          );
+        }
+        return mintSession(params, {
+          apiKey,
+          baseUrl: apiBaseUrl,
+          ...(options.fetch ? { fetch: options.fetch } : {}),
+        });
+      },
+    },
     async getAuthToken(): Promise<string | null> {
       // Mirror `authHeaders()`: a configured API key wins, else the
       // construction-time auth token. Resolve the (possibly async) key setter.

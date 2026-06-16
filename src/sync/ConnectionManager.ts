@@ -20,18 +20,29 @@
  * Designed to be embedded by `BaseSyncedStore`: one instance per store,
  * started on first successful connect, disposed on teardown.
  *
- *   CONNECTED ──► OFFLINE ──► PROBING_NETWORK ──► RECONNECTING ──► CONNECTED
- *                    │              │                    │
- *                    ▼              ▼                    ▼
- *             WAITING_FOR_NETWORK  SESSION_EXPIRED    BACKOFF ──► PROBING_NETWORK
+ *   CONNECTED ──(socket drop)──► PROBING_NETWORK ──► RECONNECTING ──► CONNECTED
+ *        │                              │                  │
+ *   (network lost)                      ▼                  ▼
+ *        ▼                        SESSION_EXPIRED       BACKOFF ──► PROBING_NETWORK
+ *     OFFLINE ──(online)──► PROBING_NETWORK
+ *        │
+ *        ▼
+ *   WAITING_FOR_NETWORK
  *
- * Includes two fixes over the original app-side FSM:
+ * Includes three fixes over the original app-side FSM:
  *   1. `backoff` accepts `NETWORK_ONLINE` / `TAB_VISIBLE` — jumps to
  *      probing immediately when the network comes back, without
  *      waiting for the backoff timer to elapse.
  *   2. `scheduleBackoff` parks in `waiting_for_network` (resetting
  *      `attempt`) when `navigator.onLine === false` at max retries,
  *      instead of hard-reloading an already-offline browser.
+ *   3. A socket drop (`WS_DISCONNECTED`, typically code 1006) goes
+ *      STRAIGHT to `probing_network`, not the passive `offline` state.
+ *      1006 is browser-local and carries no connectivity signal, so on a
+ *      healthy machine no `online`/`offline` event ever fires — parking in
+ *      `offline` stranded recovery until the 30s watchdog, long enough for
+ *      queued commits to roll back. Only a genuine OS-level `NETWORK_LOST`
+ *      parks in `offline` and waits for the `online` event.
  */
 
 import { makeAutoObservable, runInAction } from 'mobx';
@@ -248,8 +259,19 @@ export class ConnectionManager {
       case 'connected':
         switch (event.type) {
           case 'NETWORK_LOST':
-          case 'WS_DISCONNECTED':
+            // The OS reported the NIC down — park passively in `offline` and
+            // wait for the `online` event. Probing a downed adapter is wasted
+            // work.
             return 'offline';
+          case 'WS_DISCONNECTED':
+            // The socket died (typically code 1006) but the OS network is
+            // almost certainly fine — 1006 is generated locally when the TCP
+            // conn vanishes and carries NO connectivity signal, so the browser
+            // fires no online/offline event. Probe IMMEDIATELY rather than
+            // landing in the passive `offline` dead-end (which only escaped via
+            // the 30s watchdog, long after queued commits rolled back). The
+            // probe fast-fails if we genuinely ARE offline → waiting_for_network.
+            return 'probing_network';
           case 'WS_SESSION_ERROR':
           case 'BOOTSTRAP_FAILED_SESSION':
             return 'session_expired';
@@ -419,7 +441,7 @@ export class ConnectionManager {
 
   // ── Side effects per state ───────────────────────────────────────────
 
-  private onEnterState(state: ConnectionState, _event: ConnectionEvent): void {
+  private onEnterState(state: ConnectionState, event: ConnectionEvent): void {
     switch (state) {
       case 'connected':
         this.clearBackoffTimer();
@@ -434,6 +456,19 @@ export class ConnectionManager {
         break;
 
       case 'probing_network':
+        // A socket drop (`WS_DISCONNECTED`) now lands here directly so recovery
+        // starts immediately. Tear the dead socket down FIRST — this is what
+        // sets SyncWebSocket's `isManualClose=true` and suppresses its own
+        // scheduleReconnect, keeping the FSM the single reconnect authority on
+        // the human path. The teardown runs synchronously inside the
+        // `disconnected` emit, before `SyncWebSocket.onclose` checks the flag,
+        // so the timing matches the previous `offline`-entry teardown. We gate
+        // on the drop event specifically: the other paths into `probing_network`
+        // (TAB_VISIBLE re-validation, handshake retry, backoff elapse) must NOT
+        // tear down a socket that may still be live.
+        if (event.type === 'WS_DISCONNECTED') {
+          this.callbacks?.onDisconnectWebSocket();
+        }
         this.runProbe();
         break;
 

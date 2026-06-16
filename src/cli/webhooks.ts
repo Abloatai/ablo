@@ -15,6 +15,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import pc from 'picocolors';
+import { classifyCredentialKind } from '../auth/credentialPolicy.js';
 import { resolveApiKey, normalizeMode, type Mode } from './config';
 import { brand } from './theme';
 import { DEFAULT_URL } from './push';
@@ -73,7 +74,7 @@ function requireKey(mode: Mode | undefined): string {
     );
     process.exit(1);
   }
-  if (!apiKey.startsWith('sk_')) {
+  if (classifyCredentialKind(apiKey) !== 'secret') {
     console.error(pc.red('  Managing webhooks requires a secret key ') + pc.dim('(sk_test_ / sk_live_).'));
     process.exit(1);
   }

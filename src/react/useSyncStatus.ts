@@ -24,7 +24,7 @@ import { useReactive } from './useReactive.js';
  *    `reason` carries the human-readable close reason when available.
  * - `disconnected` — network failure, server error, or the retry loop
  *    gave up. Show the offline / error UI.
- * - `needs-auth` — server rejected the session (1008/4001/4003). The
+ * - `needs-auth` — server rejected the auth token (1008/4001/4003). The
  *    consumer's `onSessionExpired` callback has already been invoked
  *    by `<AbloProvider>`; this variant exists for UI that wants to
  *    reflect the auth state itself.

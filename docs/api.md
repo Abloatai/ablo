@@ -167,8 +167,9 @@ side: it takes the claim and returns a `ClaimHandle`. Claims don't lock — if s
 already holds the row, `claim` waits for them to finish, re-reads the fresh row,
 then hands it to you, so you always proceed from current state. Default reads
 return the row even while someone is mid-edit; if a server read should not
-return a row while it's claimed, pass `ifClaimed: 'wait'` to wait for the claim
-to clear, or `ifClaimed: 'fail'` to error out instead.
+return a row while it's claimed, pass `ifClaimed: 'fail'` to error out instead.
+Reads never block on a claim — to wait for a row to free up, `claim({ id })` it
+(the claim queues fairly behind the holder).
 
 ```ts
 const claim = ablo.weatherReports.claim.state({ id: 'report_stockholm' });

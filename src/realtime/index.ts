@@ -9,10 +9,10 @@ export { Ablo, computeFKDepthPriority } from '../client/Ablo.js';
 export type {
   AbloOptions,
   InternalAbloOptions,
-  ModelCountOptions,
-  ModelListOptions,
+  LocalCountOptions,
+  LocalReadOptions,
   ModelListScope,
-  ModelLoadOptions,
+  ServerReadOptions,
   ModelOperations,
 } from '../client/Ablo.js';
 

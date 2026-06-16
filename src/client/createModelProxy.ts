@@ -33,6 +33,7 @@ import type { ModelRegistry } from '../ModelRegistry.js';
 import type { ObjectPool } from '../ObjectPool.js';
 import type { SyncClient } from '../SyncClient.js';
 import type { HydrationCoordinator } from '../sync/HydrationCoordinator.js';
+import type { JoinedParticipant } from '../sync/participants.js';
 import type { LoadWhere } from '../query/types.js';
 import { ModelScope } from '../types/index.js';
 import type {
@@ -59,7 +60,10 @@ export function getModelClientMeta(modelClient: unknown): ModelClientMeta | unde
 
 export type ModelListScope = ModelScope | 'live' | 'archived' | 'all';
 
-export interface ModelListOptions<T> {
+/** Options for the sync LOCAL-pool reads `get`/`getAll`/`onChange` (JS
+ *  `filter`, equality `where`, lifecycle `state`). The local-reactive axis;
+ *  contrast {@link ServerReadOptions} (the async server axis). */
+export interface LocalReadOptions<T> {
   where?: Partial<T>;
   /** Arbitrary local predicate. Applied after `where`. */
   filter?: (entity: T) => boolean;
@@ -72,12 +76,15 @@ export interface ModelListOptions<T> {
   state?: ModelListScope;
 }
 
-export type ModelCountOptions<T> = Pick<
-  ModelListOptions<T>,
+export type LocalCountOptions<T> = Pick<
+  LocalReadOptions<T>,
   'where' | 'filter' | 'state'
 >;
 
-export interface ModelLoadOptions<T> {
+/** Options for the async SERVER reads `retrieve`/`list` (operator `where` DSL,
+ *  `type`, `expand`). The server-async axis; contrast {@link LocalReadOptions}
+ *  (the local-reactive axis). */
+export interface ServerReadOptions<T> {
   /**
    * Filter for the lookup. Accepts:
    *   - object form: `{ name: 'foo' }` (equality, array values → `IN`)
@@ -104,8 +111,8 @@ export interface ModelLoadOptions<T> {
 }
 
 /** Options for the single-row async server read `retrieve({ id })`. A subset of
- *  {@link ModelLoadOptions} — `where`/`limit`/`orderBy` are fixed by the id. */
-export type ModelRetrieveOptions = Pick<ModelLoadOptions<unknown>, 'type' | 'expand'>;
+ *  {@link ServerReadOptions} — `where`/`limit`/`orderBy` are fixed by the id. */
+export type ServerRetrieveOptions = Pick<ServerReadOptions<unknown>, 'type' | 'expand'>;
 
 export interface ModelCollaboration<T> {
   createClaim(options: {
@@ -186,6 +193,18 @@ export interface ModelCollaboration<T> {
    * Forwards to `BaseSyncedStore.pinScope`.
    */
   pinScope?(scope: Record<string, string>): void | Promise<void>;
+  /**
+   * Open a presence/claim subscription on this model's sync group(s) and
+   * return the live participant handle. Backs `ablo.<model>.watch(ids)` —
+   * the relocation of the old `ablo.participants.join({ scope })`. WebSocket
+   * only (presence needs a socket); absent on non-ws constructions, in which
+   * case the proxy throws a clear error. Forwards to `participantManager.join`.
+   */
+  createWatch?(
+    modelKey: string,
+    ids: string | readonly string[],
+    options?: WatchOptions,
+  ): Promise<JoinedParticipant>;
 }
 
 export interface ClaimTargetOptions<T = Record<string, unknown>> {
@@ -314,7 +333,7 @@ export interface ClaimApi<T> {
   release(params: ClaimLookupParams<T> | ClaimHandle<T>): Promise<void>;
 }
 
-export interface ModelRetrieveParams extends ModelRetrieveOptions {
+export interface ModelRetrieveParams extends ServerRetrieveOptions {
   readonly id: string;
 }
 
@@ -336,6 +355,16 @@ export interface ModelDeleteParams<T>
   extends MutationOptions {
   readonly id: string;
   readonly claim?: ClaimHandle<T> | ClaimTargetOptions<T> | null;
+}
+
+/** Options for the WebSocket-only `ablo.<model>.watch(ids, options?)`. */
+export interface WatchOptions {
+  /**
+   * Lease TTL for the underlying presence claim — the participant
+   * auto-releases after this if the holder dies. Compact duration string
+   * (`'5m'`) or ms number, mirroring the claim `ttl`.
+   */
+  ttl?: Duration;
 }
 
 export interface ModelOperations<T, CreateInput> {
@@ -362,7 +391,7 @@ export interface ModelOperations<T, CreateInput> {
    * Mirrors `stripe.customers.list({...})` — network-backed. For a synchronous
    * read of the local graph use `getAll(...)`.
    */
-  list(options?: ModelLoadOptions<T>): Promise<T[]>;
+  list(options?: ServerReadOptions<T>): Promise<T[]>;
 
   /**
    * Synchronous snapshot of a single entity from the **local graph** — no
@@ -377,10 +406,10 @@ export interface ModelOperations<T, CreateInput> {
    * no network round-trip. Empty until `retrieve`/`list`/bootstrap has warmed
    * the graph.
    */
-  getAll(options?: ModelListOptions<T>): T[];
+  getAll(options?: LocalReadOptions<T>): T[];
 
   /** Count entities in the **local graph** (synchronous, no network). */
-  getCount(options?: ModelCountOptions<T>): number;
+  getCount(options?: LocalCountOptions<T>): number;
 
   /**
    * Create a new entity — **optimistic, offline-first**. Resolves once
@@ -424,10 +453,29 @@ export interface ModelOperations<T, CreateInput> {
    */
   claim: ClaimApi<T>;
 
+  /**
+   * Subscribe this client to the sync group(s) for one or more rows of this
+   * model and get a live participant handle back — presence (`.peers`), the
+   * scoped claim stream (`.claims`), and `.leave()` / `await using` disposal.
+   *
+   * The model-scoped relocation of the former `ablo.participants.join({
+   * scope: { <model>: ids } })`. WebSocket only — presence needs a socket, so
+   * this is absent on HTTP clients and throws on any non-ws construction.
+   *
+   * ```ts
+   * await using participant = await ablo.slides.watch(slideIds, { ttl: '5m' });
+   * participant.peers; // who else is here
+   * ```
+   */
+  watch(
+    ids: string | readonly string[],
+    options?: WatchOptions,
+  ): Promise<JoinedParticipant>;
+
   /** Listen for changes (callback called on every change). */
   onChange(
     callback: (entities: T[]) => void,
-    options?: ModelListOptions<T>,
+    options?: LocalReadOptions<T>,
   ): () => void;
 
 }
@@ -479,7 +527,7 @@ export function createModelProxy<T, C>(
     };
   };
 
-  const load = async (options?: ModelLoadOptions<T>): Promise<T[]> => {
+  const load = async (options?: ServerReadOptions<T>): Promise<T[]> => {
     const rows = await hydration.fetch<T>(schemaKey, options);
     // The coordinator returns Model instances. ModelOperations is
     // typed against the schema-inferred row shape (`T`), which is
@@ -1010,6 +1058,21 @@ export function createModelProxy<T, C>(
     // `claim` is a callable namespace (take a claim) carrying the coordination
     // readers (`claim.state` / `claim.queue` / `claim.release` / `claim.reorder`).
     claim: claimApi,
+
+    watch: guard(
+      (
+        ids: string | readonly string[],
+        options?: WatchOptions,
+      ): Promise<JoinedParticipant> => {
+        if (!collaboration?.createWatch) {
+          throw new AbloValidationError(
+            `Model "${schemaKey}" was built without a WebSocket runtime, so watch() is unavailable here. Presence needs a live socket — use the standard Ablo({ schema, apiKey }) client (not the HTTP transport).`,
+            { code: 'model_watch_not_configured' },
+          );
+        }
+        return collaboration.createWatch(schemaKey, ids, options);
+      },
+    ),
 
     onChange(callback, options): () => void {
       return autorun(() => {

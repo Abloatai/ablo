@@ -13,15 +13,23 @@
  */
 
 import { AbloAuthenticationError } from '../errors.js';
+import { classifyCredentialKind } from '../auth/credentialPolicy.js';
 
 /**
- * Async callable that resolves to a fresh API key. Mirrors the shape
+ * Async callable that resolves the current credential. Mirrors the shape
  * Anthropic / OpenAI / Stripe ship — used for credential rotation
- * (e.g. AWS STS, GCP IAM, Vault). Re-exported from `./Ablo` so
- * existing import paths work; defined here so this module has no
- * circular dependency back to `Ablo.ts`.
+ * (e.g. AWS STS, GCP IAM, Vault) AND the short-lived per-user browser
+ * path (mint a fresh `ek_`/`rk_` from the signed-in session). Re-exported
+ * from `./Ablo` so existing import paths work; defined here so this module
+ * has no circular dependency back to `Ablo.ts`.
+ *
+ * Contract: resolve a token; resolve `null` when the login itself is gone
+ * (terminal → the credential lifecycle treats this as `session_expired` and
+ * signs out); or THROW on a transient failure (→ back off and retry, never
+ * sign out). A long-lived static `apiKey` string needs none of this — it is
+ * used as-is. This is the single credential resolver the SDK supports.
  */
-export type ApiKeySetter = () => Promise<string>;
+export type ApiKeySetter = () => Promise<string | null>;
 
 export interface AuthResolveInput {
   /**
@@ -180,7 +188,7 @@ export function assertBrowserSafety(input: {
     !input.dangerouslyAllowBrowser &&
     inBrowser &&
     typeof input.apiKey === 'string' &&
-    input.apiKey.startsWith('sk_')
+    classifyCredentialKind(input.apiKey) === 'secret'
   ) {
     throw new AbloAuthenticationError(
       "It looks like you're running in a browser-like environment.\n\n" +

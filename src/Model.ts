@@ -310,6 +310,74 @@ export abstract class Model {
   }
 
   /**
+   * Capture a before-image for `keys` — the SINGLE source of truth for the
+   * "previous value" that undo inverses are built from. Both undo paths call
+   * this so they can never drift: the stream path
+   * (`TransactionQueue.extractPreviousData`) and the manual-record path
+   * (`RecordingTransaction.snapshotFields`).
+   *
+   * Resolution order per key:
+   *   1. `modifiedProperties.get(key).old` — first-old-wins pre-session
+   *      baseline, set whenever the field was mutated in place before commit.
+   *   2. `getOriginalSnapshot()[key]` — the last loaded/acked row, the correct
+   *      before-image for a key written WITHOUT a prior in-place mutation
+   *      (e.g. a `precomputedChanges` write).
+   *   3. `fallbackToLive` only — the current live value. The manual-record path
+   *      wants this last resort; the stream path deliberately OMITS unresolved
+   *      keys so `buildUndoOps` drops an un-revertible inverse rather than
+   *      inventing one. The flag is the one intentional difference between the
+   *      two callers — do not collapse it.
+   *
+   * `id` is always skipped. Values are read out per-key, so the
+   * `getOriginalSnapshot()` "callers must not mutate" contract is preserved.
+   *
+   * Invariant this relies on: a given undo scope is EITHER stream-recorded
+   * (`recordFromStream: true`) OR manual (`useMutators({ undoScope })`), never
+   * both — otherwise a write would be captured twice. No surface sets both.
+   */
+  capturePreviousValues(
+    keys: Iterable<string>,
+    opts?: { fallbackToLive?: boolean },
+  ): ModelData {
+    const out: ModelData = {};
+    const modified = this.modifiedProperties instanceof Map ? this.modifiedProperties : null;
+    const original = this.getOriginalSnapshot();
+    for (const key of keys) {
+      if (key === 'id') continue;
+      const mod = modified?.get(key);
+      if (mod) {
+        out[key] = mod.old;
+      } else if (original && key in original) {
+        out[key] = original[key];
+      } else if (opts?.fallbackToLive) {
+        out[key] = Reflect.get(this, key);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Drop the `modifiedProperties` entries for `keys` — re-baselines a field
+   * after its `.old` has been frozen into a committed transaction, so the NEXT
+   * write to the same field starts from this commit's result rather than the
+   * stale pre-session `.old` that {@link propertyChanged}'s first-old-wins
+   * policy preserves. Safe because the committed transaction owns its own
+   * frozen `data`/`previousData`; neither re-reads `modifiedProperties`. `id`
+   * is never consumed. With no `keys`, consumes every tracked field.
+   */
+  consumeModifiedFields(keys?: Iterable<string>): void {
+    if (!(this.modifiedProperties instanceof Map) || this.modifiedProperties.size === 0) {
+      return;
+    }
+    const only = keys ? new Set(keys) : null;
+    for (const key of [...this.modifiedProperties.keys()]) {
+      if (key === 'id') continue;
+      if (only && !only.has(key)) continue;
+      this.modifiedProperties.delete(key);
+    }
+  }
+
+  /**
    * Validate model
    */
   validate(): string[] {

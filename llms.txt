@@ -99,13 +99,13 @@ coordination until the app reports it through Data Source events.
 ## Claimed Behavior
 
 Reads never silently block. Schema reads stay open while a row is claimed.
-Server reads through `ablo.model(name)` can pass `ifClaimed: 'return'` to
-receive active claims, `ifClaimed: 'fail'` to throw `AbloClaimedError`, or
-`ifClaimed: 'wait'` to wait until the active claim clears.
+Server reads through `ablo.model(name)` can pass `ifClaimed: 'return'` (the
+default — returns the row plus active claim metadata) or `ifClaimed: 'fail'`
+to throw `AbloClaimedError`.
 
-Schema clients learn when a claim clears by listening to the live claim stream, so they don't need to poll. Schema-less HTTP callers must provide an explicit `claimedPollInterval` when using `ifClaimed: 'wait'`; Ablo does not hide a hard-coded polling loop.
-
-Use `claimedTimeout` only as a maximum wait, not as the coordination mechanism.
+Reads never block on a claim. To wait for a row to free up, `claim({ id })` it —
+the claim queues fairly behind the current holder and is granted when the row
+frees. Use `ifClaimed: 'fail'` when you'd rather refuse to read a claimed row.
 
 ## Guarantees
 

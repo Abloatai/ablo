@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.11.2
+
+### Patch Changes
+
+- a35d935: Fix stream-recorded undo capturing the wrong "before" value for updates. A second
+  update to the same field before the first sync-ack re-captured the original
+  pre-session value (first-old-wins + clear-only-on-ack), so undo of a quick second
+  edit jumped all the way back instead of one step. The queue now re-baselines a
+  field's tracked `.old` once its before-image is frozen into the committed
+  transaction.
+
+  Also close the create/update undo asymmetry: an update whose written key had no
+  in-place mutation produced an empty `previousData`, which made the inverse
+  un-revertible (a create's `delete` inverse never is). Before-image capture now
+  falls back to the last loaded/acked snapshot.
+
+  Internally, the two undo paths (stream-recorded and manual `RecordingTransaction`)
+  now share one before-image implementation via `Model.capturePreviousValues` /
+  `Model.consumeModifiedFields`, so they can no longer drift.
+
+- One-correct-way consolidation (breaking; no external consumers yet, so released as a patch):
+  - Credentials collapse to a single `apiKey` — a string, or a `() => Promise<string | null>` that
+    fetches a per-user token. Removed `getToken` / `authEndpoint` / public `authToken`.
+  - `ablo.<model>.watch(ids, { ttl })` replaces the top-level `ablo.participants.join({ scope })` —
+    model-scoped read-interest + presence (WebSocket only).
+  - Read claim-gating is `ifClaimed: 'return' | 'fail'` (removed `'wait'`); waiting is the claim
+    primitive's job (`ablo.<model>.claim`).
+  - The stateless client is `Ablo({ transport: 'http' })`; `createAbloHttpClient` is no longer a
+    public export (the factory uses it internally).
+  - Read-option types renamed: `ServerReadOptions` (server `retrieve`/`list`) and `LocalReadOptions`
+    (local `get`/`getAll`).
+  - `defineSchema` throws a clear error on a reserved-field collision; the MCP/docs API surface is
+    now compile-time bound to the real exported types (can't drift).
+
 ## 0.11.1
 
 ### Patch Changes

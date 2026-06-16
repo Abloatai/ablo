@@ -12,6 +12,55 @@ The key identifies the Ablo account. Application code does not pass an organizat
 
 "Trusted" means the runtime can hold a secret: a backend or other server-side environment a browser can't read. Browser and app clients use the same `@abloatai/ablo` import but authenticate differently — they never carry a secret key.
 
+## Which credential to use
+
+There's **one field — `apiKey`** — and what you pass depends on **where the code runs**.
+Pick your row:
+
+| Where your code runs | What to pass | Example |
+|---|---|---|
+| **Server / worker / CLI** (can hold a secret) | your secret `sk_` — it defaults to `ABLO_API_KEY`, so usually pass **nothing** | `Ablo({ schema })` |
+| **Browser — read-only** | a publishable `pk_` (safe to ship, like a Stripe `pk_`) | `Ablo({ schema, apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY })` |
+| **Browser — writing as the signed-in user** | a function that fetches a short-lived per-user token from your own backend | `Ablo({ schema, apiKey: () => fetch('/api/ablo-session').then((r) => r.text()) })` |
+
+That's the whole story: one knob, filled by audience.
+
+**Coming from Stripe? It's the same key model, same prefixes:**
+
+| Stripe | Ablo | Where it goes |
+|---|---|---|
+| publishable `pk_` (client-safe) | `pk_` | browser — read-only |
+| secret `sk_` (server, full) | `sk_` | server — full authority |
+| restricted `rk_` (granular) | `rk_` | scoped agent sessions (`sessions.create({ agent, can })`) |
+| ephemeral key (client, customer-scoped) | `ek_` | per-user browser sessions (`sessions.create({ user })`) |
+
+Mode lives in the prefix too — `sk_test_` / `sk_live_` — exactly like Stripe. The
+`apiKey` resolver fetching an `ek_` is Ablo's ephemeral-key flow: server mints, client holds.
+
+**Why a function for browser writes?** Anything you ship to a browser must be public, and a
+public `pk_` is **read-only** — it can't carry one specific user's write authority. So when
+the browser writes *as the logged-in user*, your backend (which holds the secret `sk_` and
+knows who's signed in) mints a short-lived per-user token with `sessions.create({ user })`,
+and the browser's `apiKey` function fetches it. You don't manage refresh — the SDK calls the
+function once before connecting and then keeps the token fresh (re-mint before expiry, and on
+tab-focus / network-online / device-wake). This is the Stripe ephemeral-key / Supabase
+session model. For a read-only app you don't need any of this — just the `pk_` above.
+
+Server-side, because `apiKey` defaults to `process.env.ABLO_API_KEY`, most backend and agent
+code passes nothing. The secret `sk_` (and `databaseUrl`) are **server-only** — never in a
+browser bundle. There is no `getToken`, `authEndpoint`, or `as` option — `apiKey` (a string,
+or a function for the browser-write case) is the single credential knob.
+
+### Minting per-user / agent tokens (server-side, with your `sk_`)
+
+| Mint | Call | Result |
+|---|---|---|
+| Human end-user session | `await server.sessions.create({ user: { id } })` | `ek_` (full user authority) |
+| Scoped delegated agent | `await server.sessions.create({ agent: { id }, can: { Task: ['update'] } })` | `rk_` (scoped to `can`) |
+| Connect Ablo to your own Postgres | `Ablo({ schema, apiKey, databaseUrl })` (server-only) | dedicated tenant |
+
+The principal kind comes from *which* shape you pass — `{ user }` → `user`, `{ agent, can }` → `agent`.
+
 ## Server-Side API Keys
 
 Use API keys from trusted (server-side) runtimes:

@@ -113,6 +113,11 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: 'http' 
 await ablo.tasks.update({ id, data: { status: 'done' } });
 ```
 
+> **Minting still needs the stateful client.** `sessions.create(...)` is not on
+> the `transport: 'http'` surface. Keep a default-transport `server` client for
+> minting short-lived credentials (see the 0.9.2 example below), and use the
+> http client for the per-request reads and writes.
+
 ---
 
 ## 0.9.2 — `turn` / agent-`tasks` removed; `intents` deprecated
@@ -135,8 +140,10 @@ helper, and the agent/task type family (`Agent`, `AgentOptions`,
 ```diff
 - const turn = await engine.beginTurn();
 - await Ablo({ apiKey }).agent(agentId, opts).run(prompt, handler);
-+ // Mint a scoped credential, then claim + write under it.
-+ const { token } = await ablo.sessions.create({ agent: { id: agentId } });
++ // Mint a scoped credential from a stateful (default-transport) server client —
++ // sessions.create lives on the stateful client, not on transport: 'http'.
++ const server = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
++ const { token } = await server.sessions.create({ agent: { id: agentId } });
 + const agent = Ablo({ schema, apiKey: token });
 + await using claim = await agent.tasks.claim({ id });
 + await agent.tasks.update({ id, data: { status: 'done' }, wait: 'confirmed' });

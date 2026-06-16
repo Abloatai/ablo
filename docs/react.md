@@ -31,7 +31,7 @@ import { schema } from '@/ablo/schema';
 // from your own server route (see Identity below).
 export const ablo = Ablo({
   schema,
-  authEndpoint: '/api/ablo-session',
+  apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
 });
 ```
 
@@ -65,13 +65,13 @@ export function Providers({
 
 | Prop        | Default          | Purpose                                                                                                   |
 | ----------- | ---------------- | --------------------------------------------------------------------------------------------------------- |
-| `client`    | —                | **Required.** The `Ablo({ schema, authEndpoint })` instance. It carries the schema and connection config. |
+| `client`    | —                | **Required.** The `Ablo({ schema, apiKey })` instance. It carries the schema and connection config. |
 | `userId`    | resolved from auth | App participant id for app-owned fields and your `identityRoles`. Not the security boundary.            |
 | `fallback`  | neutral spinner  | Rendered during the *first* bootstrap only. Pass a branded skeleton, `null`, or `'passthrough'`.          |
 | `onError`   | —                | Engine / WebSocket / bootstrap errors. Wire to Sentry / Datadog.                                          |
 
 Everything that used to be a provider prop — `schema`, `url`, `apiKey`,
-`teamIds`, `syncGroups`/`scope`, `persistence`, `bootstrapMode` — now lives on
+`teamIds`, `syncGroups`, `persistence`, `bootstrapMode` — now lives on
 the `Ablo({ ... })` client you build before mounting the provider. Where the
 identity comes from, and why the API key never reaches the browser, is the whole
 of [Identity & Sync Groups](./identity.md) — read that if it isn't obvious how

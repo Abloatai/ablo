@@ -6,7 +6,6 @@
  *     — owns sync engine + multiplayer lifecycle; the `fallback` prop
  *     gates children on first bootstrap. Pass `fallback="passthrough"`
  *     to disable the gate.
- *   <SyncGroupProvider id="matter:...">         — per-entity scope
  *   <ClientSideSuspense fallback={<Skeleton/>}> — NESTED gate inside an
  *     already-ready provider. Use only when you need a separate gate
  *     for a heavy subtree (e.g. a canvas) while app chrome renders
@@ -29,8 +28,6 @@
  * Multiplayer (always available — `<AbloProvider>` always constructs a client):
  *   useAblo((ablo) => ablo.<model>.claim.state(...)) — reactive coordination reads
  *   useParticipant({ scope }) — join multiplayer for a scope, get peers/claims
- *   usePresence()             — typed presence view
- *   useClaim(name)           — typed claim dispatcher
  *
  * ── Breaking changes from v0.2.x ───────────────────────────────────
  * Removed: <SyncProvider>, SyncContext, useSyncContext — folded into
@@ -68,12 +65,6 @@ export {
   type UseParticipantReturn,
   type MeshParticipantStatus,
 } from './AbloProvider.js';
-
-export {
-  SyncGroupProvider,
-  useSyncGroup,
-  type SyncGroupProviderProps,
-} from './SyncGroupProvider.js';
 
 export {
   ClientSideSuspense,
@@ -125,10 +116,6 @@ export {
   type UseAbloModelOptions,
   type UseAbloModelResult,
 } from './useAblo.js';
-
-// ── Presence + claim (typed via Register module augmentation) ─────
-export { usePresence } from './usePresence.js';
-export { useClaim } from './useClaim.js';
 
 // ── ModelScope re-export ───────────────────────────────────────────
 export { ModelScope } from '../types/index.js';

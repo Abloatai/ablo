@@ -323,8 +323,9 @@ export function formatClaimedErrorMessage(args: {
  * The target entity is currently claimed by another participant and the caller
  * asked the SDK not to read/write through that claim.
  *
- * Use `ifClaimed: 'wait'` to wait for the claim to clear, or
- * `ifClaimed: 'return'` to inspect active claims yourself.
+ * Pass `ifClaimed: 'return'` to inspect active claims yourself instead of
+ * throwing; to wait for the claim to clear, take `ablo.<model>.claim({ id })`
+ * (it queues fairly) rather than blocking the read.
  */
 export class AbloClaimedError extends AbloError {
   readonly type = 'AbloClaimedError' as const;

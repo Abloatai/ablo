@@ -39,9 +39,9 @@ Use `snapshot(...)` and `readAt` when an agent write depends on state it already
 read. `onStale: 'reject'` prevents lost updates by rejecting if the target
 changed after the snapshot.
 
-Claims are live coordination signals, not database locks. Schema clients wait
-from the realtime claim stream. Schema-less HTTP clients must pass an explicit
-`claimedPollInterval` for `ifClaimed: 'wait'`; no hidden hard-coded polling.
+Claims are live coordination signals, not database locks. Reads never block on a
+claim — to wait for a row to free up, `claim({ id })` it and the claim queues
+fairly behind the current holder.
 
 Agent run bookkeeping is internal. Most users should not create run ledger
 records or scoped access credentials manually.
@@ -307,7 +307,10 @@ common agent path.
 
 ## Model
 
-Every model read returns state plus coordination metadata:
+The read shape depends on whether the client has a local graph:
+
+- The stateful `ablo.<model>.retrieve({ id })` returns the BARE row (`T | undefined`), and `list({ where })` returns `T[]`. Read coordination metadata (state watermark, active claims) separately via `ablo.snapshot(...)` and `ablo.<model>.claim.state({ id })`.
+- The stateless HTTP / `.model(name)` `retrieve({ id })` returns a `ModelRead<T>` envelope because it has no local graph to carry the watermark; `list({ where })` still returns `T[]`.
 
 ```ts
 type ModelRead<T> = {
@@ -317,32 +320,31 @@ type ModelRead<T> = {
 };
 ```
 
-`stamp` is the state watermark. Pass it to writes as `readAt`.
+`stamp` is the state watermark. Pass it to writes as `readAt` (from `ablo.snapshot(...)` on the stateful client, or from the envelope on the HTTP client).
 
 `claims` lists active work on the target. Reads are allowed while another participant is working. The caller decides whether to return, fail, or wait.
 
 ## Claimed Behavior
 
-Claimed behavior is explicit:
+Claimed behavior is explicit, and there are only two policies:
 
-- `ifClaimed: 'return'` returns the current claims with the read.
+- `ifClaimed: 'return'` (the default) returns the row plus the current claims with the read.
 - `ifClaimed: 'fail'` throws `AbloClaimedError`.
-- `ifClaimed: 'wait'` waits for matching claims to clear.
 
-Schema clients use the realtime claim stream for waits.
-
-Schema-less HTTP clients cannot know when a claim clears unless the caller opts into polling. When using `ifClaimed: 'wait'` over HTTP, provide `claimedPollInterval` and usually `claimedTimeout`.
+Reads never block on a claim. To wait for a row to free up, `claim({ id })` it —
+the claim queues fairly behind the current holder and is granted when the row
+frees. Use `ifClaimed: 'fail'` when you'd rather refuse to read a claimed row.
 
 ```ts
+// Read a claimed row without blocking, surfacing who holds it:
 await api.model('reports').retrieve({
   id: 'report_stockholm',
-  ifClaimed: 'wait',
-  claimedPollInterval: 1_000,
-  claimedTimeout: 30_000,
+  ifClaimed: 'return',
 });
-```
 
-No hidden hard-coded claimed polling. `claimedTimeout` is a maximum wait, not the coordination mechanism.
+// Or wait for it to free up by queueing your own claim:
+await api.model('reports').claim({ id: 'report_stockholm' });
+```
 
 ## Write
 

@@ -34,6 +34,8 @@ import type {
   ModelRead,
   ModelReadOptions,
   ModelMutationOptions,
+  CreateSessionParams,
+  AbloSession,
 } from './Ablo.js';
 import type {
   ClaimHandle,
@@ -42,7 +44,7 @@ import type {
   ClaimReorderParams,
   ModelCreateParams,
   ModelDeleteParams,
-  ModelLoadOptions,
+  ServerReadOptions,
   ModelRetrieveParams,
   ModelUpdateParams,
 } from './createModelProxy.js';
@@ -60,10 +62,16 @@ export interface AbloHttpClientOptions<S extends SchemaRecord>
  * and the durable-lease claim plane (`claim` — acquire/hold/release). It does NOT
  * include `get`/`getAll`/`getCount` (local synced-pool reads) or `onChange` (live
  * subscription); those need the stateful plane and are absent BY TYPE here.
+ *
+ * Read-shape asymmetry (by design, not a gap): `retrieve(...)` returns a
+ * `ModelRead<T>` envelope `{ data, stamp, claims }` — the stateless client has no
+ * local graph, so the watermark/claims the stateful client reads from its pool
+ * must ride inline on the read (an agent needs the `stamp` to do a stale-guarded
+ * write; there is no `snapshot()` to fetch it from). `list(...)` returns a bare `T[]`.
  */
 export interface HttpModelClient<T, C = T> {
   retrieve(params: ModelRetrieveParams & ModelReadOptions): Promise<ModelRead<T>>;
-  list(options?: ModelLoadOptions<T>): Promise<T[]>;
+  list(options?: ServerReadOptions<T>): Promise<T[]>;
   create(params: ModelCreateParams<T, C>): Promise<CommitReceipt>;
   update(params: ModelUpdateParams<C>): Promise<CommitReceipt>;
   delete(params: ModelDeleteParams<T>): Promise<CommitReceipt>;
@@ -89,6 +97,12 @@ export type AbloHttpClient<S extends SchemaRecord> = {
   dispose(): Promise<void>;
   /** Resolve the bearer credential this client authenticates with (see `AbloApi.getAuthToken`). */
   getAuthToken(): Promise<string | null>;
+  /**
+   * Mint a short-lived scoped session (Stripe ephemeral-key shape). Minting is a
+   * stateless control-plane call, so — unlike `get`/`getAll`/`onChange` — it IS
+   * available on the HTTP client. `{ user }` → `ek_`, `{ agent, can }` → `rk_`.
+   */
+  readonly sessions: { create(params: CreateSessionParams<S>): Promise<AbloSession> };
   /** String-keyed model accessor (for dynamic model names). */
   model<T = Record<string, unknown>>(name: string): HttpModelClient<T>;
 };
@@ -108,6 +122,7 @@ const PROTOCOL_MEMBERS = new Set<string>([
   'commits',
   'model',
   'getAuthToken',
+  'sessions',
 ]);
 
 /**
