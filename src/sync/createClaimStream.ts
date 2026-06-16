@@ -62,7 +62,8 @@ interface OwnClaim {
   readonly range?: EntityRef['range'];
   readonly field?: string;
   readonly meta?: EntityRef['meta'];
-  readonly action: string;
+  /** Human-readable phase; serialized on the wire as `action`. */
+  readonly reason: string;
   readonly estimatedMs: number | undefined;
   /** Opt into the server's fair FIFO queue on contention (vs. reject). */
   readonly queue?: boolean;
@@ -259,7 +260,8 @@ export function createClaimStream(
         entityId: claim.entityId,
         path: claim.path,
         range: claim.range,
-        action: claim.action,
+        // Wire field stays `action` (coordination schema); source is `reason`.
+        action: claim.reason,
         field: claim.field,
         meta: claim.meta,
         estimatedMs: claim.estimatedMs,
@@ -316,7 +318,7 @@ export function createClaimStream(
     range?: EntityRef['range'];
     field?: string;
     meta?: EntityRef['meta'];
-    action: string;
+    reason: string;
     ttl?: ClaimLeaseOptions['ttl'];
     queue?: boolean;
   }): ClaimHandle {
@@ -329,7 +331,7 @@ export function createClaimStream(
       range: args.range,
       field: args.field,
       meta: args.meta,
-      action: args.action,
+      reason: args.reason,
       estimatedMs,
       queue: args.queue,
     };
@@ -347,7 +349,7 @@ export function createClaimStream(
     return {
       object: 'claim',
       claimId,
-      action: args.action,
+      reason: args.reason,
       target: {
         model: args.entityType,
         id: args.entityId,
@@ -384,7 +386,7 @@ export function createClaimStream(
         range: resolved.range,
         field: resolved.field,
         meta: withDescription(resolved.meta, opts?.description),
-        action: opts?.reason ?? 'editing',
+        reason: opts?.reason ?? 'editing',
         ttl: opts?.ttl,
         queue: opts?.queue,
       });

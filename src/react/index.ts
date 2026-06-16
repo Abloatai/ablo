@@ -2,8 +2,12 @@
  * @abloatai/ablo/react — React bindings (v0.3.0)
  *
  * Umbrella provider:
- *   <AbloProvider schema={...} userId={...} orgId={...} fallback={<Skeleton/>}>
- *     — owns sync engine + multiplayer lifecycle; the `fallback` prop
+ *   const ablo = Ablo({ schema, apiKey })   // build once — module scope or useMemo
+ *   <AbloProvider client={ablo} fallback={<Skeleton/>}>
+ *     — `client` is the only required prop (construct it yourself; the provider
+ *     is the thin reactive binding, like `<Elements stripe={...}>`). `userId`
+ *     is optional + informational. Owns sync engine + multiplayer lifecycle;
+ *     the `fallback` prop
  *     gates children on first bootstrap. Pass `fallback="passthrough"`
  *     to disable the gate.
  *   <ClientSideSuspense fallback={<Skeleton/>}> — NESTED gate inside an
@@ -27,7 +31,7 @@
  *
  * Multiplayer (always available — `<AbloProvider>` always constructs a client):
  *   useAblo((ablo) => ablo.<model>.claim.state(...)) — reactive coordination reads
- *   useParticipant({ scope }) — join multiplayer for a scope, get peers/claims
+ *   useWatch({ scope }) — join multiplayer for a scope, get peers/claims
  *
  * ── Breaking changes from v0.2.x ───────────────────────────────────
  * Removed: <SyncProvider>, SyncContext, useSyncContext — folded into
@@ -54,15 +58,15 @@ export type {
 // ── Umbrella provider + lifecycle hooks ────────────────────────────
 export {
   AbloProvider,
-  useParticipant,
+  useWatch,
   usePeers,
   useSync,
   useSyncStore,
   type AbloProviderProps,
   type ParticipantScope,
   type ParticipantStatus,
-  type UseParticipantOptions,
-  type UseParticipantReturn,
+  type UseWatchOptions,
+  type UseWatchReturn,
   type MeshParticipantStatus,
 } from './AbloProvider.js';
 

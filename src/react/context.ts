@@ -145,13 +145,14 @@ export interface SyncReactContext {
 export const SyncContext = createContext<SyncReactContext | null>(null);
 
 /**
- * Access the sync store from React components.
- * Must be used within a SyncProvider.
+ * Access the sync store from React components. The context is provided by
+ * `<AbloProvider>` (which renders the internal {@link SyncProvider}); public
+ * consumers wire `<AbloProvider client={ablo}>`, never this directly.
  */
 export function useSyncContext(): SyncReactContext {
   const ctx = useContext(SyncContext);
   if (!ctx) {
-    throw new AbloValidationError('useSyncContext must be used within a SyncProvider', {
+    throw new AbloValidationError('Sync hooks must be used within an <AbloProvider>.', {
       code: 'sync_context_missing_provider',
     });
   }
@@ -177,19 +178,13 @@ export interface SyncProviderProps {
 }
 
 /**
- * SyncProvider wires the sync store into React so SDK hooks
- * (useModel, useModels, useMutations) can access it.
+ * SyncProvider — the INTERNAL low-level provider that wires a built sync store
+ * into React so SDK hooks (useModel, useModels, useMutations) can reach it.
  *
- * @example
- * import { SyncProvider } from '@abloatai/ablo/react';
- *
- * function App() {
- *   return (
- *     <SyncProvider store={syncStore} organizationId={orgId}>
- *       <YourApp />
- *     </SyncProvider>
- *   );
- * }
+ * Public consumers do NOT use this directly (it is not exported from
+ * `@abloatai/ablo/react`). `<AbloProvider client={ablo}>` constructs the
+ * store from your `Ablo({ schema, apiKey })` client and renders this provider
+ * underneath — reach for `<AbloProvider>`.
  */
 export function SyncProvider({
   store,

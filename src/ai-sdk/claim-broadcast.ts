@@ -62,10 +62,11 @@ export interface ClaimBroadcastMiddlewareOptions<R extends SchemaRecord = Schema
   /** Target entity. Null skips the broadcast (purely conversational). */
   readonly target: ClaimTarget | null;
   /**
-   * Action verb describing what the agent is doing. Convention:
-   * `'edit'`, `'read'`, `'review'`, `'generate'`. Default `'edit'`.
+   * Human-readable phase describing what the agent is doing. Convention:
+   * `'edit'`, `'read'`, `'review'`, `'generate'`. Default `'edit'`. The same
+   * `reason` field used on every claim surface.
    */
-  readonly action?: string;
+  readonly reason?: string;
   /**
    * Peer-visible explanation of the specific work this model call is about to
    * perform. Surfaces to other agents through `ActiveClaim.description`.
@@ -88,7 +89,7 @@ export function claimBroadcastMiddleware<R extends SchemaRecord = SchemaRecord>(
   options: ClaimBroadcastMiddlewareOptions<R>,
 ): LanguageModelV3Middleware {
   const { agent, target } = options;
-  const action = options.action ?? 'edit';
+  const reason = options.reason ?? 'edit';
   const description = options.description;
 
   const openClaim = (): ClaimHandle | null => {
@@ -103,7 +104,7 @@ export function claimBroadcastMiddleware<R extends SchemaRecord = SchemaRecord>(
         meta: target.meta,
       },
       {
-        reason: action,
+        reason,
         description,
         ttl: target.estimatedMs ?? 60_000,
       },

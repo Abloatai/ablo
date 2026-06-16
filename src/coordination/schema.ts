@@ -241,7 +241,9 @@ export const modelClaimSchema = z
     id: z.string(),
     actor: z.string(),
     participantKind: wireParticipantKindSchema,
-    action: z.string(),
+    /** Human-readable phase (`'editing'`). The public SDK field; the WS/HTTP
+     *  wire carries the same value as `action` (healed on read). */
+    reason: z.string(),
     description: z.string().optional(),
     field: z.string().optional(),
     status: z.enum(['active', 'queued']).optional(),

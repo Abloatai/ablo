@@ -118,9 +118,16 @@ export interface ModelOptions {
   tableName?: string;
 
   /**
-   * Whether this model's table has an organization_id column.
-   * Default: true. When false, the bootstrap query omits the
-   * `WHERE organization_id = $1` clause for this model.
+   * Whether this model's table has an `organization_id` column. Default: true.
+   * When false, the bootstrap/read query omits the `WHERE organization_id = $1`
+   * tenant filter for this model.
+   *
+   * ⚠ SECURITY — `orgScoped: false` makes the table GLOBALLY READABLE: every
+   * client of every tenant sees every row. It is ONLY correct for genuinely
+   * tenant-less tables (the `organizations` table itself, global lookups). If
+   * rows belong to a tenant through a foreign key but this table has no
+   * `organization_id` of its own, use {@link scopedVia} INSTEAD — reaching for
+   * `orgScoped: false` there silently exposes the entire table cross-tenant.
    */
   orgScoped?: boolean;
 

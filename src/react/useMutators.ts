@@ -103,8 +103,9 @@ export function useMutators(
 
   if (!schema) {
     throw new AbloValidationError(
-      'useMutators: no schema available. Pass the schema as the first arg ' +
-        'or wire SyncProvider with a `schema` prop when using the zero-arg overload.',
+      'useMutators: no schema available. Pass the schema as the first arg, ' +
+        'or build the <AbloProvider> above with `Ablo({ schema })` so the ' +
+        'zero-arg overload can read it from context.',
       { code: 'mutators_schema_missing' },
     );
   }

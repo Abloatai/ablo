@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.0
+
+### Minor Changes
+
+- Canonicalize the claim API to one vocabulary, plus DX fixes (breaking).
+  - BREAKING: claim phase field `action` → `reason` on every claim surface
+    (`Claim`, `ClaimHandle`, `ClaimCreateOptions`, `ModelClaim`, ...). The wire
+    is unchanged (still `action`, healed on read) — no server redeploy needed.
+  - BREAKING: claim contention flag `wait` → `queue` (one word everywhere).
+  - BREAKING: React hook `useParticipant` → `useWatch` (aligns with `ablo.<model>.watch`).
+  - `ClaimDeclaration.ttlSeconds` is now `number` (was a `Duration`).
+  - Docs: `retrieve` HTTP envelope (`.data`/`.stamp`) called out; `syncGroups`
+    reworded (provisional, not deprecated); `orgScoped` cross-tenant security
+    warning; React error strings point at `<AbloProvider>`.
+
 ## 0.11.2
 
 ### Patch Changes

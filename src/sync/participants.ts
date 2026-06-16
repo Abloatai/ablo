@@ -412,7 +412,7 @@ function createJoinedParticipant(args: {
     return {
       object: 'claim',
       claimId: handle.claimId,
-      action: handle.action,
+      reason: handle.reason,
       target: handle.target,
       async release(): Promise<void> {
         ownHandles.delete(handle);

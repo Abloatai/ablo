@@ -14,7 +14,7 @@
  *   model: anthropic('claude-opus-4-7'),
  *   agent,
  *   target: { entityType: 'SlideDeck', entityId: 'deck-abc' },
- *   action: 'renaming',
+ *   reason: 'renaming',
  *   description: 'Renaming the deck title to match the project brief.',
  * });
  *
@@ -49,10 +49,11 @@ export interface WrapWithMultiplayerOptions {
   /** Target entity. Null = pass-through wrap. */
   readonly target: ClaimTarget | null;
   /**
-   * Optional action verb for the broadcast. Default `'edit'`.
-   * Convention: `'edit'`, `'read'`, `'review'`, `'generate'`.
+   * Optional human-readable phase for the broadcast. Default `'edit'`.
+   * Convention: `'edit'`, `'read'`, `'review'`, `'generate'`. The same
+   * `reason` field used on every claim surface.
    */
-  readonly action?: string;
+  readonly reason?: string;
   /**
    * Peer-visible explanation of the specific work this model call is about to
    * perform. Other agents receive it in their coordination context.
@@ -80,14 +81,14 @@ export interface WrapWithMultiplayerOptions {
 export function wrapWithMultiplayer(
   options: WrapWithMultiplayerOptions,
 ): ReturnType<typeof wrapLanguageModel> {
-  const { model, agent, target, action, description, excludeClaimIds, extraMiddleware } =
+  const { model, agent, target, reason, description, excludeClaimIds, extraMiddleware } =
     options;
 
   return wrapLanguageModel({
     model,
     middleware: [
       coordinationContextMiddleware({ agent, target, excludeClaimIds }),
-      claimBroadcastMiddleware({ agent, target, action, description }),
+      claimBroadcastMiddleware({ agent, target, reason, description }),
       ...(extraMiddleware ?? []),
     ],
   });

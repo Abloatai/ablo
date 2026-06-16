@@ -284,7 +284,8 @@ One provider component now owns the full React lifecycle. `<SyncProvider>`,
 - <SyncProvider store={sync._store} organizationId={orgId}>
 -   <AbloProvider ablo={ablo}>{children}</AbloProvider>
 - </SyncProvider>
-+ <AbloProvider schema={schema} url={url} userId={userId} organizationId={orgId}>
++ const ablo = Ablo({ schema, apiKey });
++ <AbloProvider client={ablo}>
 +   {children}
 + </AbloProvider>
 ```

@@ -240,7 +240,9 @@ export interface ClaimContext {
   readonly claimId?: string;
   readonly actor?: string;
   readonly participantKind?: ParticipantKind;
-  readonly action?: string;
+  /** Human-readable phase the holder is in (`'editing'`). Matches the public
+   *  claim surface; the wire summary carries the same value as `action`. */
+  readonly reason?: string;
   readonly description?: string;
   readonly field?: string;
   readonly status?: string;
@@ -261,7 +263,11 @@ export interface ClaimContext {
 export type ClaimErrorClaim = WireClaimSummary | ClaimContext;
 
 function claimAction(claim: ClaimErrorClaim | undefined): string | undefined {
-  return claim?.action;
+  if (!claim) return undefined;
+  // The public `ClaimContext` exposes the phase as `reason`; the wire
+  // `WireClaimSummary` projection still carries it under `action`. Read both.
+  const c = claim as { readonly reason?: string; readonly action?: string };
+  return c.reason ?? c.action;
 }
 
 function claimDescription(claim: ClaimErrorClaim | undefined): string | undefined {

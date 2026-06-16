@@ -474,8 +474,14 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
   configOverrides?: Partial<SyncEngineConfig>;
 
   /**
-   * @deprecated Server derives sync groups from the apiKey's scope.
-   * Required today as a runtime holdover; removed once Phase 3 ships.
+   * Sync groups (entity scopes) this client subscribes to. **Provisional, not
+   * deprecated** — pick the right lane: normally the server derives these from
+   * the apiKey's scope, but passing them is still REQUIRED today in any config
+   * where the key doesn't resolve them (omitting yields a `degenerate
+   * syncGroups` warning and a zero-fan-out client). Keep passing it explicitly
+   * until the server-derived path ships in Phase 3, at which point it becomes a
+   * true no-op and is removed. Build values with `syncGroup(kind, id)` from
+   * `@abloatai/ablo/schema`.
    */
   syncGroups?: string[];
 
@@ -575,7 +581,9 @@ export interface ModelReadOptions extends ClaimedOptions {}
 
 export interface ClaimCreateOptions {
   readonly target: ModelTarget;
-  readonly action: string;
+  /** Human-readable phase shown to peers — `'editing'`, `'writing'`. The same
+   *  word on every claim surface; serialized on the wire as `action`. */
+  readonly reason: string;
   readonly ttl?: Duration;
   /**
    * Join the server's fair FIFO queue when the target is already claimed,
@@ -678,6 +686,20 @@ export interface HttpClaimApi<T> {
 }
 
 export interface ModelClient<T = Record<string, unknown>> {
+  /**
+   * Single-row read over HTTP. **Returns an envelope, not the bare row** — the
+   * row is on `.data`, alongside the `.stamp` watermark (for stale-context
+   * guards on the following write) and any active `.claims`. A stateless HTTP
+   * client can't synthesize the watermark from a local snapshot, so the
+   * envelope is load-bearing here (the WebSocket client's `retrieve` returns
+   * `T | undefined` because it reads from the hydrated pool).
+   *
+   * ```ts
+   * const deal = await ablo.deals.retrieve({ id });
+   * deal.data?.recommendation;   // ← the row is on .data
+   * deal.stamp;                  // watermark — pass to the next write's readAt
+   * ```
+   */
   retrieve(params: ModelReadOptions & { readonly id: string }): Promise<ModelRead<T>>;
   /**
    * Collection read over HTTP (server round-trip). Equality `where`, `orderBy`,
@@ -2314,7 +2336,7 @@ export function Ablo<const S extends SchemaRecord>(
 	      id: claim.id,
 	      actor: claim.heldBy,
 	      participantKind: claim.participantKind,
-	      action: claim.reason,
+	      reason: claim.reason,
 	      ...(description ? { description } : {}),
 	      field: claim.target.field,
 	      status: 'active',
@@ -2335,7 +2357,7 @@ export function Ablo<const S extends SchemaRecord>(
 	      id: claim.id,
 	      actor: claim.heldBy,
 	      participantKind: claim.participantKind,
-	      action: claim.action,
+	      reason: claim.reason,
 	      ...(claim.description ? { description: claim.description } : {}),
 	      field: claim.target.field,
 	      status: 'queued',
@@ -2466,7 +2488,7 @@ export function Ablo<const S extends SchemaRecord>(
 	    return {
 	      object: 'claim',
 	      claimId: claim.claimId,
-	      action: claim.action,
+	      reason: claim.reason,
 	      target: claim.target,
 	      waited,
 	      release,
@@ -2488,7 +2510,7 @@ export function Ablo<const S extends SchemaRecord>(
 	          meta: claimOptions.target.meta,
 	        },
 	        {
-	          reason: claimOptions.action,
+	          reason: claimOptions.reason,
 	          ttl: claimOptions.ttl,
 	          queue: claimOptions.queue,
 	        },
@@ -2581,7 +2603,7 @@ export function Ablo<const S extends SchemaRecord>(
               ...(held.target.field ? { field: held.target.field } : {}),
               ...(held.target.meta ? { meta: held.target.meta } : {}),
             },
-            action: held.action,
+            reason: held.reason,
             heldBy: held.actor,
             participantKind: held.participantKind,
             expiresAt: held.expiresAt,

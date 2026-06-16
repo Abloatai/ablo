@@ -460,7 +460,7 @@ export interface ClaimStream {
   /**
    * Reactive view of the wait queue on one target — the FIFO line of
    * `status: 'queued'` claims behind the current holder, each with its
-   * `action`, `heldBy`, and `position`. Synced from the server's per-entity
+   * `reason`, `heldBy`, and `position`. Synced from the server's per-entity
    * `claim_queue` frame; empty when no one's waiting. Pair with
    * `subscribe(...)` for change notifications.
    */
@@ -564,10 +564,12 @@ export interface ClaimDeclaration {
   /** Human-readable reason — "rewriting title" / "restyling chart". */
   readonly reason: string;
   /**
-   * Expiry — auto-revoke if the participant doesn't finish in time.
-   * Number = seconds (back-compat); string = duration (`'3m'`).
+   * Seconds remaining until the server auto-expires this claim. An OUTPUT
+   * field carrying a concrete countdown, so it's a plain `number` — distinct
+   * from the input `ttl: Duration` (`'3m'`) you pass when announcing. Computed
+   * from `expiresAt - now`.
    */
-  readonly ttlSeconds?: Duration;
+  readonly ttlSeconds?: number;
 }
 
 /**
@@ -615,7 +617,13 @@ export interface ClaimHandle<T = Record<string, unknown>> extends AsyncDisposabl
     readonly range?: TargetRange;
     readonly meta?: Record<string, unknown>;
   };
-  readonly action: string;
+  /**
+   * The human-readable phase this claim represents — `'editing'`, `'writing'`,
+   * `'forecasting'`. The SAME word on every claim surface (inputs and outputs);
+   * distinct from the CRUD operation (`CommitOperationInput.action`). Defaults
+   * to `'editing'`. Serialized on the wire as `action`.
+   */
+  readonly reason: string;
   readonly description?: string;
   /** Row snapshot — populated by `ablo.<model>.claim`; absent on low-level leases. */
   readonly data?: T;
@@ -698,8 +706,10 @@ export interface Claim {
   readonly status: ClaimStatus;
   /** What is being coordinated. */
   readonly target: EntityRef;
-  /** Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. */
-  readonly action: string;
+  /** Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. The same
+   *  field on every claim surface; distinct from the CRUD operation. Serialized
+   *  on the wire as `action`. */
+  readonly reason: string;
   /** Peer-visible explanation of the work being performed. */
   readonly description?: string;
   /** Participant holding it. */

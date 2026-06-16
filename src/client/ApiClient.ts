@@ -242,6 +242,18 @@ interface ClaimCreateResponse {
   readonly position?: number;
 }
 
+/**
+ * The `/v1/claims` and model-query routes still emit the wire field `action`
+ * for the claim phase; the public `Claim` / `ModelClaim` expose it as `reason`.
+ * Heal on read so the SDK shape is consistent without a coordinated server
+ * deploy — `reason ?? action`. When the server adopts `reason`, this is a no-op.
+ */
+function healClaimPhase<C extends { reason: string }>(claim: C): C {
+  const raw = claim as C & { readonly action?: string };
+  if (raw.reason !== undefined) return claim;
+  return { ...claim, reason: raw.action ?? 'editing' };
+}
+
 interface CapabilityCreateResponse {
   readonly capabilityId?: string;
   readonly id?: string;
@@ -502,8 +514,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       { method: 'GET' },
     );
     return {
-      active: body.claims ?? [],
-      queue: body.queue ?? [],
+      active: (body.claims ?? []).map(healClaimPhase),
+      queue: (body.queue ?? []).map(healClaimPhase),
     };
   }
 
@@ -764,7 +776,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         body: JSON.stringify({
           claimId,
           target: claimOptions.target,
-          action: claimOptions.action,
+          // Wire field stays `action`; public option is `reason`.
+          action: claimOptions.reason,
           ttl: claimOptions.ttl,
           queue: claimOptions.queue,
         }),
@@ -797,7 +810,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       return {
         object: 'claim',
         claimId: id,
-        action: claimOptions.action,
+        reason: claimOptions.reason,
         target: claimOptions.target,
         release,
         revoke: () => {
@@ -866,7 +879,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     return {
       data,
       stamp: query.stamp ?? 0,
-      claims: query.claims ?? [],
+      claims: (query.claims ?? []).map(healClaimPhase),
     };
   }
 
@@ -970,13 +983,14 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       }>(claimPath(params.id), {
         method: 'POST',
         body: JSON.stringify({
-          action: params.action ?? 'editing',
+          // Wire field stays `action`; public option is `reason`.
+          action: params.reason ?? 'editing',
           ...(params.ttl !== undefined ? { ttl: params.ttl } : {}),
           ...(params.description !== undefined ? { description: params.description } : {}),
           ...(claimMeta(params) ? { meta: claimMeta(params) } : {}),
-          // `wait` (default true) → queue behind the holder; false → fail-fast
+          // `queue` (default true) → queue behind the holder; false → fail-fast
           // with AbloClaimedError (work-distribution dedup).
-          queue: params.wait ?? true,
+          queue: params.queue ?? true,
         }),
       });
       if (body.status === 'queued') {
@@ -1010,7 +1024,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           ...(params.range ? { range: params.range } : {}),
           ...(claimMeta(params) ? { meta: claimMeta(params) } : {}),
         },
-        action: params.action ?? 'editing',
+        reason: params.reason ?? 'editing',
         ...(params.description ? { description: params.description } : {}),
         data,
         release,
@@ -1031,13 +1045,14 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       release: releaseClaim,
       state: async (params: ClaimLookupParams<T>): Promise<Claim | null> => {
         const res = await claimsForEntity(params);
-        return res.claims?.[0] ?? null;
+        const first = res.claims?.[0];
+        return first ? healClaimPhase(first) : null;
       },
       queue: async (
         params: ClaimLookupParams<T>,
       ): Promise<{ readonly object: 'list'; readonly data: readonly Claim[] }> => {
         const res = await claimsForEntity(params);
-        return { object: 'list', data: res.queue ?? [] };
+        return { object: 'list', data: (res.queue ?? []).map(healClaimPhase) };
       },
       reorder: async (params: ClaimReorderParams<T>): Promise<void> => {
         await requestJson<unknown>(`${claimPath(params.id)}/reorder`, {

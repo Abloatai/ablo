@@ -124,7 +124,8 @@ export interface ModelCollaboration<T> {
       range?: TargetRange;
       meta?: Record<string, unknown>;
     };
-    action: string;
+    /** Human-readable phase (`'editing'`); wire field is `action`. */
+    reason: string;
     ttl?: Duration;
     /**
      * Block on the server's fair FIFO queue when the target is held, rather
@@ -208,8 +209,9 @@ export interface ModelCollaboration<T> {
 }
 
 export interface ClaimTargetOptions<T = Record<string, unknown>> {
-  /** Phase shown to observers while held. Defaults to `'editing'`. */
-  action?: string;
+  /** Human-readable phase shown to observers while held. Defaults to
+   *  `'editing'`. The same word on every claim surface; wire field is `action`. */
+  reason?: string;
   /** Peer-visible explanation of the work being performed. */
   description?: string;
   /** Field-level target, for fine-grained claimed-state badges. */
@@ -229,8 +231,14 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    * `AbloClaimedError` instead of waiting (claim-or-skip). Use `false` for
    * work-distribution dedup ("if someone else has this job, skip it") where
    * waiting would mean double-processing.
+   *
+   * Named `queue` to match every other claim surface (low-level
+   * `claims.claim`, HTTP `claim.create`, and the wire). The high-level typed
+   * claim defaults it ON because it serializes writers; the low-level lease
+   * and HTTP default it OFF — they return/resolve immediately and can't
+   * transparently wait for a grant.
    */
-  wait?: boolean;
+  queue?: boolean;
   /**
    * Backpressure: willing to queue, but not behind too many. If the server
    * reports `position >= maxQueueDepth` when we join the line, reject with
@@ -262,7 +270,7 @@ export interface ClaimReorderParams<T = Record<string, unknown>>
  * ```ts
  * const claim = await ablo.weatherReports.claim({
  *   id: 'report_stockholm',
- *   action: 'forecasting',
+ *   reason: 'forecasting',
  *   description: 'Fetching current weather before writing the forecast.',
  * });
  * try {
@@ -298,7 +306,7 @@ export type ClaimOptions<T = Record<string, unknown>> = ClaimTargetOptions<T>;
  *   data: { title },
  *   claim: {
  *     field: 'title',
- *     action: 'renaming',
+ *     reason: 'renaming',
  *     description: 'Renaming the task to match the project brief.',
  *   },
  * });
@@ -437,7 +445,7 @@ export interface ModelOperations<T, CreateInput> {
    * ```ts
    * const claim = await ablo.weatherReports.claim({
    *   id: 'report_stockholm',
-   *   action: 'forecasting',
+   *   reason: 'forecasting',
    *   description: 'Fetching fresh weather before updating the report.',
    * });
    * const weather = await getWeather(claim.data.location);
@@ -549,7 +557,7 @@ export function createModelProxy<T, C>(
   // `release({ id })` and `update({ id, data })` find the lease + snapshot a `claim({ id })`
   // took — no per-call handle. Released on dispose, explicit release, or TTL.
   //
-  // `target` / `action` / `expiresAt` are kept alongside the lease so
+  // `target` / `reason` / `expiresAt` are kept alongside the lease so
   // `claim.state` can synthesize a self-claim: the server excludes a holder's
   // own presence frames, so the local proxy is the ONLY place that knows "I
   // hold this." `expiresAt` is the client's best estimate from the requested
@@ -561,7 +569,7 @@ export function createModelProxy<T, C>(
       lease: ClaimHandle;
       snapshot: Snapshot;
       target: EntityRef;
-      action: string;
+      reason: string;
       expiresAt: number;
     }
   >();
@@ -591,7 +599,7 @@ export function createModelProxy<T, C>(
       id: claim.id,
       actor: claim.heldBy,
       participantKind: claim.participantKind,
-      action: claim.action,
+      reason: claim.reason,
       ...(description ? { description } : {}),
       field: claim.target.field,
       status: claim.status,
@@ -644,9 +652,9 @@ export function createModelProxy<T, C>(
     // claim (a free / already-mine target can't have changed under us).
     const held = collaboration.observe({ model: wireModel, id });
     const contended = !!held && held.heldBy !== collaboration.selfParticipantId;
-    const failFast = options?.wait === false;
+    const failFast = options?.queue === false;
 
-    // Fail-fast (`wait: false`): if another participant already holds it,
+    // Fail-fast (`queue: false`): if another participant already holds it,
     // reject now instead of queuing. Best-effort at the client (a racing
     // claim not yet synced into our snapshot slips through here) — the
     // commit-time claim guard is the authoritative backstop that rejects
@@ -687,7 +695,7 @@ export function createModelProxy<T, C>(
     // ordering depends on it; still soft (the store swallows reconcile errors).
     await collaboration.pinScope?.({ [schemaKey]: id });
 
-    // Acquire the lease. Default (`wait` !== false) goes through the server's
+    // Acquire the lease. Default (`queue` !== false) goes through the server's
     // fair FIFO queue — `queue: true` resolves only once the lease is genuinely
     // ours, blocking behind any current holder, with no TOCTOU gap (the server
     // orders contenders). Fail-fast skips the queue: we already rejected an
@@ -701,7 +709,7 @@ export function createModelProxy<T, C>(
         ...(options?.range ? { range: options.range } : {}),
         ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
       },
-      action: options?.action ?? 'editing',
+      reason: options?.reason ?? 'editing',
       ttl: options?.ttl,
       queue: !failFast,
       maxQueueDepth: options?.maxQueueDepth,
@@ -726,7 +734,7 @@ export function createModelProxy<T, C>(
     }
 
     const snapshot = collaboration.createSnapshot(schemaKey, id);
-    const action = options?.action ?? 'editing';
+    const reason = options?.reason ?? 'editing';
     // The self-claim's `EntityRef` mirrors what a peer's `claim.state` would
     // report (`observe` maps `held.target.model` → `type`), so a holder and a
     // peer see the SAME target.type for one row — the wire model token.
@@ -745,7 +753,7 @@ export function createModelProxy<T, C>(
       lease,
       snapshot,
       target: selfTarget,
-      action,
+      reason,
       expiresAt,
     });
     const target = {
@@ -762,7 +770,7 @@ export function createModelProxy<T, C>(
       claimId: lease.claimId,
       readAt: snapshot.stamp,
       target,
-      action,
+      reason,
       ...(options?.description ? { description: options.description } : {}),
       data: modelAsRow<T>(model),
       release,
@@ -798,7 +806,7 @@ export function createModelProxy<T, C>(
           id: own.lease.claimId,
           status: 'active',
           target: own.target,
-          action: own.action,
+          reason: own.reason,
           heldBy: collaboration?.selfParticipantId ?? '',
           participantKind: collaboration?.selfParticipantKind ?? 'user',
           expiresAt: own.expiresAt,
@@ -918,9 +926,9 @@ export function createModelProxy<T, C>(
             ...(claim.range ? { range: claim.range } : {}),
             ...(claimMeta(claim) ? { meta: claimMeta(claim) } : {}),
           },
-          action: claim.action ?? 'creating',
+          reason: claim.reason ?? 'creating',
           ttl: claim.ttl,
-          queue: claim.wait !== false,
+          queue: claim.queue !== false,
           maxQueueDepth: claim.maxQueueDepth,
         });
       }
