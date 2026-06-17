@@ -43,7 +43,7 @@ const updateReport = tool({
     // The claim is released automatically when it goes out of scope.
     await using claim = await ablo.weatherReports.claim({
       id: reportId,
-      action: 'editing',
+      reason: 'editing',
       ttl: '2m',
     });
     const claimed = claim.data;

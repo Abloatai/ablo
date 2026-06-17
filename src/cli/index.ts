@@ -10,7 +10,7 @@ import { push } from './push';
 import { generate } from './generate';
 import { dev, wireEnvLocal } from './dev';
 import { login, logout } from './login';
-import { resolveApiKey, resolvePushPlan } from './config';
+import { resolveApiKey, resolvePushPlan, guardActiveProjectKey } from './config';
 import { mode } from './mode';
 import { projects, ensureProject, projectSlugFromPackageName } from './projects';
 import { status } from './status';
@@ -55,7 +55,7 @@ async function main() {
   if (command === 'init') {
     await init(process.argv.slice(3));
   } else if (command === 'login') {
-    await login();
+    await login(process.argv.slice(3));
   } else if (command === 'logout') {
     logout();
   } else if (command === 'mode') {
@@ -112,6 +112,29 @@ async function main() {
     const rest = process.argv.slice(3);
     const advanced = rest.some((a) => ['--force', '--rename', '--backfill', '--url'].includes(a));
     const watching = rest.includes('--watch');
+    // Project guard: if the active project has no key but other projects do,
+    // the user switched with `ablo projects use` and never minted here. Refuse
+    // rather than silently deploy with — or demand — the wrong project's key.
+    // (`--url` overrides the target entirely, so it bypasses the guard.)
+    const guard = guardActiveProjectKey();
+    if (!guard.ok && guard.available.length > 0 && !rest.includes('--url')) {
+      console.error(
+        `  ${pc.yellow('⚠')} active project ${pc.bold(guard.activeProfile)} has no stored key ${pc.dim(
+          `(you have keys for: ${guard.available.join(', ')})`,
+        )}`,
+      );
+      const loginCmd =
+        guard.activeProfile === 'default'
+          ? 'ablo login'
+          : `ablo login --project ${guard.activeProfile}`;
+      console.error(
+        pc.dim(
+          `    Mint one with ${pc.bold(loginCmd)}, or switch with ${pc.bold('ablo projects use <slug>')}.`,
+        ),
+      );
+      process.exitCode = 1;
+      return;
+    }
     const plan = resolvePushPlan();
     if (advanced || (plan.flow === 'production' && !watching)) {
       await push(rest);
@@ -137,11 +160,12 @@ async function main() {
     console.log(`                  [--auth apikey] [--storage direct|endpoint] [--project <slug>] [--no-project]`);
     console.log(`                  [--no-agent] [--no-pull] [--no-install] [--no-login]`);
     console.log(`    npx ablo login                         Authorize in your browser (provisions sandbox + production keys)`);
+    console.log(`    npx ablo login --project <slug>        Same, scoped to a project (mints its keys, makes it active)`);
     console.log(`    npx ablo logout                        Remove the stored API key`);
     console.log(`    npx ablo mode [sandbox|production]     Switch active environment, like Stripe`);
     console.log(`    npx ablo projects list                 List the org's projects (default + your own)`);
     console.log(`    npx ablo projects create <slug>        Create a project (its keys/schema/data are isolated)`);
-    console.log(`    npx ablo projects use <slug|default>   Set the active project for new key mints`);
+    console.log(`    npx ablo projects use <slug|default>   Switch the active project (run login --project to mint its keys)`);
     console.log(`    npx ablo status                        Show org, mode, keys, and server health`);
     console.log(`    npx ablo status --json                 Same, machine-readable (mode, key prefix, org id, api host)`);
     console.log(`    npx ablo logs [-n N] [--since 15m]     Tail commit activity (follows; --no-follow to exit)`);

@@ -70,7 +70,7 @@ automatically when the scope exits:
 ```ts
 await using claim = await ablo.weatherReports.claim({
   id: 'report_stockholm',
-  action: 'editing',
+  reason: 'editing',
 });
 await ablo.weatherReports.update({ id: claim.data.id, data: { status: 'ready' } }); // rejected if the row changed under the claim
 ```

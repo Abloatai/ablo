@@ -99,4 +99,3 @@ Three things stay true no matter how you use Ablo:
 - [README](../README.md) — product overview and first example.
 - [AGENTS.md](../AGENTS.md) — short installation guidance for coding assistants.
 - [Changelog](../CHANGELOG.md) — what shipped recently.
-- [Roadmap](./roadmap.md) — what's planned next.

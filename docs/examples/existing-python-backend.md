@@ -37,10 +37,8 @@ import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
 export const schema = defineSchema({
   weatherReports: model({
-    id: z.string(),
     location: z.string(),
     status: z.enum(['pending', 'ready']),
-    updatedAt: z.string(),
   }),
 });
 ```

@@ -34,12 +34,14 @@ export { relation, type RelationDef, type RelationType } from './relation.js';
 export {
   tenancySchema,
   scopedViaRefSchema,
+  policyInputSchema,
+  resolvePolicy,
   resolveTenancy,
   tenancyColumn,
   DEFAULT_ORG_COLUMN,
   type Tenancy,
   type ScopedViaRef,
-  type TenancyInput,
+  type PolicyInput,
 } from './tenancy.js';
 
 // Database plane — which DB a model's rows live in (`tenant` portable to a BYO
@@ -146,6 +148,8 @@ export {
   roleSourceSchema,
   scopeSchema,
   grantsRefSchema,
+  groupsInputSchema,
+  type GroupsInput,
 } from './schema.js';
 
 // Schema ⇄ JSON (control-plane transport for hosted multi-tenant)

@@ -57,6 +57,8 @@ export {
   roleSourceSchema,
   scopeSchema,
   grantsRefSchema,
+  groupsInputSchema,
+  type GroupsInput,
 } from './roles.js';
 
 // ── Casing resolution ─────────────────────────────────────────────────────

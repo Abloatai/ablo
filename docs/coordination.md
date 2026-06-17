@@ -280,7 +280,7 @@ Releasing **promotes the head of the queue**: the next waiter receives the claim
 **Example**
 
 ```ts
-const claim = await ablo.weatherReports.claim({ id: 'report_stockholm', action: 'reviewing' });
+const claim = await ablo.weatherReports.claim({ id: 'report_stockholm', reason: 'reviewing' });
 const report = claim.data;
 try {
   const ok = await reviewExternally(report);

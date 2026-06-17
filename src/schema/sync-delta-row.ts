@@ -81,7 +81,7 @@ export const syncDeltaCoreSchema = z.object({
 });
 export type SyncDeltaCore = z.infer<typeof syncDeltaCoreSchema>;
 
-// ── Attribution — `control` plane (→ agent_capability_roots) ──────────────────
+// ── Attribution — `control` plane ─────────────────────────────────────────────
 
 export const deltaAttributionSchema = z.object({
   /** Legacy single-actor column, derived during the dual-write window. */
@@ -91,6 +91,7 @@ export const deltaAttributionSchema = z.object({
   onBehalfOfId: z.string().nullable(),
   onBehalfOfKind: participantKindSchema.nullable(),
   capabilityId: z.string().nullable(),
+  delegationChainRootUserId: z.string().nullable().optional(),
   confirmationState: confirmationStateSchema.nullable(),
   backfillProvenance: backfillProvenanceSchema.nullable(),
 });

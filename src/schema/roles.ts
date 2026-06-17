@@ -178,6 +178,29 @@ export const grantsRefSchema = z.object({
   scope: z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, 'grants.scope must name a relation'),
 });
 
+/**
+ * The AUTHORING form of a model's sync-group routing — the `groups: { ... }`
+ * option. One namespaced object collects the three independent routing knobs
+ * that used to be flat, collision-prone model options (`scope` / `grants` /
+ * `entityRoles`). Distinct axis from `policy` (tenant isolation): the policy
+ * decides who may *read* a row, `groups` decides which delta *channels* a row
+ * fans into.
+ *
+ * - `root`   — mark this model a scope root; its records form `<kind>:<id>`
+ *   (kind defaults from typename). Was the flat `scope` option — renamed to
+ *   `root` so it no longer collides with the (now removed) `scopedVia` tenancy
+ *   sugar or the inner `grants.scope` relation name.
+ * - `grants` — a membership edge granting an identity access to a scope root.
+ * - `roles`  — explicit non-relational record→group roles (e.g. inbox fan-out
+ *   keyed on a plain field). Was `entityRoles`. Accepts one role or an array.
+ */
+export const groupsInputSchema = z.object({
+  root: scopeSchema.optional(),
+  grants: grantsRefSchema.optional(),
+  roles: z.union([entityRoleSchema, z.array(entityRoleSchema)]).optional(),
+});
+export type GroupsInput = z.infer<typeof groupsInputSchema>;
+
 // ── Factories ───────────────────────────────────────────────────────────────
 
 function makeRole(spec: {

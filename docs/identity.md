@@ -47,18 +47,20 @@ import { defineSchema, identityRole, relation, model, z } from '@abloatai/ablo/s
 
 export const schema = defineSchema(
   {
-    // A scope root: its rows form the group `deck:<id>` (kind from `scope`).
+    // A scope root: its rows form the group `deck:<id>` (kind from `groups.root`).
+    // Tenant isolation defaults to a row-local `organization_id` column, so no
+    // `policy` is needed here.
     decks: model(
       { title: z.string(), status: z.enum(['draft', 'published']) },
       {},
-      { orgScoped: true, scope: 'deck' },
+      { groups: { root: 'deck' } },
     ),
     // A child: it has no group of its own; it inherits its deck's group via the
     // `parent` edge. A write to a slide reaches everyone viewing the deck.
     slides: model(
       { deckId: z.string() },
       { deck: relation.belongsTo('decks', 'deckId', { parent: true }) },
-      { orgScoped: true },
+      {},
     ),
   },
   {
@@ -208,13 +210,13 @@ You never write a sync-group string for a row. You declare a model's *place* in
 the entity graph and the engine derives the groups its rows fan out on. Three
 declarations, in order of how often you reach for them:
 
-**`scope` — this model is a scope root.** Its rows form a group of their own.
-The kind comes from the model's `typename` by default, or pass a string to set
-it explicitly (use the string form when the wire kind differs from the typename,
-e.g. typename `SlideDeck` but group `deck:<id>`):
+**`groups.root` — this model is a scope root.** Its rows form a group of their
+own. The kind comes from the model's `typename` by default, or pass a string to
+set it explicitly (use the string form when the wire kind differs from the
+typename, e.g. typename `SlideDeck` but group `deck:<id>`):
 
 ```ts
-decks: model({ title: z.string() }, {}, { orgScoped: true, scope: 'deck' });
+decks: model({ title: z.string() }, {}, { groups: { root: 'deck' } });
 // a deck row → group `deck:<id>`
 ```
 
@@ -232,7 +234,7 @@ slides: model(
     deck: relation.belongsTo('decks', 'deckId', { parent: true }),  // ownership → inherit deck:<id>
     sourceSlide: relation.belongsTo('slides', 'sourceSlideId'),     // reference → NOT routed
   },
-  { orgScoped: true },
+  {},  // default policy: row-local organization_id
 );
 ```
 
@@ -241,8 +243,8 @@ slides: model(
 > some required FKs are mere references. Containment is a fact only you know, so
 > it's declared, exactly as it is in OpenFGA/Zanzibar.
 
-**`grants` — a membership edge.** On a join model (e.g. `dataroomMember`), it
-says "this row grants a *subject* access to a *scope root*." Both are relation
+**`groups.grants` — a membership edge.** On a join model (e.g. `dataroomMember`),
+it says "this row grants a *subject* access to a *scope root*." Both are relation
 names on the model. The server resolves it at connect time — for user `U`, it
 finds the scope-root groups `U` is a member of and adds them to `U`'s allowed
 set (Linear's `/sync/user_sync_groups`). Use this for sub-org sharing; plain
@@ -255,15 +257,19 @@ dataroomMember: model(
     member: relation.belongsTo('users', 'userId'),
     room: relation.belongsTo('datarooms', 'dataroomId'),
   },
-  { orgScoped: true, grants: { subject: 'member', scope: 'room' } },
+  { groups: { grants: { subject: 'member', scope: 'room' } } },
 );
 ```
 
 For the rare group keyed on a plain field rather than a relation (per-recipient
-inbox fan-out, say), there's an `entityRoles: [entityRole({ kind, source })]`
+inbox fan-out, say), there's a `groups: { roles: [entityRole({ kind, source })] }`
 escape hatch. For rows that inherit *tenancy* (not a sync group) through a
-foreign key without carrying `organization_id`, use `scopedVia` rather than
-`orgScoped: false` — the latter exposes the whole table cross-tenant. See
+foreign key without carrying `organization_id`, use `policy: { by: 'parent', fk,
+parent }` rather than opting out of isolation. The old `orgScoped: false`
+exposed the whole table cross-tenant, so `validate_schema` rejects the removed
+options as `tenancy-option-removed` errors and steers you to `policy: { by:
+'parent' }` (FK inheritance) or, for genuinely global reference data, the
+explicit `policy: { by: 'none' }`. See
 `packages/sync-engine/src/schema/model.ts` for the full option set.
 
 ## How identity reaches Ablo — the proxy model
@@ -393,8 +399,8 @@ an entity anchor on the models an agent operates on:
 
 ```ts
 // each scope-root model an agent edits forms a per-entity group
-documents: model({ /* … */ }, {}, { orgScoped: true, scope: 'document' }),
-decks:     model({ /* … */ }, {}, { orgScoped: true, scope: 'deck' }),
+documents: model({ /* … */ }, {}, { groups: { root: 'document' } }),
+decks:     model({ /* … */ }, {}, { groups: { root: 'deck' } }),
 ```
 
 Then a run subscribes only to the entity groups for the rows it works on — a
@@ -484,9 +490,10 @@ an agent pointed at the entities it's working on. You **never hand-write**
    (it returns a participant handle with `.peers`). See
    [Coordination](./coordination.md).
 
-> **`scope` is the schema model option, not a client setting.** `scope: 'deck'`
-> in `model(...)` declares a scope root ([Half 2](#half-2--per-model-scope-row--group)) —
-> it names the group (`deck:<id>`) that the mechanisms above then subscribe to.
+> **`groups.root` is the schema model option, not a client setting.**
+> `groups: { root: 'deck' }` in `model(...)` declares a scope root
+> ([Half 2](#half-2--per-model-scope-row--group)) — it names the group
+> (`deck:<id>`) that the mechanisms above then subscribe to.
 > There is no `Ablo({ scope })` constructor option. The lifecycle filter on
 > [`list()`](./api.md#model-methods) is a separate axis named **`state`**
 > (`'live' | 'archived' | 'all'`, GitHub's open/closed/all), precisely so it

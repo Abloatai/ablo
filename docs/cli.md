@@ -24,18 +24,23 @@ direct-connector commands are tagged **Direct Postgres**.
 
 `ablo login` runs the OAuth 2.0 device flow: it opens your browser, you choose
 **log in** or **create an account** and approve, and the CLI provisions a
-**test + live key pair** (90-day, restricted) and stores them locally. This
-mirrors `stripe login`.
+**test + live key pair** (90-day) and stores them locally. The test key is a
+sandbox `sk_test_` key; the live key is a restricted `rk_live_` key (read-only
+observation — `logs`, `status`), so a stolen config can't write to production.
+This mirrors `stripe login`.
 
 | Command                  | What it does                                                               |
 | ------------------------ | -------------------------------------------------------------------------- |
 | `ablo login`             | Authorize in the browser; provisions + stores a test and a live key.       |
+| `ablo login --project <slug>` | Same, but scope (and mint) the pair to a project, and make it active. |
 | `ablo logout`            | Remove the stored keys.                                                    |
 | `ablo status`            | Show the active org, mode, both keys (prefix + expiry), and server health. |
 | `ablo mode [sandbox\|production]` | Switch the active environment. With no argument, prompts.                         |
 
-Keys are stored in `~/.config/ablo/config.json` (mode `0600`). In **CI**, don't
-log in — set `ABLO_API_KEY`, which always overrides the stored key.
+Keys live in `~/.config/ablo/credentials.json` (mode `0600`), keyed by project
+then environment; the non-secret `config.json` holds only the active mode and
+project. In **CI**, don't log in — set `ABLO_API_KEY`, which always overrides
+the stored key.
 
 ## Test vs live
 
@@ -47,6 +52,39 @@ the sandbox by design.
 The schema, however, is **shared** across the org — pushing a schema (from
 either environment) defines the same models sandbox and production see; only the rows differ.
 
+## Projects
+
+An org can have multiple **projects**, each with its own isolated keys, schema,
+and data. Keys are scoped to a project **at mint** and never re-scoped, so the
+CLI keeps a separate credential profile per project — Stripe's
+`login --project-name` model. The active project (set with `projects use`)
+selects which profile every command authenticates with.
+
+| Command                       | What it does                                                                       |
+| ----------------------------- | ---------------------------------------------------------------------------------- |
+| `ablo projects list`          | List the org's projects (marks the active one and the org-default).                |
+| `ablo projects create <slug>` | Create a project (`--name "Display Name"`). Its keys/schema/data are isolated.     |
+| `ablo projects use <slug>`    | Switch the active project. `ablo projects use default` returns to the org-default. |
+| `ablo login --project <slug>` | Mint and store a key pair for a project, and make it active.                       |
+
+Because keys are fixed to a project, `projects use` only changes which profile
+is active — it never re-scopes an existing key. Switch to a project you haven't
+logged into yet and the CLI tells you to mint one:
+
+```bash
+npx ablo projects use war-room
+#   ✓ now targeting project war-room (prj_…)
+#   No key stored for this project yet — run `ablo login --project war-room` to mint one.
+
+npx ablo login --project war-room   # mints + stores its key pair, keeps it active
+```
+
+If you run a project-scoped command (`push`, `dev`) while the active project has
+no key — but other projects do — the CLI **refuses** rather than silently
+deploying with the wrong project's credential, and names the fix
+(`ablo login --project <slug>`). In CI, an explicit `ABLO_API_KEY` bypasses
+profiles entirely: it acts in whatever project it was minted for.
+
 ## Commands
 
 | Command                            | What it does                                                                                                                                  | Flags                                                                                                  |
@@ -54,6 +92,7 @@ either environment) defines the same models sandbox and production see; only the
 | `ablo init`                        | Scaffold `ablo/` (`schema.ts`, client, optional Data Source / agent / component), write `.env`, install the SDK. Offers to log in at the end. | —                                                                                                      |
 | `ablo login` / `logout` / `status` | Authentication & status (above).                                                                                                              | —                                                                                                      |
 | `ablo mode [sandbox\|production]`   | Switch active environment.                                                                                                                           | —                                                                                                      |
+| `ablo projects list\|create\|use\|rename` | Manage projects and the active one (see [Projects](#projects)). Each project's keys/schema/data are isolated.                          | `--name "<display>"` (create/rename)                                                                    |
 | `ablo dev`                         | **Hosted** — push the schema to your test sandbox, then watch `ablo/schema.ts` and re-push on save.                                           | `--no-watch`, `--schema <path>`, `--export <name>`, `--url <url>`                                      |
 | `ablo logs`                        | Tail your scope's commit activity (`stripe logs tail`). Follows by default.                                                                   | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode sandbox\|production` |
 | `ablo push`                        | **Hosted** — upload the schema to Ablo; the server diffs, migrates, and activates it.                                                         | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url`         |

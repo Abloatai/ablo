@@ -222,7 +222,7 @@ Call `handle.release()` when your work is done.
 // Claim the row so other participants serialize behind us while we work.
 const handle = await ablo.weatherReports.claim({
   id: 'weather_stockholm',
-  action: 'checking_weather',
+  reason: 'checking_weather',
   ttl: '2m',
 });
 
@@ -260,7 +260,7 @@ write through the model.
 ```ts
 const active = ablo.weatherReports.claim.state({ id: 'weather_stockholm' });
 if (active) {
-  console.log(`${active.heldBy} is ${active.action}`);
+  console.log(`${active.heldBy} is ${active.reason}`);
 }
 
 const handle = await ablo.weatherReports.claim({ id: 'weather_stockholm' });
@@ -268,7 +268,7 @@ await ablo.weatherReports.update({ id: handle.data.id, data: { status: 'ready' }
 await handle.release();
 ```
 
-Use `{ wait: false }` on `claim` when work should be skipped instead of queued
+Use `{ queue: false }` on `claim` when work should be skipped instead of queued
 behind an active holder.
 
 ## Next steps

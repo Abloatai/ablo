@@ -38,8 +38,8 @@ export async function completeReport(reportId: string) {
 
   await using claim = await ablo.weatherReports.claim({
     id: reportId,
-    wait: false,
-    action: 'completing',
+    queue: false,
+    reason: 'completing',
   });
   const claimed = claim.data;
 
@@ -60,9 +60,9 @@ the server has accepted it.
 
 The two options on the claim:
 
-- `wait: false` — skip this record if another claim is already in progress,
+- `queue: false` — skip this record if another claim is already in progress,
   rather than queueing behind it. (The default queues.)
-- `action: 'completing'` — a human-readable label for what your worker is doing,
+- `reason: 'completing'` — a human-readable label for what your worker is doing,
   visible to anyone reading `claim.state({ id })`.
 
 Because the worker uses the same schema and `claim()` as the UI, its writes sync

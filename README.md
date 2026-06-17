@@ -274,7 +274,7 @@ ablo.weatherReports.claim.state({ id: 'report_stockholm' });
 ablo.weatherReports.claim.queue({ id: 'report_stockholm' });
 
 {
-  await using claim = await ablo.weatherReports.claim({ id, wait: false });
+  await using claim = await ablo.weatherReports.claim({ id, queue: false });
   /* do the held work */
 }
 
@@ -285,11 +285,11 @@ ablo.weatherReports.claim.queue({ id: 'report_stockholm' });
 ```
 
 `claim.state` returns the holder (or `null`); `claim.queue` returns the line waiting
-behind it. `wait: false` skips rather than waiting when the row is held;
+behind it. `queue: false` skips rather than waiting when the row is held;
 `maxQueueDepth: 2` bails when two or more are already ahead.
 
 Default reads keep working while a row is claimed. Server reads that need claimed
-semantics can opt in with `ifClaimed: 'return' | 'wait' | 'fail'`.
+semantics can opt in with `ifClaimed: 'return' | 'fail'`.
 
 Even an unclaimed write can't land on stale reasoning — the commit is guarded:
 

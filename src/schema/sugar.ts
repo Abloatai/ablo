@@ -74,37 +74,16 @@ export interface SugarOptions<
    */
   tableName?: string;
   /**
-   * Whether the table has an `organization_id` column. Default: `true`.
-   * Set `false` for system-scoped tables (subscriptions, teams, etc.).
+   * Row-access policy (tenant isolation / RLS) — who may *read* a row.
+   * Discriminated union on `by` (`column` | `parent` | `none`). See
+   * {@link ModelOptions.policy}.
    */
-  orgScoped?: boolean;
+  policy?: ModelOptions['policy'];
   /**
-   * Scope rows via a parent table when this table has no
-   * `organization_id` column. See {@link ModelOptions.scopedVia}.
+   * Sync-group routing — which delta *channels* a row fans into
+   * (`root` / `grants` / `roles`). See {@link ModelOptions.groups}.
    */
-  scopedVia?: ModelOptions['scopedVia'];
-  /**
-   * Override the row-local tenancy column name. See
-   * {@link ModelOptions.orgColumn}.
-   */
-  orgColumn?: ModelOptions['orgColumn'];
-  /** Canonical tenancy descriptor. See {@link ModelOptions.tenancy}. */
-  tenancy?: ModelOptions['tenancy'];
-  /**
-   * Mark this model a scope root — its records form the group `<kind>:<id>`
-   * (kind defaults from typename). See {@link ModelOptions.scope}.
-   */
-  scope?: ModelOptions['scope'];
-  /**
-   * Membership edge granting identity → scope-root access. Both fields are
-   * relation names on this model. See {@link ModelOptions.grants}.
-   */
-  grants?: ModelOptions['grants'];
-  /**
-   * Explicit non-relational record→group roles (e.g. inbox fan-out keyed on a
-   * field). See {@link ModelOptions.entityRoles}.
-   */
-  entityRoles?: ModelOptions['entityRoles'];
+  groups?: ModelOptions['groups'];
   /** Max rows loaded during bootstrap. Only applies to `.instant`. */
   bootstrapLimit?: number;
   /** Bootstrap sort order (e.g. `'created_at DESC'`). */
@@ -135,13 +114,8 @@ function build<
     lazyObservable: opts?.lazyObservable ?? baseline.lazyObservable,
     typename: opts?.typename,
     tableName: opts?.tableName,
-    orgScoped: opts?.orgScoped,
-    scopedVia: opts?.scopedVia,
-    orgColumn: opts?.orgColumn,
-    tenancy: opts?.tenancy,
-    scope: opts?.scope,
-    grants: opts?.grants,
-    entityRoles: opts?.entityRoles,
+    policy: opts?.policy,
+    groups: opts?.groups,
     bootstrapLimit: opts?.bootstrapLimit,
     bootstrapOrderBy: opts?.bootstrapOrderBy,
     persist: opts?.persist,

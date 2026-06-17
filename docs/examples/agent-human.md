@@ -47,14 +47,14 @@ export async function markReady(reportId: string) {
   if (!report) return { status: 'not_found' };
 
   try {
-    // wait: false → don't queue behind a current holder. If a human already
+    // queue: false → don't queue behind a current holder. If a human already
     // holds the row, claim rejects with AbloClaimedError (caught below), so the
-    // agent yields instead of waiting. Omit it, or pass wait: true, to queue
-    // behind them. action → the label observers see while we work.
+    // agent yields instead of waiting. Omit it, or pass queue: true, to queue
+    // behind them. reason → the label observers see while we work.
     await using claim = await ablo.weatherReports.claim({
       id: reportId,
-      wait: false,
-      action: 'marking_ready',
+      queue: false,
+      reason: 'marking_ready',
     });
     const claimed = claim.data;
 
@@ -120,7 +120,7 @@ export function ReportRow({ report: serverReport }: Props) {
 - The claim is visible to everyone: the UI reads it synchronously with
   `claim.state({ id })`, and it also arrives over the live stream.
 - `claim({ id })` makes writers take turns instead of racing — with
-  `wait: false`, the agent simply yields when a human already holds the row.
+  `queue: false`, the agent simply yields when a human already holds the row.
 - The `update` made while the claim is held is stale-checked automatically, so a human's
   edit landing mid-run rejects the agent's write with a typed
   `AbloStaleContextError` instead of overwriting it.

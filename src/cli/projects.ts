@@ -16,7 +16,13 @@
  */
 
 import pc from 'picocolors';
-import { resolveApiKey, getActiveProject, setActiveProject } from './config';
+import {
+  resolveApiKey,
+  getActiveProject,
+  setActiveProject,
+  guardActiveProjectKey,
+  DEFAULT_PROFILE,
+} from './config';
 import { DEFAULT_URL } from './push';
 import { brand } from './theme';
 
@@ -248,11 +254,19 @@ export async function projects(argv: readonly string[]): Promise<void> {
       setActiveProject({ id: target.id, slug: target.slug });
       console.log(`  ${pc.green('✓')} now targeting project ${pc.bold(target.slug)} ${pc.dim(`(${target.id})`)}`);
     }
-    console.log(
-      pc.dim(
-        '  Note: a key’s project scope is fixed at mint — switch keys (or mint one for this project) to act in it.',
-      ),
-    );
+    // A key's project scope is fixed at mint, so switching never re-scopes an
+    // existing key. If this project has none yet, point at the one command
+    // that mints it (Stripe's per-project re-login), rather than failing later.
+    const guard = guardActiveProjectKey();
+    if (!guard.ok) {
+      const loginCmd =
+        guard.activeProfile === DEFAULT_PROFILE
+          ? 'ablo login'
+          : `ablo login --project ${guard.activeProfile}`;
+      console.log(
+        pc.dim(`  No key stored for this project yet — run ${pc.bold(loginCmd)} to mint one.`),
+      );
+    }
     return;
   }
 

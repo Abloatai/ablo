@@ -19,13 +19,15 @@
 
 import { z } from 'zod';
 import type { RelationDef } from './relation.js';
-import type { EntityRole } from './roles.js';
+import type { EntityRole, GroupsInput } from './roles.js';
 import { getFieldMeta, inferFieldMetaFromZod, type FieldMeta } from './field.js';
 // Tenancy is owned by `tenancy.ts` (single source of truth). `ScopedViaRef` is
 // re-exported so existing `import { ScopedViaRef } from './model'` call sites
-// keep resolving while consumers migrate.
-import { resolveTenancy, type Tenancy, type ScopedViaRef } from './tenancy.js';
-export type { ScopedViaRef, Tenancy } from './tenancy.js';
+// keep resolving. Authoring uses the `policy` option (`PolicyInput`, named for
+// Postgres/Supabase RLS), normalized to the canonical `Tenancy` by
+// `resolvePolicy` at build time.
+import { resolvePolicy, type Tenancy, type ScopedViaRef, type PolicyInput } from './tenancy.js';
+export type { ScopedViaRef, Tenancy, PolicyInput } from './tenancy.js';
 import { DEFAULT_PLANE, type SchemaPlane } from './plane.js';
 
 /** Normalize the `entityRoles` option (single | array | undefined) to an array. */
@@ -118,52 +120,27 @@ export interface ModelOptions {
   tableName?: string;
 
   /**
-   * Whether this model's table has an `organization_id` column. Default: true.
-   * When false, the bootstrap/read query omits the `WHERE organization_id = $1`
-   * tenant filter for this model.
+   * **Axis 1 — row-access policy (tenant isolation / RLS).** Decides who may
+   * *read* a row at all. Named after Postgres/Supabase, where a `policy` is the
+   * rule that scopes which rows a tenant sees. A discriminated union on `by` —
+   * one option replacing the old `orgScoped`/`scopedVia`/`orgColumn` trio:
    *
-   * ⚠ SECURITY — `orgScoped: false` makes the table GLOBALLY READABLE: every
-   * client of every tenant sees every row. It is ONLY correct for genuinely
-   * tenant-less tables (the `organizations` table itself, global lookups). If
-   * rows belong to a tenant through a foreign key but this table has no
-   * `organization_id` of its own, use {@link scopedVia} INSTEAD — reaching for
-   * `orgScoped: false` there silently exposes the entire table cross-tenant.
+   * - `{ by: 'column' }` — row-local tenancy column (the DEFAULT when omitted).
+   *   `column` overrides the name (default `organization_id`).
+   * - `{ by: 'parent', fk, parent }` — inherit tenancy through a foreign key
+   *   when THIS table has no tenancy column of its own (e.g. `slide_layers` →
+   *   slide → deck → org). Emits, in place of `organization_id = $1`:
+   *   `WHERE <table>.<fk> IN (SELECT <parentKey> FROM <parent> WHERE
+   *   <parentTenantColumn> = $1)`. Use this for any `load: 'instant'` child
+   *   table that would otherwise leak cross-tenant on bootstrap.
+   * - `{ by: 'none' }` — genuinely global / reference data (the `organizations`
+   *   table itself, global lookups). ⚠ Makes the whole table readable
+   *   cross-tenant — only correct for tenant-less tables. Because it's an
+   *   explicit, named branch (not a falsy flag) it can't be reached by accident.
+   *
+   * Normalized into the canonical {@link Tenancy} by `resolvePolicy` at build.
    */
-  orgScoped?: boolean;
-
-  /**
-   * Scope rows via a parent table when THIS table has no
-   * `organization_id` column of its own, but rows still belong to a
-   * tenant via a foreign key (e.g. `memberRoles.member_id → member.id`,
-   * `teamMember.team_id → team.id`, `users.id ← member.user_id`).
-   *
-   * Emits, in place of the missing `organization_id = $1` clause:
-   *
-   *   WHERE <table>.<localKey> IN
-   *     (SELECT <parentKey> FROM <parentTable> WHERE <parentOrgColumn> = $1)
-   *
-   * Use this INSTEAD of `orgScoped: false` for any `load: 'instant'`
-   * model whose rows would otherwise leak cross-tenant on bootstrap —
-   * dropping the filter entirely exposes the entire DB to every client.
-   *
-   * Identifiers must match the regular `[a-zA-Z_][a-zA-Z0-9_]*` shape;
-   * the SQL compiler validates them to keep this away from injection
-   * paths.
-   */
-  scopedVia?: ScopedViaRef;
-
-  /**
-   * Override the physical tenancy column name (default `organization_id`).
-   * Authoring sugar — normalized into the canonical {@link tenancy} descriptor.
-   */
-  orgColumn?: string;
-
-  /**
-   * Canonical tenancy descriptor. You normally don't set this — `orgScoped`,
-   * `scopedVia`, and `orgColumn` are normalized into it at build time. Set it
-   * directly only to author the union form explicitly.
-   */
-  tenancy?: Tenancy;
+  policy?: PolicyInput;
 
   /**
    * Which database plane this model's rows live in. `tenant` (default) =
@@ -174,55 +151,29 @@ export interface ModelOptions {
   plane?: SchemaPlane;
 
   /**
-   * Marks this model as a **scope root** — a model that forms a sync group of
-   * its own. A scope-root record lives in the group `<kind>:<id>`, where `kind`
-   * defaults to the lowercased `typename` (so a `Deck` → `deck:<id>`). Pass a
-   * string to override the kind explicitly (`scope: 'matter'`).
+   * **Axis 2 — sync-group routing.** Decides which delta *channels* a row fans
+   * into. Orthogonal to {@link policy} (read access). One namespaced object
+   * replacing the old flat `scope`/`grants`/`entityRoles`:
    *
-   * Replaces the old `syncGroupFormat` template string: there is no `{id}`
-   * placeholder to author — the engine mints the branded {@link SyncGroup} from
-   * `(kind, id)`. Child models inherit a root's group via their `belongsTo`
-   * relations (a `document` with `dataroomId` fans into `dataroom:<id>`), so
-   * only the root declares anything.
-   */
-  scope?: boolean | string;
-
-  /**
-   * Declares this model as a **membership edge** that grants an identity access
-   * to a scope root — the relation-driven equivalent of "this user can see that
-   * dataroom." Both values are *relation names* already declared on this model:
-   * `subject` is the `belongsTo` to the identity (e.g. a `user`), `scope` is the
-   * `belongsTo` to the scope-root entity (e.g. a `dataroom`).
-   *
-   * The server's membership resolver reads this at connect time — for identity
-   * `U`, it queries `WHERE <subject FK> = U` and adds `<scopeKind>:<scope FK>`
-   * to the identity's subscribed groups (Linear's `/sync/user_sync_groups`).
+   * - `root` — mark this model a scope root; its records form the group
+   *   `<kind>:<id>` (kind defaults from the lowercased typename, e.g. `Deck` →
+   *   `deck:<id>`; pass a string to override, `root: 'matter'`). Child models
+   *   inherit a root's group via their `belongsTo` relations. Was `scope` —
+   *   renamed so it no longer collides with the old `scopedVia` tenancy sugar.
+   * - `grants` — a membership edge granting an identity access to a scope root.
+   *   Both values name `belongsTo` relations on this model (`subject` → identity,
+   *   `scope` → scope root). Only needed for sub-org sharing.
+   * - `roles` — explicit non-relational record→group roles (the inbox-fan-out
+   *   escape hatch, keyed on a plain field). Was `entityRoles`. One or many.
    *
    * ```ts
    * // dataroomMember: { userId, dataroomId }
-   * grants: { subject: 'user', scope: 'dataroom' } // both are relation names
+   * groups: { grants: { subject: 'user', scope: 'dataroom' } }
+   * // a message → its addressee's inbox, keyed on `toId`
+   * groups: { roles: [entityRole({ kind: 'inbox', source: 'toId' })] }
    * ```
-   *
-   * Not needed for org-level access — a `dataroom.organizationId` already routes
-   * via the `org:<id>` group. `grants` is only for sub-org membership.
    */
-  grants?: GrantsRef;
-
-  /**
-   * Explicit record→group roles for routing that isn't relational — a group
-   * keyed on a plain field rather than the record's own id or a `belongsTo`
-   * scope root. The escape hatch for cases like per-recipient inbox fan-out:
-   *
-   * ```ts
-   * // a message routes to its addressee's inbox, keyed on `toId`
-   * entityRoles: [entityRole({ kind: 'inbox', source: 'toId' })]
-   * ```
-   *
-   * Prefer {@link scope} (self group) + `belongsTo` relations (parent groups)
-   * when the routing follows the relation graph — reach for `entityRoles` only
-   * when it genuinely doesn't.
-   */
-  entityRoles?: EntityRole | readonly EntityRole[];
+  groups?: GroupsInput;
 
   /**
    * Whether clients may issue CREATE/UPDATE/DELETE mutations for this
@@ -471,17 +422,15 @@ export function model<
     typename: options?.typename,
     persist: options?.persist,
     tableName: options?.tableName,
-    // Normalize all tenancy authoring sugar into the one canonical descriptor.
-    tenancy: resolveTenancy({
-      tenancy: options?.tenancy,
-      orgScoped: options?.orgScoped,
-      scopedVia: options?.scopedVia,
-      orgColumn: options?.orgColumn,
-    }),
+    // Axis 1 — normalize the `policy` authoring option into the one canonical
+    // tenancy descriptor (defaults to a row-local org column).
+    tenancy: resolvePolicy(options?.policy),
     plane: options?.plane ?? DEFAULT_PLANE,
-    scope: options?.scope,
-    grants: options?.grants,
-    entityRoles: normalizeEntityRoles(options?.entityRoles),
+    // Axis 2 — unpack the `groups` routing namespace into the wire fields the
+    // server reads (`scope`/`grants`/`entityRoles` on ModelDef/ModelJSON).
+    scope: options?.groups?.root,
+    grants: options?.groups?.grants,
+    entityRoles: normalizeEntityRoles(options?.groups?.roles),
     mutable: options?.mutable ?? true,
     lazyObservable: options?.lazyObservable,
     computed: options?.computed,

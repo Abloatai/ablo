@@ -57,8 +57,8 @@ import { ablo } from '@/lib/ablo';
 export async function markReady(id: string) {
   await using claim = await ablo.weatherReports.claim({
     id,
-    wait: false,
-    action: 'marking_ready',
+    queue: false,
+    reason: 'marking_ready',
   });
   const claimed = claim.data;
 

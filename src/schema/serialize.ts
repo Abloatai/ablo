@@ -13,8 +13,10 @@
  *
  * What round-trips:
  *   - all model routing/scoping metadata (typename, tableName, load,
- *     mutable, orgScoped, scopedVia, bootstrap hints, scope, grants,
- *     entityRoles, persist, autoFill, requiredFields, lazyObservable)
+ *     mutable, the canonical `tenancy` descriptor, bootstrap hints, scope,
+ *     grants, entityRoles, persist, autoFill, requiredFields, lazyObservable).
+ *     NOTE: the authoring sugar (`policy`/`groups`) is normalized away at
+ *     `model()`-build; only the canonical wire fields cross here.
  *   - relations (incl. resolved `foreignKeyColumn`)
  *   - field metadata (names + type tags), from which validators are rebuilt
  *   - identity roles (already pure data)

@@ -19,18 +19,18 @@ import { defineSchema, identityRole, model, relation, z } from '@abloatai/ablo/s
 
 export const schema = defineSchema(
   {
-    // A deck's rows form the group `deck:<id>` (the kind comes from `scope`).
+    // A deck's rows form the group `deck:<id>` (the kind comes from `groups.root`).
     decks: model(
       { title: z.string() },
       {},
-      { orgScoped: true, scope: 'deck' },
+      { groups: { root: 'deck' } },
     ),
     // A slide has no group of its own. It inherits its deck's group via the
     // `parent` edge, so a slide write reaches everyone viewing the deck.
     slides: model(
       { deckId: z.string(), body: z.string() },
       { deck: relation.belongsTo('decks', 'deckId', { parent: true }) },
-      { orgScoped: true },
+      {},
     ),
   },
   {

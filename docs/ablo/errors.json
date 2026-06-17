@@ -1,6 +1,6 @@
 {
   "$generated": "packages/sync-engine/scripts/generate-error-docs.mts",
-  "version": "2026-06-02",
+  "version": "2026-06-13",
   "envelope": [
     "type",
     "code",
@@ -259,6 +259,24 @@
       "docUrl": "https://docs.abloatai.com/errors#claim_conflict"
     },
     {
+      "code": "claim_id_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "An claim id is required for this request.",
+      "docUrl": "https://docs.abloatai.com/errors#claim_id_required"
+    },
+    {
+      "code": "claim_lease_unavailable",
+      "category": "claim",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "The claim-lease coordination subsystem is unavailable; retry.",
+      "docUrl": "https://docs.abloatai.com/errors#claim_lease_unavailable"
+    },
+    {
       "code": "claim_lost",
       "category": "claim",
       "surface": "wire",
@@ -266,6 +284,40 @@
       "retryable": false,
       "message": "A previously held claim was lost before the write applied.",
       "docUrl": "https://docs.abloatai.com/errors#claim_lost"
+    },
+    {
+      "code": "claim_not_wired",
+      "category": "claim",
+      "surface": "client",
+      "retryable": false,
+      "message": "Claim support was used but is not wired in this runtime.",
+      "docUrl": "https://docs.abloatai.com/errors#claim_not_wired"
+    },
+    {
+      "code": "claim_queued",
+      "category": "claim",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "The claim was queued behind an active lease holder.",
+      "docUrl": "https://docs.abloatai.com/errors#claim_queued"
+    },
+    {
+      "code": "claim_wait_aborted",
+      "category": "claim",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": true,
+      "message": "Waiting for the claim lease was aborted.",
+      "docUrl": "https://docs.abloatai.com/errors#claim_wait_aborted"
+    },
+    {
+      "code": "claim_wait_poll_interval_required",
+      "category": "claim",
+      "surface": "client",
+      "retryable": false,
+      "message": "A poll interval is required when waiting on an claim.",
+      "docUrl": "https://docs.abloatai.com/errors#claim_wait_poll_interval_required"
     },
     {
       "code": "cli_invalid_arguments",
@@ -592,7 +644,7 @@
     },
     {
       "code": "grant_timeout",
-      "category": "intent",
+      "category": "claim",
       "surface": "wire",
       "httpStatus": 504,
       "retryable": true,
@@ -680,67 +732,6 @@
       "docUrl": "https://docs.abloatai.com/errors#instance_at_capacity"
     },
     {
-      "code": "intent_conflict",
-      "category": "claim",
-      "surface": "wire",
-      "httpStatus": 409,
-      "retryable": false,
-      "message": "An intent on the target conflicts with an active intent (server-internal alias of claim_conflict).",
-      "docUrl": "https://docs.abloatai.com/errors#intent_conflict"
-    },
-    {
-      "code": "intent_id_required",
-      "category": "validation",
-      "surface": "wire",
-      "httpStatus": 400,
-      "retryable": false,
-      "message": "An intent id is required for this request.",
-      "docUrl": "https://docs.abloatai.com/errors#intent_id_required"
-    },
-    {
-      "code": "intent_lease_unavailable",
-      "category": "intent",
-      "surface": "wire",
-      "httpStatus": 503,
-      "retryable": true,
-      "message": "The intent-lease coordination subsystem is unavailable; retry.",
-      "docUrl": "https://docs.abloatai.com/errors#intent_lease_unavailable"
-    },
-    {
-      "code": "intent_not_wired",
-      "category": "intent",
-      "surface": "client",
-      "retryable": false,
-      "message": "Intent support was used but is not wired in this runtime.",
-      "docUrl": "https://docs.abloatai.com/errors#intent_not_wired"
-    },
-    {
-      "code": "intent_queued",
-      "category": "intent",
-      "surface": "wire",
-      "httpStatus": 409,
-      "retryable": true,
-      "message": "The intent was queued behind an active lease holder.",
-      "docUrl": "https://docs.abloatai.com/errors#intent_queued"
-    },
-    {
-      "code": "intent_wait_aborted",
-      "category": "intent",
-      "surface": "wire",
-      "httpStatus": 409,
-      "retryable": true,
-      "message": "Waiting for the intent lease was aborted.",
-      "docUrl": "https://docs.abloatai.com/errors#intent_wait_aborted"
-    },
-    {
-      "code": "intent_wait_poll_interval_required",
-      "category": "intent",
-      "surface": "client",
-      "retryable": false,
-      "message": "A poll interval is required when waiting on an intent.",
-      "docUrl": "https://docs.abloatai.com/errors#intent_wait_poll_interval_required"
-    },
-    {
       "code": "internal_error",
       "category": "server",
       "surface": "wire",
@@ -773,7 +764,7 @@
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
-      "message": "The intent request was invalid.",
+      "message": "The claim request was invalid.",
       "docUrl": "https://docs.abloatai.com/errors#invalid_intent"
     },
     {
@@ -979,6 +970,15 @@
       "docUrl": "https://docs.abloatai.com/errors#malformed_claim"
     },
     {
+      "code": "malformed_subscription",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The update_subscription payload was malformed; expected { syncGroups: string[] }.",
+      "docUrl": "https://docs.abloatai.com/errors#malformed_subscription"
+    },
+    {
       "code": "mesh_message_from_id_spoof",
       "category": "validation",
       "surface": "wire",
@@ -1043,7 +1043,7 @@
       "category": "claim",
       "surface": "client",
       "retryable": false,
-      "message": "Claiming was requested on a model that has no claim configuration.",
+      "message": "Claiming requires the collaboration runtime, which the standard Ablo({ schema, apiKey }) client wires up for every model automatically — there is no per-model claim configuration to add. This appears only when a model proxy is constructed directly without that runtime (an internal/advanced path).",
       "docUrl": "https://docs.abloatai.com/errors#model_claim_not_configured"
     },
     {
@@ -1132,6 +1132,14 @@
       "retryable": false,
       "message": "A required field was absent from the model payload.",
       "docUrl": "https://docs.abloatai.com/errors#model_required_field_missing"
+    },
+    {
+      "code": "model_watch_not_configured",
+      "category": "claim",
+      "surface": "client",
+      "retryable": false,
+      "message": "watch() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo({ schema, apiKey }) client (default WebSocket transport).",
+      "docUrl": "https://docs.abloatai.com/errors#model_watch_not_configured"
     },
     {
       "code": "mutate_create_unknown_model",
@@ -1539,6 +1547,14 @@
       "docUrl": "https://docs.abloatai.com/errors#schema_mutable_missing_meta"
     },
     {
+      "code": "schema_reserved_field",
+      "category": "schema",
+      "surface": "client",
+      "retryable": false,
+      "message": "A model redeclared a reserved base field (id, createdAt, updatedAt, organizationId, createdBy) that the SDK provides automatically.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_reserved_field"
+    },
+    {
       "code": "schema_scope_invalid",
       "category": "schema",
       "surface": "wire",
@@ -1594,20 +1610,20 @@
     },
     {
       "code": "slide_intent_missing_deck_id",
-      "category": "intent",
+      "category": "claim",
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
-      "message": "A slide intent was missing its deck id.",
+      "message": "A slide claim was missing its deck id.",
       "docUrl": "https://docs.abloatai.com/errors#slide_intent_missing_deck_id"
     },
     {
       "code": "slide_intent_unknown_sibling",
-      "category": "intent",
+      "category": "claim",
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
-      "message": "A slide intent referenced an unknown sibling slide.",
+      "message": "A slide claim referenced an unknown sibling slide.",
       "docUrl": "https://docs.abloatai.com/errors#slide_intent_unknown_sibling"
     },
     {
@@ -1925,7 +1941,7 @@
       "category": "validation",
       "surface": "client",
       "retryable": false,
-      "message": "The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `intent`) failed validation against the write-options schema.",
+      "message": "The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `claim`) failed validation against the write-options schema.",
       "docUrl": "https://docs.abloatai.com/errors#write_options_invalid"
     },
     {

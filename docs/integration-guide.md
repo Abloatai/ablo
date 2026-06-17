@@ -142,20 +142,23 @@ model(
   },
   /* relations */ {},
   {
-    // Rows carry organization_id and bootstrap filters on it.
-    orgScoped: true,
+    // Axis 1 — `policy`: who may READ a row (tenant isolation / RLS). A
+    // row-local `organization_id` column is the default, so you omit this for
+    // normal tables; set it only for the exceptions (parent-inherited / global).
 
+    // Axis 2 — `groups`: which sync-group CHANNELS a row fans into.
     // Scope root: rows form the group `matter:<id>`. Children point at it with
     // `relation.belongsTo('matters', 'matterId', { parent: true })` to inherit.
-    scope: 'matter',
+    groups: { root: 'matter' },
   }
 );
 ```
 
-For rows that don't carry `organization_id` themselves but inherit
-tenancy via a foreign key, use `scopedVia` instead of `orgScoped:
-false` — the latter exposes the entire table cross-tenant. See
-`packages/sync-engine/src/schema/model.ts` for the full option set.
+For rows that don't carry `organization_id` themselves but inherit tenancy via a
+foreign key, set `policy: { by: 'parent', fk: '<fk>', parent: '<parentTable>' }`.
+For genuinely global/reference data, `policy: { by: 'none' }`. ⚠ `by: 'none'`
+exposes the whole table cross-tenant, so it's an explicit, named branch — never a
+falsy flag. See `packages/sync-engine/src/schema/model.ts` for the full option set.
 
 ## 2. Create The Client
 
@@ -444,7 +447,7 @@ scope.
 ```ts
 await using claim = await ablo.weatherReports.claim({
   id: reportId,
-  action: 'forecasting',
+  reason: 'forecasting',
 });
 const claimed = claim.data;
 if (!claimed) return;
@@ -510,7 +513,7 @@ them.
 | `update({ id, data, ...opts })`        | Update through the model client.                                                 |
 | `delete({ id, ...opts })`              | Delete through the model client.                                                 |
 | `claim.state({ id })`                  | See who is currently working on a row (synchronous).                             |
-| `claim({ id, action?, ttl? })`         | Acquire a disposable handle: wait for your turn, re-read, and hold the row.       |
+| `claim({ id, reason?, ttl? })`         | Acquire a disposable handle: wait for your turn, re-read, and hold the row.       |
 
 Keep first integrations on the model methods above. Every mutation and
 server-read verb takes one options object; only the synchronous `get(id)` stays

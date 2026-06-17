@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.13.0
+
+### Minor Changes
+
+- Schema authoring: split model routing into two orthogonal axes — `policy` (row access) and `groups` (sync-group routing).
+
+  **Breaking (schema authoring).** The flat, collision-prone model options are replaced by two namespaced ones:
+  - **`policy`** — row-access / tenant isolation (named after Postgres/Supabase RLS policies: the rule that scopes which rows a tenant may read). A discriminated union on `by` replaces the old `orgScoped` / `scopedVia` / `orgColumn` trio:
+    - `{ by: 'column' }` — row-local tenancy column (the default when omitted; column name still overridable).
+    - `{ by: 'parent', fk, parent }` — inherit tenancy through a foreign key when the table has no tenancy column of its own (e.g. `slide_layers` → `slides`).
+    - Type `TenancyInput` is renamed `PolicyInput`; `policyInputSchema` / `resolvePolicy` are now exported.
+  - **`groups: { root, grants, roles }`** — which delta channels a row fans into (orthogonal to `policy`, which governs read access). One namespaced object replaces the old flat `scope` / `grants` / `entityRoles`:
+    - `root` (was `scope`) — mark a model a scope root; its records form the group `<kind>:<id>`. Renamed so it no longer collides with the old `scopedVia` tenancy sugar or the inner `grants.scope` relation name.
+    - `grants` — a membership edge granting an identity access to a scope root.
+    - `roles` (was `entityRoles`) — explicit non-relational record→group roles; accepts one role or an array.
+    - `groupsInputSchema` / `GroupsInput` are now exported.
+
+  **CLI.** `config.json` now stores per-project profile key pairs (`profiles: Record<string, ProfileKeys>`) instead of a single top-level pair; older flat layouts are folded into the active profile automatically on read, so existing logins keep working. `login` / `projects` updated to the profile model.
+
 ## 0.12.0
 
 ### Minor Changes

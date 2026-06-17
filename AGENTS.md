@@ -31,7 +31,7 @@ Every model verb takes ONE options object. The common loop:
 
 1. **Read** the row — `await ablo.<model>.retrieve({ id })` (async; from the server) or `await ablo.<model>.list({ where })` for many. In React render, read synchronously with `useAblo((a) => a.<model>.get(id))`.
 2. **See who's active** (optional) — `ablo.<model>.claim.state({ id })` (synchronous; never blocks).
-3. **Claim** the row before changing it — `await using claim = await ablo.<model>.claim({ id, action?, ttl? })`. If someone else holds it, this waits for them, then gives you the fresh row on `claim.data`. The claim auto-releases when it goes out of scope (`await using`).
+3. **Claim** the row before changing it — `await using claim = await ablo.<model>.claim({ id, reason?, ttl? })`. If someone else holds it, this waits for them, then gives you the fresh row on `claim.data`. The claim auto-releases when it goes out of scope (`await using`).
 4. **Write** — `await ablo.<model>.update({ id: claim.data.id, data })`. Because you hold the claim, the write is rejected if the row changed underneath you.
 
 Keep coding assistants on this schema-backed path.
@@ -59,7 +59,7 @@ if (!report) throw new Error('Report not found');
 // row before resolving. Auto-released at the end of this scope (`await using`).
 await using claim = await ablo.weatherReports.claim({
   id: 'report_stockholm',
-  action: 'forecasting',
+  reason: 'forecasting',
   ttl: '2m',
 });
 const claimed = claim.data;

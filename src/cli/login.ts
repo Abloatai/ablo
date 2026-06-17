@@ -1,11 +1,17 @@
 /**
  * `ablo login` / `ablo logout` — manage the stored CLI credential.
  *
- *   ablo login    Browser device flow (RFC 8628): approve at /cli, the CLI
- *                 provisions a test + live key pair and stores both.
- *   ablo logout   Clear the stored keys.
+ *   ablo login                  Browser device flow (RFC 8628): approve at
+ *                               /cli, the CLI provisions a test + live key
+ *                               pair and stores both under the active project.
+ *   ablo login --project <slug> Same, but scope (and mint) the pair to a named
+ *                               project — Stripe's `login --project-name`. The
+ *                               project becomes active.
+ *   ablo logout                 Clear the stored keys.
  *
- * Headless/CI doesn't log in — it sets `ABLO_API_KEY`, which always wins.
+ * With no `--project`, login targets the currently active project (so it
+ * doubles as a refresh in place), falling back to the org-default. Headless/CI
+ * doesn't log in — it sets `ABLO_API_KEY`, which always wins.
  *
  * The device flow is two plain HTTP calls (code + token polling) so the
  * published CLI stays lean — no Better Auth client dependency. Visuals use
@@ -15,7 +21,14 @@
 import { spawn } from 'child_process';
 import pc from 'picocolors';
 import { intro, outro, note, spinner, log, select, isCancel, cancel } from '@clack/prompts';
-import { writeConfig, clearCredential, configDir, type KeyEntry } from './config';
+import {
+  setProfileKeys,
+  getActiveProject,
+  clearCredential,
+  configDir,
+  DEFAULT_PROFILE,
+  type KeyEntry,
+} from './config';
 import { brand } from './theme';
 
 const CLIENT_ID = 'ablo-cli';
@@ -67,11 +80,32 @@ interface ProvisionResponse {
   test: ProvisionKey;
   live?: ProvisionKey;
   organizationId?: string;
+  /** The project the keys were scoped to (null = the org-default). */
+  project?: { id: string; slug: string } | null;
   error?: string;
 }
 
-async function deviceLogin(): Promise<void> {
+/** Pull `--project <slug>` out of the argv (the only login flag). */
+function parseProjectFlag(argv: readonly string[]): string | undefined {
+  const i = argv.indexOf('--project');
+  if (i >= 0) {
+    const slug = argv[i + 1];
+    if (slug && !slug.startsWith('-')) return slug;
+  }
+  const eq = argv.find((a) => a.startsWith('--project='));
+  return eq ? eq.slice('--project='.length) || undefined : undefined;
+}
+
+async function deviceLogin(argv: readonly string[]): Promise<void> {
   intro(`${brand('ablo')} login`);
+
+  // Which project to scope the minted pair to: an explicit `--project`, else
+  // the active project (login doubles as a refresh in place), else the
+  // org-default. The server resolves + verifies the slug against the org.
+  // `--project default` means the org-default (no slug to resolve), mirroring
+  // `ablo projects use default`.
+  const requested = parseProjectFlag(argv) ?? getActiveProject()?.slug;
+  const targetProject = requested === DEFAULT_PROFILE ? undefined : requested;
 
   // Account choice — both paths complete in the browser; the CLI just opens
   // the right page (sign-in vs sign-up) and then the same /cli approval.
@@ -171,13 +205,19 @@ async function deviceLogin(): Promise<void> {
     process.exit(1);
   }
 
-  s.message('Provisioning a sandbox key…');
+  s.message(
+    targetProject ? `Provisioning keys for ${targetProject}…` : 'Provisioning a sandbox key…',
+  );
   const provRes = await fetch(`${AUTH_URL}/api/cli/provision-key`, {
     method: 'POST',
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-    // Pass the device_code so the server can scope the minted keys to the
-    // project the user picked at /cli (login project picker). Harmless if none.
-    body: JSON.stringify({ device_code: code.device_code }),
+    // Scope the minted keys to the chosen project (`--project`/active), with
+    // the device_code as a legacy fallback for the /cli picker. Both harmless
+    // if absent → org-default keys.
+    body: JSON.stringify({
+      device_code: code.device_code,
+      ...(targetProject ? { project_slug: targetProject } : {}),
+    }),
   }).catch(() => null);
 
   if (!provRes || !provRes.ok) {
@@ -196,21 +236,29 @@ async function deviceLogin(): Promise<void> {
     ...(prov.organizationId ? { organizationId: prov.organizationId } : {}),
     ...(k.expiresAt ? { expiresAt: k.expiresAt } : {}),
   });
-  // Default to sandbox (the dev loop); store the production key too so
-  // `ablo mode production` works without re-auth (Stripe mints both at
-  // login). The provision response names the key-prefix buckets: sk_test_
-  // keys are sandbox, sk_live_ keys are production.
-  const path = writeConfig({
-    mode: 'sandbox',
-    sandbox: entry(prov.test),
-    ...(prov.live ? { production: entry(prov.live) } : {}),
-  });
+  // Store the pair under the project profile the server scoped them to and
+  // make that project active. Default to sandbox (the dev loop); the
+  // production key rides along so `ablo mode production` works without re-auth
+  // (Stripe mints both at login). The server's `project` (null = org-default)
+  // is authoritative — it resolved the slug → id.
+  const profileName = prov.project?.slug ?? DEFAULT_PROFILE;
+  const path = setProfileKeys(
+    profileName,
+    {
+      sandbox: entry(prov.test),
+      ...(prov.live ? { production: entry(prov.live) } : {}),
+    },
+    { mode: 'sandbox', activeProject: prov.project ?? undefined },
+  );
   s.stop(`Saved keys to ${path}`);
-  outro(`${pc.green('✓')} Logged in ${pc.dim('(sandbox)')}. Run ${pc.bold('npx ablo push')} to push your schema.`);
+  const where = prov.project ? ` ${pc.dim(`(project ${prov.project.slug})`)}` : '';
+  outro(
+    `${pc.green('✓')} Logged in ${pc.dim('(sandbox)')}${where}. Run ${pc.bold('npx ablo push')} to push your schema.`,
+  );
 }
 
-export async function login(): Promise<void> {
-  await deviceLogin();
+export async function login(argv: readonly string[] = []): Promise<void> {
+  await deviceLogin(argv);
 }
 
 export function logout(): void {

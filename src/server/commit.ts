@@ -59,11 +59,16 @@ export interface CommitContext {
    */
   onBehalfOf?: ParticipantRef | null;
   /**
-   * FK to AgentCapabilityRoot.capabilityId. Non-null for agent / system commits
-   * authorized by a Biscuit; null for human-direct commits. Embedded in every
-   * delta so the audit chain "delta → capability → human" is one FK hop.
+   * Scoped credential id. Non-null for agent / system commits when the
+   * authorizing credential is known; null for human-direct commits.
    */
   capabilityId?: string | null;
+  /**
+   * Human user id at the root of the delegated authority chain. Stored directly
+   * on `sync_deltas` so audit triggers never need to join mutable credential
+   * tables while appending the hash chain.
+   */
+  delegationChainRootUserId?: string | null;
   /**
    * ApiKey row id when the caller authenticated with an API key. Used by the
    * idempotency cache and usage attribution. Null for session / capability

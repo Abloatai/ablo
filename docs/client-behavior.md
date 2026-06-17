@@ -146,7 +146,7 @@ the latest row, then hands you the fresh row — so you can't overwrite a change
 see. Options on the claim:
 
 - default `claim` waits in the fair queue and re-reads before handing you the row;
-- `{ wait: false }` rejects with `AbloClaimedError` instead of queuing;
+- `{ queue: false }` rejects with `AbloClaimedError` instead of queuing;
 - `{ maxQueueDepth }` rejects if the wait line is already too deep.
 
 While waiting, schema clients learn when the claim clears from the live claim
@@ -166,7 +166,7 @@ All SDK errors extend `AbloError` and carry a stable `type`.
 | `AbloValidationError` | Invalid input or unsupported request shape. |
 | `AbloServerError` | Server-side 5xx. Retry with backoff if the operation is idempotent. |
 | `AbloStaleContextError` | Write was based on stale `readAt` state. Re-read and retry. |
-| `AbloClaimedError` | An active claim conflicted with `{ wait: false }`, the queue was too deep, or a claim wait timed out. |
+| `AbloClaimedError` | An active claim conflicted with `{ queue: false }`, the queue was too deep, or a claim wait timed out. |
 
 ```ts
 import { AbloClaimedError } from '@abloatai/ablo';

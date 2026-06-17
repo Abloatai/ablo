@@ -180,7 +180,7 @@ if (claim) {
 
 const handle = await ablo.weatherReports.claim({
   id: 'report_stockholm',
-  action: 'editing',
+  reason: 'editing',
   ttl: '2m',
 });
 await ablo.weatherReports.update({ id: handle.data.id, data: { status: 'ready' } });

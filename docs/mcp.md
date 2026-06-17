@@ -67,11 +67,23 @@ Point your assistant at the hosted endpoint — no auth, no token:
 claude mcp add --transport http ablo https://<your-app>/api/mcp
 ```
 
-Per-client walkthroughs:
+The endpoint is identical for every client — only the config surface differs:
 
-- [Claude Code](/docs/mcp/claude-code)
-- [Cursor](/docs/mcp/cursor)
-- [Windsurf](/docs/mcp/windsurf)
+- **Claude Code** — run the `claude mcp add` command above; verify with `/mcp list`, remove with `claude mcp remove ablo`.
+- **Cursor** — add the server to `~/.cursor/mcp.json` (macOS / Linux), then restart.
+- **Windsurf** — add the same JSON via Settings → Cascade → MCP, then restart.
+
+Cursor and Windsurf use the same config shape:
+
+```json
+{
+  "mcpServers": {
+    "ablo": { "transport": "http", "url": "https://<your-app>/api/mcp" }
+  }
+}
+```
+
+Each client then lists the Ablo tools (`search_ablo_docs`, `get_recipe`, `get_api_surface`, `validate_schema`, `scaffold_app`) in its MCP panel.
 
 ### What it exposes
 
@@ -96,7 +108,7 @@ loading everything into context.
 Reusable, parameterised templates that drive an end-to-end flow:
 
 - `integrate-sync-engine` — wire the SDK into an existing project.
-- `add-agent` — add an agent worker that coordinates via intents and
+- `add-agent` — add an agent worker that coordinates via claims and
   conflict-safe writes.
 - `define-schema` — design a Zod-first schema from a description, then run
   `validate_schema` before committing.
