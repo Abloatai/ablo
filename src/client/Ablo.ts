@@ -543,6 +543,8 @@ import type {
   ClaimParams,
   ClaimLookupParams,
   ClaimReorderParams,
+  ClaimReadApi,
+  AwaitedClaimMethod,
   ServerReadOptions,
 } from './createModelProxy.js';
 import { createModelProxy } from './createModelProxy.js';
@@ -663,27 +665,22 @@ export interface ModelMutationOptions extends ClaimedOptions {
  * The HTTP/stateless claim surface. Normal tools usually put `claim` directly
  * on the write (`update({ id, data, claim })`) and let the SDK release it. Use
  * this namespace for multi-step handles and coordination screens.
+ *
+ * Same surface as the reactive {@link ClaimApi}, but every read is a server
+ * round-trip, so `state`/`queue`/`reorder` are **awaited** here (the WebSocket
+ * client resolves them synchronously from its local pool — which is what lets
+ * `useAblo((ablo) => ablo.x.claim.state({ id }))` work inside a React render; a
+ * stateless client has no pool to read, so the `Promise` is unavoidable).
+ *
+ * Mechanically DERIVED from `ClaimReadApi` via {@link AwaitedClaimMethod} so the
+ * two transports can never drift: the ONLY difference is the uniform `Promise`
+ * wrapper that statelessness forces. `claim({ id })` is identical (already async
+ * on both); `state`/`queue`/`reorder`/`release` are the awaited form.
  */
-export interface HttpClaimApi<T> {
-  /** Take a manual claim handle for multi-step work. Release it when done. */
-  (params: ClaimParams<T>): Promise<ClaimHandle<T>>;
-  /** Release a manual claim you hold. */
-  release(params: ClaimLookupParams<T> | ClaimHandle<T>): Promise<void>;
-  /**
-   * Current holder of the lease on a row, or `null` when free. For UI badges,
-   * preflight checks, and operators.
-   */
-  state(params: ClaimLookupParams<T>): Promise<Claim | null>;
-  /**
-   * FIFO wait line behind the holder. Advanced: useful for operator UIs and
-   * schedulers.
-   */
-  queue(params: ClaimLookupParams<T>): Promise<{ readonly object: 'list'; readonly data: readonly Claim[] }>;
-  /**
-   * Re-rank the wait line. Advanced and permission-gated.
-   */
-  reorder(params: ClaimReorderParams<T>): Promise<void>;
-}
+export type HttpClaimApi<T = Record<string, unknown>> =
+  ((params: ClaimParams<T>) => Promise<ClaimHandle<T>>) & {
+    [K in keyof ClaimReadApi<T>]: AwaitedClaimMethod<ClaimReadApi<T>[K]>;
+  };
 
 export interface ModelClient<T = Record<string, unknown>> {
   /**
@@ -2581,7 +2578,7 @@ export function Ablo<const S extends SchemaRecord>(
           publicClaims.queueFor({ type: target.model, id: target.id }),
         reorder: (target, order) =>
           publicClaims.reorder({ type: target.model, id: target.id }, order),
-        observe: (target) => {
+        state: (target) => {
           // The live claim stream only tracks *open* (active) claims;
           // terminal states (committed / expired / canceled) drop out of
           // the list entirely — exactly the ephemeral coordination model.

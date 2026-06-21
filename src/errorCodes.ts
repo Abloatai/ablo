@@ -39,7 +39,7 @@ import { z } from 'zod';
  * code, a changed HTTP status, an envelope field. Emitted in `errors.json`
  * and on the `Ablo-Version` response header so a consumer can detect drift.
  */
-export const ERROR_CONTRACT_VERSION = '2026-06-13';
+export const ERROR_CONTRACT_VERSION = '2026-06-20';
 
 /** Coarse grouping for metrics dashboards and docs sectioning. */
 export type ErrorCategory =
@@ -333,10 +333,19 @@ export const ERROR_CODES = {
   // ── quota / rate limit (429) ──────────────────────────────────────
   quota_exceeded: wire('rate_limit', 429, true, 'The organization exceeded its configured usage quota.'),
   connection_limit_exceeded: wire('rate_limit', 429, true, 'Too many concurrent WebSocket connections for this principal or organization. Close idle connections, or retry once others drain.'),
+  // Per-CREDENTIAL request-rate limit — the fast (RPS/burst) axis, distinct from
+  // the slow-axis `quota_exceeded` (org daily/monthly usage). Keyed per API key,
+  // so one noisy key backs off without affecting the rest of the org. The
+  // `Retry-After` header carries the bucket-refill delay.
+  rate_limit_exceeded: wire('rate_limit', 429, true, 'This API key is sending requests too quickly; slow down and retry after the indicated delay.'),
 
   // ── server (5xx) ───────────────────────────────────────────────────
   internal_error: wire('server', 500, true, 'An unexpected server error occurred.'),
   quota_lookup_failed: wire('server', 503, true, 'The quota decision could not be loaded.'),
+  // The per-key rate-limiter backend (Redis) was unreachable and the API is
+  // configured to FAIL CLOSED on that path, so the request was rejected rather
+  // than admitted unchecked. Retryable: the next attempt re-probes the backend.
+  rate_limiter_unavailable: wire('server', 503, true, 'The rate-limiter backend is unavailable and this endpoint is configured to fail closed; retry shortly.'),
   turn_open_failed: wire('server', 500, true, 'The agent turn failed to open.'),
   turn_close_failed: wire('server', 500, true, 'The agent turn failed to close cleanly.'),
 

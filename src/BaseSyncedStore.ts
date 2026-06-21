@@ -1120,47 +1120,55 @@ export class BaseSyncedStore<
     this.stopCredentialLifecycle();
     this.setCredentialRefresher(getToken);
 
-    // A transient failure is swallowed: the engine keeps its current token and
-    // the next trigger — or the reactive `credential_stale` path — retries. We
-    // never tear down or sign out on a failed proactive roll.
+    // Re-mint through the SAME single-flight path the FSM's reactive probe uses
+    // (`performCredentialRefresh`) rather than calling `getToken()` directly. Two
+    // wins over the old direct call:
+    //   - SINGLE-FLIGHT: a wake nudge, an in-flight probe, and this proactive
+    //     roll share one in-flight promise — no double-mint thrash.
+    //   - The tri-state is HONOURED. The old code did `if (token) {…}` and
+    //     dropped a `null` on the floor — a zombie session that re-minted on
+    //     every tab focus and logged "signing out" forever without ever signing
+    //     out. `session_error` now drives the FSM to actually expire.
     const refresh = async (): Promise<void> => {
-      try {
-        const token = await getToken();
-        if (token) {
-          // Push into the shared credential source (read lazily by bootstrap
-          // HTTP, probes, and the WS reconnect URL), then nudge a parked
-          // connection to re-probe with the fresh key. Same two steps the
-          // engine's `setAuthToken` wrapper performs.
-          this.auth?.setAuthToken(token);
-          this.nudgeReconnect();
-        }
-      } catch {
-        // transient (offline / mint hiccup) — a later trigger retries.
+      const outcome = await this.performCredentialRefresh();
+      if (outcome === 'refreshed') {
+        // Fresh key already pushed into the credential source by
+        // `performCredentialRefresh`; nudge a parked connection to re-probe.
+        this.nudgeReconnect();
+      } else if (outcome === 'session_error') {
+        // The long-lived login is gone (mint answered 401/403). Surface it —
+        // the proactive path's job is to report this, not hide it. A no-op in
+        // FSM states that don't accept the event (the probe converges on
+        // sign-out there anyway); `session_expired`'s onEnter owns the log.
+        this.connectionManager?.send({ type: 'BOOTSTRAP_FAILED_SESSION' });
       }
+      // 'network_error' → transient (offline / mint hiccup); the next timer tick
+      // or the FSM's own probe retries. Never sign out for it.
     };
 
     // Comfortably inside the 15m `ek_` TTL; a missed (background-throttled) tick
-    // is recovered by the next, or by the reactive probe.
+    // is recovered by the next, or by the reactive probe. The timer is the sole
+    // proactive PRE-ROLL — it keeps the key warm ahead of expiry even while the
+    // socket sits healthy-`connected` (a state the FSM never probes unprompted).
     const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
     const timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     const teardowns: Array<() => void> = [() => clearInterval(timer)];
 
     if (typeof window !== 'undefined') {
-      const onTrigger = (): void => void refresh();
-      window.addEventListener('online', onTrigger);
-      // OS-wake: the desktop shell bridges Electron `powerMonitor` 'resume' to
-      // this DOM event (visibilitychange does NOT fire on wake-from-sleep, so a
-      // nap longer than the TTL would otherwise leave a dead key untouched).
-      window.addEventListener('ablo:wake', onTrigger);
-      teardowns.push(() => window.removeEventListener('online', onTrigger));
-      teardowns.push(() => window.removeEventListener('ablo:wake', onTrigger));
-    }
-    if (typeof document !== 'undefined') {
-      const onVisible = (): void => {
-        if (document.visibilityState === 'visible') void refresh();
-      };
-      document.addEventListener('visibilitychange', onVisible);
-      teardowns.push(() => document.removeEventListener('visibilitychange', onVisible));
+      // OS-wake (desktop only): the Electron shell bridges `powerMonitor`
+      // 'resume' to this DOM event. This is the ONE event-trigger the lifecycle
+      // still owns, because `visibilitychange` does NOT fire on wake-from-sleep
+      // and — unlike `online`/`visibilitychange` — the ConnectionManager's own
+      // browser listeners (`setupBrowserListeners`) don't cover wake.
+      //
+      // The `online` and `visibilitychange` listeners that used to live here
+      // were REMOVED: the FSM already re-probes on NETWORK_ONLINE / TAB_VISIBLE
+      // through this exact credential path, so registering them here too only
+      // fired a second, null-swallowing mint per focus — the "session-key
+      // POSTed on every tab focus" spam in the console.
+      const onWake = (): void => void refresh();
+      window.addEventListener('ablo:wake', onWake);
+      teardowns.push(() => window.removeEventListener('ablo:wake', onWake));
     }
 
     this.credentialLifecycleTeardown = (): void => {

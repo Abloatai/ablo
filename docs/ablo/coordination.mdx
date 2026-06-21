@@ -70,23 +70,23 @@ a model row. It's what `claim.state()` returns and what observers render.
 | `id` | `string` | The claim id (distinct from the target row id). |
 | `status` | `ClaimStatus` | `'active' \| 'queued' \| 'committed' \| 'expired' \| 'canceled'`. `active` = the holder; `queued` = waiting in line behind it. The other three are terminal states you only see on a claim you just finished — `committed` (released after a successful write), `expired` (TTL lapsed), `canceled` (released early). |
 | `target` | `EntityRef` | What is being coordinated (`{ model, id, field? }`). |
-| `action` | `string` | Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. |
+| `reason` | `string` | Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. Serialized on the wire as `action`. |
 | `heldBy` | `string` | Participant holding (or waiting on) it (e.g. `'agent:forecaster'`). |
 | `participantKind` | `'user' \| 'agent' \| 'system'` | Who's behind it — a human (`user`), an AI (`agent`), or automated infrastructure (`system`). |
 | `position` | `number?` | 0-based place in the FIFO line — present only when `status: 'queued'` (`0` = next behind the holder). |
-| `createdAt` | `string?` | Ms-epoch the holder opened it. Optional — derived shapes may omit it. |
-| `expiresAt` | `string` | Ms-epoch the server reclaims it if the holder goes **silent**. Renewed automatically while the holder's connection stays alive — a crash-cleanup floor, not a duration you size. |
+| `createdAt` | `number?` | Ms-epoch the holder opened it. Optional — derived shapes may omit it. |
+| `expiresAt` | `number` | Ms-epoch the server reclaims it if the holder goes **silent**. Renewed automatically while the holder's connection stays alive — a crash-cleanup floor, not a duration you size. |
 
 ```jsonc
 {
   "id": "claim_8fJ2",
   "status": "active",
   "target": { "model": "weatherReports", "id": "report_stockholm" },
-  "action": "editing",
+  "reason": "editing",
   "heldBy": "agent:forecaster",
   "participantKind": "agent",
-  "createdAt": "1748160000000",
-  "expiresAt": "1748160030000"
+  "createdAt": 1748160000000,
+  "expiresAt": 1748160030000
 }
 ```
 
@@ -116,9 +116,9 @@ so two claimers can't both think they won.
 | name | type | required | description |
 |---|---|---|---|
 | `id` | `string` | yes | The row id — same id as `retrieve` / `update`. |
-| `options.action` | `string` | no | Phase shown to observers (default `'editing'`). |
+| `options.reason` | `string` | no | Phase shown to observers (default `'editing'`). Serialized on the wire as `action`. |
 | `options.field` | `string` | no | Field-level target, for fine-grained claimed-state badges. |
-| `options.wait` | `boolean` | no | `true` (default) queues and waits for the lease. `false` is fail-fast — if another participant holds the row, reject immediately with `AbloClaimedError('entity_claimed')` instead of queuing (claim-or-skip, for work dedup where waiting would double-process). |
+| `options.queue` | `boolean` | no | `true` (default) queues and waits for the lease. `false` is fail-fast — if another participant holds the row, reject immediately with `AbloClaimedError('entity_claimed')` instead of queuing (claim-or-skip, for work dedup where waiting would double-process). |
 | `options.maxQueueDepth` | `number` | no | Backpressure: reject with `AbloClaimedError('queue_too_deep')` instead of joining a line already `>= maxQueueDepth` deep. Omit to wait however deep the queue is. |
 | `options.ttl` | `Duration` | no | Crash-cleanup floor. Rarely set — the lease renews while your connection is alive, so it only matters once you go silent. |
 
@@ -182,7 +182,7 @@ is free.
 
 ```ts
 const who = ablo.weatherReports.claim.state({ id: 'report_stockholm' });
-if (who) console.log(`${who.heldBy} is ${who.action}`);
+if (who) console.log(`${who.heldBy} is ${who.reason}`);
 ```
 
 Returns the active claim state when the row is held, or `null` when it's free:
@@ -192,10 +192,10 @@ Returns the active claim state when the row is held, or `null` when it's free:
   "id": "claim_8fJ2",
   "status": "active",
   "target": { "model": "weatherReports", "id": "report_stockholm" },
-  "action": "editing",
+  "reason": "editing",
   "heldBy": "agent:forecaster",
   "participantKind": "agent",
-  "expiresAt": "1748160030000"
+  "expiresAt": 1748160030000
 }
 ```
 

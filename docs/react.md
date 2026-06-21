@@ -224,6 +224,75 @@ function wired into the provider (bound to your transport). If no `beginClaim`
 is wired, the returned invoker throws `AbloValidationError` with code
 `claim_not_wired`.
 
+## useWatch — scoped presence + read interest
+
+`useWatch` is the React form of `ablo.<model>.watch`. It joins multiplayer for a
+scope on the engine's existing socket (one TCP connection, N logical
+sub-syncgroup participants) and returns the reactive participant facade. Use it
+when a mount should both *see* who else is on an entity and, optionally, declare
+write interest in it.
+
+```tsx
+'use client';
+
+import { useWatch } from '@abloatai/ablo/react';
+
+export function DeckPresence({ deckId }: { deckId: string }) {
+  const { peers, claims, status } = useWatch({
+    scope: { slideDecks: deckId },
+    claim: true,   // I intend to write — pin the scope + let peers observe the claim
+    hydrate: true, // backfill the deck's current rows if not already loaded
+  });
+
+  if (status !== 'joined') return <span>connecting…</span>;
+  return <span>{peers.length} other{peers.length === 1 ? '' : 's'} here</span>;
+}
+```
+
+Options (`UseWatchOptions`):
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `scope` | — | Model-form scope (`{ slideDecks: id }`), resolved through the schema. Omit for engine-wide. |
+| `claim` | `false` | Acquire a write-claim on the scope (sent so peers observe it; pins the scope so it never warm-drops while held). A viewer is not a claimant — leave `false` for read-only. |
+| `hydrate` | `false` | Backfill the scope's current rows into the pool once on enter, then keep them fresh via the live tail. Set `true` for deep-linked / never-opened entities. Single-flight; soft-fails. |
+| `ttlSeconds` | — | Lease TTL for the scope claim. |
+| `paused` | `false` | Tear down and don't re-join while true. |
+
+Returns (`UseWatchReturn`): `{ participant, peers, claims, status, error }`.
+`peers` is everyone else on the scope's sync groups; `claims` is their active
+write-claims; `status` is the join lifecycle. Auto-cleans up on unmount or when
+`paused` flips true.
+
+## usePeers — read-only presence
+
+`usePeers` is a *pure reader* of the presence stream already flowing on the
+connection. Unlike `useWatch`, it does **not** enter/leave a scope (no
+`update_subscription`, no warm-TTL churn) — so reading it never changes what the
+connection is subscribed to.
+
+```tsx
+'use client';
+
+import { usePeers } from '@abloatai/ablo/react';
+
+export function CursorBroadcaster({ deckId }: { deckId: string }) {
+  const peers = usePeers({ slideDecks: deckId });
+  const alone = !peers.some((p) => p.participantKind === 'user');
+  // suppress live-cursor broadcasts while alone
+}
+```
+
+Pass `scope` to narrow to a sync group's peers, or omit it for everyone on the
+engine's groups. Returns `ReadonlyArray<Peer>`, where each `Peer` carries
+`participantKind` (`'user' | 'agent' | 'system'`), `participantId`, optional
+`label`, `syncGroups`, `activity`, `lastActive`, and optional `activeClaims`.
+
+Reach for `usePeers` (not a second `useWatch`) when some **other** mount already
+owns the scope's read interest — scope `leave` is not reference-counted, so a
+second `useWatch` on the same scope would warm-drop the owner's subscription on
+unmount.
+
 ## Next.js
 
 The Next.js [App Router landing](/nextjs) walks through Server Components

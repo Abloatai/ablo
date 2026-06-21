@@ -96,6 +96,14 @@ export function resolveDatabaseUrl(input: AuthResolveInput): string | null {
  * explicit option instead of flipping their mode for them. Warns once per process
  * so it never spams, and falls back to `console.warn` when no logger is supplied
  * (the `transport: 'api'` client has none).
+ *
+ * Suppressed entirely on the hosted/token path: if an `apiKey` resolves (option
+ * or `ABLO_API_KEY` env), the caller has chosen the hosted capability-token /
+ * Data Source transport, which is mutually exclusive with direct `databaseUrl`
+ * mode. A `DATABASE_URL` sitting in that environment is unrelated infra (Prisma,
+ * Drizzle, the sync-server) — never an omitted option — so nudging would be a
+ * false positive. This is the first-party hosted app's exact shape, where the
+ * stray nudge otherwise reaches end-user desktop logs.
  */
 let warnedDatabaseUrlEnvIgnored = false;
 export function warnIfDatabaseUrlEnvIgnored(
@@ -104,6 +112,8 @@ export function warnIfDatabaseUrlEnvIgnored(
 ): void {
   if (warnedDatabaseUrlEnvIgnored) return;
   if (input.options.databaseUrl != null) return;
+  // Hosted/token path → DATABASE_URL is unrelated infra, not an omitted option.
+  if (resolveApiKey(input) != null) return;
   const envUrl = input.env.DATABASE_URL;
   if (typeof envUrl !== 'string' || envUrl.length === 0) return;
   warnedDatabaseUrlEnvIgnored = true;

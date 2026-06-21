@@ -1,6 +1,6 @@
 {
   "$generated": "packages/sync-engine/scripts/generate-error-docs.mts",
-  "version": "2026-06-13",
+  "version": "2026-06-20",
   "envelope": [
     "type",
     "code",
@@ -1401,6 +1401,24 @@
       "retryable": true,
       "message": "The quota decision could not be loaded.",
       "docUrl": "https://docs.abloatai.com/errors#quota_lookup_failed"
+    },
+    {
+      "code": "rate_limit_exceeded",
+      "category": "rate_limit",
+      "surface": "wire",
+      "httpStatus": 429,
+      "retryable": true,
+      "message": "This API key is sending requests too quickly; slow down and retry after the indicated delay.",
+      "docUrl": "https://docs.abloatai.com/errors#rate_limit_exceeded"
+    },
+    {
+      "code": "rate_limiter_unavailable",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "The rate-limiter backend is unavailable and this endpoint is configured to fail closed; retry shortly.",
+      "docUrl": "https://docs.abloatai.com/errors#rate_limiter_unavailable"
     },
     {
       "code": "registry_invalid_constructor",

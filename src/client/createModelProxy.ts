@@ -143,8 +143,13 @@ export interface ModelCollaboration<T> {
    * `null` when the target is free. The wiring site computes it because
    * only it knows the local participant id (needed to distinguish "I
    * hold it" from "someone else holds it").
+   *
+   * Named `state` to match the public `ablo.<model>.claim.state({ id })` read —
+   * one verb for "who holds this" across every claim surface; the only
+   * difference is this internal contract takes an explicit `{ model, id }`
+   * target because it isn't bound to a single model.
    */
-  observe(target: { model: string; id: string }): Claim | null;
+  state(target: { model: string; id: string }): Claim | null;
   /**
    * The reactive wait queue on a target — the FIFO line of queued claims
    * behind the holder. Synchronous snapshot off the synced claim stream.
@@ -232,10 +237,11 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    * work-distribution dedup ("if someone else has this job, skip it") where
    * waiting would mean double-processing.
    *
-   * Named `queue` to match every other claim surface (low-level
-   * `claims.claim`, HTTP `claim.create`, and the wire). The high-level typed
-   * claim defaults it ON because it serializes writers; the low-level lease
-   * and HTTP default it OFF — they return/resolve immediately and can't
+   * Named `queue` to match every other claim surface — `ablo.<model>.claim`
+   * on both the WS and HTTP clients (take-a-claim is the callable `claim({ id
+   * })` on both; the HTTP reads are just awaited) and the wire. The high-level
+   * typed claim defaults it ON because it serializes writers; the low-level
+   * lease and HTTP default it OFF — they return/resolve immediately and can't
    * transparently wait for a grant.
    */
   queue?: boolean;
@@ -316,10 +322,18 @@ export type ClaimOptions<T = Record<string, unknown>> = ClaimTargetOptions<T>;
  * handle. `state`, `queue`, and `reorder` are coordination reads/scheduler
  * controls for UI and operators.
  */
-export interface ClaimApi<T> {
-  /** Take a claim and get an explicit held-work handle back. */
-  (params: ClaimParams<T>): Promise<ClaimHandle<T>>;
-
+/**
+ * Coordination reads + scheduler controls on a claim namespace, in their
+ * REACTIVE (synchronous) form — `state`/`queue`/`reorder` resolve against the
+ * local pool with no round-trip, which is what lets `useAblo((ablo) =>
+ * ablo.x.claim.state({ id }))` read coordination state inside a React render.
+ *
+ * This is the single source of truth for the claim read surface: the stateless
+ * HTTP client exposes the *awaited* projection of EXACTLY these methods
+ * (`HttpClaimApi` in `Ablo.ts`, derived via {@link AwaitedClaimMethod}), so the
+ * two transports can never drift — edit a signature here and HTTP follows.
+ */
+export interface ClaimReadApi<T = Record<string, unknown>> {
   /**
    * Current holder for a row, or `null` when free. Use this for UI badges and
    * preflight checks, not for the normal write path.
@@ -339,6 +353,22 @@ export interface ClaimApi<T> {
 
   /** Release a manual claim handle early. Single-write claims auto-release. */
   release(params: ClaimLookupParams<T> | ClaimHandle<T>): Promise<void>;
+}
+
+/**
+ * The awaited form of a claim method: a synchronous return becomes a `Promise`,
+ * an already-async one (`release`) is left untouched. Used to derive the
+ * stateless HTTP claim surface from the reactive {@link ClaimReadApi}.
+ */
+export type AwaitedClaimMethod<F> = F extends (...args: infer A) => infer R
+  ? R extends Promise<unknown>
+    ? (...args: A) => R
+    : (...args: A) => Promise<R>
+  : F;
+
+export interface ClaimApi<T> extends ClaimReadApi<T> {
+  /** Take a claim and get an explicit held-work handle back. */
+  (params: ClaimParams<T>): Promise<ClaimHandle<T>>;
 }
 
 export interface ModelRetrieveParams extends ServerRetrieveOptions {
@@ -650,7 +680,7 @@ export function createModelProxy<T, C>(
     // Is someone ELSE already on this target? Read the local coordination
     // snapshot up front — it decides whether we'll need to re-read after the
     // claim (a free / already-mine target can't have changed under us).
-    const held = collaboration.observe({ model: wireModel, id });
+    const held = collaboration.state({ model: wireModel, id });
     const contended = !!held && held.heldBy !== collaboration.selfParticipantId;
     const failFast = options?.queue === false;
 
@@ -736,7 +766,7 @@ export function createModelProxy<T, C>(
     const snapshot = collaboration.createSnapshot(schemaKey, id);
     const reason = options?.reason ?? 'editing';
     // The self-claim's `EntityRef` mirrors what a peer's `claim.state` would
-    // report (`observe` maps `held.target.model` → `type`), so a holder and a
+    // report (`state` maps `held.target.model` → `type`), so a holder and a
     // peer see the SAME target.type for one row — the wire model token.
     const selfTarget: EntityRef = {
       type: wireModel,
@@ -796,7 +826,7 @@ export function createModelProxy<T, C>(
       // presence. Soft + fire-and-forget — never blocks or rejects the read.
       void collaboration?.enterScope?.({ [schemaKey]: params.id });
       // Self-awareness: the server excludes a holder's OWN presence frames and
-      // the client skips them, so `observe` returns null for a row WE hold.
+      // the client skips them, so `state` returns null for a row WE hold.
       // Synthesize the active claim for self from the stored lease so the
       // holder sees its own claim (the JSDoc contract on `claim.state`).
       const own = activeClaims.get(params.id);
@@ -812,7 +842,7 @@ export function createModelProxy<T, C>(
           expiresAt: own.expiresAt,
         };
       }
-      return collaboration?.observe({ model: wireModel, id: params.id }) ?? null;
+      return collaboration?.state({ model: wireModel, id: params.id }) ?? null;
     },
 
     queue(params: ClaimLookupParams<T>): { readonly object: 'list'; readonly data: readonly Claim[] } {

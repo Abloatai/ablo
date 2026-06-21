@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0
+
+### Minor Changes
+
+- Claim API consistency + coordination docs
+  - **React:** document `useWatch` (scoped presence + read-interest, with `claim`/`hydrate`/`paused` options) and `usePeers` (read-only presence) — previously exported but undocumented.
+  - **HTTP claim surface:** `HttpClaimApi` is now a mechanically derived async projection of the reactive `ClaimApi` (`AwaitedClaimMethod`), so the two transports can never drift. No behavior change — the only difference remains the `Promise` wrapper that statelessness forces on `state`/`queue`/`reorder`.
+  - **Naming:** unified the claim read verb to `state` across every layer (the internal `ModelCollaboration.observe` is now `state`, matching the public `ablo.<model>.claim.state({ id })`).
+  - **Docs:** corrected the `Claim` object reference — the field is `reason` (serialized on the wire as `action`), and `createdAt`/`expiresAt` are `number` (epoch-ms), not strings; corrected the claim options to `reason` and `queue`.
+
 ## 0.13.0
 
 ### Minor Changes

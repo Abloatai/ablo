@@ -124,10 +124,11 @@ coordination surface is `claim.state({ id })` / `claim.queue({ id })` /
 | `id` | string | Unique identifier for the claim. |
 | `status` | `'active' \| 'queued' \| 'committed' \| 'expired' \| 'canceled'` | The whole lifecycle, in one field. `active` is the holder; `queued` is a waiter in the FIFO line behind it. |
 | `target` | `{ type, id, field? }` | What is being coordinated. |
-| `action` | string | Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. |
+| `reason` | string | Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. Serialized on the wire as `action`. |
 | `heldBy` | string | Participant id holding the claim. |
 | `participantKind` | `'user' \| 'agent' \| 'system'` | Who's behind it — a human (`user`), an AI (`agent`), or automated infrastructure (`system`). |
-| `expiresAt` | string | Ms-epoch at which the server auto-expires it if the holder doesn't finish. |
+| `createdAt` | number? | Ms-epoch the holder opened it. Optional — derived shapes may omit it. |
+| `expiresAt` | number | Ms-epoch at which the server auto-expires it if the holder doesn't finish. |
 
 ```json
 {
@@ -135,10 +136,10 @@ coordination surface is `claim.state({ id })` / `claim.queue({ id })` /
   "id": "claim_3MtwBwLkdIwHu7ix",
   "status": "active",
   "target": { "type": "weatherReports", "id": "report_stockholm", "field": "status" },
-  "action": "editing",
+  "reason": "editing",
   "heldBy": "agent:report-writer",
   "participantKind": "agent",
-  "expiresAt": "1716580000000"
+  "expiresAt": 1716580000000
 }
 ```
 
@@ -175,7 +176,7 @@ Reads never block on a claim — to wait for a row to free up, `claim({ id })` i
 const claim = ablo.weatherReports.claim.state({ id: 'report_stockholm' });
 if (claim) {
   claim.heldBy;
-  claim.action;
+  claim.reason;
 }
 
 const handle = await ablo.weatherReports.claim({
