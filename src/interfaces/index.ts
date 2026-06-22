@@ -6,6 +6,8 @@
  * GraphQL client, session handling, and analytics.
  */
 
+import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
+
 
 // ─────────────────────────────────────────────
 // Logger
@@ -223,6 +225,13 @@ export interface ModelDebugLoggerContract {
 /** Result of a successful `commit()` — server's sync cursor after the batch landed. */
 export interface CommitResult {
   lastSyncId: number;
+  /**
+   * Stale-context notifications (CoAgent/MTPO notify-instead-of-abort). Present
+   * only when a write guarded with `onStale: 'notify' collided with a
+   * concurrent change; the committer self-heals from these rather than
+   * receiving an `AbloStaleContextError`. See `StaleNotification`.
+   */
+  notifications?: StaleNotification[];
 }
 
 /**
@@ -243,7 +252,7 @@ export interface MutationOptions {
   label?: string;
   wait?: 'queued' | 'confirmed';
   readAt?: number | null;
-  onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
+  onStale?: 'reject' | 'overwrite' | 'notify' | null;
   /** Claim-pin attribution: the id (or `{ id }`) of the claim this write
    *  belongs to. Distinct from the `claim` HANDLE on the model write params —
    *  this is the low-level reference the commit carries to bypass the holder's
@@ -256,6 +265,14 @@ export interface MutationOptions {
    * id). Kept optional for wire-compat; always `null` from the client.
    */
   causedByTaskId?: string | null;
+  /**
+   * Batch-level read dependencies (the STORM "did anything I looked at change?"
+   * layer). Each entry is a row (`{model,id,readAt,fields?}`) or a sync group
+   * (`{group,readAt}`) this write was premised on; the server validates none
+   * moved since `readAt` and fires the entry's `onStale` over the batch.
+   * Distinct from per-op `readAt` (which guards only the row being written).
+   */
+  reads?: ReadDependency[] | null;
 }
 
 /**
@@ -295,7 +312,7 @@ export interface MutationOperation {
    */
   transactionId?: string;
   readAt?: number | null;
-  onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
+  onStale?: 'reject' | 'overwrite' | 'notify' | null;
   /**
    * Per-op idempotency + audit metadata. `idempotencyKey` doubles as
    * the `mutation_log.client_tx_id` cache key; `label` is persisted to

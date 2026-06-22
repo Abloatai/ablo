@@ -42,7 +42,7 @@ export const operationSchema = z.object({
   input: jsonObject.nullish(),
   transactionId: z.string().nullish(),
   readAt: z.number().nullish(),
-  onStale: z.enum(['reject', 'force', 'flag', 'merge']).nullish(),
+  onStale: z.enum(['reject', 'overwrite', 'notify']).nullish(),
 });
 export type Operation = z.infer<typeof operationSchema>;
 

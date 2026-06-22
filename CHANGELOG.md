@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.15.0
+
+### Minor Changes
+
+- **Notify-instead-of-abort: non-coercive conflict handling + read-set (the "did anything I looked at change?" layer).**
+
+  The principle: on a stale-context conflict the engine now **surfaces the current state and lets the actor — agent or human — resolve it**, instead of forcing an outcome. See `docs/concurrency-convention.md`.
+
+  **`onStale` redesigned — Stripe-aligned values (BREAKING).**
+
+  The mode set is now `'reject' | 'overwrite' | 'notify'`. Each value names its outcome:
+  - **`notify` (new, non-coercive)** — the conflicting write is **held** (not applied) and the commit returns a `StaleNotification` carrying the conflicting field's *current* value, so the actor reconciles and re-commits rather than losing work. The rest of the batch still commits.
+  - **`overwrite`** (was `force`) — blind last-writer-wins, no signal.
+  - **`reject`** (default, unchanged) — throws `AbloStaleContextError`.
+
+  Migration:
+  - `onStale: 'force'` → `onStale: 'overwrite'`.
+  - `onStale: 'flag'` / `onStale: 'merge'` → `onStale: 'notify'` (both removed; `notify` is the single hold-and-surface mode).
+
+  **`StaleNotification` — the new advisory signal.** New public type + `staleNotificationSchema`:
+  `{ object: 'stale_notification', model, id, readAt, observedSyncId, conflictingFields, currentValues, writtenBy, group? }`. Delivered two ways:
+  - on the receipt — `CommitReceipt.notifications` (and `CommitResult.notifications`);
+  - on a new SDK event — **`conflict:notified`** `{ clientTxId, notifications }` (mirrors `reconciliation:needed` / `sync:rollback`).
+
+  **Read-set (`reads[]`) — declare what you looked at, not just what you write (new).** A commit may carry batch-level read dependencies; a moved premise fires that entry's `onStale` over the whole batch (`notify` holds every write + notifies, `reject` aborts, `overwrite` proceeds). Two granularities:
+  - **Row** — `{ model, id, readAt, fields? }`: did this row (optionally these fields) change?
+  - **Group** — `{ group, readAt }`: did anything in this sync group (`deck:abc`, `org:X`) change? — the same unit a participant watches and claims.
+
+  New public type `ReadDependency` + `readDependencySchema`; available on `ablo.commits.create({ operations, reads })` and the lower-level write options. This closes the gap the write-target check alone could not: a premise that changed without the written row changing.
+
+  **Conflict policy.** `ConflictDecision` gains `{ action: 'notify' }`; `defaultPolicy` maps `onStale: 'notify'` → notify-and-hold, everything else → reject. `StaleContextConflict.requestedMode` is added so custom policies can honor the caller's declared intent.
+
+- **Data Source reverse-channel connector (new).** A customer Data Source can now **dial out** to the engine over a single outbound WebSocket (`ablo.source.v1` subprotocol) instead of exposing an inbound HTTP endpoint — the deployment shape private/VPC stores need.
+
+  - **`createSourceConnector({ apiKey, handler, baseURL? })`** (new public API, exported from the root and `/source`) — opens one outbound socket (Node global `WebSocket`, no new dependency), with reconnect/backoff, and serves the customer's existing Data Source `handler`.
+  - Server side: a connector registry + `/v1/source/listen` upgrade route bridge requests down / responses up, teed into `SourceClient` through the storage resolver.
+  - **Trust model unchanged:** the Standard-Webhooks HMAC is signed *above* the transport, so the socket carries the signed envelope byte-for-byte and the customer's `verifyAbloSourceRequest` is untouched. Transport changes, trust model doesn't.
+  - Opt-in per source via `reverse_channel_prod` (migration `20260622150000`); gated in `authorizeUpgrade`.
+
 ## 0.14.0
 
 ### Minor Changes

@@ -44,6 +44,13 @@ export interface StaleContextConflict extends ConflictBase {
    * cosmetic field. See `docs/internal/per-field-conflict-detection.md`.
    */
   readonly conflictingFields?: readonly string[];
+  /**
+   * The committer's declared `onStale` intent for this op. The default policy
+   * honors it: `'notify'` → notify+hold, anything else → reject. A custom policy
+   * may override (e.g. gate notify on claim ownership). Absent ⇒ treat as
+   * `'reject'` (the unguarded-write default).
+   */
+  readonly requestedMode?: 'reject' | 'overwrite' | 'notify';
 }
 
 export interface ClaimHeldConflict extends ConflictBase {
@@ -84,7 +91,20 @@ export type ConflictDecision =
    * or an identity holding a preempt capability). At commit time there is no
    * holder to evict, so a `preempt` decision there is treated as `allow`.
    */
-  | { readonly action: 'preempt'; readonly reason?: string };
+  | { readonly action: 'preempt'; readonly reason?: string }
+  /**
+   * Notify-instead-of-abort (non-coercion). Only meaningful for a
+   * `stale_context` conflict, and the engine's aligned disposition: HOLD the
+   * conflicting op (don't write it) and return a `StaleNotification` with the
+   * current value so the actor (agent or human) resolves and re-commits. The
+   * rest of the batch still commits. Maps from `onStale: 'notify'`.
+   *
+   * Serialization order is supplied by the monotonic `sync_id` landing order
+   * (the stale committer always yields/recomputes — an asymmetry that rules out
+   * a symmetric notify-rewrite livelock). Unbounded retry is bounded by the
+   * client's reconciliation retry cap.
+   */
+  | { readonly action: 'notify'; readonly reason?: string };
 
 /**
  * Pluggable decision function. Sync or async.
@@ -103,14 +123,27 @@ export type ConflictPolicy = (
 ) => ConflictDecision | Promise<ConflictDecision>;
 
 /**
- * Default: reject every conflict. Safe fallback when no custom policy
- * is wired — the engine never silently allows a stale or
- * claim-conflicting write through.
+ * Default policy.
+ *
+ * `claim_held` conflicts always reject (a foreign claim is honored unless a
+ * privileged policy preempts). `stale_context` conflicts honor the committer's
+ * declared `onStale` intent:
+ *
+ *   • `'notify'` → notify + hold (op withheld; the actor resolves)
+ *   • anything else (incl. `'reject'`, absent) → reject
+ *
+ * `'overwrite'` never reaches a policy — it's a hard opt-out resolved before
+ * detection. This preserves the legacy always-reject default for callers that
+ * don't opt into `notify`.
  */
-export const defaultPolicy: ConflictPolicy = (conflict) => ({
-  action: 'reject',
-  reason: conflict.kind === 'stale_context' ? 'stale_context' : 'claim_conflict',
-});
+export const defaultPolicy: ConflictPolicy = (conflict) => {
+  if (conflict.kind !== 'stale_context') {
+    return { action: 'reject', reason: 'claim_conflict' };
+  }
+  return conflict.requestedMode === 'notify'
+    ? { action: 'notify', reason: 'stale_notify_hold' }
+    : { action: 'reject', reason: 'stale_context' };
+};
 
 /**
  * Capability-gated preemption. An `claim_held` conflict is PREEMPTED when the

@@ -70,7 +70,7 @@ export interface PushResult {
  */
 export async function pushSchema(
   schema: Schema,
-  args: Pick<PushArgs, 'url' | 'apiKey' | 'force' | 'renames' | 'backfills'>,
+  args: Pick<PushArgs, 'url' | 'apiKey' | 'overwrite' | 'renames' | 'backfills'>,
 ): Promise<PushResult> {
   const schemaJson = JSON.parse(serializeSchema(schema)) as unknown;
   const res = await fetch(`${args.url}/api/schema`, {

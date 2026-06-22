@@ -102,7 +102,7 @@ export interface SourceOperation {
   readonly input?: Record<string, unknown> | null;
   readonly transactionId?: string | null;
   readonly readAt?: number | null;
-  readonly onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
+  readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
 }
 
 export interface SourceDelta {
@@ -1078,6 +1078,36 @@ export {
   type PushQueueOptions,
   type PushQueueStorage,
 } from './pushQueue.js';
+
+// ── Reverse-channel connector (outbound transport for the commit/load/list leg) ──
+// The dial-out counterpart to `createPushQueue`. Lets a customer serve Data
+// Source `commit`/`load`/`list` from localhost or a locked-down VPC with no
+// public inbound URL — see `connector-protocol.ts`.
+export {
+  createSourceConnector,
+  DEFAULT_RECONNECT_SCHEDULE,
+  type SourceConnector,
+  type SourceConnectorOptions,
+  type ConnectorWebSocket,
+  type ConnectorWebSocketFactory,
+  type ConnectorStatus,
+} from './connector.js';
+export {
+  SOURCE_CONNECTOR_PROTOCOL_VERSION,
+  SOURCE_CONNECTOR_WS_PATH,
+  WS_SOURCE_SUBPROTOCOL,
+  sourceConnectorSubprotocols,
+  encodeFrame,
+  decodeFrame,
+  ConnectorProtocolError,
+  connectorFrameSchema,
+  type ConnectorFrame,
+  type RegisterFrame,
+  type ReadyFrame,
+  type RequestFrame,
+  type ResponseFrame,
+  type ErrorFrame,
+} from './connector-protocol.js';
 
 // ── Data Source adapter interface (Zod contract + one interface, per-ORM packages) ──
 export {

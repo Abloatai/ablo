@@ -20,6 +20,7 @@
  */
 
 import { z } from 'zod';
+import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
 import type { Schema, SchemaRecord, InferModel, InferCreate, InferModelNames } from '../schema/schema.js';
 import { baseFieldsSchema } from '../schema/schema.js';
 import type { ModelDef } from '../schema/model.js';
@@ -614,14 +615,14 @@ export interface CommitOperationInput {
   readonly data?: Record<string, unknown> | null;
   readonly transactionId?: string | null;
   readonly readAt?: number | null;
-  readonly onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
+  readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
 }
 
 export interface CommitCreateOptions {
   readonly claimRef?: string | { readonly id: string } | null;
   readonly idempotencyKey?: string | null;
   readonly readAt?: number | null;
-  readonly onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
+  readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
   /**
    * A claim handle from `ablo.<model>.claim({ id })` (or the HTTP claim
    * surface). Same vocabulary as the per-model writes: the handle's
@@ -634,12 +635,30 @@ export interface CommitCreateOptions {
   readonly operation?: CommitOperationInput;
   readonly operations?: readonly CommitOperationInput[];
   readonly wait?: CommitWait;
+  /**
+   * Batch-level read dependencies (the STORM "did anything I looked at change?"
+   * layer). Declare the rows (`{model,id,readAt,fields?}`) or sync groups
+   * (`{group,readAt}`, e.g. `deck:abc`) this batch was premised on; the server
+   * validates none moved since `readAt` and fires the entry's `onStale` over the
+   * batch. Distinct from the write-target `readAt` — this guards what you READ,
+   * not what you write.
+   */
+  readonly reads?: readonly ReadDependency[] | null;
 }
 
 export interface CommitReceipt {
   readonly id: string;
   readonly status: CommitWait;
   readonly lastSyncId?: number;
+  /**
+   * Stale-context notifications (notify-instead-of-abort, non-coercion). Present
+   * only when this commit guarded a write with `onStale: 'notify' and
+   * the premise moved concurrently — the conflicting field's current value,
+   * handed back as data instead of a forced `AbloStaleContextError`. The engine
+   * surfaces state; the intelligent actor (agent or human) decides how to
+   * resolve. Also fires on `conflict:notified`.
+   */
+  readonly notifications?: readonly StaleNotification[];
 }
 
 export interface CommitResource {
@@ -656,7 +675,7 @@ export interface ModelMutationOptions extends ClaimedOptions {
   readonly claimRef?: string | { readonly id: string } | null;
   readonly idempotencyKey?: string | null;
   readonly readAt?: number | null;
-  readonly onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
+  readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
   readonly wait?: CommitWait;
   readonly claim?: ClaimHandle | ClaimOptions | null;
 }
@@ -727,6 +746,11 @@ export type SessionOperation = 'read' | 'create' | 'update' | 'delete';
 export interface CreateUserSessionParams {
   /** Your end user. `id` becomes the token's `participantId`. */
   user: { id: string };
+  /** Mint the session into THIS organization instead of the key's own org — the
+   *  Stripe Connect `Stripe-Account` pattern, for a platform serving many tenants
+   *  from one backend. Requires the `sk_` to carry the `ephemeral:mint-any-org`
+   *  scope; omit for the normal single-tenant case. */
+  organizationId?: string;
   /** Sync groups this session may subscribe to — typed (`'default'` or
    *  `<namespace>:<id>`; build with `syncGroup(kind, id)` from
    *  `@abloatai/ablo/schema`). Omit for the server default:
@@ -1656,7 +1680,8 @@ async function deriveOperationsIdempotencyKey(
 	      clientTxId: string,
 	      timeoutMs?: number,
 	      causedByTaskId?: string | null,
-	    ) => Promise<{ lastSyncId: number }>;
+	      reads?: readonly ReadDependency[] | null,
+	    ) => Promise<{ lastSyncId: number; notifications?: StaleNotification[] }>;
 	  } | null,
 	): MutationExecutor {
 	  async function commit(
@@ -1682,6 +1707,7 @@ async function deriveOperationsIdempotencyKey(
 	        clientTxId,
 	        undefined, // use sendCommit's built-in 15s default; no per-call override
 	        options?.causedByTaskId,
+	        options?.reads,
 	      );
     } catch (err) {
       // Wrap transport-level failures as connection errors so the
@@ -2677,14 +2703,21 @@ export function Ablo<const S extends SchemaRecord>(
 	      // SyncClient we already hold from createInternalComponents —
 	      // no need to leak an accessor through BaseSyncedStore.
 	      const queue = syncClient.getTransactionQueue();
-	      queue.enqueueCommit(clientTxId, operations);
+	      queue.enqueueCommit(clientTxId, operations, {
+	        ...(commitOptions.reads ? { reads: [...commitOptions.reads] } : {}),
+	      });
 
 	      if (wait === 'queued') {
 	        return { id: clientTxId, status: 'queued' };
 	      }
 
-	      const { lastSyncId } = await queue.waitForCommitReceipt(clientTxId);
-	      return { id: clientTxId, status: 'confirmed', lastSyncId };
+	      const { lastSyncId, notifications } = await queue.waitForCommitReceipt(clientTxId);
+	      return {
+	        id: clientTxId,
+	        status: 'confirmed',
+	        lastSyncId,
+	        ...(notifications && notifications.length > 0 ? { notifications } : {}),
+	      };
 	    },
 	  };
 

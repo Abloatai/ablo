@@ -1,5 +1,10 @@
 # Coordination Reference
 
+> **Governing convention:** [`concurrency-convention.md`](./concurrency-convention.md)
+> — the non-coercion principle (surface state, let the actor decide), the full
+> `onStale` taxonomy, the read-set (`reads[]`), and the boundaries. Read that for
+> the *why* and the contract; this reference is the *how* (claim mechanics + API).
+
 Coordinate long-running work on a row so humans and agents don't clobber each
 other. Most writes need none of this — a plain `ablo.<model>.update({ id, data })`
 is **last-write-wins** by default. For lost-update detection, take a claim or pass

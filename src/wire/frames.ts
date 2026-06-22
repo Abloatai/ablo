@@ -18,7 +18,7 @@
  * Changing any shape here is a wire-contract change — it requires
  * coordinated client + server updates.
  */
-import type { OnStaleMode } from '../coordination/index.js';
+import type { OnStaleMode, StaleNotification, ReadDependency } from '../coordination/index.js';
 import type { ErrorCode, RequiredCapability } from '../errors.js';
 
 // ── Client → Server ────────────────────────────────────────────────────────
@@ -47,9 +47,10 @@ export interface CommitOperation {
    */
   readAt?: number | null;
   /**
-   * Mode on stale detection. `'reject'` (default) throws
-   * AbloStaleContextError; `'force'` applies unconditionally. `'flag'` /
-   * `'merge'` are reserved, not yet implemented.
+   * Mode on stale detection (non-coercion). `'reject'` (default) throws
+   * AbloStaleContextError; `'overwrite'` applies unconditionally (blind LWW);
+   * `'notify'` holds the write and returns a `StaleNotification` for the actor
+   * to resolve.
    */
   onStale?: OnStaleMode | null;
 }
@@ -89,6 +90,15 @@ export interface CommitMessage {
      * `null` (the audit pane treats null as "no prompt-side context").
      */
     causedByTaskId?: string | null;
+    /**
+     * Batch-level read dependencies (the STORM "did anything I looked at
+     * change?" layer). Each entry is a row (`{model,id,readAt,fields?}`) or a
+     * sync group (`{group,readAt}`) the batch's writes were premised on; the
+     * server validates none moved since `readAt` and fires the entry's
+     * `onStale` disposition over the batch. Omitted ⇒ only write-targets are
+     * checked (legacy behavior).
+     */
+    reads?: ReadDependency[] | null;
   };
 }
 
@@ -113,6 +123,13 @@ export interface MutationResultMessage {
     status?: 'confirmed' | 'rejected';
     lastSyncId?: number;
     ops?: number;
+    /**
+     * Stale-context notifications for `onStale: 'notify' ops whose
+     * premise moved concurrently. Present only on a successful ack that hit a
+     * notify-resolved conflict; the client surfaces these via the
+     * `conflict:notified` event and the commit receipt instead of rejecting.
+     */
+    notifications?: StaleNotification[];
     error?: {
       code: ErrorCode;
       message: string;

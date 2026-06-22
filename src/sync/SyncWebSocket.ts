@@ -26,8 +26,26 @@ import {
 import type { CommitMessage, CommitOperation } from '../wire/index.js';
 import type { MutationOperation } from '../interfaces/index.js';
 import type { ClientSyncDelta } from '../schema/sync-delta-wire.js';
-import type { ClaimError, ClaimRejection } from '../coordination/schema.js';
-import { subscriptionAckPayloadSchema } from '../coordination/schema.js';
+import type {
+  ClaimError,
+  ClaimRejection,
+  StaleNotification,
+  ReadDependency,
+} from '../coordination/schema.js';
+import {
+  subscriptionAckPayloadSchema,
+  staleNotificationSchema,
+} from '../coordination/schema.js';
+
+/**
+ * Resolution value of a commit ack. `notifications` is present only when a
+ * guarded write (`onStale: 'notify') hit a concurrent change — the
+ * advisory self-heal signal, surfaced both here and via `conflict:notified`.
+ */
+export interface CommitAck {
+  lastSyncId: number;
+  notifications?: StaleNotification[];
+}
 import {
   WS_BEARER_SUBPROTOCOL_PREFIX,
   WS_SYNC_SUBPROTOCOL,
@@ -294,6 +312,17 @@ export interface CoreSyncEventMap {
   claim_queued: [Record<string, unknown>];
   claim_granted: [Record<string, unknown>];
   claim_lost: [Record<string, unknown>];
+  /**
+   * Notify-instead-of-abort (non-coercion). A committed write guarded with
+   * `onStale: 'notify' collided with a concurrent change; rather than
+   * forcing an outcome, the engine returned the conflicting field's current
+   * value so the actor can solve it. The resolver is the intelligent actor —
+   * an agent reasoning over the change, or a human watching the row. The commit
+   * SUCCEEDED; held ops ('notify') weren't written and the actor re-issues once
+   * it has reconciled. (The claim is the prospective form of the same
+   * non-coercion; this is the in-flight form.)
+   */
+  'conflict:notified': [{ clientTxId: string; notifications: StaleNotification[] }];
 }
 
 /**
@@ -438,7 +467,7 @@ export class SyncWebSocket<
   private pendingMutations = new Map<
     string,
     {
-      resolve: (value: { lastSyncId: number }) => void;
+      resolve: (value: CommitAck) => void;
       reject: (err: Error) => void;
       timeout: ReturnType<typeof setTimeout>;
     }
@@ -706,6 +735,11 @@ export class SyncWebSocket<
             // untrusted wire data that may be malformed or from an older server.
             const p = message.payload ?? message;
             const { clientTxId, success, lastSyncId, error } = p ?? {};
+            // Defensive: validate notifications against the canonical schema —
+            // untrusted wire data from a possibly-older/newer server.
+            const notifications = this.parseNotifications(
+              (p as { notifications?: unknown } | undefined)?.notifications,
+            );
             const pending =
               typeof clientTxId === 'string'
                 ? this.pendingMutations.get(clientTxId)
@@ -717,8 +751,20 @@ export class SyncWebSocket<
               // Coerce defensively — bigint columns serialize as strings
               // from older servers (see normalizeWireDelta).
               const ackedSyncId = Number(lastSyncId);
+              // Notify-instead-of-abort: a guarded write's premise moved. Emit
+              // the advisory signal so an agent loop can self-heal, AND resolve
+              // the receipt with it (the commit still succeeded).
+              if (notifications && notifications.length > 0) {
+                this.emit('conflict:notified', {
+                  clientTxId: typeof clientTxId === 'string' ? clientTxId : '',
+                  notifications,
+                });
+              }
               pending.resolve({
                 lastSyncId: Number.isFinite(ackedSyncId) ? ackedSyncId : 0,
+                ...(notifications && notifications.length > 0
+                  ? { notifications }
+                  : {}),
               });
             } else {
               // Capture the FULL server error so the user can see what
@@ -1240,6 +1286,7 @@ export class SyncWebSocket<
     operations: ReadonlyArray<MutationOperation>,
     clientTxId: string,
     causedByTaskId?: string | null,
+    reads?: readonly ReadDependency[] | null,
   ): CommitMessage {
     const payload: CommitMessage['payload'] = {
       operations: operations.map((op) => ({
@@ -1254,6 +1301,8 @@ export class SyncWebSocket<
       clientTxId,
     };
     if (causedByTaskId) payload.causedByTaskId = causedByTaskId;
+    // Batch-level read-set (STORM layer): rows/groups the batch was premised on.
+    if (reads && reads.length > 0) payload.reads = [...reads];
     return { type: 'commit', payload };
   }
 
@@ -1276,17 +1325,33 @@ export class SyncWebSocket<
    * NOT auto-retry here — the caller's TransactionQueue owns retry +
    * offline replay semantics and the SDK shouldn't duplicate that logic.
    */
+  /**
+   * Defensively validate the optional `notifications` array off a commit ack.
+   * Untrusted wire data — a malformed entry is dropped rather than throwing,
+   * so a bad notification never sinks an otherwise-successful commit.
+   */
+  private parseNotifications(raw: unknown): StaleNotification[] | undefined {
+    if (!Array.isArray(raw) || raw.length === 0) return undefined;
+    const out: StaleNotification[] = [];
+    for (const entry of raw) {
+      const parsed = staleNotificationSchema.safeParse(entry);
+      if (parsed.success) out.push(parsed.data);
+    }
+    return out.length > 0 ? out : undefined;
+  }
+
   sendCommit(
     operations: ReadonlyArray<MutationOperation>,
     clientTxId: string,
     timeoutMs = 15_000,
     causedByTaskId?: string | null,
-  ): Promise<{ lastSyncId: number }> {
+    reads?: readonly ReadDependency[] | null,
+  ): Promise<CommitAck> {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       return Promise.reject(this.notConnectedError('commit'));
     }
 
-    return new Promise<{ lastSyncId: number }>((resolve, reject) => {
+    return new Promise<CommitAck>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pendingMutations.delete(clientTxId);
         reject(
@@ -1302,7 +1367,7 @@ export class SyncWebSocket<
         // an open turn — keeps the wire shape stable for sessions
         // that don't use turns. Servers that don't know the field
         // ignore it; newer servers stamp it onto every delta.
-        const frame = this.buildCommitFrame(operations, clientTxId, causedByTaskId);
+        const frame = this.buildCommitFrame(operations, clientTxId, causedByTaskId, reads);
         this.ws!.send(JSON.stringify(frame));
       } catch (error) {
         clearTimeout(timeout);
@@ -1324,11 +1389,12 @@ export class SyncWebSocket<
     operations: ReadonlyArray<MutationOperation>,
     clientTxId: string,
     causedByTaskId?: string | null,
+    reads?: readonly ReadDependency[] | null,
   ): void {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       throw this.notConnectedError('commit');
     }
-    const frame = this.buildCommitFrame(operations, clientTxId, causedByTaskId);
+    const frame = this.buildCommitFrame(operations, clientTxId, causedByTaskId, reads);
     this.ws.send(JSON.stringify(frame));
   }
 

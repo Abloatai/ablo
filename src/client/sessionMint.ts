@@ -55,6 +55,7 @@ export async function mintSession<S extends SchemaRecord>(
       apiKey,
       baseUrl,
       userId: params.user.id,
+      ...(params.organizationId ? { organizationId: params.organizationId } : {}),
       ...(params.syncGroups ? { syncGroups: [...params.syncGroups] } : {}),
       ttlSeconds: params.ttlSeconds ?? 900,
       ...(ctx.fetch ? { fetch: ctx.fetch } : {}),

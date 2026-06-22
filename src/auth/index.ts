@@ -139,6 +139,10 @@ export interface MintUserSessionRequest {
   readonly baseUrl: string;
   /** The end user's external IdP id — becomes the session's `participantId`. */
   readonly userId: string;
+  /** Target org for a cross-org (platform) mint — the Stripe-Connect
+   *  `Stripe-Account` analogue. Requires the `sk_` to carry
+   *  `ephemeral:mint-any-org`; omit to mint into the key's own org. */
+  readonly organizationId?: string;
   readonly syncGroups?: readonly string[];
   readonly ttlSeconds: number;
   readonly label?: string;
@@ -189,6 +193,7 @@ export async function mintUserSessionKey(
       },
       body: JSON.stringify({
         user: { id: options.userId },
+        ...(options.organizationId ? { organizationId: options.organizationId } : {}),
         ...(options.syncGroups ? { syncGroups: options.syncGroups } : {}),
         ttlSeconds: options.ttlSeconds,
         ...(options.label ? { label: options.label } : {}),

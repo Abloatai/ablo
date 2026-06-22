@@ -19,7 +19,7 @@ import { z } from 'zod';
 import type { MutationOptions } from '../interfaces/index.js';
 import { AbloValidationError } from '../errors.js';
 
-export const onStaleModeSchema = z.enum(['reject', 'force', 'flag', 'merge']);
+export const onStaleModeSchema = z.enum(['reject', 'overwrite', 'notify']);
 
 export const writeOptionsSchema = z.object({
   /** Server-side mutation_log cache key; `null` opts out of retry-safety. */

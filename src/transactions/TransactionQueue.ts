@@ -18,6 +18,7 @@ import { handleMutationError } from './mutation-error-handler.js';
 import { AbloError, AbloConnectionError, errorCodeSpec } from '../errors.js';
 import { SyncPosition } from '../sync/syncPosition.js';
 import type { MutationOptions, WriteOptions } from '../interfaces/index.js';
+import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
 
 export interface UserContext {
   userId: string;
@@ -155,9 +156,11 @@ interface CommitTransaction {
     input?: Record<string, unknown>;
     transactionId?: string;
     readAt?: number | null;
-    onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
+    onStale?: 'reject' | 'overwrite' | 'notify' | null;
   }>;
   causedByTaskId?: string | null;
+  /** Batch-level read dependencies (STORM read-set), forwarded to the executor. */
+  reads?: ReadDependency[] | null;
   status: 'pending' | 'executing' | 'completed' | 'failed';
   createdAt: number;
   attempts: number;
@@ -208,7 +211,7 @@ function hasStaleWriteOptions(options?: WriteOptions): boolean {
 
 type WriteOperationFields = {
   readAt?: number | null;
-  onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
+  onStale?: 'reject' | 'overwrite' | 'notify' | null;
   options?: Pick<MutationOptions, 'idempotencyKey' | 'label'>;
 };
 
@@ -636,6 +639,11 @@ export class TransactionQueue extends EventEmitter {
       transaction: Transaction;
     }
   >();
+
+  // Stale-context notifications (CoAgent/MTPO notify-instead-of-abort) keyed by
+  // transaction id, populated from the commit ack and drained by
+  // `waitForCommitReceipt` so the receipt carries the self-heal signal.
+  private commitNotifications = new Map<string, StaleNotification[]>();
 
   // LINEAR PATTERN: Track delta confirmation timeouts for awaiting_delta transactions
   // Following Replicache/PowerSync pattern: retry with backoff instead of rolling back
@@ -1499,6 +1507,21 @@ export class TransactionQueue extends EventEmitter {
               const lastSyncId: number = result?.lastSyncId ?? 0;
               this.noteAck(lastSyncId);
 
+              // Notify-instead-of-abort: the server returned stale-context
+              // notifications for `onStale: 'notify'` ops whose premise moved.
+              // Every notified op was HELD (not written) — its optimistic state
+              // must be rolled back here; no delta will ever confirm it. We also
+              // stamp the signal so `waitForCommitReceipt` carries it onto the
+              // receipt.
+              const notifications = result?.notifications;
+              const heldIds = new Set((notifications ?? []).map((n) => n.id));
+              for (const { tx } of batchOps) {
+                const txNotifs = notifications?.filter((n) => n.id === tx.modelId);
+                if (txNotifs && txNotifs.length > 0) {
+                  this.commitNotifications.set(tx.id, txNotifs);
+                }
+              }
+
               // Detect server bug: lastSyncId 0 means mutation succeeded but no sync delta was emitted
               if (lastSyncId === 0) {
                 getContext().observability.captureCommitZeroSyncId({
@@ -1512,6 +1535,20 @@ export class TransactionQueue extends EventEmitter {
               // LINEAR PATTERN: Mark as awaiting_delta with syncId threshold
               // Transactions will be confirmed when any delta with id >= lastSyncId arrives
               for (const { tx } of batchOps) {
+                // Held op ('notify'): the server withheld the write, so no delta
+                // will confirm it. Roll back the optimistic update (server
+                // wins) and complete the transaction now — the agent self-heals
+                // from the notification rather than waiting out the delta
+                // timeout. The receipt still resolves (commit succeeded).
+                if (heldIds.has(tx.modelId)) {
+                  await this.rollbackOptimistic(tx, 'conflict_server_wins');
+                  this.store.updateStatus(tx.id, 'completed');
+                  this.emit('transaction:completed', tx);
+                  this.emit(`transaction:completed:${tx.id}`, tx);
+                  this.optimisticUpdates.delete(tx.id);
+                  continue;
+                }
+
                 tx.syncIdNeededForCompletion = lastSyncId;
 
                 // Safety net: when lastSyncId is 0, DELETE transactions should be confirmed
@@ -1934,7 +1971,7 @@ export class TransactionQueue extends EventEmitter {
   enqueueCommit(
     clientTxId: string,
     operations: CommitTransaction['operations'],
-    options: { causedByTaskId?: string | null } = {},
+    options: { causedByTaskId?: string | null; reads?: ReadDependency[] | null } = {},
   ): void {
     if (this.commitStore.has(clientTxId)) return;
     const tx: CommitTransaction = {
@@ -1942,6 +1979,7 @@ export class TransactionQueue extends EventEmitter {
       kind: 'commit',
       operations: [...operations],
       causedByTaskId: options.causedByTaskId ?? null,
+      ...(options.reads ? { reads: options.reads } : {}),
       status: 'pending',
       createdAt: Date.now(),
       attempts: 0,
@@ -1979,6 +2017,7 @@ export class TransactionQueue extends EventEmitter {
           const result = await this.mutationExecutor.commit(tx.operations, {
             idempotencyKey: tx.id,
             causedByTaskId: tx.causedByTaskId ?? undefined,
+            ...(tx.reads ? { reads: tx.reads } : {}),
           });
           tx.lastSyncId = result?.lastSyncId ?? 0;
           this.noteAck(tx.lastSyncId);
@@ -2022,11 +2061,20 @@ export class TransactionQueue extends EventEmitter {
    * rejects on permanent failure. Backs the `wait: 'confirmed'` semantics
    * of `ablo.commits.create()`.
    */
-  waitForCommitReceipt(clientTxId: string): Promise<{ lastSyncId: number }> {
+  waitForCommitReceipt(
+    clientTxId: string,
+  ): Promise<{ lastSyncId: number; notifications?: StaleNotification[] }> {
+    // Drain any stale-context notifications stamped for this tx on the ack.
+    const drainNotifications = (): StaleNotification[] | undefined => {
+      const n = this.commitNotifications.get(clientTxId);
+      if (!n) return undefined;
+      this.commitNotifications.delete(clientTxId);
+      return n.length > 0 ? n : undefined;
+    };
     return new Promise((resolve, reject) => {
       const existing = this.commitStore.get(clientTxId);
       if (existing?.status === 'completed') {
-        resolve({ lastSyncId: existing.lastSyncId ?? 0 });
+        resolve({ lastSyncId: existing.lastSyncId ?? 0, notifications: drainNotifications() });
         return;
       }
       if (existing?.status === 'failed' && existing.error) {
@@ -2035,7 +2083,7 @@ export class TransactionQueue extends EventEmitter {
       }
       const onCompleted = (tx: CommitTransaction) => {
         cleanup();
-        resolve({ lastSyncId: tx.lastSyncId ?? 0 });
+        resolve({ lastSyncId: tx.lastSyncId ?? 0, notifications: drainNotifications() });
       };
       const onFailed = ({ error }: { error: Error }) => {
         cleanup();

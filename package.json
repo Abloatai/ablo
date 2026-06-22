@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "The Collaboration Layer For AI Agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -87,6 +87,11 @@
       "types": "./dist/keys/index.d.ts",
       "import": "./dist/keys/index.js",
       "default": "./dist/keys/index.js"
+    },
+    "./auth": {
+      "types": "./dist/auth/index.d.ts",
+      "import": "./dist/auth/index.js",
+      "default": "./dist/auth/index.js"
     },
     "./environment": {
       "types": "./dist/environment.d.ts",

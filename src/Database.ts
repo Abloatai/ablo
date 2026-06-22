@@ -33,7 +33,7 @@ interface PersistedMutation {
   timestamp: string;
   writeOptions?: {
     readAt?: number | null;
-    onStale?: 'reject' | 'force' | 'flag' | 'merge' | null;
+    onStale?: 'reject' | 'overwrite' | 'notify' | null;
   };
 }
 

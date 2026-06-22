@@ -122,6 +122,16 @@ export {
   verifyAbloSourceRequest,
 } from './source/index.js';
 
+// Reverse-channel connector: serve the Data Source `commit`/`load`/`list` leg
+// over an OUTBOUND WebSocket (localhost / locked-down VPC, no public inbound
+// URL). The dial-out counterpart to `createPushQueue` for the `events` leg.
+export {
+  createSourceConnector,
+  type SourceConnector,
+  type SourceConnectorOptions,
+  type ConnectorStatus,
+} from './source/connector.js';
+
 // Schema DSL is intentionally published from `@abloatai/ablo/schema`.
 // Keeping it out of the root import preserves one clean runtime surface:
 // `import Ablo from '@abloatai/ablo'`.
@@ -186,6 +196,13 @@ export {
 } from './client/writeOptionsSchema.js';
 export type { WriteOptionsInput } from './client/writeOptionsSchema.js';
 export type { WriteOptions, MutationOptions } from './interfaces/index.js';
+
+// Notify-instead-of-abort signal: the value handed back to a committer whose
+// write hit a stale-context conflict under `onStale: 'notify' so its
+// agent can self-heal rather than discard work (see coordination/schema.ts and
+// docs/coordination.md → "Notify, do not abort").
+export { staleNotificationSchema, readDependencySchema } from './coordination/schema.js';
+export type { StaleNotification, ReadDependency } from './coordination/schema.js';
 // Storage-wedge detection — lets app shells render a recovery screen when the
 // IndexedDB backing store is stuck (see core/openIDBWithTimeout.ts).
 export { IDBOpenTimeoutError, isStorageOpenTimeout } from './core/openIDBWithTimeout.js';

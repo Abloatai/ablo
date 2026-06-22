@@ -16,6 +16,7 @@
 import type { ParticipantKind, ConfirmationState } from '../schema/sync-delta-row.js';
 import type { ParticipantRef } from '../schema/sync-delta-wire.js';
 import type { Environment } from '../environment.js';
+import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
 
 export interface CommitContext {
   participantId: string;
@@ -87,6 +88,14 @@ export interface CommitContext {
    * `caused_by_task_id` when present, but client writes leave it `null`.
    */
   causedByTaskId?: string | null;
+  /**
+   * Batch-level read dependencies (the STORM read-set layer). The committer
+   * declares rows/groups it READ to form this batch; the engine validates none
+   * changed since their `readAt` and fires each entry's `onStale` disposition
+   * over the whole batch. Distinct from the per-op `readAt` guard, which only
+   * validates the rows being WRITTEN. Omit for write-target-only checking.
+   */
+  reads?: ReadDependency[] | null;
 }
 
 /**
@@ -99,4 +108,12 @@ export interface CommitContext {
 export interface CommitResult {
   lastSyncId: number;
   firstSyncId: number;
+  /**
+   * Stale-context notifications for ops the committer guarded with
+   * `onStale: 'notify'. Present (non-empty) only when a guarded write
+   * collided with a concurrent change; the committer self-heals from these
+   * rather than receiving an `AbloStaleContextError`. See
+   * `StaleNotification` in `coordination/schema.ts`.
+   */
+  notifications?: StaleNotification[];
 }

@@ -205,6 +205,47 @@ await ablo.weatherReports.update({
 });
 ```
 
+## Local development & locked-down VPC — the reverse channel
+
+The signed route above is an **inbound webhook**: Ablo Cloud calls your HTTPS
+endpoint. That needs a public URL — which `localhost` doesn't have, and a
+locked-down VPC won't expose. The reverse channel fixes both. A connector you run
+next to your database dials an **outbound** WebSocket to Ablo Cloud and serves the
+same `commit`/`load`/`list` requests over it — the Stripe-CLI `stripe listen`
+pattern. No tunnel, no public endpoint, and your database credentials never leave
+your process.
+
+It wraps the **same handler** your deployed route uses — share the options object,
+so there's zero handler drift:
+
+```ts
+// scripts/ablo-connector.ts — run locally, or as a sidecar in a private VPC
+import { dataSource, createSourceConnector } from '@abloatai/ablo';
+import { sourceOptions } from '@/ablo/source'; // the same object route.ts passes
+
+const connector = createSourceConnector({
+  apiKey: process.env.ABLO_API_KEY!,         // sk_test_* for the dev loop
+  handler: dataSource(sourceOptions),         // the unchanged (Request) => Response
+});
+
+const controller = new AbortController();
+await connector.run(controller.signal);       // dials out, serves until aborted
+```
+
+When a connector is attached for a source, Ablo Cloud drains that source's
+`commit`/`load`/`list` down the socket instead of POSTing the webhook; when none
+is attached, the inbound webhook path is used unchanged. The drained requests
+carry the **same** Standard Webhooks signature, so `dataSource` verifies them
+exactly as on the webhook path — the transport changes, the trust model does not.
+
+**Production / no-public-URL deploy.** By default the connector is gated to
+`sk_test_*` keys (the dev-loop affordance). A customer who genuinely cannot expose
+an inbound endpoint — a locked-down VPC — can run the connector as their deployed
+production transport by opting that source into `reverseChannelProd` and using an
+`sk_live_*` key. The inbound webhook remains the default for everyone else (it's
+stateless and lower-latency); the reverse channel is the escape hatch for
+no-inbound environments.
+
 ## Commit Request
 
 When Ablo calls your Data Source, it sends a signed JSON request:
