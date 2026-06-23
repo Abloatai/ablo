@@ -659,6 +659,13 @@ export interface CommitReceipt {
    * resolve. Also fires on `conflict:notified`.
    */
   readonly notifications?: readonly StaleNotification[];
+  /**
+   * Ids of UPDATE/DELETE targets in this commit that matched ZERO rows (the row
+   * doesn't exist, or is outside the caller's org). Present (non-empty) only
+   * when a write missed. Typed resource wrappers turn this into a loud
+   * `AbloNotFoundError`; a raw `commits.create` caller can inspect it directly.
+   */
+  readonly missingIds?: readonly string[];
 }
 
 export interface CommitResource {

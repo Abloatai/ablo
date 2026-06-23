@@ -130,6 +130,13 @@ export interface MutationResultMessage {
      * `conflict:notified` event and the commit receipt instead of rejecting.
      */
     notifications?: StaleNotification[];
+    /**
+     * Ids of UPDATE/DELETE targets that matched ZERO rows (don't exist or are
+     * outside the org). Present (non-empty) only when a write missed. The
+     * client turns this into a loud `AbloNotFoundError` for the affected
+     * caller instead of treating the no-op as success.
+     */
+    missingIds?: string[];
     error?: {
       code: ErrorCode;
       message: string;

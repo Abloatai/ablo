@@ -116,4 +116,13 @@ export interface CommitResult {
    * `StaleNotification` in `coordination/schema.ts`.
    */
   notifications?: StaleNotification[];
+  /**
+   * Ids of UPDATE/DELETE targets that matched ZERO rows — the row doesn't
+   * exist (or is outside the caller's org). The engine has always detected
+   * this (and logged it); surfacing it here lets the client turn a silent
+   * no-op into a loud `AbloNotFoundError`. Present (non-empty) only when at
+   * least one op missed. Ids are globally-unique uuids, so a caller can match
+   * its own target id against this set without ambiguity.
+   */
+  missingIds?: string[];
 }

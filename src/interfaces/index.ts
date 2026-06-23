@@ -232,6 +232,11 @@ export interface CommitResult {
    * receiving an `AbloStaleContextError`. See `StaleNotification`.
    */
   notifications?: StaleNotification[];
+  /**
+   * Ids of UPDATE/DELETE targets that matched ZERO rows (loud 0-row writes).
+   * Present (non-empty) only when a write missed.
+   */
+  missingIds?: string[];
 }
 
 /**

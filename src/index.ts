@@ -154,6 +154,7 @@ export {
   AbloIdempotencyError,
   AbloConnectionError,
   AbloValidationError,
+  AbloNotFoundError,
   AbloServerError,
   AbloStaleContextError,
   AbloClaimedError,

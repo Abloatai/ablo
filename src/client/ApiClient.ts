@@ -227,6 +227,8 @@ interface CommitResponse {
   readonly success?: boolean;
   readonly lastSyncId?: number;
   readonly ops?: number;
+  /** Ids of UPDATE/DELETE targets that matched zero rows (loud 0-row writes). */
+  readonly missingIds?: readonly string[];
 }
 
 interface ClaimListResponse {
@@ -646,6 +648,9 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         id: body.id ?? body.clientTxId ?? clientTxId,
         status,
         lastSyncId: body.lastSyncId,
+        ...(body.missingIds && body.missingIds.length > 0
+          ? { missingIds: body.missingIds }
+          : {}),
       };
     },
   };

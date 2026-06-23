@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.15.1
+
+### Patch Changes
+
+- Loud 0-row writes: surface unmatched UPDATE/DELETE ids and add `AbloNotFoundError`
+
+  A commit now reports the ids of any UPDATE/DELETE that matched zero rows on
+  `CommitReceipt.missingIds`, and the new exported `AbloNotFoundError` lets typed
+  write wrappers throw instead of silently treating a missed write as success.
+  Additive and back-compatible (the field is omitted when nothing missed). This
+  unblocks the slides-sdk name-addressing / own-your-id work, which relies on a
+  loud failure when a stale id is written.
+
 ## 0.15.0
 
 ### Minor Changes
@@ -11,7 +24,7 @@
   **`onStale` redesigned — Stripe-aligned values (BREAKING).**
 
   The mode set is now `'reject' | 'overwrite' | 'notify'`. Each value names its outcome:
-  - **`notify` (new, non-coercive)** — the conflicting write is **held** (not applied) and the commit returns a `StaleNotification` carrying the conflicting field's *current* value, so the actor reconciles and re-commits rather than losing work. The rest of the batch still commits.
+  - **`notify` (new, non-coercive)** — the conflicting write is **held** (not applied) and the commit returns a `StaleNotification` carrying the conflicting field's _current_ value, so the actor reconciles and re-commits rather than losing work. The rest of the batch still commits.
   - **`overwrite`** (was `force`) — blind last-writer-wins, no signal.
   - **`reject`** (default, unchanged) — throws `AbloStaleContextError`.
 
@@ -33,10 +46,9 @@
   **Conflict policy.** `ConflictDecision` gains `{ action: 'notify' }`; `defaultPolicy` maps `onStale: 'notify'` → notify-and-hold, everything else → reject. `StaleContextConflict.requestedMode` is added so custom policies can honor the caller's declared intent.
 
 - **Data Source reverse-channel connector (new).** A customer Data Source can now **dial out** to the engine over a single outbound WebSocket (`ablo.source.v1` subprotocol) instead of exposing an inbound HTTP endpoint — the deployment shape private/VPC stores need.
-
   - **`createSourceConnector({ apiKey, handler, baseURL? })`** (new public API, exported from the root and `/source`) — opens one outbound socket (Node global `WebSocket`, no new dependency), with reconnect/backoff, and serves the customer's existing Data Source `handler`.
   - Server side: a connector registry + `/v1/source/listen` upgrade route bridge requests down / responses up, teed into `SourceClient` through the storage resolver.
-  - **Trust model unchanged:** the Standard-Webhooks HMAC is signed *above* the transport, so the socket carries the signed envelope byte-for-byte and the customer's `verifyAbloSourceRequest` is untouched. Transport changes, trust model doesn't.
+  - **Trust model unchanged:** the Standard-Webhooks HMAC is signed _above_ the transport, so the socket carries the signed envelope byte-for-byte and the customer's `verifyAbloSourceRequest` is untouched. Transport changes, trust model doesn't.
   - Opt-in per source via `reverse_channel_prod` (migration `20260622150000`); gated in `authorizeUpgrade`.
 
 ## 0.14.0

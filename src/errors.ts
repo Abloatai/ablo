@@ -187,6 +187,28 @@ export class AbloValidationError extends AbloError {
   readonly type = 'AbloValidationError' as const;
 }
 
+/**
+ * 404 — an UPDATE/DELETE addressed a row that doesn't exist (or is outside the
+ * caller's org). The engine reports such targets on `CommitReceipt.missingIds`;
+ * the typed resource wrappers raise this instead of returning a success receipt
+ * for a write that quietly matched zero rows. Carries the offending ids so a
+ * caller can see exactly which targets were absent.
+ */
+export class AbloNotFoundError extends AbloError {
+  readonly type = 'AbloNotFoundError' as const;
+  /** The id(s) that matched no row. */
+  readonly missingIds: readonly string[];
+  constructor(message: string, missingIds: readonly string[], options?: { requestId?: string }) {
+    super(message, {
+      code: 'mutate_update_entity_not_found',
+      httpStatus: 404,
+      details: { missingIds },
+      ...(options?.requestId !== undefined ? { requestId: options.requestId } : {}),
+    });
+    this.missingIds = missingIds;
+  }
+}
+
 /** 5xx — server-side error. Usually retryable with backoff. */
 export class AbloServerError extends AbloError {
   readonly type = 'AbloServerError' as const;
@@ -440,6 +462,10 @@ export interface CommitReceipt {
   /** Number of operations metered. Reported on both success and
    *  rejection so quota systems see attempted work. */
   readonly ops?: number;
+  /** Ids of UPDATE/DELETE targets that matched ZERO rows (loud 0-row writes).
+   *  Present (non-empty) only when a write missed; typed wrappers raise
+   *  `AbloNotFoundError` from it. */
+  readonly missingIds?: readonly string[];
   /** Populated on rejection. `requiredCapability` (when present)
    *  carries the x402-style structured retry hint. */
   readonly error?: {
