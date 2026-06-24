@@ -60,6 +60,73 @@ anything extra.
 
 ---
 
+## Declaring conflict behaviour in the schema (Axis 3)
+
+The two enforcement layers above are decided **per write** (claim a row, or pass
+`readAt` + `onStale`). You can also declare a model's **default** conflict
+disposition once, in the schema, so every commit to that model is governed
+without per-call wiring. This is the third coordination axis — orthogonal to
+`policy` (who may read a row) and `groups` (which delta channels it fans into).
+
+Add a `conflict` map to `model(...)`, keyed by the **committer's** participant
+kind (`user` / `agent` / `system`), with the same `onStale` vocabulary as values:
+
+| value | meaning |
+|---|---|
+| `'overwrite'` | the write wins; that committer is never blocked. |
+| `'reject'` | the write is refused; that committer yields to a held claim / stale snapshot. |
+| `'notify'` | hold the write and hand back the current value so the committer re-reads and re-applies (stale writes only). |
+
+```ts
+import { model, field } from '@abloatai/ablo/schema';
+
+export const card = model('card', {
+  title: field.string(),
+}, {
+  // "a human's edit always wins (never blocked); an agent yields"
+  conflict: { user: 'overwrite', agent: 'reject' },
+});
+```
+
+### Composable helpers
+
+For the same map with an authoring surface that reads like the rest of the DSL,
+use the disposition helpers and the `coordination(...)` combinator (a `cn`/`cx`
+for conflict policy — later rules win on key collisions):
+
+```ts
+import { model, field, coordination, humansOverwrite, agentsReject } from '@abloatai/ablo/schema';
+
+export const card = model('card', {
+  title: field.string(),
+}, {
+  conflict: coordination(humansOverwrite(), agentsReject()),
+  // → { user: 'overwrite', agent: 'reject' }
+});
+```
+
+Helpers, one per disposition: `humansOverwrite` / `humansReject` / `humansNotify`,
+`agentsOverwrite` / `agentsReject` / `agentsNotify`,
+`systemOverwrite` / `systemReject` / `systemNotify`.
+
+### How it relates to per-write coordination
+
+- The `conflict` map is **pure, serializable data**: it ships in your pushed
+  schema (`npx ablo push`) and the engine interprets it at the commit
+  chokepoint — there is no per-model code on the server.
+- An **omitted committer kind falls through to the engine default**: reject, and
+  honor a per-write `onStale: 'notify'`. Declaring `conflict` is purely
+  additive — existing schemas behave exactly as before.
+- It sets the **default** disposition; a per-write `onStale` and a held `claim`
+  still apply on top as described above. Think of `conflict` as "the house rule
+  for this model," and `claim` / `onStale` as what an individual write does
+  within it.
+
+The `ConflictAxis` type (also available as `Ablo.Conflict.Axis`) and the
+`interpretConflictAxis` interpreter are exported for composing custom policies.
+
+---
+
 ## The claim state object
 
 The claim state object is the live record that a participant is coordinating work on

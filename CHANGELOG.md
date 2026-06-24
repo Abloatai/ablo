@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.16.2
+
+### Patch Changes
+
+- **`mintUserSessionKey`: name the shared-schema binding around the project.** The
+  two flat options added in 0.16.0 (`schemaOwnerOrgId` + `schemaProjectId`) are
+  replaced by one project-centric option — `schemaProject: { organizationId, projectId }` —
+  naming "the project that owns the schema" as a single concept. The wire format
+  is unchanged (the SDK still sends the same keys), so no server redeploy is
+  needed. Released as a patch: the replaced options shipped in 0.16.0 and have no
+  external consumers yet.
+
+  ```ts
+  // before
+  mintUserSessionKey({ organizationId, schemaOwnerOrgId, schemaProjectId, ... });
+  // after
+  mintUserSessionKey({
+    organizationId,                                  // data org
+    schemaProject: { organizationId, projectId },    // the project that owns the schema
+    ...
+  });
+  ```
+
 ## 0.16.1
 
 ### Patch Changes
@@ -10,7 +33,7 @@
   `ABLO_AUTH_URL`), while the human approval page (`/cli`), sign-up, and the
   key-handoff route (`/api/cli/provision-key`) go to the dashboard host
   (`www.abloatai.com`, new override `ABLO_DASHBOARD_URL`). Previously every step
-  ran against `www`, where the Better Auth device endpoints no longer resolve —
+  ran against `www`, where the device endpoints no longer resolve —
   producing "Couldn't start login… Is the dashboard reachable?". The CLI now also
   builds the approval URL itself rather than trusting the server's
   `verification_uri`, which (being a relative `/cli`) resolved against the auth

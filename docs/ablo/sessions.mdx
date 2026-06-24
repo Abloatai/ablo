@@ -172,6 +172,59 @@ membership** (e.g. a `dataroom:<id>` the user was just added to) is resolved
 **server-side at connect** and unioned on top — so scope stays live, not frozen
 at mint time. Pass `syncGroups` only when you want to *narrow* below the default.
 
+## Your schema, your users (the default)
+
+Your schema lives in a **project** — you push it once (`npx ablo push`) and every
+session you mint resolves against it. The flow for serving end-users:
+
+1. **Push your schema** to your project.
+2. **Mint an `ek_` per user** — `sessions.create({ user: { id } })`. Your users
+   commit to that one schema.
+
+**Your users do not have Ablo accounts.** You authenticate them however you
+already do; your server's `sk_` mints the `ek_`. By default the session lands in
+your project's own org, so all your users share one schema and one data tenant,
+isolated from each other by sync-groups. For most apps (the Cursor shape) that's
+the whole story — nothing below is needed.
+
+## Org-per-customer isolation (the add-on)
+
+Some apps need each customer to be its **own** tenant — a hard data boundary
+(separate row-level isolation, optionally a separate database), not just per-user
+scoping. The law-firm shape (Legora): every firm is its own org, many users
+inside it.
+
+The problem that creates: if each customer is a separate org, a naïve setup would
+make you re-push your schema into every new customer's org. You don't have to.
+Keep **one** project as the home of your schema, and point each customer's
+session's *schema* at it while its *data* stays in the customer's own org:
+
+```ts
+const { token } = await mintUserSessionKey({
+  apiKey: process.env.ABLO_PLATFORM_KEY, // sk_ with the ephemeral:mint-any-org scope
+  userId,
+  organizationId,                  // DATA → this customer's org (its own isolated tenant)
+  schemaProject: {                 // SCHEMA → the project that owns your schema
+    organizationId: schemaOwnerOrgId,
+    projectId: schemaProjectId,
+  },
+  ttlSeconds: 3600,
+});
+```
+
+Server-side the split is clean: the model **shape** loads from your schema
+project, but column enrichment and the tenant connection target the customer's
+`organizationId` — so the shared schema only *describes* the shape; the data
+plane (connection + row-level isolation) stays the customer's. A shared schema
+can't leak data across orgs.
+
+<Note>
+This requires a platform `sk_` carrying the `ephemeral:mint-any-org` scope —
+only a trusted first-party key can mint a session into another org and bind its
+schema to your project. Omit these fields and you get the default above: one
+project, one schema, all your users.
+</Note>
+
 ## Security
 
 The whole safety argument is the short TTL: a session token leaked from a

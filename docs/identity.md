@@ -156,6 +156,40 @@ The identity is a **participant** — and a participant is either a human
 [Agents are participants too](#agents-are-participants-too) below. Everything in
 the next two sections applies to both.
 
+## Your schema lives in a project; your users commit to it
+
+The default is simple: your schema lives in a **project**, you push it once, and
+every session you mint resolves against it. Your end-users **don't have Ablo
+accounts** — your server's `sk_` mints an `ek_` per user, and by default that
+session lands in your project's own org. All your users share one schema, one
+data tenant, isolated from each other by sync-groups. That's the whole story for
+most apps.
+
+**Add-on — org-per-customer isolation.** If you need each customer to be its own
+hard tenant (separate row-level isolation, optionally a separate database) you'd
+otherwise have to re-push your schema into every customer's org. Instead, keep one
+project as the home of your schema and point each customer's session's *schema*
+at it while its *data* stays in the customer's org:
+
+```ts
+await mintUserSessionKey({
+  apiKey: platformKey,   // sk_ with the `ephemeral:mint-any-org` scope
+  userId,
+  organizationId,                  // DATA → this customer's org (RLS-isolated tenant)
+  schemaProject: {                 // SCHEMA → the project that owns your schema
+    organizationId: schemaOwnerOrgId,
+    projectId: schemaProjectId,
+  },
+  ttlSeconds: 3600,
+});
+```
+
+Server-side, the model **shape** loads from your schema project but column
+enrichment and the tenant connection still target `organizationId` — so the
+shared schema only *describes* the shape; the data plane stays the customer's and
+can't cross-leak. Omit these fields for the default above. Requires a platform
+`sk_` with `ephemeral:mint-any-org`.
+
 ## The two halves of scoping
 
 Scoping is two declarations that meet in the middle. One describes the

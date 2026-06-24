@@ -143,13 +143,18 @@ export interface MintUserSessionRequest {
    *  `Stripe-Account` analogue. Requires the `sk_` to carry
    *  `ephemeral:mint-any-org`; omit to mint into the key's own org. */
   readonly organizationId?: string;
-  /** FIRST-PARTY SHARED SCHEMA: bind the minted `ek_` to a schema owner-org +
-   *  project so SCHEMA resolves org-independently (one schema for all the
-   *  integrator's end-user orgs), while DATA stays scoped to `organizationId`.
-   *  Requires the `sk_` to carry `ephemeral:mint-any-org`. Omit for the normal
-   *  per-org behaviour (every external BYO customer). */
-  readonly schemaProjectId?: string;
-  readonly schemaOwnerOrgId?: string;
+  /** SHARED SCHEMA — point this session's SCHEMA at the project that owns it,
+   *  while its DATA stays scoped to `organizationId`. Use this for org-per-customer
+   *  isolation: keep one schema project, and every customer's session resolves its
+   *  schema from it instead of re-pushing the schema into each customer's org.
+   *  Requires the `sk_` to carry `ephemeral:mint-any-org`. Omit for the default
+   *  (the session resolves its schema from its own org). */
+  readonly schemaProject?: {
+    /** The org that owns the schema project. */
+    readonly organizationId: string;
+    /** The project the schema was pushed under. */
+    readonly projectId: string;
+  };
   readonly syncGroups?: readonly string[];
   readonly ttlSeconds: number;
   readonly label?: string;
@@ -201,8 +206,14 @@ export async function mintUserSessionKey(
       body: JSON.stringify({
         user: { id: options.userId },
         ...(options.organizationId ? { organizationId: options.organizationId } : {}),
-        ...(options.schemaProjectId ? { schemaProjectId: options.schemaProjectId } : {}),
-        ...(options.schemaOwnerOrgId ? { schemaOwnerOrgId: options.schemaOwnerOrgId } : {}),
+        // Flattened to the existing wire keys — the public param is project-centric,
+        // the transport contract is unchanged (no coordinated server deploy needed).
+        ...(options.schemaProject
+          ? {
+              schemaProjectId: options.schemaProject.projectId,
+              schemaOwnerOrgId: options.schemaProject.organizationId,
+            }
+          : {}),
         ...(options.syncGroups ? { syncGroups: options.syncGroups } : {}),
         ttlSeconds: options.ttlSeconds,
         ...(options.label ? { label: options.label } : {}),

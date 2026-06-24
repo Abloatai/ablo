@@ -111,7 +111,13 @@ function parseProjectFlag(argv: readonly string[]): string | undefined {
   return eq ? eq.slice('--project='.length) || undefined : undefined;
 }
 
-async function deviceLogin(argv: readonly string[]): Promise<void> {
+/** Injectable seam (tests capture the approval URL; default opens the OS browser). */
+export interface LoginDeps {
+  readonly openUrl?: (url: string) => void;
+}
+
+async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promise<void> {
+  const openUrl = deps.openUrl ?? openBrowser;
   intro(`${brand('ablo')} login`);
 
   // Which project to scope the minted pair to: an explicit `--project`, else
@@ -173,7 +179,7 @@ async function deviceLogin(argv: readonly string[]): Promise<void> {
       : `${DASHBOARD_URL}${approvePath}`;
 
   note(`${pc.bold(code.user_code)}\n\n${pc.dim(url)}`, 'Approve in your browser');
-  openBrowser(url);
+  openUrl(url);
 
   const s = spinner();
   s.start('Waiting for approval…');
@@ -278,8 +284,8 @@ async function deviceLogin(argv: readonly string[]): Promise<void> {
   );
 }
 
-export async function login(argv: readonly string[] = []): Promise<void> {
-  await deviceLogin(argv);
+export async function login(argv: readonly string[] = [], deps: LoginDeps = {}): Promise<void> {
+  await deviceLogin(argv, deps);
 }
 
 export function logout(): void {
