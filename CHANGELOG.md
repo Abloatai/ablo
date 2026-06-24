@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.3
+
+### Patch Changes
+
+- **Docs.** The bundled SDK docs are now the single source for the documentation
+  site, and several pages were expanded or corrected:
+  - The sessions/identity model is reframed around **projects** — push one schema
+    to a project, mint an `ek_` per user (your users need no Ablo account), and
+    all of them commit to that one schema. Per-customer org isolation
+    (`schemaProject`) is presented as the add-on it is, not the default.
+  - The declarative `conflict` schema axis (Axis 3) is now documented.
+  - The agent docs were corrected to the current claim vocabulary
+    (`reason`/`queue`, not the pre-0.12.0 `action`/`wait`).
+
+  No code changes.
+
 ## 0.16.2
 
 ### Patch Changes
