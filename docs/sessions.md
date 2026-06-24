@@ -1,9 +1,4 @@
----
-title: "Sessions"
-description: "Short-lived, scoped credentials your backend mints -- one resource for both end-user browser sessions and scoped agents."
----
-
-{/* AUTO-GENERATED from packages/sync-engine/docs/sessions.md -- edit there, then run `npm run build:docs`. */}
+# Sessions
 
 A **session** is a short-lived credential your backend mints with its `sk_` and
 hands to one actor — a signed-in **person's browser** or a scoped **agent**. It's

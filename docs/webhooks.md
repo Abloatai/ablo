@@ -1,8 +1,4 @@
----
-title: "Webhooks"
----
-
-{/* AUTO-GENERATED from packages/sync-engine/docs/webhooks.md -- edit there, then run `npm run build:docs`. */}
+# Webhooks
 
 Ablo owns the ordered transaction log — the source of truth. **Webhooks are how
 that log reaches your database.** Ablo streams every committed change to an

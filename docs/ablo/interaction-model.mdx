@@ -2,78 +2,88 @@
 title: "Interaction Model"
 ---
 
-Ablo separates the data path from the authority path.
+{/* AUTO-GENERATED from packages/sync-engine/docs/interaction-model.md -- edit there, then run `npm run build:docs`. */}
 
-The data path is what your application does on every write:
+When a person, a server action, and an AI agent can all write to the same row,
+you need one write path that stops them from clobbering each other. Ablo gives
+you exactly one: load the row, claim it while you work, update it, and wait for
+confirmation. This page walks through that path and the few primitives behind it.
 
-```
-Schema -> Model read -> Claim -> Model update -> Confirmation
+Here's the whole path in one block — claim a row, update it inside the claim, and
+let the claim release when your callback returns:
+
+```ts
+const report = await ablo.weatherReports.retrieve({ id: 'report_stockholm' });
+
+await using claim = await ablo.weatherReports.claim({ id: 'report_stockholm' });
+await ablo.weatherReports.update({ id: claim.data.id, data: { status: 'ready' }, wait: 'confirmed' });
 ```
 
-The authority path is what makes that write defensible:
-
-```
-Capability -> Task -> Usage
-```
+Claims don't lock. If another writer holds the row, `claim` waits for them,
+re-reads the fresh row, then hands it to you — so two writers serialize instead
+of clobbering.
 
 ## Primitives
 
 | Primitive | Plane | Purpose |
 |---|---|---|
 | `Schema` | State | Declares typed models the app and agents can read and write. |
-| `Model` | State | The generated `ablo.<model>` resource. Use `retrieve`, `get`, `create`, `update`, and `delete`. |
-| `Claim` | State | Pre-write coordination. It says what this actor is preparing to change. |
+| `Model` | State | The generated `ablo.<model>` model. Use `retrieve`/`list` (async server reads), `get`/`getAll`/`getCount` (synchronous local reads), `create`, `update`, and `delete`. |
+| `Claim` | Coordination | Who is working on a target. Taken via `ablo.<model>.claim({ id })` and read via `ablo.<model>.claim.state({ id })`. Ephemeral — never persisted. |
 | `Commit` | Protocol | The durable write underneath model updates. Most users do not call it directly. |
 | `Receipt` | Protocol | The lower-level durable result for custom runtimes. Schema writes use `wait: 'confirmed'`. |
-| `Capability` | Control | Signed credentials. It says who can do what, where, for how long, and on whose behalf. |
-| `Task` | Control | One agent run. It groups prompts, commits, child tasks, and cost. |
-| `Usage` | Control | Metering and audit rows derived from accepted work. |
 
-Capabilities, tasks, and usage do not mutate product data. They define and
-record the authority around mutation.
+### Why each primitive is separate
+
+Why are `Claim`, `Commit`, and `Receipt` separate things instead of one? Each
+does a job the others can't. If you're coming from Replicache or Yjs you'd
+expect just `Commit`; here's what the other two buy you over that minimum:
+
+- **`Claim` is not a read lock.** Reads stay open. Claims serialize
+  acting-on-the-row, so slow work can wait in FIFO order, re-read, and write
+  from fresh state.
+- **`Receipt` is not a `200 OK`.** It's the durable artifact a commit
+  produced — accepted commit id, server-assigned timestamps, stale-check
+  outcome — addressable after the fact and replayable into a different
+  client. A status code can't be re-read by a sub-agent that wasn't on
+  the original call.
 
 ## Run Loop
 
 A normal schema-backed run is:
 
-```
-await using claim = await ablo.tasks.claim({ id });
-const task = claim.data;
-const snap = ablo.snapshot({ tasks: id });
-await ablo.tasks.update({
-  id,
-  data: patch,
-  readAt: snap.stamp,
-  onStale: 'reject',
-  wait: 'confirmed',
-});
+```ts
+const report = await ablo.weatherReports.retrieve({ id });
+const active = ablo.weatherReports.claim.state({ id });
+await using claim = await ablo.weatherReports.claim({ id });
+await ablo.weatherReports.update({ id: claim.data.id, data: patch, wait: 'confirmed' });
 ```
 
-## Participants
-
-Every action is performed by one of three kinds:
-
-- `user` — a human, authenticated via session. Uses the live (WebSocket) client.
-- `agent` — an AI process acting on behalf of a human, authenticated via a capability minted from that human's session. Uses the stateless HTTP client — see [Agents](/agents).
-- `system` — a customer-backend process acting on behalf of an organization, authenticated via an API key.
-
-The participant kind is enforced at the boundary. An agent capability cannot impersonate a user. A user session cannot open a task.
-
-## Delegation chain
-
-Every capability resolves to a `delegationChainRootUserId` — the human at the head of the chain. The chain is denormalized onto every commit's `on_behalf_of_*` columns so audit queries answer "what did this human authorize" with one lookup, not a recursive join.
-
-## Enforcement
-
-Capabilities are enforced per operation, not per request. When a commit arrives, Ablo decodes the bearer token, checks each operation against `allowedOperations` and `allowedSyncGroups`, and rejects with `capability_scope_denied` if the scope is missing. Revocation takes effect within seconds of `DELETE /v1/capabilities/:id`.
+`retrieve({ id })` is an async server read (await it). `claim.state({ id })` is a
+synchronous local read of who currently holds the row — it never blocks.
 
 ## Coordination
 
-Claims broadcast across the org. When `agent:task-writer` claims a task to
-update it, schema clients can see the current holder through
-`ablo.tasks.claim.state({ id })` and the waiting line through
-`ablo.tasks.claim.queue({ id })`. Callers decide whether to yield, wait, or
-fail fast.
+> Loop view only. Full claim reference — methods, the claim-state object, the
+> `claim.queue`, errors — is [Coordination](/coordination).
+
+Claims broadcast across the org. Call `claim({ id })`, do your writes with the
+normal `update` inside the `await using` scope, and the claim releases
+automatically when the scope exits:
+
+```ts
+await using claim = await ablo.weatherReports.claim({
+  id: 'report_stockholm',
+  reason: 'editing',
+});
+await ablo.weatherReports.update({ id: claim.data.id, data: { status: 'ready' } }); // rejected if the row changed under the claim
+```
+
+`ablo.weatherReports.claim.state({ id: 'report_stockholm' })` reads the live claim (or
+`null`) without blocking. Claims don't lock: if another participant holds the
+row, `claim` waits for them to finish, re-reads, and then hands you the fresh
+row. The same signal is visible to every schema client through `claim.state({ id })`
+and the live claim stream.
 
 ## Conflict resolution
 
@@ -86,16 +96,6 @@ Schema updates can carry `readAt` and `onStale`. If the state advanced past
 
 The choice is per-commit. No CRDT default; the policy is explicit.
 
-## Audit
-
-Three tables observe the run:
-
-- `agent_tasks` — one row per open/close cycle. Cost stats, prompt hash, capability id.
-- `agent_actions_log` — one row per write, attributed to the task and the capability.
-- `usage_event` — one row per accounted API call, attributed to the api key, the participant, and the task.
-
-Joins between them answer "what did this agent do, on whose authority, at what cost." That answer is what makes giving an agent write access defensible.
-
 ## The contract in one sentence
 
-Declare schema, read state, claim the row, update the model, and wait for confirmation.
+Declare schema, load state, coordinate a claim, update the model, and wait for confirmation.

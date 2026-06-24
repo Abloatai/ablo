@@ -295,5 +295,5 @@ unmount.
 
 ## Next.js
 
-The Next.js [App Router landing](/nextjs) walks through Server Components
+The Next.js [App Router landing](./examples/nextjs.md) walks through Server Components
 + Server Actions + `useAblo` together.

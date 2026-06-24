@@ -3,368 +3,409 @@ title: "Changelog"
 description: "Product updates and releases for Ablo"
 ---
 
+{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
+
 <Update label="June 24, 2026" description="v0.16.2">
-## Name the shared-schema binding around the project
+### Patch Changes
 
-`mintUserSessionKey` replaces the two flat options from 0.16.0
-(`schemaOwnerOrgId` + `schemaProjectId`) with one project-centric option —
-`schemaProject: { organizationId, projectId }` — naming "the project that owns
-the schema" as a single concept. The wire format is unchanged.
+- **`mintUserSessionKey`: name the shared-schema binding around the project.** The
+  two flat options added in 0.16.0 (`schemaOwnerOrgId` + `schemaProjectId`) are
+  replaced by one project-centric option — `schemaProject: { organizationId, projectId }` —
+  naming "the project that owns the schema" as a single concept. The wire format
+  is unchanged (the SDK still sends the same keys), so no server redeploy is
+  needed. Released as a patch: the replaced options shipped in 0.16.0 and have no
+  external consumers yet.
 
-```ts
-mintUserSessionKey({
-  organizationId,                                // data org
-  schemaProject: { organizationId, projectId },  // the project that owns the schema
-  // ...
-});
-```
+  ```ts
+  // before
+  mintUserSessionKey({ organizationId, schemaOwnerOrgId, schemaProjectId, ... });
+  // after
+  mintUserSessionKey({
+    organizationId,                                  // data org
+    schemaProject: { organizationId, projectId },    // the project that owns the schema
+    ...
+  });
+  ```
 </Update>
 
 <Update label="June 24, 2026" description="v0.16.1">
-## Fix `ablo login`
+### Patch Changes
 
-`ablo login` now completes reliably. The device-authorization endpoints resolve
-against the identity server (override with `ABLO_AUTH_URL`) and the approval page
-against the dashboard (new override `ABLO_DASHBOARD_URL`), fixing a "Couldn't
-start login" error where both were assumed to share one origin.
+- **Fix `ablo login` against the standalone auth server.** The device flow now
+  targets two origins instead of one: the RFC 8628 device endpoints
+  (`/api/auth/device/*`) go to the identity server (`auth.abloatai.com`, override
+  `ABLO_AUTH_URL`), while the human approval page (`/cli`), sign-up, and the
+  key-handoff route (`/api/cli/provision-key`) go to the dashboard host
+  (`www.abloatai.com`, new override `ABLO_DASHBOARD_URL`). Previously every step
+  ran against `www`, where the device endpoints no longer resolve —
+  producing "Couldn't start login… Is the dashboard reachable?". The CLI now also
+  builds the approval URL itself rather than trusting the server's
+  `verification_uri`, which (being a relative `/cli`) resolved against the auth
+  server's origin to a 404.
 </Update>
 
 <Update label="June 24, 2026" description="v0.16.0">
-## Axis 3 — declare write-conflict behaviour in the schema
+### Minor Changes
 
-A model can now state what happens when a commit collides with a foreign claim
-or a stale snapshot — per committer kind (`user` / `agent` / `system`) — right
-next to its fields, using the same `overwrite | reject | notify` vocabulary as
-the `onStale` write guard. A third axis, orthogonal to `policy` (read access)
-and `groups` (delta routing).
+- **Axis 3 — declare write-conflict behaviour in the schema (new).** A model can now
+  state what happens when a commit collides with a foreign claim or a stale snapshot —
+  per committer kind (`user` / `agent` / `system`) — right next to its fields, using the
+  same `overwrite | reject | notify` vocabulary as the `onStale` write guard. It is a
+  third axis, orthogonal to `policy` (read access) and `groups` (delta routing).
+  - **`conflict` on `model()`** — a plain, serializable disposition map. Pure data, so it
+    round-trips through the schema registry to the server; the generic engine interprets it
+    at the commit chokepoint (no per-model logic in the engine).
 
-```ts
-import { coordination, humansOverwrite, agentsReject } from '@abloatai/ablo/schema';
+    ```ts
+    // "a human's edit always wins (never blocked); an agent yields"
+    conflict: { user: 'overwrite', agent: 'reject' }
+    ```
 
-// "a human's edit always wins (never blocked); an agent yields"
-conflict: coordination(humansOverwrite(), agentsReject());
-// → { user: 'overwrite', agent: 'reject' }
-```
+  - **Composable authoring helpers (new, from `@abloatai/ablo/schema`)** — disposition
+    functions plus a `cn`/`cx`-style combinator, so conflict policy reads like the rest of
+    the DSL (`relation.belongsTo()`) and like modern config (`plugins: [admin(), …]`):
 
-It is pure, serializable data — the generic engine interprets it at the commit
-chokepoint. New `@abloatai/ablo/schema` exports: `coordination`, the
-`humans*` / `agents*` / `system*` disposition helpers, and the `ConflictRule`
-type; `ConflictAxis` (also `Ablo.Conflict.Axis`) and `interpretConflictAxis`
-are exported for custom policies. An omitted committer kind falls through to the
-engine default (reject; honor `onStale: 'notify'`) — fully additive.
+    ```ts
+    import { coordination, humansOverwrite, agentsReject } from '@abloatai/ablo/schema';
 
-### Added
+    conflict: coordination(humansOverwrite(), agentsReject());
+    // → { user: 'overwrite', agent: 'reject' }
+    ```
 
-- **First-party shared schema for ephemeral keys.** `mintUserSessionKey` accepts
-  `schemaProjectId` + `schemaOwnerOrgId`, binding the minted `ek_` so **schema**
-  resolves from a shared owner-org/project (one schema serves all of an
-  integrator's end-user orgs) while **data** stays scoped to `organizationId`.
-  Requires the `sk_` to carry `ephemeral:mint-any-org`; omit both for the
-  existing per-org behaviour.
+    Exports: `coordination`, `humansOverwrite` / `humansReject` / `humansNotify`,
+    `agentsOverwrite` / `agentsReject` / `agentsNotify`,
+    `systemOverwrite` / `systemReject` / `systemNotify`, and the `ConflictRule` type.
+
+  - An omitted committer kind falls through to the engine default (reject; honor
+    `onStale: 'notify'`), so this is fully additive — existing schemas are unchanged.
+    New public types `ConflictAxis` (also `Ablo.Conflict.Axis`) and the
+    `interpretConflictAxis` interpreter are exported for custom policy composition.
+
+- **First-party shared schema for ephemeral keys (new).** `mintUserSessionKey` now accepts
+  `schemaProjectId` + `schemaOwnerOrgId`, binding the minted `ek_` to a schema owner-org +
+  project so **schema** resolves org-independently (one schema serves all of an integrator's
+  end-user orgs) while **data** stays scoped to `organizationId`. Requires the `sk_` to carry
+  `ephemeral:mint-any-org`; omit both for the existing per-org (BYO) behaviour.
 </Update>
 
 <Update label="June 23, 2026" description="v0.15.1">
-## Loud 0-row writes
+### Patch Changes
 
-A commit now reports the ids of any UPDATE/DELETE that matched zero rows on
-`CommitReceipt.missingIds`, and the new exported `AbloNotFoundError` lets typed
-write wrappers throw instead of silently treating a missed write as success.
-Additive and back-compatible — the field is omitted when nothing missed.
+- Loud 0-row writes: surface unmatched UPDATE/DELETE ids and add `AbloNotFoundError`
+
+  A commit now reports the ids of any UPDATE/DELETE that matched zero rows on
+  `CommitReceipt.missingIds`, and the new exported `AbloNotFoundError` lets typed
+  write wrappers throw instead of silently treating a missed write as success.
+  Additive and back-compatible (the field is omitted when nothing missed). This
+  unblocks the slides-sdk name-addressing / own-your-id work, which relies on a
+  loud failure when a stale id is written.
 </Update>
 
 <Update label="June 22, 2026" description="v0.15.0">
-## Notify-instead-of-abort: non-coercive conflict handling + read-set
+### Minor Changes
 
-On a stale-context conflict the engine now surfaces the current state and lets
-the actor — agent or human — resolve it, instead of forcing an outcome.
+- **Notify-instead-of-abort: non-coercive conflict handling + read-set (the "did anything I looked at change?" layer).**
 
-### Added
+  The principle: on a stale-context conflict the engine now **surfaces the current state and lets the actor — agent or human — resolve it**, instead of forcing an outcome. See `docs/concurrency-convention.md`.
 
-- **`onStale: 'notify'`** holds the conflicting write (not applied) and returns
-  a `StaleNotification` carrying the field's current value, so the actor
-  reconciles and re-commits rather than losing work. Delivered on
-  `CommitReceipt.notifications` and the new `conflict:notified` SDK event.
-- **Read-set (`reads[]`)** — declare what you looked at, not just what you write.
-  A moved premise fires that entry's `onStale` over the whole batch. Row
-  (`{ model, id, readAt, fields? }`) and group (`{ group, readAt }`)
-  granularities. New `ReadDependency` type on `ablo.commits.create`.
-- **Data Source reverse-channel connector** — `createSourceConnector({ apiKey, handler })`
-  dials out to the engine over one outbound WebSocket (`ablo.source.v1`) instead
-  of exposing an inbound HTTP endpoint, for private/VPC stores. The
-  Standard-Webhooks HMAC is signed above the transport, so the trust model is
-  unchanged.
+  **`onStale` redesigned — Stripe-aligned values (BREAKING).**
 
-### Breaking
+  The mode set is now `'reject' | 'overwrite' | 'notify'`. Each value names its outcome:
+  - **`notify` (new, non-coercive)** — the conflicting write is **held** (not applied) and the commit returns a `StaleNotification` carrying the conflicting field's _current_ value, so the actor reconciles and re-commits rather than losing work. The rest of the batch still commits.
+  - **`overwrite`** (was `force`) — blind last-writer-wins, no signal.
+  - **`reject`** (default, unchanged) — throws `AbloStaleContextError`.
 
-- **`onStale` values are Stripe-aligned.** `'force'` → `'overwrite'`;
-  `'flag'` / `'merge'` → `'notify'` (both removed). The set is now
-  `'reject' | 'overwrite' | 'notify'`.
+  Migration:
+  - `onStale: 'force'` → `onStale: 'overwrite'`.
+  - `onStale: 'flag'` / `onStale: 'merge'` → `onStale: 'notify'` (both removed; `notify` is the single hold-and-surface mode).
+
+  **`StaleNotification` — the new advisory signal.** New public type + `staleNotificationSchema`:
+  `{ object: 'stale_notification', model, id, readAt, observedSyncId, conflictingFields, currentValues, writtenBy, group? }`. Delivered two ways:
+  - on the receipt — `CommitReceipt.notifications` (and `CommitResult.notifications`);
+  - on a new SDK event — **`conflict:notified`** `{ clientTxId, notifications }` (mirrors `reconciliation:needed` / `sync:rollback`).
+
+  **Read-set (`reads[]`) — declare what you looked at, not just what you write (new).** A commit may carry batch-level read dependencies; a moved premise fires that entry's `onStale` over the whole batch (`notify` holds every write + notifies, `reject` aborts, `overwrite` proceeds). Two granularities:
+  - **Row** — `{ model, id, readAt, fields? }`: did this row (optionally these fields) change?
+  - **Group** — `{ group, readAt }`: did anything in this sync group (`deck:abc`, `org:X`) change? — the same unit a participant watches and claims.
+
+  New public type `ReadDependency` + `readDependencySchema`; available on `ablo.commits.create({ operations, reads })` and the lower-level write options. This closes the gap the write-target check alone could not: a premise that changed without the written row changing.
+
+  **Conflict policy.** `ConflictDecision` gains `{ action: 'notify' }`; `defaultPolicy` maps `onStale: 'notify'` → notify-and-hold, everything else → reject. `StaleContextConflict.requestedMode` is added so custom policies can honor the caller's declared intent.
+
+- **Data Source reverse-channel connector (new).** A customer Data Source can now **dial out** to the engine over a single outbound WebSocket (`ablo.source.v1` subprotocol) instead of exposing an inbound HTTP endpoint — the deployment shape private/VPC stores need.
+  - **`createSourceConnector({ apiKey, handler, baseURL? })`** (new public API, exported from the root and `/source`) — opens one outbound socket (Node global `WebSocket`, no new dependency), with reconnect/backoff, and serves the customer's existing Data Source `handler`.
+  - Server side: a connector registry + `/v1/source/listen` upgrade route bridge requests down / responses up, teed into `SourceClient` through the storage resolver.
+  - **Trust model unchanged:** the Standard-Webhooks HMAC is signed _above_ the transport, so the socket carries the signed envelope byte-for-byte and the customer's `verifyAbloSourceRequest` is untouched. Transport changes, trust model doesn't.
+  - Opt-in per source via `reverse_channel_prod` (migration `20260622150000`); gated in `authorizeUpgrade`.
 </Update>
 
 <Update label="June 21, 2026" description="v0.14.0">
-## Claim API consistency + coordination docs
+### Minor Changes
 
-`useWatch` (scoped presence + read-interest) and `usePeers` (read-only presence)
-are now documented. `HttpClaimApi` is a mechanically derived async projection of
-the reactive `ClaimApi`, so the two transports can't drift. The claim read verb
-is unified to `state` across every layer. No behaviour change.
+- Claim API consistency + coordination docs
+  - **React:** document `useWatch` (scoped presence + read-interest, with `claim`/`hydrate`/`paused` options) and `usePeers` (read-only presence) — previously exported but undocumented.
+  - **HTTP claim surface:** `HttpClaimApi` is now a mechanically derived async projection of the reactive `ClaimApi` (`AwaitedClaimMethod`), so the two transports can never drift. No behavior change — the only difference remains the `Promise` wrapper that statelessness forces on `state`/`queue`/`reorder`.
+  - **Naming:** unified the claim read verb to `state` across every layer (the internal `ModelCollaboration.observe` is now `state`, matching the public `ablo.<model>.claim.state({ id })`).
+  - **Docs:** corrected the `Claim` object reference — the field is `reason` (serialized on the wire as `action`), and `createdAt`/`expiresAt` are `number` (epoch-ms), not strings; corrected the claim options to `reason` and `queue`.
 </Update>
 
 <Update label="June 17, 2026" description="v0.13.0">
-## Schema authoring: two orthogonal axes — `policy` and `groups`
+### Minor Changes
 
-### Breaking
+- Schema authoring: split model routing into two orthogonal axes — `policy` (row access) and `groups` (sync-group routing).
 
-- The flat model options are replaced by two namespaced ones:
-  - **`policy`** — row access / tenant isolation. A discriminated union on `by`
-    replaces `orgScoped` / `scopedVia` / `orgColumn`: `{ by: 'column' }`
-    (default) or `{ by: 'parent', fk, parent }` to inherit tenancy through a
-    foreign key. `TenancyInput` → `PolicyInput`.
-  - **`groups: { root, grants, roles }`** — which delta channels a row fans into,
-    replacing flat `scope` / `grants` / `entityRoles`.
-- CLI: `config.json` stores per-project profile key pairs; older flat layouts
-  fold into the active profile automatically.
+  **Breaking (schema authoring).** The flat, collision-prone model options are replaced by two namespaced ones:
+  - **`policy`** — row-access / tenant isolation (named after Postgres/Supabase RLS policies: the rule that scopes which rows a tenant may read). A discriminated union on `by` replaces the old `orgScoped` / `scopedVia` / `orgColumn` trio:
+    - `{ by: 'column' }` — row-local tenancy column (the default when omitted; column name still overridable).
+    - `{ by: 'parent', fk, parent }` — inherit tenancy through a foreign key when the table has no tenancy column of its own (e.g. `slide_layers` → `slides`).
+    - Type `TenancyInput` is renamed `PolicyInput`; `policyInputSchema` / `resolvePolicy` are now exported.
+  - **`groups: { root, grants, roles }`** — which delta channels a row fans into (orthogonal to `policy`, which governs read access). One namespaced object replaces the old flat `scope` / `grants` / `entityRoles`:
+    - `root` (was `scope`) — mark a model a scope root; its records form the group `<kind>:<id>`. Renamed so it no longer collides with the old `scopedVia` tenancy sugar or the inner `grants.scope` relation name.
+    - `grants` — a membership edge granting an identity access to a scope root.
+    - `roles` (was `entityRoles`) — explicit non-relational record→group roles; accepts one role or an array.
+    - `groupsInputSchema` / `GroupsInput` are now exported.
+
+  **CLI.** `config.json` now stores per-project profile key pairs (`profiles: Record<string, ProfileKeys>`) instead of a single top-level pair; older flat layouts are folded into the active profile automatically on read, so existing logins keep working. `login` / `projects` updated to the profile model.
 </Update>
 
 <Update label="June 16, 2026" description="v0.12.0">
-## Canonicalize the claim API to one vocabulary
+### Minor Changes
 
-### Breaking
-
-- Claim phase field `action` → `reason` on every claim surface (the wire is
-  unchanged — still `action`, healed on read; no server redeploy).
-- Claim contention flag `wait` → `queue` everywhere.
-- React hook `useParticipant` → `useWatch`.
-- `ClaimDeclaration.ttlSeconds` is now a `number` (was a `Duration`).
+- Canonicalize the claim API to one vocabulary, plus DX fixes (breaking).
+  - BREAKING: claim phase field `action` → `reason` on every claim surface
+    (`Claim`, `ClaimHandle`, `ClaimCreateOptions`, `ModelClaim`, ...). The wire
+    is unchanged (still `action`, healed on read) — no server redeploy needed.
+  - BREAKING: claim contention flag `wait` → `queue` (one word everywhere).
+  - BREAKING: React hook `useParticipant` → `useWatch` (aligns with `ablo.<model>.watch`).
+  - `ClaimDeclaration.ttlSeconds` is now `number` (was a `Duration`).
+  - Docs: `retrieve` HTTP envelope (`.data`/`.stamp`) called out; `syncGroups`
+    reworded (provisional, not deprecated); `orgScoped` cross-tenant security
+    warning; React error strings point at `<AbloProvider>`.
 </Update>
 
 <Update label="June 16, 2026" description="v0.11.2">
-## Undo correctness + one-correct-way consolidation
+### Patch Changes
 
-Fixes stream-recorded undo capturing the wrong "before" value on a quick second
-edit, and closes the create/update undo asymmetry. Both undo paths now share one
-before-image implementation.
+- a35d935: Fix stream-recorded undo capturing the wrong "before" value for updates. A second
+  update to the same field before the first sync-ack re-captured the original
+  pre-session value (first-old-wins + clear-only-on-ack), so undo of a quick second
+  edit jumped all the way back instead of one step. The queue now re-baselines a
+  field's tracked `.old` once its before-image is frozen into the committed
+  transaction.
 
-### Breaking
+  Also close the create/update undo asymmetry: an update whose written key had no
+  in-place mutation produced an empty `previousData`, which made the inverse
+  un-revertible (a create's `delete` inverse never is). Before-image capture now
+  falls back to the last loaded/acked snapshot.
 
-- Credentials collapse to a single `apiKey` (string or `() => Promise<string | null>`);
-  removed `getToken` / `authEndpoint` / public `authToken`.
-- `ablo.<model>.watch(ids, { ttl })` replaces `ablo.participants.join({ scope })`.
-- Read claim-gating is `ifClaimed: 'return' | 'fail'` (removed `'wait'`).
-- `createAbloHttpClient` is no longer a public export — use `Ablo({ transport: 'http' })`.
-- Read-option types renamed: `ServerReadOptions` / `LocalReadOptions`.
+  Internally, the two undo paths (stream-recorded and manual `RecordingTransaction`)
+  now share one before-image implementation via `Model.capturePreviousValues` /
+  `Model.consumeModifiedFields`, so they can no longer drift.
+
+- One-correct-way consolidation (breaking; no external consumers yet, so released as a patch):
+  - Credentials collapse to a single `apiKey` — a string, or a `() => Promise<string | null>` that
+    fetches a per-user token. Removed `getToken` / `authEndpoint` / public `authToken`.
+  - `ablo.<model>.watch(ids, { ttl })` replaces the top-level `ablo.participants.join({ scope })` —
+    model-scoped read-interest + presence (WebSocket only).
+  - Read claim-gating is `ifClaimed: 'return' | 'fail'` (removed `'wait'`); waiting is the claim
+    primitive's job (`ablo.<model>.claim`).
+  - The stateless client is `Ablo({ transport: 'http' })`; `createAbloHttpClient` is no longer a
+    public export (the factory uses it internally).
+  - Read-option types renamed: `ServerReadOptions` (server `retrieve`/`list`) and `LocalReadOptions`
+    (local `get`/`getAll`).
+  - `defineSchema` throws a clear error on a reserved-field collision; the MCP/docs API surface is
+    now compile-time bound to the real exported types (can't drift).
 </Update>
 
 <Update label="June 15, 2026" description="v0.11.1">
-## DX hardening from a real onboarding session
+### Patch Changes
 
-- `databaseUrl` is now an explicit, server-only option — `Ablo(...)` no longer
-  auto-reads `process.env.DATABASE_URL` (a stray one no longer flips the client
-  into connection-string mode).
-- Claims/presence are observable from any client (including Node agents):
-  reading a row enters its sync group, claiming pins it. **Requires a
-  coordinated `sync-server` deploy.**
-- `ablo init` detects the `src/app` layout and writes the real sandbox key;
-  `--help`/`-h` prints usage; `ablo dev --no-watch` exits after one push.
-- Name the client with `typeof sync` (not `ReturnType<typeof Ablo>`).
+- 7f91f6e: DX hardening from a real onboarding session — onboarding, CLI, coordination, types, and docs.
+
+  **Client behavior**
+  - `databaseUrl` is now an explicit, server-only option: `Ablo(...)` no longer auto-reads `process.env.DATABASE_URL`. A stray `DATABASE_URL` (common — Prisma/Drizzle/docker set it) no longer silently flips the client into connection-string mode; a one-time warning points at the explicit option. Passing `databaseUrl: process.env.DATABASE_URL` explicitly is unchanged.
+  - Claims/presence are now observable from any client (including Node agents): reading a row enters its entity sync group (read-interest) and claiming pins it (write-intent), so `ablo.<model>.claim.state({ id })` reports co-participants without any manual subscribe step — whether the observer arrives before the claim (live delta) or after it (subscribe-time backfill). The claim **holder** now also sees its own claim via `claim.state`. **Requires a coordinated `sync-server` deploy** (the subscribe-time claim backfill + the entity-scope subscription gate that lets an org-authority agent key narrow into a row's group live server-side); the client package change alone does not deliver cross-client agent observation.
+
+  **CLI**
+  - `ablo init` detects the `src/app` layout (routes + the `@/ablo` import alias resolve correctly), writes the **real** stored sandbox key into `.env.local` instead of a placeholder, and scaffolds `ablo/register.ts` (a regular module, not a colliding `ablo.d.ts`).
+  - `ablo <command> --help` / `-h` now prints usage instead of erroring with "unknown flag", and `migrate` is listed in the top-level help.
+  - `ablo dev --no-watch` now exits after one push instead of watching forever.
+
+  **Types**
+  - Name the client with `typeof sync` (the value-inferred idiom, like tRPC's `typeof appRouter` / Drizzle's `typeof db`) — `ReturnType<typeof Ablo>` collapses to the untyped client and should not be used. No bespoke client-type generic is needed.
+  - `model_claim_not_configured` message clarified: claiming needs no per-model schema configuration; every model is claimable through the standard client.
+
+  **Docs**
+  - Reconciled the self-contradictory `databaseUrl` story (it is an explicit, server-only option, not auto-read from the environment; consistent casing), documented that the sandbox can host rows (apiKey only, no database), explained why a localhost Postgres can't be the system of record, and led the connect-your-database flow with `ablo pull`/`ablo check` over `ablo migrate`. Fixed stale `api.md` vocabulary (`object: 'claim'`, `participantKind: 'user' | 'agent' | 'system'`).
+
+- 7f91f6e: Docs: document the completed `intent` → `claim` rename. Adds a 0.11.0 migration entry (`useIntent` → `useClaim`, `Register.Intents` → `Register.Claims`, `Ablo.Intent.*` → `Ablo.Claim.*`, and the coordinated client/server deploy for the `claim_*` wire frames), a `useClaim` section in the React reference, and fixes the stale `participantKind` union to the canonical `'user' | 'agent' | 'system'`.
 </Update>
 
 <Update label="June 15, 2026" description="v0.11.0">
-## Canonical `claim` vocabulary + sync-group area of interest
+### Minor Changes
 
-### Breaking
-
-- **`intent` → `claim` everywhere**: `useClaim` replaces `useIntent`, the
-  `Ablo.Claim.*` namespace replaces `Ablo.Intent.*`, `Register` registers
-  `Claims`. Wire frames moved `intent_*` → `claim_*` — clients and servers must
-  run a `claim_*`-aware build together.
-
-### Added
-
-- **Sync-group area of interest** — read interest is no longer frozen at connect;
-  `update_subscription` drives live re-indexing with `enterScope` / `leaveScope`
-  / `pinScope` / `unpinScope`.
-- **Richer claim-rejection errors** — rejections carry `heldByClaim` /
-  `policyReason`, and `AbloClaimedError` exposes a typed `claims` array.
-- Participant identity is canonical `user` | `agent` | `system`.
+- Canonical `claim` vocabulary, sync-group area-of-interest, and richer claim-rejection errors.
+  - **`intent` → `claim` everywhere.** The coordination primitive is now a `Claim` across the public surface: `useClaim` replaces `useIntent`, the `Ablo.Claim.*` namespace replaces `Ablo.Intent.*`, and module augmentation registers `Claims` instead of `Intents` on the `Register` interface. The underlying wire frames moved from `intent_*` to `claim_*` — clients and servers must run a `claim_*`-aware build together.
+  - **Sync-group area of interest.** A client's read interest is no longer frozen at connect: the new `update_subscription` frame drives live re-indexing, and `enterScope` / `leaveScope` / `pinScope` / `unpinScope` let a store narrow or widen what it streams. `AreaOfInterestManager` adds hysteresis (warm-TTL), claim-pinning, reconcile coalescing, and an LRU cap so narrowing the view never shrinks the write allowlist.
+  - **Richer claim-rejection errors.** Rejections (over WebSocket and HTTP) now carry `heldByClaim` and `policyReason`, and `AbloClaimedError` exposes a typed `claims` array so callers can see exactly who holds the contested rows.
+  - **Coordination vocabulary consolidation.** Participant identity is canonical `user` | `agent` | `system`; the server stamps `participantKind` on every presence emit and clients read it, so non-human peers surface correctly.
 </Update>
 
 <Update label="June 12, 2026" description="v0.10.1">
-## Docs: 0.10.0 migration entry
+### Patch Changes
 
-Adds the `test`/`live` → `sandbox`/`production` environment rename (key prefixes
-unchanged) and the `transport: 'http'` stateless client to the Version History &
-Migration Guide.
+- Docs: add the 0.10.0 entry to the Version History & Migration Guide — the `test`/`live` → `sandbox`/`production` environment enum rename (key prefixes unchanged) and the new `transport: 'http'` stateless client.
 </Update>
 
 <Update label="June 12, 2026" description="v0.10.0">
-## Stateless HTTP transport + canonical environment vocabulary
+### Minor Changes
 
-### Added
+- Rename environment enum values to `production` and `sandbox` while preserving the existing `*_live_`/`*_test_` key prefix format.
 
-- **`Ablo({ transport: 'http' })`** returns a stateless client for agents,
-  workers, and serverless — the same `ablo.<model>` surface with no WebSocket,
-  one HTTP round-trip per call. The return type narrows so stateful-only APIs
-  (`get`/`getAll`/`onChange`) are compile errors.
-- **Source-mode commit scoping** — `commit` forwards `projectId`, `accountScope`,
-  and `environment` to customer storage resolvers.
+### Patch Changes
 
-### Breaking
-
-- Environment enum values are renamed to `production` / `sandbox` (the
-  `*_live_` / `*_test_` key prefixes are preserved).
+- Stateless HTTP transport for server-side actors, and a canonical environment vocabulary.
+  - **`Ablo({ transport: 'http' })`** returns a stateless `AbloHttpClient` for agents, workers, and serverless — the same `ablo.<model>` surface and coordination plane with no websocket: each call is one HTTP round-trip and identity rides the Bearer credential. The return type narrows so stateful-only APIs (`get`/`getAll`/`onChange`) are compile errors instead of latent runtime gaps.
+  - **Canonical `production` / `sandbox` environments** (new `environment.ts`, exported from the root): `sk_test_` / `sk_live_` remain the wire-level key prefixes but now map to `production` / `sandbox` everywhere — key parsing, source `mode`, and the CLI (which drops the legacy test/live config migration).
+  - **Source-mode commit scoping**: `commit` now forwards `projectId`, `accountScope`, and `environment` to customer storage resolvers, so per-project and sandbox/production traffic can be routed to distinct stores.
+  - **Fixes**: the WebSocket bearer credential is sent in the `ablo.bearer.<token>` subprotocol (never in the URL or proxy logs); `Model` no longer fabricates an `updatedAt` of "now" for records that arrive with only `createdAt`.
 </Update>
 
 <Update label="June 12, 2026" description="v0.9.15">
-## Package metadata
+### Patch Changes
 
-Set the npm description to "The Collaboration Layer For AI Agents" so it stops
-reverting to the old text on publish.
+- Package metadata: set the npm description to "The Collaboration Layer For AI Agents" (matching the GitHub repo About) so it stops reverting to the old "State control API…" text on publish.
 </Update>
 
 <Update label="June 11, 2026" description="v0.9.14">
-## README: real typed snippet
+### Patch Changes
 
-Replace the pseudo-diagram with a real typed snippet
-(`create`/`retrieve`/`update`/`claim`) and tidy the Get-started line.
+- README: replace the `schema -> ablo.<model>...` pseudo-diagram with a real typed snippet (`create`/`retrieve`/`update`/`claim`), and tidy the Get-started line.
 </Update>
 
 <Update label="June 11, 2026" description="v0.9.13">
-## Per-project axis
+### Patch Changes
 
-Schemas, planes, routing, and enforcement are scoped per project. Adds the
-control plane, per-project key scoping with identity threading, a `remove_model`
-gate, and the CLI/docs to drive it.
+- Per-project axis: schemas, planes, routing, and enforcement scoped per project. Adds the control plane, per-project key scoping with identity threading, a `remove_model` gate, and the CLI/docs to drive it.
 </Update>
 
 <Update label="June 11, 2026" description="v0.9.12">
-## README: point doc links at `docs.abloatai.com`
+### Patch Changes
 
-The Docs / Quickstart / API header links now point at `docs.abloatai.com`
-instead of `abloatai.com`, which 307-redirects to the marketing site.
+- README: point the Docs / Quickstart / API header links at `docs.abloatai.com` (the real docs) instead of `abloatai.com`, which 307-redirects to the marketing site.
 </Update>
 
 <Update label="June 11, 2026" description="v0.9.11">
-## `Model<'name'>` helper + `sessions.create` fixes
+### Patch Changes
 
-- **`Model<'tasks'>`** via the `Register` binding names your model in one
-  parameter instead of restating `typeof schema`; `InferModel` is deprecated.
-- Fix `sessions.create({ user })` 403 — user sessions now mint an `ek_` via the
-  `sk_`-gated ephemeral-key door (was wrongly routed through `/auth/capability`).
-- New: `ablo.organizationId` (after `ready()`), `ablo status --json`, typed
-  `SyncGroupInput`.
+- `Model<'name'>` type helper via the `Register` binding — name your model in one parameter (`Model<'tasks'>`) instead of restating `typeof schema`; `Model<S, 'name'>` is also supported and `InferModel` is deprecated. CLI: retire the stale `dev` wording from the login outro and `push` header. Docs: cover the `Register` binding end-to-end and document the `pk_` publishable key + the `/v1/commits` HTTP path.
+- 3024593: Fix `sessions.create({ user })` 403 — user sessions now mint via the sk\_-gated ephemeral-key door
+  - `sessions.create({ user })` mints an `ek_` user session via `/auth/ephemeral-keys` (was wrongly routed through `/auth/capability`, which rejects human participants — writes were being attributed to agents).
+  - Control-plane calls always present your original `sk_`, never the client's exchanged sync credential.
+  - `sessions.create({ agent, can })` no longer requires hand-built `syncGroups` — the org anchor is the server default — and the `can` allowlist is now honored at commit time (model-alias matching).
+  - New: `ablo.organizationId` (resolved after `ready()`), `ablo status --json`, typed sync-group inputs (`SyncGroupInput` + `invalid_sync_group` rejection for malformed groups).
 </Update>
 
-<Update label="June 11, 2026" description="v0.9.10">
-## README: brand header
+<Update label="v0.9.10" description="v0.9.10">
+### Patch Changes
 
-Add a centered brand header (banner, tagline, doc nav links, status badges).
+- README: add a centered brand header (Ablo banner, tagline, doc nav links, and status badges).
 </Update>
 
 <Update label="June 11, 2026" description="v0.9.9">
-## Docs: migration guide refinements
+### Patch Changes
 
-Version history & migration guide refinements plus changelog, audit, and link
-fixes.
+- Docs: version history & migration guide refinements plus changelog, audit, and link fixes.
 </Update>
 
-<Update label="June 11, 2026" description="v0.9.8">
-## Docs: Version History & Migration Guide
+<Update label="v0.9.8" description="v0.9.8">
+### Patch Changes
 
-Add a Version History & Migration Guide, bring the changelog current, and sync
-doc trees. Drop the dormant `causedByTaskId` from the audit-row docs and fix the
-`ablo mode` argument vocabulary.
+- Docs: add a Version History & Migration Guide, bring the changelog current, and sync doc trees. Drop the dormant `causedByTaskId` from the audit-row docs and fix the `ablo mode` argument vocabulary.
 </Update>
 
 <Update label="June 11, 2026" description="v0.9.7">
-## Docs: correct `commits.create` operation shape
+### Patch Changes
 
-The advanced commit example now uses the public `{ action, model, data }`
-operation shape that the SDK actually accepts (it previously showed `resource:`
-and an internal wire form). No code changes.
+- Docs: fix the `commits.create` operation shape to the public `{ action, model, data }` form.
 </Update>
 
 <Update label="June 11, 2026" description="v0.9.6">
-## CLI quickstart down to three commands
+### Patch Changes
 
-`ablo init` now owns login, the standalone `migrate` step is dropped from the
-`databaseUrl` quickstart (`dev` handles it), and the watch command is renamed
-for honest naming. Also fixes three production bugs surfaced by the new
-end-to-end journey test harness.
-
-### Breaking
-
-- **`ablo dev` is now `ablo push`.** Update any scripts that called `ablo dev`.
+- CLI quickstart simplification (3 commands). `init` now owns login, `migrate` is dropped from the direct-`databaseUrl` quickstart (dev handles it), and the `dev` command is renamed to `push` for honest naming with headless-safe login. **Note:** `ablo dev` is now `ablo push` — update any scripts. Also fixes 3 production bugs surfaced by the new end-to-end journey test harness.
 </Update>
 
 <Update label="June 10, 2026" description="v0.9.5">
-## Scoped-role automation and tenant-routing fix
+### Patch Changes
 
-`ablo migrate` now auto-creates the RLS-gated scoped role with zero SQL, using a
-log-safe SCRAM-SHA-256 password verifier, plus a Neon/Supabase scoped-role
-`databaseUrl` recipe. Fixes a JSONB double-encode that corrupted per-tenant
-routing and silently fell back to the shared pool.
+- Scoped-role automation + tenant-routing fix. `ablo migrate` now auto-creates the RLS-gated scoped role (zero SQL) with a log-safe SCRAM-SHA-256 password verifier, plus a Neon/Supabase scoped-role `databaseUrl` recipe. Fix a jsonb double-encode that corrupted per-tenant routing and silently fell back to the shared pool.
 </Update>
 
 <Update label="June 10, 2026" description="v0.9.4">
-## Sync-position correctness and CLI hardening
+### Patch Changes
 
-Five scattered sync cursors are consolidated into one typed `syncPosition`
-(persisted / applied / acked with a derived `readFloor`), fixing a claim taken
-right after an ack-confirmed write reading stale against that write's own delta.
-Adds transaction ack-confirmation, schema DDL-first push, and a reworked CLI.
+- Sync-position correctness + CLI hardening. Consolidate five scattered sync cursors into one typed `syncPosition` (persisted/applied/acked with a derived `readFloor`), fixing a claim taken right after an ack-confirmed write reading stale against that write's own delta. Add transaction ack-confirmation, schema DDL-first-push, and a reworked CLI (config/dev/login/mode/drizzle-pull).
 </Update>
 
 <Update label="June 9, 2026" description="v0.9.3">
-## Onboarding leads with your own database
+### Patch Changes
 
-The quickstart now leads with the bring-your-own-database path (Drizzle Data
-Source), drops the Ablo-managed mode, and adds the `ablo push` step.
+- Onboarding: quickstart leads with your-own-database (Drizzle Data Source), drop Ablo-managed mode, add `ablo push` step; context7 library-claim config.
 </Update>
 
 <Update label="June 9, 2026" description="v0.9.2">
-## First-try setup for people and AI agents
+### Patch Changes
 
-Integrating Ablo now works on the first attempt: `ablo init` scaffolds a project
-that builds and runs the current API, and the docs + error messages guide you to
-the one step everything depends on — `ablo push`.
+- Developer-onboarding overhaul so an LLM or a person gets a working integration on the first try.
+  - **`ablo init` scaffolds a project that builds and is current-API.** The Next.js scaffold now ships `app/providers.tsx` + an `app/api/ablo-session` route, uses `useAblo` (the removed `withSync` is gone), object-param verbs, and never bundles your `sk_` key into the browser. The webhook receiver moved off the `[...all]` catch-all.
+  - **Agent docs are accurate and ship.** `AGENTS.md`, `llms.txt`, and `llms-full.txt` are on the 0.9.x API (object-param `create`/`update`/`delete`/`retrieve`, disposable `await using claim`, `AbloProvider client` prop), lead with `ablo init`, and `AGENTS.md` now ships in the package.
+  - **`ablo push` is self-documenting.** Writing to a model the server hasn't seen now fails with an error that tells you to run `ablo push` (the `server_execute_unknown_model` / `unknown_model` messages), instead of a cryptic "unknown model."
+  - **`intents` is deprecated in favor of `claim`** everywhere the docs and the MCP scaffold/prompts teach or generate coordination; the public `ablo.intents` accessor is marked `@internal`.
+  - Docs say Node 24+, and the `drizzle-orm` peer floor is `>=0.44`.
 
-- **`ablo init` produces a working project** — browser provider + session route,
-  current hooks and object-param verbs, and no `sk_` key in the browser bundle.
-- **`ablo push` is self-documenting** — writing to a model the server hasn't seen
-  fails with an error that tells you to run it. The server keeps its own copy of
-  the schema, so this is the step that makes writes work.
-- **Drizzle Data Source derives columns from your schema** — `drizzleDataSource(db, schema)`
-  maps snake_case columns exactly as `ablo migrate` provisions them, so synced
-  models need no parallel Drizzle table. Your auth and other non-synced tables
-  stay in your own ORM schema: one database, two schemas, side by side.
-- **`claim` is the one coordination API** — the internal `intents` accessor is
-  deprecated; use `ablo.<model>.claim`.
-- Requires **Node 24+**.
+- a88747a: Remove the `turn` primitive and the agent-work `tasks` resource from the client surface — the SDK is now purely `ablo.<model>` + `claim`.
 
-### Breaking
+  **Breaking**
+  - `engine.beginTurn()`, the `Turn` handle interface, and the `Ablo.Turn` type are removed. `AbloApi.beginTurn` and the HTTP client's `beginTurn` are gone too.
+  - `CommitCreateOptions.causedByTaskId` is removed. (Lineage is no longer stamped from the client.)
+  - The engine no longer exposes a `protocol` accessor or a public `tasks` work-unit resource. `ablo.tasks` is, and always was, the schema `tasks` model proxy.
+  - The **`agent().run()` helper and the low-level agent/task type family are removed**: `AbloApi.agent(id, options)` and `AbloApi.tasks` (the `TaskResource`), plus the exported types `Agent`, `AgentOptions`, `AgentRunOptions`, `AgentRunResult`/`Done`/`Failed`/`Cancelled`, `AgentRunStatus`, `AgentRunContext`, `AgentModelClient`, `AgentModelReadOptions`, `AgentModelMutationOptions`, `AgentIntentOptions`, `AgentIntentInput`, `Task`, `TaskResource`, `TaskCreateOptions`, `TaskCloseOptions`, `TaskCloseResult` (and the `Ablo.*` namespace aliases for all of them). The `Ablo.Auth.Agent` principal constructor and the schema-backed `tasks` model are unaffected.
 
-- Removed the `turn` primitive and the agent-work `tasks` resource. The client
-  surface is now purely `ablo.<model>` + `claim`: `engine.beginTurn()`, the
-  `Turn` type, `agent().run()`, and the agent/task type family are gone.
-  Coordinate concurrent writers with `claim`; attribution comes from the
-  server's auth context (`actor` / `onBehalfOf` / `capabilityId`).
+  **Why**
 
+  `turn`/`agent_tasks` was a second coordination-and-attribution mechanism living alongside `claim`. It is redundant on the client:
+  - `claim` already serializes writers **and** carries the causal link — its `intent` id rides on every guarded write.
+  - The server stamps `actor` / `onBehalfOf` / `capabilityId` onto each delta from the auth context.
+  - Per-run token/cost is recorded in Langfuse, not the `agent_tasks` table.
+
+  So the only thing the client lost is the audit pane's "show everything this exact prompt produced" filter, which keyed off `caused_by_task_id`; new writes leave that column null.
+
+  **Migration**
+
+  Agents stop opening/closing tasks — just issue `ablo.<model>` writes (schema-backed) or `ablo.commits.create(...)` (schema-less) under a `claim`. Replace `Ablo({ apiKey }).agent(id, opts).run(prompt, handler)` with: mint a scoped credential via `sessions.create({ agent })`, then `claim` the row and `update` / `commits.create`.
+
+  The **server** `agent_tasks` table, the `caused_by_task_id` delta column, the `/api/sync/commit` wire field, and the `agent_actions_log` compliance hash-chain remain in place but **dormant** (client writes leave the field null) — they are load-bearing for the tamper-evident audit chain and historical-row audit JOINs, so they are intentionally NOT dropped. The dead `/v1/tasks` + `/api/agent/turn` route handlers ARE removed (zero live callers).
 </Update>
 
-<Update label="June 5, 2026" description="v0.9.0">
-## Single options object for every model verb
+<Update label="June 8, 2026" description="v0.9.1">
+### Patch Changes
 
-The model read and write verbs now take one options object instead of
-positional arguments, so the id, the data, and every modifier live as named
-siblings. `claim` returns a disposable handle instead of taking a callback.
+- 90b656c: `drizzleDataSource` now takes `(db, schema)` and derives snake_case columns from your schema, so it composes with `ablo migrate` with no parallel Drizzle table. Update calls from `drizzleDataSource(db, tables)` → `drizzleDataSource(db, schema)`. Also adds the `snakeToCamel` export and provisions the adapter's `ablo_outbox` / `ablo_idempotency` tables via `ablo migrate`.
+</Update>
 
-### Breaking
+<Update label="v0.9.0" description="v0.9.0">
+A single options object for every model verb, and a disposable `claim` handle.
 
-- `create`, `update`, `delete`, and the async server `retrieve` each take a
-  single options object: `create({ data, id? })`, `update({ id, data, ...options })`,
+### Breaking Changes
+
+- **One options object per verb.** `create`, `update`, `delete`, and the async
+  server `retrieve` each take a single options object instead of positional
+  arguments, so the id, the data, and every modifier live as named siblings:
+  `create({ data, id? })`, `update({ id, data, ...options })`,
   `delete({ id, ...options })`, `retrieve({ id, ...options })`. Reactive local
-  reads use `get(id)` (synchronous) — `useAblo((ablo) => ablo.tasks.get(id))`.
+  reads stay on `get(id)` (synchronous) —
+  `useAblo((ablo) => ablo.tasks.get(id))`.
 
   ```diff
   - await ablo.tasks.update(id, { status: 'done' }, { wait: 'confirmed' })
@@ -377,10 +418,10 @@ siblings. `claim` returns a disposable handle instead of taking a callback.
   + useAblo((ablo) => ablo.tasks.get(id)) ?? serverTask
   ```
 
-- `claim` returns a disposable handle instead of taking a callback. The handle
-  exposes the fresh row on `.data` and is released on scope exit (`await using`)
-  or explicitly via `.release()`. `claim.state`, `claim.queue`, `claim.release`,
-  and `claim.reorder` also take the options object.
+- **`claim` returns a disposable handle** instead of taking a callback. The
+  handle exposes the fresh row on `.data` and is released on scope exit
+  (`await using`) or explicitly via `.release()`. `claim.state`, `claim.queue`,
+  `claim.release`, and `claim.reorder` also take the options object.
 
   ```diff
   - await ablo.tasks.claim(id, async (task) => {
@@ -390,29 +431,31 @@ siblings. `claim` returns a disposable handle instead of taking a callback.
   + const task = claim.data
   + await ablo.tasks.update({ id: task.id, data: { status: 'in_review' } })
   ```
-
 </Update>
 
-<Update label="June 2, 2026" description="v0.8.0">
-## Callable `claim` namespace and direct Postgres connector
+<Update label="v0.8.0" description="v0.8.0">
+A callable `claim` coordination namespace and bring-your-own-database support
+via a new `databaseUrl` option.
 
-Coordination collapses into a single callable `claim` accessor, and a new
-`databaseUrl` option lets you opt into the direct Postgres connector.
+### Minor Changes
 
-### Added
+- **Callable `claim` coordination namespace.** Taking a claim and inspecting its
+  state now live under one accessor: `claim(id, work)` acquires a claim and runs
+  `work` while it's held, and `claim.state(id)`, `claim.queue(id)`,
+  `claim.release(id)`, and `claim.reorder(id, order)` cover the surrounding
+  lifecycle. The README leads with the problem (who is allowed to act, and in
+  what order) and the Quick Start now demonstrates `claim` directly.
 
-- Callable `claim` coordination namespace. `claim(id, work)` acquires a claim
-  and runs `work` while it's held; `claim.state(id)`, `claim.queue(id)`,
-  `claim.release(id)`, and `claim.reorder(id, order)` cover the rest of the
-  lifecycle.
-- `databaseUrl` option on `Ablo({ schema, apiKey, databaseUrl })` for the direct
-  Postgres connector. Server-side only; defaults to `process.env.DATABASE_URL`.
-  See the data-sources guide for setup and role requirements.
+- **Bring-your-own-database via `databaseUrl`.** Point a project at your own
+  Postgres with `Ablo({ schema, apiKey, databaseUrl })`. Ablo writes synced rows
+  back into your database, so your data stays canonical. Server-side only;
+  defaults to `process.env.DATABASE_URL`. See the data-sources guide for setup
+  and role requirements.
 
 ### Breaking
 
-- Removed the flat coordination methods `claimState`, `queue`, `release`, and
-  `reorder`. Use the `claim` namespace instead.
+- The flat coordination methods `claimState`, `queue`, `release`, and `reorder`
+  are removed in favor of the `claim` namespace above.
 
   ```diff
   - await ablo.task.claimState(id)
@@ -420,223 +463,331 @@ Coordination collapses into a single callable `claim` accessor, and a new
   + await ablo.task.claim.state(id)
   + await ablo.task.claim.release(id)
   ```
-
 </Update>
 
-<Update label="May 28, 2026" description="v0.7.0">
-## Error contract, schema engine, and the `ablo` CLI
+<Update label="v0.7.0" description="v0.7.0">
+### Minor Changes
 
-A versioned error contract across HTTP and WebSocket, a schema diff/migration
-engine, and the `ablo` CLI for hosted, Data Source, and direct-connector
-workflows.
+- Structured error contract, schema/migration engine, and a full `ablo` CLI.
+  - **Structured error contract across HTTP + WS planes.** A closed, canonical
+    error-code registry is now the `code` tier of a Stripe-style error model. A
+    single HTTP egress funnel converts every throw to a canonical
+    `{ type, code, message, doc_url, request_id, ...details }` envelope; the WS
+    plane narrows mutation/claim error codes to the same union.
+  - **Versioned contract + drift guard.** `ERROR_CONTRACT_VERSION` (date-based)
+    ships in `errors.json` and on the `Ablo-Version` response header, so consumers
+    detect contract changes without diffing docs. Generated `errors.mdx` /
+    `errors.json` plus a CI drift guard keep the docs, OpenAPI spec, and SDK from
+    silently diverging from the registry.
+  - **Always-on request correlation.** Every response carries a `req_…` request id
+    (honoring an inbound `x-request-id`), stamped into the envelope's `request_id`.
+  - **OpenAPI parity.** The stale `{ error, reason }` schema is replaced by the
+    canonical envelope plus a generated `ErrorCode` enum.
+
+  CLI + schema:
+  - **Schema diff + migration planning engine** (`generateProvisionPlan` /
+    `generateMigrationPlan` in `@abloatai/ablo/schema`) — pure diff, classify,
+    apply, and constant-value backfill for required-field migrations.
+  - **`ablo generate`** — emit TypeScript types from the pushed schema.
+  - **Full `ablo` CLI suite**, Stripe-CLI-shaped: `init`, `login` / `logout` /
+    `status`, `mode [test|live]`, `dev` (push schema to the test sandbox + watch),
+    `logs` (tail your scope's commit activity), and the data-source commands below.
+    Authentication is the OAuth 2.0 device flow; `login` provisions and stores a
+    test and a live key, and `mode` switches the active one.
+  - **Database-URL structure (bring-your-own-database).** The CLI is split by where
+    it writes:
+    - `ablo pull` / `ablo check` / `ablo migrate` operate on **your own
+      `DATABASE_URL`** — `pull` introspects it to emit `defineSchema(...)` from
+      existing tables (read-only, like `prisma db pull`), `check` verifies tables
+      fit the schema with no DDL, and `migrate` applies DDL to `DATABASE_URL`.
+    - `ablo schema push` / `ablo dev` target the **hosted** test/live sandbox; the
+      server diffs, migrates, and activates the uploaded schema. `dev` never
+      touches live data.
+
+  **BREAKING** — removed the legacy React hooks `useQuery` / `useOne` / `useMutate`
+  / `useReader`. Use `useAblo()` + `ablo.<model>.*` instead. The `MutateActions`,
+  `ReaderActions`, and `ReaderFindOptions` types are still re-exported for callers
+  that referenced them.
+</Update>
+
+<Update label="v0.6.0" description="v0.6.0">
+### Minor Changes
+
+- 0f663e7: Coordination surface: fair queue, reactive wait-line, and lease renewal.
+  - **Claims acquire through a server FIFO queue.** On contention a claim waits its turn and re-reads before proceeding; reads are never blocked. Writes blocked by another participant's claim throw a typed `AbloBusyError`.
+  - **`ablo.<model>.queue(id)`** — reactive read of the wait-line behind a row: who's queued, their action, and FIFO position. Synced to peers like `activity(id)`.
+  - **Backpressure on `claim`** — `{ wait: false }` skips instead of waiting if the row is already held (claim-or-skip dedup); `{ maxQueueDepth: n }` bails with `AbloBusyError('queue_too_deep')` rather than joining a line already that deep.
+  - **Lease renewal** — a held claim renews automatically while the holder's connection is alive, so you never size a TTL; it lapses only after the holder goes silent. A queued claim that's abandoned is dequeued (no ghost waiters).
+  - **Reads are never gated by a claim**, including for agents.
+  - Intent vocabulary cleanup: a waiting claim is an `Intent` with `status: 'queued'` (`position` carries its place in line). Removed the unbuilt `whenFree`.
+
+- **BREAKING — API renames** (apply when upgrading from 0.5.1):
+  - Change-listeners renamed to `.onChange(...)`: `ablo.<model>.subscribe(cb)`, `presence.subscribe()`, `intents.subscribe()` → `.onChange(...)`. (`subscribe` is reserved for an upcoming scope-grant verb.)
+  - Row-access API renamed Resource → Model: `Ablo.Resource.*` → `Ablo.Model.*`, `ablo.resource(name)` → `ablo.model(name)`, `ModelTarget.resource` → `ModelTarget.model`, error code `resource_not_found` → `model_not_found`.
+</Update>
+
+<Update label="v0.5.1" description="v0.5.1">
+### Patch Changes
+
+- Docs: add a React quick-start (provider + `useAblo`), plain-language rewrite, and a "Set up with Claude Code" section.
+</Update>
+
+<Update label="v0.5.0" description="v0.5.0">
+### Minor Changes
+
+- 9154c1b: Rename intent handle methods to a clearer claim vocabulary; add `AbloProvider` `bootstrapMode`.
+
+  BREAKING — on the model intent handle (`ablo.<model>.intent(id)`):
+  `acquire`→`claim`, `acquireOrAwait`→`claimOrWait`, `settled`→`whenFree`,
+  `release`→`finish`, `revoke`→`cancel`. The lower-level `IntentHandle` /
+  `IntentLeaseHandle` (`ablo.intents.*`) are unchanged.
+
+  Also: `AbloProvider` gains a `bootstrapMode` prop (`'full' | 'none'`) to skip the
+  baseline pull on read-light pages; `StaleContextConflict` gains an optional
+  `conflictingFields`; README + JSDoc clarity pass and a new HTTP API section.
+</Update>
+
+<Update label="v0.4.0" description="v0.4.0">
+### Minor Changes
+
+- Per-entity coordination intents on the model accessor.
+
+  Coordinate writes to an entity through the same accessor you read it with —
+  `ablo.<model>.intent(id)`, returning a `ModelIntentHandle`. Intent state is one
+  self-describing object (`{ object: 'intent', id, status, target, action, heldBy,
+participantKind, createdAt?, expiresAt? }`) with a single lifecycle:
+  `status: 'active' | 'committed' | 'expired' | 'canceled'`. An `active` intent is
+  the lock.
+
+  ### Added
+  - `ablo.<model>.intent(id)` → `ModelIntentHandle<T>`, beside `create` / `update`
+    / `retrieve` / `load` on every model.
+    - Read side (any participant, synchronous + reactive): `current` (the holder's
+      intent, or `null`), `status` (`'idle'` when free), `settled()`.
+    - Write side (the holder): `acquire()`, `acquireOrAwait()`, lease-guarded
+      `update()`, `release()`, `revoke()`.
+    - `AsyncDisposable`: `await using lock = ablo.<model>.intent(id)` auto-releases
+      on scope exit.
+  - `acquireOrAwait()` — serialize-on-contention: take the lease, or wait out the
+    current holder, re-read the changed row, then take it. The caller never branches
+    on who holds the target — it just gets the target safely. Bind it to an agent's
+    write-tool boundary so agents never reason about coordination.
+  - New exports: `ModelIntentHandle`, `ModelIntentAcquireOptions`.
+
+  ### Changed
+  - `acquire()` is fire-and-forget over the socket — it does not throw on conflict.
+    Resolve contention with `acquireOrAwait()` (wait) or read `current` for a
+    reactive "who's editing" badge, rather than catching a rejection.
+
+  ### Deprecated
+  - Participant-level `intents.claim()` / `onRejected()` and the `intent_rejected`
+    wire frame still work but are superseded by the per-model handle. Their removal
+    is a future breaking change.
+
+## Unreleased
+
+Schema-driven identity sync-group composition, plus a terser capability surface.
+
+The convention for deriving a participant's allowed sync-groups from its identity is now declared on the consumer's schema as an open registration. Consumers with a `{ regionId, customerId }` identity shape declare their own roles instead of receiving any built-in prefixes from the SDK.
+
+Capability fields shed their redundant `allowed` prefix to match the surrounding vocabulary — capability inputs always describe what the bearer _can_ touch, so the prefix was doing no disambiguation work for the consumer.
 
 ### Added
 
-- Closed error-code registry as the `code` field of the error model. HTTP and
-  WebSocket errors share one envelope:
-  `{ type, code, message, doc_url, request_id, ...details }`.
-- `ERROR_CONTRACT_VERSION`, emitted in `errors.json` and on the `Ablo-Version`
-  response header. `errors.mdx` and `errors.json` are generated from the
-  registry, with a CI check that fails on drift.
-- Request correlation: every response includes a `req_…` id (or the inbound
-  `x-request-id`), also set as the envelope's `request_id`.
-- Schema diff and migration planning via `generateProvisionPlan` and
-  `generateMigrationPlan` (`@abloatai/ablo/schema`), with constant-value
-  backfill for new required fields.
-- `ablo generate` emits TypeScript types from the schema.
-- CLI commands: `init`, `login`, `logout`, `status`, `mode`, `dev`, and `logs`.
-  Authentication uses the OAuth 2.0 device flow; `login` provisions a test and a
-  live key.
-- Table-adoption commands run against your `DATABASE_URL`: `pull` generates
-  `defineSchema(...)` from existing tables, `check` verifies them without changing your schema,
-  and `migrate` applies changes for the direct connector. `schema push` and
-  `dev` target the hosted sandbox, where the server diffs, migrates, and
-  activates the schema.
+- `DefineSchemaOptions.identityRoles?: readonly IdentityRole[]` — open registration of identity-anchored sync-group roles on `defineSchema(...)`. Each `IdentityRole` declares `{ kind, template, extract }`: a diagnostic label, a `'<prefix>:{id}'` template, and a pure extractor function from an opaque identity context to zero-or-more ids. No closed enum; consumers fully control both the template strings and the extraction logic.
+- `composeIdentitySyncGroups(identity, schema)` exported from `@abloatai/ablo/schema` — walks the schema's registered `identityRoles`, calls each extractor, and substitutes ids into templates. Stable, deduped output. Returns `[]` when no roles are registered.
+- `Schema.identityRoles: readonly IdentityRole[]` — the registered list, accessible on every `defineSchema(...)` result.
+- New exported types: `IdentityRole`, `IdentityContext`.
 
 ### Breaking
 
-- Removed the React hooks `useQuery`, `useOne`, `useMutate`, and `useReader`.
-  Use `useAblo()` with `ablo.<model>.*`. The `MutateActions`, `ReaderActions`,
-  and `ReaderFindOptions` types are still exported.
+- `capabilities.create({ allowedSyncGroups, allowedOperations })` → `capabilities.create({ syncGroups, operations })`. Both fields renamed at every public surface — capability create input, capability retrieve response, capability record, Identity returned from `AuthProvider`. Hard rename, no alias. Update the call sites; the field semantics are unchanged.
 
-  ```diff
-  - const { data } = useQuery('task', { where: { done: false } })
-  + const ablo = useAblo()
-  + const tasks = ablo.task.list({ where: { done: false } })
+  ```ts
+  // Before
+  await api.capabilities.create({
+    allowedSyncGroups: ['org:acme'],
+    allowedOperations: ['tasks.update'],
+    lease: '10m',
+  });
+
+  // After
+  await api.capabilities.create({
+    syncGroups: ['org:acme'],
+    operations: ['tasks.update'],
+    lease: '10m',
+  });
   ```
 
-- Replaced the `{ error, reason }` OpenAPI error schema with the envelope and a
-  generated `ErrorCode` enum.
+### Changed
+
+- `docs/integration-guide.md` §1 now shows `identityRoles` in the canonical `defineSchema` example plus a "Declaring scope on a model" subsection covering `orgScoped` / `scopedVia` / `syncGroupFormat`. `docs/capabilities.md`, `docs/api.md`, `docs/mcp.md`, and `AGENTS.md` cross-reference the `identityRoles` section and use the renamed fields throughout.
 </Update>
 
-<Update label="May 26, 2026" description="v0.6.0">
-## Coordination: fair queue, wait-line, and lease renewal
+<Update label="v0.3.0" description="v0.3.0">
+Umbrella `<AbloProvider>` for React apps. One provider component now owns the full lifecycle — singleton rotation on auth change, Strict-Mode-safe bootstrap, `beforeunload` cleanup, session-expiry IndexedDB wipe, post-bootstrap hooks, mesh client construction. Replaces the ad-hoc provider glue every consumer had to write themselves.
 
-Claims acquire through a server-side FIFO queue. Reads are never gated by a
-claim, including for agents.
+Declarative props absorb every class of lifecycle glue; the status hook returns a tagged union so impossible states are unrepresentable. The reference integration shrank from 515 LOC of hand-rolled singleton/AbortController/beforeunload/reaction-bridge wiring to a 60-LOC thin wrapper that just passes props through.
 
 ### Added
 
-- Claims acquire through a FIFO queue. On contention a claim waits its turn and
-  re-reads before proceeding; a write blocked by another participant's claim
-  throws `AbloBusyError`.
-- `ablo.<model>.queue(id)` — reactive read of the wait-line behind a row: who is
-  queued, their action, and FIFO position. Synced to peers like `activity(id)`.
-- Backpressure on `claim`: `{ wait: false }` skips instead of waiting if the row
-  is held; `{ maxQueueDepth: n }` throws `AbloBusyError('queue_too_deep')`
-  rather than joining a line already that deep.
-- Lease renewal: a held claim renews while the holder's connection is alive, so
-  there is no TTL to size; it lapses only after the holder goes silent. An
-  abandoned queued claim is dequeued.
-- A waiting claim is an `Intent` with `status: 'queued'`; `position` carries its
-  place in line.
+- `<AbloProvider>` — umbrella provider at `@abloatai/ablo/react`. Props include data config (`schema`, `url`, `userId`, `organizationId`), auth (`capabilityToken` / `apiKey` / session cookie fallback), declarative behavior (`preventUnsavedChanges`, `lostConnectionTimeout`, `postBootstrap`), callbacks (`onSessionExpired`, `onError`, `resolveUsers`), and DI escape hatches.
+- `<SyncGroupProvider id="matter:...">` + `useSyncGroup()` — per-entity scope context.
+- `<ClientSideSuspense fallback={...}>` — gate renders until the engine reports `connected`. Phase-1 non-Suspense; phase-2 upgrades to real Suspense.
+- `useSyncStatus()` rewritten as a tagged union: `{ name: 'initial' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'needs-auth', ... }`. Impossible states are unrepresentable.
+- `useCurrentUserId()` — returns the `userId` prop. Replaces downstream consumers' defineProperty hacks on the store.
+- `useErrorListener(cb)` — imperative error callback (Sentry/Datadog).
+- `useSync<R>()` and `useSyncStore<T>()` accept generic parameters so consumers can widen to their concrete schema types without `as unknown` casts at call sites.
+- `BaseSyncedStore.purge()` / `SyncEngine.purge()` — disconnect + wipe every `ablo_*` / `ablo-*` IndexedDB. Called automatically on session expiry.
+- `SyncEngine.onSessionError(listener)` — subscribe to session-error events. Multiple subscribers supported.
+- Commit payload projection built into `TransactionQueue`. Mutations are automatically projected onto the model's schema-declared fields (dropping framework internals `__class` / `__typename` / `clientId` / `syncStatus` and anything not declared), with `field.json()` values auto-stringified for TEXT columns and `undefined` dropped on updates. No config port, no consumer hook — the SDK derives correct wire payloads from the schema alone. Apps that previously maintained hand-rolled extractor tables can delete them entirely.
+
+### Breaking (continued)
+
+- Removed `SyncEngineConfig.extractCreateInput` and `SyncEngineConfig.buildUpdateInput`. The SDK's built-in projection replaces them. Consumers who passed these in `configOverrides` should delete the override; the default now covers 100% of identity-column mutations. The `configOverrides` prop still exists but its remaining fields are all deprecated (see below) and scheduled for removal in v0.4.
+
+### Deprecated (vestigial — removal in v0.4)
+
+- `SyncEngineConfig.modelCreatePriority`, `defaultCreatePriority`, `defaultNonCreatePriority` — never read at runtime.
+- `SyncEngineConfig.batchableModels` — never read at runtime.
+- `SyncEngineConfig.dedicatedDeleteModels` — never read at runtime.
+- `SyncEngineConfig.preserveCaseModels` — never read at runtime.
+- `SyncEngineConfig.essentialFields` — used only in debug logging, no behavioral effect.
+- `SyncEngineConfig.classNameFallbackMap` — dead path; `ModelRegistry.registerModelsFromSchema` registers by constructor identity, bypassing the class-name fallback entirely.
 
 ### Breaking
 
-- Change listeners renamed to `.onChange(...)`: `ablo.<model>.subscribe(cb)`,
-  `presence.subscribe()`, `intents.subscribe()` → `.onChange(...)`.
-- Row-access API renamed Resource → Model: `Ablo.Resource.*` → `Ablo.Model.*`,
-  `ablo.resource(name)` → `ablo.model(name)`, `ModelTarget.resource` →
-  `ModelTarget.model`, error code `resource_not_found` → `model_not_found`.
-</Update>
+- Removed `<SyncProvider>` — folded into `<AbloProvider>`. Migrate by swapping the provider and passing `userId`/`organizationId`/`url` instead of a pre-constructed store.
+- Removed `createAbloContext()` factory and its returned `AbloProvider` / `useAblo` / `useParticipant` triple. Mesh is now always-on inside `<AbloProvider>`; `useAblo()` and `useParticipant(opts)` are always available. Schema-typed mesh hooks are on the roadmap.
+- Removed `withSync` (no-op alias of `observer`). Import `observer` from `mobx-react-lite` directly if needed.
+- Removed `useSyncContext` from the public surface (never used outside the SDK's test helpers).
+- `useSyncStatus()` return shape changed from six booleans to a tagged union. Migration: `const { isReady } = useSyncStatus()` → `const status = useSyncStatus(); const isReady = status.name === 'connected'`.
+- `SyncStoreContract` gained six sync-status getters and a `syncStatus` field. Third-party classes implementing the contract must add these (additive for callers).
 
-<Update label="May 26, 2026" description="v0.5.1">
-## Documentation
+### Migration
 
-- Added a React quick-start (provider + `useAblo`), a plain-language rewrite, and
-  a "Set up with Claude Code" section.
-</Update>
+```tsx
+// Before (0.2.x)
+const { AbloProvider, useAblo, useParticipant } = createAbloContext<typeof schema>();
 
-<Update label="May 25, 2026" description="v0.5.0">
-## Claim vocabulary and `bootstrapMode`
+function Root() {
+  const sync = createSyncEngine({ url, schema, user });
+  const ablo = new Ablo({ schema });
+  return (
+    <SyncProvider store={sync._store} organizationId={orgId}>
+      <AbloProvider ablo={ablo}>
+        <App />
+      </AbloProvider>
+    </SyncProvider>
+  );
+}
 
-### Added
-
-- `<AbloProvider>` gains a `bootstrapMode` prop (`'full' | 'none'`) to skip the
-  baseline pull on read-light pages.
-- `StaleContextConflict` gains an optional `conflictingFields`.
-
-### Breaking
-
-- Renamed the model intent handle methods (`ablo.<model>.intent(id)`):
-  `acquire` → `claim`, `acquireOrAwait` → `claimOrWait`, `settled` → `whenFree`,
-  `release` → `finish`, `revoke` → `cancel`. The lower-level `IntentHandle` /
-  `IntentLeaseHandle` (`ablo.intents.*`) are unchanged.
-</Update>
-
-<Update label="May 25, 2026" description="v0.4.0">
-## Intents
-
-Coordinate writes to an entity with the same accessor you read it:
-`ablo.<model>.intent(id)`.
-
-```ts
-const lock = ablo.documents.intent(doc.id);
-
-lock.current;                              // who holds it (or null) — sync + reactive
-lock.status;                              // 'idle' when free
-
-await lock.claimOrWait();                // take it, or wait out the holder then take it
-await lock.update({ status: 'done' });   // optimistic, lease-guarded
-await lock.finish();
+// After (0.3.0)
+function Root() {
+  return (
+    <AbloProvider
+      schema={schema}
+      url={url}
+      userId={userId}
+      organizationId={orgId}
+      preventUnsavedChanges
+      onSessionExpired={() => router.replace('/signin')}
+    >
+      <ClientSideSuspense fallback={<Skeleton />}>
+        <App />
+      </ClientSideSuspense>
+    </AbloProvider>
+  );
+}
 ```
 
-- `claimOrWait()` is the serialize-on-contention call — you never branch on who
-  holds the target; you just get it safely. Bind it to an agent's write tool so
-  agents never reason about coordination.
-- Handles are `AsyncDisposable` — `await using lock = …` finishes on scope exit.
-
-**Deprecated:** participant-level `intents.claim()` / `onRejected()` are superseded
-by the per-model handle and will be removed in a future release.
+No breaking change to `useQuery` / `useOne` / `useMutate` / `useReader` / `useMutators` / `useUndoScope` / `usePresence` / `useIntent` — call sites remain source-compatible.
 </Update>
 
-<Update label="April 22, 2026" description="v0.3.0">
-  ## Umbrella `<AbloProvider>` for React
+<Update label="v0.2.1" description="v0.2.1">
+React bindings hardening. Fixes two infinite-loop classes that surfaced in downstream apps as React error #185 ("Maximum update depth exceeded"), and exposes sync-status reactivity as a first-class observable + hook.
 
-  One provider component now owns the full lifecycle — singleton rotation on auth
-  change, Strict-Mode-safe bootstrap, `beforeunload` cleanup, session-expiry
-  IndexedDB wipe, post-bootstrap hooks, mesh client construction. The reference
-  integration shrank from 515 LOC of hand-rolled wiring to a 60-LOC wrapper.
+### Fixed
 
-  ### Added
+- **`useQuery` / `useOne` no longer loop on `getSnapshot`.** The `useSyncExternalStore` adapter was returning a fresh `view.results.slice()` on every call, which React's post-commit consistency check interpreted as "store updated mid-render" — scheduling another render, another snapshot, another mismatch, ad infinitum. The snapshot is now cached in a ref and only refreshed inside the subscribe callback right before `onChange()` fires. Affected every tree with multiple simultaneous `useQuery` subscribers.
 
-  - `<AbloProvider>` — umbrella provider at `@abloatai/ablo/react` with declarative
-    data, auth, behavior, and callback props.
-  - `<SyncGroupProvider id="…">` + `useSyncGroup()` — per-entity scope context.
-  - `<ClientSideSuspense fallback={…}>` — gate renders until the engine is `connected`.
-  - `useSyncStatus()` rewritten as a tagged union — impossible states are unrepresentable.
-  - `useCurrentUserId()`, `useErrorListener(cb)`.
-  - Commit payload projection built into `TransactionQueue` — wire payloads derived
-    from the schema alone; hand-rolled extractor tables can be deleted.
+### Added
 
-  ### Breaking
+- **`BaseSyncedStore` sync status is now properly observable.** `syncStatus` and `dataReady` are annotated `observable`; `isReady`, `isSyncing`, `isOffline`, `isReconnecting`, `isError`, `hasUnsyncedChanges` are `computed`. Before, these were plain getters over plain fields — `reaction(() => store.isReady, ...)` silently never fired. Existing `observer` / `reaction` call sites that relied on the implicit `pool.size` trigger will continue to work; new call sites should read these observables directly.
+- **`useSyncStatus()` React hook.** Returns `{ isReady, isSyncing, isOffline, isReconnecting, isError, hasUnsyncedChanges }` as a reactive snapshot, bridged via `useSyncExternalStore` with a correctly-cached snapshot. Replaces hand-rolled `reaction` bridges in consumer providers. See `docs/react.md`.
+- **`SyncStoreContract` surfaces the status getters** so TypeScript autocomplete works from the `useSyncContext()` return value without a cast.
 
-  - Removed `<SyncProvider>` (folded into `<AbloProvider>`) and `createAbloContext()`
-    — mesh is always-on; `useAblo()` / `useParticipant()` always available.
-  - Removed `withSync` (import `observer` from `mobx-react-lite` directly).
-  - `useSyncStatus()` now returns a tagged union instead of six booleans:
-    `const isReady = useSyncStatus().name === 'connected'`.
+### Documentation
 
-  No breaking change to `useQuery` / `useOne` / `useMutate` / `useReader` / `useMutators` /
-  `useUndoScope` / `usePresence` / `useIntent`.
+- **`llms.txt` and `docs/react.md`** gained a "Common pitfalls" section covering the three traps this release addresses: don't wrap providers in `observer()`, `getSnapshot` must return a cached reference, and sync-status fields are real observables (don't watch `pool.size` as a proxy).
+
+### Migration
+
+No breaking changes. Optional: replace any local `reaction(() => store.isReady, setReady, { fireImmediately: true })` bridges in your own providers with `const { isReady } = useSyncStatus()` for consumers below the store provider.
 </Update>
 
-<Update label="April 22, 2026" description="v0.2.1">
-  ## React bindings hardening
+<Update label="v0.2.0" description="v0.2.0">
+Mesh SDK — the canonical agent-multiplayer surface. Locked at this release; further work is consolidation, not expansion.
 
-  Fixes two infinite-loop classes that surfaced downstream as React error #185
-  ("Maximum update depth exceeded"), and exposes sync-status reactivity as a
-  first-class observable + hook.
+### What's frozen
 
-  ### Fixed
+The SDK covers exactly three integration shapes. Each has a canonical example in [`examples/`](./examples/):
 
-  - `useQuery` / `useOne` no longer loop on `getSnapshot` — the snapshot is cached
-    in a ref and refreshed only inside the subscribe callback.
+1. **Server agent** — `new Ablo({ schema })` reads `ABLO_API_KEY`, joins and works. ([`examples/server-agent.ts`](./examples/server-agent.ts))
+2. **Browser app** — server mints a scoped capability, browser holds it via `new Ablo({ schema, capabilityToken })`. No API key in bundle, no session cookies, no allowed-origins registration required. Stripe `client_secret` shape. ([`examples/browser-app.ts`](./examples/browser-app.ts))
+3. **Sub-agent** — `parent.join(child, opts)` attenuates from the parent's capability. ([`examples/sub-agent.ts`](./examples/sub-agent.ts))
 
-  ### Added
+### Ergonomics (package-wide)
 
-  - `BaseSyncedStore` sync status is now properly observable (`isReady`, `isSyncing`,
-    `isOffline`, `isReconnecting`, `isError`, `hasUnsyncedChanges`).
-  - `useSyncStatus()` React hook — reactive snapshot bridged via `useSyncExternalStore`.
+- **`Ablo` class** — `import Ablo from '@abloatai/ablo'` / `new Ablo({ schema })`. Matches `new Stripe()` / `new OpenAI()` / `new Anthropic()` pattern. `createMesh(opts)` stays available as the functional alias.
+- **Model-scoped joins** — `ablo.matters.join(id, { label })` desugars to the generic `join`. Proxy-based so the namespace adapts to any schema. Collisions with reserved admin fields (`roles`, `members`, `audit`, `capabilities`) throw at construction time.
+- **Flat scope form** — `scope: { matters: id }` alongside the array form.
+- **`as` alias** — `{ as: session({...}) }` replaces the security-jargon `onBehalfOf`; both still accepted.
+- **Auto-connect** — `join()` returns a connected participant. `autoConnect: false` to opt out.
+- **Duration strings** — `ttl: '3m'`, `ttlSeconds: '24h'` accepted alongside numbers.
+- **Descriptive generics** — every public type uses `TSchema` / `TAgent` / `ModelName` instead of `S` / `A` / `K`. Zero `unknown` in public types.
 
-  No breaking changes.
+### Coordination primitives
+
+- **Presence verbs** — `participant.presence.editing(target)` / `viewing(target)` / `idle()`. Plus `update({...})` escape hatch for custom actions.
+- **Intent verbs** — `participant.intents.editing(target, opts)` / `writing(target, opts)`. Returns an `IntentHandle` with `Symbol.asyncDispose` so `await using work = ...` auto-revokes.
+- **Snapshots** — `const snap = await participant.snapshot({ clauses: [id] })`. Flat shape: `snap.clauses[id]` (typed from schema via `InferModel`, not `unknown`), `snap.stamp`, `snap.signal` (AbortSignal).
+- **Async iterables** — `for await (const peers of participant.presence)`, `for await (const openIntents of participant.intents)`, `for await (const delta of participant.deltas)`.
+
+### Env / config
+
+- `ABLO_API_KEY` — required for server-side use.
+- `baseURL` — optional override for private deployments / local-dev (defaults to `wss://api.abloatai.com`).
+- `organizationId` — **no longer required** in `createMesh`. The API key or session binds the caller to one org; the capability mint response echoes it back.
+- `createMeshFromEnv` — removed. `new Ablo({ schema })` auto-reads env.
+
+### Test coverage
+
+- 53 mesh unit tests across 8 suites (`__tests__/unit/mesh/`)
+- New E2E test `e2e-browser-capability-token.ts` proves the server-mints / browser-holds flow end-to-end
+- Existing 12 mesh E2E tests (token refresh, watermark, chinese wall, etc.) still pass
+
+---
 </Update>
 
-<Update label="April 21, 2026" description="v0.2.0">
-  ## Mesh SDK — the canonical agent-multiplayer surface
+<Update label="v0.1.0" description="v0.1.0">
+Initial release.
 
-  The SDK covers exactly three integration shapes, each with a canonical example:
-  **server agent**, **browser app** (scoped capability token, Stripe `client_secret`
-  shape), and **sub-agent** (attenuated from the parent capability).
+### Features
 
-  ### Ergonomics
+- **Schema DSL**: Zero-codegen schema definition with full TypeScript inference (`defineSchema`, `field`, `relation`)
+- **React Hooks**: `useModels`, `useModel`, `useMutations`, `withSync` for reactive data binding
+- **Consumer API**: `createSyncEngine()` — one-liner setup that hides all internal wiring
+- **Offline-first**: IndexedDB persistence with automatic offline mutation queue and FK-safe flush
+- **Real-time sync**: WebSocket delta streaming with optimistic updates and rollback
+- **AI Agent SDK**: `SyncAgent` for backend/AI agent participation as first-class sync citizens
+- **Pluggable auth**: `AuthProvider` interface with built-in API key, JWT, and session providers
+- **Security**: IndexedDB cleanup on session expiry and sync group revocation
+- **Testing utilities**: `@abloatai/ablo/testing` subpath with mocks, fixtures, and harness
 
-  - `Ablo` class — `import Ablo from '@abloatai/ablo'` / `new Ablo({ schema })`,
-    matching `new Stripe()` / `new OpenAI()`.
-  - Model-scoped joins — `ablo.matters.join(id, { label })`.
-  - `as` alias replaces `onBehalfOf`; duration strings (`ttl: '3m'`); auto-connect.
+### Test Coverage
 
-  ### Coordination primitives
-
-  - Presence verbs — `presence.editing(target)` / `viewing(target)` / `idle()`.
-  - Intent verbs — `intents.editing(target)` / `writing(target)`, returning an
-    `IntentHandle` with `Symbol.asyncDispose` for `await using`.
-  - Snapshots and async iterables over presence, intents, and deltas.
-
-  ### Config
-
-  - `organizationId` no longer required — the API key or session binds the caller's org.
-  - `createMeshFromEnv` removed — `new Ablo({ schema })` auto-reads env.
-</Update>
-
-<Update label="April 10, 2026" description="v0.1.0">
-  ## Initial release
-
-  - **Schema DSL** — zero-codegen schema with full TypeScript inference.
-  - **React hooks** — reactive data binding for models, mutations, and queries.
-  - **Consumer API** — `createSyncEngine()` one-liner setup.
-  - **Offline-first** — IndexedDB persistence with an FK-safe offline mutation queue.
-  - **Real-time sync** — WebSocket delta streaming with optimistic updates and rollback.
-  - **AI Agent SDK** — `SyncAgent` for agents as first-class sync citizens.
-  - **Pluggable auth** — API key, JWT, and session providers.
+- 231 unit/integration/property/contract tests
+- 50 E2E tests against real Go server + PostgreSQL + Redis
+- Property-based testing via fast-check
 </Update>

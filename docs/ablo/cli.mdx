@@ -2,101 +2,108 @@
 title: "CLI"
 ---
 
+{/* AUTO-GENERATED from packages/sync-engine/docs/cli.md -- edit there, then run `npm run build:docs`. */}
+
 The `ablo` CLI gets you from an empty project to live-syncing data: scaffold a
-schema, connect storage, and verify the model contract. For an existing backend,
-the normal path is a signed Data Source endpoint. For the optional direct
-Postgres connector, you set `DATABASE_URL` and `ablo migrate` provisions **just
-your synced models plus the adapter's `ablo_outbox` / `ablo_idempotency`
-tables** — never your whole database. Your `defineSchema(...)` is the single
-source of truth for those synced models; the CLI lowers it to SQL through one
-engine (`generateProvisionPlan` / `generateMigrationPlan` in
-`@abloatai/ablo/schema`). Everything else — auth, billing, non-synced tables —
-stays in your own ORM schema, provisioned by your own migrations.
+schema, authenticate, push the schema, and watch it sync. Your
+`defineSchema(...)` is the single source of truth: whether you run the CLI
+locally or push to the hosted server, the same engine turns it into the same
+SQL — so what you test is what ships.
 
 ```bash
-npx ablo init                 # choose "My database (Data Source endpoint)"
-# mount ablo/data-source.ts at /api/ablo/source
+npx ablo init      # scaffold ablo/schema.ts + client
+npx ablo login     # authorize in the browser
+npx ablo dev       # push schema to the test sandbox + watch
 ```
 
-<Warning>
-**Agents & CI — run non-interactively.** A coding agent or CI run has no TTY, so
-two things to know:
-
-- **Prompts hang** — `ablo init` and bare `ablo mode` prompt. Use
-  `ablo init --yes` and `ablo mode sandbox|production` (with the argument). `init` also
-  auto-detects no-TTY, but pass `--yes` to be explicit. Bare `ablo mode` now
-  errors with the right form instead of hanging.
-- **Long-runners never return** — `ablo dev` watches and `ablo logs` follows by
-  default. Use `ablo dev --no-watch` and `ablo logs --no-follow`.
-
-```bash
-npx ablo init --yes --framework nextjs --auth apikey --storage datasource
-# also: --no-agent  --no-pull  --no-install  --no-login
-```
-
-Authenticate with the `ABLO_API_KEY` env var — do **not** run `ablo login`
-(it opens a browser; logging in is a human step that provisions the key the
-agent then uses). One-shot commands (`status`, `push`, `pull`, `check`,
-`generate`) are safe as-is.
-</Warning>
-
-The hosted commands below (`ablo login`, `ablo dev`, `ablo push`) authenticate
-and sync your Ablo schema to the hosted control plane. Use a
-[Data Source](/data-sources) for your app tables, or `ablo migrate` when you
-opt into the direct Postgres connector.
+**Two setup styles, and they pick your commands.** If your app database is the
+source of truth, expose a [Data Source endpoint](/data-sources) and keep DB
+credentials in your app. If you explicitly want Ablo to open a Postgres
+connection, use the **Direct Postgres connector** commands: `ablo migrate`
+applies changes to your own `DATABASE_URL`, and `ablo check` / `ablo pull`
+adopt tables you already have. Hosted sandbox commands are tagged **Hosted**;
+direct-connector commands are tagged **Direct Postgres**.
 
 ## Authenticate
 
 `ablo login` runs the OAuth 2.0 device flow: it opens your browser, you choose
 **log in** or **create an account** and approve, and the CLI provisions a
-**test + live key pair** (90-day, restricted) and stores them locally. This
-mirrors `stripe login`.
+**test + live key pair** (90-day) and stores them locally. The test key is a
+sandbox `sk_test_` key; the live key is a restricted `rk_live_` key (read-only
+observation — `logs`, `status`), so a stolen config can't write to production.
+This mirrors `stripe login`.
 
-| Command | What it does |
-| --- | --- |
-| `ablo login` | Authorize in the browser; provisions + stores a test and a live key. |
-| `ablo logout` | Remove the stored keys. |
-| `ablo status` | Show the active org, mode, both keys (prefix + expiry), and server health. |
-| `ablo mode [sandbox\|production]` | Switch the active mode. With no argument, prompts. |
+| Command                  | What it does                                                               |
+| ------------------------ | -------------------------------------------------------------------------- |
+| `ablo login`             | Authorize in the browser; provisions + stores a test and a live key.       |
+| `ablo login --project <slug>` | Same, but scope (and mint) the pair to a project, and make it active. |
+| `ablo logout`            | Remove the stored keys.                                                    |
+| `ablo status`            | Show the active org, mode, both keys (prefix + expiry), and server health. |
+| `ablo mode [sandbox\|production]` | Switch the active environment. With no argument, prompts.                         |
 
-Keys are stored in `~/.config/ablo/config.json` (mode `0600`). In **CI**, don't
-log in — set `ABLO_API_KEY`, which always overrides the stored key.
+Keys live in `~/.config/ablo/credentials.json` (mode `0600`), keyed by project
+then environment; the non-secret `config.json` holds only the active mode and
+project. In **CI**, don't log in — set `ABLO_API_KEY`, which always overrides
+the stored key.
 
 ## Test vs live
 
 Like Stripe, every account has a **test** mode and a **live** mode, and a key
 belongs to one of them. Test keys are bound to an isolated sandbox: their reads
-and writes never touch live data. Switch with `ablo mode`; `ablo dev` is always
-test mode by design.
+and writes never touch production data. Switch with `ablo mode`; `ablo dev` is always
+the sandbox by design.
 
 The schema, however, is **shared** across the org — pushing a schema (from
-either mode) defines the same models test and live see; only the rows differ.
+either environment) defines the same models sandbox and production see; only the rows differ.
+
+## Projects
+
+An org can have multiple **projects**, each with its own isolated keys, schema,
+and data. Keys are scoped to a project **at mint** and never re-scoped, so the
+CLI keeps a separate credential profile per project — Stripe's
+`login --project-name` model. The active project (set with `projects use`)
+selects which profile every command authenticates with.
+
+| Command                       | What it does                                                                       |
+| ----------------------------- | ---------------------------------------------------------------------------------- |
+| `ablo projects list`          | List the org's projects (marks the active one and the org-default).                |
+| `ablo projects create <slug>` | Create a project (`--name "Display Name"`). Its keys/schema/data are isolated.     |
+| `ablo projects use <slug>`    | Switch the active project. `ablo projects use default` returns to the org-default. |
+| `ablo login --project <slug>` | Mint and store a key pair for a project, and make it active.                       |
+
+Because keys are fixed to a project, `projects use` only changes which profile
+is active — it never re-scopes an existing key. Switch to a project you haven't
+logged into yet and the CLI tells you to mint one:
+
+```bash
+npx ablo projects use war-room
+#   ✓ now targeting project war-room (prj_…)
+#   No key stored for this project yet — run `ablo login --project war-room` to mint one.
+
+npx ablo login --project war-room   # mints + stores its key pair, keeps it active
+```
+
+If you run a project-scoped command (`push`, `dev`) while the active project has
+no key — but other projects do — the CLI **refuses** rather than silently
+deploying with the wrong project's credential, and names the fix
+(`ablo login --project <slug>`). In CI, an explicit `ABLO_API_KEY` bypasses
+profiles entirely: it acts in whatever project it was minted for.
 
 ## Commands
 
-| Command | What it does | Flags |
-| --- | --- | --- |
-| `ablo init` | Scaffold `ablo/` (`schema.ts`, client, Data Source endpoint, optional agent / component), write `.env`, install the SDK, and create the app's [project](/projects) when you're logged in. Offers to log in at the end. Interactive by default; non-interactive with `--yes`/no-TTY. | `--yes`, `--framework`, `--auth`, `--storage`, `--project <slug>`, `--no-project`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login` |
-| `ablo login` / `logout` / `status` | Authentication & status (above). `status` shows the active mode AND project. | — |
-| `ablo mode [sandbox\|production]` | Switch active mode. | — |
-| `ablo projects list\|create\|use` | Manage the org's [projects](/projects) — each app's isolated schema/planes/keys. `use` sets the local active project for new key mints. | `create <slug> [--name]`, `use <slug\|id\|default>` |
-| `ablo dev` | **Hosted** — push the schema to your test sandbox, then watch `ablo/schema.ts` and re-push on save. | `--no-watch`, `--schema <path>`, `--export <name>`, `--url <url>` |
-| `ablo logs` | Tail your scope's commit activity (`stripe logs tail`). Follows by default. | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode sandbox\|production` |
-| `ablo push` | **Hosted** — upload the schema to Ablo; the server diffs, migrates, and activates it. | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url` |
-| `ablo pull` | **Adoption** — generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`). | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force` |
-| `ablo check` | **Adoption** — verify your *existing* tables fit the schema (read-only, no schema changes). | `--schema <path>`, `--export <name>`, `--app-schema <name>` |
-| `ablo generate` | Emit TypeScript types from the schema. | `--out <path>`, `--schema`, `--export` |
-
-<Note>
-**A schema change is not live until you `ablo push`.** The sync server imports no
-app schema — it learns your models, and which ones are `mutable`, only from the
-copy you push (per tenant). Editing `ablo/schema.ts`, rebuilding, or redeploying
-your app changes nothing on the server by itself. After **any** schema change —
-new model, new field, flipping `mutable` — run `ablo push` (or keep `ablo dev`
-running, which re-pushes on save). A write to a model the active pushed schema
-hasn't seen fails with `server_execute_unknown_model` (see
-[Structured errors](#structured-errors)).
-</Note>
+| Command                            | What it does                                                                                                                                  | Flags                                                                                                  |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `ablo init`                        | Scaffold `ablo/` (`schema.ts`, client, optional Data Source / agent / component), write `.env`, install the SDK. Offers to log in at the end. | —                                                                                                      |
+| `ablo login` / `logout` / `status` | Authentication & status (above).                                                                                                              | —                                                                                                      |
+| `ablo mode [sandbox\|production]`   | Switch active environment.                                                                                                                           | —                                                                                                      |
+| `ablo projects list\|create\|use\|rename` | Manage projects and the active one (see [Projects](#projects)). Each project's keys/schema/data are isolated.                          | `--name "<display>"` (create/rename)                                                                    |
+| `ablo dev`                         | **Hosted** — push the schema to your test sandbox, then watch `ablo/schema.ts` and re-push on save.                                           | `--no-watch`, `--schema <path>`, `--export <name>`, `--url <url>`                                      |
+| `ablo logs`                        | Tail your scope's commit activity (`stripe logs tail`). Follows by default.                                                                   | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode sandbox\|production` |
+| `ablo push`                        | **Hosted** — upload the schema to Ablo; the server diffs, migrates, and activates it.                                                         | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url`         |
+| `ablo migrate`                     | **Direct Postgres** — provision just the synced models (plus the adapter's `ablo_outbox` / `ablo_idempotency`) in your own `DATABASE_URL`. Leaves your other tables alone.                                                          | `--dry-run`, `--output <file>`, `--schema`, `--export`                                                 |
+| `ablo pull`                        | **Direct Postgres** — generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`).                              | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force`                                     |
+| `ablo check`                       | **Direct Postgres** — verify your _existing_ tables fit the schema (read-only, no schema changes).                                                       | `--schema <path>`, `--export <name>`, `--app-schema <name>`                                            |
+| `ablo generate`                    | Emit TypeScript types from the schema.                                                                                                        | `--out <path>`, `--schema`, `--export`                                                                 |
 
 ## `ablo dev`
 
@@ -143,10 +150,11 @@ point: review it, then run `ablo check`.
 
 ## `ablo check`
 
-The table-adoption front door. Instead of migrating (running schema SQL on your database), Ablo
-checks the tables you already have: `ablo check` introspects `DATABASE_URL`,
-compares it to your `defineSchema(...)`, and reports — per model — whether the
-table is adoptable. It never writes or alters anything.
+`ablo check` is how you adopt a database you already own. Instead of creating or
+altering tables, it inspects your existing ones and tells you which fit the
+schema: it introspects `DATABASE_URL`, compares each table to your
+`defineSchema(...)`, and reports — per model — whether the table is adoptable.
+It never writes or alters anything.
 
 A table is adoptable when it has a primary key `id` and (for org-scoped models)
 an `organization_id` column — the tenancy marker the engine isolates on. Every
@@ -176,40 +184,50 @@ If a table can't carry `organization_id` (or has business logic Ablo shouldn't
 bypass), keep it behind a [Data Source endpoint](/data-sources) rather than
 reshaping it. `ablo check` is read-only; it never proposes a migration.
 
-## `migrate` vs `push`
+## `migrate` (Direct Postgres) vs `push` (Hosted)
 
-Two front doors to the same engine. Use `migrate` when you opt into the direct
-Postgres connector and want Ablo to provision your synced models in
-`DATABASE_URL`. It only creates the tables for the models in your Ablo schema,
-plus the adapter's `ablo_outbox` / `ablo_idempotency` tables — your other tables
-are left alone and stay owned by your own migration tool (drizzle-kit, prisma
-migrate). `push` (and `dev`) run the hosted path: the server registers your
-schema version and version-gates connecting clients.
+Same engine, two setups. If you use the **Direct Postgres connector**, use
+`ablo migrate` — it provisions the synced models in your own `DATABASE_URL`. If
+Ablo manages the sandbox/hosted store, use `ablo push` and `ablo dev` — the
+server applies the change and version-gates connecting clients.
 
 ```bash
 ablo migrate --dry-run            # preview the exact SQL
-ablo migrate                      # apply synced models to DATABASE_URL
+ablo migrate                      # apply to DATABASE_URL
 ablo migrate --output schema.sql  # write SQL to a file
 ```
+
+### One database, two schemas
+
+`ablo migrate` does **not** own your whole database. It creates exactly the
+models in your `defineSchema(...)` — the synced, collaborative tables — plus the
+adapter's bookkeeping tables (`ablo_outbox`, `ablo_idempotency`). Nothing else.
+
+Your auth, billing, and any other non-synced tables stay in **your own ORM
+schema** (Drizzle's `schema.ts`, Prisma's `schema.prisma`) and are provisioned by
+**your own migrations** (`drizzle-kit push` / `prisma migrate`). The Ablo schema
+is not a replacement for `schema.prisma`, and `ablo migrate` won't touch, drop,
+or adopt the tables it doesn't manage. One database, two schemas, side by side —
+each owned by its own migration tool.
 
 ## Zod → Postgres type mapping
 
 The one type map, shared by both paths (there is no second mapping):
 
-| Zod | Postgres |
-| --- | --- |
-| `z.string()` | `TEXT` |
-| `z.number()` | `DOUBLE PRECISION` — never `INTEGER`; a Zod number may be fractional, and truncating is silent data loss |
-| `z.boolean()` | `BOOLEAN` |
-| `z.date()` | `TIMESTAMPTZ` |
-| `z.enum([...])` | `TEXT` + a `CHECK (col IN (...))` constraint |
-| `z.object` / `z.array` / `z.record` / `z.union` / `z.custom` | `JSONB` |
-| `.optional()` / `.nullable()` | nullable column |
+| Zod                                                          | Postgres                                                                                                 |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `z.string()`                                                 | `TEXT`                                                                                                   |
+| `z.number()`                                                 | `DOUBLE PRECISION` — never `INTEGER`; a Zod number may be fractional, and truncating is silent data loss |
+| `z.boolean()`                                                | `BOOLEAN`                                                                                                |
+| `z.date()`                                                   | `TIMESTAMPTZ`                                                                                            |
+| `z.enum([...])`                                              | `TEXT` + a `CHECK (col IN (...))` constraint                                                             |
+| `z.object` / `z.array` / `z.record` / `z.union` / `z.custom` | `JSONB`                                                                                                  |
+| `.optional()` / `.nullable()`                                | nullable column                                                                                          |
 
 Each table also gets the platform columns (`id`, `organization_id`,
 `created_by`, `created_at`, `updated_at`), an `organization_id` index, and
-row-level security keyed on `current_setting('app.current_org_id')` for tenant
-isolation.
+row-level security so each org only sees its own rows — the engine sets this per
+request (via `current_setting('app.current_org_id')`); you don't manage it.
 
 `.default(...)` is **not** emitted as a SQL column default — Zod applies the
 default at write time (`create`), in one place, so a DB default and a schema
@@ -220,6 +238,18 @@ default can't drift.
 A failed migration aborts the whole transaction (nothing partial lands) and
 reports the same `migration_failed` shape on both paths — naming the statement
 that broke and the Postgres SQLSTATE, not just "migration failed".
+
+`ablo migrate` (local) logs it:
+
+```txt
+[migrate] migration plan failed {
+  code: 'migration_failed',
+  failedStatement: 'ALTER TABLE "public"."tasks" RENAME COLUMN a TO b;',
+  failedStatementIndex: 4,
+  pgCode: '42P01',
+  durationMs: 133
+}
+```
 
 `ablo push` (hosted) returns the canonical error envelope (HTTP 500),
 which the SDK reconstructs as a typed `AbloServerError`:
@@ -238,29 +268,11 @@ which the SDK reconstructs as a typed `AbloServerError`:
 The pushed artifact is recorded `failed` and is never activated, so a broken
 migration can't leave clients gated against tables that don't match.
 
-### `server_execute_unknown_model`
-
-```json
-{
-  "type": "AbloValidationError",
-  "code": "server_execute_unknown_model",
-  "message": "Unknown model: \"presentationSession\". Mark the entity `mutable: true` in the schema to expose it over the wire."
-}
-```
-
-This is a **write rejected at commit time** (HTTP 400), not a migration error.
-The model is missing from the org's *active pushed schema* — almost always
-because you changed `ablo/schema.ts` locally but never ran `ablo push`, or the
-model exists but isn't marked `mutable: true`. Fix the schema if needed, then
-`ablo push`. (Mutability is opt-in by design: a model is read-only over the wire
-unless it explicitly declares `mutable: true`, so a new model can't become
-client-writable by accident.)
-
 ## Environment
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `ABLO_API_KEY` | Authenticate without `ablo login` (CI). Always overrides the stored key. | — |
-| `ABLO_API_URL` | Control-plane / API host (`push`, `dev`, `status`). | `https://api.abloatai.com` |
-| `ABLO_AUTH_URL` | Dashboard origin for `ablo login`'s device flow. | `https://abloatai.com` |
-| `ABLO_CONFIG_DIR` / `XDG_CONFIG_HOME` | Where the credential file lives. | `~/.config/ablo` |
+| Variable                              | Purpose                                                                  | Default                    |
+| ------------------------------------- | ------------------------------------------------------------------------ | -------------------------- |
+| `ABLO_API_KEY`                        | Authenticate without `ablo login` (CI). Always overrides the stored key. | —                          |
+| `ABLO_API_URL`                        | Control-plane / API host (`push`, `dev`, `status`).                      | `https://api.abloatai.com` |
+| `ABLO_AUTH_URL`                       | Dashboard origin for `ablo login`'s device flow.                         | `https://abloatai.com`     |
+| `ABLO_CONFIG_DIR` / `XDG_CONFIG_HOME` | Where the credential file lives.                                         | `~/.config/ablo`           |

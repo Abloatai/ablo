@@ -1,127 +1,137 @@
 ---
 title: "API Keys"
-description: "The key model — a secret key, the sessions it mints, and a read-only publishable key."
 ---
 
-Ablo authenticates your **project**, not your **users**. You sign users in
-however you like; Ablo only needs to know which credential is acting. That gives
-you a **secret key** your backend holds, the short-lived **sessions** it mints
-per user or agent, and a read-only **publishable key** for browser apps that
-don't need per-user writes.
+{/* AUTO-GENERATED from packages/sync-engine/docs/api-keys.md -- edit there, then run `npm run build:docs`. */}
 
-## Secret key — you create this once
+Authenticate a server-side client — a route handler, worker, or CLI — by passing an API key when you create the client.
 
-Created in the dashboard, long-lived, configured into your app's backend.
+```ts
+import Ablo from '@abloatai/ablo';
 
-| Prefix | Kind | Use it from | Authority |
-|--------|------|-------------|-----------|
-| `sk_`  | **Secret** | Your **backend** | Full org access. Mints the session credentials below. |
+const ablo = Ablo({ apiKey: process.env.ABLO_API_KEY });
+```
 
-<Warning>
-Never ship an `sk_` to a browser — it's a secret with full org authority, like
-a Stripe `sk_` or a Supabase `service_role` key. The browser only ever holds a
-short-lived session credential it can't mint itself.
-</Warning>
+The key identifies the Ablo account. Application code does not pass an organization id; Ablo derives scope from the credential.
 
-## Session credentials — your backend mints these per actor
+"Trusted" means the runtime can hold a secret: a backend or other server-side environment a browser can't read. Browser and app clients use the same `@abloatai/ablo` import but authenticate differently — they never carry a secret key.
 
-Short-lived, scoped, minted on demand with your `sk_`. This is how a *specific*
-person or agent acts — and the "who did what" Ablo records. Two shapes:
+## Which credential to use
 
-| | `ek_` **User session** | `rk_` **Agent session** |
+There's **one field — `apiKey`** — and what you pass depends on **where the code runs**.
+Pick your row:
+
+| Where your code runs | What to pass | Example |
 |---|---|---|
-| Subject | a logged-in **person** | an **agent** / automation |
-| Authority | full, within their org | narrow — a typed `can` op allowlist |
-| Minted with | `ablo.sessions.create({ user: { id } })` | `ablo.sessions.create({ agent, can })` |
-| Lifetime | short (~15m), auto-refreshed | short, per run |
-| Lives where | the user's **browser** | the agent runtime |
-| Docs | [Sessions](/sessions) | [Sessions](/sessions) |
+| **Server / worker / CLI** (can hold a secret) | your secret `sk_` — it defaults to `ABLO_API_KEY`, so usually pass **nothing** | `Ablo({ schema })` |
+| **Browser — read-only** | a publishable `pk_` (safe to ship, like a Stripe `pk_`) | `Ablo({ schema, apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY })` |
+| **Browser — writing as the signed-in user** | a function that fetches a short-lived per-user token from your own backend | `Ablo({ schema, apiKey: () => fetch('/api/ablo-session').then((r) => r.text()) })` |
 
-They're the same primitive — a backend-minted, short-lived, scoped credential
-your `sk_` vouches for — minted by one resource, [`ablo.sessions`](/sessions),
-wearing two hats: one for humans, one for agents. (An `rk_` can also be a
-long-lived dashboard-created agent key, configured straight into a backend like
-`sk_`.)
+That's the whole story: one knob, filled by audience.
 
-## Publishable key (`pk_`) — read-only, browser-safe
+**Coming from Stripe? It's the same key model, same prefixes:**
 
-For a read-only browser experience with **no session route**, a publishable key
-is the simplest path. Like a Stripe `pk_` or a Supabase anon key, it is
-long-lived, org-scoped, and safe to ship in a browser bundle.
+| Stripe | Ablo | Where it goes |
+|---|---|---|
+| publishable `pk_` (client-safe) | `pk_` | browser — read-only |
+| secret `sk_` (server, full) | `sk_` | server — full authority |
+| restricted `rk_` (granular) | `rk_` | scoped agent sessions (`sessions.create({ agent, can })`) |
+| ephemeral key (client, customer-scoped) | `ek_` | per-user browser sessions (`sessions.create({ user })`) |
 
-| Prefix | Kind | Use it from | Authority |
-|--------|------|-------------|-----------|
-| `pk_`  | **Publishable** | The **browser**, directly | **Read-only** data plane for the org. Cannot write, and cannot reach any control-plane operation. |
+Mode lives in the prefix too — `sk_test_` / `sk_live_` — exactly like Stripe. The
+`apiKey` resolver fetching an `ek_` is Ablo's ephemeral-key flow: server mints, client holds.
 
-It is used **directly as the bearer** — never exchanged, never expires, nothing
-to refresh — so the browser holds it as-is:
+**Why a function for browser writes?** Anything you ship to a browser must be public, and a
+public `pk_` is **read-only** — it can't carry one specific user's write authority. So when
+the browser writes *as the logged-in user*, your backend (which holds the secret `sk_` and
+knows who's signed in) mints a short-lived per-user token with `sessions.create({ user })`,
+and the browser's `apiKey` function fetches it. You don't manage refresh — the SDK calls the
+function once before connecting and then keeps the token fresh (re-mint before expiry, and on
+tab-focus / network-online / device-wake). This is the Stripe ephemeral-key / Supabase
+session model. For a read-only app you don't need any of this — just the `pk_` above.
 
-```tsx Browser (read-only)
-const ablo = Ablo({ schema, apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY }); // pk_live_…
+Server-side, because `apiKey` defaults to `process.env.ABLO_API_KEY`, most backend and agent
+code passes nothing. The secret `sk_` (and `databaseUrl`) are **server-only** — never in a
+browser bundle. There is no `getToken`, `authEndpoint`, or `as` option — `apiKey` (a string,
+or a function for the browser-write case) is the single credential knob.
+
+### Minting per-user / agent tokens (server-side, with your `sk_`)
+
+| Mint | Call | Result |
+|---|---|---|
+| Human end-user session | `await server.sessions.create({ user: { id } })` | `ek_` (full user authority) |
+| Scoped delegated agent | `await server.sessions.create({ agent: { id }, can: { Task: ['update'] } })` | `rk_` (scoped to `can`) |
+| Connect Ablo to your own Postgres | `Ablo({ schema, apiKey, databaseUrl })` (server-only) | dedicated tenant |
+
+The principal kind comes from *which* shape you pass — `{ user }` → `user`, `{ agent, can }` → `agent`.
+
+## Server-Side API Keys
+
+Use API keys from trusted (server-side) runtimes:
+
+- backend route handlers
+- workers and agents
+- CLI tools
+- webhooks
+
+Never ship a secret API key to a browser bundle.
+
+## Publishable key (`pk_`) — browser-safe, read-only
+
+For a read-only browser experience, a publishable key is safe to ship in the
+bundle. Like a Stripe `pk_` or a Supabase anon key, it is long-lived,
+org-scoped, and used **directly as the bearer** — never exchanged, never
+expires, nothing to refresh:
+
+```ts
+const ablo = Ablo({ apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY }); // pk_live_…
 ```
 
-Reach for a minted `ek_` session instead the moment the browser needs to **write**
-on a specific user's behalf or read data scoped to that user — `pk_` grants the
-whole org's readable data plane, not a per-user slice.
+A `pk_` grants **read-only** access to the org's data plane: it cannot write and
+cannot reach any control-plane operation. The moment the browser needs to write
+on a specific user's behalf, mint a short-lived `ek_` user session from your
+backend instead (see the Sessions guide).
 
-## Which key do I initialize with?
+## Sandboxes and production
 
-There's **one** entry point — `Ablo()` — and the key depends on **where your
-code runs**. The browser never holds a static key at all: it fetches a minted
-session token from your backend.
+Test and live keys are the same shape; the prefix names the environment:
 
-<CodeGroup>
+- `sk_test_…` — a key bound to a **sandbox**. Its reads and writes are isolated
+  to that sandbox and are invisible to live keys (and to other sandboxes).
+- `sk_live_…` — a key against your live data.
 
-```tsx Browser (end-user apps)
-import Ablo from '@abloatai/ablo';
-import { AbloProvider } from '@abloatai/ablo/react';
+Every org has a default sandbox, plus any number of additional
+sandboxes you create. **Data is isolated per sandbox; the schema is shared
+across the whole org.** A schema you push from a test key defines the same
+models your live keys see — only the rows differ. This mirrors how Stripe
+separates sandbox and production data while keeping the API shape identical.
 
-// getToken fetches from YOUR backend route, which mints the user's session
-// token (ek_) — see below. The client fetches + refreshes it; the browser never
-// holds a secret, and the ek_ already names your org. Build it once at module
-// scope, then hand the instance to the provider.
-const ablo = Ablo({
-  schema,
-  getToken: () =>
-    fetch('/api/ablo-session', { method: 'POST' })
-      .then((r) => r.json())
-      .then((d) => d.token),
-});
+## Scopes
 
-<AbloProvider client={ablo}>{children}</AbloProvider>;
+Keys carry scopes following the principle of least privilege — each key gets
+only what its job needs. A secret key with **no scopes** has full org authority
+(the default for a `sk_live_` backend key); a key with a non-empty scope set is
+restricted to exactly those grants:
+
+- `schema:push` — author the org schema (`ablo schema push`, `ablo dev`). A
+  high-risk, org-wide grant: because schema is shared, a push affects the live
+  table shape. A full-authority key has it implicitly; a *restricted* key (such
+  as a sandbox key) needs it granted explicitly.
+- `sandbox:<id>` — identifies which sandbox the key belongs to. (The key's data
+  isolation comes from that sandbox binding, not from this scope string.)
+
+A key minted from the default sandbox carries `schema:push`, so
+`ablo dev` works out of the box. Keys from other sandboxes are **data-only** by
+default — enable "schema authoring" when minting if you want that key to push
+schema too. Hand data-only keys to embedded apps and CI agents; reserve
+schema-authoring keys for the developer running `ablo dev`.
+
+### `ablo dev`
+
+```sh
+ABLO_API_KEY=sk_test_… npx ablo dev
 ```
 
-```ts Server / agents (backend)
-import Ablo from '@abloatai/ablo';
-
-// A secret (or restricted) key BOTH identifies the project AND authenticates,
-// so nothing else is needed. Never expose this in client code.
-const ablo = Ablo({
-  schema,
-  apiKey: process.env.ABLO_SECRET_KEY, // sk_live_… (or rk_live_… for an agent)
-});
-```
-
-</CodeGroup>
-
-Your `/api/ablo-session` route is one line — it mints the user session for the
-signed-in user and returns it:
-
-```ts Your backend route (session-authed)
-const { token } = await ablo.sessions.create({ user: { id: currentUser.id } });
-return Response.json({ token });
-```
-
-## Secret keys (`sk_`)
-
-Full backend authority — server-to-server calls, schema pushes, and minting the
-session credentials above. Pass as `apiKey`. Keep it in a server secret store;
-never in client code or version control. Use it only from trusted runtimes:
-backend route handlers, workers, CLI tools, webhooks.
-
-## Test vs live
-
-Every key is `…_live_…` or `…_test_…`. A `_test_` key transparently routes to a
-sandbox — an isolated data realm that looks like production but can't affect it
-(Stripe's test/live split). Build against `_test_`; switch to `_live_` for
-production.
+Pushes your `ablo/schema.ts` to the test sandbox, prints the one line you need
+in `.env.local`, and re-pushes on every save. It refuses `sk_live_` keys so a
+tight save loop can never churn production data.

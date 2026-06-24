@@ -2,8 +2,14 @@
 title: "Audit log"
 ---
 
-Every commit becomes one row. Rows are hash-chained per principal —
-tamper-evident, queryable, exportable.
+{/* AUTO-GENERATED from packages/sync-engine/docs/audit.md -- edit there, then run `npm run build:docs`. */}
+
+The audit log records who changed what in your org, and when — including
+changes an AI agent made on a person's behalf. Every change is one row, and the
+rows are signed in a chain so you can later prove the history wasn't altered.
+You can filter it, page through it, and export it.
+
+Every commit becomes one row.
 
 ## Row shape
 
@@ -14,10 +20,10 @@ tamper-evident, queryable, exportable.
   actorId:              string,
   onBehalfOfKind:       'user' | 'agent' | 'system' | null,
   onBehalfOfId:         string | null,
-  capabilityId:         string | null,
-  capabilityLabel:      string | null,
+  capabilityId:         string | null,    // the API key/capability used for the write
+  capabilityLabel:      string | null,    // its human-readable name, for scanning the log
   delegationChainRoot:  string | null,    // always points at a human
-  actionType:           string,           // e.g. 'task.update'
+  actionType:           string,           // e.g. 'weatherReport.update'
   modelName:            string | null,    // e.g. 'claude-opus-4-7'
   diffSummary:          unknown,
   // tamper-evident
@@ -29,16 +35,16 @@ tamper-evident, queryable, exportable.
 
 ## Delegation chain
 
-`delegationChainRoot` always points at the human who started the chain.
-There is no audit row whose root is an agent. Autonomous AI writes are not
-a thing in this system; every chain starts with a person.
+Every action traces back to a human. Even when an agent makes the change,
+`delegationChainRoot` names the person who set that work in motion — there is no
+audit row whose root is an agent.
 
 ## Verify
 
 ```bash
 curl https://<your-app>/api/orgs/<slug>/audit/verify-chain?\
   principalKind=agent\
-  &principalId=task-writer-v3
+  &principalId=weather-agent-v3
 ```
 
 Returns either:
@@ -72,7 +78,10 @@ curl 'https://<your-app>/api/orgs/<slug>/audit/export?actorKind=agent&since=2026
   > may-agent-writes.csv
 ```
 
-CSV up to a hard cap per request. For larger windows, paginate.
+One request exports CSV up to a hard row cap. If your window is larger than the
+cap, the response is truncated at the cap rather than erroring — so for large
+windows, split the window by date and request each slice, or page through the
+JSON `GET` endpoint above using `nextCursor`.
 
 ## Compliance posture
 

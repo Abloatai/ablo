@@ -1,16 +1,15 @@
 ---
 title: "Version History & Migration Guide"
-description: "Every breaking change in @abloatai/ablo, what to change, and which version introduced it."
 ---
 
-This page is the breaking-changes-first companion to the [Changelog](/changelog).
-The changelog tells the story of each release; this page tells you exactly what
-to change when you upgrade.
+{/* AUTO-GENERATED from packages/sync-engine/docs/migration.md -- edit there, then run `npm run build:docs`. */}
 
-<Note>
-Ablo is pre-1.0, so minor versions (`0.x.0`) may carry breaking changes. Patch
-versions (`0.x.y`) never do. Pin a minor and read this page before bumping it.
-</Note>
+The breaking-changes-first companion to the [Changelog](/changelog). The
+changelog tells the story of each release; this page tells you exactly what to
+change when you upgrade.
+
+> Ablo is pre-1.0, so minor versions (`0.x.0`) may carry breaking changes. Patch
+> versions (`0.x.y`) never do. Pin a minor and read this page before bumping it.
 
 ## Breaking changes at a glance
 
@@ -59,12 +58,10 @@ mechanical:
 **3. Type namespace.** The `Ablo.Intent.*` helper types moved to `Ablo.Claim.*`.
 If you referenced them directly, rename the namespace; the shapes are unchanged.
 
-<Warning>
-  **Coordinated deploy required.** The on-the-wire frames moved from `intent_*`
-  to `claim_*`. A `claim_*`-aware client cannot coordinate with an `intent_*`
-  server (and vice-versa), so ship the client and server together. If you run a
-  self-managed sync server, deploy it first.
-</Warning>
+> **Coordinated deploy required.** The on-the-wire frames moved from `intent_*`
+> to `claim_*`. A `claim_*`-aware client cannot coordinate with an `intent_*`
+> server (and vice-versa), so ship the client and server together. If you run a
+> self-managed sync server, deploy it first.
 
 Two non-breaking improvements ride along: claim-rejection errors now surface the
 contending holders (`AbloClaimedError.claims` and a policy reason folded into the
@@ -100,12 +97,10 @@ commonly a Data Source handler keyed on `mode`. The mapping is exactly
 source resolvers, so per-project and per-environment traffic can be routed to
 distinct stores.
 
-<Note>
-  **CLI note:** the legacy single-file config that stored `test`/`live` key
-  buckets is no longer auto-migrated. If `ablo status` can't find your keys after
-  upgrading, re-run `ablo login` to write the current `sandbox`/`production`
-  layout.
-</Note>
+> **CLI note:** the legacy single-file config that stored `test`/`live` key
+> buckets is no longer auto-migrated. If `ablo status` can't find your keys after
+> upgrading, re-run `ablo login` to write the current `sandbox`/`production`
+> layout.
 
 ### New (non-breaking): `transport: 'http'`
 
@@ -122,6 +117,11 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: 'http' 
 await ablo.tasks.update({ id, data: { status: 'done' } });
 ```
 
+> **Minting still needs the stateful client.** `sessions.create(...)` is not on
+> the `transport: 'http'` surface. Keep a default-transport `server` client for
+> minting short-lived credentials (see the 0.9.2 example below), and use the
+> http client for the per-request reads and writes.
+
 ---
 
 ## 0.9.2 — `turn` / agent-`tasks` removed; `intents` deprecated
@@ -137,17 +137,17 @@ id rides on every guarded write), and the server stamps `actor` / `onBehalfOf` /
 helper, and the agent/task type family (`Agent`, `AgentOptions`,
 `AgentRunResult`, `Task`, `TaskResource`, …).
 
-<Warning>
-`ablo.tasks` is — and always was — the schema `tasks` **model** proxy. Only the
-agent-work *resource* of the same name was removed. If you have a `tasks` model
-in your schema, it is unaffected.
-</Warning>
+> **Note:** `ablo.tasks` is — and always was — the schema `tasks` **model**
+> proxy. Only the agent-work *resource* of the same name was removed. If you have
+> a `tasks` model in your schema, it is unaffected.
 
 ```diff
 - const turn = await engine.beginTurn();
 - await Ablo({ apiKey }).agent(agentId, opts).run(prompt, handler);
-+ // Mint a scoped credential, then claim + write under it.
-+ const { token } = await ablo.sessions.create({ agent: { id: agentId } });
++ // Mint a scoped credential from a stateful (default-transport) server client —
++ // sessions.create lives on the stateful client, not on transport: 'http'.
++ const server = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
++ const { token } = await server.sessions.create({ agent: { id: agentId } });
 + const agent = Ablo({ schema, apiKey: token });
 + await using claim = await agent.tasks.claim({ id });
 + await agent.tasks.update({ id, data: { status: 'done' }, wait: 'confirmed' });
@@ -155,15 +155,11 @@ in your schema, it is unaffected.
 
 Per-run token/cost now lives in Langfuse, not an `agent_tasks` table. The only
 capability the client loses is the audit pane's "show everything this exact
-prompt produced" filter (it keyed off `caused_by_task_id`); new writes leave
-that column `null`.
-
-<Note>
-The server-side `agent_tasks` table, the `caused_by_task_id` delta column, and
-the `agent_actions_log` hash-chain are intentionally **kept but dormant** — they
-are load-bearing for the tamper-evident audit chain. The dead `/v1/tasks` and
-`/api/agent/turn` route handlers were removed.
-</Note>
+prompt produced" filter (it keyed off `caused_by_task_id`); new writes leave that
+column `null`. The server-side `agent_tasks` table, the `caused_by_task_id` delta
+column, and the `agent_actions_log` hash-chain are intentionally **kept but
+dormant** — they are load-bearing for the tamper-evident audit chain. The dead
+`/v1/tasks` and `/api/agent/turn` route handlers were removed.
 
 ### `intents` → `claim`
 
@@ -243,11 +239,9 @@ Removed: `useQuery`, `useOne`, `useMutate`, `useReader`. The `MutateActions`,
 that reference them. This release also replaced the `{ error, reason }` error
 shape with the canonical `{ type, code, message, doc_url, request_id }` envelope.
 
-<Note>
-This — not 0.9.x — is the release where `useAblo()` became the one React read
-path. If you are coming from a 0.6.x or earlier app, this is your biggest hook
-migration.
-</Note>
+> **Note:** This — not 0.9.x — is the release where `useAblo()` became the one
+> React read path. If you are coming from a 0.6.x or earlier app, this is your
+> biggest hook migration.
 
 ---
 
@@ -294,7 +288,8 @@ One provider component now owns the full React lifecycle. `<SyncProvider>`,
 - <SyncProvider store={sync._store} organizationId={orgId}>
 -   <AbloProvider ablo={ablo}>{children}</AbloProvider>
 - </SyncProvider>
-+ <AbloProvider schema={schema} url={url} userId={userId} organizationId={orgId}>
++ const ablo = Ablo({ schema, apiKey });
++ <AbloProvider client={ablo}>
 +   {children}
 + </AbloProvider>
 ```

@@ -1,8 +1,4 @@
----
-title: "Agents"
----
-
-{/* AUTO-GENERATED from packages/sync-engine/docs/agents.md -- edit there, then run `npm run build:docs`. */}
+# Agents
 
 An agent is a **reactive** participant: it wakes on something happening, reads
 what it needs, writes a result, and goes idle. That's a request/response

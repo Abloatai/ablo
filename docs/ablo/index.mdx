@@ -1,82 +1,72 @@
 ---
 title: "Ablo Docs"
-mode: "center"
 ---
 
-Ablo is a state control API for AI agents and collaborative apps.
+{/* AUTO-GENERATED from packages/sync-engine/docs/index.md -- edit there, then run `npm run build:docs`. */}
 
-It gives agents a narrow way to write production state: declare models, load current state, coordinate active work, and write with stale-state checks. Capabilities, tasks, commits, and receipts are the protocol underneath, not first-integration ceremony.
+You have a database, and you want an AI agent to edit the same rows your
+users are editing — without the two clobbering each other's work. Ablo gives
+the agent a narrow, audited write path: you declare your models, then everyone
+(React components, server actions, and agents) calls the same
+`ablo.deck.update(...)`. Ablo streams confirmed changes to everyone live and
+rejects any write based on stale data.
 
-Multiplayer is not a separate product mode. Humans, server actions, and agents
-write through the same `ablo.<model>` surface on one typed, coordinated state —
-Ablo fans out confirmed deltas, exposes active intents, and rejects stale writes
-for every participant. Everyone constructs the same client: interactive apps
-call `Ablo({ schema, apiKey })` and get the live WebSocket plane; [agents](/agents)
-add `transport: 'http'` and get a stateless client — same API, same coordination
-plane, no socket.
+The flow is four steps: declare your models, read the current rows, claim the
+row you're about to change, then write — and the write is rejected if someone
+changed the row first.
 
-## Two clients: server vs browser
-
-A typical app builds **two** Ablo clients, and the split is the most common
-setup mistake. The server holds your secret key; the browser never does — it
-fetches a short-lived per-user token from a backend route.
-
-<CodeGroup>
-
-```ts Server (sk_)
-import Ablo from '@abloatai/ablo';
-// Secret sk_ key. Identifies the project AND authenticates. Never bundled.
-export const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+```ts
+// The same call, whether a person, a server action, or an agent makes it.
+await ablo.deck.update({ id: deckId, data: { title: "Q3 Strategy" } });
 ```
 
-```tsx Browser (ek_)
-import Ablo from '@abloatai/ablo';
-import { AbloProvider } from '@abloatai/ablo/react';
-// No secret. getToken fetches a per-user ek_ from YOUR backend route.
-const ablo = Ablo({
-  schema,
-  getToken: () =>
-    fetch('/api/ablo-session', { method: 'POST' })
-      .then((r) => r.json())
-      .then((d) => d.token),
-});
-// <AbloProvider client={ablo}>{children}</AbloProvider>
-```
+Claims don't lock. If another writer holds the row, `claim` waits for them,
+re-reads the fresh row, then hands it to you — so two writers serialize
+instead of clobbering.
 
-</CodeGroup>
+## What you get
 
-<Warning>
-Shipping the server `apiKey` to the browser is blocked by default, and a browser
-client with **no** `getToken`/`apiKey` fails to initialize with `session_expired`.
-The backend route mints the token with [`ablo.sessions.create({ user })`](/sessions).
-See the full wiring in the [Next.js example](/examples/nextjs).
-</Warning>
+Three things stay true no matter how you use Ablo:
+
+- **One model API for every actor.** `ablo.<model>.update(...)` is the
+  call from React components, server actions, background workers, and
+  AI agents alike. No separate "agent SDK," no parallel mutation path.
+  Attribution comes from the credential, not the call site.
+- **You declare tenancy scopes once.** Tenancy / per-entity scope
+  prefixes (`org:`, `deck:`, or your own `region:` / `customer:`) are
+  declared once on the schema's `identityRoles`, so application code
+  never builds an `org:123` string by hand — which keeps tenant
+  boundaries from leaking.
+- **Stale writes are rejected.** If the row changed after you read it,
+  your write is turned away instead of silently overwriting the change
+  you didn't see.
 
 ## Start here
 
-- [Quickstart](/quickstart) — Make your first schema-backed write through a Data Source.
-- [Agents](/agents) — Stateless HTTP client, claim/queue coordination, humans + agents on one state.
-- [Connect Your Database](/data-sources) — Keep rows canonical behind a signed Data Source endpoint, or opt into the direct Postgres connector.
-- [Integration Guide](/integration-guide) — Connect an existing backend, then add React, multiplayer, and agent patterns.
-- [Guarantees](/guarantees) — What confirmed writes, stale checks, and intents guarantee.
-- [Interaction Model](/interaction-model) — The commit plane and control plane.
-- [API Reference](/api) — Resource-by-resource method shape.
+- [Quickstart](/quickstart) — Make your first schema-backed write.
+- [Schema Contract](/schema-contract) — One schema becomes typed model clients, React reads, agent writes, Data Source shape, and schema push.
+- [CLI & Migrations](/cli) — `init` / `migrate` / `push` / `generate`, the shared Zod→Postgres type map, and structured migration errors.
+- [Identity & Sync Groups](/identity) — Use your own authentication; tell Ablo who's connecting and how org / team / user map to sync-group scope.
+- [Integration Guide](/integration-guide) — Connect your database via Data Source, plus React, multiplayer, and agent patterns.
+- [Guarantees](/guarantees) — What confirmed writes, stale checks, and claims guarantee.
+- [Interaction Model](/interaction-model) — The schema, claim, update, confirmation loop.
+- [API Reference](/api) — Model-by-model method shape.
 - [Client Behavior](/client-behavior) — Options, errors, retries, timeouts, and imports.
+- [Connect Your Database](/data-sources) — Keep canonical rows in your app database without giving Ablo database credentials.
+- [React](/react) — Provider, hooks, and reactive reads for React apps.
 - [API Keys](/api-keys) — Bearer tokens for the public API.
 
 ## API shape
 
 | Plane | Primitives | Purpose |
 |---|---|---|
-| State | `Schema`, `Model`, `Intent`, `Receipt` | The product path. Load, coordinate, write, confirm. |
-| Commit | `Resource`, `Commit` | Advanced protocol path for custom runtimes and batches. |
-| Control | `Capability`, `Usage` | The authority path. Scope, attribute, meter, audit. |
-| Storage | `Data Source`, `Direct Postgres Connector` | Existing app tables stay canonical behind a signed Data Source. The direct connector is an opt-in path where Ablo opens a Postgres connection. |
+| State | `Schema`, `Model`, `Claim`, `Receipt` | The product path. Load, coordinate, write, confirm. |
+| Storage | `Data Source` | Your rows live in your own database behind a signed Data Source endpoint. |
 
 ## Use cases
 
 - **Let agents write to shared state** — Give an AI agent scoped, revocable write access to your typed data.
-- **Coordinate multiple actors** — Use intents to broadcast pre-write declarations across humans and agents.
+- **Coordinate multiple actors** — Use claims to show pre-write work across humans and agents.
 - **Audit every agent action** — Trace any write back to a human in one query.
 - **Build collaborative editors** — Humans and agents on the same record, with realtime updates and stale-read protection.
 - **Meter and gate API usage** — Per-key, per-team usage reports and quota enforcement.
@@ -84,31 +74,31 @@ See the full wiring in the [Next.js example](/examples/nextjs).
 
 ## Concepts
 
-- [Model Methods](./api.md#model-methods) — Load and write typed state.
+- [Schema Contract](/schema-contract) — What the schema drives across SDK, React, agents, Data Source, and migrations.
+- [Model Methods](/api#model-methods) — Load and write typed state.
 - [Integration Guide](/integration-guide) — The normal app path and optional pieces.
 - [Guarantees](/guarantees) — Confirmed writes, optimistic state, stale-write protection, and agent lifecycle.
-- [Intent](./api.md#intent) — Broadcast proposed work before committing.
-- [Advanced Commit API](./api.md#advanced-commit-api) — Apply custom batch mutations.
+- [Coordination](/coordination) — `claim`, `claim.state`, and `claim.queue` for active work.
 - [Connect Your Database](/data-sources) — Where data lands when your app database is canonical.
-- [Receipt](./api.md#receipt) — Confirm what landed.
-- [Capability](./api.md#capability) — Signed credentials for a bounded actor, operation set, sync group, and lease.
-- [Usage](./api.md#usage) — Metering and audit dimensions. One agent run is a `claim` (its `intent` id is the causal link recorded on every write); cost and audit surface through Usage, not a separate run envelope.
+- [Receipt](/api#receipt) — Confirm what landed.
+- [Usage](/api#usage) — Metering and audit dimensions.
+- [Audit Log](/audit) — Trace any confirmed write back to the human behind it.
+- [MCP](/mcp) — Expose Ablo models to MCP clients (Claude, Cursor).
 
 ## Examples
 
 - [AI SDK Tool](/examples/ai-sdk-tool) — Put Ablo inside an AI SDK tool call.
 - [Existing Python Backend](/examples/existing-python-backend) — Add multiplayer and future agent writes without replacing a Python API server.
-- [Agent + Human](/examples/agent-human) — Yield when a human is editing the same task.
-- [Server Agent](/examples/server-agent) — Schema-backed worker plus advanced schema-less run.
+- [Agent + Human](/examples/agent-human) — Yield when a human is editing the same report.
+- [Server Agent](/examples/server-agent) — Schema-backed worker.
 - [Next.js](/examples/nextjs) — App-router setup with React bindings.
 
 ## Runtime builds
 
-- `@abloatai/ablo` — schema-powered sync client for typed model operations, realtime, intents, and receipts.
-- `Ablo({ apiKey })` — advanced resource client for runtimes that intentionally cannot import a schema.
+- `@abloatai/ablo` — schema-powered sync client for typed model operations, realtime claims, and receipts.
 
 ## More
 
-- [README](https://github.com/Abloatai/ablo/blob/main/packages/sync-engine/README.md) — product overview and first example.
-- [AGENTS.md](https://github.com/Abloatai/ablo/blob/main/packages/sync-engine/AGENTS.md) — short installation guidance for coding assistants.
-- [Changelog](https://github.com/Abloatai/ablo/blob/main/packages/sync-engine/CHANGELOG.md) — what shipped recently.
+- [README](https://github.com/Abloatai/ablo/blob/main/README.md) — product overview and first example.
+- [AGENTS.md](https://github.com/Abloatai/ablo/blob/main/AGENTS.md) — short installation guidance for coding assistants.
+- [Changelog](/changelog) — what shipped recently.

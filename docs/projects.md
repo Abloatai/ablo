@@ -1,9 +1,4 @@
----
-title: "Projects"
-description: "One organization, many apps -- each project has its own schema, its own data planes, and its own keys."
----
-
-{/* AUTO-GENERATED from packages/sync-engine/docs/projects.md -- edit there, then run `npm run build:docs`. */}
+# Projects
 
 A **project** is the isolation unit inside your organization — the shape you
 know from Neon or Supabase. Each app you build gets its own project, and each

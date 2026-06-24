@@ -1,8 +1,4 @@
----
-title: "Agent Messaging"
----
-
-{/* AUTO-GENERATED from packages/sync-engine/docs/agent-messaging.md -- edit there, then run `npm run build:docs`. */}
+# Agent Messaging
 
 Use a normal model when agents or humans need durable communication inside a
 syncGroup. Use claim `description` and `meta` for live coordination context.

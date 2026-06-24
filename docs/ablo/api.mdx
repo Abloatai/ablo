@@ -2,84 +2,93 @@
 title: "API"
 ---
 
+{/* AUTO-GENERATED from packages/sync-engine/docs/api.md -- edit there, then run `npm run build:docs`. */}
+
+> **Upgrading?** Every breaking change and its migration is on the
+> [Version History & Migration Guide](/migration).
+
+This is the per-method reference for reading and writing rows that stay in
+sync across sessions. You declare your models once, then call the same
+`ablo.<model>` methods from React, a server action, or an agent — and every
+confirmed write streams to everyone watching. When two writers touch the same
+row, you can optionally `claim` it so they serialize instead of clobbering
+each other.
+
+Two things to know before the method list. **Reads come in two flavors:**
+`retrieve({ id })` / `list({ where })` are async and hit the server (use them when
+the row may not be local yet); `get(id)` / `getAll({ where })` / `getCount({ where })`
+are synchronous reads off the local graph (use them in render, after data has
+synced). **Claims don't lock.** If another writer holds the row, `claim` waits
+for them, re-reads the fresh row, then hands it to you — so two writers
+serialize instead of clobbering.
+
 Start with the schema client:
-
-For end-to-end app setup across React, existing backends, Data Source, and
-agents, read [Integration Guide](/integration-guide).
-
-<Note>
-Upgrading? Every breaking change and its migration is on the
-[Version History & Migration Guide](/migration).
-</Note>
-
 
 ```ts
 import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
 const schema = defineSchema({
-  tasks: model({
-    title: z.string(),
-    status: z.enum(['todo', 'doing', 'done']),
+  weatherReports: model({
+    location: z.string(),
+    status: z.enum(['pending', 'ready']),
   }),
 });
 
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
 await ablo.ready();
-const task = await ablo.tasks.retrieve({ id: 'task_123' });
-if (!task) throw new Error('Task not found');
+const report = await ablo.weatherReports.retrieve({ id: 'report_stockholm' });
+if (!report) throw new Error('Row not found');
 
-await ablo.tasks.update({ id: 'task_123', data: { status: 'done' }, wait: 'confirmed' });
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' }, wait: 'confirmed' });
 ```
+
+For end-to-end app setup across React, existing backends, Data Source, and
+agents, read the [Integration Guide](/integration-guide).
 
 ## Model Methods
 
-Each schema model becomes a typed resource on the client:
+Each schema model becomes a typed model on the client:
 
-- `ablo.tasks.retrieve({ id })` fetches one row from the server.
-- `ablo.tasks.list(options?)` fetches rows from the server.
-- `ablo.tasks.get(id)` reads one already-loaded row from the local pool.
-- `ablo.tasks.getAll(options?)` reads the local pool.
-- `ablo.tasks.create({ data })` / `update({ id, data, ...options })` / `delete({ id, ...options })`.
+- `ablo.weatherReports.retrieve({ id })` reads one row asynchronously (server read).
+- `ablo.weatherReports.list({ where })` reads a collection asynchronously (server read).
+- `ablo.weatherReports.get(id)` reads one row synchronously from the local graph.
+- `ablo.weatherReports.create({ data })` creates a row.
+- `ablo.weatherReports.update({ id, data, ...options })` updates a row.
+- `ablo.weatherReports.delete({ id, ...options })` deletes a row.
 
-`retrieve` and `get` are not aliases. `retrieve({ id })` goes to the server and
-returns a promise; `get(id)` is a synchronous read of the local pool, valid
-after `ready()` or a prior `list`/`retrieve`.
+`retrieve`/`list` and `get`/`getAll`/`getCount` are not aliases. Use
+`retrieve({ id })` or `list({ where })` when the row may not be local yet — they
+hydrate pool → IndexedDB → network. Use `get(id)` / `getAll({ where })` /
+`getCount({ where })` for a cheap synchronous snapshot of what is already in
+the local graph.
 
 | Method | Returns | Use when |
 |---|---|---|
-| `retrieve({ id })` | `Promise<T \| undefined>` | Fetch one row from the server. |
-| `list(options?)` | `Promise<T[]>` | Fetch rows from the server. |
-| `get(id)` | `T \| undefined` | Synchronous local read of an already-loaded row. |
-| `getAll(options?)` | `T[]` | Synchronous local list. |
-| `getCount(options?)` | `number` | Synchronous local count. |
-| `create({ data, id? })` | `Promise<T>` | Create through the schema model. |
-| `update({ id, data, ...options })` | `Promise<T>` | Update through the schema model. |
-| `delete({ id, ...options })` | `Promise<void>` | Delete through the schema model. |
+| `retrieve({ id })` | `Promise<T \| undefined>` | You need one row, hydrating from local store and server. |
+| `list({ where })` | `Promise<T[]>` | You need to hydrate a collection from local store and server. |
+| `get(id)` | `T \| undefined` | You want a synchronous snapshot of one local row. |
+| `getAll(options?)` | `T[]` | You want a synchronous snapshot of a local collection. |
+| `getCount(options?)` | `number` | You want a synchronous count of local rows. |
+| `create({ data, ...options })` | `Promise<T>` | You want to create through the schema model. |
+| `update({ id, data, ...options })` | `Promise<T>` | You want to update through the schema model. |
+| `delete({ id, ...options })` | `Promise<void>` | You want to delete through the schema model. |
 
-`getAll` and `getCount` read the local pool. They default to live rows and accept:
-
-```ts
-const activeDoneTasks = ablo.tasks.getAll({
-  where: { status: 'done' },
-  filter: (task) => !task.title.startsWith('[archived]'),
-  orderBy: { updatedAt: 'desc' },
-  limit: 20,
-  state: 'live', // 'live' | 'archived' | 'all'
-});
-```
+`retrieve`, `list`, `create`, `update`, and `delete` are the main path — they go
+through the server. `get` / `getAll` / `getCount` are **synchronous reads**
+off the rows a session has already synced, so a cheap re-read needs no round-trip.
 
 ## Protected Writes
 
 Use `snapshot` when a write should reject if the row changed mid-flight:
 
 ```ts
-const snap = ablo.snapshot({ tasks: 'task_123' });
+const snap = ablo.snapshot({ weatherReports: 'report_stockholm' });
 
-await ablo.tasks.update({
-  id: 'task_123',
-  data: { status: 'done' },
+await ablo.weatherReports.update({
+  id: 'report_stockholm',
+  data: { status: 'ready' },
   readAt: snap.stamp,
   onStale: 'reject',
   wait: 'confirmed',
@@ -92,129 +101,141 @@ Protected write options:
 |---|---|
 | `readAt` | The state cursor the write was based on. |
 | `onStale` | Stale-state policy. Prefer `reject` for agent writes. |
-| `claim` | Active work claim associated with the write. |
 | `wait` | `queued` resolves after local queueing; `confirmed` waits for server acceptance. |
 | `idempotencyKey` | Stable key for retry-safe writes. The SDK generates one when omitted. |
 | `timeout` | Maximum time to wait for the write call. |
 
-## Advanced Resource API
+## Claims
 
-Use `resource(name)` only when you intentionally need the raw protocol shape:
-generic server runtimes, MCP routes, batch tools, or code that has no schema.
+Before anyone writes a row, they can claim it so other people and agents see
+who is editing it in real time. Claims don't lock. If another writer holds the
+row, `claim` waits for them, re-reads the fresh row, then hands it to you — so
+two writers serialize instead of clobbering. A claim is temporary: it expires
+on its own if the holder stops, and is never saved as a row.
 
-```ts
-const tasks = ablo.resource<{ status: string }>('tasks');
+You coordinate a row with calls on its model, beside `create`/`update`/`retrieve`:
+`ablo.<model>.claim({ id })` takes the claim and returns a handle,
+`ablo.<model>.claim.state({ id })` reads who currently holds it (synchronous, never
+blocks), and `ablo.<model>.claim.release({ id })` releases it early. The full
+coordination surface is `claim.state({ id })` / `claim.queue({ id })` /
+`claim.release({ id })` / `claim.reorder({ id, order })` hanging off `claim`.
 
-const { data, stamp, claims } = await tasks.retrieve({
-  id: 'task_123',
-  ifClaimed: 'return',
-});
+### The Claim State Object
+
+| Field | Type | Description |
+|---|---|---|
+| `object` | `'claim'` | String representing the object's type. |
+| `id` | string | Unique identifier for the claim. |
+| `status` | `'active' \| 'queued' \| 'committed' \| 'expired' \| 'canceled'` | The whole lifecycle, in one field. `active` is the holder; `queued` is a waiter in the FIFO line behind it. |
+| `target` | `{ type, id, field? }` | What is being coordinated. |
+| `reason` | string | Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. Serialized on the wire as `action`. |
+| `heldBy` | string | Participant id holding the claim. |
+| `participantKind` | `'user' \| 'agent' \| 'system'` | Who's behind it — a human (`user`), an AI (`agent`), or automated infrastructure (`system`). |
+| `createdAt` | number? | Ms-epoch the holder opened it. Optional — derived shapes may omit it. |
+| `expiresAt` | number | Ms-epoch at which the server auto-expires it if the holder doesn't finish. |
+
+```json
+{
+  "object": "claim",
+  "id": "claim_3MtwBwLkdIwHu7ix",
+  "status": "active",
+  "target": { "type": "weatherReports", "id": "report_stockholm", "field": "status" },
+  "reason": "editing",
+  "heldBy": "agent:report-writer",
+  "participantKind": "agent",
+  "expiresAt": 1716580000000
+}
 ```
 
-`stamp` is the state watermark. Pass it as `readAt` to reject stale writes.
+### Lifecycle
 
-`claims` lists active work on the target. Set `ifClaimed: 'wait'` to wait for
-that work to clear, or `ifClaimed: 'fail'` to throw `AbloClaimedError`.
-
-## Claim
-
-Claim is the coordination verb. It tells humans and agents who is working on
-a target before the write lands.
-
-```ts
-await using claim = await ablo.tasks.claim({ id: 'task_123', action: 'update' });
-
-// `claim.data` is the fresh row, read after the claim is held.
-const snap = ablo.snapshot({ tasks: 'task_123' });
-const task = await ablo.tasks.update({
-  id: 'task_123',
-  data: { status: 'done' },
-  readAt: snap.stamp,
-  onStale: 'reject',
-  wait: 'confirmed',
-});
-
-task.status; // done
-// The claim auto-releases on scope exit, or call `claim.release()` explicitly.
+```
+            claim({ id })              update({ id }) lands
+  (free) ───────────▶ active ───────────────────────▶ committed
+                        │
+            ┌───────────┴───────────┐
+            ▼                       ▼
+        canceled                 expired
+   (release w/o write)        (TTL; holder died)
 ```
 
-`claim({ id })` itself waits when the row is already held — there is no separate
-wait call. For a stateless read, `retrieve({ id, ifClaimed: 'wait' })` waits
-until the claim clears. Pass `timeout` only when your product needs an upper
-bound.
+A target is free when `ablo.<model>.claim.state({ id })` is `null`. Terminal
+states drop out of the live stream, so a present claim is either `active` (the
+holder) or `queued` (waiting in the FIFO line behind the holder; see
+`claim.queue({ id })`).
 
-## Advanced Commit API
+### Reading and claiming
 
-Most callers use `ablo.<model>.update(...)` or `resource.update(...)`. For atomic
-batches or custom runtimes, use `commits.create`.
+`claim.state({ id })` is the read side for observers: synchronous, never blocks, and
+returns the live claim state object (or `null`). `claim({ id })` is the write
+side: it takes the claim and returns a `ClaimHandle`. Claims don't lock — if someone else
+already holds the row, `claim` waits for them to finish, re-reads the fresh row,
+then hands it to you, so you always proceed from current state. Default reads
+return the row even while someone is mid-edit; if a server read should not
+return a row while it's claimed, pass `ifClaimed: 'fail'` to error out instead.
+Reads never block on a claim — to wait for a row to free up, `claim({ id })` it
+(the claim queues fairly behind the holder).
 
 ```ts
-await ablo.commits.create({
-  wait: 'confirmed',
-  operations: [
-    {
-      action: 'update',
-      model: 'tasks',
-      id: 'task_123',
-      data: { status: 'done' },
-      readAt: stamp,
-      onStale: 'reject',
-    },
-  ],
+const claim = ablo.weatherReports.claim.state({ id: 'report_stockholm' });
+if (claim) {
+  claim.heldBy;
+  claim.reason;
+}
+
+const handle = await ablo.weatherReports.claim({
+  id: 'report_stockholm',
+  reason: 'editing',
+  ttl: '2m',
 });
+await ablo.weatherReports.update({ id: handle.data.id, data: { status: 'ready' } });
+await handle.release();
 ```
 
-Over HTTP this is `POST /v1/commits` with `Authorization: Bearer <key>` and a
-body of `{ operations, wait, idempotencyKey? }` — the same path a non-TypeScript
-client posts to directly. Every state change becomes a commit; commits check
-authorization, stale state, claim conflicts, and idempotency.
+Writes go through the normal `ablo.<model>.update({ id, data })`. While you hold
+a claim on `id`, that `update` rejects with `AbloStaleContextError` if the row
+changed underneath you since you took the claim, so you re-read before retrying.
+Call `handle.release()` (or `ablo.weatherReports.claim.release({ id })`) to release
+the claim when your work is done.
 
 ## Agent
 
 Most agents should import the same schema as the app and call
-`ablo.<model>.retrieve(...)` plus `ablo.<model>.update(...)`, holding a
-`ablo.<model>.claim(...)` across any slow read→write gap. Workers that cannot
-import the app schema use the protocol client and `ablo.commits.create(...)`
-directly. There is no separate run envelope — a write is a commit, and
-attribution is stamped server-side from the capability.
+`ablo.<model>.list(...)`, `ablo.<model>.claim({ id })`, and
+`ablo.<model>.update({ id, data })`.
 
-## Data Source
+## HTTP API
 
-Use `dataSource(...)` only when the customer's app database remains canonical
-and Ablo should call a signed endpoint instead of storing customer rows itself.
+The SDK is a convenience wrapper over a model-scoped HTTP surface — the same
+noun (`model`) and verbs as `ablo.<model>.…`. Non-JS callers (or curl) use it
+directly. The table below shows the shape with `{model}` as a placeholder; the
+[OpenAPI spec](./openapi.json) expands it into one **typed** path per model
+(`/v1/models/task`, `/v1/models/deck`, …, generated from your schema) so each
+endpoint documents that model's real field contract instead of a generic blob.
 
-```ts
-import { dataSource } from '@abloatai/ablo';
-import { schema } from './ablo.schema';
+| SDK call | HTTP |
+|---|---|
+| `ablo.<model>.create({ data })` | `POST /v1/models/{model}` |
+| `ablo.<model>.list({ where })` | `GET /v1/models/{model}` |
+| `ablo.<model>.retrieve({ id })` | `GET /v1/models/{model}/{id}` |
+| `ablo.<model>.update({ id, data })` | `PATCH /v1/models/{model}/{id}` |
+| `ablo.<model>.delete({ id })` | `DELETE /v1/models/{model}/{id}` |
+| `ablo.<model>.claim({ id })` | `POST /v1/models/{model}/{id}/claim` |
+| (release a claim) | `DELETE /v1/models/{model}/{id}/claim` |
 
-export const POST = dataSource({
-  schema,
-  apiKey: process.env.ABLO_API_KEY,
-  async commit({ operations, clientTxId, context }) {
-    // Write operations to the customer's database transaction.
-    return { rows: [] };
-  },
-});
-```
+Auth is a bearer API key: `Authorization: Bearer sk_…`. Mutations take an
+`Idempotency-Key` header — derive it from the business event, not a random
+value, so a retry never double-writes. Writes return a `CommitReceipt`; a
+rejected write carries an error `code` (e.g. `stale_context`, `intent_conflict`)
+to act on. `GET /v1/models/{model}` is cursor-paginated (`limit`, `order`,
+`order_by`, `starting_after`) and returns `{ data, has_more, next_cursor }`.
 
-The SDK still uses `ablo.<model>.update(...)`. The Data Source endpoint is a
-server-to-server storage adapter. See [Connect Your Database](/data-sources).
+`POST /v1/commits` remains the path for **atomic multi-op** writes (several
+operations across rows/models that must commit together) — the per-model routes
+above are the one-record path. Both run the identical guarded-write engine.
 
-## Agent session
-
-A scoped agent [session](/sessions) is the lower-level permission boundary —
-mint one with `sessions.create({ agent })` and write under a `claim`.
-
-```ts
-const session = await api.sessions.create({
-  agent: { id: 'agent:task-writer' },
-  can: { Task: ['read', 'update'] }, // typed off your schema
-  ttlSeconds: 600,                   // 10m
-});
-```
-
-The session expires on its own; a normal agent run also closes when the handler
-returns, fails, or is cancelled.
+The [coordination MCP server](/mcp) (`@ablo/mcp`) is this same surface
+rendered as agent tools.
 
 ## Errors
 

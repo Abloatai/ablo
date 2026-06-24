@@ -2,7 +2,31 @@
 title: "Integration Guide"
 ---
 
-Use this guide when you are adding Ablo to a real product, not a demo.
+{/* AUTO-GENERATED from packages/sync-engine/docs/integration-guide.md -- edit there, then run `npm run build:docs`. */}
+
+If humans and AI agents both edit the same records in your app, they overwrite
+each other and there's no good place to coordinate. Ablo gives them one shared,
+typed write path — the same `ablo.<model>.update(...)` call for a React
+component, a server action, a background worker, or an agent — and reconciles the
+edits. This guide adds it to a product that already has a backend and database,
+one model at a time.
+
+Three things hold no matter which actor is writing:
+
+- **One model API for every actor.** `ablo.<model>.update(...)` is what
+  React components, server actions, background workers, and AI agents
+  all call. No separate "agent SDK," no parallel mutation path. The
+  attribution comes from the credential, not the call site.
+- **You never type `org:123` in client code.** The server derives what each
+  caller can see from their authenticated identity, using the `identityRoles`
+  you declare once in the schema. The client just names which model and id it
+  wants. The `org:` / `user:` / `team:` (or your own `region:` / `customer:`)
+  prefixes live in the schema, never in consumer code.
+- **Agents don't use your account API key.** Each agent run gets a short-lived
+  credential scoped to just what that run can touch, verified per request and
+  revocable instantly. (See the Agents section below for the actual calls.)
+
+## The integration in one diagram
 
 The normal integration is one client:
 
@@ -16,36 +40,33 @@ Declare the models Ablo coordinates, then read and write through
 that same model path.
 
 ```txt
-schema -> ablo.<model>.retrieve(...) -> ablo.<model>.update(...)
+schema -> ablo.<model>.list(...) -> ablo.<model>.update(...)
 ```
 
-Capabilities, tasks, commits, and receipts exist under the hood. Most apps do
-not create them by hand.
+Commits and receipts exist under the hood. Most apps do not create protocol
+objects by hand.
 
-## Pick The Backing Mode
+## Your Database
 
-Every schema model has a backing store. The SDK call shape stays the same.
+Every schema model is backed by **your own database**. The SDK call shape is the
+same everywhere.
 
-| Mode | Rows live in | Use when |
-|---|---|---|
-| Data Source | Your app database | Your existing service writes the database and stays source of truth. This is the default existing-backend path. |
-| Direct Postgres connector | Your Postgres | Optional convenience connector. You explicitly let Ablo open a database connection and provision tables. |
-| Schema-less resource API | Custom runtime | A server worker, MCP route, or migration script intentionally cannot import the app schema. |
+In this guide — an app that already owns its backend and database — keep
+`DATABASE_URL` inside your app and expose a signed Data Source endpoint: Ablo
+coordinates each write and your app commits it to your Postgres. Do not pass
+`databaseUrl` to `Ablo(...)` here; application and agent code use `ABLO_API_KEY`.
 
-For an existing backend, expose a signed Data Source endpoint and keep
-`DATABASE_URL` inside your app. Application and agent code authenticate with
-`ABLO_API_KEY`; Ablo calls your endpoint, your server writes the database, and
-Ablo coordinates the resulting stream.
-
-Use the direct Postgres connector only when you want Ablo to own the database
-connection and provisioning flow.
+If instead you want Ablo to connect to your Postgres directly, pass `databaseUrl`
+(a live, server-only option) to `Ablo(...)`. That and the sandbox-only `apiKey`
+shape are the other two start states — [Connect Your Database](/data-sources)
+is the single source of truth for all three.
 
 ## Test With Sandboxes
 
 Use the public `/sandbox` page to understand the state flow. It is a visual,
 deterministic demo; it does not call your API key or mutate hosted Ablo data.
 It is also built for coding agents: copy the sandbox prompt into Claude Code or
-Codex and ask it to wire one real resource through the schema model API.
+Codex and ask it to wire one real model through the schema model API.
 
 Use the authenticated org dashboard sandbox for real integration work. The
 default sandbox is the equivalent of Stripe test mode:
@@ -63,33 +84,85 @@ and write path are ready for production.
 When handing this to a coding agent, give it a concrete target:
 
 ```txt
-Add Ablo Sync to this app for one resource that humans and agents both edit.
+Add Ablo to this app for one model that humans and agents both edit.
 Use the org sandbox sk_test_* key. Declare schema, add the Ablo client, replace
-one write with ablo.<model>.update({ id, data, wait: 'confirmed' }), and add a
-smoke test for two concurrent writers.
+one write with ablo.<model>.update(..., { readAt, onStale: 'reject',
+wait: 'confirmed' }), and add a smoke test for two concurrent writers.
 ```
 
 ## 1. Declare A Schema
 
 Start with fields and relations. Keep load strategies, indexing hints, and
 read-only/mutable shortcuts out of the first version unless you already need
-offline-heavy local cache behavior.
+them.
 
 ```ts
-// src/ablo.schema.ts
+// src/ablo/schema.ts
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
-export const schema = defineSchema({
-  tasks: model({
-    id: z.string(),
-    projectId: z.string(),
-    title: z.string(),
-    status: z.enum(['todo', 'doing', 'done']),
-    assigneeId: z.string().nullable(),
-    updatedAt: z.string(),
-  }),
-});
+export const schema = defineSchema(
+  {
+    weatherReports: model({
+      // Reserved fields (id, createdAt, updatedAt, organizationId, createdBy)
+      // are SDK-provided automatically — never declare them. Declare only your
+      // own fields.
+      projectId: z.string(),
+      location: z.string(),
+      status: z.enum(['pending', 'ready']),
+      assigneeId: z.string().nullable(),
+    }),
+  },
+  {
+    // Identity-anchored sync-group roles. The server walks these to build each
+    // participant's allowed subscription set from the resolved identity context.
+    // `kind` is the group prefix; `source` is the identity field to read — both
+    // consumer-controlled, no hardcoded `org:` / `user:` convention anywhere in
+    // the engine. Pure data (no closures), so the schema stays JSON-serializable.
+    // Omit `identityRoles` entirely if you don't need identity-derived scoping.
+    identityRoles: [
+      identityRole({ kind: 'org', source: 'organizationId' }),
+      identityRole({ kind: 'user', source: 'userId' }),
+    ],
+  }
+);
 ```
+
+### Declaring scope on a model
+
+> **Canonical reference: [Identity & Sync Groups](/identity).** This is the
+> short version — `scope` (root), `parent` (containment), `grants` (membership),
+> and the model-form `scope` prop are all covered in depth there. Read it once;
+> this guide only shows the minimal shape inline.
+
+Per-row tenancy and per-entity sync-group anchors live on the `model(...)`
+options. The two halves compose: the identity roles above produce a
+participant's _allowed_ set; the per-model options below define how rows are
+filtered server-side and which sync-group each row fans out on.
+
+```ts
+model(
+  {
+    /* fields */
+  },
+  /* relations */ {},
+  {
+    // Axis 1 — `policy`: who may READ a row (tenant isolation / RLS). A
+    // row-local `organization_id` column is the default, so you omit this for
+    // normal tables; set it only for the exceptions (parent-inherited / global).
+
+    // Axis 2 — `groups`: which sync-group CHANNELS a row fans into.
+    // Scope root: rows form the group `matter:<id>`. Children point at it with
+    // `relation.belongsTo('matters', 'matterId', { parent: true })` to inherit.
+    groups: { root: 'matter' },
+  }
+);
+```
+
+For rows that don't carry `organization_id` themselves but inherit tenancy via a
+foreign key, set `policy: { by: 'parent', fk: '<fk>', parent: '<parentTable>' }`.
+For genuinely global/reference data, `policy: { by: 'none' }`. ⚠ `by: 'none'`
+exposes the whole table cross-tenant, so it's an explicit, named branch — never a
+falsy flag. See `packages/sync-engine/src/schema/model.ts` for the full option set.
 
 ## 2. Create The Client
 
@@ -98,7 +171,7 @@ Trusted runtimes can use `ABLO_API_KEY`.
 ```ts
 // src/ablo.ts
 import Ablo from '@abloatai/ablo';
-import { schema } from './ablo.schema';
+import { schema } from './ablo/schema';
 
 export const ablo = Ablo({
   schema,
@@ -106,97 +179,131 @@ export const ablo = Ablo({
 });
 ```
 
-Browser apps must **never** ship the server `apiKey`. The browser gets its own
-short-lived credential: build an `Ablo` client whose `getToken` fetches a token
-from a backend route, and pass that **client instance** to `<AbloProvider>`.
+Browser apps should use the React provider or a scoped session token, not a
+server API key in the bundle. Build the client first, then hand it to the
+provider — `AbloProvider` takes `{ client, userId?, onError?, fallback? }`, and
+nothing else (`schema`, `teamIds`, and `apiKey` all live on the
+client now).
 
-First, a backend route mints a per-user session token (an `ek_`) using the
-server client. Authenticate it with your own session before minting.
+```tsx
+// src/ablo-client.ts
+import Ablo from '@abloatai/ablo';
+import { schema } from '@/ablo/schema';
 
-```ts
-// app/api/ablo-session/route.ts
-import { ablo } from '@/ablo'; // server client, holds ABLO_API_KEY
-import { getCurrentUser } from '@/auth';
-
-export async function POST() {
-  const user = await getCurrentUser(); // your existing auth
-  if (!user) return new Response('Unauthorized', { status: 401 });
-
-  const session = await ablo.sessions.create({ user: { id: user.id } });
-  return Response.json({ token: session.token });
-}
+// The browser never holds the API key. The client mints a short-lived token
+// from your session route (see below) and refreshes it before expiry.
+export const ablo = Ablo({
+  schema,
+  apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
+});
 ```
-
-Then point a browser `Ablo` client at that route and hand the instance to the
-provider. `getToken` is called for the first mint and every refresh — the
-secret `apiKey` never enters the bundle.
 
 ```tsx
 // app/providers.tsx
 'use client';
 
-import Ablo from '@abloatai/ablo';
 import { AbloProvider } from '@abloatai/ablo/react';
-import { schema } from '@/ablo.schema';
-
-// Build once at module scope — a new instance per render tears down the socket.
-const ablo = Ablo({
-  schema,
-  getToken: () =>
-    fetch('/api/ablo-session', { method: 'POST' })
-      .then((r) => r.json())
-      .then((d) => d.token),
-});
+import { ablo } from '@/ablo-client';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return <AbloProvider client={ablo}>{children}</AbloProvider>;
 }
 ```
 
-For a read-only browser experience with no session route, use a publishable
-`pk_` key directly instead: `Ablo({ schema, apiKey: 'pk_...' })`.
+The session route mints the scoped token server-side, where the API key lives:
+
+```ts
+// app/api/ablo-session/route.ts
+import Ablo from '@abloatai/ablo';
+import { schema } from '@/ablo/schema';
+import { auth } from '@/auth';
+
+export const runtime = 'nodejs';
+
+const sync = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+
+export async function POST() {
+  const session = await auth(); // your own auth — returns the signed-in user
+  const { token } = await sync.sessions.create({ user: { id: session.userId } });
+  return Response.json({ token });
+}
+```
+
+### Why two credential shapes
+
+`ABLO_API_KEY` is your long-lived account credential. Treat it like a
+Stripe secret key: it stays on trusted servers, never reaches a browser
+bundle, and signs server-to-server requests. It is the right credential
+for trusted runtimes (Next.js server actions, background workers,
+migration scripts) where the code reading it is yours.
+
+A browser is not that environment. The React provider exchanges your API key for
+a short-lived, narrowly scoped bearer token. The browser holds that scoped token;
+the API key never leaves the server. The exchange is the bridge between two
+credential shapes:
+
+```
+                     trusted runtime              browser / agent
+ABLO_API_KEY ─exchange─►  scoped token ────────► narrow scope, leased
+(long-lived,             (short-lived,
+ broad scope,             per-actor scope,
+ server only)             revocable)
+```
+
+This is the same shape as Stripe's
+ephemeral keys (Issuing Elements expires in 15 minutes) and AWS STS
+AssumeRole (returns time-bounded creds with the minimal needed scope).
+You never type that token into your app; the SDK mints one when it needs one and
+refreshes before expiry.
 
 ## 3. Read State
 
-Use `retrieve` (async) when the row may not already be local — it goes to the
-server and resolves with the row.
+Reads come in two flavors, and you pick based on whether you can wait.
+`retrieve({ id })` and `list({ where })` hit the server (and hydrate the local
+store) — they're async, so you `await` them. `get(id)` (positional),
+`getAll({ where })`, and `getCount({ where })` read the already-synced local
+graph synchronously, so they're the ones you call in render — and the ones you
+use inside a `useAblo` selector, never the async `retrieve`/`list`.
+
+Use `retrieve` when the row may not be local yet — it fetches from the server
+and waits.
 
 ```ts
 await ablo.ready();
 
-const task = await ablo.tasks.retrieve({ id: 'task_123' });
-if (!task) throw new Error('task not found');
+const report = await ablo.weatherReports.retrieve({ id: 'report_stockholm' });
+if (!report) throw new Error('report not found');
 ```
 
-Use `get`, `getAll`, and `getCount` for synchronous local reads after data has
-loaded.
+Use `get`, `getAll`, and `getCount` for synchronous local-graph reads after
+data has synced.
 
 ```ts
-const task = ablo.tasks.get('task_123');
-const activeTasks = ablo.tasks.getAll({
+const report = ablo.weatherReports.get('report_stockholm');
+const activeReports = ablo.weatherReports.getAll({
   where: { projectId: 'proj_123' },
+  filter: (report) => report.status !== 'ready',
   orderBy: { updatedAt: 'desc' },
   limit: 50,
 });
 ```
 
-In React, selector `useAblo` is the public read API. Selectors run on every
-local change, so they must use the **synchronous** reads (`get`, `getAll`,
-`getCount`) — never `retrieve`/`list`, which are async:
+In React, selector `useAblo` is the public read API:
 
 ```tsx
 'use client';
 
 import { useAblo } from '@abloatai/ablo/react';
 
-export function TaskRow({ task: serverTask }: { task: Task }) {
-  const task = useAblo((ablo) => ablo.tasks.get(serverTask.id)) ?? serverTask;
+export function ReportRow({
+  report: serverReport,
+}: {
+  report: { id: string; location: string; status: string };
+}) {
+  const report = useAblo((ablo) => ablo.weatherReports.get(serverReport.id)) ?? serverReport;
+  const active = useAblo((ablo) => ablo.weatherReports.claim.state({ id: serverReport.id }));
 
-  return (
-    <button disabled={task.status === 'done'}>
-      {task.title}
-    </button>
-  );
+  return <button disabled={Boolean(active) || report.status === 'ready'}>{report.location}</button>;
 }
 ```
 
@@ -211,22 +318,18 @@ const ablo = useAblo();
 For simple writes:
 
 ```ts
-await ablo.tasks.update({
-  id: 'task_123',
-  data: { status: 'done' },
-  wait: 'confirmed',
-});
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' }, wait: 'confirmed' });
 ```
 
 For writes based on state the user or agent already read, snapshot first and
 reject stale updates:
 
 ```ts
-const snap = ablo.snapshot({ tasks: 'task_123' });
+const snap = ablo.snapshot({ weatherReports: 'report_stockholm' });
 
-await ablo.tasks.update({
-  id: 'task_123',
-  data: { status: 'done' },
+await ablo.weatherReports.update({
+  id: 'report_stockholm',
+  data: { status: 'ready' },
   readAt: snap.stamp,
   onStale: 'reject',
   wait: 'confirmed',
@@ -240,17 +343,17 @@ back optimistic local state and throw a typed `AbloError`.
 
 There is no separate multiplayer setup.
 
-If humans, server actions, and agents use the same schema model resource, they
+If humans, server actions, and agents use the same schema client, they
 share the same stream:
 
 ```txt
-human UI -> ablo.tasks.update(...)
-agent    -> ablo.tasks.update(...)
-server   -> ablo.tasks.update(...)
+human UI -> ablo.weatherReports.update(...)
+agent    -> ablo.weatherReports.update(...)
+server   -> ablo.weatherReports.update(...)
 ```
 
-Ablo coordinates those writes, fans out confirmed deltas, coordinates exclusive
-access through claims, and lets callers reject stale writes with `readAt`.
+Ablo coordinates those writes, fans out confirmed deltas, exposes active claims,
+and lets callers reject stale writes with `readAt`.
 
 Direct writes to your own database bypass that stream until your app reports the
 change through Data Source events.
@@ -265,7 +368,7 @@ the records that need multiplayer now and agent-safe writes later.
 
 ```txt
 Button
-  -> ablo.tasks.update(...)
+  -> ablo.weatherReports.update(...)
   -> Ablo
   -> signed Data Source request
   -> existing backend service
@@ -275,31 +378,45 @@ Button
 
 The migration can be gradual:
 
-1. Declare schema for one resource, such as `tasks`.
+1. Declare schema for one model, such as `reports`.
 2. Keep existing server loads for first paint.
-3. Add `useAblo((ablo) => ablo.tasks.get(id)) ?? serverTask` for live rows.
+3. Add `useAblo((ablo) => ablo.weatherReports.get(id)) ?? serverReport` for live rows.
 4. Add one Data Source endpoint that calls the existing service layer.
-5. Move one mutation button from `fetch('/api/tasks/...')` to `ablo.tasks.update(...)`.
+5. Move one mutation button from `fetch('/api/reports/...')` to `ablo.weatherReports.update(...)`.
 6. Add an outbox/events path for writes that still happen outside Ablo.
-7. Let agents use the same `ablo.tasks.retrieve(...)` and `ablo.tasks.update(...)`.
+7. Let agents use the same `ablo.weatherReports.list(...)` and `ablo.weatherReports.update(...)`.
 
 For the full Python shape, see
 [Existing Python Backend](/examples/existing-python-backend).
 
 ## 7. Data Source Endpoint
 
-Use a Data Source when your app database remains the source of truth. Wire your
-ORM through an adapter; it handles reads, the commit transaction, idempotency,
-and the outbox/events feed:
+Use a Data Source when your app database remains the source of truth. Wire the
+route with `dataSourceNext` and an adapter — `prismaDataSource(prisma, schema)`
+or `drizzleDataSource(db, schema)`. You don't hand-write `commit`; the adapter
+owns transactional commit, idempotency, and reads.
 
 ```ts
 // app/api/ablo/source/route.ts
 import { dataSourceNext } from '@abloatai/ablo/source/next';
-import { drizzleDataSource } from '@abloatai/ablo/source/drizzle';
-import { schema } from '@/ablo.schema';
-import { db } from '@/db';
+import { prismaDataSource } from '@abloatai/ablo/source';
+import { schema } from '@/ablo/schema';
+import { prisma } from '@/db';
 
 export const runtime = 'nodejs';
+
+export const { POST } = dataSourceNext({
+  schema,
+  apiKey: process.env.ABLO_API_KEY!,
+  adapter: prismaDataSource(prisma, schema),
+});
+```
+
+With Drizzle, pass `drizzleDataSource(db, schema)` instead — the adapter takes
+your Drizzle `db` and the Ablo `schema` (not your table objects):
+
+```ts
+import { drizzleDataSource } from '@abloatai/ablo/source/drizzle';
 
 export const { POST } = dataSourceNext({
   schema,
@@ -308,12 +425,8 @@ export const { POST } = dataSourceNext({
 });
 ```
 
-On Prisma, swap the adapter for `prismaDataSource(prisma, schema)` from
-`@abloatai/ablo/source`. The adapter is given your Ablo `schema`, so it only
-touches the synced models; the rest of your database stays yours.
-
-Ablo needs your Data Source endpoint and API key. Your app stores one Ablo
-credential:
+Ablo needs your Data Source endpoint and API key. Your app
+stores one Ablo credential:
 
 ```bash
 ABLO_API_KEY=sk_live_...
@@ -326,57 +439,66 @@ The API key verifies Ablo's request. It is not a database credential.
 Agents should use the same model methods as the app when they can import the
 schema.
 
-```ts
-// Take a claim so the agent has exclusive, ordered access while it works.
-await using claim = await ablo.tasks.claim({ id: taskId, action: 'update' });
-if (!claim.data) return;
+An agent often reads a row, calls an LLM, then writes back — a slow gap during
+which a human might touch the same row. Wrap that work in a claim. Claims don't
+lock. If another writer holds the row, `claim` waits for them, re-reads the
+fresh row, then hands it to you — so two writers serialize instead of clobbering.
 
-await ablo.tasks.update({
-  id: taskId,
-  data: { status: 'done', summary: await summarize(claim.data) },
+A claim is a disposable handle (`await using`), not a callback: read the fresh
+row off `claim.data`, do your work, and the handle auto-releases when it leaves
+scope.
+
+```ts
+await using claim = await ablo.weatherReports.claim({
+  id: reportId,
+  reason: 'forecasting',
+});
+const claimed = claim.data;
+if (!claimed) return;
+
+await ablo.weatherReports.update({
+  id: claimed.id,
+  data: { status: 'ready', forecast: await getForecast(claimed) },
   wait: 'confirmed',
 });
-// claim auto-releases at end of scope
 ```
 
 Use AI SDK for the model loop. Put Ablo inside the tool that persists the final
 change.
 
 ```ts
-import { tool } from 'ai';
-import { z } from 'zod';
-
-const completeTask = tool({
-  description: 'Mark a task done with a summary',
+const completeReport = tool({
+  description: 'Mark a weather report ready with a forecast',
   inputSchema: z.object({
-    taskId: z.string(),
-    summary: z.string(),
+    reportId: z.string(),
+    forecast: z.string(),
   }),
-  execute: async ({ taskId, summary }) => {
-    return ablo.tasks.update({
-      id: taskId,
-      data: { status: 'done', summary },
+  execute: async ({ reportId, forecast }) => {
+    const snap = ablo.snapshot({ weatherReports: reportId });
+    return ablo.weatherReports.update({
+      id: reportId,
+      data: { status: 'ready', forecast },
+      readAt: snap.stamp,
+      onStale: 'reject',
       wait: 'confirmed',
     });
   },
 });
 ```
 
-Use the schema-less protocol client (`ablo.model(name)` + `commits.create(...)`)
-only for custom server runtimes that intentionally cannot import the schema.
+Keep agent writes on the same schema client surface as the app.
 
 ## Optional Surface
 
-| Optional piece | Why it exists |
-|---|---|
-| `/react` | Live React selectors, provider lifecycle, presence, sync status. |
-| `/testing` | Test harnesses and deterministic mocks. |
-| `Data Source` | Keep your app database canonical. |
-| `persistence: 'indexeddb'` | Durable browser cache and offline queueing for apps that need it. |
-| `claim` | Take exclusive, ordered access to a row; queue concurrent writers. |
-| `snapshot` + `readAt` | Reject writes based on stale state. |
-| `mutable`, `readOnly`, `field`, `indexed` | Advanced schema and local-cache tuning. |
-| `resource(...)` and `commits.create(...)` | Low-level protocol access for custom runtimes. |
+| Optional piece                            | Why it exists                                                     |
+| ----------------------------------------- | ----------------------------------------------------------------- |
+| `/react`                                  | Live React selectors, provider lifecycle, presence, sync status.  |
+| `/testing`                                | Test harnesses and deterministic mocks.                           |
+| `Data Source`                             | Keep your app database canonical.                                 |
+| `persistence: 'indexeddb'`                | Durable browser cache that survives reloads, for apps that need it. |
+| `claim` / `claim.state` / `claim.queue`          | Show active work and coordinate before a write.                   |
+| `snapshot` + `readAt`                     | Reject writes based on stale state.                               |
+| `mutable`, `readOnly`, `field`, `indexed` | Advanced schema and read tuning.                                  |
 
 The first integration should not need most of these. Start with schema and
 model methods, then add the optional pieces where the product actually needs
@@ -384,18 +506,19 @@ them.
 
 ## Method Cheatsheet
 
-| Method | Use it for |
-|---|---|
-| `retrieve({ id })` | Async fetch of one row from the server. |
-| `list({ where, orderBy, limit })` | Async server query. |
-| `get(id)` | Synchronous local read of one loaded row. |
-| `getAll(options?)` | Synchronous local collection read. |
-| `getCount(options?)` | Synchronous local count. |
-| `create({ data, id? })` | Create through the model resource. |
-| `update({ id, data, ...options })` | Update through the model resource. |
-| `delete({ id, ...options })` | Delete through the model resource. |
-| `claim({ id, action?, ttl? })` | Take an `await using` claim for exclusive, ordered access. |
-| `claim.state({ id })` | See the current holder and queue. |
+| Method                                 | Use it for                                                                       |
+| -------------------------------------- | -------------------------------------------------------------------------------- |
+| `retrieve({ id })`                     | Async read of one row from the server (await it).                                |
+| `list({ where })`                      | Async read of many rows from the server (await it).                              |
+| `get(id)`                              | Synchronous local read of one synced row (positional id; use in render).         |
+| `getAll({ where })`                    | Synchronous local read of many synced rows.                                      |
+| `getCount({ where })`                  | Synchronous local count of synced rows.                                          |
+| `create({ data, id? })`                | Create through the model client.                                                 |
+| `update({ id, data, ...opts })`        | Update through the model client.                                                 |
+| `delete({ id, ...opts })`              | Delete through the model client.                                                 |
+| `claim.state({ id })`                  | See who is currently working on a row (synchronous).                             |
+| `claim({ id, reason?, ttl? })`         | Acquire a disposable handle: wait for your turn, re-read, and hold the row.       |
 
-Do not use `ablo.commit` as the first write API. Most callers should never need
-the low-level commit plane directly.
+Keep first integrations on the model methods above. Every mutation and
+server-read verb takes one options object; only the synchronous `get(id)` stays
+positional.

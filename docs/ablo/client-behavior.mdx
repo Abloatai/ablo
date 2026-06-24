@@ -2,7 +2,11 @@
 title: "Client Behavior"
 ---
 
-This page covers the SDK behavior around options, errors, retries, and runtimes.
+{/* AUTO-GENERATED from packages/sync-engine/docs/client-behavior.md -- edit there, then run `npm run build:docs`. */}
+
+When several writers touch the same data at once — a person in the browser, a Server Action, an agent worker — the SDK decides whose write lands and how the others find out. This page is the reference for that: per-write options like `wait` and `onStale`, claiming a record so your slow work runs uninterrupted, and which errors are safe to retry.
+
+Claims don't lock. If another writer holds the row, `claim` waits for them, re-reads the fresh row, then hands it to you — so two writers serialize instead of clobbering.
 
 ## Constructor
 
@@ -11,9 +15,9 @@ import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
 const schema = defineSchema({
-  tasks: model({
-    title: z.string(),
-    status: z.enum(['todo', 'doing', 'done']),
+  weatherReports: model({
+    location: z.string(),
+    status: z.enum(['pending', 'ready']),
   }),
 });
 
@@ -27,53 +31,60 @@ Common options:
 
 | Option | Purpose |
 |---|---|
-| `schema` | Required for typed model resources. Omit only for advanced schema-less runtimes. |
+| `schema` | Required for typed model clients. |
 | `apiKey` | Bearer credential for trusted server runtimes. Defaults to `ABLO_API_KEY` when available. |
+| `databaseUrl` | Optional, server-only. Registers your Postgres directly (the connection-string path). Pass it explicitly — it is **not** auto-read from the environment. Omit it for a signed Data Source endpoint or the hosted sandbox. The SDK throws if it sees this in a browser. |
 | `baseURL` | Override the hosted sync endpoint for staging or private deployments. |
-| `persistence` | `volatile` by default. Use `indexeddb` for browser durable cache and offline queueing. |
+| `persistence` | `memory` by default. Use `indexeddb` for a durable browser cache that survives reloads. |
+| `transport` | `'websocket'` (default) is the live, stateful client — a persistent socket, a local synced pool, and `onChange` subscriptions. `'http'` returns the **stateless** client for server-side actors (agents, workers, serverless): the same `ablo.<model>` read/write/claim surface, but each call is one HTTP round-trip with no socket. Under `'http'` the return type narrows to `AbloHttpClient`, so stateful-only methods (`get`/`getAll`, `onChange`, `watch`) are compile errors rather than runtime gaps. |
 | `fetch` | Custom fetch implementation for tests or non-standard runtimes. |
 | `defaultHeaders` | Extra headers attached to every HTTP request. |
 | `defaultQuery` | Extra query parameters attached to every HTTP request. |
 | `dangerouslyAllowBrowser` | Required before sending an API key from browser code. Prefer a server route instead. |
 
-There is intentionally no `databaseURL` constructor option. Teams that keep
-canonical rows in their own database use a signed [Data Source](/data-sources)
-endpoint.
+`databaseUrl` is an optional, server-only constructor option. It is **not**
+auto-read from the environment — pass it explicitly to register your Postgres
+directly (the connection-string path). Omit it when you expose a signed
+[Data Source](/data-sources) endpoint, or when trying Ablo against the hosted
+sandbox.
 
 ## Model Methods
 
-Each schema model becomes a typed resource:
+Each schema model becomes a typed model:
 
 ```ts
 await ablo.ready();
 
-const task = await ablo.tasks.retrieve({ id: 'task_123' });
-const local = ablo.tasks.get('task_123');
+const report = await ablo.weatherReports.retrieve({ id: 'report_stockholm' });
+const local = ablo.weatherReports.get('report_stockholm');
 
-await ablo.tasks.create({ data: { title: 'Draft launch plan', status: 'todo' } });
-await ablo.tasks.update({ id: 'task_123', data: { status: 'done' }, wait: 'confirmed' });
-await ablo.tasks.delete({ id: 'task_123', wait: 'confirmed' });
+await ablo.weatherReports.create({ data: { location: 'Stockholm', status: 'pending' } });
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' }, wait: 'confirmed' });
+await ablo.weatherReports.delete({ id: 'report_stockholm', wait: 'confirmed' });
 ```
 
-`retrieve` is async hydration from local store and server. `get`, `getAll`, and
-`getCount` are synchronous local reads after data is loaded.
+Call `retrieve`/`list` first — they fetch from the server and you `await` them.
+After that, `get`/`getAll`/`getCount` read the already-synced data instantly with
+no `await`, and stay reactive in render. Use the async pair to load, the sync trio
+to read.
 
-`list` accepts the same practical read options the React selector path uses:
-`where`, `filter`, `orderBy`, `limit`, `offset`, and `scope`. Scope defaults to
-`'live'`; pass `'archived'` or `'all'` when you intentionally want non-live
-rows.
+`getAll` accepts the same practical read options the React selector path uses:
+`where`, `filter`, `orderBy`, `limit`, `offset`, and `state`. The `state`
+lifecycle filter defaults to `'live'`; pass `'archived'` or `'all'` when you
+intentionally want non-live rows.
 
 ## Multiplayer Behavior
 
-Multiplayer works when every participant uses the same model resource path. A
-human Server Action, a browser view, and an agent worker can all use
-`ablo.tasks`:
+Two writers both try to mark `report_stockholm` ready at the same time. To stop
+the second write from silently overwriting the first, every participant goes
+through the same model client path. A human Server Action, a browser view, and an
+agent worker can all use `ablo.weatherReports`:
 
 ```ts
-const task = await ablo.tasks.retrieve({ id });
-const snap = ablo.snapshot({ tasks: id });
+const report = await ablo.weatherReports.retrieve({ id });
+const snap = ablo.snapshot({ weatherReports: id });
 
-await ablo.tasks.update({
+await ablo.weatherReports.update({
   id,
   data: patch,
   readAt: snap.stamp,
@@ -82,10 +93,11 @@ await ablo.tasks.update({
 });
 ```
 
-The confirmed write fans out over realtime subscriptions. React clients that use
-`useAblo((ablo) => ablo.tasks.get(id))` receive the new row, and selectors
-such as `useAblo((ablo) => ablo.tasks.claim.state({ id }))`
-receive the current claim holder. There is
+Once the server accepts the write, every other connected client gets the new row
+automatically — no polling or manual refresh on your side. React clients that use
+`useAblo((ablo) => ablo.weatherReports.get(id))` receive the new row, and selectors
+such as `useAblo((ablo) => ablo.weatherReports.claim.state({ id }))`
+receive active claim state. There is
 no extra multiplayer setup beyond routing shared state through Ablo.
 
 If an app writes directly to its database, Ablo cannot coordinate that write
@@ -94,14 +106,13 @@ until the app reports it through Data Source events.
 ## Per-Write Options
 
 ```ts
-await ablo.tasks.update({
-  id: 'task_123',
-  data: { status: 'done' },
+await ablo.weatherReports.update({
+  id: 'report_stockholm',
+  data: { status: 'ready' },
   wait: 'confirmed',
   readAt: snap.stamp,
   onStale: 'reject',
-  claim,
-  idempotencyKey: 'task_123:mark-done:v1',
+  idempotencyKey: 'report_stockholm:mark-ready:v1',
   timeout: 20_000,
 });
 ```
@@ -111,30 +122,39 @@ await ablo.tasks.update({
 | `wait` | `queued` resolves after local queueing; `confirmed` waits for server acceptance. |
 | `readAt` | State cursor the write was based on. |
 | `onStale` | Policy when the target changed after `readAt`. Prefer `reject`. |
-| `claim` | Active work claim associated with this write. |
 | `idempotencyKey` | Stable key for retry-safe writes. The SDK generates one when omitted. |
 | `timeout` | Maximum time for the write call. |
 
-## Busy Behavior
+## Claimed Behavior
+
+If your update involves a slow step — an API call, an LLM round-trip — and someone
+else might write the same record meanwhile, claiming the record stops you from
+overwriting their change. Check who holds the record with `claim.state({ id })`, then
+take it with `claim({ id })`:
 
 ```ts
-const holder = ablo.tasks.claim.state({ id: 'task_123' });
+const active = ablo.weatherReports.claim.state({ id: 'report_stockholm' });
 
-if (holder) {
-  await using claim = await ablo.tasks.claim({ id: 'task_123' });
-  // claim is held here; it waits if another actor holds it.
+if (active) {
+  return { status: 'claimed', active };
 }
+
+const handle = await ablo.weatherReports.claim({ id: 'report_stockholm' });
+await ablo.weatherReports.update({ id: handle.data.id, data: { status: 'ready' } });
+await handle.release();
 ```
 
-Reads never silently block. For a stateless read of a possibly-claimed row,
-use `ifClaimed`:
+`claim.state({ id })` returns the current holder (or nothing) without ever blocking.
+When you call `claim({ id })`, the SDK queues other claimers behind you, re-reads
+the latest row, then hands you the fresh row — so you can't overwrite a change you didn't
+see. Options on the claim:
 
-- `return` returns the row even while claimed.
-- `wait` waits for the active claim to clear.
-- `fail` throws `AbloClaimedError`.
+- default `claim` waits in the fair queue and re-reads before handing you the row;
+- `{ queue: false }` rejects with `AbloClaimedError` instead of queuing;
+- `{ maxQueueDepth }` rejects if the wait line is already too deep.
 
-Schema clients use the realtime stream for waits. Schema-less HTTP clients must
-provide `busyPollInterval` when using `ifClaimed: 'wait'`.
+While waiting, schema clients learn when the claim clears from the live claim
+stream, so they never poll.
 
 ## Errors
 
@@ -150,16 +170,16 @@ All SDK errors extend `AbloError` and carry a stable `type`.
 | `AbloValidationError` | Invalid input or unsupported request shape. |
 | `AbloServerError` | Server-side 5xx. Retry with backoff if the operation is idempotent. |
 | `AbloStaleContextError` | Write was based on stale `readAt` state. Re-read and retry. |
-| `AbloClaimedError` | Target was claimed by another participant and `ifClaimed: 'fail'` was set, or a claim wait timed out. |
+| `AbloClaimedError` | An active claim conflicted with `{ queue: false }`, the queue was too deep, or a claim wait timed out. |
 
 ```ts
 import { AbloClaimedError } from '@abloatai/ablo';
 
 try {
-  await ablo.tasks.update({ id: 'task_123', data: { status: 'done' }, wait: 'confirmed' });
+  await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' }, wait: 'confirmed' });
 } catch (error) {
   if (error instanceof AbloClaimedError) {
-    return { status: 'claimed', claims: error.claims };
+    return { status: 'claimed' };
   }
   throw error;
 }

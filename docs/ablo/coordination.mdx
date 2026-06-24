@@ -1,11 +1,19 @@
 ---
-title: 'Coordination'
+title: "Coordination"
 ---
 
+{/* AUTO-GENERATED from packages/sync-engine/docs/coordination.md -- edit there, then run `npm run build:docs`. */}
+
+> **Governing convention:** [`concurrency-convention.md`](/concurrency-convention)
+> — the non-coercion principle (surface state, let the actor decide), the full
+> `onStale` taxonomy, the read-set (`reads[]`), and the boundaries. Read that for
+> the *why* and the contract; this reference is the *how* (claim mechanics + API).
+
 Coordinate long-running work on a row so humans and agents don't clobber each
-other. Most writes need none of this — `ablo.<model>.update({ id, data })` is optimistic
-and the server rejects it if the row moved. Reach for `claim` only when you'll
-**hold a row across a slow gap** (read → LLM call → write).
+other. Most writes need none of this — a plain `ablo.<model>.update({ id, data })`
+is **last-write-wins** by default. For lost-update detection, take a claim or pass
+`readAt` / `onStale` yourself. Reach for `claim` only when you'll **hold a row
+across a slow gap** (read → LLM call → write).
 
 Claims don't lock. If another writer holds the row, `claim` waits for them,
 re-reads the fresh row, then hands it to you — so two writers serialize instead
@@ -31,17 +39,19 @@ make:
 
 | layer | kind | what it does | enforces? |
 |---|---|---|---|
-| **Presence** (`claim.state`, observers) | observation | Broadcasts who is working where, live. Renders cursors / "agent X is editing." | **No.** Advisory only — it never blocks or rejects a write. |
+| **Presence** (`claim.state`, observers) | observation | Broadcasts who is working where, live. Renders cursors / "agent X is editing." Reading or claiming a row auto-enrolls you in its sync group, so `claim.state({ id })` observes co-participants from any client (browser or Node agent) with no manual subscribe step. | **No.** Advisory only — it never blocks or rejects a write. |
 | **Claim** (`claim`/`claim.queue`/`claim.release`) | pessimistic | Reserves a row for one participant. Foreign writers are rejected server-side; contenders join a fair FIFO queue. | **Yes**, between participants — mutual exclusion. |
 | **Stale-context** (`readAt` + `onStale`) | optimistic (LWW) | On commit, rejects a write whose snapshot is older than the row's latest delta. Last-writer-wins detection. | **Yes**, against time — lost-update detection. |
 
 **The one decision: do you hold the row across a slow gap (read → LLM call →
 write)?**
 
-- **No** (the common case — a single quick `update`): do nothing. `ablo.<model>.update`
-  is optimistically guarded by stale-context already; it rejects with
-  `AbloStaleContextError` if the row moved under you. This is the default and
-  needs no ceremony.
+- **No** (the common case — a single quick `update`): a plain `ablo.<model>.update`
+  is **last-write-wins** — it carries no `readAt`, so the server skips the stale
+  check and the write simply lands. That's fine for most fields. If you need
+  lost-update detection on a no-claim write, pass `readAt` + `onStale: 'reject'`
+  yourself and it rejects with `AbloStaleContextError` when the row moved under
+  you.
 - **Yes** (you'll reason for seconds while holding the row): `claim` it. The claim
   excludes other participants for the duration, queues contenders fairly, and —
   see below — your own writes under it stay stale-guarded too.
@@ -50,12 +60,13 @@ write)?**
 non-holder writing to a claimed row is rejected (`AbloClaimedError`) regardless of
 `readAt`. If you do hold it, your own writes are still stale-checked — a row that
 moved between your snapshot and your write still rejects with
-`AbloStaleContextError`. With no claim held, the stale check is the only
-protection, and it's automatic, which is why the no-claim path is safe by default.
-Presence (`claim.state`) never decides anything — read it to render, act on the
-errors. The two checks are independent: one rejects writes from people who don't
-hold the claim, the other rejects writes based on a stale snapshot, and the SDK
-adds the stale-check for you when you write under a claim, so you don't pass
+`AbloStaleContextError`. With no claim held and no `readAt`, there is **no**
+stale protection — the plain write is last-write-wins; opt into lost-update
+detection by passing `readAt` + `onStale` yourself. Presence (`claim.state`)
+never decides anything — read it to render, act on the errors. The two checks are
+independent: one rejects writes from people who don't hold the claim, the other
+rejects writes based on a stale snapshot, and the SDK adds the stale-check for you
+when you write under a claim **you took on this client**, so there you don't pass
 anything extra.
 
 ---
@@ -161,6 +172,17 @@ a model row. It's what `claim.state()` returns and what observers render.
 
 ## Methods
 
+One word — "claim" — names four distinct things; keep them separate as you read:
+
+- **the lease (claim handle)** — the *object* returned by `ablo.<model>.claim({ id })`
+  (`ClaimHandle`, an `AsyncDisposable` with `.data` and `.release()`).
+- **acquiring a claim/lease** — the *verb* `ablo.<model>.claim({ id })`, the call
+  that takes the lease.
+- **`claim.state` / `claim.queue`** — the *inspection namespace* hanging off the
+  model, for reading who holds the row and who's lined up.
+- **the write's `claim` param** — `update({ id, data, claim })`, where you pass a
+  lease the proxy didn't take itself.
+
 Each method below follows one fixed shape: **signature · what it does ·
 parameters · returns · example**.
 
@@ -218,14 +240,18 @@ held. Server/model reads can choose a claimed policy:
 ```ts
 await ablo.weatherReports.retrieve({
   id: 'report_stockholm',
-  ifClaimed: 'wait',
-  claimedTimeout: 30_000,
+  ifClaimed: 'fail',
 });
 ```
 
-- `ifClaimed: 'return'` reads now and includes active work metadata.
-- `ifClaimed: 'wait'` waits for the active claim to clear before reading.
+- `ifClaimed: 'return'` (the default) reads now and includes active work metadata.
 - `ifClaimed: 'fail'` throws `AbloClaimedError` if the row is claimed.
+
+Reads never block on a claim — there is no `ifClaimed: 'wait'`. Waiting for a row
+to free up is a **claim-side** concern: take `ablo.<model>.claim({ id })` (it
+queues fairly behind the current holder and re-reads the fresh row once it's
+yours). Use `ifClaimed: 'fail'` when a read should simply refuse to proceed
+against a row someone else is mid-editing.
 
 ### `claim.state`
 
@@ -235,6 +261,16 @@ ablo.<model>.claim.state({ id })
 
 Read who's currently working on a row, for observers and UI. Synchronous and
 reactive (it reads the local coordination snapshot). Never blocks.
+
+**You don't subscribe to anything first.** Reading or claiming a row
+automatically enrolls you in that row's sync group: reading it (including
+`retrieve`/`get`, or `claim.state` itself) gives you **read-interest**, and
+`claim`-ing it gives you a **pinned write-intent**. So `claim.state({ id })`
+observes co-participants on that row from **any** client — a browser, a Server
+Action, or a Node agent — and a holder sees its own claim, with no manual
+subscribe step. There is no `participants.join` to call: the typed
+`ablo.<model>` surface (read / `claim` / `claim.state` / `claim.queue`) is the
+whole coordination API.
 
 **Parameters**
 
@@ -320,7 +356,7 @@ Releasing **promotes the head of the queue**: the next waiter receives the claim
 **Example**
 
 ```ts
-const claim = await ablo.weatherReports.claim({ id: 'report_stockholm', action: 'reviewing' });
+const claim = await ablo.weatherReports.claim({ id: 'report_stockholm', reason: 'reviewing' });
 const report = claim.data;
 try {
   const ok = await reviewExternally(report);
@@ -331,18 +367,53 @@ try {
 }
 ```
 
+### `watch` — presence for a set of rows
+
+Reading or claiming a row auto-enrolls you in its sync group, which is enough for
+`claim.state`/`claim.queue` to observe co-participants. When you want to *hold*
+presence on a known set of rows — a deck's slides, a board's cards — and react to
+who joins or leaves, use `watch`:
+
+```ts
+await using room = await ablo.slides.watch(slideIds, { ttl: '5m' });
+room.peers; // who else is here, live
+```
+
+`watch(ids, { ttl? })` opens a model-scoped presence/claim subscription and returns
+a participant handle (`.peers`, the scoped claim stream, `.leave()` / `await using`
+disposal). It is the model-scoped successor to the old top-level
+`ablo.participants.join({ scope })`. **WebSocket only** — presence needs a live
+socket, so `watch` is absent on the HTTP client (`Ablo({ transport: 'http' })`) and
+throws on any non-ws construction.
+
 ### Writing under a claim
 
 There is no separate "write" method on a claim — use the normal
-`ablo.<model>.update({ id, data })`. While you hold a claim on `id`, that `update` is
-automatically stale-guarded against the snapshot the claim took (`readAt` =
-snapshot watermark, `onStale: 'reject'`) and attributed to the claim's lease, so
-it rejects with [`AbloStaleContextError`](#errors) if the row changed under you.
+`ablo.<model>.update({ id, data })`. The auto-guarding holds **only when this same
+client took the claim** via `ablo.<model>.claim({ id })` (the proxy remembers the
+lease in-process): that `update` is then stale-guarded against the snapshot the
+claim took (`readAt` = snapshot watermark, `onStale: 'reject'`) and attributed to
+the claim's lease, so it rejects with [`AbloStaleContextError`](#errors) if the
+row changed under you.
 
 ```ts
 await using claim = await ablo.weatherReports.claim({ id });
 await ablo.weatherReports.update({ id: claim.data.id, data: { status: 'ready' } }); // guarded by the claim
 ```
+
+A claim handle minted by **another client** (or returned over HTTP) is not known
+to this proxy, so a plain `update` won't pick it up. Pass it explicitly:
+
+```ts
+await ablo.weatherReports.update({ id, data: { status: 'ready' }, claim: handle });
+```
+
+**Self-stale on a second write.** The claim's watermark is fixed at claim time
+and is **not** re-baselined as you write. So a *second* `update` under one held
+claim is stale-checked against the snapshot the claim took — which your *first*
+write already moved past — and rejects with `AbloStaleContextError` against your
+own earlier write. Re-read (and re-claim) between writes if you need to write the
+same row more than once under one claim.
 
 Claims are **enforced server-side**: if you `update`/`delete` a row that *another*
 participant holds, the commit is rejected with [`AbloClaimedError`](#errors) (`code:
@@ -364,7 +435,7 @@ try {
 
 ## Errors
 
-All extend `AbloError` (see [Errors](/errors)). Catch by `type` or
+All extend `AbloError` (`packages/sync-engine/src/errors.ts`). Catch by `type` or
 inspect the `code`.
 
 | error | `code` | thrown when | carries |
@@ -375,7 +446,7 @@ inspect the `code`.
 | `AbloClaimedError` | `claim_conflict` | An `update`/`delete` targets a row another participant holds — the server's pre-commit check rejected it. | — |
 | `AbloClaimedError` | `entity_claimed` | Same conflict, from the commit guard backstop. | — |
 | `AbloStaleContextError` | — | A guarded `update` (under a claim, or any write carrying `readAt`) targets a row that received deltas since the snapshot — your reasoning is stale. | `readAt`, `conflicts[]` |
-| `AbloValidationError` | `model_claim_not_configured` | `claim` called on a model without collaboration wiring. | — |
+| `AbloValidationError` | `model_claim_not_configured` | `claim` called on a model proxy built without the collaboration runtime — an internal/advanced construction path. The standard `Ablo({ schema, apiKey })` client enables claiming for **every** model; there is no per-model claim config to add. | — |
 | `AbloValidationError` | `entity_not_found` | The row id doesn't exist locally or on load. | — |
 
 `AbloStaleContextError.conflicts` lists the `(model, id, observedSyncId)` rows

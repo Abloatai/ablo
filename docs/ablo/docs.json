@@ -65,8 +65,11 @@
           {
             "group": "Concepts",
             "pages": [
+              "identity",
               "coordination",
+              "concurrency-convention",
               "interaction-model",
+              "schema-contract",
               "guarantees",
               "client-behavior"
             ]
@@ -129,12 +132,6 @@
             "pages": [
               "api",
               "errors"
-            ]
-          },
-          {
-            "group": "Roadmap",
-            "pages": [
-              "roadmap"
             ]
           }
         ]

@@ -86,7 +86,6 @@ Three things stay true no matter how you use Ablo:
 - [AI SDK Tool](./examples/ai-sdk-tool.md) — Put Ablo inside an AI SDK tool call.
 - [Existing Python Backend](./examples/existing-python-backend.md) — Add multiplayer and future agent writes without replacing a Python API server.
 - [Agent + Human](./examples/agent-human.md) — Yield when a human is editing the same report.
-- [Agent Scoped to One Deck](./examples/scoped-agent.md) — Scope an agent to one entity with `scope` / `parent`; realtime for just that deck.
 - [Server Agent](./examples/server-agent.md) — Schema-backed worker.
 - [Next.js](./examples/nextjs.md) — App-router setup with React bindings.
 
