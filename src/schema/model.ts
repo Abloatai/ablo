@@ -29,6 +29,11 @@ import { getFieldMeta, inferFieldMetaFromZod, type FieldMeta } from './field.js'
 import { resolvePolicy, type Tenancy, type ScopedViaRef, type PolicyInput } from './tenancy.js';
 export type { ScopedViaRef, Tenancy, PolicyInput } from './tenancy.js';
 import { DEFAULT_PLANE, type SchemaPlane } from './plane.js';
+// Axis 3 — write-conflict disposition. Pure-data type (the onStale vocabulary)
+// so it round-trips through schema serialization; the generic engine interprets
+// it (`interpretConflictAxis`) at the commit chokepoint.
+import type { ConflictAxis } from '../policy/types.js';
+export type { ConflictAxis } from '../policy/types.js';
 
 /** Normalize the `entityRoles` option (single | array | undefined) to an array. */
 function normalizeEntityRoles(
@@ -174,6 +179,29 @@ export interface ModelOptions {
    * ```
    */
   groups?: GroupsInput;
+
+  /**
+   * **Axis 3 — write-conflict disposition, per committer kind.** Decides what
+   * happens when a commit collides with a foreign claim or a stale snapshot on
+   * this model — orthogonal to {@link policy} (read access) and {@link groups}
+   * (delta routing). A plain map keyed by the COMMITTER's participant kind
+   * (`user` / `agent` / `system`), with the `onStale` vocabulary as values:
+   *
+   * - `'overwrite'` — the write wins; that committer is never blocked.
+   * - `'reject'`    — the write is refused; that committer yields.
+   * - `'notify'`    — hold the write and hand back the current value so the
+   *                   committer re-reads and re-applies (stale writes only).
+   *
+   * An omitted kind falls through to the engine default (reject; honor
+   * `onStale: 'notify'`). It is pure data (serializes through the schema
+   * registry to the server) and the generic engine interprets it — so e.g.
+   *
+   * ```ts
+   * // "a human's edit always wins (never blocked); an agent yields"
+   * conflict: { user: 'overwrite', agent: 'reject' }
+   * ```
+   */
+  conflict?: ConflictAxis;
 
   /**
    * Whether clients may issue CREATE/UPDATE/DELETE mutations for this
@@ -342,6 +370,9 @@ export interface ModelDef<
   readonly grants?: GrantsRef;
   /** Explicit non-relational record→group roles (normalized to an array). See {@link ModelOptions.entityRoles}. */
   readonly entityRoles?: readonly EntityRole[];
+  /** Axis 3 — declared write-conflict disposition per committer kind. Already
+   *  canonical pure data (unlike `policy`, no resolve step). See {@link ModelOptions.conflict}. */
+  readonly conflict?: ConflictAxis;
   /** Whether wire-level CREATE/UPDATE/DELETE is allowed. See {@link ModelOptions.mutable}. */
   readonly mutable?: boolean;
   /** Defer MobX setup until first observer access. See {@link ModelOptions.lazyObservable}. */
@@ -431,6 +462,9 @@ export function model<
     scope: options?.groups?.root,
     grants: options?.groups?.grants,
     entityRoles: normalizeEntityRoles(options?.groups?.roles),
+    // Axis 3 — already canonical pure data (a per-kind disposition map), so it
+    // passes through verbatim; no resolve step like `resolvePolicy`.
+    conflict: options?.conflict,
     mutable: options?.mutable ?? true,
     lazyObservable: options?.lazyObservable,
     computed: options?.computed,

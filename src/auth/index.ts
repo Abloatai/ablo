@@ -143,6 +143,13 @@ export interface MintUserSessionRequest {
    *  `Stripe-Account` analogue. Requires the `sk_` to carry
    *  `ephemeral:mint-any-org`; omit to mint into the key's own org. */
   readonly organizationId?: string;
+  /** FIRST-PARTY SHARED SCHEMA: bind the minted `ek_` to a schema owner-org +
+   *  project so SCHEMA resolves org-independently (one schema for all the
+   *  integrator's end-user orgs), while DATA stays scoped to `organizationId`.
+   *  Requires the `sk_` to carry `ephemeral:mint-any-org`. Omit for the normal
+   *  per-org behaviour (every external BYO customer). */
+  readonly schemaProjectId?: string;
+  readonly schemaOwnerOrgId?: string;
   readonly syncGroups?: readonly string[];
   readonly ttlSeconds: number;
   readonly label?: string;
@@ -194,6 +201,8 @@ export async function mintUserSessionKey(
       body: JSON.stringify({
         user: { id: options.userId },
         ...(options.organizationId ? { organizationId: options.organizationId } : {}),
+        ...(options.schemaProjectId ? { schemaProjectId: options.schemaProjectId } : {}),
+        ...(options.schemaOwnerOrgId ? { schemaOwnerOrgId: options.schemaOwnerOrgId } : {}),
         ...(options.syncGroups ? { syncGroups: options.syncGroups } : {}),
         ttlSeconds: options.ttlSeconds,
         ...(options.label ? { label: options.label } : {}),

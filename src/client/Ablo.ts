@@ -3182,6 +3182,7 @@ export namespace Ablo {
     export type Operation = _Policy.ConflictOperation;
     export type Decision = _Policy.ConflictDecision;
     export type Policy = _Policy.ConflictPolicy;
+    export type Axis = _Policy.ConflictAxis;
   }
 
   // ── Commit (sub-namespace — write-side cohort) ────────────────────

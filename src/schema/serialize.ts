@@ -14,9 +14,11 @@
  * What round-trips:
  *   - all model routing/scoping metadata (typename, tableName, load,
  *     mutable, the canonical `tenancy` descriptor, bootstrap hints, scope,
- *     grants, entityRoles, persist, autoFill, requiredFields, lazyObservable).
+ *     grants, entityRoles, the `conflict` disposition map, persist, autoFill,
+ *     requiredFields, lazyObservable).
  *     NOTE: the authoring sugar (`policy`/`groups`) is normalized away at
- *     `model()`-build; only the canonical wire fields cross here.
+ *     `model()`-build; only the canonical wire fields cross here. `conflict`
+ *     is already canonical pure data, so it crosses verbatim.
  *   - relations (incl. resolved `foreignKeyColumn`)
  *   - field metadata (names + type tags), from which validators are rebuilt
  *   - identity roles (already pure data)
@@ -39,6 +41,7 @@ import type {
   LoadStrategy,
   PersistOptions,
   AutoFillRule,
+  ConflictAxis,
 } from './model.js';
 import type { RelationDef, RelationType } from './relation.js';
 import {
@@ -81,6 +84,9 @@ export interface ModelJSON {
   readonly scope?: boolean | string;
   readonly grants?: GrantsRef;
   readonly entityRoles?: readonly EntityRole[];
+  /** Axis 3 — declared write-conflict disposition per committer kind. Pure data;
+   *  absent in pre-conflict-axis artifacts → undefined → engine default. */
+  readonly conflict?: ConflictAxis;
   readonly bootstrapLimit?: number;
   readonly bootstrapOrderBy?: string;
   readonly mutable?: boolean;
@@ -129,6 +135,7 @@ function modelToJSON(def: ModelDef): ModelJSON {
     scope: def.scope,
     grants: def.grants,
     entityRoles: def.entityRoles,
+    conflict: def.conflict,
     bootstrapLimit: def.bootstrapLimit,
     bootstrapOrderBy: def.bootstrapOrderBy,
     mutable: def.mutable,
@@ -241,6 +248,9 @@ function modelFromJSON(json: ModelJSON): ModelDef {
     scope: json.scope,
     grants: json.grants,
     entityRoles: json.entityRoles,
+    // Axis 3 — pure data; absent in pre-conflict-axis artifacts → undefined →
+    // the commit path falls through to the function registry / engine default.
+    conflict: json.conflict,
     mutable: json.mutable,
     lazyObservable: json.lazyObservable,
     // computed getters are closures and intentionally not serialized; a

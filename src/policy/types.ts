@@ -8,6 +8,7 @@
  */
 
 import type { ParticipantRef } from '../types/streams.js';
+import type { OnStaleMode } from '../coordination/schema.js';
 
 export type ConflictKind = 'stale_context' | 'claim_held';
 
@@ -136,14 +137,19 @@ export type ConflictPolicy = (
  * detection. This preserves the legacy always-reject default for callers that
  * don't opt into `notify`.
  */
-export const defaultPolicy: ConflictPolicy = (conflict) => {
+// Typed by its real SYNCHRONOUS shape (via `satisfies`) rather than the
+// async-permissive `ConflictPolicy` alias, so sync callers like
+// `interpretConflictAxis` and `capabilityPreemptPolicy` get a plain
+// `ConflictDecision` back (not `… | Promise<…>`). Still assignable to
+// `ConflictPolicy` everywhere it's used as a policy.
+export const defaultPolicy = ((conflict: Conflict): ConflictDecision => {
   if (conflict.kind !== 'stale_context') {
     return { action: 'reject', reason: 'claim_conflict' };
   }
   return conflict.requestedMode === 'notify'
     ? { action: 'notify', reason: 'stale_notify_hold' }
     : { action: 'reject', reason: 'stale_context' };
-};
+}) satisfies ConflictPolicy;
 
 /**
  * Capability-gated preemption. An `claim_held` conflict is PREEMPTED when the
@@ -162,4 +168,72 @@ export const capabilityPreemptPolicy: ConflictPolicy = (conflict) => {
   }
   return defaultPolicy(conflict);
 };
+
+/**
+ * **Axis 3 — declared write-conflict disposition, per committer kind.**
+ *
+ * A model declares this in its schema (`conflict: { user: 'overwrite', agent:
+ * 'reject' }`); the generic engine interprets it at the commit chokepoint. It's
+ * pure data — the same `OnStaleMode` vocabulary used by write guards
+ * (`'reject' | 'overwrite' | 'notify'`) — so it serializes through the schema
+ * registry to the schema-agnostic server, which names no app model.
+ *
+ * Keys are the COMMITTER's participant kind (server-derived, forge-proof): an
+ * omitted kind falls through to the engine default. So `{ user: 'overwrite',
+ * agent: 'reject' }` reads "a human's write wins (never blocked); an agent's
+ * write yields", and `system` (unlisted) takes the default.
+ */
+export interface ConflictAxis {
+  /** What happens when a human (`user` session) commits into a conflict. */
+  readonly user?: OnStaleMode;
+  /** What happens when an AI `agent` commits into a conflict. */
+  readonly agent?: OnStaleMode;
+  /** What happens when a `system` / automation actor commits into a conflict. */
+  readonly system?: OnStaleMode;
+}
+
+/**
+ * Interpret a declared {@link ConflictAxis} for a concrete conflict — pure and
+ * synchronous (no I/O), so it runs on either side of the schema-agnostic
+ * boundary. Looks up the committer's kind and maps the declared `OnStaleMode`:
+ *
+ *   - undefined   → the engine default (`defaultPolicy`: reject; honor
+ *                   `onStale: 'notify'` on a stale write)
+ *   - `overwrite` → `allow` — the write wins / the committer is never blocked
+ *   - `reject`    → `reject` — the committer yields
+ *   - `notify`    → on `stale_context`: notify + hold (re-read & re-apply);
+ *                   on `claim_held`: notify has no held op to reconcile against
+ *                   (see {@link ConflictDecision} `notify`), so degrade to
+ *                   `reject` rather than silently allowing a claimed-row write.
+ *
+ * NOTE: this is a generic interpretation only. Server-side invariants (e.g. an
+ * agent may never bypass a foreign claim) are enforced where the decision is
+ * applied, not here.
+ */
+export function interpretConflictAxis(
+  axis: ConflictAxis,
+  conflict: Conflict,
+): ConflictDecision {
+  const mode = axis[conflict.committer.kind];
+  if (mode === undefined) return defaultPolicy(conflict);
+  switch (mode) {
+    case 'overwrite':
+      return { action: 'allow', note: 'conflict:overwrite' };
+    case 'reject':
+      return {
+        action: 'reject',
+        reason: conflict.kind === 'claim_held' ? 'claim_conflict' : 'stale_context',
+      };
+    case 'notify':
+      return conflict.kind === 'stale_context'
+        ? { action: 'notify', reason: 'stale_notify_hold' }
+        : { action: 'reject', reason: 'claim_conflict' };
+    default: {
+      // Exhaustiveness backstop: a future `OnStaleMode` member surfaces as a
+      // localized compile error here, not a missing-return at the signature.
+      const _exhaustive: never = mode;
+      return _exhaustive;
+    }
+  }
+}
 

@@ -97,7 +97,24 @@ export {
   type PersistOptions,
   type RelationRecord,
   type GrantsRef,
+  type ConflictAxis,
 } from './model.js';
+
+// Axis 3 — coordination authoring helpers for the `conflict` axis (composable
+// disposition fns + a `cn`-style combinator).
+export {
+  coordination,
+  humansOverwrite,
+  humansReject,
+  humansNotify,
+  agentsOverwrite,
+  agentsReject,
+  agentsNotify,
+  systemOverwrite,
+  systemReject,
+  systemNotify,
+  type ConflictRule,
+} from './coordination.js';
 
 // Claim-first shorthand: `mutable.lazy({...})` and friends. Read the
 // safety posture and load shape off the verb tokens; everything else

@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.16.0
+
+### Minor Changes
+
+- **Axis 3 — declare write-conflict behaviour in the schema (new).** A model can now
+  state what happens when a commit collides with a foreign claim or a stale snapshot —
+  per committer kind (`user` / `agent` / `system`) — right next to its fields, using the
+  same `overwrite | reject | notify` vocabulary as the `onStale` write guard. It is a
+  third axis, orthogonal to `policy` (read access) and `groups` (delta routing).
+
+  - **`conflict` on `model()`** — a plain, serializable disposition map. Pure data, so it
+    round-trips through the schema registry to the server; the generic engine interprets it
+    at the commit chokepoint (no per-model logic in the engine).
+
+    ```ts
+    // "a human's edit always wins (never blocked); an agent yields"
+    conflict: { user: 'overwrite', agent: 'reject' }
+    ```
+
+  - **Composable authoring helpers (new, from `@abloatai/ablo/schema`)** — disposition
+    functions plus a `cn`/`cx`-style combinator, so conflict policy reads like the rest of
+    the DSL (`relation.belongsTo()`) and like modern config (`plugins: [admin(), …]`):
+
+    ```ts
+    import { coordination, humansOverwrite, agentsReject } from '@abloatai/ablo/schema';
+
+    conflict: coordination(humansOverwrite(), agentsReject())
+    // → { user: 'overwrite', agent: 'reject' }
+    ```
+
+    Exports: `coordination`, `humansOverwrite` / `humansReject` / `humansNotify`,
+    `agentsOverwrite` / `agentsReject` / `agentsNotify`,
+    `systemOverwrite` / `systemReject` / `systemNotify`, and the `ConflictRule` type.
+
+  - An omitted committer kind falls through to the engine default (reject; honor
+    `onStale: 'notify'`), so this is fully additive — existing schemas are unchanged.
+    New public types `ConflictAxis` (also `Ablo.Conflict.Axis`) and the
+    `interpretConflictAxis` interpreter are exported for custom policy composition.
+
+- **First-party shared schema for ephemeral keys (new).** `mintUserSessionKey` now accepts
+  `schemaProjectId` + `schemaOwnerOrgId`, binding the minted `ek_` to a schema owner-org +
+  project so **schema** resolves org-independently (one schema serves all of an integrator's
+  end-user orgs) while **data** stays scoped to `organizationId`. Requires the `sk_` to carry
+  `ephemeral:mint-any-org`; omit both for the existing per-org (BYO) behaviour.
+
 ## 0.15.1
 
 ### Patch Changes

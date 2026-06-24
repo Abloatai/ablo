@@ -140,7 +140,7 @@ export {
 // (reject-on-stale) is already applied server-side, so you only import it
 // to COMPOSE a custom policy. Leave it alone and stale writes are rejected
 // safely by default. Type counterparts live under `Ablo.Conflict.*`.
-export { defaultPolicy, capabilityPreemptPolicy } from './policy/index.js';
+export { defaultPolicy, capabilityPreemptPolicy, interpretConflictAxis } from './policy/index.js';
 
 // Typed error hierarchy — Stripe-style. One import gets every class
 // consumers need to discriminate failures (`e instanceof AbloX` or
