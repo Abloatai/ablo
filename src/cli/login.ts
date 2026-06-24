@@ -32,15 +32,30 @@ import {
 import { brand } from './theme';
 
 const CLIENT_ID = 'ablo-cli';
+
+const stripSlash = (u: string) => u.replace(/\/+$/, '');
+
 /**
- * Dashboard origin (Better Auth + /cli + provision-key live here). MUST be the
- * canonical `www` host: the apex 307-redirects to www, and `fetch` strips the
- * `Authorization` header on that cross-origin hop — so the authenticated
- * provision call silently arrives tokenless and 401s while every other step
- * (no auth header) works. Symptom: browser says "Approved", CLI says
- * "Could not provision a key".
+ * The device flow spans TWO origins now that Better Auth runs as its own
+ * service:
+ *
+ * - AUTH_URL — the identity server (`auth.abloatai.com`). Owns the RFC 8628
+ *   device endpoints (`/api/auth/device/*`). It's in-VPC, so it can reach the
+ *   private Aurora the session lives in — which is exactly why these calls can
+ *   no longer hit the Vercel `www` frontend (it 404s / can't reach the DB).
+ *   Override with `ABLO_AUTH_URL` (e.g. `http://localhost:8081` in dev).
+ *
+ * - DASHBOARD_URL — the product dashboard (`www.abloatai.com`, apps/sync-web).
+ *   Serves the human approval page (`/cli`), the sign-up page, and the
+ *   key-handoff route (`/api/cli/provision-key`) — none of which exist on the
+ *   headless auth server. MUST be the canonical `www` host: the apex
+ *   307-redirects to www and `fetch` strips the `Authorization` header on that
+ *   cross-origin hop, so the authenticated provision call would silently arrive
+ *   tokenless and 401 (symptom: browser says "Approved", CLI says "Could not
+ *   provision a key"). Override with `ABLO_DASHBOARD_URL`.
  */
-const AUTH_URL = (process.env.ABLO_AUTH_URL ?? 'https://www.abloatai.com').replace(/\/+$/, '');
+const AUTH_URL = stripSlash(process.env.ABLO_AUTH_URL ?? 'https://auth.abloatai.com');
+const DASHBOARD_URL = stripSlash(process.env.ABLO_DASHBOARD_URL ?? 'https://www.abloatai.com');
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -143,13 +158,19 @@ async function deviceLogin(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
   const code = (await codeRes.json()) as DeviceCodeResponse;
-  // Sign-up opens the signup page (which returns to /cli after creating an org);
-  // log-in opens /cli directly (it bounces to sign-in if no session).
+  // The approval page + sign-up live on the DASHBOARD host, never the auth
+  // server. We build the URL ourselves rather than trusting the server's
+  // `verification_uri_complete`: the device plugin resolves its relative
+  // `verificationUri: '/cli'` against the auth server's baseURL, which would
+  // send the browser to `auth.abloatai.com/cli` — a 404 (that page is a
+  // sync-web Next.js route). Sign-up opens the signup page (which returns to
+  // /cli after creating an org); log-in opens /cli directly (it bounces to
+  // sign-in if no session).
   const approvePath = `/cli?user_code=${code.user_code}`;
   const url =
     account === 'signup'
-      ? `${AUTH_URL}/signup?next=${encodeURIComponent(approvePath)}`
-      : code.verification_uri_complete ?? code.verification_uri;
+      ? `${DASHBOARD_URL}/signup?next=${encodeURIComponent(approvePath)}`
+      : `${DASHBOARD_URL}${approvePath}`;
 
   note(`${pc.bold(code.user_code)}\n\n${pc.dim(url)}`, 'Approve in your browser');
   openBrowser(url);
@@ -208,7 +229,7 @@ async function deviceLogin(argv: readonly string[]): Promise<void> {
   s.message(
     targetProject ? `Provisioning keys for ${targetProject}…` : 'Provisioning a sandbox key…',
   );
-  const provRes = await fetch(`${AUTH_URL}/api/cli/provision-key`, {
+  const provRes = await fetch(`${DASHBOARD_URL}/api/cli/provision-key`, {
     method: 'POST',
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
     // Scope the minted keys to the chosen project (`--project`/active), with
@@ -224,7 +245,7 @@ async function deviceLogin(argv: readonly string[]): Promise<void> {
     s.stop('Could not provision a key.');
     const reason = provRes ? ((await provRes.json().catch(() => ({}))) as ProvisionResponse).error : undefined;
     if (reason) log.error(reason);
-    else if (provRes) log.error(`Key provisioning returned ${provRes.status} from ${AUTH_URL}/api/cli/provision-key.`);
+    else if (provRes) log.error(`Key provisioning returned ${provRes.status} from ${DASHBOARD_URL}/api/cli/provision-key.`);
     log.error(
       `The browser approval succeeded but the key handoff failed. Try again, or grab a ${pc.bold('sk_test_')} key from the dashboard and set ${pc.bold('ABLO_API_KEY')}.`,
     );

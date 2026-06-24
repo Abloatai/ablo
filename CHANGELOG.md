@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.1
+
+### Patch Changes
+
+- **Fix `ablo login` against the standalone auth server.** The device flow now
+  targets two origins instead of one: the RFC 8628 device endpoints
+  (`/api/auth/device/*`) go to the identity server (`auth.abloatai.com`, override
+  `ABLO_AUTH_URL`), while the human approval page (`/cli`), sign-up, and the
+  key-handoff route (`/api/cli/provision-key`) go to the dashboard host
+  (`www.abloatai.com`, new override `ABLO_DASHBOARD_URL`). Previously every step
+  ran against `www`, where the Better Auth device endpoints no longer resolve —
+  producing "Couldn't start login… Is the dashboard reachable?". The CLI now also
+  builds the approval URL itself rather than trusting the server's
+  `verification_uri`, which (being a relative `/cli`) resolved against the auth
+  server's origin to a 404.
+
 ## 0.16.0
 
 ### Minor Changes
@@ -9,7 +25,6 @@
   per committer kind (`user` / `agent` / `system`) — right next to its fields, using the
   same `overwrite | reject | notify` vocabulary as the `onStale` write guard. It is a
   third axis, orthogonal to `policy` (read access) and `groups` (delta routing).
-
   - **`conflict` on `model()`** — a plain, serializable disposition map. Pure data, so it
     round-trips through the schema registry to the server; the generic engine interprets it
     at the commit chokepoint (no per-model logic in the engine).
@@ -26,7 +41,7 @@
     ```ts
     import { coordination, humansOverwrite, agentsReject } from '@abloatai/ablo/schema';
 
-    conflict: coordination(humansOverwrite(), agentsReject())
+    conflict: coordination(humansOverwrite(), agentsReject());
     // → { user: 'overwrite', agent: 'reject' }
     ```
 
