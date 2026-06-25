@@ -576,6 +576,7 @@ export type {
   ClaimLookupParams,
   ClaimReorderParams,
   Claim,
+  HeldClaim,
   ModelOperations,
 } from './createModelProxy.js';
 import type {

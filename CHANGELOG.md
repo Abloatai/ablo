@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.20.1
+
+### Patch Changes
+
+- Fix `await using held = await ablo.<model>.claim(...)` failing to typecheck. `claim()` now returns a `HeldClaim<T>` — a `Claim<T>` with `data`, `release`, `revoke`, and the async disposer made `Required` (they're optional on the base `Claim<T>`, which also models observed peer claims that lack them). A held claim is therefore assignable to `AsyncDisposable`, so the `await using` auto-release pattern compiles. Observed claim surfaces still return the looser `Claim<T>`. `HeldClaim` is exported.
+
 ## 0.20.0
 
 ### Minor Changes

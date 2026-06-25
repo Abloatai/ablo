@@ -656,3 +656,15 @@ export interface Claim<T = Record<string, unknown>> {
   /** Auto-release on `await using` scope exit. Present only on a held claim. */
   [Symbol.asyncDispose]?(): PromiseLike<void>;
 }
+
+/**
+ * A claim you HOLD — the resolved value of `ablo.<model>.claim(...)`. Same
+ * composition pattern as {@link PresenceTarget}: a `Claim<T>` with the
+ * lease-control members made `Required` (they're optional on the base because it
+ * also models observed peer claims, which lack them). Narrowing the return type
+ * is what makes `await using held = await ablo.x.claim(...)` typecheck —
+ * `Claim<T>`'s optional `[Symbol.asyncDispose]` is not assignable to
+ * `AsyncDisposable`.
+ */
+export type HeldClaim<T = Record<string, unknown>> = Claim<T> &
+  Required<Pick<Claim<T>, 'data' | 'release' | 'revoke' | typeof Symbol.asyncDispose>>;

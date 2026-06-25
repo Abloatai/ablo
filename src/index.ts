@@ -97,6 +97,7 @@ export type {
   ClaimLookupParams,
   ClaimReorderParams,
   Claim,
+  HeldClaim,
   ModelOperations,
 } from './client/Ablo.js';
 export type { AbloPersistence } from './client/persistence.js';

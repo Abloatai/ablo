@@ -39,6 +39,7 @@ import { ModelScope } from '../types/index.js';
 import type {
   Duration,
   Claim,
+  HeldClaim,
   ClaimWaitOptions,
   ClaimTarget,
   Snapshot,
@@ -295,7 +296,7 @@ export interface ClaimReorderParams<T = Record<string, unknown>>
  */
 // THE one claim handle lives in `../types/streams` (canonical). Re-exported
 // here so existing `from '.../createModelProxy'` import paths keep working.
-export type { Claim };
+export type { Claim, HeldClaim };
 
 export type ClaimOptions<T = Record<string, unknown>> = ClaimTargetOptions<T>;
 
@@ -368,11 +369,11 @@ export type AwaitedClaimMethod<F> = F extends (...args: infer A) => infer R
 export interface ClaimApi<T> extends ClaimReadApi<T> {
   /**
    * Take a claim and get an explicit held-work handle back. Returns a
-   * {@link Claim} — `data` (and `readAt`) are guaranteed present
-   * because this door always re-reads the row under the lease, so callers use
-   * `handle.data` directly without a guard.
+   * {@link HeldClaim} — `data`, `release`, `revoke`, and the async disposer are
+   * guaranteed present (this door always re-reads the row under the lease), so
+   * callers use `handle.data` directly and `await using` works without a guard.
    */
-  (params: ClaimParams<T>): Promise<Claim<T>>;
+  (params: ClaimParams<T>): Promise<HeldClaim<T>>;
 }
 
 export interface ModelRetrieveParams extends ServerRetrieveOptions {
@@ -673,7 +674,7 @@ export function createModelProxy<T, C>(
 
   const takeClaim = async (
     params: ClaimParams<T>,
-  ): Promise<Claim<T>> => {
+  ): Promise<HeldClaim<T>> => {
     if (!collaboration) {
       throw new AbloValidationError(
         `Model "${schemaKey}" was built without the collaboration runtime, so claim() is unavailable here. Claiming needs no per-model config — use the standard Ablo({ schema, apiKey }) client and every model is claimable.`,
@@ -815,7 +816,7 @@ export function createModelProxy<T, C>(
     };
   };
 
-  const claim = (params: ClaimParams<T>): Promise<Claim<T>> =>
+  const claim = (params: ClaimParams<T>): Promise<HeldClaim<T>> =>
     takeClaim(params);
 
   // `claim` is a callable namespace: invoke it to take a claim, reach its
