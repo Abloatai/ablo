@@ -314,6 +314,66 @@ export function modeFromKey(key: string): Mode | undefined {
   return undefined;
 }
 
+export interface KeyMismatchDiagnostic {
+  code: 'key_mode_mismatch' | 'env_key_overrides_stored';
+  message: string;
+}
+
+export interface EffectiveKeyDiagnostic {
+  keyPrefix: string | null;
+  keySource: 'env' | 'stored' | null;
+  keyMode: Mode | null;
+  storedKeyPrefix: string | null;
+  keyMatchesActiveMode: boolean | null;
+  keyMatchesStoredActiveKey: boolean | null;
+  keyMismatch: KeyMismatchDiagnostic | null;
+}
+
+function prefix(key: string | undefined): string | null {
+  return key ? key.slice(0, 12) : null;
+}
+
+export function describeEffectiveKey(
+  activeMode: Mode,
+  envKey: string | undefined,
+  storedEntry: KeyEntry | undefined,
+): EffectiveKeyDiagnostic {
+  const effectiveKey = envKey ?? storedEntry?.apiKey;
+  const keySource = envKey ? 'env' : storedEntry ? 'stored' : null;
+  const keyMode = effectiveKey ? modeFromKey(effectiveKey) ?? null : null;
+  const keyMatchesActiveMode = keyMode ? keyMode === activeMode : null;
+  const keyMatchesStoredActiveKey =
+    envKey && storedEntry?.apiKey ? envKey === storedEntry.apiKey : null;
+
+  let keyMismatch: KeyMismatchDiagnostic | null = null;
+  if (keyMode && keyMode !== activeMode) {
+    const sourceLabel = envKey ? 'ABLO_API_KEY' : 'stored active key';
+    keyMismatch = {
+      code: 'key_mode_mismatch',
+      message:
+        `${sourceLabel} is a ${keyMode} key but the CLI mode is ${activeMode}. ` +
+        `Requests use ${sourceLabel} (${prefix(effectiveKey)}...), not the active CLI mode.`,
+    };
+  } else if (envKey && storedEntry?.apiKey && envKey !== storedEntry.apiKey) {
+    keyMismatch = {
+      code: 'env_key_overrides_stored',
+      message:
+        `ABLO_API_KEY (${prefix(envKey)}...) overrides the stored ${activeMode} key ` +
+        `(${prefix(storedEntry.apiKey)}...).`,
+    };
+  }
+
+  return {
+    keyPrefix: prefix(effectiveKey),
+    keySource,
+    keyMode,
+    storedKeyPrefix: prefix(storedEntry?.apiKey),
+    keyMatchesActiveMode,
+    keyMatchesStoredActiveKey,
+    keyMismatch,
+  };
+}
+
 /**
  * Normalize a user-supplied mode word.
  */

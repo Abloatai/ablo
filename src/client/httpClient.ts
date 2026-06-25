@@ -38,7 +38,7 @@ import type {
   AbloSession,
 } from './Ablo.js';
 import type {
-  ClaimHandle,
+  Claim,
   ClaimLookupParams,
   ClaimParams,
   ClaimReorderParams,

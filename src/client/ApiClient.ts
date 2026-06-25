@@ -24,7 +24,9 @@ import {
   resolveBaseURL,
   resolveBootstrapBaseUrl,
   resolveDatabaseUrl,
+  warnIfCliKeyMismatch,
   warnIfDatabaseUrlEnvIgnored,
+  warnIfDatabaseUrlDeprecated,
 } from './auth.js';
 import { registerDataSource } from './registerDataSource.js';
 import { toSeconds } from '../utils/duration.js';
@@ -50,7 +52,6 @@ import type {
 import { mintSession } from './sessionMint.js';
 import type { SchemaRecord } from '../schema/schema.js';
 import type {
-  ClaimHandle,
   ClaimLookupParams,
   ClaimOptions,
   ClaimParams,
@@ -67,7 +68,7 @@ export type AbloApiClientOptions = Omit<AbloOptions, 'schema'> & {
 };
 
 export interface AbloApiClaims {
-  create(options: ClaimCreateOptions): Promise<ClaimHandle>;
+  create(options: ClaimCreateOptions): Promise<Claim>;
   list(target?: Partial<ModelTarget>): Promise<readonly ModelClaim[]>;
   waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void>;
 }
@@ -244,18 +245,6 @@ interface ClaimCreateResponse {
   readonly position?: number;
 }
 
-/**
- * The `/v1/claims` and model-query routes still emit the wire field `action`
- * for the claim phase; the public `Claim` / `ModelClaim` expose it as `reason`.
- * Heal on read so the SDK shape is consistent without a coordinated server
- * deploy — `reason ?? action`. When the server adopts `reason`, this is a no-op.
- */
-function healClaimPhase<C extends { reason: string }>(claim: C): C {
-  const raw = claim as C & { readonly action?: string };
-  if (raw.reason !== undefined) return claim;
-  return { ...claim, reason: raw.action ?? 'editing' };
-}
-
 interface CapabilityCreateResponse {
   readonly capabilityId?: string;
   readonly id?: string;
@@ -315,6 +304,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   // Nudge (once) if a stray DATABASE_URL is in the env but `databaseUrl` wasn't
   // passed — no logger on this path, so the helper falls back to console.warn.
   warnIfDatabaseUrlEnvIgnored(authInput);
+  warnIfDatabaseUrlDeprecated(authInput);
+  void warnIfCliKeyMismatch(authInput);
   assertBrowserSafety({
     apiKey: configuredApiKey,
     databaseUrl: configuredDatabaseUrl,
@@ -516,8 +507,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       { method: 'GET' },
     );
     return {
-      active: (body.claims ?? []).map(healClaimPhase),
-      queue: (body.queue ?? []).map(healClaimPhase),
+      active: body.claims ?? [],
+      queue: body.queue ?? [],
     };
   }
 
@@ -633,7 +624,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         body: JSON.stringify({
           clientTxId,
           idempotencyKey: clientTxId,
-          claim: normalizeClaimId(commitOptions.claimRef) ?? claim?.claimId,
+          claim: normalizeClaimId(commitOptions.claimRef) ?? claim?.id,
           operations,
         }),
       });
@@ -774,15 +765,14 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
 
 
   const claims: AbloApiClaims = {
-    async create(claimOptions: ClaimCreateOptions): Promise<ClaimHandle> {
+    async create(claimOptions: ClaimCreateOptions): Promise<Claim> {
       const claimId = createClaimId();
       const body = await requestJson<ClaimCreateResponse>('/v1/claims', {
         method: 'POST',
         body: JSON.stringify({
           claimId,
           target: claimOptions.target,
-          // Wire field stays `action`; public option is `reason`.
-          action: claimOptions.reason,
+          reason: claimOptions.reason,
           ttl: claimOptions.ttl,
           queue: claimOptions.queue,
         }),
@@ -814,9 +804,16 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
 
       return {
         object: 'claim',
-        claimId: id,
+        id,
         reason: claimOptions.reason,
-        target: claimOptions.target,
+        target: {
+          type: claimOptions.target.model,
+          id: claimOptions.target.id,
+          ...(claimOptions.target.field ? { field: claimOptions.target.field } : {}),
+          ...(claimOptions.target.path ? { path: claimOptions.target.path } : {}),
+          ...(claimOptions.target.range ? { range: claimOptions.target.range } : {}),
+          ...(claimOptions.target.meta ? { meta: claimOptions.target.meta } : {}),
+        },
         release,
         revoke: () => {
           void release().catch(() => {});
@@ -884,7 +881,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     return {
       data,
       stamp: query.stamp ?? 0,
-      claims: (query.claims ?? []).map(healClaimPhase),
+      claims: query.claims ?? [],
     };
   }
 
@@ -931,13 +928,13 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       typeof options?.claim === 'object' &&
       options?.claim !== null &&
       (options.claim as { object?: unknown }).object === 'claim' &&
-      typeof (options.claim as { claimId?: unknown }).claimId === 'string'
-        ? (options.claim as ClaimHandle)
+      typeof (options.claim as { id?: unknown }).id === 'string'
+        ? (options.claim as Claim)
         : undefined;
     const readAt = options?.readAt ?? claimHandle?.readAt;
     const requestBody: Record<string, unknown> = {
       idempotencyKey: clientTxId,
-      claim: normalizeClaimId(options?.claimRef) ?? claimHandle?.claimId,
+      claim: normalizeClaimId(options?.claimRef) ?? claimHandle?.id,
       onStale:
         options?.onStale ?? (claimHandle?.readAt !== undefined ? 'reject' : undefined),
       readAt,
@@ -968,11 +965,11 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     // request/response, so a stateless agent participates in coordination too.
     const claimPath = (id: string): string =>
       `/v1/models/${encodeURIComponent(name)}/${encodeURIComponent(id)}/claim`;
-    const isClaimHandle = (value: unknown): value is ClaimHandle<T> =>
+    const isClaimHandle = (value: unknown): value is Claim<T> =>
       typeof value === 'object' &&
       value !== null &&
       (value as { object?: unknown }).object === 'claim' &&
-      typeof (value as { claimId?: unknown }).claimId === 'string' &&
+      typeof (value as { id?: unknown }).id === 'string' &&
       typeof (value as { release?: unknown }).release === 'function';
     const claimMeta = (options: ClaimOptions<T> | undefined): Record<string, unknown> | undefined => {
       if (!options?.description) return options?.meta;
@@ -988,8 +985,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       }>(claimPath(params.id), {
         method: 'POST',
         body: JSON.stringify({
-          // Wire field stays `action`; public option is `reason`.
-          action: params.reason ?? 'editing',
+          reason: params.reason ?? 'editing',
           ...(params.ttl !== undefined ? { ttl: params.ttl } : {}),
           ...(params.description !== undefined ? { description: params.description } : {}),
           ...(claimMeta(params) ? { meta: claimMeta(params) } : {}),
@@ -1005,24 +1001,24 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           { code: 'claim_queued' },
         );
       }
-      return body.claim?.id ?? body.id ?? body.claimId ?? createClaimId();
+      return body.claim?.id ?? body.id ?? body.id ?? createClaimId();
     };
-    const releaseClaim = (params: ClaimLookupParams<T> | ClaimHandle<T>): Promise<void> =>
+    const releaseClaim = (params: ClaimLookupParams<T> | Claim<T>): Promise<void> =>
       requestJson<unknown>(
         claimPath(isClaimHandle(params) ? params.target.id : params.id),
         { method: 'DELETE' },
       ).then(() => undefined);
 
-    async function claimImpl(params: ClaimParams<T>): Promise<ClaimHandle<T>> {
+    async function claimImpl(params: ClaimParams<T>): Promise<Claim<T>> {
       const claimId = await acquireClaim(params);
       const { data, stamp } = await retrieveModel<T>(name, { id: params.id });
       const release = () => releaseClaim(params);
       return {
         object: 'claim',
-        claimId,
+        id: claimId,
         readAt: stamp,
         target: {
-          model: name,
+          type: name,
           id: params.id,
           ...(params.field ? { field: params.field } : {}),
           ...(params.path ? { path: params.path } : {}),
@@ -1051,13 +1047,13 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       state: async (params: ClaimLookupParams<T>): Promise<Claim | null> => {
         const res = await claimsForEntity(params);
         const first = res.claims?.[0];
-        return first ? healClaimPhase(first) : null;
+        return first ?? null;
       },
       queue: async (
         params: ClaimLookupParams<T>,
       ): Promise<{ readonly object: 'list'; readonly data: readonly Claim[] }> => {
         const res = await claimsForEntity(params);
-        return { object: 'list', data: (res.queue ?? []).map(healClaimPhase) };
+        return { object: 'list', data: res.queue ?? [] };
       },
       reorder: async (params: ClaimReorderParams<T>): Promise<void> => {
         await requestJson<unknown>(`${claimPath(params.id)}/reorder`, {
@@ -1078,7 +1074,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       if (!claimInput) return run(input);
 
       if (isClaimHandle(claimInput)) {
-        return run({ ...input, claimRef: { id: claimInput.claimId }, claim: undefined });
+        return run({ ...input, claimRef: { id: claimInput.id }, claim: undefined });
       }
 
       const claimId = await acquireClaim({ id, ...claimInput });

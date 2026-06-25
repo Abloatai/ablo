@@ -217,9 +217,13 @@ function bailIfCancelled<T>(value: T | symbol): asserts value is T {
 // sane default, and no prompt is shown. Flags also override in interactive mode.
 const INIT_FRAMEWORKS = ['nextjs', 'vite', 'remix', 'vanilla'];
 const INIT_AUTHS = ['apikey', 'firebase', 'auth0', 'clerk', 'supabase', 'betterauth', 'jwt'];
-// 'datasource' is accepted as a legacy alias for 'endpoint'.
-const INIT_STORAGES = ['direct', 'endpoint', 'datasource'];
-type InitStorage = 'direct' | 'endpoint';
+// Your data always lives in YOUR database — Ablo hosts only the transaction log
+// (sync_deltas) + coordination, never your rows. 'endpoint' (signed Data Source) is
+// the path; 'datasource' is its legacy alias. 'direct' (the `databaseUrl` connector
+// that lets Ablo dial into your DB) is DEPRECATED — accepted as a flag for
+// back-compat but no longer the default. See stripe-shaped-storage-posture.md.
+const INIT_STORAGES = ['endpoint', 'direct', 'datasource'];
+type InitStorage = 'endpoint' | 'direct';
 
 interface InitOptions {
   readonly yes: boolean;
@@ -408,22 +412,21 @@ async function init(args: readonly string[] = []) {
     }),
   );
 
-  // Your database is the system of record — Ablo never hosts data, so the only
-  // choice is HOW Ablo reaches your Postgres: 'direct' (databaseUrl on the
-  // client, the canonical default) or 'endpoint' (the connection string never
-  // leaves your app; Ablo calls a signed Data Source route instead).
-  // 'datasource' is the legacy flag spelling of 'endpoint'.
-  const storageChoice = await chooseOption('storage', opts.storage, 'direct', INIT_STORAGES, interactive, () =>
-    select({
-      message: 'How should Ablo reach your database?',
-      initialValue: 'direct',
-      options: [
-        { value: 'direct', label: 'Connection string (DATABASE_URL) — recommended' },
-        { value: 'endpoint', label: 'Signed endpoint in my app (credentials never leave it)' },
-      ],
-    }),
+  // Your data lives in your database; Ablo hosts the transaction log. Writes
+  // materialize through a signed Data Source endpoint your app exposes — that's the
+  // one path, so there's nothing to ask. (An explicit `--storage direct` is still
+  // honored for existing projects.)
+  const storageChoice = await chooseOption('storage', opts.storage, 'endpoint', INIT_STORAGES, false, () =>
+    Promise.resolve('endpoint'),
   );
   const storage: InitStorage = storageChoice === 'datasource' ? 'endpoint' : (storageChoice as InitStorage);
+  if (storage === 'direct') {
+    note(
+      '`--storage direct` uses the deprecated databaseUrl connector. The signed Data\n' +
+        'Source endpoint is the supported path.',
+      pc.yellow('Deprecated'),
+    );
+  }
 
   // The agent teammate is the headline example — defaults to yes.
   const agent = await chooseBool(opts.agent, true, interactive, () =>
@@ -658,11 +661,10 @@ export const schema = defineSchema({
 }
 
 function generateSyncConfig(auth: string, storage: InitStorage): string {
-  // Direct mode: the client carries databaseUrl — Ablo registers the connection
-  // and rows land in YOUR Postgres. Endpoint mode must omit it (the signed Data
-  // Source route is the connection; registering both would double-connect).
+  // Your DB lives behind a signed Data Source route, so the client holds no
+  // connection string.
   const databaseLine = storage === 'direct'
-    ? `\n  databaseUrl: process.env.DATABASE_URL, // your Postgres — rows live here, never with Ablo`
+    ? `\n  databaseUrl: process.env.DATABASE_URL, // deprecated direct connector`
     : '';
   const authLine = auth === 'apikey'
     ? ''
@@ -681,11 +683,10 @@ function generateSyncConfig(auth: string, storage: InitStorage): string {
   return `import Ablo from '@abloatai/ablo';
 import { schema } from './schema';
 
-// SERVER-ONLY client — it holds your \`sk_\` key (and in direct mode your
-// database URL). Use it from server code: the agent script and the
-// /api/ablo-session route. Do NOT import this into a browser ('use client')
-// component; the browser uses app/providers.tsx, which authenticates via the
-// session route and never touches the key or the database URL.
+// SERVER-ONLY client — it holds your \`sk_\` key. Use it from server code: the
+// agent script and the /api/ablo-session route. Do NOT import this into a browser
+// ('use client') component; the browser uses app/providers.tsx, which authenticates
+// via the session route and never touches the key.
 export const sync = Ablo({
   apiKey: process.env.ABLO_API_KEY,${databaseLine}${authLine}
   schema,
@@ -721,8 +722,9 @@ export {};
 function generateEnv(storage: InitStorage, opts: { includeApiKey?: boolean } = {}): string {
   const { includeApiKey = true } = opts;
   const databaseBlock = storage === 'direct'
-    ? '# Your Postgres — the system of record. The client registers this connection\n' +
-      '# (sent once over TLS, stored sealed) and every row lives HERE, never with Ablo.\n' +
+    ? '# DEPRECATED direct connector. The client registers this connection (sent once\n' +
+      '# over TLS, stored sealed) so Ablo dials into your Postgres. Prefer a signed Data\n' +
+      '# Source endpoint; to keep the transaction log in your infra too, self-host the engine.\n' +
       '# Use a dedicated non-superuser role; the browser never sees this value.\n' +
       'DATABASE_URL=postgres://user:password@host:5432/db\n'
     : '# Used by ablo/data-source.ts (your DB endpoint) + `ablo migrate` — NOT the client.\n' +

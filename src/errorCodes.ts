@@ -188,6 +188,7 @@ export const ERROR_CODES = {
   browser_database_url_blocked: client('auth', 'A database connection string must not be used from a browser context — it carries DB credentials.'),
   datasource_registration_failed: client('auth', 'Failed to register the provided databaseUrl as a datasource.'),
   datasource_connection_unsupported: wire('validation', 400, false, 'This deployment cannot register a direct (connection string) datasource — use the signed endpoint kind.'),
+  datasource_direct_deprecated: wire('validation', 410, false, 'The direct (connection string) datasource is deprecated. Register a signed Data Source endpoint instead — your app owns the write and your credentials never leave it.'),
 
   // ── permission / capability (403) ──────────────────────────────────
   capability_scope_denied: wire('capability', 403, false, "The connection's resolved scope does not cover the attempted action."),
@@ -270,6 +271,7 @@ export const ERROR_CODES = {
   unique_violation: wire('conflict', 409, false, 'A value violates a uniqueness constraint.'),
   check_violation: wire('validation', 400, false, 'A value violates a database check constraint.'),
   constraint_violation: wire('validation', 400, false, 'A database integrity constraint was violated.'),
+  column_type_mismatch: wire('validation', 400, false, 'A structured (JSON) value was written to a column whose database type is not jsonb. The column was not provisioned as jsonb (often a pre-existing column adopted by `ablo push`); storing the value would silently corrupt it to "[object Object]". Run `ablo migrate` to alter the column to jsonb.'),
 
   // ── tenant / unknown model (400) ───────────────────────────────────
   server_execute_unknown_model: wire('tenant', 400, false, 'Wrote to a model the server does not know. The server keeps its own copy of the schema — run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` before writing to new or changed models.'),

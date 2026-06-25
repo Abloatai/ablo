@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.19.0
+
+### Minor Changes
+
+- **Claim observability — a `ClaimLog` you can print or assert on.** A new
+  `observability` provider hook lets you tap every claim event and stale-write
+  collision the client sees. Hand `new ClaimLog()` to `Ablo({ observability })`
+  and it collects an ordered, readable log — `formatClaim` / `formatConflict`
+  render one line per event, and `collisions()` returns the conflicts for eval
+  assertions. New exports: `ClaimLog`, `formatClaim`, `formatConflict`,
+  `noopObservability`, and the types `ClaimLogEntry`, `ClaimEvent`,
+  `ConflictEvent`, `SyncObservabilityProvider`. Spread `noopObservability` to
+  override only the hooks you care about.
+
+  **AWS-shaped CLI credential store + `ablo config`.** Local CLI state is now split
+  into two files, matching `~/.aws/config` vs `~/.aws/credentials`: `config.json`
+  holds non-secret settings (active environment + active project) and is safe to
+  print or let an agent read; `credentials.json` holds the keys (0600, never
+  printed), keyed by project profile then environment. Per-project profiles follow
+  Stripe's model — `ablo projects use <slug>` selects the active profile, and a
+  key's project is fixed at mint so selecting a project never re-scopes an existing
+  key. `ablo status` now reports the resolved profile and environment.
+
+  **Schema JSON-column reconciliation.** `generateJsonColumnReconciliation` (new
+  export) emits the DDL to reconcile JSON-backed columns when adopting or evolving
+  an existing schema.
+
+  **Breaking (0.x):**
+  - The claim handle type `ClaimHandle` is renamed to **`Claim`**, and its
+    identifier field is `id` (was `claimId`). Update type imports and any code
+    reading `.claimId`.
+  - The ai-sdk `claimBroadcastMiddleware` (and `./ai-sdk/claim-broadcast`) is
+    removed — coordination broadcast is handled by `coordinationContextMiddleware`.
+    Import `ClaimTarget` from the package root or `@abloatai/ablo` ai-sdk's
+    `coordination-context` instead of `claim-broadcast`. The inline-claim option is
+    `reason` (not the pre-0.12 `action`); the ai-sdk docs are corrected to match.
+
 ## 0.18.0
 
 ### Minor Changes

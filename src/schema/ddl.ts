@@ -115,6 +115,76 @@ export function sqlType(fieldType: ModelJSON['fields'][string]['type']): string 
 
 const BASE_COLUMNS = new Set(['id', 'organization_id', 'created_by', 'created_at', 'updated_at']);
 
+// ── JSON column drift reconciliation ─────────────────────────────────────────
+
+/**
+ * Detect and repair `field.json()` columns that exist in the live database as a
+ * NON-jsonb type, and emit a salvaging in-place `ALTER … TYPE jsonb`.
+ *
+ * Why this is needed: provisioning uses `ADD COLUMN IF NOT EXISTS` and
+ * `CREATE TABLE IF NOT EXISTS` (idempotent by design). When `ablo push` adopts
+ * a table/column that PRE-EXISTS with a different type — e.g. a `content TEXT`
+ * column from a legacy table — the additive DDL is a no-op and the column
+ * silently stays `text`. The pure schema-to-schema differ
+ * ({@link generateMigrationPlan}) can't see this: the schema says `json` on
+ * both sides, so it emits no change. The drift is only visible by INTROSPECTING
+ * the live database and comparing to the declared type — the drizzle-kit
+ * `pull` discipline. A `json` value bound to a `text` column corrupts to the
+ * literal `"[object Object]"`, so leaving the drift unrepaired is silent data
+ * loss.
+ *
+ * The cast is SALVAGING, never aborting (Postgres won't auto-cast text→jsonb;
+ * invalid rows would otherwise fail the whole ALTER): a row that `IS JSON`
+ * parses to jsonb, anything else (including already-corrupted
+ * `"[object Object]"`) is wrapped as a jsonb string via `to_jsonb`, and NULL
+ * stays NULL. The `IS JSON` predicate requires Postgres 16+ (the fleet runs
+ * 17); on an older engine the ALTER fails LOUD with a structured
+ * `migration_failed` rather than silently — acceptable, since silent corruption
+ * is the thing we're eliminating. See
+ * https://echobind.com/post/safely-alter-postgres-columns-with-using.
+ *
+ * Pure + idempotent: emits a statement ONLY for a json field whose live column
+ * type is present and not already `jsonb`/`json`. A correctly-provisioned schema
+ * yields zero statements, so this is a no-op on every push after the first
+ * repair. Columns absent from `liveColumnTypes` are left to the additive
+ * provisioner (which adds them as jsonb).
+ *
+ * @param liveColumnTypes table name → (column name → information_schema
+ *   `data_type`), as introspected from the target schema.
+ */
+export function generateJsonColumnReconciliation(
+  schema: SchemaJSON,
+  liveColumnTypes: ReadonlyMap<string, ReadonlyMap<string, string>>,
+  targetSchema: string,
+): string[] {
+  const qs = q(targetSchema);
+  const statements: string[] = [];
+  for (const [key, model] of Object.entries(schema.models)) {
+    const table = model.tableName ?? key;
+    const liveCols = liveColumnTypes.get(table);
+    if (!liveCols) continue; // table not provisioned yet — nothing to reconcile
+    const qt = `${qs}.${q(table)}`;
+    for (const [fieldName, meta] of Object.entries(model.fields)) {
+      if (meta.type !== 'json') continue;
+      const col = meta.column ?? camelToSnake(fieldName);
+      const liveType = liveCols.get(col);
+      if (liveType === undefined) continue; // column absent — provisioner adds jsonb
+      if (liveType === 'jsonb' || liveType === 'json') continue; // already correct
+      const c = q(col);
+      statements.push(
+        `ALTER TABLE ${qt} ALTER COLUMN ${c} TYPE jsonb USING (\n` +
+          `  CASE\n` +
+          `    WHEN ${c} IS NULL THEN NULL\n` +
+          `    WHEN ${c}::text IS JSON THEN ${c}::text::jsonb\n` +
+          `    ELSE to_jsonb(${c}::text)\n` +
+          `  END\n` +
+          `);`,
+      );
+    }
+  }
+  return statements;
+}
+
 // ── Foreign keys (relation-driven, sync-safe) ────────────────────────────────
 
 /**

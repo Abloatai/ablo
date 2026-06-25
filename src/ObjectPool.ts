@@ -755,7 +755,21 @@ export class ObjectPool {
       modelName?: string;
       id?: string;
     },
-    ModelClass?: new (data: Record<string, unknown>) => Model
+    ModelClass?: new (data: Record<string, unknown>) => Model,
+    opts?: {
+      /**
+       * Throw (instead of warn + return null) when the wire names a model
+       * this client never registered. Passed by the developer-await read
+       * path (`HydrationCoordinator`'s network leg) so a schema collision
+       * — the org's pushed schema names `Document` but this client only
+       * registered `documents` — surfaces AT the row that failed, with the
+       * known-model list and `ablo status` pointer, instead of bubbling up
+       * three layers later as a misleading `entity_not_found`. Left off
+       * (default) for the continuous delta loop and IDB-cache hydration,
+       * where a single unknown typename must not wedge the whole batch.
+       */
+      strict?: boolean;
+    },
   ): Model | null {
     // Support multiple model identifier fields for backwards compatibility
     const modelName = data.__typename ?? data.__class ?? data.modelName ?? 'Unknown';
@@ -770,6 +784,17 @@ export class ObjectPool {
         );
         getContext().modelDebugLogger?.logError('Unknown', 'CREATE', 'No model identifier found', data);
         return null;
+      }
+
+      if (opts?.strict) {
+        const known = this.registry.getRegisteredModelNames();
+        throw new AbloValidationError(
+          `Model "${modelName}" is not registered on this client` +
+            (known.length ? ` (known: ${known.join(', ')})` : '') +
+            `. The schema pushed to this org may differ from your local ` +
+            `schema — run \`ablo status\` to compare.`,
+          { code: 'model_not_registered' },
+        );
       }
 
       getContext().logger.warn(

@@ -39,9 +39,8 @@ import { ModelScope } from '../types/index.js';
 import type {
   Duration,
   Claim,
-  ClaimHandle,
   ClaimWaitOptions,
-  EntityRef,
+  ClaimTarget,
   Snapshot,
   TargetRange,
 } from '../types/streams.js';
@@ -124,7 +123,7 @@ export interface ModelCollaboration<T> {
       range?: TargetRange;
       meta?: Record<string, unknown>;
     };
-    /** Human-readable phase (`'editing'`); wire field is `action`. */
+    /** Human-readable phase (`'editing'`). */
     reason: string;
     ttl?: Duration;
     /**
@@ -135,7 +134,7 @@ export interface ModelCollaboration<T> {
     queue?: boolean;
     /** Reject (don't wait) if the queue is already this deep when we join. */
     maxQueueDepth?: number;
-  }): Promise<ClaimHandle>;
+  }): Promise<Claim>;
   createSnapshot(modelKey: string, id: string): Snapshot;
   /**
    * Current coordination state on a target — who (if anyone) holds it.
@@ -215,7 +214,7 @@ export interface ModelCollaboration<T> {
 
 export interface ClaimTargetOptions<T = Record<string, unknown>> {
   /** Human-readable phase shown to observers while held. Defaults to
-   *  `'editing'`. The same word on every claim surface; wire field is `action`. */
+   *  `'editing'`. The same word on every claim surface. */
   reason?: string;
   /** Peer-visible explanation of the work being performed. */
   description?: string;
@@ -296,7 +295,7 @@ export interface ClaimReorderParams<T = Record<string, unknown>>
  */
 // THE one claim handle lives in `../types/streams` (canonical). Re-exported
 // here so existing `from '.../createModelProxy'` import paths keep working.
-export type { ClaimHandle };
+export type { Claim };
 
 export type ClaimOptions<T = Record<string, unknown>> = ClaimTargetOptions<T>;
 
@@ -352,7 +351,7 @@ export interface ClaimReadApi<T = Record<string, unknown>> {
   reorder(params: ClaimReorderParams<T>): void;
 
   /** Release a manual claim handle early. Single-write claims auto-release. */
-  release(params: ClaimLookupParams<T> | ClaimHandle<T>): Promise<void>;
+  release(params: ClaimLookupParams<T> | Claim<T>): Promise<void>;
 }
 
 /**
@@ -367,8 +366,13 @@ export type AwaitedClaimMethod<F> = F extends (...args: infer A) => infer R
   : F;
 
 export interface ClaimApi<T> extends ClaimReadApi<T> {
-  /** Take a claim and get an explicit held-work handle back. */
-  (params: ClaimParams<T>): Promise<ClaimHandle<T>>;
+  /**
+   * Take a claim and get an explicit held-work handle back. Returns a
+   * {@link Claim} — `data` (and `readAt`) are guaranteed present
+   * because this door always re-reads the row under the lease, so callers use
+   * `handle.data` directly without a guard.
+   */
+  (params: ClaimParams<T>): Promise<Claim<T>>;
 }
 
 export interface ModelRetrieveParams extends ServerRetrieveOptions {
@@ -379,20 +383,20 @@ export interface ModelCreateParams<T, CreateInput>
   extends MutationOptions {
   readonly data: CreateInput;
   readonly id?: string | null;
-  readonly claim?: ClaimHandle<T> | ClaimTargetOptions<T> | null;
+  readonly claim?: Claim<T> | ClaimTargetOptions<T> | null;
 }
 
 export interface ModelUpdateParams<T>
   extends MutationOptions {
   readonly id: string;
   readonly data: Partial<T>;
-  readonly claim?: ClaimHandle<T> | ClaimTargetOptions<T> | null;
+  readonly claim?: Claim<T> | ClaimTargetOptions<T> | null;
 }
 
 export interface ModelDeleteParams<T>
   extends MutationOptions {
   readonly id: string;
-  readonly claim?: ClaimHandle<T> | ClaimTargetOptions<T> | null;
+  readonly claim?: Claim<T> | ClaimTargetOptions<T> | null;
 }
 
 /** Options for the WebSocket-only `ablo.<model>.watch(ids, options?)`. */
@@ -542,7 +546,7 @@ export function createModelProxy<T, C>(
   // with the commit op's model name; a lease recorded under the schema key
   // never collides with it — which silently disarmed the guard for every
   // model whose schema key differs from its typename (i.e. nearly all of
-  // them, plural key vs singular typename). Public surfaces (ClaimHandle.
+  // them, plural key vs singular typename). Public surfaces (Claim.
   // target.model) keep the schema key; only the wire/coordination targets
   // use this.
   const wireModel = registeredModelName.toLowerCase();
@@ -596,9 +600,9 @@ export function createModelProxy<T, C>(
   const activeClaims = new Map<
     string,
     {
-      lease: ClaimHandle;
+      lease: Claim;
       snapshot: Snapshot;
-      target: EntityRef;
+      target: ClaimTarget;
       reason: string;
       expiresAt: number;
     }
@@ -608,11 +612,11 @@ export function createModelProxy<T, C>(
   // expiry estimate when a claim is taken without an explicit TTL.
   const DEFAULT_LEASE_TTL_MS = 90_000;
 
-  const isClaimHandle = (value: unknown): value is ClaimHandle<T> =>
+  const isClaimHandle = (value: unknown): value is Claim<T> =>
     typeof value === 'object' &&
     value !== null &&
     (value as { object?: unknown }).object === 'claim' &&
-    typeof (value as { claimId?: unknown }).claimId === 'string' &&
+    typeof (value as { id?: unknown }).id === 'string' &&
     typeof (value as { release?: unknown }).release === 'function';
 
   const claimMeta = (
@@ -664,12 +668,12 @@ export function createModelProxy<T, C>(
     const held = activeClaims.get(id);
     if (!held) return;
     activeClaims.delete(id);
-    await held.lease.release();
+    await held.lease.release?.();
   };
 
   const takeClaim = async (
     params: ClaimParams<T>,
-  ): Promise<ClaimHandle<T>> => {
+  ): Promise<Claim<T>> => {
     if (!collaboration) {
       throw new AbloValidationError(
         `Model "${schemaKey}" was built without the collaboration runtime, so claim() is unavailable here. Claiming needs no per-model config — use the standard Ablo({ schema, apiKey }) client and every model is claimable.`,
@@ -765,10 +769,10 @@ export function createModelProxy<T, C>(
 
     const snapshot = collaboration.createSnapshot(schemaKey, id);
     const reason = options?.reason ?? 'editing';
-    // The self-claim's `EntityRef` mirrors what a peer's `claim.state` would
+    // The self-claim's `ClaimTarget` mirrors what a peer's `claim.state` would
     // report (`state` maps `held.target.model` → `type`), so a holder and a
     // peer see the SAME target.type for one row — the wire model token.
-    const selfTarget: EntityRef = {
+    const selfTarget: ClaimTarget = {
       type: wireModel,
       id,
       ...(options?.field ? { field: options.field } : {}),
@@ -787,7 +791,7 @@ export function createModelProxy<T, C>(
       expiresAt,
     });
     const target = {
-      model: schemaKey,
+      type: schemaKey,
       id,
       ...(options?.field ? { field: options.field } : {}),
       ...(options?.path ? { path: options.path } : {}),
@@ -797,7 +801,7 @@ export function createModelProxy<T, C>(
     const release = () => releaseClaim(id);
     return {
       object: 'claim',
-      claimId: lease.claimId,
+      id: lease.id,
       readAt: snapshot.stamp,
       target,
       reason,
@@ -811,7 +815,7 @@ export function createModelProxy<T, C>(
     };
   };
 
-  const claim = (params: ClaimParams<T>): Promise<ClaimHandle<T>> =>
+  const claim = (params: ClaimParams<T>): Promise<Claim<T>> =>
     takeClaim(params);
 
   // `claim` is a callable namespace: invoke it to take a claim, reach its
@@ -833,7 +837,7 @@ export function createModelProxy<T, C>(
       if (own) {
         return {
           object: 'claim',
-          id: own.lease.claimId,
+          id: own.lease.id,
           status: 'active',
           target: own.target,
           reason: own.reason,
@@ -856,7 +860,7 @@ export function createModelProxy<T, C>(
       collaboration?.reorder({ model: wireModel, id: params.id }, params.order);
     },
 
-    release: guard((params: ClaimLookupParams<T> | ClaimHandle<T>): Promise<void> =>
+    release: guard((params: ClaimLookupParams<T> | Claim<T>): Promise<void> =>
       releaseClaim(isClaimHandle(params) ? params.target.id : params.id),
     ),
   });
@@ -933,7 +937,7 @@ export function createModelProxy<T, C>(
       const id = params.id ?? Model.generateId();
       const opts = mutationOptions(params);
       const claim = params.claim;
-      let autoLease: ClaimHandle | undefined;
+      let autoLease: Claim | undefined;
       if (claim && !isClaimHandle(claim)) {
         if (!collaboration) {
           throw new AbloValidationError(
@@ -980,14 +984,14 @@ export function createModelProxy<T, C>(
       const effective: MutationOptions = {
         ...opts,
         ...(autoLease ? { claim: autoLease } : {}),
-        ...(isClaimHandle(claim) ? { claim: { id: claim.claimId } } : {}),
+        ...(isClaimHandle(claim) ? { claim: { id: claim.id } } : {}),
       };
       try {
         syncClient.add(model, effective);
         await waitForMutation(model, effective);
         return modelAsRow<T>(model);
       } finally {
-        await autoLease?.release().catch(() => {});
+        await autoLease?.release?.().catch(() => {});
       }
     }),
 
@@ -1000,7 +1004,7 @@ export function createModelProxy<T, C>(
           try {
             return await operations.update({ ...params, claim: handle });
           } finally {
-            await handle.release();
+            await handle.release?.();
           }
         }
         const { id } = params;
@@ -1020,7 +1024,7 @@ export function createModelProxy<T, C>(
               wait: 'confirmed',
               readAt: claimed.snapshot.stamp,
               onStale: 'reject',
-              claimRef: { id: claimed.lease.claimId },
+              claimRef: { id: claimed.lease.id },
               ...opts,
             }
           : {
@@ -1035,7 +1039,7 @@ export function createModelProxy<T, C>(
                   }
                 : {}),
               ...opts,
-              ...(handle ? { claim: { id: handle.claimId } } : {}),
+              ...(handle ? { claim: { id: handle.id } } : {}),
             };
         // Local user update: `applyChanges` keeps change tracking ON so
         // the edited fields land in `modifiedProperties` and actually get
@@ -1056,7 +1060,7 @@ export function createModelProxy<T, C>(
         try {
           await operations.delete({ ...params, claim: handle });
         } finally {
-          await handle.release();
+          await handle.release?.();
         }
         return;
       }
@@ -1075,7 +1079,7 @@ export function createModelProxy<T, C>(
             wait: 'confirmed',
             readAt: claimed.snapshot.stamp,
             onStale: 'reject',
-            claimRef: { id: claimed.lease.claimId },
+            claimRef: { id: claimed.lease.id },
             ...opts,
           }
         : {
@@ -1087,7 +1091,7 @@ export function createModelProxy<T, C>(
                 }
               : {}),
             ...opts,
-            ...(handle ? { claim: { id: handle.claimId } } : {}),
+            ...(handle ? { claim: { id: handle.id } } : {}),
           };
       syncClient.delete(model, effective);
       await waitForMutation(model, effective);

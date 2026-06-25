@@ -377,6 +377,12 @@ class TransactionStore {
 
 export class TransactionQueue extends EventEmitter {
   private store = new TransactionStore();
+  // Signature of the last permanent-error we logged at `warn`. A `create`
+  // whose id already exists (`unique_violation`) is a permanent rejection
+  // that the offline queue re-drives on every reconnect/bootstrap — without
+  // this, the identical cause prints on a loop. We log the first occurrence
+  // and demote exact repeats to `debug`.
+  private lastPermanentErrorSig?: string;
   // Per-instance executor binding. Set by `setMutationExecutor(...)` from the
   // owning Ablo right after construction. Falls back to `getContext()` only
   // when unset (preserves legacy tests / SDK consumers that haven't migrated).
@@ -717,6 +723,9 @@ export class TransactionQueue extends EventEmitter {
     // promise always settles, regardless of which path produced the
     // terminal state.
     this.on('transaction:completed', (tx: Transaction) => {
+      // Any successful write clears the permanent-error dedup, so a genuine
+      // recurrence after recovery warns again instead of staying demoted.
+      this.lastPermanentErrorSig = undefined;
       const r = this.confirmationResolvers.get(tx.id);
       if (r) {
         this.confirmationResolvers.delete(tx.id);
@@ -1635,7 +1644,12 @@ export class TransactionQueue extends EventEmitter {
                 return undefined;
               };
               const diagnostics = readDiagnostics(error);
-              getContext().logger.warn('[TransactionQueue] Batch commit rejected', {
+              // Mechanic-level breadcrumb. Every batch rejection — transient
+              // (reconnect retries it) or permanent (`handleFailure` logs the
+              // authoritative `warn` with the same typed cause) — passes
+              // through here. Logging it at `warn` made one rejected write
+              // surface three identical dumps; keep it at `debug`.
+              getContext().logger.debug('[TransactionQueue] Batch commit rejected', {
                 batchSize: batchOps.length,
                 models: batchOps.map(({ op }) => `${op.type}:${op.model}`),
                 errorType: abloErr?.type ?? (error as Error)?.name,
@@ -2199,7 +2213,7 @@ export class TransactionQueue extends EventEmitter {
       // expiry (AbloAuthenticationError).
       try {
         const abloErr = error instanceof AbloError ? error : undefined;
-        getContext().logger.warn('[TransactionQueue] Permanent error - rolling back', {
+        const details = {
           txId: transaction.id.slice(0, 8),
           type: transaction.type,
           model: transaction.modelName,
@@ -2210,7 +2224,32 @@ export class TransactionQueue extends EventEmitter {
           requestId: abloErr?.requestId,
           message: error?.message,
           inputKeys: transaction.data ? Object.keys(transaction.data) : undefined,
-        });
+        };
+
+        // A `create` whose id already exists is the benign idempotency case:
+        // "this row is already there." It's the least alarming permanent
+        // error, so it doesn't warrant a `warn` — `info` keeps it visible
+        // without crying wolf. Everything else (FK violation, auth expiry,
+        // server 500) stays at `warn`.
+        const isBenignIdempotent =
+          transaction.type === 'create' &&
+          (abloErr?.code === 'unique_violation' ||
+            abloErr?.type === 'AbloIdempotencyError');
+
+        // Demote exact repeats (same write rejected for the same reason on
+        // each reconnect replay) to `debug` so the loop logs once.
+        const sig = `${details.type}:${details.model}:${details.modelId}:${details.errorCode ?? details.errorType}`;
+        const isRepeat = sig === this.lastPermanentErrorSig;
+        this.lastPermanentErrorSig = sig;
+
+        const logger = getContext().logger;
+        if (isRepeat) {
+          logger.debug('[TransactionQueue] Permanent error - rolling back (repeat)', details);
+        } else if (isBenignIdempotent) {
+          logger.info('[TransactionQueue] Write skipped — row already exists', details);
+        } else {
+          logger.warn('[TransactionQueue] Permanent error - rolling back', details);
+        }
       } catch {}
 
       // Mark as failed immediately and rollback

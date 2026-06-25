@@ -6,7 +6,7 @@
  * GraphQL client, session handling, and analytics.
  */
 
-import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
+import type { StaleNotification, ReadDependency, ParticipantKind } from '../coordination/schema.js';
 
 
 // ─────────────────────────────────────────────
@@ -35,6 +35,7 @@ export type SyncBreadcrumbCategory =
   | 'sync.offline'
   | 'sync.database'
   | 'sync.conflict'
+  | 'sync.coordination'
   | 'sync.groups';
 
 export interface RollbackDetails {
@@ -101,6 +102,53 @@ export interface OfflineFlushFailureDetails {
   error: string;
 }
 
+/**
+ * One thing that happened to a claim. `phase` is the past-tense state it just
+ * entered — the trail you follow to see WHY two participants collided on a row:
+ * who asked, who waited behind whom, who was turned away, whose lease lapsed.
+ * Each phase mirrors a `claim_*` wire frame.
+ */
+export interface ClaimEvent {
+  phase:
+    | 'acquired' // target was free — lease granted immediately
+    | 'queued' // contended — joined the FIFO line behind the holder
+    | 'granted' // reached the head of the line — lease now ours
+    | 'lost' // held lease taken away (TTL lapse on disconnect, revoke)
+    | 'rejected' // server denied the claim — another participant holds the target
+    | 'expired'; // TTL lapsed server-side
+  /** Server claim id, when the frame carries one. */
+  claimId?: string;
+  /** The claimed row + optional field scope. */
+  model?: string;
+  id?: string;
+  field?: string;
+  /** Participant that owns or blocks the lease (on `rejected`, the holder). */
+  actor?: string;
+  participantKind?: ParticipantKind;
+  /** FIFO position when `queued`. */
+  position?: number;
+  /** Rejection or policy reason, when the server supplied one. */
+  reason?: string;
+}
+
+/**
+ * A committed `onStale: 'notify'` write whose premise moved — the in-flight twin
+ * of a claim collision. The commit SUCCEEDED, but the guarded ops weren't written
+ * because the row changed since the caller's `readAt`; the engine handed back the
+ * live value so the actor can self-heal. Records WHICH rows and fields collided.
+ */
+export interface ConflictEvent {
+  /** The client idempotency key whose write was notified. */
+  clientTxId: string;
+  /** The conflicted rows + the fields that collided. */
+  rows: ReadonlyArray<{
+    model: string;
+    id: string;
+    fields: readonly string[];
+    writtenBy?: ParticipantKind;
+  }>;
+}
+
 /** Span attributes for performance monitoring */
 export interface SpanAttributes {
   [key: string]: string | number | boolean | undefined;
@@ -148,6 +196,12 @@ export interface SyncObservabilityProvider {
 
   /** Capture self-healing event */
   captureSelfHealing(details: SelfHealingDetails): void;
+
+  /** Capture a claim state change (acquired / queued / granted / lost / rejected / expired) */
+  captureClaim(event: ClaimEvent): void;
+
+  /** Capture a notify-instead-of-abort stale-write collision */
+  captureConflict(event: ConflictEvent): void;
 
   /** Capture commit returning lastSyncId: 0 */
   captureCommitZeroSyncId(details: CommitZeroSyncIdDetails): void;

@@ -27,7 +27,7 @@
  *       wait: 'confirmed',
  *       claim: {
  *         field: 'title',
- *         action: 'renaming',
+ *         reason: 'renaming',
  *         description,
  *       },
  *     });
@@ -51,7 +51,7 @@
  * ```ts
  * const claim = await ablo.tasks.claim({
  *   id,
- *   action: 'rewriting',
+ *   reason: 'rewriting',
  *   description: 'Rewriting the task brief before updating follow-up fields.',
  *   ttl: '2m',
  * });
@@ -74,14 +74,9 @@
  */
 
 export {
-  claimBroadcastMiddleware,
-  type ClaimTarget,
-  type ClaimBroadcastMiddlewareOptions,
-} from './claim-broadcast.js';
-
-export {
   coordinationContextMiddleware,
   type CoordinationContextMiddlewareOptions,
+  type ClaimTarget,
 } from './coordination-context.js';
 
 export { wrapWithMultiplayer, type WrapWithMultiplayerOptions } from './wrap.js';

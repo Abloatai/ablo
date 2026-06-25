@@ -75,6 +75,8 @@ export const noopObservability: SyncObservabilityProvider = {
   captureWebSocketError() {},
   captureOfflineFlushFailure() {},
   captureSelfHealing() {},
+  captureClaim() {},
+  captureConflict() {},
   captureCommitZeroSyncId() {},
   startSpan<T>(_name: string, _op: string, fn: () => T, _attributes?: SpanAttributes): T {
     return fn();

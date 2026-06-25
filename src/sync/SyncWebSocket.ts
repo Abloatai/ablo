@@ -24,7 +24,7 @@ import {
 // shapes in comments ("mirrors hub/types.ts …"); importing the wire types makes
 // the compiler enforce the outgoing frame so client and server cannot drift.
 import type { CommitMessage, CommitOperation } from '../wire/index.js';
-import type { MutationOperation } from '../interfaces/index.js';
+import type { MutationOperation, ClaimEvent } from '../interfaces/index.js';
 import type { ClientSyncDelta } from '../schema/sync-delta-wire.js';
 import type {
   ClaimError,
@@ -35,7 +35,9 @@ import type {
 import {
   subscriptionAckPayloadSchema,
   staleNotificationSchema,
+  wireParticipantKindSchema,
 } from '../coordination/schema.js';
+import { formatClaim, formatConflict } from '../coordination/trace.js';
 
 /**
  * Resolution value of a commit ack. `notifications` is present only when a
@@ -220,7 +222,7 @@ export interface PresenceUpdateEvent {
   participantKind?: string;
   timestamp?: number;
   /** Server stamps every presence frame with this participant's open
-   *  claim claims so peers see them without a separate channel. Wire
+   *  claims so peers see them without a separate channel. Wire
    *  shape mirrors `apps/sync-server/src/hub/types.ts Claim`. */
   activeClaims?: Array<{
     claimId: string;
@@ -233,7 +235,7 @@ export interface PresenceUpdateEvent {
       startColumn?: number;
       endColumn?: number;
     };
-    action: string;
+    reason: string;
     field?: string;
     meta?: Record<string, unknown>;
     declaredAt: number;
@@ -755,8 +757,23 @@ export class SyncWebSocket<
               // the advisory signal so an agent loop can self-heal, AND resolve
               // the receipt with it (the commit still succeeded).
               if (notifications && notifications.length > 0) {
+                const txId = typeof clientTxId === 'string' ? clientTxId : '';
+                const event = {
+                  clientTxId: txId,
+                  rows: notifications.map((n) => ({
+                    model: n.model,
+                    id: n.id,
+                    fields: n.conflictingFields,
+                    writtenBy: n.writtenBy?.kind,
+                  })),
+                };
+                const message = formatConflict(event);
+                const ctx = getContext();
+                ctx.logger.warn(message);
+                ctx.observability.breadcrumb(message, 'sync.coordination', 'warning');
+                ctx.observability.captureConflict(event);
                 this.emit('conflict:notified', {
-                  clientTxId: typeof clientTxId === 'string' ? clientTxId : '',
+                  clientTxId: txId,
                   notifications,
                 });
               }
@@ -920,6 +937,7 @@ export class SyncWebSocket<
             // inactive server-side by the time this arrives.
             const p = message.payload ?? {};
             if (typeof p.claimId === 'string') {
+              this.recordClaim('expired', p);
               this.emit('claim_expired', { claimId: p.claimId });
             }
             break;
@@ -929,33 +947,40 @@ export class SyncWebSocket<
             // already claimed by another participant. Forward the
             // payload as-is — the ClaimStream consumer interprets
             // the conflict shape (peerId, target, etc.).
+            this.recordClaim('rejected', message.payload ?? {});
             this.emit('claim_rejected', message.payload ?? {});
             break;
           }
           case 'claim_acquired': {
             // Opt-in fair queue: the target was free, so the lease is ours
             // immediately (no waiting). Payload carries { claimId, target }.
+            this.recordClaim('acquired', message.payload ?? {});
             this.emit('claim_acquired', message.payload ?? {});
             break;
           }
           case 'claim_queue': {
-            // Per-entity wait-queue snapshot for reactive `queue(id)`.
+            // Per-entity wait-queue snapshot for reactive `queue(id)`. Not a
+            // single claim's state change, so it isn't logged — the per-claim
+            // `queued`/`granted` events already tell that story.
             this.emit('claim_queue', message.payload ?? {});
             break;
           }
           case 'claim_queued': {
             // Opt-in fair queue: our claim is waiting in line. Payload
             // carries { claimId, target, position }.
+            this.recordClaim('queued', message.payload ?? {});
             this.emit('claim_queued', message.payload ?? {});
             break;
           }
           case 'claim_granted': {
             // Our queued claim reached the head — the lease is now ours.
+            this.recordClaim('granted', message.payload ?? {});
             this.emit('claim_granted', message.payload ?? {});
             break;
           }
           case 'claim_lost': {
             // A held/granted claim was taken from us (TTL lapse, revoke).
+            this.recordClaim('lost', message.payload ?? {});
             this.emit('claim_lost', message.payload ?? {});
             break;
           }
@@ -1338,6 +1363,50 @@ export class SyncWebSocket<
       if (parsed.success) out.push(parsed.data);
     }
     return out.length > 0 ? out : undefined;
+  }
+
+  /**
+   * Single instrumentation point for claim events. Every `claim_*` frame routes
+   * through here so a developer debugging a collision gets one consistent trace
+   * — a console line AND a structured capture — without each dispatch case
+   * re-deriving the row/holder shape. The wire payload is loosely typed
+   * (`Record<string, unknown>`), so this is the one place that narrows it into
+   * a {@link ClaimEvent}.
+   */
+  private recordClaim(
+    phase: ClaimEvent['phase'],
+    payload: Record<string, unknown>,
+  ): void {
+    const str = (v: unknown): string | undefined =>
+      typeof v === 'string' ? v : undefined;
+    // Targets arrive flat ({ entityType, entityId }) or nested under `target`.
+    const target =
+      payload.target && typeof payload.target === 'object'
+        ? (payload.target as Record<string, unknown>)
+        : payload;
+    const kind = wireParticipantKindSchema.safeParse(payload.participantKind);
+    const event: ClaimEvent = {
+      phase,
+      claimId: str(payload.claimId),
+      model: str(target.entityType) ?? str(target.model),
+      id: str(target.entityId) ?? str(target.id),
+      field: str(target.field),
+      actor: str(payload.actor) ?? str(payload.heldBy),
+      participantKind: kind.success ? kind.data : undefined,
+      position: typeof payload.position === 'number' ? payload.position : undefined,
+      reason: str(payload.policyReason) ?? str(payload.reason),
+    };
+    const message = formatClaim(event);
+    // A rejection or lost lease is the collision a developer is actively
+    // debugging → warn (shows at the default log level). The routine events
+    // (acquired/queued/granted/expired) are debug-only so they never drown the
+    // console until you opt in with `new Ablo({ debug: true })`.
+    const isCollision = phase === 'rejected' || phase === 'lost';
+    const ctx = getContext();
+    if (isCollision) ctx.logger.warn(message);
+    else ctx.logger.debug(message);
+    ctx.observability.breadcrumb(message, 'sync.coordination', isCollision ? 'warning' : 'info');
+    ctx.observability.captureClaim(event);
   }
 
   sendCommit(

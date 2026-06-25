@@ -14,8 +14,6 @@
  *   model: anthropic('claude-opus-4-7'),
  *   agent,
  *   target: { entityType: 'SlideDeck', entityId: 'deck-abc' },
- *   reason: 'renaming',
- *   description: 'Renaming the deck title to match the project brief.',
  * });
  *
  * const result = streamText({
@@ -36,29 +34,25 @@ import type {
 import type { Ablo } from '../client/Ablo.js';
 import type { SchemaRecord } from '../schema/schema.js';
 import {
-  claimBroadcastMiddleware,
+  coordinationContextMiddleware,
   type ClaimTarget,
-} from './claim-broadcast.js';
-import { coordinationContextMiddleware } from './coordination-context.js';
+} from './coordination-context.js';
 
-export interface WrapWithMultiplayerOptions {
+export interface WrapWithMultiplayerOptions<R extends SchemaRecord = SchemaRecord> {
   /** The base language model to wrap. Consumer brings their own. */
   readonly model: LanguageModelV3;
-  /** Connected SyncAgent. Null = pass-through wrap (no broadcast, no read). */
-  readonly agent: Ablo<SchemaRecord> | null;
+  /**
+   * Connected Ablo. Null = pass-through wrap (no broadcast, no read).
+   *
+   * Generic over the schema record (like the two middlewares it composes) so a
+   * caller passing a typed `Ablo<typeof schema>` doesn't have to cast: `Ablo<S>`
+   * and `Ablo<SchemaRecord>` aren't structurally assignable (the widened version
+   * collapses model proxies to an index signature that clashes with the named
+   * methods `ready`/`dispose`/…).
+   */
+  readonly agent: Ablo<R> | null;
   /** Target entity. Null = pass-through wrap. */
   readonly target: ClaimTarget | null;
-  /**
-   * Optional human-readable phase for the broadcast. Default `'edit'`.
-   * Convention: `'edit'`, `'read'`, `'review'`, `'generate'`. The same
-   * `reason` field used on every claim surface.
-   */
-  readonly reason?: string;
-  /**
-   * Peer-visible explanation of the specific work this model call is about to
-   * perform. Other agents receive it in their coordination context.
-   */
-  readonly description?: string;
   /**
    * Optional claimIds to exclude from the coordination-context
    * read — typically the caller's own claim if they're composing
@@ -78,17 +72,15 @@ export interface WrapWithMultiplayerOptions {
   readonly extraMiddleware?: readonly LanguageModelV3Middleware[];
 }
 
-export function wrapWithMultiplayer(
-  options: WrapWithMultiplayerOptions,
+export function wrapWithMultiplayer<R extends SchemaRecord = SchemaRecord>(
+  options: WrapWithMultiplayerOptions<R>,
 ): ReturnType<typeof wrapLanguageModel> {
-  const { model, agent, target, reason, description, excludeClaimIds, extraMiddleware } =
-    options;
+  const { model, agent, target, excludeClaimIds, extraMiddleware } = options;
 
   return wrapLanguageModel({
     model,
     middleware: [
       coordinationContextMiddleware({ agent, target, excludeClaimIds }),
-      claimBroadcastMiddleware({ agent, target, reason, description }),
       ...(extraMiddleware ?? []),
     ],
   });

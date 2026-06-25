@@ -231,8 +231,14 @@ export class SyncClient extends EventEmitter {
         // (e.g. `AbloValidationError` with `code: 'schema_...'`,
         // `AbloServerError` with `httpStatus: 500`). Falling back to
         // generic message lets us still see unstructured errors.
+        // Mechanic-level breadcrumb only. The authoritative, user-facing
+        // reason is logged once at `warn` by `TransactionQueue.handleFailure`
+        // (`Permanent error - rolling back`). Logging the same typed cause
+        // again here at `warn` is what produced three identical dumps per
+        // rejected write — keep it at `debug` so the rollback mechanics are
+        // available when debugging but don't double the console noise.
         const abloErr = error instanceof AbloError ? error : undefined;
-        getContext().logger.warn('[SyncClient.rollback]', {
+        getContext().logger.debug('[SyncClient.rollback]', {
           txType: transaction.type,
           modelName: transaction.modelName,
           modelId: transaction.modelId.slice(0, 12),

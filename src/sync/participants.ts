@@ -3,17 +3,16 @@ import type { Schema, SchemaRecord } from '../schema/schema.js';
 import { scopeKindOf, type ModelDef } from '../schema/model.js';
 import { AbloConnectionError, AbloValidationError } from '../errors.js';
 import type {
-  ActiveClaim,
+  Claim,
   Activity,
-  EntityRef,
-  ClaimDeclaration,
-  ClaimHandle,
+  ClaimTarget,
   ClaimLeaseOptions,
   ClaimStream,
   Peer,
   PresenceStream,
   PresenceTarget,
 } from '../types/streams.js';
+import type { AttachableClaimStream } from './createClaimStream.js';
 
 /**
  * Scope accepted by participant APIs. The normal SDK shape is an
@@ -21,8 +20,8 @@ import type {
  * advanced transport escape hatch.
  */
 export type ParticipantScope =
-  | EntityRef
-  | readonly EntityRef[]
+  | ClaimTarget
+  | readonly ClaimTarget[]
   | string
   | readonly string[]
   | { readonly syncGroup: string }
@@ -70,7 +69,7 @@ export interface ParticipantJoinOptions {
 
 export interface ScopedPresence {
   readonly self: Peer;
-  readonly focus: EntityRef | null;
+  readonly focus: ClaimTarget | null;
   readonly others: ReadonlyArray<Peer>;
   update(activity: Activity): void;
   reading(detail?: string): void;
@@ -94,15 +93,15 @@ export interface ScopedClaimOptions {
 }
 
 export interface ScopedClaims {
-  readonly focus: EntityRef | null;
-  readonly others: ReadonlyArray<ActiveClaim>;
+  readonly focus: ClaimTarget | null;
+  readonly others: ReadonlyArray<Claim>;
   /**
    * Claim an exclusive claim on the participant's focus target (or
    * an explicit override via `opts.target`). Single verb — the old
    * `editing / writing / announce / claim(reason, opts)` overloads
    * collapsed into this one method.
    */
-  claim(opts?: ScopedClaimOptions): ClaimHandle;
+  claim(opts?: ScopedClaimOptions): Claim;
   onRejected(listener: Parameters<ClaimStream['onRejected']>[0]): () => void;
   onChange(listener: () => void): () => void;
 }
@@ -114,14 +113,14 @@ export interface ParticipantFocusOptions {
 
 export interface JoinedParticipant {
   /** Current exact thing this participant is reading/editing. */
-  readonly target: EntityRef | null;
-  readonly focusTarget: EntityRef | null;
+  readonly target: ClaimTarget | null;
+  readonly focusTarget: ClaimTarget | null;
   /** Transport scopes this participant is joined to for visibility/fan-out. */
   readonly syncGroups: readonly string[];
   readonly presence: ScopedPresence;
   readonly claims: ScopedClaims;
   readonly peers: ReadonlyArray<Peer>;
-  readonly activeClaims: ReadonlyArray<ActiveClaim>;
+  readonly activeClaims: ReadonlyArray<Claim>;
   focus(target: PresenceTarget, options?: ParticipantFocusOptions): JoinedParticipant;
   leave(): void;
   [Symbol.asyncDispose](): Promise<void>;
@@ -136,7 +135,7 @@ export interface ParticipantManagerConfig {
   readonly ready: () => Promise<void>;
   readonly getTransport: () => SyncWebSocket | null;
   readonly presence: PresenceStream;
-  readonly claims: ClaimStream;
+  readonly claims: AttachableClaimStream;
   readonly schema?: Schema<SchemaRecord>;
 }
 
@@ -228,7 +227,7 @@ export function resolveParticipantSyncGroups(
 }
 
 export function syncGroupFromEntityRef(
-  ref: EntityRef,
+  ref: ClaimTarget,
   schema?: Schema<SchemaRecord>,
 ): string {
   const match = findModelForEntityRef(ref, schema);
@@ -247,7 +246,7 @@ function syncGroupFromSchemaKey(
 }
 
 function findModelForEntityRef(
-  ref: EntityRef,
+  ref: ClaimTarget,
   schema?: Schema<SchemaRecord>,
 ): { key: string; def: ModelDef } | null {
   if (!schema?.models) return null;
@@ -302,7 +301,7 @@ function isTupleTarget(value: unknown): value is readonly [type: string, id: str
   );
 }
 
-function isEntityScope(scope: unknown): scope is EntityRef {
+function isEntityScope(scope: unknown): scope is ClaimTarget {
   return (
     typeof scope === 'object' &&
     scope !== null &&
@@ -312,9 +311,9 @@ function isEntityScope(scope: unknown): scope is EntityRef {
   );
 }
 
-function targetToEntityRef(target: PresenceTarget): EntityRef {
+function targetToEntityRef(target: PresenceTarget): ClaimTarget {
   if (isTupleTarget(target)) return { type: target[0], id: target[1] };
-  return target as EntityRef;
+  return target as ClaimTarget;
 }
 
 function unique(values: string[]): string[] {
@@ -322,18 +321,18 @@ function unique(values: string[]): string[] {
 }
 
 function createJoinedParticipant(args: {
-  readonly target: EntityRef | null;
+  readonly target: ClaimTarget | null;
   readonly syncGroups: readonly string[];
   readonly claimId: string;
   readonly transport: SyncWebSocket;
   readonly presence: PresenceStream;
-  readonly claims: ClaimStream;
+  readonly claims: AttachableClaimStream;
 }): JoinedParticipant {
-  const ownHandles = new Set<ClaimHandle>();
+  const ownHandles = new Set<Claim>();
   let currentTarget = args.target;
   let left = false;
 
-  const requireTarget = (target?: PresenceTarget): EntityRef => {
+  const requireTarget = (target?: PresenceTarget): ClaimTarget => {
     const resolved = target ? targetToEntityRef(target) : currentTarget;
     if (!resolved) {
       throw new AbloValidationError('Participant action requires a structured target', {
@@ -361,7 +360,7 @@ function createJoinedParticipant(args: {
   const resolvePresenceAction = (
     targetOrDetail?: PresenceTarget | string,
     detail?: string,
-  ): { target: EntityRef; detail?: string } => {
+  ): { target: ClaimTarget; detail?: string } => {
     if (typeof targetOrDetail === 'string' || targetOrDetail === undefined) {
       return { target: requireTarget(), detail: targetOrDetail ?? detail };
     }
@@ -407,24 +406,24 @@ function createJoinedParticipant(args: {
     },
   };
 
-  const track = (handle: ClaimHandle): ClaimHandle => {
+  const track = (handle: Claim): Claim => {
     ownHandles.add(handle);
     return {
       object: 'claim',
-      claimId: handle.claimId,
+      id: handle.id,
       reason: handle.reason,
       target: handle.target,
       async release(): Promise<void> {
         ownHandles.delete(handle);
-        await handle.release();
+        await handle.release?.();
       },
       revoke(): void {
         ownHandles.delete(handle);
-        handle.revoke();
+        handle.revoke?.();
       },
       [Symbol.asyncDispose]: async () => {
         ownHandles.delete(handle);
-        await handle[Symbol.asyncDispose]();
+        await handle[Symbol.asyncDispose]?.();
       },
     };
   };
@@ -438,7 +437,7 @@ function createJoinedParticipant(args: {
         currentTarget ? targetsOverlap(claim.target, currentTarget) : true,
       );
     },
-    claim(opts?: ScopedClaimOptions): ClaimHandle {
+    claim(opts?: ScopedClaimOptions): Claim {
       return track(
         args.claims.claim(requireTarget(opts?.target), {
           reason: opts?.reason,
@@ -458,7 +457,7 @@ function createJoinedParticipant(args: {
     if (left) return;
     left = true;
     for (const handle of Array.from(ownHandles)) {
-      handle.revoke();
+      handle.revoke?.();
       ownHandles.delete(handle);
     }
     args.presence.idle();
@@ -492,7 +491,7 @@ function createJoinedParticipant(args: {
   return joined;
 }
 
-function activityFromTarget(target: EntityRef): Omit<Activity, 'action'> {
+function activityFromTarget(target: ClaimTarget): Omit<Activity, 'action'> {
   return {
     entityType: target.type,
     entityId: target.id,
@@ -505,7 +504,7 @@ function activityFromTarget(target: EntityRef): Omit<Activity, 'action'> {
 
 function presenceMatchesParticipant(
   entry: Peer,
-  target: EntityRef | null,
+  target: ClaimTarget | null,
   syncGroups: readonly string[],
 ): boolean {
   if (syncGroups.some((g) => entry.syncGroups.includes(g))) return true;
@@ -523,7 +522,7 @@ function presenceMatchesParticipant(
   );
 }
 
-function targetsOverlap(a: EntityRef, b: EntityRef): boolean {
+function targetsOverlap(a: ClaimTarget, b: ClaimTarget): boolean {
   if (a.type !== b.type || a.id !== b.id) return false;
   if (!hasSubtarget(a) || !hasSubtarget(b)) return true;
   if (a.path && b.path && a.path !== b.path) return false;
@@ -532,13 +531,13 @@ function targetsOverlap(a: EntityRef, b: EntityRef): boolean {
   return fieldOverlaps && rangeOverlaps;
 }
 
-function hasSubtarget(target: EntityRef): boolean {
+function hasSubtarget(target: ClaimTarget): boolean {
   return Boolean(target.path || target.field || target.range);
 }
 
 function rangesOverlap(
-  a: NonNullable<EntityRef['range']>,
-  b: NonNullable<EntityRef['range']>,
+  a: NonNullable<ClaimTarget['range']>,
+  b: NonNullable<ClaimTarget['range']>,
 ): boolean {
   return a.startLine <= b.endLine && b.startLine <= a.endLine;
 }

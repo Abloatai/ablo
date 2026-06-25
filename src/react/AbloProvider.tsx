@@ -13,7 +13,7 @@ import {
 import type { Schema, SchemaRecord } from '../schema/schema.js';
 import { Ablo } from '../client/Ablo.js';
 import type {
-  ActiveClaim,
+  Claim,
   Peer,
 } from '../types/streams.js';
 import type {
@@ -440,13 +440,13 @@ export interface UseWatchReturn {
   /** Everyone else on the engine's sync groups (`participant.presence.others`), bridged to React. */
   readonly peers: ReadonlyArray<Peer>;
   /** Active claim claims by peers (`participant.claims.others`), bridged to React. */
-  readonly claims: ReadonlyArray<ActiveClaim>;
+  readonly claims: ReadonlyArray<Claim>;
   readonly status: ParticipantStatus;
   readonly error: Error | null;
 }
 
 const EMPTY_PRESENCE: ReadonlyArray<Peer> = Object.freeze([]);
-const EMPTY_INTENTS: ReadonlyArray<ActiveClaim> = Object.freeze([]);
+const EMPTY_INTENTS: ReadonlyArray<Claim> = Object.freeze([]);
 
 /**
  * Join multiplayer for a given scope. Returns the participant and its
@@ -577,7 +577,7 @@ export function useWatch(opts: UseWatchOptions): UseWatchReturn {
   // presence). Queries and sync status use useSyncExternalStore
   // because transactions CAN tear visibly; presence can't.
   const [peers, setPeers] = useState<ReadonlyArray<Peer>>(EMPTY_PRESENCE);
-  const [claims, setClaims] = useState<ReadonlyArray<ActiveClaim>>(EMPTY_INTENTS);
+  const [claims, setClaims] = useState<ReadonlyArray<Claim>>(EMPTY_INTENTS);
 
   useEffect(() => {
     if (!participant || paused) {

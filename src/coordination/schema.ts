@@ -240,8 +240,8 @@ export type ClaimStatus = z.infer<typeof claimStatusSchema>;
 
 const wireClaimBaseSchema = targetRefSchema.extend({
   claimId: z.string(),
-  /** Verb the agent expects: 'update' | 'create' | 'editing' | 'reviewing' … */
-  action: z.string(),
+  /** Human-readable phase: 'editing' | 'reviewing' | 'forecasting' … */
+  reason: z.string(),
   /** Server-stamped declaration time (epoch ms). */
   declaredAt: z.number(),
   /** Server-computed TTL deadline (epoch ms). Readers treat as advisory. */
@@ -251,7 +251,7 @@ const wireClaimBaseSchema = targetRefSchema.extend({
 
 export const wireClaimSummarySchema = wireClaimBaseSchema.pick({
   claimId: true,
-  action: true,
+  reason: true,
   declaredAt: true,
   expiresAt: true,
   entityType: true,
@@ -279,7 +279,7 @@ export type ClaimError = z.infer<typeof claimErrorSchema>;
 /**
  * A declared pending-mutation claim — the unit broadcast in presence
  * `activeClaims`. Clients supply the descriptive `targetRef` fields, an
- * `action`, and a chosen `claimId`; the SERVER stamps `declaredAt` /
+ * explanatory `reason`, and a chosen `claimId`; the SERVER stamps `declaredAt` /
  * `expiresAt` and may set `status` / `error`.
  *
  * `status` and `error` are OPTIONAL: this single shape serves both the
@@ -340,8 +340,7 @@ export const modelClaimSchema = z
     id: z.string(),
     actor: z.string(),
     participantKind: wireParticipantKindSchema,
-    /** Human-readable phase (`'editing'`). The public SDK field; the WS/HTTP
-     *  wire carries the same value as `action` (healed on read). */
+    /** Human-readable phase (`'editing'`). */
     reason: z.string(),
     description: z.string().optional(),
     field: z.string().optional(),
@@ -354,14 +353,14 @@ export const modelClaimSchema = z
 export type ModelClaim = z.infer<typeof modelClaimSchema>;
 
 /**
- * `claim_begin` payload (client → server). The descriptive target + action,
+ * `claim_begin` payload (client → server). The descriptive target + reason,
  * plus an optional duration hint and the opt-in fair-queue flag. The server
  * stamps the lifecycle/timestamp fields, so they are NOT part of the inbound
  * shape — this is exactly what the WS ingest validates.
  */
 export const claimBeginPayloadSchema = targetRefSchema.extend({
   claimId: z.string(),
-  action: z.string(),
+  reason: z.string(),
   /** Hint for `expiresAt`; the server caps it. */
   estimatedMs: z.number().optional(),
   /**

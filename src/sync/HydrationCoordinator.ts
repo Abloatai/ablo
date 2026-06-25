@@ -284,7 +284,11 @@ export class HydrationCoordinator {
   ): Promise<Model[]> {
     const networkRows = await this.queryNetwork(modelName, clauses, options);
     const networkModels = networkRows
-      .map((raw) => this.hydrateOne(raw, typename))
+      // Strict: a row the SERVER returned whose typename this client never
+      // registered is a genuine schema collision (the org's pushed schema
+      // differs from local) — throw it here, naming the cause, rather than
+      // silently dropping the row and failing downstream as `entity_not_found`.
+      .map((raw) => this.hydrateOne(raw, typename, { strict: true }))
       .filter((m): m is Model => m !== null);
 
     if (networkModels.length > 0) {
@@ -418,7 +422,11 @@ export class HydrationCoordinator {
     return (this.opts.schema as { models?: Record<string, SchemaModelDef> }).models?.[modelName];
   }
 
-  private hydrateOne(raw: unknown, typename?: string): Model | null {
+  private hydrateOne(
+    raw: unknown,
+    typename?: string,
+    opts?: { strict?: boolean },
+  ): Model | null {
     if (!raw || typeof raw !== 'object') return null;
     const obj = raw as Record<string, unknown>;
     if (typeof obj.id !== 'string') return null;
@@ -449,7 +457,7 @@ export class HydrationCoordinator {
     // re-populate it). The typename comes from the schema relation
     // (`'SlideLayer'`, `'SlideLayoutLayer'`, etc.) so no guessing involved.
     const stamped = this.stampTypename(obj, typename) as Record<string, unknown>;
-    return this.opts.objectPool.createFromData(stamped);
+    return this.opts.objectPool.createFromData(stamped, undefined, opts);
   }
 
   /**

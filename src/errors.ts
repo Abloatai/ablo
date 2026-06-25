@@ -277,8 +277,7 @@ export interface ClaimContext {
   readonly claimId?: string;
   readonly actor?: string;
   readonly participantKind?: ParticipantKind;
-  /** Human-readable phase the holder is in (`'editing'`). Matches the public
-   *  claim surface; the wire summary carries the same value as `action`. */
+  /** Human-readable phase the holder is in (`'editing'`). */
   readonly reason?: string;
   readonly description?: string;
   readonly field?: string;
@@ -299,12 +298,9 @@ export interface ClaimContext {
 
 export type ClaimErrorClaim = WireClaimSummary | ClaimContext;
 
-function claimAction(claim: ClaimErrorClaim | undefined): string | undefined {
+function claimReason(claim: ClaimErrorClaim | undefined): string | undefined {
   if (!claim) return undefined;
-  // The public `ClaimContext` exposes the phase as `reason`; the wire
-  // `WireClaimSummary` projection still carries it under `action`. Read both.
-  const c = claim as { readonly reason?: string; readonly action?: string };
-  return c.reason ?? c.action;
+  return claim.reason;
 }
 
 function claimDescription(claim: ClaimErrorClaim | undefined): string | undefined {
@@ -343,23 +339,23 @@ export function formatClaimedErrorMessage(args: {
   readonly fallback?: string;
 }): string {
   const holder = claimActor(args.claim, args.heldBy);
-  const action = claimAction(args.claim);
+  const reason = claimReason(args.claim);
   const description = claimDescription(args.claim);
   const expiresIn = secondsUntil(claimExpiresAt(args.claim));
 
-  if (!holder && !action && !description) {
+  if (!holder && !reason && !description) {
     return args.fallback ?? `Model row is claimed: ${args.targetLabel}.`;
   }
 
   const actor = holder ?? 'another participant';
-  const actionPart = action ? ` (${action})` : '';
+  const reasonPart = reason ? ` (${reason})` : '';
   const descriptionPart = description ? `: ${description}` : '';
   const expiresPart =
     expiresIn !== undefined ? ` - expires in ${expiresIn}s` : '';
   const policyPart = args.policyReason
     ? ` Policy reason: ${args.policyReason}.`
     : '';
-  return `Claimed by ${actor}${actionPart}${descriptionPart}${expiresPart} on ${args.targetLabel}.${policyPart}`;
+  return `Claimed by ${actor}${reasonPart}${descriptionPart}${expiresPart} on ${args.targetLabel}.${policyPart}`;
 }
 
 /**

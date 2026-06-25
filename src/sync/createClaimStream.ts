@@ -10,7 +10,7 @@
  *
  * Wire contract (apps/sync-server/src/hub/types.ts):
  *   • Outbound: `{ type: 'claim_begin', payload: { claimId,
- *       entityType, entityId, action, field?, estimatedMs? } }`
+ *       entityType, entityId, reason, field?, estimatedMs? } }`
  *   • Outbound: `{ type: 'claim_abandon', payload: { claimId,
  *       entityType?, entityId? } }`
  *   • Inbound (via presence): `event.activeClaims: Claim[]`
@@ -27,10 +27,8 @@ import type {
   PresenceUpdateEvent,
 } from './SyncWebSocket.js';
 import type {
-  ActiveClaim,
   ClaimOptions,
-  EntityRef,
-  ClaimHandle,
+  ClaimTarget,
   Claim,
   ClaimLeaseOptions,
   ClaimRejection,
@@ -57,6 +55,13 @@ export interface ClaimStreamConfig {
 }
 
 export interface AttachableClaimStream extends ClaimStream {
+  /**
+   * INTERNAL lease mint — sends the `claim_begin` frame and returns a held
+   * {@link Claim} (no row `data`; the model door reads the row and stamps it).
+   * Not part of the public `ClaimStream` surface: the only public way to take a
+   * claim is `ablo.<model>.claim({ id })`, which builds on this.
+   */
+  claim(target: PresenceTarget, opts?: ClaimOptions): Claim;
   attach(transport: SyncWebSocket): void;
   dispose(): void;
 }
@@ -65,10 +70,10 @@ interface OwnClaim {
   readonly entityType: string;
   readonly entityId: string;
   readonly path?: string;
-  readonly range?: EntityRef['range'];
+  readonly range?: ClaimTarget['range'];
   readonly field?: string;
-  readonly meta?: EntityRef['meta'];
-  /** Human-readable phase; serialized on the wire as `action`. */
+  readonly meta?: ClaimTarget['meta'];
+  /** Human-readable phase. */
   readonly reason: string;
   readonly estimatedMs: number | undefined;
   /** Opt into the server's fair FIFO queue on contention (vs. reject). */
@@ -82,8 +87,8 @@ export function createClaimStream(
   const { participantId } = config;
 
   // ── State: others' open claims, keyed by claimId ───────────────
-  const activeByClaimId = new Map<string, ActiveClaim>();
-  let claimsSnapshot: ReadonlyArray<ActiveClaim> = Object.freeze([]);
+  const activeByClaimId = new Map<string, Claim>();
+  let claimsSnapshot: ReadonlyArray<Claim> = Object.freeze([]);
 
   // ── State: our own open claims (for re-announce on reconnect) ───
   const ownClaims = new Map<string, OwnClaim>();
@@ -159,7 +164,9 @@ export function createClaimStream(
           if (claim.status && claim.status !== 'active') continue;
           const description = descriptionFromMeta(claim.meta);
           activeByClaimId.set(claim.claimId, {
+            object: 'claim',
             id: claim.claimId,
+            status: 'active',
             heldBy: event.userId,
             participantKind: participantKindFromWire(
               event.participantKind,
@@ -173,13 +180,13 @@ export function createClaimStream(
               field: claim.field,
               meta: claim.meta,
             },
-            reason: claim.action,
+            reason: claim.reason,
             ...(description ? { description } : {}),
             ttlSeconds: Math.max(
               0,
               Math.floor((claim.expiresAt - Date.now()) / 1000),
             ),
-            announcedAt: claim.declaredAt,
+            createdAt: claim.declaredAt,
             expiresAt: claim.expiresAt,
           });
           mutated = true;
@@ -298,8 +305,7 @@ export function createClaimStream(
         entityId: claim.entityId,
         path: claim.path,
         range: claim.range,
-        // Wire field stays `action` (coordination schema); source is `reason`.
-        action: claim.reason,
+        reason: claim.reason,
         field: claim.field,
         meta: claim.meta,
         estimatedMs: claim.estimatedMs,
@@ -342,9 +348,9 @@ export function createClaimStream(
   }
 
   function withDescription(
-    meta: EntityRef['meta'],
+    meta: ClaimTarget['meta'],
     description: string | undefined,
-  ): EntityRef['meta'] {
+  ): ClaimTarget['meta'] {
     if (!description) return meta;
     return { ...(meta ?? {}), description };
   }
@@ -353,13 +359,13 @@ export function createClaimStream(
     entityType: string;
     entityId: string;
     path?: string;
-    range?: EntityRef['range'];
+    range?: ClaimTarget['range'];
     field?: string;
-    meta?: EntityRef['meta'];
+    meta?: ClaimTarget['meta'];
     reason: string;
     ttl?: ClaimLeaseOptions['ttl'];
     queue?: boolean;
-  }): ClaimHandle {
+  }): Claim {
     const claimId = crypto.randomUUID();
     const estimatedMs = args.ttl !== undefined ? toMs(args.ttl) : undefined;
     const claim: OwnClaim = {
@@ -396,10 +402,11 @@ export function createClaimStream(
 
     return {
       object: 'claim',
-      claimId,
+      id: claimId,
+      status: 'active',
       reason: args.reason,
       target: {
-        model: args.entityType,
+        type: args.entityType,
         id: args.entityId,
         path: args.path,
         range: args.range,
@@ -416,16 +423,16 @@ export function createClaimStream(
     };
   }
 
-  function resolveTarget(target: PresenceTarget): EntityRef {
+  function resolveTarget(target: PresenceTarget): ClaimTarget {
     if (Array.isArray(target)) return { type: target[0], id: target[1] };
-    return target as EntityRef;
+    return target as ClaimTarget;
   }
 
   return {
     claim(
       target: PresenceTarget,
       opts?: ClaimOptions,
-    ): ClaimHandle {
+    ): Claim {
       const resolved = resolveTarget(target);
       return mintHandle({
         entityType: resolved.type,
@@ -469,7 +476,7 @@ export function createClaimStream(
       };
     },
     [Symbol.asyncIterator]() {
-      return asyncIteratorFrom<ReadonlyArray<ActiveClaim>>(
+      return asyncIteratorFrom<ReadonlyArray<Claim>>(
         (onChange) => {
           listeners.add(onChange);
           return () => {

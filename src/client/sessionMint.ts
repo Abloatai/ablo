@@ -37,6 +37,16 @@ export interface MintSessionContext {
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly fetch?: typeof fetch;
+  /**
+   * Schema-key → wire typename map, supplied ONLY by the schema client
+   * (`Ablo`). A capability is scoped by the lowercased TYPENAME the Hub
+   * checks, but `can` is keyed by schema key — so `can: { documents: ['update'] }`
+   * on a model whose `typename` is overridden to `Document` must mint
+   * `document.update`, not `documents.update` (else the Hub denies it with
+   * `capability_scope_denied`). The schemaless `ApiClient` omits this map:
+   * there the `can` key already IS the wire token, so no translation applies.
+   */
+  readonly modelTypenames?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -79,9 +89,14 @@ export async function mintSession<S extends SchemaRecord>(
     };
   }
 
-  const operations = Object.entries(params.can).flatMap(([model, ops]) =>
-    (ops ?? []).map((op) => `${model.toLowerCase()}.${op}`),
-  );
+  const operations = Object.entries(params.can).flatMap(([model, ops]) => {
+    // Translate the schema key the developer used in `can` to the wire
+    // typename the Hub gates on — see `modelTypenames` above. Falls back to
+    // the key when no map is supplied (schemaless client) or the key isn't
+    // in it, preserving the prior behaviour exactly for those callers.
+    const ns = ctx.modelTypenames?.[model] ?? model;
+    return (ops ?? []).map((op) => `${ns.toLowerCase()}.${op}`);
+  });
   const res = await exchangeApiKey({
     apiKey,
     baseUrl,

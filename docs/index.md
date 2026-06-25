@@ -48,6 +48,7 @@ Three things stay true no matter how you use Ablo:
 - [Interaction Model](./interaction-model.md) — The schema, claim, update, confirmation loop.
 - [API Reference](./api.md) — Model-by-model method shape.
 - [Client Behavior](./client-behavior.md) — Options, errors, retries, timeouts, and imports.
+- [Debugging & Logs](./debugging.md) — Turn on the `[Ablo]` coordination trace (`debug` / `logLevel`) to watch claims, queueing, and grants while you build — or read the same activity in code via `ClaimLog` to render an activity feed.
 - [Connect Your Database](./data-sources.md) — Keep canonical rows in your app database without giving Ablo database credentials.
 - [React](./react.md) — Provider, hooks, and reactive reads for React apps.
 - [API Keys](./api-keys.md) — Bearer tokens for the public API.

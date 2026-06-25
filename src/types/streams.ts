@@ -165,7 +165,7 @@ export interface ContextChange {
  * `range`, `field`, and `meta` are generic coordination hints for
  * products like code editors, document editors, and design tools.
  */
-export interface EntityRef {
+export interface ClaimTarget {
   readonly type: string;
   readonly id: string;
   readonly path?: string;
@@ -176,11 +176,11 @@ export interface EntityRef {
 
 /**
  * A pointer to one entity the participant is acting on. Either a
- * typed `EntityRef` (`{ type, id, ... }`), or a tuple
+ * typed `ClaimTarget` (`{ type, id, ... }`), or a tuple
  * `['Clause', 'cl_3']` for ergonomic inline use. The verb methods
  * below accept both.
  */
-export type PresenceTarget = EntityRef | readonly [type: string, id: string];
+export type PresenceTarget = ClaimTarget | readonly [type: string, id: string];
 
 /**
  * Reactive livestream of what every multiplayer participant is doing.
@@ -433,29 +433,19 @@ export interface ClaimOptions extends ClaimLeaseOptions {
   readonly queue?: boolean;
 }
 
+// The claim STREAM is observation-only. Taking a claim is done through the one
+// public door — `ablo.<model>.claim({ id })` — which reads the row under the
+// lease and hands back a `ClaimHandle` with `data`. There is deliberately no
+// low-level `claims.claim(target)` take-method here: a second take-door with a
+// row-less handle was the source of the "which claim type / which path" DX
+// confusion, so the stream exposes only the reactive reads below.
 export interface ClaimStream {
-  /**
-   * Claim an exclusive claim on a target. Returns a handle — call
-   * `.revoke()` to cancel, let it expire via TTL, or use `await using`
-   * (TC39 explicit resource management) to auto-revoke on scope exit.
-   *
-   * Server rejects via `claim_rejected` when another participant
-   * already holds a claim on the same target. Default `reason` is
-   * `'editing'`; pass `{reason: 'writing'}` (or any string) to override.
-   *
-   * The frame ships on the open WS immediately. One method, one shape —
-   * the verb shortcuts (`editing`, `writing`, `announce`) and the
-   * scoped `claim(reason, opts)` overload were collapsed into this
-   * single primitive.
-   */
-  claim(target: PresenceTarget, opts?: ClaimOptions): ClaimHandle;
-
   /**
    * Reactive view of every other participant's active claims.
    * Reads return the current snapshot; pair with `subscribe(...)`
    * below to get notified on change.
    */
-  readonly others: ReadonlyArray<ActiveClaim>;
+  readonly others: ReadonlyArray<Claim>;
 
   /**
    * Reactive view of the wait queue on one target — the FIFO line of
@@ -530,7 +520,7 @@ export interface ClaimStream {
    * }
    * ```
    */
-  [Symbol.asyncIterator](): AsyncIterableIterator<ReadonlyArray<ActiveClaim>>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<ReadonlyArray<Claim>>;
 }
 
 /**
@@ -559,114 +549,6 @@ export interface ClaimLost {
   };
 }
 
-export interface ClaimDeclaration {
-  readonly target: EntityRef;
-  /** Human-readable reason — "rewriting title" / "restyling chart". */
-  readonly reason: string;
-  /**
-   * Seconds remaining until the server auto-expires this claim. An OUTPUT
-   * field carrying a concrete countdown, so it's a plain `number` — distinct
-   * from the input `ttl: Duration` (`'3m'`) you pass when announcing. Computed
-   * from `expiresAt - now`.
-   */
-  readonly ttlSeconds?: number;
-}
-
-/**
- * Handle returned from `announce(...)` / `analyzing(...)` / etc.
- *
- * Implements `Symbol.asyncDispose` so callers can write:
- *
- * ```ts
- * {
- *   await using work = participant.claims.analyzing(clause, { ttl: '3m' });
- *   // ... do the work; claim auto-revokes when the block exits
- * }
- * ```
- */
-/**
- * THE one claim handle. Returned by every claim door — the typed
- * `ablo.<model>.claim({ id })` (rich: `data`/`readAt`/`target` populated) and
- * the low-level `participant.claims.claim()` lease (minimal: `claimId` +
- * `revoke`/`release`). Row-level fields are optional precisely because the
- * low-level lease has no row snapshot; the model door fills them in.
- *
- * Implements `Symbol.asyncDispose` so callers can `await using claim = ...`
- * and have it auto-release on scope exit.
- */
-export interface ClaimHandle<T = Record<string, unknown>> extends AsyncDisposable {
-  readonly object: 'claim';
-  readonly claimId: string;
-  /**
-   * True when the grant came AFTER waiting in the server's FIFO line
-   * (`claim_granted`) — the authoritative "the row may have changed under us"
-   * signal. Absent for an immediate grant or a non-queued lease.
-   */
-  readonly waited?: boolean;
-  /**
-   * Sync watermark of the held snapshot (`data` was read at this stamp). Writes
-   * carrying the handle use it as the `readAt` stale guard. Present for
-   * model-scoped claims; absent for low-level leases.
-   */
-  readonly readAt?: number;
-  readonly target: {
-    readonly model: string;
-    readonly id: string;
-    readonly field?: string;
-    readonly path?: string;
-    readonly range?: TargetRange;
-    readonly meta?: Record<string, unknown>;
-  };
-  /**
-   * The human-readable phase this claim represents — `'editing'`, `'writing'`,
-   * `'forecasting'`. The SAME word on every claim surface (inputs and outputs);
-   * distinct from the CRUD operation (`CommitOperationInput.action`). Defaults
-   * to `'editing'`. Serialized on the wire as `action`.
-   */
-  readonly reason: string;
-  readonly description?: string;
-  /** Row snapshot — populated by `ablo.<model>.claim`; absent on low-level leases. */
-  readonly data?: T;
-  release(): Promise<void>;
-  revoke(): void;
-}
-
-export interface ActiveClaim extends ClaimDeclaration {
-  readonly id: string;
-  readonly heldBy: string;
-  /**
-   * Whether the holding participant is a user (session), an agent, or a
-   * system actor. First-class field so UIs can style "agent editing X"
-   * differently from "user editing X" without string-parsing `heldBy`.
-   * Canonical `'user' | 'agent' | 'system'` — the presence/claim stream
-   * derives the value from the boolean `isAgent` wire flag (so it produces
-   * only `'user'`/`'agent'`), but the type stays the full union it shares
-   * with the HTTP claim surface and lease store.
-   */
-  readonly participantKind: ParticipantKind;
-  readonly description?: string;
-  /** Epoch-ms the claim was announced. */
-  readonly announcedAt: number;
-  /** Epoch-ms the server auto-expires it. */
-  readonly expiresAt: number;
-}
-
-// ─────────────────────────────────────────────────────────────────────
-//  Claim — the canonical, Stripe-shaped coordination object
-// ─────────────────────────────────────────────────────────────────────
-//
-// One self-describing claim carries the whole coordination lifecycle
-// in a single `status` field — the same move Stripe makes with
-// `PaymentIntent` (`requires_confirmation → processing → succeeded`).
-// This supersedes the sprawl of `Claim` / `ActiveClaim` /
-// `ModelClaim` / `ClaimRejection` / `Claim`: those were five half-
-// shapes of one idea. `Claim` is the idea.
-//
-// It stays on the *coordination plane* — ephemeral, TTL'd, broadcast on
-// the presence frame, never persisted to IndexedDB and never emitted as
-// a `SyncDelta`. It is read through `ablo.<model>.claim.state({ id })`, not
-// `defineSchema`.
-
 /**
  * Every lifecycle state of a coordination claim, in one enum.
  * `active` = the current holder (the lock). `queued` = waiting in the FIFO
@@ -687,44 +569,90 @@ export interface ClaimWaitOptions {
   readonly signal?: AbortSignal;
 }
 
-/**
- * The coordination state of one entity. Self-describing on the wire via
- * `object: 'claim'`. Existence with `status: 'active'` *is* the lock;
- * the fields *are* the awareness ("agent X is editing this until Y").
- *
- * Deliberately omits a Stripe-style `next_action`: a contender's only
- * response is "wait until free, then re-read", and the runtime performs
- * that uniformly — `claim` serializes behind the holder via the server
- * FIFO queue (or low-level `claims.waitFor` to wait without claiming), and the
- * stale-context guard forces the re-read. Encoding a constant instruction
- * the engine always takes would be the kind of ceremony this object exists
- * to remove.
- */
-export interface Claim {
+// ─────────────────────────────────────────────────────────────────────
+//  Claim — the ONE claim structure
+// ─────────────────────────────────────────────────────────────────────
+//
+// There is exactly one claim type. The SAME `Claim` is:
+//   • what `ablo.<model>.claim({ id })` returns (a claim you HOLD — `data`,
+//     `readAt`, `release()`/`revoke()` are populated),
+//   • what `ablo.<model>.claim.state({ id })` reads (the current holder, or
+//     null),
+//   • every entry in `ablo.claims.others` / `queueFor(...)` (peer claims you
+//     only observe — no `release()`).
+//
+// Behavioral fields are optional because not every surface fills every one: a
+// peer claim you merely observe has no `release()`; a freshly-minted lease has
+// no row `data` until the door reads it. One name, one shape, no `ClaimHandle`
+// / `ActiveClaim` / `ModelClaim` to disambiguate.
+//
+// Lives on the *coordination plane* — ephemeral, TTL'd, broadcast on the
+// presence frame, never persisted to IndexedDB and never emitted as a
+// `SyncDelta`.
+export interface Claim<T = Record<string, unknown>> {
   readonly object: 'claim';
+  /** This claim's id. */
   readonly id: string;
-  readonly status: ClaimStatus;
+  /**
+   * Lifecycle state. `active` = the holder (the lock); `queued` = waiting in
+   * the FIFO line (carries `position`). Optional on shapes derived from a
+   * presence frame that don't carry it — a present entry is `active` by
+   * construction.
+   */
+  readonly status?: ClaimStatus;
   /** What is being coordinated. */
-  readonly target: EntityRef;
-  /** Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. The same
-   *  field on every claim surface; distinct from the CRUD operation. Serialized
-   *  on the wire as `action`. */
+  readonly target: ClaimTarget;
+  /**
+   * Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. The same
+   * field on every claim surface; distinct from the CRUD operation. Defaults to
+   * `'editing'`.
+   */
   readonly reason: string;
   /** Peer-visible explanation of the work being performed. */
   readonly description?: string;
-  /** Participant holding it. */
-  readonly heldBy: string;
-  readonly participantKind: ParticipantKind;
+  /** Participant holding it. Absent on a handle you hold for yourself. */
+  readonly heldBy?: string;
   /**
-   * Epoch-ms the holder opened it. Optional until the lease wire carries
-   * it — derived shapes (e.g. mapped from a presence frame) may omit it.
+   * Whether the holder is a user (session), agent, or system actor — so UIs
+   * style "agent editing X" vs "user editing X" without string-parsing
+   * `heldBy`. Present on observed claims; absent on your own fresh handle.
    */
+  readonly participantKind?: ParticipantKind;
+  /** Epoch-ms the holder opened it. */
   readonly createdAt?: number;
   /** Epoch-ms the server auto-expires it if the holder doesn't finish. */
-  readonly expiresAt: number;
+  readonly expiresAt?: number;
+  /**
+   * Seconds remaining until auto-expiry — an OUTPUT countdown (plain `number`),
+   * distinct from the input `ttl: Duration` (`'3m'`) you pass when claiming.
+   */
+  readonly ttlSeconds?: number;
   /**
    * 0-based place in the FIFO line — present only when `status: 'queued'`
-   * (`0` = next in line behind the holder). Absent for the active holder.
+   * (`0` = next behind the holder). Absent for the active holder.
    */
   readonly position?: number;
+  /**
+   * True when the grant came AFTER waiting in the server's FIFO line
+   * (`claim_granted`) — the authoritative "the row may have changed under us"
+   * signal. Absent for an immediate (uncontended) grant.
+   */
+  readonly waited?: boolean;
+  /**
+   * Sync watermark of the held snapshot (`data` was read at this stamp). Writes
+   * carrying the claim use it as the `readAt` stale guard. Present on a claim
+   * you hold.
+   */
+  readonly readAt?: number;
+  /** Row snapshot under the lease — present on a claim you hold. */
+  readonly data?: T;
+  /**
+   * Release the lease. Present only on a claim you HOLD (returned by
+   * `ablo.<model>.claim`); absent on observed peer claims.
+   */
+  release?(): Promise<void>;
+  /** Synchronously abandon the lease. Present only on a claim you hold. */
+  revoke?(): void;
+  /** Auto-release on `await using` scope exit. Present only on a held claim. */
+  [Symbol.asyncDispose]?(): PromiseLike<void>;
 }

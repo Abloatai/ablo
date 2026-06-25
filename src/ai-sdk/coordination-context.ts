@@ -27,8 +27,9 @@ import type {
 } from '@ai-sdk/provider';
 import type { Ablo } from '../client/Ablo.js';
 import type { SchemaRecord } from '../schema/schema.js';
-import type { ActiveClaim } from '../types/streams.js';
-import type { ClaimTarget } from './claim-broadcast.js';
+import type { Claim, ClaimTarget } from '../types/streams.js';
+
+export type { ClaimTarget };
 
 export interface CoordinationContextMiddlewareOptions<R extends SchemaRecord = SchemaRecord> {
   readonly agent: Ablo<R> | null;
@@ -70,8 +71,8 @@ export function coordinationContextMiddleware<R extends SchemaRecord = SchemaRec
       // against the engine's reactive claims.others array — no I/O.
       const peerClaims = agent.claims.others.filter(
         (claim) =>
-          claim.target.type === target.entityType &&
-          claim.target.id === target.entityId &&
+          claim.target.type === target.type &&
+          claim.target.id === target.id &&
           targetsOverlap(claim.target, target) &&
           !excludeClaimIds.has(claim.id),
       );
@@ -100,7 +101,7 @@ function rangesOverlap(
 }
 
 function targetsOverlap(
-  claimTarget: ActiveClaim['target'],
+  claimTarget: Claim['target'],
   target: ClaimTarget,
 ): boolean {
   if (!hasSubtarget(claimTarget) || !hasSubtarget(target)) return true;
@@ -128,10 +129,10 @@ function targetsOverlap(
  * "AI knows," not "AI gets a wall of text."
  */
 function formatCoordinationNote(
-  claims: readonly ActiveClaim[],
+  claims: readonly Claim[],
   target: ClaimTarget,
 ): string {
-  const entityLabel = target.entityType.toLowerCase();
+  const entityLabel = target.type.toLowerCase();
   if (claims.length === 1) {
     const c = claims[0];
     const details = c.description ? `Declared work: ${c.description}. ` : '';

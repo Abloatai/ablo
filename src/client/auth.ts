@@ -69,6 +69,205 @@ export function resolveAuthToken(input: AuthResolveInput): string | null {
   return input.options.authToken ?? null;
 }
 
+type CliMode = 'sandbox' | 'production';
+type StaticApiKeySource = 'option' | 'env';
+
+interface StaticApiKey {
+  readonly key: string;
+  readonly source: StaticApiKeySource;
+}
+
+interface CliCredentialSnapshot {
+  readonly mode: CliMode;
+  readonly activeProfile: string;
+  readonly storedKey?: string;
+}
+
+export interface CliKeyMismatch {
+  readonly source: StaticApiKeySource;
+  readonly configuredKeyPrefix: string;
+  readonly configuredMode?: CliMode;
+  readonly cliMode: CliMode;
+  readonly storedKeyPrefix?: string;
+  readonly kind: 'mode_mismatch' | 'key_override';
+  readonly message: string;
+}
+
+function keyPrefix(key: string): string {
+  return `${key.slice(0, 12)}…`;
+}
+
+/** Infer sandbox/production from Ablo key prefixes without importing CLI code. */
+export function modeFromApiKey(key: string): CliMode | undefined {
+  if (/^(sk|rk)_test_/.test(key)) return 'sandbox';
+  if (/^(sk|rk)_live_/.test(key)) return 'production';
+  return undefined;
+}
+
+function resolveStaticApiKey(input: AuthResolveInput): StaticApiKey | null {
+  if (typeof input.options.apiKey === 'string') {
+    return { key: input.options.apiKey, source: 'option' };
+  }
+  if (input.options.apiKey !== undefined && input.options.apiKey !== null) {
+    return null;
+  }
+  const envKey = input.env.ABLO_API_KEY;
+  if (typeof envKey === 'string' && envKey.length > 0) {
+    return { key: envKey, source: 'env' };
+  }
+  return null;
+}
+
+function readProfileKeys(
+  value: unknown,
+): Record<string, Record<CliMode, { apiKey?: string } | undefined>> {
+  if (!value || typeof value !== 'object') return {};
+  const profiles: Record<string, Record<CliMode, { apiKey?: string } | undefined>> = {};
+  for (const [name, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as Record<string, unknown>;
+    const sandbox = row.sandbox;
+    const production = row.production;
+    profiles[name] = {
+      sandbox: sandbox && typeof sandbox === 'object' ? sandbox as { apiKey?: string } : undefined,
+      production: production && typeof production === 'object' ? production as { apiKey?: string } : undefined,
+    };
+  }
+  return profiles;
+}
+
+function legacyProfileKeys(
+  value: Record<string, unknown> | null,
+): Record<CliMode, { apiKey?: string } | undefined> {
+  if (!value) return { sandbox: undefined, production: undefined };
+  const sandbox = value.sandbox;
+  const production = value.production;
+  if (
+    (sandbox && typeof sandbox === 'object') ||
+    (production && typeof production === 'object')
+  ) {
+    return {
+      sandbox: sandbox && typeof sandbox === 'object' ? sandbox as { apiKey?: string } : undefined,
+      production: production && typeof production === 'object' ? production as { apiKey?: string } : undefined,
+    };
+  }
+  if (typeof value.apiKey === 'string') {
+    return { sandbox: { apiKey: value.apiKey }, production: undefined };
+  }
+  return { sandbox: undefined, production: undefined };
+}
+
+function normalizeCliMode(value: unknown): CliMode | undefined {
+  return value === 'sandbox' || value === 'production' ? value : undefined;
+}
+
+function activeProjectSlug(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const slug = (value as { slug?: unknown }).slug;
+  return typeof slug === 'string' && slug.length > 0 ? slug : undefined;
+}
+
+function importNodeBuiltin<T>(specifier: string): Promise<T> {
+  return import(specifier) as Promise<T>;
+}
+
+async function readJsonIfPresent(path: string): Promise<Record<string, unknown> | null> {
+  try {
+    const { readFile } = await importNodeBuiltin<typeof import('node:fs/promises')>(
+      'node:fs/promises',
+    );
+    const text = await readFile(path, 'utf8');
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readCliCredentialSnapshot(env: Record<string, string | undefined>): Promise<CliCredentialSnapshot | null> {
+  const processLike = (globalThis as typeof globalThis & {
+    process?: { versions?: { node?: string } };
+  }).process;
+  if (!processLike?.versions?.node) return null;
+  if (typeof window !== 'undefined') return null;
+
+  const [{ homedir }, { join }] = await Promise.all([
+    importNodeBuiltin<typeof import('node:os')>('node:os'),
+    importNodeBuiltin<typeof import('node:path')>('node:path'),
+  ]);
+  const dir = env.ABLO_CONFIG_DIR
+    ?? (env.XDG_CONFIG_HOME ? join(env.XDG_CONFIG_HOME, 'ablo') : join(homedir(), '.config', 'ablo'));
+  const [cfg, creds] = await Promise.all([
+    readJsonIfPresent(join(dir, 'config.json')),
+    readJsonIfPresent(join(dir, 'credentials.json')),
+  ]);
+  const mode = normalizeCliMode(cfg?.mode) ?? normalizeCliMode(creds?.mode);
+  const activeProfile = activeProjectSlug(cfg?.activeProject) ?? 'default';
+
+  const profiles = {
+    ...readProfileKeys(creds?.profiles),
+    ...readProfileKeys(cfg?.profiles),
+  };
+  if (!profiles[activeProfile]) {
+    const legacy = { ...legacyProfileKeys(cfg), ...legacyProfileKeys(creds) };
+    if (legacy.sandbox?.apiKey || legacy.production?.apiKey) {
+      profiles[activeProfile] = legacy;
+    }
+  }
+  const effectiveMode = mode ?? (Object.keys(profiles).length > 0 ? 'sandbox' : undefined);
+  if (!effectiveMode) return null;
+  return {
+    mode: effectiveMode,
+    activeProfile,
+    ...(profiles[activeProfile]?.[effectiveMode]?.apiKey
+      ? { storedKey: profiles[activeProfile]![effectiveMode]!.apiKey }
+      : {}),
+  };
+}
+
+export function describeCliKeyMismatch(
+  configured: StaticApiKey,
+  cli: CliCredentialSnapshot,
+): CliKeyMismatch | null {
+  const configuredMode = modeFromApiKey(configured.key);
+  const configuredKeyPrefix = keyPrefix(configured.key);
+  const storedKeyPrefix = cli.storedKey ? keyPrefix(cli.storedKey) : undefined;
+  const sourceLabel = configured.source === 'env' ? 'ABLO_API_KEY' : 'configured apiKey';
+
+  if (configuredMode && configuredMode !== cli.mode) {
+    return {
+      source: configured.source,
+      configuredKeyPrefix,
+      configuredMode,
+      cliMode: cli.mode,
+      ...(storedKeyPrefix ? { storedKeyPrefix } : {}),
+      kind: 'mode_mismatch',
+      message:
+        `${sourceLabel} is a ${configuredMode} key (${configuredKeyPrefix}) but the Ablo CLI is in ` +
+        `${cli.mode} mode${storedKeyPrefix ? ` (active stored key ${storedKeyPrefix})` : ''}. ` +
+        `Requests will use ${configuredMode}. Use the ${cli.mode} key, unset ABLO_API_KEY, ` +
+        `or run \`ablo mode ${configuredMode}\` intentionally.`,
+    };
+  }
+
+  if (configured.source === 'env' && cli.storedKey && configured.key !== cli.storedKey) {
+    return {
+      source: configured.source,
+      configuredKeyPrefix,
+      ...(configuredMode ? { configuredMode } : {}),
+      cliMode: cli.mode,
+      storedKeyPrefix,
+      kind: 'key_override',
+      message:
+        `ABLO_API_KEY (${configuredKeyPrefix}) overrides the CLI's stored active ${cli.mode} key ` +
+        `(${storedKeyPrefix}). Requests will use the environment key. Unset ABLO_API_KEY to use ` +
+        '`ablo status` / `ablo mode` credentials.',
+    };
+  }
+
+  return null;
+}
+
 /**
  * Resolve the direct-URL connector's Postgres connection string.
  *
@@ -124,6 +323,58 @@ export function warnIfDatabaseUrlEnvIgnored(
     'otherwise ignore this (the hosted sandbox and signed Data Source endpoints need no databaseUrl).';
   if (warn) warn(message);
   else if (typeof console !== 'undefined') console.warn('[Ablo]', message);
+}
+
+/**
+ * One-time deprecation nudge for the `databaseUrl` direct connector.
+ *
+ * `databaseUrl` registers the `dedicated` storage mode — Ablo opens a pool INTO
+ * the caller's Postgres and writes into it directly. That is the operate-their-
+ * database posture we are moving off. Ablo is Stripe-shaped: it hosts only the
+ * transaction log (the ordered sync_deltas) + coordination, never your data — your
+ * rows always live in your own database. The supported path is the signed Data
+ * Source endpoint (`dataSource(...)`), where your app owns the write and your
+ * credentials never leave it. See docs/plans/stripe-shaped-storage-posture.md.
+ *
+ * Still honored at runtime so existing integrations keep working; this only warns
+ * once per process (so it never spams) and falls back to `console.warn` when no
+ * logger is supplied (the `transport: 'http'`/`'api'` client has none).
+ */
+let warnedDatabaseUrlDeprecated = false;
+export function warnIfDatabaseUrlDeprecated(
+  input: AuthResolveInput,
+  warn?: (message: string) => void,
+): void {
+  if (warnedDatabaseUrlDeprecated) return;
+  if (input.options.databaseUrl == null) return;
+  warnedDatabaseUrlDeprecated = true;
+  const message =
+    '`databaseUrl` (the direct connector) is deprecated and will be removed from ' +
+    'the supported path. It lets Ablo dial into your database; we are moving off ' +
+    'that. Ablo hosts only the transaction log — your data stays in your DB. Expose ' +
+    'a signed Data Source endpoint (`dataSource(...)`) so your app owns the write, ' +
+    'or self-host the engine to keep the log in your infra too. ' +
+    'See docs/plans/stripe-shaped-storage-posture.md.';
+  if (warn) warn(message);
+  else if (typeof console !== 'undefined') console.warn('[Ablo]', message);
+}
+
+let warnedCliKeyMismatch = false;
+export async function warnIfCliKeyMismatch(
+  input: AuthResolveInput,
+  warn?: (message: string) => void,
+): Promise<void> {
+  if (warnedCliKeyMismatch) return;
+  if (input.env.NODE_ENV === 'production') return;
+  const configured = resolveStaticApiKey(input);
+  if (!configured) return;
+  const cli = await readCliCredentialSnapshot(input.env);
+  if (!cli) return;
+  const mismatch = describeCliKeyMismatch(configured, cli);
+  if (!mismatch) return;
+  warnedCliKeyMismatch = true;
+  if (warn) warn(mismatch.message);
+  else if (typeof console !== 'undefined') console.warn('[Ablo]', mismatch.message);
 }
 
 export const ABLO_HOSTED_API_DOMAIN = 'api.abloatai.com';

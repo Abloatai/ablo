@@ -25,6 +25,22 @@ one answer to "how do two agents not clobber each other" — then covers the
 (`claim` · `claim.state` · `claim.queue` · `claim.release` · [writing under a
 claim](#writing-under-a-claim)), and the [errors](#errors) you can catch.
 
+> **Before anything else: one identity per agent.** Coordination excludes
+> *participants*, and a participant **is the key**, not the client object. The
+> server derives identity from the credential's scope — so **N clients sharing
+> one `sk_`/`ek_` are one participant**: they all see the same `heldBy`, never
+> queue behind each other, and a "second" claimer silently re-takes the lease it
+> already holds (no mutual exclusion). To get real per-agent exclusion, mint a
+> **distinct scoped `rk_` per agent** and bind a client to it:
+>
+> ```ts
+> const { token } = await ablo.sessions.create({ agent: { id: `agent-${i}` } }); // rk_
+> const agent = Ablo({ schema, apiKey: token }); // this agent's own participant
+> ```
+>
+> Now `agent-0` holds while `agent-1`/`agent-2` queue in FIFO order and drain in
+> turn. See [sessions](./sessions.md#agent-sessions-rk_) for the minting flow.
+
 ---
 
 ## The model — three layers, one decision

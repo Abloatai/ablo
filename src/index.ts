@@ -96,7 +96,7 @@ export type {
   ClaimParams,
   ClaimLookupParams,
   ClaimReorderParams,
-  ClaimHandle,
+  Claim,
   ModelOperations,
 } from './client/Ablo.js';
 export type { AbloPersistence } from './client/persistence.js';
@@ -210,6 +210,19 @@ export type { WriteOptions, MutationOptions } from './interfaces/index.js';
 // docs/coordination.md → "Notify, do not abort").
 export { staleNotificationSchema, readDependencySchema } from './coordination/schema.js';
 export type { StaleNotification, ReadDependency } from './coordination/schema.js';
+// Claim log — collect claim events + stale-write collisions into an ordered list
+// you can print for eyeballing or collisions() for evals assertions. Hand
+// `new ClaimLog()` to `Ablo({ observability })`.
+export { ClaimLog, formatClaim, formatConflict } from './coordination/trace.js';
+export type { ClaimLogEntry } from './coordination/trace.js';
+export type {
+  ClaimEvent,
+  ConflictEvent,
+  SyncObservabilityProvider,
+} from './interfaces/index.js';
+// Spread this to provide a custom `observability` that overrides only the hooks
+// you care about (e.g. captureClaim) and no-ops the rest.
+export { noopObservability } from './SyncEngineContext.js';
 // Storage-wedge detection — lets app shells render a recovery screen when the
 // IndexedDB backing store is stuck (see core/openIDBWithTimeout.ts).
 export { IDBOpenTimeoutError, isStorageOpenTimeout } from './core/openIDBWithTimeout.js';

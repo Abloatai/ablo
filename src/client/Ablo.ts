@@ -66,6 +66,7 @@ import { BootstrapHelper } from '../sync/BootstrapHelper.js';
 import { HydrationCoordinator } from '../sync/HydrationCoordinator.js';
 import { type RefreshScheduler } from '../auth/index.js';
 import { mintSession } from './sessionMint.js';
+import type { MintSessionContext } from './sessionMint.js';
 import type { SyncGroupInput } from '../schema/roles.js';
 import { createAuthCredentialSource } from '../auth/credentialSource.js';
 import { createInternalComponents } from './createInternalComponents.js';
@@ -84,7 +85,7 @@ import type {
   PresenceStream,
   Snapshot,
 } from '../types/streams.js';
-import type { ActiveClaim, ClaimHandle, Duration, Claim, TargetRange } from '../types/streams.js';
+import type { Claim, Duration, TargetRange } from '../types/streams.js';
 import {
   createProtocolClient,
   type AbloApi,
@@ -123,7 +124,9 @@ import {
   resolveBaseURL,
   resolveBootstrapBaseUrl,
   resolveDatabaseUrl,
+  warnIfCliKeyMismatch,
   warnIfDatabaseUrlEnvIgnored,
+  warnIfDatabaseUrlDeprecated,
 } from './auth.js';
 import { registerDataSource } from './registerDataSource.js';
 import {
@@ -183,18 +186,19 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
   apiKey?: string | ApiKeySetter | null | undefined;
 
   /**
-   * Direct-URL convenience connector: a connection string to your own Postgres
-   * that Ablo can register for a dedicated tenant.
+   * @deprecated The direct connector lets Ablo dial INTO your Postgres and write to
+   * it — the operate-their-database posture we are moving off. Ablo is Stripe-shaped:
+   * it hosts only the transaction log (the ordered sync_deltas) + coordination, never
+   * your data; your rows always live in your own database. Use the signed Data Source
+   * endpoint instead — keep `DATABASE_URL` in your app, expose `dataSource(...)`, and
+   * let your server own the write while Ablo coordinates the sync stream. To keep the
+   * log in your infra too, self-host the engine. See
+   * docs/plans/stripe-shaped-storage-posture.md.
    *
-   * This is NOT the default Data Source path. For the Zero-shaped default, keep
-   * `DATABASE_URL` in your app, expose `dataSource(...)`, and let your server
-   * write the database while Ablo coordinates the sync stream.
-   *
-   * SERVER-ONLY: this carries credentials, so it is never sent from the browser
-   * — constructing a client with `databaseUrl` and `dangerouslyAllowBrowser`
-   * throws. If you opt into this connector, provide a NON-superuser,
-   * non-`BYPASSRLS` role; the direct connector rejects privileged roles that
-   * cannot enforce RLS.
+   * Still honored at runtime for back-compat. SERVER-ONLY: it carries credentials, so
+   * it is never sent from the browser — constructing a client with `databaseUrl` and
+   * `dangerouslyAllowBrowser` throws. If you use it, provide a NON-superuser,
+   * non-`BYPASSRLS` role; the connector rejects privileged roles that cannot enforce RLS.
    */
   databaseUrl?: string | null | undefined;
 
@@ -571,7 +575,7 @@ export type {
   ClaimParams,
   ClaimLookupParams,
   ClaimReorderParams,
-  ClaimHandle,
+  Claim,
   ModelOperations,
 } from './createModelProxy.js';
 import type {
@@ -621,7 +625,7 @@ export interface ModelReadOptions extends ClaimedOptions {}
 export interface ClaimCreateOptions {
   readonly target: ModelTarget;
   /** Human-readable phase shown to peers — `'editing'`, `'writing'`. The same
-   *  word on every claim surface; serialized on the wire as `action`. */
+   *  word on every claim surface. */
   readonly reason: string;
   readonly ttl?: Duration;
   /**
@@ -667,7 +671,7 @@ export interface CommitCreateOptions {
    * against concurrent edits without re-stating the watermark by hand.
    * Explicit `readAt`/`onStale` on the options win.
    */
-  readonly claim?: ClaimHandle<Record<string, unknown>> | null;
+  readonly claim?: Claim<Record<string, unknown>> | null;
   readonly operation?: CommitOperationInput;
   readonly operations?: readonly CommitOperationInput[];
   readonly wait?: CommitWait;
@@ -709,7 +713,7 @@ export interface CommitResource {
 }
 
 export interface ClaimResource extends ClaimStream {
-  create(options: ClaimCreateOptions): Promise<ClaimHandle>;
+  create(options: ClaimCreateOptions): Promise<Claim>;
   list(target?: Partial<ModelTarget>): readonly ModelClaim[];
   waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void>;
 }
@@ -720,7 +724,7 @@ export interface ModelMutationOptions extends ClaimedOptions {
   readonly readAt?: number | null;
   readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
   readonly wait?: CommitWait;
-  readonly claim?: ClaimHandle | ClaimOptions | null;
+  readonly claim?: Claim | ClaimOptions | null;
 }
 
 /**
@@ -740,7 +744,7 @@ export interface ModelMutationOptions extends ClaimedOptions {
  * on both); `state`/`queue`/`reorder`/`release` are the awaited form.
  */
 export type HttpClaimApi<T = Record<string, unknown>> =
-  ((params: ClaimParams<T>) => Promise<ClaimHandle<T>>) & {
+  ((params: ClaimParams<T>) => Promise<Claim<T>>) & {
     [K in keyof ClaimReadApi<T>]: AwaitedClaimMethod<ClaimReadApi<T>[K]>;
   };
 
@@ -834,6 +838,37 @@ export interface CreateAgentSessionParams<S extends SchemaRecord> {
 export type CreateSessionParams<S extends SchemaRecord> =
   | CreateUserSessionParams
   | CreateAgentSessionParams<S>;
+
+/** Params for {@link Ablo.agents}.create — a flattened agent descriptor (no
+ *  `{ agent }` discriminator: `agents.create` only ever mints an agent). Unlike
+ *  {@link CreateSessionParams} it resolves to a connected, scoped {@link Ablo}
+ *  client rather than a raw token. */
+export interface CreateAgentClientParams<S extends SchemaRecord> {
+  /** Wire participant identity (`agent:<id>`) — what claim exclusion and the
+   *  FIFO queue gate on. OMIT to get a fresh `crypto.randomUUID()`: a distinct,
+   *  independent participant (the default, and what you want for concurrent
+   *  agents). Pass a STABLE string only when one logical agent must re-attach
+   *  to its own held claims across reconnects/restarts. */
+  id?: string;
+  /** Human-readable label for logs / attribution (carried in `userMeta.name`).
+   *  INDEPENDENT of `id`: two agents that share a `name` still receive distinct
+   *  ids and coordinate as SEPARATE participants — `name` never derives or
+   *  collapses identity. */
+  name?: string;
+  /** Per-model operation allowlist, typed against the schema's model names. */
+  can: { [M in keyof S & string]?: readonly SessionOperation[] };
+  /** Sync groups this agent may subscribe to — typed (`'default'` or
+   *  `<namespace>:<id>`). Omit for the server default (org anchor + the
+   *  agent's own anchor). */
+  syncGroups?: readonly SyncGroupInput[];
+  /** Token lifetime in seconds. Defaults to 900 (15m); the returned client
+   *  auto-re-mints before expiry, so a long-running agent never handles
+   *  rotation itself. */
+  ttlSeconds?: number;
+  /** Extra opaque identity blob echoed on the session scope. Merged with
+   *  `name` (the `name` param wins if you also set `userMeta.name`). */
+  userMeta?: Record<string, unknown>;
+}
 
 /** A minted session token — the Stripe ephemeral-key / Supabase session
  *  resource. `token` is the secret the holder presents as its bearer. */
@@ -965,6 +1000,36 @@ export type Ablo<S extends SchemaRecord> = {
    */
   sessions: {
     create(params: CreateSessionParams<S>): Promise<AbloSession>;
+  };
+
+  /**
+   * Mint a scoped **agent identity** and return a ready-to-use client bound to
+   * it — the `ablo.<resource>.<verb>` shape for the agent use case. One call
+   * replaces `sessions.create({ agent })` + constructing a second
+   * `Ablo({ apiKey: token })`:
+   *
+   * ```ts
+   * const agent = await ablo.agents.create({
+   *   name: 'researcher',                  // readable label (optional)
+   *   can: { documents: ['read', 'update'] },
+   *   // id omitted → a fresh uuid: a distinct, independent participant
+   * });
+   * await agent.documents.update({ id, data, claim });
+   * await agent.dispose(); // when the agent is done
+   * ```
+   *
+   * Server-side only (requires the `sk_` secret key, like `sessions.create`);
+   * throws `AbloAuthenticationError` in the browser. The returned client holds
+   * its own auto-refreshing `rk_`, so a long run never hits token expiry, and
+   * the `sk_` never leaves this process. Each call is a DISTINCT participant by
+   * default (omit `id` → fresh uuid), so even two agents sharing a `name` queue
+   * behind one another on a contended row — `name` is display only and never
+   * collapses identity. Humans don't get a server-built client — ship them a
+   * token via `sessions.create({ user })`. Need the raw token for revocation,
+   * or a stable re-attachable id? Use `sessions.create({ agent })` / pass `id`.
+   */
+  agents: {
+    create(params: CreateAgentClientParams<S>): Promise<Ablo<S>>;
   };
 
   /**
@@ -1957,6 +2022,8 @@ export function Ablo<const S extends SchemaRecord>(
   // Nudge (once) if a stray DATABASE_URL is in the env but `databaseUrl` wasn't
   // passed — the env value is no longer auto-adopted (see resolveDatabaseUrl).
   warnIfDatabaseUrlEnvIgnored(authInput, (m) => logger.warn(m));
+  warnIfDatabaseUrlDeprecated(authInput, (m) => logger.warn(m));
+  void warnIfCliKeyMismatch(authInput, (m) => logger.warn(m));
   const schema = options.schema as Schema<S>;
   const url = resolveBaseURL(authInput);
 
@@ -2125,6 +2192,22 @@ export function Ablo<const S extends SchemaRecord>(
     logger.error(_validationError.message);
     store.syncStatus.state = 'error';
     store.syncStatus.error = _validationError;
+  }
+
+  // Deprecated identity overrides are a silent no-op under hosted cloud: when an
+  // `apiKey` is configured the SERVER derives participant kind + id from the
+  // key's scope, so `kind` / `agentId` passed here are ignored. Setting them and
+  // trusting them is the trap (you think you're an agent; the key says user).
+  // Warn loudly rather than removing the fields — `agentId` is still load-bearing
+  // on the self-hosted path (no apiKey; paired with `capabilityToken`).
+  if (configuredApiKey && (internalOptions.kind || internalOptions.agentId)) {
+    logger.warn(
+      'Ablo: `kind` / `agentId` are ignored when an `apiKey` is configured — ' +
+        'the server derives participant identity from the key’s scope. Remove ' +
+        'them (or mint a scoped session via `ablo.sessions.create({ agent })` ' +
+        'for a distinct agent identity). They apply only to the self-hosted ' +
+        '`capabilityToken` path.',
+    );
   }
 
   // 7. The ready() promise drives the BaseSyncedStore.initialize() generator
@@ -2387,12 +2470,12 @@ export function Ablo<const S extends SchemaRecord>(
 
 	  function isClaimHandleValue(
 	    value: unknown,
-	  ): value is ClaimHandle<Record<string, unknown>> {
+	  ): value is Claim<Record<string, unknown>> {
 	    return (
 	      typeof value === 'object' &&
 	      value !== null &&
 	      (value as { object?: unknown }).object === 'claim' &&
-	      typeof (value as { claimId?: unknown }).claimId === 'string'
+	      typeof (value as { id?: unknown }).id === 'string'
 	    );
 	  }
 
@@ -2443,17 +2526,17 @@ export function Ablo<const S extends SchemaRecord>(
 	    );
 	  }
 
-	  function modelClaimFromActive(claim: ActiveClaim): ModelClaim {
+	  function modelClaimFromActive(claim: Claim): ModelClaim {
 	    const description = descriptionFromMeta(claim.target.meta);
 	    return {
 	      id: claim.id,
-	      actor: claim.heldBy,
-	      participantKind: claim.participantKind,
+	      actor: claim.heldBy ?? "",
+	      participantKind: claim.participantKind ?? "user",
 	      reason: claim.reason,
 	      ...(description ? { description } : {}),
 	      field: claim.target.field,
 	      status: 'active',
-	      expiresAt: claim.expiresAt,
+	      expiresAt: claim.expiresAt ?? 0,
 	      target: {
 	        model: claim.target.type,
 	        id: claim.target.id,
@@ -2468,14 +2551,14 @@ export function Ablo<const S extends SchemaRecord>(
 	  function modelClaimFromQueued(claim: Claim): ModelClaim {
 	    return {
 	      id: claim.id,
-	      actor: claim.heldBy,
-	      participantKind: claim.participantKind,
+	      actor: claim.heldBy ?? "",
+	      participantKind: claim.participantKind ?? "user",
 	      reason: claim.reason,
 	      ...(claim.description ? { description: claim.description } : {}),
 	      field: claim.target.field,
 	      status: 'queued',
 	      position: claim.position,
-	      expiresAt: claim.expiresAt,
+	      expiresAt: claim.expiresAt ?? 0,
 	      target: {
 	        model: claim.target.type,
 	        id: claim.target.id,
@@ -2489,7 +2572,7 @@ export function Ablo<const S extends SchemaRecord>(
 
 	  function targetMatchesModel(
 	    target: { readonly model?: string; readonly id?: string; readonly field?: string },
-	    claim: ActiveClaim,
+	    claim: Claim,
 	  ): boolean {
 	    if (
 	      target.model &&
@@ -2594,13 +2677,13 @@ export function Ablo<const S extends SchemaRecord>(
 	    throw claimedError(target, current, 'model_claimed');
 	  }
 
-	  function wrapClaimHandle(claim: ClaimHandle, waited = false): ClaimHandle {
+	  function wrapClaimHandle(claim: Claim, waited = false): Claim {
 	    const release = async (): Promise<void> => {
-	      claim.revoke();
+	      claim.revoke?.();
 	    };
 	    return {
 	      object: 'claim',
-	      claimId: claim.claimId,
+	      id: claim.id,
 	      reason: claim.reason,
 	      target: claim.target,
 	      waited,
@@ -2611,7 +2694,7 @@ export function Ablo<const S extends SchemaRecord>(
 	  }
 
 	  const publicClaims: ClaimResource = Object.assign(claimStream, {
-	    async create(claimOptions: ClaimCreateOptions): Promise<ClaimHandle> {
+	    async create(claimOptions: ClaimCreateOptions): Promise<Claim> {
 	      await ready();
 	      const claim = claimStream.claim(
 	        {
@@ -2638,7 +2721,7 @@ export function Ablo<const S extends SchemaRecord>(
 	        const ws = store.getSyncWebSocket();
 	        if (ws) {
 	          try {
-	            ({ waited } = await awaitClaimGrant(ws, claim.claimId, {
+	            ({ waited } = await awaitClaimGrant(ws, claim.id, {
 	              timeoutMs: claimOptions.waitTimeoutMs,
 	              maxQueueDepth: claimOptions.maxQueueDepth,
 	            }));
@@ -2646,7 +2729,7 @@ export function Ablo<const S extends SchemaRecord>(
 	            // Gave up waiting (queue too deep, timed out, or lost) — abandon
 	            // the queued claim so we don't leave a phantom entry in the
 	            // line that would block or mislead other claimers.
-	            claim.revoke();
+	            claim.revoke?.();
 	            throw err;
 	          }
 	        }
@@ -2780,7 +2863,7 @@ export function Ablo<const S extends SchemaRecord>(
 	      });
 	      const wait = commitOptions.wait ?? 'confirmed';
 	      const claimId =
-	        normalizeClaimId(commitOptions.claimRef) ?? claim?.claimId;
+	        normalizeClaimId(commitOptions.claimRef) ?? claim?.id;
 	      void claimId; // The current wire clears claims by entity after commit.
 
 	      // Route through the TransactionQueue's commit lane so the call
@@ -2953,6 +3036,40 @@ export function Ablo<const S extends SchemaRecord>(
 	    return resolveApiKeyValue(configuredApiKey);
 	  }
 
+	  /**
+	   * Resolve the control-plane context a session/agent mint needs (sk_ +
+	   * bootstrap base URL + the schema-key→typename map the Hub gates on).
+	   * Shared by `sessions.create` and `agents.create` so the two mint doors
+	   * can never drift on how a token is minted. Throws if no `sk_` is present —
+	   * minting is a backend-only operation.
+	   */
+	  async function buildMintContext(resource: string): Promise<MintSessionContext> {
+	    const apiKey = await controlPlaneApiKey();
+	    if (!apiKey) {
+	      throw new AbloAuthenticationError(
+	        `${resource} requires a secret (sk_) API key — call it from your backend, not the browser.`,
+	        { code: 'apikey_missing' },
+	      );
+	    }
+	    return {
+	      apiKey,
+	      baseUrl: resolveBootstrapBaseUrl({
+	        url,
+	        bootstrapBaseUrl: internalOptions.bootstrapBaseUrl,
+	      }),
+	      ...(internalOptions.fetch ? { fetch: internalOptions.fetch } : {}),
+	      // Map every `can` schema-key to the wire typename the Hub gates on, so a
+	      // typename override (`documents` → `Document`) doesn't mint a capability
+	      // the server then denies. See `MintSessionContext`.
+	      modelTypenames: Object.fromEntries(
+	        Object.entries(schema.models).map(([key, def]) => [
+	          key,
+	          (def as ModelDef).typename ?? key,
+	        ]),
+	      ),
+	    };
+	  }
+
 	  const engine = {
     ...modelProxies,
 
@@ -3014,26 +3131,56 @@ export function Ablo<const S extends SchemaRecord>(
       // agent credential silently replacing the secret key on control-plane
       // calls is how humans get minted as agents — attribution is the product.
       async create(params: CreateSessionParams<S>): Promise<AbloSession> {
-        const apiKey = await controlPlaneApiKey();
-        if (!apiKey) {
-          throw new AbloAuthenticationError(
-            'sessions.create requires a secret (sk_) API key — call it from your backend, not the browser.',
-            { code: 'apikey_missing' },
-          );
-        }
-        const baseUrl = resolveBootstrapBaseUrl({
-          url,
-          bootstrapBaseUrl: internalOptions.bootstrapBaseUrl,
-        });
-        // The two mint doors (`{ user }` → /auth/ephemeral-keys → `ek_`,
-        // `{ agent, can }` → /auth/capability → scoped `rk_`) live in the shared
-        // `mintSession` so this stateful client and the stateless HTTP client can
-        // never drift on how a token is minted.
-        return mintSession(params, {
-          apiKey,
-          baseUrl,
-          ...(internalOptions.fetch ? { fetch: internalOptions.fetch } : {}),
-        });
+        // Both mint doors (`{ user }` → /auth/ephemeral-keys → `ek_`,
+        // `{ agent, can }` → /auth/capability → scoped `rk_`) resolve their
+        // control-plane context through the shared `buildMintContext`, so this
+        // client, `agents.create`, and the stateless HTTP client can never drift
+        // on how a token is minted.
+        return mintSession(params, await buildMintContext('sessions.create'));
+      },
+    },
+
+    // Mint a scoped agent IDENTITY and hand back a connected client bound to it
+    // — `sessions.create({ agent })` + `Ablo({ apiKey })` fused into one call,
+    // for agents that run in THIS (sk_-holding) process. Omitting `id` yields a
+    // fresh uuid per call, so concurrent agents are distinct participants that
+    // queue behind each other (even when they share a `name`). Humans don't get
+    // a server-built client — ship them a token via `sessions.create({ user })`.
+    agents: {
+      async create(params: CreateAgentClientParams<S>): Promise<Ablo<S>> {
+        // Distinct participant by default: omit `id` → a fresh uuid, so even two
+        // agents that share a `name` are INDEPENDENT participants and queue
+        // behind one another. `name` is display only (→ userMeta.name); it never
+        // derives the id. Pass an explicit `id` only to re-attach an agent to
+        // its own held claims.
+        const id = params.id ?? globalThis.crypto.randomUUID();
+        const userMeta =
+          params.name !== undefined ? { ...params.userMeta, name: params.name } : params.userMeta;
+        const sessionParams = {
+          agent: { id },
+          can: params.can,
+          ...(params.syncGroups ? { syncGroups: params.syncGroups } : {}),
+          ...(params.ttlSeconds !== undefined ? { ttlSeconds: params.ttlSeconds } : {}),
+          ...(userMeta ? { userMeta } : {}),
+        } satisfies CreateAgentSessionParams<S>;
+        // Re-mint the `rk_` on every resolver call so a long-lived agent client
+        // never hits token expiry; the `sk_` stays in THIS process — the child
+        // only ever sees its own short-lived `rk_`.
+        const mintToken = async (): Promise<string> =>
+          (await mintSession(sessionParams, await buildMintContext('agents.create')))
+            .token;
+        // Mint once up front so a bad key / denied scope throws HERE, not later
+        // inside the child's bootstrap; reuse that first token, re-mint on refresh.
+        let pending: string | null = await mintToken();
+        const apiKey: ApiKeySetter = async () => {
+          if (pending !== null) {
+            const token = pending;
+            pending = null;
+            return token;
+          }
+          return mintToken();
+        };
+        return Ablo<S>({ ...(internalOptions as AbloOptions<S>), apiKey });
       },
     },
 
@@ -3205,7 +3352,7 @@ export namespace Ablo {
   export type ClaimedOptions = import('./Ablo.js').ClaimedOptions;
 
   // ── Entity pointers (flat — input shapes used everywhere) ─────────
-  export type EntityRef = _Streams.EntityRef;
+  export type ClaimTarget = _Streams.ClaimTarget;
   export type PresenceTarget = _Streams.PresenceTarget;
   export type TargetRange = _Streams.TargetRange;
   export type Duration = _Streams.Duration;
@@ -3215,8 +3362,7 @@ export namespace Ablo {
   export type ClaimStream = _Streams.ClaimStream;
   export type Peer = _Streams.Peer;
   export type Activity = _Streams.Activity;
-  export type ActiveClaim = _Streams.ActiveClaim;
-  export type ClaimHandle = _Streams.ClaimHandle;
+  export type Claim = _Streams.Claim;
   export type ClaimRejection = _Streams.ClaimRejection;
   export type ClaimLost = _Streams.ClaimLost;
 
@@ -3282,7 +3428,7 @@ export namespace Ablo {
   // ── Claim (sub-namespace — peer-claim cohort) ────────────────────
   // eslint-disable-next-line @typescript-eslint/no-namespace
   export namespace Claim {
-    export type Handle = import('./Ablo.js').ClaimHandle;
+    export type Handle = import('./Ablo.js').Claim;
     export type CreateOptions = import('./Ablo.js').ClaimCreateOptions;
     export type WaitOptions = import('./Ablo.js').ClaimWaitOptions;
     export type Client = import('./Ablo.js').ClaimResource;
