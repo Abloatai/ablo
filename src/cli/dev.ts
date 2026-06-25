@@ -45,7 +45,6 @@ import {
   DEFAULT_URL,
 } from './push';
 import { resolveApiKey, getMode, type Mode } from './config';
-import { ensureScopedRoleInteractive, readProjectDatabaseUrl } from './dbRole';
 import { brand } from './theme';
 
 export interface DevArgs {
@@ -211,11 +210,32 @@ async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; me
   if (status === 409) {
     const unexecutable = Array.isArray(body.unexecutable) ? body.unexecutable : [];
     const warnings = Array.isArray(body.warnings) ? body.warnings : [];
+    // Whether any signal is a reader-visibility removal (carries `shadowed`):
+    // those need the "why" context line below; a pure unexecutable (e.g. a
+    // required column on a non-empty table) does not.
+    const hasShadowed = [...unexecutable, ...warnings].some(
+      (s) => (s as { shadowed?: unknown }).shadowed != null,
+    );
     const lines = [
-      'Incompatible schema change — not safe to apply as-is.',
+      pc.bold('Incompatible schema change — not safe to apply as-is.'),
+      '',
       ...unexecutable.map((u) => pc.red(fmtSignal(u))),
       ...warnings.map((w) => pc.yellow(fmtSignal(w))),
-      pc.dim(`Run ${pc.bold('ablo push --force')} (or ${pc.bold('--rename old:new')}) to resolve.`),
+      '',
+      ...(hasShadowed
+        ? [
+            pc.dim(
+              '  These models exist in the baseline above but not in your push. Sandbox readers',
+            ),
+            pc.dim(
+              '  fall back to the production schema until you push your own, so applying this drops them.',
+            ),
+            '',
+          ]
+        : []),
+      pc.dim(
+        `  Fix: ${pc.bold('ablo push --force')} to apply anyway, or ${pc.bold('--rename old:new')} if you renamed a model.`,
+      ),
     ];
     return { ok: false, message: lines.join('\n') };
   }
@@ -262,15 +282,11 @@ export async function dev(argv: readonly string[]): Promise<void> {
 
   console.log(`\n  ${brand('ablo')} ${pc.dim('push')} ${pc.dim('(sandbox)')}\n`);
 
-  // Direct-databaseUrl projects: check the configured role BEFORE the push.
-  // Neon/Supabase dashboard strings connect as the BYPASSRLS owner, which the
-  // server's RLS gate refuses — `dev` offers to create the scoped role here
-  // (from this machine; the owner credential never reaches Ablo), so the
-  // quickstart needs no separate `ablo migrate` step: the push provisions the
-  // tables server-side in the registered database.
-  const projectDbUrl = readProjectDatabaseUrl();
-  if (projectDbUrl) await ensureScopedRoleInteractive(projectDbUrl);
-
+  // `ablo dev` does NOT touch your database — no role creation, no RLS changes,
+  // no migrations. Ablo connects to your DB as-is (the server warns, but serves,
+  // if the role can't enforce RLS — tenant isolation on your own database is your
+  // call). Removed the auto scoped-role prompt that used to run here on every
+  // dev loop; securing the connection is opt-in (see `ablo doctor` / the docs).
   const schema = await loadSchema(args.schemaPath, args.exportName);
   const modelCount = Object.keys(schema.models).length;
   console.log(

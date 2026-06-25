@@ -2150,7 +2150,25 @@ export class BaseSyncedStore<
   protected applyDeltaFrame(deltas: SyncDelta[]): void {
     let enqueuedAny = false;
     for (const delta of deltas) {
-      if (this.enqueueDelta(delta)) enqueuedAny = true;
+      // A delta_batch frame is the server's AUTHORITATIVE, ordered answer to
+      // "everything in my stream after cursor C" (reconnect/catch-up replay or
+      // post-bootstrap drain). Apply every delta it carries — do NOT subject it
+      // to the live-traffic watermark dedup (`id <= applied`).
+      //
+      // That watermark is only valid under in-order delivery, and reconnect
+      // breaks the assumption: an in-flight LIVE broadcast for a gap delta can
+      // land out of order BEFORE the catch-up fills the ids below it (e.g. the
+      // server acks a write, then the test/client reconnects, then that write's
+      // pending broadcast arrives on the fresh socket — id 4 live before the
+      // catch-up's [2,3,4]). Applying id 4 advances `applied` to 4, and the
+      // watermark would then drop 2 and 3 from the catch-up as "already seen" —
+      // a poisoned gap and a cursor that lies (applied=4 with rows 2,3 absent).
+      //
+      // Re-applying a delta the live path already applied is safe: the
+      // downstream `Database.processDeltaBatch` + `SyncClient.applyDeltaBatchToPool`
+      // are idempotent (echo detection, no row resurrection, conflict
+      // resolution), so the redundant id 4 is a no-op while 2 and 3 land.
+      if (this.enqueueDelta(delta, { authoritative: true })) enqueuedAny = true;
     }
     if (!enqueuedAny) return;
 
@@ -2168,9 +2186,18 @@ export class BaseSyncedStore<
    * sync-group mutations). Does NOT schedule a flush — callers decide
    * whether to debounce (live) or flush atomically (catch-up frame).
    */
-  protected enqueueDelta(delta: SyncDelta): boolean {
-    // Dedup guard — skip already-processed deltas
-    if (delta.id > 0 && delta.id <= this.highestProcessedSyncId) return false;
+  protected enqueueDelta(
+    delta: SyncDelta,
+    options: { authoritative?: boolean } = {},
+  ): boolean {
+    // Dedup guard — skip already-processed deltas. The `applied` watermark is a
+    // valid skip threshold ONLY for in-order live traffic; an authoritative
+    // catch-up frame bypasses it (see `applyDeltaFrame`) so an out-of-order
+    // live delta that advanced the watermark can't cause the frame's lower ids
+    // to be silently dropped.
+    if (!options.authoritative && delta.id > 0 && delta.id <= this.highestProcessedSyncId) {
+      return false;
+    }
 
     // Confirm awaiting transactions via sync ID threshold (before batching)
     this.syncClient.onDeltaReceived(delta.id);

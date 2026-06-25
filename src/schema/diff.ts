@@ -320,6 +320,20 @@ export interface MigrationSignal {
   readonly model: string;
   readonly field?: string;
   readonly detail: string;
+  /**
+   * Reader-visibility context for a removal that shadows an existing artifact:
+   * the active schema this push is being diffed against. Lets the CLI show the
+   * baseline — version + WHEN it was pushed — so "incompatible" isn't a mystery
+   * (e.g. a first sandbox push diffed against a months-old production schema).
+   */
+  readonly shadowed?: {
+    readonly environment: string;
+    readonly version: number;
+    /** ISO timestamp the shadowed artifact was activated/pushed, or null. */
+    readonly pushedAt: string | null;
+    /** Who pushed it (e.g. `apikey:…`), or null. */
+    readonly pushedBy: string | null;
+  };
 }
 
 export interface MigrationClassification {

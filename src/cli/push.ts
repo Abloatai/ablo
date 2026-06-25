@@ -48,11 +48,29 @@ export const DEFAULT_SCHEMA_PATH = 'ablo/schema.ts';
 export const DEFAULT_EXPORT = 'schema';
 export const DEFAULT_URL = 'https://api.abloatai.com';
 
-/** Format a single migration signal `{ model, field?, detail }` for the CLI. */
+/** Format a single migration signal `{ model, field?, detail, shadowed? }` for
+ *  the CLI. When `shadowed` is present (a removal diffed against an existing
+ *  artifact), a second line names the baseline — version + WHEN it was pushed —
+ *  so the user understands what "incompatible" is comparing against. */
 export function fmtSignal(s: unknown): string {
-  const sig = s as { model?: string; field?: string; detail?: string };
+  const sig = s as {
+    model?: string;
+    field?: string;
+    detail?: string;
+    shadowed?: { environment?: string; version?: number; pushedAt?: string | null; pushedBy?: string | null };
+  };
   const where = sig.field ? `${sig.model}.${sig.field}` : sig.model;
-  return `    • ${pc.bold(where ?? '?')} — ${sig.detail ?? ''}`;
+  let line = `    • ${pc.bold(where ?? '?')} — ${sig.detail ?? ''}`;
+  if (sig.shadowed) {
+    const env = sig.shadowed.environment ?? 'production';
+    const ver = sig.shadowed.version != null ? `v${sig.shadowed.version}` : 'active';
+    const when = sig.shadowed.pushedAt
+      ? new Date(sig.shadowed.pushedAt).toISOString().slice(0, 10)
+      : 'unknown date';
+    const by = sig.shadowed.pushedBy ? ` by ${sig.shadowed.pushedBy}` : '';
+    line += `\n      ${pc.dim(`↳ baseline: ${env} ${ver}, pushed ${when}${by}`)}`;
+  }
+  return line;
 }
 
 /** Structured outcome of a single `POST /api/schema` — no console/exit so it
@@ -246,12 +264,48 @@ export async function push(argv: readonly string[]): Promise<void> {
       console.error(pc.yellow(`  Destructive (data loss):`));
       for (const w of warnings) console.error(pc.yellow(fmtSignal(w)));
     }
+    const hasShadowed = [...unexecutable, ...warnings].some(
+      (s) => (s as { shadowed?: unknown }).shadowed != null,
+    );
+    if (hasShadowed) {
+      console.error(
+        pc.dim(
+          '  These models exist in the baseline above but not in your push. Sandbox readers fall',
+        ),
+      );
+      console.error(
+        pc.dim(
+          '  back to the production schema until you push your own, so applying this drops them.',
+        ),
+      );
+    }
     console.error(pc.dim(`  Re-push with ${pc.bold('--force')} to override, or use ${pc.bold('--rename old:new')} if you renamed a model.`));
   } else if (status === 403) {
-    console.error(pc.red(`  Forbidden: ${body.message ?? body.reason ?? 'key lacks schema:push scope'}`));
-    // The login-minted production key is a restricted (rk_) observe-only key
-    // by design — name the door that works instead of leaving a dead end.
-    if (args.apiKey != null && classifyCredentialKind(args.apiKey) === 'restricted') {
+    // Remediation is keyed on the machine-readable CODE, not the HTTP status —
+    // a 403 from the RLS firebreak is a DATABASE-config problem, not a key-scope
+    // one, and printing "you need schema:push" for it sends the user down the
+    // wrong path (the exact misdiagnosis reported from an integration). Always
+    // lead with the server's real message + code, then remediate per code.
+    const code = (body.code ?? body.reason) as string | undefined;
+    const serverMsg = (body.message ?? body.reason) as string | undefined;
+    console.error(pc.red(`  Forbidden${code ? ` [${code}]` : ''}: ${serverMsg ?? 'permission denied'}`));
+    if (code === 'database_role_cannot_enforce_rls') {
+      console.error(
+        pc.dim(
+          `  Your database role bypasses row-level security. Run ${pc.bold('npx ablo migrate')} to ` +
+            `create a scoped (NOBYPASSRLS) role and repoint DATABASE_URL, then re-push.`,
+        ),
+      );
+    } else if (code === 'database_tables_unforced_rls') {
+      console.error(
+        pc.dim(
+          `  One or more synced tables don't have FORCE ROW LEVEL SECURITY. Run ` +
+            `${pc.bold('npx ablo migrate')} to (re)apply the tenant policies, then re-push.`,
+        ),
+      );
+    } else if (args.apiKey != null && classifyCredentialKind(args.apiKey) === 'restricted') {
+      // The login-minted production key is a restricted (rk_) observe-only key
+      // by design — name the door that works instead of leaving a dead end.
       console.error(
         pc.dim(
           `  Schema pushes need a SECRET key: ${pc.bold('sk_test_')} (sandbox dev loop) or a dashboard ` +

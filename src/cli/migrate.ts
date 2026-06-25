@@ -18,7 +18,7 @@ import { AbloValidationError } from '../errors.js';
 import pc from 'picocolors';
 import { writeFileSync } from 'fs';
 import postgres from 'postgres';
-import { ensureScopedRoleInteractive } from './dbRole';
+import { readProjectDatabaseUrl } from './dbRole';
 import { serializeSchema, generateProvisionPlan, type Schema, type SchemaJSON } from '@abloatai/ablo/schema';
 import { adapterTableMigrations } from '@abloatai/ablo/source';
 import { loadSchema } from './push';
@@ -29,6 +29,10 @@ import { loadSchema } from './push';
  * `parseMigrateArgs` below.
  */
 export const MIGRATE_USAGE = `  ablo migrate — provision your schema's tables in your own Postgres (DATABASE_URL)
+
+  To connect a real database, run \`ablo connect\` — Ablo reads your WAL via logical
+  replication, the one way. \`migrate\` is the optional escape hatch for provisioning
+  tables when you don't already have them.
 
   Usage:
     npx ablo migrate                      Create the synced-model tables (with row-level security)
@@ -244,16 +248,28 @@ export async function migrate(argv: readonly string[]): Promise<void> {
     return;
   }
 
-  const dbUrl = process.env.DATABASE_URL ?? process.env.ABLO_DATABASE_URL;
+  // Resolve DATABASE_URL the way the app's framework will: process env first,
+  // then the env files frameworks load (`.env.local`, `.env`). The CLI runs via
+  // `npx` WITHOUT the app's env loader, so it must read the files itself — else
+  // `migrate` can't see a DATABASE_URL that `push` (and Next.js) read from
+  // `.env.local`, which is exactly where `push` WRITES the scoped-role URL.
+  const dbUrl = readProjectDatabaseUrl();
   if (!dbUrl) {
-    console.error(pc.red('  Set DATABASE_URL (or ABLO_DATABASE_URL) to apply, or use --dry-run to preview.'));
+    console.error(
+      pc.red(
+        '  No DATABASE_URL found (checked process env, .env.local, .env). Set it to apply, or use --dry-run to preview.',
+      ),
+    );
     process.exit(1);
   }
 
-  const effectiveUrl = await ensureScopedRoleInteractive(dbUrl);
-
+  // NOTE: `ablo migrate` provisions tables but does NOT create roles, force RLS,
+  // or rewrite DATABASE_URL on your database — it runs the DDL as the role you
+  // provide, like any migration tool. Securing the connection (scoped role, RLS)
+  // is your call; `ablo doctor` / the docs show the recipe if you want it. This
+  // command is OPTIONAL — Ablo reads/writes your existing tables without it.
   try {
-    await applyStatements(effectiveUrl, args.targetSchema, plan.statements, plan.concurrent);
+    await applyStatements(dbUrl, args.targetSchema, plan.statements, plan.concurrent);
     console.log(`  ${pc.green('✓')} Migration complete`);
   } catch {
     process.exit(1);

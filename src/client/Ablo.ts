@@ -1601,12 +1601,43 @@ function createDynamicModelClass(
 
 // ── Default console logger ────────────────────────────────────────────────
 
-const consoleLogger: SyncLogger = {
-  debug: (...args: unknown[]) => { if (typeof console !== 'undefined') console.debug('[sync]', ...args); },
-  info: (...args: unknown[]) => { if (typeof console !== 'undefined') console.info('[sync]', ...args); },
-  warn: (...args: unknown[]) => { if (typeof console !== 'undefined') console.warn('[sync]', ...args); },
-  error: (...args: unknown[]) => { if (typeof console !== 'undefined') console.error('[sync]', ...args); },
-};
+/**
+ * Level threshold for the default console logger.
+ *
+ * The SDK emits a `debug` line per model and per property during schema
+ * registration (see `ModelRegistry`), plus assorted lifecycle chatter. That
+ * is verbose by design but carries no actionable signal for app consumers, so
+ * the default threshold is `warn` — `debug`/`info` are dropped unless a
+ * consumer opts in.
+ *
+ * Opt back in with `ABLO_LOG_LEVEL=debug` (or `info`/`warn`/`error`/`silent`).
+ * Passing a custom `logger` to `Ablo({ logger })` bypasses this entirely.
+ */
+type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent';
+const LOG_LEVEL_RANK: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40, silent: 99 };
+
+function resolveLogLevel(): LogLevel {
+  // `globalThis.process` guard keeps this safe in browser/edge runtimes that
+  // have no `process` binding — there we fall through to the default.
+  const raw = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.ABLO_LOG_LEVEL;
+  const normalized = raw?.toLowerCase();
+  if (normalized && normalized in LOG_LEVEL_RANK) return normalized as LogLevel;
+  return 'warn';
+}
+
+const consoleLogger: SyncLogger = (() => {
+  const threshold = LOG_LEVEL_RANK[resolveLogLevel()];
+  const emit = (level: LogLevel, fn: (...args: unknown[]) => void, args: unknown[]) => {
+    if (typeof console === 'undefined' || LOG_LEVEL_RANK[level] < threshold) return;
+    fn('[sync]', ...args);
+  };
+  return {
+    debug: (...args: unknown[]) => emit('debug', console.debug, args),
+    info: (...args: unknown[]) => emit('info', console.info, args),
+    warn: (...args: unknown[]) => emit('warn', console.warn, args),
+    error: (...args: unknown[]) => emit('error', console.error, args),
+  };
+})();
 
 // `readProcessEnv` lives in `./auth` alongside the other resolvers
 // that read it. Re-exported there for use elsewhere in the file.

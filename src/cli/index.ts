@@ -6,6 +6,7 @@ import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import { migrate, MIGRATE_USAGE } from './migrate';
+import { connect, CONNECT_USAGE } from './connect';
 import { push } from './push';
 import { generate } from './generate';
 import { dev, wireEnvLocal } from './dev';
@@ -33,6 +34,7 @@ const LOGO = `
  * fall through to the top-level command list.
  */
 const SUBCOMMAND_USAGE: Readonly<Record<string, string>> = {
+  connect: CONNECT_USAGE,
   migrate: MIGRATE_USAGE,
 };
 
@@ -98,6 +100,8 @@ async function main() {
     } else {
       await pull(rest);
     }
+  } else if (command === 'connect') {
+    await connect(process.argv.slice(3));
   } else if (command === 'migrate') {
     await migrate(process.argv.slice(3));
   } else if (command === 'push') {
@@ -177,7 +181,9 @@ async function main() {
     console.log(`    npx ablo pull prisma [path]            Generate schema.ts from a Prisma schema (keeps enums + relations)`);
     console.log(`    npx ablo pull drizzle <module>         Generate schema.ts from a Drizzle schema (keeps enums + relations)`);
     console.log(`    npx ablo check                         Check your existing database fits the schema (read-only, creates no tables)`);
-    console.log(`    npx ablo migrate                       Provision your synced-model tables in your own Postgres (DATABASE_URL)`);
+    console.log(`    npx ablo connect                       Connect a real database — prints the logical-replication setup SQL (the one way)`);
+    console.log(`    npx ablo connect --check               Validate DATABASE_URL is replication-ready (wal_level, publication, role, replica identity)`);
+    console.log(`    npx ablo migrate                       Provision your synced-model tables in your own Postgres (optional escape hatch — \`connect\` is the way)`);
     console.log(`    npx ablo migrate --dry-run             Print the SQL without executing (preview)`);
     console.log(`    npx ablo push                          Upload your schema definition to Ablo (metadata only — rows stay in your DB)`);
     console.log(`    npx ablo push --force                  Allow destructive/unexecutable changes`);

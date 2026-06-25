@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.17.0
+
+### Minor Changes
+
+- **Bring-your-own database is now one model.** Ablo connects to your Postgres and
+  never operates it. There used to be two confusing BYO paths, and the
+  connection-string one would create roles, force row-level security, transfer
+  table ownership, and push you to run `ablo migrate` before anything worked. That
+  cascade is gone. Ablo now follows the shape every serious "sync over your own
+  Postgres" engine uses (ElectricSQL, PowerSync, Zero): it reads your database via
+  Postgres logical replication and never runs DDL, creates roles, forces RLS, or
+  rewrites your `DATABASE_URL`. You own your schema; Ablo reads it.
+  - **New: `ablo connect`.** One command prints the exact, copy-pasteable setup for
+    your own Postgres — enable `wal_level=logical`, create the `ablo_publication`
+    publication and a least-privilege `ablo_replicator` role — and
+    `ablo connect --check` validates readiness (wal level, publication, replication
+    grant, replica identity). This is the single supported way to connect a real
+    database.
+  - **`ablo migrate` left the happy path.** It no longer creates roles, transfers
+    ownership, or rewrites your connection string, and `ablo dev` no longer attempts
+    a scoped-role creation on every watch loop. `migrate` is now an optional escape
+    hatch for generating starter DDL (`--dry-run` prints the SQL).
+  - **Clearer failures.** `ablo push` permission errors lead with the server's actual
+    reason code and per-code remediation instead of a generic "needs `schema:push`
+    scope," and the schema-conflict message names which environment/version a prior
+    push came from and when.
+  - **Logical-replication runtime is in Preview.** The setup (`ablo connect`) and the
+    connection model are live; the server-side WAL consumer that streams your changes
+    is implemented and journey-tested but not yet generally available.
+
+  The previous connection-string-operate and adapter/outbox modes are demoted to a
+  clearly-labeled **Legacy / not recommended** section — they still work, but new
+  integrations should use logical replication.
+
 ## 0.16.3
 
 ### Patch Changes

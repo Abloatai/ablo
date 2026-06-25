@@ -187,26 +187,36 @@ export async function ensureScopedRoleInteractive(dbUrl: string): Promise<string
   }
   if (!safety.unsafe) return dbUrl;
 
-  const why = safety.superuser ? 'a superuser' : 'BYPASSRLS';
+  const why = safety.superuser ? 'a superuser role' : 'an admin role that bypasses row-level security';
+  // Lead with the plain-language WHY, then pre-empt the two misreads this prompt
+  // reliably triggers (especially for AI agents): that Ablo wants your owner
+  // credential, or that "ownership" is being handed over. Neither is true — the
+  // role is created locally and Ablo only ever sees the limited role's password.
   console.log(
-    `\n  ${pc.yellow('!')} DATABASE_URL connects as ${pc.bold(safety.role)} — ${why}, so ` +
-      `row-level security can't be enforced.\n    Ablo's server will refuse this connection ` +
-      `(${pc.bold('database_role_cannot_enforce_rls')}).`,
+    `\n  ${pc.yellow('!')} Your ${pc.bold('DATABASE_URL')} connects as ${pc.bold(safety.role)} — ${why}.\n` +
+      `    Ablo enforces tenant isolation with row-level security (so one org can never\n` +
+      `    read another's rows), and a role that bypasses RLS would silently defeat that —\n` +
+      `    so the server won't accept it (${pc.bold('database_role_cannot_enforce_rls')}).\n\n` +
+      `    The fix runs ${pc.bold('entirely on this machine')}, with the credential already in\n` +
+      `    your DATABASE_URL. It does ${pc.bold('NOT')} send that credential to Ablo and does\n` +
+      `    ${pc.bold('NOT')} transfer ownership of anything — it just creates a limited role\n` +
+      `    (${pc.bold(DEFAULT_SCOPED_ROLE)}: NOSUPERUSER, NOBYPASSRLS) for your app to connect as,\n` +
+      `    and repoints DATABASE_URL at it.`,
   );
 
   // CI / agents (no TTY): don't block, don't guess — point at the recipe.
   if (!process.stdout.isTTY) {
     console.log(
       pc.dim(
-        `    Create a scoped role and update DATABASE_URL — run \`npx ablo migrate\` interactively\n` +
-          `    to do it automatically, or see https://docs.abloatai.com/quickstart#scoped-role`,
+        `    Run \`npx ablo migrate\` in an interactive terminal to create it automatically,\n` +
+          `    or apply the manual recipe: https://docs.abloatai.com/quickstart#scoped-role`,
       ),
     );
     return dbUrl;
   }
 
   const proceed = await confirm({
-    message: `Create a scoped role ${DEFAULT_SCOPED_ROLE} (NOSUPERUSER, NOBYPASSRLS) and update DATABASE_URL?`,
+    message: `Create the limited role ${DEFAULT_SCOPED_ROLE} here and repoint DATABASE_URL at it? (Ablo never sees your ${safety.role} credential)`,
     initialValue: true,
   });
   if (isCancel(proceed) || !proceed) {
@@ -217,8 +227,8 @@ export async function ensureScopedRoleInteractive(dbUrl: string): Promise<string
   const { role, databaseUrl } = await createScopedRole(dbUrl);
   const where = persistDatabaseUrl(databaseUrl);
   console.log(
-    `  ${pc.green('✓')} Created role ${pc.bold(role)} and updated ${pc.bold('DATABASE_URL')} in ${pc.bold(where)}.\n` +
-      pc.dim(`    The owner credential never left this machine; the new password was written, not printed.`),
+    `  ${pc.green('✓')} Created the limited role ${pc.bold(role)} and updated ${pc.bold('DATABASE_URL')} in ${pc.bold(where)}.\n` +
+      pc.dim(`    Your ${safety.role} credential never left this machine; the new password was written, not printed.`),
   );
   return databaseUrl;
 }
