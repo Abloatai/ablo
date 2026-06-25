@@ -85,7 +85,7 @@ import type {
   PresenceStream,
   Snapshot,
 } from '../types/streams.js';
-import type { Claim, Duration, TargetRange } from '../types/streams.js';
+import type { Claim, HeldClaim, Duration, TargetRange } from '../types/streams.js';
 import {
   createProtocolClient,
   type AbloApi,
@@ -745,7 +745,7 @@ export interface ModelMutationOptions extends ClaimedOptions {
  * on both); `state`/`queue`/`reorder`/`release` are the awaited form.
  */
 export type HttpClaimApi<T = Record<string, unknown>> =
-  ((params: ClaimParams<T>) => Promise<Claim<T>>) & {
+  ((params: ClaimParams<T>) => Promise<HeldClaim<T>>) & {
     [K in keyof ClaimReadApi<T>]: AwaitedClaimMethod<ClaimReadApi<T>[K]>;
   };
 

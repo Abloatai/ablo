@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.20.2
+
+### Patch Changes
+
+- Extend the `HeldClaim` return type to the HTTP transport. 0.20.1 fixed `await using` on the WebSocket client's `claim()` but missed the stateless HTTP client (`HttpClaimApi`) used by server-side agents, which still returned the looser `Claim<T>`. Both transports' `claim()` now return `HeldClaim<T>`, so `await using held = await ablo.<model>.claim(...)` typechecks regardless of transport.
+
 ## 0.20.1
 
 ### Patch Changes

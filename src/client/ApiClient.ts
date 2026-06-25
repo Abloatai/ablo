@@ -59,7 +59,7 @@ import type {
   ServerReadOptions,
 } from './createModelProxy.js';
 import type { Duration } from '../utils/duration.js';
-import type { Claim } from '../types/streams.js';
+import type { Claim, HeldClaim } from '../types/streams.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
 
 export type AbloApiClientOptions = Omit<AbloOptions, 'schema'> & {
@@ -1009,7 +1009,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         { method: 'DELETE' },
       ).then(() => undefined);
 
-    async function claimImpl(params: ClaimParams<T>): Promise<Claim<T>> {
+    async function claimImpl(params: ClaimParams<T>): Promise<HeldClaim<T>> {
       const claimId = await acquireClaim(params);
       const { data, stamp } = await retrieveModel<T>(name, { id: params.id });
       const release = () => releaseClaim(params);
