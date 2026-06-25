@@ -24,6 +24,7 @@ import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { serializeSchema, schemaHash, type Schema } from '@abloatai/ablo/schema';
 import { resolveApiKey, getMode } from './config';
+import { readProjectApiKey, type ApiKeySource } from './dbRole';
 
 export interface PushArgs {
   schemaPath: string;
@@ -88,7 +89,7 @@ export interface PushResult {
  */
 export async function pushSchema(
   schema: Schema,
-  args: Pick<PushArgs, 'url' | 'apiKey' | 'overwrite' | 'renames' | 'backfills'>,
+  args: Pick<PushArgs, 'url' | 'apiKey' | 'force' | 'renames' | 'backfills'>,
 ): Promise<PushResult> {
   const schemaJson = JSON.parse(serializeSchema(schema)) as unknown;
   const res = await fetch(`${args.url}/api/schema`, {
@@ -203,6 +204,25 @@ export async function loadSchema(schemaPath: string, exportName: string): Promis
   return schema as Schema;
 }
 
+/** Masked key for error output — `sk_test_CEIM…`, never the full secret. */
+function maskKey(key: string | undefined): string {
+  return key ? `${key.slice(0, 12)}…` : '(none)';
+}
+
+/** Human label for where the resolved key came from. */
+function describeKeySource(source: ApiKeySource | 'login'): string {
+  switch (source) {
+    case 'env':
+      return 'ABLO_API_KEY (environment)';
+    case '.env.local':
+      return '.env.local';
+    case '.env':
+      return '.env';
+    case 'login':
+      return '`ablo login` (stored sandbox config)';
+  }
+}
+
 export async function push(argv: readonly string[]): Promise<void> {
   let args: PushArgs;
   try {
@@ -212,8 +232,24 @@ export async function push(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  // Fall back to the stored credential (`ablo login`) when no env var is set.
-  if (!args.apiKey) args.apiKey = resolveApiKey();
+  // Resolve the key the way the app's framework does: ABLO_API_KEY from
+  // process.env (set by parsePushArgs) → .env.local → .env → the stored
+  // `ablo login` credential. `npx ablo` has NO framework env loader, so a key a
+  // developer put in `.env.local` (the natural place) is invisible to
+  // process.env — without this, push silently uses the stored sandbox login key
+  // instead of the production key in .env.local (the reported bug). `keySource`
+  // is tracked so a 403 can say exactly WHICH key it used and WHERE it came from.
+  let keySource: ApiKeySource | 'login' = 'env';
+  if (!args.apiKey) {
+    const fromProject = readProjectApiKey();
+    if (fromProject) {
+      args.apiKey = fromProject.key;
+      keySource = fromProject.source;
+    } else {
+      args.apiKey = resolveApiKey();
+      keySource = 'login';
+    }
+  }
 
   if (!args.apiKey) {
     // Message contract: enumerate the doors — both environments exist.
@@ -289,6 +325,9 @@ export async function push(argv: readonly string[]): Promise<void> {
     const code = (body.code ?? body.reason) as string | undefined;
     const serverMsg = (body.message ?? body.reason) as string | undefined;
     console.error(pc.red(`  Forbidden${code ? ` [${code}]` : ''}: ${serverMsg ?? 'permission denied'}`));
+    // Always name WHICH key push used and WHERE it came from — the reported
+    // confusion was "push used my sandbox login key, not my prod key in .env.local".
+    console.error(pc.dim(`  Push used ${pc.bold(maskKey(args.apiKey))} from ${describeKeySource(keySource)}.`));
     if (code === 'database_role_cannot_enforce_rls') {
       console.error(
         pc.dim(
@@ -310,6 +349,21 @@ export async function push(argv: readonly string[]): Promise<void> {
         pc.dim(
           `  Schema pushes need a SECRET key: ${pc.bold('sk_test_')} (sandbox dev loop) or a dashboard ` +
             `${pc.bold('sk_live_')} (production deploy: ${pc.bold('ABLO_API_KEY=sk_live_… npx ablo push')}).`,
+        ),
+      );
+    } else {
+      // Any other 403 on push = the key connected but isn't authorized to AUTHOR
+      // schema (needs the schema:push capability). Most often this is the wrong
+      // key being used — name the fix in terms of where keys are resolved from.
+      console.error(
+        pc.dim(
+          `  This key isn't authorized to push schema (needs ${pc.bold('schema:push')}). ` +
+            (keySource === 'login'
+              ? `It's your stored ${pc.bold('ablo login')} sandbox key — a key in ${pc.bold('.env.local')} ` +
+                `or ${pc.bold('ABLO_API_KEY')} takes precedence, so put a schema:push key there ` +
+                `(sandbox ${pc.bold('sk_test_')} or production ${pc.bold('sk_live_')}) and re-push. `
+              : `Use a schema:push key — a sandbox ${pc.bold('sk_test_')} or production ${pc.bold('sk_live_')}. `) +
+            `Manage keys at https://abloatai.com`,
         ),
       );
     }

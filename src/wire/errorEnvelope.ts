@@ -29,6 +29,19 @@ export interface ErrorEnvelope {
   readonly message: string;
   readonly doc_url?: string;
   readonly request_id?: string;
+  /** Aggregate field-level failures — so one 4xx can report EVERY invalid input
+   *  at once (schema push, batch commit, CLI-arg validation) instead of failing
+   *  on the first. `param` stays the single-field convenience case. (RFC 9457
+   *  `errors[]` / JSON:API `errors[]` / Google `BadRequest.fieldViolations[]`.) */
+  readonly errors?: ReadonlyArray<{
+    readonly code?: string;
+    readonly message: string;
+    readonly param?: string;
+  }>;
+  /** Typed-details slot: `AbloError.toJSON()` spreads its `details` (e.g.
+   *  `missingIds`, `conflicts`, `retryAfterSeconds`) as top-level members.
+   *  Consumers MUST ignore members they don't recognize (forward-compat). */
+  readonly [key: string]: unknown;
 }
 
 /** {@link AbloError} subclass → default HTTP status. The subclass is chosen to

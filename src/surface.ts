@@ -72,6 +72,8 @@ export const PUBLIC_ABLO_OPTION_KEYS = [
   'databaseUrl',
   'persistence',
   'transport',
+  'debug',
+  'logLevel',
   'authToken',
   'baseURL',
   'fetch',

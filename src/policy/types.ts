@@ -124,18 +124,32 @@ export type ConflictPolicy = (
 ) => ConflictDecision | Promise<ConflictDecision>;
 
 /**
- * Default policy.
+ * Default policy — **Law 7 (the human is the principal) is the engine-wide
+ * default, not an opt-in.**
  *
- * `claim_held` conflicts always reject (a foreign claim is honored unless a
- * privileged policy preempts). `stale_context` conflicts honor the committer's
- * declared `onStale` intent:
+ * A `claim_held` conflict resolves by the COMMITTER's kind. This default is, by
+ * construction, identical to `coordination(humansOverwrite(), agentsReject())`
+ * applied to every model — so a developer who wants different behaviour just
+ * declares the conflict axis on that model (`humansReject()`, `humansNotify()`,
+ * …) and it wins. The default and the override speak the same vocabulary; the
+ * default is the one you get for free.
+ *
+ *   • `user`   → `allow`  — a human is never blocked by a claim (a claim is a
+ *                           coordination hint among agents, not a lock on people)
+ *   • `system` → `allow`  — automation principals at the root of a trust chain
+ *                           behave like humans here (matches `mayBypassClaims`)
+ *   • `agent`  → `reject` — an agent yields to a foreign claim (the no-bypass
+ *                           invariant; the ONLY sanctioned agent override is the
+ *                           privileged `claim.preempt` capability seam, see
+ *                           {@link capabilityPreemptPolicy})
+ *
+ * `stale_context` conflicts honor the committer's declared `onStale` intent:
  *
  *   • `'notify'` → notify + hold (op withheld; the actor resolves)
  *   • anything else (incl. `'reject'`, absent) → reject
  *
- * `'overwrite'` never reaches a policy — it's a hard opt-out resolved before
- * detection. This preserves the legacy always-reject default for callers that
- * don't opt into `notify`.
+ * `'overwrite'` never reaches a policy on the stale path — it's a hard opt-out
+ * resolved before detection.
  */
 // Typed by its real SYNCHRONOUS shape (via `satisfies`) rather than the
 // async-permissive `ConflictPolicy` alias, so sync callers like
@@ -143,8 +157,14 @@ export type ConflictPolicy = (
 // `ConflictDecision` back (not `… | Promise<…>`). Still assignable to
 // `ConflictPolicy` everywhere it's used as a policy.
 export const defaultPolicy = ((conflict: Conflict): ConflictDecision => {
-  if (conflict.kind !== 'stale_context') {
-    return { action: 'reject', reason: 'claim_conflict' };
+  if (conflict.kind === 'claim_held') {
+    // Law 7 universal default: principals (human / system) are never blocked;
+    // agents yield. Keeping `agent → reject` here is what makes the no-bypass
+    // invariant hold even on the registry/default resolution path (which, unlike
+    // the declared-axis path, has no separate agent-degradation guard).
+    return conflict.committer.kind === 'agent'
+      ? { action: 'reject', reason: 'claim_conflict' }
+      : { action: 'allow', note: 'principal:not-blocked' };
   }
   return conflict.requestedMode === 'notify'
     ? { action: 'notify', reason: 'stale_notify_hold' }
@@ -197,8 +217,9 @@ export interface ConflictAxis {
  * synchronous (no I/O), so it runs on either side of the schema-agnostic
  * boundary. Looks up the committer's kind and maps the declared `OnStaleMode`:
  *
- *   - undefined   → the engine default (`defaultPolicy`: reject; honor
- *                   `onStale: 'notify'` on a stale write)
+ *   - undefined   → the engine default (`defaultPolicy`: Law 7 — a human/system
+ *                   committer is allowed (never blocked), an agent rejects on a
+ *                   `claim_held`; on a stale write, honor `onStale: 'notify'`)
  *   - `overwrite` → `allow` — the write wins / the committer is never blocked
  *   - `reject`    → `reject` — the committer yields
  *   - `notify`    → on `stale_context`: notify + hold (re-read & re-apply);

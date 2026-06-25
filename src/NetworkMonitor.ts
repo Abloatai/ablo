@@ -36,7 +36,9 @@ export class NetworkMonitor extends EventEmitter {
     const wasOnline = this.isOnline;
     this.isOnline = false;
     if (wasOnline) {
-      getContext().logger.warn('Network connection lost');
+      // Symmetric with 'Network connection restored' (info) — expected,
+      // transient connectivity state, not an actionable warning.
+      getContext().logger.info('Network connection lost');
       this.emit('offline');
     }
   };

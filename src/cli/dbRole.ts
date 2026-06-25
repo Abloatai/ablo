@@ -283,3 +283,29 @@ export function readProjectDatabaseUrl(cwd: string = process.cwd()): string | nu
   }
   return null;
 }
+
+/** Where a resolved `ABLO_API_KEY` came from — for clear "which key did push use?" errors. */
+export type ApiKeySource = 'env' | '.env.local' | '.env';
+
+/**
+ * Resolve `ABLO_API_KEY` the way the app's framework does — `process.env` first,
+ * then the env files frameworks load (`.env.local`, then `.env`). `npx ablo …`
+ * runs WITHOUT Next/Vite's env loader, so a key a developer put in `.env.local`
+ * (the natural place — it's where the SDK reads it at runtime) is invisible to
+ * `process.env`. Without this, `push`/`dev` silently fall back to the stored
+ * `ablo login` sandbox key and use the WRONG key (the reported "my production
+ * key in .env.local is never used" bug). Returns the key + which source it came
+ * from (so the caller can say so in an error), or `null` if none is set.
+ */
+export function readProjectApiKey(
+  cwd: string = process.cwd(),
+): { key: string; source: ApiKeySource } | null {
+  if (process.env.ABLO_API_KEY) return { key: process.env.ABLO_API_KEY, source: 'env' };
+  for (const name of ['.env.local', '.env'] as const) {
+    const path = resolve(cwd, name);
+    if (!existsSync(path)) continue;
+    const match = readFileSync(path, 'utf8').match(/^ABLO_API_KEY=(.+)$/m);
+    if (match?.[1]) return { key: match[1].trim().replace(/^["']|["']$/g, ''), source: name };
+  }
+  return null;
+}

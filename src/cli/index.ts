@@ -23,6 +23,7 @@ import { pull, buildSchemaSourceFromDb } from './pull';
 import { prismaPull } from './prisma-pull';
 import { drizzlePull } from './drizzle-pull';
 import { brand } from './theme';
+import { renderCliError } from './renderError';
 
 const LOGO = `
   ${brand('ablo')} ${pc.dim('sync engine')}
@@ -962,7 +963,9 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  // Ablo errors stringify to one clean line (code + message + docs link),
+  // never a stack/object dump — see AbloError.toString().
+  console.error(String(err));
   process.exit(1);
 });
 `;
@@ -1057,22 +1060,33 @@ export function Providers({ children }: { children: React.ReactNode }) {
 // The session-mint route. Runs server-side with your sk_ key, asserts WHO the
 // browser is acting as (your auth), and returns ONLY a short-lived token.
 function generateSessionRoute(): string {
-  return `import { sync } from '@/ablo';
+  return `import { headers } from 'next/headers';
+import { sync } from '@/ablo';
+import { auth } from '@/lib/auth'; // your server-side betterAuth({ ... }) instance
 
 // Mints the browser's session token. The browser never sees your sk_ key — it
-// only gets this token, which already names your org + the user you assert here.
-// Replace getCurrentUser() with your real auth (NextAuth / Clerk / Better Auth / …).
+// only gets this short-lived token, already scoped to your org + the user you
+// assert here. The browser fetches THIS route at a relative URL
+// ('/api/ablo-session') — that's correct + best practice (same-origin, cookies
+// flow automatically); the SDK refreshes it in the browser only.
 export async function POST(): Promise<Response> {
-  const user = await getCurrentUser(); // ← your auth: who is making this request?
+  const user = await getCurrentUser();
   if (!user) return new Response('Unauthorized', { status: 401 });
 
   const { token } = await sync.sessions.create({ user: { id: user.id } });
   return Response.json({ token });
 }
 
-// TODO: replace with your auth provider's "current user" lookup.
+// Validate the signed-in user SERVER-SIDE. This ships wired for Better Auth;
+// \`getSession\` is the server method — pass the request headers (async in current
+// Next.js), it does NOT read cookies implicitly. Using a different provider?
+// Replace the body:
+//   • NextAuth:  const s = await auth();            return s?.user ? { id: s.user.id } : null;
+//   • Clerk:     const { userId } = await auth();   return userId ? { id: userId } : null;
+//   • Supabase:  const { data } = await supabase.auth.getUser(); return data.user ? { id: data.user.id } : null;
 async function getCurrentUser(): Promise<{ id: string } | null> {
-  return null;
+  const session = await auth.api.getSession({ headers: await headers() });
+  return session?.user ? { id: session.user.id } : null;
 }
 `;
 }
@@ -1084,4 +1098,9 @@ function detectPackageManager(): string {
   return 'npm';
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  // Structured terminal block instead of `console.error(err)`'s wall of text
+  // (stack + every field). Sets process.exitCode = 1 so failures signal non-zero.
+  renderCliError(err);
+  process.exit(process.exitCode ?? 1);
+});

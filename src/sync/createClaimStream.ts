@@ -44,6 +44,12 @@ import {
   descriptionFromMeta,
   participantKindFromWire,
 } from '../coordination/schema.js';
+import { getContext } from '../context.js';
+
+/** Readable target for the coordination trace: `documents:abc` / `documents:abc.title`. */
+function claimLabel(type: string, id: string, field?: string): string {
+  return field ? `${type}:${id}.${field}` : `${type}:${id}`;
+}
 
 export interface ClaimStreamConfig {
   /** Identity used to filter our own active claims out of `others`. */
@@ -88,6 +94,9 @@ export function createClaimStream(
   const queueByEntity = new Map<string, ReadonlyArray<Claim>>();
   const entityKey = (type: string, id: string): string => `${type}:${id}`;
   const EMPTY_QUEUE: readonly Claim[] = Object.freeze([]);
+  // Last queue position we logged per own-claim, so advancing in line is traced
+  // once per change (not re-logged on every server re-fan of the same line).
+  const lastLoggedQueuePos = new Map<string, number>();
 
   // ── Subscribers ──────────────────────────────────────────────────
   const listeners = new Set<() => void>();
@@ -183,6 +192,15 @@ export function createClaimStream(
     unsubs.push(
       t.subscribe('claim_rejected', (rejection) => {
         if (!rejection.claimId) return;
+        if (ownClaims.has(rejection.claimId)) {
+          const tgt = rejection.target
+            ? claimLabel(rejection.target.entityType, rejection.target.entityId, rejection.target.field)
+            : rejection.claimId;
+          getContext().logger.info(
+            `claim: rejected ${tgt}${rejection.heldBy ? ` — held by ${rejection.heldBy}` : ''}`,
+            { claimId: rejection.claimId, reason: rejection.reason },
+          );
+        }
         // Drop the rejected own-claim so reconnect doesn't re-announce
         // a claim the server already rejected (would just spam both
         // sides with conflicts).
@@ -203,6 +221,13 @@ export function createClaimStream(
       t.subscribe('claim_lost', (payload) => {
         const lost = payload as unknown as ClaimLost;
         if (!lost.claimId) return;
+        if (ownClaims.has(lost.claimId)) {
+          const c = ownClaims.get(lost.claimId);
+          getContext().logger.info(
+            `claim: lost ${c ? claimLabel(c.entityType, c.entityId, c.field) : lost.claimId} (preempted or expired)`,
+            { claimId: lost.claimId },
+          );
+        }
         // Drop the lost own-claim so reconnect doesn't re-announce a lease we
         // no longer hold.
         ownClaims.delete(lost.claimId);
@@ -230,6 +255,19 @@ export function createClaimStream(
         const line = Array.isArray(p.queue) ? p.queue : [];
         if (line.length === 0) queueByEntity.delete(key);
         else queueByEntity.set(key, Object.freeze([...line]));
+        // If WE are in this line, trace our position (the "agent queued behind a
+        // claim" moment) — once per position change, so advancing is visible.
+        const ourIndex = line.findIndex((c) => ownClaims.has(c.id));
+        if (ourIndex >= 0) {
+          const ourId = line[ourIndex]!.id;
+          if (lastLoggedQueuePos.get(ourId) !== ourIndex) {
+            lastLoggedQueuePos.set(ourId, ourIndex);
+            getContext().logger.info(
+              `claim: queued for ${claimLabel(p.target.type, p.target.id)} — position ${ourIndex + 1} of ${line.length}, waiting`,
+              { claimId: ourId },
+            );
+          }
+        }
         notifyListeners();
       }),
     );
@@ -337,6 +375,12 @@ export function createClaimStream(
     };
     ownClaims.set(claimId, claim);
     sendBegin(claimId, claim);
+    // Coordination trace (info): the creator can SEE their human/agent claims.
+    getContext().logger.info(
+      `claim: requesting ${claimLabel(claim.entityType, claim.entityId, claim.field)} for "${claim.reason}"` +
+        (claim.queue ? ' (will queue if contended)' : ''),
+      { claimId },
+    );
 
     let revoked = false;
     const revoke = () => {
@@ -344,6 +388,10 @@ export function createClaimStream(
       revoked = true;
       ownClaims.delete(claimId);
       sendAbandon(claimId, claim);
+      getContext().logger.info(
+        `claim: released ${claimLabel(claim.entityType, claim.entityId, claim.field)}`,
+        { claimId },
+      );
     };
 
     return {

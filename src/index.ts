@@ -173,6 +173,12 @@ export {
 } from './errors.js';
 export type { CommitReceipt, RequiredCapability } from './errors.js';
 export type { ErrorCode, WireErrorCode, ErrorCategory, ErrorCodeSpec, RecoveryClass } from './errors.js';
+// Canonical wire-egress contract (dependency-free): the error envelope shape +
+// the AbloError-subclass→HTTP-status table. Re-exported so server consumers
+// (e.g. apps/sync-server, which keeps its own self-contained copy) can assert
+// against the ONE source instead of silently drifting. See wire/errorEnvelope.ts.
+export { errorEnvelope, statusForType } from './wire/errorEnvelope.js';
+export type { ErrorEnvelope } from './wire/errorEnvelope.js';
 export { WS_BEARER_SUBPROTOCOL_PREFIX, WS_SYNC_SUBPROTOCOL } from './auth/credentialSource.js';
 export {
   ENVIRONMENTS,

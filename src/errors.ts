@@ -127,6 +127,21 @@ export class AbloError extends Error {
       ...(this.details ?? {}),
     };
   }
+
+  /**
+   * A single, leak-proof line for logs and `String(err)` / template
+   * interpolation: `AbloValidationError [code]: message (see docs) [request_id: …]`.
+   *
+   * Deliberately does NOT dump `details`, `cause`, or the stack — the thing that
+   * makes `console.error(richError)` an unreadable wall of text. The structured
+   * payload stays available via {@link toJSON}; this is the human one-liner.
+   */
+  override toString(): string {
+    const code = this.code ? ` [${this.code}]` : '';
+    const docs = this.docUrl ? ` (see ${this.docUrl})` : '';
+    const req = this.requestId ? ` [request_id: ${this.requestId}]` : '';
+    return `${this.name}${code}: ${this.message}${docs}${req}`;
+  }
 }
 
 /**

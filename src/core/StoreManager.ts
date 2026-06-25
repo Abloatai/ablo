@@ -333,7 +333,9 @@ export class StoreManager {
    * Clear all stores
    */
   async clearAllStores(): Promise<void> {
-    getContext().logger.warn('Clearing all stores');
+    // Lifecycle chatter (logout / identity switch / reset) — NOT a warning.
+    // `debug` so it's silent under the default `warn` threshold.
+    getContext().logger.debug('Clearing all stores');
 
     const promises = Array.from(this.stores.values()).map((store) => store.clear());
 

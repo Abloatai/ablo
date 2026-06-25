@@ -573,7 +573,7 @@ export class SyncWebSocket<
     // which is unreliable but the only signal available; in Node it returns true
     // (assume online) so the sidecar/agent path doesn't short-circuit here.
     if (!getContext().onlineStatus.isOnline()) {
-      getContext().logger.warn('onlineStatus reports offline, but attempting connection anyway');
+      getContext().logger.debug('onlineStatus reports offline, but attempting connection anyway');
     }
 
     this.isConnecting = true;

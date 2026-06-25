@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.18.0
+
+### Minor Changes
+
+- **Client observability — `debug` / `logLevel`, off by default.** The SDK used to
+  emit a `debug` line per model and per property during schema registration (a
+  firehose). It now defaults to a quiet `warn` threshold and exposes two new
+  `Ablo()` options to opt back in:
+  - `logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent'` — `'info'` surfaces
+    coordination and connection events without the per-model registration noise;
+    `'debug'` is everything. Precedence: explicit `logLevel` → `debug: true` →
+    `ABLO_LOG_LEVEL` env → default `warn`. Supplying your own `logger` bypasses both.
+  - `debug: boolean` — shorthand for `logLevel: 'debug'`.
+
+  Coordination is now traceable at `info`: claims that are **rejected** or **lost**
+  (preempted/expired), and your position **advancing in a claim queue**, each log
+  once per change with a readable target (`documents:abc.title`) — quiet lowercase
+  lines, no shouty tags.
+
+  **New: canonical wire-egress contract export.** `errorEnvelope`, `statusForType`,
+  and the `ErrorEnvelope` type are now exported from the package root. Server
+  consumers (e.g. a self-hosted sync server) can assert against the one source of
+  truth for the error-envelope shape and the `AbloError`-subclass→HTTP-status
+  table instead of keeping a copy that silently drifts.
+
+  **Structured CLI error rendering.** CLI failures render as a titled block with a
+  reason code and per-code remediation (`--verbose` for the stack) instead of a
+  console wall-of-text; `AbloError.toString()` produces a leak-proof one-liner.
+
+  **`ABLO_API_KEY` resolution + sandbox key scopes.** The key is now resolved from
+  `.env.local` / `.env` (not just the process env), and sandbox keys are granted
+  `schema:push` by default so `ablo push` works out of the box in a fresh sandbox.
+
 ## 0.17.0
 
 ### Minor Changes

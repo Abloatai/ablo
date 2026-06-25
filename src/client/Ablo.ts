@@ -223,6 +223,24 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    */
   transport?: 'websocket' | 'http' | undefined;
 
+  /**
+   * Turn Ablo's diagnostic logging on/off. `true` surfaces the `[Ablo]`
+   * coordination trace — claims requested / queued / granted / released, agent
+   * handovers, connection state — so you can SEE the human+agent coordination
+   * you built while debugging. Omitted/`false` keeps the quiet default (only
+   * warnings + errors). For a middle ground use {@link logLevel}. Env override:
+   * `ABLO_LOG_LEVEL`. Ignored if a custom logger is supplied.
+   */
+  debug?: boolean | undefined;
+
+  /**
+   * Log threshold for the default `[Ablo]` logger (takes precedence over
+   * {@link debug}). `'info'` = coordination + connection events without the
+   * per-model registration firehose; `'debug'` = everything; `'warn'` (default)
+   * = warnings + errors only; `'silent'` = nothing. Env override: `ABLO_LOG_LEVEL`.
+   */
+  logLevel?: 'debug' | 'info' | 'warn' | 'error' | 'silent' | undefined;
+
   // ── Advanced (you usually don't need these) ─────────────────────────
   // Connection/transport tuning, mirroring the Stripe/OpenAI/Anthropic
   // client option bags. The defaults are tuned for hosted production;
@@ -361,8 +379,26 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    */
   capabilityToken?: string;
 
-  /** Custom logger (default: console) */
+  /** Custom logger (default: console). Supplying one bypasses {@link debug}/{@link logLevel}. */
   logger?: SyncLogger;
+
+  /**
+   * Turn Ablo's diagnostic logging on/off. `true` surfaces the `[Ablo]`
+   * coordination trace — claims acquired / queued / granted / released, agent
+   * handovers, connection state — plus internal lifecycle, so you can SEE the
+   * human+agent coordination you built. Omitted/`false` keeps the quiet default
+   * (only warnings + errors). For a middle ground use {@link logLevel}.
+   * Env override: `ABLO_LOG_LEVEL`. Ignored if a custom {@link logger} is passed.
+   */
+  debug?: boolean;
+
+  /**
+   * Log threshold for the default `[Ablo]` logger (takes precedence over
+   * {@link debug}). `'info'` = coordination + connection events without the
+   * per-model registration firehose; `'debug'` = everything; `'warn'` (default)
+   * = warnings + errors only; `'silent'` = nothing. Env override: `ABLO_LOG_LEVEL`.
+   */
+  logLevel?: 'debug' | 'info' | 'warn' | 'error' | 'silent';
 
   /** ObjectPool size limit (default: 10000) */
   maxPoolSize?: number;
@@ -1616,7 +1652,15 @@ function createDynamicModelClass(
 type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent';
 const LOG_LEVEL_RANK: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40, silent: 99 };
 
-function resolveLogLevel(): LogLevel {
+/**
+ * Resolve the effective level. Precedence: explicit `logLevel` option →
+ * `debug: true` (⇒ debug) → `ABLO_LOG_LEVEL` env → default `warn`. `debug: false`
+ * / omitted just means "don't raise the level" — it falls through to env/default
+ * rather than force-silencing an ops-set env override.
+ */
+function resolveLogLevel(opts?: { debug?: boolean; logLevel?: LogLevel }): LogLevel {
+  if (opts?.logLevel && opts.logLevel in LOG_LEVEL_RANK) return opts.logLevel;
+  if (opts?.debug === true) return 'debug';
   // `globalThis.process` guard keeps this safe in browser/edge runtimes that
   // have no `process` binding — there we fall through to the default.
   const raw = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.ABLO_LOG_LEVEL;
@@ -1625,11 +1669,15 @@ function resolveLogLevel(): LogLevel {
   return 'warn';
 }
 
-const consoleLogger: SyncLogger = (() => {
-  const threshold = LOG_LEVEL_RANK[resolveLogLevel()];
-  const emit = (level: LogLevel, fn: (...args: unknown[]) => void, args: unknown[]) => {
-    if (typeof console === 'undefined' || LOG_LEVEL_RANK[level] < threshold) return;
-    fn('[sync]', ...args);
+/**
+ * Build the default logger, gated at `level` and prefixed `[Ablo]` so a creator
+ * with a console full of other tools' logs can see at a glance what's ours.
+ */
+function createConsoleLogger(level: LogLevel): SyncLogger {
+  const threshold = LOG_LEVEL_RANK[level];
+  const emit = (lvl: LogLevel, fn: (...args: unknown[]) => void, args: unknown[]) => {
+    if (typeof console === 'undefined' || LOG_LEVEL_RANK[lvl] < threshold) return;
+    fn('[Ablo]', ...args);
   };
   return {
     debug: (...args: unknown[]) => emit('debug', console.debug, args),
@@ -1637,7 +1685,7 @@ const consoleLogger: SyncLogger = (() => {
     warn: (...args: unknown[]) => emit('warn', console.warn, args),
     error: (...args: unknown[]) => emit('error', console.error, args),
   };
-})();
+}
 
 // `readProcessEnv` lives in `./auth` alongside the other resolvers
 // that read it. Re-exported there for use elsewhere in the file.
@@ -1901,7 +1949,11 @@ export function Ablo<const S extends SchemaRecord>(
     dangerouslyAllowBrowser: options.dangerouslyAllowBrowser,
   });
 
-  const { logger = consoleLogger } = internalOptions;
+  // Custom logger wins; otherwise build the default `[Ablo]` logger at the level
+  // resolved from `debug`/`logLevel`/`ABLO_LOG_LEVEL` (default `warn`).
+  const logger =
+    internalOptions.logger ??
+    createConsoleLogger(resolveLogLevel({ debug: options.debug, logLevel: options.logLevel }));
   // Nudge (once) if a stray DATABASE_URL is in the env but `databaseUrl` wasn't
   // passed — the env value is no longer auto-adopted (see resolveDatabaseUrl).
   warnIfDatabaseUrlEnvIgnored(authInput, (m) => logger.warn(m));

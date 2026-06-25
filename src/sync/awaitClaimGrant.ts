@@ -19,6 +19,7 @@ import {
   claimTargetLabel,
 } from '../errors.js';
 import type { ClaimRejection } from '../coordination/schema.js';
+import { getContext } from '../context.js';
 
 export interface GrantTransport {
   subscribe(
@@ -74,12 +75,20 @@ export function awaitClaimGrant(
     // means the lease is now ours; `waited` records which path it was.
     unsubs.push(
       transport.subscribe('claim_acquired', (p) => {
-        if (p?.claimId === claimId) settle(() => resolve({ waited: false }));
+        if (p?.claimId === claimId) {
+          getContext().logger.debug(`claim: acquired ${claimId} (target was free)`);
+          settle(() => resolve({ waited: false }));
+        }
       }),
     );
     unsubs.push(
       transport.subscribe('claim_granted', (p) => {
-        if (p?.claimId === claimId) settle(() => resolve({ waited: true }));
+        if (p?.claimId === claimId) {
+          // Promoted to the head of the line — the creator's "it's the agent's
+          // turn now" moment after waiting behind a holder.
+          getContext().logger.info(`claim: granted ${claimId} — your turn (waited in queue)`);
+          settle(() => resolve({ waited: true }));
+        }
       }),
     );
     if (options?.maxQueueDepth !== undefined) {

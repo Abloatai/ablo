@@ -123,7 +123,7 @@ export function warnIfDatabaseUrlEnvIgnored(
     'To register your Postgres directly, pass `databaseUrl: process.env.DATABASE_URL` explicitly; ' +
     'otherwise ignore this (the hosted sandbox and signed Data Source endpoints need no databaseUrl).';
   if (warn) warn(message);
-  else if (typeof console !== 'undefined') console.warn('[sync]', message);
+  else if (typeof console !== 'undefined') console.warn('[Ablo]', message);
 }
 
 export const ABLO_HOSTED_API_DOMAIN = 'api.abloatai.com';

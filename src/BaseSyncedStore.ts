@@ -1075,9 +1075,23 @@ export class BaseSyncedStore<
         // A throw = transient (offline / mint endpoint unreachable / 5xx). The
         // login may be perfectly valid; never sign out for this — back off and
         // retry. Mirrors the `getToken` throw-vs-null contract end-to-end.
-        getContext().logger.warn('[BaseSyncedStore] Access-credential re-mint failed (transient)', {
-          error: (error as Error)?.message,
-        });
+        const message = (error as Error)?.message ?? String(error);
+        // A relative-URL resolver invoked server-side (Node fetch has no origin
+        // to resolve against) emits the opaque "Failed to parse URL" / "Only
+        // absolute URLs are supported". Translate it into something actionable
+        // instead of a mystery transient blip — the proactive refresh is now
+        // browser-only, so hitting this means the resolver fired from SSR/RSC or
+        // a server route.
+        if (typeof window === 'undefined' && /parse URL|absolute URLs?/i.test(message)) {
+          getContext().logger.warn(
+            'credential resolver ran on the server with a relative URL — Node fetch needs an absolute URL. ' +
+              'Refresh the Ablo client in the browser, or build an absolute URL server-side ' +
+              "(e.g. new URL('/api/ablo-session', process.env.NEXT_PUBLIC_APP_URL)).",
+            { error: message },
+          );
+        } else {
+          getContext().logger.warn('access-credential re-mint failed (transient)', { error: message });
+        }
         return 'network_error';
       }
     })();
@@ -1107,10 +1121,11 @@ export class BaseSyncedStore<
    *   1. REACTIVE — register `getToken` as the re-mint hook the FSM calls when a
    *      probe finds the key stale (`credential_stale`) or on a nudge.
    *   2. PROACTIVE — keep the short-lived key fresh ahead of trouble: a refresh
-   *      timer inside the TTL, plus re-mint on OS wake / network-online / tab
-   *      focus. Browser-only triggers are env-gated, so Node/agent hosts get
-   *      only the timer (a no-op there — agents use a static `apiKey`, no
-   *      resolver, so this is never called for them).
+   *      timer inside the TTL, plus re-mint on OS wake. The ENTIRE proactive
+   *      block is browser-gated (`typeof window`): server/SSR has no socket to
+   *      keep warm and the resolver is browser-oriented, so arming it in Node
+   *      would fire a relative-URL fetch and throw. (Agents pass a static
+   *      `apiKey` with no resolver, so this method is never called for them.)
    *
    * Config-driven and invisible, like Supabase's `autoRefreshToken` — consumers
    * never call a refresh method. Idempotent (a second call replaces the first);
@@ -1146,15 +1161,27 @@ export class BaseSyncedStore<
       // or the FSM's own probe retries. Never sign out for it.
     };
 
-    // Comfortably inside the 15m `ek_` TTL; a missed (background-throttled) tick
-    // is recovered by the next, or by the reactive probe. The timer is the sole
-    // proactive PRE-ROLL — it keeps the key warm ahead of expiry even while the
-    // socket sits healthy-`connected` (a state the FSM never probes unprompted).
-    const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
-    const timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
-    const teardowns: Array<() => void> = [() => clearInterval(timer)];
+    const teardowns: Array<() => void> = [];
 
+    // The ENTIRE proactive pre-roll is BROWSER-ONLY. On the server (Next.js
+    // SSR/RSC evaluating the `providers` module) there is no live socket to keep
+    // warm AND the scaffolded credential resolver is browser-oriented (a
+    // relative-URL `fetch('/api/ablo-session')`). Arming the timer server-side
+    // fires that resolver in Node, where fetch has no origin to resolve a
+    // relative URL against → "Failed to parse URL" on every tick. Browser-only
+    // refresh is the unanimous vendor model (Supabase `autoRefreshToken: isBrowser()`,
+    // Clerk/Ably/Stripe refresh client-side). The reactive re-mint hook
+    // (`setCredentialRefresher` above) stays UNCONDITIONAL: it only fires on a
+    // real connection probe, which can't happen during a bare SSR module eval.
     if (typeof window !== 'undefined') {
+      // Comfortably inside the 15m `ek_` TTL; a missed (background-throttled)
+      // tick is recovered by the next, or by the reactive probe. The timer is
+      // the sole proactive PRE-ROLL — it keeps the key warm ahead of expiry even
+      // while the socket sits healthy-`connected` (a state the FSM never probes).
+      const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+      const timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
+      teardowns.push(() => clearInterval(timer));
+
       // OS-wake (desktop only): the Electron shell bridges `powerMonitor`
       // 'resume' to this DOM event. This is the ONE event-trigger the lifecycle
       // still owns, because `visibilitychange` does NOT fire on wake-from-sleep
