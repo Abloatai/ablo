@@ -143,7 +143,9 @@ export const mutable = {
     shape: Shape,
     opts?: SugarOptions<R, C>,
   ): ModelDef<Shape, R, C> =>
-    build(shape, opts, { mutable: true, load: 'instant', lazyObservable: false }),
+    // Reactive by default (see readonly.instant note): opt out with
+    // `lazyObservable: false` only for very large read-only list models.
+    build(shape, opts, { mutable: true, load: 'instant', lazyObservable: true }),
 
   lazy: <
     Shape extends z.ZodRawShape,
@@ -186,7 +188,11 @@ export const readOnly = {
     shape: Shape,
     opts?: SugarOptions<R, C>,
   ): ModelDef<Shape, R, C> =>
-    build(shape, opts, { mutable: false, load: 'instant', lazyObservable: false }),
+    // Reactive by default (like every variant now): a remote delta that mutates
+    // a row in place must re-render reactive reads. Opt out per-model with
+    // `lazyObservable: false` for very large read-only lists where per-field
+    // atoms cost more than the QueryView's entry-replaced reactivity.
+    build(shape, opts, { mutable: false, load: 'instant', lazyObservable: true }),
 
   lazy: <
     Shape extends z.ZodRawShape,

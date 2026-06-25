@@ -59,4 +59,11 @@ export interface BootstrapModel {
   fieldColumns?: Record<string, string>;
   /** Physical-column aliases needed after SELECT * for `.from(...)` fields. */
   columnOverrides?: readonly ColumnOverride[];
+  /**
+   * Physical columns the schema declares as `json` (`field.json()`). A json
+   * field stored in a TEXT column comes back from `row_to_json` as a serialized
+   * string; the bootstrap re-parses these so the wire is the canonical object
+   * regardless of physical column type (jsonb returns objects natively → no-op).
+   */
+  jsonColumns?: readonly string[];
 }

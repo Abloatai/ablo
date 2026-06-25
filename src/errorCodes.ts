@@ -271,7 +271,7 @@ export const ERROR_CODES = {
   unique_violation: wire('conflict', 409, false, 'A value violates a uniqueness constraint.'),
   check_violation: wire('validation', 400, false, 'A value violates a database check constraint.'),
   constraint_violation: wire('validation', 400, false, 'A database integrity constraint was violated.'),
-  column_type_mismatch: wire('validation', 400, false, 'A structured (JSON) value was written to a column whose database type is not jsonb. The column was not provisioned as jsonb (often a pre-existing column adopted by `ablo push`); storing the value would silently corrupt it to "[object Object]". Run `ablo migrate` to alter the column to jsonb.'),
+  column_type_mismatch: wire('validation', 400, false, 'A structured (JSON) value was written to a column whose database type cannot hold it. Ablo adapts a json field to either a jsonb column (native) or a text column (serialized) — but a scalar column (integer, boolean, uuid, timestamp, …) cannot store a JSON object or array. Use a jsonb or text column for this field. Ablo adapts to your column; it does not alter your schema.'),
 
   // ── tenant / unknown model (400) ───────────────────────────────────
   server_execute_unknown_model: wire('tenant', 400, false, 'Wrote to a model the server does not know. The server keeps its own copy of the schema — run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` before writing to new or changed models.'),

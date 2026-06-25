@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.0
+
+### Minor Changes
+
+- Reactive reads now work out of the box. A read like `useAblo((a) => a.documents.get(id))` re-renders when a live delta updates the row — including in-place field updates (the common collaborative case), which previously fired no reaction and left the UI silently stale.
+
+  Two changes make this work:
+  - **Models are reactive by default.** Schema fields are now MobX-observable without opting in. `json` fields stay `observable.ref` (one atom for the whole blob, not a deep atom tree per node), so the default is cheap. Opt out per model with `lazyObservable: false` for very large read-only list models where the QueryView's entry-replaced reactivity is enough.
+  - **`useAblo` returns a plain row snapshot** (via the new `Model.toReactiveSnapshot()`) instead of the live model instance. Reading the fields inside the tracked function is what subscribes the reaction (MobX tracks property access, not values), and the fresh snapshot identity lets the hook detect the change. Consumers get plain row objects and never touch a MobX observable directly.
+
+  Also new: `deepEqual` and `stableStringify` exports for comparing `field.json()` values. A `jsonb`-backed json field round-trips with reordered object keys (Postgres `jsonb` does not preserve key order), so a naive `JSON.stringify(a) === JSON.stringify(b)` comparison is unreliable when reconciling against external state (e.g. a rich-text editor). These helpers compare key-order-insensitively.
+
 ## 0.19.0
 
 ### Minor Changes

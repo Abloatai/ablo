@@ -188,7 +188,6 @@ export { selectModels } from './select.js';
 export {
   generateProvisionPlan,
   generateMigrationPlan,
-  generateJsonColumnReconciliation,
   appSchemaName,
   camelToSnake,
   snakeToCamel,

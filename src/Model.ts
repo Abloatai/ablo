@@ -881,6 +881,55 @@ export abstract class Model {
   }
 
   /**
+   * A fresh, plain row snapshot that READS every declared field through its
+   * MobX observable getter. This is the reactive read surface for
+   * `useReactive`/`useAblo`, and it relies on two MobX facts:
+   *
+   *  1. MobX tracks property *access*, not values — so reading each field here,
+   *     inside the caller's tracked function, SUBSCRIBES the reaction to that
+   *     field. A bare `return model` (the previous `modelAsRow`) dereferences
+   *     nothing, so an in-place delta update fires no reaction and the UI never
+   *     re-renders. (https://mobx.js.org/understanding-reactivity.html)
+   *  2. The returned object is a NEW identity each call, so the hook's equality
+   *     check detects the change — the same mutated instance would compare equal
+   *     and suppress the re-render even after tracking fired.
+   *
+   * Unlike `toJSON()`, values keep their runtime types (a `Date` stays a `Date`,
+   * a json field stays its parsed object) and wire-noise keys
+   * (`__class`/`clientId`/`syncStatus`) are omitted — this is exactly the row
+   * the schema's `T` describes. Computed relations (`referenceModel`/
+   * `referenceCollection`) and ephemeral fields are skipped, matching `toJSON`'s
+   * row projection; they're lazy/recursive and not part of the row's data.
+   */
+  toReactiveSnapshot<T = ModelData>(): T {
+    const snapshot: ModelData = {
+      id: this.id,
+      createdAt: this.createdAt,
+      updatedAt: this.updatedAt,
+    };
+    if (this.archivedAt !== undefined) snapshot.archivedAt = this.archivedAt;
+
+    const properties = getActiveRegistry().getProperties(this.getModelName());
+    if (properties) {
+      const self = this as Record<string, unknown>;
+      for (const [propName, metadata] of properties) {
+        if (
+          metadata.type === 'ephemeralProperty' ||
+          metadata.type === 'referenceModel' ||
+          metadata.type === 'referenceCollection'
+        ) {
+          continue;
+        }
+        // Reading through the observable getter is the point: it subscribes the
+        // enclosing MobX reaction to this field.
+        snapshot[propName] = self[propName];
+      }
+    }
+
+    return snapshot as T;
+  }
+
+  /**
    * Get field changes for activity tracking
    */
   getFieldChanges(): FieldChange[] {

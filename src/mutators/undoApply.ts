@@ -25,6 +25,7 @@
 
 import type { SyncStoreContract } from '../react/context.js';
 import type { InverseOp } from './inverseOp.js';
+import { deepEqual } from '../utils/json.js';
 
 /**
  * How undo/redo handles a field a collaborator changed after your op:
@@ -37,34 +38,12 @@ export type UndoConflictPolicy = 'skip-stale' | 'last-writer-wins';
 
 export const DEFAULT_UNDO_CONFLICT_POLICY: UndoConflictPolicy = 'skip-stale';
 
-/** Structural equality for JSON-shaped values (scalars, arrays, plain objects). */
-export function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
-    return false;
-  }
-  const aArr = Array.isArray(a);
-  if (aArr !== Array.isArray(b)) return false;
-  if (aArr) {
-    const av = a as unknown[];
-    const bv = b as unknown[];
-    if (av.length !== bv.length) return false;
-    for (let i = 0; i < av.length; i++) {
-      if (!deepEqual(av[i], bv[i])) return false;
-    }
-    return true;
-  }
-  const ao = a as Record<string, unknown>;
-  const bo = b as Record<string, unknown>;
-  const ak = Object.keys(ao);
-  const bk = Object.keys(bo);
-  if (ak.length !== bk.length) return false;
-  for (const k of ak) {
-    if (!Object.prototype.hasOwnProperty.call(bo, k)) return false;
-    if (!deepEqual(ao[k], bo[k])) return false;
-  }
-  return true;
-}
+/**
+ * Structural equality for JSON-shaped values (scalars, arrays, plain objects).
+ * Re-exported from the shared `utils/json` helper (key order is ignored) so the
+ * undo path and app authors share one implementation.
+ */
+export { deepEqual };
 
 /**
  * Map `id → { field: establishedValue }` from the paired ops. Only update-family

@@ -5,7 +5,7 @@ import { AbloInternalContext } from './internalContext.js';
 import type { Ablo, ModelClaim } from '../client/Ablo.js';
 import type { ModelOperations } from '../client/createModelProxy.js';
 import { getModelClientMeta } from '../client/createModelProxy.js';
-import { Model, modelAsRow } from '../Model.js';
+import { Model } from '../Model.js';
 import type { SchemaRecord } from '../schema/schema.js';
 import type { ResolveSchema } from '../types/global.js';
 import { useReactive } from './useReactive.js';
@@ -68,9 +68,19 @@ function readModelResult<T, C>(
   return { data, claims, claimed: claims.length > 0 };
 }
 
+/**
+ * Project a reactive read into the value `useReactive` caches and returns.
+ *
+ * For a `Model`, this MUST read the row's fields (via `toReactiveSnapshot`),
+ * not return the bare instance: MobX tracks property access, so reading the
+ * fields inside this tracked function is what subscribes the reaction to them —
+ * and the fresh object identity lets `useReactive`'s equality detect an
+ * in-place delta update. Returning `modelAsRow(value)` (the live instance, no
+ * field read) is why `useAblo(a => a.x.get(id))` used to ignore remote edits.
+ */
 function snapshotValue<T>(value: T): T {
   if (value instanceof Model) {
-    return modelAsRow(value) as T;
+    return value.toReactiveSnapshot<T>();
   }
   if (Array.isArray(value)) {
     return value.map((item) => snapshotValue(item)) as T;

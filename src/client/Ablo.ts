@@ -1397,8 +1397,19 @@ function registerModelsFromSchema(schema: Schema, registry: ModelRegistry): void
       }
     }
 
-    // Create a dynamic Model subclass with JSON sub-property getters
-    const isLazy = modelDef.lazyObservable === true;
+    // Create a dynamic Model subclass with JSON sub-property getters.
+    //
+    // Field-level MobX observability is ON BY DEFAULT. A reactive read like
+    // `useAblo((a) => a.documents.get(id))` must re-render when a remote delta
+    // mutates the row IN PLACE (the common collaborative case); without
+    // per-field observability that update fires no reaction and the UI silently
+    // goes stale. Models opt OUT with an explicit `lazyObservable: false` —
+    // appropriate only for very large read-only list models where per-field
+    // atoms cost more than the QueryView's entry-replaced reactivity already
+    // provides. json fields register as `observable.ref` (see
+    // `registerModelsFromSchema`), so the default is ~one atom per scalar field
+    // per loaded row — cheap — not a deep atom tree per blob.
+    const isLazy = modelDef.lazyObservable !== false;
     // Base provenance fields (`organizationId`, `createdBy`) live in
     // `baseFieldsSchema`, not the per-model `shape`. The server stamps + emits
     // them (camelCased on the wire), but hydration (`Model.assignFieldsFromData`)

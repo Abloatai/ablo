@@ -260,3 +260,10 @@ export { defineMutators } from './mutators/defineMutators.js';
 export { createTransaction, type Transaction } from './mutators/Transaction.js';
 // Undo runtime is intentionally not part of the public root surface. App code
 // uses `useUndoScope` from `@abloatai/ablo/react`.
+
+// JSON comparison helpers. A `field.json()` value backed by a Postgres `jsonb`
+// column round-trips with reordered object keys (jsonb doesn't preserve key
+// order), so a naive `JSON.stringify(a) === JSON.stringify(b)` guard misfires
+// when an app reconciles an Ablo row against external editor state. Use these
+// (key-order-insensitive) instead. See `utils/json.ts` for the full rationale.
+export { deepEqual, stableStringify } from './utils/json.js';
