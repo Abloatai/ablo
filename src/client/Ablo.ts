@@ -78,6 +78,8 @@ import { createPresenceStream } from '../sync/createPresenceStream.js';
 import { createClaimStream } from '../sync/createClaimStream.js';
 import { awaitClaimGrant } from '../sync/awaitClaimGrant.js';
 import { createSnapshot } from '../sync/createSnapshot.js';
+import { reconcileFunctionalUpdate } from './functionalUpdate.js';
+import type { ModelUpdater, ContentionOptions } from './functionalUpdate.js';
 import { createParticipantManager } from '../sync/participants.js';
 import type {
   ClaimStream,
@@ -773,6 +775,21 @@ export interface ModelClient<T = Record<string, unknown>> {
   list?(options?: ServerReadOptions<T>): Promise<T[]>;
   create(params: ModelMutationOptions & { readonly data: Record<string, unknown>; readonly id?: string | null }): Promise<CommitReceipt>;
   update(params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> }): Promise<CommitReceipt>;
+  /**
+   * Update under contention with a function of the latest state —
+   * `update(id, current => next)`, the `setState(prev => next)` of the data
+   * layer. The SDK reads the freshest row, runs your updater, writes it as a
+   * compare-and-swap against the row's watermark, and re-reads + re-runs on any
+   * concurrent write. No claim, no identity, no conflict codes surface: the
+   * write either lands or throws {@link AbloContentionError} once its reconcile
+   * budget is spent. Return `null`/`undefined` from the updater to skip the
+   * write (resolves to `undefined`).
+   */
+  update(
+    id: string,
+    updater: ModelUpdater<T>,
+    options?: ContentionOptions,
+  ): Promise<CommitReceipt | undefined>;
   delete(params: ModelMutationOptions & { readonly id: string }): Promise<CommitReceipt>;
   /**
    * Durable lease + FIFO wait-line over HTTP — coordination without a socket.
@@ -2964,6 +2981,67 @@ export function Ablo<const S extends SchemaRecord>(
 	  }
 
 	  function model<T = Record<string, unknown>>(name: string): ModelClient<T> {
+	    // Overloaded `update`: classic `update({ id, data })` + functional
+	    // `update(id, current => next)` — the SDK-owned read-fresh → compare-and-
+	    // swap → reconcile loop (correctness via the row watermark, no clobber).
+	    function updateModel(
+	      params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> },
+	    ): Promise<CommitReceipt>;
+	    function updateModel(
+	      id: string,
+	      updater: ModelUpdater<T>,
+	      options?: ContentionOptions,
+	    ): Promise<CommitReceipt | undefined>;
+	    function updateModel(
+	      arg:
+	        | (ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> })
+	        | string,
+	      updater?: ModelUpdater<T>,
+	      contention?: ContentionOptions,
+	    ): Promise<CommitReceipt | undefined> {
+	      if (typeof arg === 'string') {
+	        const id = arg;
+	        if (typeof updater !== 'function') {
+	          throw new AbloValidationError(
+	            `${name}.update('${id}', updater): the second argument must be an updater ` +
+	              `function (current) => next. To write a fixed value, use update({ id, data }).`,
+	            { code: 'write_options_invalid' },
+	          );
+	        }
+	        return reconcileFunctionalUpdate<T, CommitReceipt>(updater, contention, {
+	          model: name,
+	          id,
+	          readFresh: async () => {
+	            const read = await retrieveModel<T>(name, id, {});
+	            return { data: read.data, stamp: read.stamp };
+	          },
+	          writeNext: (patch, readAt) =>
+	            commits.create({
+	              readAt,
+	              onStale: 'reject',
+	              wait: 'confirmed',
+	              operations: [
+	                { action: 'update', model: name, id, data: patch as Record<string, unknown> },
+	              ],
+	            }),
+	        });
+	      }
+	      const params = arg;
+	      return (async () => {
+	        await applyClaimedPolicy({ model: name, id: params.id }, params);
+	        return commits.create({
+	          claimRef: params.claimRef,
+	          idempotencyKey: params.idempotencyKey,
+	          readAt: params.readAt,
+	          onStale: params.onStale,
+	          ...(isClaimHandleValue(params.claim) ? { claim: params.claim } : {}),
+	          wait: params.wait,
+	          operations: [
+	            { action: 'update', model: name, id: params.id, data: params.data },
+	          ],
+	        });
+	      })();
+	    }
 	    return {
 	      retrieve(params: ModelReadOptions & { readonly id: string }): Promise<ModelRead<T>> {
 	        return retrieveModel<T>(name, params.id, params);
@@ -2990,27 +3068,7 @@ export function Ablo<const S extends SchemaRecord>(
 	          ],
 	        });
 	      },
-	      async update(
-	        params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> },
-	      ): Promise<CommitReceipt> {
-	        await applyClaimedPolicy({ model: name, id: params.id }, params);
-	        return commits.create({
-	          claimRef: params.claimRef,
-	          idempotencyKey: params.idempotencyKey,
-	          readAt: params.readAt,
-	          onStale: params.onStale,
-	          ...(isClaimHandleValue(params.claim) ? { claim: params.claim } : {}),
-	          wait: params.wait,
-	          operations: [
-	            {
-	              action: 'update',
-	              model: name,
-	              id: params.id,
-	              data: params.data,
-	            },
-	          ],
-	        });
-	      },
+	      update: updateModel,
 	      async delete(
 	        params: ModelMutationOptions & { readonly id: string },
 	      ): Promise<CommitReceipt> {

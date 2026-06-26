@@ -58,6 +58,9 @@
 // `import { Ablo }` also compiles.
 export { Ablo } from './client/Ablo.js';
 export type { MutationExecutor } from './interfaces/index.js';
+// The functional-update surface: `ablo.<model>.update(id, current => next)`.
+export type { ModelUpdater, ContentionOptions } from './client/functionalUpdate.js';
+export { DEFAULT_CONTENTION_RETRIES } from './client/functionalUpdate.js';
 // `InternalAbloOptions` carries the full construction surface (auth + transport
 // + DI + sync groups) that app shells need to build a client to hand to
 // `<AbloProvider client={...}>`. `AbloOptions` is the trimmed public shape.
@@ -159,6 +162,7 @@ export {
   AbloServerError,
   AbloStaleContextError,
   AbloClaimedError,
+  AbloContentionError,
   CapabilityError,
   translateHttpError,
   hasWireCode,

@@ -16,6 +16,11 @@ import {
   translateHttpError,
 } from '../errors.js';
 import {
+  reconcileFunctionalUpdate,
+  type ModelUpdater,
+  type ContentionOptions,
+} from './functionalUpdate.js';
+import {
   assertBrowserSafety,
   readProcessEnv,
   resolveApiKey,
@@ -1163,6 +1168,61 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       }
     };
 
+    // `update` is overloaded: the classic `update({ id, data })` and the
+    // functional `update(id, current => next)`. Declared as a real overloaded
+    // function (not an arrow assigned to the property) so the two public
+    // signatures survive — the implementation's `| undefined` return is for the
+    // updater's opt-out, hidden from the fixed-value form's callers.
+    function updateModel(
+      params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> },
+    ): Promise<CommitReceipt>;
+    function updateModel(
+      id: string,
+      updater: ModelUpdater<T>,
+      options?: ContentionOptions,
+    ): Promise<CommitReceipt | undefined>;
+    function updateModel(
+      arg:
+        | (ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> })
+        | string,
+      updater?: ModelUpdater<T>,
+      contention?: ContentionOptions,
+    ): Promise<CommitReceipt | undefined> {
+      // Functional form: update(id, current => next). The SDK owns the
+      // read-fresh → compute → compare-and-swap → reconcile loop; correctness
+      // rides on the row's watermark (readAt + onStale:'reject'), so no claim
+      // or per-participant identity is needed and contention never clobbers.
+      if (typeof arg === 'string') {
+        const id = arg;
+        if (typeof updater !== 'function') {
+          throw new AbloValidationError(
+            `${name}.update('${id}', updater): the second argument must be an updater ` +
+              `function (current) => next. To write a fixed value, use update({ id, data }).`,
+            { code: 'write_options_invalid' },
+          );
+        }
+        return reconcileFunctionalUpdate<T, CommitReceipt>(updater, contention, {
+          model: name,
+          id,
+          readFresh: async () => {
+            const read = await retrieveModel<T>(name, { id });
+            return { data: read.data, stamp: read.stamp };
+          },
+          writeNext: (patch, readAt) =>
+            mutateModel('update', name, id, patch as Record<string, unknown>, {
+              readAt,
+              onStale: 'reject',
+              wait: 'confirmed',
+            }),
+        });
+      }
+      const params = arg;
+      return withMutationClaim(params.id, params, async (options) => {
+        await applyClaimedPolicy({ model: name, id: params.id }, options);
+        return mutateModel('update', name, params.id, params.data, options);
+      });
+    }
+
     return {
       claim,
       retrieve(params: ModelReadOptions & { readonly id: string }): Promise<ModelRead<T>> {
@@ -1180,14 +1240,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           return mutateModel('create', name, id, params.data, options);
         });
       },
-      async update(
-        params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> },
-      ): Promise<CommitReceipt> {
-        return withMutationClaim(params.id, params, async (options) => {
-          await applyClaimedPolicy({ model: name, id: params.id }, options);
-          return mutateModel('update', name, params.id, params.data, options);
-        });
-      },
+      update: updateModel,
       async delete(
         params: ModelMutationOptions & { readonly id: string },
       ): Promise<CommitReceipt> {

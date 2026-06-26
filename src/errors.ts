@@ -272,6 +272,47 @@ export class AbloStaleContextError extends AbloError {
   }
 }
 
+/**
+ * The functional `update(id, current => next)` form exhausted its reconcile
+ * budget — the row stayed continuously contended (a hot row under sustained
+ * concurrent writes), so no attempt could land a compare-and-swap.
+ *
+ * This is the ONLY coordination concept the functional update ever surfaces, and
+ * only at the extreme: the SDK has already read-fresh → recomputed → retried on
+ * every stale/claim conflict on the caller's behalf. Catch it to back off and
+ * retry later, raise the `retries` budget, or move that row to the WebSocket
+ * transport (which parks writers in a fair FIFO queue instead of racing). The
+ * last underlying conflict that drove the final retry is on `.cause`.
+ */
+export class AbloContentionError extends AbloError {
+  readonly type = 'AbloContentionError' as const;
+  /** The contended model + row that could not be written. */
+  readonly model: string;
+  readonly id: string;
+  /** How many reconcile rounds were attempted before giving up. */
+  readonly attempts: number;
+
+  constructor(
+    model: string,
+    id: string,
+    attempts: number,
+    options?: { cause?: unknown },
+  ) {
+    super(
+      `Could not update ${model}/${id} after ${attempts} attempts — the row stayed ` +
+        `continuously contended, so nothing was written. Retry later, raise \`retries\`, ` +
+        `or use the WebSocket transport for a fair FIFO queue.`,
+      {
+        code: 'contention_exhausted',
+        ...(options?.cause !== undefined ? { cause: options.cause } : {}),
+      },
+    );
+    this.model = model;
+    this.id = id;
+    this.attempts = attempts;
+  }
+}
+
 export interface ClaimContext {
   readonly id?: string;
   readonly claimId?: string;

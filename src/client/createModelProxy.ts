@@ -25,6 +25,11 @@ import {
   type ClaimErrorClaim,
 } from '../errors.js';
 import { descriptionFromMeta } from '../coordination/schema.js';
+import {
+  reconcileFunctionalUpdate,
+  type ModelUpdater,
+  type ContentionOptions,
+} from './functionalUpdate.js';
 import type { MutationOptions } from '../interfaces/index.js';
 import { Model, modelAsRow } from '../Model.js';
 import { toMs } from '../utils/duration.js';
@@ -463,6 +468,21 @@ export interface ModelOperations<T, CreateInput> {
 
   /** Update an entity by id — optimistic, offline-first (see `create`). */
   update(params: ModelUpdateParams<T>): Promise<T>;
+  /**
+   * Update under contention with a function of the latest state —
+   * `update(id, current => next)`, the `setState(prev => next)` of the data
+   * layer. The SDK reads the freshest row, runs your updater, writes it as a
+   * compare-and-swap, and re-reads + re-runs on any concurrent write. Nothing
+   * about claims, identity, or conflict codes surfaces: the write either lands
+   * or throws {@link AbloContentionError} once its reconcile budget is spent.
+   * Return `null`/`undefined` from the updater to skip the write. Resolves to
+   * the reconciled row (or `undefined` when the updater opted out).
+   */
+  update(
+    id: string,
+    updater: ModelUpdater<T>,
+    options?: ContentionOptions,
+  ): Promise<T | undefined>;
 
   /** Delete an entity by id — optimistic, offline-first (see `create`). */
   delete(params: ModelDeleteParams<T>): Promise<void>;
@@ -996,8 +1016,75 @@ export function createModelProxy<T, C>(
       }
     }),
 
-    update: guard(
-      async (params: ModelUpdateParams<T>): Promise<T> => {
+    // `update` is overloaded — classic `update({ id, data })` + functional
+    // `update(id, current => next)`. The IIFE keeps the shared error-guard
+    // wrapping while exposing the two public signatures (a plain `guard(...)`
+    // would collapse them to one).
+    update: ((): ModelOperations<T, C>['update'] => {
+      const updateImpl = guard(
+        async (
+          arg: ModelUpdateParams<T> | string,
+          updater?: ModelUpdater<T>,
+          contention?: ContentionOptions,
+        ): Promise<T | undefined> => {
+        // Functional form: update(id, current => next). Same guarantee as the
+        // HTTP client (shared reconcile loop), implemented with this transport's
+        // own read-fresh + confirmed compare-and-swap. A forced server round-trip
+        // gets the latest row + watermark; the write is stale-guarded by it, so
+        // concurrent writers reconcile instead of clobbering — no claim needed.
+        if (typeof arg === 'string') {
+          const id = arg;
+          if (typeof updater !== 'function') {
+            throw new AbloValidationError(
+              `${registeredModelName}.update('${id}', updater): the second argument must ` +
+                `be an updater function (current) => next. To write a fixed value, use ` +
+                `update({ id, data }).`,
+              { code: 'write_options_invalid' },
+            );
+          }
+          if (!collaboration) {
+            throw new AbloValidationError(
+              `${registeredModelName}.update(id, updater) needs the collaboration runtime ` +
+                `(a live WebSocket) to read the row's watermark for its compare-and-swap. ` +
+                `Use the standard Ablo({ schema, apiKey }) client.`,
+              { code: 'model_claim_not_configured' },
+            );
+          }
+          return reconcileFunctionalUpdate<T, T>(updater, contention, {
+            model: registeredModelName,
+            id,
+            readFresh: async () => {
+              // `type: 'complete'` forces the round-trip — the hydration ledger
+              // would otherwise serve a possibly-stale local row for a hydrated id.
+              await load({ where: [['id', id]], type: 'complete' });
+              const fresh = objectPool.get(id);
+              const snapshot = collaboration.createSnapshot(schemaKey, id);
+              return {
+                data: fresh ? modelAsRow<T>(fresh) : undefined,
+                stamp: snapshot.stamp,
+              };
+            },
+            writeNext: async (patch, readAt) => {
+              const model = objectPool.get(id);
+              if (!model) {
+                throw new AbloValidationError(
+                  `Entity not found: ${registeredModelName}/${id}`,
+                  { code: 'entity_not_found' },
+                );
+              }
+              const effective: MutationOptions = {
+                wait: 'confirmed',
+                readAt,
+                onStale: 'reject',
+              };
+              model.applyChanges(patch as Record<string, unknown>);
+              syncClient.update(model, effective);
+              await waitForMutation(model, effective);
+              return modelAsRow<T>(model);
+            },
+          });
+        }
+        const params = arg;
         const autoClaim =
           params.claim && !isClaimHandle(params.claim) ? params.claim : null;
         if (autoClaim) {
@@ -1050,8 +1137,23 @@ export function createModelProxy<T, C>(
         syncClient.update(model, effective);
         await waitForMutation(model, effective);
         return modelAsRow<T>(model);
-      },
-    ),
+        },
+      );
+      function update(params: ModelUpdateParams<T>): Promise<T>;
+      function update(
+        id: string,
+        updater: ModelUpdater<T>,
+        options?: ContentionOptions,
+      ): Promise<T | undefined>;
+      function update(
+        arg: ModelUpdateParams<T> | string,
+        updater?: ModelUpdater<T>,
+        contention?: ContentionOptions,
+      ): Promise<T | undefined> {
+        return updateImpl(arg, updater, contention);
+      }
+      return update;
+    })(),
 
     delete: guard(async (params: ModelDeleteParams<T>): Promise<void> => {
       const autoClaim =

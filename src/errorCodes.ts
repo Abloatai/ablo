@@ -229,6 +229,12 @@ export const ERROR_CODES = {
 
   // ── stale context / idempotency (409) ──────────────────────────────
   stale_context: wire('conflict', 409, true, 'The write carried a readAt watermark that is now stale; re-read and retry.'),
+  // Raised by the functional `update(id, current => next)` form once its
+  // internal reconcile budget is exhausted — the row stayed continuously
+  // contended. Client-side: the SDK already retried; the caller decides whether
+  // to back off, raise `retries`, or move the row to the WebSocket transport.
+  contention_exhausted: client('conflict', 'A functional update could not land after exhausting its reconcile budget; the row stayed continuously contended.'),
+  update_aborted: client('conflict', 'The functional update reconcile loop was aborted via its AbortSignal before the write landed.'),
   idempotency_conflict: wire('conflict', 409, false, 'The same Idempotency-Key was reused with a different request body.'),
   idempotency_key_too_long: wire('validation', 400, false, 'The supplied Idempotency-Key exceeds the maximum length.'),
 

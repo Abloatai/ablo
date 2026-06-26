@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.22.0
+
+### Minor Changes
+
+- Add the functional update form: `ablo.<model>.update(id, current => next)`.
+
+  The `setState(prev => next)` of the data layer. Pass a function of the latest
+  row and the SDK owns everything that used to be the caller's problem under
+  contention: it reads the freshest row, runs your updater, writes it as a
+  compare-and-swap against the row's watermark, and re-reads + re-runs on any
+  concurrent write. No claim, no per-participant identity, and no
+  `stale_context` / `claim_*` codes ever surface — correctness rides on the
+  watermark, so concurrent writers reconcile instead of silently clobbering. The
+  write either lands or throws a single `AbloContentionError` once its reconcile
+  budget is spent.
+
+  Identical guarantee on both transports (HTTP and WebSocket share one reconcile
+  loop). Return `null`/`undefined` from the updater to skip the write. Tune with
+  `{ retries, signal }`. Exports: `AbloContentionError`, `ModelUpdater`,
+  `ContentionOptions`, `DEFAULT_CONTENTION_RETRIES`.
+
+  The classic `update({ id, data })` form is unchanged.
+
 ## 0.21.0
 
 ### Minor Changes
