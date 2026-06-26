@@ -822,6 +822,43 @@ export class SyncWebSocket<
               } else {
                 errorMessage = 'mutation failed on server';
               }
+              // Coordination collision: a stale-context rejection (the write's
+              // readAt premise moved underneath) or a foreign-claim conflict is
+              // exactly the collision ClaimLog exists to surface. The notify
+              // path (success + notifications) emits captureConflict above; a
+              // HARD rejection must too — otherwise observability.collisions()
+              // silently misses every rejected write. The conflicted rows ride
+              // along on the typed error's `conflicts` detail (see
+              // AbloStaleContextError.toJSON / errorEnvelope).
+              if (
+                errorCode === 'stale_context' ||
+                errorCode === 'claim_conflict' ||
+                errorCode === 'entity_claimed' ||
+                errorCode?.startsWith('policy:') === true
+              ) {
+                const rawConflicts =
+                  error != null &&
+                  typeof error === 'object' &&
+                  Array.isArray((error as { conflicts?: unknown }).conflicts)
+                    ? (error as { conflicts: ReadonlyArray<{ model?: unknown; id?: unknown }> })
+                        .conflicts
+                    : [];
+                const conflictEvent = {
+                  clientTxId: typeof clientTxId === 'string' ? clientTxId : '',
+                  rows: rawConflicts.map((r) => ({
+                    model: typeof r.model === 'string' ? r.model : 'unknown',
+                    id: typeof r.id === 'string' ? r.id : 'unknown',
+                    fields: [] as string[],
+                  })),
+                };
+                const ctx = getContext();
+                ctx.observability.breadcrumb(
+                  formatConflict(conflictEvent),
+                  'sync.coordination',
+                  'warning',
+                );
+                ctx.observability.captureConflict(conflictEvent);
+              }
               // Build the proper typed AbloError from the wire code via the
               // shared factory — the same code→class mapping the HTTP commit
               // path uses (`translateHttpError`). This keeps rejected commits

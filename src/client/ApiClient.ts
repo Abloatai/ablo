@@ -60,11 +60,18 @@ import type {
 } from './createModelProxy.js';
 import type { Duration } from '../utils/duration.js';
 import type { Claim, HeldClaim } from '../types/streams.js';
+import type { SyncObservabilityProvider } from '../interfaces/index.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
 
 export type AbloApiClientOptions = Omit<AbloOptions, 'schema'> & {
   readonly schema?: null | undefined;
   readonly bootstrapBaseUrl?: string | undefined;
+  /**
+   * Observability provider forwarded from `Ablo({ observability })`. The HTTP
+   * transport emits the same claim/conflict seams as the WS transport so a
+   * `ClaimLog` works identically for headless (server-agent) evals.
+   */
+  readonly observability?: SyncObservabilityProvider;
 };
 
 export interface AbloApiClaims {
@@ -311,6 +318,44 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     databaseUrl: configuredDatabaseUrl,
     dangerouslyAllowBrowser: options.dangerouslyAllowBrowser,
   });
+
+  // Observability seam for the STATELESS HTTP transport. The WS transport emits
+  // claim/conflict events from SyncWebSocket; the HTTP path (server-side agents,
+  // `transport: 'http'`) emitted nothing, so a `ClaimLog` handed to a headless
+  // agent eval stayed empty. Mirror the two WS seams here: claim acquired +
+  // coordination-conflict rejection. No-op when no provider is configured.
+  const observability = options.observability;
+
+  // Shared by the two HTTP write doors (`commits.create` + per-model
+  // `mutateModel`): a rejected write whose code is a coordination conflict is
+  // the collision ClaimLog exists to surface. Prefer the server's `conflicts`
+  // detail (carried on the typed error / envelope); fall back to the rows the
+  // caller tried to write so the collision always names a target. Inert without
+  // a provider or for non-conflict errors. Never throws (capture is best-effort).
+  const recordCoordinationConflict = (
+    error: unknown,
+    clientTxId: string,
+    fallbackRows: ReadonlyArray<{ model: string; id: string }>,
+  ): void => {
+    if (!observability) return;
+    const code = (error as { code?: unknown })?.code;
+    const isConflict =
+      code === 'stale_context' ||
+      code === 'claim_conflict' ||
+      code === 'entity_claimed' ||
+      (typeof code === 'string' && code.startsWith('policy:'));
+    if (!isConflict) return;
+    const rawConflicts = (error as { conflicts?: unknown })?.conflicts;
+    const rows =
+      Array.isArray(rawConflicts) && rawConflicts.length > 0
+        ? (rawConflicts as ReadonlyArray<{ model?: unknown; id?: unknown }>).map((r) => ({
+            model: typeof r.model === 'string' ? r.model : 'unknown',
+            id: typeof r.id === 'string' ? r.id : 'unknown',
+            fields: [] as string[],
+          }))
+        : fallbackRows.map((r) => ({ model: r.model, id: r.id, fields: [] as string[] }));
+    observability.captureConflict({ clientTxId, rows });
+  };
 
   const fetchImpl = options.fetch ?? globalThis.fetch;
   if (typeof fetchImpl !== 'function') {
@@ -618,16 +663,32 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         onStale:
           commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
       });
-      const body = await requestJson<CommitResponse>('/v1/commits', {
-        method: 'POST',
-        idempotencyKey: clientTxId,
-        body: JSON.stringify({
-          clientTxId,
+      let body: CommitResponse;
+      try {
+        body = await requestJson<CommitResponse>('/v1/commits', {
+          method: 'POST',
           idempotencyKey: clientTxId,
-          claim: normalizeClaimId(commitOptions.claimRef) ?? claim?.id,
-          operations,
-        }),
-      });
+          body: JSON.stringify({
+            clientTxId,
+            idempotencyKey: clientTxId,
+            claim: normalizeClaimId(commitOptions.claimRef) ?? claim?.id,
+            operations,
+          }),
+        });
+      } catch (error) {
+        // Coordination collision over HTTP — surface it to observability on the
+        // same footing as the WS transport, then rethrow unchanged. Fall back to
+        // the ops we tried to write so the collision always names a row.
+        recordCoordinationConflict(
+          error,
+          clientTxId,
+          operations.map((o) => ({
+            model: typeof o.model === 'string' ? o.model : 'unknown',
+            id: typeof o.id === 'string' ? o.id : 'unknown',
+          })),
+        );
+        throw error;
+      }
 
       // `requestJson` throws via `translateHttpError` on any non-2xx,
       // so reaching here implies success. Narrow `status` to the
@@ -942,11 +1003,20 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     if (action === 'create') requestBody.id = id;
     if (data !== undefined) requestBody.data = data;
 
-    const body = await requestJson<CommitResponse>(path, {
-      method,
-      idempotencyKey: clientTxId,
-      body: JSON.stringify(requestBody),
-    });
+    let body: CommitResponse;
+    try {
+      body = await requestJson<CommitResponse>(path, {
+        method,
+        idempotencyKey: clientTxId,
+        body: JSON.stringify(requestBody),
+      });
+    } catch (error) {
+      // Per-model write door (`ablo.<model>.update/create/delete`) — the path
+      // the demo editor + server agents actually take. Capture coordination
+      // collisions here too; this single row IS the fallback target.
+      recordCoordinationConflict(error, clientTxId, [{ model: modelName, id }]);
+      throw error;
+    }
 
     // `requestJson` throws via `translateHttpError` on any non-2xx, so reaching
     // here implies success. Narrow `status` to the `CommitWait`-compatible
@@ -1011,6 +1081,14 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
 
     async function claimImpl(params: ClaimParams<T>): Promise<HeldClaim<T>> {
       const claimId = await acquireClaim(params);
+      observability?.captureClaim({
+        phase: 'acquired',
+        claimId,
+        model: name,
+        id: params.id,
+        ...(params.field ? { field: params.field } : {}),
+        reason: params.reason ?? 'editing',
+      });
       const { data, stamp } = await retrieveModel<T>(name, { id: params.id });
       const release = () => releaseClaim(params);
       return {

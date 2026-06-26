@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.21.0
+
+### Minor Changes
+
+- Coordination observability now fires on BOTH transports. Previously `captureClaim`/`captureConflict` were emitted only by the WebSocket transport, so a `ClaimLog` (or any `observability` provider) handed to a stateless HTTP client — the transport server-side agents use via `Ablo({ transport: 'http' })` — stayed empty, and even on WebSocket a hard commit rejection went unrecorded. Fixed:
+  - **HTTP transport now emits.** `Ablo({ transport: 'http', observability })` records `claim` acquisition (`captureClaim`) and coordination-conflict rejections (`captureConflict`, code `stale_context` / `claim_conflict` / `entity_claimed`) on BOTH HTTP write doors (`commits.create` and per-model `ablo.<model>.update/create/delete`). The conflict names the collided rows — from the server's `conflicts` detail when present, otherwise the ops the write attempted. `observability` is now a documented option on the HTTP client.
+  - **WebSocket rejections now recorded.** A commit rejected by the conflict policy (`mutation_result` `success: false` with a coordination code) now calls `captureConflict`, mirroring the existing notify-on-success path. So `ClaimLog.collisions()` no longer silently misses rejected writes.
+
+  Net effect: a `ClaimLog` behaves identically regardless of transport — `entries`, `collisions()`, and `onChange` reflect the real coordination timeline for headless agent evals and live activity feeds alike.
+
 ## 0.20.2
 
 ### Patch Changes

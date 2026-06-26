@@ -168,7 +168,13 @@ function activeProjectSlug(value: unknown): string | undefined {
 }
 
 function importNodeBuiltin<T>(specifier: string): Promise<T> {
-  return import(specifier) as Promise<T>;
+  // Node-only runtime import (CLI credential snapshot). The call is dead in
+  // browser/edge builds — guarded by `process.versions.node` and `window`
+  // checks in the callers — but bundlers still try to resolve the dynamic
+  // `import()` and Turbopack fails the build on the unanalyzable specifier.
+  // The magic comments tell each bundler to emit the import verbatim and never
+  // resolve it. Keep both so webpack and Turbopack consumers are covered.
+  return import(/* webpackIgnore: true */ /* turbopackIgnore: true */ specifier) as Promise<T>;
 }
 
 async function readJsonIfPresent(path: string): Promise<Record<string, unknown> | null> {
