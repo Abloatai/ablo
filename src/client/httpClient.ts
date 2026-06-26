@@ -49,6 +49,7 @@ import type {
   ModelUpdateParams,
 } from './createModelProxy.js';
 import type { Schema, SchemaRecord, InferModel, InferCreate } from '../schema/schema.js';
+import type { ModelUpdater, ContentionOptions } from './functionalUpdate.js';
 
 export interface AbloHttpClientOptions<S extends SchemaRecord>
   extends Omit<AbloApiClientOptions, 'schema'> {
@@ -74,6 +75,18 @@ export interface HttpModelClient<T, C = T> {
   list(options?: ServerReadOptions<T>): Promise<T[]>;
   create(params: ModelCreateParams<T, C>): Promise<CommitReceipt>;
   update(params: ModelUpdateParams<C>): Promise<CommitReceipt>;
+  /**
+   * Functional update under contention — `update(id, current => next)`, the
+   * `setState(prev => next)` of the data layer. The SDK reads the freshest row,
+   * runs your updater, writes it as a compare-and-swap, and re-reads + re-runs on
+   * any concurrent write. No claim, no identity, no conflict codes: the write
+   * lands or throws `AbloContentionError`. Return `null`/`undefined` to skip.
+   */
+  update(
+    id: string,
+    updater: ModelUpdater<T>,
+    options?: ContentionOptions,
+  ): Promise<CommitReceipt | undefined>;
   delete(params: ModelDeleteParams<T>): Promise<CommitReceipt>;
   claim: HttpClaimApi<T>;
 }

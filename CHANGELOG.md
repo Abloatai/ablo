@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.1
+
+### Patch Changes
+
+- Expose the functional `update(id, current => next)` overload on the stateless
+  HTTP client type (`HttpModelClient` / `AbloHttpClient`).
+
+  0.22.0 wired the functional update at runtime on every transport and added the
+  overload to `ModelOperations` (WebSocket) and `ModelClient`, but the
+  `Ablo({ transport: 'http' })` client resolves its models to `HttpModelClient`,
+  whose `update` type still declared only the `update({ id, data })` form. So
+  server-side agents — the primary callers — saw a type error on
+  `update(id, fn)` even though it worked. Add the overload to that type.
+
 ## 0.22.0
 
 ### Minor Changes
