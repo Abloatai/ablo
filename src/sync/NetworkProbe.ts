@@ -182,7 +182,7 @@ export async function probeNetwork(input?: string | NetworkProbeOptions): Promis
           // or an auth-tagged code this SDK doesn't recognise. Re-auth re-mints
           // the same rejected credential and retrying won't help, so STOP
           // rather than reconnect-loop or sign the user out.
-          getContext().logger.warn('[NetworkProbe] Reachable but auth-blocked (non-retryable, non-expiry)', {
+          getContext().logger.debug('[NetworkProbe] Reachable but auth-blocked (non-retryable, non-expiry)', {
             status: response.status,
             code: authFailure,
             recovery,
@@ -224,7 +224,7 @@ export async function probeNetwork(input?: string | NetworkProbeOptions): Promis
     // expected 204; log a warning so misconfigurations surface instead of
     // silently passing.
     if (response.status < 200 || response.status >= 300) {
-      getContext().logger.warn('[NetworkProbe] Unexpected probe response', {
+      getContext().logger.debug('[NetworkProbe] Unexpected probe response', {
         status: response.status,
         url,
         latencyMs,

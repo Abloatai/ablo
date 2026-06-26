@@ -1919,7 +1919,7 @@ export class SyncWebSocket<
   private forceClose(reason: string): void {
     if (!this.ws) return;
     this.lastForceCloseReason = reason;
-    getContext().logger.warn('[SyncWebSocket] forceClose', {
+    getContext().logger.debug('[SyncWebSocket] forceClose', {
       reason,
       readyState: this.ws.readyState,
       msSinceOpen:
@@ -2167,7 +2167,7 @@ export class SyncWebSocket<
     if (!hasDeltas && typeof payload.currentSyncId === 'number') {
       const serverHead: number = payload.currentSyncId;
       if (serverHead < this.lastSyncId) {
-        getContext().logger.warn(
+        getContext().logger.debug(
           '[SyncWebSocket] local cursor ahead of server head — resetting and resyncing',
           {
             local: this.lastSyncId,

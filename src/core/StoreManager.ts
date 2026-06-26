@@ -39,7 +39,8 @@ export class StoreManager {
     this.db = db;
 
     if (this.isInitialized) {
-      getContext().logger.warn('StoreManager already initialized');
+      // Idempotent re-entry — harmless, nothing for the consumer to act on → debug.
+      getContext().logger.debug('StoreManager already initialized');
       return;
     }
 
@@ -117,7 +118,9 @@ export class StoreManager {
           store.createIndex(propName, propName, { unique: false });
           getContext().logger.debug('Created index', { store: storeName, prop: propName });
         } catch (error) {
-          getContext().logger.warn('Failed to create index', { store: storeName, prop: propName, error });
+          // Internal IndexedDB index setup — a miss only affects local query
+          // speed and isn't consumer-actionable → debug.
+          getContext().logger.debug('Failed to create index', { store: storeName, prop: propName, error });
         }
       }
 

@@ -37,7 +37,7 @@ import type {
   SessionErrorDetector,
   OnlineStatusProvider,
 } from '../interfaces/index.js';
-import { AbloError, AbloAuthenticationError, AbloConnectionError, AbloValidationError, translateHttpError, hasWireCode, toAbloError, claimedError } from '../errors.js';
+import { AbloError, AbloAuthenticationError, AbloConnectionError, AbloValidationError, AbloNotFoundError, translateHttpError, hasWireCode, toAbloError, claimedError } from '../errors.js';
 import { descriptionFromMeta } from '../coordination/schema.js';
 // `ModelTarget` (the `model`/`id` locator) and `ModelClaim` (the resolved claim
 // view) are canonical in `../coordination/schema` — derived there from one zod
@@ -604,7 +604,13 @@ export type ModelOperationAction =
 export type CommitWait = 'queued' | 'confirmed';
 
 export interface ModelRead<T = Record<string, unknown>> {
-  readonly data: T;
+  /**
+   * The row, or `undefined` when no row matched the id (or it's outside the
+   * caller's scope). A miss is data-absence, not an error — `retrieve` never
+   * throws "not found", mirroring the WebSocket client's `T | undefined`.
+   * Branch on it: `const deal = (await ablo.deals.retrieve({ id })).data; if (!deal) …`.
+   */
+  readonly data: T | undefined;
   readonly stamp: number;
   readonly claims: readonly ModelClaim[];
 }
@@ -773,7 +779,13 @@ export interface ModelClient<T = Record<string, unknown>> {
    * `.model(name)` accessor omits it (use the typed `ablo.<model>.list` there).
    */
   list?(options?: ServerReadOptions<T>): Promise<T[]>;
-  create(params: ModelMutationOptions & { readonly data: Record<string, unknown>; readonly id?: string | null }): Promise<CommitReceipt>;
+  /**
+   * Create a row and return it — the confirmed, authoritative server row (with
+   * framework defaults like `createdAt`/`createdBy`), mirroring the WebSocket
+   * client's `create`. A re-create of an existing caller-supplied id is
+   * idempotent and returns the EXISTING row, not the input.
+   */
+  create(params: ModelMutationOptions & { readonly data: Record<string, unknown>; readonly id?: string | null }): Promise<T>;
   update(params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> }): Promise<CommitReceipt>;
   /**
    * Update under contention with a function of the latest state —
@@ -2344,14 +2356,15 @@ export function Ablo<const S extends SchemaRecord>(
 	          (resolvedSyncGroups.length === 0 ||
 	            (resolvedSyncGroups.length === 1 && resolvedSyncGroups[0] === 'default'))
 	        ) {
+	          // Actionable and NOT self-healing (no live updates until fixed):
+	          // kept at warn, consumer register — engine jargon and the internal
+	          // file pointer stripped; forensic fields ride the debug companion.
 	          logger.warn(
-	            'Ablo({kind:"user"}) initialized with degenerate syncGroups — ' +
-	              'this client will receive zero deltas through the live WS path. ' +
-	              'Either pass `syncGroups` explicitly (typically ' +
-	              '`["org:${orgId}", "user:${userId}"]`) or verify your auth ' +
-	              'provider populates them. See packages/sync-engine/src/client/identity.ts.',
-	            { participantKind, resolvedSyncGroups },
+	            'This client was started without sync groups, so it will not receive ' +
+	              'live updates. Pass `syncGroups` (for example ' +
+	              '`["org:<id>", "user:<id>"]`) or check that your auth provider supplies them.',
 	          );
+	          logger.debug('degenerate syncGroups — details', { participantKind, resolvedSyncGroups });
 	        }
 
         _resolvedOrganizationId = accountScope;
@@ -3048,16 +3061,18 @@ export function Ablo<const S extends SchemaRecord>(
 	      },
 	      async create(
 	        params: ModelMutationOptions & { readonly data: Record<string, unknown>; readonly id?: string | null },
-	      ): Promise<CommitReceipt> {
+	      ): Promise<T> {
 	        const id = params.id ?? createModelId();
 	        await applyClaimedPolicy({ model: name, id }, params);
-	        return commits.create({
+	        // Confirm, then return the authoritative row (with framework defaults;
+	        // the EXISTING row on an idempotent re-create) — mirrors the WS client.
+	        await commits.create({
 	          claimRef: params.claimRef,
 	          idempotencyKey: params.idempotencyKey,
 	          readAt: params.readAt,
 	          onStale: params.onStale,
 	          ...(isClaimHandleValue(params.claim) ? { claim: params.claim } : {}),
-	          wait: params.wait,
+	          wait: params.wait ?? 'confirmed',
 	          operations: [
 	            {
 	              action: 'create',
@@ -3067,6 +3082,14 @@ export function Ablo<const S extends SchemaRecord>(
 	            },
 	          ],
 	        });
+	        const { data } = await retrieveModel<T>(name, id, {});
+	        if (data === undefined) {
+	          throw new AbloNotFoundError(
+	            `create ${name}/${id} did not yield a readable row (the write did not confirm).`,
+	            [id],
+	          );
+	        }
+	        return data;
 	      },
 	      update: updateModel,
 	      async delete(
@@ -3260,7 +3283,8 @@ export function Ablo<const S extends SchemaRecord>(
       try {
         await store.disconnect();
       } catch (err) {
-        logger.warn('Error during sync engine disposal', { error: (err as Error).message });
+        // Best-effort teardown — a disposal hiccup isn't consumer-actionable → debug.
+        logger.debug('Error during sync engine disposal', { error: (err as Error).message });
       }
       presenceStream.dispose();
       claimStream.dispose();

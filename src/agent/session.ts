@@ -22,6 +22,7 @@
 
 import { Ablo } from '../client/Ablo.js';
 import { AbloConnectionError } from '../errors.js';
+import { getContext } from '../context.js';
 import type { Schema, SchemaRecord } from '../schema/schema.js';
 
 // Internal shapes — used by the implementation and by the inline
@@ -177,12 +178,14 @@ export function createAgentSession<R extends SchemaRecord = SchemaRecord>(
       const causeMsg = e.cause?.message;
       // Best-effort dispose so the failed agent doesn't leak ws state.
       try { await agent.dispose(); } catch { /* ignore */ }
-      // Use console.error directly (rather than the engine logger)
-      // because this path may run before the per-agent logger is
-      // attached. The structured fields match the cap-mint logger in
-      // `connectAgent.ts` so a single search picks both up.
-      // eslint-disable-next-line no-console
-      console.error('[Agent.session] ws bootstrap failed', {
+      // Route through the gated logger so this obeys ABLO_LOG_LEVEL like every
+      // other line: a plain consumer-register `error` headline (the unreachable
+      // URL + code), with the structured fields on a `debug` companion. The
+      // companion's shape matches the cap-mint logger in `connectAgent.ts` so a
+      // single search picks both up.
+      const log = getContext().logger;
+      log.error(`Agent could not connect to the sync server at ${wsUrl}${code ? ` (${code})` : ''}.`);
+      log.debug('[Agent.session] ws bootstrap failed', {
         url: wsUrl,
         surfaceClass: identity.surfaceClass,
         orgId: identity.organizationId,

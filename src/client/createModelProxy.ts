@@ -1169,11 +1169,12 @@ export function createModelProxy<T, C>(
       }
       const { id } = params;
       const model = objectPool.get(id);
-      if (!model)
-        throw new AbloValidationError(
-          `Entity not found: ${registeredModelName}/${id}`,
-          { code: 'entity_not_found' },
-        );
+      // Idempotent delete (AIP-135 for client-assigned ids): "ensure absent". A
+      // row that isn't in our replicated view is already gone from our
+      // perspective, so a delete is a no-op success — not an `entity_not_found`
+      // error. This matches the HTTP client (which never threw here) and makes
+      // delete safe to retry / race (two actors deleting the same row).
+      if (!model) return;
       const claimed = activeClaims.get(id);
       const opts = mutationOptions(params);
       const handle = isClaimHandle(params.claim) ? params.claim : undefined;

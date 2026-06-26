@@ -244,7 +244,7 @@ export class ConnectionManager {
     try {
       this.callbacks?.onStateChange?.(nextState, prevState);
     } catch (err) {
-      getContext().logger.warn('[ConnectionManager] onStateChange threw', {
+      getContext().logger.debug('[ConnectionManager] onStateChange threw', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -579,7 +579,7 @@ export class ConnectionManager {
    */
   private async runRefreshCredential(): Promise<void> {
     if (this.credentialRefreshAttempts >= MAX_CREDENTIAL_REFRESH_ATTEMPTS) {
-      getContext().logger.warn(
+      getContext().logger.debug(
         '[ConnectionManager] Access key still stale after repeated re-mints — stopping',
         { attempts: this.credentialRefreshAttempts },
       );
@@ -622,7 +622,7 @@ export class ConnectionManager {
     } catch (error) {
       // A thrown refresher is transient by contract (offline / mint endpoint
       // unreachable) — back off and retry, never sign out.
-      getContext().logger.warn('[ConnectionManager] Credential re-mint threw (transient)', { error });
+      getContext().logger.debug('[ConnectionManager] Credential re-mint threw (transient)', { error });
       this.send({ type: 'RECONNECT_FAILED' });
     }
   }
@@ -643,7 +643,7 @@ export class ConnectionManager {
           break;
       }
     } catch (error) {
-      getContext().logger.error('[ConnectionManager] Reconnect threw', { error });
+      getContext().logger.debug('[ConnectionManager] Reconnect threw', { error });
       this.send({ type: 'RECONNECT_FAILED' });
     }
   }
@@ -659,7 +659,7 @@ export class ConnectionManager {
       // event (or watchdog) restart the cycle when the network comes
       // back.
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-        getContext().logger.warn(
+        getContext().logger.debug(
           '[ConnectionManager] Max retries while offline — parking until network restored',
         );
         getContext().observability.breadcrumb(
@@ -672,7 +672,7 @@ export class ConnectionManager {
         });
         return;
       }
-      getContext().logger.warn('[ConnectionManager] Max retries — hard reload');
+      getContext().logger.debug('[ConnectionManager] Max retries — hard reload');
       getContext().observability.breadcrumb(
         'Max retries — hard reload',
         'sync.offline',
@@ -778,7 +778,7 @@ export class ConnectionManager {
         const browserOnline =
           typeof navigator === 'undefined' || navigator.onLine === true;
         if (this.stuckCycles >= MAX_STUCK_CYCLES_BEFORE_RELOAD && browserOnline) {
-          getContext().logger.warn('[ConnectionManager] Watchdog: sustained stuck — hard reload');
+          getContext().logger.debug('[ConnectionManager] Watchdog: sustained stuck — hard reload');
           getContext().observability.breadcrumb(
             'Watchdog hard reload',
             'sync.offline',

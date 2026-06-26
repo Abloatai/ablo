@@ -16,6 +16,7 @@ import { z } from 'zod';
 import type { QueryBatch, QueryBatchResult } from './types.js';
 import { translateHttpError } from '../errors.js';
 import { withAuthHeaders, type AuthTokenGetter } from '../auth/credentialSource.js';
+import { getContext } from '../context.js';
 
 // ── Response validation ─────────────────────────────────────────────────
 //
@@ -103,8 +104,11 @@ export async function postQuery(
       // 401) instead of a bare status. We deliberately DON'T throw —
       // fire-and-forget callers would kill the Next.js router on an
       // unhandled rejection — and still return empty slots, but the failure
-      // is now legible as an Ablo error. Direct console.error is
-      // INTENTIONAL: operators alert on the `[postQuery.error]` prefix.
+      // is now legible as an Ablo error. Routed through the gated logger so it
+      // obeys ABLO_LOG_LEVEL like everything else: a consumer-register `warn`
+      // (their models + the typed message + a wire `code`) with the forensics on
+      // a `debug` companion. Actionable and not self-healing — the read returns
+      // empty until the underlying cause (auth, network) is resolved.
       let body: unknown = null;
       try {
         body = await response.clone().json();
@@ -112,17 +116,27 @@ export async function postQuery(
         // non-JSON error page — translateHttpError falls back to status text
       }
       const err = translateHttpError(response.status, body);
-      console.error(
-        `[postQuery.error] ${err.type} ${err.code ?? response.status} for ` +
-          `${batch.queries.map((q) => q.model).join(',')}: ${err.message}`,
+      const models = batch.queries.map((q) => q.model).join(', ');
+      getContext().logger.warn(
+        `Could not load ${models} — ${err.message} (code: ${err.code ?? response.status}). No results were returned.`,
       );
+      getContext().logger.debug('[postQuery.error] query http failure', {
+        type: err.type,
+        code: err.code ?? response.status,
+        models,
+        message: err.message,
+      });
       return { results: batch.queries.map(() => []) };
     }
 
     const raw: unknown = await response.json();
     const parsed = QueryBatchResultSchema.safeParse(raw);
     if (!parsed.success) {
-      console.error('[postQuery.error] malformed response:', parsed.error.issues);
+      // A malformed server response isn't something the consumer can act on
+      // (server/protocol issue) → debug, gated like everything else.
+      getContext().logger.debug('[postQuery.error] malformed response', {
+        issues: parsed.error.issues,
+      });
       return { results: batch.queries.map(() => []) };
     }
     return parsed.data;

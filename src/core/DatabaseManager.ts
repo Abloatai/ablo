@@ -87,7 +87,7 @@ export class DatabaseManager {
       // safe to delete and re-create. Try exactly once: delete, then re-open.
       if (!(error instanceof IDBOpenTimeoutError)) throw error;
 
-      getContext().logger.warn(
+      getContext().logger.debug(
         '[sync-engine] meta DB open timed out — attempting self-heal (delete + retry)',
         { db: this.metaDbName, reason: error.reason },
       );

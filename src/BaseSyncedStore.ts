@@ -444,7 +444,7 @@ export class BaseSyncedStore<
         this.syncClient.applyBootstrapDataToPool(data, undefined, { scoped: true });
         for (const g of need) this.hydratedGroups.add(g);
       } catch (err) {
-        getContext().logger.warn('[BaseSyncedStore] scoped hydrate failed', {
+        getContext().logger.debug('[BaseSyncedStore] scoped hydrate failed', {
           syncGroups: need,
           error: err instanceof Error ? err.message : String(err),
         });
@@ -1019,7 +1019,7 @@ export class BaseSyncedStore<
             });
           }
         } catch (fallbackError) {
-          getContext().logger.warn('[BaseSyncedStore] Local fallback failed', {
+          getContext().logger.debug('[BaseSyncedStore] Local fallback failed', {
             error: (fallbackError as Error).message,
           });
         }
@@ -1090,7 +1090,7 @@ export class BaseSyncedStore<
             { error: message },
           );
         } else {
-          getContext().logger.warn('access-credential re-mint failed (transient)', { error: message });
+          getContext().logger.debug('access-credential re-mint failed (transient)', { error: message });
         }
         return 'network_error';
       }
@@ -1306,7 +1306,7 @@ export class BaseSyncedStore<
     const groupKey = typeof rawObj.group === 'string' ? rawObj.group : undefined;
 
     if (!groupKey) {
-      getContext().logger.warn('[BaseSyncedStore] Group removed delta missing group key', {
+      getContext().logger.debug('[BaseSyncedStore] Group removed delta missing group key', {
         syncId: delta.id,
       });
       return;
@@ -1407,7 +1407,7 @@ export class BaseSyncedStore<
         subscribedSyncGroups: Array.from(currentGroups),
       });
     } catch (error) {
-      getContext().logger.warn('[BaseSyncedStore] Failed to check sync group shrinkage', {
+      getContext().logger.debug('[BaseSyncedStore] Failed to check sync group shrinkage', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -1494,7 +1494,7 @@ export class BaseSyncedStore<
         yield this.syncClient.hydrateFromDatabase();
         hasLocalData = this.objectPool.size > 0;
       } catch (hydrateError) {
-        getContext().logger.warn('[sync-engine] IDB hydration failed', { error: hydrateError });
+        getContext().logger.debug('[sync-engine] IDB hydration failed', { error: hydrateError });
         getContext().observability.captureBootstrapFailure(hydrateError, { type: 'hydration-from-idb' });
       }
 
@@ -1640,7 +1640,7 @@ export class BaseSyncedStore<
         this.applyBootstrapToPool(bootstrapResult, deltaProtectedIds);
         this.updateSyncStatus({ state: 'idle', progress: 100 });
       } catch (error) {
-        getContext().logger.warn('[sync-engine] Background bootstrap failed', {
+        getContext().logger.debug('[sync-engine] Background bootstrap failed', {
           error: error instanceof Error ? error.message : String(error),
           cause: error,
         });
@@ -1827,7 +1827,7 @@ export class BaseSyncedStore<
         if (resolved) return;
         resolved = true;
         unsubscribe();
-        getContext().logger.warn(
+        getContext().logger.debug(
           `[BaseSyncedStore] waitForWebSocketConnected timed out after ${timeoutMs}ms — initialize() will return but the next mutation may race the upgrade.`,
         );
         resolve(false);
@@ -1946,7 +1946,11 @@ export class BaseSyncedStore<
       // SECURITY: Clear IndexedDB data on session expiry.
       // When auth is revoked, locally cached data must not persist on disk.
       this.database.clear().catch((clearErr) => {
-        getContext().logger.error('[BaseSyncedStore] Failed to clear database on session error', clearErr);
+        // consumer register: session ended, but cached data may remain on disk
+        getContext().logger.error(
+          'Your session ended, but some locally cached data could not be cleared from this device.',
+        );
+        getContext().logger.debug('[BaseSyncedStore] Failed to clear database on session error', clearErr);
       });
       this.objectPool.clear();
     });
@@ -1962,7 +1966,11 @@ export class BaseSyncedStore<
     });
 
     const onReconnectFailed = this.syncWebSocket.subscribe('reconnect_failed', ({ attempts }) => {
-      getContext().logger.warn('[BaseSyncedStore] WebSocket reconnection gave up', { attempts });
+      // consumer register: reconnection exhausted — the app is now offline
+      getContext().logger.warn(
+        'Lost connection to the sync service and could not reconnect. Your app is now offline; changes will sync once the connection is restored.',
+      );
+      getContext().logger.debug('[BaseSyncedStore] WebSocket reconnection gave up', { attempts });
       this.updateSyncStatus({ state: 'reconnecting' });
     });
 
@@ -2627,7 +2635,7 @@ export class BaseSyncedStore<
       modelId: 'batch',
       error: error instanceof Error ? error : new Error(String(error)),
     });
-    getContext().logger.error('[BaseSyncedStore] Delta flush error', {
+    getContext().logger.debug('[BaseSyncedStore] Delta flush error', {
       error: error instanceof Error ? error.message : String(error),
     });
   };

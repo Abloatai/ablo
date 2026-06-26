@@ -304,7 +304,7 @@ async function resolveHosted(input: HostedInput): Promise<ResolvedIdentity> {
       return { expiresAtMs: Date.parse(next.expiresAt) };
     },
     onError: (err) => {
-      input.logger.warn('cap token refresh failed; will retry', {
+      input.logger.debug('cap token refresh failed; will retry', {
         error: err.message,
       });
     },

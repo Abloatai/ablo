@@ -854,7 +854,9 @@ export class TransactionQueue extends EventEmitter {
       }
     }
     if (inFlight.length === 0) return;
-    getContext().logger.warn(
+    // Internal mechanic: each failed commit surfaces to the consumer via its own
+    // rejection path, so this aggregate is forensic — debug, not warn.
+    getContext().logger.debug(
       `[TransactionQueue] WS disconnected > ${graceMs}ms; failing ${inFlight.length} in-flight commit(s) with AbloConnectionError`,
       { inFlightIds: inFlight.map((id) => id.slice(0, 8)) },
     );
@@ -1827,7 +1829,9 @@ export class TransactionQueue extends EventEmitter {
 
       // If disconnected, re-schedule with same timeout (no backoff while offline)
       if (!this.isConnectedFn()) {
-        getContext().logger.warn('[TransactionQueue] Timeout fired while disconnected - re-scheduling', {
+        // Self-healing: re-schedule the confirmation wait while offline, no
+        // consumer action needed → debug.
+        getContext().logger.debug('[TransactionQueue] Timeout fired while disconnected - re-scheduling', {
           txId: tx.id.slice(0, 8),
           model: tx.modelName,
         });
@@ -1876,7 +1880,9 @@ export class TransactionQueue extends EventEmitter {
           retryCount: retryCount + 1,
         });
 
-        getContext().logger.warn('[TransactionQueue] Re-scheduling with backoff', {
+        // Self-healing retry with backoff — the server already committed; we're
+        // just waiting on the delta. No consumer action → debug.
+        getContext().logger.debug('[TransactionQueue] Re-scheduling with backoff', {
           txId: tx.id.slice(0, 8),
           model: tx.modelName,
           nextTimeoutMs: nextTimeout,
@@ -2055,7 +2061,9 @@ export class TransactionQueue extends EventEmitter {
           tx.status = 'failed';
           tx.error = error;
           this.commitLane.shift();
-          getContext().logger.warn('[TransactionQueue] commit lane permanent error', {
+          // Internal bookkeeping — the consumer-facing rejection is emitted via
+          // 'transaction:failed' and surfaced by the permanent-error headline → debug.
+          getContext().logger.debug('[TransactionQueue] commit lane permanent error', {
             txId: tx.id.slice(0, 12),
             attempts: tx.attempts,
             message: error.message,
@@ -2243,12 +2251,36 @@ export class TransactionQueue extends EventEmitter {
         this.lastPermanentErrorSig = sig;
 
         const logger = getContext().logger;
+
+        // Two registers, one call site, split by log level (the default
+        // consumer logger is gated at `warn`, so `debug` is invisible unless
+        // someone sets ABLO_LOG_LEVEL=debug to debug the engine itself):
+        //   • the default-visible line speaks the APP DEVELOPER's language —
+        //     their verb (`update`), their model, the typed error's own human
+        //     message, and the wire `code` for grep — the way AI SDK / Next.js
+        //     surface errors. No engine nouns ("TransactionQueue", "permanent",
+        //     "rolling back") and no JSON dump on this line: those alarm and
+        //     don't help someone who just installed @abloatai/ablo.
+        //   • the forensic `details` ride a companion `debug` line for whoever
+        //     is debugging the engine internals.
+        const revertNote = this.config.enableOptimistic
+          ? ' The local change was reverted.'
+          : '';
+        const reason = abloErr?.message ? ` — ${abloErr.message}` : '';
+        const code = abloErr?.code ? ` (code: ${abloErr.code})` : '';
+        const headline = `Your ${transaction.type} to "${transaction.modelName}" was not saved${reason}${code}.${revertNote}`;
+
         if (isRepeat) {
-          logger.debug('[TransactionQueue] Permanent error - rolling back (repeat)', details);
+          // Same write rejected for the same reason on each reconnect replay —
+          // log the forensics once, stay quiet after.
+          logger.debug('write rejected again (same reason)', details);
         } else if (isBenignIdempotent) {
-          logger.info('[TransactionQueue] Write skipped — row already exists', details);
+          // Already-exists on a `create` is expected on replay, not a problem.
+          logger.info(`Your ${transaction.type} to "${transaction.modelName}" was skipped — this row already exists.`);
+          logger.debug('idempotent skip — details', details);
         } else {
-          logger.warn('[TransactionQueue] Permanent error - rolling back', details);
+          logger.warn(headline);
+          logger.debug('write rejection — details', details);
         }
       } catch {}
 

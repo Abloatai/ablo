@@ -647,7 +647,7 @@ export class Database {
 
         const store = this.getStore(modelName, 'bootstrap');
         if (!store) {
-          getContext().logger.warn(
+          getContext().logger.debug(
             `[Bootstrap] NO IDB STORE for ${modelName} — ${modelData.length} items DROPPED`,
           );
           continue;
@@ -1432,7 +1432,7 @@ export class Database {
         // `DataError`, `AbortError`) so we can find what's wrong with
         // the `compacted` payload shape or store schema.
         const idbErr = err instanceof Error ? err : new Error(String(err));
-        getContext().logger.warn('[Database.processDeltaBatch] store tx FAILED', {
+        getContext().logger.debug('[Database.processDeltaBatch] store tx FAILED', {
           modelName,
           storeDeltasCount: storeDeltas.length,
           errorName: idbErr.name,
@@ -1485,7 +1485,7 @@ export class Database {
       // persisted" signal loud when it actually happens. If this fires
       // repeatedly on the same sync IDs, a specific row is un-writable
       // (validation? compact issue?) and needs fixing at that layer.
-      getContext().logger.warn('[Database.processDeltaBatch] cursor withheld due to failed store tx', {
+      getContext().logger.debug('[Database.processDeltaBatch] cursor withheld due to failed store tx', {
         seen: highestSyncId,
         persisted: highestPersistedSyncId,
         gap: highestSyncId - highestPersistedSyncId,

@@ -11,6 +11,7 @@ import {
   AbloAuthenticationError,
   AbloConnectionError,
   AbloValidationError,
+  AbloNotFoundError,
   formatClaimedErrorMessage,
   claimedError,
   translateHttpError,
@@ -936,13 +937,13 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       },
     );
 
-    const data = query.data as T | undefined;
-    if (!data) {
-      throw new AbloValidationError(
-        `Model row not found: ${modelName}/${params.id}`,
-        { code: 'model_not_found' },
-      );
-    }
+    // Miss = `data: undefined`, NOT a thrown error. The WebSocket client's
+    // `retrieve` returns `T | undefined` for a missing row; throwing only here
+    // made the obvious read ("does this row exist?") a hard edge that an agent
+    // had to wrap in try/catch. Both transports now agree: absent row → absent
+    // data. Callers branch on `.data` (already the documented `.data?.x` usage).
+    // Normalize a miss to `undefined` (the server may send `null` or omit it).
+    const data = (query.data ?? undefined) as T | undefined;
 
     return {
       data,
@@ -1095,6 +1096,15 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         reason: params.reason ?? 'editing',
       });
       const { data, stamp } = await retrieveModel<T>(name, { id: params.id });
+      // A held claim hands back a snapshot; the typed `HeldClaim.data` is `T`.
+      // `retrieve` now reports a miss as `undefined` rather than throwing, but a
+      // claim on a row that doesn't exist has nothing to hold — surface it.
+      if (data === undefined) {
+        throw new AbloNotFoundError(
+          `Cannot claim ${name}/${params.id}: it does not exist (or is outside this credential's scope).`,
+          [params.id],
+        );
+      }
       const release = () => releaseClaim(params);
       return {
         object: 'claim',
@@ -1233,11 +1243,27 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       },
       async create(
         params: ModelMutationOptions & { readonly data: Record<string, unknown>; readonly id?: string | null },
-      ): Promise<CommitReceipt> {
+      ): Promise<T> {
         const id = params.id ?? createModelId();
         return withMutationClaim(id, params, async (options) => {
           await applyClaimedPolicy({ model: name, id }, options);
-          return mutateModel('create', name, id, params.data, options);
+          // Confirm the write, then return the row — the obvious expectation of
+          // "create" (the WebSocket client already returns the row). The read-
+          // back is the authoritative server row, so it carries the framework
+          // defaults (createdAt/createdBy/…) AND, for an idempotent re-create of
+          // an existing id, the EXISTING row rather than the caller's input.
+          await mutateModel('create', name, id, params.data, {
+            ...options,
+            wait: options?.wait ?? 'confirmed',
+          });
+          const { data } = await retrieveModel<T>(name, { id });
+          if (data === undefined) {
+            throw new AbloNotFoundError(
+              `create ${name}/${id} did not yield a readable row (the write did not confirm).`,
+              [id],
+            );
+          }
+          return data;
         });
       },
       update: updateModel,

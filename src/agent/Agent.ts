@@ -371,7 +371,9 @@ export class Agent implements PresenceAnnouncer {
       try {
         await this.opts.announcer.announce(status, activity);
       } catch (err) {
-        this.opts.logger.warn('[perception] announcer error', {
+        // Best-effort presence; failing only means peers don't see this
+        // agent's status. Not consumer-actionable → maintainer register.
+        this.opts.logger.debug('[perception] announcer error', {
           error: (err as Error).message,
         });
       }
@@ -387,12 +389,12 @@ export class Agent implements PresenceAnnouncer {
         syncGroups: this.opts.syncGroups,
       });
       if (!res.ok) {
-        this.opts.logger.warn(
+        this.opts.logger.debug(
           `[perception] announce failed: ${res.status} ${res.statusText}`,
         );
       }
     } catch (err) {
-      this.opts.logger.warn('[perception] announce error', {
+      this.opts.logger.debug('[perception] announce error', {
         error: (err as Error).message,
       });
     }

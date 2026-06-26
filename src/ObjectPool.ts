@@ -307,7 +307,9 @@ export class ObjectPool {
           deltaInfo.action === 'I' &&
           (history.lastAction === 'U' || history.lastAction === 'D')
         ) {
-          getContext().logger.warn(
+          // Internal delta-ordering anomaly that reconciles on the next
+          // catch-up — forensic, not consumer-actionable → debug.
+          getContext().logger.debug(
             `ObjectPool.add() SUSPICIOUS: INSERT after ${history.lastAction}`,
             { modelType, id, syncId: deltaInfo.syncId },
           );
@@ -778,7 +780,9 @@ export class ObjectPool {
 
     if (!Constructor) {
       if (!ModelClass && modelName === 'Unknown') {
-        getContext().logger.warn(
+        // Malformed row with no type marker — dropped, but nothing the consumer
+        // can act on (the actionable schema-drift case is handled below) → debug.
+        getContext().logger.debug(
           'ObjectPool.createFromData: No model identifier found',
           { data },
         );
@@ -797,7 +801,13 @@ export class ObjectPool {
         );
       }
 
+      // Genuinely actionable and NOT self-healing: a model the server is sending
+      // isn't in your schema, so these rows are silently skipped. Keep at warn,
+      // consumer register (their model name + the `ablo status` fix); forensics ride debug.
       getContext().logger.warn(
+        `Received data for "${modelName}", which isn't in your schema — these rows will be skipped. Run \`ablo status\` to compare your local schema with the server.`,
+      );
+      getContext().logger.debug(
         `ObjectPool.createFromData: No constructor found for model "${modelName}"`,
         { data },
       );
@@ -834,7 +844,9 @@ export class ObjectPool {
       return model;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      getContext().logger.warn(
+      // Internal construction failure — captured via observability below and
+      // re-fetched on resync; the stack is forensic → debug.
+      getContext().logger.debug(
         `[ObjectPool.createFromData] FAILED ${modelName}`,
         { errorMessage, stack: error instanceof Error ? error.stack : undefined },
       );

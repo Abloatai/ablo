@@ -73,7 +73,12 @@ export interface AbloHttpClientOptions<S extends SchemaRecord>
 export interface HttpModelClient<T, C = T> {
   retrieve(params: ModelRetrieveParams & ModelReadOptions): Promise<ModelRead<T>>;
   list(options?: ServerReadOptions<T>): Promise<T[]>;
-  create(params: ModelCreateParams<T, C>): Promise<CommitReceipt>;
+  /**
+   * Create a row and return it — the confirmed, authoritative server row (with
+   * framework defaults), mirroring the WebSocket client's `create`. A re-create
+   * of an existing caller-supplied id is idempotent and returns the EXISTING row.
+   */
+  create(params: ModelCreateParams<T, C>): Promise<T>;
   update(params: ModelUpdateParams<C>): Promise<CommitReceipt>;
   /**
    * Functional update under contention — `update(id, current => next)`, the

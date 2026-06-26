@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.23.0
+
+### Minor Changes
+
+- 2807efb: `create` now returns the created row, not a `CommitReceipt`.
+
+  The WebSocket client's `create` already returned the row (`T`); the HTTP client
+  and the `.model(name)` accessor returned a `CommitReceipt`, so "create returns
+  the thing I created" only held on one transport. Both now return the confirmed,
+  authoritative server row (framework defaults like `createdAt`/`createdBy`
+  included). For an idempotent re-create of an existing caller-supplied id, the
+  EXISTING row is returned (not the input).
+
+  BREAKING (HTTP / `.model()` callers only): `await ablo.<model>.create(...)` now
+  resolves to the row instead of `{ status, lastSyncId, ... }`. Code that ignored
+  the return value, or that read `.id` (the row carries `id` too), is unaffected;
+  code that read `lastSyncId` / `serverTxId` / `status` off a typed model create
+  should use the raw `commits.create(...)` resource, which still returns a
+  `CommitReceipt`. WebSocket-client callers are unaffected (already returned `T`).
+
+- 2807efb: `delete` is idempotent — deleting an already-absent row is a no-op success, not
+  an error.
+
+  The WebSocket client's `delete` threw `entity_not_found` when the row wasn't in
+  the local pool, while the HTTP client returned without error — so "delete this"
+  was a hard edge on one transport. Both now agree: a row that isn't present is
+  already gone, so the delete succeeds with no effect. This is AIP-135's
+  recommended behavior for client-assigned-id / declarative APIs (Ablo is exactly
+  that), and it makes delete safe to retry and to race (two actors deleting the
+  same row). The deliberate "loud 0-row" assertion in `@ablo/slides-sdk` is
+  unchanged (it keeps its own `allowMissing` opt-out).
+
+- 2807efb: `retrieve` reports a missing row as `data: undefined` instead of throwing.
+
+  The HTTP client previously threw `model_not_found` for a missing row while the
+  WebSocket client returned `T | undefined` — so the obvious read ("does this row
+  exist?") was a hard edge an agent had to wrap in `try/catch` on one transport
+  only. Both transports now agree: an absent row is data-absence, not an error.
+  `ModelRead.data` is now `T | undefined` (matching the documented `.data?.x`
+  usage). Taking a `claim` on a row that doesn't exist still throws
+  `AbloNotFoundError` — a claim has nothing to hold.
+
 ## 0.22.1
 
 ### Patch Changes

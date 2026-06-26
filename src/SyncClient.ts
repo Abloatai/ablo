@@ -286,7 +286,13 @@ export class SyncClient extends EventEmitter {
             // cascade), don't re-add it — Object.assign cannot restore the private
             // isDisposed flag, so the model would be added in a broken state.
             if (model.disposed) {
-              getContext().logger.warn('[SyncClient] Skipping rollback restore for disposed model', {
+              // Follow-on of an already-logged permanent error, not its own
+              // problem: the tx that failed has already surfaced the cause in
+              // TransactionQueue. Restoring a disposed model is a no-op by
+              // design (can't revive the private isDisposed flag), so keep this
+              // at `debug` instead of emitting a second `warn` that reads as a
+              // distinct failure in the console.
+              getContext().logger.debug('[SyncClient] Rollback skipped restore (model already disposed)', {
                 modelId: transaction.modelId,
                 modelName: transaction.modelName,
                 reason,
@@ -1248,9 +1254,15 @@ export class SyncClient extends EventEmitter {
     // this class of misconfiguration surfaces in dev instead of
     // manifesting as "my drag doesn't save."
     if (!this.userId || !this.organizationId) {
-      getContext().logger.warn(
-        '[sync] mutations dropped — SyncClient has no identity. ' +
-          'Did the store call `syncClient.initialize(userId, orgId)`?',
+      // Internal invariant, not a consumer-actionable error: identity (user +
+      // org) hasn't arrived yet. The mutations stay queued and retry once it
+      // does, so this is `debug` — a transient startup race is normal. If it
+      // never clears it means the host app finished sign-in without seeding
+      // identity, which surfaces downstream as "writes never confirm"; we do
+      // NOT name internal wiring (`SyncClient.initialize`) here because that
+      // method isn't part of the @abloatai/ablo surface a reader could act on.
+      getContext().logger.debug(
+        '[sync] writes waiting for identity (user/org not set yet) — queued, will retry',
         {
           pending: this.pendingMutations.length,
           userId: this.userId,
@@ -1967,7 +1979,9 @@ export class SyncClient extends EventEmitter {
           // re-fetch and re-apply. Logged here so silent IDB failures
           // are observable instead of disappearing into a default switch
           // fall-through.
-          getContext().logger.warn('[SyncClient.applyDeltaBatchToPool] skipping pool op for unpersisted delta', {
+          // Self-healing: the next catch-up poll / reconnect re-fetches and
+          // re-applies this delta, so it's forensic, not consumer-actionable → debug.
+          getContext().logger.debug('[SyncClient.applyDeltaBatchToPool] skipping pool op for unpersisted delta', {
             modelName,
             modelId: modelId.slice(0, 12),
           });

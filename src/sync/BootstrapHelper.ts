@@ -543,7 +543,7 @@ export class BootstrapHelper {
         getContext().logger.debug('Cleared cache key', { key });
       });
     } catch (error) {
-      getContext().logger.warn('Failed to clear cache', { error });
+      getContext().logger.debug('Failed to clear cache', { error });
     }
   }
 
@@ -556,7 +556,7 @@ export class BootstrapHelper {
     try {
       localStorage.setItem(this.getBootstrapCacheKey(orgId), JSON.stringify(data));
     } catch (e) {
-      getContext().logger.warn('Failed to cache bootstrap payload', {
+      getContext().logger.debug('Failed to cache bootstrap payload', {
         error: e instanceof Error ? e.message : String(e),
       });
     }

@@ -19,6 +19,7 @@
  */
 
 import type { Schema } from '../schema/schema.js';
+import { getContext } from '../context.js';
 import type { SyncStoreContract, LocalMutation } from '../react/context.js';
 import { createTransaction, type Transaction } from './Transaction.js';
 import { type InverseOp, type UndoEntry, parseUndoEntry } from './inverseOp.js';
@@ -440,9 +441,9 @@ export class UndoScope<S extends Schema> {
         listener(entry);
       } catch (err) {
         // A faulty observer must never break the editor's recording path.
-        if (typeof console !== 'undefined') {
-          console.error('[UndoScope] onRecord listener threw', err);
-        }
+        // Routed through the gated logger; the consumer's own onRecord callback
+        // is at fault, so this is actionable → warn (no engine tag on the line).
+        getContext().logger.warn('An undo/redo onRecord listener threw — your callback should not throw', err);
       }
     }
   }
@@ -465,9 +466,9 @@ export class UndoScope<S extends Schema> {
       try {
         listener();
       } catch (err) {
-        if (typeof console !== 'undefined') {
-          console.error('[UndoScope] onChange listener threw', err);
-        }
+        // Consumer's own onChange callback is at fault → actionable warn,
+        // routed through the gated logger (no engine tag on the line).
+        getContext().logger.warn('An undo/redo onChange listener threw — your callback should not throw', err);
       }
     }
   }

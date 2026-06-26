@@ -141,7 +141,9 @@ export function useMutators(
                 if (entry) undoScope.record(entry);
                 return result;
               } catch (err) {
-                getContext().logger.error(
+                // The error is re-thrown to the caller's await (the real
+                // consumer surface), so this is a forensic follow-on → debug.
+                getContext().logger.debug(
                   `[useMutators] mutator "${label}" threw`,
                   { error: err },
                 );
@@ -155,7 +157,9 @@ export function useMutators(
           try {
             return await fn({ tx, args });
           } catch (err) {
-            getContext().logger.error(
+            // Re-thrown to the caller's await (the real consumer surface) →
+            // this duplicate is forensic, debug only.
+            getContext().logger.debug(
               `[useMutators] mutator "${label}" threw`,
               { error: err },
             );
