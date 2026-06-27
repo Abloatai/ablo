@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.24.0
+
+### Minor Changes
+
+- Multi-agent coordination for AI SDK tools + safer `ablo push`.
+  - **`coordinatedTool` (`@abloatai/ablo/ai-sdk`)** — one call turns an Ablo model
+    write into a Vercel AI SDK `tool()` with concurrency coordination handled, so an
+    AI agent can contribute to shared state without clobbering concurrent writers.
+    Three strategies: `merge` (default — delegates to the functional update's
+    compare-and-swap + backoff, self-healing accumulate), `claim` (mutual exclusion,
+    returns a `claimed` signal the model retries on), and `queue` (SQS-style
+    poll-acquire over HTTP). The `ai-sdk` entry now also documents the canonical
+    multi-agent coordination model (surface-the-signal + back-off laws, strategy
+    table).
+  - **`ablo push` guards** — `--dry-run`/`--plan` prints the deploy target, a
+    model-level diff vs the deployed schema, and git state, then exits without
+    applying. Production deploys now require a typed confirmation (and refuse an
+    uncommitted schema unless `--allow-dirty`); sandbox confirms interactively.
+    `--yes`/`-y` skips confirmation for CI.
+
 ## 0.23.0
 
 ### Minor Changes

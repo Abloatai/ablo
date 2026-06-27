@@ -409,6 +409,12 @@ A slide claim referenced an unknown sibling slide.
 
 The write collided with concurrent state (stale read, idempotency mismatch, incompatible change).
 
+### contention_exhausted
+
+`client-only` · not sent over the network
+
+A functional update could not land after exhausting its reconcile budget; the row stayed continuously contended.
+
 ### foreign_key_violation
 
 `HTTP 409` · not retryable
@@ -438,6 +444,12 @@ The write carried a readAt watermark that is now stale; re-read and retry.
 `HTTP 409` · not retryable
 
 A value violates a uniqueness constraint.
+
+### update_aborted
+
+`client-only` · not sent over the network
+
+The functional update reconcile loop was aborted via its AbortSignal before the write landed.
 
 ## Validation
 
@@ -472,6 +484,12 @@ An claim id is required for this request.
 `client-only` · not sent over the network
 
 The CLI was invoked with an unknown flag or a malformed flag value.
+
+### column_type_mismatch
+
+`HTTP 400` · not retryable
+
+A structured (JSON) value was written to a column whose database type cannot hold it. Ablo adapts a json field to either a jsonb column (native) or a text column (serialized) — but a scalar column (integer, boolean, uuid, timestamp, …) cannot store a JSON object or array. Use a jsonb or text column for this field. Ablo adapts to your column; it does not alter your schema.
 
 ### commit_operation_action_required
 
@@ -520,6 +538,12 @@ A database integrity constraint was violated.
 `HTTP 400` · not retryable
 
 This deployment cannot register a direct (connection string) datasource — use the signed endpoint kind.
+
+### datasource_direct_deprecated
+
+`HTTP 410` · not retryable
+
+The direct (connection string) datasource is deprecated. Register a signed Data Source endpoint instead — your app owns the write and your credentials never leave it.
 
 ### duration_invalid
 

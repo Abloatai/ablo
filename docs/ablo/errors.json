@@ -328,6 +328,15 @@
       "docUrl": "https://docs.abloatai.com/errors#cli_invalid_arguments"
     },
     {
+      "code": "column_type_mismatch",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A structured (JSON) value was written to a column whose database type cannot hold it. Ablo adapts a json field to either a jsonb column (native) or a text column (serialized) — but a scalar column (integer, boolean, uuid, timestamp, …) cannot store a JSON object or array. Use a jsonb or text column for this field. Ablo adapts to your column; it does not alter your schema.",
+      "docUrl": "https://docs.abloatai.com/errors#column_type_mismatch"
+    },
+    {
       "code": "commit_failed",
       "category": "transport",
       "surface": "wire",
@@ -427,6 +436,14 @@
       "docUrl": "https://docs.abloatai.com/errors#constraint_violation"
     },
     {
+      "code": "contention_exhausted",
+      "category": "conflict",
+      "surface": "client",
+      "retryable": false,
+      "message": "A functional update could not land after exhausting its reconcile budget; the row stayed continuously contended.",
+      "docUrl": "https://docs.abloatai.com/errors#contention_exhausted"
+    },
+    {
       "code": "database_host_not_allowed",
       "category": "permission",
       "surface": "wire",
@@ -470,6 +487,15 @@
       "retryable": false,
       "message": "This deployment cannot register a direct (connection string) datasource — use the signed endpoint kind.",
       "docUrl": "https://docs.abloatai.com/errors#datasource_connection_unsupported"
+    },
+    {
+      "code": "datasource_direct_deprecated",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 410,
+      "retryable": false,
+      "message": "The direct (connection string) datasource is deprecated. Register a signed Data Source endpoint instead — your app owns the write and your credentials never leave it.",
+      "docUrl": "https://docs.abloatai.com/errors#datasource_direct_deprecated"
     },
     {
       "code": "datasource_registration_failed",
@@ -1908,6 +1934,14 @@
       "retryable": false,
       "message": "Named a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` — the server keeps its own copy of the schema.",
       "docUrl": "https://docs.abloatai.com/errors#unknown_model"
+    },
+    {
+      "code": "update_aborted",
+      "category": "conflict",
+      "surface": "client",
+      "retryable": false,
+      "message": "The functional update reconcile loop was aborted via its AbortSignal before the write landed.",
+      "docUrl": "https://docs.abloatai.com/errors#update_aborted"
     },
     {
       "code": "upload_fields_required",

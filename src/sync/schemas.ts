@@ -63,6 +63,9 @@ export const BootstrapResponseSchema = z
     deltaCount: z.number().optional(),
     failedModels: z.array(z.string()).optional(),
     timestamp: z.number().default(() => Date.now()),
+    // Server's active schema hash (drift detection). Optional: absent from
+    // older servers / tenants that have never pushed a schema.
+    schemaHash: z.string().optional(),
   })
   .passthrough();
 

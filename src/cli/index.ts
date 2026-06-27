@@ -115,7 +115,9 @@ async function main() {
     // it routes to the dev flow, whose live-key refusal names the supported
     // production path.
     const rest = process.argv.slice(3);
-    const advanced = rest.some((a) => ['--force', '--rename', '--backfill', '--url'].includes(a));
+    const advanced = rest.some((a) =>
+      ['--force', '--rename', '--backfill', '--url', '--dry-run', '--plan', '--yes', '-y', '--allow-dirty'].includes(a),
+    );
     const watching = rest.includes('--watch');
     // Project guard: if the active project has no key but other projects do,
     // the user switched with `ablo projects use` and never minted here. Refuse

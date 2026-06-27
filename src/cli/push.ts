@@ -22,9 +22,12 @@ import { AbloValidationError } from '../errors.js';
 import { classifyCredentialKind } from '../auth/credentialPolicy.js';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
+import { execFileSync } from 'child_process';
+import { confirm, text, isCancel, cancel } from '@clack/prompts';
 import { serializeSchema, schemaHash, type Schema } from '@abloatai/ablo/schema';
-import { resolveApiKey, getMode } from './config';
+import { resolveApiKey, getMode, getActiveProject, modeFromKey } from './config';
 import { readProjectApiKey, type ApiKeySource } from './dbRole';
+import { brand } from './theme';
 
 export interface PushArgs {
   schemaPath: string;
@@ -34,6 +37,13 @@ export interface PushArgs {
   force: boolean;
   renames: { from: string; to: string }[];
   backfills: { model: string; field: string; value: string | number | boolean }[];
+  /** Skip the interactive confirmation (CI / scripted deploys). */
+  yes: boolean;
+  /** Don't refuse a production push when the schema file has uncommitted changes. */
+  allowDirty: boolean;
+  /** Compute and print the plan (target + model diff + git state), then exit
+   *  WITHOUT applying — the `terraform plan` / `prisma migrate diff` of push. */
+  dryRun: boolean;
 }
 
 /** Coerce a `--backfill` literal: `true`/`false` → boolean, numeric → number,
@@ -121,6 +131,9 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
   let exportName = DEFAULT_EXPORT;
   let url = process.env.ABLO_API_URL ?? DEFAULT_URL;
   let force = false;
+  let yes = false;
+  let allowDirty = false;
+  let dryRun = false;
   const renames: { from: string; to: string }[] = [];
   const backfills: { model: string; field: string; value: string | number | boolean }[] = [];
 
@@ -138,6 +151,17 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
         break;
       case '--force':
         force = true;
+        break;
+      case '--yes':
+      case '-y':
+        yes = true;
+        break;
+      case '--allow-dirty':
+        allowDirty = true;
+        break;
+      case '--dry-run':
+      case '--plan':
+        dryRun = true;
         break;
       case '--rename': {
         const spec = argv[++i] ?? '';
@@ -171,7 +195,7 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
 
   // Strip a trailing slash so `${url}/api/schema` is well-formed.
   url = url.replace(/\/+$/, '');
-  return { schemaPath, exportName, url, apiKey: process.env.ABLO_API_KEY, force, renames, backfills };
+  return { schemaPath, exportName, url, apiKey: process.env.ABLO_API_KEY, force, renames, backfills, yes, allowDirty, dryRun };
 }
 
 /** Dynamically import the user's schema module (TS) and return the export. */
@@ -207,6 +231,201 @@ export async function loadSchema(schemaPath: string, exportName: string): Promis
 /** Masked key for error output — `sk_test_CEIM…`, never the full secret. */
 function maskKey(key: string | undefined): string {
   return key ? `${key.slice(0, 12)}…` : '(none)';
+}
+
+/**
+ * Uncommitted-schema guard. A deploy should be traceable to a commit, so we
+ * check whether the schema file differs from git HEAD. Returns `null` when not
+ * in a git repo / git is unavailable — non-git users are never blocked.
+ */
+function schemaGitState(schemaPath: string): { dirty: boolean; untracked: boolean } | null {
+  try {
+    const out = execFileSync('git', ['status', '--porcelain', '--', schemaPath], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (out === '') return { dirty: false, untracked: false };
+    return { dirty: true, untracked: out.startsWith('??') };
+  } catch {
+    return null;
+  }
+}
+
+/** A model on the deployed plane (`GET /api/schema`) — key + conflict policy. */
+interface RemoteModel {
+  key: string;
+  conflict: Record<string, string> | null;
+}
+interface RemoteSchema {
+  active?: boolean;
+  version?: number;
+  models?: RemoteModel[];
+}
+
+/** Best-effort read of the schema CURRENTLY ACTIVE on the key's plane, for the
+ *  diff preview. Any failure → null (the server still computes the real diff on
+ *  apply); never blocks the push. Mirrors `status`'s fetch. */
+async function fetchActiveSchema(url: string, apiKey: string): Promise<RemoteSchema | null> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 3000);
+  try {
+    const res = await fetch(`${url}/api/schema`, {
+      headers: { authorization: `Bearer ${apiKey}` },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as RemoteSchema;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/** Compact conflict string for a diff line: `{user:overwrite,agent:reject}` or ''. */
+function conflictStr(c: Record<string, string> | null | undefined): string {
+  if (!c) return '';
+  const parts = (['user', 'agent', 'system'] as const).flatMap((k) => (c[k] ? [`${k}:${c[k]}`] : []));
+  return parts.length ? `{${parts.join(',')}}` : '';
+}
+
+/** Local model summary from the serialized schema: key → conflict string. */
+function localModels(schema: Schema): Map<string, string> {
+  const json = JSON.parse(serializeSchema(schema)) as {
+    models: Record<string, { conflict?: Record<string, string> | null }>;
+  };
+  const out = new Map<string, string>();
+  for (const [key, def] of Object.entries(json.models)) out.set(key, conflictStr(def.conflict));
+  return out;
+}
+
+/**
+ * Print the model-level plan (added / removed / conflict-changed) against the
+ * deployed schema — the at-a-glance `terraform plan`. Field-level destructive
+ * changes are caught authoritatively by the server's gate on apply (it returns
+ * `warnings`/`unexecutable`); this is the human preview before that.
+ */
+function printPlan(local: Map<string, string>, remote: RemoteSchema | null): void {
+  if (!remote?.models) {
+    console.log(`  ${pc.dim('plan')}     ${pc.dim('(deployed schema unavailable — the server computes the diff on apply)')}\n`);
+    return;
+  }
+  const remoteMap = new Map<string, string>();
+  for (const m of remote.models) remoteMap.set(m.key, conflictStr(m.conflict));
+
+  const added = [...local.keys()].filter((k) => !remoteMap.has(k));
+  const removed = [...remoteMap.keys()].filter((k) => !local.has(k));
+  const changed = [...local.keys()].filter((k) => remoteMap.has(k) && remoteMap.get(k) !== local.get(k));
+  const verLabel = remote.version != null ? `v${remote.version}` : 'active';
+
+  if (added.length === 0 && removed.length === 0 && changed.length === 0) {
+    console.log(`  ${pc.dim('plan')}     ${pc.dim(`no model-level changes vs deployed ${verLabel} (any field changes apply on push)`)}\n`);
+    return;
+  }
+  console.log(`  ${pc.dim('plan')}     ${pc.dim(`vs deployed ${verLabel}:`)}`);
+  for (const k of added) console.log(`           ${pc.green(`+ ${k}`)} ${pc.dim('(new model)')}`);
+  for (const k of changed)
+    console.log(`           ${pc.yellow(`~ ${k}`)} ${pc.dim(`conflict ${remoteMap.get(k) || '(default)'} → ${local.get(k) || '(default)'}`)}`);
+  for (const k of removed) console.log(`           ${pc.red(`- ${k}`)} ${pc.dim('(removed — destructive, needs --force)')}`);
+  console.log('');
+}
+
+/**
+ * Pre-flight gate run after the banner + plan, before the write. Encodes the
+ * sandbox/production separation: sandbox confirms interactively (and proceeds
+ * silently when not a TTY, so the dev/CI loop never hangs); production is gated
+ * hard — uncommitted schema is refused (unless `--allow-dirty`), and applying
+ * requires a typed confirmation (TTY) or an explicit `--yes` (CI). Calls
+ * `process.exit(1)` on refusal/cancel; returns when clear to apply.
+ */
+async function confirmPush(
+  args: PushArgs,
+  env: 'production' | 'sandbox' | null | undefined,
+): Promise<void> {
+  const isProd = env === 'production';
+  const tty = Boolean(process.stdout.isTTY && process.stdin.isTTY);
+
+  if (isProd && !args.yes) {
+    const git = schemaGitState(args.schemaPath);
+    if (git?.dirty && !args.allowDirty) {
+      console.error(`  ${pc.red('✗')} Refusing to deploy uncommitted schema to ${pc.red(pc.bold('production'))}.`);
+      console.error(pc.dim(`    Commit ${pc.bold(args.schemaPath)} first, or pass ${pc.bold('--allow-dirty')} to override.`));
+      process.exit(1);
+    }
+    if (!tty) {
+      console.error(`  ${pc.red('✗')} Refusing to deploy to ${pc.red(pc.bold('production'))} non-interactively without confirmation.`);
+      console.error(pc.dim(`    Re-run with ${pc.bold('--yes')} to confirm in CI/scripts.`));
+      process.exit(1);
+    }
+    const project = getActiveProject();
+    const expected = project?.slug ?? 'production';
+    const typed = await text({
+      message: `This deploys to ${pc.red(pc.bold('PRODUCTION'))}. Type ${pc.bold(expected)} to confirm:`,
+      placeholder: expected,
+    });
+    if (isCancel(typed) || String(typed).trim() !== expected) {
+      cancel('Aborted — confirmation did not match.');
+      process.exit(1);
+    }
+    return;
+  }
+
+  // Sandbox: confirm interactively; proceed silently when not a TTY so the dev
+  // loop / scripted sandbox deploys don't hang on stdin.
+  if (!isProd && !args.yes && tty) {
+    const ok = await confirm({ message: `Apply to ${pc.green('sandbox')}?` });
+    if (isCancel(ok) || !ok) {
+      cancel('Aborted.');
+      process.exit(1);
+    }
+  }
+}
+
+/**
+ * `prisma migrate`-style target banner — printed before every push so the
+ * deploy target is never a guess. The drift the demo hit (app built against
+ * one schema, a DIFFERENT schema deployed) happens when you can't see WHICH
+ * project/environment a push lands on. The environment is read from the KEY,
+ * not the CLI mode: the resolved key's plane is the real target, and a key
+ * whose env disagrees with the active mode is exactly the silent footgun.
+ */
+function printPushTarget(opts: {
+  schemaPath: string;
+  url: string;
+  apiKey: string;
+  keySource: ApiKeySource | 'login';
+  modelCount: number;
+  hash: string;
+}): void {
+  const env = modeFromKey(opts.apiKey);
+  const envLabel =
+    env === 'production'
+      ? pc.red(pc.bold('production'))
+      : env === 'sandbox'
+        ? pc.green('sandbox')
+        : pc.yellow('unknown env');
+  const project = getActiveProject();
+  const projectLabel = project
+    ? `${pc.bold(project.slug)} ${pc.dim(`(${project.id})`)}`
+    : `${pc.bold('default')} ${pc.dim('(org-default — `ablo projects use <slug>` to scope)')}`;
+  // Flag the drift trap: CLI mode and the key's plane disagree → you may be
+  // pushing somewhere other than where `ablo status` implies.
+  const cliMode = getMode();
+  const modeNote =
+    env && env !== cliMode
+      ? ` ${pc.yellow(`(CLI mode is ${cliMode} — this key targets ${env})`)}`
+      : '';
+
+  console.log(`\n  ${brand('ablo')} ${pc.dim('push')} ${pc.dim('→')} ${envLabel}${modeNote}`);
+  console.log(`  ${pc.dim('project')}  ${projectLabel}`);
+  console.log(`  ${pc.dim('target')}   ${pc.dim(opts.url)}`);
+  console.log(
+    `  ${pc.dim('key')}      ${maskKey(opts.apiKey)} ${pc.dim(`(${describeKeySource(opts.keySource)})`)}`,
+  );
+  console.log(
+    `  ${pc.dim('schema')}   ${pc.bold(opts.schemaPath)} ${pc.dim(`· ${opts.modelCount} models · hash ${opts.hash}`)}\n`,
+  );
 }
 
 /** Human label for where the resolved key came from. */
@@ -267,9 +486,33 @@ export async function push(argv: readonly string[]): Promise<void> {
   const schema = await loadSchema(args.schemaPath, args.exportName);
   const hash = schemaHash(schema);
 
-  console.log(
-    `  Pushing ${pc.bold(args.schemaPath)} ${pc.dim(`(${Object.keys((schema as Schema).models).length} models, hash ${hash})`)} → ${pc.dim(args.url)}`,
-  );
+  printPushTarget({
+    schemaPath: args.schemaPath,
+    url: args.url,
+    apiKey: args.apiKey,
+    keySource,
+    modelCount: Object.keys((schema as Schema).models).length,
+    hash,
+  });
+
+  // Plan preview — the model-level diff against the deployed schema.
+  const remote = await fetchActiveSchema(args.url, args.apiKey);
+  printPlan(localModels(schema), remote);
+
+  // Git state — surface an untraceable deploy (not yet a hard block on sandbox).
+  const git = schemaGitState(args.schemaPath);
+  if (git?.dirty) {
+    const what = git.untracked ? 'is untracked (not committed)' : 'has uncommitted changes';
+    console.log(`  ${pc.yellow('⚠')}  ${pc.bold(args.schemaPath)} ${what} — this deploy won't match a git commit.\n`);
+  }
+
+  if (args.dryRun) {
+    console.log(`  ${pc.dim('○')} dry run — nothing applied. Re-run without ${pc.bold('--dry-run')} to deploy.`);
+    return;
+  }
+
+  // Sandbox/production separation + confirmation (exits on refusal).
+  await confirmPush(args, modeFromKey(args.apiKey));
 
   const { ok: resOk, status, body, bodyText } = await pushSchema(schema, args);
 

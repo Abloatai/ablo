@@ -531,6 +531,15 @@ export interface SyncEngineConfig {
    * e.g., { TaskModel: 'Task', ProjectModel: 'Project' }
    */
   classNameFallbackMap: Readonly<Record<string, string>>;
+
+  /**
+   * Content hash of the schema THIS client was built against (the same
+   * `schemaHash()` the CLI push + server compute). Used purely to detect
+   * schema drift: when the server reports a different active hash on bootstrap,
+   * the SDK warns the developer to run `ablo push` — otherwise drift only
+   * surfaces later as an opaque DB constraint error. Advisory, not enforced.
+   */
+  expectedSchemaHash?: string;
 }
 
 // ─────────────────────────────────────────────

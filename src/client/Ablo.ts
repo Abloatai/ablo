@@ -23,6 +23,7 @@ import { z } from 'zod';
 import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
 import type { Schema, SchemaRecord, InferModel, InferCreate, InferModelNames } from '../schema/schema.js';
 import { baseFieldsSchema } from '../schema/schema.js';
+import { schemaHash } from '../schema/serialize.js';
 import type { ModelDef } from '../schema/model.js';
 import type { RelationDef } from '../schema/relation.js';
 import type {
@@ -1402,6 +1403,9 @@ function deriveConfigFromSchema(schema: Schema): SyncEngineConfig {
     defaultNonCreatePriority: 50,
     essentialFields: {},
     classNameFallbackMap: {},
+    // Hash this client's schema once so bootstrap can detect drift against the
+    // server's active hash (same `schemaHash` the CLI push + server compute).
+    expectedSchemaHash: schemaHash(schema),
   };
 }
 

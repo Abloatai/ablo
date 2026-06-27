@@ -19,6 +19,12 @@ export interface BootstrapData {
   /** Model types whose server-side query failed (timeout, RLS error, etc.) */
   failedModels?: string[];
   timestamp: number;
+  /**
+   * The server's ACTIVE schema content hash for this tenant (same `schemaHash`
+   * the CLI push computes). Present once the tenant has pushed a schema; the
+   * client compares it to its own `config.expectedSchemaHash` to warn on drift.
+   */
+  schemaHash?: string;
 }
 
 export interface BootstrapFetchResult {
@@ -87,9 +93,36 @@ export class BootstrapHelper {
 	    getAuthToken?: AuthTokenGetter;
 	  };
   private abortController: AbortController | null = null;
+  /** Warn about schema drift at most once per helper. */
+  private schemaDriftWarned = false;
 
   get baseUrl(): string {
     return this.options.baseUrl;
+  }
+
+  /**
+   * Advisory schema-drift check: compare the server's active schema hash (on the
+   * bootstrap response) against the hash this client was built with. A mismatch
+   * means the app's schema and the deployed schema have diverged — reads/writes
+   * relying on undeployed changes will later fail with an opaque DB constraint
+   * error. Warn once, actionably; never throws or blocks the bootstrap.
+   */
+  private warnOnSchemaDrift(serverHash: string | undefined): void {
+    if (this.schemaDriftWarned || !serverHash) return;
+    const clientHash = getContext().config.expectedSchemaHash;
+    if (!clientHash || clientHash === serverHash) return;
+    this.schemaDriftWarned = true;
+    // Self-brand the message ("Ablo:") rather than rely on the default logger's
+    // `[Ablo]` namespace — consumers wiring their own logger (pino, etc.) lose
+    // that prefix, and a drift warning that reads like the app's own log is
+    // worse than none. The brand tells them at a glance who is talking.
+    getContext().logger.warn(
+      `Ablo: Schema drift detected — this app was built against schema ${clientHash}, ` +
+        `but the deployed schema is ${serverHash}. Operations that depend on schema ` +
+        `changes not yet deployed will fail later with an opaque database error. Run ` +
+        `\`ablo push\` to deploy your schema (or update this app to match the deployed one).`,
+      { clientSchemaHash: clientHash, serverSchemaHash: serverHash },
+    );
   }
 
   constructor(options: BootstrapOptions) {
@@ -388,6 +421,7 @@ export class BootstrapHelper {
 
     const rawJson = await res.json();
     const data: BootstrapData = parseBootstrapResponse(rawJson);
+    this.warnOnSchemaDrift(data.schemaHash);
 
     // Persist payload for offline
     try {
@@ -472,6 +506,7 @@ export class BootstrapHelper {
 
     const rawJson = await response.json();
     const data = parseBootstrapResponse(rawJson);
+    this.warnOnSchemaDrift(data.schemaHash);
 
     // Save a copy for offline
     try {

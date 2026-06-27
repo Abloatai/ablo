@@ -71,6 +71,47 @@
  * `wrapWithMultiplayer` is optional. Use it when the whole model call is scoped
  * to one entity before any tool is chosen; tool implementations stay exactly
  * the same.
+ *
+ * ## Multi-agent coordination — the canonical way
+ *
+ * When several agents (or agents + humans) write the SAME row concurrently, the
+ * outcome is decided by **(write path) × (the model's conflict policy)**, NOT by
+ * how smart the model is. The same model silently loses 3 of 4 concurrent
+ * contributions through a blind whole-row write, and lands all 4 through a
+ * coordinated one — because the coordinated write returns a *signal* the model
+ * (or the runtime) acts on. Two empirical laws fall out:
+ *
+ *   1. **Surface the signal.** A write that swallows the conflict and reports
+ *      success is the footgun. Every robust path returns a legible result
+ *      (`reject` → re-read & retry; `claimed` → the model tries again) instead of
+ *      clobbering. Reaching for a bigger model does not fix a silent write.
+ *   2. **Back off.** Under N-way contention, writers that retry in lock-step just
+ *      re-collide. The shared reconcile loop already jitters its backoff; any
+ *      hand-rolled retry must too, or it exhausts its budget and drops a writer.
+ *
+ * `coordinatedTool` (below) encodes both. Prefer it over a hand-written tool for
+ * "save the agent's contribution into the shared row":
+ *
+ * ```ts
+ * import { coordinatedTool } from '@abloatai/ablo/ai-sdk';
+ * const saveSection = coordinatedTool(ablo.documents, {
+ *   description: 'Save your section into the shared document.',
+ *   inputSchema: z.object({ text: z.string() }),
+ *   id: () => DOC_ID,
+ *   apply: (current, { text }) => ({ content: appendBlock(current.content, text) }),
+ *   strategy: 'merge', // 'merge' (default, self-healing) | 'claim' | 'queue'
+ * });
+ * ```
+ *
+ * | strategy | writers relate by | on contention | model conflict policy |
+ * |----------|-------------------|---------------|------------------------|
+ * | `merge`  | accumulate (CAS)  | re-read + re-apply (silent, backed off) | must be `reject` (default) |
+ * | `claim`  | mutual exclusion  | returns `{status:'claimed'}` → model retries | any |
+ * | `queue`  | FIFO-ish (SQS)    | poll-acquire until granted / timeout | any |
+ *
+ * Note: a model declaring `agentsNotify()` HOLDS a losing write instead of
+ * rejecting it, which defeats `merge`'s reconcile (the loser is dropped, not
+ * retried). Use `agentsReject()` for accumulate semantics, or `claim`/`queue`.
  */
 
 export {
@@ -80,3 +121,10 @@ export {
 } from './coordination-context.js';
 
 export { wrapWithMultiplayer, type WrapWithMultiplayerOptions } from './wrap.js';
+
+export {
+  coordinatedTool,
+  type CoordinationStrategy,
+  type CoordinatedToolOptions,
+  type CoordinatedWriteResult,
+} from './coordinated-tool.js';
