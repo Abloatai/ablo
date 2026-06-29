@@ -4,39 +4,111 @@ title: "Connect Your Database"
 
 {/* AUTO-GENERATED from packages/sync-engine/docs/data-sources.md -- edit there, then run `npm run build:docs`. */}
 
-**In production, your database is the system of record.** Every synced model is
-backed by your own Postgres; Ablo is the transaction layer on top of it. There
-are two ways to connect, and they are the same product with the same writes — the
-only difference is where your database credential lives:
+**Connect your database = Postgres logical replication.** That is the one way.
+Ablo reads your write-ahead log (WAL) and **never runs DDL, never owns your
+schema, and never migrates it**. Your application keeps writing to its own
+Postgres through its own backend, exactly as it does today; Ablo only tails the
+changes and fans the confirmed rows out to every connected human and agent. This
+is the same model ElectricSQL, PowerSync, and Zero use — a publication plus a
+replication slot. Ablo consumes the logical-replication stream; your application
+continues to own the write path.
 
-| | How Ablo reaches your Postgres | Use when |
-|---|---|---|
-| **Connection string** (primary) | You pass `databaseUrl` to `Ablo(...)` explicitly (it is never auto-read from the environment); Ablo registers the connection and commits each write directly, behind row-level security. | You can hand over a scoped connection string. |
-| **Signed endpoint** | Your app exposes one route built from an ORM adapter; Ablo sends signed commit requests and your app writes its own database. | Database credentials must never leave your infrastructure. |
-
-> Just trying Ablo? You don't need a database at all to start: the hosted
+> **Just trying Ablo?** You don't need a database at all to start. The hosted
 > **sandbox** can host rows in Ablo's test plane — pass an `apiKey` only and omit
-> `databaseUrl`, like Stripe test mode. Connect your Postgres (either shape
-> below) when you're ready for it to be the system of record.
+> any database setup, like Stripe test mode. Connect your Postgres with logical
+> replication (below) when you're ready for it to be the system of record.
 
-Either way, you define an Ablo schema with `defineSchema`, `model`, and Zod. The
-Ablo schema describes **only your synced, collaborative models** — the rows Ablo
-coordinates and fans out in realtime. It is *not* your whole-database schema and
-does *not* replace your `schema.prisma` (or your Drizzle schema). Your auth,
-billing, and any other non-synced tables stay in your own ORM schema, owned by
-your own migrations. One database, two schemas, side by side: Ablo owns the
-synced models; you keep owning everything else. `ablo check` reflects this — it
-reports your other tables as "ignored / owned by you," which is exactly right.
+Your database stays the system of record. Ablo never becomes a second source of
+truth and never takes over operating your Postgres.
 
-What Ablo stores, in both shapes: your schema *definition* (model names, fields,
-types — pushed with `ablo push`), your hashed API keys, a safe projection of the
-connection registration (host, database, schema — the connection string itself
-is sealed and never echoed back), and the commit log that drives sync. Never
-your rows.
+## The five steps (mirrors Zero's install flow)
 
-## Connection String (default)
+You run the setup once against your own database, then point Ablo at it. The CLI
+prints the exact SQL and validates it for you — you never hand-craft replication
+internals.
 
-The canonical client carries all three values:
+### 1. Enable logical decoding
+
+Turn on logical WAL so Ablo can decode row changes:
+
+```sql
+ALTER SYSTEM SET wal_level = 'logical';
+```
+
+`wal_level` is **not reloadable** — you must **restart Postgres** for it to take
+effect. On Amazon RDS / Aurora you can't `ALTER SYSTEM`; set
+`rds.logical_replication = 1` in the instance's parameter group instead, then
+reboot.
+
+### 2. Run `ablo connect` to get the publication / slot / role SQL
+
+```bash
+npx ablo connect
+```
+
+`ablo connect` prints the exact, copy-pasteable setup SQL for **your** Postgres
+and nothing else — it does not ask for a connection-string flavor, an adapter, or
+a driver, because logical replication is how you connect. Run the printed SQL
+against your database (as a superuser / the DB owner). It does three things:
+
+- **A publication** naming the tables Ablo should read (`ablo_publication`, the
+  single canonical name the runtime subscribes to):
+
+  ```sql
+  CREATE PUBLICATION "ablo_publication" FOR ALL TABLES;
+  ```
+
+  Scope it to a subset with `npx ablo connect --tables a,b,c`.
+
+- **A least-privilege replication role** — it can stream replication and `SELECT`,
+  nothing more. You choose the password; it never passes through Ablo's CLI or
+  servers:
+
+  ```sql
+  CREATE ROLE "ablo_replicator" WITH REPLICATION LOGIN PASSWORD '<password>';
+  GRANT SELECT ON ALL TABLES IN SCHEMA public TO "ablo_replicator";
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO "ablo_replicator";
+  ```
+
+  Rename it with `--role <name>`. On Amazon RDS the `REPLICATION` attribute is
+  granted, not set directly: `GRANT rds_replication TO "ablo_replicator";`.
+
+The **replication slot** is created and owned by Ablo's runtime when it first
+subscribes with this role — you don't pre-create it. The publication and the role
+are the only objects the recipe asks you to create.
+
+### 3. Validate with `ablo connect --check`
+
+Put the replication role's connection string in `DATABASE_URL`, then verify the
+database is replication-ready:
+
+```bash
+npx ablo connect --check
+```
+
+This connects and checks the four invariants, printing a green checklist or the
+precise per-item fix:
+
+- `wal_level` is `logical`
+- the `ablo_publication` publication exists
+- the `DATABASE_URL` role has the `REPLICATION` attribute
+- every published table has a usable `REPLICA IDENTITY` (a primary key, or
+  `REPLICA IDENTITY FULL`) so `UPDATE`/`DELETE` can replicate
+
+Re-run it until every item is green.
+
+### 4. Point Ablo at the database with the replication role
+
+Give Ablo the connection string for the **replication role** you created — a
+`REPLICATION`-attributed role that streams the WAL and `SELECT`s, nothing more
+(not a read-only account; see the privilege note below). The same value `--check`
+validated:
+
+```bash
+# .env — server runtime only, never the browser
+DATABASE_URL=postgres://ablo_replicator:<password>@host:5432/db?sslmode=require
+ABLO_API_KEY=sk_live_...
+```
 
 ```ts
 import Ablo from '@abloatai/ablo';
@@ -45,295 +117,107 @@ import { schema } from './ablo/schema';
 export const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
-  databaseUrl: process.env.DATABASE_URL, // your Postgres, passed explicitly — rows live here
 });
 ```
 
-```bash
-# .env — server runtime only, never the browser
-DATABASE_URL=postgres://ablo_app:...@host:5432/db
-ABLO_API_KEY=sk_live_...
-```
+You define an Ablo schema with `defineSchema`, `model`, and Zod. The Ablo schema
+describes **only your synced, collaborative models** — the rows Ablo coordinates
+and fans out in realtime. It is *not* your whole-database schema and does *not*
+replace your `schema.prisma` (or your Drizzle schema). Your auth, billing, and
+any other tables stay in your own ORM schema, owned by your own migrations.
+`ablo check` reflects this — it reports tables you didn't declare as "ignored /
+owned by you," which is exactly right.
 
-On first connect the SDK registers the connection — sent once over TLS, stored
-sealed, never returned by any API. From then on Ablo commits every confirmed
-write directly to your database and reads canonical rows from it.
+### 5. Writes go through your own backend
 
-### A localhost Postgres can't be the system of record
-
-This is the connection-string fact people hit first. Ablo's **cloud** registers
-your connection string and connects to your Postgres **over the network**. A
-`localhost` / private-range database (`127.0.0.1`, `192.168.*`, Docker's
-`db:5432`) is unreachable from Ablo's side, so such connection strings are
-**rejected**. Two escape hatches for local development against your own DB:
-
-- **Expose a signed Data Source endpoint.** Your app — which *can* reach your
-  local DB — proxies Ablo's commits to it. See [Signed Endpoint](#signed-endpoint)
-  below. This is the right answer for "my dev DB stays on my machine."
-- **Use the hosted sandbox.** Skip the database entirely: pass an `apiKey` only,
-  omit `databaseUrl`, and let Ablo's test plane host the rows while you build.
-
-Safety requirements, enforced server-side before the first write:
-
-- **Non-superuser role.** The connection must not be a superuser or hold
-  `BYPASSRLS` — Ablo's tenant isolation is row-level security, and a role that
-  can bypass it is rejected outright.
-- **Row-level security on synced tables.** `npx ablo migrate` provisions your
-  synced-model tables with `FORCE ROW LEVEL SECURITY` already applied; tables
-  you create yourself must do the same.
-- **Network-reachable host.** As above, connection strings resolving to loopback
-  or private address ranges are rejected — Ablo connects from its cloud.
-
-`databaseUrl` is server-only: the SDK throws if it sees one in a browser-like
-environment, and `dangerouslyAllowBrowser` does not override that. It is also
-never auto-read from the environment — pass it explicitly to `Ablo(...)`.
-
-## Signed Endpoint
-
-When a connection string must not leave your infrastructure, keep
-`DATABASE_URL` in your app and expose one HTTPS endpoint instead. Ablo signs a
-commit request; an ORM adapter in your route runs it in one transaction against
-your Postgres and returns the canonical rows. Omit `databaseUrl` from
-`Ablo(...)` in this setup — the client takes only the schema and the API key:
+Your application writes to its Postgres the way it always has — its own ORM, its
+own backend, its own transactions. Ablo does not intercept or proxy those writes.
+It observes them on the WAL and fans the confirmed rows out to connected clients.
+The read, claim, and coordination surface (`ablo.<model>`) layers on top:
 
 ```ts
-export const ablo = Ablo({
-  schema,
-  apiKey: process.env.ABLO_API_KEY,
-});
-```
-
-The SDK call is identical in both shapes:
-
-```ts
-await ablo.weatherReports.create({ data: { location: 'Stockholm', status: 'pending' } });
-await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' } });
 const report = ablo.weatherReports.get('report_stockholm');
+const active = ablo.weatherReports.claim.state({ id: 'report_stockholm' });
 ```
 
-Multiplayer behavior is built in. Writes made through
-`ablo.<model>.create/update/delete` are coordinated by Ablo, then confirmed rows
-fan out to subscribers. If something writes to your database without going
-through Ablo (a cron job, an admin tool), Ablo can't know about it
-automatically. To keep everyone's screen up to date, your app reports those
-outside changes back through the outbox feed — shown below in
-[Outbox Events](#outbox-events).
+For the typed read/claim/write surface itself, see
+[Quickstart](/quickstart) and [Schema Contract](/schema-contract).
 
-## Your Database Stays Canonical
+## What Ablo touches in your database — the honest footprint
 
-Your application database remains the source of truth and Ablo coordinates writes
-against it.
+This is the complete list. Nothing else.
 
-If you are migrating an app where every button already calls a backend endpoint,
-read [Integration Guide](/integration-guide) first, then
-[Existing Python Backend](/examples/existing-python-backend) for a concrete
-service-owned database example.
+| Object | What it is | Owned by |
+|---|---|---|
+| `ablo_publication` | A Postgres publication naming the tables Ablo reads. | You create it (step 2). |
+| Replication slot | A logical slot Ablo subscribes through to track its WAL position. | Ablo's runtime creates it on first connect. |
+| `ablo_replicator` role | A least-privilege `REPLICATION` + `SELECT` role. | You create it (step 2). |
+| `wal_level = logical` | A server setting that **requires a restart**. | You set it (step 1). |
 
-## What Ablo Gives You
+Operational reality you should know up front:
 
-When you add a Data Source in Ablo, you get:
+- **`wal_level = logical` needs a restart.** It is a one-time, server-wide change
+  and is not reloadable.
+- **A replication slot retains WAL.** While Ablo is connected, the slot holds the
+  WAL it hasn't yet acknowledged. If Ablo is disconnected for a long time, that
+  WAL accumulates and consumes disk. **Ablo monitors slot lag and WAL retention**
+  and surfaces it so you're never surprised by disk pressure; an abandoned slot is
+  dropped rather than left to grow unbounded.
+- **The role's privilege footprint is narrow and precise — not a "read-only"
+  account.** It carries the `REPLICATION` attribute, which lets it stream the WAL
+  and `SELECT`; it cannot `INSERT`/`UPDATE`/`DELETE`, run DDL, or own objects, and
+  the recipe never grants it more. (For a security review, state it that way — a
+  logical-replication role is a real privilege, just a tightly-scoped one — rather
+  than calling it "read-only", which a reviewer will correctly push back on.)
 
-| Field | Purpose |
-|---|---|
-| Data Source endpoint | The public HTTPS endpoint in your app that Ablo calls. |
-| API key | Stored in your app as `ABLO_API_KEY`; used by the SDK and the Data Source endpoint. |
-| External-write feed | Optional `events` handler on the same Data Source endpoint. |
-| Status | Last successful request, last error, and delivery attempts. |
+What Ablo explicitly does **not** do:
 
-The shape is the same as a production webhook integration:
+- It **never runs DDL** against your database.
+- It **never owns or migrates your schema** — your migration tool stays in charge.
+- It **never writes your rows** — writes are yours, through your backend.
 
-1. Expose one Data Source endpoint in your app.
-2. Store `ABLO_API_KEY` in your app.
-3. Verify signed HTTP calls before opening a database transaction.
-4. Keep your database credentials in your app.
-5. Write an outbox row in the same transaction as every app-row change.
+## What Ablo stores on its side
 
-## Route
+Your schema *definition* (model names, fields, types — pushed with `ablo push`),
+your hashed API keys, a safe projection of the connection registration (host,
+database, schema — the connection string itself is sealed and never echoed back),
+the replication slot position, and the commit log that drives sync. Never your
+rows.
 
-You don't hand-write the commit transaction, the idempotency upsert, or the
-outbox writes. You pass an ORM **adapter** and it does all of that for you —
-transaction, exactly-once idempotency, and outbox — driven by the same Ablo
-schema. The whole route is three fields:
+> **Logical-replication runtime status: Preview.** The setup path above
+> (`ablo connect` and `ablo connect --check`) is real and shipping. The
+> server-side component that consumes your WAL and turns it into sync deltas is in
+> **Preview** — it is implemented and tested but **not yet GA / boot-wired in the
+> hosted runtime**. Treat WAL consumption as not-yet-deployed until this note is
+> removed. Maintainers: see
+> [internal/byo-wal-consumer.md](/internal/byo-wal-consumer) for the
+> architecture and remaining slices.
 
-```ts
-// app/api/ablo/source/route.ts
-import { dataSourceNext } from '@abloatai/ablo/source/next';
-import { prismaDataSource } from '@abloatai/ablo/source';
-import { schema } from '@/ablo/schema';
-import { prisma } from '@/lib/prisma';
+## Next steps
 
-// Data Source routes touch the database, so they run on the Node runtime.
-export const runtime = 'nodejs';
+- [Quickstart](/quickstart) — connect and write through `ablo.<model>`.
+- [Schema Contract](/schema-contract) — what the schema drives across SDK,
+  React, and agents.
+- [Guarantees](/guarantees) — what confirmed writes and stale checks mean.
+- [Integration Guide](/integration-guide) — the full app, React, multiplayer,
+  and agent path.
 
-export const { POST } = dataSourceNext({
-  schema,
-  apiKey: process.env.ABLO_API_KEY!,
-  adapter: prismaDataSource(prisma, schema),
-});
-```
+---
 
-Using Drizzle instead of Prisma is the same shape — swap the adapter for
-`drizzleDataSource(db, schema)`:
+## Legacy / not recommended
 
-```ts
-// app/api/ablo/source/route.ts
-import { dataSourceNext } from '@abloatai/ablo/source/next';
-import { drizzleDataSource } from '@abloatai/ablo/source/drizzle';
-import { schema } from '@/ablo/schema';
-import { db } from '@/db';
+> **Use logical replication instead** (top of this page). The shapes below
+> predate the single connect path. They are documented only so existing
+> integrations can be read and understood — do **not** reach for them when
+> connecting a new database. They are the seams that caused painful onboarding,
+> and `ablo connect` exists precisely to replace them.
 
-export const runtime = 'nodejs';
-
-export const { POST } = dataSourceNext({
-  schema,
-  apiKey: process.env.ABLO_API_KEY!,
-  adapter: drizzleDataSource(db, schema),
-});
-```
-
-The adapter is constructed from your ORM client and the Ablo `schema` —
-`prismaDataSource(prisma, schema)` or `drizzleDataSource(db, schema)`. It maps
-each synced model to your table, wraps every commit in one transaction, dedupes
-on `clientTxId` via `ablo_idempotency`, and appends `ablo_outbox` rows for the
-external-write feed — the bookkeeping you used to write by hand.
-
-Your app code still writes through the normal model API:
-
-```ts
-await ablo.weatherReports.update({
-  id: 'report_stockholm',
-  data: { status: 'ready' },
-  wait: 'confirmed',
-  readAt: snap.stamp,
-  onStale: 'reject',
-});
-```
-
-## Local development & locked-down VPC — the reverse channel
-
-The signed route above is an **inbound webhook**: Ablo Cloud calls your HTTPS
-endpoint. That needs a public URL — which `localhost` doesn't have, and a
-locked-down VPC won't expose. The reverse channel fixes both. A connector you run
-next to your database dials an **outbound** WebSocket to Ablo Cloud and serves the
-same `commit`/`load`/`list` requests over it — the Stripe-CLI `stripe listen`
-pattern. No tunnel, no public endpoint, and your database credentials never leave
-your process.
-
-It wraps the **same handler** your deployed route uses — share the options object,
-so there's zero handler drift:
-
-```ts
-// scripts/ablo-connector.ts — run locally, or as a sidecar in a private VPC
-import { dataSource, createSourceConnector } from '@abloatai/ablo';
-import { sourceOptions } from '@/ablo/source'; // the same object route.ts passes
-
-const connector = createSourceConnector({
-  apiKey: process.env.ABLO_API_KEY!,         // sk_test_* for the dev loop
-  handler: dataSource(sourceOptions),         // the unchanged (Request) => Response
-});
-
-const controller = new AbortController();
-await connector.run(controller.signal);       // dials out, serves until aborted
-```
-
-When a connector is attached for a source, Ablo Cloud drains that source's
-`commit`/`load`/`list` down the socket instead of POSTing the webhook; when none
-is attached, the inbound webhook path is used unchanged. The drained requests
-carry the **same** Standard Webhooks signature, so `dataSource` verifies them
-exactly as on the webhook path — the transport changes, the trust model does not.
-
-**Production / no-public-URL deploy.** By default the connector is gated to
-`sk_test_*` keys (the dev-loop affordance). A customer who genuinely cannot expose
-an inbound endpoint — a locked-down VPC — can run the connector as their deployed
-production transport by opting that source into `reverseChannelProd` and using an
-`sk_live_*` key. The inbound webhook remains the default for everyone else (it's
-stateless and lower-latency); the reverse channel is the escape hatch for
-no-inbound environments.
-
-## Commit Request
-
-When Ablo calls your Data Source, it sends a signed JSON request:
-
-```ts
-{
-  type: 'commit',
-  clientTxId: 'tx_...',
-  operations: [
-    {
-      type: 'UPDATE',
-      model: 'weatherReports',
-      id: 'report_stockholm',
-      input: { status: 'ready' },
-      readAt: 1042,
-      onStale: 'reject',
-    },
-  ],
-  scope: {
-    participantId: 'agent:triage',
-    participantKind: 'agent',
-    organizationId: 'org_123',
-    requiredSyncGroups: ['org:org_123'],
-    mode: 'live',
-  },
-}
-```
-
-Return canonical rows:
-
-```ts
-{
-  rows: [
-    { id: 'report_stockholm', location: 'Stockholm', status: 'ready' },
-  ],
-}
-```
-
-Use explicit `deltas` only when your source already computes canonical change
-events.
-
-## Outbox Events
-
-The adapter serves the outbox feed for you. Every `commit` it runs appends one
-`ablo_outbox` row per operation in the same transaction, and the adapter's
-built-in events handler streams those rows back to Ablo by cursor — so connected
-humans and agents stay current with no extra code. If Ablo already appended the
-commit directly, `clientTxId` lets Ablo filter the echo; if the direct append
-failed, the same outbox row repairs it on the next poll or push.
-
-Events without `clientTxId` are treated as external writes. The only thing you
-add by hand is recording *outside* writes — changes made to your tables by a
-cron job or admin tool that never went through Ablo. Append an `ablo_outbox` row
-(with no `clientTxId`) for those in the same transaction as the change, and the
-adapter's feed carries them to every connected screen.
-
-## Production Checklist (signed endpoint)
-
-Before using the signed-endpoint shape in production:
-
-- Keep `DATABASE_URL` in the customer app or backend environment.
-- Use only the Data Source endpoint and `ABLO_API_KEY` as the customer-facing integration boundary.
-- Run the adapter migrations so `ablo_outbox` and `ablo_idempotency` exist
-  alongside your synced tables (`ablo migrate`).
-- Set `export const runtime = 'nodejs'` on the route so it can reach the database.
-- For writes that bypass Ablo (cron, admin tools), append an `ablo_outbox` row
-  (no `clientTxId`) in the same transaction as the change.
-- Monitor last success, last error, retry count, event lag, and cursor.
-
-The adapter already handles the rest — signature verification, the commit
-transaction, `clientTxId` idempotency, returning canonical rows, the outbox
-append per operation, and deduping the feed by event `id`. You don't write any of
-that by hand.
-
-In this shape, leave `databaseUrl` out of `Ablo(...)` — the endpoint *is* the
-connection, and registering both would point Ablo at your database twice.
-
-## Security
-
-- Verify requests with `ABLO_API_KEY`.
-- Keep database credentials in your app.
-- Dedupe commits by `clientTxId`.
-- Dedupe external events by event `id`.
-- Use HTTPS in production.
-
-The API key is not a database credential. It only lets your route verify that
-the request came from Ablo and was not modified in transit.
+These older shapes connected Ablo to a database two other ways: by handing Ablo a
+**connection string** to operate directly (`databaseUrl` on the client, committing
+writes itself behind row-level security), or by exposing a **signed Data Source
+endpoint** built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`,
+with `ablo_outbox` / `ablo_idempotency` bookkeeping and a reverse-channel
+connector for VPCs). Both required Ablo to either operate your database or proxy
+every write, and both have been superseded by logical replication, where Ablo only
+reads your WAL. If you are maintaining one of these integrations, migrate it to
+`ablo connect` at the next opportunity.

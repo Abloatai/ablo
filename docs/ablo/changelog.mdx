@@ -5,6 +5,256 @@ description: "Product updates and releases for Ablo"
 
 {/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
 
+<Update label="v0.25.0" description="v0.25.0">
+### Minor Changes
+
+- ca30064: Logical replication is now the documented default storage path, with self-service data-source registration from the CLI.
+  - **`ablo connect --register`** — registers your database as an Ablo data source over logical replication in one step: it runs the same pre-flight replication probe `ablo connect` uses (server reachable, `REPLICATION` privilege, `wal_level=logical`, publication/slot creatable), and on success `POST`s the connection to the engine's `/v1/datasources`. The `ek_`-authed call scopes the source to your org automatically; the password is stored decomposed as a secret, never echoed back. This is the "registration is the enable" path — there is no separate tier or flag to pick.
+  - **`ablo init` leads with logical replication** — the default storage mode is now `replication` (was `endpoint`); the generated env + next-steps point at `ablo connect` / `ablo connect --register`. The signed-endpoint and direct modes remain as the explicit fallback / legacy options.
+  - **`ablo status`** — a data-plane diagnostic that probes whether your registered source is reachable and replicating (failure-only reporting, so it never falsely reports healthy).
+  - **`ablo push`** — minor guard/UX refinements (deploy-target clarity).
+  - **Docs (README, `docs/data-sources.md`, `llms.txt`)** rewritten to the one-path model: Ablo consumes your database's logical-replication stream and your application owns the write path. The security wording is precise — a logical-replication connection requires the `REPLICATION` privilege (it is **not** a read-only SQL account), so reviews are not misled by a "read-only" claim.
+
+  No breaking changes to the SDK runtime API. The server-side WAL read cutover these CLI changes support ships by deploying the engine, not this package.
+</Update>
+
+<Update label="June 27, 2026" description="v0.24.0">
+### Minor Changes
+
+- Multi-agent coordination for AI SDK tools + safer `ablo push`.
+  - **`coordinatedTool` (`@abloatai/ablo/ai-sdk`)** — one call turns an Ablo model
+    write into a Vercel AI SDK `tool()` with concurrency coordination handled, so an
+    AI agent can contribute to shared state without clobbering concurrent writers.
+    Three strategies: `merge` (default — delegates to the functional update's
+    compare-and-swap + backoff, self-healing accumulate), `claim` (mutual exclusion,
+    returns a `claimed` signal the model retries on), and `queue` (SQS-style
+    poll-acquire over HTTP). The `ai-sdk` entry now also documents the canonical
+    multi-agent coordination model (surface-the-signal + back-off laws, strategy
+    table).
+  - **`ablo push` guards** — `--dry-run`/`--plan` prints the deploy target, a
+    model-level diff vs the deployed schema, and git state, then exits without
+    applying. Production deploys now require a typed confirmation (and refuse an
+    uncommitted schema unless `--allow-dirty`); sandbox confirms interactively.
+    `--yes`/`-y` skips confirmation for CI.
+</Update>
+
+<Update label="June 26, 2026" description="v0.23.0">
+### Minor Changes
+
+- 2807efb: `create` now returns the created row, not a `CommitReceipt`.
+
+  The WebSocket client's `create` already returned the row (`T`); the HTTP client
+  and the `.model(name)` accessor returned a `CommitReceipt`, so "create returns
+  the thing I created" only held on one transport. Both now return the confirmed,
+  authoritative server row (framework defaults like `createdAt`/`createdBy`
+  included). For an idempotent re-create of an existing caller-supplied id, the
+  EXISTING row is returned (not the input).
+
+  BREAKING (HTTP / `.model()` callers only): `await ablo.<model>.create(...)` now
+  resolves to the row instead of `{ status, lastSyncId, ... }`. Code that ignored
+  the return value, or that read `.id` (the row carries `id` too), is unaffected;
+  code that read `lastSyncId` / `serverTxId` / `status` off a typed model create
+  should use the raw `commits.create(...)` resource, which still returns a
+  `CommitReceipt`. WebSocket-client callers are unaffected (already returned `T`).
+
+- 2807efb: `delete` is idempotent — deleting an already-absent row is a no-op success, not
+  an error.
+
+  The WebSocket client's `delete` threw `entity_not_found` when the row wasn't in
+  the local pool, while the HTTP client returned without error — so "delete this"
+  was a hard edge on one transport. Both now agree: a row that isn't present is
+  already gone, so the delete succeeds with no effect. This is AIP-135's
+  recommended behavior for client-assigned-id / declarative APIs (Ablo is exactly
+  that), and it makes delete safe to retry and to race (two actors deleting the
+  same row). The deliberate "loud 0-row" assertion in `@ablo/slides-sdk` is
+  unchanged (it keeps its own `allowMissing` opt-out).
+
+- 2807efb: `retrieve` reports a missing row as `data: undefined` instead of throwing.
+
+  The HTTP client previously threw `model_not_found` for a missing row while the
+  WebSocket client returned `T | undefined` — so the obvious read ("does this row
+  exist?") was a hard edge an agent had to wrap in `try/catch` on one transport
+  only. Both transports now agree: an absent row is data-absence, not an error.
+  `ModelRead.data` is now `T | undefined` (matching the documented `.data?.x`
+  usage). Taking a `claim` on a row that doesn't exist still throws
+  `AbloNotFoundError` — a claim has nothing to hold.
+</Update>
+
+<Update label="June 26, 2026" description="v0.22.1">
+### Patch Changes
+
+- Expose the functional `update(id, current => next)` overload on the stateless
+  HTTP client type (`HttpModelClient` / `AbloHttpClient`).
+
+  0.22.0 wired the functional update at runtime on every transport and added the
+  overload to `ModelOperations` (WebSocket) and `ModelClient`, but the
+  `Ablo({ transport: 'http' })` client resolves its models to `HttpModelClient`,
+  whose `update` type still declared only the `update({ id, data })` form. So
+  server-side agents — the primary callers — saw a type error on
+  `update(id, fn)` even though it worked. Add the overload to that type.
+</Update>
+
+<Update label="June 26, 2026" description="v0.22.0">
+### Minor Changes
+
+- Add the functional update form: `ablo.<model>.update(id, current => next)`.
+
+  The `setState(prev => next)` of the data layer. Pass a function of the latest
+  row and the SDK owns everything that used to be the caller's problem under
+  contention: it reads the freshest row, runs your updater, writes it as a
+  compare-and-swap against the row's watermark, and re-reads + re-runs on any
+  concurrent write. No claim, no per-participant identity, and no
+  `stale_context` / `claim_*` codes ever surface — correctness rides on the
+  watermark, so concurrent writers reconcile instead of silently clobbering. The
+  write either lands or throws a single `AbloContentionError` once its reconcile
+  budget is spent.
+
+  Identical guarantee on both transports (HTTP and WebSocket share one reconcile
+  loop). Return `null`/`undefined` from the updater to skip the write. Tune with
+  `{ retries, signal }`. Exports: `AbloContentionError`, `ModelUpdater`,
+  `ContentionOptions`, `DEFAULT_CONTENTION_RETRIES`.
+
+  The classic `update({ id, data })` form is unchanged.
+</Update>
+
+<Update label="June 26, 2026" description="v0.21.0">
+### Minor Changes
+
+- Coordination observability now fires on BOTH transports. Previously `captureClaim`/`captureConflict` were emitted only by the WebSocket transport, so a `ClaimLog` (or any `observability` provider) handed to a stateless HTTP client — the transport server-side agents use via `Ablo({ transport: 'http' })` — stayed empty, and even on WebSocket a hard commit rejection went unrecorded. Fixed:
+  - **HTTP transport now emits.** `Ablo({ transport: 'http', observability })` records `claim` acquisition (`captureClaim`) and coordination-conflict rejections (`captureConflict`, code `stale_context` / `claim_conflict` / `entity_claimed`) on BOTH HTTP write doors (`commits.create` and per-model `ablo.<model>.update/create/delete`). The conflict names the collided rows — from the server's `conflicts` detail when present, otherwise the ops the write attempted. `observability` is now a documented option on the HTTP client.
+  - **WebSocket rejections now recorded.** A commit rejected by the conflict policy (`mutation_result` `success: false` with a coordination code) now calls `captureConflict`, mirroring the existing notify-on-success path. So `ClaimLog.collisions()` no longer silently misses rejected writes.
+
+  Net effect: a `ClaimLog` behaves identically regardless of transport — `entries`, `collisions()`, and `onChange` reflect the real coordination timeline for headless agent evals and live activity feeds alike.
+</Update>
+
+<Update label="June 25, 2026" description="v0.20.2">
+### Patch Changes
+
+- Extend the `HeldClaim` return type to the HTTP transport. 0.20.1 fixed `await using` on the WebSocket client's `claim()` but missed the stateless HTTP client (`HttpClaimApi`) used by server-side agents, which still returned the looser `Claim<T>`. Both transports' `claim()` now return `HeldClaim<T>`, so `await using held = await ablo.<model>.claim(...)` typechecks regardless of transport.
+</Update>
+
+<Update label="June 25, 2026" description="v0.20.1">
+### Patch Changes
+
+- Fix `await using held = await ablo.<model>.claim(...)` failing to typecheck. `claim()` now returns a `HeldClaim<T>` — a `Claim<T>` with `data`, `release`, `revoke`, and the async disposer made `Required` (they're optional on the base `Claim<T>`, which also models observed peer claims that lack them). A held claim is therefore assignable to `AsyncDisposable`, so the `await using` auto-release pattern compiles. Observed claim surfaces still return the looser `Claim<T>`. `HeldClaim` is exported.
+</Update>
+
+<Update label="June 25, 2026" description="v0.20.0">
+### Minor Changes
+
+- Reactive reads now work out of the box. A read like `useAblo((a) => a.documents.get(id))` re-renders when a live delta updates the row — including in-place field updates (the common collaborative case), which previously fired no reaction and left the UI silently stale.
+
+  Two changes make this work:
+  - **Models are reactive by default.** Schema fields are now MobX-observable without opting in. `json` fields stay `observable.ref` (one atom for the whole blob, not a deep atom tree per node), so the default is cheap. Opt out per model with `lazyObservable: false` for very large read-only list models where the QueryView's entry-replaced reactivity is enough.
+  - **`useAblo` returns a plain row snapshot** (via the new `Model.toReactiveSnapshot()`) instead of the live model instance. Reading the fields inside the tracked function is what subscribes the reaction (MobX tracks property access, not values), and the fresh snapshot identity lets the hook detect the change. Consumers get plain row objects and never touch a MobX observable directly.
+
+  Also new: `deepEqual` and `stableStringify` exports for comparing `field.json()` values. A `jsonb`-backed json field round-trips with reordered object keys (Postgres `jsonb` does not preserve key order), so a naive `JSON.stringify(a) === JSON.stringify(b)` comparison is unreliable when reconciling against external state (e.g. a rich-text editor). These helpers compare key-order-insensitively.
+</Update>
+
+<Update label="June 25, 2026" description="v0.19.0">
+### Minor Changes
+
+- **Claim observability — a `ClaimLog` you can print or assert on.** A new
+  `observability` provider hook lets you tap every claim event and stale-write
+  collision the client sees. Hand `new ClaimLog()` to `Ablo({ observability })`
+  and it collects an ordered, readable log — `formatClaim` / `formatConflict`
+  render one line per event, and `collisions()` returns the conflicts for eval
+  assertions. New exports: `ClaimLog`, `formatClaim`, `formatConflict`,
+  `noopObservability`, and the types `ClaimLogEntry`, `ClaimEvent`,
+  `ConflictEvent`, `SyncObservabilityProvider`. Spread `noopObservability` to
+  override only the hooks you care about.
+
+  **AWS-shaped CLI credential store + `ablo config`.** Local CLI state is now split
+  into two files, matching `~/.aws/config` vs `~/.aws/credentials`: `config.json`
+  holds non-secret settings (active environment + active project) and is safe to
+  print or let an agent read; `credentials.json` holds the keys (0600, never
+  printed), keyed by project profile then environment. Per-project profiles follow
+  Stripe's model — `ablo projects use <slug>` selects the active profile, and a
+  key's project is fixed at mint so selecting a project never re-scopes an existing
+  key. `ablo status` now reports the resolved profile and environment.
+
+  **Schema JSON-column reconciliation.** `generateJsonColumnReconciliation` (new
+  export) emits the DDL to reconcile JSON-backed columns when adopting or evolving
+  an existing schema.
+
+  **Breaking (0.x):**
+  - The claim handle type `ClaimHandle` is renamed to **`Claim`**, and its
+    identifier field is `id` (was `claimId`). Update type imports and any code
+    reading `.claimId`.
+  - The ai-sdk `claimBroadcastMiddleware` (and `./ai-sdk/claim-broadcast`) is
+    removed — coordination broadcast is handled by `coordinationContextMiddleware`.
+    Import `ClaimTarget` from the package root or `@abloatai/ablo` ai-sdk's
+    `coordination-context` instead of `claim-broadcast`. The inline-claim option is
+    `reason` (not the pre-0.12 `action`); the ai-sdk docs are corrected to match.
+</Update>
+
+<Update label="June 25, 2026" description="v0.18.0">
+### Minor Changes
+
+- **Client observability — `debug` / `logLevel`, off by default.** The SDK used to
+  emit a `debug` line per model and per property during schema registration (a
+  firehose). It now defaults to a quiet `warn` threshold and exposes two new
+  `Ablo()` options to opt back in:
+  - `logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent'` — `'info'` surfaces
+    coordination and connection events without the per-model registration noise;
+    `'debug'` is everything. Precedence: explicit `logLevel` → `debug: true` →
+    `ABLO_LOG_LEVEL` env → default `warn`. Supplying your own `logger` bypasses both.
+  - `debug: boolean` — shorthand for `logLevel: 'debug'`.
+
+  Coordination is now traceable at `info`: claims that are **rejected** or **lost**
+  (preempted/expired), and your position **advancing in a claim queue**, each log
+  once per change with a readable target (`documents:abc.title`) — quiet lowercase
+  lines, no shouty tags.
+
+  **New: canonical wire-egress contract export.** `errorEnvelope`, `statusForType`,
+  and the `ErrorEnvelope` type are now exported from the package root. Server
+  consumers (e.g. a self-hosted sync server) can assert against the one source of
+  truth for the error-envelope shape and the `AbloError`-subclass→HTTP-status
+  table instead of keeping a copy that silently drifts.
+
+  **Structured CLI error rendering.** CLI failures render as a titled block with a
+  reason code and per-code remediation (`--verbose` for the stack) instead of a
+  console wall-of-text; `AbloError.toString()` produces a leak-proof one-liner.
+
+  **`ABLO_API_KEY` resolution + sandbox key scopes.** The key is now resolved from
+  `.env.local` / `.env` (not just the process env), and sandbox keys are granted
+  `schema:push` by default so `ablo push` works out of the box in a fresh sandbox.
+</Update>
+
+<Update label="June 25, 2026" description="v0.17.0">
+### Minor Changes
+
+- **Bring-your-own database is now one model.** Ablo connects to your Postgres and
+  never operates it. There used to be two confusing BYO paths, and the
+  connection-string one would create roles, force row-level security, transfer
+  table ownership, and push you to run `ablo migrate` before anything worked. That
+  cascade is gone. Ablo now follows the shape every serious "sync over your own
+  Postgres" engine uses (ElectricSQL, PowerSync, Zero): it reads your database via
+  Postgres logical replication and never runs DDL, creates roles, forces RLS, or
+  rewrites your `DATABASE_URL`. You own your schema; Ablo reads it.
+  - **New: `ablo connect`.** One command prints the exact, copy-pasteable setup for
+    your own Postgres — enable `wal_level=logical`, create the `ablo_publication`
+    publication and a least-privilege `ablo_replicator` role — and
+    `ablo connect --check` validates readiness (wal level, publication, replication
+    grant, replica identity). This is the single supported way to connect a real
+    database.
+  - **`ablo migrate` left the happy path.** It no longer creates roles, transfers
+    ownership, or rewrites your connection string, and `ablo dev` no longer attempts
+    a scoped-role creation on every watch loop. `migrate` is now an optional escape
+    hatch for generating starter DDL (`--dry-run` prints the SQL).
+  - **Clearer failures.** `ablo push` permission errors lead with the server's actual
+    reason code and per-code remediation instead of a generic "needs `schema:push`
+    scope," and the schema-conflict message names which environment/version a prior
+    push came from and when.
+  - **Logical-replication runtime is in Preview.** The setup (`ablo connect`) and the
+    connection model are live; the server-side WAL consumer that streams your changes
+    is implemented and journey-tested but not yet generally available.
+
+  The previous connection-string-operate and adapter/outbox modes are demoted to a
+  clearly-labeled **Legacy / not recommended** section — they still work, but new
+  integrations should use logical replication.
+</Update>
+
 <Update label="June 24, 2026" description="v0.16.3">
 ### Patch Changes
 

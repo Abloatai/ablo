@@ -5,16 +5,16 @@ title: "Quickstart"
 {/* AUTO-GENERATED from packages/sync-engine/docs/quickstart.md -- edit there, then run `npm run build:docs`. */}
 
 Build with Ablo on **the Postgres you already have**. You declare a small Ablo
-schema for the models humans and agents edit together, hand the client your
-Postgres `DATABASE_URL` (passed explicitly), and coordinate every write through
-`ablo.<model>`. In production, your database is the system of record. Ablo is the
-transaction layer on top: it registers your connection, commits every write there
-behind row-level security, and fans the confirmed rows out to every connected
-client.
+schema for the models humans and agents edit together, connect Ablo to your
+database with **logical replication** (`ablo connect`), and coordinate every read
+and claim through `ablo.<model>`. Your database stays the system of record: your
+app keeps writing through its own backend, Ablo tails your write-ahead log (WAL),
+and the confirmed rows fan out to every connected client. Ablo **never runs DDL,
+owns, or migrates your schema**.
 
 > No database yet? The hosted **sandbox** can host rows in Ablo's test plane —
-> pass an `apiKey` only and omit `databaseUrl`, like Stripe test mode — so you can
-> try Ablo before pointing it at your Postgres.
+> pass an `apiKey` only and skip the database setup, like Stripe test mode — so
+> you can try Ablo before connecting your Postgres.
 
 ## 1. Install and initialize
 
@@ -99,15 +99,34 @@ same idiom as tRPC's `typeof appRouter` and Drizzle's `typeof db`; it resolves
 the typed overload at the call site. Avoid `ReturnType<typeof Ablo>`, which
 collapses to the untyped client.
 
-## 3. Point Ablo at your database
+## 3. Connect your database with `ablo connect`
 
-The client takes your schema, your key, and your `DATABASE_URL`. On first
-connect Ablo registers the connection (sent once over TLS, stored sealed, never
-echoed back) and from then on commits every write directly to your Postgres.
+Connecting a real database = Postgres logical replication, and `ablo connect` is
+the one way to set it up. Ablo **reads** your WAL and never runs DDL, owns, or
+migrates your schema — your app keeps writing through its own backend.
+
+```bash
+# 1. Enable logical decoding (then RESTART Postgres — wal_level is not reloadable)
+#    ALTER SYSTEM SET wal_level = 'logical';
+#    On RDS/Aurora: set rds.logical_replication = 1 in the parameter group, reboot.
+
+# 2. Print the exact publication + replication-role SQL for YOUR Postgres, run it:
+npx ablo connect
+
+# 3. Put the replication role's connection string in DATABASE_URL, then validate:
+npx ablo connect --check
+```
+
+`ablo connect` prints the copy-pasteable SQL (a publication named
+`ablo_publication` and a least-privilege `ablo_replicator` role with
+`REPLICATION` + `SELECT`, password you choose). `ablo connect --check` connects to
+`DATABASE_URL` and verifies `wal_level=logical`, the publication, the role's
+`REPLICATION` attribute, and that every published table has a usable
+`REPLICA IDENTITY` — a green checklist or the precise fix per item.
 
 ```bash
 # .env — server runtime only, never the browser
-DATABASE_URL=postgres://ablo_app:...@host:5432/db
+DATABASE_URL=postgres://ablo_replicator:<password>@host:5432/db?sslmode=require
 ABLO_API_KEY=sk_test_...
 ```
 
@@ -119,50 +138,18 @@ import { schema } from './schema';
 export const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
-  databaseUrl: process.env.DATABASE_URL, // your Postgres, passed explicitly — rows live here
 });
 ```
 
-`databaseUrl` is not auto-read from the environment — you pass it explicitly
-(as above). If a `DATABASE_URL` is set for another tool, `Ablo()` ignores it
-unless you wire it in like this.
-
-Use a dedicated **non-superuser role** for the connection — Ablo enforces
-tenant isolation with row-level security, so the server rejects superuser or
-`BYPASSRLS` roles outright (`database_role_cannot_enforce_rls`).
-
-> **Neon / Supabase note:** the connection string those dashboards hand you
-> uses the database OWNER role (e.g. `neondb_owner`), which is `BYPASSRLS` —
-> Ablo will reject it. You don't have to fix that by hand: `npx ablo dev`
-> (next step) detects the unsafe role and offers to create the scoped one for
-> you — from your machine, so the owner credential never reaches Ablo. It
-> writes the new `DATABASE_URL` into your env file (the generated password is
-> never printed).
->
-> Prefer to do it manually? The equivalent SQL:
->
-> ```sql
-> CREATE ROLE ablo_app LOGIN PASSWORD '<strong password>'
->   NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-> GRANT CREATE, CONNECT ON DATABASE <your_db> TO ablo_app;
-> GRANT CREATE, USAGE ON SCHEMA public TO ablo_app;
-> ```
->
-> Then swap the user/password in the dashboard's string:
-> `postgres://ablo_app:<password>@<same-host>/<same-db>?sslmode=require`.
-
-Don't want a connection string to leave your infrastructure? Keep
-`DATABASE_URL` in your app only and expose one signed **Data Source endpoint**
-built from an ORM adapter instead — same product, same writes, see
-[Connect Your Database](/data-sources). In that setup, omit `databaseUrl`
-from `Ablo(...)`.
+The full setup, the honest footprint (publication + slot + `REPLICATION` role +
+the `wal_level` restart + slot/WAL retention Ablo monitors), and the Preview
+status of the WAL runtime are in [Connect Your Database](/data-sources).
 
 ## 4. Push the schema, then map it to tables
 
 ```bash
-npx ablo push      # checks your DATABASE_URL role, pushes the schema (sandbox),
-                   # and writes ABLO_API_KEY to .env.local. Add --watch to
-                   # re-push on every save.
+npx ablo push      # pushes the schema definition and writes ABLO_API_KEY to
+                   # .env.local. Add --watch to re-push on every save.
 ```
 
 `ablo push` uploads the schema *definition* — model names, fields, types. That
@@ -170,21 +157,22 @@ metadata is what tells Ablo which models to coordinate. Skipping it makes every
 write to a new or changed model fail with `server_execute_unknown_model` — that
 error literally means "run `npx ablo push`."
 
-Now Ablo needs real Postgres tables behind those models. Two ways, depending on
-who owns the tables:
+Now map those models to your real Postgres tables. **Your migration tool owns the
+tables** — Ablo reads them, it does not create or migrate them:
 
-- **Adopt existing tables (the common case).** Most teams already have the
-  tables — created by Prisma, Drizzle, or hand-written migrations. Run
-  `npx ablo pull` to import their shape into your schema, or `npx ablo check`
-  to verify your schema and the live tables agree. Keep managing the tables
-  with your own migration tool; Ablo just syncs the subset of models you
-  declared.
-- **Let Ablo provision them.** If Ablo should own the tables, `npx ablo migrate`
-  creates your synced-model tables (with row-level security) in the registered
-  database. Your other tables are left untouched.
+- Run `npx ablo pull` to import the shape of your existing tables (created by
+  Prisma, Drizzle, or hand-written migrations) into your schema, or
+  `npx ablo check` to verify your schema and the live tables agree. Keep managing
+  the tables with your own migration tool; Ablo syncs the subset of models you
+  declared and reports the rest as "ignored / owned by you."
+
+> **Optional escape hatch:** if you have no tables yet and want Ablo to scaffold
+> them, `npx ablo migrate` can create your synced-model tables for you. This is
+> not the happy path — connecting a real database is `ablo connect` (step 3), and
+> your own migrations stay in charge of your schema.
 
 Nothing runs locally — there is no dev server to start. Your app talks to Ablo's
-hosted API with the sandbox key; the rows land in your database.
+hosted API; the rows live in your database.
 
 ## 5. Write through the model
 
@@ -283,5 +271,5 @@ Keep using the schema client for app and agent writes.
 - [Schema Contract](/schema-contract) explains what the schema drives across SDK, React, agents, Data Source, and schema push.
 - [Guarantees](/guarantees) explains what confirmed writes and stale checks mean.
 - [Client Behavior](/client-behavior) covers errors, retries, and public imports.
-- [Connect Your Database](/data-sources) covers both connection shapes — `databaseUrl` and the signed Data Source endpoint.
+- [Connect Your Database](/data-sources) covers the logical-replication connect path end to end — `ablo connect`, the honest footprint, and the WAL runtime's Preview status.
 - [AI SDK Tool](/examples/ai-sdk-tool) shows the same write path inside a tool call.

@@ -55,11 +55,13 @@ claims are visible while the work is still in progress.
 [Version History &amp; Migration Guide](./docs/migration.md)
 
 It works with the auth and database you already have. **In production, your
-database is the system of record.** Ablo is the transaction layer on top of it:
-realtime data is scoped to *sync groups* from your own identity, and every
-committed row lives in your Postgres. (Trying Ablo with no database yet? The
-hosted **sandbox** can host rows in Ablo's test plane — apiKey only, like
-Stripe test mode — so you can explore before pointing it at your Postgres.)
+database is the system of record.** Ablo is the sync + coordination layer on top
+of it: it consumes your Postgres' logical-replication stream, scopes realtime
+data to *sync groups* from your own identity, and your application keeps owning
+the write path — every row lives in your Postgres. (Trying Ablo with no database
+yet? A **sandbox** `sk_test` key holds throwaway **test data** — like Stripe test
+mode — so you can explore before pointing it at your Postgres. Test-mode only; in
+production every row lives in your database.)
 
 **Built for** collaborative editors, AI agent workflows, and internal tools —
 anywhere people and agents change shared state and everyone has to see it live.
@@ -92,11 +94,11 @@ what's configured at any time.
 
 **Keys & runtime.** Ablo needs Node 24+ and TypeScript 5+. Keys come in two of
 *your* environments — `sk_test_` and `sk_live_`, like Stripe — and `ablo login`
-mints both. Keep the key and the database URL in trusted server runtimes only.
-In the browser, `<AbloProvider>` authenticates with the signed-in user's
-session — never the raw key, never the database URL. Prefer the connection
-string never leaving your infrastructure? Expose a signed
-[Data Source endpoint](./docs/data-sources.md) instead and omit `databaseUrl`.
+mints both. Keep the key in trusted server runtimes only. In the browser,
+`<AbloProvider>` authenticates with the signed-in user's session — never the raw
+key. Your database is connected once, out of band, via `npx ablo connect`
+(logical replication); if it can't grant a replication role, expose a signed
+[Data Source endpoint](./docs/data-sources.md) instead.
 
 For production (React, an existing backend, Data Source, agents), the
 [Integration Guide](./docs/integration-guide.md) is the deeper map.
@@ -175,8 +177,9 @@ const schema = defineSchema({
 const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY, // written to .env.local by `npx ablo push`
-  databaseUrl: process.env.DATABASE_URL, // your Postgres, passed explicitly — rows live here
 });
+// Your Postgres is connected once via `npx ablo connect` (logical replication) —
+// not passed here. Ablo tails its WAL; your rows never leave your database.
 
 await ablo.ready();
 
@@ -403,10 +406,12 @@ each other's changes in real time — that's the default, not a feature you turn
 - `useAblo(...)` gives React clients the live row, kept current automatically.
 - `ablo.<model>.claim({ id })` / `claim.state({ id })` / `claim.queue({ id })` let humans and agents coordinate (and observe) active work on a row — and the line waiting behind it — before a write lands.
 
-Always write through Ablo — either the SDK model methods
-(`ablo.<model>.create/update/delete`) or the HTTP write endpoint below. If you
-write straight to your own database instead, those changes won't reach connected
-clients.
+Your application owns the write path: writes that land in your database — through
+your own backend, your existing API, any path — are tailed off the WAL and fanned
+out to connected clients automatically (the Electric model). The SDK model
+methods (`ablo.<model>.create/update/delete`) and the HTTP write endpoint are the
+*JavaScript/agent* ergonomic surface — they participate in claims and confirmation
+— but they are not a requirement for your normal writes to show up.
 
 ## HTTP Writes
 
@@ -429,35 +434,39 @@ curl https://api.abloatai.com/v1/commits \
 
 ## Your Database
 
-In production, every schema model is backed by **your own database** — Ablo is
-the transaction layer on top of it. Two ways to connect it:
+In production, every schema model is backed by **your own database** — Ablo
+**consumes** it, never owns it. The model is Electric's (and PowerSync's, and
+Zero's): Ablo consumes your Postgres' logical-replication stream and fans the
+changes out; **your application continues to own the write path.** Two ways Ablo
+connects:
 
-| | How Ablo reaches your Postgres | Use when |
+| | How Ablo connects to your Postgres | Use when |
 | --- | --- | --- |
-| **Connection string** (primary) | `databaseUrl` at init — passed explicitly, never auto-read from the environment. Ablo registers the connection once (sent over TLS, stored sealed, never echoed back) and commits each write directly — through a non-superuser role, behind row-level security. | You can hand over a scoped connection string. |
-| **Signed endpoint** | Your app exposes one route built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`); Ablo sends signed commit requests and your app writes its own database. | Database credentials must never leave your infrastructure. |
+| **Logical replication** (primary) | `npx ablo connect` prints the setup SQL (`wal_level=logical`, a publication, a `REPLICATION` role); `npx ablo connect --register` tells Ablo to replicate it. Ablo tails the WAL — it never runs DDL on, writes to, owns, or migrates your database. | Your database can grant a `REPLICATION` role (most can). |
+| **Signed endpoint** (fallback) | Your app exposes one route built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`); Ablo sends signed requests and your app touches its own database. Needs no database configuration. | Your database **can't** grant a replication role (a locked-down managed DB). |
 
-(No database yet? The hosted **sandbox** can host rows in Ablo's test plane —
-omit `databaseUrl` and pass an `apiKey` only, like Stripe test mode — so you can
-try Ablo before connecting your Postgres.)
+(No database yet? A **sandbox** `sk_test` key lets you try Ablo's full API and
+coordination with throwaway **test data** — like Stripe test mode — before you
+connect your own Postgres. Test-mode only: in production your rows always live in
+your database and Ablo holds just the transaction log, never your data.)
 
-Same product, same truth either way: in production your database is the system of
-record. See
-[Connect Your Database](./docs/data-sources.md) for both shapes.
+Your database is the system of record. The old `databaseUrl` dial-in (Ablo
+holding a read/write connection) is **deprecated and being removed** — connect
+via logical replication instead. See
+[Connect Your Database](./docs/data-sources.md).
 
 ## Configuration
 
-`Ablo({ ... })` takes your schema, your key, and — in production — your database,
-either as an explicit `databaseUrl` here or as a signed
-[Data Source endpoint](./docs/data-sources.md) in your app. (`databaseUrl` is
-never auto-read from the environment; omit it to try Ablo against the hosted
-sandbox.) Every other option has correct defaults:
+`Ablo({ ... })` takes your schema and your key. Your database is connected
+**out of band** — once, via `npx ablo connect` (logical replication) or a signed
+[Data Source endpoint](./docs/data-sources.md) — not through the constructor.
+Every other option has correct defaults:
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `schema` | `Schema` | — (required) | Typed model proxies (`ablo.<model>.*`) |
 | `apiKey` | `string \| ApiKeySetter \| null` | `process.env.ABLO_API_KEY` | Server key — a string, or an async function for rotation |
-| `databaseUrl` | `string \| null` | `—` | Your Postgres, registered as the data plane. **Must be passed explicitly — it is not auto-read from the environment.** If you have a `DATABASE_URL` set for another tool (Prisma, Drizzle, docker-compose), `Ablo()` ignores it unless you pass `databaseUrl` explicitly. Server runtimes only — the SDK throws if it sees this in a browser. Omit it when your app exposes a signed [Data Source endpoint](./docs/data-sources.md) instead, or when trying Ablo against the hosted sandbox. |
+| `databaseUrl` | `string \| null` | `—` | **Deprecated — being removed.** The old dial-in (Ablo holding a read/write connection to your DB). Connect via `npx ablo connect` (logical replication) instead; Ablo tails your WAL rather than dialing in. See [Connect Your Database](./docs/data-sources.md). |
 
 Keep `apiKey` in trusted server runtimes. In the browser, `<AbloProvider>`
 authenticates with the signed-in user's session; the raw-key path is gated
@@ -512,7 +521,7 @@ contract; there are no retry or timeout knobs to tune.
 - [React](./docs/react.md) — `<AbloProvider>`, `useAblo`, presence, status, and bootstrap gating.
 - [Coordination](./docs/coordination.md) — `claim` / `claim.state` / `claim.queue` / `claim.release` reference: hold a row across slow agent work, and observe the line waiting behind it.
 - [Client Behavior](./docs/client-behavior.md) — options, errors, retries, timeouts, and public imports.
-- [Connect Your Database](./docs/data-sources.md) — connect your Postgres by connection string (`databaseUrl`) or signed endpoint; your database is the system of record either way.
+- [Connect Your Database](./docs/data-sources.md) — connect your Postgres by logical replication (`npx ablo connect`) or, as a fallback, a signed endpoint; your database is the system of record either way.
 - [Existing Python Backend](./docs/examples/existing-python-backend.md) — migrate existing Python endpoints to multiplayer and agent-safe writes gradually.
 - [AI SDK Tool](./docs/examples/ai-sdk-tool.md) — use Ablo inside an AI SDK tool call.
 - [Server Agent](./docs/examples/server-agent.md) — schema-backed worker.

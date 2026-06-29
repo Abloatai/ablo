@@ -77,6 +77,79 @@ async function fetchPushedSchema(apiUrl: string, apiKey: string | undefined): Pr
   }
 }
 
+/** Result of the DATA-plane probe — see {@link probeDataPlane}. */
+type DataPlaneProbe =
+  | { status: 'ok' }
+  | { status: 'no_database' }
+  | { status: 'intermittent'; ok: number; failed: number }
+  | { status: 'forbidden'; detail?: string }
+  | { status: 'unknown'; detail: string }
+  | { status: 'skipped' };
+
+/** One sample's outcome. `routed` = the request reached the tenant DB (a row
+ *  miss is fine); `no_route` = tenant_routing_failed before any query. */
+type Sample = 'routed' | 'no_route' | { forbidden: string | undefined } | { other: string };
+
+async function sampleRead(apiUrl: string, apiKey: string, modelTypename: string, n: number): Promise<Sample> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    // A by-id read for an absent id. Per the server's entity route, tenant
+    // routing happens BEFORE the query, so `entity_not_found` (404) is only
+    // reachable once routing succeeds → a clean "DB answered" signal, while
+    // `tenant_routing_failed` means routing itself failed.
+    const res = await fetch(
+      `${apiUrl}/v1/models/${encodeURIComponent(modelTypename)}/__ablo_health_probe_${n}__`,
+      { headers: { authorization: `Bearer ${apiKey}` }, signal: ctrl.signal },
+    );
+    if (res.ok) return 'routed';
+    let code: string | undefined;
+    try {
+      const body = (await res.json()) as { code?: string; error?: { code?: string } };
+      code = body.code ?? body.error?.code;
+    } catch {
+      /* non-JSON */
+    }
+    if (code === 'entity_not_found') return 'routed';
+    if (code === 'tenant_routing_failed') return 'no_route';
+    if (res.status === 401 || res.status === 403) return { forbidden: code };
+    return { other: `${res.status}${code ? ` ${code}` : ''}` };
+  } catch {
+    return { other: 'unreachable' };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * Probe the DATA plane, not just the control plane. `ablo status` otherwise
+ * reports "api reachable" + "schema pushed" — both control-plane facts — and
+ * looks healthy while reads/writes fail because the org's database isn't
+ * routable (a redeploy/reaper drops the registration, or the key targets an org
+ * that never had one). Worse, the registration can be INTERMITTENT — a single
+ * read can't see that. So we sample a few times and report the worst case, so
+ * the gap surfaces HERE with a fix, not as an opaque mid-operation failure.
+ */
+async function probeDataPlane(
+  apiUrl: string,
+  apiKey: string | undefined,
+  modelTypename: string,
+): Promise<DataPlaneProbe> {
+  if (!apiKey) return { status: 'skipped' };
+  const samples: Sample[] = [];
+  for (let i = 0; i < 3; i++) samples.push(await sampleRead(apiUrl, apiKey, modelTypename, i));
+
+  const forbidden = samples.find((s): s is { forbidden: string | undefined } => typeof s === 'object' && 'forbidden' in s);
+  if (forbidden) return { status: 'forbidden', detail: forbidden.forbidden };
+  const routed = samples.filter((s) => s === 'routed').length;
+  const noRoute = samples.filter((s) => s === 'no_route').length;
+  if (routed === samples.length) return { status: 'ok' };
+  if (noRoute === samples.length) return { status: 'no_database' };
+  if (routed > 0 && noRoute > 0) return { status: 'intermittent', ok: routed, failed: noRoute };
+  const other = samples.find((s): s is { other: string } => typeof s === 'object' && 'other' in s);
+  return { status: 'unknown', detail: other?.other ?? 'inconclusive' };
+}
+
 /** Compact `{user:overwrite,agent:reject}` (or '' when default). */
 function formatConflict(conflict: PushedModel['conflict']): string {
   if (!conflict) return '';
@@ -208,6 +281,38 @@ export async function status(args: string[] = []): Promise<void> {
       }
     } else if (pushed && !pushed.active) {
       console.log(`  ${pc.dim('schema')}  ${pc.yellow('none pushed')} ${pc.dim(`(run ${pc.bold('ablo push')} or ${pc.bold('ablo dev')})`)}`);
+    }
+
+    // Data-plane health — the check that turns a lying-green status into the truth.
+    if (pushed && pushed.active && pushed.models.length > 0) {
+      const probe = await probeDataPlane(apiUrl, introspectKey, pushed.models[0].typename);
+      // Deliberately NO green "healthy" line. This bare-key probe carries only
+      // the key — it can resolve a different tenant than the typed SDK does (the
+      // SDK's identity carries project/sandbox), so an apparent "ok" here is not
+      // trustworthy enough to reassure. The probe only ever WARNS: it speaks when
+      // it catches a definite failure, and stays silent otherwise. (Faithful
+      // SDK-path probe is a follow-up — see the read-path decision doc.)
+      if (probe.status === 'no_database') {
+        console.log(`  ${pc.dim('data')}    ${pc.red('✗ no database registered')}${org ? pc.dim(` for org ${org}`) : ''}`);
+        console.log(
+          `          ${pc.dim(
+            `reads/writes will fail with ${pc.bold('tenant_routing_failed')}. Connect one with ` +
+              `${pc.bold('ablo connect')}, or point ${pc.bold('ABLO_API_KEY')} at an org that has a database.`,
+          )}`,
+        );
+      } else if (probe.status === 'intermittent') {
+        console.log(`  ${pc.dim('data')}    ${pc.red(`✗ database routing is intermittent`)} ${pc.dim(`(${probe.ok} ok / ${probe.failed} failed of ${probe.ok + probe.failed})`)}${org ? pc.dim(` for org ${org}`) : ''}`);
+        console.log(
+          `          ${pc.dim(
+            `some reads/writes fail with ${pc.bold('tenant_routing_failed')} — the registration is unstable. ` +
+              `Re-establish it with ${pc.bold('ablo connect')} (or check for a recent server redeploy).`,
+          )}`,
+        );
+      } else if (probe.status === 'forbidden') {
+        console.log(`  ${pc.dim('data')}    ${pc.yellow('? key not authorized to read')}${probe.detail ? pc.dim(` (${probe.detail})`) : ''}`);
+      } else if (probe.status === 'unknown') {
+        console.log(`  ${pc.dim('data')}    ${pc.yellow(`? data-plane check inconclusive (${probe.detail})`)}`);
+      }
     }
   }
 

@@ -11,9 +11,25 @@ title: "Coordination"
 
 Coordinate long-running work on a row so humans and agents don't clobber each
 other. Most writes need none of this — a plain `ablo.<model>.update({ id, data })`
-is **last-write-wins** by default. For lost-update detection, take a claim or pass
-`readAt` / `onStale` yourself. Reach for `claim` only when you'll **hold a row
-across a slow gap** (read → LLM call → write).
+is **last-write-wins** by default.
+
+> **Read-modify-write under contention? Use the functional update — it owns all
+> of this for you.** When the new value is computed from the current one (the
+> shape that races), pass a function instead of data:
+>
+> ```ts
+> await ablo.documents.update(id, (current) => ({ content: revise(current.content) }));
+> ```
+>
+> The SDK reads the freshest row, runs your updater, writes it as a
+> compare-and-swap, and re-reads + re-runs on any concurrent write — no claim, no
+> per-agent identity, no `stale_context` / `claim_*` codes, no retry loop, and no
+> way to silently clobber. See [Functional update](#functional-update).
+> The rest of this page is the **low-level** machinery the functional form is
+> built on — reach for it directly only when you need to **hold a row across a
+> slow gap with side effects** (e.g. presence badges, multi-row handles), or want
+> explicit FIFO ordering. For lost-update detection on a single read-modify-write,
+> prefer the functional form over hand-rolling `claim` / `readAt` / `onStale`.
 
 Claims don't lock. If another writer holds the row, `claim` waits for them,
 re-reads the fresh row, then hands it to you — so two writers serialize instead
@@ -23,11 +39,48 @@ Reads stay open: reading a claimed row is allowed unless the caller explicitly
 asks for claimed gating. A claim carries a TTL so a crashed holder is
 auto-released and the queue advances.
 
+> **Transport: WebSocket queues, HTTP reconciles.** The "blocks until promoted"
+> behaviour above needs a live socket to wake the waiter, so it applies to the
+> **WebSocket client only**. On the **stateless HTTP client**
+> (`Ablo({ transport: 'http' })` — the transport server-side agents use) there is
+> nothing to park a waiter, so a contended `claim` does **not** wait: it acquires
+> immediately, or rejects right away with `AbloClaimedError('claim_queued')`
+> (`queue: true`, the default) / `AbloClaimedError('entity_claimed')`
+> (`queue: false`). And because short claim→write→release cycles rarely overlap,
+> concurrent HTTP agents usually all acquire, then collide at **write** time — the
+> first write wins and the rest get `AbloStaleContextError('stale_context')`.
+> The coordination pattern over HTTP is therefore a **reconcile loop**, not a
+> queue: catch `claim_queued` / `claim_lost` / `stale_context`, re-read fresh,
+> regenerate, retry. See [Errors](#errors) and the loop sketch there.
+
 This reference opens with [the model](#the-model--three-layers-one-decision) — the
 one answer to "how do two agents not clobber each other" — then covers the
 [claim state object](#the-claim-state-object), the SDK [methods](#methods)
 (`claim` · `claim.state` · `claim.queue` · `claim.release` · [writing under a
 claim](#writing-under-a-claim)), and the [errors](#errors) you can catch.
+
+> **Before anything else: one identity per agent (for the low-level claim
+> path).** The [functional update](#functional-update) does
+> **not** need this — its safety comes from the row watermark (compare-and-swap),
+> not from participant identity, so it's correct even when many workers share one
+> `sk_`. The rule below applies when you take **explicit `claim`s** for FIFO
+> exclusion or presence.
+>
+> Coordination excludes
+> *participants*, and a participant **is the key**, not the client object. The
+> server derives identity from the credential's scope — so **N clients sharing
+> one `sk_`/`ek_` are one participant**: they all see the same `heldBy`, never
+> queue behind each other, and a "second" claimer silently re-takes the lease it
+> already holds (no mutual exclusion). To get real per-agent exclusion, mint a
+> **distinct scoped `rk_` per agent** and bind a client to it:
+>
+> ```ts
+> const { token } = await ablo.sessions.create({ agent: { id: `agent-${i}` } }); // rk_
+> const agent = Ablo({ schema, apiKey: token }); // this agent's own participant
+> ```
+>
+> Now `agent-0` holds while `agent-1`/`agent-2` queue in FIFO order and drain in
+> turn. See [sessions](/sessions#agent-sessions-rk_) for the minting flow.
 
 ---
 
@@ -441,6 +494,7 @@ inspect the `code`.
 | error | `code` | thrown when | carries |
 |---|---|---|---|
 | `AbloClaimedError` | `claim_lost` | A held/queued claim was taken away (holder TTL lapse on disconnect, or revoke) while you were holding or waiting. | `claims?` |
+| `AbloClaimedError` | `claim_queued` | **HTTP transport only.** A contended `claim` (default `queue: true`) could not block-wait for the lease (no socket), so it rejected immediately instead of queueing. Retryable — re-attempt the claim. | `claims?` |
 | `AbloClaimedError` | `grant_timeout` | The optional `timeoutMs` elapsed while you were still queued for a grant. | `claims?` |
 | `AbloClaimedError` | `queue_too_deep` | `claim` was passed `maxQueueDepth` and the wait line was already that deep when you tried to join — fail-fast instead of waiting. | `claims?` |
 | `AbloClaimedError` | `claim_conflict` | An `update`/`delete` targets a row another participant holds — the server's pre-commit check rejected it. | — |
@@ -467,3 +521,138 @@ try {
   } else throw err;
 }
 ```
+
+### The reconcile loop, by hand (rarely needed)
+
+This is the loop the [functional update](#functional-update) runs for you. Write
+it yourself only when one attempt isn't a pure re-read-and-recompute — e.g. you
+must hold an explicit `claim` for a presence badge across the gap, or coordinate
+several rows in one handle. For a single read-modify-write, use the functional
+form instead of this.
+
+```ts
+const RETRYABLE = (e: unknown) =>
+  e instanceof AbloStaleContextError ||                       // row moved under our write
+  (e instanceof AbloClaimedError &&
+    (e.code === 'claim_queued' ||                             // someone holds it right now
+     e.code === 'claim_lost'));                               // a human preempted us
+
+for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  try {
+    await using claim = await ablo.reports.claim({ id });     // acquire or claim_queued
+    const fresh = claim.data;                                 // read at the lease moment
+    const next = await generate(fresh);                       // slow gap
+    await ablo.reports.update({ id, data: next, claim });     // first writer wins
+    break;                                                    // landed
+  } catch (err) {
+    if (!RETRYABLE(err) || attempt === MAX_ATTEMPTS) throw err;
+    await sleep(80 + attempt * 40 + Math.random() * 60);      // jitter: don't lock-step
+  }
+}
+```
+
+The loop, not a queue, is the coordination mechanism over HTTP. On the WebSocket
+client the same code works but rarely loops, because `claim` blocks in the FIFO
+line instead of throwing `claim_queued`.
+
+---
+
+## Functional update
+
+The read-modify-write surface that owns the loop above so you never write it.
+Pass a **function of the current state** instead of fixed `data` — the
+`setState(prev => next)` of the data layer:
+
+```ts
+const row = await ablo.documents.update(documentId, (current) => ({
+  content: revise(current.content),        // "given the latest, here is the next"
+}));
+```
+
+What the SDK does on every call, on **both transports** (one shared loop, so the
+guarantee can't drift): read the freshest row + its watermark → run your updater
+→ write it as a **compare-and-swap** against that watermark (`readAt` +
+`onStale: 'reject'`) → on any concurrent write, re-read and re-run. Correctness
+comes from the watermark, **not** from participant identity — so it's immune to
+the shared-credential clobber footgun and needs no `claim` and no per-agent `rk_`.
+
+Nothing about claims, identity, or conflict codes surfaces. The call either
+returns the reconciled row (a `CommitReceipt` on the HTTP client; the row on the
+WebSocket client) or, at the extreme, throws **one** error:
+
+```ts
+import { AbloContentionError } from '@abloatai/ablo';
+
+try {
+  await ablo.documents.update(id, (cur) => ({ content: revise(cur.content) }), {
+    retries: 16,            // reconcile rounds before giving up (default 16)
+    signal: req.signal,     // optional: abort the loop if the request is cancelled
+  });
+} catch (err) {
+  if (err instanceof AbloContentionError) {
+    // The row stayed continuously contended past the budget — nothing was
+    // written. err.attempts, err.cause (the last conflict). Back off, raise
+    // `retries`, or move the row to the WebSocket transport (fair FIFO queue).
+  }
+}
+```
+
+Return `null` / `undefined` from the updater to **skip the write** after seeing
+fresh state (the call resolves to `undefined`). A missing row throws
+`AbloNotFoundError`; a genuine failure (validation, constraint, permission)
+propagates immediately without retrying.
+
+### How `create` and `delete` relate
+
+They don't get a functional form — and shouldn't. The functional form exists
+because `update` is the only verb whose **next state is a function of the current
+state**, which is the shape that races. The other two aren't read-modify-write:
+
+| Verb | Functional form? | Why | Its "just works" property |
+| --- | --- | --- | --- |
+| `update` | **yes** — `update(id, current => next)` | next value depends on the current one (lost-update hazard) | compare-and-swap + reconcile |
+| `create` | no — `create({ data, id? })` | no prior state to read; the hazard is *id collision*, a terminal `unique_violation`, not a lost update | **idempotency** — stable id / `idempotencyKey` makes a retried create safe |
+| `delete` | no — `delete({ id })` | no resulting state to compute; "make it not exist" is unchanged by concurrent edits, and delete is idempotent | naturally idempotent |
+
+The same reason React has `setState(prev => next)` but no functional mount /
+unmount. A *conditional* delete ("only if unchanged since I read it") is the one
+niche case — express it with an explicit `claim` / `readAt` on `delete({ id })`,
+not a function.
+
+---
+
+## Observability — the `ClaimLog`
+
+Coordination you can't see is coordination you can't debug. Pass an
+`observability` provider to `Ablo({ ... })` and the client reports every claim
+lifecycle event and stale-write collision it sees. The batteries-included
+provider is `ClaimLog`:
+
+```ts
+import Ablo, { ClaimLog } from '@abloatai/ablo';
+
+const log = new ClaimLog();
+const ablo = Ablo({ schema, apiKey, observability: log });
+// …run your agents…
+
+log.entries        // full ordered timeline, one readable line each
+log.collisions()   // just the collisions: rejected/lost claims + stale writes
+log.toString()     // pretty, greppable timeline to print
+log.onChange(fn)   // reactive subscribe → drive a live activity feed / useSyncExternalStore
+```
+
+`collisions()` is the eval primitive — `expect(log.collisions()).toHaveLength(0)`
+asserts "no one stepped on anyone." Each line names the row it touched, e.g.
+`conflict: tx … — 1 row(s) changed underneath: reports/r1`.
+
+`ClaimLog` implements the full `SyncObservabilityProvider`, so it drops straight
+into the `observability` slot; spread `noopObservability` if you only want to
+override a few hooks (e.g. forward to Sentry/OTel). Exports: `ClaimLog`,
+`formatClaim`, `formatConflict`, `noopObservability`, and the types `ClaimEvent`,
+`ConflictEvent`, `ClaimLogEntry`, `SyncObservabilityProvider`.
+
+> **Both transports, from 0.21.0.** Observability fires on the WebSocket **and**
+> the stateless HTTP transport (claim acquired + coordination-conflict
+> rejections, on every write door). Before 0.21.0 only WebSocket emitted, so a
+> `ClaimLog` on an HTTP client — e.g. a headless server-agent eval — stayed
+> silent even though coordination still worked.

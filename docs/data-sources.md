@@ -6,7 +6,8 @@ schema, and never migrates it**. Your application keeps writing to its own
 Postgres through its own backend, exactly as it does today; Ablo only tails the
 changes and fans the confirmed rows out to every connected human and agent. This
 is the same model ElectricSQL, PowerSync, and Zero use — a publication plus a
-replication slot, read-only.
+replication slot. Ablo consumes the logical-replication stream; your application
+continues to own the write path.
 
 > **Just trying Ablo?** You don't need a database at all to start. The hosted
 > **sandbox** can host rows in Ablo's test plane — pass an `apiKey` only and omit
@@ -94,8 +95,10 @@ Re-run it until every item is green.
 
 ### 4. Point Ablo at the database with the replication role
 
-Give Ablo the connection string for the **replication role** you created. This is
-a read-only WAL connection — the same value `--check` validated:
+Give Ablo the connection string for the **replication role** you created — a
+`REPLICATION`-attributed role that streams the WAL and `SELECT`s, nothing more
+(not a read-only account; see the privilege note below). The same value `--check`
+validated:
 
 ```bash
 # .env — server runtime only, never the browser
@@ -156,8 +159,12 @@ Operational reality you should know up front:
   WAL accumulates and consumes disk. **Ablo monitors slot lag and WAL retention**
   and surfaces it so you're never surprised by disk pressure; an abandoned slot is
   dropped rather than left to grow unbounded.
-- **The role is read-only.** It can stream replication and `SELECT`. It cannot
-  write, and the recipe never grants it more.
+- **The role's privilege footprint is narrow and precise — not a "read-only"
+  account.** It carries the `REPLICATION` attribute, which lets it stream the WAL
+  and `SELECT`; it cannot `INSERT`/`UPDATE`/`DELETE`, run DDL, or own objects, and
+  the recipe never grants it more. (For a security review, state it that way — a
+  logical-replication role is a real privilege, just a tightly-scoped one — rather
+  than calling it "read-only", which a reviewer will correctly push back on.)
 
 What Ablo explicitly does **not** do:
 

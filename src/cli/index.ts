@@ -186,6 +186,7 @@ async function main() {
     console.log(`    npx ablo check                         Check your existing database fits the schema (read-only, creates no tables)`);
     console.log(`    npx ablo connect                       Connect a real database — prints the logical-replication setup SQL (the one way)`);
     console.log(`    npx ablo connect --check               Validate DATABASE_URL is replication-ready (wal_level, publication, role, replica identity)`);
+    console.log(`    npx ablo connect --audit-infra         Read-only audit for deprecated Ablo sync infra in a customer DB`);
     console.log(`    npx ablo migrate                       Provision your synced-model tables in your own Postgres (optional escape hatch — \`connect\` is the way)`);
     console.log(`    npx ablo migrate --dry-run             Print the SQL without executing (preview)`);
     console.log(`    npx ablo push                          Upload your schema definition to Ablo (metadata only — rows stay in your DB)`);
@@ -220,12 +221,14 @@ function bailIfCancelled<T>(value: T | symbol): asserts value is T {
 const INIT_FRAMEWORKS = ['nextjs', 'vite', 'remix', 'vanilla'];
 const INIT_AUTHS = ['apikey', 'firebase', 'auth0', 'clerk', 'supabase', 'betterauth', 'jwt'];
 // Your data always lives in YOUR database — Ablo hosts only the transaction log
-// (sync_deltas) + coordination, never your rows. 'endpoint' (signed Data Source) is
-// the path; 'datasource' is its legacy alias. 'direct' (the `databaseUrl` connector
-// that lets Ablo dial into your DB) is DEPRECATED — accepted as a flag for
-// back-compat but no longer the default. See stripe-shaped-storage-posture.md.
-const INIT_STORAGES = ['endpoint', 'direct', 'datasource'];
-type InitStorage = 'endpoint' | 'direct';
+// (sync_deltas) + coordination, never your rows. 'replication' (Postgres logical
+// replication via `ablo connect`) is THE path and the default — Ablo consumes your
+// WAL, your app owns the write path. 'endpoint' (a signed Data Source endpoint) is
+// the FALLBACK for DBs that can't grant a REPLICATION role; 'datasource' is its
+// legacy alias. 'direct' (the `databaseUrl` connector that lets Ablo dial into your
+// DB) is DEPRECATED — accepted for back-compat only. See ADR 0002.
+const INIT_STORAGES = ['replication', 'endpoint', 'direct', 'datasource'];
+type InitStorage = 'endpoint' | 'direct' | 'replication';
 
 interface InitOptions {
   readonly yes: boolean;
@@ -414,18 +417,19 @@ async function init(args: readonly string[] = []) {
     }),
   );
 
-  // Your data lives in your database; Ablo hosts the transaction log. Writes
-  // materialize through a signed Data Source endpoint your app exposes — that's the
-  // one path, so there's nothing to ask. (An explicit `--storage direct` is still
-  // honored for existing projects.)
-  const storageChoice = await chooseOption('storage', opts.storage, 'endpoint', INIT_STORAGES, false, () =>
-    Promise.resolve('endpoint'),
+  // Logical replication is the one path: Ablo consumes your Postgres WAL and your
+  // app owns the write path. The database is connected out of band via `ablo connect`,
+  // so the scaffold needs no DB wiring — nothing to ask. 'endpoint' (a signed Data
+  // Source endpoint) is the fallback for DBs that can't grant a REPLICATION role;
+  // '--storage direct' (databaseUrl dial-in) is deprecated, honored for existing projects.
+  const storageChoice = await chooseOption('storage', opts.storage, 'replication', INIT_STORAGES, false, () =>
+    Promise.resolve('replication'),
   );
   const storage: InitStorage = storageChoice === 'datasource' ? 'endpoint' : (storageChoice as InitStorage);
   if (storage === 'direct') {
     note(
-      '`--storage direct` uses the deprecated databaseUrl connector. The signed Data\n' +
-        'Source endpoint is the supported path.',
+      '`--storage direct` uses the deprecated databaseUrl connector. Logical replication\n' +
+        '(`npx ablo connect`) is the supported path; a signed Data Source endpoint is the fallback.',
       pc.yellow('Deprecated'),
     );
   }
@@ -587,7 +591,11 @@ async function init(args: readonly string[] = []) {
     `Run ${pc.bold('npx ablo login')} (or add ${pc.bold('ABLO_API_KEY')} to ${pc.bold(envFile)})`,
     `Set ${pc.bold('DATABASE_URL')} in ${pc.bold(envFile)} — your Postgres is the system of record; rows live there, never with Ablo`,
     `Run ${pc.bold('npx ablo dev')} — pushes your schema definition and watches for changes`,
-    ...(storage === 'direct'
+    ...(storage === 'replication'
+      ? [
+          `Connect your database: ${pc.bold('npx ablo connect')} prints the logical-replication setup SQL (run it once on your Postgres), then ${pc.bold('npx ablo connect --register')} tells Ablo to replicate it — your app keeps writing through your own backend, Ablo tails the WAL`,
+        ]
+      : storage === 'direct'
       ? [
           `Provision your DB: ${pc.bold('npx ablo migrate')} (creates your synced-model tables with row-level security; keep your own migrations for everything else)`,
         ]
@@ -725,9 +733,14 @@ function generateEnv(storage: InitStorage, opts: { includeApiKey?: boolean } = {
   const { includeApiKey = true } = opts;
   const databaseBlock = storage === 'direct'
     ? '# DEPRECATED direct connector. The client registers this connection (sent once\n' +
-      '# over TLS, stored sealed) so Ablo dials into your Postgres. Prefer a signed Data\n' +
-      '# Source endpoint; to keep the transaction log in your infra too, self-host the engine.\n' +
-      '# Use a dedicated non-superuser role; the browser never sees this value.\n' +
+      '# over TLS, stored sealed) so Ablo dials into your Postgres. Prefer logical\n' +
+      '# replication (`npx ablo connect`); to keep the transaction log in your infra too,\n' +
+      '# self-host the engine. Use a dedicated non-superuser role; the browser never sees this.\n' +
+      'DATABASE_URL=postgres://user:password@host:5432/db\n'
+    : storage === 'replication'
+    ? '# Used by `npx ablo connect` to set up + register logical replication — the\n' +
+      '# DIRECT (un-pooled) endpoint. Ablo TAILS your WAL from here; it never writes.\n' +
+      '# The client never sees it; the browser never sees it. Your DB stays yours.\n' +
       'DATABASE_URL=postgres://user:password@host:5432/db\n'
     : '# Used by ablo/data-source.ts (your DB endpoint) + `ablo migrate` — NOT the client.\n' +
       '# Ablo never sees it; the browser never sees it. Your DB stays in your app.\n' +

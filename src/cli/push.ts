@@ -585,6 +585,21 @@ export async function push(argv: readonly string[]): Promise<void> {
             `${pc.bold('npx ablo migrate')} to (re)apply the tenant policies, then re-push.`,
         ),
       );
+    } else if (code === 'capability_scope_denied' || code === 'capability_invalid') {
+      // NOT a key-scope problem. `capability_scope_denied` is the data plane's
+      // Postgres returning 42501 (insufficient_privilege) — the connected DB
+      // role / row-level security refused the write (errors.ts classifyAuthzPgError).
+      // The schema:push GATE is a different code (`forbidden`). A different API
+      // key will NOT fix this; the role behind this org's database can't write
+      // the target, or the org's database isn't provisioned with a role that can.
+      console.error(
+        pc.dim(
+          `  This is a ${pc.bold('database privilege')} error (Postgres 42501 / row-level security), not a key scope — ` +
+            `a different API key won't help. The role behind this org's database can't write the target. ` +
+            `Provision a writable, RLS-scoped role with ${pc.bold('npx ablo migrate')}, or check the org's database ` +
+            `registration. See docs/plans/read-path-logical-replication-vs-hosting.md.`,
+        ),
+      );
     } else if (args.apiKey != null && classifyCredentialKind(args.apiKey) === 'restricted') {
       // The login-minted production key is a restricted (rk_) observe-only key
       // by design — name the door that works instead of leaving a dead end.

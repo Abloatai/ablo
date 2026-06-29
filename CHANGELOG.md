@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.25.0
+
+### Minor Changes
+
+- ca30064: Logical replication is now the documented default storage path, with self-service data-source registration from the CLI.
+  - **`ablo connect --register`** — registers your database as an Ablo data source over logical replication in one step: it runs the same pre-flight replication probe `ablo connect` uses (server reachable, `REPLICATION` privilege, `wal_level=logical`, publication/slot creatable), and on success `POST`s the connection to the engine's `/v1/datasources`. The `ek_`-authed call scopes the source to your org automatically; the password is stored decomposed as a secret, never echoed back. This is the "registration is the enable" path — there is no separate tier or flag to pick.
+  - **`ablo init` leads with logical replication** — the default storage mode is now `replication` (was `endpoint`); the generated env + next-steps point at `ablo connect` / `ablo connect --register`. The signed-endpoint and direct modes remain as the explicit fallback / legacy options.
+  - **`ablo status`** — a data-plane diagnostic that probes whether your registered source is reachable and replicating (failure-only reporting, so it never falsely reports healthy).
+  - **`ablo push`** — minor guard/UX refinements (deploy-target clarity).
+  - **Docs (README, `docs/data-sources.md`, `llms.txt`)** rewritten to the one-path model: Ablo consumes your database's logical-replication stream and your application owns the write path. The security wording is precise — a logical-replication connection requires the `REPLICATION` privilege (it is **not** a read-only SQL account), so reviews are not misled by a "read-only" claim.
+
+  No breaking changes to the SDK runtime API. The server-side WAL read cutover these CLI changes support ships by deploying the engine, not this package.
+
 ## 0.24.0
 
 ### Minor Changes
