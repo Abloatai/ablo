@@ -523,15 +523,44 @@ async function runRegister(): Promise<void> {
     process.exit(0);
   }
 
-  const body = (await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string } };
-  const code = body.error?.code;
-  const message = body.error?.message ?? `HTTP ${res.status}`;
+  // The server's envelope is FLAT (`{ type, code, message, details }` —
+  // Stripe's error-object shape, see wire/errorEnvelope). The nested
+  // `error.code` fallback is kept for older/wrapped deployments.
+  const body = (await res.json().catch(() => ({}))) as {
+    code?: string;
+    message?: string;
+    details?: {
+      failures?: readonly { item?: string; actual?: string; fix?: string }[];
+      reason?: string;
+    };
+    error?: { code?: string; message?: string };
+  };
+  const code = body.code ?? body.error?.code;
+  const message = body.message ?? body.error?.message ?? `HTTP ${res.status}`;
   console.error(pc.red(`\n  Registration failed: ${message}`));
   if (code === 'forbidden') {
     console.error(pc.dim(`  Registering a database needs a ${pc.bold('secret')} key (sk_…). Run ${pc.bold('ablo login')} for one.`));
   } else if (code === 'datasource_connection_unsupported') {
     console.error(
       pc.dim(`  This deployment can’t accept connection strings — use a self-hosted/hosted engine, or the signed endpoint fallback.`),
+    );
+  } else if (code === 'database_not_replication_ready') {
+    // The server re-ran the readiness probes from ITS side and found failures
+    // (it can see a different truth than the local --check: e.g. a publication
+    // added since, or probes running as the replication role, not yours).
+    for (const f of body.details?.failures ?? []) {
+      console.error(`  ${pc.red('✗')} ${pc.bold(f.item ?? 'item')}${f.actual ? pc.dim(` (${f.actual})`) : ''}`);
+      if (f.fix) for (const line of f.fix.split('\n')) console.error(`      ${pc.red('•')} ${line}`);
+    }
+    console.error(pc.dim(`\n  Apply the fixes, verify with ${pc.bold('ablo connect --check')}, then re-run.`));
+  } else if (code === 'database_unreachable') {
+    if (body.details?.reason) console.error(pc.dim(`  ${body.details.reason}`));
+    console.error(
+      pc.dim(
+        `  Ablo's servers must be able to reach this database — a localhost or private-network\n` +
+          `  Postgres can't be replicated by the hosted service. Use a reachable host (or a tunnel),\n` +
+          `  or the signed ${pc.bold('dataSource()')} endpoint fallback.`,
+      ),
     );
   }
   console.error();

@@ -36,7 +36,8 @@ const RECOVERY_HINT: Readonly<Record<string, string>> = {
   permission: "Your key isn't allowed to do this — check its scopes or role.",
   session_expiry: 'Your session expired — sign in again.',
   access_credential_expiry: 'Your access credential expired — refresh it and retry.',
-  auth_blocked: 'Authentication was blocked.',
+  auth_blocked:
+    'Authentication was blocked — the credential itself was rejected. Check that the key matches this environment.',
 };
 
 /** `AbloValidationError` → `Validation error`; `AbloNotFoundError` → `Not found error`. */

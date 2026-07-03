@@ -39,6 +39,7 @@ import {
 } from './wsFrameHandlers.js';
 // Sync-position state (lastSyncId watermark, version vector, server cursor).
 import { SyncCursor } from './syncCursor.js';
+import { PROTOCOL_VERSION, WS_CLOSE_PROTOCOL_VERSION } from '../wire/protocolVersion.js';
 // Application-level heartbeat timers (see heartbeat.ts for the rationale).
 import { HeartbeatController } from './heartbeat.js';
 
@@ -886,6 +887,21 @@ export class SyncWebSocket<
         this.pendingSubscriptions = [];
       }
 
+      // Protocol-version rejection (4010): TERMINAL. Reconnecting cannot heal
+      // a version mismatch — only upgrading the SDK (or rolling the server
+      // forward) can — so a blind retry here would loop forever against the
+      // same typed close. Surface it and stop.
+      if (event.code === WS_CLOSE_PROTOCOL_VERSION) {
+        getContext().observability.captureWebSocketError({
+          context: 'protocol-version-close',
+          code: event.code,
+          reason: event.reason,
+        });
+        this.emit('protocol_mismatch', event);
+        this.emit('disconnected', event);
+        return;
+      }
+
       // Check for session-related close codes
       // 1008 = Policy Violation (often auth)
       // 4001 = Unauthorized (custom)
@@ -1718,6 +1734,9 @@ export class SyncWebSocket<
         cursor: this.cursor.syncCursor,        // Always send lastSyncId to ensure server uses client's current position
         lastSyncId: this.cursor.lastSyncId,
         capabilities: capsArr,
+        // Protocol handshake: the server rejects an out-of-range version with
+        // WS close 4010 before serving any deltas (wire/protocolVersion.ts).
+        protocolVersion: PROTOCOL_VERSION,
       },
     });
   }
@@ -1859,14 +1878,22 @@ export class SyncWebSocket<
   /**
    * Handle bootstrap response from server
    */
-  private handleBootstrapResponse(payload: any): void {
+  private handleBootstrapResponse(payload: unknown): void {
     // Emit bootstrap data for processing. (A `version` field from
     // pre-cutover servers is ignored — version vector removed in W4a.)
+    // Field-wise typeof guards mirror the cursor handling above: the frame
+    // is server-produced, so coercion only bites on malformed frames.
+    const p = (payload && typeof payload === 'object' ? payload : {}) as {
+      entityType?: unknown;
+      data?: unknown;
+      isComplete?: unknown;
+      cursor?: unknown;
+    };
     this.emit('bootstrap_data', {
-      entityType: payload.entityType,
-      data: payload.data,
-      isComplete: payload.isComplete,
-      cursor: payload.cursor,
+      entityType: typeof p.entityType === 'string' ? p.entityType : '',
+      data: p.data,
+      isComplete: p.isComplete === true,
+      cursor: typeof p.cursor === 'string' ? p.cursor : undefined,
     });
   }
 

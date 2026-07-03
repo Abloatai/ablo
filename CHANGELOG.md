@@ -10,6 +10,8 @@
 
 - **`@abloatai/ablo/wire` now exports the protocol schemas.** `commitOperationSchema`, `commitPayloadSchema`, and the frame schemas let tooling and tests validate client↔engine frames against the same contract the engine enforces.
 
+- **Protocol version negotiation is surfaced.** `@abloatai/ablo/wire` exports `PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`, `WS_CLOSE_PROTOCOL_VERSION`, `PROTOCOL_VERSION_HEADER`, `protocolVersionProblem`, and `ERROR_CONTRACT_VERSION` — the single integer the client and server compare on connect to detect an incompatible peer and fail with a clear reason instead of a cryptic wire error.
+
 - **`@abloatai/ablo/coordination` exposes the conflict-policy vocabulary** — `defaultPolicy`, `capabilityPreemptPolicy`, and `interpretConflictAxis` — for server-side consumers building on the claim model. `@abloatai/ablo/schema` gains the role primitives (`identityRole`, `entityRole`, and their types and schemas) for declaring identity- and entity-scoped roles.
 
 - **Removed unused API surface.** Dropped the `@abloatai/ablo/server/next` subpath export and the unused `MutationDispatcher` interface (plus its `MockMutationDispatcher` test double) and the offline-mutation-queue internals behind them — none had documented consumers. Every supported entry point (`@abloatai/ablo`, `/ai-sdk`, `/react`, `/source`, `/coordination`, `/schema`, `/keys`, `/auth`, `/wire`, …) is unchanged.

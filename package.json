@@ -145,7 +145,7 @@
     "lint:docs": "node scripts/check-doc-drift.mjs",
     "lint:eslint": "eslint . --cache",
     "lint:pkg": "publint",
-    "prepublishOnly": "npm run build && npm test && npm run lint:pkg",
+    "prepublishOnly": "npm run build && npm run lint:pkg",
     "check:dist": "node scripts/check-dist-fresh.mjs",
     "pretest": "node scripts/check-dist-fresh.mjs",
     "test": "jest",

@@ -39,7 +39,7 @@ import { z } from 'zod';
  * code, a changed HTTP status, an envelope field. Emitted in `errors.json`
  * and on the `Ablo-Version` response header so a consumer can detect drift.
  */
-export const ERROR_CONTRACT_VERSION = '2026-07-01';
+export const ERROR_CONTRACT_VERSION = '2026-07-03';
 
 /** Coarse grouping for metrics dashboards and docs sectioning. */
 export type ErrorCategory =
@@ -145,30 +145,30 @@ const client = (
  */
 export const ERROR_CODES = {
   // ── auth (401) ─────────────────────────────────────────────────────
-  apikey_invalid: wire('auth', 401, false, 'API key is unknown or malformed.'),
-  apikey_revoked: wire('auth', 401, false, 'API key has been revoked.'),
+  apikey_invalid: wire('auth', 401, false, "This API key isn't one Ablo recognizes — it may be mistyped, truncated, or belong to a different environment. Check the key and try again."),
+  apikey_revoked: wire('auth', 401, false, 'This API key has been revoked and can no longer be used. Mint a new key from the dashboard.'),
   // THE sync-engine access credential — the Stripe-style ephemeral key
   // (`ek_` for users, `rk_` for agents) minted server-side from the login and
   // presented as a Bearer. Its expiry is routine and re-mintable: get a fresh
   // key from the still-valid session and retry — NEVER a sign-out. (An agent's
   // expired `rk_` must not log a human out either.) This is the ONLY code on
   // the silent re-mint path; see RecoveryClass `access_credential_expiry`.
-  apikey_expired: wire('auth', 401, false, 'API key has expired.', 'access_credential_expiry'),
-  apikey_missing: wire('auth', 401, false, 'No API key was supplied on the request.'),
-  api_key_required: wire('auth', 401, false, 'This operation requires an API key.'),
-  capability_id_missing: wire('auth', 401, false, 'A capability id was expected but not provided.'),
-  exchange_failed: wire('auth', 401, false, 'The API-key credential exchange was rejected.'),
-  identity_resolve_failed: wire('auth', 401, false, 'Identity resolution was rejected.'),
+  apikey_expired: wire('auth', 401, false, 'This ephemeral API key has expired. Mint a fresh key from your still-valid session and retry the request.', 'access_credential_expiry'),
+  apikey_missing: wire('auth', 401, false, 'The request arrived without an API key. Send one as `Authorization: Bearer <key>`.'),
+  api_key_required: wire('auth', 401, false, 'This operation requires an API key, and none was presented. Send one as `Authorization: Bearer <key>`.'),
+  capability_id_missing: wire('auth', 401, false, 'This request must name a capability id, but none was provided.'),
+  exchange_failed: wire('auth', 401, false, 'The API key could not be exchanged for a working credential — the exchange was rejected. Check that the key is still valid.'),
+  identity_resolve_failed: wire('auth', 401, false, 'The server could not resolve an identity for this credential — the identity lookup was rejected. Check that the credential is still valid.'),
   auth_no_credentials: wire('auth', 401, false, 'No recognized authentication credential was presented — no API key and no bearer JWT. Send `Authorization: Bearer <token>`.'),
-  identity_missing_organization: wire('auth', 401, false, 'Authentication succeeded but resolved to no organization context.'),
+  identity_missing_organization: wire('auth', 401, false, 'Authentication succeeded, but the credential resolves to no organization, so requests cannot be scoped. Check that the key or token carries an organization.'),
   // The long-lived login is gone — terminal, drives sign-out + re-auth.
-  session_expired: wire('auth', 401, false, 'The session is invalid or expired; re-authenticate.', 'session_expiry'),
+  session_expired: wire('auth', 401, false, 'Your session has expired or is no longer valid. Sign in again to continue.', 'session_expiry'),
   // `jwt_invalid` is the residual fallback; the codes below split out the
   // specific failure modes so an integrating customer can tell "I registered
   // the wrong JWKS" from "my token has no org claim" from "wrong audience"
   // rather than getting one opaque code for all of them.
-  jwt_invalid: wire('auth', 401, false, 'The bearer JWT could not be validated (unclassified).'),
-  jwt_malformed: wire('auth', 401, false, 'The bearer JWT is not a well-formed JWT and could not be decoded.'),
+  jwt_invalid: wire('auth', 401, false, "The bearer JWT failed validation for a reason the server could not classify further. Check the token's issuer, signature, audience, and expiry."),
+  jwt_malformed: wire('auth', 401, false, 'The bearer token is not a well-formed JWT and could not be decoded. Check that the full, unmodified token was sent.'),
   jwt_missing_issuer: wire('auth', 401, false, 'The bearer JWT has no `iss` (issuer) claim, so it cannot be routed to a trusted issuer.'),
   jwt_issuer_untrusted: wire('auth', 401, false, "The bearer JWT's `iss` is not a registered trusted issuer. Register it via POST /v1/trusted-issuers, or check the token's issuer claim."),
   jwt_signature_invalid: wire('auth', 401, false, "The bearer JWT's signature could not be verified against the issuer's JWKS (wrong key, rotated key, or forged token)."),
@@ -180,25 +180,25 @@ export const ERROR_CODES = {
   // When a customer DOES present an external-IdP JWT, its expiry means
   // re-authenticate against that IdP, so it classifies as a session expiry
   // (which also keeps `isSessionErrorResponse` behaviour unchanged).
-  jwt_expired: wire('auth', 401, false, 'The bearer JWT has expired; obtain a fresh token.', 'session_expiry'),
+  jwt_expired: wire('auth', 401, false, 'The bearer JWT has expired. Obtain a fresh token from your identity provider and retry.', 'session_expiry'),
   jwt_org_membership_denied: wire('auth', 403, false, "The bearer JWT's subject is not an active member of the organization in its `org_id` claim (removed, suspended, or the claim does not match a membership)."),
-  file_upload_auth_required: wire('auth', 401, false, 'File upload requires an authenticated session.'),
-  browser_apikey_blocked: client('auth', 'Raw API keys must not be used from a browser context.'),
-  browser_database_url_blocked: client('auth', 'A database connection string must not be used from a browser context — it carries DB credentials.'),
-  datasource_registration_failed: client('auth', 'Failed to register the provided databaseUrl as a datasource.'),
-  datasource_connection_unsupported: wire('validation', 400, false, 'This deployment cannot register a direct (connection string) datasource — use the signed endpoint kind.'),
+  file_upload_auth_required: wire('auth', 401, false, 'File uploads require an authenticated session. Sign in and retry.'),
+  browser_apikey_blocked: client('auth', 'A raw API key was used from a browser, where anyone can read it. Keep secret keys server-side and hand the browser a short-lived ephemeral key instead.'),
+  browser_database_url_blocked: client('auth', 'A database connection string was used from a browser context. It carries database credentials, so it must stay server-side.'),
+  datasource_registration_failed: client('auth', 'The provided `databaseUrl` could not be registered as a data source. Check that the connection string is valid and the database is reachable.'),
+  datasource_connection_unsupported: wire('validation', 400, false, 'This deployment does not accept direct connection-string data sources. Register a signed Data Source endpoint instead.'),
   datasource_direct_deprecated: wire('validation', 410, false, 'The direct (connection string) datasource is deprecated. Register a signed Data Source endpoint instead — your app owns the write and your credentials never leave it.'),
 
   // ── permission / capability (403) ──────────────────────────────────
-  capability_scope_denied: wire('capability', 403, false, "The connection's resolved scope does not cover the attempted action."),
-  issuer_register_forbidden: wire('permission', 403, false, 'Registering a trusted issuer requires a secret (sk_) API key.'),
-  capability_invalid: wire('capability', 403, false, 'The capability is unknown, revoked, or expired.'),
+  capability_scope_denied: wire('capability', 403, false, 'This action falls outside the scope granted to the connection, so it was denied.'),
+  issuer_register_forbidden: wire('permission', 403, false, 'Registering a trusted issuer requires a secret (`sk_`) API key. The key presented is not a secret key.'),
+  capability_invalid: wire('capability', 403, false, 'This capability cannot be used — it is unknown, revoked, or expired. Request a fresh grant.'),
   test_database_not_registered: wire('permission', 403, false, 'Test mode requires a registered dev database for this org — run `npx ablo init`, or construct the client with `databaseUrl` using your test key.'),
   tenant_routing_failed: wire('server', 500, true, "The org's registered database could not be resolved or dialed. Ablo never falls back to shared storage for a dedicated tenant — retry, and check the datasource status if it persists."),
-  database_role_cannot_enforce_rls: wire('permission', 403, false, 'The connected database role cannot enforce row-level security (superuser or BYPASSRLS).'),
-  database_role_unreadable: wire('permission', 403, false, 'The connected database role could not be introspected.'),
-  database_tables_unforced_rls: wire('permission', 403, false, 'Synced tables in the connected database do not have FORCE ROW LEVEL SECURITY applied.'),
-  database_host_not_allowed: wire('permission', 403, false, 'The connected database host resolves to a private, loopback, or link-local address and cannot be used.'),
+  database_role_cannot_enforce_rls: wire('permission', 403, false, 'The database role Ablo connects with is a superuser or has `BYPASSRLS`, so Postgres will not enforce row-level security for it. Connect with a role that is subject to RLS.'),
+  database_role_unreadable: wire('permission', 403, false, 'Ablo could not introspect the database role it connects with, so it cannot verify that row-level security is enforced.'),
+  database_tables_unforced_rls: wire('permission', 403, false, 'Some synced tables do not have `FORCE ROW LEVEL SECURITY` applied, so the table owner can bypass row isolation. Run `ALTER TABLE ... FORCE ROW LEVEL SECURITY` on each synced table.'),
+  database_host_not_allowed: wire('permission', 403, false, "The database host resolves to a private, loopback, or link-local address, which Ablo's servers will not connect to. Use a publicly resolvable host."),
   // Deprecated spellings of the `database_*` codes above — still emitted by
   // older servers; kept so they classify identically. Do not use in new code.
   byo_role_cannot_enforce_rls: wire('permission', 403, false, 'The direct Postgres connector role cannot enforce row-level security.'),
@@ -216,31 +216,31 @@ export const ERROR_CODES = {
   // behind the holder) or re-read and rebase. `retryable: true` here turned
   // every cross-client claim conflict into an infinite client resend loop
   // (~150ms storm — found by the claims journey, 2026-06-10).
-  claim_conflict: wire('claim', 409, false, 'The target entity is claimed by another participant.'),
-  claim_lost: wire('claim', 409, false, 'A previously held claim was lost before the write applied.'),
-  entity_claimed: wire('claim', 409, false, 'The target entity is currently claimed; write was blocked.'),
-  malformed_claim: wire('claim', 400, false, 'The claim payload was malformed.'),
-  malformed_subscription: wire('validation', 400, false, 'The update_subscription payload was malformed; expected { syncGroups: string[] }.'),
-  model_claimed: wire('claim', 409, false, 'The model instance is claimed by another participant.'),
-  model_claimed_timeout: wire('claim', 409, false, 'Timed out waiting for a model claim to clear.'),
+  claim_conflict: wire('claim', 409, false, 'Another participant holds a claim on this row, so the write was rejected. Take a claim with `ablo.<model>.claim` to queue fairly behind the holder, or re-read and rebase.'),
+  claim_lost: wire('claim', 409, false, 'The claim held on this row was lost before the write could apply. Re-acquire the claim and retry.'),
+  entity_claimed: wire('claim', 409, false, 'This row is currently claimed by another participant, so the write was blocked. Queue behind the holder with `ablo.<model>.claim`, or wait for the claim to clear.'),
+  malformed_claim: wire('claim', 400, false, 'The claim payload could not be parsed. A claim must name the model and the entity it targets; check the payload shape and resend.'),
+  malformed_subscription: wire('validation', 400, false, 'The `update_subscription` payload was malformed; expected `{ syncGroups: string[] }`.'),
+  model_claimed: wire('claim', 409, false, 'Another participant holds a claim on this row. Read `claim.state` to see who holds it, or queue behind them with a claim of your own.'),
+  model_claimed_timeout: wire('claim', 409, false, 'Another participant held a claim on this row and did not release it in time. Retry, or read `claim.state` to see who holds it.'),
   model_claim_not_configured: client('claim', 'Claiming requires the collaboration runtime, which the standard Ablo({ schema, apiKey }) client wires up for every model automatically — there is no per-model claim configuration to add. This appears only when a model proxy is constructed directly without that runtime (an internal/advanced path).'),
   model_watch_not_configured: client('claim', 'watch() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo({ schema, apiKey }) client (default WebSocket transport).'),
 
   // ── stale context / idempotency (409) ──────────────────────────────
-  stale_context: wire('conflict', 409, true, 'The write carried a readAt watermark that is now stale; re-read and retry.'),
+  stale_context: wire('conflict', 409, true, "The row changed after you read it — the write's `readAt` watermark is older than the current row version. Re-read the row and retry."),
   // Raised by the functional `update(id, current => next)` form once its
   // internal reconcile budget is exhausted — the row stayed continuously
   // contended. Client-side: the SDK already retried; the caller decides whether
   // to back off, raise `retries`, or move the row to the WebSocket transport.
-  contention_exhausted: client('conflict', 'A functional update could not land after exhausting its reconcile budget; the row stayed continuously contended.'),
-  update_aborted: client('conflict', 'The functional update reconcile loop was aborted via its AbortSignal before the write landed.'),
-  idempotency_conflict: wire('conflict', 409, false, 'The same Idempotency-Key was reused with a different request body.'),
-  idempotency_key_too_long: wire('validation', 400, false, 'The supplied Idempotency-Key exceeds the maximum length.'),
+  contention_exhausted: client('conflict', 'A functional update kept losing to concurrent writes and exhausted its reconcile budget. Back off and retry, raise `retries`, or move the row to the WebSocket transport.'),
+  update_aborted: client('conflict', 'The functional update was aborted via its `AbortSignal` before the write landed; nothing was written.'),
+  idempotency_conflict: wire('conflict', 409, false, 'This `Idempotency-Key` was already used with a different request body. Reuse a key only to retry an identical request; otherwise generate a new one.'),
+  idempotency_key_too_long: wire('validation', 400, false, 'The supplied `Idempotency-Key` exceeds the maximum length. Use a shorter key — a UUID works well.'),
 
   // ── validation (400 / 422) ─────────────────────────────────────────
   write_options_invalid: client('validation', 'The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `claim`) failed validation against the write-options schema.'),
   source_operation_id_required: client('validation', 'A data-source operation arrived without the entity `id` it targets.'),
-  source_adapter_misconfigured: client('validation', 'The data-source ORM adapter could not map a schema model onto the backing client (missing delegate or model).'),
+  source_adapter_misconfigured: client('validation', 'The data-source ORM adapter could not map a schema model onto the backing client — the client exposes no matching delegate or model. Check that the adapter and schema agree on model names.'),
   // Wire since 2026-07-01: the sync-server validates every pushed/polled
   // source event before appending to the log and rejects the whole batch
   // with this code (`param` names the offending index + field path, e.g.
@@ -250,7 +250,7 @@ export const ERROR_CODES = {
   duration_invalid: client('validation', 'A duration value was not a number of seconds or a "500ms" | "30s" | "3m" | "24h" string.'),
   schema_definition_invalid: client('validation', 'A schema definition value was invalid (bad column identifier, non-finite backfill, or unsupported schema-JSON version).'),
   cli_invalid_arguments: client('validation', 'The CLI was invoked with an unknown flag or a malformed flag value.'),
-  turn_validation_failed: wire('validation', 422, false, 'The agent turn failed server-side validation.'),
+  turn_validation_failed: wire('validation', 422, false, 'The agent turn payload failed server-side validation and was not applied.'),
   commit_operation_required: wire('validation', 400, false, 'A commit must carry `operation` or `operations`.'),
   // Wire since 2026-07-01: both commit transports (WS `commit` frame and HTTP
   // `/v1/commits`) validate every operation against `commitOperationSchema`
@@ -258,21 +258,21 @@ export const ERROR_CODES = {
   // names the offending index + field path (e.g. `operations[3].readAt`).
   commit_operation_invalid: wire('validation', 400, false, 'A commit operation failed validation against the wire commit-operation schema — wrong field type (e.g. a string `readAt`), unknown `type`, or missing `model`. The whole batch was rejected; the error names the offending operation index and field path.'),
   commit_operation_model_required: wire('validation', 400, false, 'A commit operation is missing its `model`.'),
-  commit_operations_ambiguous: wire('validation', 400, false, 'A commit supplied both `operation` and `operations`.'),
+  commit_operations_ambiguous: wire('validation', 400, false, 'A commit supplied both `operation` and `operations`. Send one or the other, not both.'),
   commit_too_many_operations: wire('validation', 400, false, 'A commit exceeded the per-commit operation limit; split it into smaller batches.'),
-  model_required_field_missing: wire('validation', 400, false, 'A required field was absent from the model payload.'),
-  model_identifier_missing: wire('validation', 400, false, 'The model payload is missing its identifier.'),
-  snapshot_reserved_key: wire('validation', 400, false, 'A snapshot used a reserved key name.'),
-  mesh_message_invalid_input: wire('validation', 400, false, 'The mesh message failed input validation.'),
-  mesh_message_from_id_spoof: wire('validation', 403, false, 'The mesh message `from` id does not match the authenticated sender.'),
-  mesh_message_from_kind_mismatch: wire('validation', 403, false, 'The mesh message `from` kind does not match the sender.'),
-  agent_perception_missing_context: wire('validation', 422, false, 'The agent perception request lacked required context.'),
+  model_required_field_missing: wire('validation', 400, false, 'The write is missing a field the model marks as required. Include the field and retry.'),
+  model_identifier_missing: wire('validation', 400, false, "The payload is missing the model's identifier, so the target row cannot be determined. Include the `id` field."),
+  snapshot_reserved_key: wire('validation', 400, false, 'The snapshot uses a key name that is reserved by the runtime. Rename the key and retry.'),
+  mesh_message_invalid_input: wire('validation', 400, false, 'The mesh message payload failed input validation and was not delivered.'),
+  mesh_message_from_id_spoof: wire('validation', 403, false, "The mesh message's `from` id does not match the authenticated sender, so it was rejected — participants may only send as themselves."),
+  mesh_message_from_kind_mismatch: wire('validation', 403, false, "The mesh message's `from` kind does not match the kind of the authenticated sender, so it was rejected."),
+  agent_perception_missing_context: wire('validation', 422, false, 'The agent perception request is missing context it needs to run. Include the required context fields and retry.'),
 
   // ── not found (404) ────────────────────────────────────────────────
-  entity_not_found: wire('not_found', 404, false, 'The referenced entity does not exist.'),
-  model_not_found: wire('not_found', 404, false, 'The referenced model row does not exist.'),
-  mutate_update_entity_not_found: wire('not_found', 404, false, 'The entity targeted by an update does not exist.'),
-  task_id_missing: wire('server', 502, true, 'The task-create response did not include an id.'),
+  entity_not_found: wire('not_found', 404, false, 'No row exists with the requested id. It may have been deleted, or the id may belong to a different environment.'),
+  model_not_found: wire('not_found', 404, false, 'No row of this model exists with the requested id. It may have been deleted, or the id may belong to a different environment.'),
+  mutate_update_entity_not_found: wire('not_found', 404, false, 'The row targeted by this update does not exist — it may have been deleted since you read it. Re-read before retrying.'),
+  task_id_missing: wire('server', 502, true, 'The task-create response arrived without a task id, so the result cannot be used. Retry the request.'),
 
   // ── data integrity / DB constraints ────────────────────────────────
   // Emitted when a write is rejected by a database integrity constraint
@@ -281,90 +281,90 @@ export const ERROR_CODES = {
   // retry. The server normalizer maps SQLSTATE → these codes and tucks the
   // raw constraint/column/table detail into `details` rather than leaking
   // the driver's message text onto the wire.
-  not_null_violation: wire('validation', 400, false, 'A required field was missing (database not-null constraint).'),
-  foreign_key_violation: wire('conflict', 409, false, 'A referenced entity does not exist, or is still referenced (database foreign-key constraint).'),
-  unique_violation: wire('conflict', 409, false, 'A value violates a uniqueness constraint.'),
-  check_violation: wire('validation', 400, false, 'A value violates a database check constraint.'),
-  constraint_violation: wire('validation', 400, false, 'A database integrity constraint was violated.'),
+  not_null_violation: wire('validation', 400, false, 'The database rejected the write because a required column was left empty — a not-null constraint. The error details name the column; supply a value and retry.'),
+  foreign_key_violation: wire('conflict', 409, false, 'The database rejected the write on a foreign-key constraint: a referenced row does not exist, or the row being deleted is still referenced by others. The error details name the constraint.'),
+  unique_violation: wire('conflict', 409, false, 'The write duplicates a value that must be unique — another row already holds it. Choose a different value, or update the existing row.'),
+  check_violation: wire('validation', 400, false, 'The database rejected a value that fails one of its check constraints. The error details name the constraint; adjust the value and retry.'),
+  constraint_violation: wire('validation', 400, false, 'The database rejected the write on an integrity constraint. The error details identify the specific constraint.'),
   column_type_mismatch: wire('validation', 400, false, 'A structured (JSON) value was written to a column whose database type cannot hold it. Ablo adapts a json field to either a jsonb column (native) or a text column (serialized) — but a scalar column (integer, boolean, uuid, timestamp, …) cannot store a JSON object or array. Use a jsonb or text column for this field. Ablo adapts to your column; it does not alter your schema.'),
 
   // ── tenant / unknown model (400) ───────────────────────────────────
   server_execute_unknown_model: wire('tenant', 400, false, 'Wrote to a model the server does not know. The server keeps its own copy of the schema — run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` before writing to new or changed models.'),
   mutate_create_unknown_model: wire('tenant', 400, false, 'Created a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` first — the server keeps its own copy of the schema.'),
-  tenant_model_columns_unknown: wire('tenant', 400, false, "The tenant model's columns could not be resolved."),
-  tenant_model_missing_organization_id: wire('tenant', 400, false, 'The tenant model is missing the organization_id column required for isolation.'),
+  tenant_model_columns_unknown: wire('tenant', 400, false, 'The columns for this model could not be resolved in the tenant database, so the operation cannot be mapped onto its table.'),
+  tenant_model_missing_organization_id: wire('tenant', 400, false, "This model's table has no `organization_id` column, which Ablo requires to isolate rows by organization. Add the column before syncing this model."),
 
   // ── schema migration / declaration (validation) ────────────────────
-  schema_mutable_missing_meta: wire('schema', 400, false, 'A mutable schema is missing its required meta block.'),
-  schema_scope_kind_invalid: wire('schema', 400, false, 'A scope kind in the schema is invalid.'),
-  schema_field_not_camelcase: wire('schema', 400, false, 'A schema field name is not camelCase.'),
-  schema_field_consecutive_caps: wire('schema', 400, false, 'A schema field name has consecutive capital letters.'),
+  schema_mutable_missing_meta: wire('schema', 400, false, 'The schema is declared mutable but is missing its required `meta` block.'),
+  schema_scope_kind_invalid: wire('schema', 400, false, 'A scope declaration in the schema uses a kind the engine does not recognize.'),
+  schema_field_not_camelcase: wire('schema', 400, false, 'A schema field name is not camelCase. Rename the field (for example `dueDate`) — Ablo derives column names from camelCase field names.'),
+  schema_field_consecutive_caps: wire('schema', 400, false, 'A schema field name contains consecutive capital letters, which cannot be mapped to a column name unambiguously. Write acronyms in lower case (`apiKey`, not `APIKey`).'),
   schema_reserved_field: client('schema', 'A model redeclared a reserved base field (id, createdAt, updatedAt, organizationId, createdBy) that the SDK provides automatically.'),
-  schema_grants_shape_invalid: wire('schema', 400, false, 'A grants declaration has an invalid shape.'),
-  schema_grants_identifier_unsafe: wire('schema', 400, false, 'A grants declaration referenced an unsafe identifier.'),
-  schema_grants_relation_kind: wire('schema', 400, false, 'A grants relation referenced an invalid kind.'),
-  schema_grants_relation_missing: wire('schema', 400, false, 'A grants declaration referenced a missing relation.'),
-  schema_grants_target_not_scope_root: wire('schema', 400, false, 'A grants target is not a scope root.'),
-  drop_field: client('schema', 'Migration would drop a field (destructive classification).'),
-  drop_model: client('schema', 'Migration would drop a model (destructive classification).'),
-  lossy_recreate: client('schema', 'Migration would require a lossy table recreate.'),
-  made_required: client('schema', 'Migration would make an existing field required.'),
-  required_field_added: client('schema', 'Migration adds a new required field.'),
-  enum_value_removed: client('schema', 'Migration removes an enum value (destructive classification).'),
-  risky_cast: client('schema', 'Migration would perform a risky column type cast.'),
+  schema_grants_shape_invalid: wire('schema', 400, false, 'A `grants` declaration in the schema has an invalid shape and could not be parsed.'),
+  schema_grants_identifier_unsafe: wire('schema', 400, false, 'A `grants` declaration references an identifier that is not safe to use in SQL. Use plain column and relation names.'),
+  schema_grants_relation_kind: wire('schema', 400, false, 'A `grants` declaration references a relation of a kind it cannot traverse.'),
+  schema_grants_relation_missing: wire('schema', 400, false, 'A `grants` declaration references a relation the model does not define. Check the relation name against the model.'),
+  schema_grants_target_not_scope_root: wire('schema', 400, false, 'A `grants` declaration targets a model that is not a scope root, so access cannot be derived from it.'),
+  drop_field: client('schema', 'This migration would drop an existing field, destroying the data stored in it.'),
+  drop_model: client('schema', 'This migration would drop an entire model and its table, destroying the rows stored in it.'),
+  lossy_recreate: client('schema', 'This migration can only apply by recreating the table, which would not preserve its existing rows.'),
+  made_required: client('schema', 'This migration makes an existing optional field required, which rows without a value for it would violate.'),
+  required_field_added: client('schema', 'This migration adds a new required field that existing rows have no value for.'),
+  enum_value_removed: client('schema', 'This migration removes an enum value that existing rows may still hold.'),
+  risky_cast: client('schema', 'This migration changes a column to a type its current values may not convert to cleanly.'),
 
   // ── claim / lease (409 / transport) ───────────────────────────────
-  claim_lease_unavailable: wire('claim', 503, true, 'The claim-lease coordination subsystem is unavailable; retry.'),
-  claim_not_wired: client('claim', 'Claim support was used but is not wired in this runtime.'),
-  claim_queued: wire('claim', 409, true, 'The claim was queued behind an active lease holder.'),
-  claim_wait_aborted: wire('claim', 409, true, 'Waiting for the claim lease was aborted.'),
-  claim_wait_poll_interval_required: client('claim', 'A poll interval is required when waiting on an claim.'),
-  grant_timeout: wire('claim', 504, true, 'Timed out waiting for a capability grant.'),
-  slide_intent_missing_deck_id: wire('claim', 400, false, 'A slide claim was missing its deck id.'),
-  slide_intent_unknown_sibling: wire('claim', 400, false, 'A slide claim referenced an unknown sibling slide.'),
+  claim_lease_unavailable: wire('claim', 503, true, 'The claim-lease coordination subsystem is temporarily unavailable, so the claim could not be processed. Retry shortly.'),
+  claim_not_wired: client('claim', 'Claims were used, but this runtime has no claim support wired in. The standard `Ablo({ schema, apiKey })` client wires it up automatically.'),
+  claim_queued: wire('claim', 409, true, 'The claim was queued behind the current lease holder and will be granted in turn. Wait, or read `claim.queue` to see your position.'),
+  claim_wait_aborted: wire('claim', 409, true, 'The wait for this claim lease was aborted before the lease was granted.'),
+  claim_wait_poll_interval_required: client('claim', 'Waiting on a claim requires a poll interval, and none was provided.'),
+  grant_timeout: wire('claim', 504, true, 'The wait for a capability grant timed out before one arrived. Retry the request.'),
+  slide_intent_missing_deck_id: wire('claim', 400, false, 'This slide claim is missing the id of the deck it belongs to.'),
+  slide_intent_unknown_sibling: wire('claim', 400, false, 'This slide claim references a sibling slide that does not exist in the deck.'),
 
   // ── bootstrap (transport) ──────────────────────────────────────────
-  bootstrap_fetch_timeout: wire('bootstrap', 504, true, 'The bootstrap fetch timed out.'),
-  bootstrap_offline: wire('bootstrap', 503, true, 'Bootstrap could not run because the client is offline.'),
-  bootstrap_offline_no_cache: wire('bootstrap', 503, false, 'Bootstrap is offline and no cached snapshot is available.'),
-  bootstrap_response_invalid: wire('bootstrap', 502, true, 'The bootstrap response was malformed.'),
-  bootstrap_response_schema_invalid: wire('bootstrap', 502, true, 'The bootstrap response failed schema validation.'),
+  bootstrap_fetch_timeout: wire('bootstrap', 504, true, 'The initial bootstrap fetch timed out before the server responded. Retry shortly.'),
+  bootstrap_offline: wire('bootstrap', 503, true, 'Bootstrap could not run because the client is offline. It can proceed once the network returns.'),
+  bootstrap_offline_no_cache: wire('bootstrap', 503, false, 'The client is offline and no cached snapshot is available to start from, so there is no data to load until the network returns.'),
+  bootstrap_response_invalid: wire('bootstrap', 502, true, 'The bootstrap response could not be parsed. Retrying may succeed.'),
+  bootstrap_response_schema_invalid: wire('bootstrap', 502, true, 'The bootstrap response parsed but failed schema validation, so it was not applied. Retrying may succeed.'),
 
   // ── transport / connection ─────────────────────────────────────────
-  exchange_malformed_response: wire('transport', 502, true, 'The credential exchange returned a malformed response.'),
-  exchange_network_error: wire('transport', 503, true, 'A network error occurred during credential exchange.'),
-  source_network_error: wire('transport', 503, true, 'A network error occurred talking to the source.'),
-  identity_network_error: wire('transport', 503, true, 'A network error occurred resolving identity.'),
-  commit_no_result: wire('transport', 504, true, 'The commit was sent but no result frame arrived.'),
-  commit_failed: wire('transport', 500, true, 'The commit failed to apply.'),
-  commit_offline_grace_expired: wire('transport', 503, false, "The offline grace window expired before the commit could be sent."),
-  queue_too_deep: wire('transport', 503, true, 'The transaction queue exceeded its depth limit.'),
-  flush_timeout: wire('transport', 504, true, 'Timed out flushing the transaction queue.'),
-  wait_for_timeout: wire('transport', 504, true, 'A wait-for condition timed out.'),
+  exchange_malformed_response: wire('transport', 502, true, 'The credential exchange returned a response that could not be parsed. Retrying may succeed.'),
+  exchange_network_error: wire('transport', 503, true, 'A network error interrupted the credential exchange. Check connectivity and retry.'),
+  source_network_error: wire('transport', 503, true, 'A network error occurred while talking to the data source. Check connectivity and retry.'),
+  identity_network_error: wire('transport', 503, true, 'A network error occurred while resolving your identity. Check connectivity and retry.'),
+  commit_no_result: wire('transport', 504, true, 'The commit was sent, but no result frame arrived, so its outcome is unknown. It is safe to retry.'),
+  commit_failed: wire('transport', 500, true, 'The commit reached the server but failed to apply. Retrying may succeed.'),
+  commit_offline_grace_expired: wire('transport', 503, false, 'The offline grace window expired before this commit could be sent, so it was not applied. Re-apply the change once the connection returns.'),
+  queue_too_deep: wire('transport', 503, true, 'The transaction queue is over its depth limit, so new writes are being rejected until it drains. Retry shortly.'),
+  flush_timeout: wire('transport', 504, true, 'Flushing the transaction queue timed out before every pending write was sent. Retry once connectivity stabilizes.'),
+  wait_for_timeout: wire('transport', 504, true, 'A wait-for condition timed out before it was satisfied. Retry, or extend the timeout.'),
   instance_at_capacity: wire('transport', 503, true, 'The server is at connection capacity. Retry shortly — transient and not specific to your credentials.'),
-  fetch_unavailable: client('transport', 'No fetch implementation is available in this environment.'),
-  base_url_missing: client('transport', 'No base URL was configured for the client.'),
-  sync_not_ready: client('transport', 'A sync operation was attempted before the client was ready.'),
-  ws_not_ready: client('transport', 'A frame was sent before the WebSocket was connected.'),
+  fetch_unavailable: client('transport', 'This environment provides no `fetch` implementation, so HTTP requests cannot be made. Run on a platform with `fetch` (Node 18+, modern browsers) or supply a polyfill.'),
+  base_url_missing: client('transport', 'The client has no base URL configured, so it cannot address the server. Set the base URL when constructing the client.'),
+  sync_not_ready: client('transport', 'A sync operation ran before the client finished initializing. Wait for the client to be ready before syncing.'),
+  ws_not_ready: client('transport', 'A frame was sent before the WebSocket connection was established. Wait for the connection to open before sending.'),
 
   // ── quota / rate limit (429) ──────────────────────────────────────
-  quota_exceeded: wire('rate_limit', 429, true, 'The organization exceeded its configured usage quota.'),
+  quota_exceeded: wire('rate_limit', 429, true, 'Your organization has used up its configured usage quota. Requests will succeed again once the quota resets or the limit is raised.'),
   connection_limit_exceeded: wire('rate_limit', 429, true, 'Too many concurrent WebSocket connections for this principal or organization. Close idle connections, or retry once others drain.'),
   // Per-CREDENTIAL request-rate limit — the fast (RPS/burst) axis, distinct from
   // the slow-axis `quota_exceeded` (org daily/monthly usage). Keyed per API key,
   // so one noisy key backs off without affecting the rest of the org. The
   // `Retry-After` header carries the bucket-refill delay.
-  rate_limit_exceeded: wire('rate_limit', 429, true, 'This API key is sending requests too quickly; slow down and retry after the indicated delay.'),
+  rate_limit_exceeded: wire('rate_limit', 429, true, 'This API key is sending requests faster than its rate limit allows. Slow down and retry after the delay in the `Retry-After` header.'),
 
   // ── server (5xx) ───────────────────────────────────────────────────
-  internal_error: wire('server', 500, true, 'An unexpected server error occurred.'),
-  quota_lookup_failed: wire('server', 503, true, 'The quota decision could not be loaded.'),
+  internal_error: wire('server', 500, true, "Something went wrong on Ablo's side — an unexpected server error. It is safe to retry."),
+  quota_lookup_failed: wire('server', 503, true, "The server could not load this organization's quota state, so the request was rejected rather than admitted unchecked. Retry shortly."),
   // The per-key rate-limiter backend (Redis) was unreachable and the API is
   // configured to FAIL CLOSED on that path, so the request was rejected rather
   // than admitted unchecked. Retryable: the next attempt re-probes the backend.
   rate_limiter_unavailable: wire('server', 503, true, 'The rate-limiter backend is unavailable and this endpoint is configured to fail closed; retry shortly.'),
-  turn_open_failed: wire('server', 500, true, 'The agent turn failed to open.'),
-  turn_close_failed: wire('server', 500, true, 'The agent turn failed to close cleanly.'),
+  turn_open_failed: wire('server', 500, true, 'The agent turn could not be opened on the server. It is safe to retry.'),
+  turn_close_failed: wire('server', 500, true, 'The agent turn could not be closed cleanly on the server. It is safe to retry the close.'),
 
   // ── client-only invariants (never serialized) ──────────────────────
   invalid_options: client('client', 'The Ablo client was constructed with invalid or incomplete options.'),
@@ -412,60 +412,65 @@ export const ERROR_CODES = {
   capability_id_required: wire('validation', 400, false, 'A capability id is required for this request.'),
   organization_mismatch: wire('permission', 403, false, 'The request targeted an organization the caller is not scoped to.'),
   project_scope_denied: wire('permission', 403, false, "The request targeted a project the caller's key is not scoped to."),
-  project_slug_taken: wire('validation', 409, false, 'A project with this slug already exists in the organization.'),
+  project_slug_taken: wire('validation', 409, false, 'A project with this slug already exists in the organization. Choose a different slug.'),
   forbidden: wire('permission', 403, false, 'The caller lacks permission for this operation.'),
-  source_api_key_unresolved: wire('auth', 401, false, 'The source API key could not be resolved.'),
+  source_api_key_unresolved: wire('auth', 401, false, 'The API key presented for this data source could not be resolved to a known key. Check the key and its environment.'),
   capability_auth_disabled: wire('server', 503, false, 'Capability authentication is disabled on this server.'),
-  provisioner_unavailable: wire('server', 503, false, 'No database provisioner is configured.'),
-  invalid_model: wire('validation', 400, false, 'The request named an invalid model.'),
-  invalid_id: wire('validation', 400, false, 'The request carried an invalid id.'),
+  provisioner_unavailable: wire('server', 503, false, 'This deployment has no database provisioner configured, so tables cannot be created here.'),
+  invalid_model: wire('validation', 400, false, 'The model name in the request is not a valid model identifier.'),
+  invalid_id: wire('validation', 400, false, 'The id in the request is not a valid identifier.'),
   unknown_model: wire('tenant', 400, false, 'Named a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` — the server keeps its own copy of the schema.'),
-  model_not_tenant_scoped: wire('tenant', 400, false, 'The model is not tenant-scoped and cannot be queried this way.'),
+  model_not_tenant_scoped: wire('tenant', 400, false, 'This model is not tenant-scoped, so it cannot be queried through the tenant-scoped read path.'),
   schema_table_invalid: wire('schema', 500, false, "The model's table identifier is invalid."),
   schema_scope_invalid: wire('schema', 500, false, "The model's scope predicate could not be built."),
-  entity_fetch_failed: wire('server', 500, true, 'The entity fetch failed.'),
-  events_required: wire('validation', 400, false, 'The request must include a non-empty events array.'),
-  ingest_failed: wire('validation', 400, false, 'The source-event ingest failed.'),
-  migration_failed: wire('server', 500, false, 'The schema migration failed to apply.'),
+  entity_fetch_failed: wire('server', 500, true, 'The server failed to fetch the requested entity. It is safe to retry.'),
+  events_required: wire('validation', 400, false, 'The request must include a non-empty `events` array.'),
+  ingest_failed: wire('validation', 400, false, 'The source-event batch was rejected during ingest and nothing was appended. Check the events against the expected shape and re-send.'),
+  migration_failed: wire('server', 500, false, 'The schema migration failed while applying and did not complete.'),
   schema_provisioning_forbidden: wire(
     'permission',
     403,
     false,
     'Schema registration could not create tables in the target database: the engine is not permitted to run DDL there.',
   ),
-  model_query_failed: wire('validation', 400, false, 'The model query failed.'),
-  queries_required: wire('validation', 400, false, 'The request must include a non-empty queries array.'),
+  model_query_failed: wire('validation', 400, false, 'The model query failed to execute. Check the query filters and operators.'),
+  queries_required: wire('validation', 400, false, 'The request must include a non-empty `queries` array.'),
   query_unsupported_operator: wire('validation', 400, false, 'The query used an unsupported operator.'),
-  query_unknown_relation: wire('validation', 400, false, 'The query referenced an unknown relation.'),
-  query_relation_target_unknown: wire('schema', 500, false, 'A relation targets a model the schema does not define.'),
+  query_invalid_like_pattern: wire('validation', 400, false, 'The `LIKE` pattern must not end with an escape character.'),
+  query_invalid_boolean: wire('validation', 400, false, 'The query compared a boolean column against an invalid boolean literal.'),
+  protocol_version_unsupported: wire('transport', 426, false, 'The client sync-protocol version is outside the range this server supports — upgrade the SDK (or the server was rolled back mid-fleet).'),
+  database_unreachable: wire('validation', 400, false, "Ablo could not reach this database to check that it can stream replication. The connection string may be wrong, the host may not be reachable from Ablo's servers, or the credentials may not be accepted."),
+  database_not_replication_ready: wire('validation', 400, false, 'This database is not set up for logical replication yet. Every failing item — wal_level, the publication, the replication grant, a replica identity — is listed in the error details with its exact fix. `ablo connect` prints the one-time setup; `ablo connect --check` verifies it.'),
+  query_unknown_relation: wire('validation', 400, false, 'The query references a relation the model does not define. Check the relation name against the schema.'),
+  query_relation_target_unknown: wire('schema', 500, false, 'A relation in the query targets a model the schema does not define.'),
   query_invalid_identifier: wire('validation', 400, false, 'The query contained an invalid identifier.'),
   org_id_required: wire('validation', 400, false, 'An organization id is required for this request.'),
-  presence_identity_required: wire('validation', 400, false, 'Both userId and organizationId are required.'),
-  upload_fields_required: wire('validation', 400, false, 'A required upload field was missing.'),
-  upload_items_required: wire('validation', 400, false, 'The request must include a non-empty items array.'),
-  presigned_url_failed: wire('server', 500, true, 'Failed to generate a presigned upload URL.'),
+  presence_identity_required: wire('validation', 400, false, 'Presence requests must carry both `userId` and `organizationId`.'),
+  upload_fields_required: wire('validation', 400, false, 'The upload request is missing a required field.'),
+  upload_items_required: wire('validation', 400, false, 'The request must include a non-empty `items` array.'),
+  presigned_url_failed: wire('server', 500, true, 'The server could not generate a presigned upload URL. It is safe to retry.'),
   upload_not_configured: wire('server', 503, false, 'Uploads are not configured on this deployment: the upload storage bucket and CDN domain are unset.'),
   task_id_required: wire('validation', 400, false, 'A task id is required for this request.'),
-  claim_id_required: wire('validation', 400, false, 'An claim id is required for this request.'),
+  claim_id_required: wire('validation', 400, false, 'A claim id is required for this request.'),
   commit_operation_action_required: wire('validation', 400, false, 'A commit operation is missing its `action`.'),
   commit_operation_unsupported: wire('validation', 400, false, 'A commit operation used an unsupported `action`.'),
   usage_invalid: wire('validation', 400, false, 'The usage request was invalid.'),
   invalid_request: wire('validation', 400, false, 'The request parameters were invalid.'),
   capability_not_found: wire('not_found', 404, false, 'No capability exists with the given id.'),
-  invalid_participant_kind: wire('validation', 400, false, 'The participant kind is invalid.'),
-  invalid_sync_group: wire('validation', 400, false, 'Sync groups must be "default" or "<namespace>:<id>".'),
-  narrow_scope_required: wire('validation', 400, false, 'A narrowed scope is required for this request.'),
-  wide_scope_forbidden: wire('permission', 403, false, 'A wide scope is not permitted for this caller.'),
-  capability_required: wire('auth', 401, false, 'This operation requires a capability.'),
+  invalid_participant_kind: wire('validation', 400, false, 'The participant kind is not one the server recognizes.'),
+  invalid_sync_group: wire('validation', 400, false, 'Sync groups must be `default` or `<namespace>:<id>`.'),
+  narrow_scope_required: wire('validation', 400, false, 'This request requires a scope narrowed to specific resources; the presented scope is too broad.'),
+  wide_scope_forbidden: wire('permission', 403, false, 'This caller may not use a wide scope. Request a scope narrowed to the resources you need.'),
+  capability_required: wire('auth', 401, false, 'This operation requires a capability, and none was presented.'),
   parent_turn_not_found: wire('not_found', 404, false, 'The referenced parent turn does not exist.'),
-  parent_turn_foreign_agent: wire('permission', 403, false, 'The parent turn belongs to a different agent.'),
+  parent_turn_foreign_agent: wire('permission', 403, false, 'The referenced parent turn belongs to a different agent, so it cannot be used here.'),
   turn_not_found: wire('not_found', 404, false, 'The referenced turn does not exist.'),
-  turn_foreign_agent: wire('permission', 403, false, 'The turn belongs to a different agent.'),
-  invalid_intent: wire('validation', 400, false, 'The claim request was invalid.'),
+  turn_foreign_agent: wire('permission', 403, false, 'This turn belongs to a different agent, so the caller cannot act on it.'),
+  invalid_intent: wire('validation', 400, false, 'The claim request was malformed and could not be processed.'),
   schema_too_large: wire('validation', 413, false, 'The submitted schema exceeds the maximum size.'),
   request_too_large: wire('validation', 413, false, 'The request body exceeds the maximum size.'),
   invalid_schema: wire('validation', 400, false, 'The submitted schema could not be parsed.'),
-  incompatible_change: wire('conflict', 409, false, 'The schema change is incompatible with the current schema.'),
+  incompatible_change: wire('conflict', 409, false, 'The schema change is incompatible with the schema currently deployed and cannot be applied as-is.'),
 } as const satisfies Record<string, ErrorCodeSpec>;
 
 /**

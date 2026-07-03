@@ -575,81 +575,6 @@
       "count": 10
     }
   },
-  "__tests__/unit/server/commit.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 12
-    },
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 3
-    },
-    "@typescript-eslint/no-require-imports": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-argument": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 36
-    },
-    "@typescript-eslint/no-unsafe-call": {
-      "count": 29
-    },
-    "@typescript-eslint/no-unsafe-function-type": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 20
-    },
-    "@typescript-eslint/no-unsafe-return": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 4
-    },
-    "@typescript-eslint/require-await": {
-      "count": 3
-    }
-  },
-  "__tests__/unit/server/execute.test.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 10
-    },
-    "@typescript-eslint/no-unsafe-call": {
-      "count": 14
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 12
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
-    "@typescript-eslint/require-await": {
-      "count": 2
-    }
-  },
-  "__tests__/unit/server/registry.test.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 4
-    },
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 4
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 16
-    },
-    "@typescript-eslint/no-unsafe-call": {
-      "count": 28
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 21
-    },
-    "@typescript-eslint/no-unsafe-return": {
-      "count": 3
-    }
-  },
   "__tests__/unit/sync/createSnapshot.test.ts": {
     "@typescript-eslint/no-empty-function": {
       "count": 1
@@ -1159,9 +1084,6 @@
     },
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 4
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
     }
   },
   "src/client/__tests__/acquire-or-await.test.ts": {
@@ -1939,7 +1861,7 @@
   },
   "src/sync/SyncWebSocket.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 2
+      "count": 1
     },
     "@typescript-eslint/no-non-null-assertion": {
       "count": 3
@@ -1949,12 +1871,6 @@
     },
     "@typescript-eslint/no-unsafe-argument": {
       "count": 1
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 4
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 4
     },
     "@typescript-eslint/no-unused-vars": {
       "count": 1

@@ -12,7 +12,6 @@ import {
   AbloConnectionError,
   AbloValidationError,
   AbloNotFoundError,
-  formatClaimedErrorMessage,
   claimedError,
   translateHttpError,
 } from '../errors.js';
@@ -35,6 +34,7 @@ import {
   warnIfDatabaseUrlDeprecated,
 } from './auth.js';
 import { registerDataSource } from './registerDataSource.js';
+import { PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER } from '../wire/protocolVersion.js';
 import { toSeconds } from '../utils/duration.js';
 import type { AbloOptions } from './options.js';
 import type {
@@ -426,6 +426,9 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
+      // Protocol handshake for the HTTP transport (wire/protocolVersion.ts):
+      // the server answers an out-of-range version with a typed 426.
+      [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION),
     };
 
     for (const [key, value] of Object.entries(options.defaultHeaders ?? {})) {
@@ -1137,7 +1140,9 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           { code: 'claim_queued' },
         );
       }
-      return body.claim?.id ?? body.id ?? body.id ?? createClaimId();
+      // `claimId` is the queued-response field name (routes/claims.ts) — a
+      // pre-rename regression duplicated the `body.id` arm and dropped it.
+      return body.claim?.id ?? body.id ?? body.claimId ?? createClaimId();
     };
     const releaseClaim = (params: ClaimLookupParams<T> | Claim<T>): Promise<void> =>
       requestJson<unknown>(

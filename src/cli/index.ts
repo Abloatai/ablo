@@ -593,7 +593,9 @@ async function init(args: readonly string[] = []) {
     `Run ${pc.bold('npx ablo dev')} — pushes your schema definition and watches for changes`,
     ...(storage === 'replication'
       ? [
-          `Connect your database: ${pc.bold('npx ablo connect')} prints the logical-replication setup SQL (run it once on your Postgres), then ${pc.bold('npx ablo connect --register')} tells Ablo to replicate it — your app keeps writing through your own backend, Ablo tails the WAL`,
+          `Connect your database — ${pc.bold('npx ablo connect')} prints the one-time logical-replication setup SQL to run on your Postgres`,
+          `Verify it — ${pc.bold('npx ablo connect --check')} walks wal_level, the publication, the role, and replica identity, with the exact fix for anything missing`,
+          `Register it — ${pc.bold('npx ablo connect --register')} tells Ablo to start replicating; your app keeps writing through your own backend while Ablo tails the WAL`,
         ]
       : storage === 'direct'
       ? [

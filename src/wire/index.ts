@@ -26,6 +26,17 @@ export type { ListEnvelope } from './listEnvelope.js';
 // two cannot drift) — the per-op / per-payload ingest gates for both commit
 // transports.
 export { commitOperationSchema, commitPayloadSchema } from './frames.js';
+
+// Protocol versioning — the one integer client and server compare to know
+// they can speak, plus the typed WS rejection close code. See the module's
+// changelog + deploy contract.
+export {
+  PROTOCOL_VERSION,
+  MIN_SUPPORTED_PROTOCOL_VERSION,
+  WS_CLOSE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION_HEADER,
+  protocolVersionProblem,
+} from './protocolVersion.js';
 export type {
   CommitOperation,
   MutationMessage,
