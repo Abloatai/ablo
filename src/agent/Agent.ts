@@ -48,6 +48,7 @@
 import type { PresenceAnnouncer, AgentContext } from './types.js';
 import type { Activity, WireClaim } from '../types/streams.js';
 import { createAgentSession } from './session.js';
+import { createConsoleLogger, resolveLogLevel } from '../client/consoleLogger.js';
 export type { AgentContext } from './types.js';
 export type { WireClaim } from '../types/streams.js';
 
@@ -160,10 +161,10 @@ export interface AgentMessage {
 /** Subset of AI SDK's prepareStep context. */
 export interface PrepareStepContext<M extends AgentMessage = AgentMessage> {
   stepNumber: number;
-  steps: ReadonlyArray<{
-    toolCalls?: ReadonlyArray<{ toolName: string; input?: unknown; args?: unknown }>;
-    toolResults?: ReadonlyArray<unknown>;
-  }>;
+  steps: readonly {
+    toolCalls?: readonly { toolName: string; input?: unknown; args?: unknown }[];
+    toolResults?: readonly unknown[];
+  }[];
   messages: M[];
   model?: unknown;
 }
@@ -181,8 +182,8 @@ export interface StepFinishContext {
   stepType?: 'initial' | 'continue' | 'tool-result';
   finishReason?: string;
   text?: string;
-  toolCalls?: ReadonlyArray<{ toolName: string; input?: unknown; args?: unknown }>;
-  toolResults?: ReadonlyArray<unknown>;
+  toolCalls?: readonly { toolName: string; input?: unknown; args?: unknown }[];
+  toolResults?: readonly unknown[];
   usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
 }
 
@@ -249,15 +250,27 @@ export interface WrapToolOptions<TArgs> {
 
 // ── Agent ───────────────────────────────────────────────────────
 
-// Console-backed default logger. Local to this module so the agent
-// SDK doesn't take a transitive dependency on `getContext()` (which
-// belongs to the web-app context, not standalone agent workers).
-const consoleLogger: SyncLogger = {
-  debug: (msg, ...args) => console.debug('[agent]', msg, ...args),
-  info: (msg, ...args) => console.info('[agent]', msg, ...args),
-  warn: (msg, ...args) => console.warn('[agent]', msg, ...args),
-  error: (msg, ...args) => console.error('[agent]', msg, ...args),
-};
+/**
+ * Console-backed default logger — the SAME gated factory the `Ablo()` client
+ * uses (`createConsoleLogger`, threshold from `ABLO_LOG_LEVEL`, default
+ * `warn`), tagged `[agent]` so agent-runtime lines are distinguishable. The
+ * previous hand-rolled shim ignored the level gate entirely and printed
+ * `[perception]` engine internals at debug/info by default. Level is resolved
+ * per construction (not at module load) so `ABLO_LOG_LEVEL` set by the host
+ * process before building an Agent is honored.
+ *
+ * Exported for the unit test that pins the gating; consumers pass their own
+ * `logger` option instead.
+ */
+export function defaultAgentLogger(): SyncLogger {
+  const gated = createConsoleLogger(resolveLogLevel());
+  return {
+    debug: (msg, ...args) => { gated.debug('[agent]', msg, ...args); },
+    info: (msg, ...args) => { gated.info('[agent]', msg, ...args); },
+    warn: (msg, ...args) => { gated.warn('[agent]', msg, ...args); },
+    error: (msg, ...args) => { gated.error('[agent]', msg, ...args); },
+  };
+}
 
 export class Agent implements PresenceAnnouncer {
   private readonly opts: Required<
@@ -274,7 +287,7 @@ export class Agent implements PresenceAnnouncer {
       syncGroups: options.syncGroups,
       fetch: options.fetch ?? globalThis.fetch.bind(globalThis),
       timeoutMs: options.timeoutMs ?? 5_000,
-      logger: options.logger ?? consoleLogger,
+      logger: options.logger ?? defaultAgentLogger(),
     };
   }
 
@@ -463,12 +476,13 @@ export class Agent implements PresenceAnnouncer {
         };
       }
 
-      const body = (await (res as Response).json()) as {
-        results: Array<Array<Record<string, unknown>> | null>;
+      const body = (await (res).json()) as {
+        results: (Record<string, unknown>[] | null)[];
       };
       const rows = body.results?.[0];
+      const entity = rows?.[0];
 
-      if (!rows || rows.length === 0) {
+      if (!entity) {
         return {
           stale: true,
           reason: 'not_found',
@@ -476,8 +490,6 @@ export class Agent implements PresenceAnnouncer {
           pendingClaims,
         };
       }
-
-      const entity = rows[0];
       const updatedAtRaw = entity.updated_at ?? entity.updatedAt;
       const lastModifiedBy =
         (entity.updated_by as string | undefined) ??
@@ -701,7 +713,7 @@ export class Agent implements PresenceAnnouncer {
     return {
       ...originalTool,
       execute: wrappedExecute,
-    } as TTool;
+    };
   }
 
   // ── Internal ─────────────────────────────────────────────────────────

@@ -149,7 +149,7 @@ function wrapMutateForKey<S extends Schema, K extends keyof S['models'] & string
         // Snapshot all previous values BEFORE applying — later patches
         // in the same list would corrupt the inverse state of earlier
         // ones if we snapshotted lazily.
-        const prevPatches: Array<{ id: string } & Record<string, unknown>> = [];
+        const prevPatches: ({ id: string } & Record<string, unknown>)[] = [];
         for (const p of patch) {
           const fields = Object.keys(p).filter((k) => k !== 'id');
           const prev = snapshotFields((p as { id: string }).id, fields);
@@ -202,7 +202,7 @@ function wrapMutateForKey<S extends Schema, K extends keyof S['models'] & string
       if (prev) {
         inverses.push({ kind: 'create', modelKey, data: prev });
       }
-    }) as MutateActions<S, K>['delete'],
+    }),
 
     archive: async (id: string): Promise<void> => {
       await mutate.archive(id);

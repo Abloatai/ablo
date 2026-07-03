@@ -278,7 +278,7 @@ export function readProjectDatabaseUrl(cwd: string = process.cwd()): string | nu
   for (const name of ['.env.local', '.env']) {
     const path = resolve(cwd, name);
     if (!existsSync(path)) continue;
-    const match = readFileSync(path, 'utf8').match(/^DATABASE_URL=(.+)$/m);
+    const match = /^DATABASE_URL=(.+)$/m.exec(readFileSync(path, 'utf8'));
     if (match?.[1]) return match[1].trim().replace(/^["']|["']$/g, '');
   }
   return null;
@@ -292,10 +292,14 @@ export type ApiKeySource = 'env' | '.env.local' | '.env';
  * then the env files frameworks load (`.env.local`, then `.env`). `npx ablo …`
  * runs WITHOUT Next/Vite's env loader, so a key a developer put in `.env.local`
  * (the natural place — it's where the SDK reads it at runtime) is invisible to
- * `process.env`. Without this, `push`/`dev` silently fall back to the stored
- * `ablo login` sandbox key and use the WRONG key (the reported "my production
+ * `process.env`. Without this, the CLI silently falls back to the stored
+ * `ablo login` sandbox key and uses the WRONG key (the reported "my production
  * key in .env.local is never used" bug). Returns the key + which source it came
  * from (so the caller can say so in an error), or `null` if none is set.
+ *
+ * Consumed via `resolveEffectiveApiKey` (`cli/config.ts`) — the ONE chain
+ * `push`, `dev`, `status`, and `resolvePushPlan` all share; don't call this
+ * directly from a command, or the diagnostics and the deploy can diverge again.
  */
 export function readProjectApiKey(
   cwd: string = process.cwd(),
@@ -304,7 +308,7 @@ export function readProjectApiKey(
   for (const name of ['.env.local', '.env'] as const) {
     const path = resolve(cwd, name);
     if (!existsSync(path)) continue;
-    const match = readFileSync(path, 'utf8').match(/^ABLO_API_KEY=(.+)$/m);
+    const match = /^ABLO_API_KEY=(.+)$/m.exec(readFileSync(path, 'utf8'));
     if (match?.[1]) return { key: match[1].trim().replace(/^["']|["']$/g, ''), source: name };
   }
   return null;

@@ -41,7 +41,7 @@ export function asyncIteratorFromEvents<T>(
   subscribe: (push: (value: T) => void) => () => void,
 ): AsyncIterableIterator<T> {
   const queue: T[] = [];
-  const resolvers: Array<(result: IteratorResult<T>) => void> = [];
+  const resolvers: ((result: IteratorResult<T>) => void)[] = [];
   let done = false;
 
   const push = (value: T) => {
@@ -98,7 +98,7 @@ export function asyncIteratorFrom<T>(
   // awaiting. We never hold more than one at a time — a consumer
   // that calls `next()` twice without awaiting the first breaks
   // the async-iterator contract.
-  const resolvers: Array<(result: IteratorResult<T>) => void> = [];
+  const resolvers: ((result: IteratorResult<T>) => void)[] = [];
   let done = false;
 
   const push = () => {

@@ -144,7 +144,7 @@ export class UndoScope<S extends Schema> {
    */
   private replaying = false;
   /** Ops collected during the current tick, flushed as ONE entry. */
-  private batch: Array<{ forward: InverseOp; inverse: InverseOp | null }> = [];
+  private batch: { forward: InverseOp; inverse: InverseOp | null }[] = [];
   private flushScheduled = false;
   /**
    * Open grouping session (Liveblocks `history.pause()` / Yjs `stopCapturing`
@@ -152,7 +152,7 @@ export class UndoScope<S extends Schema> {
    * flushing per-tick, so a multi-tick action (a drag, a whole streaming AI
    * response) collapses into ONE Cmd+Z. `endGroup()` flushes it.
    */
-  private group: { label?: string; ops: Array<{ forward: InverseOp; inverse: InverseOp | null }> } | null =
+  private group: { label?: string; ops: { forward: InverseOp; inverse: InverseOp | null }[] } | null =
     null;
   /**
    * ASYNC replay-echo suppression, keyed by `${modelKey}:${id}`.
@@ -205,7 +205,7 @@ export class UndoScope<S extends Schema> {
     // doubles can omit it (undo then records nothing).
     this.unsubscribe =
       options.recordFromStream && this.store.subscribeLocalMutations
-        ? this.store.subscribeLocalMutations((m) => this.onLocalMutation(m))
+        ? this.store.subscribeLocalMutations((m) => { this.onLocalMutation(m); })
         : () => {};
   }
 
@@ -684,7 +684,7 @@ async function applyOps<S extends Schema>(tx: Transaction<S>, ops: InverseOp[]):
       update: (
         patch:
           | ({ id: string } & Record<string, unknown>)
-          | Array<{ id: string } & Record<string, unknown>>,
+          | ({ id: string } & Record<string, unknown>)[],
       ) => Promise<unknown>;
       delete: (id: string | string[]) => Promise<void>;
     }
@@ -693,6 +693,13 @@ async function applyOps<S extends Schema>(tx: Transaction<S>, ops: InverseOp[]):
 
   for (const op of ops) {
     const m = mutateAny[op.modelKey];
+    if (!m) {
+      // A persisted inverse op referencing a model the schema no longer has —
+      // previously this surfaced as an opaque TypeError on `m.create`.
+      throw new Error(
+        `Cannot undo: model "${op.modelKey}" is not part of the current schema.`,
+      );
+    }
     switch (op.kind) {
       case 'create':
         await m.create(op.data);

@@ -36,7 +36,7 @@ import type {
   ModelMutationOptions,
   CreateSessionParams,
   AbloSession,
-} from './Ablo.js';
+} from './resourceTypes.js';
 import type {
   Claim,
   ClaimLookupParams,
@@ -153,7 +153,7 @@ export function createAbloHttpClient<S extends SchemaRecord>(
 ): AbloHttpClient<S> {
   // The schema is type-level only; the protocol client is schema-agnostic.
   const { schema: _schema, ...rest } = options;
-  const api: AbloApi = createProtocolClient({ ...rest, schema: null } as AbloApiClientOptions);
+  const api: AbloApi = createProtocolClient({ ...rest, schema: null });
 
   const facade = new Proxy(api as unknown as Record<string | symbol, unknown>, {
     get(target, prop) {

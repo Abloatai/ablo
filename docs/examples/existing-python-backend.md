@@ -67,11 +67,11 @@ import Ablo from '@abloatai/ablo';
 import { AbloProvider } from '@abloatai/ablo/react';
 import { schema } from '@/ablo/schema';
 
-// Browser client: no secret key — the `apiKey` resolver fetches the session
-// token your server route mints (see the session route below).
+// Browser client: no secret key — `authEndpoint` points at the session route
+// your server exposes (below); the SDK fetches and refreshes the token.
 const ablo = Ablo({
   schema,
-  apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
+  authEndpoint: '/api/ablo-session',
 });
 
 export function Providers({ children }: { children: React.ReactNode }) {

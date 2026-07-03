@@ -198,7 +198,7 @@ export type InferQueryResult<
   Q extends QueryDef,
 > = Q extends QueryDef<z.ZodType, infer R>
   ? R extends InferModelNames<S>
-    ? Array<InferModel<S, R>>
+    ? InferModel<S, R>[]
     : never
   : never;
 

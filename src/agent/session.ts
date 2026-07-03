@@ -172,7 +172,7 @@ export function createAgentSession<R extends SchemaRecord = SchemaRecord>(
       // chain here so staging logs name what was unreachable, then
       // re-throw with the URL embedded so the dispatch wrapper at
       // least surfaces a concrete failure point.
-      type WithCauseCode = { cause?: { code?: string; message?: string }; message?: string };
+      interface WithCauseCode { cause?: { code?: string; message?: string }; message?: string }
       const e = err as WithCauseCode;
       const code = e.cause?.code;
       const causeMsg = e.cause?.message;

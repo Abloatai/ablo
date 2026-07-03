@@ -28,7 +28,7 @@ import { getFieldMeta, inferFieldMetaFromZod, type FieldMeta } from './field.js'
 // `resolvePolicy` at build time.
 import { resolvePolicy, type Tenancy, type ScopedViaRef, type PolicyInput } from './tenancy.js';
 export type { ScopedViaRef, Tenancy, PolicyInput } from './tenancy.js';
-import { DEFAULT_PLANE, type SchemaPlane } from './plane.js';
+import { DEFAULT_RESIDENCY, type ModelResidency } from './residency.js';
 // Axis 3 — write-conflict disposition. Pure-data type (the onStale vocabulary)
 // so it round-trips through schema serialization; the generic engine interprets
 // it (`interpretConflictAxis`) at the commit chokepoint.
@@ -153,7 +153,7 @@ export interface ModelOptions {
    * provisioning. `control` = Ablo's control plane (sync log, attribution,
    * audit) — never emitted into a customer DB. See `./plane.ts`.
    */
-  plane?: SchemaPlane;
+  plane?: ModelResidency;
 
   /**
    * **Axis 2 — sync-group routing.** Decides which delta *channels* a row fans
@@ -363,7 +363,7 @@ export interface ModelDef<
   readonly tenancy: Tenancy;
   /** Database plane — `tenant` (default) is portable to a customer DB; `control`
    *  is Ablo-only. See {@link ModelOptions.plane} and `./plane.ts`. */
-  readonly plane?: SchemaPlane;
+  readonly plane?: ModelResidency;
   /** Scope-root marker. See {@link ModelOptions.scope}. */
   readonly scope?: boolean | string;
   /** Membership edge granting identity → scope-root access. See {@link ModelOptions.grants}. */
@@ -456,7 +456,7 @@ export function model<
     // Axis 1 — normalize the `policy` authoring option into the one canonical
     // tenancy descriptor (defaults to a row-local org column).
     tenancy: resolvePolicy(options?.policy),
-    plane: options?.plane ?? DEFAULT_PLANE,
+    plane: options?.plane ?? DEFAULT_RESIDENCY,
     // Axis 2 — unpack the `groups` routing namespace into the wire fields the
     // server reads (`scope`/`grants`/`entityRoles` on ModelDef/ModelJSON).
     scope: options?.groups?.root,

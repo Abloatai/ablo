@@ -70,7 +70,7 @@ export interface ParticipantJoinOptions {
 export interface ScopedPresence {
   readonly self: Peer;
   readonly focus: ClaimTarget | null;
-  readonly others: ReadonlyArray<Peer>;
+  readonly others: readonly Peer[];
   update(activity: Activity): void;
   reading(detail?: string): void;
   reading(target: PresenceTarget, detail?: string): void;
@@ -94,7 +94,7 @@ export interface ScopedClaimOptions {
 
 export interface ScopedClaims {
   readonly focus: ClaimTarget | null;
-  readonly others: ReadonlyArray<Claim>;
+  readonly others: readonly Claim[];
   /**
    * Claim an exclusive claim on the participant's focus target (or
    * an explicit override via `opts.target`). Single verb — the old
@@ -119,8 +119,8 @@ export interface JoinedParticipant {
   readonly syncGroups: readonly string[];
   readonly presence: ScopedPresence;
   readonly claims: ScopedClaims;
-  readonly peers: ReadonlyArray<Peer>;
-  readonly activeClaims: ReadonlyArray<Claim>;
+  readonly peers: readonly Peer[];
+  readonly activeClaims: readonly Claim[];
   focus(target: PresenceTarget, options?: ParticipantFocusOptions): JoinedParticipant;
   leave(): void;
   [Symbol.asyncDispose](): Promise<void>;
@@ -136,7 +136,7 @@ export interface ParticipantManagerConfig {
   readonly getTransport: () => SyncWebSocket | null;
   readonly presence: PresenceStream;
   readonly claims: AttachableClaimStream;
-  readonly schema?: Schema<SchemaRecord>;
+  readonly schema?: Schema;
 }
 
 export function createParticipantManager(
@@ -199,7 +199,7 @@ export function createParticipantManager(
 
 export function resolveParticipantSyncGroups(
   scope: ParticipantScope | undefined,
-  schema?: Schema<SchemaRecord>,
+  schema?: Schema,
 ): string[] {
   if (!scope) return [];
   if (typeof scope === 'string') return [scope];
@@ -228,7 +228,7 @@ export function resolveParticipantSyncGroups(
 
 export function syncGroupFromEntityRef(
   ref: ClaimTarget,
-  schema?: Schema<SchemaRecord>,
+  schema?: Schema,
 ): string {
   const match = findModelForEntityRef(ref, schema);
   const kind = match ? scopeKindOf(match.def, match.key) : undefined;
@@ -238,20 +238,20 @@ export function syncGroupFromEntityRef(
 function syncGroupFromSchemaKey(
   schemaKey: string,
   id: string,
-  schema?: Schema<SchemaRecord>,
+  schema?: Schema,
 ): string {
-  const def = schema?.models?.[schemaKey] as ModelDef | undefined;
+  const def = schema?.models?.[schemaKey];
   const kind = def ? scopeKindOf(def, schemaKey) : undefined;
   return `${kind ?? schemaKey}:${id}`;
 }
 
 function findModelForEntityRef(
   ref: ClaimTarget,
-  schema?: Schema<SchemaRecord>,
+  schema?: Schema,
 ): { key: string; def: ModelDef } | null {
   if (!schema?.models) return null;
   const wanted = ref.type.toLowerCase();
-  for (const [key, def] of Object.entries(schema.models) as Array<[string, ModelDef]>) {
+  for (const [key, def] of Object.entries(schema.models) as [string, ModelDef][]) {
     const typename = def.typename ?? key;
     if (typename.toLowerCase() === wanted || key.toLowerCase() === wanted) {
       return { key, def };
@@ -313,7 +313,7 @@ function isEntityScope(scope: unknown): scope is ClaimTarget {
 
 function targetToEntityRef(target: PresenceTarget): ClaimTarget {
   if (isTupleTarget(target)) return { type: target[0], id: target[1] };
-  return target as ClaimTarget;
+  return target;
 }
 
 function unique(values: string[]): string[] {

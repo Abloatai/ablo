@@ -11,6 +11,7 @@ import {
   getMode,
   getKeyEntry,
   resolvePushPlan,
+  resolveEffectiveApiKey,
   getActiveProject,
   describeEffectiveKey,
   type Mode,
@@ -28,7 +29,7 @@ function expiryLabel(iso: string): string {
 
 async function ping(apiUrl: string): Promise<boolean> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 3000);
+  const t = setTimeout(() => { ctrl.abort(); }, 3000);
   try {
     const res = await fetch(`${apiUrl}/api/health`, { signal: ctrl.signal });
     return res.ok;
@@ -62,7 +63,7 @@ interface PushedSchema {
 async function fetchPushedSchema(apiUrl: string, apiKey: string | undefined): Promise<PushedSchema | null> {
   if (!apiKey) return null;
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 3000);
+  const t = setTimeout(() => { ctrl.abort(); }, 3000);
   try {
     const res = await fetch(`${apiUrl}/api/schema`, {
       headers: { authorization: `Bearer ${apiKey}` },
@@ -92,7 +93,7 @@ type Sample = 'routed' | 'no_route' | { forbidden: string | undefined } | { othe
 
 async function sampleRead(apiUrl: string, apiKey: string, modelTypename: string, n: number): Promise<Sample> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 4000);
+  const t = setTimeout(() => { ctrl.abort(); }, 4000);
   try {
     // A by-id read for an absent id. Per the server's entity route, tenant
     // routing happens BEFORE the query, so `entity_not_found` (404) is only
@@ -172,12 +173,22 @@ export async function status(args: string[] = []): Promise<void> {
     const key = describeEffectiveKey(mode, process.env.ABLO_API_KEY, entry);
     const plan = resolvePushPlan();
     const activeProject = getActiveProject();
-    const introspectKey = process.env.ABLO_API_KEY ?? entry?.apiKey;
-    const pushed = await fetchPushedSchema(apiUrl, introspectKey);
+    // The ONE shared credential chain (env → .env.local → .env → stored) —
+    // the same key `ablo push` would present, so this diagnostic can never
+    // report a different credential than a deploy uses.
+    const effective = resolveEffectiveApiKey();
+    const pushed = await fetchPushedSchema(apiUrl, effective.key);
     const out = {
       mode,
       // The locally-active project (`ablo projects use`); null = org-default.
       project: activeProject ?? null,
+      // The credential the CLI resolves for requests, with its provenance —
+      // 'env' | '.env.local' | '.env' | 'stored' (users debug key confusion
+      // constantly; the SOURCE is usually the answer).
+      effectiveKey: {
+        prefix: effective.key ? effective.key.slice(0, 12) : null,
+        source: effective.source,
+      },
       keyPrefix: key.keyPrefix,
       keySource: key.keySource,
       keyMode: key.keyMode,
@@ -213,9 +224,15 @@ export async function status(args: string[] = []): Promise<void> {
 
   console.log(`\n  ${brand('ablo')} ${pc.dim('status')}\n`);
 
-  if (process.env.ABLO_API_KEY) {
+  // The ONE shared credential chain (env → .env.local → .env → stored) — the
+  // same key `push`/`dev` resolve, so status never reports a different
+  // credential than a deploy would present. An explicit key (env var or a
+  // project env file) overrides the stored login key; SAY so, with its source.
+  const effective = resolveEffectiveApiKey();
+  if (effective.key && effective.source && effective.source !== 'stored') {
+    const label = effective.source === 'env' ? 'ABLO_API_KEY env' : effective.source;
     console.log(
-      `  ${pc.dim('key')}     ${process.env.ABLO_API_KEY.slice(0, 12)}… ${pc.dim('(ABLO_API_KEY env — overrides stored)')}`,
+      `  ${pc.dim('key')}     ${effective.key.slice(0, 12)}… ${pc.dim(`(${label} — overrides stored)`)}`,
     );
   } else if (!cfg) {
     console.log(`  ${pc.yellow('!')} Not logged in — run ${pc.bold('ablo login')}.`);
@@ -263,9 +280,9 @@ export async function status(args: string[] = []): Promise<void> {
   // before debugging a single write. Best-effort — silent if the server can't
   // be reached or is too old to answer.
   if (reachable) {
-    const introspectKey = process.env.ABLO_API_KEY ?? activeEntry?.apiKey;
+    const introspectKey = effective.key;
     const pushed = await fetchPushedSchema(apiUrl, introspectKey);
-    if (pushed && pushed.active) {
+    if (pushed?.active) {
       const when = pushed.pushedAt ? ` ${pc.dim(`@ ${pushed.pushedAt.slice(0, 10)}`)}` : '';
       const ver = pushed.version != null ? ` ${pc.dim(`(rev ${pushed.version})`)}` : '';
       console.log(`  ${pc.dim('schema')}  ${pc.bold(`${pushed.models.length} models pushed`)}${ver}${when}`);
@@ -284,8 +301,9 @@ export async function status(args: string[] = []): Promise<void> {
     }
 
     // Data-plane health — the check that turns a lying-green status into the truth.
-    if (pushed && pushed.active && pushed.models.length > 0) {
-      const probe = await probeDataPlane(apiUrl, introspectKey, pushed.models[0].typename);
+    const firstPushedModel = pushed?.active ? pushed.models[0] : undefined;
+    if (firstPushedModel !== undefined) {
+      const probe = await probeDataPlane(apiUrl, introspectKey, firstPushedModel.typename);
       // Deliberately NO green "healthy" line. This bare-key probe carries only
       // the key — it can resolve a different tenant than the typed SDK does (the
       // SDK's identity carries project/sandbox), so an apparent "ok" here is not

@@ -98,10 +98,6 @@ export interface CommitZeroSyncIdDetails {
   operations: string[];
 }
 
-export interface OfflineFlushFailureDetails {
-  error: string;
-}
-
 /**
  * One thing that happened to a claim. `phase` is the past-tense state it just
  * entered — the trail you follow to see WHY two participants collided on a row:
@@ -141,18 +137,16 @@ export interface ConflictEvent {
   /** The client idempotency key whose write was notified. */
   clientTxId: string;
   /** The conflicted rows + the fields that collided. */
-  rows: ReadonlyArray<{
+  rows: readonly {
     model: string;
     id: string;
     fields: readonly string[];
     writtenBy?: ParticipantKind;
-  }>;
+  }[];
 }
 
 /** Span attributes for performance monitoring */
-export interface SpanAttributes {
-  [key: string]: string | number | boolean | undefined;
-}
+export type SpanAttributes = Record<string, string | number | boolean | undefined>;
 
 /**
  * Observability provider — replaces direct Sentry dependency.
@@ -190,9 +184,6 @@ export interface SyncObservabilityProvider {
 
   /** Capture WebSocket error */
   captureWebSocketError(details: WebSocketErrorDetails): void;
-
-  /** Capture offline flush failure */
-  captureOfflineFlushFailure(details: OfflineFlushFailureDetails): void;
 
   /** Capture self-healing event */
   captureSelfHealing(details: SelfHealingDetails): void;
@@ -452,8 +443,8 @@ export interface MutationExecutor {
 
   /** Batch upload attachments (optional) */
   batchUploadAttachments?(
-    items: Array<{ id: string; input: Record<string, unknown> }>
-  ): Promise<Array<{ id: string; url: string }>>;
+    items: { id: string; input: Record<string, unknown> }[]
+  ): Promise<{ id: string; url: string }[]>;
 
   /** Delete a subscription entity */
   deleteSubscription?(entityType: string, entityId: string, txId: string): Promise<void>;
@@ -463,18 +454,6 @@ export interface MutationExecutor {
 
   /** Register a callback for session expiry detection */
   onSessionExpired?(callback: () => void): void;
-}
-
-// ─────────────────────────────────────────────
-// Offline Mutation Dispatcher
-// ─────────────────────────────────────────────
-
-/**
- * Dispatches queued offline mutations on reconnect.
- * Replaces the massive switch statement in OfflineFlush.ts.
- */
-export interface MutationDispatcher {
-  dispatch(operationName: string, variables: Record<string, unknown>): Promise<void>;
 }
 
 // ─────────────────────────────────────────────

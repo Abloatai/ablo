@@ -14,6 +14,7 @@
 
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
 import { AbloConnectionError, AbloValidationError, toAbloError } from './errors.js';
+import type { RecoveryClass } from './errorCodes.js';
 import { ConnectionManager } from './sync/ConnectionManager.js';
 import { AreaOfInterestManager } from './sync/AreaOfInterestManager.js';
 import {
@@ -32,7 +33,6 @@ import {
   type SyncGroupChangePayload,
   type GroupAddedPayload,
   type GroupRemovedPayload,
-  type VersionVector,
   type BootstrapHint,
   type BootstrapDataEvent,
   type PresenceUpdateEvent,
@@ -42,12 +42,24 @@ import {
 import { QueryProcessor } from './core/QueryProcessor.js';
 import { Model, rowAsModel } from './Model.js';
 import { getContext } from './context.js';
-import { SyncSessionError } from './errors.js';
+import { SyncSessionError, isAccessCredentialExpiryCloseReason } from './errors.js';
 import { ModelScope } from './ObjectPool.js';
 import { LazyReferenceCollection } from './LazyReferenceCollection.js';
 import type { Schema } from './schema/schema.js';
-import type { SyncStoreContract, LocalMutation } from './react/context.js';
+// The store contract (SyncStoreContract/LocalMutation/SyncStatus) lives in a
+// react-free core leaf — react/context.ts re-exports it for React consumers.
+import type { SyncStatus, SyncStoreContract, LocalMutation } from './core/storeContract.js';
 import type { AuthCredentialSource } from './auth/credentialSource.js';
+import type { ModelData } from './types/modelData.js';
+import { deriveSyncPlanFromSchema } from './sync/syncPlan.js';
+import type { EnrichmentPlanEntry, ForeignKeyIndexSpec } from './sync/syncPlan.js';
+import { CredentialLifecycle, type CredentialRefresher } from './sync/credentialLifecycle.js';
+import * as groupChange from './sync/groupChange.js';
+import type { GroupChangeContext } from './sync/groupChange.js';
+import * as bootstrapApply from './sync/bootstrapApply.js';
+import type { PoolContext, RehydrationStats } from './sync/bootstrapApply.js';
+import * as deltaPipeline from './sync/deltaPipeline.js';
+import type { DeltaPipelineContext } from './sync/deltaPipeline.js';
 
 // ── Exported types ──────────────────────────────────────────────────────────
 
@@ -58,8 +70,9 @@ export type ModelConstructor<T extends Model> = abstract new (...args: never[]) 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Constructor args vary per model (PrismaTask, Record<string, unknown>, etc.)
 export type ConcreteModelConstructor<T extends Model> = new (data?: any) => T;
 
-/** Generic record type for model data */
-export type ModelData = Record<string, unknown>;
+// ModelData moved to types/modelData.ts (breaks the BaseSyncedStore <->
+// SyncClient mutual type cycle); re-exported so importers are unchanged.
+export type { ModelData } from './types/modelData.js';
 
 /** Query result interface */
 export interface QueryResult<T extends Model> {
@@ -69,58 +82,15 @@ export interface QueryResult<T extends Model> {
   fromCache?: boolean;
 }
 
-/** A foreign-key index to register on the ObjectPool at construction time. */
-export interface ForeignKeyIndexSpec {
-  /**
-   * The child model name (where the FK field lives) — this is the type
-   * that will be passed to `pool.registerForeignKey(modelName, fieldName)`
-   * and later to `pool.getByForeignKey(modelName, fieldName, value)`.
-   *
-   * Use the wire `__typename` casing (e.g., `'SlideLayer'`, not
-   * `'slideLayer'`) — that's the value `createFromData` stamps onto
-   * models and the pool indexes by.
-   */
-  readonly modelName: string;
-  /** The FK field name on the child model, e.g. `'slideId'`. */
-  readonly fieldName: string;
-}
-
-/**
- * A declarative enrichment rule for the delta-apply path.
- *
- * When a delta for `modelName` arrives, after the model is constructed
- * the base store reads `data[foreignKey]` from the payload, looks up
- * the matching parent in the ObjectPool, and attaches it as
- * `data[relationKey]`. Best-effort: if the parent isn't yet in the
- * pool (e.g., arrived later in the same bootstrap batch), enrichment
- * silently no-ops.
- *
- * Replaces the previous pattern of overriding `enrichRelations` on a
- * subclass to hardcode per-model enrichment logic.
- */
-export interface EnrichmentPlanEntry {
-  /** The child model whose incoming deltas should be enriched. */
-  readonly modelName: string;
-  /** The FK field on the child that points at the parent's id. */
-  readonly foreignKey: string;
-  /** The property name under which to attach the parent model. */
-  readonly relationKey: string;
-}
+// ForeignKeyIndexSpec + EnrichmentPlanEntry moved to sync/syncPlan.ts
+// alongside deriveSyncPlanFromSchema; re-exported so importers are unchanged.
+export type { ForeignKeyIndexSpec, EnrichmentPlanEntry } from './sync/syncPlan.js';
 
 /** Configuration for SyncedStore behavior */
 export interface SyncedStoreConfig {
   enableOffline?: boolean;
   enableCache?: boolean;
   enableTelemetry?: boolean;
-
-  /**
-   * Initial version vector keys, each seeded to 0. Merged with the
-   * schema-derived set (if a schema is provided to the constructor) —
-   * explicit keys here layer on top of derived ones. Replaces the
-   * subclass pattern of hardcoding `this.versionVector = { tasks: 0, ... }`
-   * in the constructor.
-   */
-  versionVectorKeys?: readonly string[];
 
   /**
    * Declarative enrichment plan consumed by `enrichRelations`. Replaces
@@ -141,17 +111,10 @@ export interface SyncedStoreConfig {
   foreignKeyIndexes?: readonly ForeignKeyIndexSpec[];
 }
 
-/** Sync status for UI binding */
-export interface SyncStatus {
-  state: 'idle' | 'syncing' | 'error' | 'offline' | 'reconnecting';
-  progress: number;
-  error?: Error;
-  /** When true, the error is a session/auth error requiring re-authentication. */
-  isSessionError: boolean;
-  lastSyncAt?: Date;
-  pendingChanges: number;
-  offlineSince?: Date;
-}
+// SyncStatus moved to core/storeContract.ts (the react-free store-contract
+// leaf, next to SyncStoreContract which embeds it); re-exported so importers
+// are unchanged.
+export type { SyncStatus } from './core/storeContract.js';
 
 /** User context for initialization */
 export interface UserContext {
@@ -197,15 +160,9 @@ export interface SmartSyncOptions {
   maxBatchSize?: number;
 }
 
-/** Rehydration statistics from bootstrap */
-export interface RehydrationStats {
-  added: number;
-  updated: number;
-  removed: number;
-  skipped: number;
-  healed: number;
-  elapsedMs: number;
-}
+// RehydrationStats moved to sync/bootstrapApply.ts alongside the bootstrap
+// apply path; re-exported so importers are unchanged.
+export type { RehydrationStats } from './sync/bootstrapApply.js';
 
 /** Bootstrap timeout configuration */
 export const BOOTSTRAP_CONFIG = {
@@ -223,11 +180,14 @@ export type {
   SyncGroupChangePayload,
   GroupAddedPayload,
   GroupRemovedPayload,
-  VersionVector,
   BootstrapHint,
   BootstrapDataEvent,
   PresenceUpdateEvent,
 };
+
+// deriveSyncPlanFromSchema (pure schema → sync-plan derivation) moved to
+// sync/syncPlan.ts; re-exported so importers are unchanged.
+export { deriveSyncPlanFromSchema } from './sync/syncPlan.js';
 
 // ── Base class ──────────────────────────────────────────────────────────────
 
@@ -259,65 +219,6 @@ export type {
  *     }
  *   }
  */
-
-/**
- * Walk a schema and derive the three sync-plan arrays consumed by
- * `BaseSyncedStore`'s constructor: version-vector keys, FK indexes to
- * register on the pool, and the enrichment plan.
- *
- * Version vector keys are derived from each model's `typename` (lowercased
- * to match the server's event-type convention — `'Task'` → `'task'`,
- * `'SlideLayer'` → `'slidelayer'`). A fallback to the schema key applies
- * when `typename` is unset, though `defineSchema()` now always resolves
- * it during assembly so the fallback is defensive-only.
- *
- * FK indexes and enrichment entries are pulled from each `belongsTo`
- * relation where `options.index` / `options.enrich` is set. Relations
- * without those options are skipped — this is an opt-in mechanism so
- * adding a `belongsTo` never silently changes delta or lookup semantics.
- *
- * Pure function: takes a Schema, returns three arrays. No side effects,
- * no class state. Called once at construction time from `BaseSyncedStore`.
- */
-export function deriveSyncPlanFromSchema(schema: Schema): {
-  versionVectorKeys: string[];
-  enrichmentPlan: EnrichmentPlanEntry[];
-  foreignKeyIndexes: ForeignKeyIndexSpec[];
-} {
-  const versionVectorKeys: string[] = [];
-  const enrichmentPlan: EnrichmentPlanEntry[] = [];
-  const foreignKeyIndexes: ForeignKeyIndexSpec[] = [];
-
-  for (const [modelName, def] of Object.entries(schema.models)) {
-    const typename = def.typename ?? modelName;
-    versionVectorKeys.push(typename.toLowerCase());
-
-    for (const [relationKey, rel] of Object.entries(def.relations)) {
-      if (rel.type === 'belongsTo') {
-        if (rel.options?.index) {
-          foreignKeyIndexes.push({ modelName: typename, fieldName: rel.foreignKey });
-        }
-        if (rel.options?.enrich) {
-          enrichmentPlan.push({
-            modelName: typename,
-            foreignKey: rel.foreignKey,
-            relationKey,
-          });
-        }
-      } else if (rel.type === 'hasMany' || rel.type === 'hasOne') {
-        // hasMany/hasOne: the FK lives on the TARGET model, not the current model.
-        // Register the FK index on the target so getByForeignKey works.
-        // Target typename is resolved at registration time from the schema.
-        const targetDef = schema.models[rel.target];
-        const targetTypename = targetDef?.typename ?? rel.target;
-        foreignKeyIndexes.push({ modelName: targetTypename, fieldName: rel.foreignKey });
-      }
-    }
-  }
-
-  return { versionVectorKeys, enrichmentPlan, foreignKeyIndexes };
-}
-
 export class BaseSyncedStore<
   // The collaboration event map. Each key maps to a handler args tuple.
   // `EventMap<T>` (defined in sync/SyncWebSocket.ts) is a homomorphic mapped
@@ -487,16 +388,15 @@ export class BaseSyncedStore<
   // ── Internal helpers ──
   protected readonly queryProcessor: QueryProcessor;
   /**
-   * Runtime behavior flags only — the three schema/config arrays
-   * (`versionVectorKeys`, `enrichmentPlan`, `foreignKeyIndexes`) are
-   * consumed at construction time and stored on the instance as
-   * `versionVector`, `enrichmentPlan`, and pool-registered indexes.
-   * They don't need to persist on `this.config`.
+   * Runtime behavior flags only — the schema/config arrays
+   * (`enrichmentPlan`, `foreignKeyIndexes`) are consumed at construction
+   * time and stored on the instance as `enrichmentPlan` and
+   * pool-registered indexes. They don't need to persist on `this.config`.
    */
   protected readonly config: Required<
     Pick<SyncedStoreConfig, 'enableOffline' | 'enableCache' | 'enableTelemetry'>
   >;
-  protected disposers: Array<() => void> = [];
+  protected disposers: (() => void)[] = [];
   protected initialized = false;
   protected dataReady = false;
 
@@ -513,7 +413,6 @@ export class BaseSyncedStore<
   protected userContext: UserContext | null = null;
 
   // ── Smart sync ──
-  protected versionVector: VersionVector;
   /**
    * Declarative enrichment plan: "for model X, when a delta arrives,
    * read data[foreignKey] and attach the matching parent from the pool
@@ -555,11 +454,11 @@ export class BaseSyncedStore<
       modelRegistry: ModelRegistry;
       /**
        * Optional schema. When provided, `deriveSyncPlanFromSchema` walks
-       * the schema's models + relations to auto-populate version vector
-       * keys, FK indexes, and the enrichment plan from declarative
-       * annotations. Class-based subclass users (like Ablo's legacy
-       * SyncedStore) typically pass explicit `config.versionVectorKeys`
-       * / `config.foreignKeyIndexes` / `config.enrichmentPlan` instead.
+       * the schema's models + relations to auto-populate FK indexes and
+       * the enrichment plan from declarative annotations. Class-based
+       * subclass users (like Ablo's legacy SyncedStore) typically pass
+       * explicit `config.foreignKeyIndexes` / `config.enrichmentPlan`
+       * instead.
        */
       schema?: TSchema;
       /** Sync server URL for WebSocket connection. Converted to wss:// automatically. */
@@ -582,11 +481,11 @@ export class BaseSyncedStore<
 
     // ── Schema-derived sync plan (Phase 2) ─────────────────────────────
     //
-    // When a schema is provided, derive version vector keys, FK indexes,
-    // and the enrichment plan from declarative annotations on the schema's
-    // `belongsTo` relations. Explicit config fields layer on top, so
-    // subclasses (like Ablo's SyncedStore) can pass hardcoded arrays
-    // without needing a full schema.generated.ts.
+    // When a schema is provided, derive FK indexes and the enrichment
+    // plan from declarative annotations on the schema's `belongsTo`
+    // relations. Explicit config fields layer on top, so subclasses
+    // (like Ablo's SyncedStore) can pass hardcoded arrays without
+    // needing a full schema.generated.ts.
     //
     // Order matters: schema-derived first, config second, so that in a
     // future where Ablo passes both (schema AND explicit config), the
@@ -594,7 +493,7 @@ export class BaseSyncedStore<
     // accidentally shadowed by schema derivation.
     const derived = dependencies.schema
       ? deriveSyncPlanFromSchema(dependencies.schema)
-      : { versionVectorKeys: [], enrichmentPlan: [], foreignKeyIndexes: [] };
+      : { enrichmentPlan: [], foreignKeyIndexes: [] };
 
     const mergedForeignKeyIndexes: ForeignKeyIndexSpec[] = [
       ...derived.foreignKeyIndexes,
@@ -631,17 +530,6 @@ export class BaseSyncedStore<
       batchingDelay: 100,
       maxBatchSize: 50,
     };
-
-    // Version vector: union of schema-derived keys + explicit config keys,
-    // each seeded to 0. Empty when neither source supplies keys (unchanged
-    // behavior from pre-Phase-2 defaults).
-    const mergedVvKeys = [
-      ...derived.versionVectorKeys,
-      ...(config.versionVectorKeys ?? []),
-    ];
-    this.versionVector = Object.fromEntries(
-      mergedVvKeys.map((k) => [k, 0])
-    ) as VersionVector;
 
     // Create internal helpers
     this.queryProcessor = new QueryProcessor({
@@ -748,26 +636,21 @@ export class BaseSyncedStore<
   protected connectionManager: import('./sync/ConnectionManager.js').ConnectionManager | null = null;
 
   /**
-   * Re-mint hook for the short-lived access credential (the Stripe-style
-   * `ek_`/`rk_`). Wired by the React provider from its `getToken`/`authEndpoint`
-   * — the engine owns WHEN to refresh (a stale-credential probe / an external
-   * nudge), the integrator owns HOW to mint. Mirrors the `getToken` contract:
-   * resolves a token string on success, `null` when the long-lived login is
-   * gone (terminal), and THROWS on a transient/offline failure. Used by
-   * {@link performCredentialRefresh}. Absent ⇒ no silent re-mint (e.g. a static
-   * `apiKey` deployment whose credential source refreshes out-of-band).
+   * Access-credential re-mint + proactive pre-roll — extracted to
+   * sync/credentialLifecycle.ts. Owns the refresher hook, the single-flight
+   * guard, and the browser-only refresh timer / wake listener; talks back
+   * through three lazily-resolved callbacks (the ConnectionManager doesn't
+   * exist until `setupWebSocketSync`). The `setCredentialRefresher` /
+   * `performCredentialRefresh` / `startCredentialLifecycle` methods below
+   * are thin delegates so the store's public surface is unchanged.
    */
-  private credentialRefresher: (() => Promise<string | null>) | null = null;
-
-  /** Single-flight guard so a wake nudge + an in-flight request + a probe don't
-   *  all mint at once (the classic "token thrash → random logout" bug). */
-  private inFlightCredentialRefresh: Promise<'refreshed' | 'session_error' | 'network_error'> | null =
-    null;
-
-  /** Teardown for the proactive credential lifecycle (refresh timer + wake/
-   *  online/focus listeners) installed by {@link startCredentialLifecycle};
-   *  cleared on {@link disconnect}. Null when no resolver is wired. */
-  private credentialLifecycleTeardown: (() => void) | null = null;
+  private readonly credentialLifecycle = new CredentialLifecycle({
+    setAuthToken: (token) => { this.auth?.setAuthToken(token); },
+    nudgeReconnect: () => { this.nudgeReconnect(); },
+    reportSessionExpired: () => {
+      this.connectionManager?.send({ type: 'BOOTSTRAP_FAILED_SESSION' });
+    },
+  });
 
   /**
    * Listeners registered via `subscribeSessionError()`. Fired when the
@@ -822,7 +705,7 @@ export class BaseSyncedStore<
 
   /**
    * Observe the LOCAL mutation stream for undo recording (see
-   * {@link import('./react/context.js').LocalMutation}). Taps the
+   * {@link import('./core/storeContract.js').LocalMutation}). Taps the
    * TransactionQueue's `transaction:created` event — fired once per local
    * create/update/delete/archive with `previousData` already captured.
    * Remote/collaborator deltas apply via `applyDeltaBatchToPool` and never
@@ -835,7 +718,7 @@ export class BaseSyncedStore<
     // the queue's emitter does) — so undo recorded nothing. See
     // `SyncClient.onLocalTransaction` for the full rationale.
     return this.syncClient.onLocalTransaction((tx) => {
-      if (!tx || !tx.type || !tx.modelName || !tx.modelId) return;
+      if (!tx?.type || !tx.modelName || !tx.modelId) return;
       handler({
         type: tx.type,
         modelName: tx.modelName,
@@ -1000,7 +883,7 @@ export class BaseSyncedStore<
       if (SyncSessionError.isSessionError(error)) {
         this.syncWebSocket?.setSessionErrorDetected();
         this.syncWebSocket?.disconnect();
-        this.updateSyncStatus({ state: 'error', error: error as Error });
+        this.updateSyncStatus({ state: 'error', error: error });
 
         // SECURITY: Clear locally cached data when session is invalid
         this.database.clear().catch(() => {});
@@ -1032,76 +915,31 @@ export class BaseSyncedStore<
   /**
    * Register the access-credential re-mint hook. Called by the React provider
    * with a thunk that mints a fresh `ek_`/`rk_` (typically its `getToken`).
-   * See {@link credentialRefresher}.
+   * See {@link CredentialLifecycle.setRefresher}.
    */
-  setCredentialRefresher(refresher: (() => Promise<string | null>) | null): void {
-    this.credentialRefresher = refresher;
+  setCredentialRefresher(refresher: CredentialRefresher | null): void {
+    this.credentialLifecycle.setRefresher(refresher);
   }
 
   /**
    * Re-mint the short-lived access credential and push it into the credential
    * source, reporting a tri-state outcome the {@link ConnectionManager} maps to
-   * its FSM. The contract mirrors `getToken` (and PowerSync's `fetchCredentials`
-   * / Liveblocks' `authEndpoint`, but made explicit instead of overloading
-   * return/throw):
-   *   - token string  → `'refreshed'`     (fresh key in place; re-probe & reconnect)
-   *   - `null`        → `'session_error'` (login itself is gone → terminal, sign out)
-   *   - throw         → `'network_error'` (couldn't reach the mint endpoint → transient)
-   *
-   * SINGLE-FLIGHT: concurrent callers (a wake nudge, an in-flight request, the
-   * probe) share one in-flight promise so we never double-mint — the canonical
-   * fix for the "every 401 mints a token → thrash → spurious logout" anti-pattern.
-   *
-   * No refresher wired ⇒ `'refreshed'` (a no-op re-probe): a static-`apiKey`
-   * deployment has no session to re-mint from; its credential source refreshes
-   * out-of-band, so we just re-probe with whatever it currently holds.
+   * its FSM. Single-flight; no refresher wired ⇒ `'refreshed'` (a no-op
+   * re-probe). Full contract on {@link CredentialLifecycle.refresh}.
    */
   async performCredentialRefresh(): Promise<'refreshed' | 'session_error' | 'network_error'> {
-    const refresher = this.credentialRefresher;
-    if (!refresher) return 'refreshed';
-    if (this.inFlightCredentialRefresh) return this.inFlightCredentialRefresh;
+    return this.credentialLifecycle.refresh();
+  }
 
-    const run = (async (): Promise<'refreshed' | 'session_error' | 'network_error'> => {
-      try {
-        const token = await refresher();
-        if (!token) {
-          // null = the long-lived login is gone (mint endpoint answered 401/403).
-          // Terminal — the FSM routes this to sign-out.
-          return 'session_error';
-        }
-        this.auth?.setAuthToken(token);
-        return 'refreshed';
-      } catch (error) {
-        // A throw = transient (offline / mint endpoint unreachable / 5xx). The
-        // login may be perfectly valid; never sign out for this — back off and
-        // retry. Mirrors the `getToken` throw-vs-null contract end-to-end.
-        const message = (error as Error)?.message ?? String(error);
-        // A relative-URL resolver invoked server-side (Node fetch has no origin
-        // to resolve against) emits the opaque "Failed to parse URL" / "Only
-        // absolute URLs are supported". Translate it into something actionable
-        // instead of a mystery transient blip — the proactive refresh is now
-        // browser-only, so hitting this means the resolver fired from SSR/RSC or
-        // a server route.
-        if (typeof window === 'undefined' && /parse URL|absolute URLs?/i.test(message)) {
-          getContext().logger.warn(
-            'credential resolver ran on the server with a relative URL — Node fetch needs an absolute URL. ' +
-              'Refresh the Ablo client in the browser, or build an absolute URL server-side ' +
-              "(e.g. new URL('/api/ablo-session', process.env.NEXT_PUBLIC_APP_URL)).",
-            { error: message },
-          );
-        } else {
-          getContext().logger.debug('access-credential re-mint failed (transient)', { error: message });
-        }
-        return 'network_error';
-      }
-    })();
-
-    this.inFlightCredentialRefresh = run;
-    try {
-      return await run;
-    } finally {
-      this.inFlightCredentialRefresh = null;
-    }
+  /**
+   * THE auth-recovery backbone for HTTP transports (lazy query lane etc.):
+   * classify-driven single-flight re-mint with the same FSM outcome routing
+   * the WS probe and proactive pre-roll use. `'retry'` ⇒ a fresh credential
+   * is in the credential source, replay the request ONCE. Full contract on
+   * {@link CredentialLifecycle.recoverFromAuthRejection}.
+   */
+  async recoverFromAuthRejection(recovery: RecoveryClass): Promise<'retry' | 'stop'> {
+    return this.credentialLifecycle.recoverFromAuthRejection(recovery);
   }
 
   /**
@@ -1116,248 +954,82 @@ export class BaseSyncedStore<
   }
 
   /**
-   * Install the access-credential lifecycle the CLIENT owns (this used to live
-   * in the React provider — wrong layer). Two parts:
-   *   1. REACTIVE — register `getToken` as the re-mint hook the FSM calls when a
-   *      probe finds the key stale (`credential_stale`) or on a nudge.
-   *   2. PROACTIVE — keep the short-lived key fresh ahead of trouble: a refresh
-   *      timer inside the TTL, plus re-mint on OS wake. The ENTIRE proactive
-   *      block is browser-gated (`typeof window`): server/SSR has no socket to
-   *      keep warm and the resolver is browser-oriented, so arming it in Node
-   *      would fire a relative-URL fetch and throw. (Agents pass a static
-   *      `apiKey` with no resolver, so this method is never called for them.)
-   *
-   * Config-driven and invisible, like Supabase's `autoRefreshToken` — consumers
-   * never call a refresh method. Idempotent (a second call replaces the first);
-   * torn down on {@link disconnect}.
+   * Install the access-credential lifecycle the CLIENT owns: register
+   * `getToken` as the reactive re-mint hook AND arm the browser-only
+   * proactive pre-roll (refresh timer + OS-wake re-mint). Idempotent
+   * (a second call replaces the first); torn down on {@link disconnect}.
+   * Full rationale on {@link CredentialLifecycle.start}.
    */
-  startCredentialLifecycle(getToken: () => Promise<string | null>): void {
-    this.stopCredentialLifecycle();
-    this.setCredentialRefresher(getToken);
-
-    // Re-mint through the SAME single-flight path the FSM's reactive probe uses
-    // (`performCredentialRefresh`) rather than calling `getToken()` directly. Two
-    // wins over the old direct call:
-    //   - SINGLE-FLIGHT: a wake nudge, an in-flight probe, and this proactive
-    //     roll share one in-flight promise — no double-mint thrash.
-    //   - The tri-state is HONOURED. The old code did `if (token) {…}` and
-    //     dropped a `null` on the floor — a zombie session that re-minted on
-    //     every tab focus and logged "signing out" forever without ever signing
-    //     out. `session_error` now drives the FSM to actually expire.
-    const refresh = async (): Promise<void> => {
-      const outcome = await this.performCredentialRefresh();
-      if (outcome === 'refreshed') {
-        // Fresh key already pushed into the credential source by
-        // `performCredentialRefresh`; nudge a parked connection to re-probe.
-        this.nudgeReconnect();
-      } else if (outcome === 'session_error') {
-        // The long-lived login is gone (mint answered 401/403). Surface it —
-        // the proactive path's job is to report this, not hide it. A no-op in
-        // FSM states that don't accept the event (the probe converges on
-        // sign-out there anyway); `session_expired`'s onEnter owns the log.
-        this.connectionManager?.send({ type: 'BOOTSTRAP_FAILED_SESSION' });
-      }
-      // 'network_error' → transient (offline / mint hiccup); the next timer tick
-      // or the FSM's own probe retries. Never sign out for it.
-    };
-
-    const teardowns: Array<() => void> = [];
-
-    // The ENTIRE proactive pre-roll is BROWSER-ONLY. On the server (Next.js
-    // SSR/RSC evaluating the `providers` module) there is no live socket to keep
-    // warm AND the scaffolded credential resolver is browser-oriented (a
-    // relative-URL `fetch('/api/ablo-session')`). Arming the timer server-side
-    // fires that resolver in Node, where fetch has no origin to resolve a
-    // relative URL against → "Failed to parse URL" on every tick. Browser-only
-    // refresh is the unanimous vendor model (Supabase `autoRefreshToken: isBrowser()`,
-    // Clerk/Ably/Stripe refresh client-side). The reactive re-mint hook
-    // (`setCredentialRefresher` above) stays UNCONDITIONAL: it only fires on a
-    // real connection probe, which can't happen during a bare SSR module eval.
-    if (typeof window !== 'undefined') {
-      // Comfortably inside the 15m `ek_` TTL; a missed (background-throttled)
-      // tick is recovered by the next, or by the reactive probe. The timer is
-      // the sole proactive PRE-ROLL — it keeps the key warm ahead of expiry even
-      // while the socket sits healthy-`connected` (a state the FSM never probes).
-      const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
-      const timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
-      teardowns.push(() => clearInterval(timer));
-
-      // OS-wake (desktop only): the Electron shell bridges `powerMonitor`
-      // 'resume' to this DOM event. This is the ONE event-trigger the lifecycle
-      // still owns, because `visibilitychange` does NOT fire on wake-from-sleep
-      // and — unlike `online`/`visibilitychange` — the ConnectionManager's own
-      // browser listeners (`setupBrowserListeners`) don't cover wake.
-      //
-      // The `online` and `visibilitychange` listeners that used to live here
-      // were REMOVED: the FSM already re-probes on NETWORK_ONLINE / TAB_VISIBLE
-      // through this exact credential path, so registering them here too only
-      // fired a second, null-swallowing mint per focus — the "session-key
-      // POSTed on every tab focus" spam in the console.
-      const onWake = (): void => void refresh();
-      window.addEventListener('ablo:wake', onWake);
-      teardowns.push(() => window.removeEventListener('ablo:wake', onWake));
-    }
-
-    this.credentialLifecycleTeardown = (): void => {
-      for (const t of teardowns) t();
-    };
+  startCredentialLifecycle(
+    getToken: CredentialRefresher,
+    opts?: { proactiveInNode?: boolean },
+  ): void {
+    this.credentialLifecycle.start(getToken, opts);
   }
 
   /** Tear down the proactive credential lifecycle (idempotent). */
   private stopCredentialLifecycle(): void {
-    this.credentialLifecycleTeardown?.();
-    this.credentialLifecycleTeardown = null;
+    this.credentialLifecycle.stop();
   }
 
   // ── Sync Group Management ────────────────────────────────────────────────
+  //
+  // Implementation extracted to sync/groupChange.ts. The methods below stay
+  // as thin protected delegates with unchanged signatures — subclass
+  // override points remain overridable, and the leaf routes cross-handler
+  // calls back through `groupChangeContext()` so dynamic dispatch holds.
+
+  /** Narrow context the group-change leaf talks back through. */
+  private groupChangeContext(): GroupChangeContext {
+    return {
+      database: this.database,
+      objectPool: this.objectPool,
+      getSubscribedSyncGroups: () => this.syncWebSocket?.getSyncGroups() ?? [],
+      getCurrentSyncGroups: () =>
+        this.userContext ? this.resolveSyncGroups(this.userContext) : null,
+      getBootstrapMode: () => this.userContext?.bootstrapMode,
+      disconnectWebSocket: () => { this.syncWebSocket?.disconnect(); },
+      emitConnectionEvent: (event) => { this.onConnectionEvent?.(event); },
+      handleGroupAdded: (payload, syncId) => this.handleGroupAdded(payload, syncId),
+      computeUpdatedSyncGroups: (payload) => this.computeUpdatedSyncGroups(payload),
+      forceFullRebootstrap: () => { this.forceFullRebootstrap(); },
+    };
+  }
 
   /**
-   * Handle an actionType 'G' delta.
-   *
-   * The server emits 'G' via two distinct pathways, distinguished by payload
-   * shape:
-   *
-   *   Incremental (EmitGroupAdded):   { group, userId }
-   *     - The recipient was added to a single sync group.
-   *     - Subsequent 'C' (Covering) deltas deliver each newly-visible entity.
-   *     - No re-bootstrap — entities arrive via the normal insert path.
-   *
-   *   Legacy (EmitGroupChange):       { addedGroups, removedGroups }
-   *     - Single delta carrying the full group membership diff.
-   *     - Forces a full re-bootstrap (disconnect + reconnect + fetch all).
-   *     - Deprecated on the server; kept here for wire-level backward compat.
+   * Handle an actionType 'G' delta — incremental `{ group, userId }` or
+   * legacy `{ addedGroups, removedGroups }` payloads. Full pathway doc on
+   * {@link groupChange.handleSyncGroupChange}.
    */
   protected async handleSyncGroupChange(delta: SyncDelta): Promise<void> {
-    const raw = typeof delta.data === 'string' ? JSON.parse(delta.data as string) : delta.data;
-    const rawObj = (raw ?? {}) as Record<string, unknown>;
-
-    // Detect incremental payload shape: { group, userId }
-    if (typeof rawObj.group === 'string' && typeof rawObj.userId === 'string') {
-      const incremental: GroupAddedPayload = {
-        group: rawObj.group,
-        userId: rawObj.userId,
-      };
-      await this.handleGroupAdded(incremental, delta.id);
-      return;
-    }
-
-    // Legacy payload: { addedGroups, removedGroups }
-    const payload: SyncGroupChangePayload = {
-      removedGroups: (rawObj.removedGroups as string[]) ?? [],
-      addedGroups: (rawObj.addedGroups as string[]) ?? [],
-    };
-
-    getContext().logger.info('[BaseSyncedStore] Sync group change received (legacy)', {
-      removedGroups: payload.removedGroups,
-      addedGroups: payload.addedGroups,
-      syncId: delta.id,
-    });
-
-    // SECURITY: If groups were removed, clear cached data immediately.
-    // This prevents revoked data from persisting if the device goes offline
-    // before the full re-bootstrap completes.
-    if (payload.removedGroups.length > 0) {
-      await this.database.clear();
-      this.objectPool.clear();
-      getContext().logger.info('[BaseSyncedStore] Cleared cached data due to revoked sync groups', {
-        removedGroups: payload.removedGroups,
-      });
-    }
-
-    const updatedGroups = this.computeUpdatedSyncGroups(payload);
-    await this.database.updateWorkspaceMetadata({ subscribedSyncGroups: updatedGroups });
-    this.forceFullRebootstrap();
+    return groupChange.handleSyncGroupChange(this.groupChangeContext(), delta);
   }
 
   /**
-   * Handle an incremental GroupAdded delta.
-   *
-   * Adds the new group to the subscription metadata without triggering a
-   * re-bootstrap. The server will follow up with 'C' (Covering) deltas for
-   * each newly-visible entity, which flow through the normal insert path.
+   * Handle an incremental GroupAdded delta — metadata only, no re-bootstrap
+   * (covering deltas bring the entities). See {@link groupChange.handleGroupAdded}.
    */
   protected async handleGroupAdded(payload: GroupAddedPayload, syncId: number): Promise<void> {
-    getContext().logger.info('[BaseSyncedStore] Group added (incremental)', {
-      group: payload.group,
-      syncId,
-    });
-
-    const current = new Set(this.syncWebSocket?.getSyncGroups() ?? []);
-    current.add(payload.group);
-    await this.database.updateWorkspaceMetadata({ subscribedSyncGroups: Array.from(current) });
-    // Note: no forceFullRebootstrap() — covering deltas will bring the entities.
+    return groupChange.handleGroupAdded(this.groupChangeContext(), payload, syncId);
   }
 
   /**
-   * Handle an actionType 'S' (GroupRemoved) delta.
-   *
-   * Signals that the recipient has lost access to a sync group. Because
-   * the client does not track per-entity group membership, we can't
-   * selectively purge entities belonging to that group. The safe fallback
-   * is the legacy behavior: clear local state and force a re-bootstrap
-   * with the updated group list.
-   *
-   * Future optimization: track group membership in the ObjectPool so 'S'
-   * can do a targeted purge instead of a full re-bootstrap.
+   * Handle an actionType 'S' (GroupRemoved) delta — SECURITY clear of local
+   * state + full re-bootstrap. See {@link groupChange.handleGroupRemoved}.
    */
   protected async handleGroupRemoved(delta: SyncDelta): Promise<void> {
-    const raw = typeof delta.data === 'string' ? JSON.parse(delta.data as string) : delta.data;
-    const rawObj = (raw ?? {}) as Record<string, unknown>;
-    const groupKey = typeof rawObj.group === 'string' ? rawObj.group : undefined;
-
-    if (!groupKey) {
-      getContext().logger.debug('[BaseSyncedStore] Group removed delta missing group key', {
-        syncId: delta.id,
-      });
-      return;
-    }
-
-    getContext().logger.info('[BaseSyncedStore] Group removed', {
-      group: groupKey,
-      syncId: delta.id,
-    });
-
-    // SECURITY: Clear cached data before re-bootstrap. This prevents
-    // revoked-group data from persisting if the device goes offline
-    // between receiving 'S' and completing the re-bootstrap.
-    await this.database.clear();
-    this.objectPool.clear();
-
-    // Update subscription metadata so the re-bootstrap fetches the
-    // correct set of groups.
-    const current = new Set(this.syncWebSocket?.getSyncGroups() ?? []);
-    current.delete(groupKey);
-    await this.database.updateWorkspaceMetadata({ subscribedSyncGroups: Array.from(current) });
-
-    this.forceFullRebootstrap();
+    return groupChange.handleGroupRemoved(this.groupChangeContext(), delta);
   }
 
   /** Compute new sync groups after applying additions and removals */
   protected computeUpdatedSyncGroups(payload: SyncGroupChangePayload): string[] {
-    const current = new Set(this.syncWebSocket?.getSyncGroups() ?? []);
-    for (const g of payload.removedGroups) current.delete(g);
-    for (const g of payload.addedGroups) current.add(g);
-    return Array.from(current);
+    return groupChange.computeUpdatedSyncGroups(this.groupChangeContext(), payload);
   }
 
-  /** Force a full re-bootstrap via connection lifecycle event.
-   *
-   * No-op for `bootstrapMode: 'none'` participants — they never pull
-   * baseline state, so a "force re-bootstrap" trigger (sync-group
-   * shrink, scope revocation) instead just flushes the local pool and
-   * relies on covering deltas to repopulate the data they actually
-   * subscribe to.
-   */
+  /** Force a full re-bootstrap via connection lifecycle event (no-op for
+   *  `bootstrapMode: 'none'` participants — see {@link groupChange.forceFullRebootstrap}). */
   protected forceFullRebootstrap(): void {
-    if (this.userContext?.bootstrapMode === 'none') {
-      getContext().logger.info(
-        '[BaseSyncedStore] forceFullRebootstrap skipped (bootstrapMode=none)',
-      );
-      return;
-    }
-    this.database.markRequiresFullBootstrap();
-    this.syncWebSocket?.disconnect();
-    this.onConnectionEvent?.('WS_DISCONNECTED');
+    groupChange.forceFullRebootstrap(this.groupChangeContext());
   }
 
   /**
@@ -1369,48 +1041,38 @@ export class BaseSyncedStore<
    * check can never disagree.
    */
   protected resolveSyncGroups(context: UserContext): readonly string[] {
-    if (context.syncGroups && context.syncGroups.length > 0) {
-      return context.syncGroups;
-    }
-    return [];
+    return groupChange.resolveSyncGroups(context);
   }
 
   /** Check if sync groups shrank since last session — force full bootstrap if so */
   protected async checkSyncGroupShrinkage(): Promise<void> {
-    if (!this.userContext) return;
+    return groupChange.checkSyncGroupShrinkage(this.groupChangeContext());
+  }
 
-    try {
-      const metadata = await this.database.getWorkspaceMetadata();
-      const stored = metadata?.subscribedSyncGroups ?? [];
-      if (stored.length === 0) return;
+  // ── Bootstrap apply ──────────────────────────────────────────────────────
+  //
+  // Implementation extracted to sync/bootstrapApply.ts. Thin protected
+  // delegates below keep the signatures (and subclass overridability)
+  // unchanged; the leaf talks back through `poolContext()` — enrichment
+  // stays pre-bound to `this.enrichRelations` so that override point holds.
 
-      const currentGroups = new Set(this.resolveSyncGroups(this.userContext));
-
-      const removedGroups = stored.filter((g: string) => !currentGroups.has(g));
-
-      if (removedGroups.length > 0) {
-        getContext().logger.info('[BaseSyncedStore] Sync groups shrank — forcing full bootstrap', {
-          removedGroups,
-          storedCount: stored.length,
-          currentCount: currentGroups.size,
-        });
-
-        // SECURITY: Clear cached data before re-bootstrap to prevent
-        // revoked-group data from persisting if device goes offline
-        await this.database.clear();
-        this.objectPool.clear();
-
-        this.database.markRequiresFullBootstrap();
-      }
-
-      await this.database.updateWorkspaceMetadata({
-        subscribedSyncGroups: Array.from(currentGroups),
-      });
-    } catch (error) {
-      getContext().logger.debug('[BaseSyncedStore] Failed to check sync group shrinkage', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+  /** Narrow context the bootstrap-apply leaf talks back through. */
+  private poolContext(): PoolContext {
+    const store = this;
+    return {
+      applyDeltaBatchToPool: (results) =>
+        { this.syncClient.applyDeltaBatchToPool(
+          results,
+          (name, data) => this.enrichRelations(name, data),
+        ); },
+      applyBootstrapDataToPool: (bootstrapData, protectedIds) =>
+        this.syncClient.applyBootstrapDataToPool(bootstrapData, protectedIds),
+      getPoolSize: () => this.objectPool.size,
+      getAllPoolIds: () => this.objectPool.getAllIds(),
+      get bootstrapDeltaQueue() { return store.bootstrapDeltaQueue; },
+      set bootstrapDeltaQueue(queue) { store.bootstrapDeltaQueue = queue; },
+      applyDeltaFrame: (deltas) => { this.applyDeltaFrame(deltas); },
+    };
   }
 
   /** Apply bootstrap data to the ObjectPool with ghost removal */
@@ -1419,40 +1081,7 @@ export class BaseSyncedStore<
     bootstrapResult: BootstrapResult,
     protectedIds?: ReadonlySet<string>
   ): RehydrationStats {
-    const { bootstrapData } = bootstrapResult;
-
-    // Partial bootstrap: Database.processDeltaBatch already wrote the deltas
-    // to IDB. Route the same results through the delta-apply path so the
-    // in-memory pool evicts deleted entities (and updates modified ones).
-    // Without this, reconnect DELETEs persist to IDB but the canvas keeps
-    // showing ghost layers until a full reload.
-    if (bootstrapData.type === 'partial') {
-      const deltaResults = bootstrapResult.deltaResults;
-      if (deltaResults && deltaResults.length > 0) {
-        this.syncClient.applyDeltaBatchToPool(
-          deltaResults,
-          (name, data) => this.enrichRelations(name, data),
-        );
-      }
-      return { added: 0, updated: 0, removed: 0, skipped: 0, healed: 0, elapsedMs: 0 };
-    }
-
-    if (!bootstrapData.models) {
-      return { added: 0, updated: 0, removed: 0, skipped: 0, healed: 0, elapsedMs: 0 };
-    }
-
-    const start = typeof performance !== 'undefined' ? performance.now() : Date.now();
-
-    // SyncClient owns: model creation, healing, pool upsert, ghost removal
-    const stats = this.syncClient.applyBootstrapDataToPool(bootstrapData, protectedIds);
-
-    const elapsedMs = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - start);
-
-    getContext().logger.info('[BaseSyncedStore] Bootstrap applied', {
-      ...stats, elapsedMs, poolSize: this.objectPool.size,
-    });
-
-    return { ...stats, elapsedMs };
+    return bootstrapApply.applyBootstrapToPool(this.poolContext(), bootstrapResult, protectedIds);
   }
 
   // ── Initialize + Lifecycle ───────────────────────────────────────────────
@@ -1502,11 +1131,6 @@ export class BaseSyncedStore<
       const lastSyncId = (yield this.database.getLastSyncId()) as number;
       this.syncClient.position.advancePersisted(lastSyncId || 0);
 
-      try {
-        const versions = (yield this.database.getVersionVector()) as Record<string, number> | null;
-        if (versions && typeof versions === 'object') Object.assign(this.versionVector, versions);
-      } catch {}
-
       // If local data available, show UI immediately
       if (hasLocalData) {
         this.dataReady = true;
@@ -1554,8 +1178,17 @@ export class BaseSyncedStore<
         yield this.waitForWebSocketConnected(5000);
       } else if (requirements.type !== 'local') {
         if (hasLocalData) {
-          // Background bootstrap — don't block UI
-          this.performBackgroundBootstrap(requirements, context, signal);
+          // Background bootstrap — don't block UI. The method captures its own
+          // operational failures; this backstop covers escapes from the
+          // delta-queue replay in withDeltaQueuing's finally (and the error
+          // handler itself), which would otherwise vanish unhandled.
+          void this.performBackgroundBootstrap(requirements, context, signal).catch(
+            (error: unknown) => {
+              getContext().observability.captureBootstrapFailure(error, {
+                type: 'background-orchestration',
+              });
+            }
+          );
         } else {
           // First load — must wait for server data
           yield this.executeBootstrapWithTimeout(
@@ -1587,7 +1220,7 @@ export class BaseSyncedStore<
         this.dataReady = false;
         this.initialized = false;
         this.updateSyncStatus({ state: 'idle', progress: 0 });
-        return { success: false, error: error as Error };
+        return { success: false, error: error };
       }
 
       const isSession = SyncSessionError.isSessionError(error);
@@ -1596,8 +1229,8 @@ export class BaseSyncedStore<
       if (isSession) {
         this.syncWebSocket?.setSessionErrorDetected();
         this.syncWebSocket?.disconnect();
-        this.updateSyncStatus({ state: 'error', error: error as Error });
-        return { success: false, error: error as Error };
+        this.updateSyncStatus({ state: 'error', error: error });
+        return { success: false, error: error };
       }
 
       // Fallback: show local data if available
@@ -1648,7 +1281,7 @@ export class BaseSyncedStore<
         if (SyncSessionError.isSessionError(error)) {
           this.syncWebSocket?.setSessionErrorDetected();
           this.syncWebSocket?.disconnect();
-          this.updateSyncStatus({ state: 'error', error: error as Error });
+          this.updateSyncStatus({ state: 'error', error: error });
         } else if (!this.syncWebSocket?.isConnected()) {
           this.updateSyncStatus({ state: 'offline', offlineSince: new Date() });
         }
@@ -1670,25 +1303,12 @@ export class BaseSyncedStore<
 
   /** Collect IDs that must survive ghost removal (added by deltas during bootstrap) */
   protected collectDeltaProtectedIds(preBootstrapIds: ReadonlySet<string>): Set<string> {
-    const protectedIds = new Set<string>();
-    for (const id of this.objectPool.getAllIds()) {
-      if (!preBootstrapIds.has(id)) protectedIds.add(id);
-    }
-    for (const delta of this.bootstrapDeltaQueue ?? []) {
-      if (delta.actionType !== 'D' && delta.modelId) protectedIds.add(delta.modelId);
-    }
-    return protectedIds;
+    return bootstrapApply.collectDeltaProtectedIds(this.poolContext(), preBootstrapIds);
   }
 
-  /** Replay deltas queued during bootstrap */
+  /** Replay deltas queued during bootstrap (atomically, via `applyDeltaFrame`). */
   protected replayQueuedDeltas(): void {
-    const queue = this.bootstrapDeltaQueue;
-    this.bootstrapDeltaQueue = null;
-    if (!queue || queue.length === 0) return;
-    // Deltas that landed during bootstrap are a complete frame — apply
-    // them atomically (one flush, one re-render) rather than dribbling
-    // each back through the live debounce path.
-    this.applyDeltaFrame(queue);
+    bootstrapApply.replayQueuedDeltas(this.poolContext());
   }
 
   /**
@@ -1747,6 +1367,10 @@ export class BaseSyncedStore<
     if (this.syncWebSocket) { this.syncWebSocket.disconnect(); this.syncWebSocket = null; }
     this.syncClient.disconnect();
     this.queryProcessor.clearCache();
+    // Stop the pool's GC interval — the one timer the pool arms itself.
+    // Without this a discarded store retains its whole pool via the interval
+    // closure (and a Node process without `unref` support can't exit).
+    this.objectPool.stopGC();
     this.updateSyncStatus({ state: 'offline' });
   }
 
@@ -1851,7 +1475,6 @@ export class BaseSyncedStore<
       organizationId: context.organizationId,
       syncGroups: [...this.resolveSyncGroups(context)],
       lastSyncId,
-      versions: this.versionVector,
       kind: context.kind,
       capabilityToken: context.capabilityToken,
       getAuthToken: this.auth?.getAuthToken,
@@ -1935,7 +1558,9 @@ export class BaseSyncedStore<
       }
     });
 
-    const onSessionError = this.syncWebSocket.subscribe('session_error', (error: Error) => {
+    // Terminal session loss (revocation / the login itself is gone): notify,
+    // route the FSM to its terminal state, and clear local data.
+    const handleTerminalSessionError = (error: Error): void => {
       getContext().observability.captureWebSocketError({ context: 'session-error', error: error.message });
       this.onConnectionEvent?.('WS_SESSION_ERROR');
       for (const listener of this.sessionErrorListeners) {
@@ -1953,6 +1578,58 @@ export class BaseSyncedStore<
         getContext().logger.debug('[BaseSyncedStore] Failed to clear database on session error', clearErr);
       });
       this.objectPool.clear();
+    };
+
+    const onSessionError = this.syncWebSocket.subscribe('session_error', (error: Error) => {
+      // WS analog of HTTP's `apikey_expired` (see SyncSessionError.
+      // isSessionErrorResponse): the hub's keepalive reaper closes sockets
+      // whose SHORT-LIVED access credential (`ek_`/`rk_`) passed its expiry
+      // with `4001 credential_expired`. That is re-mintable from the
+      // still-valid login — recover silently (un-latch, single-flight
+      // re-mint, reconnect) instead of signing out and clearing local data.
+      // Only a mint that answers `null` (the login itself is gone) falls
+      // through to the terminal path. Without this branch, every credential
+      // TTL elapse wedged the socket behind the write-once session latch.
+      if (SyncSessionError.isSessionError(error) && isAccessCredentialExpiryCloseReason(error.message)) {
+        getContext().observability.breadcrumb(
+          'WebSocket closed for expired access credential — re-minting',
+          'sync.websocket',
+          'warning',
+        );
+        // Un-latch BEFORE the async mint so the FSM's own recovery
+        // (probe → refreshing_credential → reconnect) is never blocked on
+        // our .then() ordering.
+        this.syncWebSocket?.clearSessionError();
+        void this.performCredentialRefresh().then((outcome) => {
+          if (outcome === 'refreshed') {
+            if (this.connectionManager) {
+              // Kick a parked FSM; a concurrent probe joins the same
+              // single-flight mint, so this never double-mints.
+              this.nudgeReconnect();
+            } else {
+              // Agent/system clients have no connection FSM
+              // (createConnectionManager returns null for kind 'agent') —
+              // reconnect the socket directly; connect() reads the
+              // freshly-minted credential from the credential source.
+              this.syncWebSocket?.resetReconnectAttempts();
+              this.syncWebSocket?.connect();
+            }
+            return;
+          }
+          if (outcome === 'session_error') {
+            // The mint endpoint rejected: the long-lived login is gone.
+            // Re-latch so writes reject with the permanent session type
+            // (see SyncWebSocket.notConnectedError) instead of parking.
+            this.syncWebSocket?.setSessionErrorDetected();
+            handleTerminalSessionError(error);
+          }
+          // 'network_error' → transient mint failure. The WS_DISCONNECTED
+          // that follows this event already put the FSM on its probe/backoff
+          // loop, which retries through the same single-flight refresh.
+        });
+        return;
+      }
+      handleTerminalSessionError(error);
     });
 
     // Handshake failed: WS close before open. The HTTP status is hidden
@@ -2089,27 +1766,61 @@ export class BaseSyncedStore<
   }
 
   // ── Delta Processing Pipeline ─────────────────────────────────────────────
+  //
+  // Implementation extracted to sync/deltaPipeline.ts (dedup, enqueue
+  // bookkeeping, debounce, flush). The methods below stay as thin protected
+  // delegates with unchanged signatures, and the leaf routes every call to
+  // a protected override point back through `deltaPipelineContext` so
+  // subclass dynamic dispatch is preserved. `applyDeltaFrame` — the
+  // authoritative-apply correctness seam — deliberately stays here.
 
-  /** State signature for delta deduplication */
-  private extractStateSignature(delta: SyncDelta): Record<string, unknown> | null {
-    if (!delta.data || typeof delta.data !== 'object') return null;
+  /** Memoized pipeline context — `enqueueDelta` runs once per delta, so the
+   *  accessor object is built once and reused (the get/set accessors always
+   *  read the live host fields). */
+  private _deltaPipelineContext: DeltaPipelineContext | null = null;
 
-    const data = typeof delta.data === 'string'
-      ? (JSON.parse(delta.data) as Record<string, unknown>)
-      : (delta.data as Record<string, unknown>);
-
-    // Generic state fields — subclasses can override getStateFields() for model-specific fields
-    const fieldsToCheck = this.getStateFields(delta.modelName);
-    const signature: Record<string, unknown> = {
-      actionType: delta.actionType,
-      modelName: delta.modelName,
+  private get deltaPipelineContext(): DeltaPipelineContext {
+    if (this._deltaPipelineContext) return this._deltaPipelineContext;
+    const store = this;
+    this._deltaPipelineContext = {
+      // Shared pipeline state, backed by the host fields.
+      get pendingDeltas() { return store.pendingDeltas; },
+      set pendingDeltas(deltas) { store.pendingDeltas = deltas; },
+      get batchTimer() { return store.batchTimer; },
+      set batchTimer(timer) { store.batchTimer = timer; },
+      get bootstrapDeltaQueue() { return store.bootstrapDeltaQueue; },
+      get smartSyncOptions() { return store.smartSyncOptions; },
+      get highestProcessedSyncId() { return store.highestProcessedSyncId; },
+      get lastAckedId() { return store.lastAckedId; },
+      // SyncClient position/transaction bookkeeping.
+      onDeltaReceived: (syncId) => { this.syncClient.onDeltaReceived(syncId); },
+      advanceApplied: (syncId) => { this.syncClient.position.advanceApplied(syncId); },
+      advancePersisted: (syncId) => { this.syncClient.position.advancePersisted(syncId); },
+      // Persistence + pool writes.
+      processDeltaBatch: (deltas) => this.database.processDeltaBatch(deltas),
+      applyDeltaBatchToPool: (results) =>
+        { this.syncClient.applyDeltaBatchToPool(
+          results,
+          (name, data) => this.enrichRelations(name, data),
+        ); },
+      acknowledge: (syncId) => { this.syncWebSocket?.acknowledge?.(syncId); },
+      get objectPool() { return store.objectPool; },
+      // Dynamic-dispatch hooks — protected override points on this class.
+      getStateFields: (modelName) => this.getStateFields(modelName),
+      isCustomEntity: (modelName) => this.isCustomEntity(modelName),
+      createCustomEntity: (modelName, modelId, data) =>
+        this.createCustomEntity(modelName, modelId, data),
+      deduplicateDeltas: (deltas) => this.deduplicateDeltas(deltas),
+      flushPendingDeltas: () => this.flushPendingDeltas(),
+      handleFlushError: (error) => { this.handleFlushError(error); },
+      handleSyncGroupChange: (delta) => this.handleSyncGroupChange(delta),
+      handleGroupRemoved: (delta) => this.handleGroupRemoved(delta),
+      forceFullRebootstrap: () => { this.forceFullRebootstrap(); },
+      cascadeCancelTransactionsForDeletedParent: (parentModelName, parentId) => {
+        this.cascadeCancelTransactionsForDeletedParent(parentModelName, parentId);
+      },
     };
-
-    for (const field of fieldsToCheck) {
-      if (field in data) signature[field] = data[field];
-    }
-
-    return signature;
+    return this._deltaPipelineContext;
   }
 
   /** Get fields that represent meaningful state for deduplication. Override for model-specific fields. */
@@ -2117,42 +1828,9 @@ export class BaseSyncedStore<
     return ['status', 'state', 'isActive'];
   }
 
-  private isSameState(a: Record<string, unknown> | null, b: Record<string, unknown> | null): boolean {
-    if (!a || !b) return false;
-    const keys = Object.keys(a);
-    if (keys.length !== Object.keys(b).length) return false;
-    return keys.every((k) => a[k] === b[k]);
-  }
-
   /** Deduplicate deltas to the same entity — keep meaningful state transitions only */
   protected deduplicateDeltas(deltas: SyncDelta[]): SyncDelta[] {
-    const byEntity = new Map<string, SyncDelta[]>();
-    for (const d of deltas) {
-      const key = `${d.modelName}:${d.modelId}`;
-      if (!byEntity.has(key)) byEntity.set(key, []);
-      byEntity.get(key)!.push(d);
-    }
-
-    const result: SyncDelta[] = [];
-    for (const entityDeltas of byEntity.values()) {
-      const sorted = entityDeltas.sort((a, b) => a.id - b.id);
-
-      // DELETE wins — it's the final state
-      const del = sorted.find((d) => d.actionType === 'D');
-      if (del) { result.push(del); continue; }
-
-      // Keep deltas that represent different states
-      const unique: SyncDelta[] = [];
-      let prev: Record<string, unknown> | null = null;
-      for (const d of sorted) {
-        const sig = this.extractStateSignature(d);
-        if (!this.isSameState(prev, sig)) { unique.push(d); prev = sig; }
-      }
-
-      result.push(...(unique.length > 0 ? unique : [sorted[sorted.length - 1]]));
-    }
-
-    return result.sort((a, b) => a.id - b.id);
+    return deltaPipeline.deduplicateDeltas(this.deltaPipelineContext, deltas);
   }
 
   /** Process incoming delta with smart batching */
@@ -2225,76 +1903,12 @@ export class BaseSyncedStore<
     delta: SyncDelta,
     options: { authoritative?: boolean } = {},
   ): boolean {
-    // Dedup guard — skip already-processed deltas. The `applied` watermark is a
-    // valid skip threshold ONLY for in-order live traffic; an authoritative
-    // catch-up frame bypasses it (see `applyDeltaFrame`) so an out-of-order
-    // live delta that advanced the watermark can't cause the frame's lower ids
-    // to be silently dropped.
-    if (!options.authoritative && delta.id > 0 && delta.id <= this.highestProcessedSyncId) {
-      return false;
-    }
-
-    // Confirm awaiting transactions via sync ID threshold (before batching)
-    this.syncClient.onDeltaReceived(delta.id);
-
-    // Update version vector
-    const entityType = delta.modelName.toLowerCase();
-    if (this.versionVector[entityType] !== undefined) {
-      this.versionVector[entityType] = Math.max(this.versionVector[entityType], delta.id);
-    }
-
-    // Queue during active bootstrap
-    if (this.bootstrapDeltaQueue !== null) {
-      this.bootstrapDeltaQueue.push(delta);
-      return false;
-    }
-
-    // Advance watermark
-    this.syncClient.position.advanceApplied(delta.id);
-
-    // Sync group added — handle immediately. Supports both legacy
-    // (addedGroups/removedGroups) and incremental (group/userId) payloads.
-    if (delta.actionType === 'G') {
-      void this.handleSyncGroupChange(delta);
-      return false;
-    }
-
-    // Sync group removed — handle immediately. Clears affected local state
-    // and forces re-bootstrap with the updated group list.
-    if (delta.actionType === 'S') {
-      void this.handleGroupRemoved(delta);
-      return false;
-    }
-
-    // DELETE — fire the cascade cancel immediately (O(1) via FK index;
-    // must run BEFORE any subsequent update on the same model lands so
-    // pending update transactions for soon-deleted children don't race
-    // their parent's delete) but route the IDB+pool write through the
-    // same batched path as UPDATEs. The previous immediate-flush path
-    // produced N IDB writes + N pool mutations + N `models:changed`
-    // events when a peer deleted a chart with N layers; the batched
-    // path produces one of each per microtask flush. Dedup in
-    // `flushPendingDeltas` handles the U-then-D-on-same-model case
-    // correctly via arrival-order replay through `processDeltaBatch`.
-    if (delta.actionType === 'D') {
-      this.cascadeCancelTransactionsForDeletedParent(delta.modelName, delta.modelId);
-    }
-
-    this.pendingDeltas.push(delta);
-    return true;
+    return deltaPipeline.enqueueDelta(this.deltaPipelineContext, delta, options);
   }
 
   /** Debounce a flush for live single-delta traffic. */
   protected scheduleDeltaFlush(): void {
-    if (this.batchTimer) clearTimeout(this.batchTimer);
-
-    if (this.pendingDeltas.length >= this.smartSyncOptions.maxBatchSize) {
-      void this.flushPendingDeltas().catch(this.handleFlushError);
-    } else {
-      this.batchTimer = setTimeout(() => {
-        void this.flushPendingDeltas().catch(this.handleFlushError);
-      }, this.smartSyncOptions.batchingDelay);
-    }
+    deltaPipeline.scheduleDeltaFlush(this.deltaPipelineContext);
   }
 
   /**
@@ -2338,80 +1952,7 @@ export class BaseSyncedStore<
   /** Flush pending deltas with deduplication and batched ObjectPool mutations */
   /** Flush pending deltas with deduplication. Delegates pool writes to SyncClient. */
   protected async flushPendingDeltas(): Promise<void> {
-    if (this.pendingDeltas.length === 0) return;
-
-    const deduplicatedDeltas = this.deduplicateDeltas(this.pendingDeltas);
-
-    // Custom entities → apply directly to ObjectPool (skip IDB)
-    const customDeltas = deduplicatedDeltas.filter((d) => this.isCustomEntity(d.modelName));
-    if (customDeltas.length > 0) {
-      runInAction(() => {
-        for (const delta of customDeltas) {
-          const data = typeof delta.data === 'string'
-            ? (JSON.parse(delta.data as string) as Record<string, unknown>)
-            : (delta.data as Record<string, unknown>);
-
-          // 'C' (Covering) is treated identically to 'I' here — the client
-          // gained permission to see the entity, so we insert it into the
-          // pool as if newly created.
-          if (delta.actionType === 'I' || delta.actionType === 'U' || delta.actionType === 'C') {
-            const existing = this.objectPool.get(delta.modelId);
-            if (existing) {
-              existing.updateFromData(data);
-            } else {
-              const model = this.createCustomEntity(delta.modelName, delta.modelId, data);
-              if (model) { model.markAsPersisted(); this.objectPool.add(model, ModelScope.live); }
-            }
-          } else if (delta.actionType === 'D') {
-            this.objectPool.remove(delta.modelId);
-          }
-        }
-      });
-    }
-
-    // Regular deltas → IDB then ObjectPool via SyncClient.
-    // 'G' and 'S' deltas are routed upstream (handleSyncGroupChange,
-    // handleGroupRemoved) and never reach flushPendingDeltas, but the
-    // Database.processDelta signature accepts them defensively.
-    const regularDeltas = deduplicatedDeltas.filter((d) => !this.isCustomEntity(d.modelName));
-    const batch = await this.database.processDeltaBatch(
-      regularDeltas.map((d) => ({
-        syncId: d.id,
-        actionType: d.actionType,
-        modelName: d.modelName,
-        modelId: d.modelId,
-        data: typeof d.data === 'string' ? JSON.parse(d.data as string) : d.data,
-        // Thread `transactionId` through so the receive layer can
-        // recognize echoes of locally-applied transactions and skip
-        // the pool mutation. See `OPTIMISTIC_RECONCILIATION.md`.
-        transactionId: d.transactionId,
-      }))
-    );
-    const dbResults = batch.results;
-
-    // Delegate ObjectPool writes to SyncClient (owns pool operations)
-    this.syncClient.applyDeltaBatchToPool(dbResults, (name, data) => this.enrichRelations(name, data));
-
-    // Acknowledge + advance sync cursor — gated on IDB persistence.
-    //
-    // We MUST ack `persistedSyncId` (the high-water mark of deltas whose
-    // store transaction actually committed), NOT the input batch's last
-    // delta id. Acking by input range advances the server's view past
-    // deltas that never wrote to IDB; the next catch-up request would
-    // then send the advanced cursor and the server replies "you're up
-    // to date" — losing the un-persisted delta forever. This is the
-    // Replicache "same-transaction" invariant: the cursor and the
-    // persisted view must be consistent.
-    const persistedSyncId = batch.persistedSyncId;
-    if (persistedSyncId > this.lastAckedId) {
-      this.syncWebSocket?.acknowledge?.(persistedSyncId);
-      this.syncClient.position.advancePersisted(persistedSyncId);
-    }
-
-    // Cache invalidation is automatic via SyncClient 'models:changed' event
-
-    this.pendingDeltas = [];
-    if (this.batchTimer) { clearTimeout(this.batchTimer); this.batchTimer = null; }
+    return deltaPipeline.flushPendingDeltas(this.deltaPipelineContext);
   }
 
   // ── Core Mutations (thin delegation to SyncClient) ────────────────────────
@@ -2647,7 +2188,7 @@ export class BaseSyncedStore<
       actionType: delta.actionType,
       modelName: delta.modelName,
       modelId: delta.modelId,
-      data: typeof delta.data === 'string' ? JSON.parse(delta.data as string) : delta.data,
+      data: typeof delta.data === 'string' ? JSON.parse(delta.data) : delta.data,
     });
 
     if (!dbResult) return;

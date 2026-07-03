@@ -15,6 +15,7 @@
 import { z } from 'zod';
 import type { QueryBatch, QueryBatchResult } from './types.js';
 import { translateHttpError } from '../errors.js';
+import { classifyRecovery, type RecoveryClass } from '../errorCodes.js';
 import { withAuthHeaders, type AuthTokenGetter } from '../auth/credentialSource.js';
 import { getContext } from '../context.js';
 
@@ -62,6 +63,17 @@ export interface PostQueryOptions {
    * New SDK internals should pass `getAuthToken`.
    */
   capabilityToken?: string;
+
+  /**
+   * THE auth-recovery backbone (the store's single-flight re-mint with FSM
+   * outcome routing — see `CredentialLifecycle.recoverFromAuthRejection`).
+   * When a query is rejected with a 401, the failure's `RecoveryClass` is
+   * passed here; `'retry'` means a fresh credential landed in the credential
+   * source and the request is replayed ONCE (the PowerSync/axios-interceptor
+   * pattern: invalidate on 401, single-flight refresh, one-shot replay —
+   * never a retry loop). Absent ⇒ the pre-backbone behavior: log + empty.
+   */
+  recoverCredential?: (recovery: RecoveryClass) => Promise<'retry' | 'stop'>;
 }
 
 /**
@@ -79,68 +91,99 @@ export async function postQuery(
   const url = `${options.baseUrl}/sync/query`;
   const timeout = options.fetchTimeout ?? 30_000;
 
-  // Race the fetch against a timeout so hung requests don't block
-  // the calling helper indefinitely.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  // At most TWO attempts: the original request, plus ONE replay after a
+  // successful credential recovery (see `recoverCredential`). Bounded by
+  // construction — a second auth rejection falls through to the log+empty
+  // path, so a wedged credential can never retry-loop.
+  for (let attempt = 0; ; attempt++) {
+    // Race the fetch against a timeout so hung requests don't block
+    // the calling helper indefinitely. Fresh controller per attempt.
+    const controller = new AbortController();
+    const timer = setTimeout(() => { controller.abort(); }, timeout);
 
-  try {
-    const headers = withAuthHeaders(
-      options.getAuthToken,
-      { 'Content-Type': 'application/json' },
-      options.capabilityToken,
-    );
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(batch),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      // Build the typed AbloError for this HTTP failure (same code→class
-      // map the throwing paths use) so the log is tagged + carries a
-      // registry `code` (e.g. AbloAuthenticationError/session_expired on a
-      // 401) instead of a bare status. We deliberately DON'T throw —
-      // fire-and-forget callers would kill the Next.js router on an
-      // unhandled rejection — and still return empty slots, but the failure
-      // is now legible as an Ablo error. Routed through the gated logger so it
-      // obeys ABLO_LOG_LEVEL like everything else: a consumer-register `warn`
-      // (their models + the typed message + a wire `code`) with the forensics on
-      // a `debug` companion. Actionable and not self-healing — the read returns
-      // empty until the underlying cause (auth, network) is resolved.
-      let body: unknown = null;
-      try {
-        body = await response.clone().json();
-      } catch {
-        // non-JSON error page — translateHttpError falls back to status text
-      }
-      const err = translateHttpError(response.status, body);
-      const models = batch.queries.map((q) => q.model).join(', ');
-      getContext().logger.warn(
-        `Could not load ${models} — ${err.message} (code: ${err.code ?? response.status}). No results were returned.`,
+    try {
+      // Recomputed per attempt: `withAuthHeaders` reads the live credential
+      // source, so a replay after recovery carries the freshly-minted key.
+      const headers = withAuthHeaders(
+        options.getAuthToken,
+        { 'Content-Type': 'application/json' },
+        options.capabilityToken,
       );
-      getContext().logger.debug('[postQuery.error] query http failure', {
-        type: err.type,
-        code: err.code ?? response.status,
-        models,
-        message: err.message,
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(batch),
+        signal: controller.signal,
       });
-      return { results: batch.queries.map(() => []) };
-    }
 
-    const raw: unknown = await response.json();
-    const parsed = QueryBatchResultSchema.safeParse(raw);
-    if (!parsed.success) {
-      // A malformed server response isn't something the consumer can act on
-      // (server/protocol issue) → debug, gated like everything else.
-      getContext().logger.debug('[postQuery.error] malformed response', {
-        issues: parsed.error.issues,
-      });
-      return { results: batch.queries.map(() => []) };
+      if (!response.ok) {
+        // Build the typed AbloError for this HTTP failure (same code→class
+        // map the throwing paths use) so the log is tagged + carries a
+        // registry `code` (e.g. AbloAuthenticationError/session_expired on a
+        // 401) instead of a bare status. We deliberately DON'T throw —
+        // fire-and-forget callers would kill the Next.js router on an
+        // unhandled rejection — and still return empty slots, but the failure
+        // is now legible as an Ablo error.
+        let body: unknown = null;
+        try {
+          body = await response.clone().json();
+        } catch {
+          // non-JSON error page — translateHttpError falls back to status text
+        }
+        const err = translateHttpError(response.status, body);
+
+        // 401 → hand the failure to the auth-recovery backbone, ONCE. The
+        // class routes the decision: `access_credential_expiry` re-mints
+        // silently and replays; `session_expiry` reports terminal session
+        // loss (sign-out is the FSM's call, not ours); everything else stops.
+        // A bare 401 with no readable code is classified as an expired access
+        // key — the NetworkProbe precedent: the only terminal path is the
+        // re-mint itself resolving null, never an ambiguous status.
+        if (attempt === 0 && response.status === 401 && options.recoverCredential) {
+          const recovery: RecoveryClass =
+            typeof err.code === 'string'
+              ? classifyRecovery(err.code)
+              : 'access_credential_expiry';
+          const outcome = await options.recoverCredential(recovery);
+          if (outcome === 'retry') {
+            getContext().logger.debug('[postQuery] credential recovered — replaying query once', {
+              code: err.code ?? response.status,
+            });
+            continue;
+          }
+        }
+
+        // Routed through the gated logger so it obeys ABLO_LOG_LEVEL like
+        // everything else: a consumer-register `warn` (their models + the
+        // typed message + a wire `code`) with the forensics on a `debug`
+        // companion. Actionable and not self-healing — the read returns
+        // empty until the underlying cause (auth, network) is resolved.
+        const models = batch.queries.map((q) => q.model).join(', ');
+        getContext().logger.warn(
+          `Could not load ${models} — ${err.message} (code: ${err.code ?? response.status}). No results were returned.`,
+        );
+        getContext().logger.debug('[postQuery.error] query http failure', {
+          type: err.type,
+          code: err.code ?? response.status,
+          models,
+          message: err.message,
+        });
+        return { results: batch.queries.map(() => []) };
+      }
+
+      const raw: unknown = await response.json();
+      const parsed = QueryBatchResultSchema.safeParse(raw);
+      if (!parsed.success) {
+        // A malformed server response isn't something the consumer can act on
+        // (server/protocol issue) → debug, gated like everything else.
+        getContext().logger.debug('[postQuery.error] malformed response', {
+          issues: parsed.error.issues,
+        });
+        return { results: batch.queries.map(() => []) };
+      }
+      return parsed.data;
+    } finally {
+      clearTimeout(timer);
     }
-    return parsed.data;
-  } finally {
-    clearTimeout(timer);
   }
 }

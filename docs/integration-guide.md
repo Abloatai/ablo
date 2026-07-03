@@ -190,7 +190,7 @@ import { schema } from '@/ablo/schema';
 // from your session route (see below) and refreshes it before expiry.
 export const ablo = Ablo({
   schema,
-  apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
+  authEndpoint: '/api/ablo-session',
 });
 ```
 

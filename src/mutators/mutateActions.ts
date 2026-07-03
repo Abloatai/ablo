@@ -149,7 +149,7 @@ export function createMutateActions<
       const model = store.pool.get(idOrIds);
       if (!model) return;
       await store.delete(model);
-    }) as MutateActions<S, K>['delete'],
+    }),
 
     archive: async (id) => {
       const model = store.pool.get(id);

@@ -69,9 +69,15 @@ export function coordinationContextMiddleware<R extends SchemaRecord = SchemaRec
 
       // Read peer claims on the same target. Synchronous lookup
       // against the engine's reactive claims.others array — no I/O.
+      // Type compares case-insensitively: observed claims carry the WIRE
+      // dialect (lowercased typename, `slidedeck`), while callers naturally
+      // write the schema typename (`SlideDeck`) — the same normalization the
+      // commit plane applies (`modelMap` lookups lowercase, and
+      // `targetsOverlap` below already lowercases field/path).
+      const wantedType = target.type.toLowerCase();
       const peerClaims = agent.claims.others.filter(
         (claim) =>
-          claim.target.type === target.type &&
+          claim.target.type.toLowerCase() === wantedType &&
           claim.target.id === target.id &&
           targetsOverlap(claim.target, target) &&
           !excludeClaimIds.has(claim.id),
@@ -133,8 +139,8 @@ function formatCoordinationNote(
   target: ClaimTarget,
 ): string {
   const entityLabel = target.type.toLowerCase();
-  if (claims.length === 1) {
-    const c = claims[0];
+  const c = claims.length === 1 ? claims[0] : undefined;
+  if (c) {
     const details = c.description ? `Declared work: ${c.description}. ` : '';
     return (
       `<multiplayer_context>\n` +

@@ -12,7 +12,6 @@
 import { observable, runInAction, type IObservableArray } from 'mobx';
 import { type Model, modelAsRow } from '../Model.js';
 import { ModelScope } from '../types/index.js';
-import type { ObjectPool } from '../ObjectPool.js';
 import type { ViewRegistry } from './ViewRegistry.js';
 import type { IncrementalView } from './query-utils.js';
 import {
@@ -24,6 +23,19 @@ import {
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/**
+ * The slice of `ObjectPool` a QueryView reads — a minimal structural
+ * interface (LogFoldContext-style) instead of the concrete class, so this
+ * module never imports `../ObjectPool.js` back (ObjectPool imports QueryView
+ * at runtime for `createView()`; the reverse edge was the last core-layer
+ * import cycle). `ObjectPool` satisfies it structurally.
+ */
+export interface QueryViewPool {
+  hasForeignKeyIndex(typename: string, fieldName: string): boolean;
+  getByForeignKey(modelName: string, fieldName: string, fieldValue: string): Model[];
+  getByTypeName(modelName: string, scope?: ModelScope): Model[];
+}
 
 export interface QueryViewOptions<T> {
   where?: Partial<T>;
@@ -53,9 +65,9 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
   readonly results: IObservableArray<T>;
 
   private readonly typename: string;
-  private readonly pool: ObjectPool;
+  private readonly pool: QueryViewPool;
   private readonly registry: ViewRegistry;
-  private readonly whereEntries: Array<[string, unknown]> | null;
+  private readonly whereEntries: [string, unknown][] | null;
   private readonly filterFn: ((entity: T) => boolean) | null;
   private readonly sortKey: string | null;
   private readonly sortDir: 1 | -1;
@@ -71,7 +83,7 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
 
   constructor(
     typename: string,
-    pool: ObjectPool,
+    pool: QueryViewPool,
     registry: ViewRegistry,
     options: QueryViewOptions<T> = {},
   ) {
@@ -85,7 +97,7 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
       : null;
 
     this.filterFn = options.filter ?? null;
-    this.sortKey = (options.orderBy as string) ?? null;
+    this.sortKey = options.orderBy ?? null;
     this.sortDir = options.order === 'desc' ? -1 : 1;
     this.limitN = options.limit;
     this.offsetN = options.offset ?? 0;
@@ -94,15 +106,13 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
     // Check for FK-index optimization: single-field where with an indexed FK
     this.fkField = null;
     this.fkValue = null;
-    if (
-      this.whereEntries &&
-      this.whereEntries.length === 1 &&
-      typeof this.whereEntries[0][1] === 'string'
-    ) {
-      const [field, value] = this.whereEntries[0];
+    const soleWhereEntry =
+      this.whereEntries && this.whereEntries.length === 1 ? this.whereEntries[0] : undefined;
+    if (soleWhereEntry && typeof soleWhereEntry[1] === 'string') {
+      const [field, value] = soleWhereEntry;
       if (pool.hasForeignKeyIndex(typename, field)) {
         this.fkField = field;
-        this.fkValue = value as string;
+        this.fkValue = value;
       }
     }
 
@@ -184,7 +194,7 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
   handleUpdated(model: Record<string, unknown>): void {
     if (this.disposed) return;
     const entity = model as T;
-    const id = (entity as Record<string, unknown>)['id'] as string | undefined;
+    const id = (entity as Record<string, unknown>).id as string | undefined;
     const idx = id !== undefined ? this.findIndexById(id) : -1;
     const matchesNow = this.matchesFilter(entity);
 

@@ -318,7 +318,7 @@ function detectOrm(override?: string): DetectedOrm {
       devDependencies?: Record<string, string>;
     };
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-    if (deps['@prisma/client'] || deps['prisma']) return 'prisma';
+    if (deps['@prisma/client'] || deps.prisma) return 'prisma';
     if (deps['drizzle-orm']) return 'drizzle';
   } catch {
     /* unreadable package.json → neutral default */
@@ -1050,23 +1050,12 @@ import Ablo from '@abloatai/ablo';
 import { AbloProvider } from '@abloatai/ablo/react';
 import { schema } from '@/ablo/schema';
 
-// The browser client holds NO secret. The \`apiKey\` resolver fetches the route
+// The browser client holds NO secret. The endpoint string points at the route
 // below, which mints a short-lived session token (already scoped to the org +
-// user); the client keeps it fresh (refresh timer + wake/online/focus re-mint).
-// Contract: return the token, return \`null\` when the user is signed out
-// (→ the client signs out), or throw on a transient failure (→ it retries).
-const ablo = Ablo({
-  schema,
-  apiKey: async () => {
-    const res = await fetch('/api/ablo-session', {
-      method: 'POST',
-      credentials: 'include',
-    });
-    if (!res.ok) return null;
-    const { token } = (await res.json()) as { token: string | null };
-    return token;
-  },
-});
+// user); the SDK owns the exchange — it fetches the route (POST, same-origin
+// cookies) and keeps the token fresh (refresh timer + wake re-mint). A 401
+// from the route signs the user out; any other failure is retried.
+const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return <AbloProvider client={ablo}>{children}</AbloProvider>;
@@ -1090,8 +1079,8 @@ export async function POST(): Promise<Response> {
   const user = await getCurrentUser();
   if (!user) return new Response('Unauthorized', { status: 401 });
 
-  const { token } = await sync.sessions.create({ user: { id: user.id } });
-  return Response.json({ token });
+  const { token, expiresAt } = await sync.sessions.create({ user: { id: user.id } });
+  return Response.json({ token, expiresAt });
 }
 
 // Validate the signed-in user SERVER-SIDE. This ships wired for Better Auth;

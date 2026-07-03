@@ -25,8 +25,8 @@ import { resolve } from 'path';
 import { execFileSync } from 'child_process';
 import { confirm, text, isCancel, cancel } from '@clack/prompts';
 import { serializeSchema, schemaHash, type Schema } from '@abloatai/ablo/schema';
-import { resolveApiKey, getMode, getActiveProject, modeFromKey } from './config';
-import { readProjectApiKey, type ApiKeySource } from './dbRole';
+import { ABLO_DEFAULT_BASE_URL } from '../client/hostedEndpoints.js';
+import { resolveEffectiveApiKey, getMode, getActiveProject, modeFromKey, type EffectiveKeySource } from './config';
 import { brand } from './theme';
 
 export interface PushArgs {
@@ -57,7 +57,9 @@ function coerceBackfill(raw: string): string | number | boolean {
 
 export const DEFAULT_SCHEMA_PATH = 'ablo/schema.ts';
 export const DEFAULT_EXPORT = 'schema';
-export const DEFAULT_URL = 'https://api.abloatai.com';
+/** Single-sourced from the hosted-endpoints leaf; re-exported under the name
+ *  the other CLI commands already import. */
+export const DEFAULT_URL = ABLO_DEFAULT_BASE_URL;
 
 /** Format a single migration signal `{ model, field?, detail, shadowed? }` for
  *  the CLI. When `shadowed` is present (a removal diffed against an existing
@@ -218,7 +220,7 @@ export async function loadSchema(schemaPath: string, exportName: string): Promis
   // `export const schema = …` resolves either way.
   const nested = mod.default && typeof mod.default === 'object' ? (mod.default as Record<string, unknown>) : undefined;
   const schema = mod[exportName] ?? nested?.[exportName];
-  if (!schema || typeof schema !== 'object' || !('models' in (schema as object))) {
+  if (!schema || typeof schema !== 'object' || !('models' in (schema))) {
     throw new AbloValidationError(
       `${pc.bold(schemaPath)} has no \`${exportName}\` export that looks like a Schema. ` +
         `Did you \`export const ${exportName} = defineSchema({ ... })\`?`,
@@ -268,7 +270,7 @@ interface RemoteSchema {
  *  apply); never blocks the push. Mirrors `status`'s fetch. */
 async function fetchActiveSchema(url: string, apiKey: string): Promise<RemoteSchema | null> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 3000);
+  const t = setTimeout(() => { ctrl.abort(); }, 3000);
   try {
     const res = await fetch(`${url}/api/schema`, {
       headers: { authorization: `Bearer ${apiKey}` },
@@ -361,7 +363,7 @@ async function confirmPush(
     const project = getActiveProject();
     const expected = project?.slug ?? 'production';
     const typed = await text({
-      message: `This deploys to ${pc.red(pc.bold('PRODUCTION'))}. Type ${pc.bold(expected)} to confirm:`,
+      message: `This deploys to ${pc.bold('production')}. Type ${pc.bold(expected)} to confirm:`,
       placeholder: expected,
     });
     if (isCancel(typed) || String(typed).trim() !== expected) {
@@ -374,7 +376,7 @@ async function confirmPush(
   // Sandbox: confirm interactively; proceed silently when not a TTY so the dev
   // loop / scripted sandbox deploys don't hang on stdin.
   if (!isProd && !args.yes && tty) {
-    const ok = await confirm({ message: `Apply to ${pc.green('sandbox')}?` });
+    const ok = await confirm({ message: `Apply to ${pc.bold('sandbox')}?` });
     if (isCancel(ok) || !ok) {
       cancel('Aborted.');
       process.exit(1);
@@ -394,28 +396,27 @@ function printPushTarget(opts: {
   schemaPath: string;
   url: string;
   apiKey: string;
-  keySource: ApiKeySource | 'login';
+  keySource: EffectiveKeySource;
   modelCount: number;
   hash: string;
 }): void {
   const env = modeFromKey(opts.apiKey);
   const envLabel =
     env === 'production'
-      ? pc.red(pc.bold('production'))
+      ? pc.bold('production')
       : env === 'sandbox'
-        ? pc.green('sandbox')
+        ? pc.bold('sandbox')
         : pc.yellow('unknown env');
   const project = getActiveProject();
   const projectLabel = project
     ? `${pc.bold(project.slug)} ${pc.dim(`(${project.id})`)}`
-    : `${pc.bold('default')} ${pc.dim('(org-default — `ablo projects use <slug>` to scope)')}`;
+    : `${pc.bold('default')} ${pc.dim('(org-default)')}`;
   // Flag the drift trap: CLI mode and the key's plane disagree → you may be
-  // pushing somewhere other than where `ablo status` implies.
+  // pushing somewhere other than where `ablo status` implies. The env label
+  // above already names the real target, so the note only flags the mismatch.
   const cliMode = getMode();
   const modeNote =
-    env && env !== cliMode
-      ? ` ${pc.yellow(`(CLI mode is ${cliMode} — this key targets ${env})`)}`
-      : '';
+    env && env !== cliMode ? ` ${pc.yellow(`(cli mode: ${cliMode})`)}` : '';
 
   console.log(`\n  ${brand('ablo')} ${pc.dim('push')} ${pc.dim('→')} ${envLabel}${modeNote}`);
   console.log(`  ${pc.dim('project')}  ${projectLabel}`);
@@ -424,21 +425,21 @@ function printPushTarget(opts: {
     `  ${pc.dim('key')}      ${maskKey(opts.apiKey)} ${pc.dim(`(${describeKeySource(opts.keySource)})`)}`,
   );
   console.log(
-    `  ${pc.dim('schema')}   ${pc.bold(opts.schemaPath)} ${pc.dim(`· ${opts.modelCount} models · hash ${opts.hash}`)}\n`,
+    `  ${pc.dim('schema')}   ${pc.bold(opts.schemaPath)} ${pc.dim(`${opts.modelCount} models, hash ${opts.hash}`)}\n`,
   );
 }
 
 /** Human label for where the resolved key came from. */
-function describeKeySource(source: ApiKeySource | 'login'): string {
+function describeKeySource(source: EffectiveKeySource): string {
   switch (source) {
     case 'env':
-      return 'ABLO_API_KEY (environment)';
+      return 'ABLO_API_KEY';
     case '.env.local':
       return '.env.local';
     case '.env':
       return '.env';
-    case 'login':
-      return '`ablo login` (stored sandbox config)';
+    case 'stored':
+      return 'ablo login';
   }
 }
 
@@ -451,23 +452,18 @@ export async function push(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  // Resolve the key the way the app's framework does: ABLO_API_KEY from
-  // process.env (set by parsePushArgs) → .env.local → .env → the stored
-  // `ablo login` credential. `npx ablo` has NO framework env loader, so a key a
-  // developer put in `.env.local` (the natural place) is invisible to
+  // Resolve the key through the ONE shared chain (`resolveEffectiveApiKey`):
+  // ABLO_API_KEY from process.env (set by parsePushArgs) → .env.local → .env →
+  // the stored `ablo login` credential. `npx ablo` has NO framework env loader,
+  // so a key a developer put in `.env.local` (the natural place) is invisible to
   // process.env — without this, push silently uses the stored sandbox login key
   // instead of the production key in .env.local (the reported bug). `keySource`
   // is tracked so a 403 can say exactly WHICH key it used and WHERE it came from.
-  let keySource: ApiKeySource | 'login' = 'env';
+  let keySource: EffectiveKeySource = 'env';
   if (!args.apiKey) {
-    const fromProject = readProjectApiKey();
-    if (fromProject) {
-      args.apiKey = fromProject.key;
-      keySource = fromProject.source;
-    } else {
-      args.apiKey = resolveApiKey();
-      keySource = 'login';
-    }
+    const resolved = resolveEffectiveApiKey();
+    args.apiKey = resolved.key;
+    keySource = resolved.source ?? 'stored';
   }
 
   if (!args.apiKey) {
@@ -491,7 +487,7 @@ export async function push(argv: readonly string[]): Promise<void> {
     url: args.url,
     apiKey: args.apiKey,
     keySource,
-    modelCount: Object.keys((schema as Schema).models).length,
+    modelCount: Object.keys((schema).models).length,
     hash,
   });
 
@@ -616,7 +612,7 @@ export async function push(argv: readonly string[]): Promise<void> {
       console.error(
         pc.dim(
           `  This key isn't authorized to push schema (needs ${pc.bold('schema:push')}). ` +
-            (keySource === 'login'
+            (keySource === 'stored'
               ? `It's your stored ${pc.bold('ablo login')} sandbox key — a key in ${pc.bold('.env.local')} ` +
                 `or ${pc.bold('ABLO_API_KEY')} takes precedence, so put a schema:push key there ` +
                 `(sandbox ${pc.bold('sk_test_')} or production ${pc.bold('sk_live_')}) and re-push. `

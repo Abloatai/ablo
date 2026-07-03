@@ -33,7 +33,7 @@ import { z } from 'zod';
 import { AbloValidationError } from '../errors.js';
 import type { FieldMeta } from './field.js';
 import type { Tenancy } from './tenancy.js';
-import type { SchemaPlane } from './plane.js';
+import type { ModelResidency } from './residency.js';
 import type {
   ModelDef,
   RelationRecord,
@@ -80,7 +80,7 @@ export interface ModelJSON {
   readonly tenancy: Tenancy;
   /** Database plane. Optional for back-compat: absent in artifacts written before
    *  the plane axis → read as `tenant` (the default). See `./plane.ts`. */
-  readonly plane?: SchemaPlane;
+  readonly plane?: ModelResidency;
   readonly scope?: boolean | string;
   readonly grants?: GrantsRef;
   readonly entityRoles?: readonly EntityRole[];
@@ -119,8 +119,8 @@ function relationToJSON(rel: RelationDef): RelationJSON {
 
 function modelToJSON(def: ModelDef): ModelJSON {
   const relations: Record<string, RelationJSON> = {};
-  for (const [name, rel] of Object.entries(def.relations as RelationRecord)) {
-    relations[name] = relationToJSON(rel as RelationDef);
+  for (const [name, rel] of Object.entries(def.relations)) {
+    relations[name] = relationToJSON(rel);
   }
   return {
     fields: def.fields,
@@ -151,7 +151,7 @@ function modelToJSON(def: ModelDef): ModelJSON {
  * (validators, `computed`); keeps everything the server and a faithful
  * rebuild need. The result is plain data — `JSON.stringify`-safe.
  */
-export function toSchemaJSON(schema: Schema<SchemaRecord>): SchemaJSON {
+export function toSchemaJSON(schema: Schema): SchemaJSON {
   const models: Record<string, ModelJSON> = {};
   for (const [key, def] of Object.entries(schema.models)) {
     if (def.typename === '' || def.typename === undefined) {
@@ -166,7 +166,7 @@ export function toSchemaJSON(schema: Schema<SchemaRecord>): SchemaJSON {
 }
 
 /** Serialize a `Schema` to a JSON string (the `ablo push` payload). */
-export function serializeSchema(schema: Schema<SchemaRecord>): string {
+export function serializeSchema(schema: Schema): string {
   return JSON.stringify(toSchemaJSON(schema));
 }
 
@@ -267,7 +267,7 @@ function modelFromJSON(json: ModelJSON): ModelDef {
  * `computed` getters are absent. Everything the server reads — routing,
  * scoping, relations, identity roles — is restored exactly.
  */
-export function fromSchemaJSON(json: SchemaJSON): Schema<SchemaRecord> {
+export function fromSchemaJSON(json: SchemaJSON): Schema {
   const models: Record<string, ModelDef> = {};
   const validators: Record<string, z.ZodObject<z.ZodRawShape>> = {};
   for (const [key, modelJson] of Object.entries(json.models)) {
@@ -276,14 +276,14 @@ export function fromSchemaJSON(json: SchemaJSON): Schema<SchemaRecord> {
     validators[key] = baseFieldsSchema.merge(def.schema);
   }
   return {
-    models: models as SchemaRecord,
-    validators: validators as Schema<SchemaRecord>['validators'],
+    models: models,
+    validators: validators as Schema['validators'],
     identityRoles: json.identityRoles,
   };
 }
 
 /** Parse a `Schema` from a JSON string (inverse of {@link serializeSchema}). */
-export function parseSchema(json: string): Schema<SchemaRecord> {
+export function parseSchema(json: string): Schema {
   const parsed = JSON.parse(json) as SchemaJSON;
   if (parsed.v !== SCHEMA_JSON_VERSION) {
     throw new AbloValidationError(
@@ -303,7 +303,7 @@ export function parseSchema(json: string): Schema<SchemaRecord> {
  * the hash it was built against, the server compares it to the tenant's
  * active schema hash. Not a security primitive.
  */
-export function schemaHash(schema: Schema<SchemaRecord>): string {
+export function schemaHash(schema: Schema): string {
   const canonical = canonicalJson(toSchemaJSON(schema));
   let h = 0x811c9dc5;
   for (let i = 0; i < canonical.length; i++) {

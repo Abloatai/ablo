@@ -94,20 +94,27 @@ class MockGlobalWebSocket {
 // ─────────────────────────────────────────────
 // Make navigator.onLine writable for offline tests
 // ─────────────────────────────────────────────
+// Both globals are jsdom-only; guard so suites that opt into the node
+// environment (`@jest-environment node` docblock — e.g. the windowless
+// credential pre-roll tests) can share this setup file.
 
-Object.defineProperty(navigator, 'onLine', {
-  writable: true,
-  value: true,
-});
+if (typeof navigator !== 'undefined') {
+  Object.defineProperty(navigator, 'onLine', {
+    writable: true,
+    value: true,
+  });
+}
 
 // ─────────────────────────────────────────────
 // Make document.visibilityState writable
 // ─────────────────────────────────────────────
 
-Object.defineProperty(document, 'visibilityState', {
-  writable: true,
-  value: 'visible',
-});
+if (typeof document !== 'undefined') {
+  Object.defineProperty(document, 'visibilityState', {
+    writable: true,
+    value: 'visible',
+  });
+}
 
 // ─────────────────────────────────────────────
 // TextEncoder / TextDecoder polyfill (jsdom)
@@ -137,10 +144,9 @@ if (typeof globalThis.TextEncoder === 'undefined') {
 // ─────────────────────────────────────────────
 //
 // Node 20+ ships `webcrypto` with the full SubtleCrypto surface; jsdom
-// stubs `crypto.getRandomValues` but omits `.subtle`. Patch the global
-// so `crypto.subtle.digest(...)`, `.encrypt(...)`, `.importKey(...)` —
-// used by OfflineTransactionStore encryption and
-// deriveBatchIdempotencyKey — work identically in tests and prod.
+// stubs `crypto.getRandomValues` but omits `.subtle` (and, in the partial
+// polyfill jest-environment-jsdom returns, `randomUUID`). Patch the global
+// so the full Web Crypto surface works identically in tests and prod.
 // `globalThis.crypto` is typed as `Crypto` which already declares
 // `subtle: SubtleCrypto`. Jest's `jest-environment-jsdom` actually
 // returns a partial polyfill that omits `subtle`, so we read it

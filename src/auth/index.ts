@@ -74,7 +74,7 @@ export async function exchangeApiKey(
   const timeoutMs = options.timeoutMs ?? 10_000;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => { controller.abort(); }, timeoutMs);
 
   let response: Response;
   try {
@@ -193,7 +193,7 @@ export async function mintUserSessionKey(
   const timeoutMs = options.timeoutMs ?? 10_000;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => { controller.abort(); }, timeoutMs);
 
   let response: Response;
   try {
@@ -276,7 +276,7 @@ export async function resolveIdentity(
   const timeoutMs = options.timeoutMs ?? 10_000;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => { controller.abort(); }, timeoutMs);
 
   let response: Response;
   try {

@@ -272,7 +272,7 @@ export class ObjectPool {
 
     // Check if model already exists to prevent duplicates
     const existingEntry = this.entries.get(id);
-    if (existingEntry && existingEntry.model && !existingEntry.model.disposed) {
+    if (existingEntry?.model && !existingEntry.model.disposed) {
       // Model already exists and is valid, update its scope if needed
       if (existingEntry.scope !== scope) {
         runInAction(() => {
@@ -415,7 +415,7 @@ export class ObjectPool {
 
       // Skip if model already exists and is valid
       const existingEntry = this.entries.get(id);
-      if (existingEntry && existingEntry.model && !existingEntry.model.disposed) {
+      if (existingEntry?.model && !existingEntry.model.disposed) {
         if (existingEntry.scope !== scope) {
           this.entries.set(id, { ...existingEntry, scope });
           this.accessTimes.set(id, now);
@@ -853,7 +853,7 @@ export class ObjectPool {
       getContext().observability.captureTransactionFailure({
         context: 'createFromData',
         modelName,
-        modelId: data.id as string | undefined,
+        modelId: data.id,
         error: errorMessage,
       });
       getContext().modelDebugLogger?.logError(modelName, 'CREATE', errorMessage, {
@@ -873,7 +873,7 @@ export class ObjectPool {
   clear(options: { preserveObserved?: boolean } = {}): void {
     const preserveObserved = options.preserveObserved ?? false;
     const preservedIds: string[] = [];
-    const preservedEntries: Array<[string, ModelEntry]> = [];
+    const preservedEntries: [string, ModelEntry][] = [];
     let disposedCount = 0;
     let checkedCount = 0;
 
@@ -1008,7 +1008,7 @@ export class ObjectPool {
     };
   }
 
-  clearDeltaHistory(olderThanMs: number = 3600000): void {
+  clearDeltaHistory(olderThanMs = 3600000): void {
     const now = Date.now();
     const toDelete: string[] = [];
 
@@ -1109,6 +1109,10 @@ export class ObjectPool {
   private startGC(): void {
     if (this.gcTimer) return;
     this.gcTimer = setInterval(() => this.gc(), this.config.gcInterval);
+    // Don't hold a headless Node process open just for pool GC — without
+    // this, an agent that never calls disconnect() can never exit. No-op in
+    // browsers (where setInterval returns a number without `unref`).
+    this.gcTimer.unref?.();
   }
 
   stopGC(): void {

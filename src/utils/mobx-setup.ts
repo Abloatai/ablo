@@ -13,7 +13,7 @@ import {
   type IValueDidChange,
   type AnnotationMapEntry,
 } from 'mobx';
-import { PropertyType, PropertyMetadata, ReferenceMetadata } from '../types/index.js';
+import { PropertyType, type PropertyMetadata, type ReferenceMetadata } from '../types/index.js';
 import { getContext } from '../context.js';
 
 /**
@@ -52,7 +52,7 @@ export function M1<T extends M1Target>(
     let obj = target;
     while (obj) {
       const descriptor = Object.getOwnPropertyDescriptor(obj, propName);
-      if (descriptor && descriptor.get) return true;
+      if (descriptor?.get) return true;
       obj = Object.getPrototypeOf(obj);
       if (obj === Object.prototype) break;
     }
@@ -64,7 +64,7 @@ export function M1<T extends M1Target>(
     let obj = target;
     while (obj) {
       const descriptor = Object.getOwnPropertyDescriptor(obj, propName);
-      if (descriptor && descriptor.set) return true;
+      if (descriptor?.set) return true;
       obj = Object.getPrototypeOf(obj);
       if (obj === Object.prototype) break;
     }
@@ -179,7 +179,7 @@ export function M1<T extends M1Target>(
   // `Reflect.get` keeps the read typed without an index-signature
   // cast — `target` is `M1Target`, which deliberately doesn't index
   // by arbitrary string (we don't want to sneak random fields in).
-  const actionMethods: ReadonlyArray<string> = [
+  const actionMethods: readonly string[] = [
     'propertyChanged',
     'markAsPersisted',
     'clearChanges',

@@ -19,7 +19,16 @@ import pc from 'picocolors';
 import { writeFileSync } from 'fs';
 import postgres from 'postgres';
 import { readProjectDatabaseUrl } from './dbRole';
-import { serializeSchema, generateProvisionPlan, type Schema, type SchemaJSON } from '@abloatai/ablo/schema';
+import {
+  serializeSchema,
+  generateProvisionPlan,
+  PG_LOCK_NOT_AVAILABLE,
+  resolveDdlLockTimeout,
+  resolveDdlMaxLockAttempts,
+  ddlLockRetryBackoffMs,
+  type Schema,
+  type SchemaJSON,
+} from '@abloatai/ablo/schema';
 import { adapterTableMigrations } from '@abloatai/ablo/source';
 import { loadSchema } from './push';
 
@@ -119,20 +128,18 @@ interface PgError {
  *  executor's `[migration]` logs (`@abloatai/ablo` server `prefixedLogger`),
  *  so a failure reads identically whether Ablo applied it or you did. */
 const log = {
-  info: (msg: string, fields: Record<string, unknown>) => console.log(`[migrate] ${msg}`, fields),
-  warn: (msg: string, fields: Record<string, unknown>) => console.warn(pc.yellow(`[migrate] ${msg}`), fields),
-  error: (msg: string, fields: Record<string, unknown>) => console.error(pc.red(`[migrate] ${msg}`), fields),
+  info: (msg: string, fields: Record<string, unknown>) => { console.log(`[migrate] ${msg}`, fields); },
+  warn: (msg: string, fields: Record<string, unknown>) => { console.warn(pc.yellow(`[migrate] ${msg}`), fields); },
+  error: (msg: string, fields: Record<string, unknown>) => { console.error(pc.red(`[migrate] ${msg}`), fields); },
 };
 
-// Safe schema-change settings (mirror apps/sync-server/src/schema/ddlExec.ts): a low
-// lock_timeout so a blocked ALTER never freezes the table behind the lock queue,
-// + bounded retry on lock contention (55P03).
-const PG_LOCK_NOT_AVAILABLE = '55P03';
-// Configurable per deployment via `ABLO_SCHEMA_LOCK_TIMEOUT` (the older
-// `ABLO_DDL_LOCK_TIMEOUT` name is still honored, so existing setups don't break).
-const LOCK_TIMEOUT =
-  process.env.ABLO_SCHEMA_LOCK_TIMEOUT ?? process.env.ABLO_DDL_LOCK_TIMEOUT ?? '5s';
-const MAX_LOCK_ATTEMPTS = 5;
+// Safe schema-change settings — SHARED with the hosted executor
+// (apps/sync-server/src/schema/ddlExec.ts) via `@abloatai/ablo/schema`'s
+// ddlLock leaf: a low lock_timeout so a blocked ALTER never freezes the table
+// behind the lock queue, + bounded retry on lock contention (55P03). Tunable
+// via ABLO_SCHEMA_LOCK_TIMEOUT / ABLO_SCHEMA_LOCK_ATTEMPTS (older ABLO_DDL_*
+// names still honored) — the SAME knobs on both paths; the copy-pasted pair
+// had drifted (this file hardcoded 5 attempts while the server honored env).
 
 /**
  * Apply statements in one transaction under the same advisory-lock discipline
@@ -149,6 +156,8 @@ async function applyStatements(
   const sql = postgres(dbUrl, { max: 1, prepare: false, onnotice: () => {} });
   const total = statements.length;
   const startedAt = Date.now();
+  const lockTimeout = resolveDdlLockTimeout();
+  const maxLockAttempts = resolveDdlMaxLockAttempts();
   log.info('applying migration plan', { targetSchema, statements: total });
   try {
     // Inside a transaction under advisory lock with a low lock_timeout + bounded retry on lock
@@ -157,10 +166,9 @@ async function applyStatements(
     for (let attempt = 1; ; attempt++) {
       try {
         await sql.begin(async (tx) => {
-          await tx.unsafe(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
+          await tx.unsafe(`SET LOCAL lock_timeout = '${lockTimeout}'`);
           await tx`SELECT pg_advisory_xact_lock(hashtext(${`provision:${targetSchema}`}))`;
-          for (let index = 0; index < total; index++) {
-            const statement = statements[index]!;
+          for (const [index, statement] of statements.entries()) {
             try {
               await tx.unsafe(statement);
             } catch (err) {
@@ -183,8 +191,8 @@ async function applyStatements(
         break;
       } catch (err) {
         const pg = (err ?? {}) as PgError;
-        if (pg.code === PG_LOCK_NOT_AVAILABLE && attempt < MAX_LOCK_ATTEMPTS) {
-          const backoffMs = Math.min(60_000, 10 * 2 ** attempt) + Math.floor(Math.random() * 50);
+        if (pg.code === PG_LOCK_NOT_AVAILABLE && attempt < maxLockAttempts) {
+          const backoffMs = ddlLockRetryBackoffMs(attempt);
           log.warn('schema change blocked by a lock; backing off and retrying', { targetSchema, attempt, backoffMs });
           await new Promise((resolve) => setTimeout(resolve, backoffMs));
           continue;
@@ -266,7 +274,7 @@ export async function migrate(argv: readonly string[]): Promise<void> {
   // NOTE: `ablo migrate` provisions tables but does NOT create roles, force RLS,
   // or rewrite DATABASE_URL on your database — it runs the DDL as the role you
   // provide, like any migration tool. Securing the connection (scoped role, RLS)
-  // is your call; `ablo doctor` / the docs show the recipe if you want it. This
+  // is your call; the docs show the recipe if you want it. This
   // command is OPTIONAL — Ablo reads/writes your existing tables without it.
   try {
     await applyStatements(dbUrl, args.targetSchema, plan.statements, plan.concurrent);

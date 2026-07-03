@@ -14,7 +14,7 @@ export class NetworkMonitor extends EventEmitter {
   // Only `navigator.onLine === false` means offline. Node 18+ exposes a global
   // `navigator` with `onLine === undefined`, so the naive `navigator.onLine`
   // would seed `false` (offline) on every server client — start optimistic.
-  private isOnline: boolean = !(typeof navigator !== 'undefined' && navigator.onLine === false);
+  private isOnline = !(typeof navigator !== 'undefined' && navigator.onLine === false);
   private lastOnlineCheck: Date = new Date();
 
   constructor() {
@@ -22,7 +22,7 @@ export class NetworkMonitor extends EventEmitter {
     this.setupListeners();
   }
 
-  private handleOnline = async (): Promise<void> => {
+  private handleOnline = (): void => {
     const wasOffline = !this.isOnline;
     this.isOnline = true;
     this.lastOnlineCheck = new Date();

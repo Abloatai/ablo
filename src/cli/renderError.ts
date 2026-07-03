@@ -90,7 +90,7 @@ function renderKnownDetails(
  * `process.exitCode = 1`. Safe on `AbloError`, plain `Error`, and non-errors.
  */
 export function renderCliError(err: unknown, opts: RenderErrorOptions = {}): void {
-  const line = opts.write ?? ((l: string) => console.error(l));
+  const line = opts.write ?? ((l: string) => { console.error(l); });
   const verbose =
     opts.verbose ?? (process.argv.includes('--verbose') || process.env.ABLO_VERBOSE === '1');
 

@@ -76,7 +76,7 @@ export class LazyReferenceCollection<T extends Model> {
   items: T[] | null = null;
 
   /** Loading state */
-  isLoading: boolean = false;
+  isLoading = false;
 
   /** Error state */
   loadError: Error | null = null;
@@ -85,7 +85,7 @@ export class LazyReferenceCollection<T extends Model> {
    * MobX observation tracking - prevents GC while React is observing this collection
    * Following MobX best practice: https://mobx.js.org/lazy-observables.html
    */
-  _isBeingObserved: boolean = false;
+  _isBeingObserved = false;
 
   /** Promise for ongoing hydration */
   private hydrationPromise: Promise<void> | null = null;
@@ -357,17 +357,20 @@ export class LazyReferenceCollection<T extends Model> {
         if (typeof id !== 'string') continue;
 
         // Check if already in ObjectPool
-        let model = this.objectPool.get(id) as T | undefined;
+        let model = this.objectPool.get(id);
 
         if (!model) {
           // Create new model instance
-          model = new ModelClass() as T;
+          model = new ModelClass();
           model.updateFromData(data);
           this.objectPool.add(model);
         }
 
         if (model) {
-          models.push(model);
+          // The by-name registry lookup types instances as the base
+          // `Model`; this collection's `modelName` IS `T`'s registered
+          // name (fixed at construction), so the instance is a `T`.
+          models.push(model as T);
         }
       }
 

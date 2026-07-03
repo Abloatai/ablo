@@ -91,9 +91,8 @@ class BasicQueryCache implements QueryCache {
     }
 
     // Fast path: Check if pattern is a simple model type match like ".*ModelType.*"
-    const simpleMatch = pattern.match(/^\.\*(\w+)\.\*$/);
-    if (simpleMatch) {
-      const modelType = simpleMatch[1];
+    const modelType = /^\.\*(\w+)\.\*$/.exec(pattern)?.[1];
+    if (modelType !== undefined) {
       const keysToDelete = this.modelTypeIndex.get(modelType);
       if (keysToDelete) {
         for (const key of keysToDelete) {
@@ -136,8 +135,9 @@ class BasicQueryCache implements QueryCache {
    * Cache key format: "operation:ModelType:options"
    */
   private extractModelType(key: string): string | null {
-    const parts = key.split(':');
-    return parts.length >= 2 ? parts[1] : null;
+    // `?? null` is equivalent to the old length check: a missing second
+    // segment reads as undefined, and split never yields undefined otherwise.
+    return key.split(':')[1] ?? null;
   }
 }
 
@@ -320,9 +320,8 @@ export class QueryProcessor {
     this.cache.invalidate(pattern);
     // Also invalidate predicate result cache for this model type
     if (pattern) {
-      const simpleMatch = pattern.match(/^\.\*(\w+)\.\*$/);
-      if (simpleMatch) {
-        const modelType = simpleMatch[1];
+      const modelType = /^\.\*(\w+)\.\*$/.exec(pattern)?.[1];
+      if (modelType !== undefined) {
         for (const key of this.predicateResultCache.keys()) {
           if (key.includes(modelType)) {
             this.predicateResultCache.delete(key);

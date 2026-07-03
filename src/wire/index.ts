@@ -22,6 +22,10 @@ export type { ListEnvelope } from './listEnvelope.js';
 
 // Commit-path frame contract — the canonical write-path message shapes shared
 // by the SDK client, the sync-server, and any `@abloatai/ablo/server` host.
+// The runtime Zod validators live beside the interfaces (z.infer-bound so the
+// two cannot drift) — the per-op / per-payload ingest gates for both commit
+// transports.
+export { commitOperationSchema, commitPayloadSchema } from './frames.js';
 export type {
   CommitOperation,
   MutationMessage,
@@ -48,5 +52,20 @@ export {
   errorFromWire,
   toAbloError,
   ERROR_CONTRACT_VERSION,
+  // The code→{httpStatus,retryable} registry table — dependency-free data a
+  // server needs to resolve a code's canonical status exactly like the SDK's
+  // wire producer does (pinned by the sync-server envelope parity test).
+  errorCodeSpec,
 } from '../errors.js';
 export type { ErrorCode, WireErrorCode } from '../errors.js';
+
+// Protocol timing constants — the 30s ping cadence + the 3×-ping claim/
+// presence lease window shared by the SDK heartbeat, the Hub keepalive,
+// the claim coordinator, and the presence reaper (see protocol.ts) — plus
+// the WS auth-handshake subprotocols shared by SyncWebSocket and the Hub.
+export {
+  PING_INTERVAL_MS,
+  LEASE_TTL_MS,
+  WS_BEARER_SUBPROTOCOL_PREFIX,
+  WS_SYNC_SUBPROTOCOL,
+} from './protocol.js';

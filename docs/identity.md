@@ -359,10 +359,10 @@ import { schema } from '@/ablo/schema';
 export function makeAblo(user: { teamIds: string[] }) {
   return Ablo({
     schema,
-    // The browser holds no secret — the `apiKey` resolver fetches the
-    // short-lived session token your `/api/ablo-session` route minted, and the
-    // client keeps it fresh before expiry.
-    apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
+    // The browser holds no secret — `authEndpoint` points at the route that
+    // mints the short-lived session token, and the client keeps it fresh
+    // before expiry.
+    authEndpoint: '/api/ablo-session',
     teamIds: user.teamIds,
   });
 }

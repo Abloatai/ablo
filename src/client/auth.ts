@@ -12,24 +12,19 @@
  * explicit options so generated apps do not accrete hidden env knobs.
  */
 
-import { AbloAuthenticationError } from '../errors.js';
+import { AbloAuthenticationError, AbloValidationError } from '../errors.js';
 import { classifyCredentialKind } from '../auth/credentialPolicy.js';
+import { ABLO_HOSTED_API_DOMAIN, ABLO_DEFAULT_BASE_URL } from './hostedEndpoints.js';
+import { isCredentialEndpoint, createEndpointCredentialResolver } from './credentialEndpoint.js';
 
 /**
- * Async callable that resolves the current credential. Mirrors the shape
- * Anthropic / OpenAI / Stripe ship — used for credential rotation
- * (e.g. AWS STS, GCP IAM, Vault) AND the short-lived per-user browser
- * path (mint a fresh `ek_`/`rk_` from the signed-in session). Re-exported
- * from `./Ablo` so existing import paths work; defined here so this module
- * has no circular dependency back to `Ablo.ts`.
- *
- * Contract: resolve a token; resolve `null` when the login itself is gone
- * (terminal → the credential lifecycle treats this as `session_expired` and
- * signs out); or THROW on a transient failure (→ back off and retry, never
- * sign out). A long-lived static `apiKey` string needs none of this — it is
- * used as-is. This is the single credential resolver the SDK supports.
+ * The credential-resolver callable contract. Defined in the `credentialEndpoint`
+ * leaf (which produces one) and re-exported here — the historical home — so
+ * `./auth` importers keep working while the module graph stays one-directional
+ * (`auth → credentialEndpoint`, never back). See there for the full contract.
  */
-export type ApiKeySetter = () => Promise<string | null>;
+import type { ApiKeySetter } from './credentialEndpoint.js';
+export type { ApiKeySetter };
 
 export interface AuthResolveInput {
   /**
@@ -39,6 +34,7 @@ export interface AuthResolveInput {
    */
   readonly options: {
     readonly apiKey?: string | ApiKeySetter | null;
+    readonly authEndpoint?: string | ApiKeySetter | null;
     readonly authToken?: string | null;
     readonly baseURL?: string | null;
     readonly databaseUrl?: string | null;
@@ -62,7 +58,42 @@ export function readProcessEnv(): Record<string, string | undefined> {
 export function resolveApiKey(
   input: AuthResolveInput,
 ): string | ApiKeySetter | null {
-  return input.options.apiKey ?? input.env.ABLO_API_KEY ?? null;
+  // `authEndpoint` — the NAMED session-mint field (Liveblocks `authEndpoint` /
+  // Ably `authUrl`): a route string the SDK exchanges for a short-lived token,
+  // or an async resolver for custom exchanges. Resolved HERE — the one
+  // resolution point all three factory branches (WS, `transport: 'http'`,
+  // protocol client) share — into an `ApiKeySetter`, so every downstream
+  // consumer sees the familiar resolver and the credential lifecycle drives
+  // renewal off it.
+  const endpoint = input.options.authEndpoint;
+  const configured = input.options.apiKey;
+  if (endpoint != null) {
+    if (configured != null) {
+      throw new AbloValidationError(
+        'Ablo: pass either `apiKey` (a key the process holds) or `authEndpoint` ' +
+          '(a route that mints the token) — not both; the client cannot know ' +
+          'which credential to use.',
+        { code: 'invalid_options', param: 'authEndpoint' },
+      );
+    }
+    if (typeof endpoint === 'function') return endpoint;
+    if (!isCredentialEndpoint(endpoint)) {
+      throw new AbloValidationError(
+        '`authEndpoint` expects a URL or path (e.g. \'/api/ablo-session\') or an ' +
+          'async resolver — a key string belongs in `apiKey`.',
+        { code: 'invalid_options', param: 'authEndpoint' },
+      );
+    }
+    return createEndpointCredentialResolver(endpoint);
+  }
+  // `apiKey` also accepts the endpoint-string shape directly (same detection —
+  // key strings are `sk_`/`ek_`/`rk_`-prefixed so the shapes can't collide).
+  // Deliberately only the EXPLICIT option: an `ABLO_API_KEY` env value is
+  // always a literal key, never endpoint-detected.
+  if (typeof configured === 'string' && isCredentialEndpoint(configured)) {
+    return createEndpointCredentialResolver(configured);
+  }
+  return configured ?? input.env.ABLO_API_KEY ?? null;
 }
 
 export function resolveAuthToken(input: AuthResolveInput): string | null {
@@ -106,6 +137,9 @@ export function modeFromApiKey(key: string): CliMode | undefined {
 
 function resolveStaticApiKey(input: AuthResolveInput): StaticApiKey | null {
   if (typeof input.options.apiKey === 'string') {
+    // An endpoint-string `apiKey` is not a key — it never participates in
+    // CLI-mode mismatch checks (its minted tokens carry the mode instead).
+    if (isCredentialEndpoint(input.options.apiKey)) return null;
     return { key: input.options.apiKey, source: 'option' };
   }
   if (input.options.apiKey !== undefined && input.options.apiKey !== null) {
@@ -129,8 +163,8 @@ function readProfileKeys(
     const sandbox = row.sandbox;
     const production = row.production;
     profiles[name] = {
-      sandbox: sandbox && typeof sandbox === 'object' ? sandbox as { apiKey?: string } : undefined,
-      production: production && typeof production === 'object' ? production as { apiKey?: string } : undefined,
+      sandbox: sandbox && typeof sandbox === 'object' ? sandbox : undefined,
+      production: production && typeof production === 'object' ? production : undefined,
     };
   }
   return profiles;
@@ -147,8 +181,8 @@ function legacyProfileKeys(
     (production && typeof production === 'object')
   ) {
     return {
-      sandbox: sandbox && typeof sandbox === 'object' ? sandbox as { apiKey?: string } : undefined,
-      production: production && typeof production === 'object' ? production as { apiKey?: string } : undefined,
+      sandbox: sandbox && typeof sandbox === 'object' ? sandbox : undefined,
+      production: production && typeof production === 'object' ? production : undefined,
     };
   }
   if (typeof value.apiKey === 'string') {
@@ -226,7 +260,7 @@ async function readCliCredentialSnapshot(env: Record<string, string | undefined>
     mode: effectiveMode,
     activeProfile,
     ...(profiles[activeProfile]?.[effectiveMode]?.apiKey
-      ? { storedKey: profiles[activeProfile]![effectiveMode]!.apiKey }
+      ? { storedKey: profiles[activeProfile][effectiveMode].apiKey }
       : {}),
   };
 }
@@ -383,9 +417,9 @@ export async function warnIfCliKeyMismatch(
   else if (typeof console !== 'undefined') console.warn('[Ablo]', mismatch.message);
 }
 
-export const ABLO_HOSTED_API_DOMAIN = 'api.abloatai.com';
-export const ABLO_HOSTED_HTTP_BASE_URL = `https://${ABLO_HOSTED_API_DOMAIN}`;
-export const ABLO_DEFAULT_BASE_URL = `https://${ABLO_HOSTED_API_DOMAIN}`;
+// Declared in the dependency-free `hostedEndpoints.ts` leaf (single source of
+// the hosted domain); re-exported here so existing import paths keep working.
+export { ABLO_HOSTED_API_DOMAIN, ABLO_HOSTED_HTTP_BASE_URL, ABLO_DEFAULT_BASE_URL } from './hostedEndpoints.js';
 
 const LEGACY_HOSTED_API_HOSTS = new Set([
   'mesh.ablo.finance',
@@ -551,6 +585,6 @@ function ensureApiSuffix(httpBase: string): string {
   } catch {
     // Should be unreachable post-`normalizeAbloHostedBaseUrl` (which yields an
     // absolute URL), but fall back to a string check rather than throwing.
-    return /\/api$/.test(trimmed) ? trimmed : `${trimmed}/api`;
+    return trimmed.endsWith("/api") ? trimmed : `${trimmed}/api`;
   }
 }

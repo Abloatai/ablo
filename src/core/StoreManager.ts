@@ -241,7 +241,9 @@ export class StoreManager {
     // Sample a few stores — don't check all 30+ if the first one has data
     const samplesToCheck = Math.min(storeEntries.length, 3);
     for (let i = 0; i < samplesToCheck; i++) {
-      const [, store] = storeEntries[i];
+      const entry = storeEntries[i];
+      if (!entry) break;
+      const [, store] = entry;
       try {
         const count = await store.count();
         if (count > 0) return true;
@@ -376,21 +378,21 @@ export class StoreManager {
     storeTypes: { full: number; partial: number };
     readiness: { ready: number; notReady: number };
     totalRecords: number;
-    storeDetails: Array<{
+    storeDetails: {
       modelName: string;
       storeName: string;
       strategy: LoadStrategy;
       ready: boolean;
       count: number;
-    }>;
+    }[];
   }> {
-    const storeDetails: Array<{
+    const storeDetails: {
       modelName: string;
       storeName: string;
       strategy: LoadStrategy;
       ready: boolean;
       count: number;
-    }> = [];
+    }[] = [];
 
     let totalRecords = 0;
     let readyCount = 0;

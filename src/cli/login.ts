@@ -159,7 +159,7 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
     body: JSON.stringify({ client_id: CLIENT_ID, scope: 'openid profile email' }),
   }).catch(() => null);
 
-  if (!codeRes || !codeRes.ok) {
+  if (!codeRes?.ok) {
     log.error(`Couldn't start login against ${AUTH_URL}. Is the dashboard reachable?`);
     process.exit(1);
   }
@@ -247,7 +247,7 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
     }),
   }).catch(() => null);
 
-  if (!provRes || !provRes.ok) {
+  if (!provRes?.ok) {
     s.stop('Could not provision a key.');
     const reason = provRes ? ((await provRes.json().catch(() => ({}))) as ProvisionResponse).error : undefined;
     if (reason) log.error(reason);

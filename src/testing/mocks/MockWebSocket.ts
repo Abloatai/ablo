@@ -36,7 +36,7 @@ export class MockWebSocket {
   private _listeners = new Map<string, Set<EventHandler>>();
 
   /** Track all emitted events for assertions */
-  readonly emittedEvents: Array<{ type: string; data: unknown }> = [];
+  readonly emittedEvents: { type: string; data: unknown }[] = [];
 
   get connected(): boolean {
     return this._connected;
@@ -94,7 +94,7 @@ export class MockWebSocket {
   }
 
   /** Simulate session error (401/403) */
-  simulateSessionError(code: number = 401): void {
+  simulateSessionError(code = 401): void {
     this._sessionError = true;
     this._connected = false;
     this.emit('session_error', { code });

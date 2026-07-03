@@ -70,7 +70,7 @@ function encodeMeta(meta: Omit<FieldMeta, 'isOptional'>): string {
 }
 
 function decodeMeta(description: string | undefined): Omit<FieldMeta, 'isOptional'> | null {
-  if (!description || !description.startsWith(META_PREFIX)) return null;
+  if (!description?.startsWith(META_PREFIX)) return null;
   try {
     return JSON.parse(description.slice(META_PREFIX.length));
   } catch {
@@ -311,7 +311,7 @@ export const field = {
       inner = schemaOrShape;
     } else {
       // Plain object shape → wrap in z.object() for the sub-property pattern
-      inner = z.object(schemaOrShape as z.ZodRawShape);
+      inner = z.object(schemaOrShape);
     }
     return buildField(inner, { type: 'json' });
   },
@@ -331,5 +331,5 @@ export function indexed<T extends z.ZodType>(schema: T): T {
   const newMeta: Omit<FieldMeta, 'isOptional'> = meta
     ? { ...meta, isIndexed: true }
     : { type: 'string', isIndexed: true };
-  return schema.describe(encodeMeta(newMeta)) as T;
+  return schema.describe(encodeMeta(newMeta));
 }

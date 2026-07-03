@@ -69,6 +69,7 @@ type _ListOptionKeysExact = Expect<
 export const PUBLIC_ABLO_OPTION_KEYS = [
   'schema',
   'apiKey',
+  'authEndpoint',
   'databaseUrl',
   'persistence',
   'transport',

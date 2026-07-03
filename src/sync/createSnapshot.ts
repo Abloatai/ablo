@@ -47,7 +47,7 @@ export interface CreateSnapshotArgs<
   /** Returns the engine's current `lastSyncId`. Read at snapshot time
    *  to stamp the watermark; not re-read after. */
   getLastSyncId: () => number;
-  entities: { readonly [M in K]: string | readonly string[] };
+  entities: Readonly<Record<K, string | readonly string[]>>;
 }
 
 export function createSnapshot<

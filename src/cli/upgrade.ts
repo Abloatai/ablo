@@ -93,8 +93,8 @@ function verbRewrite(call: CallExpression, verb: string): string | null {
   const params = VERB_ARGS[verb];
   if (!params) return null;
   const args = call.getArguments();
-  if (args.length === 0) return null;
   const first = args[0];
+  if (first === undefined) return null;
   const calleeText = call.getExpression().getText(); // e.g. "ablo.tasks.update"
 
   if (verb === 'create') {
@@ -155,7 +155,8 @@ export async function upgrade(argv: readonly string[]): Promise<void> {
       edits.push({ file, line: node.getStartLineNumber(), rule, before, after });
     };
     const flag = (node: Node, rule: string, hint: string): void => {
-      manual.push({ file, line: node.getStartLineNumber(), rule, snippet: node.getText().split('\n')[0].slice(0, 120), hint });
+      // `split('\n')` always yields at least one element — `?? ''` only satisfies the checker.
+      manual.push({ file, line: node.getStartLineNumber(), rule, snippet: (node.getText().split('\n')[0] ?? '').slice(0, 120), hint });
     };
 
     // ── withSync → observer ──────────────────────────────────────────────
@@ -190,13 +191,13 @@ export async function upgrade(argv: readonly string[]): Promise<void> {
       if (method in VERB_ARGS) {
         const next = verbRewrite(call, method);
         if (next) {
-          record(call, `${method}→object-param`, call.getText().split('\n')[0].slice(0, 80), next.slice(0, 80));
+          record(call, `${method}→object-param`, (call.getText().split('\n')[0] ?? '').slice(0, 80), next.slice(0, 80));
           call.replaceWithText(next);
         }
       } else if (method === 'load') {
         const next = loadRewrite(call);
         if (next) {
-          record(call, 'load→retrieve/list', call.getText().split('\n')[0].slice(0, 80), next.slice(0, 80));
+          record(call, 'load→retrieve/list', (call.getText().split('\n')[0] ?? '').slice(0, 80), next.slice(0, 80));
           call.replaceWithText(next);
         }
       }

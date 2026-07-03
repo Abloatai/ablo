@@ -128,18 +128,18 @@ export abstract class Model {
 
   /** Lifecycle state */
   private isDisposed = false;
-  private disposers: Array<() => void> = [];
+  private disposers: (() => void)[] = [];
 
   /**
    * Track observed LazyReferenceCollections for GC prevention
    * When any collection is being observed by React, the model should not be GC'd
    * Following MobX best practice: https://mobx.js.org/lazy-observables.html
    */
-  private _observedCollections: Set<Disposable> = new Set();
+  private _observedCollections = new Set<Disposable>();
 
   constructor(data: Partial<Model> = {}) {
     // Always generate permanent UUID on client
-    this.id = data.id || Model.generateId();
+    this.id = data.id ?? Model.generateId();
     this.clientId = this.id; // No more temp IDs!
 
     // Ensure dates are Date objects, not strings
@@ -161,7 +161,7 @@ export abstract class Model {
       : data.createdAt
         ? new Date(this.createdAt)
         : new Date();
-    this.syncStatus = data.syncStatus || 'pending';
+    this.syncStatus = data.syncStatus ?? 'pending';
   }
 
   /**
@@ -432,9 +432,7 @@ export abstract class Model {
    * Add validation rule
    */
   protected addValidationRule(propName: string, rule: ValidationRule): void {
-    if (!this.validationRules[propName]) {
-      this.validationRules[propName] = [];
-    }
+    this.validationRules[propName] ??= [];
     this.validationRules[propName].push(rule);
   }
 
@@ -565,7 +563,7 @@ export abstract class Model {
 
       // Never assign to MobX computed properties (they may expose a setter that throws)
       try {
-        if (isComputedProp(this as object, key)) {
+        if (isComputedProp(this, key)) {
           continue;
         }
       } catch {
@@ -700,7 +698,7 @@ export abstract class Model {
     };
 
     if (this.archivedAt !== undefined) {
-      result.archivedAt = this.archivedAt?.toISOString() || null;
+      result.archivedAt = this.archivedAt?.toISOString() ?? null;
     }
 
     if (properties) {
@@ -746,7 +744,7 @@ export abstract class Model {
     const className = this.constructor.name;
     // Use consumer-provided fallback map from config (replaces hardcoded Prisma name map)
     const fallbackMap = getContext().config.classNameFallbackMap;
-    return fallbackMap[className] || className.replace(/Model$/, '');
+    return fallbackMap[className] ?? className.replace(/Model$/, '');
   }
 
   /**
@@ -963,7 +961,7 @@ export abstract class Model {
     data: ModelData & { __typename?: string; __class?: string; modelName?: string }
   ): Model {
     // Support both __class and __typename, and handle both old and new naming
-    const modelIdentifier = data.__typename || data.__class || data.modelName;
+    const modelIdentifier = data.__typename ?? data.__class ?? data.modelName;
 
     if (!modelIdentifier) {
       throw new AbloValidationError(

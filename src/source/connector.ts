@@ -38,9 +38,11 @@ import {
   type ResponseFrame,
   type ReadyFrame,
 } from './connector-protocol.js';
+import { ABLO_HOSTED_HTTP_BASE_URL } from '../client/hostedEndpoints.js';
 
-/** Default Ablo Cloud base. The connector appends `SOURCE_CONNECTOR_WS_PATH`. */
-const DEFAULT_BASE_URL = 'https://api.abloatai.com';
+/** Default Ablo Cloud base. The connector appends `SOURCE_CONNECTOR_WS_PATH`.
+ *  Single-sourced from the dependency-free hosted-endpoints leaf. */
+const DEFAULT_BASE_URL = ABLO_HOSTED_HTTP_BASE_URL;
 
 /**
  * Reconnect backoff, in ms, indexed by consecutive failed connect attempts.

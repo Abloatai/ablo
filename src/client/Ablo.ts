@@ -5,7 +5,7 @@
  * bootstrap, offline queue, DI adapters) behind a single function call.
  *
  * Usage:
- *   import { Ablo } from '@abloatai/ablo/client';
+ *   import { Ablo } from '@abloatai/ablo';
  *   import { schema } from './schema';
  *
  *   const sync = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
@@ -19,26 +19,14 @@
  *   await sync.reports.delete({ id: reportId });
  */
 
-import { z } from 'zod';
-import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
 import type { Schema, SchemaRecord, InferModel, InferCreate, InferModelNames } from '../schema/schema.js';
-import { baseFieldsSchema } from '../schema/schema.js';
-import { schemaHash } from '../schema/serialize.js';
 import type { ModelDef } from '../schema/model.js';
-import type { RelationDef } from '../schema/relation.js';
 import type {
   SyncEngineConfig,
-  SyncLogger,
   MutationExecutor,
-  MutationDispatcher,
-  MutationOptions,
   MutationOperation,
-  SyncObservabilityProvider,
-  SyncAnalytics,
-  SessionErrorDetector,
-  OnlineStatusProvider,
 } from '../interfaces/index.js';
-import { AbloError, AbloAuthenticationError, AbloConnectionError, AbloValidationError, AbloNotFoundError, translateHttpError, hasWireCode, toAbloError, claimedError } from '../errors.js';
+import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, AbloNotFoundError, translateHttpError, toAbloError, claimedError } from '../errors.js';
 import { descriptionFromMeta } from '../coordination/schema.js';
 // `ModelTarget` (the `model`/`id` locator) and `ModelClaim` (the resolved claim
 // view) are canonical in `../coordination/schema` — derived there from one zod
@@ -47,7 +35,6 @@ import { descriptionFromMeta } from '../coordination/schema.js';
 // re-exported so `ablo.ModelTarget` / `ablo.ModelClaim` stay stable.
 import type { ModelTarget, ModelClaim } from '../coordination/schema.js';
 export type { ModelTarget, ModelClaim };
-import { LoadStrategy, PropertyType } from '../types/index.js';
 import { initSyncEngine } from '../context.js';
 import {
   noopObservability,
@@ -57,14 +44,9 @@ import {
 } from '../SyncEngineContext.js';
 import { alwaysOnline } from '../adapters/alwaysOnline.js';
 import { validateAbloOptions } from './validateAbloOptions.js';
-import { ModelRegistry, setActiveRegistry } from '../ModelRegistry.js';
-import { ObjectPool, ModelScope } from '../ObjectPool.js';
+import { ObjectPool } from '../ObjectPool.js';
 import type { SyncStoreContract } from '../react/context.js';
 import type { SyncWebSocket } from '../sync/SyncWebSocket.js';
-import { Database } from '../Database.js';
-import { SyncClient } from '../SyncClient.js';
-import { BootstrapHelper } from '../sync/BootstrapHelper.js';
-import { HydrationCoordinator } from '../sync/HydrationCoordinator.js';
 import { type RefreshScheduler } from '../auth/index.js';
 import { mintSession } from './sessionMint.js';
 import type { MintSessionContext } from './sessionMint.js';
@@ -72,7 +54,6 @@ import type { SyncGroupInput } from '../schema/roles.js';
 import { createAuthCredentialSource } from '../auth/credentialSource.js';
 import { createInternalComponents } from './createInternalComponents.js';
 import { resolveParticipantIdentity } from './identity.js';
-import { Model, modelAsRow } from '../Model.js';
 import { BaseSyncedStore, type SyncStatus } from '../BaseSyncedStore.js';
 import type { DefaultCollaborationEvents } from '../sync/SyncWebSocket.js';
 import { createPresenceStream } from '../sync/createPresenceStream.js';
@@ -83,40 +64,24 @@ import { reconcileFunctionalUpdate } from './functionalUpdate.js';
 import type { ModelUpdater, ContentionOptions } from './functionalUpdate.js';
 import { createParticipantManager } from '../sync/participants.js';
 import type {
-  ClaimStream,
   ClaimWaitOptions,
   PresenceStream,
   Snapshot,
 } from '../types/streams.js';
-import type { Claim, HeldClaim, Duration, TargetRange } from '../types/streams.js';
+import type { Claim } from '../types/streams.js';
 import {
   createProtocolClient,
   type AbloApi,
   type AbloApiClientOptions,
   type AbloApiClaims,
 } from './ApiClient.js';
-// Value import is cycle-safe: httpClient.js only value-imports ApiClient.js,
-// which imports this module type-only.
+// Value import is cycle-safe: httpClient.js and ApiClient.js take the client
+// types from the `options`/`resourceTypes` leaves, never from this module.
 import {
   createAbloHttpClient,
   type AbloHttpClient,
   type AbloHttpClientOptions,
 } from './httpClient.js';
-
-// ── Options ───────────────────────────────────────────────────────────────
-
-/**
- * Async function that resolves an apiKey at request time. Use for
- * credential rotation — rotate from a vault, refresh from session
- * storage, or pull from a Better Auth session. Mirrors Anthropic's
- * `ApiKeySetter` exactly so any rotation pattern that works with
- * `@anthropic-ai/sdk` works here.
- *
- * Re-exported from `./auth` so existing import paths (`@abloatai/ablo`)
- * keep resolving; the canonical definition lives there alongside the
- * resolvers that consume it.
- */
-export type { ApiKeySetter } from './auth.js';
 import type { ApiKeySetter } from './auth.js';
 import {
   assertBrowserSafety,
@@ -132,439 +97,41 @@ import {
   warnIfDatabaseUrlDeprecated,
 } from './auth.js';
 import { registerDataSource } from './registerDataSource.js';
-import {
-  shouldUseInMemoryPersistence,
-  type AbloPersistence,
-} from './persistence.js';
+import { shouldUseInMemoryPersistence } from './persistence.js';
 
-/**
- * Options for `Ablo({...})`.
- *
- * The only required field is `schema`. The default path is one line:
- *
- * ```ts
- * const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
- * ```
- *
- * `apiKey` itself defaults to `process.env.ABLO_API_KEY`, so in most
- * server setups `Ablo({ schema })` is enough. Every other field is
- * optional tuning (timeouts, retries, custom fetch, persistence) —
- * if you're not sure whether you need one, you don't. Reach for them
- * the way you'd reach for the equivalent option on the Stripe / OpenAI
- * / Anthropic clients: rarely, and deliberately.
- *
- * @see https://docs.abloatai.com — full option reference
- */
-export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
-  /**
-   * TypeScript schema defined with `defineSchema()`. Required — it's what
-   * makes `ablo.weatherReports.update(...)` typed. This is the one field you must
-   * pass; start here.
-   */
-  schema: Schema<S>;
+// ── Leaf modules (the factory's split-out cohesive units) ─────────────────
+// The option types, the shared resource-type surface, the schema-derived
+// config, model registration, the default console logger, and the default WS
+// mutation executor each live in their own leaf module. The two type leaves
+// (`options`, `resourceTypes`) have ZERO runtime imports, which is what lets
+// `ApiClient.ts` / `httpClient.ts` / `sessionMint.ts` take the client types
+// without importing this factory back (the old 4-cycle cluster). Everything
+// is re-exported below so importers of `./Ablo.js` (the root barrel,
+// `/core`) stay unchanged.
+import type { AbloOptions, InternalAbloOptions } from './options.js';
+import type {
+  AbloSession,
+  ClaimCreateOptions,
+  ClaimResource,
+  ClaimedOptions,
+  CommitCreateOptions,
+  CommitOperationInput,
+  CommitReceipt,
+  CommitResource,
+  CreateAgentClientParams,
+  CreateAgentSessionParams,
+  CreateSessionParams,
+  ModelClient,
+  ModelMutationOptions,
+  ModelRead,
+  ModelReadOptions,
+} from './resourceTypes.js';
+import { deriveConfigFromSchema } from './schemaConfig.js';
+import { registerModelsFromSchema } from './modelRegistration.js';
+import { createConsoleLogger, resolveLogLevel } from './consoleLogger.js';
+import { createDefaultMutationExecutor } from './wsMutationExecutor.js';
 
-  /**
-   * API key — **the one auth field most apps set.** Server-side this is your
-   * secret `sk_` (and it defaults to `process.env['ABLO_API_KEY']`, so you
-   * usually pass nothing). A long-lived key needs no refresh; the client uses
-   * it as-is.
-   *
-   * Accepts a static string OR an async `() => Promise<string | null>` resolver
-   * — the single credential path. Use the resolver form for two cases:
-   *
-   *  - **Key rotation** (server): pull a fresh `sk_`/`pk_` from a vault on each
-   *    bootstrap (AWS STS, GCP IAM, Vault).
-   *  - **Short-lived per-user browser** auth: return the fresh `ek_`/`rk_` bearer
-   *    your backend minted for the signed-in user. The client mints once before
-   *    connect, then keeps it fresh for you — a refresh timer ahead of expiry
-   *    plus re-mint on OS-wake / network-online / tab-focus, and a reactive
-   *    re-mint when a probe finds the key stale. You never call a refresh method
-   *    (Supabase `autoRefreshToken` model).
-   *
-   * Resolver contract: resolve a token; resolve `null` when the login itself is
-   * gone (terminal → the client signs out / fails `ready()` with `session_expired`);
-   * or THROW on a transient failure (→ back off and retry, never sign out). A
-   * static string never refreshes — it is used as-is.
-   */
-  apiKey?: string | ApiKeySetter | null | undefined;
-
-  /**
-   * @deprecated The direct connector lets Ablo dial INTO your Postgres and write to
-   * it — the operate-their-database posture we are moving off. Ablo is Stripe-shaped:
-   * it hosts only the transaction log (the ordered sync_deltas) + coordination, never
-   * your data; your rows always live in your own database. Use the signed Data Source
-   * endpoint instead — keep `DATABASE_URL` in your app, expose `dataSource(...)`, and
-   * let your server own the write while Ablo coordinates the sync stream. To keep the
-   * log in your infra too, self-host the engine. See
-   * docs/plans/stripe-shaped-storage-posture.md.
-   *
-   * Still honored at runtime for back-compat. SERVER-ONLY: it carries credentials, so
-   * it is never sent from the browser — constructing a client with `databaseUrl` and
-   * `dangerouslyAllowBrowser` throws. If you use it, provide a NON-superuser,
-   * non-`BYPASSRLS` role; the connector rejects privileged roles that cannot enforce RLS.
-   */
-  databaseUrl?: string | null | undefined;
-
-  /**
-   * Local persistence mode. Pass `indexeddb` only when you want offline
-   * queueing and a reload-surviving browser cache.
-   *
-   * @default 'memory'
-   */
-  persistence?: AbloPersistence;
-
-  /**
-   * Transport selector. `'websocket'` (default) is the live client —
-   * persistent socket, local synced pool, `onChange` subscriptions. `'http'`
-   * returns the STATELESS client for server-side actors (agents, workers,
-   * serverless): same `ablo.<model>` surface and coordination plane, but each
-   * call is one HTTP round-trip, identity rides the Bearer credential, and no
-   * socket is ever opened. With `'http'` the return type narrows to
-   * `AbloHttpClient<S>`, so stateful-only capabilities (`get`/`getAll`,
-   * `onChange`) are compile errors rather than latent runtime gaps.
-   *
-   * Note: session/credential minting (`sessions.create`) currently runs on the
-   * stateful (default) client, not the http client.
-   *
-   * @default 'websocket'
-   */
-  transport?: 'websocket' | 'http' | undefined;
-
-  /**
-   * Turn Ablo's diagnostic logging on/off. `true` surfaces the `[Ablo]`
-   * coordination trace — claims requested / queued / granted / released, agent
-   * handovers, connection state — so you can SEE the human+agent coordination
-   * you built while debugging. Omitted/`false` keeps the quiet default (only
-   * warnings + errors). For a middle ground use {@link logLevel}. Env override:
-   * `ABLO_LOG_LEVEL`. Ignored if a custom logger is supplied.
-   */
-  debug?: boolean | undefined;
-
-  /**
-   * Log threshold for the default `[Ablo]` logger (takes precedence over
-   * {@link debug}). `'info'` = coordination + connection events without the
-   * per-model registration firehose; `'debug'` = everything; `'warn'` (default)
-   * = warnings + errors only; `'silent'` = nothing. Env override: `ABLO_LOG_LEVEL`.
-   */
-  logLevel?: 'debug' | 'info' | 'warn' | 'error' | 'silent' | undefined;
-
-  // ── Advanced (you usually don't need these) ─────────────────────────
-  // Connection/transport tuning, mirroring the Stripe/OpenAI/Anthropic
-  // client option bags. The defaults are tuned for hosted production;
-  // override only for self-hosting, tests, proxies, or odd runtimes.
-
-  /**
-   * Bearer auth token. Hosted-cloud consumers pass `apiKey`; self-hosted
-   * deployments may pass a bearer token minted by their own auth layer.
-   */
-  authToken?: string | null | undefined;
-
-  /**
-   * Override the Ablo API base URL. Defaults to hosted production.
-   */
-  baseURL?: string | null | undefined;
-
-  /** Custom fetch implementation for tests, proxies, or non-standard runtimes. */
-  fetch?: typeof fetch | undefined;
-
-  /** Default headers sent with every API request. */
-  defaultHeaders?: Record<string, string | null | undefined> | undefined;
-
-  /** Default query parameters sent with every API request. */
-  defaultQuery?: Record<string, string | undefined> | undefined;
-
-  /**
-   * Client-side use is disabled by default because private API keys should
-   * not ship to browsers. Set this only when the browser holds a minted
-   * session token (`ek_`/`rk_`) or you route through a controlled server proxy.
-   */
-  dangerouslyAllowBrowser?: boolean | undefined;
-}
-
-export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
-  /**
-   * API key used for authentication.
-   *
-   * Accepts a static string (`sk_live_...`) or an async function that
-   * resolves to one. Defaults to `process.env['ABLO_API_KEY']`.
-   *
-   * When a function is provided, it's invoked before each request so
-   * you can rotate or refresh credentials at runtime. The function
-   * must return a non-empty string; otherwise an `AbloAuthenticationError`
-   * is thrown. If the function throws, the error is wrapped with the
-   * original available as `cause`.
-   *
-   * Mirrors Anthropic / OpenAI / Stripe SDK shape exactly.
-   */
-  apiKey?: string | ApiKeySetter | null | undefined;
-
-  /**
-   * Bearer auth token. Sent as `Authorization: Bearer <token>` on
-   * every request.
-   *
-   * Use this for self-hosted deployments where your auth layer mints
-   * cap tokens directly. Hosted-cloud consumers pass `apiKey` instead;
-   * the server handles cap-mint internally.
-   */
-  authToken?: string | null | undefined;
-
-  /**
-   * Override the default base URL. Defaults to
-   * `wss://api.abloatai.com` for hosted production; pass an explicit
-   * URL for self-hosted or private deployments.
-   */
-  baseURL?: string | null | undefined;
-
-  /**
-   * Custom `fetch` implementation. Defaults to `globalThis.fetch`.
-   * Override for testing, custom transports, or runtime shims.
-   */
-  fetch?: typeof fetch | undefined;
-
-  /**
-   * Default headers to include with every request to the API.
-   * Removed per-request by setting the header to `null` in request
-   * options.
-   */
-  defaultHeaders?: Record<string, string | null | undefined> | undefined;
-
-  /**
-   * Default query parameters to include with every request.
-   * Removed per-request by setting the param to `undefined`.
-   */
-  defaultQuery?: Record<string, string | undefined> | undefined;
-
-  /**
-   * Client-side use of this SDK is disabled by default — your apiKey
-   * would ship to every visitor's network tab. Only set this to
-   * `true` if you've understood the risk and have appropriate
-   * mitigations (a minted session token, a server-side proxy, etc).
-   */
-  dangerouslyAllowBrowser?: boolean | undefined;
-
-  /**
-   * TypeScript schema defined with `defineSchema()`.
-   *
-   * The root `Ablo(...)` client is schema-first so consumers get typed
-   * model clients such as `ablo.weatherReports.update(...)`. Omit `schema`
-   * only for the advanced Model / Claim / Commit client.
-   */
-  schema: Schema<S>;
-
-  // ── Deprecated ──────────────────────────────────────────────────────
-  // Legacy options retained for backwards compat during the Anthropic-
-  // shape migration. New consumers should pass only `{schema, apiKey}`
-  // and let Ablo resolve account scope, participant identity, and
-  // realtime permissions from the key.
-
-  /**
-   * @deprecated Server derives participant kind from the apiKey's
-   * scope. Pass apiKey only; this option will be removed once the
-   * server-internal cap-mint flow lands.
-   */
-  kind?: 'user' | 'agent' | 'system';
-
-  /**
-   * @deprecated Server derives user identity from the apiKey's
-   * scope (or from `Ablo-Acting-User` request header for B2B2C).
-   * Removed once Phase 3 ships.
-   */
-  user?: {
-    id: string;
-    teamIds?: string[];
-  };
-
-  /**
-   * @deprecated Server derives agent identity from the apiKey's
-   * scope. Removed once Phase 3 ships.
-   */
-  agentId?: string;
-
-  /**
-   * @deprecated Cap-mint moves server-internal in Phase 3. Pass
-   * `apiKey` only; the server handles capability issuance.
-   */
-  capabilityToken?: string;
-
-  /** Custom logger (default: console). Supplying one bypasses {@link debug}/{@link logLevel}. */
-  logger?: SyncLogger;
-
-  /**
-   * Turn Ablo's diagnostic logging on/off. `true` surfaces the `[Ablo]`
-   * coordination trace — claims acquired / queued / granted / released, agent
-   * handovers, connection state — plus internal lifecycle, so you can SEE the
-   * human+agent coordination you built. Omitted/`false` keeps the quiet default
-   * (only warnings + errors). For a middle ground use {@link logLevel}.
-   * Env override: `ABLO_LOG_LEVEL`. Ignored if a custom {@link logger} is passed.
-   */
-  debug?: boolean;
-
-  /**
-   * Log threshold for the default `[Ablo]` logger (takes precedence over
-   * {@link debug}). `'info'` = coordination + connection events without the
-   * per-model registration firehose; `'debug'` = everything; `'warn'` (default)
-   * = warnings + errors only; `'silent'` = nothing. Env override: `ABLO_LOG_LEVEL`.
-   */
-  logLevel?: 'debug' | 'info' | 'warn' | 'error' | 'silent';
-
-  /** ObjectPool size limit (default: 10000) */
-  maxPoolSize?: number;
-
-  /**
-   * Local persistence mode. Defaults to `memory` so Ablo behaves like a
-   * point solution for shared state instead of silently bolting IndexedDB
-   * durability onto every browser consumer.
-   *
-   * Pass `persistence: 'indexeddb'` only when you want offline queueing
-   * and a reload-surviving local cache in a browser.
-   */
-  persistence?: AbloPersistence;
-
-  /** @deprecated Use `persistence: 'indexeddb'` for durable browser storage. */
-  offline?: boolean;
-
-  /**
-   * @deprecated Internal/testing escape hatch. Use `persistence` in
-   * production code. `true` maps to `memory`; `false` maps to
-   * `indexeddb` in browsers.
-   */
-  inMemory?: boolean;
-
-  /**
-   * If true, initialization starts immediately in the background so
-   * `sync.reports.findMany()` works after `await sync.ready()`.
-   *
-   * If false (default), the consumer MUST call `await sync.ready()` before
-   * using the engine — any query before that returns empty results.
-   *
-   * Default: false (explicit is better — prevents silent init failures).
-   */
-  autoStart?: boolean;
-
-  /**
-   * How aggressively this client should pull baseline state at
-   * startup.
-   *
-   *  - `'full'`: pull every delta in the configured sync groups before
-   *    `ready()` resolves. Default for `kind: 'user'`.
-   *  - `'none'`: open the WS and process live deltas only — no baseline
-   *    fetch. Reads round-trip via `model.retrieve()`; subscriptions
-   *    populate the pool lazily via covering deltas. Default for
-   *    `kind: 'agent'` because agent-worker / routine runners don't
-   *    need (or want) a local replica of the org's tenant plane.
-   */
-  bootstrapMode?: 'full' | 'none';
-
-  // ── Advanced DI overrides ────────────────────────────────────────────────
-  //
-  // The fields below let an integrator replace the SDK's noop defaults with
-  // their own implementations. They exist so first-party apps (like Ablo's
-  // web client) can dogfood `Ablo` without losing the structured
-  // observability, analytics, and auth-aware mutation executor they already
-  // wired up by hand. External consumers can ignore all of these — the
-  // built-in defaults work for the documented zero-config call shape.
-
-  /**
-   * Custom observability provider (Sentry, Honeycomb, OTel, etc.).
-   * Default: a noop implementation that drops all breadcrumbs and spans.
-   */
-  observability?: SyncObservabilityProvider;
-
-  /**
-   * Custom analytics provider (PostHog, Amplitude, Segment, etc.).
-   * Default: a noop implementation that drops all events.
-   */
-  analytics?: SyncAnalytics;
-
-  /**
-   * Detect whether an error from a mutation/bootstrap response means the
-   * user's session has expired. Used to surface re-auth prompts. Default:
-   * heuristic that matches `401 Unauthorized` and a few common error shapes.
-   */
-  sessionErrorDetector?: SessionErrorDetector;
-
-  /**
-   * Detect whether the browser is currently online. Default: reads
-   * `navigator.onLine` and listens to the `online`/`offline` events.
-   */
-  onlineStatus?: OnlineStatusProvider;
-
-  /**
-   * Replace the built-in `MutationExecutor` (which posts a hardcoded
-   * `commit` method against `${url}/graphql`) with one that uses your own
-   * GraphQL client, auth headers, retry policy, and observability hooks.
-   *
-   * Default: a fetch-based executor that targets `${url}/graphql` and sends
-   * the configured bearer (`apiKey` / backend-minted token) as `Authorization`.
-   */
-  mutationExecutor?: MutationExecutor;
-
-  /**
-   * Replace the built-in `MutationDispatcher` (used by the offline queue
-   * to replay mutations on reconnect). If you override `mutationExecutor`
-   * you almost always want to override this too so the two paths share
-   * the same auth/retry behavior.
-   *
-   * Default: a thin dispatcher that routes to the built-in executor.
-   */
-  mutationDispatcher?: MutationDispatcher;
-
-  /**
-   * Partial overrides for the auto-derived `SyncEngineConfig`. Merged on
-   * top of `deriveConfigFromSchema(schema)`. Use this when you need
-   * specific `modelCreatePriority`, `batchableModels`, or
-   * `essentialFields` settings that the schema cannot express.
-   */
-  configOverrides?: Partial<SyncEngineConfig>;
-
-  /**
-   * Sync groups (entity scopes) this client subscribes to. **Provisional, not
-   * deprecated** — pick the right lane: normally the server derives these from
-   * the apiKey's scope, but passing them is still REQUIRED today in any config
-   * where the key doesn't resolve them (omitting yields a `degenerate
-   * syncGroups` warning and a zero-fan-out client). Keep passing it explicitly
-   * until the server-derived path ships in Phase 3, at which point it becomes a
-   * true no-op and is removed. Build values with `syncGroup(kind, id)` from
-   * `@abloatai/ablo/schema`.
-   */
-  syncGroups?: string[];
-
-  /**
-   * Override the bootstrap endpoint base URL. Use this when your sync
-   * server's HTTP API lives on a different host than the WebSocket URL.
-   *
-   * Must include the `/api` prefix — `BootstrapHelper` appends
-   * `/sync/bootstrap` directly. Example:
-   * `'http://api.example.com/api'` → `http://api.example.com/api/sync/bootstrap`.
-   *
-   * Default: `${url.replace(/^ws/, 'http')}/api`.
-   */
-  bootstrapBaseUrl?: string;
-
-  /**
-   * Ablo-owned account scope. Required for Branch 3 identity resolution
-   * in `identity.ts` — without it the SDK falls through to the
-   * `/api/identity` HTTP-derived path (Branch 2).
-   */
-  organizationId?: string;
-}
-
-// ── Model proxy types ─────────────────────────────────────────────────────
-
-/**
- * Operations available on each model in the sync engine.
- *
- * Naming aligns with Stripe / OpenAI / Anthropic conventions:
- *   `retrieve({ id })` — async single-row server read
- *   `list({ where })` — async collection server read
- *   `get(id)` / `getAll(...)` / `getCount(...)` — local graph snapshots
- *   `create({ data })` / `update({ id, data })` / `delete({ id })` — writes
- *   `claim({ id })` — durable claim handle for coordinated writes
- */
-// `ModelOperations` and the model option types live in
-// `./createModelProxy` alongside the factory that builds them — re-exported
-// here so the existing import path (`@abloatai/ablo`) keeps resolving.
-// See `createModelProxy.ts` for full JSDoc on each method.
+export type { ApiKeySetter, AbloOptions, InternalAbloOptions } from './options.js';
 export type {
   LocalCountOptions,
   LocalReadOptions,
@@ -581,351 +148,39 @@ export type {
   Claim,
   HeldClaim,
   ModelOperations,
-} from './createModelProxy.js';
-import type {
-  ModelOperations,
-  ClaimOptions,
-  ClaimParams,
-  ClaimLookupParams,
-  ClaimReorderParams,
-  ClaimReadApi,
-  AwaitedClaimMethod,
-  ServerReadOptions,
-} from './createModelProxy.js';
+  ModelOperationAction,
+  CommitWait,
+  ModelRead,
+  IfClaimedPolicy,
+  ClaimedOptions,
+  ClaimWaitOptions,
+  ModelReadOptions,
+  ClaimCreateOptions,
+  CommitOperationInput,
+  CommitCreateOptions,
+  CommitReceipt,
+  CommitResource,
+  ClaimResource,
+  ModelMutationOptions,
+  HttpClaimApi,
+  ModelClient,
+  SessionOperation,
+  CreateUserSessionParams,
+  CreateAgentSessionParams,
+  CreateSessionParams,
+  CreateAgentClientParams,
+  AbloSession,
+} from './resourceTypes.js';
+export { computeFKDepthPriority } from './schemaConfig.js';
+
+import type { ModelOperations } from './createModelProxy.js';
 import { createModelProxy } from './createModelProxy.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
-
-export type ModelOperationAction =
-  | 'create'
-  | 'update'
-  | 'delete'
-  | 'archive'
-  | 'unarchive';
-
-export type CommitWait = 'queued' | 'confirmed';
-
-export interface ModelRead<T = Record<string, unknown>> {
-  /**
-   * The row, or `undefined` when no row matched the id (or it's outside the
-   * caller's scope). A miss is data-absence, not an error — `retrieve` never
-   * throws "not found", mirroring the WebSocket client's `T | undefined`.
-   * Branch on it: `const deal = (await ablo.deals.retrieve({ id })).data; if (!deal) …`.
-   */
-  readonly data: T | undefined;
-  readonly stamp: number;
-  readonly claims: readonly ModelClaim[];
-}
-
-export type IfClaimedPolicy = 'return' | 'fail';
-
-export interface ClaimedOptions {
-  /**
-   * What to do when another participant has claimed the target: `return`
-   * includes active claim metadata in the response; `fail` throws
-   * `AbloClaimedError`. Waiting for a claim to clear is a claim-side concern —
-   * take `ablo.<model>.claim({ id })` (it queues fairly); reads never block.
-   */
-  readonly ifClaimed?: IfClaimedPolicy;
-}
-
-export type { ClaimWaitOptions } from '../types/streams.js';
-
-export interface ModelReadOptions extends ClaimedOptions {}
-
-export interface ClaimCreateOptions {
-  readonly target: ModelTarget;
-  /** Human-readable phase shown to peers — `'editing'`, `'writing'`. The same
-   *  word on every claim surface. */
-  readonly reason: string;
-  readonly ttl?: Duration;
-  /**
-   * Join the server's fair FIFO queue when the target is already claimed,
-   * rather than failing immediately. `create` then resolves only once the
-   * lease is actually ours (the server pushes `claim_acquired` if the target
-   * was free, or `claim_granted` when we reach the head of the line). Without
-   * this, a contended claim throws. Used by `ablo.<model>.claim` so writers
-   * serialize instead of racing.
-   */
-  readonly queue?: boolean;
-  /** Cap on how long to wait for a queued grant before rejecting. */
-  readonly waitTimeoutMs?: number;
-  /**
-   * Backpressure: reject with `AbloClaimedError('queue_too_deep')` instead of
-   * waiting if the queue is already `>= maxQueueDepth` when we join.
-   */
-  readonly maxQueueDepth?: number;
-}
-
-export interface CommitOperationInput {
-  readonly action: ModelOperationAction;
-  /** The model name — matches `ablo.<model>` and the schema's `model()`. */
-  readonly model?: string;
-  readonly target?: ModelTarget;
-  readonly id?: string | null;
-  readonly data?: Record<string, unknown> | null;
-  readonly transactionId?: string | null;
-  readonly readAt?: number | null;
-  readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
-}
-
-export interface CommitCreateOptions {
-  readonly claimRef?: string | { readonly id: string } | null;
-  readonly idempotencyKey?: string | null;
-  readonly readAt?: number | null;
-  readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
-  /**
-   * A claim handle from `ablo.<model>.claim({ id })` (or the HTTP claim
-   * surface). Same vocabulary as the per-model writes: the handle's
-   * snapshot watermark becomes the batch `readAt` default and `onStale`
-   * defaults to `'reject'`, so a commit that follows a claim is guarded
-   * against concurrent edits without re-stating the watermark by hand.
-   * Explicit `readAt`/`onStale` on the options win.
-   */
-  readonly claim?: Claim<Record<string, unknown>> | null;
-  readonly operation?: CommitOperationInput;
-  readonly operations?: readonly CommitOperationInput[];
-  readonly wait?: CommitWait;
-  /**
-   * Batch-level read dependencies (the STORM "did anything I looked at change?"
-   * layer). Declare the rows (`{model,id,readAt,fields?}`) or sync groups
-   * (`{group,readAt}`, e.g. `deck:abc`) this batch was premised on; the server
-   * validates none moved since `readAt` and fires the entry's `onStale` over the
-   * batch. Distinct from the write-target `readAt` — this guards what you READ,
-   * not what you write.
-   */
-  readonly reads?: readonly ReadDependency[] | null;
-}
-
-export interface CommitReceipt {
-  readonly id: string;
-  readonly status: CommitWait;
-  readonly lastSyncId?: number;
-  /**
-   * Stale-context notifications (notify-instead-of-abort, non-coercion). Present
-   * only when this commit guarded a write with `onStale: 'notify' and
-   * the premise moved concurrently — the conflicting field's current value,
-   * handed back as data instead of a forced `AbloStaleContextError`. The engine
-   * surfaces state; the intelligent actor (agent or human) decides how to
-   * resolve. Also fires on `conflict:notified`.
-   */
-  readonly notifications?: readonly StaleNotification[];
-  /**
-   * Ids of UPDATE/DELETE targets in this commit that matched ZERO rows (the row
-   * doesn't exist, or is outside the caller's org). Present (non-empty) only
-   * when a write missed. Typed resource wrappers turn this into a loud
-   * `AbloNotFoundError`; a raw `commits.create` caller can inspect it directly.
-   */
-  readonly missingIds?: readonly string[];
-}
-
-export interface CommitResource {
-  create(options: CommitCreateOptions): Promise<CommitReceipt>;
-}
-
-export interface ClaimResource extends ClaimStream {
-  create(options: ClaimCreateOptions): Promise<Claim>;
-  list(target?: Partial<ModelTarget>): readonly ModelClaim[];
-  waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void>;
-}
-
-export interface ModelMutationOptions extends ClaimedOptions {
-  readonly claimRef?: string | { readonly id: string } | null;
-  readonly idempotencyKey?: string | null;
-  readonly readAt?: number | null;
-  readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
-  readonly wait?: CommitWait;
-  readonly claim?: Claim | ClaimOptions | null;
-}
-
-/**
- * The HTTP/stateless claim surface. Normal tools usually put `claim` directly
- * on the write (`update({ id, data, claim })`) and let the SDK release it. Use
- * this namespace for multi-step handles and coordination screens.
- *
- * Same surface as the reactive {@link ClaimApi}, but every read is a server
- * round-trip, so `state`/`queue`/`reorder` are **awaited** here (the WebSocket
- * client resolves them synchronously from its local pool — which is what lets
- * `useAblo((ablo) => ablo.x.claim.state({ id }))` work inside a React render; a
- * stateless client has no pool to read, so the `Promise` is unavoidable).
- *
- * Mechanically DERIVED from `ClaimReadApi` via {@link AwaitedClaimMethod} so the
- * two transports can never drift: the ONLY difference is the uniform `Promise`
- * wrapper that statelessness forces. `claim({ id })` is identical (already async
- * on both); `state`/`queue`/`reorder`/`release` are the awaited form.
- */
-export type HttpClaimApi<T = Record<string, unknown>> =
-  ((params: ClaimParams<T>) => Promise<HeldClaim<T>>) & {
-    [K in keyof ClaimReadApi<T>]: AwaitedClaimMethod<ClaimReadApi<T>[K]>;
-  };
-
-export interface ModelClient<T = Record<string, unknown>> {
-  /**
-   * Single-row read over HTTP. **Returns an envelope, not the bare row** — the
-   * row is on `.data`, alongside the `.stamp` watermark (for stale-context
-   * guards on the following write) and any active `.claims`. A stateless HTTP
-   * client can't synthesize the watermark from a local snapshot, so the
-   * envelope is load-bearing here (the WebSocket client's `retrieve` returns
-   * `T | undefined` because it reads from the hydrated pool).
-   *
-   * ```ts
-   * const deal = await ablo.deals.retrieve({ id });
-   * deal.data?.recommendation;   // ← the row is on .data
-   * deal.stamp;                  // watermark — pass to the next write's readAt
-   * ```
-   */
-  retrieve(params: ModelReadOptions & { readonly id: string }): Promise<ModelRead<T>>;
-  /**
-   * Collection read over HTTP (server round-trip). Equality `where`, `orderBy`,
-   * `limit`. Present on the stateless protocol client; the store-backed
-   * `.model(name)` accessor omits it (use the typed `ablo.<model>.list` there).
-   */
-  list?(options?: ServerReadOptions<T>): Promise<T[]>;
-  /**
-   * Create a row and return it — the confirmed, authoritative server row (with
-   * framework defaults like `createdAt`/`createdBy`), mirroring the WebSocket
-   * client's `create`. A re-create of an existing caller-supplied id is
-   * idempotent and returns the EXISTING row, not the input.
-   */
-  create(params: ModelMutationOptions & { readonly data: Record<string, unknown>; readonly id?: string | null }): Promise<T>;
-  update(params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> }): Promise<CommitReceipt>;
-  /**
-   * Update under contention with a function of the latest state —
-   * `update(id, current => next)`, the `setState(prev => next)` of the data
-   * layer. The SDK reads the freshest row, runs your updater, writes it as a
-   * compare-and-swap against the row's watermark, and re-reads + re-runs on any
-   * concurrent write. No claim, no identity, no conflict codes surface: the
-   * write either lands or throws {@link AbloContentionError} once its reconcile
-   * budget is spent. Return `null`/`undefined` from the updater to skip the
-   * write (resolves to `undefined`).
-   */
-  update(
-    id: string,
-    updater: ModelUpdater<T>,
-    options?: ContentionOptions,
-  ): Promise<CommitReceipt | undefined>;
-  delete(params: ModelMutationOptions & { readonly id: string }): Promise<CommitReceipt>;
-  /**
-   * Durable lease + FIFO wait-line over HTTP — coordination without a socket.
-   * Present on the stateless protocol client (`Ablo({ schema: null })` /
-   * `createAbloHttpClient`); the store-backed `.model(name)` accessor omits it
-   * (the typed `ablo.<model>.claim` proxy is the full reactive namespace there).
-   */
-  claim?: HttpClaimApi<T>;
-}
-
-/** A single data operation a scoped **agent** session may perform on a model. */
-export type SessionOperation = 'read' | 'create' | 'update' | 'delete';
-
-/** Mint params for an **end-user** session — full data authority within the
- *  org (the Stripe `ephemeralKeys.create` / Supabase session shape). Mints an
- *  `ek_` token. `user.id` is your end user's external IdP id (becomes the
- *  session's `participantId`); Ablo does not model your users, so it's an
- *  honest string at the trust boundary. */
-export interface CreateUserSessionParams {
-  /** Your end user. `id` becomes the token's `participantId`. */
-  user: { id: string };
-  /** Mint the session into THIS organization instead of the key's own org — the
-   *  Stripe Connect `Stripe-Account` pattern, for a platform serving many tenants
-   *  from one backend. Requires the `sk_` to carry the `ephemeral:mint-any-org`
-   *  scope; omit for the normal single-tenant case. */
-  organizationId?: string;
-  /** Sync groups this session may subscribe to — typed (`'default'` or
-   *  `<namespace>:<id>`; build with `syncGroup(kind, id)` from
-   *  `@abloatai/ablo/schema`). Omit for the server default:
-   *  `[org:<your org>, user:<user.id>]`. */
-  syncGroups?: readonly SyncGroupInput[];
-  /** Token lifetime in seconds. Defaults to 900 (15m, the Stripe ephemeral default). */
-  ttlSeconds?: number;
-  /** Opaque identity blob echoed back to the client as `ablo.user`. */
-  userMeta?: Record<string, unknown>;
-  agent?: never;
-  can?: never;
-}
-
-/** Mint params for a scoped **agent** session — mints a restricted `rk_` token
- *  gated to exactly the operations named in `can`. `can` is typed off your
- *  schema (no magic `'task.update'` strings): `{ Task: ['update'], Deck: ['read'] }`
- *  — the SDK serializes each entry to the wire allowlist (`task.update`). */
-export interface CreateAgentSessionParams<S extends SchemaRecord> {
-  /** Your agent. `id` becomes the token's `participantId`. */
-  agent: { id: string };
-  /** Per-model operation allowlist, typed against the schema's model names. */
-  can: { [M in keyof S & string]?: readonly SessionOperation[] };
-  /** Sync groups this session may subscribe to — typed (`'default'` or
-   *  `<namespace>:<id>`; build with `syncGroup(kind, id)` from
-   *  `@abloatai/ablo/schema`). Omit for the server default: the org
-   *  anchor (`org:<your org>`) + the agent's own anchor. */
-  syncGroups?: readonly SyncGroupInput[];
-  /** Token lifetime in seconds. Defaults to 900 (15m, the Stripe ephemeral default). */
-  ttlSeconds?: number;
-  /** Opaque identity blob echoed back to the client as `ablo.agent`. */
-  userMeta?: Record<string, unknown>;
-  user?: never;
-}
-
-/** Params for {@link Ablo.sessions}.create — a discriminated union: pass
- *  `{ user }` for a full-authority end-user session (`ek_`) or `{ agent, can }`
- *  for a scoped agent session (`rk_`). */
-export type CreateSessionParams<S extends SchemaRecord> =
-  | CreateUserSessionParams
-  | CreateAgentSessionParams<S>;
-
-/** Params for {@link Ablo.agents}.create — a flattened agent descriptor (no
- *  `{ agent }` discriminator: `agents.create` only ever mints an agent). Unlike
- *  {@link CreateSessionParams} it resolves to a connected, scoped {@link Ablo}
- *  client rather than a raw token. */
-export interface CreateAgentClientParams<S extends SchemaRecord> {
-  /** Wire participant identity (`agent:<id>`) — what claim exclusion and the
-   *  FIFO queue gate on. OMIT to get a fresh `crypto.randomUUID()`: a distinct,
-   *  independent participant (the default, and what you want for concurrent
-   *  agents). Pass a STABLE string only when one logical agent must re-attach
-   *  to its own held claims across reconnects/restarts. */
-  id?: string;
-  /** Human-readable label for logs / attribution (carried in `userMeta.name`).
-   *  INDEPENDENT of `id`: two agents that share a `name` still receive distinct
-   *  ids and coordinate as SEPARATE participants — `name` never derives or
-   *  collapses identity. */
-  name?: string;
-  /** Per-model operation allowlist, typed against the schema's model names. */
-  can: { [M in keyof S & string]?: readonly SessionOperation[] };
-  /** Sync groups this agent may subscribe to — typed (`'default'` or
-   *  `<namespace>:<id>`). Omit for the server default (org anchor + the
-   *  agent's own anchor). */
-  syncGroups?: readonly SyncGroupInput[];
-  /** Token lifetime in seconds. Defaults to 900 (15m); the returned client
-   *  auto-re-mints before expiry, so a long-running agent never handles
-   *  rotation itself. */
-  ttlSeconds?: number;
-  /** Extra opaque identity blob echoed on the session scope. Merged with
-   *  `name` (the `name` param wins if you also set `userMeta.name`). */
-  userMeta?: Record<string, unknown>;
-}
-
-/** A minted session token — the Stripe ephemeral-key / Supabase session
- *  resource. `token` is the secret the holder presents as its bearer. */
-export interface AbloSession {
-  object: 'session';
-  /** Stable id of the minted credential (for revocation). */
-  id: string;
-  /** The short-lived session token — `ek_` for a `{ user }` session, `rk_`
-   *  for an `{ agent }` session. Hand this to the participant's runtime. */
-  token: string;
-  /** ISO-8601 expiry. */
-  expiresAt: string;
-  organizationId: string;
-  scope: {
-    organizationId: string;
-    syncGroups: readonly string[];
-    operations: readonly string[];
-    participantKind: 'user' | 'agent' | 'system';
-    participantId: string;
-  };
-  userMeta: Record<string, unknown>;
-}
 
 /** The typed sync engine client — one property per model in the schema */
 export type Ablo<S extends SchemaRecord> = {
   readonly [K in keyof S & string]: ModelOperations<
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- internal alias of the public Model<> type; kept for back-compat, no behavior difference
     InferModel<Schema<S>, K>,
     InferCreate<Schema<S>, K>
   >;
@@ -1205,7 +460,7 @@ export type Ablo<S extends SchemaRecord> = {
    * ```
    */
   snapshot<ModelName extends keyof S & string>(
-    entities: { readonly [M in ModelName]: string | readonly string[] },
+    entities: Readonly<Record<ModelName, string | readonly string[]>>,
   ): Snapshot<Schema<S>, ModelName>;
 
   // ── Internal accessors for framework integration ─────────────────
@@ -1227,754 +482,8 @@ export type Ablo<S extends SchemaRecord> = {
   readonly _ws: SyncWebSocket | null;
 };
 
-// ── Config derivation from schema ─────────────────────────────────────────
-
-/**
- * Compute a create-priority map from schema `belongsTo` relations using
- * Tarjan's strongly-connected-components algorithm.
- *
- * The FK graph has an edge `child → parent` for every `belongsTo`. Tarjan
- * runs a single linear DFS that simultaneously (a) detects cycles by
- * grouping mutually-reachable nodes into SCCs and (b) emits those SCCs
- * in reverse topological order of the condensation graph. In this edge
- * convention a "sink" SCC has no outgoing edges — i.e. no parents — so
- * it is an *FK root* (`organizations`, `themes`, etc.). Tarjan emits
- * roots first and leaves last, exactly the order in which rows must be
- * inserted to satisfy FK constraints.
- *
- * Priorities are assigned by emit order: SCC #0 → 10, SCC #1 → 20, …
- * Members of the same SCC share a priority, so insertion order wins the
- * tiebreak inside a cycle (this matters for cyclic schemas like
- * `slideDecks ↔ layouts`, where one direction is the user's chosen
- * "soft" edge — only the consumer's mutator sequence knows which one).
- *
- * This algorithm is iteration-order-independent: starting the DFS from
- * any node yields the same SCC partitioning, and SCCs always come out
- * in valid topological order. The previous DFS-with-memoization
- * heuristic broke under cycles by treating the back-edge as depth 0,
- * which made priorities depend on which node the walk happened to
- * enter the cycle at.
- *
- * Schema authors can mark one side of a cycle with
- * `belongsTo(target, fk, { defer: true })`. Those edges are excluded
- * from the dependency graph entirely, which deterministically breaks
- * the cycle and turns the SCC into a chain — the marked child gets a
- * strictly higher priority than its parent instead of being tied with
- * it. Pair with a Postgres `DEFERRABLE INITIALLY DEFERRED` constraint
- * if you want the database side of the cycle to also relax. See
- * {@link BelongsToOptions.defer}.
- *
- * The returned map is keyed by {@link ModelDef.typename} (falling back
- * to the schema key), because that is what `Model.getModelName()`
- * returns at transaction time — keying by schema key would silently
- * miss the lookup and every model would fall through to
- * `defaultCreatePriority`.
- *
- * Reference: Tarjan, R. (1972), "Depth-first search and linear graph
- * algorithms." Linear in V + E.
- */
-export function computeFKDepthPriority(schema: Schema): ReadonlyMap<string, number> {
-  // schemaKey → typename (wire name used at transaction time)
-  const keyToTypename = new Map<string, string>();
-  for (const [key, def] of Object.entries(schema.models)) {
-    keyToTypename.set(key, def.typename ?? key);
-  }
-
-  // Adjacency: schemaKey → parent schema keys pulled from `belongsTo`.
-  // Parents not in the schema (e.g. external types) are dropped so the
-  // graph stays closed. Edges marked `{ defer: true }` are also
-  // dropped — the schema author has declared this side of a cycle to
-  // be the "soft" one (insert with null FK, patch later), so the
-  // dependency-graph walker treats it as if the edge weren't there.
-  // That breaks the cycle deterministically and lets the other side
-  // become a strict topological predecessor.
-  const parentsOf = new Map<string, readonly string[]>();
-  for (const [key, def] of Object.entries(schema.models)) {
-    const out: string[] = [];
-    for (const rel of Object.values(def.relations) as Array<RelationDef & { options?: { defer?: boolean } }>) {
-      if (rel.type !== 'belongsTo') continue;
-      if (!keyToTypename.has(rel.target)) continue;
-      if (rel.options?.defer === true) continue;
-      out.push(rel.target);
-    }
-    parentsOf.set(key, out);
-  }
-
-  // Tarjan SCC bookkeeping
-  const dfsIndex = new Map<string, number>();
-  const lowlink = new Map<string, number>();
-  const onStack = new Set<string>();
-  const stack: string[] = [];
-  const sccs: string[][] = [];
-  let counter = 0;
-
-  function strongconnect(v: string): void {
-    dfsIndex.set(v, counter);
-    lowlink.set(v, counter);
-    counter++;
-    stack.push(v);
-    onStack.add(v);
-
-    for (const w of parentsOf.get(v) ?? []) {
-      if (!dfsIndex.has(w)) {
-        strongconnect(w);
-        lowlink.set(v, Math.min(lowlink.get(v)!, lowlink.get(w)!));
-      } else if (onStack.has(w)) {
-        // Back-edge into the active DFS path — w is in the same SCC as v.
-        lowlink.set(v, Math.min(lowlink.get(v)!, dfsIndex.get(w)!));
-      }
-    }
-
-    // v is the root of an SCC: pop everything down to v inclusive.
-    if (lowlink.get(v) === dfsIndex.get(v)) {
-      const component: string[] = [];
-      let w: string;
-      do {
-        w = stack.pop()!;
-        onStack.delete(w);
-        component.push(w);
-      } while (w !== v);
-      sccs.push(component);
-    }
-  }
-
-  for (const key of keyToTypename.keys()) {
-    if (!dfsIndex.has(key)) strongconnect(key);
-  }
-
-  // Tarjan emits SCCs in reverse topological order of the condensation.
-  // In our edge convention (child→parent), reverse-topo of the
-  // condensation means root-SCCs (no outgoing edges = no parents)
-  // first, leaf-SCCs (deepest descendants) last. We could just use
-  // emit-order as the priority — but that gives independent sibling
-  // SCCs different priorities, which is semantically wrong: siblings
-  // don't depend on each other and shouldn't be ordered relative to
-  // each other.
-  //
-  // Instead, do one more pass to compute *longest-path depth* on the
-  // condensation DAG: depth(SCC) = max(depth(parent SCC)) + 1, or 0
-  // for SCCs with no in-schema parents. SCCs at the same depth get
-  // the same priority — siblings stay tied, insertion order in the
-  // queue breaks the tie. Priority = (depth + 1) * 10.
-  //
-  // We can compute this in a single pass over the SCCs because
-  // Tarjan's emit-order *is* a valid topological order of the
-  // condensation: when we process sccs[i], every parent SCC has
-  // already been assigned a depth.
-  const nodeToSccIdx = new Map<string, number>();
-  sccs.forEach((scc, i) => {
-    for (const node of scc) nodeToSccIdx.set(node, i);
-  });
-
-  const sccDepth = new Map<number, number>();
-  sccs.forEach((scc, i) => {
-    let maxParentDepth = -1;
-    for (const node of scc) {
-      for (const parent of parentsOf.get(node) ?? []) {
-        const parentSccIdx = nodeToSccIdx.get(parent);
-        if (parentSccIdx === undefined) continue;
-        if (parentSccIdx === i) continue; // intra-SCC edge — not a dep
-        const d = sccDepth.get(parentSccIdx);
-        if (d !== undefined && d > maxParentDepth) maxParentDepth = d;
-      }
-    }
-    sccDepth.set(i, maxParentDepth + 1);
-  });
-
-  const out = new Map<string, number>();
-  sccs.forEach((scc, i) => {
-    const priority = (sccDepth.get(i)! + 1) * 10;
-    for (const key of scc) {
-      out.set(keyToTypename.get(key)!, priority);
-    }
-  });
-  return out;
-}
-
-function deriveConfigFromSchema(schema: Schema): SyncEngineConfig {
-  // Commit payload projection is done directly inside `TransactionQueue`
-  // — see `projectCommitPayload` there. Each model's field metadata
-  // rides on `ModelRegistry` (populated by `registerModelsFromSchema`),
-  // so there's no config-layer shim: the queue asks the registry for
-  // the declared fields and serializes accordingly.
-  return {
-    modelCreatePriority: computeFKDepthPriority(schema),
-    defaultCreatePriority: 40,
-    defaultNonCreatePriority: 50,
-    essentialFields: {},
-    classNameFallbackMap: {},
-    // Hash this client's schema once so bootstrap can detect drift against the
-    // server's active hash (same `schemaHash` the CLI push + server compute).
-    expectedSchemaHash: schemaHash(schema),
-  };
-}
-
-// ── Auto model registration from schema ───────────────────────────────────
-
-function registerModelsFromSchema(schema: Schema, registry: ModelRegistry): void {
-  registry.startBatch();
-
-  for (const [schemaKey, modelDef] of Object.entries(schema.models)) {
-    // Use typename as the model name — this is the wire-format name that
-    // the server sends in bootstrap responses and sync deltas. The pool's
-    // typeIndex, the ModelRegistry, and getModelName() all use this name.
-    // Schema key (camelCase plural) is only for the consumer-facing proxy API.
-    const modelName = modelDef.typename ?? schemaKey;
-
-    // Collect JSON sub-property fields to generate ${field}Json getters
-    const jsonSubFields: Array<{ fieldName: string; subSchema: z.ZodObject<z.ZodRawShape> }> = [];
-
-    for (const [fieldName, zodType] of Object.entries(modelDef.shape)) {
-      const inner = unwrapZodType(zodType as z.ZodType);
-      if (isZodObject(inner)) {
-        jsonSubFields.push({ fieldName, subSchema: inner });
-      }
-    }
-
-    // Create a dynamic Model subclass with JSON sub-property getters.
-    //
-    // Field-level MobX observability is ON BY DEFAULT. A reactive read like
-    // `useAblo((a) => a.documents.get(id))` must re-render when a remote delta
-    // mutates the row IN PLACE (the common collaborative case); without
-    // per-field observability that update fires no reaction and the UI silently
-    // goes stale. Models opt OUT with an explicit `lazyObservable: false` —
-    // appropriate only for very large read-only list models where per-field
-    // atoms cost more than the QueryView's entry-replaced reactivity already
-    // provides. json fields register as `observable.ref` (see
-    // `registerModelsFromSchema`), so the default is ~one atom per scalar field
-    // per loaded row — cheap — not a deep atom tree per blob.
-    const isLazy = modelDef.lazyObservable !== false;
-    // Base provenance fields (`organizationId`, `createdBy`) live in
-    // `baseFieldsSchema`, not the per-model `shape`. The server stamps + emits
-    // them (camelCased on the wire), but hydration (`Model.assignFieldsFromData`)
-    // only assigns keys that already exist as an own/prototype property — so
-    // without a slot here, `deck.createdBy` / `deck.organizationId` silently read
-    // `undefined` (this is why the profile decks tab showed nothing: it filters
-    // `decks.filter(d => d.createdBy === userId)`). `id`/`createdAt`/`updatedAt`
-    // are already seeded by the base Model constructor, so they're excluded.
-    const fieldNames = [
-      ...Object.keys(modelDef.shape),
-      ...Object.keys(baseFieldsSchema.shape).filter(
-        (f) => f !== 'id' && f !== 'createdAt' && f !== 'updatedAt' && !(f in modelDef.shape),
-      ),
-    ];
-    const computed = (modelDef as { computed?: Record<string, (self: Record<string, unknown>) => unknown> }).computed;
-    const DynamicModel = createDynamicModelClass(modelName, jsonSubFields, fieldNames, computed, isLazy);
-
-    // Respect the schema's load strategy so lazy models skip IDB hydration + bootstrap
-    const loadStrategy = modelDef.load === 'lazy' || modelDef.load === 'manual'
-      ? LoadStrategy.lazy
-      : LoadStrategy.instant;
-
-    registry.registerModel(modelName, DynamicModel, {
-      loadStrategy,
-      fields: modelDef.fields,
-      autoFill: modelDef.autoFill,
-      requiredFields: modelDef.requiredFields,
-    });
-
-    // Collect the set of fields that should get an IDB secondary index.
-    //
-    // Matches Linear's opt-in model (see wzhudev/reverse-linear-sync-engine):
-    // `@Reference(..., { indexed: true })`. Only `belongsTo` relations that
-    // explicitly set `{ index: true }` in their options get an IDB secondary
-    // index. Every other FK (and every scalar) is resolved via in-memory
-    // ObjectPool scans, which are fast enough at org-scope sizes (~10k rows)
-    // and reactive via MobX.
-    //
-    // Auto-indexing every belongsTo was wrong: it bloated write amplification
-    // for the vast majority of FKs that are never queried by fk. Indexing
-    // every scalar (like the legacy Go backend did) is even worse.
-    const indexedFields = new Set<string>();
-    for (const relDef of Object.values(modelDef.relations)) {
-      if (relDef.type === 'belongsTo' && relDef.foreignKey && relDef.options?.index === true) {
-        indexedFields.add(relDef.foreignKey);
-      }
-    }
-
-    // Register fields as properties (from Zod shape).
-    for (const [fieldName, rawZodType] of Object.entries(modelDef.shape)) {
-      const zodType = rawZodType as z.ZodType;
-      const isOptional = zodType.isOptional?.() ?? false;
-      // A field is indexed if it's the FK of a `belongsTo({ index: true })`
-      // relation. Legacy `description === 'indexed'` still works for
-      // consumers using `field.*().indexed()`.
-      const isIndexed =
-        indexedFields.has(fieldName) || zodType.description === 'indexed';
-      // JSON-typed fields (per the schema's wire-type tag) are opaque
-      // blobs from MobX's perspective — chart specs, ProseMirror docs,
-      // style maps. Deep observability on them recursively walks every
-      // nested property and creates an atom for each leaf, producing a
-      // microtask storm on every commit/streaming update. `ref` tracks
-      // only reassignment, which is how blob consumers actually use them.
-      const wireType = modelDef.fields?.[fieldName]?.type;
-      const observability: 'deep' | 'shallow' | 'ref' | undefined =
-        wireType === 'json' ? 'ref' : undefined;
-      registry.registerProperty(modelName, fieldName, {
-        type: PropertyType.property,
-        indexed: isIndexed,
-        optional: isOptional,
-        observability,
-      });
-    }
-
-    // Register relations
-    for (const [relName, relDef] of Object.entries(modelDef.relations)) {
-      if (relDef.type === 'belongsTo') {
-        registry.registerReference(modelName, relName, {
-          referencedModel: () => {
-            const targetModel = registry.getModelByName(relDef.target);
-            return targetModel ?? DynamicModel;
-          },
-          indexed: true,
-        });
-      } else if (relDef.type === 'hasMany') {
-        // Generate a getter on the parent model that returns all children
-        // matching the FK via Model.getStore().getByForeignKey(). The FK
-        // index on the target model is registered by deriveSyncPlanFromSchema.
-        const targetName = relDef.target;
-        const foreignKey = relDef.foreignKey;
-        const orderByField = relDef._orderBy;
-
-        // Resolve the target typename from the schema (might differ from the key)
-        const targetDef = schema.models[targetName];
-        const targetTypename = targetDef?.typename ?? targetName;
-
-        Object.defineProperty(DynamicModel.prototype, relName, {
-          get(this: Model) {
-            const store = Model.getStore();
-            if (!store) return [];
-            const results = store.getByForeignKey(targetTypename, foreignKey, this.id);
-            if (orderByField && results.length > 1) {
-              return [...results].sort((a, b) => {
-                // `orderByField` is a runtime string from the schema's
-                // hasMany({ orderBy }) — Models have dynamic typed
-                // fields produced by createDynamicModelClass, so the
-                // static type doesn't carry an index signature for
-                // arbitrary field reads. `Reflect.get` is the typed
-                // bridge — returns `unknown`, narrowed below.
-                const va: unknown = Reflect.get(a, orderByField);
-                const vb: unknown = Reflect.get(b, orderByField);
-                if (typeof va === 'number' && typeof vb === 'number') return va - vb;
-                if (typeof va === 'string' && typeof vb === 'string') return va.localeCompare(vb);
-                return 0;
-              });
-            }
-            return results;
-          },
-          enumerable: true,
-          configurable: true,
-        });
-      }
-    }
-  }
-
-  registry.endBatch();
-}
-
-// ── JSON sub-property helpers ─────────────────────────────────────────────
-
-/**
- * Unwrap a Zod schema through .optional(), .nullable(), .default(),
- * .readonly() to find the innermost type. Needed to detect whether a
- * field.json() call wraps a ZodObject (has sub-properties) or a plain
- * type (ZodUnknown, ZodArray, etc.).
- *
- * Uses Zod's public `.unwrap()` API per wrapper type — no `_def`
- * digging. Bounded loop guards against pathological self-referential
- * wrappers.
- */
-function unwrapZodType(schema: z.ZodType): z.ZodType {
-  let current: z.ZodType = schema;
-  for (let i = 0; i < 10; i++) {
-    if (current instanceof z.ZodOptional) {
-      current = current.unwrap() as z.ZodType;
-      continue;
-    }
-    if (current instanceof z.ZodNullable) {
-      current = current.unwrap() as z.ZodType;
-      continue;
-    }
-    if (current instanceof z.ZodDefault) {
-      // v4 deprecates removeDefault in favor of unwrap, but the
-      // installed @types declarations only expose removeDefault on
-      // ZodDefault. Use it — it's the same runtime function.
-      current = current.unwrap() as z.ZodType;
-      continue;
-    }
-    if (current instanceof z.ZodReadonly) {
-      current = current.unwrap() as z.ZodType;
-      continue;
-    }
-    break;
-  }
-  return current;
-}
-
-/** Type guard: is this a ZodObject with a .shape property? */
-function isZodObject(schema: z.ZodType): schema is z.ZodObject<z.ZodRawShape> {
-  return schema instanceof z.ZodObject;
-}
-
-/** Create a Model subclass for a schema-defined model */
-function createDynamicModelClass(
-  modelName: string,
-  jsonSubFields: Array<{ fieldName: string; subSchema: z.ZodObject<z.ZodRawShape> }>,
-  fieldNames: string[],
-  computed?: Record<string, (self: Record<string, unknown>) => unknown>,
-  lazyObservable = false,
-) {
-  const ModelClass = class extends Model {
-    private _modelName = modelName;
-
-    constructor(data?: Record<string, unknown>) {
-      super(data);
-      // Gate `propertyChanged`-via-`observe` tracking during initial
-      // hydration. M1 installs a MobX `observe()` listener per schema
-      // property that forwards writes to `propertyChanged()` so direct
-      // assignments like `layer.position = newPos` still round-trip
-      // through the transaction queue. During construction we're writing
-      // wire data, NOT user edits — flagging this as "constructing" lets
-      // the listener early-return on those writes so `modifiedProperties`
-      // doesn't get polluted with every field of every hydrated model.
-      //
-      // The listener is installed by `makeObservable()` below (inside
-      // M1), so writes that happen BEFORE that line won't fire it; this
-      // flag is defensive in case a subclass or call path reorders the
-      // steps later.
-      (this as { _isConstructing?: boolean })._isConstructing = true;
-      // MobX 6 requires fields to exist as own properties BEFORE makeObservable().
-      // Model base only sets id/createdAt/updatedAt. Schema fields (title, userId, etc.)
-      // must be initialized here so M1's annotations can find them.
-      for (const field of fieldNames) {
-        if (!(field in this)) {
-          (this as Record<string, unknown>)[field] = data?.[field] ?? undefined;
-        }
-      }
-      // Per-field MobX observability opt-in via `lazyObservable: true` on
-      // the model definition. Defaults to plain objects — reactivity comes
-      // from the QueryView "entry replaced" pattern, which is cheap for
-      // read-only list UIs but invisible to in-place field mutations.
-      //
-      // Multiplayer editors need live field-level reactivity so remote
-      // deltas AND local drag/resize/rename mutations surface through
-      // `observer()` components without the whole pool entry being
-      // replaced. Without observability, `layer.position.x = 500` emits
-      // nothing and the UI lags until some unrelated state change triggers
-      // a pass (toolbar close, deselect).
-      //
-      // Delegates to `Model.makeObservable()` (the inherited method) so
-      // MobX annotations are derived from the same registry that M1 reads.
-      // That means computed getters, reference collections, custom
-      // getters/setters, and property-change tracking all integrate
-      // correctly — reimplementing `makeObservable` inline here would miss
-      // those seams.
-      if (lazyObservable) {
-        this.makeObservable();
-      }
-      (this as { _isConstructing?: boolean })._isConstructing = false;
-    }
-
-    getModelName(): string {
-      return this._modelName;
-    }
-  };
-
-  // Generate ${field}Json getters for JSON fields with sub-properties.
-  //
-  // The getter reads the raw JSON string from the instance (set via
-  // updateFromData), parses it, applies Zod defaults, and caches by
-  // raw value. This replaces the hand-coded metadataObject + sub-property
-  // getter pattern that 11+ Ablo models currently repeat.
-  //
-  // Example: field named 'metadata' with sub-schema { icon: z.string().default('presentation') }
-  // → model.metadataJson returns { icon: 'presentation', ... } (typed, cached)
-  for (const { fieldName, subSchema } of jsonSubFields) {
-    const getterName = `${fieldName}Json`;
-    const cacheKey = `__${fieldName}JsonCache`;
-
-    Object.defineProperty(ModelClass.prototype, getterName, {
-      get(this: Record<string, unknown>) {
-        const raw = this[fieldName];
-
-        // Cache check: same raw value → same parsed result
-        const cache = this[cacheKey] as { raw: unknown; parsed: unknown } | undefined;
-        if (cache && cache.raw === raw) return cache.parsed;
-
-        // Parse: handle string (from DB/wire), object (already parsed), null/undefined
-        let input: unknown;
-        try {
-          if (typeof raw === 'string') {
-            input = JSON.parse(raw);
-          } else if (raw && typeof raw === 'object') {
-            input = raw;
-          } else {
-            input = {};
-          }
-        } catch {
-          input = {};
-        }
-
-        // Apply Zod parse for type coercion + defaults. safeParse so
-        // malformed metadata doesn't crash — falls back to all defaults.
-        const result = subSchema.safeParse(input);
-        const parsed = result.success ? result.data : subSchema.safeParse({}).data ?? {};
-
-        this[cacheKey] = { raw, parsed };
-        return parsed;
-      },
-      enumerable: true,
-      configurable: true,
-    });
-  }
-
-  // Install schema-declared computed getters on the prototype.
-  // Each getter receives `this` (the model instance) and returns the computed value.
-  if (computed) {
-    for (const [name, fn] of Object.entries(computed)) {
-      Object.defineProperty(ModelClass.prototype, name, {
-        get(this: Record<string, unknown>) {
-          return fn(this);
-        },
-        enumerable: true,
-        configurable: true,
-      });
-    }
-  }
-
-  return ModelClass;
-}
-
-// ── Default console logger ────────────────────────────────────────────────
-
-/**
- * Level threshold for the default console logger.
- *
- * The SDK emits a `debug` line per model and per property during schema
- * registration (see `ModelRegistry`), plus assorted lifecycle chatter. That
- * is verbose by design but carries no actionable signal for app consumers, so
- * the default threshold is `warn` — `debug`/`info` are dropped unless a
- * consumer opts in.
- *
- * Opt back in with `ABLO_LOG_LEVEL=debug` (or `info`/`warn`/`error`/`silent`).
- * Passing a custom `logger` to `Ablo({ logger })` bypasses this entirely.
- */
-type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent';
-const LOG_LEVEL_RANK: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40, silent: 99 };
-
-/**
- * Resolve the effective level. Precedence: explicit `logLevel` option →
- * `debug: true` (⇒ debug) → `ABLO_LOG_LEVEL` env → default `warn`. `debug: false`
- * / omitted just means "don't raise the level" — it falls through to env/default
- * rather than force-silencing an ops-set env override.
- */
-function resolveLogLevel(opts?: { debug?: boolean; logLevel?: LogLevel }): LogLevel {
-  if (opts?.logLevel && opts.logLevel in LOG_LEVEL_RANK) return opts.logLevel;
-  if (opts?.debug === true) return 'debug';
-  // `globalThis.process` guard keeps this safe in browser/edge runtimes that
-  // have no `process` binding — there we fall through to the default.
-  const raw = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.ABLO_LOG_LEVEL;
-  const normalized = raw?.toLowerCase();
-  if (normalized && normalized in LOG_LEVEL_RANK) return normalized as LogLevel;
-  return 'warn';
-}
-
-/**
- * Build the default logger, gated at `level` and prefixed `[Ablo]` so a creator
- * with a console full of other tools' logs can see at a glance what's ours.
- */
-function createConsoleLogger(level: LogLevel): SyncLogger {
-  const threshold = LOG_LEVEL_RANK[level];
-  const emit = (lvl: LogLevel, fn: (...args: unknown[]) => void, args: unknown[]) => {
-    if (typeof console === 'undefined' || LOG_LEVEL_RANK[lvl] < threshold) return;
-    fn('[Ablo]', ...args);
-  };
-  return {
-    debug: (...args: unknown[]) => emit('debug', console.debug, args),
-    info: (...args: unknown[]) => emit('info', console.info, args),
-    warn: (...args: unknown[]) => emit('warn', console.warn, args),
-    error: (...args: unknown[]) => emit('error', console.error, args),
-  };
-}
-
 // `readProcessEnv` lives in `./auth` alongside the other resolvers
 // that read it. Re-exported there for use elsewhere in the file.
-
-// ── Default mutation executor (wire: `commit` frame over WebSocket) ──────
-
-/**
- * Derive a stable `Idempotency-Key` from the batch's operation set.
- *
- * Retries of the same batch compute the same key — a reconnecting
- * client that rebuilds the identical mutations from its offline queue
- * sends the identical key, so the server's `mutation_log` replay path
- * returns the cached response instead of re-executing the mutators.
- *
- * Content-addressed: sort operations by (model, id, type) then sha256
- * the serialized form. Separator-safe — adjacent fields are delimited
- * by a character (`\x1e`, the ASCII record separator) that cannot
- * appear in a JSON string literal. Output length is 70 chars — safely
- * under Stripe's documented 255-char cap.
- *
- * Uses the Web Crypto API (cross-runtime: Node 20+ and browsers), same
- * primitive as the offline queue's AES-GCM encryption.
- *
- * @internal — exported as unexported file-local; callers go through
- * the executor's own `Idempotency-Key` plumbing.
- */
-async function deriveOperationsIdempotencyKey(
-  operations: ReadonlyArray<{
-    type: string;
-    model: string;
-    id: string;
-    input?: Record<string, unknown>;
-  }>,
-): Promise<string> {
-  const normalized = [...operations]
-    .map((op) => ({
-      type: op.type,
-      model: op.model,
-      id: op.id,
-      input: op.input ?? null,
-    }))
-    .sort((a, b) => {
-      if (a.model !== b.model) return a.model < b.model ? -1 : 1;
-      if (a.id !== b.id) return a.id < b.id ? -1 : 1;
-      return a.type < b.type ? -1 : a.type > b.type ? 1 : 0;
-    });
-  const encoded = new TextEncoder().encode(JSON.stringify(normalized));
-  const digest = await crypto.subtle.digest('SHA-256', encoded);
-  const bytes = new Uint8Array(digest);
-  let hex = '';
-  for (let i = 0; i < bytes.length; i++) {
-    hex += bytes[i].toString(16).padStart(2, '0');
-  }
-  return `batch-${hex}`;
-}
-
-/**
- * Default mutation executor: sends `{ type: 'commit', payload: ... }` over
- * the sync engine's own WebSocket.
- *
- * Transport ownership follows the Zero / Liveblocks pattern — the engine
- * owns its socket end-to-end and the executor is internal. Apps pass URLs
- * and auth; they do NOT inject transport callbacks. That's why this
- * factory takes a `getWs` closure instead of a full SyncWebSocket: the WS
- * doesn't exist when the executor is constructed (it's created later in
- * `Ablo` during `BaseSyncedStore` init), so we resolve it
- * lazily at commit time. Same trick Zero uses internally — see
- * `packages/zero-client/src/client/zero.ts` where `Pusher`/`Puller` are
- * constructed before the socket then wired up at connect time.
- *
-	 * `options.idempotencyKey` becomes the wire-level `clientTxId` when set,
-	 * matching Stripe-style retry semantics. Otherwise the SDK generates one.
-	 */
-	function createDefaultMutationExecutor(
-	  getWs: () => {
-	    sendCommit?: (
-	      operations: ReadonlyArray<MutationOperation>,
-	      clientTxId: string,
-	      timeoutMs?: number,
-	      causedByTaskId?: string | null,
-	      reads?: readonly ReadDependency[] | null,
-	    ) => Promise<{ lastSyncId: number; notifications?: StaleNotification[] }>;
-	  } | null,
-	): MutationExecutor {
-	  async function commit(
-	    operations: MutationOperation[],
-	    options?: MutationOptions,
-	  ) {
-    const ws = getWs();
-    if (!ws?.sendCommit) {
-      throw new AbloConnectionError(
-        'SyncWebSocket not ready for commit. The engine must finish bootstrap ' +
-          'before mutations can be sent.',
-        { code: 'ws_not_ready' },
-      );
-    }
-	    const clientTxId =
-	      options?.idempotencyKey ??
-	      (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-	        ? crypto.randomUUID()
-	        : `tx_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`);
-	    try {
-	      return await ws.sendCommit(
-	        operations,
-	        clientTxId,
-	        undefined, // use sendCommit's built-in 15s default; no per-call override
-	        options?.causedByTaskId,
-	        options?.reads,
-	      );
-    } catch (err) {
-      // Wrap transport-level failures as connection errors so the
-      // TransactionQueue's retry classifier treats them as transient
-      // (matches the old HTTP path's network-error handling).
-      if (err instanceof AbloError) throw err;
-      if (err instanceof Error) {
-        if (/not connected|timed out|connection|ECONN/i.test(err.message)) {
-          const wrapped = new AbloConnectionError(err.message, { cause: err });
-          // Preserve any `diagnostics` snapshot the underlying SyncWebSocket
-          // attached to the rejection. Without this, the wrapped error
-          // bottoms out at "AbloConnectionError: not connected" with no
-          // attribution to which close code / heartbeat trip / session
-          // error caused it. See SyncWebSocket.notConnectedError().
-          if (
-            err &&
-            typeof err === 'object' &&
-            'diagnostics' in err &&
-            (err as { diagnostics?: unknown }).diagnostics
-          ) {
-            (wrapped as unknown as { diagnostics: unknown }).diagnostics = (
-              err as { diagnostics: unknown }
-            ).diagnostics;
-          }
-          throw wrapped;
-        }
-      }
-      throw err;
-    }
-  }
-
-  return {
-    commit,
-    executeCreate: (model, id, input, _txId, options) =>
-      commit([{ type: 'CREATE', model: model.toLowerCase(), id, input }], options).then(() => {}),
-    executeUpdate: (model, id, data, _txId, options) =>
-      commit([{ type: 'UPDATE', model: model.toLowerCase(), id, input: data }], options),
-    executeDelete: (model, id, _txId, options) =>
-      commit([{ type: 'DELETE', model: model.toLowerCase(), id }], options).then(() => {}),
-    executeArchive: (model, id, _txId, options) =>
-      commit([{ type: 'ARCHIVE', model: model.toLowerCase(), id }], options).then(() => {}),
-    executeUnarchive: (model, id, _txId, options) =>
-      commit([{ type: 'UNARCHIVE', model: model.toLowerCase(), id }], options).then(() => {}),
-  };
-}
-
-// ── Default mutation dispatcher (for offline flush) ───────────────────────
-
-function createDefaultMutationDispatcher(executor: MutationExecutor): MutationDispatcher {
-  return {
-    async dispatch(opName: string, variables: Record<string, unknown>) {
-      const prefixes = ['Create', 'Update', 'Delete', 'Archive', 'Unarchive'] as const;
-      for (const prefix of prefixes) {
-        if (opName.startsWith(prefix)) {
-          const model = opName.slice(prefix.length);
-          const v = variables;
-          const input = (prefix === 'Create' || prefix === 'Update')
-            ? v.input as Record<string, unknown>
-            : undefined;
-          await executor.commit([{
-            type: prefix.toUpperCase(),
-            model: model.toLowerCase(),
-            id: (v.id as string) ?? '',
-            input,
-          }]);
-          return;
-        }
-      }
-    },
-  };
-}
 
 // ── Auth normalization ─────────────────────────────────────────────────────
 
@@ -2010,6 +519,14 @@ function resolveCredentialResolver(
  * await sync.weatherReports.create({ location: 'Stockholm', status: 'pending' });
  * ```
  *
+ * In the browser (or any client that shouldn't hold a secret key), point
+ * `authEndpoint` at your session-mint route instead — the SDK fetches it, keeps the
+ * short-lived token fresh, and re-mints on expiry:
+ *
+ * ```ts
+ * const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
+ * ```
+ *
  * Pass `transport: 'http'` for the stateless server-side client (agents,
  * workers, serverless) — same `ablo.<model>` surface, no socket:
  *
@@ -2033,7 +550,7 @@ export function Ablo<const S extends SchemaRecord>(
   if (options.schema == null) {
     // The protocol client IS the stateless HTTP plane (string-keyed models),
     // so `transport: 'http'` needs no special-casing here.
-    return createProtocolClient(options as AbloApiClientOptions);
+    return createProtocolClient(options);
   }
   if (options.transport === 'http') {
     return createAbloHttpClient(options as AbloHttpClientOptions<S>);
@@ -2050,6 +567,7 @@ export function Ablo<const S extends SchemaRecord>(
   // `apiKey` path — no refresh needed.
   const credentialResolver = resolveCredentialResolver(configuredApiKey);
   const authCredentials = createAuthCredentialSource(
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- load-bearing on the self-hosted path; server-internal cap-mint (Phase 3) not shipped
     internalOptions.capabilityToken ?? configuredAuthToken,
   );
   const configuredDatabaseUrl = resolveDatabaseUrl(authInput);
@@ -2066,10 +584,10 @@ export function Ablo<const S extends SchemaRecord>(
     createConsoleLogger(resolveLogLevel({ debug: options.debug, logLevel: options.logLevel }));
   // Nudge (once) if a stray DATABASE_URL is in the env but `databaseUrl` wasn't
   // passed — the env value is no longer auto-adopted (see resolveDatabaseUrl).
-  warnIfDatabaseUrlEnvIgnored(authInput, (m) => logger.warn(m));
-  warnIfDatabaseUrlDeprecated(authInput, (m) => logger.warn(m));
-  void warnIfCliKeyMismatch(authInput, (m) => logger.warn(m));
-  const schema = options.schema as Schema<S>;
+  warnIfDatabaseUrlEnvIgnored(authInput, (m) => { logger.warn(m); });
+  warnIfDatabaseUrlDeprecated(authInput, (m) => { logger.warn(m); });
+  void warnIfCliKeyMismatch(authInput, (m) => { logger.warn(m); });
+  const schema = options.schema;
   const url = resolveBaseURL(authInput);
 
   // 1. Derive config from schema
@@ -2110,8 +628,6 @@ export function Ablo<const S extends SchemaRecord>(
       const ws = storeHolder.store?.getSyncWebSocket() ?? null;
       return ws;
     });
-  const dispatcher: MutationDispatcher =
-    internalOptions.mutationDispatcher ?? createDefaultMutationDispatcher(executor);
 
   // 3. Initialize SDK context (one call — hides all DI wiring).
   //    Each provider can be overridden individually; the noop defaults
@@ -2128,16 +644,14 @@ export function Ablo<const S extends SchemaRecord>(
         : browserOnlineStatus),
     config,
     mutationExecutor: executor,
-    mutationDispatcher: dispatcher,
   });
 
   // 4. Create internal components (user never sees these). See
   //    `./createInternalComponents.ts` for the construction order
   //    and what each component does. Model registration happens
-  //    here because `registerModelsFromSchema` lives in this file —
-  //    the schema-to-Model-class translation depends on private
-  //    helpers (`createDynamicModelClass`, `unwrapZodType`, etc.)
-  //    that aren't worth pulling into the components module.
+  //    here (via `registerModelsFromSchema`, in `./modelRegistration.ts`)
+  //    because the schema-to-Model-class translation is client-construction
+  //    wiring that isn't worth pulling into the components module.
   const {
     modelRegistry,
     objectPool,
@@ -2176,9 +690,37 @@ export function Ablo<const S extends SchemaRecord>(
   // timer + wake/online/focus re-mint). Installed once here so refresh works for
   // ANY consumer of `Ablo({ auth })` — not only those who render `<AbloProvider>`.
   // The first mint happens in `ready()` so the first connection carries a token.
+  //
+  // Long-lived server clients also get the pre-roll TIMER on windowless hosts
+  // (`proactiveInNode`): their socket must renew its `rk_`/`ek_` BEFORE the
+  // hub's keepalive reaper closes it (4001 `credential_expired`). Two signals
+  // qualify — agent/system participants (the axis `createConnectionManager`
+  // gates on; `kind` is deprecated but still what agent runtimes pass today),
+  // and an ABSOLUTE endpoint-string `apiKey` (a relative one can't fetch in
+  // Node at all, so an absolute URL is unambiguously a deliberate server
+  // client, kind or no kind). User-kind clients in Node (an SSR/RSC module
+  // eval of scaffolded browser code) stay reactive-only.
   if (credentialResolver) {
-    store.startCredentialLifecycle(credentialResolver);
+    const rawEndpoint = internalOptions.authEndpoint ?? internalOptions.apiKey;
+    const absoluteEndpoint =
+      typeof rawEndpoint === 'string' && /^https?:\/\//i.test(rawEndpoint);
+    store.startCredentialLifecycle(credentialResolver, {
+      /* eslint-disable @typescript-eslint/no-deprecated -- `kind` gates the self-hosted proactive pre-roll; hosted path derives it from the apiKey scope */
+      proactiveInNode:
+        internalOptions.kind === 'agent' ||
+        internalOptions.kind === 'system' ||
+        absoluteEndpoint,
+      /* eslint-enable @typescript-eslint/no-deprecated */
+    });
   }
+
+  // Put the lazy-query lane on the SAME auth-recovery backbone as the WS probe
+  // and the proactive pre-roll: a 401 on `/sync/query` re-mints via the store's
+  // single-flight lifecycle and replays once, instead of silently returning
+  // empty rows against an expired `ek_` until the next proactive tick (the
+  // "Could not load documents — apikey_expired" wedge). Late-bound because the
+  // coordinator is constructed before the store exists.
+  hydration.setCredentialRecovery((recovery) => store.recoverFromAuthRejection(recovery));
 
   // Wire the store back into the default executor's lazy getter (see
   // `storeHolder` above). The executor was constructed before the store
@@ -2208,10 +750,12 @@ export function Ablo<const S extends SchemaRecord>(
   // connection's authenticated identity prefix, but the local `self`
   // entry uses the kind we know at construction.
   const participantId =
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- self-hosted identity fallback; hosted path derives identity from the apiKey scope
     (internalOptions.kind === 'agent' ? internalOptions.agentId : internalOptions.user?.id) ?? '';
   const presenceStream = createPresenceStream({
     participantId,
     syncGroups: internalOptions.syncGroups ?? [],
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- local self-entry kind; server re-stamps isAgent from the authenticated identity
     isAgent: internalOptions.kind === 'agent',
   });
   const claimStream = createClaimStream({ participantId });
@@ -2226,6 +770,7 @@ export function Ablo<const S extends SchemaRecord>(
   // 6. Validate options up front — fail loudly on obviously wrong inputs so
   //    strangers don't get silent empty results. Validation errors are written
   //    into `store.syncStatus` (the single source of truth).
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- self-hosted default; hosted path ignores it (server derives kind from the apiKey scope)
   const kind = internalOptions.kind ?? 'user';
   const _validationError = validateAbloOptions({
     options: internalOptions,
@@ -2245,6 +790,7 @@ export function Ablo<const S extends SchemaRecord>(
   // trusting them is the trap (you think you're an agent; the key says user).
   // Warn loudly rather than removing the fields — `agentId` is still load-bearing
   // on the self-hosted path (no apiKey; paired with `capabilityToken`).
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- reads the deprecated fields precisely to warn callers off them under a configured apiKey
   if (configuredApiKey && (internalOptions.kind || internalOptions.agentId)) {
     logger.warn(
       'Ablo: `kind` / `agentId` are ignored when an `apiKey` is configured — ' +
@@ -2516,7 +1062,7 @@ export function Ablo<const S extends SchemaRecord>(
 
 	  function isClaimHandleValue(
 	    value: unknown,
-	  ): value is Claim<Record<string, unknown>> {
+	  ): value is Claim {
 	    return (
 	      typeof value === 'object' &&
 	      value !== null &&
@@ -2677,12 +1223,12 @@ export function Ablo<const S extends SchemaRecord>(
 
 	      const onAbort = () => {
 	        finish(() =>
-	          reject(
+	          { reject(
 	            new AbloConnectionError('Claim wait aborted.', {
 	              code: 'claim_wait_aborted',
 	              cause: options?.signal?.reason,
 	            }),
-	          ),
+	          ); },
 	        );
 	      };
 
@@ -2697,13 +1243,13 @@ export function Ablo<const S extends SchemaRecord>(
 	      if (options?.timeout != null) {
 	        timeoutId = setTimeout(() => {
 	          finish(() =>
-	            reject(
+	            { reject(
 	              claimedError(
 	                target,
 	                listModelClaims(target),
 	                'model_claimed_timeout',
 	              ),
-	            ),
+	            ); },
 	          );
 	        }, options.timeout);
 	      }
@@ -2822,7 +1368,7 @@ export function Ablo<const S extends SchemaRecord>(
         queue: (target) =>
           publicClaims.queueFor({ type: target.model, id: target.id }),
         reorder: (target, order) =>
-          publicClaims.reorder({ type: target.model, id: target.id }, order),
+          { publicClaims.reorder({ type: target.model, id: target.id }, order); },
         state: (target) => {
           // The live claim stream only tracks *open* (active) claims;
           // terminal states (committed / expired / canceled) drop out of
@@ -3038,7 +1584,7 @@ export function Ablo<const S extends SchemaRecord>(
 	              onStale: 'reject',
 	              wait: 'confirmed',
 	              operations: [
-	                { action: 'update', model: name, id, data: patch as Record<string, unknown> },
+	                { action: 'update', model: name, id, data: patch },
 	              ],
 	            }),
 	        });
@@ -3161,7 +1707,7 @@ export function Ablo<const S extends SchemaRecord>(
 	      modelTypenames: Object.fromEntries(
 	        Object.entries(schema.models).map(([key, def]) => [
 	          key,
-	          (def as ModelDef).typename ?? key,
+	          (def).typename ?? key,
 	        ]),
 	      ),
 	    };
@@ -3370,7 +1916,7 @@ export function Ablo<const S extends SchemaRecord>(
 
     /** Context-staleness snapshot — see `engine.snapshot(...)` JSDoc. */
     snapshot<ModelName extends keyof S & string>(
-      entities: { readonly [M in ModelName]: string | readonly string[] },
+      entities: Readonly<Record<ModelName, string | readonly string[]>>,
     ): Snapshot<Schema<S>, ModelName> {
       return createSnapshot<Schema<S>, ModelName>({
         pool: objectPool,
@@ -3446,8 +1992,8 @@ export namespace Ablo {
   export type CapabilityRotateOptions = import('./ApiClient.js').CapabilityRotateOptions;
   export type RotatedCapability = import('./ApiClient.js').RotatedCapability;
   // Claimed-state options stay flat — same concept reused by claims and models.
-  export type IfClaimedPolicy = import('./Ablo.js').IfClaimedPolicy;
-  export type ClaimedOptions = import('./Ablo.js').ClaimedOptions;
+  export type IfClaimedPolicy = import('./resourceTypes.js').IfClaimedPolicy;
+  export type ClaimedOptions = import('./resourceTypes.js').ClaimedOptions;
 
   // ── Entity pointers (flat — input shapes used everywhere) ─────────
   export type ClaimTarget = _Streams.ClaimTarget;
@@ -3493,6 +2039,7 @@ export namespace Ablo {
     export type InferModel<
       S extends _SchemaTypes.Schema,
       K extends keyof S['models'],
+      // eslint-disable-next-line @typescript-eslint/no-deprecated -- re-exports the deprecated alias under its historical name for back-compat
     > = _SchemaTypes.InferModel<S, K>;
     export type InferCreate<
       S extends _SchemaTypes.Schema,
@@ -3515,32 +2062,32 @@ export namespace Ablo {
   // ── Commit (sub-namespace — write-side cohort) ────────────────────
   // eslint-disable-next-line @typescript-eslint/no-namespace
   export namespace Commit {
-    export type Wait = import('./Ablo.js').CommitWait;
-    export type OperationAction = import('./Ablo.js').ModelOperationAction;
-    export type OperationInput = import('./Ablo.js').CommitOperationInput;
-    export type CreateOptions = import('./Ablo.js').CommitCreateOptions;
-    export type Receipt = import('./Ablo.js').CommitReceipt;
-    export type Client = import('./Ablo.js').CommitResource;
+    export type Wait = import('./resourceTypes.js').CommitWait;
+    export type OperationAction = import('./resourceTypes.js').ModelOperationAction;
+    export type OperationInput = import('./resourceTypes.js').CommitOperationInput;
+    export type CreateOptions = import('./resourceTypes.js').CommitCreateOptions;
+    export type Receipt = import('./resourceTypes.js').CommitReceipt;
+    export type Client = import('./resourceTypes.js').CommitResource;
   }
 
   // ── Claim (sub-namespace — peer-claim cohort) ────────────────────
   // eslint-disable-next-line @typescript-eslint/no-namespace
   export namespace Claim {
-    export type Handle = import('./Ablo.js').Claim;
-    export type CreateOptions = import('./Ablo.js').ClaimCreateOptions;
-    export type WaitOptions = import('./Ablo.js').ClaimWaitOptions;
-    export type Client = import('./Ablo.js').ClaimResource;
+    export type Handle = import('./resourceTypes.js').Claim;
+    export type CreateOptions = import('./resourceTypes.js').ClaimCreateOptions;
+    export type WaitOptions = import('./resourceTypes.js').ClaimWaitOptions;
+    export type Client = import('./resourceTypes.js').ClaimResource;
   }
 
   // ── Model (sub-namespace — typed-row read/write cohort) ───────────
   // eslint-disable-next-line @typescript-eslint/no-namespace
   export namespace Model {
-    export type Target = import('./Ablo.js').ModelTarget;
-    export type Claim = import('./Ablo.js').ModelClaim;
-    export type Read<T = Record<string, unknown>> = import('./Ablo.js').ModelRead<T>;
-    export type Client<T = Record<string, unknown>> = import('./Ablo.js').ModelClient<T>;
-    export type ReadOptions = import('./Ablo.js').ModelReadOptions;
-    export type MutationOptions = import('./Ablo.js').ModelMutationOptions;
+    export type Target = import('./resourceTypes.js').ModelTarget;
+    export type Claim = import('./resourceTypes.js').ModelClaim;
+    export type Read<T = Record<string, unknown>> = import('./resourceTypes.js').ModelRead<T>;
+    export type Client<T = Record<string, unknown>> = import('./resourceTypes.js').ModelClient<T>;
+    export type ReadOptions = import('./resourceTypes.js').ModelReadOptions;
+    export type MutationOptions = import('./resourceTypes.js').ModelMutationOptions;
   }
 
   // ── Source (sub-namespace — customer-owned storage adapter) ──────

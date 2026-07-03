@@ -17,6 +17,10 @@
 import type { Schema, SchemaRecord } from './schema.js';
 import type { ModelDef } from './model.js';
 import type { FieldMeta } from './field.js';
+// Dependency-free leaf (NOT client/auth.ts — that would pull the error
+// registry + credential policy into the schema subpath and close a
+// schema → client → errors → coordination → schema cycle).
+import { ABLO_HOSTED_HTTP_BASE_URL } from '../client/hostedEndpoints.js';
 
 export interface SchemaToOpenApiOptions {
   /** Spec title. Default `"Ablo API"`. */
@@ -146,7 +150,7 @@ export function schemaToOpenApi<S extends SchemaRecord>(
         'Generated from your pushed Ablo schema — these routes are your models. ' +
         'Authenticate every request with your API key as a Bearer token.',
     },
-    servers: [{ url: options.serverUrl ?? 'https://api.abloatai.com/api' }],
+    servers: [{ url: options.serverUrl ?? `${ABLO_HOSTED_HTTP_BASE_URL}/api` }],
     security: [{ bearerAuth: [] }],
     components: {
       securitySchemes: {

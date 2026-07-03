@@ -41,6 +41,6 @@ export function useErrorListener(listener: (error: Error) => void): void {
   ref.current = listener;
 
   useEffect(() => {
-    return ctx.subscribeError((err) => ref.current(err));
+    return ctx.subscribeError((err) => { ref.current(err); });
   }, [ctx]);
 }

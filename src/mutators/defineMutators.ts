@@ -41,9 +41,7 @@ export type MutatorFn<S extends Schema, TArgs, TResult = void> = (
  * ends up seeing.
  */
 export type MutatorDefs<S extends Schema> = {
-  [K in keyof S['models']]?: {
-    [mutatorName: string]: MutatorFn<S, never, unknown>;
-  };
+  [K in keyof S['models']]?: Record<string, MutatorFn<S, never, unknown>>;
 };
 
 /**

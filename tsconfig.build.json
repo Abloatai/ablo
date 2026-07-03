@@ -1,9 +1,8 @@
 {
+  // Emitting build for the shipped library: flips tsconfig.json's noEmit and
+  // trims maps; outDir/rootDir/declaration are inherited from tsconfig.json.
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "declaration": true,
     "declarationMap": false,
     "stripInternal": true,
     "sourceMap": false,
@@ -13,7 +12,6 @@
   "exclude": [
     "src/**/__tests__/**",
     "src/testing/setup/**",
-    "src/internal/**",
     "src/__type_probe.*",
     "src/cli/**"
   ]

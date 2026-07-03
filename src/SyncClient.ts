@@ -11,7 +11,7 @@
 import { runInAction } from 'mobx';
 import { ObjectPool, ModelScope } from './ObjectPool.js';
 import { Model } from './Model.js';
-import type { ModelData } from './BaseSyncedStore.js';
+import type { ModelData } from './types/modelData.js';
 // ModelRegistry instance accessed via this.objectPool.registry
 import { LoadStrategy } from './types/index.js';
 import { getContext } from './context.js';
@@ -19,6 +19,7 @@ import { AbloAuthenticationError, AbloError, AbloValidationError } from './error
 import { EventEmitter } from 'events';
 import { NetworkMonitor } from './NetworkMonitor.js';
 import { TransactionQueue } from './transactions/TransactionQueue.js';
+import { persistedMutationSchema } from './transactions/persistedReplay.js';
 import {
   OptimisticEchoTracker,
   type OptimisticEchoMetrics,
@@ -82,26 +83,41 @@ function rawRecordIsNewer(data: Record<string, unknown>, existing: Model): boole
   return inMs > exMs;
 }
 
+/**
+ * Narrow an untyped server `updatedAt` (ISO string / epoch / Date, off a
+ * `Record<string, unknown>` row) to epoch ms for LWW comparison. Falsy /
+ * non-date values → 0, matching the conflict resolver's historical
+ * "no timestamp = epoch" behavior.
+ */
+function toEpochMs(value: unknown): number {
+  if (!value) return 0;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'string' || typeof value === 'number') {
+    return new Date(value).getTime();
+  }
+  return 0;
+}
+
 export class SyncClient extends EventEmitter {
   private objectPool: ObjectPool;
   private database: Database;
   private get mutationExecutor() { return getContext().mutationExecutor; }
   private networkMonitor: NetworkMonitor;
   private transactionQueue: TransactionQueue;
-  private observers: Set<SyncObserver> = new Set();
+  private observers = new Set<SyncObserver>();
 
   // Authentication context
   private userId: string | null = null;
   private organizationId: string | null = null;
 
   // Pending mutations queue
-  private pendingMutations: Array<{
+  private pendingMutations: {
     type: 'create' | 'update' | 'delete' | 'archive';
     model: Model;
     timestamp: Date;
     capturedChanges?: Record<string, unknown>;
     writeOptions?: WriteOptions;
-  }> = [];
+  }[] = [];
 
   /**
    * Tracks transaction ids the client has optimistically applied but
@@ -125,8 +141,8 @@ export class SyncClient extends EventEmitter {
   private offlineSince?: Date;
 
   // Configuration
-  private maxRetries: number = 3;
-  private isDisposed: boolean = false;
+  private maxRetries = 3;
+  private isDisposed = false;
 
   /**
    * THE client's place in the global delta order — the one canonical
@@ -181,8 +197,25 @@ export class SyncClient extends EventEmitter {
    * Setup network monitoring handlers
    */
   private setupNetworkMonitoring(): void {
-    this.networkMonitor.on('online', () => this.handleReconnection());
-    this.networkMonitor.on('offline', () => this.handleDisconnection());
+    // Both handlers emit to external listeners (which can throw) before/around
+    // their own try/catch — route rejections into observability rather than
+    // losing a failed reconnect flush silently.
+    this.networkMonitor.on('online', () => {
+      void this.handleReconnection().catch((error: unknown) => {
+        getContext().observability.captureTransactionFailure({
+          context: 'network-online-reconnection',
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      });
+    });
+    this.networkMonitor.on('offline', () => {
+      void this.handleDisconnection().catch((error: unknown) => {
+        getContext().observability.captureTransactionFailure({
+          context: 'network-offline-handler',
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      });
+    });
   }
 
   /**
@@ -373,59 +406,24 @@ export class SyncClient extends EventEmitter {
   private setupAwaitingTransactionPersistence(): void {
     this.transactionQueue.on(
       'transaction:persist_awaiting',
-      async (event: {
+      (event: {
         txId: string;
         model: string;
         modelId: string;
         operationType: string;
         syncIdNeeded?: number;
       }) => {
-        if (!this.database) return;
-
-        try {
-          await this.database.saveTransaction({
-            id: `awaiting_${event.txId}`,
-            type: 'awaiting_delta',
-            timestamp: Date.now(),
-            awaitingDelta: {
-              syncIdNeeded: event.syncIdNeeded ?? 0,
-              modelName: event.model,
-              modelId: event.modelId,
-              operationType: event.operationType,
-            },
-          });
-
-          getContext().observability.breadcrumb(
-            'Persisted unconfirmed transaction to IDB',
-            'sync.transaction',
-            'info',
-            {
-              txId: event.txId,
-              model: event.model,
-              modelId: event.modelId,
-            }
-          );
-        } catch (error) {
-          getContext().observability.captureTransactionFailure({
-            context: 'persist-awaiting-transaction',
-            modelName: event.model,
-            modelId: event.modelId,
-            error: error instanceof Error ? error : new Error(String(error)),
-          });
-        }
+        // void is safe: the handler's body is fully try/catch'd.
+        void this.persistAwaitingTransaction(event);
       }
     );
 
     // Clean up persisted awaiting transactions when they're finally confirmed
     this.transactionQueue.on(
       'transaction:completed',
-      async (tx: { id: string; modelName: string; modelId: string }) => {
-        if (!this.database) return;
-        try {
-          await this.database.removeTransaction(`awaiting_${tx.id}`);
-        } catch {
-          // Ignore — might not have been persisted
-        }
+      (tx: { id: string; modelName: string; modelId: string }) => {
+        // void is safe: the handler's body is fully try/catch'd.
+        void this.removeAwaitingTransaction(tx.id);
       }
     );
 
@@ -449,6 +447,59 @@ export class SyncClient extends EventEmitter {
         this.echoTracker.drainOnRollback(event.transaction.id);
       },
     );
+  }
+
+  /** Persist an unconfirmed transaction to IDB (never rejects — failures are captured). */
+  private async persistAwaitingTransaction(event: {
+    txId: string;
+    model: string;
+    modelId: string;
+    operationType: string;
+    syncIdNeeded?: number;
+  }): Promise<void> {
+    if (!this.database) return;
+
+    try {
+      await this.database.saveTransaction({
+        id: `awaiting_${event.txId}`,
+        type: 'awaiting_delta',
+        timestamp: Date.now(),
+        awaitingDelta: {
+          syncIdNeeded: event.syncIdNeeded ?? 0,
+          modelName: event.model,
+          modelId: event.modelId,
+          operationType: event.operationType,
+        },
+      });
+
+      getContext().observability.breadcrumb(
+        'Persisted unconfirmed transaction to IDB',
+        'sync.transaction',
+        'info',
+        {
+          txId: event.txId,
+          model: event.model,
+          modelId: event.modelId,
+        }
+      );
+    } catch (error) {
+      getContext().observability.captureTransactionFailure({
+        context: 'persist-awaiting-transaction',
+        modelName: event.model,
+        modelId: event.modelId,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
+  }
+
+  /** Drop the persisted awaiting-row once confirmed (never rejects). */
+  private async removeAwaitingTransaction(txId: string): Promise<void> {
+    if (!this.database) return;
+    try {
+      await this.database.removeTransaction(`awaiting_${txId}`);
+    } catch {
+      // Ignore — might not have been persisted
+    }
   }
 
   /**
@@ -577,13 +628,13 @@ export class SyncClient extends EventEmitter {
     // We collect all models across ALL types before touching MobX, so that Phase 2
     // can add them in a single addBatch() call → ONE MobX action → ONE re-render.
     const allModelsToAdd: Model[] = [];
-    const perTypePerfLogs: Array<{
+    const perTypePerfLogs: {
       type: string;
       fetched: number;
       added: number;
       fetchMs: string;
       createMs: string;
-    }> = [];
+    }[] = [];
 
     for (const modelType of modelTypes) {
       const typeStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -594,7 +645,7 @@ export class SyncClient extends EventEmitter {
 
         // Create models in batch first, collect for deferred addBatch
         const modelsForType: Model[] = [];
-        const recordsToHeal: Array<{ id: string; data: Record<string, unknown> }> = [];
+        const recordsToHeal: { id: string; data: Record<string, unknown> }[] = [];
 
         for (const data of rawData) {
           let withType =
@@ -603,7 +654,7 @@ export class SyncClient extends EventEmitter {
               : data;
 
           // Self-healing: Fix corrupted IndexedDB records missing essential fields
-          const healResult = this.healModelRecord(modelType, withType as Record<string, unknown>);
+          const healResult = this.healModelRecord(modelType, withType);
           if (healResult === null) {
             continue; // Record is corrupted beyond repair — skip
           }
@@ -627,11 +678,12 @@ export class SyncClient extends EventEmitter {
           getContext().logger.info(
             `[SyncClient.hydrate] Persisting ${recordsToHeal.length} healed ${modelType} records to IndexedDB`
           );
-          // Use fire-and-forget to not block hydration
-          Promise.resolve().then(async () => {
+          // Use fire-and-forget to not block hydration.
+          // void is safe: the handler's body is fully try/catch'd.
+          void Promise.resolve().then(async () => {
             try {
               for (const { id, data } of recordsToHeal) {
-                await this.database!.putRecord(modelType, id, data);
+                await this.database.putRecord(modelType, id, data);
               }
               getContext().logger.info(
                 `[SyncClient.hydrate] Successfully healed ${recordsToHeal.length} ${modelType} records`
@@ -647,14 +699,6 @@ export class SyncClient extends EventEmitter {
         }
 
         const typeEnd = typeof performance !== 'undefined' ? performance.now() : Date.now();
-
-        // Dev-only hydration summary
-        if (modelType === 'InboxItem' && process.env.NODE_ENV !== 'production') {
-          getContext().logger.debug('[SyncClient] InboxItem hydration summary', {
-            fetched: rawData.length,
-            added: modelsForType.length,
-          });
-        }
 
         perTypePerfLogs.push({
           type: modelType,
@@ -748,7 +792,7 @@ export class SyncClient extends EventEmitter {
               : data;
 
           // Self-healing
-          const healResult = this.healModelRecord(modelType, withType as Record<string, unknown>);
+          const healResult = this.healModelRecord(modelType, withType);
           if (healResult === null) {
             skippedCount++;
             continue;
@@ -760,9 +804,10 @@ export class SyncClient extends EventEmitter {
             if (this.database) {
               const id = healResult.data.id as string;
               const healedData = healResult.data;
-              Promise.resolve().then(async () => {
+              // void is safe: the handler's body is fully try/catch'd.
+              void Promise.resolve().then(async () => {
                 try {
-                  await this.database!.putRecord(modelType, id, healedData);
+                  await this.database.putRecord(modelType, id, healedData);
                 } catch {
                   // Non-critical — will heal again next time
                 }
@@ -940,12 +985,12 @@ export class SyncClient extends EventEmitter {
 
   /** Add new model (CREATE) - works offline */
   add(model: Model, options?: WriteOptions): void {
-    this.mutate('create', model, () => this.objectPool.add(model, ModelScope.live), options);
+    this.mutate('create', model, () => { this.objectPool.add(model, ModelScope.live); }, options);
   }
 
   /** Update existing model (UPDATE) - works offline */
   update(model: Model, options?: WriteOptions): void {
-    this.mutate('update', model, () => this.objectPool.upsert(model, ModelScope.live), options);
+    this.mutate('update', model, () => { this.objectPool.upsert(model, ModelScope.live); }, options);
   }
 
   /**
@@ -1137,7 +1182,7 @@ export class SyncClient extends EventEmitter {
 
   /** Archive model (ARCHIVE) - works offline */
   archive(model: Model): void {
-    this.mutate('archive', model, () => this.objectPool.updateScope(model.id, ModelScope.archived));
+    this.mutate('archive', model, () => { this.objectPool.updateScope(model.id, ModelScope.archived); });
   }
 
   /**
@@ -1209,11 +1254,22 @@ export class SyncClient extends EventEmitter {
         mutations: serializedMutations,
         timestamp: Date.now(),
       });
-    } catch (error) {}
+    } catch (error) {
+      // Best-effort persistence — the in-memory queue still processes; only
+      // a tab close before reconnect loses these. Forensic → debug.
+      getContext().logger.debug('[SyncClient] Failed to persist offline mutation queue', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
-   * Restore mutation queue from IndexedDB
+   * Restore mutation queue from IndexedDB.
+   *
+   * The persisted record was written by a PREVIOUS session (possibly an older
+   * SDK build), so each entry is validated at this replay boundary (T1.8):
+   * corrupt entries are dropped + logged at debug, and a failure never
+   * vanishes into an empty catch — offline write survival must be observable.
    */
   private async restoreMutationQueue(): Promise<void> {
     if (!this.database || !this.userId) return;
@@ -1224,18 +1280,38 @@ export class SyncClient extends EventEmitter {
 
       if (queue?.mutations) {
         for (const mutation of queue.mutations) {
-          const model = this.objectPool.createFromData(mutation.modelData);
+          const parsed = persistedMutationSchema.safeParse(mutation);
+          if (!parsed.success) {
+            getContext().logger.debug('[SyncClient] Dropping malformed persisted mutation', {
+              issues: parsed.error.issues.map((i) => i.path.join('.')).join(', '),
+            });
+            continue;
+          }
+          const model = this.objectPool.createFromData(parsed.data.modelData);
           if (model) {
             this.pendingMutations.push({
-              type: mutation.type,
+              type: parsed.data.type,
               model,
-              timestamp: new Date(mutation.timestamp),
-              writeOptions: mutation.writeOptions,
+              timestamp: new Date(parsed.data.timestamp),
+              ...(parsed.data.writeOptions !== undefined
+                ? { writeOptions: parsed.data.writeOptions }
+                : {}),
             });
           }
         }
       }
-    } catch (error) {}
+    } catch (error) {
+      // A restore failure means queued offline writes did NOT rehydrate.
+      // Self-healing is impossible here (the record may be unreadable), but
+      // the failure must be visible for diagnosis instead of silent loss.
+      getContext().logger.debug('[SyncClient] Failed to restore offline mutation queue', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      getContext().observability.captureTransactionFailure({
+        context: 'restore-mutation-queue',
+        error: error instanceof Error ? error : String(error),
+      });
+    }
   }
 
   /**
@@ -1308,16 +1384,26 @@ export class SyncClient extends EventEmitter {
 
     const ctx = { userId: this.userId, organizationId: this.organizationId };
 
+    // Settlement is delivered via transaction.confirmation, not this promise —
+    // it only rejects when staging itself throws (change extraction, optimistic
+    // apply, store add). That means the write never entered the queue, so
+    // capture it instead of dropping it silently.
+    const captureStagingFailure = (error: unknown): void => {
+      getContext().observability.captureTransactionFailure({
+        context: `stage-mutation-${mutation.type}`,
+        modelName: mutation.model.getModelName(),
+        modelId: mutation.model.id,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    };
+
     if (mutation.type === 'update') {
-      this.transactionQueue.update(
-        mutation.model,
-        ctx,
-        mutation.capturedChanges,
-        mutation.writeOptions,
-      );
+      this.transactionQueue
+        .update(mutation.model, ctx, mutation.capturedChanges, mutation.writeOptions)
+        .catch(captureStagingFailure);
     } else {
       const handler = this.transactionQueue[mutation.type].bind(this.transactionQueue);
-      handler(mutation.model, ctx, mutation.writeOptions);
+      handler(mutation.model, ctx, mutation.writeOptions).catch(captureStagingFailure);
     }
   }
 
@@ -1328,7 +1414,7 @@ export class SyncClient extends EventEmitter {
    * CRITICAL: Always respects certain server states (deletes, deactivations)
    * even when there are local changes, to maintain data consistency.
    */
-  resolveConflicts(localModel: Model, serverData: any): Model {
+  resolveConflicts(localModel: Model, serverData: Record<string, unknown>): Model {
     const hasLocalChanges = localModel.hasChanges;
     // Safely get timestamp, handling both Date objects and strings
     const localUpdatedAt = localModel.updatedAt
@@ -1336,7 +1422,7 @@ export class SyncClient extends EventEmitter {
         ? localModel.updatedAt.getTime()
         : new Date(localModel.updatedAt).getTime()
       : 0;
-    const serverUpdatedAt = serverData?.updatedAt ? new Date(serverData.updatedAt).getTime() : 0;
+    const serverUpdatedAt = toEpochMs(serverData.updatedAt);
 
     getContext().logger.debug('Conflict resolution', {
       modelId: localModel.id,
@@ -1379,7 +1465,7 @@ export class SyncClient extends EventEmitter {
       const merged: ModelData = { ...serverData, ...(localChanges || {}) };
 
       // Preserve the most recent updatedAt without clearing dirty flags
-      if (serverData?.updatedAt || localModel.updatedAt) {
+      if (serverData.updatedAt || localModel.updatedAt) {
         const mergedUpdatedAt = new Date(Math.max(localUpdatedAt, serverUpdatedAt));
         // updateFromData accepts Date or ISO string for dates
         merged.updatedAt = mergedUpdatedAt;
@@ -1402,10 +1488,11 @@ export class SyncClient extends EventEmitter {
 
   /**
    * Extract critical state fields from server data
-   * These are states that must always be respected, even with local changes
+   * These are states that must always be respected, even with local changes.
+   * The conflict brain reads exactly these known fields — nothing else.
    */
-  private extractCriticalState(serverData: any): Record<string, any> {
-    const critical: Record<string, any> = {};
+  private extractCriticalState(serverData: Record<string, unknown>): Record<string, unknown> {
+    const critical: Record<string, unknown> = {};
 
     if (!serverData || typeof serverData !== 'object') {
       return critical;
@@ -1433,7 +1520,7 @@ export class SyncClient extends EventEmitter {
   /**
    * Check if critical state changes exist that require forcing server state
    */
-  private hasCriticalStateChange(criticalStates: Record<string, any>): boolean {
+  private hasCriticalStateChange(criticalStates: Record<string, unknown>): boolean {
     // Any critical state present means we should force accept server
     return (
       Object.keys(criticalStates).length > 0 &&
@@ -1724,12 +1811,12 @@ export class SyncClient extends EventEmitter {
     // same listener, so undo observes every write door — one stream.
     const onCommitCreated = (payload: {
       clientTxId: string;
-      operations: ReadonlyArray<{
+      operations: readonly {
         type: string;
         model: string;
         id: string;
         input?: Record<string, unknown>;
-      }>;
+      }[];
     }): void => {
       const TYPE_BY_WIRE: Record<
         string,
@@ -1873,7 +1960,7 @@ export class SyncClient extends EventEmitter {
   }
 
   applyDeltaBatchToPool(
-    dbResults: Array<{
+    dbResults: {
       action: string;
       modelName: string;
       modelId: string;
@@ -1886,7 +1973,7 @@ export class SyncClient extends EventEmitter {
        * schema-derived deltas, etc.) don't have a client transaction.
        */
       transactionId?: string;
-    }>,
+    }[],
     enrichRelations: (modelName: string, data: Record<string, unknown>) => Record<string, unknown>,
   ): void {
     const modelsToAdd: Model[] = [];

@@ -10,7 +10,7 @@ import { ObjectPool } from '../../ObjectPool.js';
 import { MockMutationExecutor } from '../mocks/MockMutationExecutor.js';
 import { MockNetworkMonitor } from '../mocks/MockNetworkMonitor.js';
 import { MockWebSocket } from '../mocks/MockWebSocket.js';
-import { MockMutationDispatcher, createTestContext } from '../mocks/MockSyncContext.js';
+import { createTestContext } from '../mocks/MockSyncContext.js';
 import type { TestContextResult } from '../mocks/MockSyncContext.js';
 import {
   registerTestModels,
@@ -37,9 +37,6 @@ export interface TestHarness {
 
   /** Shorthand: mock network monitor */
   networkMonitor: MockNetworkMonitor;
-
-  /** Shorthand: mock mutation dispatcher */
-  mutationDispatcher: MockMutationDispatcher;
 
   /** Cleanup everything */
   cleanup: () => void;
@@ -116,7 +113,6 @@ export function createTestHarness(options: TestHarnessOptions = {}): TestHarness
     context,
     mutationExecutor: context.mocks.mutationExecutor,
     networkMonitor: context.mocks.networkMonitor,
-    mutationDispatcher: context.mocks.mutationDispatcher,
     cleanup: () => {
       pool.clear();
       webSocket.reset();

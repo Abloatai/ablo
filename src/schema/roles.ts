@@ -292,3 +292,41 @@ export function composeEntitySyncGroups(
   }
   return Array.from(out);
 }
+
+/**
+ * Apply capability-style intersection to a client-requested sync-group
+ * set. Mirrors the cap-bearer path where Biscuit caveats narrow the
+ * client's requested set to what's actually authorized. Fully generic —
+ * it never inspects the group strings — so it lives here beside the
+ * composition helpers rather than in any product schema package
+ * (`@ablo/schema` re-exports it for compat).
+ *
+ * Behaviour:
+ *   - If the client requested no groups, return the full identity-
+ *     derived set (the default subscription scope for this participant).
+ *   - If the client requested a non-empty subset, intersect against the
+ *     identity-derived allowed set — drop any group the participant is
+ *     not authorized to subscribe to. Logs the dropped groups via the
+ *     optional `logDropped` callback for observability.
+ *   - If the intersection is empty after filtering, fall back to the
+ *     full allowed set rather than emit `[]` (which would degenerate to
+ *     the server-side `['default']` fallback and produce silent zero-
+ *     delta delivery).
+ */
+export function intersectRequestedWithAllowed(args: {
+  readonly requested: readonly string[];
+  readonly allowed: readonly string[];
+  readonly logDropped?: (dropped: readonly string[]) => void;
+}): readonly string[] {
+  const { requested, allowed, logDropped } = args;
+  if (requested.length === 0) return allowed;
+  const allowedSet = new Set(allowed);
+  const accepted: string[] = [];
+  const dropped: string[] = [];
+  for (const g of requested) {
+    if (allowedSet.has(g)) accepted.push(g);
+    else dropped.push(g);
+  }
+  if (dropped.length > 0 && logDropped) logDropped(dropped);
+  return accepted.length > 0 ? accepted : allowed;
+}

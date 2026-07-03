@@ -44,8 +44,10 @@ export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck
           change('tx_create', [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }]),
         );
         assert.equal(result.rows.length, 1, 'one row returned');
-        assert.equal((result.rows[0] as Row).id, 't1');
-        assert.equal((result.rows[0] as Row).title, 'A');
+        const created = result.rows[0];
+        assert.ok(created, 'one row returned');
+        assert.equal(created.id, 't1');
+        assert.equal(created.title, 'A');
       },
     },
     {
@@ -55,7 +57,7 @@ export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck
         await adapter.commit(change('tx1', [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }]));
         const found = await adapter.read({ kind: 'load', model: 'task', id: 't1' });
         assert.equal(found.length, 1);
-        assert.equal((found[0] as Row).title, 'A');
+        assert.equal(found[0]?.title, 'A');
         const missing = await adapter.read({ kind: 'load', model: 'task', id: 'nope' });
         assert.equal(missing.length, 0, 'unknown id reads empty');
       },
@@ -71,7 +73,7 @@ export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck
           ]),
         );
         const rows = await adapter.read({ kind: 'list', model: 'task' });
-        const ids = rows.map((r) => (r as Row).id).sort();
+        const ids = rows.map((r) => (r).id).sort();
         assert.deepEqual(ids, ['t1', 't2']);
       },
     },
@@ -100,9 +102,9 @@ export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck
         assert.ok(page.events.length >= 1, 'at least one event');
         const evt = page.events.find((e) => e.entityId === 't1');
         assert.ok(evt, 'event for the committed row');
-        assert.equal(evt?.model, 'task');
-        assert.equal(evt?.type, 'CREATE');
-        assert.equal(evt?.clientTxId, 'tx_evt');
+        assert.equal(evt.model, 'task');
+        assert.equal(evt.type, 'CREATE');
+        assert.equal(evt.clientTxId, 'tx_evt');
       },
     },
     {
@@ -135,7 +137,7 @@ export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck
         await adapter.commit(change('tx_c1', [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }]));
         await adapter.commit(change('tx_u1', [{ type: 'UPDATE', model: 'task', id: 't1', input: { title: 'B' } }]));
         const found = await adapter.read({ kind: 'load', model: 'task', id: 't1' });
-        assert.equal((found[0] as Row).title, 'B', 'update applied');
+        assert.equal(found[0]?.title, 'B', 'update applied');
       },
     },
   ];

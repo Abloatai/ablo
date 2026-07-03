@@ -44,7 +44,7 @@ import {
   DEFAULT_EXPORT,
   DEFAULT_URL,
 } from './push';
-import { resolveApiKey, getMode, type Mode } from './config';
+import { resolveEffectiveApiKey, getMode, type Mode } from './config';
 import { brand } from './theme';
 
 export interface DevArgs {
@@ -157,15 +157,17 @@ export function wireEnvLocal(apiKey: string, cwd: string = process.cwd()): strin
     action = `Created ${pc.bold('.env.local')} with ${pc.bold('ABLO_API_KEY')}`;
   } else {
     const content = readFileSync(envPath, 'utf8');
-    const match = content.match(/^ABLO_API_KEY=(.*)$/m);
+    const match = /^ABLO_API_KEY=(.*)$/m.exec(content);
+    // `(.*)` always captures on a match — `?? ''` only satisfies the checker.
+    const existing = match?.[1] ?? '';
     if (!match) {
       appendFileSync(envPath, `${content.endsWith('\n') || content.length === 0 ? '' : '\n'}${line}\n`);
       action = `Added ${pc.bold('ABLO_API_KEY')} to ${pc.bold('.env.local')}`;
-    } else if (match[1] === apiKey) {
+    } else if (existing === apiKey) {
       action = `${pc.bold('.env.local')} already has this key`;
     } else {
       writeFileSync(envPath, content.replace(/^ABLO_API_KEY=.*$/m, line));
-      action = `Updated ${pc.bold('ABLO_API_KEY')} in ${pc.bold('.env.local')} ${pc.dim(`(was ${match[1].slice(0, 12)}…)`)}`;
+      action = `Updated ${pc.bold('ABLO_API_KEY')} in ${pc.bold('.env.local')} ${pc.dim(`(was ${existing.slice(0, 12)}…)`)}`;
     }
   }
 
@@ -270,9 +272,14 @@ export async function dev(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  // Fall back to the stored credential when no env var is set. `dev` is always
-  // the SANDBOX loop, so it resolves the sandbox key regardless of the active mode.
-  if (!args.apiKey) args.apiKey = resolveApiKey('sandbox');
+  // Resolve through the ONE shared chain (env var → .env.local → .env → the
+  // stored `ablo login` credential) so `dev` sees the same key `push`/`status`
+  // report. `dev` is always the SANDBOX loop, so the stored fallback resolves
+  // the sandbox key regardless of the active mode; a production key found in a
+  // project env file is refused just below by `classifyKey`, which names the
+  // production path. (Pre-fix, dev skipped the env files — it could silently
+  // use the stored sandbox key and then OVERWRITE the key in `.env.local`.)
+  if (!args.apiKey) args.apiKey = resolveEffectiveApiKey('sandbox').key;
 
   const key = classifyKey(args.apiKey, getMode());
   if (!key.ok) {
@@ -286,7 +293,7 @@ export async function dev(argv: readonly string[]): Promise<void> {
   // no migrations. Ablo connects to your DB as-is (the server warns, but serves,
   // if the role can't enforce RLS — tenant isolation on your own database is your
   // call). Removed the auto scoped-role prompt that used to run here on every
-  // dev loop; securing the connection is opt-in (see `ablo doctor` / the docs).
+  // dev loop; securing the connection is opt-in (see the docs).
   const schema = await loadSchema(args.schemaPath, args.exportName);
   const modelCount = Object.keys(schema.models).length;
   console.log(

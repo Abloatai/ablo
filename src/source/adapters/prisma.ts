@@ -24,7 +24,7 @@ import type { ChangeSet, EventsPage, Migration, Operation, OutboxEvent } from '.
 import { outboxEventSchema } from '../contract.js';
 import { adapterTableMigrations } from '../migrations.js';
 import type { SchemaRecord, Schema } from '../../schema/schema.js';
-import type { SourceListQuery, SourceWhere } from '../index.js';
+import type { SourceListQuery, SourceWhere } from '../types.js';
 
 /** A Prisma model delegate (the subset we call). */
 export interface PrismaDelegate {
@@ -55,7 +55,7 @@ export interface PrismaDataSourceOptions {
   readonly delegateName?: (model: string) => string;
 }
 
-const lowerFirst = (s: string): string => (s ? s[0].toLowerCase() + s.slice(1) : s);
+const lowerFirst = (s: string): string => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 
 /**
  * Resolve a model's Prisma delegate by name. This is the ONE irreducible cast in
@@ -174,7 +174,8 @@ export function prismaDataSource<S extends SchemaRecord>(
           `SELECT response FROM ablo_idempotency WHERE client_tx_id = $1 LIMIT 1`,
           change.clientTxId,
         );
-        if (cached.length > 0) return { rows: cached[0].response };
+        const cachedRow = cached[0];
+        if (cachedRow) return { rows: cachedRow.response };
 
         const rows: Row[] = [];
         for (const [index, op] of change.operations.entries()) {
@@ -227,7 +228,7 @@ export function prismaDataSource<S extends SchemaRecord>(
       );
       return {
         events,
-        nextCursor: events.length > 0 ? events[events.length - 1].cursor : null,
+        nextCursor: events.at(-1)?.cursor ?? null,
       };
     },
   };

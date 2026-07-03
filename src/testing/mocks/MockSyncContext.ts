@@ -18,7 +18,6 @@ import type {
   SyncLogger,
   SyncObservabilityProvider,
   SessionErrorDetector,
-  MutationDispatcher,
   SyncEngineConfig,
 } from '../../interfaces/index.js';
 import { initSyncEngine, resetSyncEngine } from '../../context.js';
@@ -54,44 +53,11 @@ export interface TestContextResult {
   /** Mock handles for test assertions */
   mocks: {
     mutationExecutor: MockMutationExecutor;
-    mutationDispatcher: MockMutationDispatcher;
     networkMonitor: MockNetworkMonitor;
   };
 
   /** Cleanup: calls resetSyncEngine() */
   cleanup: () => void;
-}
-
-/**
- * Simple mock mutation dispatcher that records dispatch calls.
- */
-export class MockMutationDispatcher implements MutationDispatcher {
-  readonly dispatched: Array<{ operationName: string; variables: Record<string, unknown> }> = [];
-  private _shouldSucceed = true;
-  private _error?: Error;
-
-  async dispatch(operationName: string, variables: Record<string, unknown>): Promise<void> {
-    this.dispatched.push({ operationName, variables });
-    if (!this._shouldSucceed) {
-      throw this._error ?? new Error(`Mock dispatch failed: ${operationName}`);
-    }
-  }
-
-  failAll(error?: Error): void {
-    this._shouldSucceed = false;
-    this._error = error;
-  }
-
-  succeedAll(): void {
-    this._shouldSucceed = true;
-    this._error = undefined;
-  }
-
-  reset(): void {
-    this.dispatched.length = 0;
-    this._shouldSucceed = true;
-    this._error = undefined;
-  }
 }
 
 /**
@@ -107,7 +73,6 @@ export class MockMutationDispatcher implements MutationDispatcher {
  */
 export function createTestContext(options: TestContextOptions = {}): TestContextResult {
   const mutationExecutor = new MockMutationExecutor(options.mutationExecutorOptions);
-  const mutationDispatcher = new MockMutationDispatcher();
   const networkMonitor = new MockNetworkMonitor(!options.startOffline);
 
   const config: SyncEngineConfig = {
@@ -125,7 +90,6 @@ export function createTestContext(options: TestContextOptions = {}): TestContext
     sessionErrorDetector: options.sessionErrorDetector ?? defaultSessionErrorDetector,
     onlineStatus: networkMonitor,
     mutationExecutor,
-    mutationDispatcher,
     config,
   };
 
@@ -144,7 +108,6 @@ export function createTestContext(options: TestContextOptions = {}): TestContext
     context,
     mocks: {
       mutationExecutor,
-      mutationDispatcher,
       networkMonitor,
     },
     cleanup: () => {
@@ -155,7 +118,6 @@ export function createTestContext(options: TestContextOptions = {}): TestContext
       // registry in place keeps those calls valid; the next createTestContext
       // with hasActiveRegistry()===true simply reuses it.
       mutationExecutor.reset();
-      mutationDispatcher.reset();
       networkMonitor.reset();
     },
   };

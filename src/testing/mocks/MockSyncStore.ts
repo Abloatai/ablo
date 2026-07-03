@@ -39,8 +39,8 @@ export class MockSyncStore implements SyncStoreContract {
 
   // Call tracking for assertions
   public calls = {
-    retrieve: [] as Array<{ modelClass: ModelCtor<Model>; id: string }>,
-    query: [] as Array<{ modelClass: ModelCtor<Model>; options?: QueryOptions<Model> }>,
+    retrieve: [] as { modelClass: ModelCtor<Model>; id: string }[],
+    query: [] as { modelClass: ModelCtor<Model>; options?: QueryOptions<Model> }[],
     save: [] as Model[],
     delete: [] as Model[],
     archive: [] as Model[],
@@ -58,17 +58,17 @@ export class MockSyncStore implements SyncStoreContract {
     for (const m of models) {
       map.set(m.id, m);
     }
-    this.byClass.set(modelClass as ModelCtor<Model>, map);
+    this.byClass.set(modelClass, map);
   }
 
   /**
    * Add a single model (upsert).
    */
   addModel<T extends Model>(modelClass: ModelCtor<T>, model: T): void {
-    let map = this.byClass.get(modelClass as ModelCtor<Model>);
+    let map = this.byClass.get(modelClass);
     if (!map) {
       map = new Map();
-      this.byClass.set(modelClass as ModelCtor<Model>, map);
+      this.byClass.set(modelClass, map);
     }
     map.set(model.id, model);
   }
@@ -77,7 +77,7 @@ export class MockSyncStore implements SyncStoreContract {
    * Remove a model by ID.
    */
   removeModel<T extends Model>(modelClass: ModelCtor<T>, id: string): void {
-    this.byClass.get(modelClass as ModelCtor<Model>)?.delete(id);
+    this.byClass.get(modelClass)?.delete(id);
   }
 
   /**
@@ -98,8 +98,8 @@ export class MockSyncStore implements SyncStoreContract {
   // ── SyncStoreContract implementation ──────────────────────────────────
 
   retrieve<T extends Model>(modelClass: ModelCtor<T>, id: string): T | undefined {
-    this.calls.retrieve.push({ modelClass: modelClass as ModelCtor<Model>, id });
-    return this.byClass.get(modelClass as ModelCtor<Model>)?.get(id) as T | undefined;
+    this.calls.retrieve.push({ modelClass: modelClass, id });
+    return this.byClass.get(modelClass)?.get(id) as T | undefined;
   }
 
   queryByClass<T extends Model>(
@@ -107,11 +107,11 @@ export class MockSyncStore implements SyncStoreContract {
     options?: QueryOptions<T>
   ): QueryResult<T> {
     this.calls.query.push({
-      modelClass: modelClass as ModelCtor<Model>,
+      modelClass: modelClass,
       options: options as QueryOptions<Model> | undefined,
     });
 
-    const map = this.byClass.get(modelClass as ModelCtor<Model>);
+    const map = this.byClass.get(modelClass);
     if (!map) {
       return { data: [] };
     }

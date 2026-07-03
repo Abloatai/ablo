@@ -12,135 +12,60 @@ import { EventEmitter } from 'events';
 import type { Database } from '../Database.js';
 import { Model } from '../Model.js';
 import { getContext } from '../context.js';
-import { getActiveRegistry } from '../ModelRegistry.js';
-import { MutationOperationType } from '../types/index.js';
+import type { MutationOperationType } from '../types/index.js';
 import { handleMutationError } from './mutation-error-handler.js';
 import { AbloError, AbloConnectionError, errorCodeSpec } from '../errors.js';
 import { SyncPosition } from '../sync/syncPosition.js';
-import type { MutationOptions, WriteOptions } from '../interfaces/index.js';
+import type { WriteOptions } from '../interfaces/index.js';
 import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
+import {
+  projectCommitPayload,
+  computePriorityScore,
+  normalizeModelKey,
+  stripModelSuffix,
+  hasStaleWriteOptions,
+  applyWriteOptions,
+  asTransportError,
+  extractStatusCode,
+  TX_TYPE_TO_MUTATION_OP,
+  type MutationInput,
+  type Transaction,
+  type UserContext,
+  type WriteOperationFields,
+} from './commitPayload.js';
+import { TransactionStore } from './TransactionStore.js';
+import {
+  entityKey,
+  mergeUpdateData,
+  takeUnsentCreateForModel,
+  findCreateBarrierForDelete,
+  deferDeleteUntilCreateSettles,
+  releaseDeferredDeletesForCreate,
+} from './coalesceRules.js';
+import { DeltaConfirmationTracker } from './deltaConfirmation.js';
+import {
+  deserializePersistedTransaction,
+  isNonReplayablePersistedRow,
+} from './persistedReplay.js';
+import {
+  applyOptimisticCreate,
+  applyOptimisticUpdate,
+  applyOptimisticDelete,
+  rollbackOptimistic,
+  type OptimisticUpdateEntry,
+} from './optimistic.js';
 
-export interface UserContext {
-  userId: string;
-  organizationId: string;
-  role?: string;
-  teamIds?: string[];
-}
-
-/** Wire-format mutation payload (post-projection). */
-type MutationInput = Record<string, unknown>;
-
-/**
- * Framework-internal keys added by `Model.toJSON()` that must never
- * reach the wire. The server treats each top-level key as a target
- * column, so shipping these would blow up the INSERT/UPDATE.
- */
-const FRAMEWORK_KEYS = new Set(['__class', '__typename', 'clientId', 'syncStatus']);
-
-/**
- * Project a Model's serialized data onto its schema-declared fields
- * and return a wire-safe commit payload. Two jobs:
- *
- *   1. Drop framework internals (`__class`, `__typename`, `clientId`,
- *      `syncStatus`) and anything not declared on the model's schema.
- *   2. JSON.stringify values typed as `field.json()` — TEXT columns
- *      storing JSON need explicit stringification; postgres.js won't
- *      auto-serialize for non-JSONB columns.
- *
- * For updates (`dropUndefined: true`), `undefined` values are also
- * stripped so they don't translate to `SET column = NULL` on the
- * server side.
- *
- * Fields are read from `ModelRegistry`, populated by
- * `registerModelsFromSchema` at SDK initialization. If the model
- * isn't registered with field metadata (edge case — e.g., tests or
- * manually registered models), projection falls back to identity and
- * the caller gets whatever the Model serialized.
- */
-function projectCommitPayload(
-  modelName: string,
-  source: Record<string, unknown>,
-  opts: { dropUndefined: boolean },
-): MutationInput {
-  const metadata = getActiveRegistry().getMetadata(modelName);
-  const fields = metadata?.fields;
-  const out: MutationInput = {};
-
-  if (!fields) {
-    // Unknown registration — strip framework keys and ship the rest.
-    for (const [k, v] of Object.entries(source)) {
-      if (FRAMEWORK_KEYS.has(k)) continue;
-      if (opts.dropUndefined && v === undefined) continue;
-      out[k] = v;
-    }
-    return out;
-  }
-
-  for (const [key, meta] of Object.entries(fields)) {
-    if (!(key in source)) continue;
-    const value = source[key];
-    if (opts.dropUndefined && value === undefined) continue;
-    // JSON-typed fields (`jsonb` on the server): ship as OBJECTS over
-    // the wire, not pre-stringified strings. Previously we stringified
-    // here, which round-tripped incorrectly:
-    //
-    //   1. Client stringifies `position: {x, y}` → `'{"x":...}'`
-    //   2. Server writes to jsonb column (parses string → jsonb object, fine)
-    //   3. Server's delta echoes `data: JSON.stringify(op.input)` where
-    //      `op.input.position` is still the STRING from step 1
-    //   4. Client merges delta → `model.position = "{...}"` (STRING)
-    //   5. Next drag: `{ ...layer.position, x, y }` spreads the STRING
-    //      char-by-char, producing corrupted char-indexed objects like
-    //      `{"0":"{","1":"\"","2":"x",...,"x":null,"y":null,...}`
-    //   6. That corrupt object lands in the next commit, stored in jsonb.
-    //
-    // Sending objects avoids the round-trip mismatch: the wire carries
-    // the object through delta + commit unchanged, and `postgres-js`
-    // serializes JS objects to jsonb correctly via its own
-    // `json.serialize` (triggered by Postgres's ParameterDescription
-    // response identifying the column as type 3802 / jsonb).
-    out[key] = value;
-  }
-  return out;
-}
-
-export interface Transaction {
-  id: string;
-  type: 'create' | 'update' | 'delete' | 'archive' | 'unarchive';
-  modelName: string;
-  modelId: string;
-  modelKey: string;
-  data?: MutationInput;
-  previousData?: MutationInput | null;
-  context: UserContext;
-  status: 'pending' | 'executing' | 'awaiting_delta' | 'completed' | 'failed' | 'rolled_back';
-  createdAt: number;
-  attempts: number;
-  priority: 'normal' | 'high';
-  priorityScore: number; // derived FK-aware priority used for sorting
-  writeOptions?: WriteOptions;
-  batchId?: string;
-  /** Completed locally without a server operation; no sync echo will arrive. */
-  localOnly?: boolean;
-  /** LINEAR PATTERN: syncId threshold - transaction confirms when delta.id >= this value */
-  syncIdNeededForCompletion?: number;
-  /**
-   * Resolves when the server has confirmed this transaction (delta arrived
-   * or HTTP ack). Rejects with the originating error if the transaction is
-   * permanently rolled back. Name matches the queue's existing `'confirmed'`
-   * status vocabulary (`commits.create({wait:'confirmed'})`,
-   * `waitForConfirmation`) — gives call sites a single `await` point for
-   * "did my write land?", so failures surface at the source instead of
-   * leaking via silent pool rollback. The rejection error is the same
-   * `AbloError` recorded on the queue's `transaction:failed` event.
-   */
-  confirmation?: Promise<void>;
-}
+// The queue's separable units live in sibling leaves (`commitPayload`,
+// `TransactionStore`, `coalesceRules`, `deltaConfirmation`, `optimistic`).
+// Re-export the moved public types so importers keep using the
+// `transactions/TransactionQueue.js` path unchanged.
+export type { Transaction, UserContext } from './commitPayload.js';
 
 /**
  * A raw multi-op commit transaction queued via `ablo.commits.create()`.
  *
- * Distinct from the per-model `Transaction` above: operations are
+ * Distinct from the per-model `Transaction` (see `./commitPayload.js`):
+ * operations are
  * pre-built by the caller and the envelope is atomic — no coalescing,
  * no FK reordering, no optimistic local apply. The lane shares the
  * same `mutationExecutor.commit()` underneath as the model-proxy
@@ -149,7 +74,7 @@ export interface Transaction {
 interface CommitTransaction {
   id: string;
   kind: 'commit';
-  operations: Array<{
+  operations: {
     type: string;
     model: string;
     id: string;
@@ -157,7 +82,7 @@ interface CommitTransaction {
     transactionId?: string;
     readAt?: number | null;
     onStale?: 'reject' | 'overwrite' | 'notify' | null;
-  }>;
+  }[];
   causedByTaskId?: string | null;
   /** Batch-level read dependencies (STORM read-set), forwarded to the executor. */
   reads?: ReadDependency[] | null;
@@ -167,113 +92,6 @@ interface CommitTransaction {
   lastSyncId?: number;
   error?: Error;
 }
-
-const normalizeModelKey = (modelName: string): string =>
-  modelName.replace('Model', '').toLowerCase();
-const stripModelSuffix = (modelName: string): string => modelName.replace('Model', '');
-
-/**
- * FK-ordered create priority.
- *
- * Reads `config.modelCreatePriority` out of the runtime SyncEngineContext —
- * this map is populated once at `createSyncEngine(...)` time by walking the
- * schema's `belongsTo` graph (see `computeFKDepthPriority` in
- * `client/createSyncEngine.ts`). The queue stays schema-agnostic: no model
- * names appear here, and consumer applications can override specific
- * priorities via `configOverrides.modelCreatePriority` without touching the
- * SDK.
- *
- * Non-create ops (update/delete/archive/unarchive) don't need FK ordering
- * because the row already exists, so they all share
- * `config.defaultNonCreatePriority`.
- */
-const computePriorityScore = (type: Transaction['type'], modelName: string): number => {
-  const { modelCreatePriority, defaultCreatePriority, defaultNonCreatePriority } =
-    getContext().config;
-  if (type !== 'create') return defaultNonCreatePriority;
-  return modelCreatePriority.get(modelName) ?? defaultCreatePriority;
-};
-
-const TX_TYPE_TO_MUTATION_OP: Record<Transaction['type'], MutationOperationType> = {
-  create: MutationOperationType.CREATE,
-  update: MutationOperationType.UPDATE,
-  delete: MutationOperationType.DELETE,
-  archive: MutationOperationType.ARCHIVE,
-  unarchive: MutationOperationType.UNARCHIVE,
-};
-
-function hasStaleWriteOptions(options?: WriteOptions): boolean {
-  return (
-    options?.readAt !== undefined ||
-    options?.onStale !== undefined
-  );
-}
-
-type WriteOperationFields = {
-  readAt?: number | null;
-  onStale?: 'reject' | 'overwrite' | 'notify' | null;
-  options?: Pick<MutationOptions, 'idempotencyKey' | 'label'>;
-};
-
-/**
- * Project a transaction's `writeOptions` onto the wire operation. Stale
- * guards (`readAt`/`onStale`) ride at the op root; `idempotencyKey`/`label`
- * ride in the op's `options` slot (`MutationOperation.options` — the
- * mutation_log cache key + audit tag). This is the single place the
- * caller-supplied write vocabulary crosses onto the wire.
- */
-function applyWriteOptions<T extends object>(
-  op: T,
-  transaction: Transaction,
-): T & WriteOperationFields {
-  const operation = op as T & WriteOperationFields;
-  const writeOptions = transaction.writeOptions;
-  if (!writeOptions) return operation;
-  if (writeOptions.readAt !== undefined) {
-    operation.readAt = writeOptions.readAt;
-  }
-  if (writeOptions.onStale !== undefined) {
-    operation.onStale = writeOptions.onStale;
-  }
-  if (writeOptions.idempotencyKey != null || writeOptions.label !== undefined) {
-    operation.options = {
-      ...(writeOptions.idempotencyKey != null
-        ? { idempotencyKey: writeOptions.idempotencyKey }
-        : {}),
-      ...(writeOptions.label !== undefined ? { label: writeOptions.label } : {}),
-    };
-  }
-  return operation;
-}
-
-/**
- * Structural shape we duck-type against for transport-layer errors.
- * Captures the union of GraphQL-style and HTTP-style error shapes the
- * mutation executor surfaces — kept narrow on purpose so we don't
- * pretend to know fields the runtime won't always supply.
- */
-interface TransportError {
-  message?: string;
-  code?: string | number;
-  extensions?: Record<string, unknown>;
-  locations?: ReadonlyArray<unknown>;
-  path?: ReadonlyArray<string | number>;
-  response?: {
-    status?: number;
-    errors?: ReadonlyArray<{ extensions?: { code?: string }; message?: string }>;
-  };
-  // Some executors stash a wrapped server message under `error`.
-  error?: string;
-}
-
-function asTransportError(value: unknown): TransportError {
-  return (value && typeof value === 'object' ? value : {}) as TransportError;
-}
-
-function extractStatusCode(error: unknown): number | undefined {
-  return asTransportError(error).response?.status;
-}
-
 
 interface ConflictResolution {
   strategy: 'last-write-wins' | 'merge' | 'reject' | 'custom';
@@ -318,61 +136,6 @@ interface TransactionQueueConfig {
    * forever when the WS dies mid-flight — see the 2026-05-15 wedge.
    */
   commitOfflineGraceMs: number;
-}
-
-class TransactionStore {
-  private transactions = new Map<string, Transaction>();
-  private byStatus = new Map<string, Set<string>>();
-
-  add(transaction: Transaction): void {
-    this.transactions.set(transaction.id, transaction);
-
-    if (!this.byStatus.has(transaction.status)) {
-      this.byStatus.set(transaction.status, new Set());
-    }
-    this.byStatus.get(transaction.status)!.add(transaction.id);
-  }
-
-  get(id: string): Transaction | undefined {
-    return this.transactions.get(id);
-  }
-
-  updateStatus(id: string, newStatus: Transaction['status']): void {
-    const tx = this.transactions.get(id);
-    if (!tx) return;
-
-    this.byStatus.get(tx.status)?.delete(id);
-    tx.status = newStatus;
-
-    if (!this.byStatus.has(newStatus)) {
-      this.byStatus.set(newStatus, new Set());
-    }
-    this.byStatus.get(newStatus)!.add(id);
-  }
-
-  getByStatus(status: Transaction['status']): Transaction[] {
-    const ids = this.byStatus.get(status) || new Set();
-    return Array.from(ids)
-      .map((id) => this.transactions.get(id)!)
-      .filter(Boolean);
-  }
-
-  remove(id: string): void {
-    const tx = this.transactions.get(id);
-    if (!tx) return;
-
-    this.transactions.delete(id);
-    this.byStatus.get(tx.status)?.delete(id);
-  }
-
-  clear(): void {
-    this.transactions.clear();
-    this.byStatus.clear();
-  }
-
-  getAll(): Transaction[] {
-    return Array.from(this.transactions.values());
-  }
 }
 
 export class TransactionQueue extends EventEmitter {
@@ -438,15 +201,7 @@ export class TransactionQueue extends EventEmitter {
   }
 
   private entityKey(modelName: string, modelId: string): string {
-    return `${modelName}:${modelId}`;
-  }
-
-  private isTransactionForModel(
-    transaction: Transaction,
-    modelName: string,
-    modelId: string,
-  ): boolean {
-    return transaction.modelName === modelName && transaction.modelId === modelId;
+    return entityKey(modelName, modelId);
   }
 
   private resolveConfirmation(transaction: Transaction): void {
@@ -457,23 +212,13 @@ export class TransactionQueue extends EventEmitter {
   }
 
   private takeUnsentCreateForModel(modelName: string, modelId: string): Transaction | undefined {
-    const isUnsentCreate = (tx: Transaction): boolean =>
-      tx.type === 'create' &&
-      tx.status === 'pending' &&
-      tx.attempts === 0 &&
-      this.isTransactionForModel(tx, modelName, modelId);
-
-    const stagedIndex = this.createdTransactions.findIndex(isUnsentCreate);
-    if (stagedIndex >= 0) {
-      return this.createdTransactions.splice(stagedIndex, 1)[0];
-    }
-
-    const queuedIndex = this.executionQueue.findIndex(isUnsentCreate);
-    if (queuedIndex >= 0) {
-      return this.executionQueue.splice(queuedIndex, 1)[0];
-    }
-
-    return this.store.getByStatus('pending').find(isUnsentCreate);
+    return takeUnsentCreateForModel(
+      this.createdTransactions,
+      this.executionQueue,
+      this.store,
+      modelName,
+      modelId,
+    );
   }
 
   private async cancelUnsentCreateForDelete(transaction: Transaction): Promise<void> {
@@ -485,20 +230,7 @@ export class TransactionQueue extends EventEmitter {
   }
 
   private findCreateBarrierForDelete(modelName: string, modelId: string): Transaction | undefined {
-    const liveCreates = [
-      ...this.store.getByStatus('pending'),
-      ...this.store.getByStatus('executing'),
-      ...this.store.getByStatus('awaiting_delta'),
-    ].filter((tx) =>
-      tx.type === 'create' &&
-      this.isTransactionForModel(tx, modelName, modelId) &&
-      // A never-attempted pending create can be cancelled instead. Once the
-      // create has been sent, even a retry-pending state is a causal barrier:
-      // the server may already have applied it and only the response was lost.
-      (tx.status !== 'pending' || tx.attempts > 0)
-    );
-
-    return liveCreates.sort((a, b) => b.createdAt - a.createdAt)[0];
+    return findCreateBarrierForDelete(this.store, modelName, modelId);
   }
 
   private completeLocalDelete(
@@ -540,77 +272,16 @@ export class TransactionQueue extends EventEmitter {
   }
 
   private deferDeleteUntilCreateSettles(createTransaction: Transaction, deleteTransaction: Transaction): void {
-    const key = this.entityKey(createTransaction.modelName, createTransaction.modelId);
-    const deferred = this.deferredDeletesByCreate.get(key) ?? [];
-    deferred.push(deleteTransaction);
-    this.deferredDeletesByCreate.set(key, deferred);
+    deferDeleteUntilCreateSettles(this.deferredDeletesByCreate, createTransaction, deleteTransaction);
   }
 
   private releaseDeferredDeletesForCreate(createTransaction: Transaction): void {
-    const key = this.entityKey(createTransaction.modelName, createTransaction.modelId);
-    const deferred = this.deferredDeletesByCreate.get(key);
-    if (!deferred || deferred.length === 0) return;
-
-    this.deferredDeletesByCreate.delete(key);
-
-    for (const deleteTransaction of deferred) {
-      if (this.store.get(deleteTransaction.id)?.status !== 'pending') continue;
-      this.enqueue(deleteTransaction);
-    }
-  }
-
-  // Merge two GraphQL update payloads with special handling for metadata fields
-  private mergeUpdateData(
-    left: MutationInput | undefined,
-    right: MutationInput | undefined,
-    _modelName?: string
-  ): MutationInput {
-    const out: MutationInput = { ...(left || {}) };
-    const src = right || {};
-
-    for (const key of Object.keys(src)) {
-      // Special case: metadata payloads may be JSON strings; merge objects instead of clobbering
-      if (key === 'metadata') {
-        const l = out.metadata;
-        const r = src.metadata;
-
-        // If both sides undefined/null, continue
-        if (l == null && r == null) {
-          continue;
-        }
-
-        // Normalize to objects
-        const toObj = (v: unknown): Record<string, unknown> => {
-          if (v == null) return {};
-          if (typeof v === 'string') {
-            try {
-              return JSON.parse(v);
-            } catch {
-              return {};
-            }
-          }
-          if (typeof v === 'object') return v as Record<string, unknown>;
-          return {};
-        };
-
-        const lobj = toObj(l);
-        const robj = toObj(r);
-        const merged = { ...lobj, ...robj };
-        // Re-stringify to match schema input type
-        try {
-          out.metadata = JSON.stringify(merged);
-        } catch {
-          // Fallback to right-hand side if stringify fails
-          out.metadata = typeof r === 'string' ? r : JSON.stringify(robj || {});
-        }
-        continue;
-      }
-
-      // Default: shallow overwrite with right-hand value
-      out[key] = src[key];
-    }
-
-    return out;
+    releaseDeferredDeletesForCreate(
+      this.deferredDeletesByCreate,
+      this.store,
+      (tx) => { this.enqueue(tx); },
+      createTransaction,
+    );
   }
 
   // Configuration - tuned for LINEAR-style batching
@@ -636,27 +307,20 @@ export class TransactionQueue extends EventEmitter {
   // Track executing transactions for backpressure
   private executingCount = 0;
 
-  // Optimistic update tracking
-  private optimisticUpdates = new Map<
-    string,
-    {
-      model: Model;
-      previousState: MutationInput | null | undefined;
-      transaction: Transaction;
-    }
-  >();
+  // Optimistic update tracking. The entry shape + apply/rollback rules live
+  // in `./optimistic.js`; the ledger itself stays host state because the
+  // completion paths, `getStats`, and `dispose` all read it.
+  private optimisticUpdates = new Map<string, OptimisticUpdateEntry>();
 
   // Stale-context notifications (CoAgent/MTPO notify-instead-of-abort) keyed by
   // transaction id, populated from the commit ack and drained by
   // `waitForCommitReceipt` so the receipt carries the self-heal signal.
   private commitNotifications = new Map<string, StaleNotification[]>();
 
-  // LINEAR PATTERN: Track delta confirmation timeouts for awaiting_delta transactions
-  // Following Replicache/PowerSync pattern: retry with backoff instead of rolling back
-  private deltaConfirmationTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
-
-  // Track retry attempts per transaction for exponential backoff
-  private deltaConfirmationRetries = new Map<string, number>();
+  // Delta-confirmation tracking (ack watermark advance + the awaiting_delta
+  // timeout/retry maps) lives in `./deltaConfirmation.js`. Constructed in the
+  // constructor once `position` is bound.
+  private readonly deltaConfirmation: DeltaConfirmationTracker;
 
   // Connection state check - set by SyncClient to prevent rollbacks during disconnection
   private isConnectedFn: () => boolean = () => true;
@@ -682,16 +346,8 @@ export class TransactionQueue extends EventEmitter {
   }
 
   private noteAck(lastSyncId: number | undefined): void {
-    this.position.noteAck(lastSyncId);
+    this.deltaConfirmation.noteAck(lastSyncId);
   }
-
-  // Delta confirmation retry config (Replicache-style exponential backoff)
-  // Max retries before requesting full reconciliation
-  private static readonly DELTA_MAX_RETRIES = 5;
-  // Initial timeout (first attempt)
-  private static readonly DELTA_INITIAL_TIMEOUT_MS = 30_000;
-  // Max timeout cap (like Replicache's maxDelayMs of 60s)
-  private static readonly DELTA_MAX_TIMEOUT_MS = 120_000;
 
   // Batch management
   private batchIndex = 0;
@@ -711,6 +367,18 @@ export class TransactionQueue extends EventEmitter {
   constructor(config?: Partial<TransactionQueueConfig>) {
     super();
     this.position = config?.position ?? new SyncPosition();
+    // Bind the confirmation tracker to this queue's store/ledger/events.
+    // `isConnected` closes over `isConnectedFn` so `setConnectionChecker`
+    // swaps stay visible to in-flight timeouts.
+    this.deltaConfirmation = new DeltaConfirmationTracker({
+      store: this.store,
+      optimisticUpdates: this.optimisticUpdates,
+      emit: (event, payload) => {
+        this.emit(event, payload);
+      },
+      isConnected: () => this.isConnectedFn(),
+      position: this.position,
+    });
 
         if (config) {
       this.config = { ...this.config, ...config };
@@ -778,6 +446,7 @@ export class TransactionQueue extends EventEmitter {
     );
     if (candidates.length === 0) return Promise.resolve();
     const latest = candidates.sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (!latest) return Promise.resolve();
     return latest.confirmation ?? Promise.resolve();
   }
 
@@ -1243,9 +912,9 @@ export class TransactionQueue extends EventEmitter {
    */
   async batchUploadAttachments(
     _files: File[],
-    items: Array<{ id: string; [key: string]: unknown }>,
+    items: { id: string; [key: string]: unknown }[],
     _context: UserContext
-  ): Promise<Array<{ id: string; url: string }>> {
+  ): Promise<{ id: string; url: string }[]> {
     return this.mutationExecutor.batchUploadAttachments?.(items.map(i => ({ id: i.id, input: i }))) ?? [];
   }
 
@@ -1347,7 +1016,7 @@ export class TransactionQueue extends EventEmitter {
       // If there is an in-flight update for this model, merge into post-flight buffer
       if (!preserveWatermark && this.inFlightByModel.has(modelKey)) {
         const prev = this.pendingMergeByModel.get(modelKey) || {};
-        const merged = this.mergeUpdateData(prev, transaction.data || {}, transaction.modelName);
+        const merged = mergeUpdateData(prev, transaction.data || {}, transaction.modelName);
         this.pendingMergeByModel.set(modelKey, merged);
         this.store.remove(transaction.id);
         return;
@@ -1363,7 +1032,7 @@ export class TransactionQueue extends EventEmitter {
           !hasStaleWriteOptions(t.writeOptions)
       );
       if (!preserveWatermark && pendingInQueue) {
-        pendingInQueue.data = this.mergeUpdateData(
+        pendingInQueue.data = mergeUpdateData(
           pendingInQueue.data || {},
           transaction.data || {},
           transaction.modelName
@@ -1472,7 +1141,7 @@ export class TransactionQueue extends EventEmitter {
           }
 
           // Build ALL operations for unified commit (SINGLE WS round-trip)
-          const batchOps: Array<{
+          const batchOps: {
             tx: Transaction;
             op: {
               type: MutationOperationType;
@@ -1481,7 +1150,7 @@ export class TransactionQueue extends EventEmitter {
               input?: Record<string, unknown>;
               transactionId: string;
             } & WriteOperationFields;
-          }> = [];
+          }[] = [];
 
           for (const tx of batch) {
             // Per-op `transactionId` carries the local tx UUID through
@@ -1639,7 +1308,7 @@ export class TransactionQueue extends EventEmitter {
                 // wrapping in Ablo.commit() and any future wrappers.
                 for (let i = 0; i < 3 && cur && typeof cur === 'object'; i++) {
                   if ('diagnostics' in cur && (cur as { diagnostics?: unknown }).diagnostics) {
-                    return (cur as { diagnostics: unknown }).diagnostics;
+                    return (cur).diagnostics;
                   }
                   cur = (cur as { cause?: unknown }).cause;
                 }
@@ -1750,195 +1419,17 @@ export class TransactionQueue extends EventEmitter {
   /**
    * LINEAR PATTERN: Confirm all awaiting transactions when delta with syncId >= threshold arrives.
    * This replaces clientMutationId echoing - transactions are confirmed by sync ID threshold.
+   * Policy + timeout maps live in the `./deltaConfirmation.js` leaf.
    * @param syncId - The sync ID of the received delta
    */
   onDeltaReceived(syncId: number): void {
-    // Cursor advancing happens where the delta is APPLIED (the store calls
-    // position.advanceApplied / advancePersisted); this hook only resolves
-    // confirmation thresholds against the incoming id.
-
-    const awaitingTxs = this.store.getByStatus('awaiting_delta');
-    const executingTxs = this.store.getByStatus('executing');
-
-    // Debug: Show state when delta arrives
-    if (awaitingTxs.length > 0 || executingTxs.length > 0) {
-      getContext().logger.debug('tx:delta_received', {
-        syncId,
-        lastSeenSyncId: this.lastSeenSyncId,
-        awaitingCount: awaitingTxs.length,
-        executingCount: executingTxs.length,
-        awaitingThresholds: awaitingTxs.map((tx) => ({
-          txId: tx.id.slice(0, 8),
-          model: tx.modelName,
-          needed: tx.syncIdNeededForCompletion,
-          willConfirm:
-            tx.syncIdNeededForCompletion !== undefined && syncId >= tx.syncIdNeededForCompletion,
-        })),
-      });
-    }
-
-    // Fast path: no awaiting transactions
-    if (awaitingTxs.length === 0) return;
-
-    let confirmedCount = 0;
-
-    for (const tx of awaitingTxs) {
-      // Confirm if this delta's ID meets or exceeds the threshold
-      if (tx.syncIdNeededForCompletion !== undefined && syncId >= tx.syncIdNeededForCompletion) {
-        this.cancelDeltaConfirmationTimeout(tx.id);
-        this.store.updateStatus(tx.id, 'completed');
-        this.emit('transaction:completed', tx);
-        this.emit(`transaction:completed:${tx.id}`, tx);
-        this.optimisticUpdates.delete(tx.id);
-        confirmedCount++;
-
-        getContext().logger.debug('tx:confirm_via_delta', {
-          txId: tx.id.slice(0, 8),
-          model: tx.modelName,
-          neededSyncId: tx.syncIdNeededForCompletion,
-          receivedSyncId: syncId,
-        });
-      }
-    }
-
-    // Log batch summary only if we confirmed something
-    if (confirmedCount > 0) {
-      // Use warn for staging visibility when transactions confirm
-      getContext().observability.breadcrumb('Transactions confirmed via delta', 'sync.transaction', 'info', {
-        count: confirmedCount,
-        syncId,
-        remainingAwaiting: awaitingTxs.length - confirmedCount,
-      });
-    }
+    this.deltaConfirmation.onDeltaReceived(syncId);
   }
 
-  // REPLICACHE/POWERSYNC PATTERN: Schedule delta confirmation with retry + reconciliation
-  // Instead of rolling back on timeout (which destroys confirmed server state),
-  // retry with exponential backoff and request reconciliation to catch up on missed deltas.
-  // Only rollback on explicit server rejection, never on timeout.
+  // REPLICACHE/POWERSYNC PATTERN: Schedule delta confirmation with retry +
+  // reconciliation — see DeltaConfirmationTracker in `./deltaConfirmation.js`.
   private scheduleDeltaConfirmationTimeout(tx: Transaction, timeoutMs: number): void {
-    // Cancel any existing timeout for this transaction
-    this.cancelDeltaConfirmationTimeout(tx.id);
-
-    const timeoutHandle = setTimeout(async () => {
-      const currentTx = this.store.get(tx.id);
-      if (!currentTx || currentTx.status !== 'awaiting_delta') {
-        this.deltaConfirmationRetries.delete(tx.id);
-        return; // Already confirmed or failed
-      }
-
-      // If disconnected, re-schedule with same timeout (no backoff while offline)
-      if (!this.isConnectedFn()) {
-        // Self-healing: re-schedule the confirmation wait while offline, no
-        // consumer action needed → debug.
-        getContext().logger.debug('[TransactionQueue] Timeout fired while disconnected - re-scheduling', {
-          txId: tx.id.slice(0, 8),
-          model: tx.modelName,
-        });
-        this.deltaConfirmationTimeouts.delete(tx.id);
-        this.scheduleDeltaConfirmationTimeout(tx, timeoutMs);
-        return;
-      }
-
-      const retryCount = this.deltaConfirmationRetries.get(tx.id) ?? 0;
-      const diagnosis =
-        this.lastSeenSyncId === 0
-          ? 'No deltas received - delta pipeline may be broken'
-          : currentTx.syncIdNeededForCompletion &&
-              this.lastSeenSyncId < currentTx.syncIdNeededForCompletion
-            ? 'Delta not yet received - may be lost or delayed'
-            : 'Delta should have confirmed - possible race condition';
-
-      getContext().observability.captureReconciliation({
-        reason: 'delta_timeout',
-        model: tx.modelName,
-        modelId: tx.modelId,
-        syncIdNeeded: currentTx.syncIdNeededForCompletion,
-        lastSeenSyncId: this.lastSeenSyncId,
-        retryCount,
-        connectionState: this.isConnectedFn() ? 'connected' : 'disconnected',
-      });
-
-      if (retryCount < TransactionQueue.DELTA_MAX_RETRIES) {
-        // RETRY: Request reconciliation and re-schedule with exponential backoff
-        // The server already committed this mutation — we just need the delta to arrive
-        this.deltaConfirmationRetries.set(tx.id, retryCount + 1);
-        this.deltaConfirmationTimeouts.delete(tx.id);
-
-        // Exponential backoff: 30s → 60s → 120s → 120s → 120s (capped)
-        const nextTimeout = Math.min(timeoutMs * 2, TransactionQueue.DELTA_MAX_TIMEOUT_MS);
-
-        // Emit reconciliation request so SyncedStore can cycle the WebSocket
-        // to trigger delta catch-up from the server
-        this.emit('reconciliation:needed', {
-          reason: 'delta_confirmation_timeout',
-          txId: tx.id,
-          model: tx.modelName,
-          modelId: tx.modelId,
-          syncIdNeeded: currentTx.syncIdNeededForCompletion,
-          lastSeenSyncId: this.lastSeenSyncId,
-          retryCount: retryCount + 1,
-        });
-
-        // Self-healing retry with backoff — the server already committed; we're
-        // just waiting on the delta. No consumer action → debug.
-        getContext().logger.debug('[TransactionQueue] Re-scheduling with backoff', {
-          txId: tx.id.slice(0, 8),
-          model: tx.modelName,
-          nextTimeoutMs: nextTimeout,
-          retry: retryCount + 1,
-        });
-
-        this.scheduleDeltaConfirmationTimeout(tx, nextTimeout);
-      } else {
-        // LINEAR PATTERN: Retries exhausted — persist to IndexedDB instead of rolling back.
-        // The transaction succeeded on the server (HTTP 200), so the data exists server-side.
-        // Persist the awaiting state so it survives tab close. On next session, the WebSocket
-        // reconnect + delta catch-up will naturally confirm it (like Linear's IndexedDB caching).
-        this.deltaConfirmationRetries.delete(tx.id);
-        this.deltaConfirmationTimeouts.delete(tx.id);
-
-        getContext().observability.captureDeltaRetryExhausted({
-          txId: tx.id,
-          model: tx.modelName,
-          modelId: tx.modelId,
-          retryCount: TransactionQueue.DELTA_MAX_RETRIES,
-          syncIdNeeded: currentTx.syncIdNeededForCompletion,
-        });
-
-        // Emit persist event — SyncClient handles the IDB write
-        this.emit('transaction:persist_awaiting', {
-          txId: tx.id,
-          model: tx.modelName,
-          modelId: tx.modelId,
-          operationType: tx.type,
-          syncIdNeeded: currentTx.syncIdNeededForCompletion,
-        });
-
-        // Also request one final reconciliation cycle
-        this.emit('reconciliation:needed', {
-          reason: 'delta_retries_exhausted',
-          txId: tx.id,
-          model: tx.modelName,
-          modelId: tx.modelId,
-          syncIdNeeded: currentTx.syncIdNeededForCompletion,
-          lastSeenSyncId: this.lastSeenSyncId,
-          retryCount: TransactionQueue.DELTA_MAX_RETRIES,
-        });
-      }
-    }, timeoutMs);
-
-    this.deltaConfirmationTimeouts.set(tx.id, timeoutHandle);
-  }
-
-  // Cancel a pending delta confirmation timeout and clean up retry tracking
-  private cancelDeltaConfirmationTimeout(id: string): void {
-    const timeoutHandle = this.deltaConfirmationTimeouts.get(id);
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-      this.deltaConfirmationTimeouts.delete(id);
-    }
-    this.deltaConfirmationRetries.delete(id);
+    this.deltaConfirmation.scheduleDeltaConfirmationTimeout(tx, timeoutMs);
   }
 
   /**
@@ -2027,6 +1518,7 @@ export class TransactionQueue extends EventEmitter {
     try {
       while (this.commitLane.length > 0) {
         const tx = this.commitLane[0];
+        if (!tx) break;
         if (tx.status !== 'pending') {
           this.commitLane.shift();
           continue;
@@ -2375,36 +1867,19 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Optimistic updates
+   * Optimistic updates — apply/rollback rules live in `./optimistic.js`;
+   * these delegates bind the host-owned ledger + event emitter.
    */
   private applyOptimisticCreate(model: Model, transaction: Transaction): void {
-    this.optimisticUpdates.set(transaction.id, {
-      model,
-      previousState: null,
-      transaction,
-    });
-
-    this.emit('optimistic:create', { model, transaction });
+    applyOptimisticCreate(this.optimisticUpdates, this, model, transaction);
   }
 
   private applyOptimisticUpdate(model: Model, transaction: Transaction): void {
-    this.optimisticUpdates.set(transaction.id, {
-      model,
-      previousState: transaction.previousData,
-      transaction,
-    });
-
-    this.emit('optimistic:update', { model, transaction });
+    applyOptimisticUpdate(this.optimisticUpdates, this, model, transaction);
   }
 
   private applyOptimisticDelete(model: Model, transaction: Transaction): void {
-    this.optimisticUpdates.set(transaction.id, {
-      model,
-      previousState: transaction.previousData,
-      transaction,
-    });
-
-    this.emit('optimistic:delete', { model, transaction });
+    applyOptimisticDelete(this.optimisticUpdates, this, model, transaction);
   }
 
   private async rollbackOptimistic(
@@ -2412,18 +1887,7 @@ export class TransactionQueue extends EventEmitter {
     reason?: string,
     error?: Error
   ): Promise<void> {
-    const optimistic = this.optimisticUpdates.get(transaction.id);
-    if (!optimistic) return;
-
-    this.emit('optimistic:rollback', {
-      model: optimistic.model,
-      previousState: optimistic.previousState,
-      transaction,
-      reason: reason ?? 'unknown',
-      error,
-    });
-
-    this.optimisticUpdates.delete(transaction.id);
+    await rollbackOptimistic(this.optimisticUpdates, this, transaction, reason, error);
   }
 
   /**
@@ -2456,6 +1920,7 @@ export class TransactionQueue extends EventEmitter {
 
       for (const data of persisted) {
         const transaction = this.deserializeTransaction(data);
+        if (!transaction) continue;
         this.store.add(transaction);
         this.enqueue(transaction);
       }
@@ -2467,8 +1932,32 @@ export class TransactionQueue extends EventEmitter {
     }
   }
 
-  private deserializeTransaction(data: any): Transaction {
-    return { ...data, status: 'pending' };
+  /**
+   * Validate + rehydrate one persisted row (the T1.8 IDB replay boundary).
+   * Rows written by other subsystems into the same store (`'queue'`,
+   * `'awaiting_delta'`) are skipped silently; rows that fail the
+   * persisted-transaction schema (older SDK versions, corruption) are
+   * DROPPED with an observability capture instead of replayed as commits.
+   */
+  private deserializeTransaction(data: unknown): Transaction | null {
+    if (isNonReplayablePersistedRow(data)) return null;
+
+    const transaction = deserializePersistedTransaction(data);
+    if (!transaction) {
+      const rowId =
+        typeof data === 'object' && data !== null && typeof (data as { id?: unknown }).id === 'string'
+          ? (data as { id: string }).id
+          : undefined;
+      getContext().logger.debug('[TransactionQueue] Dropping malformed persisted transaction', {
+        rowId,
+      });
+      getContext().observability.captureTransactionFailure({
+        context: 'deserialize-persisted-transaction',
+        error: `Persisted transaction failed schema validation${rowId ? ` (id: ${rowId})` : ''}`,
+      });
+      return null;
+    }
+    return transaction;
   }
 
   /**
@@ -2487,7 +1976,15 @@ export class TransactionQueue extends EventEmitter {
         if (!transactionType || transaction.type === transactionType) {
           cancelledTransactions.push(transaction);
           this.store.updateStatus(transaction.id, 'rolled_back');
-          this.rollbackOptimistic(transaction, 'model_cancelled');
+          // Sync caller: a rejected rollback (throwing optimistic:rollback
+          // listener) must surface, not vanish — the status flip above is
+          // already committed either way.
+          void this.rollbackOptimistic(transaction, 'model_cancelled').catch((error: unknown) => {
+            getContext().observability.captureTransactionFailure({
+              context: 'rollback-model-cancelled',
+              error: error instanceof Error ? error : String(error),
+            });
+          });
         }
       }
     }
@@ -2526,7 +2023,14 @@ export class TransactionQueue extends EventEmitter {
         const fkValue = transaction.data?.[foreignKey];
         if (fkValue === parentId) {
           this.store.updateStatus(transaction.id, 'rolled_back');
-          this.rollbackOptimistic(transaction, 'cascade_parent_deleted');
+          void this.rollbackOptimistic(transaction, 'cascade_parent_deleted').catch(
+            (error: unknown) => {
+              getContext().observability.captureTransactionFailure({
+                context: 'rollback-cascade-parent-deleted',
+                error: error instanceof Error ? error : String(error),
+              });
+            }
+          );
           cancelled++;
 
           getContext().logger.debug('[TransactionQueue] Cascade cancelled orphaned transaction', {
@@ -2692,6 +2196,17 @@ export class TransactionQueue extends EventEmitter {
     // Clear processing
     if (this.processTimer) {
       clearTimeout(this.processTimer);
+    }
+
+    // Clear every armed delta-confirmation timer (one per in-flight tx,
+    // 30–120s each) — a disposed queue must not keep the process alive or
+    // fire confirmation callbacks against the cleared store below.
+    this.deltaConfirmation.dispose();
+
+    // Clear the offline-grace timer armed by setConnectionState('disconnected').
+    if (this.commitOfflineGraceTimer !== null) {
+      clearTimeout(this.commitOfflineGraceTimer);
+      this.commitOfflineGraceTimer = null;
     }
 
     // Clear store

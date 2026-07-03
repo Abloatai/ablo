@@ -109,7 +109,7 @@ export function useReactive<T>(
           }
         },
       );
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+       
     },
     [subscribeVersion],
   );

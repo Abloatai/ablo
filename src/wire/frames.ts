@@ -18,8 +18,19 @@
  * Changing any shape here is a wire-contract change — it requires
  * coordinated client + server updates.
  */
+import { z } from 'zod';
+// Runtime schema primitives come from the coordination LEAF module (a pure
+// zod file), not the barrel — keeps `wire/` lean (zod-leaf runtime deps only).
+import {
+  commitOperationSchema as coordinationCommitOperationSchema,
+  readDependencySchema,
+} from '../coordination/schema.js';
 import type { OnStaleMode, StaleNotification, ReadDependency } from '../coordination/index.js';
 import type { ErrorCode, RequiredCapability } from '../errors.js';
+
+/** Compile-time two-way equality pin: `_AssertExact<z.infer<schema>, Interface>`
+ *  fails to typecheck the moment either side drifts. */
+type _AssertExact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 
 // ── Client → Server ────────────────────────────────────────────────────────
 
@@ -53,7 +64,37 @@ export interface CommitOperation {
    * to resolve.
    */
   onStale?: OnStaleMode | null;
+  /**
+   * Write even if another participant holds a claim on this entity. The
+   * default (`false`) rejects with `AbloClaimedError` when claimed — `bypass`
+   * is the explicit, recorded override, honored only for participants the
+   * claim guard trusts (humans / framework identities; agent `bypass` is
+   * ignored). Previously honored by the server's commit executor without
+   * being declared here — the exact contract drift this file exists to
+   * prevent.
+   */
+  bypass?: boolean | null;
 }
+
+/**
+ * Runtime validator for {@link CommitOperation} — the per-op ingest gate both
+ * commit transports (WS `commit` frame, HTTP `/v1/commits`) run before an
+ * operation reaches the executor. Extends the canonical coordination-layer
+ * schema (writeGuard `readAt`/`onStale`/`bypass` + op identity), widening only
+ * `bypass` to `nullish` to match the interface (`boolean | null`).
+ *
+ * `readAt` is `z.number()` — a string watermark previously flowed into the
+ * stale-guard SQL (`id > $3`) unvalidated.
+ */
+export const commitOperationSchema = coordinationCommitOperationSchema.extend({
+  bypass: z.boolean().nullish(),
+});
+// z.infer-bound: the schema and the interface cannot drift in either direction.
+const _commitOperationContract: _AssertExact<
+  z.infer<typeof commitOperationSchema>,
+  CommitOperation
+> = true;
+void _commitOperationContract;
 
 /**
  * Client → Server single named-mutation frame. The named-mutator write
@@ -101,6 +142,25 @@ export interface CommitMessage {
     reads?: ReadDependency[] | null;
   };
 }
+
+/**
+ * Runtime validator for {@link CommitMessage}'s payload — every field the
+ * server's commit path actually honors (`operations`, `clientTxId`,
+ * `causedByTaskId`, `reads`), each entry validated by
+ * {@link commitOperationSchema} / the canonical `readDependencySchema`.
+ */
+export const commitPayloadSchema = z.object({
+  operations: z.array(commitOperationSchema),
+  clientTxId: z.string(),
+  causedByTaskId: z.string().nullish(),
+  reads: z.array(readDependencySchema).nullish(),
+});
+// z.infer-bound: payload schema and CommitMessage['payload'] cannot drift.
+const _commitPayloadContract: _AssertExact<
+  z.infer<typeof commitPayloadSchema>,
+  CommitMessage['payload']
+> = true;
+void _commitPayloadContract;
 
 // ── Server → Client ──────────────────────────────────────────────────────
 

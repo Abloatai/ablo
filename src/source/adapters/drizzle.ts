@@ -83,7 +83,7 @@ interface ModelColumns {
   readonly columnToField: ReadonlyMap<string, string>;
 }
 
-function buildColumnMaps(schema: Schema<SchemaRecord>): ReadonlyMap<string, ModelColumns> {
+function buildColumnMaps(schema: Schema): ReadonlyMap<string, ModelColumns> {
   const json = toSchemaJSON(schema);
   const out = new Map<string, ModelColumns>();
   for (const [key, model] of Object.entries(json.models)) {
@@ -201,7 +201,8 @@ export function drizzleDataSource<S extends SchemaRecord>(
             sql`SELECT response FROM ablo_idempotency WHERE client_tx_id = ${change.clientTxId} LIMIT 1`,
           ),
         );
-        if (cached.length > 0) return { rows: cached[0].response as Row[] };
+        const cachedRow = cached[0];
+        if (cachedRow) return { rows: cachedRow.response as Row[] };
 
         const rows: Row[] = [];
         for (const [index, op] of change.operations.entries()) {
@@ -243,7 +244,7 @@ export function drizzleDataSource<S extends SchemaRecord>(
           cursor: String(r.cursor),
         }),
       );
-      return { events, nextCursor: events.length > 0 ? events[events.length - 1].cursor : null };
+      return { events, nextCursor: events.at(-1)?.cursor ?? null };
     },
   };
 }

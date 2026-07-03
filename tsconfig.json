@@ -1,20 +1,34 @@
 {
+  // Extends the shared strict base (target/strict/esModuleInterop/skipLibCheck…).
+  // Package-specific overrides: the shipped library type-checks under NodeNext
+  // (real ESM, `.js` relative specifiers), needs DOM libs (browser sync client),
+  // and declares its dist emit shape. Base's bundler resolution is overridden by
+  // NodeNext; base's `@ablo/source` customConditions is inert for this file set
+  // (nothing outside src/cli imports another workspace package — src/cli is
+  // excluded here and typechecked by tsconfig.cli.json).
+  //
+  // NOTE for jest: ts-jest merges its inline tsconfig over THIS file, so the
+  // strictness flags below also gate test files at jest runtime. The jest
+  // configs re-disable verbatimModuleSyntax only (ts-jest emits CJS).
+  "extends": "../tsconfig/base.json",
   "compilerOptions": {
-    "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "strict": true,
     "noEmit": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
     "rootDir": "./src",
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    // W3-Strict ratchet (production-doctor Tier 3 §4). These also reach the
+    // jest programs through ts-jest's tsconfig merge and the typed-lint
+    // program (tsconfig.eslint.json), so tests are held to the same bar.
+    "verbatimModuleSyntax": true,
+    "noImplicitOverride": true,
+    // Overrides base.json's explicit `false` — this package is burned down.
+    "noUncheckedIndexedAccess": true
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules", "dist", "src/cli"]

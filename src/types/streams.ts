@@ -9,8 +9,7 @@
  * the shared coordination substrate.
  */
 
-import type { ModelDef } from '../schema/model.js';
-import type { InferCreate, InferModel, Schema } from '../schema/schema.js';
+import type { InferModel, Schema } from '../schema/schema.js';
 
 // Coordination wire shapes have ONE canonical home — `../coordination/schema`.
 // These are imported (so the rest of this file can reference them) and
@@ -39,14 +38,13 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
-/**
- * Identity reference for an actor / on-behalf-of slot. Generic
- * protocol vocabulary; works for sessions, agents, and system roles.
- */
-export interface ParticipantRef {
-  kind: 'user' | 'agent' | 'system';
-  id: string;
-}
+// Participant identity is a zero-import leaf (`./participant.ts`) shared with
+// the conflict-policy layer — the break in the foundation triangle
+// `types/streams → schema/model → policy/types → types/streams`. Imported for
+// local use and re-exported so existing `from '.../streams'` import paths keep
+// resolving.
+import type { ParticipantRef } from './participant.js';
+export type { ParticipantRef } from './participant.js';
 
 /**
  * Whether the human explicitly approved a change. Open-source
@@ -235,10 +233,10 @@ export interface PresenceStream {
    * agents are doing right now: "copy-bot is generating a new title
    * for slide 5; don't duplicate that work."
    */
-  readonly others: ReadonlyArray<Peer>;
+  readonly others: readonly Peer[];
 
   /** Subset of `others` filtered to a specific sync group. */
-  othersIn(syncGroup: string): ReadonlyArray<Peer>;
+  othersIn(syncGroup: string): readonly Peer[];
 
   /**
    * Framework-agnostic reactivity primitive. Register a callback that
@@ -284,7 +282,7 @@ export interface PresenceStream {
    * down the underlying subscription cleanly via the iterator's
    * `return()` hook.
    */
-  [Symbol.asyncIterator](): AsyncIterableIterator<ReadonlyArray<Peer>>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<readonly Peer[]>;
 }
 
 /**
@@ -360,7 +358,7 @@ export interface Peer {
   /** Server timestamp of the most recent frame from this participant. */
   readonly lastActive: string;
   /** Pending-mutation claims this participant has declared. */
-  readonly activeClaims?: ReadonlyArray<Claim>;
+  readonly activeClaims?: readonly Claim[];
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -445,7 +443,7 @@ export interface ClaimStream {
    * Reads return the current snapshot; pair with `subscribe(...)`
    * below to get notified on change.
    */
-  readonly others: ReadonlyArray<Claim>;
+  readonly others: readonly Claim[];
 
   /**
    * Reactive view of the wait queue on one target — the FIFO line of
@@ -520,7 +518,7 @@ export interface ClaimStream {
    * }
    * ```
    */
-  [Symbol.asyncIterator](): AsyncIterableIterator<ReadonlyArray<Claim>>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<readonly Claim[]>;
 }
 
 /**

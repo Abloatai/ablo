@@ -43,7 +43,7 @@ export interface SubscriptionTransport {
    * authoritative for its next diff).
    */
   updateSubscription(
-    syncGroups: ReadonlyArray<string>,
+    syncGroups: readonly string[],
   ): Promise<{ syncGroups: string[] }>;
 }
 
@@ -54,7 +54,7 @@ export interface AreaOfInterestOptions {
    * Groups always present in the effective set (e.g. `org:<id>`,
    * `user:<id>`). Never warm, never expired.
    */
-  baseGroups?: ReadonlyArray<string>;
+  baseGroups?: readonly string[];
   /**
    * How long a `leave`-ed group stays subscribed before it actually drops.
    * This is the hysteresis margin. Default 30s.
@@ -126,7 +126,7 @@ export class AreaOfInterestManager {
         options.scheduler ??
         ((fn, ms) => {
           const handle = setInterval(fn, ms);
-          return () => clearInterval(handle);
+          return () => { clearInterval(handle); };
         });
       this.cancelSweep = schedule(() => {
         void this.sweep();

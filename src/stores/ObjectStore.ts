@@ -6,7 +6,7 @@
  * Uses native IndexedDB for maximum performance (no wrapper overhead).
  */
 
-import { ModelMetadata } from '../types/index.js';
+import type { ModelMetadata } from '../types/index.js';
 import type { ObjectStoreContract } from './ObjectStoreContract.js';
 
 /**
@@ -82,13 +82,13 @@ export class ObjectStore implements ObjectStoreContract {
         // Use relaxed durability for ~16x write performance (safe with optimistic sync)
         const tx = this.db.transaction([this.storeName], 'readwrite', {
           durability: 'relaxed',
-        } as IDBTransactionOptionsWithDurability);
+        });
         const store = tx.objectStore(this.storeName);
         const request = store.put(data);
 
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error || new Error('IndexedDB transaction error'));
-        request.onerror = () => reject(request.error || new Error('IndexedDB request error'));
+        tx.oncomplete = () => { resolve(); };
+        tx.onerror = () => { reject(tx.error || new Error('IndexedDB transaction error')); };
+        request.onerror = () => { reject(request.error || new Error('IndexedDB request error')); };
       } catch (error) {
         // Propagate failure so callers do not continue with inconsistent state
         reject(error instanceof Error ? error : new Error(String(error)));
@@ -110,8 +110,8 @@ export class ObjectStore implements ObjectStoreContract {
         const store = tx.objectStore(this.storeName);
         const request = store.get(id);
 
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        request.onsuccess = () => { resolve(request.result); };
+        request.onerror = () => { reject(request.error); };
       } catch (error) {
         resolve(undefined);
       }
@@ -153,7 +153,7 @@ export class ObjectStore implements ObjectStoreContract {
           };
         }
 
-        tx.onerror = () => reject(tx.error);
+        tx.onerror = () => { reject(tx.error); };
       } catch (error) {
         resolve(results);
       }
@@ -174,8 +174,8 @@ export class ObjectStore implements ObjectStoreContract {
         const store = tx.objectStore(this.storeName);
         const request = store.getAll();
 
-        request.onsuccess = () => resolve(request.result || []);
-        request.onerror = () => reject(request.error);
+        request.onsuccess = () => { resolve(request.result || []); };
+        request.onerror = () => { reject(request.error); };
       } catch (error) {
         resolve([]);
       }
@@ -195,13 +195,13 @@ export class ObjectStore implements ObjectStoreContract {
         // Use relaxed durability for ~16x write performance (safe with optimistic sync)
         const tx = this.db.transaction([this.storeName], 'readwrite', {
           durability: 'relaxed',
-        } as IDBTransactionOptionsWithDurability);
+        });
         const store = tx.objectStore(this.storeName);
         const request = store.delete(id);
 
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error || new Error('IndexedDB transaction error'));
-        request.onerror = () => reject(request.error || new Error('IndexedDB request error'));
+        tx.oncomplete = () => { resolve(); };
+        tx.onerror = () => { reject(tx.error || new Error('IndexedDB transaction error')); };
+        request.onerror = () => { reject(request.error || new Error('IndexedDB request error')); };
       } catch (error) {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -233,13 +233,13 @@ export class ObjectStore implements ObjectStoreContract {
         // Use relaxed durability for ~16x write performance (safe with optimistic sync)
         const tx = this.db.transaction([this.storeName], 'readwrite', {
           durability: 'relaxed',
-        } as IDBTransactionOptionsWithDurability);
+        });
         const store = tx.objectStore(this.storeName);
         const request = store.clear();
 
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error || new Error('IndexedDB transaction error'));
-        request.onerror = () => reject(request.error || new Error('IndexedDB request error'));
+        tx.oncomplete = () => { resolve(); };
+        tx.onerror = () => { reject(tx.error || new Error('IndexedDB transaction error')); };
+        request.onerror = () => { reject(request.error || new Error('IndexedDB request error')); };
       } catch (error) {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -260,8 +260,8 @@ export class ObjectStore implements ObjectStoreContract {
         const store = tx.objectStore(this.storeName);
         const request = store.count();
 
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        request.onsuccess = () => { resolve(request.result); };
+        request.onerror = () => { reject(request.error); };
       } catch (error) {
         resolve(0);
       }
@@ -286,8 +286,8 @@ export class ObjectStore implements ObjectStoreContract {
         const index = store.index(indexName);
         const request = index.getAll(value);
 
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        request.onsuccess = () => { resolve(request.result); };
+        request.onerror = () => { reject(request.error); };
       } catch (error) {
         resolve([]);
       }
@@ -332,7 +332,7 @@ export class ObjectStore implements ObjectStoreContract {
           resolve(filtered);
         };
 
-        request.onerror = () => reject(request.error);
+        request.onerror = () => { reject(request.error); };
       } catch (error) {
         resolve([]);
       }
@@ -357,8 +357,8 @@ export class ObjectStore implements ObjectStoreContract {
         const index = store.index(indexName);
         const request = index.get(value);
 
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        request.onsuccess = () => { resolve(request.result); };
+        request.onerror = () => { reject(request.error); };
       } catch (error) {
         resolve(undefined);
       }
@@ -380,8 +380,8 @@ export class ObjectStore implements ObjectStoreContract {
         const index = store.index(indexName);
         const request = index.count(value);
 
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        request.onsuccess = () => { resolve(request.result); };
+        request.onerror = () => { reject(request.error); };
       } catch (error) {
         resolve(0);
       }

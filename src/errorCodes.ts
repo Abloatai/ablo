@@ -39,7 +39,7 @@ import { z } from 'zod';
  * code, a changed HTTP status, an envelope field. Emitted in `errors.json`
  * and on the `Ablo-Version` response header so a consumer can detect drift.
  */
-export const ERROR_CONTRACT_VERSION = '2026-06-20';
+export const ERROR_CONTRACT_VERSION = '2026-07-01';
 
 /** Coarse grouping for metrics dashboards and docs sectioning. */
 export type ErrorCategory =
@@ -52,7 +52,6 @@ export type ErrorCategory =
   | 'not_found'
   | 'tenant'
   | 'schema'
-  | 'claim'
   | 'bootstrap'
   | 'transport'
   | 'rate_limit'
@@ -242,12 +241,22 @@ export const ERROR_CODES = {
   write_options_invalid: client('validation', 'The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `claim`) failed validation against the write-options schema.'),
   source_operation_id_required: client('validation', 'A data-source operation arrived without the entity `id` it targets.'),
   source_adapter_misconfigured: client('validation', 'The data-source ORM adapter could not map a schema model onto the backing client (missing delegate or model).'),
-  source_event_invalid: client('validation', 'A data-source outbox event could not be built — the operation carries no entity id and none was supplied.'),
+  // Wire since 2026-07-01: the sync-server validates every pushed/polled
+  // source event before appending to the log and rejects the whole batch
+  // with this code (`param` names the offending index + field path, e.g.
+  // `events[3].entityId`). Also raised client-side by
+  // `sourceEventForOperation` when an outbox event cannot be built.
+  source_event_invalid: wire('validation', 400, false, 'A data-source event was malformed — missing or invalid id, model, entityId, type, or field value. The whole event batch was rejected and nothing was ingested; fix the offending outbox row and re-send.'),
   duration_invalid: client('validation', 'A duration value was not a number of seconds or a "500ms" | "30s" | "3m" | "24h" string.'),
   schema_definition_invalid: client('validation', 'A schema definition value was invalid (bad column identifier, non-finite backfill, or unsupported schema-JSON version).'),
   cli_invalid_arguments: client('validation', 'The CLI was invoked with an unknown flag or a malformed flag value.'),
   turn_validation_failed: wire('validation', 422, false, 'The agent turn failed server-side validation.'),
   commit_operation_required: wire('validation', 400, false, 'A commit must carry `operation` or `operations`.'),
+  // Wire since 2026-07-01: both commit transports (WS `commit` frame and HTTP
+  // `/v1/commits`) validate every operation against `commitOperationSchema`
+  // (`wire/frames.ts`) and reject the whole batch with this code. `param`
+  // names the offending index + field path (e.g. `operations[3].readAt`).
+  commit_operation_invalid: wire('validation', 400, false, 'A commit operation failed validation against the wire commit-operation schema — wrong field type (e.g. a string `readAt`), unknown `type`, or missing `model`. The whole batch was rejected; the error names the offending operation index and field path.'),
   commit_operation_model_required: wire('validation', 400, false, 'A commit operation is missing its `model`.'),
   commit_operations_ambiguous: wire('validation', 400, false, 'A commit supplied both `operation` and `operations`.'),
   commit_too_many_operations: wire('validation', 400, false, 'A commit exceeded the per-commit operation limit; split it into smaller batches.'),
@@ -418,6 +427,12 @@ export const ERROR_CODES = {
   events_required: wire('validation', 400, false, 'The request must include a non-empty events array.'),
   ingest_failed: wire('validation', 400, false, 'The source-event ingest failed.'),
   migration_failed: wire('server', 500, false, 'The schema migration failed to apply.'),
+  schema_provisioning_forbidden: wire(
+    'permission',
+    403,
+    false,
+    'Schema registration could not create tables in the target database: the engine is not permitted to run DDL there.',
+  ),
   model_query_failed: wire('validation', 400, false, 'The model query failed.'),
   queries_required: wire('validation', 400, false, 'The request must include a non-empty queries array.'),
   query_unsupported_operator: wire('validation', 400, false, 'The query used an unsupported operator.'),
@@ -429,6 +444,7 @@ export const ERROR_CODES = {
   upload_fields_required: wire('validation', 400, false, 'A required upload field was missing.'),
   upload_items_required: wire('validation', 400, false, 'The request must include a non-empty items array.'),
   presigned_url_failed: wire('server', 500, true, 'Failed to generate a presigned upload URL.'),
+  upload_not_configured: wire('server', 503, false, 'Uploads are not configured on this deployment: the upload storage bucket and CDN domain are unset.'),
   task_id_required: wire('validation', 400, false, 'A task id is required for this request.'),
   claim_id_required: wire('validation', 400, false, 'An claim id is required for this request.'),
   commit_operation_action_required: wire('validation', 400, false, 'A commit operation is missing its `action`.'),
@@ -447,6 +463,7 @@ export const ERROR_CODES = {
   turn_foreign_agent: wire('permission', 403, false, 'The turn belongs to a different agent.'),
   invalid_intent: wire('validation', 400, false, 'The claim request was invalid.'),
   schema_too_large: wire('validation', 413, false, 'The submitted schema exceeds the maximum size.'),
+  request_too_large: wire('validation', 413, false, 'The request body exceeds the maximum size.'),
   invalid_schema: wire('validation', 400, false, 'The submitted schema could not be parsed.'),
   incompatible_change: wire('conflict', 409, false, 'The schema change is incompatible with the current schema.'),
 } as const satisfies Record<string, ErrorCodeSpec>;

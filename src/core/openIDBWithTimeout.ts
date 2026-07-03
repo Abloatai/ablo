@@ -79,7 +79,7 @@ export function openIDBWithTimeout(
 
     if (options.onUpgrade) {
       request.onupgradeneeded = (event) => {
-        options.onUpgrade!(request, event as IDBVersionChangeEvent);
+        options.onUpgrade!(request, event);
       };
     }
 
@@ -119,23 +119,23 @@ export function openIDBWithTimeout(
           // A consumer reaction must never break the close.
         }
       };
-      settle(() => resolve(db));
+      settle(() => { resolve(db); });
     };
-    request.onerror = () => settle(() => reject(request.error));
+    request.onerror = () => { settle(() => { reject(request.error); }); };
 
     // The critical handler: another tab is blocking us. Native API leaves
     // the request pending indefinitely; we fail fast with a clear error so
     // the UI can tell the user to close other tabs.
     request.onblocked = () => {
       settle(() =>
-        reject(
+        { reject(
           new IDBOpenTimeoutError(
             name,
             'blocked',
             `IndexedDB \"${name}\" open blocked — another tab is holding an ` +
               `older version. Close other Ablo tabs and reload.`,
           ),
-        ),
+        ); },
       );
     };
 
@@ -144,7 +144,7 @@ export function openIDBWithTimeout(
     // deterministic error.
     const timer = setTimeout(() => {
       settle(() =>
-        reject(
+        { reject(
           new IDBOpenTimeoutError(
             name,
             'timeout',
@@ -152,7 +152,7 @@ export function openIDBWithTimeout(
               `Storage may be in a bad state — clearing site data and reloading ` +
               `usually fixes this.`,
           ),
-        ),
+        ); },
       );
     }, timeoutMs);
   });
@@ -187,9 +187,9 @@ export function deleteIDBWithTimeout(
       resolve(value);
     };
     const request = indexedDB.deleteDatabase(name);
-    request.onsuccess = () => settle(true);
-    request.onerror = () => settle(false);
-    request.onblocked = () => settle(false);
-    const timer = setTimeout(() => settle(false), timeoutMs);
+    request.onsuccess = () => { settle(true); };
+    request.onerror = () => { settle(false); };
+    request.onblocked = () => { settle(false); };
+    const timer = setTimeout(() => { settle(false); }, timeoutMs);
   });
 }

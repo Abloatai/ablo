@@ -123,7 +123,7 @@ export function memoryDataSource(): DataSourceAdapter {
       const page = outbox.filter((e) => Number(e.cursor) > after).slice(0, limit);
       return {
         events: page,
-        nextCursor: page.length > 0 ? page[page.length - 1].cursor : null,
+        nextCursor: page.at(-1)?.cursor ?? null,
       };
     },
   };

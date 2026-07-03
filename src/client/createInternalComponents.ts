@@ -102,7 +102,7 @@ export function createInternalComponents<S extends SchemaRecord>(
   // WebSocket delta stream keeps hydrated rows fresh so repeat reads serve
   // pure-local with no network; after a drop, deltas may have been missed, so
   // the next read of each query must re-confirm with the server once.
-  syncClient.on('sync:reconnecting', () => hydration.invalidate());
+  syncClient.on('sync:reconnecting', () => { hydration.invalidate(); });
 
   return {
     modelRegistry,

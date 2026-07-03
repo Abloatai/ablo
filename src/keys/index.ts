@@ -86,7 +86,8 @@ const CRC32_TABLE = (() => {
 function crc32(s: string): number {
   let c = 0xffffffff;
   for (let i = 0; i < s.length; i++) {
-    c = (CRC32_TABLE[(c ^ s.charCodeAt(i)) & 0xff] ^ (c >>> 8)) >>> 0;
+    // `& 0xff` bounds the index to the 256-entry table — the ?? 0 is unreachable.
+    c = ((CRC32_TABLE[(c ^ s.charCodeAt(i)) & 0xff] ?? 0) ^ (c >>> 8)) >>> 0;
   }
   return (c ^ 0xffffffff) >>> 0;
 }
@@ -96,7 +97,7 @@ function checksum6(payload: string): string {
   let n = crc32(payload);
   let out = '';
   for (let i = 0; i < CHECKSUM_LEN; i++) {
-    out = BASE62[n % 62] + out;
+    out = BASE62.charAt(n % 62) + out;
     n = Math.floor(n / 62);
   }
   return out;
@@ -108,7 +109,7 @@ function randomBase62(len: number): string {
   while (out.length < len) {
     for (const b of randomBytes(len * 2)) {
       if (b < 248) {
-        out += BASE62[b % 62];
+        out += BASE62.charAt(b % 62);
         if (out.length === len) break;
       }
     }
@@ -147,6 +148,14 @@ export const apiKeySchema = z.string().transform((raw, ctx): ParsedApiKey => {
     return z.NEVER;
   }
   const [, prefix, env, body] = m;
+  const kind = prefix === undefined ? undefined : KIND_BY_PREFIX[prefix];
+  // Unreachable on a KEY_RE match (all three groups are non-optional and the
+  // prefix alternation is exactly the KIND_BY_PREFIX key set) — narrows the
+  // regex-group lookups for the checks below.
+  if (kind === undefined || env === undefined || body === undefined) {
+    ctx.addIssue({ code: 'custom', message: 'not a valid Ablo API key format' });
+    return z.NEVER;
+  }
   const checksummed = bodyIsChecksummed(body);
   if (checksummed && checksum6(raw.slice(0, -CHECKSUM_LEN)) !== body.slice(KEY_BODY_LEN)) {
     ctx.addIssue({ code: 'custom', message: 'API key checksum mismatch' });
@@ -154,7 +163,7 @@ export const apiKeySchema = z.string().transform((raw, ctx): ParsedApiKey => {
   }
   return {
     raw,
-    kind: KIND_BY_PREFIX[prefix],
+    kind,
     env: environmentFromKeyPrefix(env as KeyPrefixEnvironment),
     body,
     checksummed,
@@ -171,15 +180,15 @@ export function parseApiKey(raw: string): ParsedApiKey | null {
 
 /** True when the key uses the new checksummed format (regardless of validity). */
 export function isChecksummedKey(raw: string): boolean {
-  const m = KEY_RE.exec(raw);
-  return m !== null && bodyIsChecksummed(m[3]);
+  const body = KEY_RE.exec(raw)?.[3];
+  return body !== undefined && bodyIsChecksummed(body);
 }
 
 /** Verify the embedded checksum. Meaningful only for checksummed-format keys. */
 export function keyChecksumMatches(raw: string): boolean {
-  const m = KEY_RE.exec(raw);
-  if (!m || !bodyIsChecksummed(m[3])) return false;
-  return checksum6(raw.slice(0, -CHECKSUM_LEN)) === m[3].slice(KEY_BODY_LEN);
+  const body = KEY_RE.exec(raw)?.[3];
+  if (body === undefined || !bodyIsChecksummed(body)) return false;
+  return checksum6(raw.slice(0, -CHECKSUM_LEN)) === body.slice(KEY_BODY_LEN);
 }
 
 // ── Mint + hash (node:crypto) ───────────────────────────────────────────

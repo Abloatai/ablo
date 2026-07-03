@@ -65,13 +65,9 @@ import { DefaultFallback } from './DefaultFallback.js';
  *
  * ```tsx
  * // Build once at module scope — a new instance per render tears down the socket.
- * const ablo = Ablo({
- *   schema,
- *   apiKey: () =>
- *     fetch('/api/ablo-session', { method: 'POST' })
- *       .then((r) => r.json())
- *       .then((d) => d.token),
- * });
+ * // The endpoint string points at your session-mint route (`ablo init`
+ * // scaffolds it); the SDK fetches it and keeps the token fresh.
+ * const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
  *
  * <AbloProvider client={ablo}>
  *   <App />
@@ -195,7 +191,7 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
   // `dispose()`. The CONSUMER built the client, so the consumer owns teardown;
   // the provider never disposes it.
   const engine = client;
-  const schema = engine.schema as Schema<R>;
+  const schema = engine.schema;
 
   // Account scope isn't a prop — read it from `_store.orgId` once `ready()`
   // resolves the identity from the client's auth.
@@ -238,16 +234,22 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
   useEffect(() => {
     let stale = false;
 
-    const unsubscribeSession = engine.onSessionError(async (err) => {
+    const unsubscribeSession = engine.onSessionError((err) => {
       errorEmitter.emit(err);
-      try {
-        await engine.purge();
-      } catch {}
-      try {
-        await onSessionExpiredRef.current?.();
-      } catch (hookErr) {
-        errorEmitter.emit(hookErr as Error);
-      }
+      void (async () => {
+        try {
+          await engine.purge();
+        } catch {}
+        try {
+          await onSessionExpiredRef.current?.();
+        } catch (hookErr) {
+          errorEmitter.emit(hookErr as Error);
+        }
+      })().catch(() => {
+        // Only a throwing errorEmitter subscriber can land here — it was
+        // already the error-reporting path, so swallow rather than surface
+        // an unhandled rejection loop.
+      });
     });
 
     engine
@@ -284,7 +286,7 @@ export function AbloProvider<R extends SchemaRecord = SchemaRecord>(
       }
     };
     window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
+    return () => { window.removeEventListener('beforeunload', handler); };
   }, [engine, preventUnsavedChanges]);
 
   // ── SyncContext value (for useQuery/useOne/useMutate hooks) ──────
@@ -438,15 +440,15 @@ export type MeshParticipantStatus = ParticipantStatus;
 export interface UseWatchReturn {
   readonly participant: EngineParticipant | null;
   /** Everyone else on the engine's sync groups (`participant.presence.others`), bridged to React. */
-  readonly peers: ReadonlyArray<Peer>;
+  readonly peers: readonly Peer[];
   /** Active claim claims by peers (`participant.claims.others`), bridged to React. */
-  readonly claims: ReadonlyArray<Claim>;
+  readonly claims: readonly Claim[];
   readonly status: ParticipantStatus;
   readonly error: Error | null;
 }
 
-const EMPTY_PRESENCE: ReadonlyArray<Peer> = Object.freeze([]);
-const EMPTY_INTENTS: ReadonlyArray<Claim> = Object.freeze([]);
+const EMPTY_PRESENCE: readonly Peer[] = Object.freeze([]);
+const EMPTY_INTENTS: readonly Claim[] = Object.freeze([]);
 
 /**
  * Join multiplayer for a given scope. Returns the participant and its
@@ -576,8 +578,8 @@ export function useWatch(opts: UseWatchOptions): UseWatchReturn {
   // peer list is harmless (users won't notice one frame of stale
   // presence). Queries and sync status use useSyncExternalStore
   // because transactions CAN tear visibly; presence can't.
-  const [peers, setPeers] = useState<ReadonlyArray<Peer>>(EMPTY_PRESENCE);
-  const [claims, setClaims] = useState<ReadonlyArray<Claim>>(EMPTY_INTENTS);
+  const [peers, setPeers] = useState<readonly Peer[]>(EMPTY_PRESENCE);
+  const [claims, setClaims] = useState<readonly Claim[]>(EMPTY_INTENTS);
 
   useEffect(() => {
     if (!participant || paused) {
@@ -625,7 +627,7 @@ export function useWatch(opts: UseWatchOptions): UseWatchReturn {
  * const alone = !peers.some((p) => p.participantKind === 'user');
  * ```
  */
-export function usePeers(scope?: ParticipantScope): ReadonlyArray<Peer> {
+export function usePeers(scope?: ParticipantScope): readonly Peer[] {
   const ctx = useContext(AbloInternalContext);
   const engine = ctx?.engine ?? null;
 
@@ -636,7 +638,7 @@ export function usePeers(scope?: ParticipantScope): ReadonlyArray<Peer> {
   );
   const groups = useMemo(() => JSON.parse(scopeKey) as string[], [scopeKey]);
 
-  const [peers, setPeers] = useState<ReadonlyArray<Peer>>(EMPTY_PRESENCE);
+  const [peers, setPeers] = useState<readonly Peer[]>(EMPTY_PRESENCE);
 
   useEffect(() => {
     if (!engine) {
@@ -644,7 +646,7 @@ export function usePeers(scope?: ParticipantScope): ReadonlyArray<Peer> {
       return;
     }
     const presence = engine.presence;
-    const compute = (): ReadonlyArray<Peer> =>
+    const compute = (): readonly Peer[] =>
       groups.length === 0
         ? presence.others
         : presence.others.filter((p) =>
@@ -655,7 +657,7 @@ export function usePeers(scope?: ParticipantScope): ReadonlyArray<Peer> {
     // rarely; a frame of stale presence is harmless (same rationale as
     // useWatch's peers bridge).
     setPeers(compute());
-    return presence.onChange(() => setPeers(compute()));
+    return presence.onChange(() => { setPeers(compute()); });
   }, [engine, scopeKey]);
 
   return peers;
@@ -718,7 +720,7 @@ export function useSync<R extends SchemaRecord = SchemaRecord>(): Ablo<R> {
  */
 export function useSyncStore<T extends SyncStoreContract = SyncStoreContract>(): T {
   const sync = useContext(SyncContext);
-  if (!sync || !sync.store) {
+  if (!sync?.store) {
     throw new AbloValidationError(
       'useSyncStore: the sync engine has not yet initialized. Wrap ' +
         'consumers in <ClientSideSuspense> or guard on useSyncStatus().',

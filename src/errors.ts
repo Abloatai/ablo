@@ -155,18 +155,18 @@ export function docUrlForCode(code: ErrorCode): string {
 
 /** 401 — invalid/missing/expired credentials. */
 export class AbloAuthenticationError extends AbloError {
-  readonly type = 'AbloAuthenticationError' as const;
+  override readonly type = 'AbloAuthenticationError' as const;
 }
 
 /** 403 — credentials were valid but the action is forbidden (scope
  *  denial, revoked capability, role not authorized). */
 export class AbloPermissionError extends AbloError {
-  readonly type = 'AbloPermissionError' as const;
+  override readonly type = 'AbloPermissionError' as const;
 }
 
 /** 429 — rate limit exceeded. Consumers should back off before retry. */
 export class AbloRateLimitError extends AbloError {
-  readonly type = 'AbloRateLimitError' as const;
+  override readonly type = 'AbloRateLimitError' as const;
   readonly retryAfterSeconds?: number;
 
   constructor(
@@ -189,17 +189,17 @@ export class AbloRateLimitError extends AbloError {
 
 /** 409 — same `Idempotency-Key` reused with a different request body. */
 export class AbloIdempotencyError extends AbloError {
-  readonly type = 'AbloIdempotencyError' as const;
+  override readonly type = 'AbloIdempotencyError' as const;
 }
 
 /** Network / transport failure — TCP reset, DNS, timeout, abort. */
 export class AbloConnectionError extends AbloError {
-  readonly type = 'AbloConnectionError' as const;
+  override readonly type = 'AbloConnectionError' as const;
 }
 
 /** 400 / 422 — request payload was invalid. */
 export class AbloValidationError extends AbloError {
-  readonly type = 'AbloValidationError' as const;
+  override readonly type = 'AbloValidationError' as const;
 }
 
 /**
@@ -210,7 +210,7 @@ export class AbloValidationError extends AbloError {
  * caller can see exactly which targets were absent.
  */
 export class AbloNotFoundError extends AbloError {
-  readonly type = 'AbloNotFoundError' as const;
+  override readonly type = 'AbloNotFoundError' as const;
   /** The id(s) that matched no row. */
   readonly missingIds: readonly string[];
   constructor(message: string, missingIds: readonly string[], options?: { requestId?: string }) {
@@ -226,7 +226,7 @@ export class AbloNotFoundError extends AbloError {
 
 /** 5xx — server-side error. Usually retryable with backoff. */
 export class AbloServerError extends AbloError {
-  readonly type = 'AbloServerError' as const;
+  override readonly type = 'AbloServerError' as const;
 }
 
 /**
@@ -241,15 +241,15 @@ export class AbloServerError extends AbloError {
  * deck).
  */
 export class AbloStaleContextError extends AbloError {
-  readonly type = 'AbloStaleContextError' as const;
+  override readonly type = 'AbloStaleContextError' as const;
   /** Sync id at the caller's `readAt` when the write was attempted. */
   readonly readAt?: number;
   /** Entities that received deltas between `readAt` and the write. */
-  readonly conflicts?: ReadonlyArray<{
+  readonly conflicts?: readonly {
     readonly model: string;
     readonly id: string;
     readonly observedSyncId: number;
-  }>;
+  }[];
 
   constructor(
     message: string,
@@ -259,11 +259,11 @@ export class AbloStaleContextError extends AbloError {
       requestId?: string;
       cause?: unknown;
       readAt?: number;
-      conflicts?: ReadonlyArray<{
+      conflicts?: readonly {
         readonly model: string;
         readonly id: string;
         readonly observedSyncId: number;
-      }>;
+      }[];
     },
   ) {
     super(message, options);
@@ -285,7 +285,7 @@ export class AbloStaleContextError extends AbloError {
  * last underlying conflict that drove the final retry is on `.cause`.
  */
 export class AbloContentionError extends AbloError {
-  readonly type = 'AbloContentionError' as const;
+  override readonly type = 'AbloContentionError' as const;
   /** The contended model + row that could not be written. */
   readonly model: string;
   readonly id: string;
@@ -408,8 +408,8 @@ export function formatClaimedErrorMessage(args: {
  * (it queues fairly) rather than blocking the read.
  */
 export class AbloClaimedError extends AbloError {
-  readonly type = 'AbloClaimedError' as const;
-  readonly claims?: ReadonlyArray<ClaimErrorClaim>;
+  override readonly type = 'AbloClaimedError' as const;
+  readonly claims?: readonly ClaimErrorClaim[];
 
   constructor(
     message: string,
@@ -418,7 +418,7 @@ export class AbloClaimedError extends AbloError {
       httpStatus?: number;
       requestId?: string;
       cause?: unknown;
-      claims?: ReadonlyArray<ClaimErrorClaim>;
+      claims?: readonly ClaimErrorClaim[];
     },
   ) {
     super(message, options);
@@ -575,7 +575,7 @@ export class SyncSessionError extends AbloAuthenticationError {
   readonly isSessionError = true;
   readonly statusCode: number;
 
-  constructor(message: string, statusCode: number = 401) {
+  constructor(message: string, statusCode = 401) {
     super(message, { httpStatus: statusCode, code: 'session_expired' });
     this.name = 'SyncSessionError';
     this.statusCode = statusCode;
@@ -593,7 +593,7 @@ export class SyncSessionError extends AbloAuthenticationError {
       return true;
     }
     if (error && typeof error === 'object' && 'isSessionError' in error) {
-      return (error as { isSessionError: boolean }).isSessionError === true;
+      return (error as { isSessionError: boolean }).isSessionError;
     }
     return false;
   }
@@ -624,6 +624,20 @@ export class SyncSessionError extends AbloAuthenticationError {
     // permission failure, not a session error.
     return status === 401;
   }
+}
+
+/**
+ * WS-close analog of {@link SyncSessionError.isSessionErrorResponse}'s
+ * access-vs-session split: `true` for close reasons that mean the SHORT-LIVED
+ * access credential (`ek_`/`rk_`) passed its expiry — the hub's keepalive
+ * reaper closes such sockets with `4001 'credential_expired'`. Re-mintable
+ * from the still-valid login, so the connection layer silently re-mints and
+ * reconnects; never a sign-out, never a local-data clear. Every OTHER session
+ * close reason (key revocation, genuine login loss) stays terminal — a
+ * revoked credential must not be silently re-minted around.
+ */
+export function isAccessCredentialExpiryCloseReason(reason: string): boolean {
+  return reason === 'credential_expired' || classifyRecovery(reason) === 'access_credential_expiry';
 }
 
 // ── HTTP → class mapping ──────────────────────────────────────────────
@@ -737,7 +751,7 @@ export function errorFromWire(
     httpStatus?: number;
     requestId?: string;
     requiredCapability?: RequiredCapability;
-    claims?: ReadonlyArray<ClaimErrorClaim>;
+    claims?: readonly ClaimErrorClaim[];
   } = {},
 ): AbloError {
   const { code, requestId, requiredCapability, claims } = opts;

@@ -72,7 +72,7 @@ export function createPresenceStream(
 
   // ── Others ───────────────────────────────────────────────────────
   const othersById = new Map<string, Peer>();
-  let othersSnapshot: ReadonlyArray<Peer> = Object.freeze([]);
+  let othersSnapshot: readonly Peer[] = Object.freeze([]);
   const listeners = new Set<() => void>();
 
   const notifyListeners = () => {
@@ -88,7 +88,7 @@ export function createPresenceStream(
 
   // ── Wire wiring ──────────────────────────────────────────────────
   let attached: SyncWebSocket | null = null;
-  const unsubs: Array<() => void> = [];
+  const unsubs: (() => void)[] = [];
 
   function attach(t: SyncWebSocket): void {
     if (attached) return; // idempotent
@@ -229,7 +229,7 @@ export function createPresenceStream(
       };
     },
     [Symbol.asyncIterator]() {
-      return asyncIteratorFrom<ReadonlyArray<Peer>>(
+      return asyncIteratorFrom<readonly Peer[]>(
         (onChange) => {
           listeners.add(onChange);
           return () => {

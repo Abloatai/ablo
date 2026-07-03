@@ -17,7 +17,7 @@
  */
 
 import { z } from 'zod';
-import type { SourceOperation } from './index.js';
+import type { SourceOperation } from './types.js';
 
 const jsonObject = z.record(z.string(), z.unknown());
 

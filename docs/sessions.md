@@ -53,7 +53,7 @@ return Response.json({ token });  // return ONLY the token to the browser
 A user session has **full data authority** within its org — no operation
 allowlist. It's the human acting as themselves.
 
-Build a browser `Ablo` client whose `getToken` fetches from that route, and pass
+Point a browser `Ablo` client's `authEndpoint` at that route, and pass
 the **instance** to [`<AbloProvider>`](/react). The client fetches the token,
 opens the connection, and re-mints before expiry — your app writes no token
 plumbing:
@@ -67,10 +67,7 @@ import { schema } from '@/ablo.schema';
 
 const ablo = Ablo({
   schema,
-  getToken: () =>
-    fetch('/api/ablo-session', { method: 'POST' })
-      .then((r) => r.json())
-      .then((d) => d.token),
+  authEndpoint: '/api/ablo-session',
 });
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -81,8 +78,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
 The client owns auth, the credential lifecycle, and the connection; the provider
 is the thin reactive binding over it (Stripe's `<Elements stripe={...}>` model).
 Build the client **once** at module scope — a new instance per render tears down
-the socket. `authEndpoint: '/api/ablo-session'` is accepted as sugar for the
-`getToken` fetch above if you prefer a URL.
+the socket. Need custom headers or a
+body on the exchange? `authEndpoint` also accepts an async resolver that
+returns the token.
 
 ## Agent sessions (`rk_`)
 

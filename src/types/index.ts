@@ -147,7 +147,7 @@ export interface ModelMetadata {
    * product-neutral: the engine no longer hardcodes which models carry
    * `organizationId` / `createdBy` — the consumer's schema declares it.
    */
-  autoFill?: ReadonlyArray<{ field: string; from: 'organizationId' | 'userId' }>;
+  autoFill?: readonly { field: string; from: 'organizationId' | 'userId' }[];
   /**
    * Fields whose absence makes a stored row orphaned. When healing
    * encounters a record missing any of these fields, it returns `null`
@@ -281,4 +281,40 @@ export interface PartialIndexInfo {
 // (PresenceStream,
 // ClaimStream, Snapshot, etc.) consumed by `Ablo({...}).presence`,
 // `.claims`, `.snapshot()`.
-export * from "./streams.js";
+//
+// Explicit named list (not `export *`): every addition to streams.ts must be
+// a deliberate export decision here, so new symbols don't silently become
+// public API of the published package.
+export type {
+  // Coordination wire shapes, canonical in `../coordination/schema` and
+  // re-exported through streams.ts.
+  TargetRange,
+  OnStaleMode,
+  WireClaim,
+  ClaimRejection,
+  PresenceKind,
+  ParticipantKind,
+  // Participant identity (canonical leaf: `./participant.ts`).
+  ParticipantRef,
+  // Streams' own types.
+  JsonValue,
+  ConfirmationState,
+  AgentDelta,
+  Snapshot,
+  ContextChange,
+  ClaimTarget,
+  PresenceTarget,
+  PresenceStream,
+  Activity,
+  Peer,
+  PresenceUpdatePayload,
+  ClaimLeaseOptions,
+  Duration,
+  ClaimOptions,
+  ClaimStream,
+  ClaimLost,
+  ClaimStatus,
+  ClaimWaitOptions,
+  Claim,
+  HeldClaim,
+} from './streams.js';

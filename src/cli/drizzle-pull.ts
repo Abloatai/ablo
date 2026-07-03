@@ -126,8 +126,8 @@ export async function lowerDrizzleModule(mod: Record<string, unknown>): Promise<
     const { foreignKeys } = getTableConfig(table);
     for (const fk of foreignKeys) {
       const ref = fk.reference();
-      if (ref.columns.length !== 1) continue; // composite FK → not a single belongsTo
-      const localCol = ref.columns[0];
+      const [localCol, ...extraCols] = ref.columns;
+      if (localCol === undefined || extraCols.length > 0) continue; // composite FK → not a single belongsTo
       const fkField = fieldKeyByColumn.get(localCol) ?? fieldKeyByColName.get(localCol.name) ?? localCol.name;
       const target = getTableName(ref.foreignTable);
       relations.push({ name: stripIdSuffix(fkField), target, fkField });
@@ -177,6 +177,7 @@ export function parseDrizzlePullArgs(argv: readonly string[]): DrizzlePullArgs {
   let force = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === undefined) continue; // unreachable: i is bounded by argv.length
     switch (arg) {
       case '--schema':
         schema = argv[++i] ?? schema;
@@ -242,7 +243,7 @@ export async function drizzlePull(argv: readonly string[]): Promise<void> {
     result = await buildSchemaSourceFromDrizzle({ mod, importPath: args.importPath });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const hint = /Cannot find package 'drizzle-orm'/.test(msg)
+    const hint = msg.includes('Cannot find package \'drizzle-orm\'')
       ? pc.dim(` (install ${pc.bold('drizzle-orm')} in this project)`)
       : '';
     console.error(pc.red(`  Couldn't load the schema: ${msg}`) + hint);

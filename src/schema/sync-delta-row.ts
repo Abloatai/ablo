@@ -17,7 +17,7 @@
  *   - {@link deltaProvenanceSchema}  — which AI task caused it. `control` plane.
  *
  * {@link syncDeltaRowSchema} is the full stored row (core ∪ attribution ∪
- * provenance). {@link DELTA_PLANES} declares each slice's plane so provisioning
+ * provenance). {@link DELTA_RESIDENCY} declares each slice's plane so provisioning
  * (P1) can derive "what a customer DB gets" from the schema, not hand-code it.
  *
  * Distinct from the WIRE `SyncDelta` (`sync/SyncWebSocket.ts`, client-facing) and
@@ -28,7 +28,7 @@
  */
 
 import { z } from 'zod';
-import type { SchemaPlane } from './plane.js';
+import type { ModelResidency } from './residency.js';
 
 // ── Enums (mirror the Postgres enums; @@map name in the comment) ──────────────
 
@@ -119,8 +119,8 @@ export type SyncDeltaRow = z.infer<typeof syncDeltaRowSchema>;
  * hand-coding the boundary; the BYO outbox writes the `tenant` slice and the
  * relay enriches the `control` slices in Ablo's own database.
  */
-export const DELTA_PLANES = {
+export const DELTA_RESIDENCY = {
   core: 'tenant',
   attribution: 'control',
   provenance: 'control',
-} as const satisfies Record<string, SchemaPlane>;
+} as const satisfies Record<string, ModelResidency>;

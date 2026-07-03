@@ -102,7 +102,7 @@ interface ModelColumns {
   readonly columnToField: ReadonlyMap<string, string>;
 }
 
-function buildColumnMaps(schema: Schema<SchemaRecord>): ReadonlyMap<string, ModelColumns> {
+function buildColumnMaps(schema: Schema): ReadonlyMap<string, ModelColumns> {
   const json = toSchemaJSON(schema);
   const out = new Map<string, ModelColumns>();
   for (const [key, model] of Object.entries(json.models)) {
@@ -227,8 +227,9 @@ export function kyselyDataSource<S extends SchemaRecord>(
           .where('client_tx_id', '=', change.clientTxId)
           .limit(1)
           .execute();
-        if (cached.length > 0) {
-          const response = cached[0].response;
+        const cachedRow = cached[0];
+        if (cachedRow) {
+          const response = cachedRow.response;
           return {
             rows: (typeof response === 'string' ? JSON.parse(response) : response) as Row[],
           };
@@ -283,7 +284,7 @@ export function kyselyDataSource<S extends SchemaRecord>(
           cursor: String(r.cursor),
         }),
       );
-      return { events, nextCursor: events.length > 0 ? events[events.length - 1].cursor : null };
+      return { events, nextCursor: events.at(-1)?.cursor ?? null };
     },
   };
 }

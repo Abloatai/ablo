@@ -66,7 +66,4 @@ const _fallback: SyncEngineContext = {
     executeArchive: () => Promise.resolve(),
     executeUnarchive: () => Promise.resolve(),
   },
-  mutationDispatcher: {
-    dispatch: () => Promise.resolve(),
-  },
 };

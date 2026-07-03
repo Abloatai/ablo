@@ -36,8 +36,6 @@ export interface WorkspaceMetadata {
   updatedAt: Date;
   schemaHash?: string;
   syncGroups?: string[];
-  // Optional per-entity version vector for smarter resume
-  versions?: Record<string, number>;
 }
 
 /**
@@ -114,7 +112,7 @@ export class DatabaseManager {
   async calculateDatabaseInfo(
     userId: string,
     workspaceId: string,
-    userVersion: number = 1
+    userVersion = 1
   ): Promise<DatabaseInfo> {
     // Get schema hash from the active ModelRegistry
     const schemaHash = hasActiveRegistry()
@@ -155,7 +153,7 @@ export class DatabaseManager {
       schemaHash,
       schemaVersion,
       userVersion,
-      createdAt: existingInfo?.createdAt || new Date(),
+      createdAt: existingInfo?.createdAt ?? new Date(),
       updatedAt: new Date(),
     };
   }
@@ -166,7 +164,7 @@ export class DatabaseManager {
   private generateDatabaseName(
     userId: string,
     workspaceId: string,
-    userVersion: number = 1
+    userVersion = 1
   ): string {
     // Combine userId, workspaceId, and userVersion for unique database
     const combined = `${userId}:${workspaceId}:${userVersion}`;
@@ -203,8 +201,8 @@ export class DatabaseManager {
         resolve();
       };
 
-      tx.onerror = () => reject(tx.error);
-      request.onerror = () => reject(request.error);
+      tx.onerror = () => { reject(tx.error); };
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -219,8 +217,8 @@ export class DatabaseManager {
       const store = tx.objectStore('databases');
       const request = store.get(name);
 
-      request.onsuccess = () => resolve(request.result || null);
-      request.onerror = () => reject(request.error);
+      request.onsuccess = () => { resolve(request.result ?? null); };
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -236,8 +234,8 @@ export class DatabaseManager {
       const index = store.index('userId');
       const request = index.getAll(userId);
 
-      request.onsuccess = () => resolve(request.result || []);
-      request.onerror = () => reject(request.error);
+      request.onsuccess = () => { resolve(request.result || []); };
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -300,19 +298,21 @@ export class DatabaseManager {
         }
 
         const meta = {
-          lastSyncId: data.lastSyncId || 0,
-          firstSyncId: data.firstSyncId || 0,
-          backendDatabaseVersion: data.backendDatabaseVersion || 1,
-          subscribedSyncGroups: data.subscribedSyncGroups || [],
+          lastSyncId: data.lastSyncId ?? 0,
+          firstSyncId: data.firstSyncId ?? 0,
+          backendDatabaseVersion: data.backendDatabaseVersion ?? 1,
+          subscribedSyncGroups: data.subscribedSyncGroups ?? [],
           updatedAt: data.updatedAt ? new Date(data.updatedAt) : new Date(),
           schemaHash: data.schemaHash,
           syncGroups: data.syncGroups,
-          versions: data.versions || undefined,
+          // NOTE: old persisted records may still carry a `versions` key
+          // (the removed per-entity version vector) — tolerated by simply
+          // not picking it here.
         } as WorkspaceMetadata;
         resolve(meta);
       };
 
-      request.onerror = () => reject(request.error);
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -325,9 +325,9 @@ export class DatabaseManager {
       const store = tx.objectStore('__meta');
       const request = store.put(metadata, 'metadata');
 
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-      request.onerror = () => reject(request.error);
+      tx.oncomplete = () => { resolve(); };
+      tx.onerror = () => { reject(tx.error); };
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -345,7 +345,7 @@ export class DatabaseManager {
         resolve(data?.persisted === true);
       };
 
-      request.onerror = () => reject(request.error);
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -366,9 +366,9 @@ export class DatabaseManager {
 
       const request = store.put(persistenceData, modelName);
 
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-      request.onerror = () => reject(request.error);
+      tx.oncomplete = () => { resolve(); };
+      tx.onerror = () => { reject(tx.error); };
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -396,7 +396,7 @@ export class DatabaseManager {
         resolve(states);
       };
 
-      request.onerror = () => reject(request.error);
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -469,11 +469,11 @@ export class DatabaseManager {
 
         for (const db of databases) {
           // Count by user
-          databasesByUser[db.userId] = (databasesByUser[db.userId] || 0) + 1;
+          databasesByUser[db.userId] = (databasesByUser[db.userId] ?? 0) + 1;
 
           // Count schema versions
           const versionKey = `v${db.schemaVersion}`;
-          schemaVersions[versionKey] = (schemaVersions[versionKey] || 0) + 1;
+          schemaVersions[versionKey] = (schemaVersions[versionKey] ?? 0) + 1;
         }
 
         resolve({
@@ -484,7 +484,7 @@ export class DatabaseManager {
         });
       };
 
-      request.onerror = () => reject(request.error);
+      request.onerror = () => { reject(request.error); };
     });
   }
 

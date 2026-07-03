@@ -171,7 +171,6 @@ export class ClaimLog implements SyncObservabilityProvider {
   captureReconciliation(): void {}
   captureDeltaRetryExhausted(): void {}
   captureWebSocketError(): void {}
-  captureOfflineFlushFailure(): void {}
   captureSelfHealing(): void {}
   captureCommitZeroSyncId(): void {}
   startSpan<T>(_name: string, _op: string, fn: () => T): T {

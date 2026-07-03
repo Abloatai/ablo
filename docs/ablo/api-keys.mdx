@@ -25,7 +25,7 @@ Pick your row:
 |---|---|---|
 | **Server / worker / CLI** (can hold a secret) | your secret `sk_` — it defaults to `ABLO_API_KEY`, so usually pass **nothing** | `Ablo({ schema })` |
 | **Browser — read-only** | a publishable `pk_` (safe to ship, like a Stripe `pk_`) | `Ablo({ schema, apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY })` |
-| **Browser — writing as the signed-in user** | a function that fetches a short-lived per-user token from your own backend | `Ablo({ schema, apiKey: () => fetch('/api/ablo-session').then((r) => r.text()) })` |
+| **Browser — writing as the signed-in user** | `authEndpoint` — the route on your own backend that mints a short-lived per-user token | `Ablo({ schema, authEndpoint: '/api/ablo-session' })` |
 
 That's the whole story: one knob, filled by audience.
 
@@ -52,8 +52,9 @@ session model. For a read-only app you don't need any of this — just the `pk_`
 
 Server-side, because `apiKey` defaults to `process.env.ABLO_API_KEY`, most backend and agent
 code passes nothing. The secret `sk_` (and `databaseUrl`) are **server-only** — never in a
-browser bundle. There is no `getToken`, `authEndpoint`, or `as` option — `apiKey` (a string,
-or a function for the browser-write case) is the single credential knob.
+browser bundle. There is no `getToken` or `as` option — `apiKey` (the key a server holds)
+and `authEndpoint` (the mint route a browser points at) are the two credential
+knobs, and you set exactly one.
 
 ### Minting per-user / agent tokens (server-side, with your `sk_`)
 

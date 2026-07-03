@@ -36,7 +36,7 @@ export function selectModels<S extends SchemaRecord, K extends keyof S & string>
   const validators: Record<string, unknown> = {};
 
   for (const key of keys) {
-    const def = schema.models[key] as ModelDef | undefined;
+    const def = schema.models[key];
     if (!def) {
       throw new AbloValidationError(
         `selectModels: "${String(key)}" is not a model in the source schema`,
@@ -61,7 +61,7 @@ export function selectModels<S extends SchemaRecord, K extends keyof S & string>
       }
     }
 
-    models[key] = { ...def, relations } as ModelDef;
+    models[key] = { ...def, relations };
     validators[key] = (schema.validators as Record<string, unknown>)[key];
   }
 

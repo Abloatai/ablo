@@ -172,7 +172,7 @@ export function printConnectRecipe(args: ConnectArgs): void {
   );
 
   console.log(`  ${pc.bold('1.')} Enable logical decoding ${pc.dim('(then RESTART Postgres — wal_level is not reloadable)')}`);
-  console.log(`       ${pc.cyan(sql[0]!)}`);
+  console.log(`       ${pc.cyan(sql[0])}`);
   console.log(
     pc.dim(
       `       On Amazon RDS / Aurora you can't ALTER SYSTEM: set ${pc.bold('rds.logical_replication = 1')} in the\n` +
@@ -181,15 +181,15 @@ export function printConnectRecipe(args: ConnectArgs): void {
   );
 
   console.log(`\n  ${pc.bold('2.')} Publish the tables Ablo should read`);
-  console.log(`       ${pc.cyan(sql[1]!)}`);
+  console.log(`       ${pc.cyan(sql[1])}`);
   if (args.tables.length === 0) {
     console.log(pc.dim(`       (Scope it with ${pc.bold('ablo connect --tables a,b,c')} to publish a subset.)`));
   }
 
   console.log(`\n  ${pc.bold('3.')} Create a least-privilege replication role ${pc.dim('(pick your own password)')}`);
-  console.log(`       ${pc.cyan(sql[2]!)}`);
-  console.log(`       ${pc.cyan(sql[3]!)}`);
-  console.log(`       ${pc.cyan(sql[4]!)}`);
+  console.log(`       ${pc.cyan(sql[2])}`);
+  console.log(`       ${pc.cyan(sql[3])}`);
+  console.log(`       ${pc.cyan(sql[4])}`);
   console.log(
     pc.dim(
       `       On Amazon RDS, the REPLICATION attribute is granted, not set directly:\n` +
@@ -320,11 +320,12 @@ export async function probeReadiness(
     `SELECT puballtables FROM pg_publication WHERE pubname = $1`,
     [publication] as never[],
   )) as unknown as PublicationRow[];
+  const pubRow = pubRows[0];
   items.push(
-    pubRows.length > 0
+    pubRow
       ? {
           ok: true,
-          label: `publication ${pc.bold(publication)} exists ${pc.dim(pubRows[0]!.puballtables ? '(all tables)' : '(table subset)')}`,
+          label: `publication ${pc.bold(publication)} exists ${pc.dim(pubRow.puballtables ? '(all tables)' : '(table subset)')}`,
         }
       : {
           ok: false,
@@ -528,13 +529,6 @@ async function runRegister(): Promise<void> {
   console.error(pc.red(`\n  Registration failed: ${message}`));
   if (code === 'forbidden') {
     console.error(pc.dim(`  Registering a database needs a ${pc.bold('secret')} key (sk_…). Run ${pc.bold('ablo login')} for one.`));
-  } else if (code === 'datasource_direct_deprecated') {
-    console.error(
-      pc.dim(
-        `  This deployment doesn’t accept new connection-string registrations yet. The operator must enable it ` +
-          `(${pc.bold('ABLO_ALLOW_DIRECT_DATASOURCE=true')}) — see ${pc.bold('docs/runbooks/connect-customer-database-byo-replication.md')}.`,
-      ),
-    );
   } else if (code === 'datasource_connection_unsupported') {
     console.error(
       pc.dim(`  This deployment can’t accept connection strings — use a self-hosted/hosted engine, or the signed endpoint fallback.`),

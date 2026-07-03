@@ -25,8 +25,9 @@ import { ModelScope } from '../ObjectPool.js';
 import { AbloValidationError } from '../errors.js';
 import type { Database } from '../Database.js';
 import type { Model } from '../Model.js';
-import type { ModelRegistry } from '../ModelRegistry.js';
+import type { ModelRegistry, RegisteredModelClass } from '../ModelRegistry.js';
 import { postQuery } from '../query/client.js';
+import type { RecoveryClass } from '../errorCodes.js';
 import type { LoadWhere, Query, WhereClause, WhereOp, WherePrimitive } from '../query/types.js';
 import type { Schema } from '../schema/schema.js';
 
@@ -115,6 +116,17 @@ export class HydrationCoordinator {
    */
   private readonly hydratedKeys = new Set<string>();
   private authTokenProvider: (() => string | null) | null = null;
+  /**
+   * The auth-recovery backbone (the store's `recoverFromAuthRejection`),
+   * late-bound like {@link setAuthTokenProvider} because the store doesn't
+   * exist yet when the coordinator is constructed. Handed to `postQuery` so a
+   * 401 on the lazy lane re-mints through the SAME single-flight path the WS
+   * probe and proactive pre-roll use, then replays once — instead of silently
+   * returning empty rows against an expired key forever.
+   */
+  private credentialRecovery:
+    | ((recovery: RecoveryClass) => Promise<'retry' | 'stop'>)
+    | null = null;
 
   constructor(private readonly opts: HydrationCoordinatorOptions) {
     this.authTokenProvider = opts.getAuthToken ?? opts.getCapabilityToken ?? null;
@@ -127,6 +139,13 @@ export class HydrationCoordinator {
    */
   setAuthTokenProvider(provider: () => string | null): void {
     this.authTokenProvider = provider;
+  }
+
+  /** Late-bind the auth-recovery backbone. See {@link credentialRecovery}. */
+  setCredentialRecovery(
+    recover: (recovery: RecoveryClass) => Promise<'retry' | 'stop'>,
+  ): void {
+    this.credentialRecovery = recover;
   }
 
   /** @deprecated Use `setAuthTokenProvider`. */
@@ -163,16 +182,22 @@ export class HydrationCoordinator {
 
     const work = this.runFetch(modelName, typename, ModelClass, clauses, options, queryKey);
     this.inFlight.set(queryKey, work);
-    work.finally(() => {
-      this.inFlight.delete(queryKey);
-    });
+    // The rejection (if any) reaches callers via the returned `work`; this
+    // side-chain only clears the single-flight slot. Without the trailing
+    // catch, `.finally()` mirrors the rejection into a second, unhandled
+    // promise even when every caller handles theirs.
+    void work
+      .finally(() => {
+        this.inFlight.delete(queryKey);
+      })
+      .catch(() => undefined);
     return work;
   }
 
   private async runFetch(
     modelName: string,
     typename: string,
-    ModelClass: typeof Model,
+    ModelClass: RegisteredModelClass,
     clauses: readonly WhereClause[],
     options: FetchOptions<unknown> | undefined,
     queryKey: string,
@@ -238,7 +263,7 @@ export class HydrationCoordinator {
   private async readLocal(
     modelName: string,
     typename: string,
-    ModelClass: typeof Model,
+    ModelClass: RegisteredModelClass,
     clauses: readonly WhereClause[],
     hasExpand: boolean,
     expand: readonly string[] | undefined,
@@ -411,7 +436,7 @@ export class HydrationCoordinator {
       const all = await store.getAll();
       if (!Array.isArray(all)) return [];
       const idSet = new Set(parentIds);
-      return all.filter((r) => idSet.has((r as Record<string, unknown>)[foreignKey] as string));
+      return all.filter((r) => idSet.has((r)[foreignKey] as string));
     } catch {
       return [];
     }
@@ -443,7 +468,7 @@ export class HydrationCoordinator {
       const existing = this.opts.objectPool.get(obj.id);
       if (existing) {
         const stamped = this.stampTypename(obj, typename) as Record<string, unknown>;
-        existing.updateFromData(stamped as never);
+        existing.updateFromData(stamped);
         return existing;
       }
       return null;
@@ -505,6 +530,7 @@ export class HydrationCoordinator {
       {
         baseUrl: this.opts.baseUrl,
         getAuthToken: this.authTokenProvider ?? undefined,
+        recoverCredential: this.credentialRecovery ?? undefined,
       },
       { queries: [query] },
     );
@@ -653,7 +679,7 @@ function applyLimit<T>(arr: T[], limit: number | undefined): T[] {
 
 function scanPool<M>(
   pool: ObjectPool,
-  ModelClass: typeof Model,
+  ModelClass: RegisteredModelClass,
   clauses: readonly WhereClause[],
 ): M[] {
   const all = pool.getByType(ModelClass) as unknown as M[];
@@ -688,12 +714,12 @@ async function scanIdb(
     const indexedKeys = Object.keys(eqClauses).filter(
       (k) => k !== 'id' && typeof eqClauses[k] === 'string',
     );
-    if (indexedKeys.length === 1) {
-      const idxKey = indexedKeys[0];
+    const idxKey = indexedKeys.length === 1 ? indexedKeys[0] : undefined;
+    if (idxKey !== undefined) {
       try {
         const rows = await store.getAllFromIndex(idxKey, eqClauses[idxKey] as string);
         if (Array.isArray(rows)) {
-          return rows.filter((r) => matchesClauses(r as Record<string, unknown>, clauses));
+          return rows.filter((r) => matchesClauses(r, clauses));
         }
       } catch {
         // index doesn't exist — fall through to full-scan path.
@@ -704,7 +730,7 @@ async function scanIdb(
   try {
     const rows = await store.getAll();
     return Array.isArray(rows)
-      ? rows.filter((r) => matchesClauses(r as Record<string, unknown>, clauses))
+      ? rows.filter((r) => matchesClauses(r, clauses))
       : [];
   } catch {
     return [];

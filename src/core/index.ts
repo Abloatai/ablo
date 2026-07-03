@@ -49,7 +49,6 @@ export type {
   SyncLogger,
   SyncObservabilityProvider,
   MutationExecutor,
-  MutationDispatcher,
   SessionErrorDetector,
   OnlineStatusProvider,
   CommitResult,

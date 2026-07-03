@@ -7,19 +7,12 @@
  * through their getter without being manually patched one by one.
  */
 
-/**
- * WebSocket subprotocols used to carry the bearer credential OUT of the URL.
- *
- * Browsers cannot set an `Authorization` header on a WebSocket, so the SDK
- * offers the token as a `Sec-WebSocket-Protocol` value — `ablo.bearer.<token>` —
- * alongside the real `ablo.sync.v1` protocol the server selects. This keeps the
- * credential out of the query string, which ALB access logs, proxies, and
- * browser history capture. The server reads the token from the subprotocol and
- * echoes back ONLY `ablo.sync.v1`, never the token-bearing value. Shared with
- * the sync-server so client and server can never drift on the wire format.
- */
-export const WS_BEARER_SUBPROTOCOL_PREFIX = 'ablo.bearer.';
-export const WS_SYNC_SUBPROTOCOL = 'ablo.sync.v1';
+// The WS bearer-subprotocol constants moved to `../wire/protocol.js` — they are
+// the wire contract shared with the sync-server (which imports them via
+// `@abloatai/ablo/wire`, never the root barrel). Re-exported here so
+// existing SDK-side importers (`SyncWebSocket`, `source/connector-protocol`)
+// keep their import path.
+export { WS_BEARER_SUBPROTOCOL_PREFIX, WS_SYNC_SUBPROTOCOL } from '../wire/protocol.js';
 
 export interface AuthCredentialSource {
   getAuthToken(): string | null;

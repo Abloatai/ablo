@@ -120,9 +120,7 @@ export async function resolveParticipantIdentity(
       },
       exchangeArgs: {
         baseUrl,
-        participantKind: (kind === 'agent' ? 'agent' : 'system') as
-          | 'agent'
-          | 'system',
+        participantKind: (kind === 'agent' ? 'agent' : 'system'),
         participantId: options.agentId ?? options.user?.id,
         wideScope: true,
         ttlSeconds: 3600,
@@ -264,19 +262,18 @@ async function resolveHosted(input: HostedInput): Promise<ResolvedIdentity> {
   const baseUrl = input.baseUrl;
   // The refresh path re-runs `exchangeApiKey` with a freshly-resolved apiKey, so
   // it needs the same argument bag the policy used for the initial exchange.
+  const participantKind: 'agent' | 'system' = input.kind === 'agent' ? 'agent' : 'system';
   const exchangeArgs = {
     baseUrl,
-    participantKind: (input.kind === 'agent' ? 'agent' : 'system') as
-      | 'agent'
-      | 'system',
+    participantKind,
     participantId: input.options.agentId ?? input.options.user?.id,
     wideScope: true,
     ttlSeconds: 3600,
   };
 
-	  input.bootstrapHelper.setCacheScope(exchange.scope.organizationId);
-	  input.bootstrapHelper.setSyncGroups(exchange.scope.syncGroups);
-	  input.auth.setAuthToken(exchange.token);
+  input.bootstrapHelper.setCacheScope(exchange.scope.organizationId);
+  input.bootstrapHelper.setSyncGroups(exchange.scope.syncGroups);
+  input.auth.setAuthToken(exchange.token);
 
   // Cap tokens have a server-set TTL (3600s by default). Without
   // proactive refresh the WS would either get force-closed at expiry
@@ -296,11 +293,11 @@ async function resolveHosted(input: HostedInput): Promise<ResolvedIdentity> {
           { code: 'apikey_missing' },
         );
       }
-	      const next = await exchangeApiKey({
-	        ...exchangeArgs,
-	        apiKey: freshApiKey,
-	      });
-	      input.auth.setAuthToken(next.token);
+      const next = await exchangeApiKey({
+        ...exchangeArgs,
+        apiKey: freshApiKey,
+      });
+      input.auth.setAuthToken(next.token);
       return { expiresAtMs: Date.parse(next.expiresAt) };
     },
     onError: (err) => {

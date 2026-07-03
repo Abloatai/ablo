@@ -160,7 +160,7 @@ export class ConnectionManager {
   // Observable state
   state: ConnectionState = 'connected';
   offlineSince: Date | null = null;
-  attempt: number = 0;
+  attempt = 0;
   lastProbeResult: ProbeResult | null = null;
 
   // Private
@@ -168,10 +168,10 @@ export class ConnectionManager {
   private backoffTimer: ReturnType<typeof setTimeout> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
-  private stuckCycles: number = 0;
+  private stuckCycles = 0;
   /** Consecutive access-key re-mints in the current recovery cycle; reset on
    *  reaching `connected`. See {@link MAX_CREDENTIAL_REFRESH_ATTEMPTS}. */
-  private credentialRefreshAttempts: number = 0;
+  private credentialRefreshAttempts = 0;
   private disposed = false;
   private readonly baseUrl?: string;
   private readonly getAuthToken?: AuthTokenGetter;
@@ -469,7 +469,7 @@ export class ConnectionManager {
         if (event.type === 'WS_DISCONNECTED') {
           this.callbacks?.onDisconnectWebSocket();
         }
-        this.runProbe();
+        void this.runProbe().catch(this.captureEffectFailure('probe'));
         break;
 
       case 'waiting_for_network':
@@ -477,11 +477,11 @@ export class ConnectionManager {
         break;
 
       case 'reconnecting':
-        this.runReconnect();
+        void this.runReconnect().catch(this.captureEffectFailure('reconnect'));
         break;
 
       case 'refreshing_credential':
-        this.runRefreshCredential();
+        void this.runRefreshCredential().catch(this.captureEffectFailure('refresh-credential'));
         break;
 
       case 'backoff':
@@ -517,6 +517,22 @@ export class ConnectionManager {
   }
 
   // ── Async operations ─────────────────────────────────────────────────
+
+  /**
+   * FSM effects are fire-and-forget by design (`onEnterState` is sync). Each
+   * effect catches its own operational failures and maps them onto an FSM
+   * event, so a rejection here means the machine wedged mid-transition
+   * (`send()` or a transition listener threw) with no retry timer armed past
+   * it — capture it instead of losing the reconnect loop silently.
+   */
+  private captureEffectFailure(effect: string): (error: unknown) => void {
+    return (error: unknown) => {
+      getContext().observability.captureWebSocketError({
+        context: `connection-fsm-${effect}`,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    };
+  }
 
   private async runProbe(): Promise<void> {
     try {
@@ -776,7 +792,7 @@ export class ConnectionManager {
         // would either serve cached content forever or fail and leave
         // the user with a broken page.
         const browserOnline =
-          typeof navigator === 'undefined' || navigator.onLine === true;
+          typeof navigator === 'undefined' || navigator.onLine;
         if (this.stuckCycles >= MAX_STUCK_CYCLES_BEFORE_RELOAD && browserOnline) {
           getContext().logger.debug('[ConnectionManager] Watchdog: sustained stuck — hard reload');
           getContext().observability.breadcrumb(

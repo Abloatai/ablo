@@ -99,12 +99,12 @@ export interface BootstrapResult {
    * was disconnected — without this, DELETE deltas persist to IDB but
    * ghost entities linger in the pool until a full reload.
    */
-  deltaResults?: Array<{
+  deltaResults?: {
     action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
     modelName: string;
     modelId: string;
     data?: ModelData | null;
-  }>;
+  }[];
 }
 
 export class Database {
@@ -233,7 +233,7 @@ export class Database {
   ): void {
     if (modelName === 'Activity') return;
 
-    const requiredFields = this.essentialFields[modelName] || [];
+    const requiredFields = this.essentialFields[modelName] ?? [];
     const preserved = requiredFields.filter(
       (field) => existing[field] !== undefined && delta[field] === undefined
     );
@@ -248,7 +248,7 @@ export class Database {
     }
   }
 
-  async open(userId: string, organizationId: string, version: number = 1): Promise<void> {
+  async open(userId: string, organizationId: string, version = 1): Promise<void> {
     // Reset closing flag when opening (in case of reopen)
     this.isClosing = false;
 
@@ -503,7 +503,7 @@ export class Database {
       type,
       modelsToLoad,
       lastSyncId,
-      syncGroups: metadata?.syncGroups || [],
+      syncGroups: metadata?.syncGroups ?? [],
     };
   }
 
@@ -547,7 +547,7 @@ export class Database {
         lastSyncId: bootstrapData.lastSyncId,
         hasModels: !!bootstrapData.models,
         hasDeltas: !!bootstrapData.deltas,
-        deltaCount: bootstrapData.deltaCount || 0,
+        deltaCount: bootstrapData.deltaCount ?? 0,
       });
 
       // ✅ Only clear AFTER successful fetch (transactional safety)
@@ -558,7 +558,7 @@ export class Database {
 
       // Handle partial bootstrap (delta batch)
       if (bootstrapData.type === 'partial') {
-        const deltas = bootstrapData.deltas || [];
+        const deltas = bootstrapData.deltas ?? [];
 
         getContext().logger.info('Processing partial bootstrap with delta batch', {
           deltaCount: deltas.length,
@@ -783,7 +783,7 @@ export class Database {
         : data;
     const compacted =
       dataWithId && typeof dataWithId === 'object'
-        ? this.compactRecord(modelName, dataWithId as ModelData)
+        ? this.compactRecord(modelName, dataWithId)
         : dataWithId;
 
     switch (actionType) {
@@ -971,7 +971,7 @@ export class Database {
    * - Prevents 404 errors from fetching already-deleted entities
    */
   async processDeltaBatch(
-    deltas: Array<{
+    deltas: {
       syncId?: number;
       /**
        * Includes 'G' and 'S' defensively — they're routed upstream and
@@ -992,15 +992,15 @@ export class Database {
        * have a client transaction.
        */
       transactionId?: string;
-    }>
+    }[]
   ): Promise<{
-    results: Array<{
+    results: {
       action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
       modelName: string;
       modelId: string;
       data?: ModelData | null;
       transactionId?: string;
-    }>;
+    }[];
     /**
      * Highest syncId whose IDB store transaction actually committed in this
      * batch. The runtime delta cursor (WS `lastSyncId`, server-side
@@ -1030,13 +1030,13 @@ export class Database {
     // shape, sequential apply per delta — fine since inMemory mode
     // doesn't need IDB transaction batching for performance.
     if (this.inMemory) {
-      const inMemResults: Array<{
+      const inMemResults: {
         action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
         modelName: string;
         modelId: string;
         data?: ModelData | null;
         transactionId?: string;
-      }> = [];
+      }[] = [];
       let inMemPersistedSyncId = 0;
       for (const delta of deltas) {
         const single = await this.processDelta({
@@ -1059,13 +1059,13 @@ export class Database {
     }
 
     // Prepare results aligned with input order
-    const results: Array<{
+    const results = new Array<{
       action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
       modelName: string;
       modelId: string;
       data?: ModelData | null;
       transactionId?: string;
-    }> = new Array(deltas.length);
+    }>(deltas.length);
 
     // ========================================================================
     // LINEAR-STYLE CONFLICT RESOLUTION: Build DELETE syncId index
@@ -1109,7 +1109,7 @@ export class Database {
     // skipped rows fall into the already-seen range forever — the
     // observed "postgres has the deck, IDB doesn't, full reload can't
     // recover it" failure mode.
-    const deltasByStore = new Map<string, Array<{ idx: number; delta: (typeof deltas)[number] }>>();
+    const deltasByStore = new Map<string, { idx: number; delta: (typeof deltas)[number] }[]>();
     let highestSyncId = 0;
     let highestPersistedSyncId = 0;
     let skippedDueToConflict = 0;
@@ -1137,7 +1137,7 @@ export class Database {
 
         if (deleteSyncId !== undefined) {
           // DELETE exists for this entity
-          const deltaSyncId = delta.syncId || 0;
+          const deltaSyncId = delta.syncId ?? 0;
 
           if (deleteSyncId >= deltaSyncId) {
             // DELETE has equal or higher syncId - skip this UPDATE/INSERT
@@ -1278,13 +1278,13 @@ export class Database {
         const objectStore = tx.objectStore(modelName);
 
         // Stage results for this store; only commit to global results when tx completes successfully
-        const stagedResults: Array<{
+        const stagedResults: {
           action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
           modelName: string;
           modelId: string;
           data?: any;
           idx: number;
-        }> = [];
+        }[] = [];
 
         // Step 4: Process all deltas synchronously within transaction (no await!)
         for (const { idx, delta } of storeDeltas) {
@@ -1300,7 +1300,7 @@ export class Database {
               : data;
           const compacted =
             dataWithId && typeof dataWithId === 'object'
-              ? this.compactRecord(modelName, dataWithId as ModelData)
+              ? this.compactRecord(modelName, dataWithId)
               : dataWithId;
 
           switch (actionType) {
@@ -1397,8 +1397,8 @@ export class Database {
 
         // Wait for transaction to complete
         await new Promise<void>((resolve, reject) => {
-          tx.oncomplete = () => resolve();
-          tx.onerror = () => reject(tx.error);
+          tx.oncomplete = () => { resolve(); };
+          tx.onerror = () => { reject(tx.error); };
         });
         // Only commit staged results to the global results if the transaction succeeded.
         // Also advance `highestPersistedSyncId` ONLY for deltas in this successful tx
@@ -1545,15 +1545,7 @@ export class Database {
     }
 
     const metadata = await this.databaseManager.getWorkspaceMetadata(this.workspaceDb);
-    return metadata?.lastSyncId || 0;
-  }
-
-  async getVersionVector(): Promise<Record<string, number> | null> {
-    if (!this.workspaceDb) return null;
-    const metadata = await this.databaseManager.getWorkspaceMetadata(this.workspaceDb);
-    return (
-      (metadata as WorkspaceMetadata & { versions?: Record<string, number> })?.versions || null
-    );
+    return metadata?.lastSyncId ?? 0;
   }
 
   async updateWorkspaceMetadata(metadata: Partial<WorkspaceMetadata>): Promise<void> {
@@ -1566,7 +1558,7 @@ export class Database {
         }),
         ...metadata,
         updatedAt: new Date(),
-      } as WorkspaceMetadata;
+      };
       return;
     }
 

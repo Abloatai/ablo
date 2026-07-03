@@ -36,8 +36,8 @@ import {
 } from './auth.js';
 import { registerDataSource } from './registerDataSource.js';
 import { toSeconds } from '../utils/duration.js';
+import type { AbloOptions } from './options.js';
 import type {
-  AbloOptions,
   ClaimedOptions,
   CommitCreateOptions,
   CommitOperationInput,
@@ -54,7 +54,7 @@ import type {
   ModelTarget,
   CreateSessionParams,
   AbloSession,
-} from './Ablo.js';
+} from './resourceTypes.js';
 import { mintSession } from './sessionMint.js';
 import type { SchemaRecord } from '../schema/schema.js';
 import type {
@@ -78,7 +78,20 @@ export type AbloApiClientOptions = Omit<AbloOptions, 'schema'> & {
    * `ClaimLog` works identically for headless (server-agent) evals.
    */
   readonly observability?: SyncObservabilityProvider;
+  /**
+   * Per-request deadline in milliseconds for the stateless HTTP transport.
+   * Every request this client issues is aborted after this long and surfaces
+   * as a retryable connection error — without it a black-holed server hangs
+   * a headless agent forever (browsers never time fetch out on their own).
+   * Pass `0` to disable the deadline.
+   *
+   * @default 30_000
+   */
+  readonly timeoutMs?: number;
 };
+
+/** Default per-request deadline for the stateless HTTP transport. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export interface AbloApiClaims {
   create(options: ClaimCreateOptions): Promise<Claim>;
@@ -341,7 +354,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   const recordCoordinationConflict = (
     error: unknown,
     clientTxId: string,
-    fallbackRows: ReadonlyArray<{ model: string; id: string }>,
+    fallbackRows: readonly { model: string; id: string }[],
   ): void => {
     if (!observability) return;
     const code = (error as { code?: unknown })?.code;
@@ -354,7 +367,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     const rawConflicts = (error as { conflicts?: unknown })?.conflicts;
     const rows =
       Array.isArray(rawConflicts) && rawConflicts.length > 0
-        ? (rawConflicts as ReadonlyArray<{ model?: unknown; id?: unknown }>).map((r) => ({
+        ? (rawConflicts as readonly { model?: unknown; id?: unknown }[]).map((r) => ({
             model: typeof r.model === 'string' ? r.model : 'unknown',
             id: typeof r.id === 'string' ? r.id : 'unknown',
             fields: [] as string[],
@@ -434,6 +447,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     return target.toString();
   }
 
+  const requestTimeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+
   async function requestJson<T>(
     path: string,
     init: RequestInit & { readonly idempotencyKey?: string | null },
@@ -443,15 +458,60 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     const headers = await authHeaders();
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
 
-    const res = await fetchImpl(endpoint(path), {
-      ...requestInit,
-      headers: {
-        ...headers,
-        ...(requestInit.headers as Record<string, string> | undefined),
-      },
-    });
+    // Deadline: abort the request after `timeoutMs` so a black-holed server
+    // can't hang the caller forever (fetch has NO default timeout in browsers,
+    // and only undici's generous defaults in Node). A caller-supplied signal
+    // is combined with the deadline via a shared controller — the portable
+    // equivalent of `AbortSignal.any([caller, AbortSignal.timeout(t)])`,
+    // which older runtimes (and the jsdom test env) don't implement. The
+    // same pattern already guards `query/client.ts` and `BootstrapHelper`.
+    const callerSignal = requestInit.signal ?? undefined;
+    const controller = new AbortController();
+    const onCallerAbort = (): void => { controller.abort(callerSignal?.reason); };
+    if (callerSignal) {
+      if (callerSignal.aborted) onCallerAbort();
+      else callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+    let timedOut = false;
+    const deadline =
+      requestTimeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+          }, requestTimeoutMs)
+        : null;
 
-    const bodyText = await res.text();
+    let res: Response;
+    let bodyText: string;
+    try {
+      res = await fetchImpl(endpoint(path), {
+        ...requestInit,
+        signal: controller.signal,
+        headers: {
+          ...headers,
+          ...(requestInit.headers as Record<string, string> | undefined),
+        },
+      });
+      // Keep the deadline armed while the body streams — a server that sends
+      // headers then stalls the body is the same hang with better manners.
+      bodyText = await res.text();
+    } catch (error) {
+      if (timedOut) {
+        // Retryable by contract: `wait_for_timeout` is a registered transient
+        // transport code, so `isRetryableCode` steers callers to retry.
+        throw new AbloConnectionError(
+          `The Ablo API did not respond within ${requestTimeoutMs}ms ` +
+            `(${requestInit.method ?? 'GET'} ${path}). The request was aborted; ` +
+            'it is safe to retry.',
+          { code: 'wait_for_timeout', cause: error },
+        );
+      }
+      throw error;
+    } finally {
+      if (deadline) clearTimeout(deadline);
+      callerSignal?.removeEventListener('abort', onCallerAbort);
+    }
+
     const body = parseBody(bodyText);
     if (!res.ok) {
       throw translateHttpError(
@@ -1219,7 +1279,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
             return { data: read.data, stamp: read.stamp };
           },
           writeNext: (patch, readAt) =>
-            mutateModel('update', name, id, patch as Record<string, unknown>, {
+            mutateModel('update', name, id, patch, {
               readAt,
               onStale: 'reject',
               wait: 'confirmed',

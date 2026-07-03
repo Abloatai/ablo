@@ -89,7 +89,7 @@ export function useUndoScope(
   const { store, organizationId, schema: ctxSchema } = useSyncContext();
 
   const isExplicit = typeof schemaOrName !== 'string';
-  const schema = isExplicit ? (schemaOrName as Schema) : ctxSchema;
+  const schema = isExplicit ? (schemaOrName) : ctxSchema;
   const name = isExplicit ? (nameOrOptions as string) : schemaOrName;
   const options = (isExplicit ? maybeOptions : nameOrOptions) as UndoScopeOptions | undefined;
 
@@ -125,7 +125,7 @@ export function useUndoScope(
   // `canUndo`/`canRedo` go stale in every consumer that didn't itself call
   // undo/redo (e.g. a keyboard handler whose Cmd+Z gate then never fires).
   useEffect(() => {
-    return scope.onChange(() => setTick((t: number) => t + 1));
+    return scope.onChange(() => { setTick((t: number) => t + 1); });
   }, [scope]);
 
   const size = scope.size();

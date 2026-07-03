@@ -121,7 +121,12 @@ export function useMutators(
 
       const invokers: Record<string, (args: unknown) => Promise<unknown>> = {};
       for (const mutatorName of Object.keys(group)) {
-        const fn = group[mutatorName];
+        const maybeFn = group[mutatorName];
+        if (!maybeFn) continue;
+        // Bind the narrowed value: `noUncheckedIndexedAccess` types the indexed
+        // read as `Fn | undefined`, and that narrowing doesn't survive into the
+        // deferred invoker closures below — a non-optional local does.
+        const fn = maybeFn;
         const label = `${String(modelKey)}.${mutatorName}`;
 
         invokers[mutatorName] = async (args: unknown) => {
@@ -171,6 +176,6 @@ export function useMutators(
       out[modelKey] = invokers;
     }
 
-    return out as MutatorInvokers<MutatorDefs<Schema>>;
+    return out;
   }, [schema, mutators, store, organizationId, undoScope]);
 }

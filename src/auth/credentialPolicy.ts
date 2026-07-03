@@ -24,7 +24,17 @@
 
 import { AbloAuthenticationError } from '../errors.js';
 import type { exchangeApiKey, mintUserSessionKey, resolveIdentity } from './index.js';
-import type { resolveApiKeyValue } from '../client/auth.js';
+
+/**
+ * Structural signature of `client/auth.ts`'s `resolveApiKeyValue` — declared
+ * locally (not `typeof`-imported) because `client/auth.ts` runtime-imports
+ * {@link classifyCredentialKind} from THIS module; a back-edge here was the
+ * SDK's last auth-layer import cycle. The setter shape matches `ApiKeySetter`.
+ * `identity.ts` passes the real function; structural typing keeps them bound.
+ */
+type ResolveApiKeyValueFn = (
+  apiKey: string | (() => Promise<string | null>) | null,
+) => Promise<string | null>;
 
 /**
  * The four Ablo API-key kinds (Stripe-style). Prefix contract — kept in lockstep
@@ -33,7 +43,7 @@ import type { resolveApiKeyValue } from '../client/auth.js';
  */
 export type CredentialKind = 'secret' | 'ephemeral' | 'restricted' | 'publishable';
 
-const KIND_BY_PREFIX: ReadonlyArray<readonly [string, CredentialKind]> = [
+const KIND_BY_PREFIX: readonly (readonly [string, CredentialKind])[] = [
   ['sk_', 'secret'],
   ['ek_', 'ephemeral'],
   ['rk_', 'restricted'],
@@ -71,7 +81,7 @@ export interface CredentialPrimitives {
   readonly exchangeApiKey: typeof exchangeApiKey;
   readonly mintUserSessionKey: typeof mintUserSessionKey;
   readonly resolveIdentity: typeof resolveIdentity;
-  readonly resolveApiKeyValue: typeof resolveApiKeyValue;
+  readonly resolveApiKeyValue: ResolveApiKeyValueFn;
 }
 
 export interface ResolveCredentialContext {

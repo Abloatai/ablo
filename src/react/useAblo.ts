@@ -182,7 +182,7 @@ export function useAblo<
   const [claimVersion, setClaimVersion] = useState(0);
   useEffect(() => {
     if (!engine || id === undefined) return;
-    return engine.claims.onChange(() => setClaimVersion((version) => version + 1));
+    return engine.claims.onChange(() => { setClaimVersion((version) => version + 1); });
   }, [engine, id]);
 
   const selected = useReactive<T | undefined>(

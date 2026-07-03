@@ -33,6 +33,7 @@ import {
 import type { MutationOptions } from '../interfaces/index.js';
 import { Model, modelAsRow } from '../Model.js';
 import { toMs } from '../utils/duration.js';
+import { LEASE_TTL_MS } from '../wire/protocol.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
 import type { ModelRegistry } from '../ModelRegistry.js';
 import type { ObjectPool } from '../ObjectPool.js';
@@ -629,9 +630,11 @@ export function createModelProxy<T, C>(
     }
   >();
 
-  // Server keepalive lease window (Hub `LEASE_RENEW_TTL_MS`). The fallback
-  // expiry estimate when a claim is taken without an explicit TTL.
-  const DEFAULT_LEASE_TTL_MS = 90_000;
+  // Server keepalive lease window (Hub `LEASE_RENEW_TTL_MS` — the same
+  // `LEASE_TTL_MS` from wire/protocol.ts, so client estimate and server
+  // lease can't drift). The fallback expiry estimate when a claim is
+  // taken without an explicit TTL.
+  const DEFAULT_LEASE_TTL_MS = LEASE_TTL_MS;
 
   const isClaimHandle = (value: unknown): value is Claim<T> =>
     typeof value === 'object' &&
@@ -682,7 +685,7 @@ export function createModelProxy<T, C>(
     // Catches plain-JS callers (`onStale: 'rejct'`) at the call site with
     // a typed error instead of a silent no-op or a server 400.
     assertWriteOptions(rest, `${schemaKey} write`);
-    return rest as MutationOptions;
+    return rest;
   };
 
   const releaseClaim = async (id: string): Promise<void> => {
@@ -843,7 +846,7 @@ export function createModelProxy<T, C>(
   // members to read/steer the coordination plane. Attach the readers to the
   // guarded callable so `ablo.<model>.claim(...)` and `ablo.<model>.claim.state(...)`
   // are the same object.
-  const claimApi: ClaimApi<T> = Object.assign(guard(claim) as typeof claim, {
+  const claimApi: ClaimApi<T> = Object.assign(guard(claim), {
     state(params: ClaimLookupParams<T>): Claim | null {
       // Read-interest: a passive observer subscribing to a row's claim state
       // must enter that row's entity scope, or it sits on `org:`/`user:`
@@ -933,8 +936,9 @@ export function createModelProxy<T, C>(
         result = result.filter(options.filter);
       }
 
-      if (options?.orderBy) {
-        const [field, dir] = Object.entries(options.orderBy)[0];
+      const orderEntry = options?.orderBy ? Object.entries(options.orderBy)[0] : undefined;
+      if (orderEntry) {
+        const [field, dir] = orderEntry;
         result = [...result].sort((a, b) => {
           const av = (a as Record<string, unknown>)[field];
           const bv = (b as Record<string, unknown>)[field];
@@ -1077,7 +1081,7 @@ export function createModelProxy<T, C>(
                 readAt,
                 onStale: 'reject',
               };
-              model.applyChanges(patch as Record<string, unknown>);
+              model.applyChanges(patch);
               syncClient.update(model, effective);
               await waitForMutation(model, effective);
               return modelAsRow<T>(model);
@@ -1133,7 +1137,7 @@ export function createModelProxy<T, C>(
         // the edited fields land in `modifiedProperties` and actually get
         // sent to the server. (`updateFromData` is the hydration path and
         // would discard the tracking → empty `input: {}` no-op mutation.)
-        model.applyChanges(params.data as Record<string, unknown>);
+        model.applyChanges(params.data);
         syncClient.update(model, effective);
         await waitForMutation(model, effective);
         return modelAsRow<T>(model);

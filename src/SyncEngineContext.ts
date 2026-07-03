@@ -13,7 +13,6 @@ import type {
   OnlineStatusProvider,
   ModelDebugLoggerContract,
   MutationExecutor,
-  MutationDispatcher,
   SyncEngineConfig,
   BreadcrumbLevel,
   SyncBreadcrumbCategory,
@@ -43,9 +42,6 @@ export interface SyncEngineContext {
   /** Backend mutation transport (GraphQL, REST, etc.) */
   mutationExecutor: MutationExecutor;
 
-  /** Offline mutation replay dispatcher */
-  mutationDispatcher: MutationDispatcher;
-
   /** Application-specific sync configuration */
   config: SyncEngineConfig;
 }
@@ -73,7 +69,6 @@ export const noopObservability: SyncObservabilityProvider = {
   captureReconciliation() {},
   captureDeltaRetryExhausted() {},
   captureWebSocketError() {},
-  captureOfflineFlushFailure() {},
   captureSelfHealing() {},
   captureClaim() {},
   captureConflict() {},
@@ -112,7 +107,7 @@ export const browserOnlineStatus: OnlineStatusProvider = {
 export const defaultSessionErrorDetector: SessionErrorDetector = {
   isSessionError(error: unknown): boolean {
     if (error && typeof error === 'object' && 'isSessionError' in error) {
-      return (error as { isSessionError: boolean }).isSessionError === true;
+      return (error as { isSessionError: boolean }).isSessionError;
     }
     return false;
   },

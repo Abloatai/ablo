@@ -22,12 +22,12 @@ export class TestProject extends Model {
 
   constructor(data: Partial<TestProject> & Record<string, unknown> = {}) {
     super(data);
-    if (data.name != null) this.name = data.name as string;
-    if (data.description != null) this.description = data.description as string;
-    if (data.organizationId != null) this.organizationId = data.organizationId as string;
+    if (data.name != null) this.name = data.name;
+    if (data.description != null) this.description = data.description;
+    if (data.organizationId != null) this.organizationId = data.organizationId;
   }
 
-  getModelName(): string {
+  override getModelName(): string {
     return 'Project';
   }
 }
@@ -41,14 +41,14 @@ export class TestTask extends Model {
 
   constructor(data: Partial<TestTask> & Record<string, unknown> = {}) {
     super(data);
-    if (data.title != null) this.title = data.title as string;
-    if (data.status != null) this.status = data.status as string;
-    if (data.projectId !== undefined) this.projectId = data.projectId as string | null;
-    if (data.assigneeId !== undefined) this.assigneeId = data.assigneeId as string | null;
-    if (data.organizationId != null) this.organizationId = data.organizationId as string;
+    if (data.title != null) this.title = data.title;
+    if (data.status != null) this.status = data.status;
+    if (data.projectId !== undefined) this.projectId = data.projectId;
+    if (data.assigneeId !== undefined) this.assigneeId = data.assigneeId;
+    if (data.organizationId != null) this.organizationId = data.organizationId;
   }
 
-  getModelName(): string {
+  override getModelName(): string {
     return 'Task';
   }
 }
@@ -60,12 +60,12 @@ export class TestComment extends Model {
 
   constructor(data: Partial<TestComment> & Record<string, unknown> = {}) {
     super(data);
-    if (data.body != null) this.body = data.body as string;
-    if (data.taskId !== undefined) this.taskId = data.taskId as string | null;
-    if (data.organizationId != null) this.organizationId = data.organizationId as string;
+    if (data.body != null) this.body = data.body;
+    if (data.taskId !== undefined) this.taskId = data.taskId;
+    if (data.organizationId != null) this.organizationId = data.organizationId;
   }
 
-  getModelName(): string {
+  override getModelName(): string {
     return 'Comment';
   }
 }
@@ -76,11 +76,11 @@ export class TestSlideDeck extends Model {
 
   constructor(data: Partial<TestSlideDeck> & Record<string, unknown> = {}) {
     super(data);
-    if (data.title != null) this.title = data.title as string;
-    if (data.organizationId != null) this.organizationId = data.organizationId as string;
+    if (data.title != null) this.title = data.title;
+    if (data.organizationId != null) this.organizationId = data.organizationId;
   }
 
-  getModelName(): string {
+  override getModelName(): string {
     return 'SlideDeck';
   }
 }
@@ -92,12 +92,12 @@ export class TestSlide extends Model {
 
   constructor(data: Partial<TestSlide> & Record<string, unknown> = {}) {
     super(data);
-    if (data.order != null) this.order = data.order as number;
-    if (data.deckId !== undefined) this.deckId = data.deckId as string | null;
-    if (data.organizationId != null) this.organizationId = data.organizationId as string;
+    if (data.order != null) this.order = data.order;
+    if (data.deckId !== undefined) this.deckId = data.deckId;
+    if (data.organizationId != null) this.organizationId = data.organizationId;
   }
 
-  getModelName(): string {
+  override getModelName(): string {
     return 'Slide';
   }
 }
@@ -111,14 +111,14 @@ export class TestSlideLayer extends Model {
 
   constructor(data: Partial<TestSlideLayer> & Record<string, unknown> = {}) {
     super(data);
-    if (data.slideId !== undefined) this.slideId = data.slideId as string | null;
-    if (data.zIndex != null) this.zIndex = data.zIndex as number;
-    if (data.type != null) this.type = data.type as string;
-    if (data.content != null) this.content = data.content as string;
-    if (data.organizationId != null) this.organizationId = data.organizationId as string;
+    if (data.slideId !== undefined) this.slideId = data.slideId;
+    if (data.zIndex != null) this.zIndex = data.zIndex;
+    if (data.type != null) this.type = data.type;
+    if (data.content != null) this.content = data.content;
+    if (data.organizationId != null) this.organizationId = data.organizationId;
   }
 
-  getModelName(): string {
+  override getModelName(): string {
     return 'SlideLayer';
   }
 }

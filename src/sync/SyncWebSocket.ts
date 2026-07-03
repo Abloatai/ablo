@@ -10,50 +10,61 @@
 
 import { EventEmitter } from 'events';
 import { getContext } from '../context.js';
-import { flushOfflineQueueOnce } from './OfflineFlush.js';
 import {
   AbloConnectionError,
   AbloError,
-  CapabilityError,
   SyncSessionError,
-  errorFromWire,
   toAbloError,
-  type RequiredCapability,
 } from '../errors.js';
-// Canonical commit-path frame contract. The SDK previously DESCRIBED these
-// shapes in comments ("mirrors hub/types.ts …"); importing the wire types makes
-// the compiler enforce the outgoing frame so client and server cannot drift.
-import type { CommitMessage, CommitOperation } from '../wire/index.js';
-import type { MutationOperation, ClaimEvent } from '../interfaces/index.js';
-import type { ClientSyncDelta } from '../schema/sync-delta-wire.js';
+import type { MutationOperation } from '../interfaces/index.js';
+import { clientSyncDeltaSchema, type ClientSyncDelta } from '../schema/sync-delta-wire.js';
 import type {
   ClaimError,
   ClaimRejection,
   StaleNotification,
   ReadDependency,
 } from '../coordination/schema.js';
+// Commit-path frame builders (pure) — extracted leaf; the host re-exports
+// `CommitAck` below so importers keep this module as their path.
+import { buildCommitFrame, type CommitAck } from './commitFrames.js';
+// Inbound frame dispatch table + the minimal session slice it operates on.
 import {
-  subscriptionAckPayloadSchema,
-  staleNotificationSchema,
-  wireParticipantKindSchema,
-} from '../coordination/schema.js';
-import { formatClaim, formatConflict } from '../coordination/trace.js';
+  dispatchWsFrame,
+  isRecord,
+  isWsInboundFrame,
+  type WsSession,
+  type PendingCommit,
+  type PendingClaim,
+  type PendingSubscription,
+} from './wsFrameHandlers.js';
+// Sync-position state (lastSyncId watermark, version vector, server cursor).
+import { SyncCursor } from './syncCursor.js';
+// Application-level heartbeat timers (see heartbeat.ts for the rationale).
+import { HeartbeatController } from './heartbeat.js';
 
-/**
- * Resolution value of a commit ack. `notifications` is present only when a
- * guarded write (`onStale: 'notify') hit a concurrent change — the
- * advisory self-heal signal, surfaced both here and via `conflict:notified`.
- */
-export interface CommitAck {
-  lastSyncId: number;
-  notifications?: StaleNotification[];
-}
+// Moved leaves — re-exported so every importer's path stays unchanged.
+export type { CommitAck } from './commitFrames.js';
 import {
   WS_BEARER_SUBPROTOCOL_PREFIX,
   WS_SYNC_SUBPROTOCOL,
   type AuthTokenGetter,
 } from '../auth/credentialSource.js';
 // SyncObservability replaced by getContext().observability
+
+/**
+ * Periodic catch-up poll cadence — while connected, request any deltas
+ * whose fire-and-forget pub/sub broadcast was lost in transit. Deliberately
+ * LOCAL (not `wire/protocol.ts`): an SDK eventual-consistency knob, not a
+ * cross-boundary contract the server derives anything from. That it equals
+ * the 30s ping today is coincidence, not an invariant.
+ */
+const CATCHUP_POLL_INTERVAL_MS = 30_000;
+
+/**
+ * Ceiling for the exponential reconnect backoff (`reconnectDelay * 2^n`,
+ * ±15% jitter). Local for the same reason as the catch-up poll.
+ */
+const MAX_RECONNECT_DELAY_MS = 30_000;
 
 /**
  * The wire delta the client receives. Derived from the canonical
@@ -95,19 +106,6 @@ export interface GroupRemovedPayload {
   userId: string;
 }
 
-export interface VersionVector {
-  tasks: number;
-  projects: number;
-  users: number;
-  events: number; // Renamed from activities - audit log entries
-  inboxitems: number;
-  teams: number;
-  assignments: number;
-  comments: number;
-  threads: number;
-  [entityType: string]: number;
-}
-
 export interface SyncCapabilities {
   partialBootstrap?: boolean;
   compressedDeltas?: boolean;
@@ -123,7 +121,6 @@ export interface SyncWebSocketOptions {
   organizationId: string;
   lastSyncId?: number;
   syncGroups?: string[];
-  versions?: VersionVector;
   capabilities?: SyncCapabilities;
   reconnectDelay?: number;
   maxReconnectDelay?: number;
@@ -224,7 +221,7 @@ export interface PresenceUpdateEvent {
   /** Server stamps every presence frame with this participant's open
    *  claims so peers see them without a separate channel. Wire
    *  shape mirrors `apps/sync-server/src/hub/types.ts Claim`. */
-  activeClaims?: Array<{
+  activeClaims?: {
     claimId: string;
     entityType: string;
     entityId: string;
@@ -248,7 +245,7 @@ export interface PresenceUpdateEvent {
      */
     status?: 'active' | 'committed' | 'expired' | 'canceled';
     error?: ClaimError;
-  }>;
+  }[];
   // Legacy/optional fields kept for back-compat with the web's
   // simpler online/offline cache.
   localTime?: string;
@@ -413,20 +410,20 @@ export class SyncWebSocket<
   /** Periodic catchup interval — polls for missed deltas every 30s while connected */
   private catchupInterval: NodeJS.Timeout | null = null;
   /**
-   * Application-level heartbeat. The browser WebSocket API hides RFC 6455
-   * protocol-level ping/pong from JavaScript, so the server's `ws.ping()`
-   * keepalive can't be observed by client code — meaning the client cannot
-   * tell a healthy idle connection apart from a "zombie" socket where TCP
-   * silently broke (laptop sleep, NAT timeout, mobile handoff). We send an
-   * application-level `{ type: 'ping' }` every 30s and force-close the
-   * socket if no inbound traffic arrives within 10s. ANY inbound message
-   * counts as proof-of-life — the explicit `pong` is just a guarantee that
-   * something will arrive even on an idle stream.
+   * Application-level heartbeat — ping every 30s, force-close on a 10s
+   * silent watchdog. The full zombie-socket rationale lives with the
+   * timers in `sync/heartbeat.ts`; the transport closures below are the
+   * only socket access the controller gets.
    */
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private heartbeatTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
-  private static readonly HEARTBEAT_INTERVAL_MS = 30_000;
-  private static readonly HEARTBEAT_TIMEOUT_MS = 10_000;
+  private readonly heartbeat = new HeartbeatController({
+    isSocketOpen: () => this.ws?.readyState === WebSocket.OPEN,
+    // Optional-chained rather than asserted: the controller only calls
+    // this synchronously after `isSocketOpen()`, so `ws` is present.
+    sendPing: () => {
+      this.ws?.send(JSON.stringify({ type: 'ping' }));
+    },
+    forceClose: (reason) => { this.forceClose(reason); },
+  });
   private isConnecting = false;
   private isManualClose = false;
   /** When true, a session error has been detected (from any path — WS close or HTTP bootstrap).
@@ -454,11 +451,23 @@ export class SyncWebSocket<
   private lastCloseReason: string | null = null;
   private lastForceCloseReason: string | null = null;
   private sessionErrorAt: number | null = null;
-  private lastSyncId: number;
-  private versionVector: VersionVector;
-  private syncCursor: string | null = null;
+  /**
+   * Sync-position state (lastSyncId watermark, version vector, server
+   * cursor). The advance discipline stays documented at `sendAck` /
+   * `handleDelta`; the state itself lives in `sync/syncCursor.ts`.
+   */
+  private readonly cursor: SyncCursor;
   /** Registered collaboration event keys (colon format) for dispatch in onmessage */
   private collaborationEventTypes: Set<string>;
+  /**
+   * Minimal session adapter handed to the frame dispatch table
+   * (`sync/wsFrameHandlers.ts`). Exposes ONLY the members the handlers
+   * touch; the closure members read live state so host-side reassignment
+   * (e.g. the `pendingSubscriptions` reset on close) can't strand the
+   * handlers on a stale reference. Built in the constructor, after the
+   * state it captures exists.
+   */
+  private readonly frameSession: WsSession;
 
   /**
    * In-flight `commit` mutation requests keyed by clientTxId. Resolved when
@@ -466,14 +475,7 @@ export class SyncWebSocket<
    * timeout / disconnect. Lets consumers await a server ack for mutations
    * sent over the same socket that streams deltas.
    */
-  private pendingMutations = new Map<
-    string,
-    {
-      resolve: (value: CommitAck) => void;
-      reject: (err: Error) => void;
-      timeout: ReturnType<typeof setTimeout>;
-    }
-  >();
+  private pendingMutations = new Map<string, PendingCommit>();
 
   /**
    * In-flight `claim` requests keyed by claimId. Resolved when the
@@ -481,14 +483,7 @@ export class SyncWebSocket<
    * Same shape as pendingMutations — Phoenix-style request/response
    * over a multiplexed connection.
    */
-  private pendingClaims = new Map<
-    string,
-    {
-      resolve: (value: { syncGroups: string[]; ttlSeconds?: number }) => void;
-      reject: (err: Error) => void;
-      timeout: ReturnType<typeof setTimeout>;
-    }
-  >();
+  private pendingClaims = new Map<string, PendingClaim>();
 
   /**
    * In-flight `update_subscription` frames awaiting `subscription_ack`.
@@ -498,11 +493,7 @@ export class SyncWebSocket<
    * oldest pending request. (Read-interest changes are infrequent and
    * usually settle before the next one, so depth is ~1 in practice.)
    */
-  private pendingSubscriptions: Array<{
-    resolve: (value: { syncGroups: string[] }) => void;
-    reject: (err: Error) => void;
-    timeout: ReturnType<typeof setTimeout>;
-  }> = [];
+  private pendingSubscriptions: PendingSubscription[] = [];
 
   constructor(options: SyncWebSocketOptions) {
     super();
@@ -515,21 +506,10 @@ export class SyncWebSocket<
     this.options = {
       url: wsUrl,
       reconnectDelay: 1000,
-      maxReconnectDelay: 30000,
+      maxReconnectDelay: MAX_RECONNECT_DELAY_MS,
       collaborationEvents: ['sheet:selection', 'slide:selection', 'slide:cursor'],
       syncGroups: [],
       lastSyncId: 0,
-      versions: {
-        tasks: 0,
-        projects: 0,
-        users: 0,
-        events: 0,
-        inboxitems: 0,
-        teams: 0,
-        assignments: 0,
-        comments: 0,
-        threads: 0,
-      },
       capabilities: {
         partialBootstrap: true,
         compressedDeltas: true,
@@ -539,12 +519,29 @@ export class SyncWebSocket<
       ...options,
     };
 
-    this.lastSyncId = this.options.lastSyncId;
-    this.versionVector = { ...this.options.versions };
-    this.syncCursor = null;
+    this.cursor = new SyncCursor(this.options.lastSyncId);
     this.collaborationEventTypes = new Set(
       options.collaborationEvents ?? ['sheet:selection', 'slide:selection', 'slide:cursor']
     );
+
+    // Session slice for the inbound frame dispatch table — see the field
+    // doc on `frameSession` for why members that the host reassigns are
+    // exposed through closures instead of captured references.
+    this.frameSession = {
+      emit: (event, ...args) => this.emit(event, ...args),
+      pendingMutations: this.pendingMutations,
+      pendingClaims: this.pendingClaims,
+      shiftPendingSubscription: () => this.pendingSubscriptions.shift(),
+      options: this.options,
+      collaborationEventTypes: this.collaborationEventTypes,
+      handleDelta: (delta) => { this.handleDelta(delta); },
+      handleSyncResponse: (payload) => { this.handleSyncResponse(payload); },
+      handleBootstrapResponse: (payload) => { this.handleBootstrapResponse(payload); },
+      handlePresenceUpdate: (message) =>
+        { this.handlePresenceUpdate(
+          message as { payload?: PresenceUpdateEvent; [k: string]: unknown },
+        ); },
+    };
   }
 
   /**
@@ -557,6 +554,18 @@ export class SyncWebSocket<
   }
 
   /**
+   * Clear the session-error latch so `connect()` / `scheduleReconnect()`
+   * work again. Called by the store's access-credential recovery path when
+   * the close was a re-mintable `ek_`/`rk_` expiry (`4001 credential_expired`),
+   * not a login loss — see `isAccessCredentialExpiryCloseReason`. Genuine
+   * session losses never clear the latch; re-auth builds a fresh client.
+   */
+  clearSessionError(): void {
+    this._sessionErrorDetected = false;
+    this.sessionErrorAt = null;
+  }
+
+  /**
    * Connect to the sync engine WebSocket
    */
   connect(): void {
@@ -565,8 +574,17 @@ export class SyncWebSocket<
       return;
     }
 
-    if (this.ws?.readyState === WebSocket.OPEN || this.isConnecting) {
-      getContext().logger.debug('WebSocket already connected or connecting');
+    // CLOSING counts as busy: the socket's close teardown is still in
+    // flight and its `onclose` (which runs `scheduleReconnect`) hasn't
+    // fired yet. Overwriting `this.ws` mid-teardown is what produced the
+    // orphaned-socket race — see the stale-socket guards in
+    // `setupEventHandlers`.
+    if (
+      this.ws?.readyState === WebSocket.OPEN ||
+      this.ws?.readyState === WebSocket.CLOSING ||
+      this.isConnecting
+    ) {
+      getContext().logger.debug('WebSocket already connected, connecting, or closing');
       return;
     }
 
@@ -586,9 +604,9 @@ export class SyncWebSocket<
     // server is bearer-only (`apiKeyProvider`) and resolves identity from the
     // verified token — userId/organizationId are NEVER read from URL params.
     const params = new URLSearchParams({
-      // Intentionally omit lastSyncId, versions, capabilities from URL; these are sent in sync_request
+      // Intentionally omit lastSyncId, capabilities from URL; these are sent in sync_request
       // and ack messages to avoid stale baselines on reconnect.
-      cursor: this.syncCursor || '',
+      cursor: this.cursor.syncCursor || '',
     });
 
     // Participant kind — defaults to `user` for backward compatibility
@@ -638,11 +656,21 @@ export class SyncWebSocket<
    * Setup WebSocket event handlers
    */
   private setupEventHandlers(): void {
-    if (!this.ws) return;
+    // Capture the socket THIS call wires. Every handler below guards on
+    // `this.ws === socket` (onclose additionally tolerates a nulled host —
+    // see there) so a handler firing late, after `connect()` replaced the
+    // socket, can never clobber the NEW connection's shared state. Without
+    // this, an old socket's `onclose` ran `this.ws = null;
+    // stopCatchupInterval(); stopHeartbeat()` unconditionally — a reconnect
+    // during close teardown orphaned the fresh socket (zombie receiving
+    // deltas with no timers and broken send paths).
+    const socket = this.ws;
+    if (!socket) return;
 
-    this.ws.onopen = () => {
+    socket.onopen = () => {
+      if (this.ws !== socket) return; // stale socket — a newer connect() owns the state
       getContext().observability.breadcrumb('WebSocket connected', 'sync.websocket', 'info', {
-        lastSyncId: this.lastSyncId,
+        lastSyncId: this.cursor.lastSyncId,
         reconnectAttempts: this.reconnectAttempts,
       });
       this.isConnecting = false;
@@ -655,29 +683,12 @@ export class SyncWebSocket<
       // this improves localTime accuracy by providing the user's actual timezone)
       this.sendPresenceUpdate('online');
 
-      // Flush any queued offline mutations now that we're online
-      // Fire-and-forget; emit events for UI if desired in the future
-      (async () => {
-        try {
-          const res = await flushOfflineQueueOnce();
-          if (res.processed > 0) {
-            getContext().logger.info('Flushed offline mutations', res);
-          }
-        } catch (e) {
-          getContext().observability.captureOfflineFlushFailure({
-            error: e instanceof Error ? e.message : String(e),
-          });
-        }
-      })();
-
-      // Immediately request incremental sync based on our stored cursor/versions
-      try {
-        if (this.lastSyncId && this.lastSyncId > 0) {
-          // Let server know where we left off before requesting deltas
-          this.sendAck(this.lastSyncId);
-        }
-        this.requestIncrementalSync();
-      } catch (e) {
+      // Immediately request incremental sync based on our stored cursor.
+      // `requestIncrementalSync` is async — a bare call inside try/catch is a
+      // rejection hole (the catch never sees it); route failures through
+      // `.catch` so they land in the same breadcrumb instead of an
+      // unhandled rejection.
+      const reportSyncRequestFailure = (e: unknown): void => {
         getContext().observability.breadcrumb(
           'Failed to request incremental sync on open',
           'sync.websocket',
@@ -686,371 +697,71 @@ export class SyncWebSocket<
             error: e instanceof Error ? e.message : String(e),
           }
         );
+      };
+      try {
+        if (this.cursor.lastSyncId && this.cursor.lastSyncId > 0) {
+          // Let server know where we left off before requesting deltas
+          this.sendAck(this.cursor.lastSyncId);
+        }
+      } catch (e) {
+        reportSyncRequestFailure(e);
       }
+      this.requestIncrementalSync().catch(reportSyncRequestFailure);
 
-      // Start periodic catchup — polls for missed deltas every 30s.
-      // Real-time WebSocket delivery is best-effort (fire-and-forget Redis pub/sub).
-      // This interval guarantees eventual consistency by fetching any deltas that
-      // were committed to the DB but whose broadcast was lost in transit.
+      // Start periodic catchup — polls for missed deltas every
+      // CATCHUP_POLL_INTERVAL_MS while connected. Real-time WebSocket
+      // delivery is best-effort (fire-and-forget Redis pub/sub). This
+      // interval guarantees eventual consistency by fetching any deltas
+      // that were committed to the DB but whose broadcast was lost in
+      // transit.
       this.stopCatchupInterval();
       this.catchupInterval = setInterval(() => {
         if (this.ws?.readyState === WebSocket.OPEN) {
-          this.requestIncrementalSync();
+          // A rejected sync request must never surface as an unhandled
+          // rejection from a background interval — log and let the next
+          // poll retry.
+          this.requestIncrementalSync().catch((e: unknown) => {
+            getContext().observability.breadcrumb(
+              'Periodic catchup sync request failed',
+              'sync.websocket',
+              'warning',
+              {
+                error: e instanceof Error ? e.message : String(e),
+              }
+            );
+          });
         }
-      }, 30_000);
+      }, CATCHUP_POLL_INTERVAL_MS);
 
-      // Start application-level heartbeat — see field declaration for rationale.
-      this.startHeartbeat();
+      // Start application-level heartbeat — see sync/heartbeat.ts for rationale.
+      this.heartbeat.start();
     };
 
-    this.ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (this.ws !== socket) return; // stale socket — drop, don't feed shared state
       try {
-        const message: any = JSON.parse(event.data);
+        // Untrusted wire input: parse to `unknown`, then narrow through
+        // the frame-envelope guard before dispatch. Payload-level
+        // validation (deltas etc.) happens per-frame downstream.
+        const message: unknown = JSON.parse(event.data);
 
         // ANY inbound frame proves the socket is alive — clear the
         // heartbeat-timeout timer so we don't false-trip force-close
         // during normal traffic.
-        this.clearHeartbeatTimeout();
+        this.heartbeat.clearHeartbeatTimeout();
 
-        // Handle different message types
-        if (message.type === 'pong' || message.type === 'ping') {
-          // Ignore keepalive messages
-          getContext().logger.debug('Received keepalive', { type: message.type });
+        if (!isWsInboundFrame(message)) {
+          getContext().logger.debug('[SyncWebSocket] dropped malformed wire frame', {
+            received: Array.isArray(message) ? 'array' : typeof message,
+          });
           return;
         }
 
-        // Handle different message types
-        switch (message.type) {
-          case 'sync_response':
-            this.handleSyncResponse(message.payload);
-            break;
-          case 'bootstrap_response':
-            this.handleBootstrapResponse(message.payload);
-            break;
-          case 'presence_update':
-            this.handlePresenceUpdate(message);
-            break;
-          case 'mutation_result': {
-            // Ack for a prior `commit` we sent. Canonical shape is
-            // `MutationResultMessage` in `@abloatai/ablo/wire`. This stays a
-            // DEFENSIVE parse (not a typed cast) because the payload is
-            // untrusted wire data that may be malformed or from an older server.
-            const p = message.payload ?? message;
-            const { clientTxId, success, lastSyncId, error } = p ?? {};
-            // Defensive: validate notifications against the canonical schema —
-            // untrusted wire data from a possibly-older/newer server.
-            const notifications = this.parseNotifications(
-              (p as { notifications?: unknown } | undefined)?.notifications,
-            );
-            const pending =
-              typeof clientTxId === 'string'
-                ? this.pendingMutations.get(clientTxId)
-                : undefined;
-            if (!pending) break;
-            clearTimeout(pending.timeout);
-            this.pendingMutations.delete(clientTxId);
-            if (success) {
-              // Coerce defensively — bigint columns serialize as strings
-              // from older servers (see normalizeWireDelta).
-              const ackedSyncId = Number(lastSyncId);
-              // Notify-instead-of-abort: a guarded write's premise moved. Emit
-              // the advisory signal so an agent loop can self-heal, AND resolve
-              // the receipt with it (the commit still succeeded).
-              if (notifications && notifications.length > 0) {
-                const txId = typeof clientTxId === 'string' ? clientTxId : '';
-                const event = {
-                  clientTxId: txId,
-                  rows: notifications.map((n) => ({
-                    model: n.model,
-                    id: n.id,
-                    fields: n.conflictingFields,
-                    writtenBy: n.writtenBy?.kind,
-                  })),
-                };
-                const message = formatConflict(event);
-                const ctx = getContext();
-                ctx.logger.warn(message);
-                ctx.observability.breadcrumb(message, 'sync.coordination', 'warning');
-                ctx.observability.captureConflict(event);
-                this.emit('conflict:notified', {
-                  clientTxId: txId,
-                  notifications,
-                });
-              }
-              pending.resolve({
-                lastSyncId: Number.isFinite(ackedSyncId) ? ackedSyncId : 0,
-                ...(notifications && notifications.length > 0
-                  ? { notifications }
-                  : {}),
-              });
-            } else {
-              // Capture the FULL server error so the user can see what
-              // actually rejected the mutation. Without this, every
-              // rejection becomes the generic "mutation failed on
-              // server" — useless when debugging chart batches that
-              // tank 40+ ops at once. We stringify object errors so
-              // structured server payloads (e.g., Zod issues, schema
-              // violations) survive the trip through `new Error(...)`.
-              let errorMessage: string;
-              let errorCode: string | undefined;
-              let requiredCapability: RequiredCapability | undefined;
-              if (typeof error === 'string') {
-                errorMessage = error;
-              } else if (error != null && typeof error === 'object') {
-                const obj = error as {
-                  code?: unknown;
-                  message?: unknown;
-                  requiredCapability?: unknown;
-                };
-                if (typeof obj.code === 'string') errorCode = obj.code;
-                if (typeof obj.message === 'string') {
-                  errorMessage = obj.message;
-                } else {
-                  try {
-                    errorMessage = JSON.stringify(error);
-                  } catch {
-                    errorMessage = String(error);
-                  }
-                }
-                if (
-                  obj.requiredCapability != null &&
-                  typeof obj.requiredCapability === 'object' &&
-                  typeof (obj.requiredCapability as { scope?: unknown }).scope === 'string'
-                ) {
-                  requiredCapability = obj.requiredCapability as RequiredCapability;
-                }
-              } else {
-                errorMessage = 'mutation failed on server';
-              }
-              // Coordination collision: a stale-context rejection (the write's
-              // readAt premise moved underneath) or a foreign-claim conflict is
-              // exactly the collision ClaimLog exists to surface. The notify
-              // path (success + notifications) emits captureConflict above; a
-              // HARD rejection must too — otherwise observability.collisions()
-              // silently misses every rejected write. The conflicted rows ride
-              // along on the typed error's `conflicts` detail (see
-              // AbloStaleContextError.toJSON / errorEnvelope).
-              if (
-                errorCode === 'stale_context' ||
-                errorCode === 'claim_conflict' ||
-                errorCode === 'entity_claimed' ||
-                errorCode?.startsWith('policy:') === true
-              ) {
-                const rawConflicts =
-                  error != null &&
-                  typeof error === 'object' &&
-                  Array.isArray((error as { conflicts?: unknown }).conflicts)
-                    ? (error as { conflicts: ReadonlyArray<{ model?: unknown; id?: unknown }> })
-                        .conflicts
-                    : [];
-                const conflictEvent = {
-                  clientTxId: typeof clientTxId === 'string' ? clientTxId : '',
-                  rows: rawConflicts.map((r) => ({
-                    model: typeof r.model === 'string' ? r.model : 'unknown',
-                    id: typeof r.id === 'string' ? r.id : 'unknown',
-                    fields: [] as string[],
-                  })),
-                };
-                const ctx = getContext();
-                ctx.observability.breadcrumb(
-                  formatConflict(conflictEvent),
-                  'sync.coordination',
-                  'warning',
-                );
-                ctx.observability.captureConflict(conflictEvent);
-              }
-              // Build the proper typed AbloError from the wire code via the
-              // shared factory — the same code→class mapping the HTTP commit
-              // path uses (`translateHttpError`). This keeps rejected commits
-              // inside the typed hierarchy (capability denials →
-              // CapabilityError with `.requiredCapability`; foreign-claim
-              // conflicts → AbloClaimedError; everything else → the subclass
-              // its registry `httpStatus` implies) instead of a hand-rolled
-              // `new Error`, so callers can `instanceof`/`e.type` it and
-              // downstream retry logic can read the contract's retryability.
-              pending.reject(
-                errorFromWire(errorMessage, {
-                  code: errorCode,
-                  requiredCapability,
-                }),
-              );
-            }
-            break;
-          }
-          case 'claim_ack': {
-            // Ack for a prior `claim` we sent. Wire format mirrors
-            // apps/sync-server/src/hub/types.ts ClaimAckMessage:
-            //   { type: 'claim_ack',
-            //     payload: { claimId, success, syncGroups?,
-            //                ttlSeconds?, error? } }
-            const p = message.payload ?? {};
-            const { claimId, success, syncGroups, ttlSeconds, error } = p;
-            const pending =
-              typeof claimId === 'string'
-                ? this.pendingClaims.get(claimId)
-                : undefined;
-            if (!pending) break;
-            clearTimeout(pending.timeout);
-            this.pendingClaims.delete(claimId);
-            if (success) {
-              pending.resolve({
-                syncGroups: Array.isArray(syncGroups) ? syncGroups : [],
-                ttlSeconds: typeof ttlSeconds === 'number' ? ttlSeconds : undefined,
-              });
-            } else {
-              const code =
-                error?.code && typeof error.code === 'string'
-                  ? error.code
-                  : 'claim_rejected';
-              const msg =
-                error?.message && typeof error.message === 'string'
-                  ? error.message
-                  : 'claim rejected by server';
-              // Capability denials get the typed CapabilityError so
-              // callers can read `.requiredCapability` and attenuate-
-              // and-retry the claim with a narrower token.
-              if (
-                code === 'capability_scope_denied' ||
-                code === 'capability_invalid'
-              ) {
-                const rc = (error as { requiredCapability?: unknown } | undefined)
-                  ?.requiredCapability;
-                const requiredCapability =
-                  rc != null &&
-                  typeof rc === 'object' &&
-                  typeof (rc as { scope?: unknown }).scope === 'string'
-                    ? (rc as RequiredCapability)
-                    : undefined;
-                pending.reject(new CapabilityError(code, msg, requiredCapability));
-              } else {
-                // Route through the shared factory so a failed claim_ack is a
-                // typed AbloError (registry code → right subclass), symmetric
-                // with the commit `mutation_result` path — never a bare Error.
-                pending.reject(errorFromWire(msg, { code }));
-              }
-            }
-            break;
-          }
-          case 'subscription_ack': {
-            // Ack for a prior `update_subscription`. The wire carries no
-            // correlation id, so FIFO-match against the oldest pending
-            // request — the server applies and acks subscription updates
-            // in receive order. Validated through the canonical zod schema
-            // (mirrors how the Hub validates inbound frames).
-            const pending = this.pendingSubscriptions.shift();
-            if (!pending) break;
-            clearTimeout(pending.timeout);
-            const parsed = subscriptionAckPayloadSchema.safeParse(message.payload);
-            if (!parsed.success) {
-              // Unreadable ack — resolve the pending request as a failure
-              // rather than hang it until timeout.
-              pending.reject(
-                errorFromWire('malformed subscription_ack from server', {
-                  code: 'malformed_subscription',
-                }),
-              );
-              break;
-            }
-            const ack = parsed.data;
-            if (ack.success) {
-              // Keep the reconnect URL aligned with current interest: a
-              // reconnect re-subscribes from `this.options.syncGroups`.
-              this.options.syncGroups = ack.syncGroups;
-              pending.resolve({ syncGroups: ack.syncGroups });
-            } else {
-              pending.reject(
-                errorFromWire(
-                  ack.error?.message ?? 'update_subscription rejected by server',
-                  { code: ack.error?.code ?? 'malformed_subscription' },
-                ),
-              );
-            }
-            break;
-          }
-          case 'claim_expired': {
-            // Server-initiated expiry notification. Emit as a typed
-            // event so consumers can react (re-claim with a fresh
-            // capability, or accept the drop). The claim is already
-            // inactive server-side by the time this arrives.
-            const p = message.payload ?? {};
-            if (typeof p.claimId === 'string') {
-              this.recordClaim('expired', p);
-              this.emit('claim_expired', { claimId: p.claimId });
-            }
-            break;
-          }
-          case 'claim_rejected': {
-            // Server denied an `claim_begin` because the target is
-            // already claimed by another participant. Forward the
-            // payload as-is — the ClaimStream consumer interprets
-            // the conflict shape (peerId, target, etc.).
-            this.recordClaim('rejected', message.payload ?? {});
-            this.emit('claim_rejected', message.payload ?? {});
-            break;
-          }
-          case 'claim_acquired': {
-            // Opt-in fair queue: the target was free, so the lease is ours
-            // immediately (no waiting). Payload carries { claimId, target }.
-            this.recordClaim('acquired', message.payload ?? {});
-            this.emit('claim_acquired', message.payload ?? {});
-            break;
-          }
-          case 'claim_queue': {
-            // Per-entity wait-queue snapshot for reactive `queue(id)`. Not a
-            // single claim's state change, so it isn't logged — the per-claim
-            // `queued`/`granted` events already tell that story.
-            this.emit('claim_queue', message.payload ?? {});
-            break;
-          }
-          case 'claim_queued': {
-            // Opt-in fair queue: our claim is waiting in line. Payload
-            // carries { claimId, target, position }.
-            this.recordClaim('queued', message.payload ?? {});
-            this.emit('claim_queued', message.payload ?? {});
-            break;
-          }
-          case 'claim_granted': {
-            // Our queued claim reached the head — the lease is now ours.
-            this.recordClaim('granted', message.payload ?? {});
-            this.emit('claim_granted', message.payload ?? {});
-            break;
-          }
-          case 'claim_lost': {
-            // A held/granted claim was taken from us (TTL lapse, revoke).
-            this.recordClaim('lost', message.payload ?? {});
-            this.emit('claim_lost', message.payload ?? {});
-            break;
-          }
-          case 'delta': {
-            const p = message.payload;
-            if (p?.actionType || p?.modelName) {
-              this.handleDelta(p as SyncDelta);
-            } else if (Array.isArray(p?.deltas)) {
-              for (const d of p.deltas) {
-                if (d?.actionType || d?.modelName) this.handleDelta(d as SyncDelta);
-              }
-              if (p?.newVersions) {
-                Object.assign(this.versionVector, p.newVersions);
-              }
-            }
-            break;
-          }
-          case undefined: // Legacy support: bare delta
-            if (message.actionType || message.modelName) {
-              this.handleDelta(message as SyncDelta);
-            }
-            break;
-          default: {
-            // Collaboration events use underscore wire format (e.g., 'sheet_selection')
-            // Convert to colon format for the event map (e.g., 'sheet:selection')
-            const eventKey = message.type?.replace(/_/g, ':');
-            if (eventKey && this.collaborationEventTypes.has(eventKey)) {
-              this.emit(eventKey, message.payload);
-            } else {
-              getContext().logger.debug('Received unknown message type', { message });
-            }
-          }
-        }
+        // Frame-type → handler dispatch (sync/wsFrameHandlers.ts). The
+        // session adapter exposes only the members the handlers touch;
+        // keepalives, the legacy bare-delta form, and collaboration
+        // events are all routed there too.
+        dispatchWsFrame(this.frameSession, message);
       } catch (error) {
         getContext().observability.captureWebSocketError({
           context: 'parse-message',
@@ -1059,7 +770,8 @@ export class SyncWebSocket<
       }
     };
 
-    this.ws.onerror = (_event) => {
+    socket.onerror = (_event) => {
+      if (this.ws !== socket) return; // stale socket — its errors are no longer ours
       // WebSocket errors are DOM Events, not Error objects
       // Check if we're offline first
       if (!getContext().onlineStatus.isOnline()) {
@@ -1084,7 +796,16 @@ export class SyncWebSocket<
       this.emit('error', error);
     };
 
-    this.ws.onclose = (event) => {
+    socket.onclose = (event) => {
+      // Stale-socket close: a NEWER socket already owns the connection
+      // state — don't null it, stop its timers, or schedule a duplicate
+      // reconnect (the orphaning race this guard exists for). The one
+      // deliberate asymmetry vs the other handlers: `this.ws === null`
+      // (manual `disconnect()` nulls the field before the close event
+      // lands) still runs the full body, so in-flight work is rejected
+      // promptly and 'disconnected' reaches consumers — the pre-guard
+      // behavior manual close always had.
+      if (this.ws !== null && this.ws !== socket) return;
       const everOpened = this._everOpened;
       this.lastCloseAt = Date.now();
       this.lastCloseCode = event.code;
@@ -1102,7 +823,7 @@ export class SyncWebSocket<
       this.isConnecting = false;
       this.ws = null;
       this.stopCatchupInterval();
-      this.stopHeartbeat();
+      this.heartbeat.stop();
 
       // Cancel in-flight mutations — the socket that was carrying them is
       // gone, and the server-side state may or may not have accepted each
@@ -1184,7 +905,11 @@ export class SyncWebSocket<
           reason: event.reason,
         });
         this.emit('session_error', new SyncSessionError(event.reason || 'Session expired', event.code));
-        // Don't reconnect for session errors - user needs to re-authenticate
+        // Don't reconnect from HERE. For a genuine session loss the user
+        // must re-authenticate; for an expired ACCESS credential
+        // (`credential_expired`) the store's session_error handler re-mints,
+        // clears the latch, and drives the reconnect — see
+        // BaseSyncedStore.setupWebSocketSync.
         this.emit('disconnected', event);
         return;
       }
@@ -1221,28 +946,72 @@ export class SyncWebSocket<
   }
 
   /**
-   * Normalize a wire delta at the receive boundary. The contract
-   * (`syncDeltaWireCoreSchema`) says `id: number`, but deployed servers
-   * have sent the raw Postgres BIGINT serialization — a STRING — and
-   * every downstream watermark gate (`typeof syncId === 'number'` in
-   * `Database.processDeltaBatch`, the metadata-cursor update, numeric
-   * `>=` threshold comparisons in TransactionQueue) silently breaks on
-   * strings: acks are withheld, the resume cursor never advances, and
-   * every reconnect replays from 0 (or force-bootstraps once the gap
-   * exceeds maxDeltaGapForPartial). Coerce ONCE here so the rest of the
-   * client can trust the declared type — and old servers stay compatible.
+   * Validate + normalize a wire delta at the receive boundary — the ONE
+   * seam every inbound delta (`delta` frame, batch element, `sync_response`
+   * replay, legacy bare frame) passes through before it is emitted,
+   * persisted to IDB, or allowed to advance any watermark.
+   *
+   * Normalization (older/deployed servers stay compatible):
+   *  - `id`: the contract says `number`, but deployed servers have sent the
+   *    raw Postgres BIGINT serialization — a STRING — and every downstream
+   *    watermark gate (`typeof syncId === 'number'` in
+   *    `Database.processDeltaBatch`, the metadata-cursor update, numeric
+   *    `>=` thresholds in TransactionQueue) silently breaks on strings:
+   *    acks are withheld, the resume cursor never advances, and every
+   *    reconnect replays from 0. Coerce ONCE here.
+   *  - `transactionId` / `createdBy`: the SERVER projection sends these as
+   *    nullable (and `createdBy` as a nested ParticipantRef); the client
+   *    contract types them as optional strings and never reads them.
+   *    Normalize to absent instead of rejecting every real server delta.
+   *
+   * Validation: `clientSyncDeltaSchema.safeParse` — the canonical Zod wire
+   * contract. A frame that fails is DROPPED (returns `null`) with a
+   * debug-level log + observability breadcrumb; it is never applied. One
+   * parse per delta — callers must not re-parse.
    */
-  private normalizeWireDelta(delta: SyncDelta): SyncDelta {
-    if (typeof (delta as { id: unknown }).id === 'number') return delta;
-    const coerced = Number((delta as { id: unknown }).id);
-    return { ...delta, id: Number.isFinite(coerced) ? coerced : 0 };
+  private normalizeWireDelta(raw: unknown): SyncDelta | null {
+    let candidate: unknown = raw;
+    if (isRecord(raw)) {
+      const normalized: Record<string, unknown> = { ...raw };
+      if (typeof normalized.id !== 'number') {
+        const coerced = Number(normalized.id);
+        normalized.id = Number.isFinite(coerced) ? coerced : 0;
+      }
+      if (normalized.transactionId === null) delete normalized.transactionId;
+      if (normalized.createdBy !== undefined && typeof normalized.createdBy !== 'string') {
+        delete normalized.createdBy;
+      }
+      candidate = normalized;
+    }
+    const parsed = clientSyncDeltaSchema.safeParse(candidate);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      const detail = {
+        issue: issue ? `${issue.path.join('.')}: ${issue.message}` : 'not an object',
+        modelName:
+          isRecord(raw) && typeof raw.modelName === 'string' ? raw.modelName : undefined,
+        actionType:
+          isRecord(raw) && typeof raw.actionType === 'string' ? raw.actionType : undefined,
+      };
+      getContext().logger.debug('[SyncWebSocket] dropped malformed wire delta', detail);
+      getContext().observability.breadcrumb(
+        'Dropped malformed wire delta',
+        'sync.websocket',
+        'warning',
+        detail,
+      );
+      return null;
+    }
+    return parsed.data;
   }
 
   /**
-   * Handle incoming sync delta
+   * Handle incoming sync delta (untrusted wire input — validated and
+   * normalized by {@link normalizeWireDelta}; malformed deltas are dropped).
    */
-  private handleDelta(rawDelta: SyncDelta): void {
+  private handleDelta(rawDelta: unknown): void {
     const delta = this.normalizeWireDelta(rawDelta);
+    if (!delta) return;
     getContext().logger.debug('Received delta', {
       action: delta.actionType,
       model: delta.modelName,
@@ -1250,11 +1019,11 @@ export class SyncWebSocket<
       syncId: delta.id,
     });
 
-    // DO NOT advance `this.lastSyncId` on receipt. The runtime cursor
+    // DO NOT advance `this.cursor.lastSyncId` on receipt. The runtime cursor
     // must stay consistent with what's persisted in IDB — otherwise the
     // next `requestIncrementalSync()` (and the connect-time handshake)
     // sends an optimistic cursor and the server skips deltas that never
-    // landed in IDB. `this.lastSyncId` is advanced only in `sendAck()`,
+    // landed in IDB. `this.cursor.lastSyncId` is advanced only in `sendAck()`,
     // which is gated on `BaseSyncedStore.flushPendingDeltas`'s
     // `persistedSyncId` watermark. See Replicache's "lastMutationID
     // read in the same transaction as the client view" rule.
@@ -1269,7 +1038,7 @@ export class SyncWebSocket<
   /**
    * Send acknowledgment for received delta with version vector.
    *
-   * This is the SOLE forward-mover of `this.lastSyncId` for live
+   * This is the SOLE forward-mover of `this.cursor.lastSyncId` for live
    * deltas. Called by `BaseSyncedStore.flushPendingDeltas` with the
    * `persistedSyncId` watermark — i.e. only after the deltas have
    * actually committed to IDB. Keeping the cursor advance here (rather
@@ -1282,9 +1051,7 @@ export class SyncWebSocket<
     // these are what `requestIncrementalSync` and the connect handshake
     // will send next, and what `getLastSyncId()` reports for clean-
     // shutdown persistence.
-    if (syncId > this.lastSyncId) {
-      this.lastSyncId = syncId;
-    }
+    this.cursor.ackAdvance(syncId);
 
     if (this.ws?.readyState !== WebSocket.OPEN) return;
 
@@ -1336,39 +1103,6 @@ export class SyncWebSocket<
   }
 
   /**
-   * Project the SDK's `MutationOperation[]` onto the canonical wire
-   * `CommitMessage`. This is the single serialize boundary between the SDK op
-   * type (loose `type: string`, plus an SDK-internal `options` the server never
-   * reads) and the strict wire contract. The per-field map gives compile-time
-   * drift detection (a `CommitOperation` shape change breaks here) and the lone
-   * `as` narrows the validated op `type` to the wire union — the only
-   * loosening, localized to this boundary.
-   */
-  private buildCommitFrame(
-    operations: ReadonlyArray<MutationOperation>,
-    clientTxId: string,
-    causedByTaskId?: string | null,
-    reads?: readonly ReadDependency[] | null,
-  ): CommitMessage {
-    const payload: CommitMessage['payload'] = {
-      operations: operations.map((op) => ({
-        type: op.type as CommitOperation['type'],
-        model: op.model,
-        id: op.id,
-        input: op.input,
-        transactionId: op.transactionId,
-        readAt: op.readAt,
-        onStale: op.onStale,
-      })),
-      clientTxId,
-    };
-    if (causedByTaskId) payload.causedByTaskId = causedByTaskId;
-    // Batch-level read-set (STORM layer): rows/groups the batch was premised on.
-    if (reads && reads.length > 0) payload.reads = [...reads];
-    return { type: 'commit', payload };
-  }
-
-  /**
    * Send a `commit` mutation request over the existing WebSocket and
    * resolve when the server's `mutation_result` frame comes back with
    * the same `clientTxId`. The wire-level frame is `{ type: 'commit',
@@ -1387,67 +1121,8 @@ export class SyncWebSocket<
    * NOT auto-retry here — the caller's TransactionQueue owns retry +
    * offline replay semantics and the SDK shouldn't duplicate that logic.
    */
-  /**
-   * Defensively validate the optional `notifications` array off a commit ack.
-   * Untrusted wire data — a malformed entry is dropped rather than throwing,
-   * so a bad notification never sinks an otherwise-successful commit.
-   */
-  private parseNotifications(raw: unknown): StaleNotification[] | undefined {
-    if (!Array.isArray(raw) || raw.length === 0) return undefined;
-    const out: StaleNotification[] = [];
-    for (const entry of raw) {
-      const parsed = staleNotificationSchema.safeParse(entry);
-      if (parsed.success) out.push(parsed.data);
-    }
-    return out.length > 0 ? out : undefined;
-  }
-
-  /**
-   * Single instrumentation point for claim events. Every `claim_*` frame routes
-   * through here so a developer debugging a collision gets one consistent trace
-   * — a console line AND a structured capture — without each dispatch case
-   * re-deriving the row/holder shape. The wire payload is loosely typed
-   * (`Record<string, unknown>`), so this is the one place that narrows it into
-   * a {@link ClaimEvent}.
-   */
-  private recordClaim(
-    phase: ClaimEvent['phase'],
-    payload: Record<string, unknown>,
-  ): void {
-    const str = (v: unknown): string | undefined =>
-      typeof v === 'string' ? v : undefined;
-    // Targets arrive flat ({ entityType, entityId }) or nested under `target`.
-    const target =
-      payload.target && typeof payload.target === 'object'
-        ? (payload.target as Record<string, unknown>)
-        : payload;
-    const kind = wireParticipantKindSchema.safeParse(payload.participantKind);
-    const event: ClaimEvent = {
-      phase,
-      claimId: str(payload.claimId),
-      model: str(target.entityType) ?? str(target.model),
-      id: str(target.entityId) ?? str(target.id),
-      field: str(target.field),
-      actor: str(payload.actor) ?? str(payload.heldBy),
-      participantKind: kind.success ? kind.data : undefined,
-      position: typeof payload.position === 'number' ? payload.position : undefined,
-      reason: str(payload.policyReason) ?? str(payload.reason),
-    };
-    const message = formatClaim(event);
-    // A rejection or lost lease is the collision a developer is actively
-    // debugging → warn (shows at the default log level). The routine events
-    // (acquired/queued/granted/expired) are debug-only so they never drown the
-    // console until you opt in with `new Ablo({ debug: true })`.
-    const isCollision = phase === 'rejected' || phase === 'lost';
-    const ctx = getContext();
-    if (isCollision) ctx.logger.warn(message);
-    else ctx.logger.debug(message);
-    ctx.observability.breadcrumb(message, 'sync.coordination', isCollision ? 'warning' : 'info');
-    ctx.observability.captureClaim(event);
-  }
-
   sendCommit(
-    operations: ReadonlyArray<MutationOperation>,
+    operations: readonly MutationOperation[],
     clientTxId: string,
     timeoutMs = 15_000,
     causedByTaskId?: string | null,
@@ -1473,7 +1148,7 @@ export class SyncWebSocket<
         // an open turn — keeps the wire shape stable for sessions
         // that don't use turns. Servers that don't know the field
         // ignore it; newer servers stamp it onto every delta.
-        const frame = this.buildCommitFrame(operations, clientTxId, causedByTaskId, reads);
+        const frame = buildCommitFrame(operations, clientTxId, causedByTaskId, reads);
         this.ws!.send(JSON.stringify(frame));
       } catch (error) {
         clearTimeout(timeout);
@@ -1492,7 +1167,7 @@ export class SyncWebSocket<
    * instance because no pending resolver is registered.
    */
   sendCommitQueued(
-    operations: ReadonlyArray<MutationOperation>,
+    operations: readonly MutationOperation[],
     clientTxId: string,
     causedByTaskId?: string | null,
     reads?: readonly ReadDependency[] | null,
@@ -1500,7 +1175,7 @@ export class SyncWebSocket<
     if (this.ws?.readyState !== WebSocket.OPEN) {
       throw this.notConnectedError('commit');
     }
-    const frame = this.buildCommitFrame(operations, clientTxId, causedByTaskId, reads);
+    const frame = buildCommitFrame(operations, clientTxId, causedByTaskId, reads);
     this.ws.send(JSON.stringify(frame));
   }
 
@@ -1523,7 +1198,7 @@ export class SyncWebSocket<
    */
   sendClaim(
     claimId: string,
-    syncGroups: ReadonlyArray<string>,
+    syncGroups: readonly string[],
     options?: {
       capabilityToken?: string;
       ttlSeconds?: number;
@@ -1617,7 +1292,7 @@ export class SyncWebSocket<
    * by the connection credential's grant.
    */
   updateSubscription(
-    syncGroups: ReadonlyArray<string>,
+    syncGroups: readonly string[],
     options?: { timeoutMs?: number },
   ): Promise<{ syncGroups: string[] }> {
     if (this.ws?.readyState !== WebSocket.OPEN) {
@@ -1625,11 +1300,7 @@ export class SyncWebSocket<
     }
     const timeoutMs = options?.timeoutMs ?? 15_000;
     return new Promise<{ syncGroups: string[] }>((resolve, reject) => {
-      const entry: {
-        resolve: (value: { syncGroups: string[] }) => void;
-        reject: (err: Error) => void;
-        timeout: ReturnType<typeof setTimeout>;
-      } = {
+      const entry: PendingSubscription = {
         resolve,
         reject,
         timeout: setTimeout(() => {
@@ -1691,7 +1362,7 @@ export class SyncWebSocket<
   /**
    * Send spreadsheet selection presence
    */
-  sendSheetSelection(sheetId: string, selectedCells: Array<{ ref: string }>): void {
+  sendSheetSelection(sheetId: string, selectedCells: { ref: string }[]): void {
     this.sendCollaborationEvent('sheet:selection' as string & keyof TCollaboration, {
       sheetId,
       selectedCells,
@@ -1704,7 +1375,7 @@ export class SyncWebSocket<
   sendSlideSelection(
     deckId: string,
     slideId: string,
-    selectedLayers: Array<{ layerId: string }>
+    selectedLayers: { layerId: string }[]
   ): void {
     this.sendCollaborationEvent('slide:selection' as string & keyof TCollaboration, {
       deckId,
@@ -1833,7 +1504,7 @@ export class SyncWebSocket<
   disconnect(): void {
     this.isManualClose = true;
     this.stopCatchupInterval();
-    this.stopHeartbeat();
+    this.heartbeat.stop();
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -1843,69 +1514,6 @@ export class SyncWebSocket<
     if (this.ws) {
       this.ws.close(1000, 'Manual disconnect');
       this.ws = null;
-    }
-  }
-
-  /**
-   * Application-level heartbeat. Every `HEARTBEAT_INTERVAL_MS` while
-   * `OPEN`, send `{ type: 'ping' }` and arm a `HEARTBEAT_TIMEOUT_MS`
-   * watchdog. Any inbound frame (handled in `onmessage`) clears the
-   * watchdog. If the watchdog fires, we treat the connection as
-   * zombie and force-close it — `onclose` then triggers the existing
-   * reconnect path.
-   *
-   * Why both sides need this:
-   *  - The server sends RFC 6455 protocol pings via `ws.ping()` every
-   *    30s. Browsers auto-respond with a pong but DO NOT expose either
-   *    frame to JavaScript, so the client is blind to its own keepalive.
-   *  - On a half-open TCP (laptop wake, NAT timeout, mobile handoff)
-   *    the browser may keep `readyState === OPEN` for minutes before
-   *    the OS surfaces the broken connection. App-level traffic is
-   *    the only signal we can observe.
-   */
-  private startHeartbeat(): void {
-    this.stopHeartbeat();
-    this.heartbeatTimer = setInterval(() => {
-      if (this.ws?.readyState !== WebSocket.OPEN) return;
-
-      // Send the ping. If `send` throws, the socket is already dead —
-      // force-close so onclose triggers the reconnect cycle.
-      try {
-        this.ws.send(JSON.stringify({ type: 'ping' }));
-      } catch (err) {
-        getContext().observability.captureWebSocketError({
-          context: 'heartbeat-send-failed',
-          error: err instanceof Error ? err.message : String(err),
-        });
-        this.forceClose('heartbeat-send-failed');
-        return;
-      }
-
-      // Arm the timeout. ANY inbound message clears it (see onmessage).
-      // We don't require an explicit `pong` — a delta or any other frame
-      // is equally good proof-of-life.
-      if (this.heartbeatTimeoutTimer) clearTimeout(this.heartbeatTimeoutTimer);
-      this.heartbeatTimeoutTimer = setTimeout(() => {
-        getContext().observability.captureWebSocketError({
-          context: 'heartbeat-timeout',
-        });
-        this.forceClose('heartbeat-timeout');
-      }, SyncWebSocket.HEARTBEAT_TIMEOUT_MS);
-    }, SyncWebSocket.HEARTBEAT_INTERVAL_MS);
-  }
-
-  private stopHeartbeat(): void {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
-    this.clearHeartbeatTimeout();
-  }
-
-  private clearHeartbeatTimeout(): void {
-    if (this.heartbeatTimeoutTimer) {
-      clearTimeout(this.heartbeatTimeoutTimer);
-      this.heartbeatTimeoutTimer = null;
     }
   }
 
@@ -1994,10 +1602,26 @@ export class SyncWebSocket<
     diagnostics: ReturnType<SyncWebSocket['getConnectionDiagnostics']>;
   } {
     const d = this.getConnectionDiagnostics();
-    let detail: string;
+
+    // Session-latched is NOT a transient transport hiccup: reconnection is
+    // suppressed until re-auth (or the store's credential re-mint clears the
+    // latch), so retrying can never succeed. Reject with the PERMANENT
+    // session type — `isPermanentError` surfaces it to the caller as
+    // "re-authenticate" instead of parking the write for a reconnect that
+    // will never happen (the old `ws_not_ready` retry-forever hazard).
     if (d.sessionErrorDetected) {
-      detail = 'session_error_suppressed_reconnect';
-    } else if (d.isManualClose) {
+      return Object.assign(
+        new SyncSessionError(
+          `SyncWebSocket not connected — cannot send ${action}: session expired` +
+            (d.lastCloseReason ? ` (${d.lastCloseReason})` : '') +
+            '; re-authenticate',
+        ),
+        { diagnostics: d },
+      );
+    }
+
+    let detail: string;
+    if (d.isManualClose) {
       detail = 'manual_close';
     } else if (d.isConnecting) {
       detail = 'still_connecting';
@@ -2035,53 +1659,35 @@ export class SyncWebSocket<
     return this.options.syncGroups;
   }
 
+  // Cursor accessors — thin delegates; the state + semantics live in
+  // sync/syncCursor.ts (SyncCursor).
+
   /**
    * Update last sync ID (for persistence)
    */
   setLastSyncId(syncId: number): void {
-    this.lastSyncId = syncId;
-  }
-
-  /**
-   * Get current version vector
-   */
-  getVersionVector(): VersionVector {
-    return { ...this.versionVector };
-  }
-
-  /**
-   * Update version vector for specific entity type
-   */
-  updateVersionVector(entityType: string, version: number): void {
-    this.versionVector[entityType] = Math.max(this.versionVector[entityType] || 0, version);
-  }
-
-  /**
-   * Set version vector (for initialization)
-   */
-  setVersionVector(versions: VersionVector): void {
-    this.versionVector = { ...versions };
+    this.cursor.setLastSyncId(syncId);
   }
 
   /**
    * Update sync cursor (for incremental sync)
    */
   setSyncCursor(cursor: string | null): void {
-    this.syncCursor = cursor;
+    this.cursor.setSyncCursor(cursor);
   }
 
   /**
    * Get current sync cursor
    */
   getSyncCursor(): string | null {
-    return this.syncCursor;
+    return this.cursor.getSyncCursor();
   }
 
   /**
    * Get the highest syncId seen this session (for persistence on clean shutdown)
    */
   getLastSyncId(): number {
-    return this.lastSyncId || 0;
+    return this.cursor.getLastSyncId();
   }
 
   /**
@@ -2109,8 +1715,8 @@ export class SyncWebSocket<
     this.send({
       type: 'sync_request',
       payload: {
-        cursor: this.syncCursor,        // Always send lastSyncId to ensure server uses client's current position
-        lastSyncId: this.lastSyncId,
+        cursor: this.cursor.syncCursor,        // Always send lastSyncId to ensure server uses client's current position
+        lastSyncId: this.cursor.lastSyncId,
         capabilities: capsArr,
       },
     });
@@ -2141,9 +1747,16 @@ export class SyncWebSocket<
   }
 
   /**
-   * Handle sync response from server
+   * Handle sync response from server. Untrusted wire input — the envelope
+   * fields are narrowed defensively and every delta is validated through
+   * {@link normalizeWireDelta} (exactly once each; malformed ones drop out
+   * of the batch).
    */
-  private handleSyncResponse(payload: any): void {
+  private handleSyncResponse(rawPayload: unknown): void {
+    const payload: Record<string, unknown> = isRecord(rawPayload) ? rawPayload : {};
+    const rawDeltas: unknown[] | null = Array.isArray(payload.deltas)
+      ? payload.deltas
+      : null;
     // Cursor reconciliation — Linear-style handshake. The server stamps
     // its authoritative `currentSyncId` on every sync_response. If our
     // local cursor is AHEAD of the server, our local view has somehow
@@ -2163,32 +1776,43 @@ export class SyncWebSocket<
     // empty-delta responses eliminates this benign false positive while
     // still catching the real corruption case (server head < local AND
     // server has nothing new to send).
-    const hasDeltas = Array.isArray(payload.deltas) && payload.deltas.length > 0;
+    const hasDeltas = rawDeltas !== null && rawDeltas.length > 0;
     if (!hasDeltas && typeof payload.currentSyncId === 'number') {
       const serverHead: number = payload.currentSyncId;
-      if (serverHead < this.lastSyncId) {
+      if (serverHead < this.cursor.lastSyncId) {
         getContext().logger.debug(
           '[SyncWebSocket] local cursor ahead of server head — resetting and resyncing',
           {
-            local: this.lastSyncId,
+            local: this.cursor.lastSyncId,
             server: serverHead,
-            drift: this.lastSyncId - serverHead,
+            drift: this.cursor.lastSyncId - serverHead,
           },
         );
         getContext().observability.breadcrumb(
           'Local sync cursor diverged from server — reset',
           'sync.websocket',
           'warning',
-          { local: this.lastSyncId, server: serverHead },
+          { local: this.cursor.lastSyncId, server: serverHead },
         );
-        this.lastSyncId = serverHead;
+        this.cursor.lastSyncId = serverHead;
         // Fire a follow-up incremental sync to re-deliver anything we
         // were missing. Fire-and-forget — the next response will go
         // through this same path. The infinite-loop concern is bounded
-        // by the `serverHead < this.lastSyncId` strict-less check: once
+        // by the `serverHead < this.cursor.lastSyncId` strict-less check: once
         // we've reset to `serverHead`, the next response with the same
-        // (or higher) `currentSyncId` won't re-enter this branch.
-        void this.requestIncrementalSync();
+        // (or higher) `currentSyncId` won't re-enter this branch. A `.catch`
+        // (not `void`) so a failed send logs instead of surfacing as an
+        // unhandled rejection.
+        this.requestIncrementalSync().catch((e: unknown) => {
+          getContext().observability.breadcrumb(
+            'Post-cursor-reset sync request failed',
+            'sync.websocket',
+            'warning',
+            {
+              error: e instanceof Error ? e.message : String(e),
+            }
+          );
+        });
       }
     }
 
@@ -2198,35 +1822,37 @@ export class SyncWebSocket<
     }
 
     // Process incremental deltas
-    if (payload.deltas && Array.isArray(payload.deltas)) {
+    if (rawDeltas) {
       // Process all deltas from sync response - store handles idempotency.
-      // Same receive-boundary normalization as handleDelta — catch-up
-      // replays from older servers carry string ids too.
-      const newDeltas = (payload.deltas as SyncDelta[]).map((d) => this.normalizeWireDelta(d));
+      // Same receive-boundary validation + normalization as handleDelta —
+      // catch-up replays from older servers carry string ids too, and
+      // malformed deltas drop out of the batch instead of being applied.
+      const newDeltas: SyncDelta[] = [];
+      for (const d of rawDeltas) {
+        const delta = this.normalizeWireDelta(d);
+        if (delta) newDeltas.push(delta);
+      }
 
       if (newDeltas.length > 0) {
-        // DO NOT pre-advance `this.lastSyncId` here. Same reasoning as
+        // DO NOT pre-advance `this.cursor.lastSyncId` here. Same reasoning as
         // `handleDelta`: the runtime cursor must stay consistent with
         // IDB. The delta_batch event routes through
         // `BaseSyncedStore.processDeltaWithBatching` →
         // `flushPendingDeltas`, which calls `acknowledge()` with the
         // honest `persistedSyncId` once IDB commits. That ack is what
-        // moves `this.lastSyncId` forward.
+        // moves `this.cursor.lastSyncId` forward.
 
         // Emit ALL deltas as a single batch event
         this.emit('delta_batch', newDeltas);
       }
     }
 
-    // Update cursors and versions
-    if (payload.newCursor) {
-      this.syncCursor = payload.newCursor;
-    } else if (payload.cursor) {
-      this.syncCursor = payload.cursor;
-    }
-
-    if (payload.newVersions) {
-      Object.assign(this.versionVector, payload.newVersions);
+    // Update cursor. (`newVersions` from pre-cutover servers is ignored —
+    // the version vector was removed in W4a; `sync_id` is the causality token.)
+    if (typeof payload.newCursor === 'string' && payload.newCursor) {
+      this.cursor.syncCursor = payload.newCursor;
+    } else if (typeof payload.cursor === 'string' && payload.cursor) {
+      this.cursor.syncCursor = payload.cursor;
     }
   }
 
@@ -2234,18 +1860,14 @@ export class SyncWebSocket<
    * Handle bootstrap response from server
    */
   private handleBootstrapResponse(payload: any): void {
-    // Emit bootstrap data for processing
+    // Emit bootstrap data for processing. (A `version` field from
+    // pre-cutover servers is ignored — version vector removed in W4a.)
     this.emit('bootstrap_data', {
       entityType: payload.entityType,
       data: payload.data,
       isComplete: payload.isComplete,
       cursor: payload.cursor,
     });
-
-    // Update version vector if provided
-    if (payload.version && payload.entityType) {
-      this.updateVersionVector(payload.entityType.toLowerCase(), payload.version);
-    }
   }
 
   /**

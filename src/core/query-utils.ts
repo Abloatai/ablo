@@ -75,7 +75,7 @@ export function findIndexById<T extends Record<string, unknown>>(
   id: string,
 ): number {
   for (let i = 0; i < arr.length; i++) {
-    if (arr[i]['id'] === id) return i;
+    if (arr[i]?.id === id) return i;
   }
   return -1;
 }

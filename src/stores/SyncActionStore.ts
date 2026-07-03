@@ -6,7 +6,38 @@
  */
 
 // Uses native IndexedDB for maximum performance
-import { SyncAction } from '../types/index.js';
+import { z } from 'zod';
+import type { SyncAction } from '../types/index.js';
+import { getContext } from '../context.js';
+
+/**
+ * Zod boundary for rows read back from the sync-action store (T1.8): they
+ * were written by a previous session, so their shape is not guaranteed by
+ * this build. Default (strip) mode drops the storage bookkeeping fields
+ * (`storedAt`/`applied`/`appliedAt`) that used to be peeled off with an
+ * untyped rest-spread. Rows that don't parse are dropped + logged instead
+ * of being replayed as malformed deltas.
+ */
+const storedSyncActionSchema = z.object({
+  id: z.number(),
+  modelName: z.string(),
+  modelId: z.string(),
+  action: z.enum(['I', 'U', 'A', 'D', 'C', 'G', 'S', 'V']),
+  data: z.unknown(),
+  __class: z.literal('SyncAction').default('SyncAction'),
+});
+
+/** Parse one stored row into a SyncAction, or `null` (dropped + logged). */
+function toSyncAction(row: unknown): SyncAction | null {
+  const parsed = storedSyncActionSchema.safeParse(row);
+  if (!parsed.success) {
+    getContext().logger.debug('[SyncActionStore] Dropping malformed stored sync action', {
+      issues: parsed.error.issues.map((i) => i.path.join('.')).join(', '),
+    });
+    return null;
+  }
+  return parsed.data;
+}
 
 /**
  * SyncActionStore - Manages sync actions (deltas)
@@ -20,8 +51,8 @@ import { SyncAction } from '../types/index.js';
 export class SyncActionStore {
   private db: IDBDatabase;
   private storeName = 'sync_action_table';
-  private lastAppliedSyncId: number = 0;
-  private pendingActions: Map<number, SyncAction> = new Map();
+  private lastAppliedSyncId = 0;
+  private pendingActions = new Map<number, SyncAction>();
 
   constructor(db: IDBDatabase) {
     this.db = db;
@@ -61,8 +92,8 @@ export class SyncActionStore {
         resolve();
       };
 
-      tx.onerror = () => reject(tx.error);
-      request.onerror = () => reject(request.error);
+      tx.onerror = () => { reject(tx.error); };
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -96,11 +127,11 @@ export class SyncActionStore {
             }
           }
         };
-        request.onerror = () => reject(request.error);
+        request.onerror = () => { reject(request.error); };
       }
 
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      tx.oncomplete = () => { resolve(); };
+      tx.onerror = () => { reject(tx.error); };
     });
   }
 
@@ -114,18 +145,17 @@ export class SyncActionStore {
       const request = store.get(id);
 
       request.onsuccess = () => {
-        const data = request.result;
+        const data: unknown = request.result;
 
         if (!data) {
           resolve(undefined);
           return;
         }
 
-        const { storedAt, applied, ...action } = data;
-        resolve(action as SyncAction);
+        resolve(toSyncAction(data) ?? undefined);
       };
 
-      request.onerror = () => reject(request.error);
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -141,14 +171,14 @@ export class SyncActionStore {
       const request = index.getAll(range);
 
       request.onsuccess = () => {
-        const allData = request.result;
-        const actions = allData.map(
-          ({ storedAt, applied, ...action }: any) => action as SyncAction
-        );
+        const allData: unknown[] = request.result;
+        const actions = allData
+          .map(toSyncAction)
+          .filter((action): action is SyncAction => action !== null);
         resolve(actions);
       };
 
-      request.onerror = () => reject(request.error);
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -170,7 +200,9 @@ export class SyncActionStore {
    * Mark sync action as applied
    */
   async markAsApplied(syncId: number): Promise<void> {
-    return new Promise(async (resolve, reject) => {
+    // Plain (non-async) executor: a sync throw (e.g. transaction() on a
+    // closing DB) must reject this promise, not vanish into an ignored one.
+    return new Promise((resolve, reject) => {
       const tx = this.db.transaction([this.storeName], 'readwrite');
       const store = tx.objectStore(this.storeName);
 
@@ -181,10 +213,10 @@ export class SyncActionStore {
           existing.applied = true;
           existing.appliedAt = Date.now();
           const putRequest = store.put(existing);
-          putRequest.onerror = () => reject(putRequest.error);
+          putRequest.onerror = () => { reject(putRequest.error); };
         }
       };
-      getRequest.onerror = () => reject(getRequest.error);
+      getRequest.onerror = () => { reject(getRequest.error); };
 
       tx.oncomplete = async () => {
         // Update tracking
@@ -204,7 +236,7 @@ export class SyncActionStore {
         }
       };
 
-      tx.onerror = () => reject(tx.error);
+      tx.onerror = () => { reject(tx.error); };
     });
   }
 
@@ -214,7 +246,7 @@ export class SyncActionStore {
   async markManyAsApplied(syncIds: number[]): Promise<void> {
     if (syncIds.length === 0) return;
 
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const tx = this.db.transaction([this.storeName], 'readwrite');
       const store = tx.objectStore(this.storeName);
       let processed = 0;
@@ -241,13 +273,13 @@ export class SyncActionStore {
                 }
               }
             };
-            putRequest.onerror = () => reject(putRequest.error);
+            putRequest.onerror = () => { reject(putRequest.error); };
           } else {
             processed++;
             this.pendingActions.delete(syncId);
           }
         };
-        getRequest.onerror = () => reject(getRequest.error);
+        getRequest.onerror = () => { reject(getRequest.error); };
       }
 
       tx.oncomplete = async () => {
@@ -265,7 +297,7 @@ export class SyncActionStore {
         }
       };
 
-      tx.onerror = () => reject(tx.error);
+      tx.onerror = () => { reject(tx.error); };
     });
   }
 
@@ -303,7 +335,7 @@ export class SyncActionStore {
           currentId++;
           checkNext();
         };
-        request.onerror = () => reject(request.error);
+        request.onerror = () => { reject(request.error); };
       };
 
       checkNext();
@@ -335,7 +367,7 @@ export class SyncActionStore {
           currentId++;
           checkNext();
         };
-        request.onerror = () => reject(request.error);
+        request.onerror = () => { reject(request.error); };
       };
 
       checkNext();
@@ -345,7 +377,7 @@ export class SyncActionStore {
   /**
    * Clean up old sync actions
    */
-  async cleanup(keepDays: number = 7): Promise<number> {
+  async cleanup(keepDays = 7): Promise<number> {
     return new Promise((resolve, reject) => {
       const cutoff = Date.now() - keepDays * 24 * 60 * 60 * 1000;
       const tx = this.db.transaction([this.storeName], 'readwrite');
@@ -362,7 +394,7 @@ export class SyncActionStore {
               cleaned++;
               cursor.continue();
             };
-            deleteRequest.onerror = () => reject(deleteRequest.error);
+            deleteRequest.onerror = () => { reject(deleteRequest.error); };
           } else {
             cursor.continue();
           }
@@ -372,7 +404,7 @@ export class SyncActionStore {
         }
       };
 
-      request.onerror = () => reject(request.error);
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -391,8 +423,8 @@ export class SyncActionStore {
         resolve();
       };
 
-      tx.onerror = () => reject(tx.error);
-      request.onerror = () => reject(request.error);
+      tx.onerror = () => { reject(tx.error); };
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -433,7 +465,7 @@ export class SyncActionStore {
         });
       };
 
-      request.onerror = () => reject(request.error);
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -453,12 +485,12 @@ export class SyncActionStore {
         metadata.updatedAt = new Date();
 
         const putRequest = store.put(metadata, 'metadata');
-        putRequest.onerror = () => reject(putRequest.error);
+        putRequest.onerror = () => { reject(putRequest.error); };
       };
-      getRequest.onerror = () => reject(getRequest.error);
+      getRequest.onerror = () => { reject(getRequest.error); };
 
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      tx.oncomplete = () => { resolve(); };
+      tx.onerror = () => { reject(tx.error); };
     });
   }
 
@@ -482,7 +514,7 @@ export class SyncActionStore {
           resolve(undefined);
         }
       };
-      request.onerror = () => reject(request.error);
+      request.onerror = () => { reject(request.error); };
     });
   }
 
@@ -490,7 +522,7 @@ export class SyncActionStore {
    * Rewind to a specific sync ID (for conflict resolution)
    */
   async rewindTo(syncId: number): Promise<SyncAction[]> {
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
       // Get all actions after this sync ID
       const tx = this.db.transaction([this.storeName], 'readonly');
       const store = tx.objectStore(this.storeName);
@@ -533,25 +565,25 @@ export class SyncActionStore {
               this.lastAppliedSyncId = syncId - 1;
             }
           };
-          putRequest.onerror = () => reject(putRequest.error);
+          putRequest.onerror = () => { reject(putRequest.error); };
         }
 
         writeTx.oncomplete = async () => {
           try {
             await this.updateLastSyncId(this.lastAppliedSyncId);
-            const result = actionsToRewind.map(
-              ({ storedAt, applied, ...action }: any) => action as SyncAction
-            );
+            const result = (actionsToRewind as unknown[])
+              .map(toSyncAction)
+              .filter((action): action is SyncAction => action !== null);
             resolve(result);
           } catch (error) {
             reject(error);
           }
         };
 
-        writeTx.onerror = () => reject(writeTx.error);
+        writeTx.onerror = () => { reject(writeTx.error); };
       };
 
-      request.onerror = () => reject(request.error);
+      request.onerror = () => { reject(request.error); };
     });
   }
 }

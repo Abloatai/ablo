@@ -29,6 +29,7 @@ import { z } from 'zod';
 import { getContext } from '../context.js';
 import { classifyRecovery } from '../errors.js';
 import { withAuthHeaders, type AuthTokenGetter } from '../auth/credentialSource.js';
+import { ABLO_DEFAULT_BASE_URL } from '../client/hostedEndpoints.js';
 
 /**
  * The closed set of probe outcomes — one value carrying both reachability and
@@ -72,8 +73,9 @@ const PROBE_TIMEOUT_MS = 4000;
 
 export interface NetworkProbeOptions {
   /**
-   * Sync-server base URL (HTTP or WS scheme accepted). If omitted, falls
-   * back to the legacy `NEXT_PUBLIC_GO_SERVER_URL` default.
+   * Sync-server base URL (HTTP or WS scheme accepted). If omitted, the probe
+   * targets the canonical hosted endpoint ({@link ABLO_DEFAULT_BASE_URL}) —
+   * the same default `Ablo()` resolves.
    */
   baseUrl?: string;
   /**
@@ -92,12 +94,11 @@ export interface NetworkProbeOptions {
  * normalisation in `BootstrapHelper` / `createSyncEngine`.
  */
 function resolveProbeUrl(baseUrl?: string): string {
-  // Fall back to the legacy env var so callers that haven't been migrated
-  // to pass an explicit baseUrl keep working.
-  const resolved =
-    baseUrl ??
-    (typeof process !== 'undefined' ? process.env?.NEXT_PUBLIC_GO_SERVER_URL : undefined) ??
-    'http://localhost:8080';
+  // No explicit baseUrl → probe the canonical hosted endpoint, matching the
+  // `Ablo()` default. (This used to fall back to the REMOVED Go engine's
+  // `NEXT_PUBLIC_GO_SERVER_URL` and then `http://localhost:8080`, so a probe
+  // without a baseUrl reported a healthy production deployment as offline.)
+  const resolved = baseUrl ?? ABLO_DEFAULT_BASE_URL;
 
   // Normalize ws → http so fetch() accepts the URL. Strip any trailing slash
   // so we don't produce `//api/auth/check`.
@@ -131,7 +132,7 @@ export async function probeNetwork(input?: string | NetworkProbeOptions): Promis
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  const timeout = setTimeout(() => { controller.abort(); }, PROBE_TIMEOUT_MS);
   const start = performance.now();
 
   try {

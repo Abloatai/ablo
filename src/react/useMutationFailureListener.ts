@@ -48,6 +48,6 @@ export function useMutationFailureListener(
   useEffect(() => {
     const engine = ctx.engine;
     if (!engine) return;
-    return engine.onMutationFailure((payload) => ref.current(payload));
+    return engine.onMutationFailure((payload) => { ref.current(payload); });
   }, [ctx, ctx.engine]);
 }

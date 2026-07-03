@@ -35,8 +35,13 @@
 import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
+import { readProjectApiKey, type ApiKeySource } from './dbRole';
+import type { Environment } from '../environment.js';
 
-export type Mode = 'sandbox' | 'production';
+// Same domain as the engine's canonical `Environment` — the CLI keeps the
+// `Mode` NAME for its UX surface (`ablo mode`, key profiles) but the type is
+// one and the same, so the two can never drift.
+export type Mode = Environment;
 
 /** The reserved profile name for the org-default project (no `activeProject`).
  *  Mirrors Stripe's `default` config profile. */
@@ -442,6 +447,39 @@ export function guardActiveProjectKey(): ProjectKeyGuard {
   return { ok: hasKey(profiles[activeProfile]), activeProfile, available };
 }
 
+/** Where the ONE effective CLI credential came from: the process environment,
+ *  a project env file the app's framework would load, or the stored
+ *  `ablo login` credential. */
+export type EffectiveKeySource = ApiKeySource | 'stored';
+
+/** The credential the CLI would present, plus its provenance. `source` is
+ *  `null` exactly when `key` is `undefined` (nothing resolved). */
+export interface EffectiveApiKey {
+  key: string | undefined;
+  source: EffectiveKeySource | null;
+}
+
+/**
+ * THE one credential chain every CLI command shares:
+ *
+ *   `ABLO_API_KEY` in process.env → `.env.local` → `.env` → the stored
+ *   `ablo login` key for the active mode (or `modeOverride`).
+ *
+ * `push`, `dev`, `status`, and {@link resolvePushPlan} all resolve through
+ * here, so the diagnostic commands report exactly the credential a deploy
+ * would present. (Pre-fix there were FOUR divergent chains: only `push` read
+ * the project env files, so `ablo status` could report the stored sandbox key
+ * while `ablo push` used the production key sitting in `.env.local`.)
+ *
+ * `cwd` exists for tests; commands use the process working directory.
+ */
+export function resolveEffectiveApiKey(modeOverride?: Mode, cwd?: string): EffectiveApiKey {
+  const fromProject = readProjectApiKey(cwd);
+  if (fromProject) return { key: fromProject.key, source: fromProject.source };
+  const key = resolveApiKey(modeOverride);
+  return key ? { key, source: 'stored' } : { key: undefined, source: null };
+}
+
 /** What `ablo push` would do right now: which environment it deploys to and
  *  the credential it would present. */
 export interface PushPlan {
@@ -450,23 +488,25 @@ export interface PushPlan {
   flow: Mode;
   apiKey: string | undefined;
   /** Where the credential came from — `null` when none resolves. */
-  source: 'env' | 'stored' | null;
+  source: EffectiveKeySource | null;
 }
 
 /**
- * Resolve the credential + flow `ablo push` uses, in order: an explicit
- * `ABLO_API_KEY` (its prefix names the environment) → the ACTIVE mode's
- * stored credential (in the active project profile). The active mode is
- * honored even when no credential is stored for it, so a production-mode push
- * fails asking for a production key instead of silently running the sandbox
- * flow. (Pre-fix, only the env var was consulted: `ablo login` + `ablo mode
- * production` + `npx ablo push` still landed in the sandbox flow and demanded
- * `sk_test_`.)
+ * Resolve the credential + flow `ablo push` uses, through the shared
+ * {@link resolveEffectiveApiKey} chain: an explicit key (env var or a project
+ * env file — its prefix names the environment) → the ACTIVE mode's stored
+ * credential (in the active project profile). The active mode is honored even
+ * when no credential is stored for it, so a production-mode push fails asking
+ * for a production key instead of silently running the sandbox flow. (Pre-fix,
+ * only the env var was consulted: `ablo login` + `ablo mode production` +
+ * `npx ablo push` still landed in the sandbox flow and demanded `sk_test_`.)
  */
 export function resolvePushPlan(): PushPlan {
-  const envKey = process.env.ABLO_API_KEY;
-  if (envKey) return { flow: modeFromKey(envKey) ?? getMode(), apiKey: envKey, source: 'env' };
-  const mode = getMode();
-  const apiKey = resolveApiKey(mode);
-  return { flow: mode, apiKey, source: apiKey ? 'stored' : null };
+  const { key, source } = resolveEffectiveApiKey();
+  if (key != null && source != null && source !== 'stored') {
+    // An explicit key (env var or project env file) wins — exactly what push
+    // presents — and its prefix names the environment it deploys to.
+    return { flow: modeFromKey(key) ?? getMode(), apiKey: key, source };
+  }
+  return { flow: getMode(), apiKey: key, source };
 }

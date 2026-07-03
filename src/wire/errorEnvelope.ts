@@ -19,6 +19,16 @@
 import { AbloError, docUrlForCode } from '../errors.js';
 import { errorCodeSpec } from '../errorCodes.js';
 
+/**
+ * The constant public message for an unclassified 500. Mirrors
+ * `apps/sync-server/src/errors.ts`'s `INTERNAL_ERROR_PUBLIC_MESSAGE` —
+ * the parity test in apps/sync-server pins the two producers together. A raw
+ * `err.message` (driver text, connection strings, stack fragments) must never
+ * be the wire message; callers that need the detail log the original error
+ * server-side before/at the envelope call.
+ */
+export const INTERNAL_ERROR_PUBLIC_MESSAGE = 'An internal error occurred.';
+
 /** The canonical wire envelope — Stripe's error-object shape. Every HTTP error
  *  response and every structured frame error carries this exact set of keys,
  *  regardless of which route or transport produced it. */
@@ -33,11 +43,11 @@ export interface ErrorEnvelope {
    *  at once (schema push, batch commit, CLI-arg validation) instead of failing
    *  on the first. `param` stays the single-field convenience case. (RFC 9457
    *  `errors[]` / JSON:API `errors[]` / Google `BadRequest.fieldViolations[]`.) */
-  readonly errors?: ReadonlyArray<{
+  readonly errors?: readonly {
     readonly code?: string;
     readonly message: string;
     readonly param?: string;
-  }>;
+  }[];
   /** Typed-details slot: `AbloError.toJSON()` spreads its `details` (e.g.
    *  `missingIds`, `conflicts`, `retryAfterSeconds`) as top-level members.
    *  Consumers MUST ignore members they don't recognize (forward-compat). */
@@ -103,12 +113,15 @@ export function errorEnvelope(
       status,
     };
   }
-  const message = err instanceof Error ? err.message : String(err);
+  // Unknown throw → mask. The server copy deliberately never echoes a raw
+  // message on an unclassified 500 (it can carry pg/driver/internal detail);
+  // this producer must not either — sync-web's dashboard routes serve THIS
+  // envelope to browsers. The raw error stays with the caller for logging.
   return {
     body: {
       type: 'AbloServerError',
       code: 'internal_error',
-      message,
+      message: INTERNAL_ERROR_PUBLIC_MESSAGE,
       doc_url: docUrlForCode('internal_error'),
       ...(requestId ? { request_id: requestId } : {}),
     },

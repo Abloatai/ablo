@@ -19,7 +19,6 @@ export type { MockDelta, MockBootstrapHint } from './mocks/MockWebSocket.js';
 
 export {
   createTestContext,
-  MockMutationDispatcher,
 } from './mocks/MockSyncContext.js';
 export type { TestContextOptions, TestContextResult } from './mocks/MockSyncContext.js';
 

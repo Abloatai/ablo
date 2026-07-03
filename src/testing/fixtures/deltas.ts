@@ -195,7 +195,7 @@ export function createGroupRemovedDelta(
  * Create a batch of deltas with sequential sync IDs.
  */
 export function createDeltaBatch(
-  deltas: Array<Omit<CreateDeltaOptions, 'id'>>,
+  deltas: Omit<CreateDeltaOptions, 'id'>[],
   startingSyncId?: number
 ): SyncAction[] {
   const start = startingSyncId ?? deltaCounter + 1;

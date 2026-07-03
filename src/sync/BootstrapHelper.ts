@@ -11,9 +11,7 @@ export interface BootstrapData {
    * boundary — the per-model shape is asserted by the consumer (sync
    * engine reduce + IDB write) using the registered schema.
    */
-  models?: {
-    [typename: string]: unknown[];
-  };
+  models?: Record<string, unknown[]>;
   deltas?: ValidatedServerDelta[];
   deltaCount?: number;
   /** Model types whose server-side query failed (timeout, RLS error, etc.) */
@@ -292,7 +290,7 @@ export class BootstrapHelper {
             'sync.bootstrap',
             'warning',
             {
-              statusCode: (error as SyncSessionError).statusCode,
+              statusCode: (error).statusCode,
             }
           );
           throw error;
@@ -353,7 +351,7 @@ export class BootstrapHelper {
     // client-side was historical: it predated the auth-context pipeline
     // and forced a cross-org guard to defend against the SDK lying.
     const params = new URLSearchParams();
-    this.options.syncGroups.forEach((g) => params.append('syncGroups', g));
+    this.options.syncGroups.forEach((g) => { params.append('syncGroups', g); });
     if (this.options.instantModels && this.options.instantModels.length > 0) {
       params.append('models', this.options.instantModels.join(','));
     }
@@ -525,12 +523,35 @@ export class BootstrapHelper {
   async fetchEntity(modelName: string, id: string): Promise<Record<string, unknown> | null> {
     const url = `${this.options.baseUrl}/sync/entity/${modelName}/${id}`;
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: withAuthHeaders(this.options.getAuthToken, {
-        'Content-Type': 'application/json',
-      }, this.options.authToken),
-    });
+    // Same `fetchTimeout` deadline `performFetch` uses — this was the one
+    // fetch in this file with no AbortSignal, so a hung self-heal read could
+    // stall its caller forever. A LOCAL controller (not `this.abortController`)
+    // so an entity self-heal never cancels a concurrent bootstrap fetch.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => { controller.abort(); }, this.options.fetchTimeout);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'GET',
+        headers: withAuthHeaders(this.options.getAuthToken, {
+          'Content-Type': 'application/json',
+        }, this.options.authToken),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      // Convert abort to the existing typed timeout error (same code as the
+      // bootstrap fetch path) so callers get a retryable connection error.
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new AbloConnectionError(
+          `Entity fetch timed out after ${this.options.fetchTimeout}ms`,
+          { code: 'bootstrap_fetch_timeout', cause: error },
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (response.status === 404) {
       return null;

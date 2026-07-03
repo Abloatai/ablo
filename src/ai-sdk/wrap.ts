@@ -13,7 +13,7 @@
  * const wrapped = wrapWithMultiplayer({
  *   model: anthropic('claude-opus-4-7'),
  *   agent,
- *   target: { entityType: 'SlideDeck', entityId: 'deck-abc' },
+ *   target: { type: 'SlideDeck', id: 'deck-abc' },
  * });
  *
  * const result = streamText({

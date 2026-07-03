@@ -62,7 +62,7 @@ export function awaitClaimGrant(
   },
 ): Promise<ClaimGrantInfo> {
   return new Promise<ClaimGrantInfo>((resolve, reject) => {
-    const unsubs: Array<() => void> = [];
+    const unsubs: (() => void)[] = [];
     let timer: ReturnType<typeof setTimeout> | undefined;
     const settle = (fn: () => void): void => {
       if (timer) clearTimeout(timer);
@@ -77,7 +77,7 @@ export function awaitClaimGrant(
       transport.subscribe('claim_acquired', (p) => {
         if (p?.claimId === claimId) {
           getContext().logger.debug(`claim: acquired ${claimId} (target was free)`);
-          settle(() => resolve({ waited: false }));
+          settle(() => { resolve({ waited: false }); });
         }
       }),
     );
@@ -87,7 +87,7 @@ export function awaitClaimGrant(
           // Promoted to the head of the line — the creator's "it's the agent's
           // turn now" moment after waiting behind a holder.
           getContext().logger.info(`claim: granted ${claimId} — your turn (waited in queue)`);
-          settle(() => resolve({ waited: true }));
+          settle(() => { resolve({ waited: true }); });
         }
       }),
     );
@@ -99,12 +99,12 @@ export function awaitClaimGrant(
           const position = typeof p.position === 'number' ? p.position : 0;
           if (position >= max) {
             settle(() =>
-              reject(
+              { reject(
                 new AbloClaimedError(
                   `Claim queue for ${claimId} is ${position} deep (max ${max}).`,
                   { code: 'queue_too_deep' },
                 ),
-              ),
+              ); },
             );
           }
         }),
@@ -122,7 +122,7 @@ export function awaitClaimGrant(
             })
           : claimId;
         settle(() =>
-          reject(
+          { reject(
             new AbloClaimedError(
               formatClaimedErrorMessage({
                 targetLabel: target,
@@ -138,7 +138,7 @@ export function awaitClaimGrant(
                 claims: rejection.heldByClaim ? [rejection.heldByClaim] : undefined,
               },
             ),
-          ),
+          ); },
         );
       }),
     );
@@ -146,11 +146,11 @@ export function awaitClaimGrant(
       transport.subscribe('claim_lost', (p) => {
         if (p?.claimId === claimId) {
           settle(() =>
-            reject(
+            { reject(
               new AbloClaimedError(`Claim lost while queued for ${claimId}.`, {
                 code: 'claim_lost',
               }),
-            ),
+            ); },
           );
         }
       }),
@@ -159,12 +159,12 @@ export function awaitClaimGrant(
     if (options?.timeoutMs && options.timeoutMs > 0) {
       timer = setTimeout(() => {
         settle(() =>
-          reject(
+          { reject(
             new AbloClaimedError(
               `Timed out waiting for the queue grant on claim ${claimId}.`,
               { code: 'grant_timeout' },
             ),
-          ),
+          ); },
         );
       }, options.timeoutMs);
     }

@@ -7,7 +7,7 @@
  * Adding new shapes is additive on the discriminated union.
  */
 
-import type { ParticipantRef } from '../types/streams.js';
+import type { ParticipantRef } from '../types/participant.js';
 import type { OnStaleMode } from '../coordination/schema.js';
 
 export type ConflictKind = 'stale_context' | 'claim_held';

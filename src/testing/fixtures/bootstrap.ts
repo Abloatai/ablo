@@ -6,21 +6,19 @@
 
 import type { BootstrapType } from '../../types/index.js';
 
-export interface BootstrapModelData {
-  [modelName: string]: Array<Record<string, unknown>>;
-}
+export type BootstrapModelData = Record<string, Record<string, unknown>[]>;
 
 export interface BootstrapResponse {
   type: BootstrapType;
   lastSyncId: number;
   models?: BootstrapModelData;
-  deltas?: Array<{
+  deltas?: {
     id: number;
     modelName: string;
     modelId: string;
     action: string;
     data: Record<string, unknown>;
-  }>;
+  }[];
   deltaCount?: number;
   failedModels?: string[];
   timestamp: number;
@@ -61,12 +59,12 @@ export function createPartialBootstrapResponse(
  * Create a full bootstrap response with test model data pre-populated.
  */
 export function createTestBootstrapResponse(options: {
-  tasks?: Array<Record<string, unknown>>;
-  projects?: Array<Record<string, unknown>>;
-  slideDecks?: Array<Record<string, unknown>>;
-  slides?: Array<Record<string, unknown>>;
-  slideLayers?: Array<Record<string, unknown>>;
-  comments?: Array<Record<string, unknown>>;
+  tasks?: Record<string, unknown>[];
+  projects?: Record<string, unknown>[];
+  slideDecks?: Record<string, unknown>[];
+  slides?: Record<string, unknown>[];
+  slideLayers?: Record<string, unknown>[];
+  comments?: Record<string, unknown>[];
   lastSyncId?: number;
   failedModels?: string[];
 } = {}): BootstrapResponse {

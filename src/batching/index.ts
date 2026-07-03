@@ -65,7 +65,7 @@ interface Deferred<R> {
 
 interface Batch<T, R> {
   items: T[];
-  deferreds: Array<Deferred<R>>;
+  deferreds: Deferred<R>[];
   cost: number;
 }
 
@@ -83,9 +83,9 @@ export function createBatchScheduler<T, R>(
   let pending: Batch<T, R> | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let microtaskScheduled = false;
-  const ready: Array<Batch<T, R>> = [];
+  const ready: Batch<T, R>[] = [];
   let inFlight = 0;
-  let idleWaiters: Array<() => void> = [];
+  let idleWaiters: (() => void)[] = [];
   let disposed = false;
 
   function scheduleFlush(): void {

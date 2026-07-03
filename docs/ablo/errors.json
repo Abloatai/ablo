@@ -1,6 +1,6 @@
 {
   "$generated": "packages/sync-engine/scripts/generate-error-docs.mts",
-  "version": "2026-06-20",
+  "version": "2026-07-01",
   "envelope": [
     "type",
     "code",
@@ -371,6 +371,15 @@
       "retryable": false,
       "message": "A commit operation is missing its `action`.",
       "docUrl": "https://docs.abloatai.com/errors#commit_operation_action_required"
+    },
+    {
+      "code": "commit_operation_invalid",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A commit operation failed validation against the wire commit-operation schema — wrong field type (e.g. a string `readAt`), unknown `type`, or missing `model`. The whole batch was rejected; the error names the offending operation index and field path.",
+      "docUrl": "https://docs.abloatai.com/errors#commit_operation_invalid"
     },
     {
       "code": "commit_operation_model_required",
@@ -1495,6 +1504,15 @@
       "docUrl": "https://docs.abloatai.com/errors#registry_unknown_model"
     },
     {
+      "code": "request_too_large",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 413,
+      "retryable": false,
+      "message": "The request body exceeds the maximum size.",
+      "docUrl": "https://docs.abloatai.com/errors#request_too_large"
+    },
+    {
       "code": "required_field_added",
       "category": "schema",
       "surface": "client",
@@ -1589,6 +1607,15 @@
       "retryable": false,
       "message": "A mutable schema is missing its required meta block.",
       "docUrl": "https://docs.abloatai.com/errors#schema_mutable_missing_meta"
+    },
+    {
+      "code": "schema_provisioning_forbidden",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "Schema registration could not create tables in the target database: the engine is not permitted to run DDL there.",
+      "docUrl": "https://docs.abloatai.com/errors#schema_provisioning_forbidden"
     },
     {
       "code": "schema_reserved_field",
@@ -1699,9 +1726,10 @@
     {
       "code": "source_event_invalid",
       "category": "validation",
-      "surface": "client",
+      "surface": "wire",
+      "httpStatus": 400,
       "retryable": false,
-      "message": "A data-source outbox event could not be built — the operation carries no entity id and none was supplied.",
+      "message": "A data-source event was malformed — missing or invalid id, model, entityId, type, or field value. The whole event batch was rejected and nothing was ingested; fix the offending outbox row and re-send.",
       "docUrl": "https://docs.abloatai.com/errors#source_event_invalid"
     },
     {
@@ -1960,6 +1988,15 @@
       "retryable": false,
       "message": "The request must include a non-empty items array.",
       "docUrl": "https://docs.abloatai.com/errors#upload_items_required"
+    },
+    {
+      "code": "upload_not_configured",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": false,
+      "message": "Uploads are not configured on this deployment: the upload storage bucket and CDN domain are unset.",
+      "docUrl": "https://docs.abloatai.com/errors#upload_not_configured"
     },
     {
       "code": "usage_invalid",

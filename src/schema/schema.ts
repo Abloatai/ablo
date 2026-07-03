@@ -47,6 +47,7 @@ export {
   extractEntityIds,
   composeIdentitySyncGroups,
   composeEntitySyncGroups,
+  intersectRequestedWithAllowed,
   syncGroup,
   syncGroupSchema,
   syncGroupInputSchema,
@@ -392,8 +393,7 @@ export type UpdateValue<S extends Schema, ModelName extends keyof S['models']> =
  *
  * Matches Zero's `DeleteID<TableSchema>` from `zql/src/mutate/crud.ts`.
  */
-export type DeleteId<S extends Schema, ModelName extends keyof S['models']> =
-  { id: string };
+export interface DeleteId<S extends Schema, ModelName extends keyof S['models']> { id: string }
 
 // ── Factory ───────────────────────────────────────────────────────────────
 
@@ -430,10 +430,11 @@ function assertRoundTrippableCamelCase(modelName: string, fieldName: string): vo
   if (fieldName === 'id') return;
   // Leading-lowercase constraint: fields must be camelCase, not PascalCase.
   // PascalCase is reserved for typenames.
-  if (fieldName[0] >= 'A' && fieldName[0] <= 'Z') {
+  const first = fieldName.charAt(0);
+  if (first >= 'A' && first <= 'Z') {
     throw new AbloValidationError(
       `[defineSchema] ${modelName}.${fieldName}: field names must start lowercase ` +
-        `(camelCase). Use "${fieldName[0].toLowerCase()}${fieldName.slice(1)}" instead.`,
+        `(camelCase). Use "${first.toLowerCase()}${fieldName.slice(1)}" instead.`,
       { code: 'schema_field_not_camelcase' },
     );
   }
@@ -442,8 +443,8 @@ function assertRoundTrippableCamelCase(modelName: string, fieldName: string): vo
   // through `postgres.camel` — the snake_case intermediate would be
   // `content_j_s_o_n`, which is not a column that exists.
   for (let i = 0; i < fieldName.length - 1; i++) {
-    const a = fieldName[i];
-    const b = fieldName[i + 1];
+    const a = fieldName.charAt(i);
+    const b = fieldName.charAt(i + 1);
     const aUpper = a >= 'A' && a <= 'Z';
     const bUpper = b >= 'A' && b <= 'Z';
     if (aUpper && bUpper) {
@@ -522,8 +523,7 @@ export function defineSchema<const S extends SchemaRecord>(
     // columns stay declared in the artifact instead of rediscovered by
     // SQL compilers. Server-side SQL compilers read the resolved value
     // directly.
-    for (const relName of Object.keys(def.relations)) {
-      const rel = (def.relations as Record<string, RelationDef>)[relName];
+    for (const rel of Object.values(def.relations as Record<string, RelationDef>)) {
       const fieldColumn = def.fields[rel.foreignKey]?.column;
       (rel as { foreignKeyColumn: string }).foreignKeyColumn = fieldColumn ?? casing(rel.foreignKey);
     }
@@ -603,6 +603,9 @@ function validateSyncGroupSchema(models: Record<string, ModelDef>): void {
     // The scope edge must target a model that is actually a scope root —
     // otherwise the resolved `<kind>:<id>` group is one nothing fans into.
     const scopeRel = relations[def.grants.scope];
+    // Unreachable: the role loop above already threw if the scope relation
+    // is missing — this narrows the indexed access for the checks below.
+    if (!scopeRel) continue;
     const target = models[scopeRel.target];
     if (target && !target.scope) {
       throw new AbloValidationError(

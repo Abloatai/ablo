@@ -75,7 +75,7 @@ export function createTransaction<S extends Schema>(
         store,
         organizationId,
       );
-      mutateCache.set(prop, actions as MutateActions<S, keyof S['models'] & string>);
+      mutateCache.set(prop, actions);
       return actions;
     },
   });
@@ -96,7 +96,7 @@ export function createTransaction<S extends Schema>(
         prop as keyof S['models'] & string,
         store,
       );
-      readCache.set(prop, actions as ReaderActions<S, keyof S['models'] & string>);
+      readCache.set(prop, actions);
       return actions;
     },
   });

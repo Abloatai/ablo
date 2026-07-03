@@ -44,9 +44,21 @@ export {
   type PolicyInput,
 } from './tenancy.js';
 
-// Database plane — which DB a model's rows live in (`tenant` portable to a BYO
-// customer DB, `control` = Ablo's own). Sibling axis to `tenancy`.
-export { planeSchema, DEFAULT_PLANE, type SchemaPlane } from './plane.js';
+// Model residency — which DB a model's rows live in (`tenant` portable to a
+// customer's own DB, `control` = Ablo's own). Sibling axis to `tenancy`.
+// (Renamed from "plane" — that word is the server's tenancy scope.)
+export {
+  residencySchema,
+  DEFAULT_RESIDENCY,
+  type ModelResidency,
+  // Deliberate back-compat re-export of the deprecated aliases:
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  planeSchema,
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  DEFAULT_PLANE,
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  type SchemaPlane,
+} from './residency.js';
 
 // Decomposed sync-delta storage row (P0 of the control/tenant plane split —
 // see docs/plans/sync-delta-zod-decomposition.md). Describes the existing
@@ -59,7 +71,7 @@ export {
   participantKindSchema,
   confirmationStateSchema,
   backfillProvenanceSchema,
-  DELTA_PLANES,
+  DELTA_RESIDENCY,
   type SyncDeltaCore,
   type DeltaAttribution,
   type DeltaProvenance,
@@ -141,6 +153,7 @@ export {
   type CasingConvention,
   type CasingFn,
   composeEntitySyncGroups,
+  intersectRequestedWithAllowed,
   type IdentityRole,
   type IdentityContext,
   type IdentityRoleSource,
@@ -196,6 +209,17 @@ export {
   type ProvisionPlan,
   type MigrationPlan,
 } from './ddl.js';
+
+// Safe-DDL locking knobs (lock_timeout + bounded 55P03 retry) — the ONE
+// reader shared by `ablo migrate` and the hosted executor (ddlExec.ts), so an
+// operator tuning ABLO_SCHEMA_LOCK_* gets the same behavior on both paths.
+export {
+  PG_LOCK_NOT_AVAILABLE,
+  resolveDdlLockTimeout,
+  resolveDdlMaxLockAttempts,
+  ddlLockRetryBackoffMs,
+  type DdlLockEnv,
+} from './ddlLock.js';
 
 // Schema diff + migration planning (pure; SQL emission lowered by ddl.ts)
 export {

@@ -29,7 +29,7 @@
  */
 import { exchangeApiKey, mintUserSessionKey } from '../auth/index.js';
 import type { SchemaRecord } from '../schema/schema.js';
-import type { AbloSession, CreateSessionParams } from './Ablo.js';
+import type { AbloSession, CreateSessionParams } from './resourceTypes.js';
 
 /** The resolved control-plane context a mint needs. `fetch` is optional — the
  *  auth helpers fall back to the runtime global when omitted. */

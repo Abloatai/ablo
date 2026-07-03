@@ -12,14 +12,37 @@
 
 // Removed Node.js crypto import for browser compatibility
 import {
-  ModelMetadata,
-  PropertyMetadata,
-  ReferenceMetadata,
+  type ModelMetadata,
+  type PropertyMetadata,
+  type ReferenceMetadata,
   PropertyType,
   LoadStrategy,
 } from './types/index.js';
 import { getContext } from './context.js';
 import { AbloValidationError } from './errors.js';
+// Type-only — erased at runtime, so no Model ↔ ModelRegistry module cycle.
+import type { Model } from './Model.js';
+import type { ConcreteModelConstructor } from './BaseSyncedStore.js';
+
+/**
+ * What callers may hand to {@link ModelRegistry.registerModel}: any concrete
+ * `Model` subclass constructor. `never[]` params make every subclass
+ * constructor assignable (construct-signature params are contravariant).
+ */
+export type ModelClassInput = new (...args: never[]) => Model;
+
+/**
+ * What the registry hands BACK: a registered model class — concretely
+ * constructible with an optional data row (`ConcreteModelConstructor`, the
+ * SDK's existing Model-vs-row construction seam) and carrying `Model`'s
+ * statics (`fromJSON`, …). `Omit<typeof Model, never>` keeps the statics
+ * while stripping the ABSTRACT construct signature (mapped types drop
+ * construct signatures), so `new registry.getModelByName(n)!(...)` is legal.
+ * The one cast from {@link ModelClassInput} lives at the validated
+ * registration boundary below.
+ */
+export type RegisteredModelClass = Omit<typeof Model, never> &
+  ConcreteModelConstructor<Model>;
 
 /**
  * Extended ReferenceMetadata with additional Linear-style options
@@ -98,14 +121,16 @@ export function clearActiveRegistry(): void {
 }
 
 export class ModelRegistry {
-  private models = new Map<string, any>();
+  private models = new Map<string, RegisteredModelClass>();
   private modelMetadata = new Map<string, ModelMetadata>();
   private properties = new Map<string, Map<string, PropertyMetadata>>();
   private references = new Map<string, Map<string, ExtendedReferenceMetadata>>();
   private pendingReferences = new Map<string, PendingReference[]>();
 
-  // 🔧 PROPER FIX: Static mapping from constructor to model name
-  private constructorToModelName = new Map<any, string>();
+  // 🔧 PROPER FIX: Static mapping from constructor to model name.
+  // Keyed `unknown` on purpose: lookups arrive as `this.constructor`
+  // (Function) and as typed model classes — both accepted without casts.
+  private constructorToModelName = new Map<unknown, string>();
 
   // LINEAR PATTERN: BackReferences for cascade-aware transaction handling.
   // Maps childModelName → BackReferenceMetadata[] (which parent models
@@ -127,7 +152,7 @@ export class ModelRegistry {
     };
   }
 
-  private validateModelConstructor(name: string, constructor: any): void {
+  private validateModelConstructor(name: string, constructor: unknown): void {
     if (typeof constructor !== 'function') {
       throw new AbloValidationError(
         `Model ${name} constructor must be a function`,
@@ -135,7 +160,8 @@ export class ModelRegistry {
       );
     }
 
-    if (!constructor.prototype) {
+    const prototype: unknown = constructor.prototype;
+    if (!prototype || typeof prototype !== 'object') {
       throw new AbloValidationError(
         `Model ${name} constructor must have a prototype`,
         { code: 'registry_invalid_constructor' },
@@ -145,7 +171,7 @@ export class ModelRegistry {
     // Check for required methods
     const required = ['updateFromData', 'toJSON', 'getModelName'];
     for (const method of required) {
-      if (typeof constructor.prototype[method] !== 'function') {
+      if (typeof (prototype as Record<string, unknown>)[method] !== 'function') {
         getContext().logger.debug('Model missing required method', name, { method });
       }
     }
@@ -249,7 +275,7 @@ export class ModelRegistry {
    */
   registerModel(
     name: string,
-    constructor: any,
+    constructor: ModelClassInput,
     metadata: ModelMetadata = { loadStrategy: LoadStrategy.instant }
   ): void {
     // Validate
@@ -265,8 +291,12 @@ export class ModelRegistry {
 
     getContext().logger.debug('Registering model', name);
 
-    // Register
-    this.models.set(name, constructor);
+    // Register. The one cast in this file: input is any Model-subclass
+    // constructor (validated above); registered classes are concrete
+    // subclasses constructible with `data?` and carrying Model's statics —
+    // the shape `RegisteredModelClass` names for every read site.
+    const modelClass = constructor as RegisteredModelClass;
+    this.models.set(name, modelClass);
     this.modelMetadata.set(name, metadata);
 
     // 🔧 PROPER FIX: Create reverse mapping from constructor to model name
@@ -419,7 +449,7 @@ export class ModelRegistry {
   }
 
   /** Get model name from constructor (production-safe). */
-  getModelNameFromConstructor(constructor: any): string | undefined {
+  getModelNameFromConstructor(constructor: unknown): string | undefined {
     return this.constructorToModelName.get(constructor);
   }
 
@@ -436,8 +466,7 @@ export class ModelRegistry {
   }
 
   /** Get model constructor by name */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getModelByName(name: string): any {
+  getModelByName(name: string): RegisteredModelClass | undefined {
     return this.models.get(name);
   }
 
@@ -477,9 +506,9 @@ export class ModelRegistry {
   }
 
   /** Get child models for a parent */
-  getChildModels(parentModelName: string): Array<{ childModel: string; foreignKey: string }> {
+  getChildModels(parentModelName: string): { childModel: string; foreignKey: string }[] {
     // Derive from backReferences
-    const children: Array<{ childModel: string; foreignKey: string }> = [];
+    const children: { childModel: string; foreignKey: string }[] = [];
     for (const [childModel, refs] of this.backReferences) {
       for (const ref of refs) {
         if (ref.parentModel === parentModelName) {
@@ -496,7 +525,10 @@ export class ModelRegistry {
   getSchemaHash(): string {
     if (this.schemaHash) return this.schemaHash;
 
-    const schema: any = {};
+    const schema: Record<
+      string,
+      Record<string, { type: PropertyType; indexed: boolean; optional: boolean }>
+    > = {};
 
     // Build schema object
     for (const [modelName, props] of this.properties) {

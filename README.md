@@ -322,10 +322,10 @@ import Ablo from '@abloatai/ablo';
 import { AbloProvider, useAblo } from '@abloatai/ablo/react';
 import { schema } from './ablo/schema';
 
-// Build the client once — it authenticates via your session route, no key in the browser.
+// Build the client once — authEndpoint is your session route; no key in the browser.
 const ablo = Ablo({
   schema,
-  apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
+  authEndpoint: '/api/ablo-session',
 });
 
 function App() {
@@ -381,7 +381,7 @@ to sync-group strings.
 // team membership is asserted server-side when the session route mints the token.
 const ablo = Ablo({
   schema,
-  apiKey: () => fetch('/api/ablo-session').then((r) => r.text()),
+  authEndpoint: '/api/ablo-session',
 });
 
 <AbloProvider client={ablo} userId={user.id}>

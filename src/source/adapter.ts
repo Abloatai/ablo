@@ -18,7 +18,7 @@
  * branching anywhere above the adapter.
  */
 
-import type { SourceListQuery, SourceRequestContext } from './index.js';
+import type { SourceListQuery, SourceRequestContext } from './types.js';
 import type {
   AdapterCapabilities,
   ChangeSet,

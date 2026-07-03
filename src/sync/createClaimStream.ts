@@ -88,7 +88,7 @@ export function createClaimStream(
 
   // ── State: others' open claims, keyed by claimId ───────────────
   const activeByClaimId = new Map<string, Claim>();
-  let claimsSnapshot: ReadonlyArray<Claim> = Object.freeze([]);
+  let claimsSnapshot: readonly Claim[] = Object.freeze([]);
 
   // ── State: our own open claims (for re-announce on reconnect) ───
   const ownClaims = new Map<string, OwnClaim>();
@@ -96,7 +96,7 @@ export function createClaimStream(
   // ── State: per-entity wait queues, from `claim_queue` frames ────
   // Keyed `type:id`; the value is the FIFO line of queued claims. Powers
   // the reactive `queue(target)` read — who's waiting and what they intend.
-  const queueByEntity = new Map<string, ReadonlyArray<Claim>>();
+  const queueByEntity = new Map<string, readonly Claim[]>();
   const entityKey = (type: string, id: string): string => `${type}:${id}`;
   const EMPTY_QUEUE: readonly Claim[] = Object.freeze([]);
   // Last queue position we logged per own-claim, so advancing in line is traced
@@ -121,7 +121,7 @@ export function createClaimStream(
 
   // ── Wire wiring ──────────────────────────────────────────────────
   let attached: SyncWebSocket | null = null;
-  const unsubs: Array<() => void> = [];
+  const unsubs: (() => void)[] = [];
 
   function attach(t: SyncWebSocket): void {
     if (attached) return;
@@ -265,8 +265,9 @@ export function createClaimStream(
         // If WE are in this line, trace our position (the "agent queued behind a
         // claim" moment) — once per position change, so advancing is visible.
         const ourIndex = line.findIndex((c) => ownClaims.has(c.id));
-        if (ourIndex >= 0) {
-          const ourId = line[ourIndex]!.id;
+        const ourClaim = ourIndex >= 0 ? line[ourIndex] : undefined;
+        if (ourClaim) {
+          const ourId = ourClaim.id;
           if (lastLoggedQueuePos.get(ourId) !== ourIndex) {
             lastLoggedQueuePos.set(ourId, ourIndex);
             getContext().logger.info(
@@ -476,7 +477,7 @@ export function createClaimStream(
       };
     },
     [Symbol.asyncIterator]() {
-      return asyncIteratorFrom<ReadonlyArray<Claim>>(
+      return asyncIteratorFrom<readonly Claim[]>(
         (onChange) => {
           listeners.add(onChange);
           return () => {

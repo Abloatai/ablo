@@ -22,7 +22,7 @@
  */
 
 import type { SchemaRecord } from '../schema/schema.js';
-import { dataSource, type DataSourceOptions } from './index.js';
+import { dataSource, type DataSourceOptions } from './factory.js';
 
 /**
  * Next options ARE the core options — the `adapter` field lives on the core

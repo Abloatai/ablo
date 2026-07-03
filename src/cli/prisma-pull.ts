@@ -62,7 +62,7 @@ function stripComments(src: string): string {
     let inStr = false;
     let res = '';
     for (let i = 0; i < line.length; i++) {
-      const c = line[i];
+      const c = line.charAt(i);
       if (c === '"') {
         inStr = !inStr;
         res += c;
@@ -92,8 +92,11 @@ export function parseBlocks(srcRaw: string): PrismaBlock[] {
     }
     const body = src.slice(openIdx + 1, j - 1);
     const kw = m[1];
+    const name = m[2];
+    // Both header groups are non-optional — a missing capture is unreachable.
+    if (name === undefined) throw new Error('unparseable block header in the Prisma schema');
     const type: PrismaBlock['type'] = kw === 'model' ? 'model' : kw === 'enum' ? 'enum' : 'other';
-    blocks.push({ type, name: m[2], body });
+    blocks.push({ type, name, body });
     headerRe.lastIndex = j; // resume after this block
   }
   return blocks;
@@ -105,7 +108,7 @@ function parseEnumMembers(body: string): string[] {
     const t = line.trim();
     if (!t || t.startsWith('@') || t.startsWith('@@')) continue;
     const first = t.split(/\s+/)[0];
-    if (/^\w+$/.test(first)) members.push(first);
+    if (first !== undefined && /^\w+$/.test(first)) members.push(first);
   }
   return members;
 }
@@ -126,9 +129,12 @@ export function parseFieldLine(line: string): RawField | null {
   if (!t || t.startsWith('@@') || t.startsWith('//')) return null;
   const m = /^(\w+)\s+([A-Za-z_]\w*)(\[\])?(\?)?\s*(.*)$/.exec(t);
   if (!m) return null;
+  const [, name, type] = m;
+  // Unreachable: the name/type groups are non-optional in the regex.
+  if (name === undefined || type === undefined) return null;
   return {
-    name: m[1],
-    type: m[2],
+    name,
+    type,
     list: Boolean(m[3]),
     optional: Boolean(m[4]),
     attrs: m[5] ?? '',
@@ -145,11 +151,11 @@ function blockMap(body: string): string | undefined {
 
 /** Single foreign-key field from `@relation(fields:[x], references:[…])`, if 1:1. */
 function relationFkFields(attrs: string): string[] | null {
-  const rel = /@relation\(([^)]*)\)/.exec(attrs);
-  if (!rel) return null;
-  const fields = /fields:\s*\[([^\]]*)\]/.exec(rel[1]);
-  if (!fields) return null; // the back-reference side carries no local FK
-  return fields[1]
+  const rel = /@relation\(([^)]*)\)/.exec(attrs)?.[1];
+  if (rel === undefined) return null;
+  const fields = /fields:\s*\[([^\]]*)\]/.exec(rel)?.[1];
+  if (fields === undefined) return null; // the back-reference side carries no local FK
+  return fields
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
@@ -190,8 +196,9 @@ export function parsePrismaSchema(src: string): IRSchema {
       // the local FK; the field itself has no column of its own.
       if (modelNames.has(raw.type)) {
         const fks = relationFkFields(raw.attrs);
-        if (fks && fks.length === 1) {
-          relations.push({ name: raw.name, target: tableOf.get(raw.type) ?? raw.type, fkField: fks[0] });
+        const fkField = fks && fks.length === 1 ? fks[0] : undefined;
+        if (fkField !== undefined) {
+          relations.push({ name: raw.name, target: tableOf.get(raw.type) ?? raw.type, fkField });
         }
         // No `fields:[…]` → back-reference side; nothing to emit. Composite
         // (multi-column) FKs aren't expressible as a single belongsTo → skip.
@@ -287,6 +294,7 @@ export function parsePrismaPullArgs(argv: readonly string[]): PrismaPullArgs {
   // First bare arg (not a flag) is the schema path: `ablo pull prisma path.prisma`.
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === undefined) continue; // unreachable: i is bounded by argv.length
     switch (arg) {
       case '--schema':
         schema = argv[++i] ?? schema;

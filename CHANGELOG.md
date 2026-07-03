@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.26.0
+
+### Minor Changes
+
+- **`ablo connect --register` works against any deployment.** Registering your database as an Ablo data source over logical replication is now a first-class path everywhere — the gate that could refuse a new connection-string registration is gone. Point `ablo connect --register` at your Postgres and Ablo begins consuming its replication stream while your application keeps owning the write path; registering the source _is_ the enable, with no tier or flag to choose. The signed `dataSource()` endpoint remains the explicit fallback for databases that can't grant replication.
+
+- **More engine failures surface as typed errors you can branch on**, instead of opaque `500`s. New `AbloError` codes: `schema_provisioning_forbidden` (`403` — a push tried to create tables in a database where the engine isn't permitted to run DDL), `request_too_large` (`413` — a query or commit body exceeded the size limit), `commit_operation_invalid` (`400` — a malformed commit operation), and `upload_not_configured` (`503` — an upload was attempted with no blob store wired).
+
+- **`@abloatai/ablo/wire` now exports the protocol schemas.** `commitOperationSchema`, `commitPayloadSchema`, and the frame schemas let tooling and tests validate client↔engine frames against the same contract the engine enforces.
+
+- **`@abloatai/ablo/coordination` exposes the conflict-policy vocabulary** — `defaultPolicy`, `capabilityPreemptPolicy`, and `interpretConflictAxis` — for server-side consumers building on the claim model. `@abloatai/ablo/schema` gains the role primitives (`identityRole`, `entityRole`, and their types and schemas) for declaring identity- and entity-scoped roles.
+
+- **Removed unused API surface.** Dropped the `@abloatai/ablo/server/next` subpath export and the unused `MutationDispatcher` interface (plus its `MockMutationDispatcher` test double) and the offline-mutation-queue internals behind them — none had documented consumers. Every supported entry point (`@abloatai/ablo`, `/ai-sdk`, `/react`, `/source`, `/coordination`, `/schema`, `/keys`, `/auth`, `/wire`, …) is unchanged.
+
+- **Internal:** the SDK's largest modules — the `Ablo` client, the data-source runtime, the transaction queue, and the WebSocket sync loop — were decomposed into cohesive leaf modules. No public runtime API or import path changed.
+
+- **CLI & docs.** `ablo push` prints a calmer, information-first deploy banner (a production push still requires typing the project name to confirm). The README and `AGENTS.md` now lead with the one-path logical-replication model and clarify that sandbox is test-mode only — in production your rows stay in your database and Ablo holds only the transaction log.
+
 ## 0.25.0
 
 ### Minor Changes

@@ -56,9 +56,11 @@ function parseMode(args: readonly string[]): Mode | undefined {
 function positional(args: readonly string[]): string | undefined {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
+    if (a === undefined) continue; // unreachable: i is bounded by args.length
     if (a.startsWith('-')) {
       // Skip a value-bearing flag's value (unless it's `--flag=value`).
-      if (!a.includes('=') && args[i + 1] && !args[i + 1].startsWith('-')) i++;
+      const next = args[i + 1];
+      if (!a.includes('=') && next && !next.startsWith('-')) i++;
       continue;
     }
     return a;

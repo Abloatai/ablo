@@ -21,11 +21,8 @@
  * outbox table for production.
  */
 
-import {
-  ABLO_SOURCE_HEADERS,
-  signAbloSourceRequest,
-  type SourceEvent,
-} from './index.js';
+import { ABLO_SOURCE_HEADERS, signAbloSourceRequest } from './signing.js';
+import type { SourceEvent } from './types.js';
 
 export interface PushQueueItem {
   readonly id: string;
@@ -222,12 +219,15 @@ export function createPushQueue(options: PushQueueOptions): PushQueue {
     error: string,
   ): Promise<void> {
     const nextAttempt = item.attempts + 1;
-    if (nextAttempt >= schedule.length) {
+    // Off the end of the backoff schedule (same check as the old
+    // `nextAttempt >= schedule.length`) — dead-letter the item.
+    const backoff = schedule[nextAttempt];
+    if (backoff === undefined) {
       await options.storage.markDlq(item.id, error);
       options.onError?.(item, new Error(error));
       return;
     }
-    const delay = applyJitter(schedule[nextAttempt], jitter);
+    const delay = applyJitter(backoff, jitter);
     await options.storage.reschedule(item.id, now() + delay, error);
   }
 }
