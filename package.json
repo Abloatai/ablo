@@ -14,101 +14,121 @@
   },
   "exports": {
     ".": {
+      "@ablo/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
     "./schema": {
+      "@ablo/source": "./src/schema/index.ts",
       "types": "./dist/schema/index.d.ts",
       "import": "./dist/schema/index.js",
       "default": "./dist/schema/index.js"
     },
     "./coordination": {
+      "@ablo/source": "./src/coordination/index.ts",
       "types": "./dist/coordination/index.d.ts",
       "import": "./dist/coordination/index.js",
       "default": "./dist/coordination/index.js"
     },
     "./react": {
+      "@ablo/source": "./src/react/index.ts",
       "types": "./dist/react/index.d.ts",
       "import": "./dist/react/index.js",
       "default": "./dist/react/index.js"
     },
     "./testing": {
+      "@ablo/source": "./src/testing/index.ts",
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js",
       "default": "./dist/testing/index.js"
     },
     "./core": {
+      "@ablo/source": "./src/core/index.ts",
       "types": "./dist/core/index.d.ts",
       "import": "./dist/core/index.js",
       "default": "./dist/core/index.js"
     },
     "./batching": {
+      "@ablo/source": "./src/batching/index.ts",
       "types": "./dist/batching/index.d.ts",
       "import": "./dist/batching/index.js",
       "default": "./dist/batching/index.js"
     },
     "./agent": {
+      "@ablo/source": "./src/agent/index.ts",
       "types": "./dist/agent/index.d.ts",
       "import": "./dist/agent/index.js",
       "default": "./dist/agent/index.js"
     },
     "./ai-sdk": {
+      "@ablo/source": "./src/ai-sdk/index.ts",
       "types": "./dist/ai-sdk/index.d.ts",
       "import": "./dist/ai-sdk/index.js",
       "default": "./dist/ai-sdk/index.js"
     },
     "./source": {
+      "@ablo/source": "./src/source/index.ts",
       "types": "./dist/source/index.d.ts",
       "import": "./dist/source/index.js",
       "default": "./dist/source/index.js"
     },
     "./source/conformance": {
+      "@ablo/source": "./src/source/conformance.ts",
       "types": "./dist/source/conformance.d.ts",
       "import": "./dist/source/conformance.js",
       "default": "./dist/source/conformance.js"
     },
     "./source/drizzle": {
+      "@ablo/source": "./src/source/adapters/drizzle.ts",
       "types": "./dist/source/adapters/drizzle.d.ts",
       "import": "./dist/source/adapters/drizzle.js",
       "default": "./dist/source/adapters/drizzle.js"
     },
     "./source/kysely": {
+      "@ablo/source": "./src/source/adapters/kysely.ts",
       "types": "./dist/source/adapters/kysely.d.ts",
       "import": "./dist/source/adapters/kysely.js",
       "default": "./dist/source/adapters/kysely.js"
     },
     "./source/next": {
+      "@ablo/source": "./src/source/next.ts",
       "types": "./dist/source/next.d.ts",
       "import": "./dist/source/next.js",
       "default": "./dist/source/next.js"
     },
     "./keys": {
+      "@ablo/source": "./src/keys/index.ts",
       "types": "./dist/keys/index.d.ts",
       "import": "./dist/keys/index.js",
       "default": "./dist/keys/index.js"
     },
     "./auth": {
+      "@ablo/source": "./src/auth/index.ts",
       "types": "./dist/auth/index.d.ts",
       "import": "./dist/auth/index.js",
       "default": "./dist/auth/index.js"
     },
     "./environment": {
+      "@ablo/source": "./src/environment.ts",
       "types": "./dist/environment.d.ts",
       "import": "./dist/environment.js",
       "default": "./dist/environment.js"
     },
     "./wire": {
+      "@ablo/source": "./src/wire/index.ts",
       "types": "./dist/wire/index.d.ts",
       "import": "./dist/wire/index.js",
       "default": "./dist/wire/index.js"
     },
     "./server": {
+      "@ablo/source": "./src/server/index.ts",
       "types": "./dist/server/index.d.ts",
       "import": "./dist/server/index.js",
       "default": "./dist/server/index.js"
     },
     "./webhooks": {
+      "@ablo/source": "./src/webhooks/index.ts",
       "types": "./dist/webhooks/index.d.ts",
       "import": "./dist/webhooks/index.js",
       "default": "./dist/webhooks/index.js"
