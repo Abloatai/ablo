@@ -1,35 +1,34 @@
 /**
- * Local credential store for the Ablo CLI — AWS-shaped: two files, and the
- * config file holds NO secrets.
+ * The Ablo CLI's local credential store, split across two files so that the
+ * config file never holds a secret:
  *
- *   config.json       non-secret settings: the active environment (mode) and
- *                     the active project. Safe to open, print, or let an agent
- *                     read.
- *   credentials.json  the keys, keyed by project then environment. 0600,
- *                     never printed.
+ *   config.json       Non-secret settings: the active environment (mode) and the
+ *                     active project. Safe to open, print, or let a tool read.
+ *   credentials.json  The API keys, organized by project and then environment.
+ *                     Written with `0600` permissions and never printed.
  *
- * (Same split as `~/.aws/config` vs `~/.aws/credentials` — tooling that
- * inspects "the config" never sees a secret.)
+ * This mirrors the `~/.aws/config` and `~/.aws/credentials` split, so anything
+ * that inspects the config never encounters a secret.
  *
- * Per-project profiles (Stripe's `config.toml` model): keys live under a
- * project PROFILE (`default`, or a project slug), and within a profile under
- * `sandbox` / `production`. `ablo projects use <slug>` selects the active
- * profile; `ablo login --project <slug>` mints a pair into it. Selecting a
- * project never re-scopes an existing key — a key's project is fixed at mint,
- * so each project keeps its own credential and the active project always
- * resolves the matching one (or none, which is a precise error, never a
- * silent push to the wrong project).
+ * Keys are organized into per-project profiles. A profile is named `default`
+ * (the organization-default project) or a project slug, and within it a key is
+ * held under `sandbox` and `production`. `ablo projects use <slug>` selects the
+ * active profile; `ablo login --project <slug>` mints a key pair into it.
+ * Selecting a project never re-scopes an existing key — a key's project is fixed
+ * when it is minted — so each project keeps its own credential and the active
+ * project always resolves the matching one, or none, which surfaces as a precise
+ * error rather than a silent push to the wrong project.
  *
- * Key PREFIXES stay `sk_test_` / `sk_live_` / `rk_live_` (a wire contract the
- * server validates); only the human-facing vocabulary is sandbox/production.
+ * Key prefixes stay `sk_test_`, `sk_live_`, and `rk_live_` — a wire contract the
+ * server validates — while the human-facing vocabulary is sandbox and production.
  * `ablo mode sandbox|production` toggles which key within the active profile
- * `dev` / `push` use. `ABLO_API_KEY` in the environment always wins (CI).
+ * `dev` and `push` use. An `ABLO_API_KEY` set in the environment always wins,
+ * which is how a continuous-integration run supplies a key.
  *
- * Path: `$ABLO_CONFIG_DIR` → `$XDG_CONFIG_HOME/ablo` → `~/.config/ablo`.
- * `credentials.json` is written `0600` (owner read/write only); the dir `0700`.
- *
- * v1 stores plaintext, like the AWS CLI. An OS-keychain backend
- * (`@napi-rs/keyring`) is a later hardening.
+ * The store's location resolves from `$ABLO_CONFIG_DIR`, then
+ * `$XDG_CONFIG_HOME/ablo`, then `~/.config/ablo`. `credentials.json` is written
+ * `0600` (owner read/write only) inside a `0700` directory. Keys are stored in
+ * plaintext.
  */
 
 import { homedir } from 'os';
@@ -38,13 +37,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { readProjectApiKey, type ApiKeySource } from './dbRole';
 import type { Environment } from '../environment.js';
 
-// Same domain as the engine's canonical `Environment` — the CLI keeps the
-// `Mode` NAME for its UX surface (`ablo mode`, key profiles) but the type is
-// one and the same, so the two can never drift.
+// The same type as the engine's canonical `Environment`. The CLI keeps the name
+// `Mode` for its user-facing surface (`ablo mode`, key profiles), but the two are
+// one type and cannot drift apart.
 export type Mode = Environment;
 
-/** The reserved profile name for the org-default project (no `activeProject`).
- *  Mirrors Stripe's `default` config profile. */
+/** The reserved profile name for the organization-default project, used when no
+ *  active project is set. */
 export const DEFAULT_PROFILE = 'default';
 
 /** A stored key for one environment. `organizationId`/`expiresAt` come from
@@ -62,9 +61,9 @@ export interface ProfileKeys {
   production?: KeyEntry;
 }
 
-/** The ACTIVE project (`ablo projects use`) — a non-secret targeting
- *  preference, stored in config.json like `mode`. Absent = the org-default
- *  project (the `default` profile). */
+/** The active project, set by `ablo projects use`. A non-secret targeting
+ *  preference stored in config.json alongside `mode`. Absent means the
+ *  organization-default project (the `default` profile). */
 export interface ActiveProject {
   id: string;
   slug: string;
@@ -177,11 +176,11 @@ function hasKey(keys: ProfileKeys | undefined): boolean {
 }
 
 /**
- * Read the stored config, or null if none / unreadable / malformed. Reads the
- * `profiles` layout and transparently MIGRATES older layouts: a single-file
- * config.json with keys inside it, and the pre-profiles `{ sandbox, production }`
- * pair (in either file) — both fold into the ACTIVE profile, then the split
- * files are rewritten.
+ * Reads the stored config, returning null when none exists or it is unreadable
+ * or malformed. It reads the current profile layout and transparently upgrades
+ * older on-disk layouts: a single combined config.json that held keys inline, and
+ * the earlier `{ sandbox, production }` pair in either file, both fold into the
+ * active profile, after which the two split files are rewritten.
  */
 export function readConfig(): StoredConfig | null {
   const cfgObj = readJson(configPath());
@@ -252,7 +251,7 @@ function emptyConfig(mode: Mode = 'sandbox'): StoredConfig {
   return { mode, profiles: {} };
 }
 
-/** Store a key for one environment in the ACTIVE profile, preserving the rest. */
+/** Store a key for one environment in the active profile, preserving the rest. */
 export function setKey(mode: Mode, entry: KeyEntry): string {
   const cfg = readConfig() ?? emptyConfig(mode);
   const name = activeProfileName(cfg);
@@ -305,7 +304,7 @@ export function setActiveProject(project: ActiveProject | undefined): string {
   return writeConfig(cfg);
 }
 
-/** The stored key for `mode` in the ACTIVE profile. */
+/** The stored key for `mode` in the active profile. */
 export function getKeyEntry(mode: Mode): KeyEntry | undefined {
   const cfg = readConfig();
   if (!cfg) return undefined;
@@ -399,11 +398,11 @@ export function clearCredential(): boolean {
 }
 
 /**
- * The key the CLI should authenticate with: `ABLO_API_KEY` (CI / one-off
- * overrides always win), else the ACTIVE profile's key for the active
- * environment (or the `modeOverride`, e.g. `dev` which is always sandbox). A
- * key past its `expiresAt` is treated as absent so the caller prompts a fresh
- * `ablo login`.
+ * The key the CLI authenticates with: `ABLO_API_KEY` always wins, so continuous
+ * integration and one-off overrides take precedence; otherwise the active
+ * profile's key for the active environment, or for `modeOverride` when given
+ * (`dev`, for instance, is always sandbox). A key past its `expiresAt` is treated
+ * as absent, so the caller prompts for a fresh `ablo login`.
  */
 export function resolveApiKey(modeOverride?: Mode): string | undefined {
   if (process.env.ABLO_API_KEY) return process.env.ABLO_API_KEY;
@@ -416,21 +415,22 @@ export function resolveApiKey(modeOverride?: Mode): string | undefined {
 }
 
 /**
- * Whether the active project actually has a stored key — the guard that turns
+ * Reports whether the active project has a stored key. This guard turns
  * "you switched projects but never minted a key for this one" into a precise
- * error instead of a silent push to the wrong (or no) project.
+ * error instead of a silent push to the wrong project, or to none.
  *
- * `ok` is false ONLY when the active profile has no key yet other profiles do
- * (the genuine mismatch). A user who isn't logged in at all (`available`
+ * `ok` is false only when the active profile has no key while other profiles do
+ * — the genuine mismatch. A user who isn't logged in at all (with `available`
  * empty) is left to the normal "run `ablo login`" path. An explicit
- * `ABLO_API_KEY` is the CI escape hatch — it acts in whatever project it was
- * minted for, which the prefix can't reveal, so it's never blocked.
+ * `ABLO_API_KEY` is the escape hatch for continuous integration: it acts in
+ * whatever project it was minted for, which its prefix can't reveal, so it is
+ * never blocked.
  */
 export interface ProjectKeyGuard {
   ok: boolean;
   /** The active project's profile name (a slug, or `default`). */
   activeProfile: string;
-  /** Profiles that DO hold a key, for the remediation hint. */
+  /** Profiles that hold a key, used for the remediation hint. */
   available: string[];
 }
 
@@ -447,8 +447,8 @@ export function guardActiveProjectKey(): ProjectKeyGuard {
   return { ok: hasKey(profiles[activeProfile]), activeProfile, available };
 }
 
-/** Where the ONE effective CLI credential came from: the process environment,
- *  a project env file the app's framework would load, or the stored
+/** Where the effective CLI credential came from: the process environment, a
+ *  project env file the application's framework would load, or the stored
  *  `ablo login` credential. */
 export type EffectiveKeySource = ApiKeySource | 'stored';
 
@@ -460,18 +460,16 @@ export interface EffectiveApiKey {
 }
 
 /**
- * THE one credential chain every CLI command shares:
+ * The single credential-resolution chain every CLI command shares:
  *
- *   `ABLO_API_KEY` in process.env → `.env.local` → `.env` → the stored
- *   `ablo login` key for the active mode (or `modeOverride`).
+ *   `ABLO_API_KEY` in the environment → `.env.local` → `.env` → the stored
+ *   `ablo login` key for the active mode, or for `modeOverride` when given.
  *
- * `push`, `dev`, `status`, and {@link resolvePushPlan} all resolve through
- * here, so the diagnostic commands report exactly the credential a deploy
- * would present. (Pre-fix there were FOUR divergent chains: only `push` read
- * the project env files, so `ablo status` could report the stored sandbox key
- * while `ablo push` used the production key sitting in `.env.local`.)
+ * `push`, `dev`, `status`, and {@link resolvePushPlan} all resolve through this
+ * function, so the diagnostic commands report exactly the credential a deploy
+ * would present.
  *
- * `cwd` exists for tests; commands use the process working directory.
+ * `cwd` is a seam for tests; commands use the process working directory.
  */
 export function resolveEffectiveApiKey(modeOverride?: Mode, cwd?: string): EffectiveApiKey {
   const fromProject = readProjectApiKey(cwd);
@@ -492,14 +490,13 @@ export interface PushPlan {
 }
 
 /**
- * Resolve the credential + flow `ablo push` uses, through the shared
- * {@link resolveEffectiveApiKey} chain: an explicit key (env var or a project
- * env file — its prefix names the environment) → the ACTIVE mode's stored
- * credential (in the active project profile). The active mode is honored even
- * when no credential is stored for it, so a production-mode push fails asking
- * for a production key instead of silently running the sandbox flow. (Pre-fix,
- * only the env var was consulted: `ablo login` + `ablo mode production` +
- * `npx ablo push` still landed in the sandbox flow and demanded `sk_test_`.)
+ * Resolves the credential and flow `ablo push` uses, through the shared
+ * {@link resolveEffectiveApiKey} chain: an explicit key — an environment variable
+ * or a project env file, whose prefix names the environment — takes precedence
+ * over the active mode's stored credential in the active project profile. The
+ * active mode is honored even when no credential is stored for it, so a
+ * production-mode push fails by asking for a production key rather than silently
+ * running the sandbox flow.
  */
 export function resolvePushPlan(): PushPlan {
   const { key, source } = resolveEffectiveApiKey();

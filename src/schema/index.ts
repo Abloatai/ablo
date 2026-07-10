@@ -44,9 +44,8 @@ export {
   type PolicyInput,
 } from './tenancy.js';
 
-// Model residency — which DB a model's rows live in (`tenant` portable to a
-// customer's own DB, `control` = Ablo's own). Sibling axis to `tenancy`.
-// (Renamed from "plane" — that word is the server's tenancy scope.)
+// Model residency — which database a model's rows live in (`tenant` can be a
+// customer's own database, `control` is Ablo's). A sibling axis to `tenancy`.
 export {
   residencySchema,
   DEFAULT_RESIDENCY,
@@ -60,9 +59,8 @@ export {
   type SchemaPlane,
 } from './residency.js';
 
-// Decomposed sync-delta storage row (P0 of the control/tenant plane split —
-// see docs/plans/sync-delta-zod-decomposition.md). Describes the existing
-// `sync_deltas` columns as Zod schemas grouped by subsystem + database plane.
+// The stored `sync_deltas` row, described as Zod schemas grouped by subsystem and by
+// which database the columns live in.
 export {
   syncDeltaCoreSchema,
   deltaAttributionSchema,
@@ -79,11 +77,11 @@ export {
   type ParticipantKind,
   type ConfirmationState,
   type BackfillProvenance,
-} from './sync-delta-row.js';
+} from './syncDeltaRow.js';
 
-// Canonical WIRE delta contract — the broadcast (server→client) projection of
-// the stored row. The SDK client and the sync-server both derive their
-// `SyncDelta` type from these via `z.infer` so the contract cannot drift.
+// The wire delta contract — the server-to-client projection of the stored row.
+// Both the client SDK and the server derive their `SyncDelta` type from these with
+// `z.infer`, so the two ends cannot drift apart.
 export {
   syncDeltaActionSchema,
   wireDeltaDataSchema,
@@ -97,7 +95,7 @@ export {
   type SyncDeltaWireCore,
   type ClientSyncDelta,
   type ServerSyncDelta,
-} from './sync-delta-wire.js';
+} from '../wire/delta.js';
 
 // Model builder
 export {
@@ -112,8 +110,8 @@ export {
   type ConflictAxis,
 } from './model.js';
 
-// Axis 3 — coordination authoring helpers for the `conflict` axis (composable
-// disposition fns + a `cn`-style combinator).
+// Coordination authoring helpers for the `conflict` axis — composable disposition
+// functions plus a combinator that merges them.
 export {
   coordination,
   humansOverwrite,
@@ -128,9 +126,9 @@ export {
   type ConflictRule,
 } from './coordination.js';
 
-// Claim-first shorthand: `mutable.lazy({...})` and friends. Read the
-// safety posture and load shape off the verb tokens; everything else
-// falls back to sensible defaults. See sugar.ts for the full pattern.
+// Claim-first shorthand for common model options: `mutable.lazy({...})` and friends
+// encode a model's write-safety and load strategy in the verb, and fall back to
+// sensible defaults for everything else.
 export { mutable, readOnly, type SugarOptions } from './sugar.js';
 
 // Schema definition + type inference
@@ -182,7 +180,7 @@ export {
   type GroupsInput,
 } from './schema.js';
 
-// Schema ⇄ JSON (control-plane transport for hosted multi-tenant)
+// Schema ⇄ JSON — serialize a schema for transport and rebuild it on the far side.
 export {
   serializeSchema,
   parseSchema,
@@ -197,7 +195,7 @@ export {
 // Schema projection — derive an app's subset from one canonical schema.
 export { selectModels } from './select.js';
 
-// Schema → Postgres DDL (pure; shared by the hosted server and the CLI)
+// Schema → Postgres DDL — shared by the host implementation and the command-line tools.
 export {
   generateProvisionPlan,
   generateMigrationPlan,
@@ -210,9 +208,9 @@ export {
   type MigrationPlan,
 } from './ddl.js';
 
-// Safe-DDL locking knobs (lock_timeout + bounded 55P03 retry) — the ONE
-// reader shared by `ablo migrate` and the hosted executor (ddlExec.ts), so an
-// operator tuning ABLO_SCHEMA_LOCK_* gets the same behavior on both paths.
+// Safe-DDL locking knobs (lock_timeout plus a bounded retry on lock contention),
+// shared by `ablo migrate` and the host that applies a schema push, so tuning the
+// ABLO_SCHEMA_LOCK_* variables changes both paths the same way.
 export {
   PG_LOCK_NOT_AVAILABLE,
   resolveDdlLockTimeout,
@@ -221,7 +219,7 @@ export {
   type DdlLockEnv,
 } from './ddlLock.js';
 
-// Schema diff + migration planning (pure; SQL emission lowered by ddl.ts)
+// Schema diff + migration planning — produces the plan the DDL layer turns into SQL.
 export {
   diffSchema,
   classifyMigration,
@@ -246,7 +244,7 @@ export {
   type BlockerCode,
 } from './diff.js';
 
-// Schema → TypeScript type emission (the `generate` half; pure)
+// Schema → TypeScript type emission.
 export { generateTypes } from './generate.js';
 
 // Query definition DSL + type inference

@@ -1,9 +1,10 @@
 /**
- * Schema Field Helpers
- *
- * Thin wrappers around Zod that add sync-engine metadata (type tag, indexed).
- * Metadata is stored in `z.describe()` as a JSON-encoded string so it
- * survives `.optional()`, `.nullable()`, and `.default()` chain calls.
+ * Field builders for schema definitions. Each helper — {@link field}.string(),
+ * .number(), .enum(), and so on — returns an ordinary Zod schema with a little
+ * sync-engine metadata attached (its type tag and whether it is indexed) plus a
+ * couple of chainable methods. The metadata is tucked into the schema's description
+ * as a JSON string so it survives `.optional()`, `.nullable()`, and `.default()`
+ * chaining, and {@link resolveFieldMeta} reads it back out as a {@link FieldMeta}.
  *
  * Usage:
  *   import { field } from '@abloatai/ablo/schema';
@@ -40,9 +41,11 @@ function isZodSchema(value: unknown): value is z.ZodType {
 
 // ── Metadata types ────────────────────────────────────────────────────────
 
-/** Runtime metadata for a schema field, readable via `ModelDef.fields`. */
+/** The sync-engine metadata describing one field, available at runtime through a
+ *  model's `fields` map. The {@link field} builders attach it, and the migration
+ *  planner, type generator, and OpenAPI generator all read it. */
 export interface FieldMeta {
-  /** Sync-engine type tag (maps to storage/serialization hints). */
+  /** Sync-engine type tag, which maps to storage and serialization hints. */
   type: 'string' | 'number' | 'boolean' | 'date' | 'enum' | 'json';
   /** Whether the field was marked optional via `.optional()` or `.nullable()`. */
   isOptional: boolean;
@@ -122,17 +125,11 @@ export function getFieldMeta(schema: z.ZodType): FieldMeta | null {
 }
 
 /**
- * Fallback: infer FieldMeta directly from a raw Zod schema when no
- * `field.*()` metadata was attached.
- *
- * Walks through `.optional()` / `.nullable()` / `.default()` wrappers
- * to find the inner primitive, then maps Zod's `_def.typeName` to
- * the sync-engine type tag. Used by `resolveFieldMeta` and by
- * `model()` / `query()` at definition time.
- *
- * Kept as an internal helper rather than exported directly — the
- * public API is `resolveFieldMeta`, which combines this fallback
- * with the `getFieldMeta` fast path.
+ * Infers a {@link FieldMeta} from a plain Zod schema that carries no field-builder
+ * metadata — for example a bare `z.string()`. It unwraps `.optional()`,
+ * `.nullable()`, and `.default()` to reach the inner type, then maps that Zod type
+ * to a sync-engine type tag. Most callers should use {@link resolveFieldMeta}
+ * instead, which tries the attached metadata first and falls back to this.
  */
 export function inferFieldMetaFromZod(schema: z.ZodType): FieldMeta {
   let current: z.ZodType = schema;
@@ -172,13 +169,10 @@ export function inferFieldMetaFromZod(schema: z.ZodType): FieldMeta {
     current instanceof z.ZodRecord ||
     current instanceof z.ZodUnion ||
     current instanceof z.ZodUnknown ||
-    // `z.custom<T>()` is an opaque, structurally-uninspectable blob —
-    // by construction the engine can't see its shape, which is exactly
-    // the JSON-blob pattern (ProseMirror docs, LayerData/LayerStyle maps,
-    // chart specs). Classifying it as `'string'` (the fallthrough default)
-    // gave these fields deep MobX observability instead of the intended
-    // `observable.ref` (see Ablo.ts registerProperty), producing the
-    // microtask-storm + nested-reactivity-drift bug on live updates.
+    // `z.custom<T>()` is opaque — its shape cannot be inspected — so it is treated
+    // as a JSON blob rather than falling through to the `'string'` default. The type
+    // tag drives how the runtime observes the field, and an opaque custom value
+    // should be tracked by reference rather than deeply.
     current instanceof z.ZodCustom
   ) {
     type = 'json';
@@ -188,20 +182,14 @@ export function inferFieldMetaFromZod(schema: z.ZodType): FieldMeta {
 }
 
 /**
- * Resolve FieldMeta for any Zod schema — whether it was built with
- * `field.*()` (which attaches sync-engine metadata) or with raw Zod
- * (which requires fallback inference from `_def.typeName`).
+ * Resolves a {@link FieldMeta} for any Zod schema, whether it was built with a
+ * {@link field} builder (which attaches metadata) or with plain Zod (which needs
+ * inference). This is the single entry point for "given a Zod field, tell me its
+ * sync-engine type tag and whether it is optional"; the model and query builders use
+ * it to populate their field maps, and the serializer reads those maps.
  *
- * This is the single public entry point for "given a Zod field, tell
- * me its sync-engine type tag and optionality." Both `model()` and
- * `query()` use it to populate their `fields` / `inputFields` maps at
- * definition time, and the schema serializer reads those maps at
- * serialization time.
- *
- * Contract: always returns a value. Never returns null. Unknown Zod
- * types fall through to `'string'` — this is intentional and matches
- * the existing behavior that was previously duplicated in
- * `model.ts:inferMetaFromZod`.
+ * It always returns a value and never returns null. A Zod type it does not recognize
+ * falls through to the `string` tag by design.
  */
 export function resolveFieldMeta(schema: z.ZodType): FieldMeta {
   const attached = getFieldMeta(schema);
@@ -215,6 +203,9 @@ export function resolveFieldMeta(schema: z.ZodType): FieldMeta {
 // works) with `.indexed()` added as a chainable method. `.optional()` and
 // `.nullable()` still come from Zod itself and preserve the description.
 
+/** A Zod schema returned by a {@link field} builder — the underlying Zod type plus
+ *  two chainable methods: `indexed()` marks the field for a database index, and
+ *  `from(column)` overrides the physical column name it maps to. */
 export type FieldBuilder<T extends z.ZodType> = T & {
   indexed(): FieldBuilder<T>;
   from(column: string): FieldBuilder<T>;
@@ -248,33 +239,33 @@ function buildField<T extends z.ZodType>(
 }
 
 export const field = {
-  /** String field */
+  /** Defines a text field. */
   string() {
     return buildField(z.string(), { type: 'string' });
   },
 
-  /** Number field */
+  /** Defines a numeric field. */
   number() {
     return buildField(z.number(), { type: 'number' });
   },
 
-  /** Boolean field */
+  /** Defines a true/false field. */
   boolean() {
     return buildField(z.boolean(), { type: 'boolean' });
   },
 
-  /** Date field */
+  /** Defines a timestamp field, represented as a JavaScript `Date`. */
   date() {
     return buildField(z.date(), { type: 'date' });
   },
 
-  /** Enum field with constrained string values */
+  /** Defines a field constrained to a fixed set of string values. */
   enum<const T extends readonly [string, ...string[]]>(values: T) {
     return buildField(z.enum(values), { type: 'enum', enumValues: values });
   },
 
   /**
-   * JSON field. Three call shapes:
+   * Defines a JSON field, with three call shapes:
    *
    * ```ts
    * field.json()                                        // unknown JSON blob
@@ -282,9 +273,9 @@ export const field = {
    * field.json({ icon: z.string().default('default') }) // typed sub-properties with defaults
    * ```
    *
-   * The third form is the key DX feature for metadata fields. It wraps the
-   * plain object in `z.object()` automatically, and the model runtime generates
-   * a `${field}Json` getter that parses the JSON string on read, applies Zod
+   * The third form is especially handy for metadata fields. It wraps the plain
+   * object in `z.object()` automatically, and the model runtime adds a
+   * `${field}Json` getter that parses the JSON string on read, applies the Zod
    * defaults, and caches the result.
    *
    * Example:
@@ -316,15 +307,16 @@ export const field = {
     return buildField(inner, { type: 'json' });
   },
 
-  /** Indexed string field (shorthand for `field.string().indexed()`). */
+  /** Defines an indexed text field — shorthand for `field.string().indexed()`. */
   id() {
     return field.string().indexed();
   },
 } as const;
 
-// ── Legacy function form (kept for backward compat) ──────────────────────
+// ── Function form ────────────────────────────────────────────────────────
 
-/** Mark a Zod schema as indexed for fast lookups (function form). */
+/** Marks a Zod schema as indexed so lookups on it use a database index. This is the
+ *  standalone-function form of the `.indexed()` chain method. */
 export function indexed<T extends z.ZodType>(schema: T): T {
   // Try to preserve existing metadata type tag if present.
   const meta = decodeMeta(schema.description);

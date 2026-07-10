@@ -416,6 +416,65 @@ try {
 }
 ```
 
+### `heartbeat` — holding a claim for long-running work
+
+```ts
+held.heartbeat(ttl?: Duration): Promise<{ expiresAt: number }>
+```
+
+A claim's TTL is crash cleanup, not a work-duration estimate — so a task that
+outlives it (an agent run, a background worker's job) keeps its lease by
+**beating**, the same pattern as an SQS visibility heartbeat or a Temporal
+activity heartbeat. Each beat extends the lease from now (never shortens it,
+and each extension is clamped server-side); a crashed worker stops beating and
+its lease lapses within one beat window, promoting the next waiter.
+
+Usually **implicit** — pass `heartbeat` when claiming and the SDK beats every
+third of the TTL until release:
+
+```ts
+await using claim = await ablo.reports.claim({
+  id: 'report_q3',
+  reason: 'generating',
+  ttl: '5m',
+  heartbeat: true,               // or an explicit cadence: heartbeat: '2m'
+  onHeartbeatLost: () => abortWork(),
+});
+await runLongGeneration(claim.data); // lease held for the duration
+// scope exit releases; the loop stops with it
+```
+
+A beat that comes back with a definitive loss — the lease expired and the
+queue moved on — rejects with `AbloClaimedError` (`claim_lost`) and stops the
+auto-loop. For a worker with no socket, **the failed beat is the loss
+notification**; abandon or re-claim, and remember any write attempted under
+the old lease is independently rejected by its `readAt` guard. Transient
+failures (a connection blip) don't stop the loop — the next tick retries.
+
+Each beat's answer carries two more things:
+
+- **`queueDepth`** — how many participants wait in line behind the lease.
+  This is the cooperative-yield pressure signal: a worker that can checkpoint
+  may release early when others wait. Read it from the resolved beat, or pass
+  `onHeartbeat` when claiming to observe every auto-beat.
+- **progress `details`** — `held.heartbeat({ details: { pages: 42, of: 100 } })`
+  stores the payload as the claim's peer-visible `meta.progress` (last beat
+  wins, via `claim.state`). This is presence, not a checkpoint: it dies with
+  the lease. Durable progress belongs in the data itself — write a row, and
+  every subscriber already sees it.
+
+Works identically on both transports: the realtime client sends a
+`claim_heartbeat` frame; the HTTP client posts
+`POST /v1/models/{model}/{id}/claim/heartbeat` (`{ ttl?, claimId?, details? }`).
+Over HTTP, a **queued** claim can heartbeat too — it refreshes the waiter's
+slot in the line (a queued slot is TTL'd like a lease) and reports
+`{ status: 'queued', position }`.
+
+A stateless worker holding **many** rows beats them all in one round trip:
+`ablo.claims.heartbeatAll({ ttl: '5m' })` → `POST /v1/claims/heartbeat`, one
+entry per extended lease. This is the socketless twin of the realtime
+keepalive, which already renews every held lease on each ping.
+
 ### `watch` — presence for a set of rows
 
 Reading or claiming a row auto-enrolls you in its sync group, which is enough for

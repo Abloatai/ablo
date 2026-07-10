@@ -1,27 +1,39 @@
 /**
- * Optimistic apply/rollback — the queue's local-first bookkeeping, lifted out
- * of `TransactionQueue.ts` as a pure leaf. The queue never mutates the pool
- * itself: applying/rolling back records an entry in the host-owned ledger and
- * emits `optimistic:*` events that the pool-side listeners act on. These
- * functions take that ledger plus a minimal emitter interface (never the host
- * class type), so the rules stay cycle-free and testable in isolation.
+ * Local-first apply and rollback bookkeeping for pending mutations.
+ *
+ * When a change is written before the server confirms it, these functions
+ * record it in a ledger and emit an `optimistic:*` event; separate listeners
+ * apply the change to the in-memory data and, on rollback, restore the value
+ * it replaced. Each function takes the ledger and a small event emitter rather
+ * than any larger object, so the rules have no dependencies of their own and
+ * can be tested in isolation.
  */
 
 import type { Model } from '../Model.js';
 import type { MutationInput, Transaction } from './commitPayload.js';
 
-/** One tracked optimistic mutation: the live model + its pre-image. */
+/**
+ * One tracked optimistic mutation: the live model plus the value it held
+ * before the change, kept so a rollback can restore it.
+ */
 export interface OptimisticUpdateEntry {
   model: Model;
   previousState: MutationInput | null | undefined;
   transaction: Transaction;
 }
 
-/** The host's event surface — the only queue capability these rules need. */
+/**
+ * The event emitter these functions use to announce each optimistic change and
+ * its rollback. You supply the implementation.
+ */
 export interface OptimisticEmitter {
   emit(event: string, payload: unknown): void;
 }
 
+/**
+ * Record an optimistic create and announce it. There is no prior value to
+ * restore, so the rollback pre-image is `null`.
+ */
 export function applyOptimisticCreate(
   optimisticUpdates: Map<string, OptimisticUpdateEntry>,
   emitter: OptimisticEmitter,
@@ -37,6 +49,10 @@ export function applyOptimisticCreate(
   emitter.emit('optimistic:create', { model, transaction });
 }
 
+/**
+ * Record an optimistic update and announce it, keeping the row's prior value so
+ * a rollback can put it back.
+ */
 export function applyOptimisticUpdate(
   optimisticUpdates: Map<string, OptimisticUpdateEntry>,
   emitter: OptimisticEmitter,
@@ -52,6 +68,10 @@ export function applyOptimisticUpdate(
   emitter.emit('optimistic:update', { model, transaction });
 }
 
+/**
+ * Record an optimistic delete and announce it, keeping the deleted row so a
+ * rollback can restore it.
+ */
 export function applyOptimisticDelete(
   optimisticUpdates: Map<string, OptimisticUpdateEntry>,
   emitter: OptimisticEmitter,
@@ -67,7 +87,12 @@ export function applyOptimisticDelete(
   emitter.emit('optimistic:delete', { model, transaction });
 }
 
-export async function rollbackOptimistic(
+/**
+ * Undo an optimistic mutation by its transaction id: emit `optimistic:rollback`
+ * with the saved pre-image so listeners can restore the prior value, then drop
+ * the ledger entry. Does nothing if the transaction was never tracked.
+ */
+export function rollbackOptimistic(
   optimisticUpdates: Map<string, OptimisticUpdateEntry>,
   emitter: OptimisticEmitter,
   transaction: Transaction,
@@ -75,7 +100,7 @@ export async function rollbackOptimistic(
   error?: Error,
 ): Promise<void> {
   const optimistic = optimisticUpdates.get(transaction.id);
-  if (!optimistic) return;
+  if (!optimistic) return Promise.resolve();
 
   emitter.emit('optimistic:rollback', {
     model: optimistic.model,
@@ -86,4 +111,5 @@ export async function rollbackOptimistic(
   });
 
   optimisticUpdates.delete(transaction.id);
+  return Promise.resolve();
 }

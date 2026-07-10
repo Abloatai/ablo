@@ -53,14 +53,11 @@ export type { AgentContext } from './types.js';
 export type { WireClaim } from '../types/streams.js';
 
 /**
- * Shape returned by the sync server's REST `/api/presence` endpoint.
- *
- * Local to this module, NOT exported. The server still speaks the
- * legacy vocabulary (`userId`, `isAgent`, `updatedAt`); the engine has
- * moved on to `participantId` / `participantKind` / `lastActive`.
- * `gather()` returns this shape verbatim today; once the server
- * adopts the engine names this interface deletes and the response is
- * typed as the canonical `Peer`.
+ * The record shape the sync server returns from its REST `/api/presence`
+ * endpoint. This interface is internal to this module and not exported. Its
+ * field names (`userId`, `isAgent`, `updatedAt`) are the wire contract the
+ * presence API sends, and {@link Agent.gather} surfaces these records
+ * unchanged in the `presence` array of its snapshot.
  */
 interface WirePeer {
   userId: string;
@@ -139,11 +136,10 @@ export interface FreshnessCheck {
   /** Human-readable summary — feed this back to the LLM when stale. */
   summary?: string;
   /**
-   * Pending-mutation claims from OTHER participants targeting this
-   * entity (self-claims filtered out). Empty = no one else is
-   * currently generating against this entity. Non-empty is ADVISORY
-   * — the agent can proceed, wait, or defer. Stale-read protection
-   * that predates committed deltas.
+   * Pending-mutation claims from other participants targeting this
+   * entity, with the agent's own claims filtered out. An empty array
+   * means no one else is currently generating against the entity. A
+   * non-empty array is advisory: the agent can proceed, wait, or defer.
    */
   pendingClaims?: WireClaim[];
 }
@@ -251,16 +247,16 @@ export interface WrapToolOptions<TArgs> {
 // ── Agent ───────────────────────────────────────────────────────
 
 /**
- * Console-backed default logger — the SAME gated factory the `Ablo()` client
- * uses (`createConsoleLogger`, threshold from `ABLO_LOG_LEVEL`, default
- * `warn`), tagged `[agent]` so agent-runtime lines are distinguishable. The
- * previous hand-rolled shim ignored the level gate entirely and printed
- * `[perception]` engine internals at debug/info by default. Level is resolved
- * per construction (not at module load) so `ABLO_LOG_LEVEL` set by the host
- * process before building an Agent is honored.
+ * The console-backed logger an {@link Agent} uses when the caller does not
+ * supply one. It is the same gated factory the `Ablo()` client uses
+ * (`createConsoleLogger`), reads its threshold from the `ABLO_LOG_LEVEL`
+ * environment variable (default `warn`), and tags each line with `[agent]` so
+ * agent-runtime output is easy to spot. The level is resolved when the logger
+ * is built rather than at module load, so an `ABLO_LOG_LEVEL` that the host
+ * process sets before constructing an Agent is honored.
  *
- * Exported for the unit test that pins the gating; consumers pass their own
- * `logger` option instead.
+ * Exported so a unit test can pin the gating behavior; consumers normally pass
+ * their own `logger` option instead.
  */
 export function defaultAgentLogger(): SyncLogger {
   const gated = createConsoleLogger(resolveLogLevel());
@@ -297,11 +293,10 @@ export class Agent implements PresenceAnnouncer {
    * tokens before TTL elapses. Use on the server when the same agent
    * identity handles many requests.
    *
-   * Returns the cache, NOT an `Agent` instance: the long-lived path
-   * uses `Ablo({kind:'agent'})` over WebSocket, while the `Agent` class
-   * itself is the short-lived REST helper for AI SDK tool loops. The
-   * static method lives here so consumers reach for everything
-   * agent-related under one namespace.
+   * Returns the cache rather than an `Agent` instance: the long-lived path
+   * uses `Ablo({kind:'agent'})` over a WebSocket, while the `Agent` class
+   * itself is the short-lived REST helper for AI SDK tool loops. The static
+   * method lives here so everything agent-related sits under one namespace.
    *
    * ```ts
    * const session = Agent.session({ syncServerUrl, schema, issueToken });
@@ -317,8 +312,8 @@ export class Agent implements PresenceAnnouncer {
 
   /**
    * Extract the Agent instance from an AI SDK tool's
-   * `experimental_context`. Use inside tool `execute` functions to reach
-   * the perception without closure-capturing it.
+   * `experimental_context`. Use it inside a tool's `execute` function to
+   * reach the agent without capturing it in a closure.
    *
    * ```ts
    * execute: async (args, { experimental_context }) => {
@@ -350,9 +345,9 @@ export class Agent implements PresenceAnnouncer {
   }
 
   /**
-   * Narrower variant of {@link fromContext} that returns `undefined` instead
-   * of throwing when perception isn't in context. Useful for tools where
-   * awareness is optional (e.g., read-only tools that work without it).
+   * A lenient variant of {@link fromContext} that returns `undefined` instead
+   * of throwing when no agent is present in the context. Useful for tools
+   * where awareness is optional, such as read-only tools that work without it.
    */
   static tryFromContext(ctx: unknown): Agent | undefined {
     if (
@@ -816,10 +811,10 @@ export class Agent implements PresenceAnnouncer {
   }
 }
 
-// Declaration merge: types reachable via dot access on the imported
-// class. `import { Agent } from '@abloatai/ablo/agent'` brings the
-// runtime AND the entire type vocabulary in one symbol — Stripe /
-// Cursor / Anthropic shape.
+// Declaration merge: the type vocabulary is reachable through dot access on
+// the imported class. Importing `Agent` brings in both the runtime class and
+// its associated types as one symbol, so its options, context, and session
+// options are available without separate imports:
 //
 //   const opts: Agent.Options = { ... };
 //   const ctx:  Agent.Context = { perception };

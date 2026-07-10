@@ -1,44 +1,45 @@
 /**
- * `ablo pull drizzle` — generate `defineSchema(...)` from a Drizzle schema MODULE.
+ * Implements `ablo pull drizzle`, which generates a `defineSchema(...)` file
+ * from a Drizzle schema module. It is the Drizzle counterpart to
+ * `ablo pull prisma`.
  *
- * The Drizzle sibling of `ablo pull prisma`, and a direct analogue of what
- * `drizzle-zero` does: it imports the customer's Drizzle schema and *reflects*
- * it at runtime (`getTableColumns`, `getTableConfig`) rather than reading the
- * lossy database. That keeps the two things DB-introspection throws away:
+ * Rather than read the database — which loses information — it imports your
+ * Drizzle schema and reflects it at runtime (`getTableColumns`,
+ * `getTableConfig`). That preserves two things database introspection discards:
  *
  *   - `pgEnum(...)` members            → `field.enum([...])`
  *   - `.references(() => other.id)`    → `relation.belongsTo(target, fk)`
  *
- * The reflection core ({@link lowerDrizzleModule}) is pure — it takes an already
- * imported module object — so it's unit-testable against real Drizzle tables.
- * The CLI wrapper loads the customer's (TypeScript) module via jiti, then calls
- * it. Reflection uses the *customer's* `drizzle-orm` (resolved from their
- * project), so the column metadata always matches their version.
+ * The reflection step, {@link lowerDrizzleModule}, takes an already-imported
+ * module object and does no I/O, so it can be tested against real Drizzle
+ * tables. The command wrapper loads your (possibly TypeScript) module from disk
+ * and calls it. Reflection uses the `drizzle-orm` resolved from your own
+ * project, so the column metadata always matches the version you use.
  */
 
 import pc from 'picocolors';
 import { AbloValidationError } from '../errors.js';
 import { existsSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
-// TYPE-ONLY at module scope — erased at compile time. The VALUE imports load
-// lazily inside `loadDrizzle()`: drizzle-orm is the CUSTOMER's dependency
-// (resolved from their project), and a top-level import becomes a startup
-// `require("drizzle-orm")` in the CJS bundle that crashes EVERY `ablo`
-// command in projects that don't use Drizzle.
+// Type-only at module scope, so these are erased at compile time. The runtime
+// imports load lazily inside `loadDrizzle()`: `drizzle-orm` is your project's
+// dependency, and a top-level import would compile to a startup
+// `require("drizzle-orm")` that crashes every `ablo` command in a project that
+// doesn't use Drizzle.
 import type { Column } from 'drizzle-orm';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import { brand } from './theme';
-import { camelToSnake, emitSchemaSource, type IRField, type IRModel, type IRRelation, type IRSchema } from './schema-ir';
+import { camelToSnake, emitSchemaSource, type IRField, type IRModel, type IRRelation, type IRSchema } from './schemaIr';
 
 const DEFAULT_OUT = 'ablo/schema.ts';
 const DEFAULT_IMPORT = '@abloatai/ablo/schema';
 
-/** Engine-owned, never emitted (by Ablo field name)… */
+/** Fields Ablo manages itself and never emits, matched by field name… */
 const BASE_FIELD_NAMES = new Set(['id', 'organizationId', 'createdBy', 'createdAt', 'updatedAt']);
-/** …or by physical column. */
+/** …and by physical column name. */
 const BASE_COLUMNS = new Set(['id', 'organization_id', 'created_by', 'created_at', 'updated_at']);
 
-/** Map a Drizzle column to an IR field kind. Enum is detected first. */
+/** Maps a Drizzle column to a field kind in the intermediate schema representation. Enum columns are detected first. */
 function mapColumn(col: Column): { kind: IRField['kind']; enumValues?: readonly string[]; note?: string } {
   const enumValues = col.enumValues;
   if (col.columnType === 'PgEnumColumn' && Array.isArray(enumValues) && enumValues.length > 0) {

@@ -1,25 +1,26 @@
 /**
- * Transport-driven PresenceStream factory.
+ * Creates a {@link PresenceStream} over a live sync connection. Presence is the
+ * lightweight, ephemeral "who's here and what are they doing" view: each
+ * participant broadcasts a status and an activity, and sees everyone else's.
+ * The stream is built directly on the sync WebSocket and adds no second
+ * connection. It is the sibling of {@link createClaimStream}, which reuses the
+ * same presence frames.
  *
- * This is the engine's home for presence — built directly on
- * `SyncWebSocket`, no SyncAgent wrapper, no second connection. The
- * older compatibility path predates this and will be deleted when
- * the dual-engine collapse completes.
+ * There are two ways to construct it:
  *
- * Two construction modes:
+ *   1. Direct — pass an already-open `transport`, for example an agent worker
+ *      or a test.
+ *   2. Deferred — construct without a transport and call `attach(transport)`
+ *      once the connection is ready. The returned stream object is stable from
+ *      construction, so callers can hold the reference and let attachment
+ *      happen later.
  *
- *   1. Direct — pass `transport: SyncWebSocket` when it's already
- *      open (agent worker, tests).
- *   2. Deferred — pass `attachLater: true` and call `.attach(transport)`
- *      once the engine's WS lifecycle has produced one. The returned
- *      stream object is stable from construction; attachment can
- *      happen later without callers having to re-grab the reference.
- *
- * Wire contract (apps/sync-server/src/hub/types.ts):
- *   • Outbound: `{ type: 'presence_update', payload: { status, activity? } }`
- *     — server stamps `userId`, `kind`, `timestamp`, `isAgent` and
- *       broadcasts to other clients on the same sync groups.
- *   • Inbound:  same frame, with `kind: 'enter' | 'update' | 'leave'`.
+ * Wire frames:
+ *   • Outbound `presence_update` — `{ status, activity? }`. The server stamps
+ *       `userId`, `kind`, `timestamp`, and `isAgent`, then broadcasts to the
+ *       other participants on the same sync groups.
+ *   • Inbound — the same frame, with `kind` one of `enter`, `update`, or
+ *       `leave`.
  */
 
 import type { SyncWebSocket, PresenceUpdateEvent } from './SyncWebSocket.js';
@@ -107,10 +108,9 @@ export function createPresenceStream(
       }),
     );
 
-    // Inbound presence frames — translate the legacy wire vocabulary
-    // (userId / isAgent / timestamp) into the engine shape
-    // (participantId / participantKind / lastActive). When the server
-    // adopts the engine names this block collapses to a pass-through.
+    // Inbound presence frames arrive in the wire vocabulary
+    // (userId / isAgent / timestamp); translate them into the shape this
+    // stream exposes (participantId / participantKind / lastActive).
     unsubs.push(
       t.subscribe('presence_update', (event: PresenceUpdateEvent) => {
         if (event.userId === participantId) return; // own echo
@@ -161,10 +161,9 @@ export function createPresenceStream(
   if (transport) attach(transport);
 
   // ── Outbound ────────────────────────────────────────────────────
-  // Note: do NOT include `isAgent` in the payload. Server derives it
-  // authoritatively from the connection's identity prefix; clients
-  // self-declaring `isAgent` caused human sessions to broadcast as
-  // agents to peers (real bug we caught earlier).
+  // Do not include `isAgent` in the payload. The server derives it
+  // authoritatively from the connection's identity, and letting a client
+  // self-declare it once caused human sessions to broadcast as agents to peers.
   function sendUpdate(activity: Activity): void {
     if (!attached?.isConnected()) return; // no-op until connected
     attached.send({

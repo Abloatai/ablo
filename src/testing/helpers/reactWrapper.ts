@@ -1,8 +1,8 @@
 /**
- * React test helpers for the sync engine SDK.
- *
- * These helpers wire the SDK's SyncProvider into @testing-library/react
- * so consumers can test components and hooks that use useModel/useModels/useMutations.
+ * React testing helpers for this package. They wire the package's
+ * `SyncProvider` into `@testing-library/react` so you can test components
+ * and hooks built on `useModel`, `useModels`, and `useMutations` against a
+ * mock store, with no live server.
  */
 
 import * as React from 'react';
@@ -18,8 +18,10 @@ export interface TestWrapperOptions {
 }
 
 /**
- * Create a wrapper component for @testing-library/react's renderHook/render.
- * Wraps children in the SDK's SyncProvider with a mock store.
+ * Builds a wrapper component for `@testing-library/react`'s `renderHook`
+ * and `render`. It wraps the children in the package's `SyncProvider`,
+ * backed by a mock store, so the hooks and components under test can read
+ * from it. Pass your own store to seed specific data, or let one be created.
  *
  * @example
  * import { renderHook } from '@testing-library/react';
@@ -46,11 +48,12 @@ export function createReactTestWrapper(
 }
 
 /**
- * Drop-in replacement for @testing-library/react's `renderHook` that
- * automatically provides the SDK's SyncProvider with a mock store.
+ * A drop-in replacement for `@testing-library/react`'s `renderHook` that
+ * wraps the hook in the package's `SyncProvider` and a mock store for you,
+ * so you don't build the wrapper by hand.
  *
- * Note: This helper lazy-loads @testing-library/react to avoid forcing
- * consumers without React tests to install it.
+ * `@testing-library/react` is loaded lazily, so projects that don't use
+ * these helpers never have to install it.
  *
  * @example
  * import { renderSyncHook, createMockSyncStore } from '@abloatai/ablo/testing';
@@ -72,8 +75,8 @@ export function renderSyncHook<TProps, TResult>(
   rerender: (props?: TProps) => void;
   unmount: () => void;
 } {
-  // Lazy-load @testing-library/react so the SDK doesn't force consumers
-  // to install it unless they actually use these helpers.
+  // Load @testing-library/react lazily so projects that never call these
+  // helpers don't have to install it.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const rtl = require('@testing-library/react') as typeof import('@testing-library/react');
   return rtl.renderHook(callback, {

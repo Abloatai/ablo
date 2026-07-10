@@ -1,8 +1,8 @@
 /**
- * Next.js App Router adapter for Data Source. The core `dataSource()` already
- * returns a Web-standard `(Request) => Promise<Response>`, which Next App Router
- * accepts directly — so this is pure ergonomics: wire an ORM `adapter` in via the
- * bridge and hand back a named `POST` so the customer's route file is the minimum:
+ * A thin Next.js App Router wrapper for a Data Source. The core `dataSource()`
+ * already returns a standard `(Request) => Promise<Response>`, which the App Router
+ * accepts directly, so this helper adds only convenience: it names the handler
+ * `POST` so your route file can export it in one line.
  *
  *   // app/api/ablo/source/route.ts
  *   import { dataSourceNext } from '@abloatai/ablo/source/next';
@@ -16,18 +16,17 @@
  *     adapter: prismaDataSource(prisma, schema),
  *   });
  *
- * Day-one scope: Next + the adapter form only. Hand-written handlers use the core
- * `dataSource()` directly; Hono/Express are the same one-liner and land on demand
- * — not pre-built.
+ * For hand-written handlers, or another framework, call the core `dataSource()`
+ * directly and export its result however that framework expects.
  */
 
 import type { SchemaRecord } from '../schema/schema.js';
 import { dataSource, type DataSourceOptions } from './factory.js';
 
 /**
- * Next options ARE the core options — the `adapter` field lives on the core
- * handler now, so there is no bridging, no cast, and no per-model-typed boundary
- * at the call site. Pass `{ schema, apiKey, adapter }`.
+ * The options for `dataSourceNext`, which are exactly the core
+ * `DataSourceOptions`. Pass `{ schema, apiKey, adapter }`, the same shape
+ * `dataSource()` takes.
  */
 export type DataSourceNextOptions<S extends SchemaRecord, TAuth = unknown> =
   DataSourceOptions<S, TAuth>;

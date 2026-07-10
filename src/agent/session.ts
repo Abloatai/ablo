@@ -1,23 +1,21 @@
 /**
- * Agent session — cache + lifecycle for server-side `SyncAgent`s.
+ * Caches and manages the lifecycle of long-lived agent connections on a server.
  *
- * Captures the pattern every server-side consumer needs:
- *   1. Cache `SyncAgent` instances per (org, user, surface, target).
- *   2. Re-mint capabilities before TTL elapses.
- *   3. Align the SyncAgent ctor's `syncGroups` with the cap allowlist
- *      so the upgrade-time intersection is non-empty (avoid the
- *      silent black-hole-broadcast bug).
- *   4. Connect / disconnect / dispose lifecycle.
+ * Server code that runs AI agents typically needs the same four things, and this
+ * module handles all of them:
+ *   1. Reuse one connected agent per (organization, user, surface, target)
+ *      instead of connecting anew on every request.
+ *   2. Re-issue the agent's capability token before it expires.
+ *   3. Request exactly the sync groups the token allows, so the two lists
+ *      overlap. If they don't, the agent subscribes to nothing and every
+ *      broadcast is silently filtered out.
+ *   4. Connect, disconnect, and dispose cleanly.
  *
- * What's generic, what isn't:
- *   - Cache, TTL, sync_groups alignment, lifecycle: SAME for every
- *     consumer. Lives here.
- *   - Cap mint: AUTH-FLOW-SPECIFIC. Every consumer has a different
- *     way to obtain a token (Better Auth cookie forwarding, API key
- *     exchange, OAuth, etc.). Consumer provides via the
- *     `issueToken` callback.
- *
- * The helper itself imports nothing app-specific. Open-source-clean.
+ * Everything except obtaining the token is the same for every caller and lives
+ * here. Obtaining the token depends on how you authenticate — cookie forwarding,
+ * API-key exchange, OAuth, and so on — so you supply that step through the
+ * {@link AgentSessionOptions.issueToken} callback. The module itself depends on
+ * nothing outside this package.
  */
 
 import { Ablo } from '../client/Ablo.js';
@@ -25,20 +23,19 @@ import { AbloConnectionError } from '../errors.js';
 import { getContext } from '../context.js';
 import type { Schema, SchemaRecord } from '../schema/schema.js';
 
-// Internal shapes — used by the implementation and by the inline
-// signature of `AgentSessionOptions.issueToken`. Not exported: the
-// caller never references them by name. They build a callback that
-// returns the right shape, the type-checker enforces it.
+// These shapes describe what the issueToken callback receives and returns. They
+// are not exported because you never name them directly — you write a callback
+// with the right shape and the type-checker verifies it.
 
 interface IssuedToken {
   readonly token: string;
   readonly expiresAtMs: number;
   /**
-   * Sync groups allowed by this capability. Must include every group
-   * the agent will subscribe to — the upgrade-time intersection of
-   * (allowed) ∩ (requested) determines effective subscription. Returning
-   * a list that doesn't include the needed groups produces an empty
-   * intersection and silent broadcast failure.
+   * The sync groups this token grants access to. It must include every group the
+   * agent needs to subscribe to. The agent's effective subscription is the
+   * overlap between the groups it requests and the groups listed here, so a list
+   * that omits a needed group leaves the agent subscribed to nothing and silently
+   * receiving no broadcasts.
    */
   readonly syncGroups: readonly string[];
 }
@@ -47,35 +44,40 @@ interface AgentIdentity {
   readonly userId: string;
   readonly organizationId: string;
   /**
-   * Surface class — `'chat'`, `'mcp'`, `'agent_worker'`, etc. Session
-   * caches per surface so two surfaces don't share token or WS.
+   * The kind of surface making the request, such as `'chat'`, `'mcp'`, or
+   * `'agent_worker'`. The cache keys on this value, so two surfaces never share a
+   * token or a WebSocket connection.
    */
   readonly surfaceClass: string;
   readonly target?: { readonly entityType: string; readonly entityId: string } | null;
 }
 
 export interface AgentSessionOptions<R extends SchemaRecord = SchemaRecord> {
-  /** Sync-server WebSocket URL — `wss://sync.example.com` or `ws://localhost:3001`. */
+  /** WebSocket URL of your sync server, such as `wss://sync.example.com` or `ws://localhost:3001`. */
   readonly syncServerUrl: string;
-  /** Schema for the typed model proxy on the returned Ablo. After
-   *  the dual-engine collapse, `Ablo({kind:'agent'})` is the unified
-   *  factory and requires the schema to expose
-   *  `agent.<model>.create/update/delete`. */
+  /**
+   * Your schema, used to build the typed model proxy on the returned client. The
+   * agent client exposes it as `agent.<model>.create/update/delete`.
+   */
   readonly schema: Schema<R>;
   /**
-   * Token-issuing callback. Called on cache miss / expiry. Owns the
-   * consumer's auth flow (Better Auth cookies, API key exchange, OAuth,
-   * etc.) so the engine stays auth-flow-agnostic.
+   * Issues a capability token for the given identity. The session calls it on a
+   * cache miss or when the current token is near expiry. Because this callback
+   * carries out your authentication flow — cookie forwarding, API-key exchange,
+   * OAuth, and so on — the rest of the session stays independent of how you
+   * authenticate.
    */
   readonly issueToken: (identity: AgentIdentity) => Promise<IssuedToken>;
   /**
-   * Soft window before actual expiry to re-mint. Defaults to 30s.
-   * Avoids races between mint-time and clock-skew at use-time.
+   * How long before a token's true expiry the session should re-issue it, in
+   * milliseconds. Defaults to 30 seconds. The buffer absorbs clock skew so a
+   * token never expires mid-use.
    */
   readonly reissueBufferMs?: number;
   /**
-   * Optional agent-id strategy. Default: `${surfaceClass}:${userId}`.
-   * Override when the consumer wants different attribution shape.
+   * How to derive the agent's identifier from the request identity. Defaults to
+   * `${surfaceClass}:${userId}`. Override it when you want a different shape for
+   * attribution.
    */
   readonly agentIdFor?: (identity: AgentIdentity) => string;
 }
@@ -86,15 +88,15 @@ interface CachedAgent<R extends SchemaRecord = SchemaRecord> {
 }
 
 /**
- * Returns a session whose `getAgent` method handles cache, mint,
- * sync_groups alignment, and lifecycle. Call `disposeAll()` from
- * the consumer's process shutdown hook.
+ * Creates a session that hands out connected agents on demand. Its `getAgent`
+ * method handles caching, token issuance, sync-group alignment, and connection
+ * lifecycle; call `disposeAll` from your process's shutdown hook to close every
+ * open connection.
  *
- * Threading: the session is intended to be a long-lived singleton
- * shared across requests. The cache is keyed precisely so two
- * concurrent requests for the same (user, org, surface, target)
- * share one agent + one WS, while different requests get
- * independent agents.
+ * Treat the session as a long-lived singleton shared across requests. The cache
+ * key combines organization, user, surface, and target, so two concurrent
+ * requests for the same combination share one agent and one WebSocket, while
+ * requests for different combinations get independent agents.
  */
 export function createAgentSession<R extends SchemaRecord = SchemaRecord>(
   options: AgentSessionOptions<R>,
@@ -132,21 +134,14 @@ export function createAgentSession<R extends SchemaRecord = SchemaRecord>(
 
     const minted = await options.issueToken(identity);
 
-    // Sync_groups alignment is the load-bearing detail. The SDK
-    // ctor's `syncGroups` and the cap mint's `syncGroups`
-    // MUST overlap or the upgrade intersection is empty and every
-    // broadcast filter returns false. Use the cap's allowed list
-    // verbatim — the caller controlled what went in there, so it's
-    // exactly what the SDK should request.
-    // `AbloOptions` exposes the URL as `baseURL` (resolved by
-    // `resolveBaseURL`). Earlier code passed `url:` here — `Ablo()`
-    // silently dropped the unknown field (the cast below masked the
-    // type error) and `resolveBaseURL` fell through to the hosted
-    // default `wss://api.abloatai.com`. Staging surfaced the bug
-    // 2026-05-07 — DNS lookup hit the wrong
-    // host even though the caller threaded `syncServerUrl` through
-    // correctly. Forward as `baseURL` so the caller's URL is the only
-    // source of truth and the package default never silently applies.
+    // Request the same sync groups the token grants. The groups requested here
+    // and the groups the token allows must overlap; otherwise their intersection
+    // is empty and every broadcast is filtered out. The token's allowed list is
+    // exactly what to request, since the caller decided what went into it.
+    //
+    // Pass the URL as `baseURL`, the field the client reads. Any other field name
+    // is ignored, in which case the client would fall back to its default host,
+    // so `baseURL` keeps the caller's URL the single source of truth.
     const wsUrl = toWsUrl(options.syncServerUrl);
     const agentOptions = {
       baseURL: wsUrl,
@@ -164,25 +159,20 @@ export function createAgentSession<R extends SchemaRecord = SchemaRecord>(
     try {
       await agent.ready();
     } catch (err) {
-      // The WS bootstrap (`agent.ready()`) is the second of two
-      // failure modes in `getAgent` — the first is `issueToken` above.
-      // Both can stall server-side `agent.run` dispatches, but only
-      // the message survives the structured-clone hop into the
-      // isolated-vm caller. Capture the URL + identity + `.cause`
-      // chain here so staging logs name what was unreachable, then
-      // re-throw with the URL embedded so the dispatch wrapper at
-      // least surfaces a concrete failure point.
+      // `agent.ready` establishes the WebSocket connection, and it is the second
+      // place getAgent can fail (the first is issueToken above). Because a thrown
+      // error may cross a boundary that preserves only its message, capture the
+      // URL, identity, and cause chain in the logs here, then re-throw with the
+      // URL embedded so the failure names a concrete host.
       interface WithCauseCode { cause?: { code?: string; message?: string }; message?: string }
       const e = err as WithCauseCode;
       const code = e.cause?.code;
       const causeMsg = e.cause?.message;
       // Best-effort dispose so the failed agent doesn't leak ws state.
       try { await agent.dispose(); } catch { /* ignore */ }
-      // Route through the gated logger so this obeys ABLO_LOG_LEVEL like every
-      // other line: a plain consumer-register `error` headline (the unreachable
-      // URL + code), with the structured fields on a `debug` companion. The
-      // companion's shape matches the cap-mint logger in `connectAgent.ts` so a
-      // single search picks both up.
+      // Log through the level-gated logger so it honors ABLO_LOG_LEVEL: an
+      // `error` headline naming the unreachable URL and code, plus a `debug`
+      // companion carrying the structured fields for deeper diagnosis.
       const log = getContext().logger;
       log.error(`Agent could not connect to the sync server at ${wsUrl}${code ? ` (${code})` : ''}.`);
       log.debug('[Agent.session] ws bootstrap failed', {
@@ -217,9 +207,9 @@ export function createAgentSession<R extends SchemaRecord = SchemaRecord>(
   }
 
   /**
-   * Eject a specific cached agent — useful when the consumer knows
-   * the underlying token is invalidated (revocation, role change)
-   * and wants the next `getAgent` call to mint fresh.
+   * Removes and disposes one cached agent. Call it when you know the agent's
+   * token is no longer valid — after a revocation or role change, for example —
+   * so the next `getAgent` call issues a fresh one.
    */
   function evict(identity: AgentIdentity): void {
     const key = cacheKey(identity);

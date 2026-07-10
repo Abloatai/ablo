@@ -1,32 +1,30 @@
 /**
- * Schema ⇄ JSON
+ * Schema ⇄ JSON.
  *
- * A `Schema` is serializable except for client-only closures (Zod
- * validators + computed getters). `serializeSchema` emits the plain-data
- * JSON form; `parseSchema` reconstructs a working `Schema` from it.
+ * A `Schema` is fully serializable apart from its client-only closures — the
+ * Zod validators and computed getters. {@link serializeSchema} emits the
+ * plain-data JSON form and {@link parseSchema} reconstructs a working `Schema`
+ * from it: one `Schema` type with two representations.
  *
- * This is the GraphQL `printSchema` / `buildSchema` model: one `Schema`
- * type, two representations. A hosted multi-tenant server obtains a tenant's
- * `Schema` by `parseSchema(json)` instead of an in-process import — the JSON
- * is what travels over the control plane (`ablo push`) and is stored
- * per `(tenant, version)`.
+ * A hosted, multi-tenant server loads a tenant's schema with `parseSchema(json)`
+ * rather than importing it in process. The JSON is what `ablo push` sends and
+ * what the server stores per tenant and version.
  *
  * What round-trips:
- *   - all model routing/scoping metadata (typename, tableName, load,
- *     mutable, the canonical `tenancy` descriptor, bootstrap hints, scope,
- *     grants, entityRoles, the `conflict` disposition map, persist, autoFill,
- *     requiredFields, lazyObservable).
- *     NOTE: the authoring sugar (`policy`/`groups`) is normalized away at
- *     `model()`-build; only the canonical wire fields cross here. `conflict`
- *     is already canonical pure data, so it crosses verbatim.
- *   - relations (incl. resolved `foreignKeyColumn`)
- *   - field metadata (names + type tags), from which validators are rebuilt
- *   - identity roles (already pure data)
+ *   - all model routing and scoping metadata: typename, tableName, load,
+ *     mutable, the `tenancy` descriptor, bootstrap hints, scope, grants,
+ *     entityRoles, the `conflict` disposition map, persist, autoFill,
+ *     requiredFields, and lazyObservable. The authoring shorthands (`policy`
+ *     and `groups`) are normalized into these canonical fields when the model
+ *     is built, so only the canonical fields cross here.
+ *   - relations, including the resolved `foreignKeyColumn`
+ *   - field metadata (names and type tags), from which validators are rebuilt
+ *   - identity roles
  *
- * What does NOT round-trip (client-only, server never needs it):
- *   - `computed` getters (closures) — dropped
- *   - exact Zod refinements — rebuilt as permissive validators from
- *     `FieldMeta` (the server does no field-shape validation anyway)
+ * What does not round-trip, because the server never needs it:
+ *   - computed getters, which are closures and are dropped
+ *   - exact Zod refinements, which are rebuilt as permissive validators from
+ *     {@link FieldMeta}; the server does no field-shape validation
  */
 
 import { z } from 'zod';
@@ -52,10 +50,8 @@ import {
   type EntityRole,
 } from './schema.js';
 
-/** Current schema-JSON envelope version. Bump on a breaking change to the
- * JSON shape itself (not the user's schema). v2 replaced the per-model
- * `syncGroupFormat` template string with structured `scope`/`grants`/
- * `entityRoles` (relation-driven sync groups). */
+/** Current schema-JSON envelope version. Bump this on a breaking change to the
+ * JSON shape itself — not to a user's schema. */
 const SCHEMA_JSON_VERSION = 3 as const;
 
 // ── Wire types ──────────────────────────────────────────────────────────────
@@ -78,14 +74,15 @@ export interface ModelJSON {
   readonly typename: string;
   readonly tableName?: string;
   readonly tenancy: Tenancy;
-  /** Database plane. Optional for back-compat: absent in artifacts written before
-   *  the plane axis → read as `tenant` (the default). See `./plane.ts`. */
+  /** The database plane the model's rows live in. Optional for backward
+   *  compatibility: when absent (an artifact written before this field existed)
+   *  it reads as `tenant`, the default. See {@link ModelResidency}. */
   readonly plane?: ModelResidency;
   readonly scope?: boolean | string;
   readonly grants?: GrantsRef;
   readonly entityRoles?: readonly EntityRole[];
-  /** Axis 3 — declared write-conflict disposition per committer kind. Pure data;
-   *  absent in pre-conflict-axis artifacts → undefined → engine default. */
+  /** The declared write-conflict disposition per committer kind. When absent,
+   *  the engine falls back to its default. */
   readonly conflict?: ConflictAxis;
   readonly bootstrapLimit?: number;
   readonly bootstrapOrderBy?: string;
@@ -242,14 +239,14 @@ function modelFromJSON(json: ModelJSON): ModelDef {
     persist: json.persist,
     tableName: json.tableName,
     tenancy: json.tenancy,
-    // Absent in pre-plane-axis artifacts → default `tenant` (matches the model
-    // builder default + the provisioning fallback), so the round-trip is stable.
+    // Absent in older artifacts → default `tenant`, matching the model builder
+    // and provisioning defaults so the round-trip stays stable.
     plane: json.plane ?? 'tenant',
     scope: json.scope,
     grants: json.grants,
     entityRoles: json.entityRoles,
-    // Axis 3 — pure data; absent in pre-conflict-axis artifacts → undefined →
-    // the commit path falls through to the function registry / engine default.
+    // Absent in older artifacts → undefined, so the commit path falls through to
+    // the function registry or the engine default.
     conflict: json.conflict,
     mutable: json.mutable,
     lazyObservable: json.lazyObservable,

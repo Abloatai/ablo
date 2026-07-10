@@ -1,25 +1,25 @@
 /**
- * `selectModels` — project a schema down to a subset of its models.
+ * `selectModels` projects a schema down to a subset of its models.
  *
- * The Prisma-style "one canonical schema, each app selects what it needs"
- * primitive. Instead of re-declaring a model's fields in a second schema (which
- * must then be kept shape-identical by hand), an app picks the models it
- * subscribes to from the canonical schema. Field shapes, resolved FK columns,
- * computeds, typenames, and identity roles all come from the source — so a
- * subset is structurally incapable of drifting from the canonical definition.
+ * It lets one canonical schema serve several apps, each subscribing only to the
+ * models it needs. Rather than re-declare a model's fields in a second schema —
+ * which you would then have to keep identical by hand — an app selects the
+ * models it wants from the canonical schema. Field shapes, resolved foreign-key
+ * columns, computed getters, typenames, and identity roles all come from the
+ * source, so a subset cannot drift from the canonical definition.
  *
  * ```ts
- * import { schema as full } from '@ablo/schema';
+ * import { schema as full } from './schema';
  * import { selectModels } from '@abloatai/ablo/schema';
  *
- * // Vault subscribes to identity + dataroom content only.
+ * // Subscribe to identity and dataroom content only.
  * export const schema = selectModels(full, ['users', 'organizations', 'datarooms', 'folders', 'files']);
  * ```
  *
- * Relations whose target falls outside the selected set are dropped — the
- * subset only sees its own models. A dropped relation that carries `parent`
- * scope-inheritance throws instead: silently losing it would mis-route a
- * record's fan-out, so the selected set must be closed under `parent` edges.
+ * Relations whose target falls outside the selected set are dropped, so the
+ * subset sees only its own models. Dropping a relation that carries `parent`
+ * scope-inheritance throws instead, because silently losing it would mis-route
+ * a record's fan-out — the selected set must be closed under `parent` edges.
  */
 
 import type { Schema, SchemaRecord } from './schema.js';

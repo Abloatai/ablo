@@ -1,16 +1,16 @@
 /**
- * `awaitClaimGrant` — the client side of the fair-queue handover.
+ * Waits for a queued claim to reach the head of the line — the client side of
+ * the fair-queue handover. When a claim is contended, the server puts it in a
+ * queue and replies that it is queued (HTTP 202 on `/v1/claims`, or a
+ * `claim_queued` frame over the WebSocket). The grant is delivered later, when
+ * the claim reaches the head, as a `claim_granted` frame. This resolves once
+ * that frame arrives for the given `claimId`, so the caller's `claim` promise
+ * stays pending — event-driven, with no polling — until it is actually the
+ * caller's turn. It rejects if the claim is lost (`claim_lost`: taken away by a
+ * TTL lapse on disconnect, or revoked) or if an optional timeout elapses.
  *
- * When a `claim` is contended, the server enqueues it and replies `queued`
- * (HTTP 202 on `/v1/claims`, or `claim_queued` over WS). The grant is then
- * PUSHED later over the WS as `claim_granted` when the claim reaches the head.
- * This resolves once that frame arrives for our `claimId` — so the caller's
- * `claim` promise stays pending (event-driven; no poll, no race) until it's
- * actually our turn. Rejects on `claim_lost` (surfaced as `claim_lost`: the claim was taken away — TTL
- * lapse on disconnect, revoke) or an optional timeout.
- *
- * Takes only a minimal `{ subscribe }` transport so it unit-tests against a
- * fake; `SyncWebSocket` satisfies it structurally.
+ * It needs only a minimal `{ subscribe }` transport, so it can be tested
+ * against a fake; {@link SyncWebSocket} satisfies it.
  */
 
 import {
@@ -35,14 +35,14 @@ export interface GrantTransport {
 
 export interface ClaimGrantInfo {
   /**
-   * True when the grant arrived as `claim_granted` — i.e. the target was
-   * HELD when we asked and we waited in the FIFO line behind the holder.
-   * False for the immediate `claim_acquired` (target was free).
+   * True when the grant arrived as `claim_granted` — the target was held when
+   * the caller asked, and the caller waited in the FIFO line behind the holder.
+   * False for the immediate `claim_acquired`, where the target was free.
    *
-   * Callers use this to know the row may have changed while we queued:
-   * claim VISIBILITY is entity-scoped (org-wide subscriptions receive no
-   * presence/claim fan-out — see Hub.broadcastPresenceChange), so the
-   * local coordination snapshot cannot be trusted to detect "we waited".
+   * Callers read this to know the row may have changed while they queued. Claim
+   * visibility is scoped to the entity, so a broad, organization-wide
+   * subscription receives no presence or claim fan-out, and the local
+   * coordination snapshot cannot be trusted to tell whether the caller waited.
    * The grant frame itself is the authoritative signal.
    */
   readonly waited: boolean;

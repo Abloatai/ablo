@@ -1,22 +1,15 @@
 /**
- * The shared resource-type surface of the client — `ModelRead`, `ModelClient`,
- * the `Commit*` / `Claim*` shapes, the session-mint params/resource, and the
- * `HttpClaimApi` derivation.
- *
- * Extracted from `Ablo.ts` so `ApiClient.ts` / `httpClient.ts` /
- * `sessionMint.ts` can take the wire-facing types WITHOUT importing the
- * factory module that runtime-imports them back (the 4-cycle cluster madge
- * flagged). This module is type-only — ZERO runtime imports — so importing it
- * can never create a cycle. `Ablo.ts` re-exports everything here, so existing
- * import paths keep resolving.
+ * The shared resource types of the client: {@link ModelRead}, {@link ModelClient},
+ * the commit and claim shapes, the session-mint params and resource, and the
+ * {@link HttpClaimApi} derivation. This module holds only types and has no runtime
+ * imports.
  */
 
 import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
-// `ModelTarget` (the `model`/`id` locator) and `ModelClaim` (the resolved claim
-// view) are canonical in `../coordination/schema` — derived there from one zod
-// schema so the SDK, the HTTP client, and the sync-server routes share a single
-// definition instead of hand-redeclaring it. Re-exported so the HTTP client
-// modules can take the whole resource-type surface from this one leaf.
+// `ModelTarget` (the `model` and `id` locator) and `ModelClaim` (the resolved
+// claim view) are defined in `../coordination/schema`, derived from a single
+// schema so the client, the HTTP client, and the server share one definition.
+// They are re-exported here so the resource types live behind one import.
 import type { ModelTarget, ModelClaim } from '../coordination/schema.js';
 export type { ModelTarget, ModelClaim };
 import type { SchemaRecord } from '../schema/schema.js';
@@ -40,14 +33,12 @@ import type {
 // ── Model proxy types ─────────────────────────────────────────────────────
 
 /**
- * Operations available on each model in the sync engine.
- *
- * Naming aligns with Stripe / OpenAI / Anthropic conventions:
- *   `retrieve({ id })` — async single-row server read
- *   `list({ where })` — async collection server read
- *   `get(id)` / `getAll(...)` / `getCount(...)` — local graph snapshots
+ * The operations available on each model in the sync engine:
+ *   `retrieve({ id })` — an async single-row server read
+ *   `list({ where })` — an async collection server read
+ *   `get(id)` / `getAll(...)` / `getCount(...)` — synchronous local-cache reads
  *   `create({ data })` / `update({ id, data })` / `delete({ id })` — writes
- *   `claim({ id })` — durable claim handle for coordinated writes
+ *   `claim({ id })` — a durable claim handle for coordinated writes
  */
 // `ModelOperations` and the model option types live in
 // `./createModelProxy` alongside the factory that builds them — re-exported
@@ -67,6 +58,8 @@ export type {
   ClaimLookupParams,
   ClaimReorderParams,
   Claim,
+  ClaimHeartbeat,
+  ClaimHeartbeatOptions,
   HeldClaim,
   ModelOperations,
 } from './createModelProxy.js';
@@ -162,12 +155,12 @@ export interface CommitCreateOptions {
   readonly operations?: readonly CommitOperationInput[];
   readonly wait?: CommitWait;
   /**
-   * Batch-level read dependencies (the STORM "did anything I looked at change?"
-   * layer). Declare the rows (`{model,id,readAt,fields?}`) or sync groups
-   * (`{group,readAt}`, e.g. `deck:abc`) this batch was premised on; the server
-   * validates none moved since `readAt` and fires the entry's `onStale` over the
-   * batch. Distinct from the write-target `readAt` — this guards what you READ,
-   * not what you write.
+   * Batch-level read dependencies — the "did anything I looked at change?" guard.
+   * Declare the rows (`{ model, id, readAt, fields? }`) or sync groups
+   * (`{ group, readAt }`, for example `deck:abc`) this batch was premised on; the
+   * server checks that none moved since `readAt` and fires the entry's `onStale`
+   * over the batch. This is distinct from the write-target `readAt`: it guards what
+   * you read, not what you write.
    */
   readonly reads?: readonly ReadDependency[] | null;
 }
@@ -177,19 +170,18 @@ export interface CommitReceipt {
   readonly status: CommitWait;
   readonly lastSyncId?: number;
   /**
-   * Stale-context notifications (notify-instead-of-abort, non-coercion). Present
-   * only when this commit guarded a write with `onStale: 'notify' and
-   * the premise moved concurrently — the conflicting field's current value,
-   * handed back as data instead of a forced `AbloStaleContextError`. The engine
-   * surfaces state; the intelligent actor (agent or human) decides how to
-   * resolve. Also fires on `conflict:notified`.
+   * Stale-context notifications: present only when this commit guarded a write with
+   * `onStale: 'notify'` and the premise moved concurrently. Each carries the
+   * conflicting field's current value, handed back as data rather than raising an
+   * `AbloStaleContextError`, so the caller — an agent or a human — decides how to
+   * resolve it.
    */
   readonly notifications?: readonly StaleNotification[];
   /**
-   * Ids of UPDATE/DELETE targets in this commit that matched ZERO rows (the row
-   * doesn't exist, or is outside the caller's org). Present (non-empty) only
-   * when a write missed. Typed resource wrappers turn this into a loud
-   * `AbloNotFoundError`; a raw `commits.create` caller can inspect it directly.
+   * Ids of update or delete targets in this commit that matched no rows, because
+   * the row does not exist or is outside the caller's organization. Present and
+   * non-empty only when a write missed. The typed resource wrappers turn this into
+   * an `AbloNotFoundError`; a raw `commits.create` caller can inspect it directly.
    */
   readonly missingIds?: readonly string[];
 }
@@ -214,20 +206,20 @@ export interface ModelMutationOptions extends ClaimedOptions {
 }
 
 /**
- * The HTTP/stateless claim surface. Normal tools usually put `claim` directly
- * on the write (`update({ id, data, claim })`) and let the SDK release it. Use
- * this namespace for multi-step handles and coordination screens.
+ * The stateless HTTP claim surface. Most code puts a `claim` directly on the write
+ * (`update({ id, data, claim })`) and lets the SDK release it; reach for this
+ * namespace for multi-step handles and coordination screens.
  *
- * Same surface as the reactive {@link ClaimApi}, but every read is a server
- * round-trip, so `state`/`queue`/`reorder` are **awaited** here (the WebSocket
- * client resolves them synchronously from its local pool — which is what lets
- * `useAblo((ablo) => ablo.x.claim.state({ id }))` work inside a React render; a
- * stateless client has no pool to read, so the `Promise` is unavoidable).
+ * It is the same surface as the reactive claim API, but because every read is a
+ * server round-trip, `state`, `queue`, and `reorder` are awaited here. The
+ * WebSocket client resolves those synchronously from its local cache, which is what
+ * lets it read a claim's state inside a React render; a stateless client has no
+ * cache to read, so the promise is unavoidable.
  *
- * Mechanically DERIVED from `ClaimReadApi` via {@link AwaitedClaimMethod} so the
- * two transports can never drift: the ONLY difference is the uniform `Promise`
- * wrapper that statelessness forces. `claim({ id })` is identical (already async
- * on both); `state`/`queue`/`reorder`/`release` are the awaited form.
+ * It is derived from `ClaimReadApi` through {@link AwaitedClaimMethod} so the two
+ * transports cannot drift: the only difference is the promise wrapper that
+ * statelessness forces. `claim({ id })` is identical on both (already async);
+ * `state`, `queue`, `reorder`, and `release` are the awaited form.
  */
 export type HttpClaimApi<T = Record<string, unknown>> =
   ((params: ClaimParams<T>) => Promise<HeldClaim<T>>) & {
@@ -241,7 +233,7 @@ export interface ModelClient<T = Record<string, unknown>> {
    * guards on the following write) and any active `.claims`. A stateless HTTP
    * client can't synthesize the watermark from a local snapshot, so the
    * envelope is load-bearing here (the WebSocket client's `retrieve` returns
-   * `T | undefined` because it reads from the hydrated pool).
+   * `T | undefined` because it reads from its local cache).
    *
    * ```ts
    * const deal = await ablo.deals.retrieve({ id });
@@ -257,10 +249,10 @@ export interface ModelClient<T = Record<string, unknown>> {
    */
   list?(options?: ServerReadOptions<T>): Promise<T[]>;
   /**
-   * Create a row and return it — the confirmed, authoritative server row (with
-   * framework defaults like `createdAt`/`createdBy`), mirroring the WebSocket
-   * client's `create`. A re-create of an existing caller-supplied id is
-   * idempotent and returns the EXISTING row, not the input.
+   * Creates a row and returns the confirmed server row, including framework
+   * defaults such as `createdAt` and `createdBy`. Matches the stateful client's
+   * `create`. Passing an id that already exists is idempotent: the existing row is
+   * returned, not the input.
    */
   create(params: ModelMutationOptions & { readonly data: Record<string, unknown>; readonly id?: string | null }): Promise<T>;
   update(params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> }): Promise<CommitReceipt>;
@@ -292,25 +284,24 @@ export interface ModelClient<T = Record<string, unknown>> {
 /** A single data operation a scoped **agent** session may perform on a model. */
 export type SessionOperation = 'read' | 'create' | 'update' | 'delete';
 
-/** Mint params for an **end-user** session — full data authority within the
- *  org (the Stripe `ephemeralKeys.create` / Supabase session shape). Mints an
- *  `ek_` token. `user.id` is your end user's external IdP id (becomes the
- *  session's `participantId`); Ablo does not model your users, so it's an
- *  honest string at the trust boundary. */
+/** Parameters for minting an end-user session — full data authority within the
+ *  organization. Mints an `ek_` token. `user.id` is your end user's id from your
+ *  own identity provider and becomes the session's `participantId`; Ablo does not
+ *  model your users, so it is treated as an opaque string at the trust boundary. */
 export interface CreateUserSessionParams {
   /** Your end user. `id` becomes the token's `participantId`. */
   user: { id: string };
-  /** Mint the session into THIS organization instead of the key's own org — the
-   *  Stripe Connect `Stripe-Account` pattern, for a platform serving many tenants
-   *  from one backend. Requires the `sk_` to carry the `ephemeral:mint-any-org`
-   *  scope; omit for the normal single-tenant case. */
+  /** Mint the session into this organization instead of the key's own — for a
+   *  platform that serves many tenants from one backend. Requires the `sk_` key to
+   *  carry the `ephemeral:mint-any-org` scope; omit it for the normal
+   *  single-tenant case. */
   organizationId?: string;
   /** Sync groups this session may subscribe to — typed (`'default'` or
    *  `<namespace>:<id>`; build with `syncGroup(kind, id)` from
    *  `@abloatai/ablo/schema`). Omit for the server default:
    *  `[org:<your org>, user:<user.id>]`. */
   syncGroups?: readonly SyncGroupInput[];
-  /** Token lifetime in seconds. Defaults to 900 (15m, the Stripe ephemeral default). */
+  /** Token lifetime in seconds. Defaults to 900 (15 minutes). */
   ttlSeconds?: number;
   /** Opaque identity blob echoed back to the client as `ablo.user`. */
   userMeta?: Record<string, unknown>;
@@ -332,7 +323,7 @@ export interface CreateAgentSessionParams<S extends SchemaRecord> {
    *  `@abloatai/ablo/schema`). Omit for the server default: the org
    *  anchor (`org:<your org>`) + the agent's own anchor. */
   syncGroups?: readonly SyncGroupInput[];
-  /** Token lifetime in seconds. Defaults to 900 (15m, the Stripe ephemeral default). */
+  /** Token lifetime in seconds. Defaults to 900 (15 minutes). */
   ttlSeconds?: number;
   /** Opaque identity blob echoed back to the client as `ablo.agent`. */
   userMeta?: Record<string, unknown>;
@@ -351,15 +342,15 @@ export type CreateSessionParams<S extends SchemaRecord> =
  *  {@link CreateSessionParams} it resolves to a connected, scoped {@link Ablo}
  *  client rather than a raw token. */
 export interface CreateAgentClientParams<S extends SchemaRecord> {
-  /** Wire participant identity (`agent:<id>`) — what claim exclusion and the
-   *  FIFO queue gate on. OMIT to get a fresh `crypto.randomUUID()`: a distinct,
-   *  independent participant (the default, and what you want for concurrent
-   *  agents). Pass a STABLE string only when one logical agent must re-attach
-   *  to its own held claims across reconnects/restarts. */
+  /** The wire participant identity (`agent:<id>`) that claim exclusion and the
+   *  FIFO queue gate on. Omit it to get a fresh random id — a distinct, independent
+   *  participant, which is the default and what you want for concurrent agents.
+   *  Pass a stable string only when one logical agent must re-attach to its own
+   *  held claims across reconnects or restarts. */
   id?: string;
-  /** Human-readable label for logs / attribution (carried in `userMeta.name`).
-   *  INDEPENDENT of `id`: two agents that share a `name` still receive distinct
-   *  ids and coordinate as SEPARATE participants — `name` never derives or
+  /** A human-readable label for logs and attribution (carried in `userMeta.name`).
+   *  It is independent of `id`: two agents that share a `name` still receive
+   *  distinct ids and coordinate as separate participants — `name` never derives or
    *  collapses identity. */
   name?: string;
   /** Per-model operation allowlist, typed against the schema's model names. */
@@ -368,17 +359,16 @@ export interface CreateAgentClientParams<S extends SchemaRecord> {
    *  `<namespace>:<id>`). Omit for the server default (org anchor + the
    *  agent's own anchor). */
   syncGroups?: readonly SyncGroupInput[];
-  /** Token lifetime in seconds. Defaults to 900 (15m); the returned client
-   *  auto-re-mints before expiry, so a long-running agent never handles
-   *  rotation itself. */
+  /** Token lifetime in seconds. Defaults to 900 (15 minutes); the returned client
+   *  re-mints before expiry, so a long-running agent never handles rotation
+   *  itself. */
   ttlSeconds?: number;
   /** Extra opaque identity blob echoed on the session scope. Merged with
    *  `name` (the `name` param wins if you also set `userMeta.name`). */
   userMeta?: Record<string, unknown>;
 }
 
-/** A minted session token — the Stripe ephemeral-key / Supabase session
- *  resource. `token` is the secret the holder presents as its bearer. */
+/** A minted session. `token` is the secret the holder presents as its bearer. */
 export interface AbloSession {
   object: 'session';
   /** Stable id of the minted credential (for revocation). */

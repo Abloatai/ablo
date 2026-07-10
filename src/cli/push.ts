@@ -1,14 +1,14 @@
 /**
- * `ablo push` — upload the local schema to the hosted sync-server.
+ * `ablo push` uploads your local schema to the hosted service.
  *
- * Serializes the user's `defineSchema(...)` (imported at runtime via jiti) to
- * its JSON form and POSTs it to `POST /api/schema`, authed by the `sk_`
- * secret key. The server validates, version-bumps, and activates it; a
- * connecting client is then gated against the active schema's hash.
+ * It imports your `defineSchema(...)` module at runtime (via jiti), serializes
+ * it to JSON, and sends it to `POST /api/schema`, authenticated with your `sk_`
+ * secret key. The server validates the schema, bumps its version, and activates
+ * it; connecting clients are then checked against the active schema's hash.
  *
- * Unlike `migrate` (which regex-parses `schema.ts`), `push` needs the real
- * schema object — only `serializeSchema` produces the faithful AST the server
- * stores — so it imports the module.
+ * Where `ablo migrate` reads `schema.ts` by parsing its text, `push` needs the
+ * real schema object, because only {@link serializeSchema} produces the faithful
+ * representation the server stores — so `push` imports the module.
  *
  * Usage:
  *   ablo push
@@ -41,8 +41,8 @@ export interface PushArgs {
   yes: boolean;
   /** Don't refuse a production push when the schema file has uncommitted changes. */
   allowDirty: boolean;
-  /** Compute and print the plan (target + model diff + git state), then exit
-   *  WITHOUT applying — the `terraform plan` / `prisma migrate diff` of push. */
+  /** Compute and print the plan — target, model diff, and git state — then exit
+   *  without applying anything, so you can preview a deploy before running it. */
   dryRun: boolean;
 }
 
@@ -57,14 +57,14 @@ function coerceBackfill(raw: string): string | number | boolean {
 
 export const DEFAULT_SCHEMA_PATH = 'ablo/schema.ts';
 export const DEFAULT_EXPORT = 'schema';
-/** Single-sourced from the hosted-endpoints leaf; re-exported under the name
- *  the other CLI commands already import. */
+/** The default base URL for the hosted service, re-exported here under the name
+ *  the other CLI commands import. */
 export const DEFAULT_URL = ABLO_DEFAULT_BASE_URL;
 
-/** Format a single migration signal `{ model, field?, detail, shadowed? }` for
- *  the CLI. When `shadowed` is present (a removal diffed against an existing
- *  artifact), a second line names the baseline — version + WHEN it was pushed —
- *  so the user understands what "incompatible" is comparing against. */
+/** Formats a single migration signal — `{ model, field?, detail, shadowed? }` —
+ *  for display. When `shadowed` is present, meaning a removal was diffed against
+ *  an existing schema, a second line names the baseline it compares against: the
+ *  version and the date it was pushed, so "incompatible" is easy to interpret. */
 export function fmtSignal(s: unknown): string {
   const sig = s as {
     model?: string;
@@ -96,8 +96,9 @@ export interface PushResult {
 }
 
 /**
- * POST a serialized schema to the control plane and return the parsed result.
- * Pure I/O — the caller decides how to render success/rejection.
+ * Sends a serialized schema to the hosted service and returns the parsed
+ * result. Does the network call and nothing else — the caller decides how to
+ * render success or rejection.
  */
 export async function pushSchema(
   schema: Schema,
@@ -127,7 +128,7 @@ export async function pushSchema(
   return { ok: res.ok, status: res.status, body, bodyText };
 }
 
-/** Parse `push` flags. Pure — unit-tested without touching the network. */
+/** Parses the `push` command's flags into {@link PushArgs}. Does no I/O. */
 export function parsePushArgs(argv: readonly string[]): PushArgs {
   let schemaPath = DEFAULT_SCHEMA_PATH;
   let exportName = DEFAULT_EXPORT;
@@ -215,8 +216,8 @@ export async function loadSchema(schemaPath: string, exportName: string): Promis
   const { createJiti } = await import('jiti');
   const jiti = createJiti(process.cwd());
   const mod = await jiti.import<Record<string, unknown>>(abs);
-  // Depending on the module's emit (ESM vs transpiled CJS), the named exports
-  // may surface directly OR nest under `default`. Check both so a plain
+  // Depending on the module's emit (ESM vs transpiled CommonJS), the named
+  // exports may surface directly or nest under `default`. Check both so a plain
   // `export const schema = …` resolves either way.
   const nested = mod.default && typeof mod.default === 'object' ? (mod.default as Record<string, unknown>) : undefined;
   const schema = mod[exportName] ?? nested?.[exportName];
@@ -254,7 +255,7 @@ function schemaGitState(schemaPath: string): { dirty: boolean; untracked: boolea
   }
 }
 
-/** A model on the deployed plane (`GET /api/schema`) — key + conflict policy. */
+/** A model in the deployed schema (`GET /api/schema`): its key and conflict policy. */
 interface RemoteModel {
   key: string;
   conflict: Record<string, string> | null;
@@ -265,9 +266,9 @@ interface RemoteSchema {
   models?: RemoteModel[];
 }
 
-/** Best-effort read of the schema CURRENTLY ACTIVE on the key's plane, for the
- *  diff preview. Any failure → null (the server still computes the real diff on
- *  apply); never blocks the push. Mirrors `status`'s fetch. */
+/** Best-effort read of the schema currently active for this key, used only for
+ *  the diff preview. Any failure returns null and never blocks the push — the
+ *  server still computes the authoritative diff when the schema is applied. */
 async function fetchActiveSchema(url: string, apiKey: string): Promise<RemoteSchema | null> {
   const ctrl = new AbortController();
   const t = setTimeout(() => { ctrl.abort(); }, 3000);
@@ -303,10 +304,11 @@ function localModels(schema: Schema): Map<string, string> {
 }
 
 /**
- * Print the model-level plan (added / removed / conflict-changed) against the
- * deployed schema — the at-a-glance `terraform plan`. Field-level destructive
- * changes are caught authoritatively by the server's gate on apply (it returns
- * `warnings`/`unexecutable`); this is the human preview before that.
+ * Prints the model-level plan — models added, removed, or with a changed
+ * conflict policy — against the deployed schema, as an at-a-glance preview.
+ * Field-level destructive changes are caught authoritatively by the server when
+ * the schema is applied (it returns `warnings` and `unexecutable`); this is the
+ * human-readable preview shown beforehand.
  */
 function printPlan(local: Map<string, string>, remote: RemoteSchema | null): void {
   if (!remote?.models) {
@@ -385,12 +387,12 @@ async function confirmPush(
 }
 
 /**
- * `prisma migrate`-style target banner — printed before every push so the
- * deploy target is never a guess. The drift the demo hit (app built against
- * one schema, a DIFFERENT schema deployed) happens when you can't see WHICH
- * project/environment a push lands on. The environment is read from the KEY,
- * not the CLI mode: the resolved key's plane is the real target, and a key
- * whose env disagrees with the active mode is exactly the silent footgun.
+ * Prints a target banner before every push so the deploy destination is never a
+ * guess. It's easy to build an app against one schema and deploy to a different
+ * project or environment without noticing; the banner names exactly where the
+ * push will land. The environment comes from the key, not the CLI mode: the
+ * resolved key's environment is the real target, so a key whose environment
+ * disagrees with the active mode is flagged rather than silently trusted.
  */
 function printPushTarget(opts: {
   schemaPath: string;
@@ -411,9 +413,9 @@ function printPushTarget(opts: {
   const projectLabel = project
     ? `${pc.bold(project.slug)} ${pc.dim(`(${project.id})`)}`
     : `${pc.bold('default')} ${pc.dim('(org-default)')}`;
-  // Flag the drift trap: CLI mode and the key's plane disagree → you may be
-  // pushing somewhere other than where `ablo status` implies. The env label
-  // above already names the real target, so the note only flags the mismatch.
+  // Flag the case where the CLI mode and the key's environment disagree: the
+  // push may land somewhere other than what `ablo status` implies. The label
+  // above already names the real target, so this note only marks the mismatch.
   const cliMode = getMode();
   const modeNote =
     env && env !== cliMode ? ` ${pc.yellow(`(cli mode: ${cliMode})`)}` : '';
@@ -452,13 +454,13 @@ export async function push(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  // Resolve the key through the ONE shared chain (`resolveEffectiveApiKey`):
-  // ABLO_API_KEY from process.env (set by parsePushArgs) → .env.local → .env →
-  // the stored `ablo login` credential. `npx ablo` has NO framework env loader,
-  // so a key a developer put in `.env.local` (the natural place) is invisible to
-  // process.env — without this, push silently uses the stored sandbox login key
-  // instead of the production key in .env.local (the reported bug). `keySource`
-  // is tracked so a 403 can say exactly WHICH key it used and WHERE it came from.
+  // Resolve the key through the one shared chain, `resolveEffectiveApiKey`:
+  // ABLO_API_KEY from the process environment (set by parsePushArgs), then
+  // `.env.local`, then `.env`, then the credential stored by `ablo login`. Run
+  // through `npx`, this command has no framework to load env files, so a key a
+  // developer put in `.env.local` — the natural place — would be invisible to
+  // the process environment without this step. `keySource` records where the key
+  // came from so a 403 can say exactly which key it used and where it was found.
   let keySource: EffectiveKeySource = 'env';
   if (!args.apiKey) {
     const resolved = resolveEffectiveApiKey();
@@ -467,7 +469,7 @@ export async function push(argv: readonly string[]): Promise<void> {
   }
 
   if (!args.apiKey) {
-    // Message contract: enumerate the doors — both environments exist.
+    // Point at both environments, since either kind of key would work here.
     console.error(
       pc.red(`  No API key.`) +
         pc.dim(
@@ -495,7 +497,7 @@ export async function push(argv: readonly string[]): Promise<void> {
   const remote = await fetchActiveSchema(args.url, args.apiKey);
   printPlan(localModels(schema), remote);
 
-  // Git state — surface an untraceable deploy (not yet a hard block on sandbox).
+  // Git state — warn about a deploy that won't match a commit (a warning on sandbox, not a block).
   const git = schemaGitState(args.schemaPath);
   if (git?.dirty) {
     const what = git.untracked ? 'is untracked (not committed)' : 'has uncommitted changes';
@@ -556,16 +558,17 @@ export async function push(argv: readonly string[]): Promise<void> {
     }
     console.error(pc.dim(`  Re-push with ${pc.bold('--force')} to override, or use ${pc.bold('--rename old:new')} if you renamed a model.`));
   } else if (status === 403) {
-    // Remediation is keyed on the machine-readable CODE, not the HTTP status —
-    // a 403 from the RLS firebreak is a DATABASE-config problem, not a key-scope
-    // one, and printing "you need schema:push" for it sends the user down the
-    // wrong path (the exact misdiagnosis reported from an integration). Always
-    // lead with the server's real message + code, then remediate per code.
+    // Choose remediation from the machine-readable code, not the HTTP status. A
+    // 403 caused by row-level security is a database-configuration problem, not a
+    // key-scope one, so telling the user they "need schema:push" would send them
+    // down the wrong path. Lead with the server's real message and code, then
+    // give advice specific to that code.
     const code = (body.code ?? body.reason) as string | undefined;
     const serverMsg = (body.message ?? body.reason) as string | undefined;
     console.error(pc.red(`  Forbidden${code ? ` [${code}]` : ''}: ${serverMsg ?? 'permission denied'}`));
-    // Always name WHICH key push used and WHERE it came from — the reported
-    // confusion was "push used my sandbox login key, not my prod key in .env.local".
+    // Name which key the push used and where it came from, since the common
+    // confusion is a stored sandbox login key being used instead of a production
+    // key placed in `.env.local`.
     console.error(pc.dim(`  Push used ${pc.bold(maskKey(args.apiKey))} from ${describeKeySource(keySource)}.`));
     if (code === 'database_role_cannot_enforce_rls') {
       console.error(
@@ -582,12 +585,12 @@ export async function push(argv: readonly string[]): Promise<void> {
         ),
       );
     } else if (code === 'capability_scope_denied' || code === 'capability_invalid') {
-      // NOT a key-scope problem. `capability_scope_denied` is the data plane's
-      // Postgres returning 42501 (insufficient_privilege) — the connected DB
-      // role / row-level security refused the write (errors.ts classifyAuthzPgError).
-      // The schema:push GATE is a different code (`forbidden`). A different API
-      // key will NOT fix this; the role behind this org's database can't write
-      // the target, or the org's database isn't provisioned with a role that can.
+      // Not a key-scope problem. `capability_scope_denied` means the database
+      // returned Postgres error 42501 (insufficient_privilege) — the connected
+      // role, or its row-level security, refused the write. The `schema:push`
+      // permission gate is a different code (`forbidden`). A different API key
+      // won't fix this: the role behind this organization's database can't write
+      // the target, or the database has no role that can.
       console.error(
         pc.dim(
           `  This is a ${pc.bold('database privilege')} error (Postgres 42501 / row-level security), not a key scope — ` +
@@ -596,9 +599,24 @@ export async function push(argv: readonly string[]): Promise<void> {
             `registration. See docs/plans/read-path-logical-replication-vs-hosting.md.`,
         ),
       );
+    } else if (code === 'schema_provisioning_forbidden') {
+      // The key authenticated and passed the schema:push gate — then the target
+      // database refused the CREATE TABLE DDL (Postgres 42501). The engine's
+      // runtime role deliberately can't run DDL, so this is the environment's
+      // storage shape, not a key scope: a different API key changes nothing
+      // about what the database permits.
+      console.error(
+        pc.dim(
+          `  This is not a key problem — the push was authorized, but the target database refused ` +
+            `to let the engine create tables (Postgres 42501). On the replication read path Ablo ` +
+            `never runs DDL: register your database as a data source with ${pc.bold('npx ablo connect --register')}, ` +
+            `and pushes to that environment record the schema as metadata only — no tables are created anywhere.`,
+        ),
+      );
     } else if (args.apiKey != null && classifyCredentialKind(args.apiKey) === 'restricted') {
-      // The login-minted production key is a restricted (rk_) observe-only key
-      // by design — name the door that works instead of leaving a dead end.
+      // The production key minted by `ablo login` is a restricted, observe-only
+      // key (`rk_`) by design, so name a key that can push instead of leaving a
+      // dead end.
       console.error(
         pc.dim(
           `  Schema pushes need a SECRET key: ${pc.bold('sk_test_')} (sandbox dev loop) or a dashboard ` +
@@ -606,9 +624,9 @@ export async function push(argv: readonly string[]): Promise<void> {
         ),
       );
     } else {
-      // Any other 403 on push = the key connected but isn't authorized to AUTHOR
-      // schema (needs the schema:push capability). Most often this is the wrong
-      // key being used — name the fix in terms of where keys are resolved from.
+      // Any other 403 on push means the key authenticated but isn't authorized
+      // to author schema (it needs the schema:push capability). Most often the
+      // wrong key is in use, so frame the fix around where keys are resolved.
       console.error(
         pc.dim(
           `  This key isn't authorized to push schema (needs ${pc.bold('schema:push')}). ` +

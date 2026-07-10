@@ -1,53 +1,44 @@
 /**
- * AreaOfInterestManager — client-side hysteresis + prominence policy over
- * the `update_subscription` read primitive.
+ * Decides which sync groups a connection subscribes to as the user navigates,
+ * and pushes each change through the {@link SubscriptionTransport}'s
+ * `update_subscription` call. It smooths two kinds of churn so that opening and
+ * closing entities does not turn into a storm of subscription changes.
  *
- * Game netcode never thrashes its area-of-interest on a boundary: a cell
- * you walk out of stays subscribed for a margin before it's dropped
- * (hysteresis), and "important" entities stay relevant from farther away
- * (prominence). This manager applies both to Ablo sync groups:
+ * The first is hysteresis. Calling {@link SubscriptionManager.leave | leave}
+ * on a group does not unsubscribe it right away; the group stays subscribed for
+ * a grace period — its warm window — and drops only once that window lapses.
+ * Re-entering within the window costs nothing, since the group was never
+ * dropped, so rapid back-and-forth navigation becomes a cache hit rather than a
+ * repeated bootstrap.
  *
- *   - `enter(group)` / `leave(group)` move read interest as the user opens
- *     and closes entities (decks, sheets, docs). A `leave` does NOT
- *     immediately unsubscribe — the group goes WARM with a TTL and stays
- *     in the effective set. Re-entering within the window is a no-op
- *     (already subscribed → no bootstrap), and only when the warm TTL
- *     lapses does the group actually drop. This is the boundary hysteresis
- *     that turns deck-tab flipping from a re-bootstrap storm into a
- *     cache hit.
+ * The second is prominence. A group that holds an active write claim is pinned
+ * (see {@link SubscriptionManager.pin | pin}) and stays subscribed regardless
+ * of navigation, so a row someone is actively editing never loses its live
+ * updates. The `baseGroups` are permanent scopes that are always subscribed.
  *
- *   - `pin(group)` / `unpin(group)` express prominence: a group that holds
- *     an active claim (write-claim) is pinned and never goes warm or
- *     expires while pinned. The claim machinery is the prominence oracle —
- *     the row two agents are fighting over stays subscribed regardless of
- *     navigation.
- *
- *   - `baseGroups` are permanent infrastructure scopes (e.g. `org:<id>`,
- *     `user:<id>`) that are always in the effective set.
- *
- * The effective set is recomputed and diffed against what was last sent;
- * the transport's `update_subscription` is only called when it actually
- * changes, so hysteresis genuinely suppresses network churn rather than
- * just deferring it.
- *
- * Transport-agnostic: it depends only on {@link SubscriptionTransport},
- * which `SyncWebSocket` satisfies structurally. `now` and the sweep timer
- * are injectable so the policy is deterministic under test.
+ * The manager recomputes the full desired set on every change, diffs it against
+ * the set the transport last confirmed, and calls `update_subscription` only
+ * when the set actually changes — so the smoothing suppresses network traffic
+ * rather than merely deferring it. It depends only on
+ * {@link SubscriptionTransport}, which {@link SyncWebSocket} satisfies. The
+ * clock and the sweep timer are injectable so the policy is deterministic under
+ * test.
  */
 
 /** The single capability this manager needs from the connection. */
 export interface SubscriptionTransport {
   /**
-   * Replace the connection's read interest with the COMPLETE group set.
-   * Resolves with the server's effective set (which the manager treats as
-   * authoritative for its next diff).
+   * Replaces the connection's read interest with the complete group set. This
+   * is a full replace, not an incremental add or remove. Resolves with the
+   * effective set the server applied, which the manager treats as authoritative
+   * for its next diff.
    */
   updateSubscription(
     syncGroups: readonly string[],
   ): Promise<{ syncGroups: string[] }>;
 }
 
-export interface AreaOfInterestOptions {
+export interface SubscriptionManagerOptions {
   /** Connection to drive. `SyncWebSocket` satisfies this structurally. */
   transport: SubscriptionTransport;
   /**
@@ -61,17 +52,16 @@ export interface AreaOfInterestOptions {
    */
   warmTtlMs?: number;
   /**
-   * Maximum number of warm (left-but-still-subscribed) groups. Under heavy
-   * navigation — opening and closing many entities quickly — warm groups
-   * would otherwise pile up until each TTL lapses, inflating the connection's
-   * subscription set. When the cap is exceeded, the LEAST-recently-warmed
-   * group is evicted immediately (dropped) instead of waiting for its TTL.
-   * This is the bounded relevant-set discipline from game netcode. Default 16.
+   * The maximum number of warm (left but still subscribed) groups. Under heavy
+   * navigation, warm groups would otherwise pile up until each one's window
+   * lapses, inflating the connection's subscription set. When the cap is
+   * exceeded, the least-recently-warmed group is dropped immediately instead of
+   * waiting for its window. Default 16.
    */
   maxWarm?: number;
   /**
    * Auto-run the warm-expiry sweep on this cadence. Set `0` to disable and
-   * drive {@link AreaOfInterestManager.sweep} yourself (tests do this).
+   * drive {@link SubscriptionManager.sweep} yourself (tests do this).
    * Default = `warmTtlMs` (checks about once per margin).
    */
   sweepIntervalMs?: number;
@@ -90,7 +80,7 @@ function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   return true;
 }
 
-export class AreaOfInterestManager {
+export class SubscriptionManager {
   private readonly transport: SubscriptionTransport;
   private readonly baseGroups: ReadonlySet<string>;
   private readonly warmTtlMs: number;
@@ -113,7 +103,7 @@ export class AreaOfInterestManager {
 
   private readonly cancelSweep: (() => void) | null;
 
-  constructor(options: AreaOfInterestOptions) {
+  constructor(options: SubscriptionManagerOptions) {
     this.transport = options.transport;
     this.baseGroups = new Set(options.baseGroups ?? []);
     this.warmTtlMs = options.warmTtlMs ?? 30_000;
@@ -223,19 +213,15 @@ export class AreaOfInterestManager {
   }
 
   /**
-   * Re-assert the full desired set against the transport, forgetting what
-   * was previously confirmed. Call after a reconnect: a fresh
-   * `SyncWebSocket` instance starts from the connect-time URL groups, so
-   * the manager's `lastSent` diff baseline is stale. Clearing it forces
-   * one `update_subscription` that re-establishes the live interest on the
-   * new socket.
-   *
-   * Resetting `lastSent` makes the next reconcile unconditionally re-push
-   * the current desired set (one `update_subscription` frame) so the fresh
-   * socket's server-side index matches local interest, even if warm/pinned
-   * groups drifted across the disconnect window. The connect-time URL
-   * already carries the last-acked set, so this is a correction frame, not
-   * the primary mechanism.
+   * Re-asserts the full desired set against the transport, forgetting what was
+   * previously confirmed. Call this after a reconnect: a fresh
+   * {@link SyncWebSocket} starts from the sync groups named in the connect-time
+   * URL, so the manager's diff baseline no longer reflects the new socket.
+   * Clearing that baseline makes the next reconcile push one
+   * `update_subscription` frame that re-establishes the current interest —
+   * including any warm or pinned groups that drifted while the connection was
+   * down. The connect-time URL already carries the last-acknowledged set, so
+   * this is a correction, not the primary mechanism.
    */
   resync(): Promise<void> {
     this.lastSent = new Set();
@@ -272,14 +258,20 @@ export class AreaOfInterestManager {
             const result = await this.transport.updateSubscription([...target]);
             this.lastSent = new Set(result.syncGroups);
           } catch {
-            // Transport unavailable (offline / socket not open) or the
-            // server rejected the set. Interest is SOFT state — never throw
-            // out of enter/leave/sweep for an expected transient. Leave
-            // `lastSent` unchanged so the diff persists; `resync()` on the
-            // next `connected` re-pushes the then-current desired set,
-            // which is what recovers "interest changed while offline."
+            // Transport unavailable (offline, or socket not open) or the
+            // server rejected the set. Read interest is soft state, so enter,
+            // leave, and sweep never throw for an expected transient failure.
+            // Leaving `lastSent` unchanged keeps the pending diff; `resync()`
+            // on the next successful connect re-pushes the then-current desired
+            // set, which recovers any interest that changed while offline.
             break;
           }
+          // A concurrent reconcile() arriving during the await above sets
+          // `this.dirty` back to true (the coalescing path near line 245).
+          // TypeScript's intra-closure flow analysis can't see that cross-
+          // invocation mutation and reads this as always-false, but the loop
+          // is genuinely reentrant.
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
         } while (this.dirty);
       } finally {
         this.inFlight = null;

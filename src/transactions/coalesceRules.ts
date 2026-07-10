@@ -1,23 +1,25 @@
 /**
- * Coalescing rules — the queue's same-entity causality guards, lifted out of
- * `TransactionQueue.ts` as a leaf over a minimal store-shaped interface:
+ * The queue's rules for coalescing operations that touch the same row, so their
+ * causal order is preserved. {@link TransactionQueue} calls into these through a
+ * small store-shaped interface:
  *
- *   • create-then-delete cancellation (`takeUnsentCreateForModel`): a delete
- *     of a row whose create never left the client cancels both locally;
- *   • the create barrier (`findCreateBarrierForDelete`) + deferred-delete
- *     parking (`deferDeleteUntilCreateSettles` / `release…`): once a create
- *     HAS been sent, a delete must wait for it to settle or the server could
- *     see DELETE-before-CREATE;
- *   • update-payload merging (`mergeUpdateData`): collapses rapid same-entity
- *     updates into one wire op.
+ *   - Create-then-delete cancellation ({@link takeUnsentCreateForModel}):
+ *     deleting a row whose create never left the client cancels both locally.
+ *   - The create barrier ({@link findCreateBarrierForDelete}) and deferred-delete
+ *     parking ({@link deferDeleteUntilCreateSettles} /
+ *     {@link releaseDeferredDeletesForCreate}): once a create has been sent, a
+ *     delete must wait for it to settle, or the server could receive the delete
+ *     before the create.
+ *   - Update-payload merging ({@link mergeUpdateData}): collapses rapid updates
+ *     to the same row into one wire operation.
  *
- * The queue's `enqueue`/`delete` verbs stay in the host (they orchestrate
- * optimistic state + events); the RULES live here.
+ * The queue keeps the `enqueue` and `delete` methods that orchestrate optimistic
+ * state and events; these functions hold only the coalescing rules.
  */
 
 import type { MutationInput, Transaction } from './commitPayload.js';
 
-/** The slice of `TransactionStore` the coalescing rules read. */
+/** The subset of {@link TransactionStore} that the coalescing rules read. */
 export interface TransactionStoreLike {
   get(id: string): Transaction | undefined;
   getByStatus(status: Transaction['status']): Transaction[];
@@ -33,10 +35,11 @@ const isTransactionForModel = (
 ): boolean => transaction.modelName === modelName && transaction.modelId === modelId;
 
 /**
- * Find-and-remove a create for (model, id) that has never been sent —
- * checking the microtask staging area, the execution queue, and the store's
- * pending bucket, in that order. Splices the winner out of whichever queue
- * held it so the caller can cancel it instead of shipping create+delete.
+ * Finds and removes a create for the given model and id that has never been
+ * sent, searching the staging area, the execution queue, and the store's
+ * pending bucket in that order. It splices the match out of whichever queue
+ * held it, so the caller can cancel it rather than send a create followed by a
+ * delete.
  */
 export function takeUnsentCreateForModel(
   staged: Transaction[],
@@ -64,6 +67,12 @@ export function takeUnsentCreateForModel(
   return store.getByStatus('pending').find(isUnsentCreate);
 }
 
+/**
+ * Returns the most recent in-flight create for the given model and id that a
+ * delete must wait behind, or undefined if there is none. A pending create that
+ * has never been attempted is not a barrier, because it can be cancelled
+ * instead; once a create has been sent, even a retry-pending one is a barrier.
+ */
 export function findCreateBarrierForDelete(
   store: Pick<TransactionStoreLike, 'getByStatus'>,
   modelName: string,
@@ -85,6 +94,11 @@ export function findCreateBarrierForDelete(
   return liveCreates.sort((a, b) => b.createdAt - a.createdAt)[0];
 }
 
+/**
+ * Parks a delete until the create for the same row settles, keyed by the
+ * create's model and id. {@link releaseDeferredDeletesForCreate} re-enqueues
+ * the parked deletes once that create completes.
+ */
 export function deferDeleteUntilCreateSettles(
   deferredDeletesByCreate: Map<string, Transaction[]>,
   createTransaction: Transaction,
@@ -96,6 +110,10 @@ export function deferDeleteUntilCreateSettles(
   deferredDeletesByCreate.set(key, deferred);
 }
 
+/**
+ * Re-enqueues the deletes parked behind a create once that create settles,
+ * skipping any whose status is no longer pending.
+ */
 export function releaseDeferredDeletesForCreate(
   deferredDeletesByCreate: Map<string, Transaction[]>,
   store: Pick<TransactionStoreLike, 'get'>,
@@ -114,7 +132,12 @@ export function releaseDeferredDeletesForCreate(
   }
 }
 
-// Merge two GraphQL update payloads with special handling for metadata fields
+/**
+ * Merges two update payloads for the same row into one. Later values win, with
+ * one exception: a `metadata` field is deep-merged as an object — parsing it
+ * first when it arrives as a JSON string — rather than replaced, so partial
+ * metadata updates accumulate instead of overwriting each other.
+ */
 export function mergeUpdateData(
   left: MutationInput | undefined,
   right: MutationInput | undefined,

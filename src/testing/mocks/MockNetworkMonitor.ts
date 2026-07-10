@@ -1,8 +1,8 @@
 /**
- * MockNetworkMonitor — Test double for OnlineStatusProvider.
- *
- * Allows tests to programmatically toggle online/offline state
- * and trigger visibility change events.
+ * A test double for {@link OnlineStatusProvider} that lets tests flip the
+ * connection between online and offline on demand. Alongside its own state, it
+ * updates the global `navigator.onLine` flag so code that reads the browser
+ * value directly sees the same status.
  */
 
 import type { OnlineStatusProvider } from '../../interfaces/index.js';
@@ -18,7 +18,7 @@ export class MockNetworkMonitor implements OnlineStatusProvider {
     return this._online;
   }
 
-  /** Simulate going online */
+  /** Marks the connection online and sets `navigator.onLine` to true. */
   goOnline(): void {
     this._online = true;
     // Also update navigator.onLine for code that reads it directly
@@ -28,7 +28,7 @@ export class MockNetworkMonitor implements OnlineStatusProvider {
     });
   }
 
-  /** Simulate going offline */
+  /** Marks the connection offline and sets `navigator.onLine` to false. */
   goOffline(): void {
     this._online = false;
     Object.defineProperty(navigator, 'onLine', {
@@ -37,7 +37,7 @@ export class MockNetworkMonitor implements OnlineStatusProvider {
     });
   }
 
-  /** Toggle online state and return new value */
+  /** Flips between online and offline, returning the new online state. */
   toggle(): boolean {
     if (this._online) {
       this.goOffline();
@@ -47,7 +47,7 @@ export class MockNetworkMonitor implements OnlineStatusProvider {
     return this._online;
   }
 
-  /** Reset to initial state (online) */
+  /** Returns the monitor to its online starting state. */
   reset(): void {
     this.goOnline();
   }

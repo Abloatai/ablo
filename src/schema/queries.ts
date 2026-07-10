@@ -1,10 +1,10 @@
 /**
- * Schema Query Definitions
+ * Query definitions for a schema.
  *
- * A query is a zod input schema + a string reference to a schema model
- * that the query returns. Types flow via `z.infer` for inputs and
- * `InferModel` for results — the same inference path `model` and
- * `relation` already use. No second type system.
+ * A query pairs a Zod input schema with the name of the model it returns.
+ * Input types flow through `z.infer` and result types through `InferModel`,
+ * the same inference path `model` and `relation` use, so there is no separate
+ * type system to learn.
  *
  * Usage:
  *   import { z } from 'zod';
@@ -37,23 +37,21 @@
  *
  * Design notes:
  *
- *  - `query()` accepts any string for `returns`. The constraint that it
- *    must reference a real schema model is applied when the query is
- *    passed to `defineQueries(schema, ...)`. This mirrors how
- *    `relation.belongsTo('projects', 'projectId')` accepts a plain
- *    string at the factory and defers the cross-reference check to
- *    schema assembly time.
+ *  - `query()` accepts any string for `returns`. The check that the string
+ *    names a real model runs when the query passes through
+ *    `defineQueries(schema, ...)`, the same way
+ *    `relation.belongsTo('projects', 'projectId')` takes a plain string at
+ *    the factory and defers the cross-reference check to schema assembly.
  *
- *  - Queries do NOT carry a `name` until they pass through
- *    `defineQueries()`. The name is assigned from the record key —
- *    same pattern as `defineSchema({ tasks: model(...) })` where the
- *    model name is the record key, not a field on the model factory.
+ *  - A query carries no `name` until `defineQueries()` assigns one from its
+ *    record key — the same pattern `defineSchema({ tasks: model(...) })`
+ *    uses, where the model's name is the record key rather than a field on
+ *    the factory.
  *
- *  - All queries return an array of a single model type. Multi-model
- *    fetches (e.g., files + folders) are expressed as multiple queries
- *    in a single batch at dispatch time, not as "bundle" shapes in the
- *    schema. This keeps each `QueryDef` pointed at exactly one model
- *    and lets the generic loader hydrate via a single
+ *  - Every query returns an array of a single model type. To fetch several
+ *    model types at once, run several queries in one batch rather than
+ *    declaring a combined shape. Each `QueryDef` therefore points at exactly
+ *    one model, and the loader hydrates results through a single
  *    `schema.models[queryDef.returns]` lookup.
  */
 
@@ -87,11 +85,11 @@ export interface QueryDef<
    */
   readonly returns: TReturns;
   /**
-   * Name under which the query is registered. Populated by
-   * `defineQueries()` from the record key — do not set directly.
-   * Present so wire-dispatch code (`client.runNamed(queryDef.name,
-   * ...)`) and the Go registry lookup can read it straight off the
-   * def without needing the surrounding `Queries` object.
+   * The name under which the query is registered. {@link defineQueries}
+   * fills this in from the record key; you do not set it directly. It lives
+   * on the definition itself so dispatch and lookup code can read the name
+   * straight off a {@link QueryDef} without carrying the surrounding
+   * {@link Queries} object.
    */
   readonly name?: string;
 }
@@ -153,7 +151,7 @@ export type QueryRecord<S extends Schema> = Record<
 
 /**
  * The object returned by `defineQueries()`. Holds a reference back to
- * the schema (so the generic loader can resolve `queryDef.returns` to
+ * the schema (so the loader can resolve `queryDef.returns` to
  * a `ModelDef` at runtime via `schema.models[def.returns]`) and the
  * resolved record of queries, each with its `name` field filled in.
  */
@@ -223,9 +221,9 @@ export type InferQueryResult<
  * exist" error deep inside the loader.
  *
  * Each resolved query gets its `name` populated from the record key:
- * `queries.slideLayersByDeck.name === 'slideLayersByDeck'`. Wire
- * dispatch, the Go registry, and the loader orchestrator all read
- * `queryDef.name` directly rather than re-deriving it.
+ * `queries.slideLayersByDeck.name === 'slideLayersByDeck'`. Dispatch and
+ * lookup code read `queryDef.name` directly rather than re-deriving it from
+ * the surrounding record.
  *
  * ```ts
  * const schema = defineSchema({

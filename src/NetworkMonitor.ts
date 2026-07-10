@@ -1,10 +1,9 @@
 /**
- * NetworkMonitor - Network connectivity tracking with visibility awareness
- *
- * Monitors online/offline state using browser events AND visibility changes.
- * When a tab becomes visible after being hidden (e.g., laptop sleep/wake),
- * the WebSocket may have silently died without triggering online/offline events.
- * The visibility handler detects this and emits 'online' to trigger recovery.
+ * NetworkMonitor tracks network connectivity and reports it through events.
+ * It listens to the browser's online and offline events, and it also watches
+ * for a tab becoming visible again: after a laptop sleep/wake or a long spell
+ * in the background, the WebSocket can die silently without an offline event
+ * firing, so returning to the tab emits a recovery signal the store can act on.
  */
 
 import { EventEmitter } from 'events';

@@ -1,13 +1,10 @@
 /**
- * Inbound frame dispatch for the sync WebSocket.
- *
- * Replaces the monolithic frame `switch` that used to live inside
- * `SyncWebSocket.setupEventHandlers` with a frame-type → handler table of
- * functions over a minimal {@link WsSession} interface — only the members
- * the handlers actually touch, never the transport class itself (no
- * import cycle). The host's `onmessage` stays responsible for JSON
- * parsing, heartbeat proof-of-life, and the outer try/catch; everything
- * after that funnels through {@link dispatchWsFrame}.
+ * Routes each inbound frame from the sync WebSocket to the handler for its
+ * type. Handlers work against a minimal {@link WsSession} interface — only
+ * the members they actually touch, rather than the transport object itself,
+ * which keeps this module free of an import cycle. Reading a message off the
+ * socket, parsing its JSON, and tracking heartbeats all happen before this
+ * point; every parsed frame then passes through {@link dispatchWsFrame}.
  */
 
 import { getContext } from '../context.js';
@@ -42,9 +39,10 @@ export interface PendingClaim {
 }
 
 /**
- * In-flight `update_subscription` record awaiting `subscription_ack`.
- * FIFO-matched (no correlation id on the wire) — see the session field
- * doc on SyncWebSocket.pendingSubscriptions.
+ * An in-flight `update_subscription` request awaiting its
+ * `subscription_ack`. The wire carries no correlation id, so requests are
+ * matched to their acknowledgements in first-in, first-out order, the same
+ * order the server applies them.
  */
 export interface PendingSubscription {
   resolve: (value: { syncGroups: string[] }) => void;
@@ -53,14 +51,14 @@ export interface PendingSubscription {
 }
 
 /**
- * Parsed inbound wire frame (the raw `JSON.parse` result). Untrusted
- * data — every payload is loose and each handler narrows defensively,
- * the same posture the inline switch had.
+ * A parsed inbound wire frame, straight from `JSON.parse`. The data is
+ * untrusted: every payload is loosely typed, and each handler narrows it
+ * defensively before use.
  */
 export interface WsInboundFrame {
   type?: string;
   payload?: unknown;
-  /** Legacy bare-delta frames carry delta fields at the top level. */
+  /** Some delta frames carry their delta fields at the top level rather than under `payload`. */
   actionType?: unknown;
   modelName?: unknown;
   [key: string]: unknown;
@@ -72,10 +70,10 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Envelope guard for the raw `JSON.parse` result of an inbound WS message.
- * A frame is any plain object whose `type`, when present, is a string —
- * payload-level validation stays with each handler (deltas go through the
- * canonical `clientSyncDeltaSchema` at the `normalizeWireDelta` seam).
+ * A type guard for the parsed result of an inbound message. A frame is any
+ * plain object whose `type`, when present, is a string. Validating the
+ * payload itself is left to each handler; delta payloads, for example, are
+ * checked against the canonical delta schema before they are applied.
  */
 export function isWsInboundFrame(value: unknown): value is WsInboundFrame {
   if (!isRecord(value)) return false;
@@ -84,10 +82,11 @@ export function isWsInboundFrame(value: unknown): value is WsInboundFrame {
 }
 
 /**
- * The slice of SyncWebSocket the frame handlers operate on. The host
- * builds one adapter object over its private state; closures read live
- * fields so host-side reassignment (e.g. the pendingSubscriptions reset
- * on close) can't strand the handlers on stale references.
+ * The subset of the sync WebSocket that the frame handlers need. The
+ * transport builds a single object exposing these members over its own
+ * private state. Handlers read the fields live rather than capturing them,
+ * so resetting a field elsewhere — such as clearing pending subscriptions
+ * on close — never leaves a handler holding a stale value.
  */
 export interface WsSession {
   /** EventEmitter surface — handlers emit the typed transport events. */
@@ -96,17 +95,16 @@ export interface WsSession {
   pendingMutations: Map<string, PendingCommit>;
   /** In-flight claim acks keyed by claimId. */
   pendingClaims: Map<string, PendingClaim>;
-  /** FIFO pop of the oldest in-flight `update_subscription` request. */
+  /** Removes and returns the oldest in-flight `update_subscription` request. */
   shiftPendingSubscription(): PendingSubscription | undefined;
   /** Connection options subset the handlers write back (acked sync groups). */
   options: { syncGroups: string[] };
   /** Registered collaboration event keys (colon format). */
   collaborationEventTypes: ReadonlySet<string>;
   /**
-   * Receive-boundary delta processing. Takes UNTRUSTED wire data — the
-   * host validates against the canonical `clientSyncDeltaSchema` (and
-   * drops malformed deltas) at its `normalizeWireDelta` seam, so the
-   * handlers here never need to cast.
+   * Processes one inbound delta. The argument is untrusted wire data; the
+   * transport validates it against the canonical delta schema and drops
+   * anything malformed, so handlers here never cast.
    */
   handleDelta(delta: unknown): void;
   handleSyncResponse(payload: unknown): void;
@@ -117,10 +115,10 @@ export interface WsSession {
 export type WsFrameHandler = (session: WsSession, message: WsInboundFrame) => void;
 
 /**
- * Ack for a prior `commit` we sent. Canonical shape is
- * `MutationResultMessage` in `@abloatai/ablo/wire`. This stays a
- * DEFENSIVE parse (not a typed cast) because the payload is
- * untrusted wire data that may be malformed or from an older server.
+ * Handles the acknowledgement of a `commit` request. The canonical wire
+ * shape is `MutationResultMessage`. The payload is parsed defensively
+ * rather than cast, since it is untrusted and may be malformed or sent by
+ * an older server.
  */
 const handleMutationResult: WsFrameHandler = (session, message) => {
   const p = (message.payload ?? message) as Record<string, unknown>;
@@ -142,9 +140,9 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
     // Coerce defensively — bigint columns serialize as strings
     // from older servers (see normalizeWireDelta).
     const ackedSyncId = Number(lastSyncId);
-    // Notify-instead-of-abort: a guarded write's premise moved. Emit
-    // the advisory signal so an agent loop can self-heal, AND resolve
-    // the receipt with it (the commit still succeeded).
+    // The write succeeded, but a guarded premise shifted underneath it.
+    // Emit the advisory signal so a caller can react, and still resolve
+    // the receipt, since the commit itself went through.
     if (notifications && notifications.length > 0) {
       const txId = typeof clientTxId === 'string' ? clientTxId : '';
       const event = {
@@ -173,13 +171,10 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
         : {}),
     });
   } else {
-    // Capture the FULL server error so the user can see what
-    // actually rejected the mutation. Without this, every
-    // rejection becomes the generic "mutation failed on
-    // server" — useless when debugging chart batches that
-    // tank 40+ ops at once. We stringify object errors so
-    // structured server payloads (e.g., Zod issues, schema
-    // violations) survive the trip through `new Error(...)`.
+    // Capture the full server error so the caller can see what actually
+    // rejected the mutation, rather than a generic "mutation failed on
+    // server". Object errors are stringified so structured server payloads,
+    // such as validation issues, survive being wrapped in an Error.
     let errorMessage: string;
     let errorCode: string | undefined;
     let requiredCapability: RequiredCapability | undefined;
@@ -211,14 +206,12 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
     } else {
       errorMessage = 'mutation failed on server';
     }
-    // Coordination collision: a stale-context rejection (the write's
-    // readAt premise moved underneath) or a foreign-claim conflict is
-    // exactly the collision ClaimLog exists to surface. The notify
-    // path (success + notifications) emits captureConflict above; a
-    // HARD rejection must too — otherwise observability.collisions()
-    // silently misses every rejected write. The conflicted rows ride
-    // along on the typed error's `conflicts` detail (see
-    // AbloStaleContextError.toJSON / errorEnvelope).
+    // A stale-context rejection (the write read state that has since
+    // changed) or a foreign-claim conflict is a coordination collision.
+    // The success-with-notifications path above records the conflict, and a
+    // hard rejection must record it too, or the collision count would miss
+    // every rejected write. The conflicting rows ride along on the typed
+    // error's `conflicts` detail.
     if (
       errorCode === 'stale_context' ||
       errorCode === 'claim_conflict' ||
@@ -267,11 +260,9 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
 };
 
 /**
- * Ack for a prior `claim` we sent. Wire format mirrors
- * apps/sync-server/src/hub/types.ts ClaimAckMessage:
- *   { type: 'claim_ack',
- *     payload: { claimId, success, syncGroups?,
- *                ttlSeconds?, error? } }
+ * Handles the acknowledgement of a `claim` request. The frame has the shape
+ * `{ type: 'claim_ack', payload: { claimId, success, syncGroups?,
+ * ttlSeconds?, error? } }`.
  */
 const handleClaimAck: WsFrameHandler = (session, message) => {
   const p = (message.payload ?? {}) as Record<string, unknown>;
@@ -327,11 +318,11 @@ const handleClaimAck: WsFrameHandler = (session, message) => {
 };
 
 /**
- * Ack for a prior `update_subscription`. The wire carries no
- * correlation id, so FIFO-match against the oldest pending
- * request — the server applies and acks subscription updates
- * in receive order. Validated through the canonical zod schema
- * (mirrors how the Hub validates inbound frames).
+ * Handles the acknowledgement of an `update_subscription` request. The wire
+ * carries no correlation id, so the ack is matched to the oldest pending
+ * request in first-in, first-out order, since the server applies and
+ * acknowledges subscription updates in the order it receives them. The
+ * payload is validated against its canonical schema before use.
  */
 const handleSubscriptionAck: WsFrameHandler = (session, message) => {
   const pending = session.shiftPendingSubscription();
@@ -365,10 +356,10 @@ const handleSubscriptionAck: WsFrameHandler = (session, message) => {
 };
 
 /**
- * `delta` frames carry either a single delta or a `{ deltas: [...] }` batch.
- * Only DISCRIMINATES the two shapes here — each delta is validated exactly
- * once downstream (the host's `normalizeWireDelta` seam), so batch elements
- * are handed over raw rather than pre-parsed.
+ * Handles a `delta` frame, which carries either a single delta or a
+ * `{ deltas: [...] }` batch. This only tells the two shapes apart; each
+ * delta is validated once downstream, so batch elements are passed along
+ * raw rather than parsed here.
  */
 const handleDeltaFrame: WsFrameHandler = (session, message) => {
   const p = message.payload;
@@ -379,15 +370,16 @@ const handleDeltaFrame: WsFrameHandler = (session, message) => {
     for (const d of p.deltas) {
       session.handleDelta(d);
     }
-    // `p.newVersions` from pre-cutover servers is ignored — the version
-    // vector was removed in W4a (sync_id is the causality token).
+    // `p.newVersions` from older servers is ignored; `sync_id` is the
+    // causality token.
   }
 };
 
 /**
- * Frame-type → handler table. Every named server frame the SDK
- * understands dispatches through here; anything else falls to the
- * collaboration-event / unknown-type path in {@link dispatchWsFrame}.
+ * Maps each frame type to its handler. Every named server frame this
+ * package understands is dispatched from this table; anything else falls
+ * through to the collaboration-event and unknown-type path in
+ * {@link dispatchWsFrame}.
  */
 export const wsFrameHandlers: Record<string, WsFrameHandler> = {
   sync_response: (session, message) => { session.handleSyncResponse(message.payload); },
@@ -408,10 +400,9 @@ export const wsFrameHandlers: Record<string, WsFrameHandler> = {
     }
   },
   claim_rejected: (session, message) => {
-    // Server denied an `claim_begin` because the target is
-    // already claimed by another participant. Forward the
-    // payload as-is — the ClaimStream consumer interprets
-    // the conflict shape (peerId, target, etc.).
+    // The server denied a claim because the target is already held by
+    // another participant. The payload is forwarded as-is for the claim
+    // stream consumer to interpret (peerId, target, and so on).
     recordClaim('rejected', (message.payload ?? {}) as Record<string, unknown>);
     session.emit('claim_rejected', message.payload ?? {});
   },
@@ -443,14 +434,21 @@ export const wsFrameHandlers: Record<string, WsFrameHandler> = {
     recordClaim('lost', (message.payload ?? {}) as Record<string, unknown>);
     session.emit('claim_lost', message.payload ?? {});
   },
+  claim_heartbeat_ack: (session, message) => {
+    // Reply to our `claim_heartbeat` — the claim stream correlates it back
+    // to the awaiting caller by claimId. Not logged per-frame: heartbeats
+    // are a cadence, and the interesting transitions (lost) surface through
+    // the caller's error path.
+    session.emit('claim_heartbeat_ack', message.payload ?? {});
+  },
   delta: handleDeltaFrame,
 };
 
 /**
- * Route one parsed inbound frame to its handler. Mirrors the original
- * inline switch exactly: keepalives are ignored, a missing `type` is
- * the legacy bare-delta form, unknown types fall through to the
- * collaboration-event map (underscore wire format → colon event key).
+ * Routes one parsed inbound frame to its handler. Keepalive frames are
+ * ignored, a missing `type` is treated as a bare delta, and any unknown
+ * type falls through to the collaboration-event map, whose wire names use
+ * underscores and whose event keys use colons.
  */
 export function dispatchWsFrame(session: WsSession, message: WsInboundFrame): void {
   if (message.type === 'pong' || message.type === 'ping') {
@@ -460,17 +458,16 @@ export function dispatchWsFrame(session: WsSession, message: WsInboundFrame): vo
   }
 
   if (message.type === undefined) {
-    // Legacy support: bare delta (validated at the host's
-    // normalizeWireDelta seam like every other delta).
+    // A bare delta, validated downstream like every other delta.
     if (message.actionType || message.modelName) {
       session.handleDelta(message);
     }
     return;
   }
 
-  // Own-property lookup so wire types like 'toString' can never hit
-  // Object.prototype members — those fall through to the unknown-type
-  // path exactly as the switch's `default` did.
+  // Look up own properties only, so a wire type like 'toString' can't match
+  // an inherited Object.prototype member; such types fall through to the
+  // unknown-type path.
   const handler = Object.prototype.hasOwnProperty.call(wsFrameHandlers, message.type)
     ? wsFrameHandlers[message.type]
     : undefined;

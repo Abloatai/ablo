@@ -1549,6 +1549,15 @@
       "docUrl": "https://docs.abloatai.com/errors#registry_unknown_model"
     },
     {
+      "code": "replication_publication_drift",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "Your schema maps to tables that are not members of the replication publication, so their changes silently never stream and the source looks frozen. The missing tables and the exact `ALTER PUBLICATION … ADD TABLE …` to add them are in the error details — Ablo never alters your database for you.",
+      "docUrl": "https://docs.abloatai.com/errors#replication_publication_drift"
+    },
+    {
       "code": "request_too_large",
       "category": "validation",
       "surface": "wire",

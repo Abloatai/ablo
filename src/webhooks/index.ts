@@ -1,11 +1,9 @@
 /**
- * `@abloatai/ablo/webhooks` — the webhook event catalog + delta mapping.
- *
- * Customers import {@link AbloWebhookEvent} to type their handler; the server
- * uses {@link deltaToWebhookEvent} to turn transaction-log deltas into events
- * for Svix to deliver. Signature verification is NOT here — the customer uses
- * the open Standard Webhooks library (`svix` / `standardwebhooks`), so Ablo
- * ships no crypto.
+ * The public entry point for webhooks. Import {@link AbloWebhookEvent} to type
+ * your event handler, and use {@link deltaToWebhookEvent} to turn a committed
+ * change from the transaction log into an event to deliver. This module does not
+ * verify signatures and ships no cryptography; recipients verify deliveries with
+ * a standard webhooks library.
  */
 export {
   deltaToWebhookEvent,

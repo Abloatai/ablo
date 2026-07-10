@@ -1,10 +1,8 @@
 /**
- * The default `MutationExecutor` — sends `{ type: 'commit', ... }` frames over
- * the engine's own WebSocket, resolved lazily at commit time (the WS doesn't
- * exist when the executor is constructed).
- *
- * Extracted from `Ablo.ts`; the factory wires it up with a `getWs` closure
- * over the store holder unless the caller supplies its own executor.
+ * The default {@link MutationExecutor}. It sends each change as a `commit`
+ * frame over the sync engine's own WebSocket, resolving that socket lazily at
+ * commit time because it does not exist yet when the executor is created. A
+ * client wires this up automatically unless you supply your own executor.
  */
 
 import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
@@ -18,22 +16,19 @@ import { AbloError, AbloConnectionError } from '../errors.js';
 // ── Default mutation executor (wire: `commit` frame over WebSocket) ──────
 
 /**
- * Default mutation executor: sends `{ type: 'commit', payload: ... }` over
- * the sync engine's own WebSocket.
+ * Creates the default mutation executor, which sends each change as a `commit`
+ * frame over the sync engine's own WebSocket. The engine owns its socket, so
+ * you pass a URL and credentials rather than transport callbacks.
  *
- * Transport ownership follows the Zero / Liveblocks pattern — the engine
- * owns its socket end-to-end and the executor is internal. Apps pass URLs
- * and auth; they do NOT inject transport callbacks. That's why this
- * factory takes a `getWs` closure instead of a full SyncWebSocket: the WS
- * doesn't exist when the executor is constructed (it's created later in
- * `Ablo` during `BaseSyncedStore` init), so we resolve it
- * lazily at commit time. Same trick Zero uses internally — see
- * `packages/zero-client/src/client/zero.ts` where `Pusher`/`Puller` are
- * constructed before the socket then wired up at connect time.
+ * The factory takes a `getWs` accessor instead of a socket directly because the
+ * socket is created later during client startup and does not exist yet when
+ * this executor is constructed. The accessor is called at commit time to reach
+ * the ready socket.
  *
-	 * `options.idempotencyKey` becomes the wire-level `clientTxId` when set,
-	 * matching Stripe-style retry semantics. Otherwise the SDK generates one.
-	 */
+ * When set, `options.idempotencyKey` is sent as the wire-level `clientTxId`, so
+ * retrying a call with the same key is safe; otherwise the executor generates
+ * one.
+ */
 	export function createDefaultMutationExecutor(
 	  getWs: () => {
 	    sendCommit?: (
@@ -71,9 +66,8 @@ import { AbloError, AbloConnectionError } from '../errors.js';
 	        options?.reads,
 	      );
     } catch (err) {
-      // Wrap transport-level failures as connection errors so the
-      // TransactionQueue's retry classifier treats them as transient
-      // (matches the old HTTP path's network-error handling).
+      // Wrap transport-level failures as connection errors so the transaction
+      // queue's retry classifier treats them as transient and retries them.
       if (err instanceof AbloError) throw err;
       if (err instanceof Error) {
         if (/not connected|timed out|connection|ECONN/i.test(err.message)) {

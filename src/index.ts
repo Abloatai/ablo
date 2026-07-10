@@ -1,5 +1,5 @@
 /**
- * @abloatai/ablo — The Collaboration Layer for AI and Humans
+ * @abloatai/ablo — the collaboration layer for AI agents and people.
  *
  * ```ts
  * import Ablo from '@abloatai/ablo';
@@ -14,61 +14,63 @@
  * type Entry = Ablo.Peer;
  * ```
  *
- * `Ablo({ schema, apiKey })` gives typed model clients. `Ablo({ apiKey })`
- * gives the HTTP model/commit client for agents, MCP routes, and custom
- * runtimes.
+ * `Ablo({ schema, apiKey })` returns typed model clients. `Ablo({ apiKey })`
+ * returns the stateless HTTP model and commit client, which suits agents, MCP
+ * route handlers, and custom runtimes.
  *
- * Stripe / Anthropic / OpenAI all do this: one import, model clients
- * reached via dot-access on the engine, types via namespace dots.
+ * The whole package reaches you through one name: `Ablo` is at once a factory
+ * function, a type, and a namespace. You call model clients with dot access on
+ * the instance (`ablo.reports.retrieve(...)`) and reach every supporting type
+ * through the namespace (`Ablo.Peer`, `Ablo.Claim`).
  *
- * Public subpaths:
+ * Related surfaces live on their own import subpaths:
  *   @abloatai/ablo/schema   — defineSchema, model, z (Zod)
  *   @abloatai/ablo/react    — <AbloProvider>, useQuery, useMutate
- *   @abloatai/ablo/testing  — test harnesses + mocks
+ *   @abloatai/ablo/testing  — test harnesses and fixtures
  *
- * Reads split by where the data comes from. `ablo.<model>.retrieve({ id })` and
- * `.list({ where })` are the async **server** reads (pool → IDB → network via
- * the `HydrationCoordinator`, single-flight deduped); they're the default and
- * what hosted/stateless callers want, since their local graph starts empty.
- * `ablo.<model>.get(id)` / `.getAll(...)` / `.getCount(...)` are synchronous
- * **local-graph** snapshots with no network round-trip — for reactive React
- * selectors (`useAblo((ablo) => ablo.<model>.get(id))`) once the graph is warm.
+ * Reads come in two flavors, distinguished by where the data is fetched from.
+ * `ablo.<model>.retrieve({ id })` and `.list({ where })` are asynchronous reads
+ * that consult the local cache first and fall back to the network, de-duplicating
+ * concurrent requests for the same row. They are the default, and the right
+ * choice for stateless callers whose local graph starts empty.
+ * `ablo.<model>.get(id)`, `.getAll(...)`, and `.getCount(...)` are synchronous
+ * snapshots of the already-loaded local graph with no network round-trip — use
+ * them in reactive React selectors (`useAblo((ablo) => ablo.<model>.get(id))`)
+ * once the graph is warm.
  *
- * ── What to import (read this first) ────────────────────────────────
- * Default path — this is all most apps and agents ever need:
- *   • `Ablo` (default export) + `AbloOptions` + the `Model*Params` bags
- *   • the `Ablo*Error` classes, to discriminate failures in catch blocks
- * That's it. If you're reaching past those, you're in advanced territory.
+ * What to import, in short:
+ *   • `Ablo` (the default export), `AbloOptions`, and the `Model*Params` option
+ *     bags cover what most applications and agents ever need.
+ *   • the `Ablo*Error` classes let you discriminate failures in catch blocks.
  *
- * Advanced — opt-in, most apps never import these (each is tagged
- * "Advanced —" at its export below, with the one situation it's for):
- *   • `dataSource` / `abloSource`  — only if your own DB stays canonical
- *   • `defaultPolicy`              — only to customize conflict resolution
- *   • `defineMutators` / `createTransaction` — only for custom mutators
- * If you don't recognize one, you don't need it — the default path covers you.
+ * A handful of exports are for advanced use and are marked "Advanced" at their
+ * declaration below, each with the one situation it is for:
+ *   • `dataSource` / `abloSource`  — when your own database stays canonical.
+ *   • `defaultPolicy`              — when you customize conflict resolution.
+ *   • `defineMutators` / `createTransaction` — when you write custom mutators.
+ * If you don't recognize one of these, you don't need it.
  */
 
 // ── Consumer API ──────────────────────────────────────────────────────────
 // These are the only symbols external consumers should need from this path.
 // Everything else is in a subpath.
 
-// The canonical surface — `Ablo` is a function, type, and namespace under
-// one name. Matches `Stripe`, `OpenAI`, `Anthropic`. Default export so
-// `import Ablo from '@abloatai/ablo'` works; named export so
-// `import { Ablo }` also compiles.
+// The primary surface. `Ablo` is a function, a type, and a namespace sharing
+// one name. It is the default export, so `import Ablo from '@abloatai/ablo'`
+// works, and a named export, so `import { Ablo }` compiles too.
 export { Ablo } from './client/Ablo.js';
 export type { MutationExecutor } from './interfaces/index.js';
 // The functional-update surface: `ablo.<model>.update(id, current => next)`.
 export type { ModelUpdater, ContentionOptions } from './client/functionalUpdate.js';
 export { DEFAULT_CONTENTION_RETRIES } from './client/functionalUpdate.js';
-// `InternalAbloOptions` carries the full construction surface (auth + transport
-// + DI + sync groups) that app shells need to build a client to hand to
-// `<AbloProvider client={...}>`. `AbloOptions` is the trimmed public shape.
+// `InternalAbloOptions` is the full construction surface — authentication,
+// transport, injected dependencies, and sync groups — that an application uses
+// to build a client and hand it to `<AbloProvider client={...}>`. `AbloOptions`
+// is the trimmed shape most callers pass to `Ablo({...})`.
 export type { HttpClaimApi, InternalAbloOptions } from './client/Ablo.js';
-// The stateless HTTP client is constructed ONLY via `Ablo({ transport: 'http' })`
-// (one factory, explicit transport). The `createAbloHttpClient` function stays
-// internal — the factory calls it — but is NOT a public export. Consumers still
-// annotate with the `AbloHttpClient` type (the narrowed return of `transport:'http'`).
+// The stateless HTTP client is constructed through `Ablo({ transport: 'http' })`.
+// There is no separate constructor to import; annotate values with the
+// `AbloHttpClient` type, which is the return type of that call.
 export {
   type AbloHttpClientOptions,
   type AbloHttpClient,
@@ -80,11 +82,11 @@ export {
   ABLO_HOSTED_HTTP_BASE_URL,
   normalizeAbloHostedBaseUrl,
 } from './client/auth.js';
-// Flat surface stays small on purpose: `AbloOptions` is what every
-// consumer sees on `Ablo({...})`, and `Model*Params` are the single
-// params objects you pass into `ablo.<model>.{retrieve,create,update,delete}`. Every
-// other shape — Commit/Claim/Model/Claimed — lives under
-// `Ablo.Commit.*`, `Ablo.Claim.*`, `Ablo.Model.*`, `Ablo.ClaimedOptions`.
+// The flat surface is deliberately small: `AbloOptions` is what every caller
+// sees on `Ablo({...})`, and the `Model*Params` types are the option objects
+// you pass to `ablo.<model>.{retrieve,create,update,delete}`. Every other
+// shape — Commit, Claim, Model, Claimed — is reached through the namespace, as
+// `Ablo.Commit.*`, `Ablo.Claim.*`, `Ablo.Model.*`, and `Ablo.ClaimedOptions`.
 export type {
   AbloOptions,
   LocalCountOptions,
@@ -100,6 +102,8 @@ export type {
   ClaimLookupParams,
   ClaimReorderParams,
   Claim,
+  ClaimHeartbeat,
+  ClaimHeartbeatOptions,
   HeldClaim,
   ModelOperations,
 } from './client/Ablo.js';
@@ -112,12 +116,11 @@ export type { AbloPersistence } from './client/persistence.js';
 import { Ablo } from './client/Ablo.js';
 export default Ablo;
 
-// Advanced — most apps never import this. Customer-owned storage adapter
-// for Data Source mode: only when Ablo Cloud coordinates state while
-// canonical rows stay in YOUR database. The default is Ablo-managed
-// storage — if you haven't deliberately chosen to keep your own DB
-// canonical, skip this entirely. Type counterparts live under
-// `Ablo.Source.*` (`Ablo.Source.Operation`, `Ablo.Source.Commit.Params`).
+// Advanced, and rarely imported. The storage adapter for Data Source mode,
+// where Ablo coordinates state while the canonical rows stay in your own
+// database. The default is Ablo-managed storage; reach for this only when you
+// have deliberately chosen to keep your database canonical. The matching types
+// live under `Ablo.Source.*` (`Ablo.Source.Operation`, `Ablo.Source.Commit.Params`).
 export {
   dataSource,
   abloSource,
@@ -126,9 +129,10 @@ export {
   verifyAbloSourceRequest,
 } from './source/index.js';
 
-// Reverse-channel connector: serve the Data Source `commit`/`load`/`list` leg
-// over an OUTBOUND WebSocket (localhost / locked-down VPC, no public inbound
-// URL). The dial-out counterpart to `createPushQueue` for the `events` leg.
+// Serves the Data Source `commit`, `load`, and `list` operations over an
+// outbound WebSocket, so a database with no public inbound URL (running on a
+// developer's machine or inside a locked-down network) can still be reached by
+// dialing out to Ablo rather than accepting an inbound connection.
 export {
   createSourceConnector,
   type SourceConnector,
@@ -140,15 +144,15 @@ export {
 // Keeping it out of the root import preserves one clean runtime surface:
 // `import Ablo from '@abloatai/ablo'`.
 
-// Advanced — most apps never import this. Conflict policy: `defaultPolicy`
-// (reject-on-stale) is already applied server-side, so you only import it
-// to COMPOSE a custom policy. Leave it alone and stale writes are rejected
-// safely by default. Type counterparts live under `Ablo.Conflict.*`.
+// Advanced, and rarely imported. The default conflict policy rejects writes
+// premised on stale data and is already applied on the server, so import
+// `defaultPolicy` only to build a custom policy on top of it. Leave it be and
+// stale writes are rejected safely. The matching types live under `Ablo.Conflict.*`.
 export { defaultPolicy, capabilityPreemptPolicy, interpretConflictAxis } from './policy/index.js';
 
-// Typed error hierarchy — Stripe-style. One import gets every class
-// consumers need to discriminate failures (`e instanceof AbloX` or
-// `e.type === 'AbloX'`) plus the HTTP-response translator.
+// The typed error hierarchy. One import brings in every class you need to
+// tell failures apart — by `e instanceof AbloX` or `e.type === 'AbloX'` — along
+// with the helper that translates an HTTP response into the right class.
 export {
   SyncSessionError,
   AbloError,
@@ -178,10 +182,10 @@ export {
 } from './errors.js';
 export type { CommitReceipt, RequiredCapability } from './errors.js';
 export type { ErrorCode, WireErrorCode, ErrorCategory, ErrorCodeSpec, RecoveryClass } from './errors.js';
-// Canonical wire-egress contract (dependency-free): the error envelope shape +
-// the AbloError-subclass→HTTP-status table. Re-exported so server consumers
-// (e.g. apps/sync-server, which keeps its own self-contained copy) can assert
-// against the ONE source instead of silently drifting. See wire/errorEnvelope.ts.
+// The wire contract for errors, with no dependencies: the JSON envelope shape
+// plus the table mapping each AbloError subclass to an HTTP status. A server
+// that returns Ablo errors can assert against these so its responses never
+// drift from what the client expects.
 export { errorEnvelope, statusForType } from './wire/errorEnvelope.js';
 export type { ErrorEnvelope } from './wire/errorEnvelope.js';
 export { WS_BEARER_SUBPROTOCOL_PREFIX, WS_SYNC_SUBPROTOCOL } from './auth/credentialSource.js';
@@ -195,12 +199,12 @@ export {
 } from './environment.js';
 export type { Environment, KeyPrefixEnvironment } from './environment.js';
 
-// THE write-options contract — the one Zod schema for the option bag every
-// write door accepts (`ablo.<model>.create/update/delete`, `commits.create`,
-// the HTTP model routes). The SDK validates against it at each boundary;
-// it's exported so consumers can validate/compose options ahead of a call
-// (e.g. an agent tool's input schema). Runtime twin of `MutationOptions`,
-// drift-guarded at compile time.
+// The write-options contract: the single Zod schema for the option bag every
+// write accepts (`ablo.<model>.create/update/delete`, `commits.create`, and the
+// HTTP model routes). The SDK validates against it at each boundary, and it is
+// exported so you can validate or assemble options before a call — for example,
+// as the input schema of an agent tool. It is the runtime counterpart of the
+// `MutationOptions` type.
 export {
   writeOptionsSchema,
   onStaleModeSchema,
@@ -209,15 +213,15 @@ export {
 export type { WriteOptionsInput } from './client/writeOptionsSchema.js';
 export type { WriteOptions, MutationOptions } from './interfaces/index.js';
 
-// Notify-instead-of-abort signal: the value handed back to a committer whose
-// write hit a stale-context conflict under `onStale: 'notify' so its
-// agent can self-heal rather than discard work (see coordination/schema.ts and
-// docs/coordination.md → "Notify, do not abort").
+// The value handed back to a writer whose change hit a stale-context conflict
+// under `onStale: 'notify'`. Instead of throwing, the commit succeeds and
+// returns this notification so the caller can reconcile against the current
+// value and retry rather than discard its work.
 export { staleNotificationSchema, readDependencySchema } from './coordination/schema.js';
 export type { StaleNotification, ReadDependency } from './coordination/schema.js';
-// Claim log — collect claim events + stale-write collisions into an ordered list
-// you can print for eyeballing or collisions() for evals assertions. Hand
-// `new ClaimLog()` to `Ablo({ observability })`.
+// Collects claim events and stale-write collisions into an ordered list you can
+// print to inspect coordination, or read through `collisions()` to assert on in
+// tests. Pass `new ClaimLog()` as `Ablo({ observability })`.
 export { ClaimLog, formatClaim, formatConflict } from './coordination/trace.js';
 export type { ClaimLogEntry } from './coordination/trace.js';
 export type {
@@ -228,13 +232,15 @@ export type {
 // Spread this to provide a custom `observability` that overrides only the hooks
 // you care about (e.g. captureClaim) and no-ops the rest.
 export { noopObservability } from './SyncEngineContext.js';
-// Storage-wedge detection — lets app shells render a recovery screen when the
-// IndexedDB backing store is stuck (see core/openIDBWithTimeout.ts).
+// Detects a stuck local store: use these to recognize when the browser's
+// IndexedDB backing store fails to open in time, so your app can show a
+// recovery screen instead of hanging.
 export { IDBOpenTimeoutError, isStorageOpenTimeout } from './core/openIDBWithTimeout.js';
 
-// Machine-checked surface manifest — the SDK's own description of its public
-// verb/option names, compile-time-bound to the real types (see surface.ts).
-// The MCP `get_api_surface` imports these so docs can't name a phantom verb.
+// A machine-readable manifest of the SDK's public verb and option names, bound
+// at compile time to the real types so the lists can never name a method or
+// option the API doesn't have. Useful for generating documentation or tooling
+// that needs to enumerate the surface.
 export {
   PUBLIC_MODEL_VERBS,
   PUBLIC_LIST_OPTION_KEYS,
@@ -242,33 +248,33 @@ export {
 } from './surface.js';
 export type { ModelVerb, ListOptionKey, AbloOptionKey } from './surface.js';
 
-// Type registration point. Consumers register their Schema/Presence/Claims/
-// UserMeta once via module augmentation:
+// The type-registration point. Register your Schema, Presence, Claims, and
+// UserMeta types once through module augmentation:
 //   declare module '@abloatai/ablo' { interface Register { Schema: ... } }
-// Exported here so that augmentation merges into the canonical declaration.
-// Resolver types live under the `Ablo` namespace (`Ablo.ResolveSchema`, …).
+// The augmentation merges into this declaration, and the resolved types are
+// then available under the `Ablo` namespace (`Ablo.ResolveSchema`, and so on).
 export type { Register, DefaultSyncShape } from './types/global.js';
 
-// Advanced — most apps never import this. Custom (Zero-style) mutators:
-// `ablo.<model>.create/update/delete` already covers normal writes. Reach
-// for `defineMutators` only when you need a named, multi-step mutation with
-// custom undo. Type counterparts live under the `Ablo` namespace:
+// Advanced, and rarely imported. Custom mutators. Ordinary writes go through
+// `ablo.<model>.create/update/delete`; reach for `defineMutators` only when you
+// need a named, multi-step mutation with its own undo behavior. The matching
+// types live under the `Ablo` namespace:
 //   Ablo.Mutator.Fn, Ablo.Transaction
 //   Ablo.Mutator.UndoEntry, Ablo.Mutator.InverseOp
 //   Ablo.Query, Ablo.QueryBatch, Ablo.QueryBatchResult
 export { defineMutators } from './mutators/defineMutators.js';
-// `createTransaction` is exposed so non-React callers (the sandbox AI
-// executor, server-side workers) can invoke `defineMutators`-style
-// custom mutators without going through `useMutators`. Construct a tx
-// against `ablo.schema` + `ablo._store` + `ablo.organizationId` and
-// pass it as `{ tx, args }` to the mutator function.
+// `createTransaction` lets callers outside React — server-side workers, agent
+// runtimes — run custom mutators without the `useMutators` hook. Build a
+// transaction from the client's schema, store, and organization id, then pass
+// it to your mutator function as `{ tx, args }`.
 export { createTransaction, type Transaction } from './mutators/Transaction.js';
 // Undo runtime is intentionally not part of the public root surface. App code
 // uses `useUndoScope` from `@abloatai/ablo/react`.
 
-// JSON comparison helpers. A `field.json()` value backed by a Postgres `jsonb`
-// column round-trips with reordered object keys (jsonb doesn't preserve key
-// order), so a naive `JSON.stringify(a) === JSON.stringify(b)` guard misfires
-// when an app reconciles an Ablo row against external editor state. Use these
-// (key-order-insensitive) instead. See `utils/json.ts` for the full rationale.
+// JSON comparison helpers. A `field.json()` value stored in a Postgres `jsonb`
+// column can come back with its object keys reordered, because jsonb does not
+// preserve key order. A naive `JSON.stringify(a) === JSON.stringify(b)` check
+// then reports a difference that isn't real — a common trap when reconciling an
+// Ablo row against external editor state. These compare independent of key
+// order, so use them instead.
 export { deepEqual, stableStringify } from './utils/json.js';

@@ -6,12 +6,10 @@ import type { SyncStoreContract } from './context.js';
 import { useReactive } from './useReactive.js';
 
 /**
- * Reactive sync-status snapshot as a discriminated union. Impossible
- * states (e.g., "connected AND offline") are unrepresentable — each
- * variant carries only the fields that make sense in that state.
- *
- * Inspired by Liveblocks' `useStatus()` and Zero's `useConnectionState()`:
- * one hook, one switch, no six-boolean guessing games.
+ * A snapshot of the current sync status, modeled as a discriminated union so
+ * impossible states — such as "connected and offline" at once — cannot be
+ * represented. Each variant carries only the fields that make sense in that
+ * state, so a single `switch` on `name` narrows to exactly what you can read.
  *
  * Variants:
  * - `initial` — the provider just mounted; no connection attempt yet.

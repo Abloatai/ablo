@@ -1,9 +1,10 @@
 /**
- * Sync Engine SDK — Dependency Injection Interfaces
+ * The interfaces you implement to plug the SDK into your own environment.
  *
- * These interfaces decouple the SDK from any specific app framework.
- * Consumers implement them to wire in their own logging, observability,
- * GraphQL client, session handling, and analytics.
+ * The SDK depends on these contracts rather than any specific framework, so you
+ * provide the concrete implementations — logging, observability, analytics,
+ * session-error detection, online-status checks, and the transport that carries
+ * mutations to your backend. The SDK ships sensible no-op defaults where it can.
  */
 
 import type { StaleNotification, ReadDependency, ParticipantKind } from '../coordination/schema.js';
@@ -21,7 +22,7 @@ export interface SyncLogger {
 }
 
 // ─────────────────────────────────────────────
-// Observability (replaces Sentry coupling)
+// Observability
 // ─────────────────────────────────────────────
 
 /** Breadcrumb severity levels */
@@ -99,10 +100,11 @@ export interface CommitZeroSyncIdDetails {
 }
 
 /**
- * One thing that happened to a claim. `phase` is the past-tense state it just
- * entered — the trail you follow to see WHY two participants collided on a row:
- * who asked, who waited behind whom, who was turned away, whose lease lapsed.
- * Each phase mirrors a `claim_*` wire frame.
+ * A single event in the life of a claim. `phase` is the state the claim has just
+ * entered, and the sequence of phases is the trail you follow to see how two
+ * participants collided on a row — who asked for it, who waited behind whom, who
+ * was turned away, and whose lease lapsed. Each phase corresponds to a `claim_*`
+ * frame on the wire.
  */
 export interface ClaimEvent {
   phase:
@@ -128,10 +130,10 @@ export interface ClaimEvent {
 }
 
 /**
- * A committed `onStale: 'notify'` write whose premise moved — the in-flight twin
- * of a claim collision. The commit SUCCEEDED, but the guarded ops weren't written
- * because the row changed since the caller's `readAt`; the engine handed back the
- * live value so the actor can self-heal. Records WHICH rows and fields collided.
+ * A committed `onStale: 'notify'` write whose premise had moved. The commit
+ * succeeded, but the guarded operations were not written because the row had
+ * changed since the caller's `readAt`, and the engine returned the current value
+ * so the caller can reconcile. Records which rows and fields collided.
  */
 export interface ConflictEvent {
   /** The client idempotency key whose write was notified. */
@@ -149,8 +151,9 @@ export interface ConflictEvent {
 export type SpanAttributes = Record<string, string | number | boolean | undefined>;
 
 /**
- * Observability provider — replaces direct Sentry dependency.
- * SDK ships a no-op default; consumers provide their own (e.g., Sentry, Datadog, OpenTelemetry).
+ * The observability hooks the SDK calls to report its own lifecycle. The SDK
+ * ships a no-op default; provide your own to forward these events to a monitoring
+ * tool such as Sentry, Datadog, or OpenTelemetry.
  */
 export interface SyncObservabilityProvider {
   /** Set user/org context for error grouping */
@@ -210,7 +213,7 @@ export interface SyncObservabilityProvider {
 }
 
 // ─────────────────────────────────────────────
-// Analytics (replaces PostHog coupling)
+// Analytics
 // ─────────────────────────────────────────────
 
 export interface SyncAnalytics {
@@ -271,31 +274,30 @@ export interface ModelDebugLoggerContract {
 export interface CommitResult {
   lastSyncId: number;
   /**
-   * Stale-context notifications (CoAgent/MTPO notify-instead-of-abort). Present
-   * only when a write guarded with `onStale: 'notify' collided with a
-   * concurrent change; the committer self-heals from these rather than
-   * receiving an `AbloStaleContextError`. See `StaleNotification`.
+   * Stale-context notifications. Present only when a write guarded with
+   * `onStale: 'notify'` collided with a concurrent change: rather than throwing
+   * an `AbloStaleContextError`, the commit succeeds and reports the collision
+   * here so the caller can reconcile. See {@link StaleNotification}.
    */
   notifications?: StaleNotification[];
   /**
-   * Ids of UPDATE/DELETE targets that matched ZERO rows (loud 0-row writes).
-   * Present (non-empty) only when a write missed.
+   * Ids of update or delete targets that matched no rows. Present, and non-empty,
+   * only when a write missed the row it addressed.
    */
   missingIds?: string[];
 }
 
 /**
- * Per-call knobs attached to any mutation. Mirrors Stripe's options
- * object — the last argument of every `stripe.X.Y(...)` call. Optional
- * everywhere; omitted fields fall back to sensible defaults.
+ * Per-call options accepted by any mutation, passed as the last argument.
+ * Every field is optional; omitted fields fall back to sensible defaults.
  *
- * - `idempotencyKey` — when set, the server caches the response for 24h
- *   and returns the cached value on retries with the same key.
- *   When omitted, the SDK auto-generates a UUIDv4 per mutation so every
- *   call is retry-safe by default. Opt out with `{ idempotencyKey: null }`
- *   if you genuinely want retry-unsafe writes (rare).
- * - `label` — human-readable audit tag. Flows to `mutation_log.label`
- *   server-side for operator debugging ("nightly cleanup", "user click").
+ * - `idempotencyKey` — when set, the server caches the response for 24 hours and
+ *   returns the cached result on any retry using the same key. When omitted, the
+ *   SDK generates a fresh UUID per mutation, so every call is retry-safe by
+ *   default. Pass `{ idempotencyKey: null }` for the rare case where you want a
+ *   write that is not retry-safe.
+ * - `label` — a human-readable tag recorded with the mutation for debugging, such
+ *   as "nightly cleanup" or "user click".
  */
 export interface MutationOptions {
   idempotencyKey?: string | null;
@@ -303,90 +305,80 @@ export interface MutationOptions {
   wait?: 'queued' | 'confirmed';
   readAt?: number | null;
   onStale?: 'reject' | 'overwrite' | 'notify' | null;
-  /** Claim-pin attribution: the id (or `{ id }`) of the claim this write
-   *  belongs to. Distinct from the `claim` HANDLE on the model write params —
-   *  this is the low-level reference the commit carries to bypass the holder's
-   *  own pin. (Was `intent` before the claim-vocabulary unification.) */
+  /** The id (or `{ id }`) of the claim this write belongs to. This is the
+   *  low-level reference the commit carries so the write is attributed to a claim
+   *  and can pass the holder's own lock. It is distinct from the `claim` handle on
+   *  the model write parameters, which is the higher-level object you usually pass. */
   claimRef?: string | { readonly id: string } | null;
   /**
-   * Dormant agent-task lineage field, forwarded as the wire-level
-   * `causedByTaskId`. Turns/tasks were removed from the SDK; nothing
-   * populates this anymore (write attribution rides on the claim
-   * id). Kept optional for wire-compat; always `null` from the client.
+   * Reserved lineage field, forwarded on the wire as `causedByTaskId`. The client
+   * always sends `null`; write attribution now travels on the claim id instead.
    */
   causedByTaskId?: string | null;
   /**
-   * Batch-level read dependencies (the STORM "did anything I looked at change?"
-   * layer). Each entry is a row (`{model,id,readAt,fields?}`) or a sync group
-   * (`{group,readAt}`) this write was premised on; the server validates none
-   * moved since `readAt` and fires the entry's `onStale` over the batch.
-   * Distinct from per-op `readAt` (which guards only the row being written).
+   * Batch-level read dependencies — the answer to "did anything I looked at
+   * change?" Each entry is a row (`{ model, id, readAt, fields? }`) or a sync
+   * group (`{ group, readAt }`) that this write was premised on. The server
+   * checks that none of them moved since their `readAt` and applies the entry's
+   * `onStale` behavior to the whole batch. This is distinct from the per-operation
+   * `readAt`, which guards only the row being written.
    */
   reads?: ReadDependency[] | null;
 }
 
 /**
- * The `MutationOptions` subset carried per-write through the offline
- * transaction lane (SyncClient → TransactionQueue → wire operation).
- * ONE shared type so the proxy's public params, the queue, and the wire
- * can never narrow each other silently again — `wait` and `claim` are
- * deliberately absent because they resolve client-side before staging
- * (`wait` at the proxy's confirmation await, `claim` server-side via
- * the active lease on the entity).
+ * The subset of {@link MutationOptions} that travels with each write as it is
+ * queued offline and sent on the wire. A single shared type keeps the public
+ * parameters, the offline queue, and the wire format from diverging. `wait` and
+ * `claim` are deliberately absent: both are resolved on the client before a write
+ * is staged, so neither reaches this layer.
  */
 export type WriteOptions = Pick<
   MutationOptions,
   'readAt' | 'onStale' | 'idempotencyKey' | 'label'
 >;
 
-/** A single mutation operation in a batch. `options` rides along so the
- *  server can cache+replay via `mutation_log`. */
+/** A single mutation within a batch. Its `options` travel with it so the server
+ *  can cache and replay the operation for idempotent retries. */
 export interface MutationOperation {
   type: string;
   model: string;
   id: string;
   input?: Record<string, unknown>;
   /**
-   * Client-side transaction id for THIS operation. The server stamps
-   * it onto the resulting `sync_deltas.transaction_id` so the
-   * confirming delta can be recognized as an echo of the local
-   * optimistic mutation (echo detection at the receive layer drains
-   * the matching id via `OptimisticEchoTracker` and skips the pool
-   * mutation — see `SyncClient.applyDeltaBatchToPool`).
+   * A client-side id for this single operation. The server stamps it onto the
+   * resulting `sync_deltas.transaction_id`, so when the confirming delta arrives
+   * back over the sync stream the client can recognize it as an echo of its own
+   * optimistic write and skip re-applying it locally.
    *
-   * Distinct from the batch-level `client_tx_id` used by
-   * `mutation_log` for idempotency. The mutation_log key dedupes a
-   * RETRIED batch (request-level cache); this transactionId
-   * identifies a specific MUTATION within a batch (per-row identity
-   * for echo matching). Both can coexist on the wire.
+   * This is distinct from the batch-level `client_tx_id` that idempotency uses:
+   * that key de-duplicates a retried batch (a request-level cache), whereas this
+   * id identifies one row within a batch (for echo matching). Both can appear on
+   * the wire at once.
    */
   transactionId?: string;
   readAt?: number | null;
   onStale?: 'reject' | 'overwrite' | 'notify' | null;
   /**
-   * Per-op idempotency + audit metadata. `idempotencyKey` doubles as
-   * the `mutation_log.client_tx_id` cache key; `label` is persisted to
-   * `mutation_log.label` for debugging. These are the only `MutationOptions`
-   * fields carried over the wire.
+   * Per-operation idempotency and audit metadata. `idempotencyKey` is also the
+   * cache key the server uses to de-duplicate retries; `label` is stored for
+   * debugging. These are the only {@link MutationOptions} fields sent on the wire.
    */
   options?: Pick<MutationOptions, 'idempotencyKey' | 'label'>;
 }
 
 /**
- * Executes mutations against the backend.
- * The SDK calls this interface; consumers implement it with their
- * specific GraphQL client, REST API, or other transport.
+ * The transport that carries mutations to your backend. The SDK calls the
+ * methods on this interface; you implement them over whatever transport you use —
+ * an HTTP API, a WebSocket, or something else.
  */
 export interface MutationExecutor {
   /**
-   * Commit a batch of mutations atomically, returning the sync ack.
-   * `options` apply to the whole batch (timeout, retries) — per-op
-   * idempotencyKey/label live on each `MutationOperation`.
-   *
-   * Name matches the wire frame (`{ type: 'commit' }`) and the
-   * universal mental model for atomic writes (DB transactions, git,
-   * Firestore). Replaces the older `batchAck` name from the retired
-   * GraphQL path.
+   * Commits a batch of mutations atomically and returns the sync
+   * acknowledgement. The `options` argument applies to the whole batch, while
+   * per-operation `idempotencyKey` and `label` live on each
+   * {@link MutationOperation}. The method name matches the `{ type: 'commit' }`
+   * frame on the wire.
    */
   commit(
     operations: MutationOperation[],
@@ -461,62 +453,58 @@ export interface MutationExecutor {
 // ─────────────────────────────────────────────
 
 /**
- * Application-specific configuration for the sync engine.
- * Replaces the 6 hardcoded config maps that were previously
- * embedded in TransactionQueue, Database, and Model.
+ * Application-specific configuration for the sync engine, describing how your
+ * models relate so the engine can order and merge writes correctly.
  */
 export interface SyncEngineConfig {
   /**
-   * FK-ordered create priority, keyed by the typename each model reports
-   * via {@link Model.getModelName}. `TransactionQueue` consults this at
-   * enqueue time and when sorting groups inside a batch — lower numbers
-   * execute first, so parents precede children.
-   *
-   * `createSyncEngine` populates this automatically by topologically
-   * walking `belongsTo` relations: a model with no FK parents gets 10, a
-   * child gets 20, a grandchild 30, and so on (step = 10 to leave room
-   * for consumer overrides). Apps rarely need to touch this — override
-   * through `configOverrides.modelCreatePriority` only when the schema's
-   * declared relations don't reflect an operational constraint (e.g. a
-   * polymorphic FK the SDK can't see).
+   * The order in which to create models, so a row is never inserted before the
+   * parent row its foreign key points at. Keyed by each model's type name, with
+   * lower numbers created first, so parents precede children. The engine fills
+   * this in automatically by walking the schema's `belongsTo` relations — a model
+   * with no parents gets 10, its children 20, their children 30, and so on,
+   * stepping by 10 to leave room for overrides. You rarely set this by hand;
+   * override it only when a relation the schema can't see (such as a polymorphic
+   * foreign key) imposes an ordering the engine wouldn't otherwise know about.
    */
   modelCreatePriority: ReadonlyMap<string, number>;
 
   /**
-   * Priority assigned to CREATE ops for models missing from
-   * {@link modelCreatePriority}. Falls between the typical top and bottom
-   * of the FK chain, so an unregistered model ends up later than declared
-   * parents but earlier than declared grandchildren — a safe middle.
+   * The create priority for a model not listed in {@link modelCreatePriority}.
+   * It sits in the middle of the range, so an unlisted model is created after
+   * declared parents but before declared grandchildren — a safe default.
    */
   defaultCreatePriority: number;
 
   /**
-   * Priority for UPDATE/DELETE/ARCHIVE/UNARCHIVE ops, which don't need FK
-   * ordering (the row already exists by the time they run). Must be higher
-   * than any realistic CREATE priority so creates drain first.
+   * The priority for update, delete, archive, and unarchive operations. These
+   * need no ordering among themselves — the row already exists when they run —
+   * so this is set higher than any create priority to ensure creates go first.
    */
   defaultNonCreatePriority: number;
 
   /**
-   * Essential fields preserved during partial UPDATE merges in IndexedDB.
-   * Prevents losing critical fields when a delta only contains changed fields.
-   * e.g., { Task: ['title', 'projectId'], Slide: ['deckId', 'order'] }
+   * Fields to preserve when merging a partial update into the local store. A
+   * change usually carries only the fields that changed; listing a model's
+   * essential fields here keeps them from being dropped during that merge.
+   * For example: `{ Task: ['title', 'projectId'], Slide: ['deckId', 'order'] }`.
    */
   essentialFields: Readonly<Record<string, readonly string[]>>;
 
   /**
-   * Fallback class name → model name mapping for Model.getModelName().
-   * Used when the ModelRegistry lookup fails (e.g., minified class names).
-   * e.g., { TaskModel: 'Task', ProjectModel: 'Project' }
+   * A fallback map from class name to model name, used to resolve a model's name
+   * when the usual lookup fails — for instance, when a bundler has minified the
+   * class names. For example: `{ TaskModel: 'Task', ProjectModel: 'Project' }`.
    */
   classNameFallbackMap: Readonly<Record<string, string>>;
 
   /**
-   * Content hash of the schema THIS client was built against (the same
-   * `schemaHash()` the CLI push + server compute). Used purely to detect
-   * schema drift: when the server reports a different active hash on bootstrap,
-   * the SDK warns the developer to run `ablo push` — otherwise drift only
-   * surfaces later as an opaque DB constraint error. Advisory, not enforced.
+   * The content hash of the schema this client was built against — the same hash
+   * the `ablo push` command and the server compute. It exists only to detect
+   * schema drift: if the server reports a different active hash when the client
+   * connects, the SDK warns you to run `ablo push`, so drift surfaces as a clear
+   * message rather than a confusing database error later. It is advisory, not
+   * enforced.
    */
   expectedSchemaHash?: string;
 }
@@ -526,8 +514,9 @@ export interface SyncEngineConfig {
 // ─────────────────────────────────────────────
 
 /**
- * Allows consumers to extend the WebSocket event map with
- * application-specific collaboration events (cursors, selections, etc.).
+ * Extends the WebSocket event map with your own collaboration events, such as
+ * cursor positions or selections, beyond the core delta, presence, and
+ * bootstrap events.
  */
 export interface WebSocketEventConfig {
   /** Additional event type names beyond the core delta/presence/bootstrap events */

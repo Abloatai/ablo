@@ -1,9 +1,8 @@
 /**
- * The default `[Ablo]` console logger + its level resolution.
+ * The default `[Ablo]` console logger and its level resolution.
  *
- * Extracted from `Ablo.ts`; exported so other entry points that build a
- * default logger (e.g. the agent runtime) can reuse the same gating instead
- * of hand-rolling a console shim.
+ * These helpers are exported so any entry point that needs a default logger can
+ * reuse the same level gating rather than hand-rolling a console wrapper.
  */
 
 import type { SyncLogger } from '../interfaces/index.js';
@@ -43,8 +42,8 @@ export function resolveLogLevel(opts?: { debug?: boolean; logLevel?: LogLevel })
 }
 
 /**
- * Build the default logger, gated at `level` and prefixed `[Ablo]` so a creator
- * with a console full of other tools' logs can see at a glance what's ours.
+ * Builds the default logger, gated at `level` and prefixed `[Ablo]` so its lines
+ * stand out in a console full of other tools' output.
  */
 export function createConsoleLogger(level: LogLevel): SyncLogger {
   const threshold = LOG_LEVEL_RANK[level];

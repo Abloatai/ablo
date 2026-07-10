@@ -82,8 +82,8 @@ export type { BootstrapModelData, BootstrapResponse } from './fixtures/bootstrap
 
 export {
   createTestHarness,
-} from './helpers/sync-engine-harness.js';
-export type { TestHarness, TestHarnessOptions } from './helpers/sync-engine-harness.js';
+} from './helpers/syncEngineHarness.js';
+export type { TestHarness, TestHarnessOptions } from './helpers/syncEngineHarness.js';
 
 export {
   flushMicrotasks,
@@ -99,4 +99,4 @@ export {
   MockSyncStore,
   createMockSyncStore,
   type TestWrapperOptions,
-} from './helpers/react-wrapper.js';
+} from './helpers/reactWrapper.js';

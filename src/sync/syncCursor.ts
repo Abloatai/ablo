@@ -1,18 +1,12 @@
 /**
- * SyncCursor — the sync-position state of one SyncWebSocket session.
+ * Holds the resume state of one WebSocket sync session: the `lastSyncId`
+ * watermark, which marks the highest delta the client has seen, and an opaque
+ * server cursor used for incremental sync. The transport carries both across
+ * reconnects so the session can resume where it left off.
  *
- * Owns the two pieces of resume state the transport carries between
- * connects: the `lastSyncId` watermark and the opaque server cursor.
- * Extracted from SyncWebSocket so cursor bookkeeping is one cohesive
- * leaf instead of fields + accessors spread through the transport
- * class. The advance DISCIPLINE (only move `lastSyncId` on a
- * persistence-gated ack) is documented at the call sites in
- * SyncWebSocket (`sendAck` / `handleDelta`).
- *
- * (The per-entity version vector that used to live here was a Go-era
- * ghost — zero decision reads client- or server-side; one total-ordered
- * log per plane makes the scalar `sync_id` watermark the causality
- * token. Removed in W4a.)
+ * The watermark advances under a strict rule — it moves forward only on an
+ * acknowledgement that is gated on durable persistence — which the transport
+ * enforces at its acknowledgement and delta-handling call sites.
  */
 
 export class SyncCursor {
@@ -25,10 +19,11 @@ export class SyncCursor {
   }
 
   /**
-   * Advance the local cursor for an ack — this is what
-   * `requestIncrementalSync` and the connect handshake will send next,
-   * and what `getLastSyncId()` reports for clean-shutdown persistence.
-   * Monotonic: a stale (lower) ack never moves the cursor backward.
+   * Advances the watermark in response to an acknowledgement. This becomes the
+   * value the next incremental-sync request and the connect handshake send, and
+   * the value {@link SyncCursor.getLastSyncId} reports when persisting on a
+   * clean shutdown. The move is monotonic: a stale, lower acknowledgement never
+   * pulls the watermark backward.
    */
   ackAdvance(syncId: number): void {
     if (syncId > this.lastSyncId) {
@@ -37,28 +32,29 @@ export class SyncCursor {
   }
 
   /**
-   * Update last sync ID (for persistence)
+   * Sets the watermark outright, used when restoring persisted state.
    */
   setLastSyncId(syncId: number): void {
     this.lastSyncId = syncId;
   }
 
   /**
-   * Update sync cursor (for incremental sync)
+   * Sets the opaque server cursor used for incremental sync.
    */
   setSyncCursor(cursor: string | null): void {
     this.syncCursor = cursor;
   }
 
   /**
-   * Get current sync cursor
+   * Returns the current opaque server cursor, or null if none is set.
    */
   getSyncCursor(): string | null {
     return this.syncCursor;
   }
 
   /**
-   * Get the highest syncId seen this session (for persistence on clean shutdown)
+   * Returns the highest delta id seen this session, for persistence on a clean
+   * shutdown.
    */
   getLastSyncId(): number {
     return this.lastSyncId || 0;

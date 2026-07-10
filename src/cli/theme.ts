@@ -1,11 +1,12 @@
 /**
- * CLI brand palette — mirrors the canonical Ablo system (paper `#fafafa` + black).
+ * The color helpers for the CLI's brand palette — Ablo's paper white (`#fafafa`)
+ * and black.
  *
- * A terminal can't set its own background, and a paper-white *foreground* is
- * invisible on light terminals — so we render the wordmark as a CHIP (black
- * text on a `#fafafa` block) via 24-bit truecolor, and reserve paper-white for
- * small accents only. Falls back to plain text when color is unsupported
- * (no TTY) or `NO_COLOR` is set.
+ * A terminal can't set its own background, and paper-white text is invisible on
+ * a light terminal, so {@link brand} renders the wordmark as a chip — black text
+ * on a `#fafafa` block, drawn with 24-bit truecolor — and paper white is reserved
+ * for small accents through {@link paper}. Both fall back to plain text when color
+ * is unsupported (no TTY) or `NO_COLOR` is set.
  */
 
 const RESET = '\x1b[0m';

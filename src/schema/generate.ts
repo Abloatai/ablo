@@ -1,18 +1,18 @@
 /**
- * Schema → TypeScript type emission — the `generate` half of the loop (the
- * counterpart to `diff`/migrate). Lowers a serialized schema to a `.ts` file of
- * row interfaces + an `AbloSchema` map, so a consumer's app is typed against the
- * exact schema that the database and sync layer enforce. Pure (returns source
- * text); the CLI writes it to disk.
+ * Generates TypeScript types from a serialized schema. Given the schema, it produces
+ * the source text of a `.ts` module containing one row interface per model plus an
+ * `AbloSchema` map, so an app is typed against the same schema the database and sync
+ * layer enforce. This function is pure and returns the source as a string; the
+ * command-line tool writes it to disk.
  *
- * This is the SDK's front door: the developer writes ONE `defineSchema`, pushes
- * it (which migrates the DB), and generates types FROM the same schema — so the
- * types they code against, the rows the DB stores, and the entities sync moves
- * are provably the same thing.
+ * It is the counterpart to the migration planner in {@link diffSchema}: you write one
+ * schema definition, push it (which migrates the database), and generate types from
+ * that same schema, so the types you code against, the rows the database stores, and
+ * the entities the sync layer moves all describe the same thing.
  *
- * v1 emits the row shape (base columns + declared fields, enums as literal
- * unions). Relations are resolved by the runtime SDK's typed accessors and are
- * not expanded here.
+ * The generated interface covers the base columns plus each declared field, with
+ * enums emitted as string-literal unions. Relations are not expanded here — the
+ * runtime SDK resolves those through its typed accessors.
  */
 
 import type { FieldMeta } from './field.js';

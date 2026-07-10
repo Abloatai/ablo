@@ -1,26 +1,29 @@
 /**
- * Data Source adapter conformance suite — the shared "is this adapter correct?"
- * test set, in the Auth.js `@auth/adapter-test` mould. Every ORM adapter
- * (Prisma/Drizzle/Kysely) and any hand-written handler runs THIS to prove,
- * before production, the guarantees the adapter interface promises. A new adapter is "done"
- * when it passes — not when it compiles.
+ * The conformance suite for data-source adapters: a shared set of tests that checks
+ * whether an adapter is correct. Every adapter in this package (Prisma, Drizzle,
+ * Kysely) and any adapter you write yourself runs this suite to confirm it upholds
+ * the guarantees {@link DataSourceAdapter} promises. An adapter is complete when it
+ * passes, not merely when it compiles.
  *
- * Runner-agnostic: checks are plain async functions that throw (node:assert) on
- * failure. `runDataSourceTests` registers them with whatever `it`/`test` you
- * pass, so it works under vitest, jest, or node:test:
+ * The suite is runner-agnostic: each check is a plain async function that throws,
+ * via `node:assert`, on failure. {@link runDataSourceTests} registers the checks
+ * with whichever `it` or `test` function you pass, so it runs under vitest, jest,
+ * or `node:test`:
  *
  *   import { it } from 'vitest';
  *   runDataSourceTests(memoryDataSource, it);
  *
- * Scope: this covers the ADAPTER contract (commit idempotency, read-after-write,
- * the transactional outbox + cursor). Signature/scope rejection is a HANDLER
- * concern (the adapter never sees a signature) and is tested separately.
+ * The checks cover the adapter contract: commit idempotency, read-after-write, and
+ * the transactional outbox with its cursor. They do not cover request-signature or
+ * scope rejection, which the HTTP handler enforces before the adapter is ever
+ * called and which is tested separately.
  */
 
 import assert from 'node:assert/strict';
 import type { DataSourceAdapter, Row } from './adapter.js';
 import type { ChangeSet } from './contract.js';
 
+/** A factory that returns a fresh adapter. Each check calls it to start from clean state. */
 export type MakeAdapter = () => DataSourceAdapter | Promise<DataSourceAdapter>;
 
 /** A single conformance check. `run` throws on failure. */
@@ -34,6 +37,10 @@ const change = (clientTxId: string, ops: ChangeSet['operations']): ChangeSet => 
   operations: ops,
 });
 
+/**
+ * Builds the list of conformance checks for an adapter. Call this to run the checks
+ * yourself, or use {@link runDataSourceTests} to register them with a test runner.
+ */
 export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck[] {
   return [
     {

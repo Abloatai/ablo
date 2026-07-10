@@ -1,13 +1,13 @@
 /**
  * ViewRegistry — tracks active QueryViews per typename.
  *
- * When the ObjectPool mutates a model, it calls notifyAdded / notifyUpdated /
+ * When the InstanceCache mutates a model, it calls notifyAdded / notifyUpdated /
  * notifyRemoved on the registry, which fans the event out to every active
  * QueryView subscribed to that typename.
  */
 
 import { type Model, modelAsRow } from '../Model.js';
-import type { IncrementalView } from './query-utils.js';
+import type { IncrementalView } from './queryUtils.js';
 
 export class ViewRegistry {
   private views = new Map<string, Set<IncrementalView>>();
@@ -30,7 +30,7 @@ export class ViewRegistry {
     }
   }
 
-  /** Called by ObjectPool after a model is added to the pool. */
+  /** Called by InstanceCache after a model is added to the pool. */
   notifyAdded(typename: string, model: Model): void {
     const set = this.views.get(typename);
     if (!set) return;
@@ -39,7 +39,7 @@ export class ViewRegistry {
     }
   }
 
-  /** Called by ObjectPool after a model is updated in the pool. */
+  /** Called by InstanceCache after a model is updated in the pool. */
   notifyUpdated(typename: string, model: Model): void {
     const set = this.views.get(typename);
     if (!set) return;
@@ -48,7 +48,7 @@ export class ViewRegistry {
     }
   }
 
-  /** Called by ObjectPool after a model is removed from the pool. */
+  /** Called by InstanceCache after a model is removed from the pool. */
   notifyRemoved(typename: string, modelId: string): void {
     const set = this.views.get(typename);
     if (!set) return;

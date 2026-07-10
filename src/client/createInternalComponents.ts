@@ -1,22 +1,19 @@
 /**
- * Internal component construction for `Ablo()`.
+ * Builds the internal component graph the client runs on.
  *
- * Builds the full sync-engine component graph from options + schema:
- * `ModelRegistry`, `ObjectPool`, `BootstrapHelper`, `Database`,
- * `SyncClient`, `HydrationCoordinator`. Each component depends on
- * the previous one, so the construction order matters; isolating it
- * here means `Ablo.ts` doesn't need to know the dependency order.
- *
- * Mirrors the pattern Anthropic uses: their client constructor wires
- * endpoint modules. Ours wires the sync-engine components instead.
+ * From the caller's options and schema this wires together the model registry,
+ * object pool, bootstrap helper, database, sync client, and hydration
+ * coordinator. Each component depends on the one before it, so construction
+ * order matters; keeping it here means the client constructor does not have to
+ * know that order.
  */
 
 import { Database } from '../Database.js';
 import { ModelRegistry, setActiveRegistry } from '../ModelRegistry.js';
-import { ObjectPool } from '../ObjectPool.js';
+import { InstanceCache } from '../InstanceCache.js';
 import { SyncClient } from '../SyncClient.js';
-import { HydrationCoordinator } from '../sync/HydrationCoordinator.js';
-import { BootstrapHelper } from '../sync/BootstrapHelper.js';
+import { OnDemandLoader } from '../sync/OnDemandLoader.js';
+import { BootstrapFetcher } from '../sync/BootstrapFetcher.js';
 import type { AuthCredentialSource } from '../auth/credentialSource.js';
 import type { Schema, SchemaRecord } from '../schema/schema.js';
 import { resolveBootstrapBaseUrl } from './auth.js';
@@ -24,8 +21,8 @@ import { shouldUseInMemoryPersistence, type AbloPersistence } from './persistenc
 
 export interface InternalComponentsInput<S extends SchemaRecord> {
   readonly schema: Schema<S>;
-  /** WebSocket URL — used to derive bootstrap HTTP base when the
-   * caller didn't override `bootstrapBaseUrl`. */
+  /** The WebSocket URL. Used to derive the bootstrap HTTP base URL when the
+   * caller has not overridden `bootstrapBaseUrl`. */
   readonly url: string;
   readonly options: {
     readonly maxPoolSize?: number;
@@ -40,11 +37,11 @@ export interface InternalComponentsInput<S extends SchemaRecord> {
 
 export interface InternalComponents {
   readonly modelRegistry: ModelRegistry;
-  readonly objectPool: ObjectPool;
-  readonly bootstrapHelper: BootstrapHelper;
+  readonly objectPool: InstanceCache;
+  readonly bootstrapHelper: BootstrapFetcher;
   readonly database: Database;
   readonly syncClient: SyncClient;
-  readonly hydration: HydrationCoordinator;
+  readonly hydration: OnDemandLoader;
 }
 
 export function createInternalComponents<S extends SchemaRecord>(
@@ -52,16 +49,15 @@ export function createInternalComponents<S extends SchemaRecord>(
 ): InternalComponents {
   const { schema, url, options, auth } = input;
 
-  // The registry is created here but model registration happens in
-  // the caller (Ablo.ts owns `registerModelsFromSchema` since the
-  // schema-to-class translation depends on private helpers there).
+  // The registry is created here, but model registration happens in the caller,
+  // which owns the schema-to-class translation.
   const modelRegistry = new ModelRegistry({
     validateOnRegister: false,
     allowLateReferences: true,
   });
   setActiveRegistry(modelRegistry);
 
-  const objectPool = new ObjectPool(
+  const objectPool = new InstanceCache(
     { maxSize: options.maxPoolSize ?? 10000 },
     modelRegistry,
   );
@@ -70,7 +66,7 @@ export function createInternalComponents<S extends SchemaRecord>(
     url,
     bootstrapBaseUrl: options.bootstrapBaseUrl,
   });
-  const bootstrapHelper = new BootstrapHelper({
+  const bootstrapHelper = new BootstrapFetcher({
     baseUrl: bootstrapBaseUrl,
     syncGroups: options.syncGroups,
     instantModels: deriveInstantModels(schema),
@@ -78,18 +74,18 @@ export function createInternalComponents<S extends SchemaRecord>(
   });
 
   const database = new Database(modelRegistry, bootstrapHelper, {
-    // Point-solution default: no browser-local durable store unless the
-    // caller explicitly asks for it. Node/edge runtimes always use the
-    // in-memory store because IndexedDB is unavailable there.
+    // By default there is no browser-local durable store unless the caller asks
+    // for one. Node and edge runtimes always use the in-memory store because
+    // IndexedDB is unavailable there.
     inMemory: shouldUseInMemoryPersistence(options),
   });
   const syncClient = new SyncClient(objectPool, database);
 
-  // Lazy-load lane: hydrates pool/IDB on `ablo.<model>.load(...)` for
-  // entities not in scope at bootstrap (`load: 'lazy'` models, or
-  // entities accessed via deep-link before the pool warmed up).
-  // Single-flight + IDB write-through.
-  const hydration = new HydrationCoordinator({
+  // Lazy-load lane: hydrates the object pool and IndexedDB on demand for
+  // entities not in scope at bootstrap (`load: 'lazy'` models, or an entity
+  // reached by deep link before the pool warmed up). Single-flight, with
+  // write-through to IndexedDB.
+  const hydration = new OnDemandLoader({
     objectPool,
     database,
     registry: modelRegistry,
@@ -115,11 +111,10 @@ export function createInternalComponents<S extends SchemaRecord>(
 }
 
 /**
- * Derive instant-bootstrap model names from schema load strategies.
- * Models with `load: 'lazy'` or `'manual'` are excluded from the
- * initial bootstrap request — they're fetched on demand by the
- * `ensure*` loaders or (Phase 6) by the `ObjectPool` auto-fetch
- * mechanism. Default load strategy is `'instant'`.
+ * Derives the set of models to fetch in the initial bootstrap request from each
+ * model's load strategy. Models declared `load: 'lazy'` or `'manual'` are left
+ * out of the bootstrap and fetched on demand instead. The default strategy is
+ * `'instant'`, which includes the model.
  */
 function deriveInstantModels<S extends SchemaRecord>(
   schema: Schema<S>,

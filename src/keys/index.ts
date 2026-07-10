@@ -1,21 +1,18 @@
 /**
- * Canonical Ablo API-key format — the single source of truth for how keys
- * are minted, hashed, and validated. Both the sync-server (`apiKeyStore`)
- * and the web control-plane (`generate-key.ts`) consume THIS module, so the
- * format can no longer drift between the two mint sites (it used to live as
- * a hand-copied twin kept in sync by a comment).
+ * The Ablo API-key format: how keys are minted, hashed, and validated, in one
+ * place so every component that issues or checks a key agrees on the format.
  *
- * Node-only — uses `node:crypto`. Exposed via the `@abloatai/ablo/keys`
- * subpath and NEVER re-exported from the browser-facing `.` entry, so the
- * client bundle never pulls in `node:crypto`.
+ * This module uses `node:crypto` and is therefore Node-only. It is published on
+ * the `@abloatai/ablo/keys` subpath and kept off the main browser-facing entry
+ * so a browser bundle never pulls in `node:crypto`.
  *
- * Format (GitHub-style): `<sk|rk|ek>_<live|test>_<30 base62 body><6-char
- * base62 CRC32 checksum>`. The environment segment is the stable key-prefix
- * contract; parsed values are immediately mapped to `production` / `sandbox`.
- * The identifiable prefix + CRC32 checksum let
- * secret scanners detect leaks and let us reject typo'd/forged keys OFFLINE
- * (no DB round-trip). Legacy keys (a ~43-char base64url body, no checksum)
- * still validate by hash — they parse here as `checksummed: false`.
+ * A key looks like `<sk|rk|ek|pk>_<live|test>_<30 base62 chars><6-char base62
+ * CRC32 checksum>`. The middle segment is the stable environment prefix, mapped
+ * on parse to `production` or `sandbox`. The recognizable prefix lets secret
+ * scanners spot a leaked key, and the trailing checksum lets the format reject a
+ * mistyped or forged key locally, without a database round-trip. Older keys
+ * (roughly a 43-character base64url body with no checksum) still validate by hash
+ * and parse here with `checksummed: false`.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -30,16 +27,19 @@ import {
 
 // ── Vocabulary ──────────────────────────────────────────────────────────
 
-// The Stripe-style key model:
-//   secret (sk_)      — backend / server-to-server / agents. Full authority. Never in a browser.
-//   restricted (rk_)  — scoped SERVER key (agent session tokens / capabilities).
-//   ephemeral (ek_)   — short-lived, backend-minted, USER-scoped BROWSER session credential
-//                       (Stripe ephemeral keys). Carries participantKind:'user' + baked syncGroups.
-//   publishable (pk_) — long-lived, browser-safe, org-scoped, READ-ONLY project key
-//                       (Stripe `pk_` / Supabase anon key). Used DIRECTLY as the bearer
-//                       (never exchanged, never expires → nothing to refresh). The org owns
-//                       it; it grants read access to the org's data plane and cannot write
-//                       or reach any control-plane operation.
+// The four key kinds:
+//   secret (sk_)      — backend and server-to-server use, including agents. Full
+//                       authority; never expose one in a browser.
+//   restricted (rk_)  — a scoped server key, such as an agent session token or a
+//                       narrowed capability.
+//   ephemeral (ek_)   — a short-lived, backend-minted session credential scoped to
+//                       one user, safe to hand to that user's browser. Carries
+//                       `participantKind: 'user'` and its baked-in sync groups.
+//   publishable (pk_) — a long-lived, browser-safe, organization-scoped read-only
+//                       key. It is used directly as the bearer token — never
+//                       exchanged, never expires, nothing to refresh. It grants
+//                       read access to the organization's data and cannot write or
+//                       reach any control-plane operation.
 export const API_KEY_KINDS = ['secret', 'restricted', 'ephemeral', 'publishable'] as const;
 export type ApiKeyKind = (typeof API_KEY_KINDS)[number];
 
@@ -67,7 +67,7 @@ const CHECKSUM_LEN = 6;
 /** A new checksummed body is exactly this long and pure base62. */
 const CHECKSUMMED_BODY_LEN = KEY_BODY_LEN + CHECKSUM_LEN;
 
-/** `<sk|rk|ek|pk>_<live|test>_<body>`; body charset covers base62 AND legacy base64url. */
+/** `<sk|rk|ek|pk>_<live|test>_<body>`; the body charset covers base62 as well as the legacy base64url form. */
 const KEY_RE = /^(sk|rk|ek|pk)_(live|test)_([0-9A-Za-z\-_]+)$/;
 const BASE62_RE = /^[0-9A-Za-z]+$/;
 
@@ -136,10 +136,10 @@ function bodyIsChecksummed(body: string): boolean {
 }
 
 /**
- * Canonical schema for an Ablo API key. `parse`/`safeParse` returns a typed
- * {@link ParsedApiKey}; a new checksummed-format key with a BAD checksum is
- * rejected (the offline-reject), while a legacy key parses as
- * `checksummed: false` and passes (the server still hash-validates it).
+ * The Zod schema for an Ablo API key. `parse` and `safeParse` return a typed
+ * {@link ParsedApiKey}. A checksummed-format key whose checksum does not match is
+ * rejected without any network call; an older key with no checksum parses with
+ * `checksummed: false` and is left for the server to validate by hash.
  */
 export const apiKeySchema = z.string().transform((raw, ctx): ParsedApiKey => {
   const m = KEY_RE.exec(raw);
@@ -208,9 +208,10 @@ export function generateApiKey(
 }
 
 /**
- * Stable SHA-256 hex of a plaintext key. A fast hash is CORRECT here (not
- * bcrypt) — API keys are high-entropy random, so there's no dictionary to
- * defend against. Used at both write (mint) and lookup.
+ * The stable SHA-256 hex digest of a plaintext key, computed both when a key is
+ * minted and when one is looked up. A fast hash is the right choice here rather
+ * than a password hash like bcrypt: API keys are long random strings, so there is
+ * no dictionary of guesses to slow down.
  */
 export function hashApiKey(plaintext: string): string {
   return createHash('sha256').update(plaintext).digest('hex');
@@ -220,13 +221,13 @@ export function hashApiKey(plaintext: string): string {
 export const WEBHOOK_SECRET_PREFIX = 'whsec_';
 
 /**
- * Mint a webhook signing secret per the Standard Webhooks spec
- * (https://www.standardwebhooks.com): a base64-encoded random key, 24–64 bytes,
- * labelled with the `whsec_` prefix. We use 32 bytes (256 bits) — comfortably
- * inside the range and matching Stripe/Svix. Unlike an API key this is NOT
- * hashed at rest: signing (`signAbloSourceRequest`) needs the live key, so it is
- * stored by reference via the secret store, returned to the customer once at
- * creation, and never echoed again (Stripe's policy).
+ * Mints a webhook signing secret following the Standard Webhooks specification
+ * (https://www.standardwebhooks.com): a base64-encoded random key of 24–64 bytes,
+ * labelled with the `whsec_` prefix. This uses 32 bytes (256 bits), comfortably
+ * inside that range. Unlike an API key, a signing secret is not hashed at rest,
+ * because signing a request with {@link signAbloSourceRequest} needs the live
+ * value. It is therefore kept in a secret store, returned to the customer once at
+ * creation, and never shown again.
  */
 export function generateWebhookSecret(): { plaintext: string; last4: string } {
   const plaintext = `${WEBHOOK_SECRET_PREFIX}${randomBytes(32).toString('base64')}`;

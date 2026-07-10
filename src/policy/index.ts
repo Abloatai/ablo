@@ -1,8 +1,10 @@
 /**
- * @abloatai/ablo/policy — pluggable conflict resolution.
+ * Pluggable conflict resolution.
  *
- * The engine detects conflicts; the policy decides. Customer code
- * implements `ConflictPolicy` and registers it at the sync-server.
+ * The engine detects a conflict; a policy decides what to do about it. You
+ * implement {@link ConflictPolicy} and register it with the engine on your
+ * server. The example below allows writes from a cosmetic "linter" writer and
+ * defers everything else to {@link defaultPolicy}.
  *
  * ```ts
  * import { type ConflictPolicy, defaultPolicy } from '@abloatai/ablo/policy';

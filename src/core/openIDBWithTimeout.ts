@@ -1,25 +1,22 @@
 /**
- * Wrap `indexedDB.open()` with a timeout + loud `onblocked` surfacing so the
- * request can never silently hang the app.
+ * The error raised when opening an IndexedDB database does not complete in a
+ * bounded time. {@link openIDBWithTimeout} throws it in two situations: another
+ * browser tab is holding an older version of the database open and blocking the
+ * upgrade (`reason: 'blocked'`), or the open request produced no result at all
+ * within the timeout (`reason: 'timeout'`).
  *
- * The native `IDBOpenDBRequest` has a nasty failure mode: if another tab is
- * holding an older schema version, the request fires `onblocked` and then
- * waits forever for that tab to close the DB. Neither `onsuccess` nor
- * `onerror` fires — the promise wrapping it never settles and every caller
- * above sits indefinitely.
- *
- * This helper converts that into a real error after a bounded wait, which
- * flows up through `engine.ready()` → `SyncEngineProvider.handleError()` →
- * the error skeleton with a retry button. A visible error is strictly better
- * than a forever-spinner the user can only escape by closing the tab.
+ * The native open request can otherwise hang indefinitely — when a blocking tab
+ * never closes its connection, neither the success nor the error callback fires,
+ * and any code awaiting the open waits forever. Turning that into a thrown error
+ * lets the surrounding application show a recoverable failure instead of an
+ * unbreakable spinner.
  */
 export class IDBOpenTimeoutError extends Error {
   /**
-   * Stable, transport-independent code. `toAbloError` preserves a string
-   * `.code`, so this survives the wrap into `AbloError` and reaches the
-   * provider's `onError` intact — letting the app distinguish a wedged-storage
-   * failure (show a recovery screen) from any other bootstrap error without a
-   * brittle message match.
+   * A stable identifier for this failure, independent of the message text. When
+   * this error is wrapped into an {@link AbloError} by `toAbloError`, the string
+   * code is preserved, so error handlers can recognize a wedged-storage failure
+   * and offer a recovery path rather than matching on the message.
    */
   readonly code = 'storage_open_timeout';
 
@@ -33,7 +30,11 @@ export class IDBOpenTimeoutError extends Error {
   }
 }
 
-/** True for the wedged-IndexedDB failure, after it has been wrapped anywhere. */
+/**
+ * Returns true when a caught value is the storage-open-timeout failure. It
+ * detects the failure by its stable `code`, so it still matches after the error
+ * has been wrapped into an {@link AbloError} or another error type.
+ */
 export function isStorageOpenTimeout(err: unknown): boolean {
   return (
     typeof err === 'object' &&
@@ -48,12 +49,13 @@ export interface OpenIDBOptions {
   /** Max milliseconds to wait for the open request to resolve. Default 10_000. */
   timeoutMs?: number;
   /**
-   * Called when another context (a new tab, a fresh deploy, or our own
-   * `deleteIDBWithTimeout` self-heal) fires `versionchange` on this connection.
-   * By default the connection is `close()`d immediately — the W3C/MDN-mandated
-   * behavior that lets the other context's upgrade/delete proceed instead of
-   * blocking forever. Provide this to ALSO react (e.g. prompt a reload) AFTER
-   * the close. Throwing here is swallowed.
+   * Called when another context — a new tab, a page reload after a deploy, or
+   * this package's own {@link deleteIDBWithTimeout} recovery — needs to upgrade
+   * or delete the database and fires a `versionchange` event on this connection.
+   * The connection is always closed first, which is what lets the other
+   * context's upgrade or delete proceed instead of blocking on this one. Provide
+   * this callback to react after that close, for example to prompt the user to
+   * reload. Any error it throws is ignored.
    */
   onVersionChange?: () => void;
 }
@@ -84,13 +86,12 @@ export function openIDBWithTimeout(
     }
 
     request.onsuccess = () => {
-      // If we ALREADY timed out (or blocked) and rejected, this is a late
+      // If we already timed out or were blocked and rejected, this is a late
       // success: the native open eventually completed after we gave up. The
-      // resulting connection is orphaned — nobody up the stack holds it, so
-      // nobody will `.close()` it. A leaked open connection holds an IndexedDB
-      // lock that wedges every subsequent open/delete of this DB name (the
-      // exact "ablo_databases open/delete hangs forever with no event" failure
-      // mode). Close it here so a timed-out attempt can't poison the store.
+      // resulting connection is orphaned — nothing up the stack holds it, so
+      // nothing will close it. A leaked open connection holds an IndexedDB lock
+      // that wedges every later open or delete of this database name, so close
+      // it here to keep a timed-out attempt from poisoning the store.
       if (settled) {
         try {
           request.result.close();
@@ -100,13 +101,12 @@ export function openIDBWithTimeout(
         return;
       }
       const db = request.result;
-      // MANDATORY resilience handler (W3C IndexedDB / MDN): close this
-      // connection the instant any other context wants to upgrade or delete the
-      // DB. Without it, an open connection that ignores `versionchange` blocks
-      // the other context's request indefinitely — the root cause of a wedged
-      // `ablo_databases` that survives reloads (an interrupted transaction's
-      // connection never closes, so every later open/delete hangs with no
-      // event). Auto-closing here makes the store self-releasing.
+      // Required resilience handler per the IndexedDB specification: close this
+      // connection as soon as any other context wants to upgrade or delete the
+      // database. Without it, a connection that ignores `versionchange` blocks
+      // the other context's request indefinitely — a common cause of a database
+      // that stays wedged across reloads. Closing here makes the store release
+      // itself.
       db.onversionchange = () => {
         try {
           db.close();
@@ -159,20 +159,20 @@ export function openIDBWithTimeout(
 }
 
 /**
- * Bounded `indexedDB.deleteDatabase()` — the delete counterpart of
- * `openIDBWithTimeout`. Used by the meta-DB self-heal: when opening
- * `ablo_databases` times out (a wedged backing store), we attempt to delete it
- * and re-create from scratch. The registry it holds is rebuildable from the
- * server on the next bootstrap, so dropping it is safe.
+ * Deletes an IndexedDB database within a bounded time — the delete counterpart
+ * to {@link openIDBWithTimeout}. It is used to recover from a wedged backing
+ * store: when opening a database times out, the caller can delete it and start
+ * fresh, which is safe for any database whose contents can be rebuilt on the
+ * next load.
  *
- * Like `open`, `deleteDatabase` can hang indefinitely: if another live
- * connection holds the DB it fires `onblocked` and waits, and on a truly stuck
- * store it fires *no* event at all. Both become a bounded rejection here so the
- * caller can fall through to surfacing a real error instead of spinning.
+ * Like an open request, a native delete can hang indefinitely — it fires a
+ * blocked event and waits when another connection still holds the database, and
+ * on a truly stuck store it fires no event at all. Both cases become a bounded,
+ * resolved result here, so the caller never spins.
  *
- * Resolves `true` on a clean delete, `false` if it was blocked or timed out
- * (caller decides whether to retry the open regardless — a no-op delete still
- * leaves us no worse off).
+ * Resolves to `true` on a clean delete and `false` when the delete was blocked
+ * or timed out. Either way the caller can decide whether to retry the open; a
+ * delete that did nothing leaves the store no worse off.
  */
 export function deleteIDBWithTimeout(
   name: string,

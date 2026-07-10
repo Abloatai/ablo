@@ -1,11 +1,15 @@
 /**
- * TransactionQueue - Production-ready transaction management
+ * TransactionQueue manages the lifecycle of local writes on their way to the
+ * server: it applies each change optimistically, batches the writes made in one
+ * event-loop tick into a single commit, retries transient failures, and rolls
+ * back on permanent rejection.
  *
- * Key features:
- * - Optimistic updates with rollback
- * - Conflict resolution strategies
- * - LINEAR-style microtask batching (transactions in same event loop share batchId)
- * - Proper dependency injection (no singleton)
+ * Key behaviours:
+ * - Optimistic updates with rollback on failure.
+ * - Configurable conflict resolution.
+ * - Microtask batching: transactions created in the same event-loop tick share
+ *   a batch id and commit together in one round trip.
+ * - A dependency-injected executor, so several queues can coexist.
  */
 
 import { EventEmitter } from 'events';
@@ -13,7 +17,6 @@ import type { Database } from '../Database.js';
 import { Model } from '../Model.js';
 import { getContext } from '../context.js';
 import type { MutationOperationType } from '../types/index.js';
-import { handleMutationError } from './mutation-error-handler.js';
 import { AbloError, AbloConnectionError, errorCodeSpec } from '../errors.js';
 import { SyncPosition } from '../sync/syncPosition.js';
 import type { WriteOptions } from '../interfaces/index.js';
@@ -22,7 +25,6 @@ import {
   projectCommitPayload,
   computePriorityScore,
   normalizeModelKey,
-  stripModelSuffix,
   hasStaleWriteOptions,
   applyWriteOptions,
   asTransportError,
@@ -46,30 +48,29 @@ import { DeltaConfirmationTracker } from './deltaConfirmation.js';
 import {
   deserializePersistedTransaction,
   isNonReplayablePersistedRow,
-} from './persistedReplay.js';
+} from './replayValidation.js';
 import {
   applyOptimisticCreate,
   applyOptimisticUpdate,
   applyOptimisticDelete,
   rollbackOptimistic,
   type OptimisticUpdateEntry,
-} from './optimistic.js';
+} from './optimisticApply.js';
 
-// The queue's separable units live in sibling leaves (`commitPayload`,
+// The queue is split across sibling modules (`commitPayload`,
 // `TransactionStore`, `coalesceRules`, `deltaConfirmation`, `optimistic`).
-// Re-export the moved public types so importers keep using the
-// `transactions/TransactionQueue.js` path unchanged.
+// Re-export the shared public types here so importers can continue to reach
+// them through this module.
 export type { Transaction, UserContext } from './commitPayload.js';
 
 /**
- * A raw multi-op commit transaction queued via `ablo.commits.create()`.
- *
- * Distinct from the per-model `Transaction` (see `./commitPayload.js`):
- * operations are
- * pre-built by the caller and the envelope is atomic — no coalescing,
- * no FK reordering, no optimistic local apply. The lane shares the
- * same `mutationExecutor.commit()` underneath as the model-proxy
- * batch path, so reconnect-retry behavior is identical.
+ * A pre-built, multi-operation commit submitted through
+ * `ablo.commits.create()`. Unlike the per-model {@link Transaction} (see
+ * `./commitPayload.js`), the caller supplies the operations and the whole
+ * envelope commits atomically: the queue does not coalesce it, reorder its
+ * operations for foreign keys, or apply it optimistically. It runs through the
+ * same `mutationExecutor.commit()` as the model batch path, so its
+ * retry-on-reconnect behaviour is identical.
  */
 interface CommitTransaction {
   id: string;
@@ -84,7 +85,7 @@ interface CommitTransaction {
     onStale?: 'reject' | 'overwrite' | 'notify' | null;
   }[];
   causedByTaskId?: string | null;
-  /** Batch-level read dependencies (STORM read-set), forwarded to the executor. */
+  /** Read dependencies for the whole batch, forwarded to the executor so the server can detect stale-context writes. */
   reads?: ReadDependency[] | null;
   status: 'pending' | 'executing' | 'completed' | 'failed';
   createdAt: number;
@@ -107,10 +108,12 @@ interface TransactionQueueConfig {
   conflictResolution: ConflictResolution;
   enablePersistence: boolean;
   enableOptimistic: boolean;
-  // Backpressure control (Linear pattern) - prevents overwhelming server
+  // Backpressure control: caps how many transactions execute at once so the
+  // server is not overwhelmed.
   maxExecutingTransactions: number;
-  // Delta confirmation timeout in ms - how long to wait for WebSocket delta before rollback
-  // Default: 30000 (30s). Set higher for slow networks.
+  // How long to wait, in milliseconds, for a change's confirming sync delta
+  // before the retry-and-reconciliation cycle begins. Defaults to 30000 (30
+  // seconds); raise it for slow networks.
   deltaConfirmationTimeout: number;
   /**
    * Exponential backoff for retryable server responses (HTTP 429/503).
@@ -123,17 +126,16 @@ interface TransactionQueueConfig {
     capMs: number;
   };
   /**
-   * Grace window in ms before in-flight commit-lane transactions are
-   * failed with `AbloConnectionError` after the WebSocket transitions
-   * to `'disconnected'`. Brief disconnects (deploy rotations, mobile
-   * jitter) are absorbed transparently; only persistent disconnects
-   * surface as failures. Aligned with the 30s convention from the
-   * WebSocket reconnection guidance (websocket.org). Set lower for
-   * human-interactive consumers (e.g. 10s for chat) or higher for
-   * batch workers (e.g. 60s for agent-worker).
+   * How long, in milliseconds, to wait after the connection drops before
+   * failing any in-flight commit-lane transaction with an
+   * {@link AbloConnectionError}. Brief disconnects, such as a server restart
+   * or mobile network jitter, are absorbed transparently; only a disconnect
+   * that outlasts this window surfaces as a failure. Set it lower for
+   * interactive use (for example 10 seconds for chat) and higher for
+   * background batch work. Defaults to 30 seconds.
    *
-   * Without this deadline, `commits.create({wait:'confirmed'})` waits
-   * forever when the WS dies mid-flight — see the 2026-05-15 wedge.
+   * Without this deadline, `commits.create({ wait: 'confirmed' })` would wait
+   * forever if the connection died while a commit was in flight.
    */
   commitOfflineGraceMs: number;
 }
@@ -146,17 +148,17 @@ export class TransactionQueue extends EventEmitter {
   // this, the identical cause prints on a loop. We log the first occurrence
   // and demote exact repeats to `debug`.
   private lastPermanentErrorSig?: string;
-  // Per-instance executor binding. Set by `setMutationExecutor(...)` from the
-  // owning Ablo right after construction. Falls back to `getContext()` only
-  // when unset (preserves legacy tests / SDK consumers that haven't migrated).
+  // The executor bound to this queue instance, set by `setMutationExecutor(...)`
+  // just after construction. When unset it falls back to the ambient executor
+  // from `getContext()`.
   //
-  // Why this exists: `initSyncEngine()` writes a *module-level* singleton.
-  // Constructing a second Ablo (e.g. worker + per-job peer in agent-worker)
-  // overwrites the first instance's executor. Without an instance binding,
-  // queue commits on Ablo A would dispatch through Ablo B's executor closure,
-  // which captures B's `storeHolder.store` — and once B disposes its store,
-  // that closure returns `null` for `getWs()` and every commit on A throws
-  // `ws_not_ready` forever (queue classifies it as transient → retry loop).
+  // The binding matters because the ambient executor is a module-level
+  // singleton: constructing a second client instance overwrites the first
+  // instance's executor. Without a per-instance binding, commits on one
+  // instance would dispatch through another instance's executor closure; once
+  // that other instance disposed its store, the closure would resolve no live
+  // connection and every commit here would fail with `ws_not_ready`, which the
+  // queue treats as transient and retries endlessly.
   private _mutationExecutor: import('../interfaces/index.js').MutationExecutor | null = null;
   private get mutationExecutor() {
     return this._mutationExecutor ?? getContext().mutationExecutor;
@@ -167,8 +169,8 @@ export class TransactionQueue extends EventEmitter {
   private processTimer?: NodeJS.Timeout;
   private processScheduled = false;
 
-  // LINEAR PATTERN: Staging area for transactions created in same event loop tick
-  // All transactions go here first, then get committed together via microtask
+  // Staging area for transactions created in the same event-loop tick. Each one
+  // lands here first, then a microtask commits them together.
   private createdTransactions: Transaction[] = [];
   private commitScheduled = false;
 
@@ -284,11 +286,12 @@ export class TransactionQueue extends EventEmitter {
     );
   }
 
-  // Configuration - tuned for LINEAR-style batching
-  // Higher batch size and delay allows more operations to coalesce into single HTTP call
+  // Default configuration, tuned so more operations coalesce into a single
+  // commit: a larger batch size and delay give rapid operations more time to
+  // merge before the batch is sent.
   private config: TransactionQueueConfig = {
-    maxBatchSize: 50, // Increased from 10 - matches Linear's batch size
-    batchDelay: 150, // Increased from 50ms - more time to coalesce rapid operations
+    maxBatchSize: 50, // send up to this many operations per commit
+    batchDelay: 150, // milliseconds to wait for more operations before sending
     maxRetries: 3,
     conflictResolution: {
       strategy: 'last-write-wins',
@@ -307,14 +310,15 @@ export class TransactionQueue extends EventEmitter {
   // Track executing transactions for backpressure
   private executingCount = 0;
 
-  // Optimistic update tracking. The entry shape + apply/rollback rules live
-  // in `./optimistic.js`; the ledger itself stays host state because the
+  // Optimistic update tracking. The entry shape and apply/rollback rules live
+  // in `./optimisticApply.js`; the map itself stays on the queue because the
   // completion paths, `getStats`, and `dispose` all read it.
   private optimisticUpdates = new Map<string, OptimisticUpdateEntry>();
 
-  // Stale-context notifications (CoAgent/MTPO notify-instead-of-abort) keyed by
-  // transaction id, populated from the commit ack and drained by
-  // `waitForCommitReceipt` so the receipt carries the self-heal signal.
+  // Stale-context notifications, keyed by transaction id. When the server
+  // accepts a commit but reports that an operation's read premise had moved,
+  // the notification lands here from the commit acknowledgement and is drained
+  // by `waitForCommitReceipt`, so the receipt can carry it back to the caller.
   private commitNotifications = new Map<string, StaleNotification[]>();
 
   // Delta-confirmation tracking (ack watermark advance + the awaiting_delta
@@ -322,7 +326,8 @@ export class TransactionQueue extends EventEmitter {
   // constructor once `position` is bound.
   private readonly deltaConfirmation: DeltaConfirmationTracker;
 
-  // Connection state check - set by SyncClient to prevent rollbacks during disconnection
+  // Connection-state check, supplied by the client, used to hold off rollbacks
+  // while disconnected.
   private isConnectedFn: () => boolean = () => true;
 
   // Grace timer that, when fired, fails any commit-lane transaction
@@ -332,11 +337,11 @@ export class TransactionQueue extends EventEmitter {
   private commitOfflineGraceTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
-   * THE client's place in the global delta order — the SHARED instance
-   * (injected by SyncClient; standalone construction gets its own). The
-   * queue advances `acked` on commit responses; the store advances
-   * `applied`/`persisted`; snapshots/claims read `readFloor`. Contract +
-   * rationale live in `sync/syncPosition.ts`.
+   * This client's place in the global order of sync deltas. The instance is
+   * shared: the client injects one, and a standalone queue creates its own. The
+   * queue advances the `acked` cursor as commit responses arrive, the store
+   * advances `applied` and `persisted`, and snapshots and claims read
+   * `readFloor`. See `../sync/syncPosition.js` for the full contract.
    */
   readonly position: SyncPosition;
 
@@ -419,22 +424,18 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Look up the in-flight `confirmation` promise for a (model, id) pair.
-   * Returns the promise from the most-recent live transaction matching
-   * the given model+id, or `Promise.resolve()` if none is open (which
-   * means either "already confirmed" or "never staged" — both safe
-   * outcomes for the routing-helper grace-window use case).
+   * Returns the in-flight confirmation promise for a given model and id. When
+   * several transactions match, it returns the most recent one's promise; when
+   * none is open it resolves immediately, which covers both "already confirmed"
+   * and "never staged".
    *
-   * Looks across `pending`, `executing`, and `awaiting_delta` — these
-   * are the three non-terminal statuses where rollback is still
-   * possible. Skips `completed` (already settled) and `failed` /
-   * `rolled_back` (already rejected; the call site missed the
-   * `confirmation` window and should rely on `onMutationFailure` toast
-   * instead).
-   *
-   * Distinct from `tx.confirmation` on a known transaction — used by
-   * call sites that hold a Model reference (returned by
-   * `ablo.<model>.create()`) but never see the underlying transaction.
+   * It considers the three non-terminal statuses in which the write can still
+   * be rolled back — `pending`, `executing`, and `awaiting_delta` — and ignores
+   * `completed` (already settled) and `failed`/`rolled_back` (already
+   * rejected). This complements the `confirmation` promise carried on a known
+   * {@link Transaction}: use this method at call sites that hold a model
+   * returned by `ablo.<model>.create()` but never see the underlying
+   * transaction.
    */
   confirmationFor(modelName: string, modelId: string): Promise<void> {
     const candidates = [
@@ -451,15 +452,15 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Attach a hot `confirmation` promise to a freshly created transaction.
-   * Must be called BEFORE the transaction is staged so the call site can
-   * `await tx.confirmation` synchronously after the create/update/delete
-   * call returns. Idempotent: returns early if the tx already has one.
+   * Attaches a `confirmation` promise to a newly created transaction. Call this
+   * before the transaction is staged so a caller can `await tx.confirmation`
+   * immediately after a create, update, or delete returns. It is idempotent and
+   * returns early if one is already attached.
    *
-   * The unhandled-rejection trap is mandatory — most call sites won't
-   * `await confirmation`, and Node/browser would otherwise crash on the
-   * rejection. Consumers who *do* want failure visibility just attach a
-   * `.then`/`.catch` and the trap becomes a no-op.
+   * It also attaches a no-op rejection handler. Most callers never await the
+   * confirmation, and without this the runtime would report an unhandled
+   * rejection when a write fails. Callers that do want to observe failure simply
+   * attach their own `.then`/`.catch`.
    */
   private attachConfirmation(tx: Transaction): void {
     if (tx.confirmation) return;
@@ -467,36 +468,32 @@ export class TransactionQueue extends EventEmitter {
       this.confirmationResolvers.set(tx.id, { resolve, reject });
     });
     tx.confirmation.catch(() => {
-      // Swallow unhandled rejections — explicit consumers attach their own
-      // handler; silent failure is the leak we're already fixing elsewhere.
+      // Swallow unhandled rejections; callers that care attach their own handler.
     });
   }
 
   /**
-   * Set connection state checker - prevents rollbacks during disconnection.
-   * When disconnected, timeouts re-schedule instead of rolling back.
+   * Registers a predicate the queue uses to check whether it is connected.
+   * While disconnected, confirmation timeouts re-schedule themselves instead of
+   * escalating, so a transaction is never rolled back merely because the client
+   * was briefly offline.
    */
   setConnectionChecker(fn: () => boolean): void {
     this.isConnectedFn = fn;
   }
 
   /**
-   * Drive the offline-grace timer for in-flight commit-lane transactions.
+   * Drives the offline-grace timer for in-flight commit-lane transactions.
    *
-   * On `'disconnected'`: start a one-shot timer of
-   * `config.commitOfflineGraceMs`. If the timer fires (disconnect
-   * persisted past grace), iterate every commit-lane transaction with
-   * `status ∈ {'pending', 'executing'}` and emit
-   * `transaction:failed:${id}` with an `AbloConnectionError`. That
-   * lets `waitForCommitReceipt` reject in seconds instead of hanging
-   * forever — which is what wedged the 2026-05-15 subagent run.
+   * On `'disconnected'` it starts a one-shot timer of
+   * `config.commitOfflineGraceMs`. If that timer fires — meaning the disconnect
+   * outlasted the grace window — every commit-lane transaction still `pending`
+   * or `executing` is failed with an {@link AbloConnectionError}, so
+   * {@link waitForCommitReceipt} rejects within seconds instead of hanging.
    *
-   * On `'connected'`: clear any pending grace timer. Brief blips are
-   * absorbed transparently; the existing reconnect-retry path in
-   * `processCommitLane` / `flushOfflineQueue` handles the resumption.
-   *
-   * Called from SyncClient's `setConnectionState` after the
-   * `'connection:disconnected'` / `'connection:established'` events.
+   * On `'connected'` it clears any pending grace timer. Brief disconnects are
+   * absorbed transparently; {@link processCommitLane} and
+   * {@link flushOfflineQueue} resume the work on reconnect.
    */
   setConnectionState(state: 'connected' | 'disconnected'): void {
     if (state === 'connected') {
@@ -523,8 +520,8 @@ export class TransactionQueue extends EventEmitter {
       }
     }
     if (inFlight.length === 0) return;
-    // Internal mechanic: each failed commit surfaces to the consumer via its own
-    // rejection path, so this aggregate is forensic — debug, not warn.
+    // Each failed commit reaches the consumer through its own rejection path,
+    // so this aggregate line is forensic and logged at debug rather than warn.
     getContext().logger.debug(
       `[TransactionQueue] WS disconnected > ${graceMs}ms; failing ${inFlight.length} in-flight commit(s) with AbloConnectionError`,
       { inFlightIds: inFlight.map((id) => id.slice(0, 8)) },
@@ -543,33 +540,35 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Bind the executor for this queue instance. Called by the owning Ablo
-   * right after `BaseSyncedStore` is constructed so the executor's
-   * `storeHolder.store` closure resolves to *this* Ablo's WS — not whichever
-   * Ablo most recently called `initSyncEngine()`.
+   * Binds the mutation executor for this queue instance. The owning client
+   * calls this right after construction, so commits made here always dispatch
+   * through this instance's connection even when several client instances exist
+   * in the same process.
    */
   setMutationExecutor(executor: import('../interfaces/index.js').MutationExecutor): void {
     this._mutationExecutor = executor;
   }
 
   // ============================================================================
-  // LINEAR PATTERN: Microtask-based Transaction Staging
+  // Microtask-based transaction staging
   // ============================================================================
   //
-  // All transactions first go to `createdTransactions` staging area.
-  // A microtask commits them all together with the same batchIndex.
-  // This ensures that bulk operations (like importing 100 layers) are batched efficiently.
+  // Every transaction lands in the `createdTransactions` staging area first.
+  // A microtask then commits them together under one batch index, so a bulk
+  // operation such as importing a hundred rows is sent efficiently.
   //
   // Flow:
-  // 1. create()/update()/delete() calls stageTransaction()
-  // 2. stageTransaction() adds to createdTransactions and schedules microtask
-  // 3. Microtask runs commitCreatedTransactions() after current sync code completes
-  // 4. All staged transactions get same batchIndex and move to executionQueue
+  // 1. create()/update()/delete() calls stageTransaction().
+  // 2. stageTransaction() adds to createdTransactions and schedules a microtask.
+  // 3. The microtask runs commitCreatedTransactions() once the current
+  //    synchronous code finishes.
+  // 4. All staged transactions share one batch index and move to the execution
+  //    queue.
   // ============================================================================
 
   /**
-   * Stage a transaction for commit (Linear pattern)
-   * Transactions staged in the same event loop tick will be committed together
+   * Stages a transaction for commit. Transactions staged within the same
+   * event-loop tick are committed together.
    */
   private stageTransaction(transaction: Transaction): void {
     this.createdTransactions.push(transaction);
@@ -577,8 +576,8 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Schedule commit of staged transactions via microtask
-   * This ensures all synchronous transaction creates are batched together
+   * Schedules the staged transactions to commit on a microtask, so all
+   * transactions created synchronously within one tick are batched together.
    */
   private scheduleCommit(): void {
     if (this.commitScheduled) return;
@@ -597,8 +596,8 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Commit all staged transactions to the execution queue (Linear pattern)
-   * All transactions get the same batchIndex for efficient batching
+   * Moves all staged transactions onto the execution queue, assigning them a
+   * single shared batch index so they commit together.
    */
   private commitCreatedTransactions(): void {
     this.commitScheduled = false;
@@ -627,11 +626,15 @@ export class TransactionQueue extends EventEmitter {
     }
   }
 
-  // Batch flush all pending transactions via commit (fast path on reconnect)
+  /**
+   * Flushes every pending transaction in one commit, the fast path taken on
+   * reconnect. If the batch fails, each transaction falls back to normal,
+   * one-by-one processing.
+   */
   async flushOfflineQueue(): Promise<void> {
-    // Kick the commit lane too — pending atomic envelopes from
-    // `commits.create()` were left at the head of the lane while the WS
-    // was down. Fire-and-forget; processCommitLane self-serializes.
+    // Kick the commit lane too: atomic envelopes from `commits.create()` may
+    // have been left at the head of the lane while the connection was down.
+    // Fire-and-forget; processCommitLane serializes itself.
     void this.processCommitLane();
 
     // Collect pending transactions in created order
@@ -687,7 +690,9 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Create operation with optimistic update
+   * Records a create and applies it optimistically, then stages it for the next
+   * batched commit. Returns the {@link Transaction}, whose `confirmation`
+   * promise settles once the server confirms the write.
    */
   async create(
     model: Model,
@@ -704,8 +709,8 @@ export class TransactionQueue extends EventEmitter {
       modelKey: normalizeModelKey(actualModelName),
       priorityScore: this.computePriorityScore('create', actualModelName),
       data: this.extractCreateData(model),
-      // CREATE rollback removes the row — there is no prior state to
-      // restore, so allocating a `toJSON()` snapshot here was waste.
+      // Rolling back a create removes the row, so there is no prior state to
+      // restore and no snapshot is captured here.
       previousData: null,
       context,
       status: 'pending',
@@ -722,17 +727,19 @@ export class TransactionQueue extends EventEmitter {
       this.applyOptimisticCreate(model, transaction);
     }
 
-    // Microtask coalescer (`scheduleCommit`) collapses all creates in
-    // this tick into one wire commit with one `batchIndex` — see
-    // `commitCreatedTransactions`. No batch API needed at the call site.
+    // The microtask coalescer (`scheduleCommit`) collapses all creates in this
+    // tick into one commit under a single `batchIndex` — see
+    // `commitCreatedTransactions`. No batch call is needed at the call site.
     this.stageTransaction(transaction);
     this.emit('transaction:created', transaction);
     return transaction;
   }
 
   /**
-   * Update operation with conflict detection
-   * @param precomputedChanges - Optional pre-captured changes (avoids re-reading from model)
+   * Records an update and applies it optimistically, then stages it for the next
+   * batched commit. Rapid updates to the same entity coalesce into a single wire
+   * operation.
+   * @param precomputedChanges - Optional pre-captured changes, used instead of re-reading them from the model.
    */
   async update(
     model: Model,
@@ -747,12 +754,11 @@ export class TransactionQueue extends EventEmitter {
       ? this.mapChangesToInput(actualModelName, precomputedChanges)
       : this.extractUpdateData(model);
     const previousData = this.extractPreviousData(model, updateInput);
-    // Advance the per-field baseline for the keys we just froze into this
-    // transaction. `Model.propertyChanged` is first-old-wins and only cleared on
-    // sync-ack, so without this a SECOND update to the same field before the
-    // first acks would re-capture the original `.old` (the pre-session value)
-    // instead of THIS update's result — corrupting the stream-recorded undo
-    // inverse (the second move's "before" would point all the way back). The
+    // Advance the per-field baseline for the keys just frozen into this
+    // transaction. The model records the first old value per field and clears it
+    // only on sync acknowledgement, so a second update to the same field before
+    // the first is acknowledged would otherwise re-capture the original value
+    // instead of this update's result, corrupting the recorded undo inverse. The
     // wire payload is already frozen in `transaction.data`, so dropping the
     // consumed entries is safe.
     model.consumeModifiedFields(Object.keys(updateInput));
@@ -784,9 +790,9 @@ export class TransactionQueue extends EventEmitter {
       this.applyOptimisticUpdate(model, transaction);
     }
 
-    // LINEAR PATTERN: Stage transaction for microtask commit
-    // Multiple updates in same event loop will be batched together
-    // enqueue() will still apply its coalescing logic for same-entity updates
+    // Stage the transaction for the microtask commit; updates made in the same
+    // tick are batched together, and enqueue() still coalesces same-entity
+    // updates.
     this.stageTransaction(transaction);
 
     this.emit('transaction:created', transaction);
@@ -794,14 +800,18 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Delete operation with cascade handling
+   * Records a delete and applies it optimistically. If the row's own create has
+   * not yet been sent, both are cancelled locally rather than sending a create
+   * followed by a delete; if the create is already in flight, the delete waits
+   * until it settles so the server never sees a delete before the create.
    */
   async delete(
     model: Model,
     context: UserContext,
     writeOptions?: WriteOptions,
   ): Promise<Transaction> {
-    // 🔧 FIXED: Use getModelName() instead of constructor.name (production-safe)
+    // Use getModelName() rather than constructor.name, which is unreliable once
+    // class names are minified.
     const actualModelName = model.getModelName();
 
     // Skip Activity delete transactions - activities are permanent audit records
@@ -887,8 +897,8 @@ export class TransactionQueue extends EventEmitter {
     if (createBarrier) {
       this.deferDeleteUntilCreateSettles(createBarrier, transaction);
     } else {
-      // LINEAR PATTERN: Stage transaction for microtask commit
-      // All deletes in same event loop will be batched together
+      // Stage the transaction for the microtask commit; deletes in the same
+      // tick are batched together.
       this.stageTransaction(transaction);
     }
 
@@ -897,7 +907,7 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Upload attachment — delegates to attachment-uploader.ts
+   * Uploads a single attachment, delegating to the mutation executor.
    */
   async uploadAttachment(
     _file: File,
@@ -908,7 +918,7 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Batch upload attachments — delegates to MutationExecutor
+   * Uploads several attachments in one call, delegating to the mutation executor.
    */
   async batchUploadAttachments(
     _files: File[],
@@ -919,14 +929,16 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Archive operation
+   * Records an archive and applies it optimistically, then stages it for the
+   * next batched commit.
    */
   async archive(
     model: Model,
     context: UserContext,
     writeOptions?: WriteOptions,
   ): Promise<Transaction> {
-    // 🔧 FIXED: Use getModelName() instead of constructor.name (production-safe)
+    // Use getModelName() rather than constructor.name, which is unreliable once
+    // class names are minified.
     const actualModelName = model.getModelName();
     const modelKey = normalizeModelKey(actualModelName);
     const priorityScore = this.computePriorityScore('archive', actualModelName);
@@ -950,7 +962,7 @@ export class TransactionQueue extends EventEmitter {
     this.attachConfirmation(transaction);
     this.store.add(transaction);
 
-    // LINEAR PATTERN: Stage transaction for microtask commit
+    // Stage the transaction for the microtask commit.
     this.stageTransaction(transaction);
 
     this.emit('transaction:created', transaction);
@@ -958,10 +970,12 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Unarchive operation
+   * Records an unarchive and applies it optimistically, then stages it for the
+   * next batched commit.
    */
   async unarchive(model: Model, context: UserContext): Promise<Transaction> {
-    // 🔧 FIXED: Use getModelName() instead of constructor.name (production-safe)
+    // Use getModelName() rather than constructor.name, which is unreliable once
+    // class names are minified.
     const actualModelName = model.getModelName();
     const modelKey = normalizeModelKey(actualModelName);
     const priorityScore = this.computePriorityScore('unarchive', actualModelName);
@@ -984,7 +998,7 @@ export class TransactionQueue extends EventEmitter {
     this.attachConfirmation(transaction);
     this.store.add(transaction);
 
-    // LINEAR PATTERN: Stage transaction for microtask commit
+    // Stage the transaction for the microtask commit.
     this.stageTransaction(transaction);
 
     this.emit('transaction:created', transaction);
@@ -992,25 +1006,24 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Enqueue transaction for execution
+   * Places a transaction on the execution queue, coalescing it into an existing
+   * same-entity update where possible so redundant writes collapse.
    */
   private enqueue(transaction: Transaction): void {
     this.ensureDerivedFields(transaction);
     const modelKey = `${transaction.modelName}:${transaction.modelId}`;
 
-    // LINEAR PATTERN: Simplified coalescing for updates
-    // Staging already batches all transactions in same event loop tick
-    // We only need to handle: (1) in-flight merging, (2) same-entity merging
+    // Coalescing for updates. Staging already batches everything created in one
+    // event-loop tick, so only two cases remain here: merging into an in-flight
+    // update, and merging into a pending same-entity update.
     //
-    // RETRIES (attempts > 0) must NEVER take either merge path. A retry is
-    // re-enqueued from `handleFailure` while its own modelKey is still in
-    // `inFlightByModel` (the post-batch cleanup runs after the catch), so the
-    // in-flight merge mistook the retry for a concurrent user edit: it moved
-    // the data into `pendingMergeByModel`, REMOVED the transaction, and the
-    // post-batch block minted a fresh follow-up with `attempts: 0`. The
-    // attempt counter never accumulated and `maxRetries` never tripped — an
-    // infinite ~`batchDelay` resend storm of self-laundering transaction
-    // clones (found by the claims journey, 2026-06-10).
+    // Retries (attempts > 0) must not take either merge path. A retry is
+    // re-enqueued from `handleFailure` while its own model key is still marked
+    // in `inFlightByModel`, so treating it as a concurrent edit would move its
+    // data into `pendingMergeByModel`, remove the transaction, and then mint a
+    // fresh follow-up with the attempt counter reset to zero. The counter would
+    // never accumulate, `maxRetries` would never trip, and the write would
+    // resend in an endless loop.
     if (transaction.type === 'update' && transaction.attempts === 0) {
       const preserveWatermark = hasStaleWriteOptions(transaction.writeOptions);
       // If there is an in-flight update for this model, merge into post-flight buffer
@@ -1055,8 +1068,9 @@ export class TransactionQueue extends EventEmitter {
   private scheduleProcessing(immediate = false): void {
     if (this.processScheduled) return;
 
-    // BACKPRESSURE: Don't schedule if too many transactions are already executing
-    // This prevents overwhelming the server with concurrent requests (Linear pattern)
+    // Backpressure: don't schedule another batch while too many transactions
+    // are already executing, so the server is not flooded with concurrent
+    // requests.
     if (this.executingCount >= this.config.maxExecutingTransactions) {
       getContext().logger.debug('[TransactionQueue] Backpressure: delaying batch, too many executing', {
         executingCount: this.executingCount,
@@ -1088,13 +1102,11 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Process batch of transactions using LINEAR-style unified batch execution.
-   *
-   * Key optimization: Instead of making separate calls per operation type/model,
-   * we collect ALL batchable operations and send them in a SINGLE commit call.
-   * The sync-server handles mixed types atomically inside one transaction.
-   *
-   * This reduces N round-trips to 1, dramatically improving batch latency.
+   * Processes one batch of transactions in a single commit. Rather than calling
+   * the server once per operation type or model, it collects every batchable
+   * operation and sends them together; the server applies the mixed operations
+   * atomically within one transaction. This turns many round trips into one and
+   * greatly reduces batch latency.
    */
   private async processBatch(): Promise<void> {
     const batchStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -1113,9 +1125,9 @@ export class TransactionQueue extends EventEmitter {
       'sync.transaction.batch',
       async () => {
         try {
-          // Sort executionQueue by FK priority before batch selection
-          // This ensures parent entities (Layout, SlideLayout) are always processed
-          // before their children (SlideLayoutLayer) across batch boundaries
+          // Sort the execution queue by foreign-key priority before selecting a
+          // batch, so a parent row is always committed before its children, even
+          // across batch boundaries.
           this.executionQueue.sort((a, b) => {
             // Ensure derived fields exist (covers restored/persisted transactions)
             this.ensureDerivedFields(a);
@@ -1140,7 +1152,7 @@ export class TransactionQueue extends EventEmitter {
             this.store.updateStatus(tx.id, 'executing');
           }
 
-          // Build ALL operations for unified commit (SINGLE WS round-trip)
+          // Build every operation for one unified commit (a single round trip).
           const batchOps: {
             tx: Transaction;
             op: {
@@ -1153,12 +1165,12 @@ export class TransactionQueue extends EventEmitter {
           }[] = [];
 
           for (const tx of batch) {
-            // Per-op `transactionId` carries the local tx UUID through
-            // the wire so the server can stamp it on the resulting
-            // sync delta. The receive path (`SyncClient.applyDeltaBatchToPool`)
-            // matches it via `OptimisticEchoTracker.consumeEcho` to suppress
-            // double-applying optimistic mutations. Distinct from the
-            // batch-level idempotency key in mutation_log.
+            // The per-operation `transactionId` carries the local transaction id
+            // over the wire so the server can stamp it on the resulting sync
+            // delta. The receive path matches it through
+            // {@link UnconfirmedWrites.consumeEcho} to avoid applying the
+            // client's own optimistic change twice. This is separate from the
+            // batch-level idempotency key recorded in `mutation_log`.
             const op = applyWriteOptions({
               type: TX_TYPE_TO_MUTATION_OP[tx.type],
               model: tx.modelKey,
@@ -1169,30 +1181,29 @@ export class TransactionQueue extends EventEmitter {
             batchOps.push({ tx, op });
           }
 
-          // Execute unified commit for ALL operations (SINGLE WS round-trip)
+          // Execute the unified commit for every operation in one round trip.
           if (batchOps.length > 0) {
             const operations = batchOps.map(({ op }) => op);
 
             try {
-              // LINEAR PATTERN: Capture lastSyncId from server response for threshold-based confirmation
+              // Capture lastSyncId from the server response for threshold-based
+              // confirmation.
               //
-              // Idempotency note: the default HTTP executor derives a
-              // stable `Idempotency-Key` from the operations array
-              // itself (sorted sha256), so retries of the SAME batch
-              // hit the server's `mutation_log` replay path without
-              // requiring us to thread a key through the microtask
-              // boundary here. Keeping this path await-free preserves
-              // the coalescing test's tight bound on batch count.
+              // Idempotency: the default HTTP executor derives a stable
+              // idempotency key from the operations array itself (a sorted
+              // SHA-256), so retrying the same batch reaches the server's
+              // `mutation_log` replay path without threading a key through the
+              // microtask boundary here.
               const result = await this.mutationExecutor.commit(operations);
               const lastSyncId: number = result?.lastSyncId ?? 0;
               this.noteAck(lastSyncId);
 
-              // Notify-instead-of-abort: the server returned stale-context
-              // notifications for `onStale: 'notify'` ops whose premise moved.
-              // Every notified op was HELD (not written) — its optimistic state
-              // must be rolled back here; no delta will ever confirm it. We also
-              // stamp the signal so `waitForCommitReceipt` carries it onto the
-              // receipt.
+              // The server returned stale-context notifications for operations
+              // marked `onStale: 'notify'` whose read premise had moved. Each
+              // notified operation was held rather than written, so its
+              // optimistic state must be rolled back here — no delta will ever
+              // confirm it — and the signal is stamped so
+              // {@link waitForCommitReceipt} can carry it onto the receipt.
               const notifications = result?.notifications;
               const heldIds = new Set((notifications ?? []).map((n) => n.id));
               for (const { tx } of batchOps) {
@@ -1202,7 +1213,8 @@ export class TransactionQueue extends EventEmitter {
                 }
               }
 
-              // Detect server bug: lastSyncId 0 means mutation succeeded but no sync delta was emitted
+              // A lastSyncId of 0 means the mutation succeeded but the server
+              // emitted no sync delta; record that anomaly for observability.
               if (lastSyncId === 0) {
                 getContext().observability.captureCommitZeroSyncId({
                   operationCount: operations.length,
@@ -1212,8 +1224,8 @@ export class TransactionQueue extends EventEmitter {
                 });
               }
 
-              // LINEAR PATTERN: Mark as awaiting_delta with syncId threshold
-              // Transactions will be confirmed when any delta with id >= lastSyncId arrives
+              // Mark each transaction with the sync-id threshold that will
+              // confirm it: any delta whose id is at least lastSyncId.
               for (const { tx } of batchOps) {
                 // Held op ('notify'): the server withheld the write, so no delta
                 // will confirm it. Roll back the optimistic update (server
@@ -1248,17 +1260,17 @@ export class TransactionQueue extends EventEmitter {
                   continue;
                 }
 
-                // ACK-BASED CONFIRMATION. A successful commit response with a
-                // real watermark means the server durably applied the write —
-                // that IS the confirmation (the documented `wait: 'confirmed'`
-                // contract, and how Replicache/Zero treat the push response's
-                // lastMutationID). The delta echo is NOT an acknowledgement
-                // channel: it's replication for OTHER clients, and this
-                // client's own echo is suppressed by the OptimisticEchoTracker
-                // anyway. Gating confirmation on the echo coupled "did my
-                // write land" to subscription-stream health — a bare-Node
-                // client with no live delta stream hung forever in
-                // `awaiting_delta` on a write the server had already applied.
+                // Acknowledgement-based confirmation. A successful commit
+                // response carrying a real watermark means the server durably
+                // applied the write, and that is the confirmation the
+                // `wait: 'confirmed'` contract promises. The delta echo is not
+                // an acknowledgement channel: it exists to replicate the change
+                // to other clients, and this client's own echo is suppressed by
+                // the {@link UnconfirmedWrites} regardless. Waiting on the
+                // echo would tie "did my write land?" to the health of the
+                // subscription stream, so a client with no live delta stream
+                // would wait forever in `awaiting_delta` for a write the server
+                // had already applied.
                 if (lastSyncId > 0) {
                   this.store.updateStatus(tx.id, 'completed');
                   this.emit('transaction:completed', tx);
@@ -1271,12 +1283,11 @@ export class TransactionQueue extends EventEmitter {
                     lastSeenSyncId: this.lastSeenSyncId,
                   });
                 } else {
-                  // lastSyncId === 0 on a non-DELETE: the server accepted the
-                  // commit but emitted no delta — a server-side anomaly
-                  // (already captured via captureCommitZeroSyncId above). Keep
-                  // the delta-wait + reconciliation timeout for THIS case
-                  // only, so the anomaly surfaces instead of silently
-                  // confirming a write with no watermark.
+                  // A lastSyncId of 0 on a non-delete: the server accepted the
+                  // commit but emitted no delta, which is an anomaly (already
+                  // captured above). Keep the delta wait and reconciliation
+                  // timeout only for this case, so the anomaly surfaces instead
+                  // of silently confirming a write that carries no watermark.
                   this.store.updateStatus(tx.id, 'awaiting_delta');
                   getContext().logger.debug('tx:awaiting_delta', {
                     txId: tx.id.slice(0, 8),
@@ -1290,11 +1301,11 @@ export class TransactionQueue extends EventEmitter {
               }
             } catch (error) {
               const errorMessage = (error as Error).message || '';
-              // Surface the raw server rejection for the whole batch so
-              // cascaded failures (e.g. Layout FK violation that rolls
-              // back a 6-op transaction) are attributable to a specific
-              // cause instead of each op showing as a generic permanent
-              // error downstream.
+              // Surface the raw server rejection for the whole batch so a
+              // cascaded failure — for example a foreign-key violation that
+              // rolls back a multi-operation transaction — is attributable to a
+              // specific cause rather than showing as a generic permanent error
+              // on each operation.
               const abloErr = error instanceof AbloError ? error : undefined;
               // SyncWebSocket attaches a `diagnostics` snapshot to its
               // "not connected" / "closed while in flight" rejections.
@@ -1331,9 +1342,10 @@ export class TransactionQueue extends EventEmitter {
                 diagnostics,
               });
 
-              // LINEAR PATTERN: Handle "no rows in result set" gracefully
-              // This error means the entity was already deleted - for UPDATE/DELETE ops, this is success
-              // The claim was achieved (the data doesn't exist), so treat as completed
+              // Handle "no rows in result set" gracefully: the row was already
+              // deleted, so for update and delete operations this is effectively
+              // success — the intended end state already holds — and the
+              // transaction is treated as completed.
               if (errorMessage.includes('no rows in result set')) {
                 getContext().logger.info('[TransactionQueue] Graceful handling: entity already deleted', {
                   batchSize: batchOps.length,
@@ -1341,7 +1353,7 @@ export class TransactionQueue extends EventEmitter {
 
                 for (const { tx, op } of batchOps) {
                   if (op.type === 'UPDATE' || op.type === 'DELETE') {
-                    // Entity gone = claim achieved, mark as completed
+                    // Row already gone: the intended state holds, mark completed.
                     this.store.updateStatus(tx.id, 'completed');
                     this.emit('transaction:completed', tx);
 
@@ -1417,24 +1429,25 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * LINEAR PATTERN: Confirm all awaiting transactions when delta with syncId >= threshold arrives.
-   * This replaces clientMutationId echoing - transactions are confirmed by sync ID threshold.
-   * Policy + timeout maps live in the `./deltaConfirmation.js` leaf.
-   * @param syncId - The sync ID of the received delta
+   * Confirms every awaiting transaction whose sync-id threshold this delta meets
+   * or exceeds. The confirmation policy and timeout tracking live in
+   * {@link DeltaConfirmationTracker} (`./deltaConfirmation.js`).
+   * @param syncId - The sync id of the received delta.
    */
   onDeltaReceived(syncId: number): void {
     this.deltaConfirmation.onDeltaReceived(syncId);
   }
 
-  // REPLICACHE/POWERSYNC PATTERN: Schedule delta confirmation with retry +
-  // reconciliation — see DeltaConfirmationTracker in `./deltaConfirmation.js`.
+  // Schedule the retry-and-reconciliation wait for a transaction's confirming
+  // delta; see {@link DeltaConfirmationTracker} in `./deltaConfirmation.js`.
   private scheduleDeltaConfirmationTimeout(tx: Transaction, timeoutMs: number): void {
     this.deltaConfirmation.scheduleDeltaConfirmationTimeout(tx, timeoutMs);
   }
 
   /**
-   * Wait for a transaction to be confirmed via delta echo (Linear pattern)
-   * Reuses existing timeout mechanism from scheduleDeltaConfirmationTimeout
+   * Resolves once the given transaction is confirmed and rejects if it fails.
+   * The confirming delta's timeout is handled by
+   * {@link scheduleDeltaConfirmationTimeout}.
    */
   waitForConfirmation(transactionId: string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -1466,18 +1479,19 @@ export class TransactionQueue extends EventEmitter {
     });
   }
 
-  // Public: check if a clientMutationId exists in this queue (helps identify self-echo deltas)
+  // Reports whether a client mutation id is known to this queue, which helps
+  // identify a delta as this client's own echo.
   hasClientMutationId(id: string): boolean {
     return !!this.store.get(id) || this.commitStore.has(id);
   }
 
   /**
-   * Enqueue a raw multi-op atomic commit envelope (the `ablo.commits.create`
-   * path). Operations are pre-built by the caller; the queue's job is
-   * retry-on-reconnect + idempotent dedup, NOT optimistic apply or FK
-   * ordering. Same idempotency key (clientTxId) is dropped on the floor
-   * if already in flight — server-side `mutation_log` handles cross-session
-   * dedup; this guard handles same-session double-enqueue.
+   * Enqueues a pre-built, multi-operation atomic commit — the
+   * `ablo.commits.create()` path. The caller supplies the operations; the queue
+   * only retries on reconnect and de-duplicates, and does not apply the change
+   * optimistically or reorder for foreign keys. A duplicate `clientTxId`
+   * already in flight is ignored: the server's `mutation_log` de-duplicates
+   * across sessions, and this guard covers a double-enqueue within one session.
    */
   enqueueCommit(
     clientTxId: string,
@@ -1497,20 +1511,20 @@ export class TransactionQueue extends EventEmitter {
     };
     this.commitStore.set(clientTxId, tx);
     this.commitLane.push(tx);
-    // Surface the envelope on its OWN event so the undo stream can record
-    // commit-lane writes too (`SyncClient.onLocalTransaction` enriches each
-    // operation with pool-captured previous state). Deliberately NOT
-    // `transaction:created` — that event also feeds the optimistic-echo
-    // tracker, and commit-lane ops have no optimistic pool apply to echo.
+    // Emit the envelope on its own event so the undo stream can record
+    // commit-lane writes as well. This deliberately avoids `transaction:created`,
+    // which also feeds the optimistic-echo tracker: commit-lane operations apply
+    // nothing optimistically and so have no echo to suppress.
     this.emit('commit:created', { clientTxId, operations: tx.operations });
     void this.processCommitLane();
   }
 
   /**
-   * Drain pending commit-lane envelopes serially. Transient failures
-   * (network, ws_not_ready) leave the head-of-queue tx in `pending` and
-   * break — reconnect handler re-kicks via `flushOfflineQueue`.
-   * Permanent failures emit `transaction:failed:<id>` and drop the tx.
+   * Drains the pending commit-lane envelopes one at a time. A transient
+   * failure, such as a network error, leaves the envelope at the head of the
+   * lane in `pending` and stops; reconnect re-kicks it through
+   * {@link flushOfflineQueue}. A permanent failure emits
+   * `transaction:failed:<id>` and drops the envelope.
    */
   private async processCommitLane(): Promise<void> {
     if (this.commitProcessing) return;
@@ -1540,8 +1554,9 @@ export class TransactionQueue extends EventEmitter {
         } catch (err) {
           const error = err instanceof Error ? err : new Error(String(err));
           if (!this.isPermanentError(error)) {
-            // Transient — leave at head, retry on next kick (reconnect or
-            // next enqueueCommit). Don't tight-loop while WS is down.
+            // Transient: leave it at the head and retry on the next kick
+            // (reconnect or the next enqueueCommit) rather than tight-looping
+            // while the connection is down.
             tx.status = 'pending';
             getContext().logger.debug('[TransactionQueue] commit lane transient', {
               txId: tx.id.slice(0, 12),
@@ -1553,8 +1568,9 @@ export class TransactionQueue extends EventEmitter {
           tx.status = 'failed';
           tx.error = error;
           this.commitLane.shift();
-          // Internal bookkeeping — the consumer-facing rejection is emitted via
-          // 'transaction:failed' and surfaced by the permanent-error headline → debug.
+          // Internal bookkeeping; the consumer-facing rejection is emitted on
+          // 'transaction:failed' and surfaced by the permanent-error headline,
+          // so this line stays at debug.
           getContext().logger.debug('[TransactionQueue] commit lane permanent error', {
             txId: tx.id.slice(0, 12),
             attempts: tx.attempts,
@@ -1570,10 +1586,10 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Promise-based confirmation for a commit-lane transaction. Resolves
-   * with the server-side `lastSyncId` once `mutation_result` lands;
-   * rejects on permanent failure. Backs the `wait: 'confirmed'` semantics
-   * of `ablo.commits.create()`.
+   * Resolves once a commit-lane transaction is confirmed, returning the server's
+   * `lastSyncId` and any stale-context notifications; rejects on permanent
+   * failure. This backs the `wait: 'confirmed'` semantics of
+   * `ablo.commits.create()`.
    */
   waitForCommitReceipt(
     clientTxId: string,
@@ -1618,20 +1634,20 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Determine if an error is transient (retryable) vs permanent (non-retryable).
+   * Classifies an error as transient (worth retrying) or permanent. The
+   * approach is deliberately conservative: only known-transient errors are
+   * retried, and anything unrecognized is treated as permanent so a failing
+   * write cannot loop forever.
    *
-   * IMPORTANT: Uses a BLOCKLIST approach for safety - only retry on known transient errors.
-   * Any unknown error type defaults to permanent (don't retry) to prevent infinite loops.
+   * Transient (retried):
+   * - Network failures, connection errors, and timeouts.
+   * - Server errors (HTTP 5xx).
+   * - Rate limiting (HTTP 429).
    *
-   * Transient errors (will retry):
-   * - Network failures, connection errors, timeouts
-   * - Server errors (5xx status codes)
-   * - Rate limiting (429)
-   *
-   * Permanent errors (won't retry - includes but not limited to):
-   * - Validation errors, constraint violations
-   * - Not found, unauthorized, forbidden
-   * - Any other business logic error from the server
+   * Permanent (not retried), among others:
+   * - Validation errors and constraint violations.
+   * - Not found, unauthorized, and forbidden.
+   * - Any other business-logic error from the server.
    */
   private isPermanentError(error: Error): boolean {
     // Typed connection error (e.g. ws_not_ready, transport timeout) is
@@ -1698,19 +1714,21 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Handle transaction failure
+   * Handles a failed transaction: retries transient failures with backoff and
+   * rolls back permanent ones, settling the transaction's confirmation promise
+   * either way.
    */
   private async handleFailure(transaction: Transaction, error: Error): Promise<void> {
     transaction.attempts++;
 
-    // Check if this is a permanent error that should NOT be retried
+    // Check whether this is a permanent error that should not be retried.
     if (this.isPermanentError(error)) {
-      // Elevated to warn — permanent errors mean user writes were rejected
-      // by the server, so the user should be able to see WHY in the
-      // console (not just via Sentry). Include the typed AbloError fields
-      // so the cause is visible: `type`/`code`/`httpStatus` are what
-      // distinguish e.g. FK-violation (AbloValidationError) from auth
-      // expiry (AbloAuthenticationError).
+      // Logged at warn: a permanent error means the server rejected the write,
+      // so the developer should see the reason in the console. The typed
+      // AbloError fields (`type`, `code`, `httpStatus`) are included so the
+      // cause is visible — for example a foreign-key violation
+      // (AbloValidationError) versus expired authentication
+      // (AbloAuthenticationError).
       try {
         const abloErr = error instanceof AbloError ? error : undefined;
         const details = {
@@ -1744,17 +1762,16 @@ export class TransactionQueue extends EventEmitter {
 
         const logger = getContext().logger;
 
-        // Two registers, one call site, split by log level (the default
-        // consumer logger is gated at `warn`, so `debug` is invisible unless
-        // someone sets ABLO_LOG_LEVEL=debug to debug the engine itself):
-        //   • the default-visible line speaks the APP DEVELOPER's language —
-        //     their verb (`update`), their model, the typed error's own human
-        //     message, and the wire `code` for grep — the way AI SDK / Next.js
-        //     surface errors. No engine nouns ("TransactionQueue", "permanent",
-        //     "rolling back") and no JSON dump on this line: those alarm and
-        //     don't help someone who just installed @abloatai/ablo.
-        //   • the forensic `details` ride a companion `debug` line for whoever
-        //     is debugging the engine internals.
+        // Two registers from one call site, split by log level (the default
+        // logger is gated at `warn`, so `debug` stays hidden unless
+        // ABLO_LOG_LEVEL=debug is set to inspect the engine):
+        //   - the default-visible line speaks the application developer's
+        //     language: their verb (such as `update`), their model, the typed
+        //     error's own message, and the wire `code` for searching. It uses
+        //     no engine jargon and prints no JSON dump, which would alarm
+        //     without helping.
+        //   - the forensic `details` ride a companion `debug` line for anyone
+        //     debugging the engine internals.
         const revertNote = this.config.enableOptimistic
           ? ' The local change was reverted.'
           : '';
@@ -1792,15 +1809,11 @@ export class TransactionQueue extends EventEmitter {
     }
 
     if (transaction.attempts < this.config.maxRetries) {
-      // Exponential backoff with FULL jitter for EVERY transient retry
-      // (AWS-standard shape: `sleep = random(0, min(cap, base × 2^attempt))`
-      // — see the Exponential Backoff And Jitter analysis). Throttling
-      // signals (429/503) get a longer base, mirroring the AWS SDK's
-      // transient-vs-throttle split. Previously only 429/503 backed off
-      // AND the sleep blocked the whole batch loop — every other failure
-      // retried at raw `batchDelay` cadence. The re-enqueue is scheduled
-      // (never awaited) so one backing-off transaction can't stall
-      // unrelated commits.
+      // Exponential backoff with full jitter on every transient retry:
+      // `sleep = random(0, min(cap, base * 2^attempt))`. Throttling responses
+      // (429/503) use a longer base than other transient errors. The re-enqueue
+      // is scheduled rather than awaited, so one backing-off transaction cannot
+      // stall unrelated commits.
       const { baseMs, capMs } = this.config.retryBackoff;
       let base = baseMs;
       try {
@@ -1832,7 +1845,9 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Conflict resolution
+   * Resolves a conflict against server data using the configured strategy:
+   * last-write-wins rolls the local change back, merge and reject re-enqueue it,
+   * and custom applies the caller's resolver.
    */
   async handleConflict(transaction: Transaction, serverData: MutationInput): Promise<void> {
     const { strategy, resolver } = this.config.conflictResolution;
@@ -1867,8 +1882,8 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Optimistic updates — apply/rollback rules live in `./optimistic.js`;
-   * these delegates bind the host-owned ledger + event emitter.
+   * Optimistic updates. The apply and rollback rules live in `./optimisticApply.js`;
+   * these methods bind them to the queue's own tracking map and event emitter.
    */
   private applyOptimisticCreate(model: Model, transaction: Transaction): void {
     applyOptimisticCreate(this.optimisticUpdates, this, model, transaction);
@@ -1891,26 +1906,9 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Execute individual transaction via the unified commit path
-   */
-  private async executeTransaction(transaction: Transaction): Promise<void> {
-    const { type, modelName, modelId, data } = transaction;
-    const schemaName = stripModelSuffix(modelName);
-    const mutationType = TX_TYPE_TO_MUTATION_OP[type];
-    const model = normalizeModelKey(modelName);
-    const input = (type === 'create' || type === 'update') ? data : undefined;
-
-    try {
-      await this.mutationExecutor.commit([
-        applyWriteOptions({ type: mutationType, model, id: modelId, input }, transaction),
-      ]);
-    } catch (error) {
-      handleMutationError(error, `${type}-mutation`, schemaName, modelId);
-    }
-  }
-
-  /**
-   * Persistence
+   * Loads transactions persisted from a previous session and re-enqueues them,
+   * so writes made while offline survive a restart. Does nothing when
+   * persistence is disabled.
    */
   async loadPersistedTransactions(database: Database): Promise<void> {
     if (!this.config.enablePersistence) return;
@@ -1933,11 +1931,10 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Validate + rehydrate one persisted row (the T1.8 IDB replay boundary).
-   * Rows written by other subsystems into the same store (`'queue'`,
-   * `'awaiting_delta'`) are skipped silently; rows that fail the
-   * persisted-transaction schema (older SDK versions, corruption) are
-   * DROPPED with an observability capture instead of replayed as commits.
+   * Validates and rehydrates one persisted row. Rows written to the same store
+   * by other subsystems are skipped, and rows that fail the persisted
+   * transaction schema — from an older version or corruption — are dropped and
+   * reported rather than replayed as commits.
    */
   private deserializeTransaction(data: unknown): Transaction | null {
     if (isNonReplayablePersistedRow(data)) return null;
@@ -1961,7 +1958,9 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Cancel transactions for a specific model
+   * Cancels every pending or executing transaction for a given model id,
+   * optionally limited to one operation type, rolling back their optimistic
+   * state. Returns the cancelled transactions.
    */
   cancelTransactionsForModel(modelId: string, transactionType?: string): Transaction[] {
     const cancelledTransactions: Transaction[] = [];
@@ -1993,16 +1992,14 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * LINEAR PATTERN: Cancel transactions for child entities by foreign key
+   * Cancels pending transactions for child rows that reference a deleted parent,
+   * used to cascade a parent deletion. The caller supplies the foreign-key
+   * relationship; this method performs the cancellation.
    *
-   * Used by SyncedStore for cascade cancellation when a parent is deleted.
-   * This keeps FK relationship knowledge in ModelRegistry/SyncedStore,
-   * while TransactionQueue just handles the cancellation mechanics.
-   *
-   * @param childModelName - The child model type (e.g., 'SlideLayer')
-   * @param foreignKey - The FK property name (e.g., 'slideId')
-   * @param parentId - The deleted parent's ID
-   * @returns Number of transactions cancelled
+   * @param childModelName - The child model type (for example 'SlideLayer').
+   * @param foreignKey - The foreign-key property name (for example 'slideId').
+   * @param parentId - The deleted parent's id.
+   * @returns The number of transactions cancelled.
    */
   cancelTransactionsByForeignKey(
     childModelName: string,
@@ -2047,15 +2044,13 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Get count of outstanding transactions
+   * Returns the number of transactions still pending or executing.
    */
   getOutstandingTransactionCount(): number {
     return this.store.getByStatus('pending').length + this.store.getByStatus('executing').length;
   }
 
-  /**
-   * Utilities
-   */
+  /** Generates a unique local transaction id. */
   private generateId(): string {
     return `tx_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
   }
@@ -2079,37 +2074,27 @@ export class TransactionQueue extends EventEmitter {
     return projectCommitPayload(model.getModelName(), model.getChanges(), { dropUndefined: true });
   }
 
-  private buildUpdateInput(modelName: string, changes: Record<string, unknown>): MutationInput {
-    return projectCommitPayload(modelName, changes, { dropUndefined: true });
-  }
-
   // Derive previous values for changed fields to support accurate rollback.
-  //
-  // The previous Slide-specific branch reaching into `_data` was removed:
-  // the field name in the comment (`_localChanges`) didn't match the
-  // code (`_data`), no `Slide` class still defines either field, and
-  // hardcoded model-name checks don't belong in a generic queue. If a
-  // model ever needs to surface previous-state outside `modifiedProperties`,
-  // expose a typed `getPreviousData()` accessor on Model and call that.
+  // Model-specific special cases do not belong here; a model that needs to
+  // surface previous state beyond `modifiedProperties` should expose a typed
+  // `getPreviousData()` accessor for this method to call.
   private extractPreviousData(model: Model, updateInput?: MutationInput): MutationInput {
     // When the update's written keys are known, capture a before-image for
-    // EXACTLY those keys so the recorded undo inverse can revert them and only
-    // them (a full-row inverse would clobber concurrent edits to unrelated
-    // fields). `fallbackToLive: false` makes `Model.capturePreviousValues` OMIT
-    // any key it can't resolve from `modifiedProperties.old` / the original
-    // snapshot — `buildUndoOps` then drops an un-revertible inverse rather than
-    // inventing one. With no `updateInput` (full extract) fall back to every
-    // tracked field. `Model.capturePreviousValues` is the single before-image
-    // source shared with `RecordingTransaction.snapshotFields`.
+    // exactly those keys, so the recorded undo inverse reverts them and nothing
+    // else — a full-row inverse would clobber concurrent edits to unrelated
+    // fields. `fallbackToLive: false` makes `Model.capturePreviousValues` omit
+    // any key it cannot resolve, and `buildUndoOps` then drops an un-revertible
+    // inverse rather than inventing one. With no `updateInput` (a full extract)
+    // it falls back to every tracked field. `Model.capturePreviousValues` is the
+    // single before-image source, shared with
+    // `RecordingTransaction.snapshotFields`.
     const keys = updateInput
       ? Object.keys(updateInput)
       : [...(model.modifiedProperties instanceof Map ? model.modifiedProperties.keys() : [])];
     return { id: model.id, ...model.capturePreviousValues(keys, { fallbackToLive: false }) };
   }
 
-  /**
-   * Public API
-   */
+  /** Returns a snapshot of queue counts and the current configuration. */
   getStats() {
     return {
       pending: this.store.getByStatus('pending').length,
@@ -2124,8 +2109,8 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Get detailed debug info for the sync debug page
-   * Exposes internal state that helps diagnose delta confirmation issues
+   * Returns detailed internal state — pending, executing, and awaiting-delta
+   * transactions — to help diagnose delta-confirmation issues.
    */
   getDebugInfo() {
     const awaitingDelta = this.store.getByStatus('awaiting_delta');
@@ -2156,19 +2141,18 @@ export class TransactionQueue extends EventEmitter {
     };
   }
 
-  /**
-   * Set configuration
-   */
+  /** Merges the given options into the queue's configuration. */
   setConfig(config: Partial<TransactionQueueConfig>): void {
     this.config = { ...this.config, ...config };
   }
 
   /**
-   * Handle incoming sync delta - simplified for permanent IDs
+   * Re-emits an incoming sync delta on the `sync:delta` event for the store to
+   * apply. Because rows use stable ids, no id reconciliation is needed here.
    */
   handleSyncDelta(delta: { id: string; modelName: string; action: string; data: any }): boolean {
-    // With permanent IDs, no reconciliation needed!
-    // Just emit the delta for ObjectPool to handle directly
+    // Row ids are stable, so no reconciliation is needed; re-emit the delta for
+    // the store to apply directly.
     this.emit('sync:delta', {
       id: delta.id,
       modelName: delta.modelName,
@@ -2180,7 +2164,8 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /**
-   * Cleanup and dispose resources
+   * Releases the queue's resources: rolls back outstanding optimistic updates,
+   * clears all timers and stored transactions, and removes event listeners.
    */
   dispose(): void {
     // Cancel all active optimistic updates

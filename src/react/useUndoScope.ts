@@ -9,16 +9,14 @@ import { useSyncContext } from './context.js';
 import { AbloValidationError } from '../errors.js';
 
 /**
- * useUndoScope — per-surface undo/redo for mutator invocations.
+ * Provides per-surface undo and redo for mutator invocations. Each named scope
+ * owns an independent undo/redo stack, so different parts of your app — a deck
+ * editor, a sidebar form — can undo separately without stepping on each other.
  *
- * Zero deliberately does NOT ship a built-in undo API; consumers build one
- * on top of mutation tracking. This is ours.
- *
- * Each named scope owns an independent undo/redo stack. Wire the returned
- * `scope` into `useMutators(schema, mutators, { undoScope: scope })` and the
- * invocations become recorded. `undo()` / `redo()` replay the inverses /
- * forwards as new transactions that do NOT re-record (the manager pushes
- * them between the two stacks explicitly).
+ * Wire the returned `scope` into `useMutators(schema, mutators, { undoScope:
+ * scope })` and those invocations become recorded. `undo()` and `redo()` replay
+ * the captured inverses and forwards as new transactions that do not record
+ * themselves; the manager moves the entry between the two stacks explicitly.
  *
  * @example
  * const { undo, redo, canUndo, canRedo, scope } = useUndoScope('deck-editor');
@@ -120,7 +118,7 @@ export function useUndoScope(
     setTick(0);
   }, [scope]);
 
-  // Re-render on ANY stack change — including entries recorded from the local-
+  // Re-render on any stack change — including entries recorded from the local-
   // mutation stream, which don't otherwise trigger a React update. Without this
   // `canUndo`/`canRedo` go stale in every consumer that didn't itself call
   // undo/redo (e.g. a keyboard handler whose Cmd+Z gate then never fires).

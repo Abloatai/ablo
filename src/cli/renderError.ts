@@ -1,14 +1,13 @@
 /**
- * The single CLI error renderer — every command and the top-level catch route
+ * The single CLI error renderer. Every command, and the top-level catch, routes
  * failures through here so the terminal shows a clean, structured block instead
- * of `console.error(err)`'s wall of text (stack + every enumerable field).
+ * of the wall of text `console.error(err)` produces (a stack trace plus every
+ * enumerable field).
  *
- * Grounded in the error-DX research (docs/plans aside): clig.dev (clear title,
- * cause, next-step, no stack by default, a verbose escape hatch), Stripe's
- * code+doc_url model, and miette's titled diagnostics. It reads the fields the
- * `AbloError` already carries (`code`, `message`, `param`, `docUrl`,
- * `requestId`, `details`) — the data was always structured; only the final
- * render threw it away.
+ * It reads the fields an {@link AbloError} already carries — `code`, `message`,
+ * `param`, `docUrl`, `requestId`, and `details` — and lays them out with a clear
+ * title, the cause, and a next step. The stack is hidden by default and shown
+ * only in verbose mode. The data was always structured; this is what renders it.
  *
  *   ✗ Validation error  [model_required_field_missing]
  *
@@ -53,9 +52,9 @@ function isStringArray(v: unknown): v is readonly string[] {
 }
 
 /**
- * Render a few high-value, well-known detail keys compactly — NOT the whole
- * `details` object (that dump is the anti-pattern). Unknown details surface only
- * under `--verbose`.
+ * Renders a few well-known, high-value keys from `details` compactly, rather
+ * than dumping the whole object. Any other details surface only under
+ * `--verbose`.
  */
 function renderKnownDetails(
   details: Readonly<Record<string, unknown>> | undefined,

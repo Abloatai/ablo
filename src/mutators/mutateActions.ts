@@ -7,15 +7,16 @@ import type { ModelDef } from '../schema/model.js';
 import type { SyncStoreContract } from '../react/context.js';
 
 /**
- * `create` / `update` / `delete` are overloaded: pass one row or an array
- * (Drizzle/Prisma `values(rowOrRows)` shape). Every entry in an array call
- * lands in the same synchronous tick (`Promise.all`), so the microtask
- * coalescer in `TransactionQueue` collapses N pushes into one wire commit.
+ * The create, update, and delete actions for one model. Each action is
+ * overloaded: pass a single row to act on one entity, or an array to act on
+ * many within the same synchronous tick. An array call stages every entry
+ * together through `Promise.all`, so the microtask coalescer in
+ * `TransactionQueue` collapses the whole batch into one commit on the wire.
  *
- * This module is the React-free core of CRUD staging. The transaction system
- * (`Transaction` / `RecordingTransaction`) and `BaseSyncedStore` build on it;
- * there is no React hook here (the legacy `useMutate` hook was removed —
- * callers use `ablo.<model>.create/update/delete`).
+ * These are plain imperative actions with no React dependency. The transaction
+ * system (`Transaction` and `RecordingTransaction`) and `BaseSyncedStore` build
+ * on them, and application code reaches them through `ablo.<model>.create`,
+ * `ablo.<model>.update`, and `ablo.<model>.delete`.
  */
 type UpdatePatch<S extends Schema, K extends keyof S['models'] & string> =
   { id: string } & Partial<InferModel<S, K>>;
@@ -46,7 +47,7 @@ export interface MutateActions<S extends Schema, K extends keyof S['models'] & s
   unarchive: (id: string) => Promise<void>;
 }
 
-/** Pure factory — builds CRUD actions over a store for one model. React-free. */
+/** Builds the create, update, and delete actions for one model over a store. */
 export function createMutateActions<
   S extends Schema,
   K extends keyof S['models'] & string,

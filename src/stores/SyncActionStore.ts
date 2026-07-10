@@ -1,8 +1,6 @@
 /**
- * Linear Sync Engine - Sync Action Store
- *
- * Stores and manages sync actions received from the server.
- * Critical for delta sync and maintaining sync state consistency.
+ * A local, IndexedDB-backed store for the sync actions (change deltas) the
+ * server sends. See {@link SyncActionStore}.
  */
 
 // Uses native IndexedDB for maximum performance
@@ -11,12 +9,12 @@ import type { SyncAction } from '../types/index.js';
 import { getContext } from '../context.js';
 
 /**
- * Zod boundary for rows read back from the sync-action store (T1.8): they
- * were written by a previous session, so their shape is not guaranteed by
- * this build. Default (strip) mode drops the storage bookkeeping fields
- * (`storedAt`/`applied`/`appliedAt`) that used to be peeled off with an
- * untyped rest-spread. Rows that don't parse are dropped + logged instead
- * of being replayed as malformed deltas.
+ * The validation boundary for rows read back from the store. A row may have
+ * been written by an earlier session, so this build cannot assume its shape.
+ * Parsing in strip mode also drops the storage bookkeeping fields
+ * (`storedAt`, `applied`, `appliedAt`) that are not part of a
+ * {@link SyncAction}. A row that fails to parse is dropped and logged rather
+ * than replayed as a malformed delta.
  */
 const storedSyncActionSchema = z.object({
   id: z.number(),
@@ -40,13 +38,11 @@ function toSyncAction(row: unknown): SyncAction | null {
 }
 
 /**
- * SyncActionStore - Manages sync actions (deltas)
- *
- * Features:
- * - Stores sync actions by ID for replay
- * - Tracks applied vs pending actions
- * - Enables rewind/replay for conflict resolution
- * - Maintains sync watermark
+ * Stores the sync actions (the change deltas) the server sends, keyed by
+ * their sync id, and tracks which ones have been applied. It keeps a
+ * watermark of the last applied id, holds not-yet-applied actions as
+ * pending, and can rewind a range of actions back to pending so they can be
+ * replayed while resolving a conflict.
  */
 export class SyncActionStore {
   private db: IDBDatabase;

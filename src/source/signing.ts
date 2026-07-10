@@ -1,46 +1,58 @@
 /**
- * Standard Webhooks request signing/verification for Data Source calls.
+ * Signs and verifies source requests using the Standard Webhooks scheme.
  *
- * Ablo signs every outbound source request with the customer's project API
- * key; the customer's endpoint verifies before any handler runs. Both halves
- * live in this leaf so `pushQueue.ts` (customer-side sender) and `factory.ts`
- * (customer-side receiver) can import them directly without a runtime cycle
- * through the `index.ts` barrel.
+ * Every request Ablo sends to a data source is signed with that source's API
+ * key, and the receiving endpoint verifies the signature before any handler
+ * runs. This module provides both halves: {@link signAbloSourceRequest} for
+ * the sender and {@link verifyAbloSourceRequest} for the receiver. Because the
+ * signature format follows the Standard Webhooks specification, you can verify
+ * it with any compatible library instead of these functions if you prefer.
  */
 
+/** Inputs to {@link signAbloSourceRequest}. */
 export interface SourceSignatureOptions {
+  /** The API key to sign with; the receiver verifies against the same key. */
   readonly apiKey: string;
+  /** The exact request body being signed. */
   readonly body: string;
   /**
-   * Unique message id (`webhook-id` per the Standard Webhooks spec).
-   * Required: it goes into the HMAC input for replay defense, and
-   * receivers may dedupe by it.
+   * The unique message id, sent as the `webhook-id` header. It is folded into
+   * the signature to defend against replay, and receivers may deduplicate on
+   * it. Retries of the same request must reuse the same id.
    */
   readonly messageId: string;
-  /**
-   * Unix timestamp in seconds. Defaults to the current time.
-   */
+  /** The signing time as a Unix timestamp in seconds. Defaults to the current time. */
   readonly timestamp?: number;
 }
 
+/** Inputs to {@link verifyAbloSourceRequest}. */
 export interface SourceSignatureVerificationOptions {
+  /** The incoming request, whose headers carry the signature to check. */
   readonly request: Request;
+  /** The request body, which must match what was signed. */
   readonly body: string;
+  /** The API key to verify against. */
   readonly apiKey: string;
+  /**
+   * How far the request's timestamp may differ from the current clock, in
+   * milliseconds, before it is rejected as expired. Defaults to five minutes.
+   */
   readonly toleranceMs?: number;
 }
 
+/** What {@link verifyAbloSourceRequest} returns once a signature checks out. */
 export interface SourceSignatureVerificationResult {
+  /** The verified `webhook-id` of the request. */
   readonly messageId: string;
+  /** The time the request was signed, as a Unix timestamp in seconds. */
   readonly signedAt: number;
 }
 
 /**
- * HTTP headers used on signed source requests. Conforms to the
- * Standard Webhooks specification (https://www.standardwebhooks.com/)
- * so customer code can verify our signatures with any of the official
- * libraries (svix, standardwebhooks, hookdeck, etc.) — no Ablo-
- * specific verifier required.
+ * The HTTP header names carried on a signed source request. They follow the
+ * Standard Webhooks specification (https://www.standardwebhooks.com/), so you
+ * can verify the signature with any compatible library rather than
+ * {@link verifyAbloSourceRequest} if you prefer.
  */
 export const ABLO_SOURCE_HEADERS = {
   signature: 'webhook-signature',
@@ -49,6 +61,12 @@ export const ABLO_SOURCE_HEADERS = {
   idempotencyKey: 'Idempotency-Key',
 } as const;
 
+/**
+ * Thrown when a source request fails signature verification. The
+ * {@link SourceSignatureError.code} names the specific reason — a missing
+ * header, a malformed or expired timestamp, or a signature that does not
+ * match.
+ */
 export class SourceSignatureError extends Error {
   readonly code:
     | 'source_signature_missing'
@@ -151,6 +169,11 @@ function timingSafeEqual(expected: string, actual: string): boolean {
   return diff === 0;
 }
 
+/**
+ * Sign a source request and return the headers to send with it. The signature
+ * covers the message id, the timestamp, and the body, so any change to those
+ * invalidates it. The receiver checks it with {@link verifyAbloSourceRequest}.
+ */
 export async function signAbloSourceRequest(
   options: SourceSignatureOptions,
 ): Promise<{
@@ -175,6 +198,12 @@ export async function signAbloSourceRequest(
   };
 }
 
+/**
+ * Verify a signed source request, throwing {@link SourceSignatureError} when
+ * the message id, timestamp, or signature is missing, malformed, or outside
+ * the allowed clock-skew window. On success it returns the request's message
+ * id and signing time. This is the counterpart to {@link signAbloSourceRequest}.
+ */
 export async function verifyAbloSourceRequest(
   options: SourceSignatureVerificationOptions,
 ): Promise<SourceSignatureVerificationResult> {
@@ -239,8 +268,8 @@ export async function verifyAbloSourceRequest(
   return { messageId, signedAt };
 }
 
-// ── DataSource* naming aliases (kept 1:1 with the Source* names above; any
-// deprecation of one naming family is a separate decision) ──
+// The `DataSource*` names below are aliases, one-to-one with the `Source*`
+// names above.
 export type DataSourceSignatureOptions = SourceSignatureOptions;
 export type DataSourceSignatureVerificationOptions =
   SourceSignatureVerificationOptions;

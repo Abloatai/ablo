@@ -36,7 +36,7 @@ import type { SchemaRecord } from '../schema/schema.js';
 import {
   coordinationContextMiddleware,
   type ClaimTarget,
-} from './coordination-context.js';
+} from './coordinationContext.js';
 
 export interface WrapWithMultiplayerOptions<R extends SchemaRecord = SchemaRecord> {
   /** The base language model to wrap. Consumer brings their own. */
@@ -60,14 +60,13 @@ export interface WrapWithMultiplayerOptions<R extends SchemaRecord = SchemaRecor
    */
   readonly excludeClaimIds?: readonly string[];
   /**
-   * Optional extra middleware to compose. Runs in the order given,
-   * INSIDE the multiplayer middlewares (so the multiplayer wrap is
-   * the outer-most). Useful for caching, observability, custom
-   * transforms that should not affect the multiplayer signal.
+   * Extra middleware to compose. It runs in the order given, nested inside the
+   * multiplayer middleware, so the multiplayer wrap stays the outermost layer.
+   * Use it for caching, observability, or custom transforms that should not
+   * affect the multiplayer signal.
    *
    * For full control over ordering, skip this helper and call
-   * `wrapLanguageModel` directly with all middleware in the order
-   * you want.
+   * `wrapLanguageModel` directly with all the middleware in the order you want.
    */
   readonly extraMiddleware?: readonly LanguageModelV3Middleware[];
 }

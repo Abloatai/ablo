@@ -1,8 +1,8 @@
 /**
- * `ablo webhooks` — manage the outbound webhook endpoints Ablo streams your
- * committed changes to (the Stripe `webhook_endpoints` resource, Svix's
- * `endpoint`). The signing secret is MINTED by Ablo and shown ONCE; `create` and
- * `roll` write it straight into your env file so you never copy/paste it.
+ * `ablo webhooks` — manage the outbound webhook endpoints that Ablo delivers your
+ * committed changes to. Ablo mints the signing secret and shows it once; `create`
+ * and `roll` write it straight into your env file so you never have to copy and
+ * paste it.
  *
  *   ablo webhooks create <url> [--events a,b] [--description "..."]
  *   ablo webhooks list
@@ -10,8 +10,8 @@
  *   ablo webhooks enable <id>
  *   ablo webhooks rm <id>
  *
- * Local dev needs none of this — `ablo dev` already forwards to your machine
- * (the `stripe listen` model). Register a real endpoint only for a deployed URL.
+ * Local development needs none of this — `ablo dev` already forwards events to
+ * your machine. Register a real endpoint only for a deployed URL.
  */
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import pc from 'picocolors';

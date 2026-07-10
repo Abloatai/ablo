@@ -1,26 +1,31 @@
 /**
- * BootstrapHelper - Fixed to always fetch fresh data
- * Removed problematic caching that was serving stale data
+ * Fetches the initial snapshot the sync engine needs before it can go live: the
+ * current rows for the requested models plus the sync position from which to
+ * resume live updates. It calls the sync server's `/sync/bootstrap` HTTP
+ * endpoint, retries transient failures with backoff, and can fall back to a
+ * cached snapshot when the device is offline. {@link BootstrapData} is the
+ * shape it returns; {@link BootstrapOptions} configures it.
  */
 
 export interface BootstrapData {
   type: 'full' | 'partial';
   lastSyncId: number;
   /**
-   * Model rows keyed by typename. Each row is opaque to the SDK at this
-   * boundary — the per-model shape is asserted by the consumer (sync
-   * engine reduce + IDB write) using the registered schema.
+   * Model rows keyed by type name. Each row is opaque at this boundary; the
+   * engine asserts the per-model shape against the registered schema when it
+   * reduces the rows and writes them to local storage.
    */
   models?: Record<string, unknown[]>;
   deltas?: ValidatedServerDelta[];
   deltaCount?: number;
-  /** Model types whose server-side query failed (timeout, RLS error, etc.) */
+  /** Model types whose server-side query failed (timeout, RLS error, and the like). */
   failedModels?: string[];
   timestamp: number;
   /**
-   * The server's ACTIVE schema content hash for this tenant (same `schemaHash`
-   * the CLI push computes). Present once the tenant has pushed a schema; the
-   * client compares it to its own `config.expectedSchemaHash` to warn on drift.
+   * The content hash of the schema the server currently has active for this
+   * tenant — the same hash `ablo push` computes. Present once a schema has been
+   * pushed. The client compares it against its own `expectedSchemaHash` to warn
+   * when the app's schema and the deployed schema have drifted apart.
    */
   schemaHash?: string;
 }
@@ -43,34 +48,32 @@ export interface BootstrapOptions {
    */
   baseUrl?: string;
   /**
-   * Private cache namespace for offline bootstrap fallback. Hosted SDK
-   * callers do not pass this; Ablo sets it after auth resolves the
-   * account scope.
+   * Namespace for the offline bootstrap cache. Most callers leave this unset;
+   * the SDK fills it in once authentication has resolved the account scope, so
+   * the fallback cache is partitioned per account.
    */
   cacheScope?: string | null;
   /**
-   * @deprecated Use `cacheScope`. Kept so older self-hosted code that
-   * still constructs BootstrapHelper directly keeps its cache namespace.
+   * @deprecated Use `cacheScope`. Retained so code that constructs
+   * {@link BootstrapFetcher} directly keeps its cache namespace.
    */
   organizationId?: string;
   syncGroups?: string[];
   maxRetries?: number;
   retryDelay?: number;
-  /** Timeout for individual fetch requests in ms (default: 30000) */
+  /** How long to wait for a single fetch before timing out, in milliseconds. Default 10000 (10 seconds). */
   fetchTimeout?: number;
   /**
-   * Model names to request in bootstrap. When set, the server only returns
-   * these models — everything else is skipped. Derived from the schema's
-   * `load` strategy: only models with `load: 'instant'` (or unset, which
-   * defaults to instant) are included.
-   *
-   * When absent, the server returns all models (backward compatible with
-   * old clients that don't send a models param).
+   * The model names to request. When set, the server returns only these models
+   * and skips the rest. This is derived from each model's `load` strategy: only
+   * models loaded instantly (the default) are included. When unset, the server
+   * returns every model.
    */
   instantModels?: string[];
   /**
-   * Shared SDK credential getter. Preferred over `setAuthToken`; read at
-   * request time so token refreshes apply without recreating BootstrapHelper.
+   * Getter for the current credential, read at request time so a refreshed
+   * token takes effect without recreating the helper. Preferred over
+   * {@link BootstrapFetcher.setAuthToken}.
    */
   getAuthToken?: AuthTokenGetter;
 }
@@ -81,7 +84,7 @@ import { withAuthHeaders, type AuthTokenGetter } from '../auth/credentialSource.
 // SyncObservability replaced by getContext().observability
 import { parseBootstrapResponse, type ValidatedServerDelta } from './schemas.js';
 
-export class BootstrapHelper {
+export class BootstrapFetcher {
 	  private options: Required<Omit<BootstrapOptions, 'baseUrl' | 'instantModels' | 'organizationId' | 'cacheScope' | 'getAuthToken'>> & {
 	    baseUrl: string;
 	    instantModels?: string[];
@@ -124,23 +127,20 @@ export class BootstrapHelper {
   }
 
   constructor(options: BootstrapOptions) {
-    // Defaults are spread first; the explicit `baseUrl` then takes precedence
-    // and is computed from `options.baseUrl` (or the localhost fallback).
-    //
-    // Historical note: a previous version of this constructor placed
-    // `baseUrl: \`${baseUrl}/api\`` BEFORE the `...options` spread, which
-    // meant the spread silently overwrote it back to the caller's value
-    // and the `/api` suffix was dead code. Both Ablo and `createSyncEngine`
-    // already pass `${url}/api` explicitly, so removing the suffix here
-    // preserves the actual on-the-wire behavior while making the contract
-    // explicit: callers pass the full base URL including `/api`.
+    // Defaults are spread first; the explicit `baseUrl` then takes precedence,
+    // resolved from `options.baseUrl` or the localhost fallback. Callers pass
+    // the full base URL, including the `/api` prefix.
     this.options = {
       syncGroups: [],
       maxRetries: 3,
       retryDelay: 1000,
       fetchTimeout: 10_000, // 10 second timeout per request - fail fast for good UX
       ...options,
-      baseUrl: options.baseUrl || 'http://localhost:8080/api',
+      baseUrl: options.baseUrl ?? 'http://localhost:8080/api',
+      // Reading the deprecated `organizationId` is deliberate: it preserves the
+      // cache namespace for callers that still construct BootstrapFetcher
+      // directly with the old field instead of `cacheScope`.
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
       cacheScope: options.cacheScope ?? options.organizationId ?? null,
     };
 
@@ -161,8 +161,8 @@ export class BootstrapHelper {
 	  }
 
 	  /**
-	   * Compatibility setter for direct BootstrapHelper users. The SDK-owned
-	   * `Ablo()` path passes `getAuthToken` and does not mutate this helper.
+	   * Sets a fixed credential for callers that construct the helper directly.
+	   * The SDK instead supplies `getAuthToken` and never calls this.
 	   */
 	  setAuthToken(authToken: string | undefined): void {
 	    if (!authToken) {
@@ -173,34 +173,6 @@ export class BootstrapHelper {
 	  }
 
   /**
-   * Create a promise that rejects after a timeout
-   * Used to race against fetch requests that may hang indefinitely
-   */
-  private createTimeoutPromise<T>(ms: number, operation: string): Promise<T> {
-    return new Promise((_, reject) => {
-      setTimeout(() => {
-        reject(
-          new AbloConnectionError(`Bootstrap ${operation} timed out after ${ms}ms`, {
-            code: 'bootstrap_fetch_timeout',
-          }),
-        );
-      }, ms);
-    });
-  }
-
-  /**
-   * Wrap a promise with a timeout - if the promise doesn't resolve within
-   * the timeout period, the AbortController is triggered and an error is thrown
-   */
-  private async withTimeout<T>(
-    promise: Promise<T>,
-    timeoutMs: number,
-    operation: string
-  ): Promise<T> {
-    return Promise.race([promise, this.createTimeoutPromise<T>(timeoutMs, operation)]);
-  }
-
-  /**
    * Fetch bootstrap data from sync engine with partial bootstrap support
    * @param lastSyncId - Optional: client's current lastSyncId for partial bootstrap
    * @returns Bootstrap data (either full snapshot or delta batch)
@@ -208,11 +180,12 @@ export class BootstrapHelper {
   async fetchBootstrap(
     lastSyncId?: number,
     /**
-     * Per-call sync-group override for SCOPED hydrate-on-enter. When provided,
-     * the request uses THESE groups instead of `this.options.syncGroups`,
-     * WITHOUT mutating the shared options (so a concurrent full bootstrap is
-     * unaffected). Also bypasses the offline full-snapshot cache below, which
-     * holds the connection's full bootstrap and would be wrong for a subset.
+     * A per-call set of sync groups for a scoped hydrate-on-enter. When given,
+     * the request uses these groups instead of the configured `syncGroups`, and
+     * does so without mutating the shared options, so a concurrent full
+     * bootstrap is unaffected. It also bypasses the offline snapshot cache,
+     * which holds the full bootstrap and would be a wrong answer to a subset
+     * request.
      */
     syncGroupsOverride?: readonly string[],
   ): Promise<BootstrapData> {
@@ -239,10 +212,20 @@ export class BootstrapHelper {
 
     const url = `${this.options.baseUrl}/sync/bootstrap?${params.toString()}`;
 
-    // If offline, try cached bootstrap. Skipped for a scoped override — the
-    // cache holds the FULL snapshot, which is not a valid answer to a subset
+    // If offline, try the cached bootstrap. Skipped for a scoped override: the
+    // cache holds the full snapshot, which is not a valid answer to a subset
     // request; a scoped hydrate just soft-fails offline and retries on re-enter.
-    if (!syncGroupsOverride && typeof navigator !== 'undefined' && navigator && navigator.onLine === false) {
+    //
+    // Only an explicit `false` means offline. `navigator.onLine` is *typed*
+    // `boolean`, but at runtime it is `boolean | undefined`: Node 21+ exposes a
+    // global `navigator` whose `onLine` is `undefined`. Reading `!navigator.onLine`
+    // would treat that `undefined` as offline and falsely short-circuit to the
+    // (empty, under `persistence: 'memory'`) cache — throwing instead of fetching.
+    // Capturing it at its true runtime type keeps the `=== false` honest (and lets
+    // the boolean-literal-compare lint rule see the nullable it really is).
+    const navigatorOnline: boolean | undefined =
+      typeof navigator !== 'undefined' ? navigator.onLine : undefined;
+    if (!syncGroupsOverride && navigatorOnline === false) {
       const cached = this.options.cacheScope
         ? this.loadCachedBootstrap(this.options.cacheScope)
         : null;
@@ -267,7 +250,7 @@ export class BootstrapHelper {
           type: data.type,
           lastSyncId: data.lastSyncId,
           modelCount: data.models ? Object.keys(data.models).length : 0,
-          deltaCount: data.deltaCount || 0,
+          deltaCount: data.deltaCount ?? 0,
           totalItems: data.models
             ? Object.values(data.models).reduce(
                 (sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0),
@@ -345,11 +328,9 @@ export class BootstrapHelper {
    * Fetch bootstrap with ETag, returning 304 hints
    */
   async fetchBootstrapWithETag(): Promise<BootstrapFetchResult> {
-    // organizationId is intentionally NOT sent. Server resolves it from
-    // the authenticated identity (`c.var.identity.organizationId`) —
-    // see `apps/sync-server/src/routes/bootstrap.ts`. Sending it
-    // client-side was historical: it predated the auth-context pipeline
-    // and forced a cross-org guard to defend against the SDK lying.
+    // The organization id is intentionally not sent. The server resolves it
+    // from the authenticated identity, so the client cannot select or spoof an
+    // organization it is not scoped to.
     const params = new URLSearchParams();
     this.options.syncGroups.forEach((g) => { params.append('syncGroups', g); });
     if (this.options.instantModels && this.options.instantModels.length > 0) {
@@ -386,7 +367,10 @@ export class BootstrapHelper {
 
     if (!res.ok) {
       const bodyText = await res.text().catch(() => '');
-      let parsed: unknown = bodyText;
+      // Map an empty body to undefined so the `??` below falls through to the
+      // synthetic message — translateHttpError renders an empty string body as
+      // an empty error message, which is useless to the caller.
+      let parsed: unknown = bodyText || undefined;
       if (bodyText) {
         try {
           parsed = JSON.parse(bodyText);
@@ -394,16 +378,17 @@ export class BootstrapHelper {
           // Keep as string.
         }
       }
-      // Translate the canonical envelope FIRST so the server's specific code +
-      // message survive (e.g. `api_key_required`, `jwt_issuer_untrusted`).
+      // Translate the canonical envelope first so the server's specific code
+      // and message survive (for example `api_key_required` or
+      // `jwt_issuer_untrusted`).
       const translated = translateHttpError(
         res.status,
-        parsed || `Bootstrap fetch failed: ${res.status} ${res.statusText}`,
+        parsed ?? `Bootstrap fetch failed: ${res.status} ${res.statusText}`,
         res.headers.get('x-request-id') ?? undefined,
       );
-      // Only a genuine session/JWT EXPIRY — or a bare auth failure carrying no
-      // structured code — should drive the sign-in redirect. A specific auth
-      // code like `api_key_required` is NOT an expired session: re-logging-in
+      // Only a genuine session or JWT expiry — or a bare auth failure carrying
+      // no structured code — should drive the sign-in redirect. A specific auth
+      // code like `api_key_required` is not an expired session: signing in again
       // mints the same credential and loops. Surface it as its real typed error
       // instead of a `session_expired` wrapping the stringified body.
       if (
@@ -417,8 +402,7 @@ export class BootstrapHelper {
       throw translated;
     }
 
-    const rawJson = await res.json();
-    const data: BootstrapData = parseBootstrapResponse(rawJson);
+    const data: BootstrapData = parseBootstrapResponse(await res.json());
     this.warnOnSchemaDrift(data.schemaHash);
 
     // Persist payload for offline
@@ -426,7 +410,10 @@ export class BootstrapHelper {
       if (this.options.cacheScope) {
         this.saveCachedBootstrap(this.options.cacheScope, data);
       }
-    } catch {}
+    } catch {
+      // Offline persistence is best-effort; a failed cache write must not
+      // block returning the freshly fetched data.
+    }
     getContext().logger.info('[Bootstrap] 200 OK - received new data');
     return { notModified: false, data, etag };
   }
@@ -475,7 +462,9 @@ export class BootstrapHelper {
 
     if (!response.ok) {
       const bodyText = await response.text().catch(() => '');
-      let parsed: unknown = bodyText;
+      // Map an empty body to undefined so the `??` below falls through to the
+      // synthetic message (see the note on the primary fetch path).
+      let parsed: unknown = bodyText || undefined;
       if (bodyText) {
         try {
           parsed = JSON.parse(bodyText);
@@ -488,7 +477,7 @@ export class BootstrapHelper {
       // code-less auth failure) drives the sign-in redirect.
       const translated = translateHttpError(
         response.status,
-        parsed || `Bootstrap fetch failed: ${response.status} ${response.statusText}`,
+        parsed ?? `Bootstrap fetch failed: ${response.status} ${response.statusText}`,
         response.headers.get('x-request-id') ?? undefined,
       );
       if (
@@ -502,8 +491,7 @@ export class BootstrapHelper {
       throw translated;
     }
 
-    const rawJson = await response.json();
-    const data = parseBootstrapResponse(rawJson);
+    const data = parseBootstrapResponse(await response.json());
     this.warnOnSchemaDrift(data.schemaHash);
 
     // Save a copy for offline
@@ -511,7 +499,10 @@ export class BootstrapHelper {
       if (this.options.cacheScope) {
         this.saveCachedBootstrap(this.options.cacheScope, data);
       }
-    } catch {}
+    } catch {
+      // Offline persistence is best-effort; a failed cache write must not
+      // block returning the freshly fetched data.
+    }
     return data;
   }
 
@@ -523,10 +514,9 @@ export class BootstrapHelper {
   async fetchEntity(modelName: string, id: string): Promise<Record<string, unknown> | null> {
     const url = `${this.options.baseUrl}/sync/entity/${modelName}/${id}`;
 
-    // Same `fetchTimeout` deadline `performFetch` uses — this was the one
-    // fetch in this file with no AbortSignal, so a hung self-heal read could
-    // stall its caller forever. A LOCAL controller (not `this.abortController`)
-    // so an entity self-heal never cancels a concurrent bootstrap fetch.
+    // Uses the same `fetchTimeout` deadline as `performFetch`. A local
+    // AbortController, rather than the shared `this.abortController`, means an
+    // entity self-heal never cancels a concurrent bootstrap fetch.
     const controller = new AbortController();
     const timeoutId = setTimeout(() => { controller.abort(); }, this.options.fetchTimeout);
 
@@ -559,7 +549,9 @@ export class BootstrapHelper {
 
     if (!response.ok) {
       const bodyText = await response.text().catch(() => '');
-      let parsed: unknown = bodyText;
+      // Map an empty body to undefined so the `??` below falls through to the
+      // synthetic message (see the note on the primary fetch path).
+      let parsed: unknown = bodyText || undefined;
       if (bodyText) {
         try {
           parsed = JSON.parse(bodyText);
@@ -569,12 +561,12 @@ export class BootstrapHelper {
       }
       throw translateHttpError(
         response.status,
-        parsed || `Entity fetch failed: ${response.status} ${response.statusText}`,
+        parsed ?? `Entity fetch failed: ${response.status} ${response.statusText}`,
         response.headers.get('x-request-id') ?? undefined,
       );
     }
 
-    return await response.json();
+    return (await response.json()) as Record<string, unknown> | null;
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -589,7 +581,7 @@ export class BootstrapHelper {
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && key.includes('sync-bootstrap')) {
+        if (key?.includes('sync-bootstrap')) {
           keysToRemove.push(key);
         }
       }
@@ -658,9 +650,9 @@ export class BootstrapHelper {
 
       if (!response.ok) return false;
 
-      const data = await response.json();
-      return data.status === 'healthy';
-    } catch (error) {
+      const body = (await response.json()) as { status?: unknown };
+      return body.status === 'healthy';
+    } catch {
       getContext().observability.breadcrumb('Health check failed', 'sync.bootstrap', 'warning');
       return false;
     }

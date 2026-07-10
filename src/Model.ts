@@ -1,21 +1,15 @@
 /**
- * Model - Clean base class for domain models
- *
- * Models are pure domain objects that:
- * - Hold data and business logic
- * - Track their own changes
- * - Validate themselves
- * - Return updates/changes (not perform them)
- *
- * Models do NOT:
- * - Access stores or singletons
- * - Perform side effects (saving, notifications)
- * - Know about sync infrastructure
+ * Model is the base class for the sync engine's domain models. A model is a
+ * plain domain object: it holds data and business logic, tracks its own
+ * property changes, and validates itself, and it returns the changes to apply
+ * rather than applying them. It does not reach into stores or singletons and
+ * does not perform side effects such as saving or sending notifications;
+ * persistence and sync are driven by the store that owns the model.
  */
 
 import { runInAction, isComputedProp } from 'mobx';
 import { v4 as uuid } from 'uuid';
-import { M1 } from './utils/mobx-setup.js';
+import { M1 } from './utils/mobxSetup.js';
 import { getActiveRegistry, hasActiveRegistry } from './ModelRegistry.js';
 import { getContext } from './context.js';
 import { AbloValidationError } from './errors.js';
@@ -86,9 +80,10 @@ export interface ModelChanges {
 }
 
 /**
- * Abstract Model - Base class for all domain models
- *
- * Pure domain object with no external dependencies
+ * The abstract base class every domain model extends. It holds the model's id
+ * and timestamps, tracks in-place property changes for change detection and
+ * undo, and serializes itself, while leaving persistence and sync to the store
+ * that owns it.
  */
 export abstract class Model {
   /** Static reference to active SyncedStore for reactive queries */
@@ -273,27 +268,17 @@ export abstract class Model {
   }
 
   /**
-   * Read-only view of the snapshot taken at `markAsPersisted()` /
-   * load. Used by recording-transaction undo to derive a pre-session
-   * baseline for fields that weren't yet pre-mutated (so
-   * `modifiedProperties` has no entry for them). Returns the same
-   * underlying object — callers must not mutate it.
+   * Return a read-only view of the snapshot taken at {@link markAsPersisted}
+   * or at load time. The undo machinery uses it to recover a field's pre-edit
+   * value when the field was written without first being tracked in
+   * `modifiedProperties`. The returned object is the live snapshot, so callers
+   * must not mutate it.
    *
-   * Architectural note: this method exists because we allow direct
-   * property writes (`slide.title = 'foo'`) AND mutator-recorded
-   * writes to coexist. Zero / Replicache structurally avoids this:
-   * every mutation MUST go through a registered mutator function,
-   * mutator args are serialized, and on server pull all unacked
-   * mutations are dropped and the mutator functions are replayed on
-   * the new basis (rebase). That makes per-instance baselines
-   * unnecessary because the b-tree at the new basis IS the
-   * authoritative pre-session state.
-   *
-   * If we ever migrate to "mutators are the only write path," this
-   * snapshot field, `_originalData`, and most of
-   * `RecordingTransaction.snapshotFields` become dead code. See
-   * `packages/replicache/src/db/rebase.ts` (rocicorp/mono) for the
-   * pattern.
+   * This per-instance baseline is needed because application code can edit a
+   * model in two ways that coexist: a direct property write
+   * (`slide.title = 'foo'`) and a recorded mutation. A design in which every
+   * write went through a single recorded path would not need it, since the
+   * last acknowledged state would already be the authoritative baseline.
    */
   getOriginalSnapshot(): Readonly<ModelData> | undefined {
     return this._originalData;
@@ -310,7 +295,7 @@ export abstract class Model {
   }
 
   /**
-   * Capture a before-image for `keys` — the SINGLE source of truth for the
+   * Capture a before-image for `keys` — the single source of truth for the
    * "previous value" that undo inverses are built from. Both undo paths call
    * this so they can never drift: the stream path
    * (`TransactionQueue.extractPreviousData`) and the manual-record path
@@ -320,10 +305,10 @@ export abstract class Model {
    *   1. `modifiedProperties.get(key).old` — first-old-wins pre-session
    *      baseline, set whenever the field was mutated in place before commit.
    *   2. `getOriginalSnapshot()[key]` — the last loaded/acked row, the correct
-   *      before-image for a key written WITHOUT a prior in-place mutation
+   *      before-image for a key written without a prior in-place mutation
    *      (e.g. a `precomputedChanges` write).
    *   3. `fallbackToLive` only — the current live value. The manual-record path
-   *      wants this last resort; the stream path deliberately OMITS unresolved
+   *      wants this last resort; the stream path deliberately omits unresolved
    *      keys so `buildUndoOps` drops an un-revertible inverse rather than
    *      inventing one. The flag is the one intentional difference between the
    *      two callers — do not collapse it.
@@ -331,8 +316,8 @@ export abstract class Model {
    * `id` is always skipped. Values are read out per-key, so the
    * `getOriginalSnapshot()` "callers must not mutate" contract is preserved.
    *
-   * Invariant this relies on: a given undo scope is EITHER stream-recorded
-   * (`recordFromStream: true`) OR manual (`useMutators({ undoScope })`), never
+   * Invariant this relies on: a given undo scope is either stream-recorded
+   * (`recordFromStream: true`) or manual (`useMutators({ undoScope })`), never
    * both — otherwise a write would be captured twice. No surface sets both.
    */
   capturePreviousValues(
@@ -358,7 +343,7 @@ export abstract class Model {
 
   /**
    * Drop the `modifiedProperties` entries for `keys` — re-baselines a field
-   * after its `.old` has been frozen into a committed transaction, so the NEXT
+   * after its `.old` has been frozen into a committed transaction, so the next
    * write to the same field starts from this commit's result rather than the
    * stale pre-session `.old` that {@link propertyChanged}'s first-old-wins
    * policy preserves. Safe because the committed transaction owns its own
@@ -457,7 +442,7 @@ export abstract class Model {
       // New model - return create operation
       return {
         type: 'create',
-        modelName: this.getModelName(), // Use Prisma model name
+        modelName: this.getModelName(), // the registered model name
         modelId: this.id,
         timestamp: new Date(),
       };
@@ -465,7 +450,7 @@ export abstract class Model {
       // Existing model with changes - return update operation
       return {
         type: 'update',
-        modelName: this.getModelName(), // Use Prisma model name
+        modelName: this.getModelName(), // the registered model name
         modelId: this.id,
         changes: new Map(this.modifiedProperties),
         timestamp: new Date(),
@@ -490,7 +475,7 @@ export abstract class Model {
 
     return {
       type: 'delete',
-      modelName: this.getModelName(), // Use Prisma model name
+      modelName: this.getModelName(), // the registered model name
       modelId: this.id,
       timestamp: new Date(),
     };
@@ -510,7 +495,7 @@ export abstract class Model {
 
     return {
       type: 'archive',
-      modelName: this.getModelName(), // Use Prisma model name
+      modelName: this.getModelName(), // the registered model name
       modelId: this.id,
       timestamp: new Date(),
     };
@@ -530,7 +515,7 @@ export abstract class Model {
 
     return {
       type: 'unarchive',
-      modelName: this.getModelName(), // Use Prisma model name
+      modelName: this.getModelName(), // the registered model name
       modelId: this.id,
       timestamp: new Date(),
     };
@@ -542,7 +527,7 @@ export abstract class Model {
    * properties, and coercing date fields. Shared by `updateFromData`
    * (hydration) and `applyChanges` (local user update).
    *
-   * Change tracking is EXPLICIT, not magic: for every field actually
+   * Change tracking is explicit: for every field actually
    * written, `onWrite(key, oldValue, newValue)` is invoked with the value
    * captured immediately before assignment. `applyChanges` passes a hook
    * that records the change in `modifiedProperties`; `updateFromData`
@@ -612,10 +597,10 @@ export abstract class Model {
    * Update from raw data (hydration)
    *
    * Used for inbound server deltas and pool upserts. Change tracking is
-   * deliberately suppressed: hydration writes must NOT land in
+   * deliberately suppressed: hydration writes must not land in
    * `modifiedProperties`, otherwise applying a server delta would queue a
    * brand-new outbound mutation and the record would echo forever. For a
-   * LOCAL user edit, use `applyChanges` instead.
+   * local user edit, use `applyChanges` instead.
    *
    * Suppression is belt-and-suspenders: we pass no `onWrite` hook AND
    * clear/restore `modifiedProperties` around the assignment, so any
@@ -648,18 +633,18 @@ export abstract class Model {
   }
 
   /**
-   * Apply a LOCAL user-initiated update from a data object — the write
-   * path for `proxy.update({ id, data })`, which is the ONE AND ONLY way
+   * Apply a local, user-initiated update from a data object — the write
+   * path for `proxy.update({ id, data })`, which is the one and only way
    * application code mutates synced fields.
    *
    * Unlike `updateFromData` (hydration, untracked), this records every
    * written field in `modifiedProperties` via `propertyChanged`, so
-   * `getChanges()` / the transaction queue send the edited fields to the
-   * server and the undo system gets a correct pre-write baseline.
-   * Recording is EXPLICIT here (via the `onWrite` hook) — it does not rely
-   * on any MobX `observe()` side-channel.
+   * `getChanges()` and the transaction queue send the edited fields to the
+   * server and the undo system gets a correct pre-write baseline. Recording
+   * is explicit here, through the `onWrite` hook, and does not rely on any
+   * MobX `observe()` side channel.
    *
-   * `_originalData` is intentionally NOT reset here: it stays as the
+   * `_originalData` is intentionally not reset here: it stays as the
    * last-persisted baseline until `clearChanges()` runs on sync-ack.
    */
   applyChanges(data: ModelData): void {
@@ -688,8 +673,8 @@ export abstract class Model {
     const modelName = this.getModelName();
     const properties = getActiveRegistry().getProperties(modelName);
     const result: ModelData = {
-      __class: this.getModelName(), // Use Prisma model name for consistency
-      __typename: this.getModelName(), // Also add __typename for GraphQL compatibility
+      __class: this.getModelName(), // the registered model name for consistency
+      __typename: this.getModelName(), // __typename mirrors __class as the wire type discriminator
       id: this.id,
       createdAt: this.createdAt?.toISOString(),
       updatedAt: this.updatedAt?.toISOString(),
@@ -793,7 +778,7 @@ export abstract class Model {
 
   /**
    * Check if any collection on this model is currently being observed by React
-   * Used by ObjectPool GC to prevent disposing models in active use
+   * Used by InstanceCache GC to prevent disposing models in active use
    */
   hasObservedCollections(): boolean {
     return this._observedCollections.size > 0;
@@ -973,7 +958,7 @@ export abstract class Model {
     // Try to get model class by identifier
     let ModelClass = getActiveRegistry().getModelByName(modelIdentifier);
 
-    // If not found with Prisma name, try mapping to class name
+    // If not found by registered name, try mapping to the class name
     if (!ModelClass) {
       const classNameMap: Record<string, string> = {
         Task: 'TaskModel',

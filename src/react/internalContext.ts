@@ -5,34 +5,32 @@ import type { Ablo } from '../client/Ablo.js';
 import type { SchemaRecord } from '../schema/schema.js';
 
 /**
- * Internal context populated by `<AbloProvider>`. Separate from
- * `SyncContext` (which carries the store + schema for the data
- * hooks) because these fields are owned by the umbrella provider
- * and don't belong on the raw `SyncStoreContract`.
- *
- * Consumers should NOT use this directly — access the fields via
- * the typed hooks (`useCurrentUserId`, `useErrorListener`, etc.).
+ * The context that `<AbloProvider>` populates for its own hooks. It is kept
+ * separate from the data-hook context, which carries the store and schema,
+ * because these fields belong to the provider rather than to the store. Read
+ * them through the typed hooks such as `useCurrentUserId` and
+ * `useErrorListener` rather than reaching into this context directly.
  */
 export interface AbloInternalContextValue {
   /**
-   * Optional app user id when the application passed one. Hosted Ablo
-   * identity is server-derived, so this may be null.
+   * The application user id, when your app passed one to `<AbloProvider>`. Sync
+   * identity is derived on the server from the API key, so this is `null`
+   * unless you set it, and it is not required for sync to work.
    */
   currentUserId: string | null;
-  /** Subscribe to provider-level errors (engine errors, bootstrap failures, session issues). */
+  /** Subscribe to provider-level errors: engine errors, bootstrap failures, and session issues. */
   subscribeError: (listener: (error: Error) => void) => () => void;
-  /** Fire an error to all subscribed listeners. Called internally by the provider. */
+  /** Emit an error to every subscribed listener. The provider calls this for you. */
   emitError: (error: Error) => void;
   /**
-   * The SyncEngine proxy for this provider. `null` before bootstrap
-   * resolves. Exposed through the internal context so `useSync()`
-   * can return it without having to reach into the store — the two
-   * are sibling objects constructed together by `createSyncEngine`
-   * and shouldn't be coerced through each other.
+   * The typed `Ablo` client for this provider, or `null` until the first sync
+   * bootstrap resolves. It is held here so `useSync()` can return it without
+   * reaching into the store; the client and the store are sibling objects, and
+   * neither is derived from the other.
    *
-   * Typed as `Ablo<SchemaRecord>` on the context because
-   * generics don't flow through React context. `useSync<R>()` widens
-   * via its own generic — runtime value is the concrete engine.
+   * It is typed loosely as `Ablo<SchemaRecord>` because generics do not flow
+   * through React context. `useSync<R>()` restores the precise type through its
+   * own generic; the runtime value is the fully typed client.
    */
   engine: Ablo<SchemaRecord> | null;
 }

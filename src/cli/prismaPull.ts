@@ -1,37 +1,37 @@
 /**
- * `ablo pull prisma` — generate `defineSchema(...)` from a Prisma schema FILE.
+ * `ablo pull prisma` generates a `defineSchema(...)` starting point from a
+ * Prisma schema file.
  *
- * The lossless counterpart to `ablo pull` (which reads the live database and so
- * can't recover enums or relations). This reads `schema.prisma` directly, where
- * the ORM's claim is still declared:
+ * Unlike `ablo pull`, which reads a live database and so cannot recover details
+ * that columns don't carry, this reads `schema.prisma` directly, where enums and
+ * relations are still declared. It preserves them:
  *
- *   - `enum Status { … }`              → `field.enum([...])`  (members preserved)
+ *   - `enum Status { … }`                     → `field.enum([...])`  (members preserved)
  *   - `@relation(fields:[x], references:[y])` → `relation.belongsTo(target, x)`
- *   - `@map("col")`                    → `field.from('col')`  (column preserved)
+ *   - `@map("col")`                           → `field.from('col')`  (column preserved)
  *
- * It is the Prisma analogue of what `drizzle-zero` does by reflecting a Drizzle
- * module. Non-infringing: it only READS a local file and writes another local
- * file; it never touches a database.
+ * It only reads one local file and writes another; it never touches a database.
  *
- * Adoption contract (same as `ablo pull`): a Prisma model becomes an Ablo model
- * only if it is tenant-scoped — it must have an `id` field and an
- * `organizationId` field (or a field mapped to the `organization_id` column).
- * Models that don't clear the contract are reported as skipped.
+ * A Prisma model is adopted only if it is tenant-scoped: it must have an `id`
+ * field and an `organizationId` field, or a field mapped to the
+ * `organization_id` column. Models that don't qualify are reported as skipped.
  */
 
 import { AbloValidationError } from '../errors.js';
 import pc from 'picocolors';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { brand } from './theme';
-import { camelToSnake, emitSchemaSource, type IRField, type IRModel, type IRRelation, type IRSchema } from './schema-ir';
+import { camelToSnake, emitSchemaSource, type IRField, type IRModel, type IRRelation, type IRSchema } from './schemaIr';
 
 const DEFAULT_SCHEMA = 'prisma/schema.prisma';
 const DEFAULT_OUT = 'ablo/schema.ts';
 const DEFAULT_IMPORT = '@abloatai/ablo/schema';
 
-/** Engine-owned, never emitted as declared fields (by Ablo field name). */
+/** Base fields the runtime manages itself, matched by their Ablo field name.
+ *  These are implicit and never emitted as declared fields. */
 const BASE_FIELD_NAMES = new Set(['id', 'organizationId', 'createdBy', 'createdAt', 'updatedAt']);
-/** …or by their physical column (when a field carries `@map`). */
+/** The same base fields, matched instead by their physical column name when a
+ *  field carries `@map`. */
 const BASE_COLUMNS = new Set(['id', 'organization_id', 'created_by', 'created_at', 'updated_at']);
 
 /** Prisma scalar → IR field kind. JSON-ish and unsupported scalars get a note. */
@@ -163,7 +163,8 @@ function relationFkFields(attrs: string): string[] | null {
 
 // ── Lowering ────────────────────────────────────────────────────────────────
 
-/** Parse a Prisma schema source into the shared IR. Pure; no I/O. */
+/** Parses a Prisma schema source into the shared intermediate representation,
+ *  {@link IRSchema}. Does no I/O. */
 export function parsePrismaSchema(src: string): IRSchema {
   const blocks = parseBlocks(src);
 
@@ -205,8 +206,9 @@ export function parsePrismaSchema(src: string): IRSchema {
         continue;
       }
 
-      // Engine-owned base columns are implicit — detect (to satisfy the adopt
-      // contract) but never emit.
+      // The base columns the runtime manages are implicit. Record whether the
+      // model has an id and a tenant column — a model is adopted only when it has
+      // both — but never emit these columns as declared fields.
       if (raw.name === 'id' || /@id\b/.test(raw.attrs)) hasId = true;
       if (raw.name === 'organizationId' || column === 'organization_id') hasTenancy = true;
       if (BASE_FIELD_NAMES.has(raw.name) || (column && BASE_COLUMNS.has(column))) continue;
@@ -267,7 +269,8 @@ export interface PulledPrismaSchema {
   skipped: IRSchema['skipped'];
 }
 
-/** Parse + emit in one step. Pure; no I/O. */
+/** Parses a Prisma schema and emits the `defineSchema(...)` source in one step.
+ *  Does no I/O. */
 export function buildSchemaSourceFromPrisma(opts: { src: string; importPath: string }): PulledPrismaSchema {
   const ir = parsePrismaSchema(opts.src);
   return {

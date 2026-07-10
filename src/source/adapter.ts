@@ -1,21 +1,21 @@
 /**
- * The Data Source adapter — ONE interface every ORM backend implements, and the
- * bridge that wires it into the core `dataSource()` handler.
+ * The interface every data-source backend implements, together with the bridge
+ * that wires an implementation into the `dataSource()` HTTP handler. This package
+ * defines the contract and ships adapters for three object-relational mappers —
+ * {@link prismaDataSource}, {@link drizzleDataSource}, and {@link kyselyDataSource} —
+ * each verified by the shared conformance suite. You can also write your own.
  *
- * Pattern (Auth.js / Better Auth): one core interface, one package per ORM
- * (`prismaDataSource`, `drizzleDataSource`, `kyselyDataSource`), each provably
- * correct via the shared conformance suite. The adapter owns reading and writing
- * the database, plus the transactional outbox and idempotency, so a customer never
- * hand-writes them:
+ * An adapter reads and writes your database, and it owns the transactional outbox
+ * and idempotency bookkeeping as well, so you never write those by hand:
  *
  *   export const POST = dataSource({
  *     schema, apiKey: process.env.ABLO_API_KEY!,
  *     ...sourceHandlersFromAdapter(prismaDataSource(prisma, schema), schema),
  *   });
  *
- * The bridge below connects the adapter to the core: it turns ONE adapter into the
- * core handler's `commit` / `events` / per-model `load`+`list` — no per-ORM
- * branching anywhere above the adapter.
+ * `sourceHandlersFromAdapter` is the bridge: it turns a single adapter into the
+ * handler's `commit`, `events`, and per-model `load` and `list` operations, so no
+ * code above the adapter needs to know which mapper you chose.
  */
 
 import type { SourceListQuery, SourceRequestContext } from './types.js';
@@ -27,41 +27,46 @@ import type {
 } from './contract.js';
 
 /**
- * A canonical row keyed by schema FIELD name (e.g. `operatorId`) — the SDK shape,
- * NOT physical column names. Each adapter is the translation boundary: Prisma maps
- * via its `@map`, Drizzle via the schema's `camelToSnake`/`column` rule. `unknown`
- * leaf is narrowed by codegen later.
+ * A single row keyed by the schema's field names (for example `operatorId`), not
+ * by physical column names. Each adapter is the boundary that translates between
+ * the two, mapping a field name to whatever the underlying database column is
+ * called. Values are typed as `unknown`, so a caller must narrow a value before
+ * using it.
  */
 export type Row = Record<string, unknown>;
 
-/** A read against the canonical store — a single-row load or a filtered list. */
+/** A read request handed to an adapter: either a single-row load by id, or a filtered list. */
 export type AdapterReadRequest =
   | { readonly kind: 'load'; readonly model: string; readonly id: string; readonly scope?: SourceRequestContext }
   | { readonly kind: 'list'; readonly model: string; readonly query?: SourceListQuery; readonly scope?: SourceRequestContext };
 
+/** What {@link DataSourceAdapter.commit} returns: the rows as they stand after the write. */
 export interface AdapterCommitResult {
-  /** Canonical rows after the write — Ablo derives deltas from these. */
+  /** The affected rows after the write. The change log is derived from these. */
   readonly rows: readonly Row[];
 }
 
 /**
- * The adapter interface. An ORM adapter implements exactly these. `read`/`commit`
- * read and write the database; `events` reads the outbox; `migrations` ships the
- * `ablo_idempotency` + `ablo_outbox` table-creation SQL so the customer never writes it.
+ * The interface an adapter implements to serve one data source. `read` and
+ * `commit` read from and write to your database, `events` reads the outbox that
+ * `commit` appends to, and `migrations` supplies the SQL that creates the adapter's
+ * own two tables. `capabilities` advertises which optional features the adapter
+ * supports.
  */
 export interface DataSourceAdapter {
   readonly capabilities: AdapterCapabilities;
-  /** The table-creation SQL the adapter ships for its own tables (`ablo_idempotency` + `ablo_outbox`). */
+  /** The table-creation SQL the adapter needs for its own tables, `ablo_idempotency` and `ablo_outbox`. */
   migrations(): readonly Migration[];
-  /** Canonical rows for a load/list. */
+  /** The rows matching a load or list request. */
   read(req: AdapterReadRequest): Promise<readonly Row[]>;
   /**
-   * Apply a change set transactionally and idempotently by `clientTxId`:
-   * a duplicate `clientTxId` returns the original rows without re-applying.
-   * Writes the `ablo_outbox` rows in the SAME transaction as the app rows.
+   * Applies a change set in one transaction, keyed for idempotency by `clientTxId`.
+   * Replaying the same `clientTxId` returns the original rows without applying the
+   * change again. The matching `ablo_outbox` rows are written in the same
+   * transaction as the data rows, so the outbox can never drift from the data.
    */
   commit(change: ChangeSet): Promise<AdapterCommitResult>;
-  /** Read outbox events after `cursor` (null = from the beginning), up to `limit`. */
+  /** Reads outbox events after `cursor` (`null` starts from the beginning), up to `limit` events. */
   events(cursor: string | null, limit: number): Promise<EventsPage>;
 }
 

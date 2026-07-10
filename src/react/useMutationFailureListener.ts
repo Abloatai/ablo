@@ -12,15 +12,15 @@ export interface MutationFailurePayload {
 }
 
 /**
- * Register a side-effect listener for mutation failures. Fires whenever
- * the underlying transaction queue rolls back an optimistic write —
- * permanent rejections (validation, FK, auth) and exhausted-retry
- * rollbacks (connection lost mid-burst).
+ * Subscribes a listener to mutation failures. The callback fires whenever the
+ * transaction queue rolls back an optimistic write — both permanent rejections
+ * (a validation, foreign-key, or authorization error) and rollbacks after the
+ * retries are exhausted (for example, the connection drops mid-write).
  *
- * Use this to mount a single `<MutationFailureBoundary>` near the app
- * shell that turns silent pool rollbacks into toasts / banners. The
- * listener is stored in a ref so re-renders don't thrash the
- * subscription — matches `useErrorListener`.
+ * A single listener mounted near the top of your component tree can turn these
+ * otherwise-silent rollbacks into toasts or banners. The callback is held in a
+ * ref, so re-renders do not tear down and re-create the underlying
+ * subscription.
  *
  * @example
  * function MutationFailureBoundary() {

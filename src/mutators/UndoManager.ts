@@ -1,21 +1,17 @@
 /**
- * UndoManager — per-scope history of reversible mutations.
+ * Keeps a per-scope history of reversible changes so a surface can offer undo
+ * and redo. Each mutator invocation records an ordered list of inverse
+ * operations; `undo()` pops the most recent group and replays those inverses
+ * without recording them, then moves the entry onto the redo stack.
  *
- * Each mutator invocation records an ordered list of inverse operations.
- * On `undo()` we pop the last group and apply the inverses as a non-recorded
- * transaction (so the inverse itself doesn't push to the redo stack; we do
- * that explicitly below).
+ * History is divided into named scopes, one per surface — a deck editor, a
+ * spreadsheet, and so on — reached through {@link UndoManager.getScope}. Undo in
+ * one surface never affects another.
  *
- * Scopes: every consumer (deck editor, spreadsheet, etc.) gets a named scope
- * via `getScope(name)`. Cmd+Z in one surface never affects another.
- *
- * V1 limitations:
- *   - No persistence across sessions (in-memory stack).
- *   - No collaborative awareness — undoing after a teammate edited the same
- *     row produces a "last writer wins" outcome, not a true merge.
- *   - Server-side mutation rejection after optimistic apply does NOT
- *     automatically invalidate the undo stack. Consumers should `clear()`
- *     the scope on sync error if they want strict correctness.
+ * Two things to know about its reach. History lives in memory and does not
+ * persist across sessions. And if the server rejects a change after it was
+ * applied optimistically, the undo stack is not invalidated automatically; call
+ * {@link UndoScope.clear} on a sync error if you need strict correctness.
  */
 
 import type { Schema } from '../schema/schema.js';
@@ -29,62 +25,62 @@ import {
   type UndoConflictPolicy,
 } from './undoApply.js';
 
-/** Normalize a registered model name to the queue's lowercased alias form
- * (mirrors TransactionQueue's `normalizeModelKey`). */
+/** Normalize a registered model name to its lowercased alias form. */
 const normalizeModelAlias = (modelName: string): string =>
   modelName.replace('Model', '').toLowerCase();
 
 // ── Inverse op model ──────────────────────────────────────────────────────
 //
-// The `InverseOp` / `UndoEntry` shapes and their validator live in
-// `./inverseOp.ts` as Zod schemas (single source of truth). Re-exported here
-// so existing consumers (and the `Ablo.Mutator.*` namespace) keep importing
-// them from the undo manager.
+// The InverseOp and UndoEntry shapes and their validator are defined as Zod
+// schemas in `./inverseOp.ts`, and re-exported here so they can be imported
+// alongside the undo manager.
 export type { InverseOp, UndoEntry };
 export type { UndoConflictPolicy } from './undoApply.js';
 
 // ── Scope ──────────────────────────────────────────────────────────────────
 
 export interface UndoScopeOptions {
-  /** Max number of undo entries. Older entries drop off the bottom. Default: 100. */
+  /** The maximum number of undo entries to keep. Older entries drop off the
+   *  bottom. Defaults to 100. */
   maxHistory?: number;
   /**
-   * How undo/redo treats a field a collaborator changed after your op.
-   * Default `skip-stale` — your undo reverts your change only where it still
-   * stands, never clobbering a concurrent collaborator edit (per-user undo).
-   * `last-writer-wins` restores the legacy clobbering behavior. See
+   * How undo and redo treat a field a collaborator changed after your own
+   * change. The default, `skip-stale`, reverts your change only where it still
+   * stands, so undo never overwrites a concurrent edit — undo is per user.
+   * `last-writer-wins` restores the older behavior of overwriting regardless. See
    * {@link UndoConflictPolicy}.
    */
   conflictPolicy?: UndoConflictPolicy;
   /**
-   * Which models this surface owns. The scope only records mutations whose
-   * resolved schema key passes this predicate, so a spreadsheet edit never
-   * lands on the deck editor's stack (the equivalent of Yjs scoping by
-   * shared-type set). Omit to track every model — fine for a single-surface
-   * app, wrong when two surfaces with independent Cmd+Z share one store.
+   * A predicate selecting which models this surface owns. The scope records only
+   * mutations whose resolved schema key passes it, so, for example, a spreadsheet
+   * edit never lands on a deck editor's undo stack. Omit it to track every model,
+   * which is fine for a single-surface app but wrong when two surfaces with
+   * independent undo share one store.
    */
   tracksModel?: (schemaKey: string) => boolean;
   /**
-   * Opt into recording undo entries by OBSERVING the local-mutation stream
-   * (the best-practice model: undo listens where all local writes converge —
-   * Yjs/Liveblocks). When false (default), the scope records nothing on its
-   * own and relies on legacy manual `record()` calls. Transitional: a scope
-   * must not mix the two, or shared writes double-count. Flip a surface to
-   * `true` only when its manual-record consumers are removed in the same step.
+   * When `true`, the scope records undo entries by observing the stream of local
+   * mutations, so every write through the store is captured automatically. When
+   * `false`, the default, the scope records nothing on its own and relies on
+   * explicit {@link UndoScope.record} calls. Use one mode or the other for a given
+   * surface, not both, or shared writes are counted twice.
    */
   recordFromStream?: boolean;
 }
 
 /**
- * A single undo stack for one surface. Access via `UndoManager.getScope(name)`.
- * Consumers call `record(entry)` after each mutator; `undo()` / `redo()` to
- * traverse the stacks.
+ * A single undo stack for one surface, obtained from
+ * {@link UndoManager.getScope}. Call {@link UndoScope.record} after a mutator to
+ * add an entry, and {@link UndoScope.undo} / {@link UndoScope.redo} to move
+ * through the history.
  */
 /**
- * How long a marked replay-echo stays armed before it's pruned. The real echo
- * arrives within a couple of IndexedDB round-trips (tens of ms); this is a
- * generous safety ceiling so a never-arriving echo (e.g. the commit was skipped
- * offline) can't suppress a genuine later edit to the same row indefinitely.
+ * How long a pending replay-echo marker stays armed before it is pruned. A real
+ * echo returns within a couple of local-store round-trips (tens of milliseconds);
+ * this is a generous ceiling so that an echo which never arrives — for instance,
+ * because the write was skipped while offline — cannot suppress a genuine later
+ * edit to the same row indefinitely.
  */
 const REPLAY_ECHO_TTL_MS = 5000;
 
@@ -95,38 +91,36 @@ export class UndoScope<S extends Schema> {
   private readonly conflictPolicy: UndoConflictPolicy;
 
   /**
-   * Observers notified after each successful {@link record}. These see FORWARD
-   * user actions only — `undo()`/`redo()` replays move entries between stacks
-   * without calling `record()`, so a listener never observes a reversal. This
-   * is a deliberately domain-agnostic seam: analytics, gamification, and audit
-   * can tap the committed-mutation stream without the scope knowing about them.
-   * A throwing listener is isolated (see {@link emitRecord}) so a faulty
-   * observer can never wedge the editor's recording path.
+   * Observers notified after each successful {@link UndoScope.record}. They see
+   * forward user actions only: undo and redo move entries between the stacks
+   * without calling `record`, so a listener never observes a reversal. It is a
+   * deliberately generic hook — analytics or audit code can watch the stream of
+   * committed mutations without the scope knowing about it. A listener that throws
+   * is isolated so it cannot break recording.
    */
   private readonly recordListeners = new Set<(entry: UndoEntry) => void>();
 
   /**
-   * Observers notified after ANY stack change — record, undo, redo, or clear.
-   * Distinct from {@link recordListeners} (forward actions only): this fires on
-   * reversals too, so React consumers can keep `canUndo`/`canRedo` live. The
-   * stream-recording path pushes entries WITHOUT a React render, so without this
-   * a freshly-recorded entry leaves `canUndo` stale (snapshot from last render)
-   * and a Cmd+Z handler gated on `canUndo !== false` silently no-ops.
+   * Observers notified after any stack change — record, undo, redo, or clear.
+   * Unlike {@link recordListeners}, which fires on forward actions only, this
+   * fires on reversals too, so a React consumer can keep `canUndo` and `canRedo`
+   * current. Because the stream-recording path adds entries without triggering a
+   * render, a component that read `canUndo` on its last render would otherwise go
+   * stale and a keyboard handler gated on it would quietly do nothing.
    */
   private readonly changeListeners = new Set<() => void>();
 
   /**
-   * Serialization tail. Recording, undo, and redo all chain off this single
-   * promise so they run strictly in the order they were *invoked* — never
-   * interleaved. This is load-bearing for correctness, not just throughput:
-   *   - Ordering: callers fire writes un-awaited (`void mutations.x.update`).
-   *     Without serialization, an entry lands on the stack when its mutator
-   *     *resolves*, so a fast second write can record before a slow first one
-   *     → undo replays in the wrong order.
-   *   - Snapshot integrity: every recording reads/clears the shared models'
-   *     `modifiedProperties` (the undo "before" baseline). Two recordings
-   *     interleaving on the same model corrupt each other's inverse snapshot.
-   * Serializing the whole scope closes both holes with one mechanism.
+   * The serialization tail. Recording, undo, and redo all chain off this one
+   * promise, so they run strictly in the order they were invoked and never
+   * interleave. This matters for correctness, not just throughput, in two ways.
+   * Ordering: callers often fire writes without awaiting them, so without
+   * serialization an entry would land on the stack when its mutator resolves, and
+   * a fast second write could record before a slow first — replaying undo in the
+   * wrong order. Snapshot integrity: each recording reads and clears a model's
+   * modified-field markers, which form the undo baseline, so two recordings
+   * interleaving on the same model would corrupt each other's before-image.
+   * Serializing the whole scope closes both gaps at once.
    */
   private tail: Promise<unknown> = Promise.resolve();
 
@@ -137,38 +131,38 @@ export class UndoScope<S extends Schema> {
   /** Unsubscribe from the local-mutation stream. */
   private readonly unsubscribe: () => void;
   /**
-   * True while `undo()`/`redo()` replays ops. Replays write through the same
-   * commit path, so they re-emit on the local-mutation stream; this flag tells
-   * our own listener to ignore them (no echo) — the engine equivalent of Yjs's
-   * `trackedOrigins` exclusion / Liveblocks pausing history during undo.
+   * True while undo or redo is replaying operations. A replay writes through the
+   * normal commit path and therefore re-emits on the local-mutation stream; this
+   * flag tells the scope's own listener to ignore those writes so they are not
+   * recorded again.
    */
   private replaying = false;
-  /** Ops collected during the current tick, flushed as ONE entry. */
+  /** Operations collected during the current tick, flushed together as one entry. */
   private batch: { forward: InverseOp; inverse: InverseOp | null }[] = [];
   private flushScheduled = false;
   /**
-   * Open grouping session (Liveblocks `history.pause()` / Yjs `stopCapturing`
-   * analogue). While set, stream ops accumulate here ACROSS ticks instead of
-   * flushing per-tick, so a multi-tick action (a drag, a whole streaming AI
-   * response) collapses into ONE Cmd+Z. `endGroup()` flushes it.
+   * An open grouping session. While set, stream operations accumulate here across
+   * ticks instead of flushing each tick, so a multi-tick action — a drag, or a
+   * whole streaming AI response — collapses into a single undo step.
+   * {@link UndoScope.endGroup} flushes it.
    */
   private group: { label?: string; ops: { forward: InverseOp; inverse: InverseOp | null }[] } | null =
     null;
   /**
-   * ASYNC replay-echo suppression, keyed by `${modelKey}:${id}`.
+   * Suppression of a replay's asynchronous echo, keyed by `${modelKey}:${id}`.
    *
-   * The synchronous {@link replaying} flag only catches echoes delivered INLINE
-   * during `applyOps`. The real engine doesn't emit `transaction:created`
-   * synchronously: `SyncClient` defers the commit behind `scheduleSync()` +
-   * `await persistMutationQueue()` (an IndexedDB write), so a replayed write's
-   * echo lands on the stream AFTER `undo()`/`redo()` has already reset
-   * `replaying` and pushed the entry. That late echo would be recorded as a
-   * NEW edit — and `record()` clears the redo stack, so every undo silently
-   * destroyed its own redo. We mark the (modelKey,id) of every op we're about
-   * to replay here (synchronously, before the write), and consume one mark when
-   * the matching mutation arrives — independent of WHEN it arrives. Entries
-   * carry a TTL so a never-arriving echo (offline: the commit is skipped) can't
-   * leak and wrongly suppress a much-later genuine edit to the same row.
+   * The synchronous {@link UndoScope.replaying} flag catches only echoes
+   * delivered inline while operations are applied. In practice the engine does not
+   * emit a replayed write's echo synchronously: the commit is deferred behind a
+   * local-store write, so the echo arrives on the stream after undo or redo has
+   * already reset `replaying` and pushed its entry. That late echo would be
+   * recorded as a new edit — and recording clears the redo stack, so every undo
+   * would quietly destroy its own redo. To prevent that, the row of each operation
+   * about to be replayed is marked here synchronously, before the write, and one
+   * mark is consumed when the matching mutation arrives, whenever that is. Marks
+   * carry a time-to-live so an echo that never arrives — because the write was
+   * skipped while offline — cannot linger and wrongly suppress a much later, real
+   * edit to the same row.
    */
   private readonly pendingReplayEchoes = new Map<string, { count: number; expiresAt: number }>();
 
@@ -182,10 +176,10 @@ export class UndoScope<S extends Schema> {
     this.conflictPolicy = options.conflictPolicy ?? DEFAULT_UNDO_CONFLICT_POLICY;
     this.tracksModel = options.tracksModel;
 
-    // Build the registered-name → schema-key alias map. The mutation stream
-    // reports `model.getModelName()` (e.g. `'SlideLayer'`), but inverse ops
-    // and the replay transaction are keyed by the SCHEMA key (e.g.
-    // `'slideLayers'`). Map every reasonable spelling to the schema key.
+    // Build the map from registered name to schema key. The mutation stream
+    // reports a model's registered name (for example `'SlideLayer'`), but inverse
+    // operations and the replay transaction are keyed by the schema key (for
+    // example `'slideLayers'`), so map every reasonable spelling to the schema key.
     for (const schemaKey of Object.keys(this.schema.models)) {
       const def = (this.schema.models as Record<string, { typename?: string }>)[schemaKey];
       const typename = def?.typename ?? schemaKey;
@@ -196,13 +190,11 @@ export class UndoScope<S extends Schema> {
       }
     }
 
-    // Subscribe to the local-mutation stream ONLY when this scope opts into
-    // stream recording. Transitional flag: surfaces still on the legacy
-    // manual-record path (mutator `RecordingTransaction`, AI pipeline
-    // sessions) keep `recordFromStream: false` so writes aren't double-counted.
-    // Once every surface is migrated, stream recording becomes the only path
-    // and the flag is removed. Optional on the contract so minimal test
-    // doubles can omit it (undo then records nothing).
+    // Subscribe to the local-mutation stream only when this scope opts into
+    // stream recording. A scope using explicit `record()` calls instead keeps
+    // `recordFromStream` false so writes are not counted twice. The stream method
+    // on the store is optional, so a minimal test double can omit it, in which
+    // case undo records nothing.
     this.unsubscribe =
       options.recordFromStream && this.store.subscribeLocalMutations
         ? this.store.subscribeLocalMutations((m) => { this.onLocalMutation(m); })
@@ -210,10 +202,10 @@ export class UndoScope<S extends Schema> {
   }
 
   /**
-   * Open a grouping session: every stream-recorded op until {@link endGroup}
-   * collapses into a single undo entry. Mirrors Liveblocks `history.pause()` —
-   * call on gesture start (pointerdown) or AI-response start. Idempotent-ish:
-   * a second call closes the previous group first.
+   * Opens a grouping session: every stream-recorded operation until
+   * {@link UndoScope.endGroup} collapses into one undo entry. Call it at the start
+   * of a gesture, such as a pointer-down, or at the start of an AI response. A
+   * second call closes the previous group first.
    */
   beginGroup(label?: string): void {
     if (this.group) this.endGroup();
@@ -266,9 +258,9 @@ export class UndoScope<S extends Schema> {
   }
 
   /**
-   * Arm async-echo suppression for the rows a replay is about to write. Called
-   * synchronously, before `applyOps`, so the marks exist no matter how long the
-   * engine takes to surface the echo on the stream. See {@link pendingReplayEchoes}.
+   * Arms echo suppression for the rows a replay is about to write. Called
+   * synchronously, before the writes, so the marks exist however long the engine
+   * takes to surface each echo on the stream. See {@link UndoScope.pendingReplayEchoes}.
    */
   private markReplayEchoes(ops: InverseOp[]): void {
     const expiresAt = Date.now() + REPLAY_ECHO_TTL_MS;
@@ -284,9 +276,9 @@ export class UndoScope<S extends Schema> {
   }
 
   /**
-   * If `${schemaKey}:${modelId}` has an armed echo mark, consume one and report
-   * that this mutation is our own replay echo (caller drops it). Prunes expired
-   * marks opportunistically so a skipped/never-arriving echo can't leak.
+   * If `${schemaKey}:${modelId}` has an armed mark, consume one and report that
+   * this mutation is the scope's own replay echo, so the caller drops it. Expired
+   * marks are pruned along the way, so an echo that never arrives cannot linger.
    */
   private consumeReplayEcho(schemaKey: string, modelId: string): boolean {
     if (this.pendingReplayEchoes.size === 0) return false;
@@ -312,11 +304,11 @@ export class UndoScope<S extends Schema> {
   }
 
   /**
-   * Stream listener — the sole place entries are born. Skips replay echoes
-   * and out-of-scope models, derives the forward+inverse op from the
-   * mutation's `data`/`previousData`, and defers the stack push to a
-   * per-tick flush so a burst of writes (e.g. align 5 layers) becomes ONE
-   * undo step — riding the same tick boundary the TransactionQueue batches on.
+   * The stream listener, and the only place stream-recorded entries originate. It
+   * skips replay echoes and out-of-scope models, derives the forward and inverse
+   * operations from the mutation's `data` and `previousData`, and defers the stack
+   * push to a per-tick flush, so a burst of writes — aligning five layers at once,
+   * say — becomes a single undo step.
    */
   private onLocalMutation(m: LocalMutation): void {
     if (this.replaying) return;
@@ -360,7 +352,7 @@ export class UndoScope<S extends Schema> {
     const collected = this.batch;
     this.batch = [];
     const forwards = collected.map((c) => c.forward);
-    // Undo applies inverses in REVERSE order of how the forwards ran.
+    // Undo applies the inverses in reverse order of how the forwards ran.
     const inverses = collected
       .map((c) => c.inverse)
       .filter((i): i is InverseOp => i !== null)
@@ -385,28 +377,26 @@ export class UndoScope<S extends Schema> {
   }
 
   /**
-   * Run a recording mutator exclusively on the scope's serialization chain.
-   * Used by the legacy manual-record path (`useMutators` + `RecordingTransaction`)
-   * so the snapshot → write → `record()` sequence is atomic relative to undo/
-   * redo. The stream-recording path doesn't need this (it derives entries from
-   * already-committed mutations); kept until all surfaces migrate off manual.
+   * Runs a recording mutator by itself on the scope's serialization chain, so its
+   * snapshot, write, and {@link UndoScope.record} happen atomically with respect to
+   * undo and redo. This is used by the explicit-record path; the stream-recording
+   * path does not need it, since it derives entries from already-committed
+   * mutations.
    */
   runRecorded<T>(work: () => Promise<T>): Promise<T> {
     return this.enqueue(work);
   }
 
   /**
-   * Record one entry onto the undo stack. Clears the redo stack. Fed by
-   * {@link flushBatch}/{@link endGroup} from the local-mutation stream, and
-   * still called directly by the legacy manual-record consumers
-   * (`useMutators`, the AI mutation pipeline) until they migrate. Entries are
-   * built internally (trusted), so the schema check is DEV-ONLY: it catches
-   * recorder bugs in dev/test (rejecting a malformed op at ingestion, with its
-   * path, instead of letting it crash later inside `applyOps`) without paying a
-   * Zod parse on every user action in production. The real validation boundary
-   * is `parseUndoEntry`, applied when entries are deserialized from persistence
-   * (untrusted input). Best practice: validate at trust boundaries, type-check
-   * internal calls.
+   * Records one entry onto the undo stack and clears the redo stack. It is fed
+   * both by the per-tick flush and grouping paths from the local-mutation stream
+   * and by direct callers using explicit recording. Entries are built internally
+   * and therefore trusted, so the schema check here runs only outside production:
+   * it catches recorder bugs early, rejecting a malformed operation at ingestion
+   * with a clear path rather than letting it fail later during replay, without
+   * paying a validation cost on every user action in production. The real
+   * validation boundary is {@link parseUndoEntry}, applied to entries loaded from
+   * persistence, which is untrusted input.
    */
   record(entry: UndoEntry): void {
     if (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') {
@@ -420,13 +410,11 @@ export class UndoScope<S extends Schema> {
   }
 
   /**
-   * Subscribe to every recorded mutation. Fires synchronously at the tail of
-   * each {@link record} call, after the entry is on the undo stack. Returns an
-   * unsubscribe function — call it on teardown.
-   *
-   * Listeners receive the full {@link UndoEntry} (its `forwards` carry the
-   * `{ kind, modelKey, data }` ops), so a consumer can derive what changed
-   * (e.g. "a slideLayers row of type 'chart' was created") without re-querying.
+   * Subscribes to every recorded mutation. The listener fires synchronously at the
+   * end of each {@link UndoScope.record} call, once the entry is on the undo stack,
+   * and the returned function unsubscribes it. The listener receives the full
+   * {@link UndoEntry} — its `forwards` carry the `{ kind, modelKey, data }`
+   * operations — so a consumer can tell what changed without querying again.
    */
   onRecord(listener: (entry: UndoEntry) => void): () => void {
     this.recordListeners.add(listener);
@@ -440,19 +428,18 @@ export class UndoScope<S extends Schema> {
       try {
         listener(entry);
       } catch (err) {
-        // A faulty observer must never break the editor's recording path.
-        // Routed through the gated logger; the consumer's own onRecord callback
-        // is at fault, so this is actionable → warn (no engine tag on the line).
+        // A faulty observer must never break the recording path. The consumer's
+        // own onRecord callback is at fault, so log it as an actionable warning.
         getContext().logger.warn('An undo/redo onRecord listener threw — your callback should not throw', err);
       }
     }
   }
 
   /**
-   * Subscribe to ANY stack change (record/undo/redo/clear). Used by
-   * `useUndoScope` to re-render so `canUndo`/`canRedo` stay live across every
-   * consumer — not just the component that invoked undo/redo. Returns an
-   * unsubscribe function.
+   * Subscribes to any stack change — record, undo, redo, or clear. The React
+   * `useUndoScope` hook uses this to re-render so `canUndo` and `canRedo` stay
+   * current for every consumer, not only the component that invoked undo or redo.
+   * The returned function unsubscribes.
    */
   onChange(listener: () => void): () => void {
     this.changeListeners.add(listener);
@@ -466,8 +453,8 @@ export class UndoScope<S extends Schema> {
       try {
         listener();
       } catch (err) {
-        // Consumer's own onChange callback is at fault → actionable warn,
-        // routed through the gated logger (no engine tag on the line).
+        // The consumer's own onChange callback is at fault, so log it as an
+        // actionable warning.
         getContext().logger.warn('An undo/redo onChange listener threw — your callback should not throw', err);
       }
     }
@@ -482,12 +469,11 @@ export class UndoScope<S extends Schema> {
   }
 
   /**
-   * Pop the last mutator and apply its inverses. Pushes to redo.
-   *
-   * Under the default `skip-stale` policy the inverses are filtered against
-   * live state first (paired with the entry's forwards = "what I set"), so a
-   * field a collaborator changed after my op is left untouched — undo reverts
-   * my change only where it still stands.
+   * Pops the most recent entry, applies its inverse operations, and pushes it onto
+   * the redo stack. Under the default `skip-stale` policy the inverses are first
+   * filtered against the current state — paired with the entry's forwards, which
+   * record what this change set — so a field a collaborator changed afterward is
+   * left untouched, and undo reverts the change only where it still stands.
    */
   undo(): Promise<void> {
     return this.enqueue(async () => {
@@ -495,18 +481,18 @@ export class UndoScope<S extends Schema> {
       if (!entry) return;
       const tx = createTransaction(this.schema, this.store, this.organizationId);
       const ops = resolveOps(entry.inverses, entry.forwards, this.store, this.conflictPolicy);
-      // Suppress our own stream listener so replayed writes don't record as
-      // new undo entries. `replaying` covers inline echoes; `markReplayEchoes`
-      // covers the engine's async (IDB-gated) echo that lands after this method
-      // returns. Cleared in `finally` even if a replay op throws.
+      // Suppress the scope's own stream listener so replayed writes are not
+      // recorded as new entries. `replaying` covers echoes delivered inline;
+      // `markReplayEchoes` covers the asynchronous echo that lands after this
+      // method returns. Cleared in `finally` even if a replay throws.
       this.markReplayEchoes(ops);
       this.replaying = true;
       try {
         await applyOps(tx, ops);
       } catch (err) {
-        // The replay was rejected (e.g. a server 409): the world didn't change,
-        // so restore the entry to the undo stack rather than silently dropping
-        // it (which would also strand it off the redo stack — invisible undo).
+        // The replay was rejected (for example, a server 409). Nothing changed,
+        // so restore the entry to the undo stack rather than dropping it, which
+        // would also strand it off the redo stack and lose the action entirely.
         this.undoStack.push(entry);
         this.emitChange();
         throw err;
@@ -520,10 +506,11 @@ export class UndoScope<S extends Schema> {
   }
 
   /**
-   * Pop the last undone entry and re-apply the forward ops. Pushes to undo.
-   * Symmetric to {@link undo}: forwards are filtered against live state
-   * (paired with the entry's inverses = "what undo restored"), so redo
-   * re-asserts my change only where the undone value still stands.
+   * Pops the most recently undone entry, re-applies its forward operations, and
+   * pushes it onto the undo stack. It mirrors {@link UndoScope.undo}: the forwards
+   * are filtered against the current state — paired with the entry's inverses,
+   * which record what undo restored — so redo re-asserts the change only where the
+   * undone value still stands.
    */
   redo(): Promise<void> {
     return this.enqueue(async () => {
@@ -580,9 +567,9 @@ export class UndoScope<S extends Schema> {
 }
 
 /**
- * Derive the forward + inverse op for a single local mutation. Returns null
- * when the mutation can't be reversed (e.g. an update with no captured
- * previous values), so the caller can drop it rather than push a half-entry.
+ * Derives the forward and inverse operation for a single local mutation. Returns
+ * null when the mutation cannot be reversed — for example, an update with no
+ * captured previous values — so the caller drops it rather than push a half-entry.
  */
 function buildUndoOps(
   m: LocalMutation,
@@ -636,8 +623,9 @@ function buildUndoOps(
 // ── Manager ────────────────────────────────────────────────────────────────
 
 /**
- * Central registry of named undo scopes. One per-app instance, created once
- * during engine setup. Mutator invocations find their scope by name.
+ * The registry of named undo scopes. One instance is created per application
+ * during engine setup, and each surface finds its scope by name through
+ * {@link UndoManager.getScope}.
  */
 export class UndoManager<S extends Schema> {
   private readonly scopes = new Map<string, UndoScope<S>>();
@@ -665,9 +653,9 @@ export class UndoManager<S extends Schema> {
 // ── Internal helpers ───────────────────────────────────────────────────────
 
 /**
- * Replay a list of InverseOps through a Transaction. Used by both undo
- * (replaying captured inverses) and redo (replaying the captured forwards).
- * Every op is awaited sequentially to preserve ordering guarantees.
+ * Replays a list of operations through a {@link Transaction}. Used by both undo,
+ * which replays the captured inverses, and redo, which replays the captured
+ * forwards. Each operation is awaited in turn to preserve ordering.
  */
 async function applyOps<S extends Schema>(tx: Transaction<S>, ops: InverseOp[]): Promise<void> {
   // The tx.mutations is a Proxy whose per-key methods are strongly typed from
@@ -694,8 +682,8 @@ async function applyOps<S extends Schema>(tx: Transaction<S>, ops: InverseOp[]):
   for (const op of ops) {
     const m = mutateAny[op.modelKey];
     if (!m) {
-      // A persisted inverse op referencing a model the schema no longer has —
-      // previously this surfaced as an opaque TypeError on `m.create`.
+      // A persisted inverse op references a model the schema no longer has;
+      // fail with a clear message rather than an opaque TypeError.
       throw new Error(
         `Cannot undo: model "${op.modelKey}" is not part of the current schema.`,
       );

@@ -1,11 +1,13 @@
 /**
- * ObjectPool - In-memory model cache with deduplication
- *
- * Pure memory management without database or registry dependencies.
- * Uses static ModelRegistry for model class lookup only.
+ * InstanceCache is the in-memory cache of live model instances, keyed by id and
+ * deduplicated so each entity has a single instance. It maintains type and
+ * foreign-key indexes for fast lookups, evicts entries under a size cap, and
+ * notifies subscribers and query views as models are added, updated, or
+ * removed. It holds a {@link ModelRegistry} to map between model names and
+ * constructor classes, but performs no persistence of its own.
  */
 
-import { makeObservable, observable, action, computed, runInAction, set } from 'mobx';
+import { makeObservable, observable, action, computed, runInAction } from 'mobx';
 import { Model } from './Model.js';
 import { ModelRegistry } from './ModelRegistry.js';
 import { getContext } from './context.js';
@@ -17,7 +19,7 @@ import { QueryView, type QueryViewOptions } from './core/QueryView.js';
 /** Constructor type for Model subclasses - uses abstract to handle variance */
 type ModelConstructor<T extends Model> = abstract new (...args: never[]) => T;
 
-// Re-export so existing `import { ModelScope } from './ObjectPool.js'` still resolves
+// Re-exported so `import { ModelScope } from './InstanceCache.js'` resolves
 export { ModelScope };
 
 interface ModelEntry {
@@ -39,9 +41,10 @@ interface DeltaInfo {
 }
 
 /**
- * ObjectPool - Pure in-memory model cache with deduplication
+ * The in-memory cache of model instances, keyed by id and deduplicated so each
+ * entity resolves to a single instance.
  */
-export class ObjectPool {
+export class InstanceCache {
   // Single source of truth for all models (observable for reactivity)
   private entries = observable.map<string, ModelEntry>();
   private typeIndex = observable.map<string, Set<string>>();
@@ -62,9 +65,10 @@ export class ObjectPool {
     }
   >();
 
-  // No intermediate cache layer — getByType() reads typeIndex + entries directly.
-  // This follows Linear's sync engine pattern: observable data structures ARE the
-  // reactivity source. No computed getters with conditional cache invalidation.
+  // No intermediate cache layer — getByType() reads typeIndex and entries
+  // directly. Both are observable, so the data structures are themselves the
+  // reactivity source; there are no computed getters with conditional cache
+  // invalidation to get wrong.
 
   // Foreign key indexes: Map<"ModelType:fieldName", Map<fieldValue, ObservableSet<modelId>>>
   // Enables O(1) lookups like "all SlideLayer models where slideId = X"
@@ -109,10 +113,11 @@ export class ObjectPool {
       });
     }
 
-    if (!this.subscriptions.has(modelName)) {
-      this.subscriptions.set(modelName, new Set());
+    let subs = this.subscriptions.get(modelName);
+    if (!subs) {
+      subs = new Set();
+      this.subscriptions.set(modelName, subs);
     }
-    const subs = this.subscriptions.get(modelName)!;
     const erased = callback as (model: Model) => void;
     subs.add(erased);
     return () => subs.delete(erased);
@@ -149,20 +154,19 @@ export class ObjectPool {
       useWeakRefs: config.useWeakRefs ?? true,
     };
 
-    // 🔧 PROPER FIX: Store model registry reference
+    // Store the model registry reference
     if (!modelRegistry) {
       throw new AbloValidationError(
-        'ObjectPool requires ModelRegistry for production-safe model name lookup',
+        'InstanceCache requires ModelRegistry for production-safe model name lookup',
         { code: 'pool_registry_missing' },
       );
     }
     this.registry = modelRegistry;
 
-    // 🔧 PRODUCTION FIX: Defer type index initialization until first use
-    // This allows models to be registered after ObjectPool creation
-    // Type indexes will be initialized on first getByType call
+    // Type indexes are initialized on first use, so models can be registered
+    // after the InstanceCache is created; the first getByType call builds them.
 
-    // Linear-style: no computed cache layer. entries + typeIndex are both observable.
+    // No computed cache layer: entries and typeIndex are both observable, and
     // getByType() reads them directly, so MobX always tracks the dependency.
     makeObservable(this, {
       add: action,
@@ -180,26 +184,12 @@ export class ObjectPool {
     this.startGC();
   }
 
-  /**
-   * 🔧 PRODUCTION FIX: Initialize type indexes for all registered models
-   * This prevents the "No type index found" error in production where constructor
-   * references are lost due to minification.
-   */
-  private initializeTypeIndexes(): void {
-    const names = this.registry.getRegisteredModelNames();
-    for (const modelName of names) {
-      if (!this.typeIndex.has(modelName)) {
-        this.typeIndex.set(modelName, observable.set<string>());
-      }
-    }
-  }
+  // No computed getters — getByType() reads typeIndex and entries directly.
+  // Both are observable, so MobX always tracks the dependency; there is no
+  // conditional cache path that could silently drop a dependency.
 
-  // No computed getters — getByType() reads typeIndex + entries directly.
-  // This eliminates the conditional dependency bug where MobX lost tracking
-  // because _cacheInvalid (non-observable) gated whether entries was read.
-
-  // _rebuildCaches and _invalidateCache removed — no cache layer to manage.
-  // typeIndex + entries are observable and read directly by getByType().
+  // There is no cache layer to manage: typeIndex and entries are observable
+  // and read directly by getByType().
 
   private resolveModel(entry: ModelEntry, id?: string): Model | undefined {
     if (entry.model) return entry.model;
@@ -214,6 +204,10 @@ export class ObjectPool {
     return undefined;
   }
 
+  // The type parameter appears only in the return position on purpose: this is
+  // an ergonomic typed accessor (like Map<K, V>.get) that centralizes what would
+  // otherwise be an `as T` cast at every call site.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
   get<T extends Model = Model>(id: string): T | undefined {
     const entry = this.entries.get(id);
 
@@ -310,7 +304,7 @@ export class ObjectPool {
           // Internal delta-ordering anomaly that reconciles on the next
           // catch-up — forensic, not consumer-actionable → debug.
           getContext().logger.debug(
-            `ObjectPool.add() SUSPICIOUS: INSERT after ${history.lastAction}`,
+            `InstanceCache.add() SUSPICIOUS: INSERT after ${history.lastAction}`,
             { modelType, id, syncId: deltaInfo.syncId },
           );
         }
@@ -318,7 +312,7 @@ export class ObjectPool {
 
       // Update delta history
       this.deltaHistory.set(addKey, {
-        lastAction: deltaInfo.action || 'U',
+        lastAction: deltaInfo.action ?? 'U',
         lastSyncId: deltaInfo.syncId,
         timestamp: Date.now(),
       });
@@ -447,7 +441,7 @@ export class ObjectPool {
       // loader (`ensureDeckLayers`, `prefetchSlideLayers`, bootstrap
       // hydration) was in the pool but invisible to `hasMany` lookups
       // — `slide.layers` returned `[]` until the user clicked a layer
-      // and SOMETHING else ran a non-batch `add` that happened to
+      // and something else ran a non-batch `add` that happened to
       // populate the FK index as a side effect. The UX symptom was
       // "slides show empty until you click on one." Adding this one
       // line closes the gap.
@@ -527,9 +521,9 @@ export class ObjectPool {
       const entry = this.entries.get(id);
       if (!entry) continue;
 
-      const modelName = entry.model?.getModelName() || entry.weakRef?.deref()?.getModelName();
+      const modelName = entry.model?.getModelName() ?? entry.weakRef?.deref()?.getModelName();
 
-      // FK/type cleanup must run BEFORE entries.delete — see `remove()`
+      // FK/type cleanup must run before entries.delete — see `remove()`
       // for the full explanation. Same bug, same fix.
       this.removeFromTypeIndex(id, modelName);
       this.entries.delete(id);
@@ -539,8 +533,9 @@ export class ObjectPool {
         this.viewRegistry.notifyRemoved(modelName, id);
       }
 
-      const model = entry.model || entry.weakRef?.deref();
-      model?.dispose?.();
+      const model = entry.model ?? entry.weakRef?.deref();
+      // A non-Model object can reach the pool (see `clear`); only dispose a real one.
+      if (typeof model?.dispose === 'function') model.dispose();
 
       const addKey = modelName ? `${modelName}:${id}` : id;
       this.recentAdditions.delete(addKey);
@@ -571,7 +566,7 @@ export class ObjectPool {
     const entry = this.entries.get(id);
     if (!entry) return false;
 
-    const modelName = entry.model?.getModelName() || entry.weakRef?.deref()?.getModelName();
+    const modelName = entry.model?.getModelName() ?? entry.weakRef?.deref()?.getModelName();
 
     // Order matters here: `removeFromTypeIndex` → `removeFromForeignKeyIndex`
     // reads the FK field values off the model via `this.entries.get(id)`.
@@ -580,7 +575,7 @@ export class ObjectPool {
     // That causes `getByForeignKey(..., parentId)` to report
     // `matched > returned` (dropped-no-entry) and, on the UI, keeps the
     // stale layer visible until the next reload rebuilds the index
-    // from fresh data. Do the FK/type cleanup FIRST, then delete the
+    // from fresh data. Do the FK/type cleanup first, then delete the
     // entry.
     runInAction(() => {
       this.removeFromTypeIndex(id, modelName);
@@ -593,8 +588,9 @@ export class ObjectPool {
       this.viewRegistry.notifyRemoved(modelName, id);
     }
 
-    const model = entry.model || entry.weakRef?.deref();
-    model?.dispose?.();
+    const model = entry.model ?? entry.weakRef?.deref();
+    // A non-Model object can reach the pool (see `clear`); only dispose a real one.
+    if (typeof model?.dispose === 'function') model.dispose();
 
     // Clean tracking
     const addKey = modelName ? `${modelName}:${id}` : id;
@@ -607,7 +603,7 @@ export class ObjectPool {
 
   removeFromArchive(id: string): boolean {
     const entry = this.entries.get(id);
-    if (!entry || entry.scope !== ModelScope.archived) {
+    if (entry?.scope !== ModelScope.archived) {
       return false;
     }
     return this.remove(id);
@@ -617,8 +613,8 @@ export class ObjectPool {
     modelClass: ModelConstructor<Model>,
     scope: ModelScope = ModelScope.all
   ): Model[] {
-    // Linear-style: read typeIndex + entries directly. Both are observable maps,
-    // so MobX always tracks the dependency — no conditional cache path.
+    // Read typeIndex and entries directly. Both are observable maps, so MobX
+    // always tracks the dependency — there is no conditional cache path.
     let actualModelName = this.registry.getModelNameFromConstructor(modelClass);
     if (!actualModelName) {
       actualModelName = this.registry.getModelNameFromConstructor(modelClass);
@@ -652,7 +648,7 @@ export class ObjectPool {
     }
 
     // Resolve each ID from entries (observable) with scope filtering.
-    // Note: we do NOT check `instanceof modelClass` because schema-generated
+    // Note: we do not check `instanceof modelClass`, because schema-generated
     // dynamic classes and hand-coded classes are different constructors that
     // both represent the same model type. The typeIndex lookup by name is
     // authoritative — if the name matched, the model belongs to this type.
@@ -762,7 +758,7 @@ export class ObjectPool {
       /**
        * Throw (instead of warn + return null) when the wire names a model
        * this client never registered. Passed by the developer-await read
-       * path (`HydrationCoordinator`'s network leg) so a schema collision
+       * path (`OnDemandLoader`'s network leg) so a schema collision
        * — the org's pushed schema names `Document` but this client only
        * registered `documents` — surfaces AT the row that failed, with the
        * known-model list and `ablo status` pointer, instead of bubbling up
@@ -776,14 +772,14 @@ export class ObjectPool {
     // Support multiple model identifier fields for backwards compatibility
     const modelName = data.__typename ?? data.__class ?? data.modelName ?? 'Unknown';
 
-    const Constructor = ModelClass || this.registry.getModelByName(modelName);
+    const Constructor = ModelClass ?? this.registry.getModelByName(modelName);
 
     if (!Constructor) {
-      if (!ModelClass && modelName === 'Unknown') {
+      if (modelName === 'Unknown') {
         // Malformed row with no type marker — dropped, but nothing the consumer
         // can act on (the actionable schema-drift case is handled below) → debug.
         getContext().logger.debug(
-          'ObjectPool.createFromData: No model identifier found',
+          'InstanceCache.createFromData: No model identifier found',
           { data },
         );
         getContext().modelDebugLogger?.logError('Unknown', 'CREATE', 'No model identifier found', data);
@@ -808,7 +804,7 @@ export class ObjectPool {
         `Received data for "${modelName}", which isn't in your schema — these rows will be skipped. Run \`ablo status\` to compare your local schema with the server.`,
       );
       getContext().logger.debug(
-        `ObjectPool.createFromData: No constructor found for model "${modelName}"`,
+        `InstanceCache.createFromData: No constructor found for model "${modelName}"`,
         { data },
       );
       getContext().modelDebugLogger?.logError(
@@ -820,12 +816,12 @@ export class ObjectPool {
       return null;
     }
 
-    // Check if model already exists and UPDATE it instead of creating duplicate
-    // LINEAR PATTERN: Keep existing model instances alive, just update their data
-    // This preserves React's references and MobX observation tracking
+    // If the model already exists, update it in place instead of creating a
+    // duplicate. Keeping the existing instance alive preserves React's
+    // references and MobX's observation tracking.
     if (data.id && this.entries.has(data.id)) {
       const existing = this.get(data.id);
-      if (existing && existing.getModelName() === modelName) {
+      if (existing?.getModelName() === modelName) {
         // Same ID and same type - update existing model with new data and return it
         existing.updateFromData(data);
         return existing;
@@ -847,7 +843,7 @@ export class ObjectPool {
       // Internal construction failure — captured via observability below and
       // re-fetched on resync; the stack is forensic → debug.
       getContext().logger.debug(
-        `[ObjectPool.createFromData] FAILED ${modelName}`,
+        `[InstanceCache.createFromData] FAILED ${modelName}`,
         { errorMessage, stack: error instanceof Error ? error.stack : undefined },
       );
       getContext().observability.captureTransactionFailure({
@@ -874,12 +870,9 @@ export class ObjectPool {
     const preserveObserved = options.preserveObserved ?? false;
     const preservedIds: string[] = [];
     const preservedEntries: [string, ModelEntry][] = [];
-    let disposedCount = 0;
-    let checkedCount = 0;
 
     for (const [id, entry] of this.entries) {
-      const model = entry.model || entry.weakRef?.deref();
-      checkedCount++;
+      const model = entry.model ?? entry.weakRef?.deref();
 
       // Check if this model should be preserved (has active React observers)
       if (
@@ -894,8 +887,11 @@ export class ObjectPool {
         continue;
       }
 
-      model?.dispose?.();
-      disposedCount++;
+      // `rowAsModel` only casts, so a non-Model object can reach the pool (see
+      // the SyncClient no-op UPDATE guard). Guard that `dispose` is actually
+      // callable — mirroring the `hasObservedCollections` typeof-check above —
+      // rather than assume every pooled entry is a real Model.
+      if (typeof model?.dispose === 'function') model.dispose();
     }
 
     // Save access times for preserved entries before clearing
@@ -925,7 +921,7 @@ export class ObjectPool {
       // Re-add preserved entries (also rebuilds foreign key indexes via addToTypeIndex)
       for (const [id, entry] of preservedEntries) {
         this.entries.set(id, entry);
-        const model = entry.model || entry.weakRef?.deref();
+        const model = entry.model ?? entry.weakRef?.deref();
         if (model) {
           this.addToTypeIndex(id, model.getModelName());
         }
@@ -990,9 +986,9 @@ export class ObjectPool {
       if (entry.scope === ModelScope.live) scopeCounts.live++;
       else if (entry.scope === ModelScope.archived) scopeCounts.archived++;
 
-      const modelName = entry.model?.getModelName() || entry.weakRef?.deref()?.getModelName();
+      const modelName = entry.model?.getModelName() ?? entry.weakRef?.deref()?.getModelName();
       if (modelName) {
-        typeCounts.set(modelName, (typeCounts.get(modelName) || 0) + 1);
+        typeCounts.set(modelName, (typeCounts.get(modelName) ?? 0) + 1);
       }
     }
 
@@ -1041,12 +1037,12 @@ export class ObjectPool {
 
       for (const [id, entry] of this.entries) {
         // Check if model has expired based on last access time
-        const lastAccessed = this.accessTimes.get(id) || 0;
+        const lastAccessed = this.accessTimes.get(id) ?? 0;
         if (now - lastAccessed > this.config.maxAge) {
-          // CRITICAL: Check if model has observed collections before GC
-          // Following MobX best practice: don't dispose models being observed by React
+          // Do not GC a model that has observed collections — disposing one
+          // React is still observing would break it (per MobX guidance).
           // See: https://mobx.js.org/lazy-observables.html
-          const model = entry.model || entry.weakRef?.deref();
+          const model = entry.model ?? entry.weakRef?.deref();
           if (
             model &&
             typeof model.hasObservedCollections === 'function' &&
@@ -1094,7 +1090,7 @@ export class ObjectPool {
 
       if (skippedObserved > 0) {
         getContext().logger.debug(
-          `[ObjectPool GC] Skipped ${skippedObserved} models with active React observers`,
+          `[InstanceCache GC] Skipped ${skippedObserved} models with active React observers`,
         );
       }
 
@@ -1111,7 +1107,9 @@ export class ObjectPool {
     this.gcTimer = setInterval(() => this.gc(), this.config.gcInterval);
     // Don't hold a headless Node process open just for pool GC — without
     // this, an agent that never calls disconnect() can never exit. No-op in
-    // browsers (where setInterval returns a number without `unref`).
+    // browsers (where setInterval returns a number without `unref`), which is
+    // why the call is optional even though the Node timer type always has it.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     this.gcTimer.unref?.();
   }
 
@@ -1129,7 +1127,7 @@ export class ObjectPool {
 
       for (const [id, entry] of this.entries) {
         // Skip models that are being observed by React - they must stay alive
-        const model = entry.model || entry.weakRef?.deref();
+        const model = entry.model ?? entry.weakRef?.deref();
         if (
           model &&
           typeof model.hasObservedCollections === 'function' &&
@@ -1138,7 +1136,7 @@ export class ObjectPool {
           continue;
         }
 
-        const entryAccessTime = this.accessTimes.get(id) || 0;
+        const entryAccessTime = this.accessTimes.get(id) ?? 0;
         if (entryAccessTime < oldestTime) {
           oldest = [id, entry];
           oldestTime = entryAccessTime;
@@ -1211,7 +1209,7 @@ export class ObjectPool {
   getByForeignKey(modelName: string, fieldName: string, fieldValue: string): Model[] {
     const indexKey = `${modelName}:${fieldName}`;
     const index = this.foreignKeyIndexes.get(indexKey);
-    // Both empty-path early-returns below are NORMAL states, not errors:
+    // Both empty-path early-returns below are normal states, not errors:
     // a model with no FK index yet (not populated), or an index with no
     // entry for this specific parent id (entity genuinely has no
     // children). These used to `console.warn` diagnostic dumps on every
@@ -1245,7 +1243,7 @@ export class ObjectPool {
       // has dangling refs (legacy orphan deltas, pending CREATE
       // transactions, etc.). Noisy at warn level, useful during
       // investigation.
-      getContext().logger.debug('[ObjectPool.getByForeignKey] ROWS DROPPED', {
+      getContext().logger.debug('[InstanceCache.getByForeignKey] ROWS DROPPED', {
         modelName,
         fieldName,
         fieldValue,
@@ -1272,7 +1270,7 @@ export class ObjectPool {
     if (!fields) return;
 
     for (const fieldName of fields) {
-      const fieldValue = Reflect.get(model, fieldName);
+      const fieldValue = model.getField(fieldName);
       if (typeof fieldValue !== 'string') continue;
 
       const indexKey = `${modelName}:${fieldName}`;
@@ -1302,7 +1300,7 @@ export class ObjectPool {
     if (!model) return;
 
     for (const fieldName of fields) {
-      const fieldValue = Reflect.get(model, fieldName);
+      const fieldValue = model.getField(fieldName);
       if (typeof fieldValue !== 'string') continue;
 
       const indexKey = `${modelName}:${fieldName}`;

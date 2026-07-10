@@ -1,11 +1,13 @@
 /**
- * `@abloatai/ablo/coordination` — the canonical wire schema for the three
- * coordination layers (presence, pessimistic claims, optimistic stale-context).
- * See `./schema.ts` for the model and the per-layer schemas.
+ * The `@abloatai/ablo/coordination` entry point. It re-exports the wire
+ * schemas and inferred types for the three coordination layers: presence (who
+ * is currently active), claims (taking exclusive hold of a target before
+ * writing it), and stale-context guards (rejecting a write that was based on an
+ * out-of-date read). The definitions themselves live in the sibling schema
+ * module.
  *
- * Explicit named list (not `export *`): every addition to schema.ts must be a
- * deliberate export decision here, so new symbols don't silently become public
- * API of the published package.
+ * Exports are listed by name rather than re-exported wholesale, so every symbol
+ * that becomes part of this package's public API is a deliberate choice.
  */
 
 // Runtime schemas + helpers.
@@ -33,6 +35,10 @@ export {
   claimBeginPayloadSchema,
   claimAbandonPayloadSchema,
   claimReorderPayloadSchema,
+  claimHeartbeatPayloadSchema,
+  claimHeartbeatAckPayloadSchema,
+  claimHeartbeatBatchPayloadSchema,
+  claimHeartbeatBatchAckPayloadSchema,
   // Read interest — area-of-interest navigation
   updateSubscriptionPayloadSchema,
   subscriptionAckPayloadSchema,
@@ -45,11 +51,11 @@ export {
   presenceUpdateFrameSchema,
 } from './schema.js';
 
-// Conflict-policy runtime — the engine detects, the policy decides. Lives in
-// `../policy/types.js` (a dependency-free leaf: its only imports are types),
-// exported here so a server-side consumer reaches the coordination vocabulary
-// AND its default resolution through one leaf subpath instead of the root
-// barrel (which would evaluate the whole browser client stack in Node).
+// Conflict-policy runtime — the engine detects a conflict, and the policy
+// decides what to do about it. These are re-exported here so that server-side
+// code can reach both the coordination vocabulary and its default conflict
+// resolution from this one subpath, without importing the full client from the
+// package root.
 export { defaultPolicy, capabilityPreemptPolicy, interpretConflictAxis } from '../policy/types.js';
 export type {
   Conflict,
@@ -84,6 +90,10 @@ export type {
   ClaimBeginPayload,
   ClaimAbandonPayload,
   ClaimReorderPayload,
+  ClaimHeartbeatPayload,
+  ClaimHeartbeatAckPayload,
+  ClaimHeartbeatBatchPayload,
+  ClaimHeartbeatBatchAckPayload,
   // Read interest — area-of-interest navigation
   UpdateSubscriptionPayload,
   SubscriptionAckPayload,

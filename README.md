@@ -39,10 +39,10 @@ Under the hood, you define your data once with a Zod schema and get the same
 typed model client for every actor — people, server actions, and agents:
 
 ```ts
-await ablo.task.create({ data })                  // create
-await ablo.task.retrieve({ id })                  // read
-await ablo.task.update({ id, data })              // update
-await using task = await ablo.task.claim({ id })  // claim for safe, slow agent work
+await ablo.weatherReports.create({ data })                  // create
+await ablo.weatherReports.retrieve({ id })                  // read
+await ablo.weatherReports.update({ id, data })              // update
+await using claim = await ablo.weatherReports.claim({ id }) // hold for slow agent work
 ```
 
 The schema is the public contract. It gives you typed model methods, realtime
@@ -63,8 +63,9 @@ yet? A **sandbox** `sk_test` key holds throwaway **test data** — like Stripe t
 mode — so you can explore before pointing it at your Postgres. Test-mode only; in
 production every row lives in your database.)
 
-**Built for** collaborative editors, AI agent workflows, and internal tools —
-anywhere people and agents change shared state and everyone has to see it live.
+**Built for** collaborative editors, AI agent workflows, background workers on
+your own infrastructure, and internal tools — anywhere people and agents change
+shared state and everyone has to see it live.
 
 ## Set up
 
@@ -111,62 +112,15 @@ instead of guessing:
 
 ## Quick Start
 
+One schema, one client, one write path for humans and agents — this runs as-is
+after `ablo push`:
+
 ```ts
 import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
-```
 
-The schema is registered once (init scaffolds `ablo/register.ts` for you), and
-every type is one parameter away — no `typeof schema` re-stating, anywhere:
-
-```ts
-// ablo/register.ts — scaffolded by `npx ablo init`, sits beside ablo/schema.ts
-import type { schema } from './schema';
-declare module '@abloatai/ablo' {
-  interface Register { Schema: typeof schema }
-}
-export {};
-```
-
-It's a regular `.ts` module, not a hand-authored `.d.ts`. The top-level
-`import type { schema }` makes the `declare module` block *merge* into (augment)
-the SDK's `Register` interface instead of colliding with it — the same shape
-[TanStack Router uses in `src/router.tsx`](https://tanstack.com/router/latest/docs/framework/react/guide/type-safety). Any `.ts` file in your
-`tsconfig` `include` works; it never needs to be imported.
-
-```ts
-import type { Model } from '@abloatai/ablo/schema';
-
-type WeatherReport = Model<'weatherReports'>; // fully typed from YOUR schema
-```
-
-(The same `Register` binding types every hook and client — it's the
-TanStack-Router pattern: declare the source of truth once, everything
-infers from it.)
-
-### Naming the client type
-
-When you need to pass the client around (a function parameter, a context value),
-**infer the type from the value** — `type Sync = typeof sync`:
-
-```ts
-export const sync = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
-export type Sync = typeof sync; // fully-typed, schema-aware
-
-function persist(client: Sync) { /* ... */ }
-```
-
-This is the same idiom as tRPC's `type AppRouter = typeof appRouter` and
-Drizzle's `typeof db` — the factory resolves the typed overload at the call
-site, so `typeof sync` carries your schema. Do **not** write
-`ReturnType<typeof Ablo>`: that collapses to the untyped last overload and
-loses your model types. There is no bespoke client-type generic to import —
-`typeof` your client value is the type.
-
-```ts
 const schema = defineSchema({
-  // Reserved fields (id, createdAt, updatedAt, organizationId, createdBy) are
-  // provided automatically — don't declare them.
+  // id, createdAt, updatedAt, organizationId, createdBy come free on every model
   weatherReports: model({
     location: z.string(),
     status: z.enum(['pending', 'ready']),
@@ -174,29 +128,21 @@ const schema = defineSchema({
   }),
 });
 
-const ablo = Ablo({
-  schema,
-  apiKey: process.env.ABLO_API_KEY, // written to .env.local by `npx ablo push`
-});
-// Your Postgres is connected once via `npx ablo connect` (logical replication) —
-// not passed here. Ablo tails its WAL; your rows never leave your database.
-
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 await ablo.ready();
 
 const created = await ablo.weatherReports.create({
-  data: {
-    location: 'Stockholm',
-    status: 'pending',
-  },
+  data: { location: 'Stockholm', status: 'pending' },
 });
 
-// An agent claims the row, does its slow work, then writes back. While the
-// claim is held nobody else can overwrite it; anyone else who tries waits in
-// line and re-reads the result. This is the whole point of Ablo.
+// Claim the row before slow work — anyone else waits in line, then re-reads.
 await using claim = await ablo.weatherReports.claim({ id: created.id });
-const report = claim.data;
-const forecast = await fetchForecast(report.location); // slow: API or LLM call
-await ablo.weatherReports.update({ id: report.id, data: { status: 'ready', forecast } });
+const forecast = await fetchForecast(claim.data.location); // slow: API or LLM call
+await ablo.weatherReports.update({
+  id: created.id,
+  data: { status: 'ready', forecast },
+  claim, // the write completes the claimed work and releases the lease
+});
 
 const ready = ablo.weatherReports.get(created.id);
 console.log({ id: ready?.id, status: ready?.status });
@@ -208,6 +154,38 @@ Expected output:
 
 ```txt
 { id: '...', status: 'ready' }
+```
+
+### TypeScript setup (once, scaffolded for you)
+
+`npx ablo init` writes `ablo/register.ts` next to your schema. It binds your
+schema to the SDK's types once — the same declaration-merging shape
+[TanStack Router uses](https://tanstack.com/router/latest/docs/framework/react/guide/type-safety) —
+so every hook and client infers from it:
+
+```ts
+// ablo/register.ts — scaffolded by `npx ablo init`
+import type { schema } from './schema';
+declare module '@abloatai/ablo' {
+  interface Register { Schema: typeof schema }
+}
+export {};
+```
+
+```ts
+import type { Model } from '@abloatai/ablo/schema';
+
+type WeatherReport = Model<'weatherReports'>; // fully typed from your schema
+```
+
+To pass the client around, take the type from the value — the tRPC /
+Drizzle idiom:
+
+```ts
+export const sync = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+export type Sync = typeof sync;
+
+function persist(client: Sync) { /* ... */ }
 ```
 
 ## Reading
@@ -262,7 +240,11 @@ meanwhile, or worse, acts on stale state. `claim` holds the row across that gap:
 await using claim = await ablo.weatherReports.claim({ id: 'report_stockholm' });
 const report = claim.data;
 const forecast = await weatherAgent.getWeather(report.location);
-await ablo.weatherReports.update({ id: report.id, data: { forecast, status: 'ready' } });
+await ablo.weatherReports.update({
+  id: report.id,
+  data: { forecast, status: 'ready' },
+  claim, // attribute the write to the held claim
+});
 ```
 
 If someone else holds the row, `claim()` waits in a fair queue, then re-reads —
@@ -310,6 +292,46 @@ try {
 
 See [Coordination](./docs/coordination.md) for the full `claim` / `claim.state` /
 `claim.queue` / `claim.release` reference.
+
+## Background workers — jobs that run for minutes, not seconds
+
+Your API route enqueues a job on your own queue (SQS, EventBridge, anything);
+a worker on your own infrastructure does the slow part. **Keep that queue —
+Ablo is the worker's data layer.** It covers the two things every queue leaves
+to you: keeping the row safe, and showing progress live.
+
+Long work holds its claim by **heartbeating** — the same pattern as an SQS
+visibility heartbeat or a Temporal activity heartbeat:
+
+```ts
+// on your worker — stateless HTTP, no socket to hold
+await using claim = await ablo.weatherReports.claim({
+  id: msg.reportId,
+  ttl: '10m',
+  heartbeat: true,                 // beats automatically until release
+  onHeartbeatLost: () => abort(),  // the lease is gone → stop working
+});
+
+for (const step of steps) {
+  await runStep(step);
+  // write progress to the row — every subscribed UI updates live
+  await ablo.weatherReports.update({ id: msg.reportId, data: { progress: step.pct }, claim });
+}
+```
+
+- A worker that **crashes** stops beating; the row frees within one beat and
+  the next worker takes over.
+- A worker that **wakes up late** learns it on its next beat
+  (`AbloClaimedError`), and the write path rejects its stale writes anyway.
+- **Retries stay on your queue** — the redelivered job claims the now-free
+  row, reads its current state, and resumes.
+- A worker holding **many rows** extends them all in one call:
+  `ablo.claims.heartbeatAll({ ttl: '5m' })`.
+
+SQS's heartbeat protects the *message* from redelivery; Ablo's protects the
+*row* from concurrent and stale writes. SQS is at-least-once, so two workers
+will eventually get the same job — the claim is what keeps that from
+corrupting data.
 
 ## React
 
@@ -445,14 +467,8 @@ connects:
 | **Logical replication** (primary) | `npx ablo connect` prints the setup SQL (`wal_level=logical`, a publication, a `REPLICATION` role); `npx ablo connect --register` tells Ablo to replicate it. Ablo tails the WAL — it never runs DDL on, writes to, owns, or migrates your database. | Your database can grant a `REPLICATION` role (most can). |
 | **Signed endpoint** (fallback) | Your app exposes one route built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`); Ablo sends signed requests and your app touches its own database. Needs no database configuration. | Your database **can't** grant a replication role (a locked-down managed DB). |
 
-(No database yet? A **sandbox** `sk_test` key lets you try Ablo's full API and
-coordination with throwaway **test data** — like Stripe test mode — before you
-connect your own Postgres. Test-mode only: in production your rows always live in
-your database and Ablo holds just the transaction log, never your data.)
-
-Your database is the system of record. The old `databaseUrl` dial-in (Ablo
-holding a read/write connection) is **deprecated and being removed** — connect
-via logical replication instead. See
+Your database is the system of record — Ablo holds the transaction log and
+coordination, never your rows. See
 [Connect Your Database](./docs/data-sources.md).
 
 ## Configuration
@@ -466,7 +482,7 @@ Every other option has correct defaults:
 | --- | --- | --- | --- |
 | `schema` | `Schema` | — (required) | Typed model proxies (`ablo.<model>.*`) |
 | `apiKey` | `string \| ApiKeySetter \| null` | `process.env.ABLO_API_KEY` | Server key — a string, or an async function for rotation |
-| `databaseUrl` | `string \| null` | `—` | **Deprecated — being removed.** The old dial-in (Ablo holding a read/write connection to your DB). Connect via `npx ablo connect` (logical replication) instead; Ablo tails your WAL rather than dialing in. See [Connect Your Database](./docs/data-sources.md). |
+| `databaseUrl` | `string \| null` | `—` | Deprecated. Connect via `npx ablo connect` instead — see [Connect Your Database](./docs/data-sources.md). |
 
 Keep `apiKey` in trusted server runtimes. In the browser, `<AbloProvider>`
 authenticates with the signed-in user's session; the raw-key path is gated
@@ -519,7 +535,7 @@ contract; there are no retry or timeout knobs to tune.
 - [Guarantees](./docs/guarantees.md) — confirmed writes, stale-write protection, claim coordination, and agent lifecycle.
 - [Integration Guide](./docs/integration-guide.md) — integrate React, your database, multiplayer, and agents.
 - [React](./docs/react.md) — `<AbloProvider>`, `useAblo`, presence, status, and bootstrap gating.
-- [Coordination](./docs/coordination.md) — `claim` / `claim.state` / `claim.queue` / `claim.release` reference: hold a row across slow agent work, and observe the line waiting behind it.
+- [Coordination](./docs/coordination.md) — `claim` / `claim.state` / `claim.queue` / `claim.release` / `heartbeat` reference: hold a row across slow agent work — minutes or hours, via heartbeats — and observe the line waiting behind it.
 - [Client Behavior](./docs/client-behavior.md) — options, errors, retries, timeouts, and public imports.
 - [Connect Your Database](./docs/data-sources.md) — connect your Postgres by logical replication (`npx ablo connect`) or, as a fallback, a signed endpoint; your database is the system of record either way.
 - [Existing Python Backend](./docs/examples/existing-python-backend.md) — migrate existing Python endpoints to multiplayer and agent-safe writes gradually.

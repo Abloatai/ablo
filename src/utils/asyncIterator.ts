@@ -1,41 +1,34 @@
 /**
- * `asyncIteratorFrom` — adapt any callback-subscription primitive
- * into an async iterable.
+ * Turns a callback-based subscription into an async iterable that yields the
+ * latest snapshot each time the source changes. You supply two functions:
+ * `subscribe(listener)`, which registers your listener and returns a teardown
+ * function, and `getSnapshot()`, which reads the current value. On every change
+ * notification the iterator calls `getSnapshot()` and hands the result to the
+ * consumer's `for await` loop; when the loop ends, the iterator runs the
+ * teardown function.
  *
- * The inputs are two functions:
+ * Because each notification yields the current snapshot rather than a specific
+ * event, bursts coalesce harmlessly — a consumer that falls behind still ends up
+ * with the freshest value. The queue is unbounded, so a consumer that never
+ * advances lets memory grow without limit. When individual events matter and
+ * must not be dropped, use {@link asyncIteratorFromEvents} instead.
  *
- *   - `subscribe(onChange): unsubscribe` — the existing reactivity
- *     primitive on `PresenceStream` / `ClaimStream`. We register a
- *     listener that enqueues a value every time the source mutates;
- *     we tear it down in `return()`.
- *   - `getSnapshot()` — read the latest value to hand to the
- *     consumer. Called on every mutation notification.
- *
- * Back-pressure: an unlimited queue. If the consumer is slower than
- * the producer (rare for presence — mutations are <1/s per peer),
- * memory grows monotonically inside the iterator. For the current
- * presence workload this is fine; if we ever surface a high-frequency
- * stream (deltas at full firehose) we can bound the queue or drop
- * coalescable values.
- *
- * Multiple iterators: each call to the returned factory creates an
- * independent iterator with its own subscription. Iterators don't
- * steal values from each other — two `for await` loops on the same
- * stream both observe every mutation.
+ * Each call to the factory creates an independent iterator with its own
+ * subscription. Two `for await` loops over the same source each observe every
+ * change; they do not take values from one another.
  */
 /**
- * Variant of `asyncIteratorFrom` for event-per-iteration streams.
+ * Turns a callback-based subscription into an async iterable that yields each
+ * discrete event, in order, with none dropped. You supply a single
+ * `subscribe(push)` function: it registers your producer and returns a teardown
+ * function, and your producer calls `push(value)` once per event. The consumer's
+ * `for await` loop receives every pushed value.
  *
- * Unlike the snapshot variant (where every notification yields the
- * *current value* — coalescing bursts is fine because state is the
- * consumer's concern), this variant yields the *specific value*
- * pushed by each event. Use when the underlying stream delivers
- * discrete events that must not be dropped — e.g. `DeltaEnvelope`
- * firehose.
- *
- * The `subscribe(push): unsubscribe` signature takes a callback that
- * enqueues an event. The consumer's `for await` receives every
- * enqueued value in order.
+ * This is the counterpart to {@link asyncIteratorFrom}. Reach for that one when
+ * you only need the latest state and coalescing bursts is fine; reach for this
+ * one when every event is significant — for example a stream of change deltas
+ * where skipping one would lose data. The queue is unbounded, so a consumer that
+ * stops advancing lets memory grow without limit.
  */
 export function asyncIteratorFromEvents<T>(
   subscribe: (push: (value: T) => void) => () => void,

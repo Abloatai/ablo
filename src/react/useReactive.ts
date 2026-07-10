@@ -55,7 +55,7 @@ export function useReactive<T>(
   // When `compute` identity changes, its closed-over observable source
   // may have swapped (e.g. useQuery memoized a new QueryView because
   // the where clause changed). The MobX reaction subscribed in
-  // `subscribe` only tracks the observables read on its FIRST run; if
+  // `subscribe` only tracks the observables read on its first run; if
   // the source swaps without a re-subscription, the reaction never
   // re-tracks the new observables and `getSnapshot` keeps returning
   // the stale value forever.
@@ -77,7 +77,7 @@ export function useReactive<T>(
     // `compute` is a fresh inline arrow at virtually every call site, so this
     // branch runs on essentially every render. Reconcile the snapshot against
     // the latest closure, but only force a re-subscription when the value
-    // ACTUALLY changed. For the dominant case (same observable source, new
+    // actually changed. For the dominant case (same observable source, new
     // arrow identity, unchanged value) this avoids tearing down + recreating
     // the MobX reaction — and its double-compute — on every render. A genuine
     // source swap (a memoized compute closing over a new observable source)

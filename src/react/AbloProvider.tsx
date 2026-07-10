@@ -517,7 +517,7 @@ export function useWatch(opts: UseWatchOptions): UseWatchReturn {
   // Subscribe the connection to the scope's sync groups while mounted +
   // connected — the area-of-interest navigation primitive. No claim, no
   // TTL: a viewer just receives the scope's deltas. Hysteresis (warm TTL)
-  // lives in the store's AreaOfInterestManager, so a quick unmount/remount
+  // lives in the store's SubscriptionManager, so a quick unmount/remount
   // (tab flip) doesn't re-bootstrap.
   useEffect(() => {
     const scope = opts.scope;
@@ -702,7 +702,7 @@ export function useSync<R extends SchemaRecord = SchemaRecord>(): Ablo<R> {
 /**
  * Returns the underlying `SyncStoreContract` (the BaseSyncedStore).
  * Most consumers should prefer the typed hooks (`useQuery` etc.); this
- * is for advanced cases like direct ObjectPool access or custom
+ * is for advanced cases like direct InstanceCache access or custom
  * reactive bridges. Throws if the provider hasn't mounted the store
  * yet — wrap consumers in `<ClientSideSuspense>` to gate correctly.
  *

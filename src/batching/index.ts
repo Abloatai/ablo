@@ -1,24 +1,21 @@
 /**
- * `@abloatai/ablo/batching` — a dependency-free batch-coalescing primitive.
+ * A small, dependency-free primitive that coalesces work into batches.
  *
- * Accumulate items issued close together (the canonical case: a synchronous
- * burst, e.g. `Promise.all([ a(), b(), c() ])` in one event-loop tick) and
- * dispatch them as ONE atomic batch instead of one call each. This is the
- * scheduling essence of Ablo's `TransactionQueue` (and Linear's sync engine) —
- * microtask same-tick staging, size/cost/delay flush triggers, and in-flight
- * backpressure — distilled to a pure state machine with NO dependency on
- * models, MobX, IndexedDB, or the wire. Consumers inject the actual dispatch.
+ * It accumulates items enqueued close together — the common case being a
+ * synchronous burst such as `Promise.all([ a(), b(), c() ])` within one
+ * event-loop tick — and dispatches them as a single batch rather than one call
+ * each. It is a pure state machine: it stages items on the microtask queue,
+ * flushes on size, cost, or time triggers, and applies in-flight backpressure,
+ * with no dependency on any data model, storage layer, or network. You supply
+ * the dispatch function through {@link BatchSchedulerHooks}.
  *
  * Guarantees:
- *   - a batch is ONE `dispatchBatch(items)` call → **atomic** (all-or-nothing).
- *   - on dispatch failure, **every** enqueued promise in that batch rejects
- *     with the same error.
- *   - items dispatch in enqueue order (optionally reordered by `compare` just
- *     before a batch is cut); batches run FIFO under a `maxInFlight` cap.
- *
- * The slides-sdk wraps this to coalesce `commits.create` calls; the stateful
- * `TransactionQueue` MAY adopt it later (it would supply `compare` for FK
- * ordering and keep its merge/confirm/retry logic in its own hooks).
+ *   - each batch is a single `dispatchBatch(items)` call, applied atomically.
+ *   - if a dispatch fails, every enqueued promise in that batch rejects with
+ *     the same error.
+ *   - items dispatch in enqueue order, optionally reordered by `compare` just
+ *     before a batch is cut; batches run first-in, first-out under a
+ *     `maxInFlight` cap.
  */
 
 export interface BatchSchedulerOptions<T> {
@@ -40,9 +37,10 @@ export interface BatchSchedulerHooks<T, R> {
   /** The single dispatch for one batch. One call → atomic at this layer. */
   dispatchBatch(items: T[]): Promise<R>;
   /**
-   * Optional ordering applied to the staged items immediately before a batch
-   * is cut (e.g. FK-priority). Omit for FIFO. Does not affect which items share
-   * a batch — only their order within the dispatched array.
+   * Optional ordering applied to the staged items just before a batch is cut —
+   * for example, to send parent rows ahead of the rows that reference them. Omit
+   * for first-in, first-out order. This changes only the order of items within
+   * the dispatched array, not which items share a batch.
    */
   compare?(a: T, b: T): number;
 }
@@ -50,7 +48,7 @@ export interface BatchSchedulerHooks<T, R> {
 export interface BatchScheduler<T, R> {
   /** Stage one item; resolves with its batch's dispatch result, or rejects with the batch error. */
   enqueue(item: T): Promise<R>;
-  /** Stage an item that must dispatch in its OWN batch (e.g. it carries an explicit idempotency key). */
+  /** Stage an item that must dispatch in a batch of its own — for example, one carrying an explicit idempotency key. */
   enqueueSolo(item: T): Promise<R>;
   /** Force-flush the pending batch and resolve once everything in flight has settled. */
   flush(): Promise<void>;

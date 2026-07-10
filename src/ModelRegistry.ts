@@ -1,13 +1,11 @@
 /**
- * ModelRegistry - Type-safe model metadata management
- *
- * Key improvements:
- * - Instance-based for better testing
- * - Validation at registration
- * - Lazy reference resolution
- * - Crypto-based schema hashing
- * - Comprehensive error reporting
- * - Best practices from Linear Sync Engine
+ * ModelRegistry is the source of truth for model metadata: which model classes
+ * exist, the properties and references declared on each, the back-references
+ * used for cascade handling, and a stable hash of the whole schema.
+ * {@link Model} instances resolve their metadata through the active registry,
+ * and {@link InstanceCache} uses it to map between model names and constructor
+ * classes. References resolve lazily, so a model may declare a reference to
+ * another model that is registered later.
  */
 
 // Removed Node.js crypto import for browser compatibility
@@ -45,7 +43,8 @@ export type RegisteredModelClass = Omit<typeof Model, never> &
   ConcreteModelConstructor<Model>;
 
 /**
- * Extended ReferenceMetadata with additional Linear-style options
+ * {@link ReferenceMetadata} extended with cascade behavior: what happens to a
+ * referencing model when the referenced model is deleted or archived.
  */
 export interface ExtendedReferenceMetadata extends ReferenceMetadata {
   onDelete?: 'cascade' | 'nullify' | 'restrict';
@@ -65,8 +64,9 @@ export interface SerializedReferenceMetadata
 }
 
 /**
- * BackReference metadata for cascade-aware transaction handling
- * Linear pattern: When parent is deleted, cancel pending transactions for children
+ * Metadata that records a child model's foreign key to a parent model, used
+ * for cascade-aware transaction handling: when the parent is deleted, the
+ * child's pending transactions can be cancelled.
  */
 export interface BackReferenceMetadata {
   /** The parent model name (e.g., 'SlideDeck') */
@@ -127,22 +127,20 @@ export class ModelRegistry {
   private references = new Map<string, Map<string, ExtendedReferenceMetadata>>();
   private pendingReferences = new Map<string, PendingReference[]>();
 
-  // 🔧 PROPER FIX: Static mapping from constructor to model name.
-  // Keyed `unknown` on purpose: lookups arrive as `this.constructor`
-  // (Function) and as typed model classes — both accepted without casts.
+  // Maps a constructor back to its model name. Keyed as `unknown` on purpose:
+  // lookups arrive both as `this.constructor` (a Function) and as typed model
+  // classes, and both are accepted without a cast.
   private constructorToModelName = new Map<unknown, string>();
 
-  // LINEAR PATTERN: BackReferences for cascade-aware transaction handling.
-  // Maps childModelName → BackReferenceMetadata[] (which parent models
-  // own this child). The inverse direction (parentModelName → children)
-  // is derived on demand by `getChildModels`, populated only here.
+  // Back-references for cascade-aware transaction handling. Maps a child model
+  // name to the parent models it references. The inverse direction (parent to
+  // children) is derived on demand by `getChildModels`; it is populated here.
   private backReferences = new Map<string, BackReferenceMetadata[]>();
 
   private schemaHash?: string;
   private config: Required<RegistryConfig>;
   private registeredModels = new Set<string>();
 
-  private batchMode = false;
   private pendingHashUpdate = false;
 
   constructor(config: RegistryConfig = {}) {
@@ -299,7 +297,7 @@ export class ModelRegistry {
     this.models.set(name, modelClass);
     this.modelMetadata.set(name, metadata);
 
-    // 🔧 PROPER FIX: Create reverse mapping from constructor to model name
+    // Record the reverse mapping from constructor to model name
     this.constructorToModelName.set(constructor, name);
 
     // Initialize property maps
@@ -405,13 +403,14 @@ export class ModelRegistry {
   }
 
   /**
-   * LINEAR PATTERN: Register a back-reference for cascade-aware transaction handling
+   * Register a back-reference for cascade-aware transaction handling.
    *
-   * When a parent model is deleted, the TransactionQueue will cancel pending
-   * transactions for all child models that have a backReference to that parent.
+   * When a parent model is deleted, the transaction queue cancels pending
+   * transactions for every child model that declares a back-reference to that
+   * parent.
    *
-   * @param childModelName - The model that has a FK to the parent (e.g., 'Slide')
-   * @param metadata - BackReference configuration
+   * @param childModelName - The model that holds a foreign key to the parent (e.g., 'Slide')
+   * @param metadata - The back-reference configuration
    */
   registerBackReference(childModelName: string, metadata: BackReferenceMetadata): void {
     // Add to instance map
@@ -520,7 +519,9 @@ export class ModelRegistry {
   }
 
   /**
-   * Calculate schema hash using crypto
+   * Compute a stable hash of the registered schema — model names, property
+   * types, and their indexed and optional flags. Memoized until the schema
+   * changes.
    */
   getSchemaHash(): string {
     if (this.schemaHash) return this.schemaHash;
@@ -618,7 +619,6 @@ export class ModelRegistry {
    * Start batch registration mode to optimize performance
    */
   startBatch(): void {
-    this.batchMode = true;
     this.pendingHashUpdate = false;
   }
 
@@ -630,7 +630,6 @@ export class ModelRegistry {
    * End batch registration mode and update schema hash if needed
    */
   endBatch(): void {
-    this.batchMode = false;
     if (this.pendingHashUpdate) {
       this.getSchemaHash(); // This will recalculate if needed
       this.pendingHashUpdate = false;
@@ -654,7 +653,6 @@ export class ModelRegistry {
     this.backReferences.clear();
     this.constructorToModelName.clear();
     this.schemaHash = undefined;
-    this.batchMode = false;
     this.pendingHashUpdate = false;
 
     getContext().logger.info('ModelRegistry cleared');

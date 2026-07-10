@@ -1,14 +1,13 @@
 /**
- * Claim log — the easy way to SEE agents colliding.
+ * A claim log — the simplest way to watch agents collide. The engine reports
+ * the claim lifecycle (`acquired → queued → granted → lost / rejected /
+ * expired`) and the notify-instead-of-abort stale write through two channels:
+ * human-readable `logger` lines (shown with `new Ablo({ debug: true })`) and
+ * structured `observability.captureClaim` / `captureConflict` calls.
  *
- * The engine emits the claim lifecycle (`acquired → queued → granted → lost /
- * rejected / expired`) and the notify-instead-of-abort stale-write collision
- * through two seams: human `logger` lines (visible with `new Ablo({ debug: true })`)
- * and structured `observability.captureClaim` / `captureConflict` calls.
- *
- * This is the third, evals-shaped path: hand a {@link ClaimLog} to
- * `Ablo({ observability })`, run your scenario, then read back an ordered list
- * you can print for eyeballing or `collisions()` for assertions.
+ * This is a third channel, shaped for tests and evals. Pass a {@link ClaimLog}
+ * as `Ablo({ observability })`, run your scenario, then read back an ordered
+ * list — print it to eyeball what happened, or call `collisions()` to assert on it.
  */
 
 import type {
@@ -18,8 +17,8 @@ import type {
 } from '../interfaces/index.js';
 
 // ─────────────────────────────────────────────
-// Formatters — one readable line per event. Shared by the WS logger seam and
-// the log so console output and log output never drift.
+// Formatters — one readable line per event. Shared by the debug logger and
+// this log so console output and log output never drift.
 // ─────────────────────────────────────────────
 
 /** A claim state change as one quiet, greppable line. */
@@ -30,7 +29,7 @@ export function formatClaim(e: ClaimEvent): string {
   const actor = e.actor
     ? `${e.actor}${e.participantKind ? ` (${e.participantKind})` : ''}`
     : '';
-  // `rejected`/`lost` name the BLOCKING holder; the rest name us (or no one).
+  // `rejected`/`lost` name the blocking holder; the rest name us (or no one).
   const by = actor
     ? e.phase === 'rejected' || e.phase === 'lost'
       ? ` — held by ${actor}`
@@ -54,7 +53,7 @@ export function formatConflict(e: ConflictEvent): string {
 export interface ClaimLogEntry {
   /** Monotonic order index — deterministic, clock-free, eval-friendly. */
   readonly seq: number;
-  /** The same one-line text the console and breadcrumb seams emit. */
+  /** The same one-line text the console and breadcrumb channels emit. */
   readonly line: string;
   /** A collision worth flagging: a rejected/lost claim or a stale write. */
   readonly collision: boolean;
@@ -79,7 +78,7 @@ export interface ClaimLogEntry {
  * slot with no adapter.
  */
 export class ClaimLog implements SyncObservabilityProvider {
-  // Immutable list: a NEW array reference on every change. This is what lets
+  // Immutable list: a new array reference on every change. This is what lets
   // `useSyncExternalStore(log.onChange, () => log.entries)` detect updates —
   // it compares snapshots by reference, so an in-place push would never render.
   private rows: readonly ClaimLogEntry[] = [];
@@ -89,7 +88,7 @@ export class ClaimLog implements SyncObservabilityProvider {
   /** Cap the buffer so a long-running session can't grow unbounded. */
   constructor(private readonly max = 1_000) {}
 
-  // —— the two seams we record ——
+  // —— the two channels we record ——
 
   captureClaim(claim: ClaimEvent): void {
     this.add({

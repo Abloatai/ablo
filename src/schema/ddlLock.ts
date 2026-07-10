@@ -1,37 +1,33 @@
 /**
- * Safe-DDL LOCKING knobs — the ONE reader for how a schema change acquires
- * (and retries for) table locks, shared by BOTH executors of the provision
- * plan:
+ * Lock settings for schema-change (DDL) statements. When a schema push alters a
+ * table, these values control how quickly the change gives up on a contended
+ * lock and how many times it retries. The command-line `ablo migrate` and the
+ * host that applies a schema push both resolve their lock behavior through this
+ * module, so tuning the environment variables below changes both paths the same
+ * way.
  *
- *   - `ablo migrate` (cli/migrate.ts) — the customer runs the DDL themselves
- *   - the hosted executor (`apps/sync-server/src/schema/ddlExec.ts`)
+ * The defaults follow the standard safe-migration recipe: a short `lock_timeout`
+ * so a blocked `ALTER` aborts quickly instead of parking an `ACCESS EXCLUSIVE`
+ * lock request at the head of the queue — which would freeze every other query
+ * on that table behind it — paired with a bounded retry-and-backoff on the
+ * resulting timeout.
  *
- * The two used to carry copy-pasted constants and had already drifted: the
- * server honored `ABLO_SCHEMA_LOCK_ATTEMPTS` while the CLI hardcoded 5, so an
- * operator tuning the knob got it applied by hosted push but silently ignored
- * by `ablo migrate`. Both now resolve through here.
- *
- * The settings themselves are the battle-tested ones every mature migration
- * tool uses (GitLab `with_lock_retries`, Strong Migrations, Doctolib
- * `safe-pg-migrations`): a LOW `lock_timeout` so a blocked ALTER aborts fast
- * instead of parking an ACCESS EXCLUSIVE request at the head of the lock
- * queue (which would freeze every query on that table behind it), plus a
- * bounded retry-with-backoff on the `55P03` abort.
- *
- * Env knobs (read at CALL time, not import time, so tests and long-lived
- * processes see updates): `ABLO_SCHEMA_LOCK_TIMEOUT` / `ABLO_SCHEMA_LOCK_ATTEMPTS`
- * — the older `ABLO_DDL_*` names are still honored so existing setups don't
- * break.
+ * The environment variables are read each time a resolver is called, not once
+ * at import, so a long-running process or a test that changes them sees the
+ * update: `ABLO_SCHEMA_LOCK_TIMEOUT` and `ABLO_SCHEMA_LOCK_ATTEMPTS`. The older
+ * `ABLO_DDL_*` names are also accepted.
  */
 
-/** Postgres SQLSTATE `lock_not_available` — a `lock_timeout` abort. The ONE
- *  retryable DDL failure; everything else is a real error. */
+/** The Postgres SQLSTATE `55P03` (`lock_not_available`), raised when a statement
+ *  gives up waiting for a lock after `lock_timeout`. This is the one DDL failure
+ *  worth retrying; any other error is a genuine problem. */
 export const PG_LOCK_NOT_AVAILABLE = '55P03';
 
 const DEFAULT_LOCK_TIMEOUT = '5s';
 const DEFAULT_MAX_LOCK_ATTEMPTS = 5;
 
-/** The env subset the resolvers read — injectable for tests. */
+/** The subset of environment variables the resolvers in this module read. It is
+ *  passed in explicitly so tests can supply their own values. */
 export type DdlLockEnv = Readonly<Record<string, string | undefined>>;
 
 /** `lock_timeout` for the DDL transaction (a Postgres duration string). */

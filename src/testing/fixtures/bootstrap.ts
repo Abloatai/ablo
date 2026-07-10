@@ -1,7 +1,9 @@
 /**
- * Bootstrap response factories for sync engine tests.
- *
- * Creates well-formed bootstrap responses matching the server API.
+ * Factories that build well-formed bootstrap responses for tests. A
+ * bootstrap response is what the server returns when a client first syncs:
+ * either a full snapshot of the models or a partial batch of deltas since a
+ * known point. These helpers produce the same shapes, so tests can exercise
+ * client sync logic without a live server.
  */
 
 import type { BootstrapType } from '../../types/index.js';
@@ -25,7 +27,8 @@ export interface BootstrapResponse {
 }
 
 /**
- * Create a full bootstrap response (fresh snapshot from server).
+ * Builds a full bootstrap response — a fresh snapshot of the given models,
+ * as the server sends on a client's first sync.
  */
 export function createFullBootstrapResponse(
   models: BootstrapModelData,
@@ -40,7 +43,8 @@ export function createFullBootstrapResponse(
 }
 
 /**
- * Create a partial bootstrap response (delta batch from lastSyncId).
+ * Builds a partial bootstrap response — a batch of deltas applied on top of
+ * the client's last known sync point, given by `lastSyncId`.
  */
 export function createPartialBootstrapResponse(
   deltas: BootstrapResponse['deltas'],
@@ -56,7 +60,9 @@ export function createPartialBootstrapResponse(
 }
 
 /**
- * Create a full bootstrap response with test model data pre-populated.
+ * Builds a full bootstrap response with the common test models
+ * pre-populated. Pass any of the named model arrays to include them in the
+ * snapshot.
  */
 export function createTestBootstrapResponse(options: {
   tasks?: Record<string, unknown>[];

@@ -1,6 +1,9 @@
 /**
- * Database - Simplified persistence layer
- * Fixed bootstrap triggering and data flow
+ * The local persistence layer for synced models. It stores rows in the
+ * browser's IndexedDB (or in-memory maps when run headlessly), applies inbound
+ * deltas to that store, and fetches the bootstrap snapshot from your sync
+ * server. {@link BaseSyncedStore} drives it, and {@link InstanceCache} holds the
+ * in-memory mirror of what this class persists.
  */
 
 import { DatabaseManager, type DatabaseInfo, type WorkspaceMetadata } from './core/DatabaseManager.js';
@@ -9,7 +12,7 @@ import { ModelRegistry } from './ModelRegistry.js';
 import { LoadStrategy } from './types/index.js';
 import { getContext } from './context.js';
 import { AbloConnectionError, AbloValidationError } from './errors.js';
-import type { BootstrapHelper, BootstrapData } from './sync/BootstrapHelper.js';
+import type { BootstrapFetcher, BootstrapData } from './sync/BootstrapFetcher.js';
 import { InMemoryObjectStore } from './adapters/inMemoryStorage.js';
 import { syncPositionSchema } from './sync/syncPosition.js';
 
@@ -51,8 +54,8 @@ interface PersistedTransaction {
   timestamp?: number;
   createdAt?: number;
   mutations?: PersistedMutation[];
-  // LINEAR PATTERN: Persist awaiting_delta transactions so they survive tab close.
-  // On next session, WebSocket reconnect + delta catch-up confirms them naturally.
+  // Persist awaiting-delta transactions so they survive a tab close. On the
+  // next session, WebSocket reconnect plus delta catch-up confirms them.
   awaitingDelta?: {
     syncIdNeeded: number;
     modelName: string;
@@ -63,19 +66,17 @@ interface PersistedTransaction {
 }
 
 /**
- * Bootstrap strategies (aligned with Linear's architecture):
+ * How a session establishes its baseline state at startup.
  *
- * 'full' - Full bootstrap from server
- *   - Fetch complete snapshot from server
- *   - Clear IndexedDB
- *   - Load snapshot data
- *   - Use snapshot's lastSyncId
+ * 'full' — Fetch a complete snapshot from the server, clear the local store,
+ *   load the snapshot, and adopt its `lastSyncId`.
  *
- * 'local' - Local-only bootstrap (skip server fetch)
- *   - Use existing IndexedDB data
- *   - Hydrate ObjectPool from IndexedDB
- *   - Connect WebSocket with stored lastSyncId
- *   - Receive deltas from lastSyncId+1 onwards
+ * 'partial' — Fetch only the deltas since the stored `lastSyncId` and apply
+ *   them on top of the existing local data.
+ *
+ * 'local' — Skip the server entirely: hydrate the {@link InstanceCache} from the
+ *   local store, connect the WebSocket with the stored `lastSyncId`, and
+ *   receive deltas from there onward. Used when offline with valid local data.
  */
 export type BootstrapType = 'full' | 'partial' | 'local';
 
@@ -89,7 +90,7 @@ export interface BootstrapRequirements {
 export interface BootstrapResult {
   modelsLoaded: number;
   modelsStored: number;
-  /** The raw bootstrap response — callers can apply models directly to ObjectPool */
+  /** The raw bootstrap response — callers can apply models directly to InstanceCache */
   bootstrapData: BootstrapData;
   /**
    * Results of applying partial-bootstrap deltas to IDB. Present only when
@@ -114,19 +115,19 @@ export class Database {
 
   // Injected dependencies
   private modelRegistry: ModelRegistry;
-  private bootstrapHelper: BootstrapHelper;
+  private bootstrapHelper: BootstrapFetcher;
 
   /** The pre-configured query helper for lazy-loading data from the sync server. */
-  get helper(): BootstrapHelper {
+  get helper(): BootstrapFetcher {
     return this.bootstrapHelper;
   }
 
   /**
-   * PURE scoped snapshot fetch for hydrate-on-enter (P4). Returns the FULL
-   * current rows of the given sync groups, with NO side effects — unlike
+   * Fetch the current rows of the given sync groups as a side-effect-free
+   * snapshot, used to hydrate a scope as the user enters it. Unlike
    * {@link bootstrapFromServer}, it does not persist to IndexedDB and does not
-   * touch the connection's `subscribedSyncGroups` (which the shrinkage check
-   * owns). The caller applies the result to the pool via the SCOPED apply path.
+   * change the connection's subscribed sync groups. The caller applies the
+   * result to the pool through the scoped apply path.
    */
   async fetchScopedBootstrapData(
     syncGroups: readonly string[],
@@ -176,7 +177,7 @@ export class Database {
 
   constructor(
     modelRegistry: ModelRegistry,
-    bootstrapHelper: BootstrapHelper,
+    bootstrapHelper: BootstrapFetcher,
     options?: { inMemory?: boolean },
   ) {
     this.databaseManager = new DatabaseManager();
@@ -314,17 +315,14 @@ export class Database {
   }
 
   /**
-   * Compact a record before persisting to IndexedDB
-   * - Removes null/undefined fields
-   * - Removes empty arrays and empty objects
-   * - Drops redundant fields: __typename, __class, clientId, syncStatus
+   * Shrink a record before persisting it. Drops `undefined` fields, empty
+   * arrays, empty objects, and the redundant markers `__typename`, `__class`,
+   * `clientId`, and `syncStatus`. Explicit `null` values are preserved, since
+   * a null is a meaningful "clear this field" in a nullable column.
    *
-   * ARCHITECTURE: By design, this method receives plain objects, not MobX observables:
-   * - WebSocket deltas: Already JSON-parsed (SyncedStore.ts:889)
-   * - Optimistic updates: Models call toJSON() which uses toJS() (SlideLayer.ts:224)
-   * - Bootstrap data: Plain JSON from server
-   *
-   * Note: We do NOT drop required defaults; server provides them.
+   * By design this receives plain objects, never live observables: WebSocket
+   * deltas arrive already parsed, optimistic updates come through `toJSON()`,
+   * and bootstrap data is plain JSON from the server.
    */
   private compactRecord(_modelName: string, data: ModelData): ModelData {
     if (!data || typeof data !== 'object') return data;
@@ -337,8 +335,8 @@ export class Database {
         continue;
       }
 
-      // FIXED: Only skip undefined, preserve explicit null values
-      // Null is semantically meaningful in Prisma schemas (nullable fields)
+      // Skip only `undefined`; preserve explicit `null`, which is a
+      // meaningful value for a nullable column.
       if (value === undefined) {
         continue;
       }
@@ -445,19 +443,17 @@ export class Database {
       syncPositionSchema.shape.persisted.safeParse(metadata?.lastSyncId).data ?? 0;
     const dataAge = metadata?.updatedAt ? Date.now() - metadata.updatedAt.getTime() : Infinity;
 
-    // ── Zero-style cache-validity check ──────────────────────────
+    // ── Cache-validity check ─────────────────────────────────────
     //
     // The cursor (lastSyncId) is only valid if the data it refers to
-    // actually exists in the stores. If IDB was cleared (or this is a
-    // fresh in-memory session), the metadata's lastSyncId is stale —
-    // sending it to the server would trigger a partial bootstrap that
-    // returns zero deltas because the gap is 0, leaving the client
-    // with an empty ObjectPool.
+    // actually exists in the stores. If the local store was cleared (or
+    // this is a fresh in-memory session), the metadata's lastSyncId is
+    // stale — sending it to the server would trigger a partial bootstrap
+    // that returns zero deltas because the gap is 0, leaving the client
+    // with an empty InstanceCache.
     //
-    // Zero solves this by co-locating the cursor with the cached data:
-    // if the data is gone, the cursor is gone. We achieve the same
-    // property by sampling the actual stores — if they're empty, the
-    // cursor is meaningless regardless of what metadata claims.
+    // The fix is to sample the actual stores: if they hold no rows, the
+    // cursor is meaningless regardless of what the metadata claims.
     const dataExists = this.inMemory
       ? false  // In-memory mode: no persistent data across sessions
       : await this.storeManager.hasAnyData();
@@ -466,7 +462,7 @@ export class Database {
     // we've confirmed the data it refers to actually exists in the stores.
     const lastSyncId = dataExists ? metadataLastSyncId : 0;
 
-    // 🔍 DIAGNOSTIC: Log database state
+    // Log the resolved database state for diagnostics.
     getContext().logger.debug('[Database.requiredBootstrap] State check', {
       readinessReady: readiness.ready,
       hasMetadata: !!metadata,
@@ -489,7 +485,8 @@ export class Database {
       type = 'local';
       getContext().logger.info('Offline detected with local data - using local bootstrap');
     } else {
-      // SERVER-AUTHORITATIVE: Always use full bootstrap when online.
+      // The server is the source of truth: always use a full bootstrap
+      // when online.
       type = 'full';
       getContext().logger.info('Full bootstrap - server is source of truth', {
         reason: offline ? 'offline_no_data' : 'server_authoritative',
@@ -508,7 +505,9 @@ export class Database {
   }
 
   /**
-   * Bootstrap database with data from Go server
+   * Fetch a bootstrap snapshot (or delta batch) from the sync server and load
+   * it into the local store, then return a {@link BootstrapResult} the caller
+   * applies to the {@link InstanceCache}.
    */
   async bootstrapFromServer(
     requirements: BootstrapRequirements,
@@ -531,8 +530,8 @@ export class Database {
     });
 
     try {
-      // ✅ FETCH FIRST (before any destructive operations)
-      // This prevents data loss if the network request fails
+      // Fetch before any destructive operation, so a failed network
+      // request can't leave the local store empty.
       const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
       getContext().logger.info('Fetching bootstrap data from server (before clearing local data)', {
@@ -550,8 +549,9 @@ export class Database {
         deltaCount: bootstrapData.deltaCount ?? 0,
       });
 
-      // ✅ Only clear AFTER successful fetch (transactional safety)
-      // IMPORTANT: Clear if the SERVER says it's a full snapshot, regardless of what we asked.
+      // Clear only after a successful fetch, for transactional safety.
+      // Clear when the server says the response is a full snapshot,
+      // regardless of what type was requested.
       if (bootstrapData.type === 'full') {
         await this.clear();
       }
@@ -569,7 +569,7 @@ export class Database {
         // Apply deltas to IndexedDB using processDeltaBatch for better performance.
         // Capture the return value so the pool can be updated by the caller —
         // without this, partial-bootstrap DELETEs persist to IDB but don't
-        // evict entities from the in-memory ObjectPool, leaving ghost rows
+        // evict entities from the in-memory InstanceCache, leaving ghost rows
         // visible on the canvas until a full reload rebuilds the pool.
         let deltasApplied = 0;
         let deltaResults: BootstrapResult['deltaResults'];
@@ -727,17 +727,16 @@ export class Database {
   // bootstrapSpecificModels removed per request
 
   /**
-   * Process incoming delta from WebSocket - simplified
+   * Apply a single inbound delta from the WebSocket to the local store.
    *
-   * ⚠️ PERFORMANCE NOTE: This method is called for each individual delta.
-   * For batch processing, use processDeltaBatch() instead to avoid
-   * transaction overhead (2x transactions per delta = major bottleneck).
+   * This handles one delta at a time. To apply several, prefer
+   * {@link processDeltaBatch}, which commits them in one IndexedDB transaction
+   * rather than two transactions per delta.
    *
-   * 📝 PARTIAL DELTA PATTERN:
-   * - Server sends only changed fields: {id, position: {...}, updatedAt}
-   * - UPDATE deltas are MERGED with existing records: {...existing, ...delta}
-   * - This preserves fields not included in the delta (e.g., deckId, title)
-   * - Explicit null values ARE preserved: {position: null} clears the field
+   * Update deltas carry only the changed fields, so they are merged onto the
+   * existing record rather than replacing it. That preserves fields the delta
+   * omits (such as deckId or title), and an explicit null is kept as a value,
+   * clearing that field.
    */
   async processDelta(delta: {
     syncId?: number; // Optional sync id (from server). Enables idempotent gating.
@@ -763,7 +762,7 @@ export class Database {
       return { action: 'verify', modelName, modelId };
     }
 
-    // Best-practice gating: ignore already-applied deltas by comparing with persisted lastSyncId
+    // Idempotency gate: ignore already-applied deltas by comparing with the persisted lastSyncId
     try {
       const lastApplied = await this.getLastSyncId();
       const incomingId = typeof syncId === 'number' ? syncId : undefined;
@@ -829,12 +828,13 @@ export class Database {
       }
 
       case 'U': {
-        // ✅ UPDATE: MUST merge with existing record (partial delta pattern)
-        // Read existing record first
+        // Update: merge onto the existing record (partial-delta pattern).
+        // Read the existing record first.
         const existing = await store.get(modelId);
 
-        // CRITICAL FIX: Skip UPDATE if there's no existing record to merge with
-        // Creating a record from partial UPDATE data causes corruption (missing deckId, etc.)
+        // Skip the update when there's no existing record to merge with:
+        // building a record from partial update data would corrupt it
+        // (missing deckId, and so on).
         if (!existing) {
           getContext().observability.breadcrumb(
             'Skipping UPDATE delta - no existing record to merge with',
@@ -894,7 +894,7 @@ export class Database {
               error: err instanceof Error ? err.message : String(err),
             }
           );
-          // Surface failure so caller does not mutate ObjectPool inconsistently
+          // Surface failure so caller does not mutate InstanceCache inconsistently
           throw err;
         }
         return { action: 'remove', modelName, modelId };
@@ -948,27 +948,20 @@ export class Database {
   }
 
   /**
-   * ✅ PERFORMANCE FIX: Process multiple deltas in a single IndexedDB transaction
+   * Apply many deltas to the local store in as few IndexedDB transactions as
+   * possible. Deltas are grouped by store, and each store's writes commit in a
+   * single transaction, so a batch of 186 deltas becomes roughly one
+   * transaction per store instead of two per delta.
    *
-   * This method dramatically improves sync performance by:
-   * 1. Batch-reading all existing records for UPDATEs (outside transaction for speed)
-   * 2. Opening a single transaction per store for all writes
-   * 3. Merging UPDATE deltas with existing data to preserve unmodified fields
-   * 4. Updating metadata only once at the end with highest syncId
+   * The method reads the existing records for update deltas up front, then
+   * merges each update onto its existing record so fields the delta omits are
+   * preserved and an explicit null still clears its field. It advances the
+   * persisted sync cursor once, to the highest committed sync id.
    *
-   * Performance impact: 186 deltas goes from ~372 transactions to just 1 transaction
-   *
-   * 📝 PARTIAL DELTA MERGE PATTERN:
-   * - UPDATE deltas contain only changed fields
-   * - We merge with existing: {...existing, ...delta}
-   * - Preserves deckId, title, settings etc. when updating just position
-   * - Handles explicit null: {field: null} clears the field correctly
-   *
-   * 🔄 LINEAR-STYLE CONFLICT RESOLUTION:
-   * - Builds a map of DELETE deltas with their syncIds
-   * - Before processing UPDATE/INSERT, checks for DELETE with higher syncId
-   * - Skips stale updates for entities that will be/were deleted
-   * - Prevents 404 errors from fetching already-deleted entities
+   * Conflict resolution follows a delete-wins rule: it first indexes the
+   * delete deltas by entity, then skips any insert or update whose sync id is
+   * at or below a delete for the same entity. This avoids resurrecting a
+   * deleted entity and avoids fetching one that no longer exists.
    */
   async processDeltaBatch(
     deltas: {
@@ -1004,7 +997,7 @@ export class Database {
     /**
      * Highest syncId whose IDB store transaction actually committed in this
      * batch. The runtime delta cursor (WS `lastSyncId`, server-side
-     * `lastAckedSyncId`) must only advance to THIS value — not the input
+     * `lastAckedSyncId`) must only advance to this value — not the input
      * batch's range max — or it diverges from the persisted view and the
      * next catch-up request skips the un-persisted gap forever. Mirrors
      * the metadata-cursor invariant at `updateWorkspaceMetadata` below.
@@ -1067,14 +1060,11 @@ export class Database {
       transactionId?: string;
     }>(deltas.length);
 
-    // ========================================================================
-    // LINEAR-STYLE CONFLICT RESOLUTION: Build DELETE syncId index
-    // ========================================================================
-    // Per Linear's architecture: "If the syncId of the deleting action is larger,
-    // the model will not be created." This prevents processing stale UPDATE deltas
-    // for entities that have been cascade-deleted (where DELETE delta exists).
-    // ========================================================================
-    const deleteSyncIds = new Map<string, number>(); // key: "ModelName:modelId" -> DELETE syncId
+    // Build a delete index for conflict resolution. When a delete has a sync
+    // id at or above a later insert or update for the same entity, that entity
+    // is not (re)created — which drops stale updates for cascade-deleted
+    // entities.
+    const deleteSyncIds = new Map<string, number>(); // key: "ModelName:modelId" -> delete syncId
 
     for (const delta of deltas) {
       if (delta.actionType === 'D' && delta.syncId) {
@@ -1097,18 +1087,17 @@ export class Database {
 
     // Group deltas by store for efficient transaction management.
     //
-    // We intentionally track TWO highwater marks: `highestSyncId` for the
-    // total range seen, and `highestPersistedSyncId` accumulated only from
-    // deltas whose store transaction actually succeeded. The cursor
-    // advance (at `updateWorkspaceMetadata`) uses ONLY the persisted one.
+    // The method tracks two high-water marks: `highestSyncId` for the total
+    // range seen, and `highestPersistedSyncId`, accumulated only from deltas
+    // whose store transaction actually committed. The cursor advance (at
+    // `updateWorkspaceMetadata`) uses only the persisted one.
     //
-    // Without this split, a single store-level IDB failure (e.g. compact
-    // record missing required field, validation abort) silently advances
-    // the cursor past deltas that never wrote to IDB. Next partial
-    // bootstrap asks "what's new since {advanced cursor}?" and the
-    // skipped rows fall into the already-seen range forever — the
-    // observed "postgres has the deck, IDB doesn't, full reload can't
-    // recover it" failure mode.
+    // Without this split, a single store-level failure (a compacted record
+    // missing a required field, a validation abort) would advance the cursor
+    // past deltas that never wrote to IndexedDB. The next partial bootstrap
+    // would ask "what's new since {advanced cursor}?", the skipped rows would
+    // fall into the already-seen range forever, and the local store would stay
+    // permanently behind the server with no way to recover on reload.
     const deltasByStore = new Map<string, { idx: number; delta: (typeof deltas)[number] }[]>();
     let highestSyncId = 0;
     let highestPersistedSyncId = 0;
@@ -1123,9 +1112,8 @@ export class Database {
         highestSyncId = deltaSyncIdNum;
       }
 
-      // ========================================================================
-      // CONFLICT CHECK: Skip UPDATE/INSERT if DELETE exists with higher syncId
-      // ========================================================================
+      // Conflict check: skip an insert or update when a delete for the same
+      // entity has an equal or higher sync id.
       if (
         delta.actionType === 'U' ||
         delta.actionType === 'I' ||
@@ -1181,8 +1169,8 @@ export class Database {
       if (!store) continue;
 
       try {
-        // ✅ BEST PRACTICE: Batch read-modify-write pattern
-        // Step 1: Identify which deltas need existing data (UPDATEs)
+        // Batch read-modify-write.
+        // Step 1: Identify which deltas need existing data (updates)
         const updateDeltas = storeDeltas.filter(({ delta }) => delta.actionType === 'U');
         const updateIds = updateDeltas.map(({ delta }) => delta.modelId);
 
@@ -1213,8 +1201,9 @@ export class Database {
           }
         }
 
-        // ✅ SELF-HEALING: Fetch missing records for UPDATE deltas
-        // Track IDs that failed to fetch (404 = entity deleted, skip the delta)
+        // Self-heal by fetching missing records for update deltas.
+        // Track ids that failed to fetch (a 404 means the entity was deleted,
+        // so its delta is skipped).
         const failedToFetch = new Set<string>();
 
         if (missingIds.size > 0) {
@@ -1317,14 +1306,12 @@ export class Database {
               break;
 
             case 'U': {
-              // ✅ UPDATE: Merge delta with existing record (already fetched)
+              // Update: merge the delta onto the existing record (already fetched).
               const existing = existingRecords.get(modelId);
 
-              // ========================================================================
-              // SKIP STALE DELTAS: If entity doesn't exist locally AND failed to fetch
-              // from server (404), this is a stale UPDATE for a deleted entity.
-              // Per Linear's architecture, skip it instead of creating incomplete data.
-              // ========================================================================
+              // Skip a stale update: if the entity is neither in the local
+              // store nor fetchable from the server (a 404), it was deleted,
+              // so skip it rather than create an incomplete record.
               if (!existing && failedToFetch.has(modelId)) {
                 getContext().logger.debug('[Database.processDeltaBatch] Skipping UPDATE for deleted entity', {
                   modelName,
@@ -1334,8 +1321,9 @@ export class Database {
                 break; // Skip this delta
               }
 
-              // CRITICAL FIX: Skip UPDATE if there's no existing record to merge with
-              // Creating a record from partial UPDATE data causes corruption (missing deckId, etc.)
+              // Skip the update when there's no existing record to merge with:
+              // building a record from partial update data would corrupt it
+              // (missing deckId, and so on).
               if (!existing) {
                 getContext().observability.breadcrumb(
                   'Batch: Skipping UPDATE delta - no existing record',
@@ -1401,8 +1389,8 @@ export class Database {
           tx.onerror = () => { reject(tx.error); };
         });
         // Only commit staged results to the global results if the transaction succeeded.
-        // Also advance `highestPersistedSyncId` ONLY for deltas in this successful tx
-        // — so the cursor can't advance past rows that never wrote to IDB.
+        // Advance `highestPersistedSyncId` only for deltas in this successful
+        // transaction, so the cursor can't advance past rows that never wrote to IDB.
         for (const r of stagedResults) {
           // Resolve the originating delta so we can carry its
           // transactionId through to the result. Echo detection in
@@ -1526,13 +1514,7 @@ export class Database {
     return await store.getAllFromIndex(indexName, value);
   }
 
-  /**
-   * Update workspace metadata
-   */
-  /**
-   * Get the last sync ID from workspace metadata
-   */
-  /** Read workspace metadata from IDB (returns null if db not open). */
+  /** Read workspace metadata from IndexedDB. Returns null when the database is not open. */
   async getWorkspaceMetadata(): Promise<WorkspaceMetadata | null> {
     if (this.inMemory) return this.inMemoryMetadata;
     if (!this.workspaceDb) return null;

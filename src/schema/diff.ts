@@ -1,29 +1,32 @@
 /**
- * Schema diff + migration planning — the pure core of the managed-migration loop.
+ * Computes the migration plan that turns one schema into another. Given two
+ * serialized schemas — the one currently active and the one being pushed — it
+ * produces an ordered list of {@link MigrationStep}s describing how to evolve the
+ * database, and a {@link MigrationClassification} that separates the risky parts
+ * into warnings (they run, but may lose or risk data on a non-empty table) and
+ * unexecutable steps (they fail on a non-empty table unless a backfill or default
+ * is supplied). This module only plans: it has no database dependency and emits no
+ * SQL, so it can be unit-tested exhaustively and reused by the command-line tools.
+ * Turning a step into SQL and running it happens in the host implementation, which
+ * owns the column-type mapping and row-security rules.
  *
- * Given two serialized schemas (the active one and the one being pushed), produce
- * an ordered list of {@link MigrationStep}s describing how to evolve the database,
- * and a {@link MigrationClassification} splitting the risky parts into *warnings*
- * (execute but may lose/risk data) and *unexecutable* steps (fail on a non-empty
- * table without a backfill/default). SQL emission and execution live elsewhere
- * (server-side, where the type map + RLS live); this module is intentionally pure
- * and DB-free so it is exhaustively unit-testable and reusable by the CLI.
+ * A few design choices worth knowing about:
+ *  - Renames are supplied as data through {@link RenameHints}, not guessed. Without
+ *    a hint, a removed field plus an added field reads as a drop followed by an add,
+ *    which is the safe (lossy) default; a hint tells the planner they are the same
+ *    field under a new name.
+ *  - Destructive changes fall into two tiers — warnings versus unexecutable — and a
+ *    type change carries its own sub-tier ({@link CastSafety}: safe, risky, or not
+ *    castable) that decides between an in-place `ALTER COLUMN … TYPE` and a lossy
+ *    drop-and-recreate.
+ *  - A single {@link FieldChanges} value records which facets of a column changed
+ *    (type, nullability, enum values, index) so one `alter_field` step covers them
+ *    all instead of several separate steps.
  *
- * Design borrowed from mature tools:
- *  - **Drizzle Kit**: keep the differ pure and inject RENAME decisions as data
- *    (the {@link RenameHints} resolver seam) rather than guessing — the same
- *    engine is then headless-testable and drivable by an interactive prompt.
- *  - **Prisma migration engine**: a two-tier destructive classification
- *    (warning vs unexecutable) and a type-change sub-tier
- *    (safe / risky / not-castable) that decides in-place `ALTER TYPE` vs a
- *    lossy drop-and-recreate.
- *  - **Atlas**: a single `alter_field` step carrying *which* facets changed
- *    (type / nullability / enum / index) instead of N discrete alter steps.
- *
- * Step ordering is the expand→contract sequence (add before drop, widen before
- * narrow): create models → rename → add columns (always nullable) → alter →
- * drop columns → drop models. NOT NULL is never set on add — it is an
- * `alter_field` nullability change that a backfill must precede.
+ * Steps come back in expand-then-contract order — add before drop, widen before
+ * narrow: create models, rename, add columns (always nullable), alter, drop columns,
+ * drop models. A newly added column is never created `NOT NULL`; making a column
+ * required is a separate nullability change that a backfill must run before.
  */
 
 import type { FieldMeta } from './field.js';
@@ -34,37 +37,47 @@ export type FieldType = FieldMeta['type'];
 /** Whether a Postgres `ALTER COLUMN … TYPE` can preserve the existing data. */
 export type CastSafety = 'safe' | 'risky' | 'notCastable';
 
+/** Records a column's type change and how safely Postgres can carry it out. */
 export interface FieldTypeChange {
   readonly from: FieldType;
   readonly to: FieldType;
-  /** `safe` → plain ALTER TYPE; `risky` → ALTER w/ USING (may fail per-row);
-   *  `notCastable` → drop-and-recreate (data loss). */
+  /** How the type change is carried out: `safe` runs a plain `ALTER COLUMN … TYPE`;
+   *  `risky` runs one with a `USING` cast that may fail on some rows; `notCastable`
+   *  drops and recreates the column, losing its data. */
   readonly cast: CastSafety;
 }
 
-/** `isOptional` transition. `true → false` is the dangerous direction. */
+/** Records a change to whether a field is optional. Going from optional to required
+ *  (`true → false`) is the dangerous direction: it fails if any existing row holds
+ *  a null. */
 export interface NullabilityChange {
   readonly fromOptional: boolean;
   readonly toOptional: boolean;
 }
 
+/** Records which allowed values an enum field gained and lost. Removing a value is
+ *  the risky part — existing rows still holding it violate the new constraint. */
 export interface EnumValuesChange {
   readonly added: readonly string[];
   readonly removed: readonly string[];
 }
 
+/** Records a change to whether a field is indexed (`from` was, `to` will be). */
 export interface IndexChange {
   readonly from: boolean;
   readonly to: boolean;
 }
 
-/** Physical column-name transition for a stable logical field. */
+/** Records a change to the physical database column name backing a field whose
+ *  logical name stayed the same. */
 export interface FieldColumnChange {
   readonly from: string;
   readonly to: string;
 }
 
-/** The facets of a single column that changed (Atlas-style bitmask, as data). */
+/** The set of facets of a single column that changed. Each optional member is
+ *  present only when that facet actually changed, so one `alter_field` step can
+ *  describe several simultaneous changes to the same column. */
 export interface FieldChanges {
   readonly column?: FieldColumnChange;
   readonly type?: FieldTypeChange;
@@ -73,6 +86,9 @@ export interface FieldChanges {
   readonly indexed?: IndexChange;
 }
 
+/** One step in a migration plan. The `kind` tag names the operation and the
+ *  remaining fields carry its target and payload. {@link diffSchema} emits these in
+ *  expand-then-contract order, and the host implementation lowers each to SQL. */
 export type MigrationStep =
   | { readonly kind: 'create_model'; readonly model: string; readonly tableName: string }
   | { readonly kind: 'drop_model'; readonly model: string; readonly tableName: string }
@@ -83,10 +99,11 @@ export type MigrationStep =
   | { readonly kind: 'alter_field'; readonly model: string; readonly field: string; readonly changes: FieldChanges };
 
 /**
- * Rename decisions, injected as data (Drizzle's resolver seam). Without a hint,
- * a removed+added pair reads as drop+add (lossy) — the same safe default Prisma
- * takes. `field.model` refers to the model key in the NEXT schema (post any
- * model rename).
+ * Tells {@link diffSchema} which removed-and-added pairs are really renames. Supply
+ * these as data because the planner cannot safely guess: without a hint, a field
+ * that disappears and a field that appears read as a drop followed by an add, which
+ * loses the column's data. Each field rename names its model by the model's key in
+ * the new schema, after any model rename has been applied.
  */
 export interface RenameHints {
   readonly models?: readonly { readonly from: string; readonly to: string }[];
@@ -119,6 +136,9 @@ const CAST: Readonly<Record<string, CastSafety>> = {
   'boolean->json': 'notCastable', 'date->json': 'notCastable',
 };
 
+/** Reports how safely a field's type can change from `from` to `to`. The same type
+ *  in and out is always safe; anything else is looked up in the cast-safety matrix
+ *  and defaults to `notCastable` when no entry exists. */
 export function classifyCast(from: FieldType, to: FieldType): CastSafety {
   if (from === to) return 'safe';
   return CAST[`${from}->${to}`] ?? 'notCastable';
@@ -298,57 +318,73 @@ export function diffSchema(
   return [...creates, ...renames, ...fieldSteps, ...drops];
 }
 
-// ── Destructive classification (Prisma two-tier) ───────────────────────────────
+// ── Destructive-change classification ───────────────────────────────────────────
 
+/**
+ * Why a migration step is flagged as a warning — a change that runs but may lose or
+ * risk data on a non-empty table. Each code corresponds to one destructive step
+ * kind that {@link classifyMigration} recognizes.
+ */
 export type WarningCode =
   | 'drop_model'
   | 'drop_field'
   | 'risky_cast'
   | 'lossy_recreate'
   | 'enum_value_removed'
-  /** A model disappears from what this plane's READERS resolve, without any
-   *  table being dropped. Emitted by the server's push gate (not
-   *  `classifyMigration`) when a first sandbox push shadows the production
-   *  artifact that sandbox readers were served via the registry's sandbox→production
-   *  fallback. The data plane is untouched — the loss is visibility. */
+  /** A model stops being served to readers even though no table is dropped. This is
+   *  raised when a push is accepted, not by {@link classifyMigration}, and the loss
+   *  is visibility, not data — the underlying rows are left untouched. */
   | 'remove_model';
 
+/** Why a migration step is unexecutable — it fails on a non-empty table unless a
+ *  default or backfill is supplied. Both cases introduce a requirement that existing
+ *  rows might not satisfy. */
 export type BlockerCode = 'required_field_added' | 'made_required';
 
+/**
+ * One flagged change in a classified migration plan. {@link code} says what kind of
+ * risk it is, {@link model} and the optional {@link field} say where, and
+ * {@link detail} is a human-readable explanation suitable for showing to a
+ * developer.
+ */
 export interface MigrationSignal {
   readonly code: WarningCode | BlockerCode;
   readonly model: string;
   readonly field?: string;
   readonly detail: string;
   /**
-   * Reader-visibility context for a removal that shadows an existing artifact:
-   * the active schema this push is being diffed against. Lets the CLI show the
-   * baseline — version + WHEN it was pushed — so "incompatible" isn't a mystery
-   * (e.g. a first sandbox push diffed against a months-old production schema).
+   * Extra context for a removal signal: the previously active schema this push was
+   * compared against. Tools use it to show which baseline made the push look
+   * incompatible — its version and when it was pushed — so the warning is not a
+   * mystery.
    */
   readonly shadowed?: {
     readonly environment: string;
     readonly version: number;
-    /** ISO timestamp the shadowed artifact was activated/pushed, or null. */
+    /** ISO 8601 timestamp when the compared-against schema was pushed, or null. */
     readonly pushedAt: string | null;
-    /** Who pushed it (e.g. `apikey:…`), or null. */
+    /** Who pushed the compared-against schema, or null. */
     readonly pushedBy: string | null;
   };
 }
 
+/** The result of classifying a migration plan: its flagged changes split by
+ *  severity. Produced by {@link classifyMigration} and read by
+ *  {@link isAutoApplicable} and {@link unresolvedBlockers}. */
 export interface MigrationClassification {
-  /** Execute but may lose or risk data on a non-empty table. */
+  /** Changes that run but may lose or risk data on a non-empty table. */
   readonly warnings: readonly MigrationSignal[];
-  /** Will fail on a non-empty table unless a default/backfill is supplied. */
+  /** Changes that fail on a non-empty table unless a default or backfill is supplied. */
   readonly unexecutable: readonly MigrationSignal[];
 }
 
 /**
- * Classify a plan's steps into Prisma-style warnings vs unexecutable. The IR
- * carries no per-field default, so a non-optional `add_field` is conservatively
- * unexecutable (a backfill or default resolves it) — we cannot prove a default
- * exists. Classification is rule-based (schema-derived); the runtime layer can
- * downgrade a signal to a no-op when the target table is empty.
+ * Sorts a plan's steps into {@link MigrationClassification.warnings} and
+ * {@link MigrationClassification.unexecutable}. Because a step carries no per-field
+ * default, adding a required field is treated conservatively as unexecutable — the
+ * classifier cannot prove a default exists, so a backfill or default must resolve
+ * it. The classification is derived from the schema alone; whoever runs the plan can
+ * still downgrade a flagged step to a no-op once it finds the target table is empty.
  */
 export function classifyMigration(steps: readonly MigrationStep[]): MigrationClassification {
   const warnings: MigrationSignal[] = [];
@@ -408,7 +444,8 @@ export function classifyMigration(steps: readonly MigrationStep[]): MigrationCla
   return { warnings, unexecutable };
 }
 
-/** Convenience: a plan is safe to auto-apply iff it has no unexecutable steps. */
+/** Whether a plan is safe to apply automatically — true when it has no unexecutable
+ *  steps. Warnings do not block auto-apply; only unexecutable steps do. */
 export function isAutoApplicable(classification: MigrationClassification): boolean {
   return classification.unexecutable.length === 0;
 }
@@ -416,11 +453,11 @@ export function isAutoApplicable(classification: MigrationClassification): boole
 // ── Backfill ────────────────────────────────────────────────────────────────
 
 /**
- * A constant value to seed into existing rows so an otherwise-`unexecutable`
- * step becomes safe: a required field added to a non-empty table, or a field
- * made required while NULLs exist. Deliberately a CONSTANT (not an SQL
- * expression) — arbitrary backfill logic is out of scope; this serves the
- * common "new column defaults to X" case only. `value` is typed to the field.
+ * A constant value to write into existing rows so an otherwise-unexecutable step can
+ * run: a required field added to a non-empty table, or a field made required while
+ * some rows hold null. This is intentionally a single constant, not an SQL
+ * expression — it covers the common "new column defaults to X" case; anything more
+ * elaborate is out of scope.
  */
 export interface BackfillValue {
   readonly model: string;
@@ -429,9 +466,10 @@ export interface BackfillValue {
 }
 
 /**
- * Does a provided backfill resolve this blocker? Only the two row-dependent
- * blockers (`required_field_added`, `made_required`) are backfill-resolvable; a
- * data-loss *warning* is not — that always needs `force`.
+ * Reports whether a supplied backfill resolves this blocker. Only the two
+ * row-dependent blockers — `required_field_added` and `made_required` — can be
+ * resolved with a backfill; a data-loss warning cannot, and must be accepted
+ * explicitly instead.
  */
 export function isBlockerResolved(
   signal: MigrationSignal,
@@ -441,8 +479,8 @@ export function isBlockerResolved(
   return backfills.some((b) => b.model === signal.model && b.field === signal.field);
 }
 
-/** The unexecutable signals NOT covered by a supplied backfill. Empty → the push
- *  can proceed (modulo the separate `warnings`/`force` gate). */
+/** The unexecutable signals that the supplied backfills do not cover. An empty
+ *  result means no blocker remains, though any warnings are still gated separately. */
 export function unresolvedBlockers(
   classification: MigrationClassification,
   backfills: readonly BackfillValue[],

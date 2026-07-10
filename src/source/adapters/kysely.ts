@@ -1,28 +1,29 @@
 /**
- * Kysely Data Source adapter. Same adapter interface + conformance shape as
- * `prismaDataSource` / `drizzleDataSource`, built against Kysely's REAL
- * query-builder API:
- *   - `db.transaction().execute(async (trx) => …)` — interactive transaction.
- *   - `insertInto/updateTable/deleteFrom/selectFrom` + `returningAll()` —
- *     the fluent builder; table/column names are plain strings, so no raw
- *     SQL tag is needed and this module imports NOTHING from `kysely`
- *     (structural `KyselyLike`, mirroring the Prisma adapter's zero-dep
- *     `PrismaLike`).
+ * The Kysely adapter for the data-source interface. It implements the same
+ * {@link DataSourceAdapter} contract as {@link prismaDataSource} and
+ * {@link drizzleDataSource} and passes the same conformance suite, built against
+ * Kysely's query builder:
+ *   - `db.transaction().execute(async (trx) => …)` runs an interactive transaction.
+ *   - `insertInto` / `updateTable` / `deleteFrom` / `selectFrom` with
+ *     `returningAll()` form the fluent query. Table and column names are plain
+ *     strings, so the adapter needs no raw-SQL tag and imports nothing from
+ *     `kysely`; it depends only on the structural {@link KyselyLike} shape, the
+ *     same approach the Prisma adapter takes with {@link PrismaLike}.
  *
- * SCHEMA-DRIVEN COLUMNS. Kysely is SQL-near: it passes the column names you
- * give it through verbatim (no Prisma-style `@map`). Like the Drizzle
- * adapter, every table + column name is derived from the SAME rule the
- * provisioner uses (`generateProvisionPlan`):
+ * Table and column names come from your schema. Kysely passes the column names you
+ * give it straight through to SQL, so, like the Drizzle adapter, this one derives
+ * every name from the same rule the table provisioner uses:
  *   table  = `model.tableName ?? key`
- *   column = `fieldMeta.column ?? camelToSnake(field)`  (+ the tenancy column)
- * so `ablo migrate` (which emits `operator_id`) and this adapter COMPOSE.
- * The adapter is the translation boundary: rows in/out are field-keyed (the
- * SDK shape); the physical columns it reads/writes are snake_case.
+ *   column = `fieldMeta.column ?? camelToSnake(field)`  (plus the tenancy column)
+ * This keeps the tables `ablo migrate` creates (for example `operator_id`) and the
+ * columns this adapter uses in agreement. The adapter is the translation boundary:
+ * the rows it accepts and returns are keyed by field name, while the physical
+ * columns are snake_case.
  *
- * JSONB note: the outbox `data` / idempotency `response` values are passed
- * as JSON strings — Postgres infers the parameter type from the target
- * `jsonb` column, so the coercion is server-side and driver-agnostic (no
- * `::jsonb` cast available without raw SQL).
+ * A note on JSON columns: the outbox `data` and idempotency `response` values are
+ * passed as JSON strings. Postgres infers the parameter type from the target
+ * `jsonb` column, so the conversion happens on the server and works across drivers,
+ * without the `::jsonb` cast that only raw SQL allows.
  */
 
 import { AbloValidationError } from '../../errors.js';
@@ -41,10 +42,11 @@ import { camelToSnake, snakeToCamel } from '../../schema/ddl.js';
 import { tenancyColumn } from '../../schema/tenancy.js';
 
 /**
- * The subset of a Kysely instance (or transaction handle) the adapter calls.
- * Structural on purpose — declared with method shorthand so a real
- * `Kysely<DB>` (whose params are narrowed to `keyof DB`) stays assignable
- * under TypeScript's method bivariance, exactly like `PrismaLike`.
+ * The subset of a Kysely instance, or transaction handle, that the adapter calls.
+ * It is structural by design: declaring the members with method shorthand lets a
+ * real `Kysely<DB>` — whose parameters are narrowed to `keyof DB` — stay assignable
+ * under TypeScript's method-parameter bivariance, the same way {@link PrismaLike}
+ * accepts a real `PrismaClient`.
  */
 export interface KyselyLike {
   selectFrom(table: string): KyselySelectBuilder;
@@ -95,7 +97,7 @@ function rowId(op: Operation): string {
   return id;
 }
 
-/** Per-model name resolution, precomputed once from the schema (see drizzle.ts). */
+/** Per-model name resolution, computed once from the schema (the Drizzle adapter documents the same shape). */
 interface ModelColumns {
   readonly table: string;
   readonly fieldToColumn: ReadonlyMap<string, string>;
@@ -143,13 +145,13 @@ export function kyselyDataSource<S extends SchemaRecord>(
   const fieldFor = (mc: ModelColumns, column: string): string =>
     mc.columnToField.get(column) ?? snakeToCamel(column);
 
-  /** Field-keyed (SDK shape) → column-keyed (physical), for INSERT/UPDATE. */
+  /** Field-keyed row to column-keyed row, for INSERT and UPDATE values. */
   const toColumns = (mc: ModelColumns, row: Row): Row => {
     const out: Row = {};
     for (const k of Object.keys(row)) out[columnFor(mc, k)] = row[k];
     return out;
   };
-  /** Column-keyed (RETURNING * / SELECT *) → field-keyed (SDK shape). */
+  /** Column-keyed row (from `RETURNING *` or `SELECT *`) back to a field-keyed row. */
   const toFields = (mc: ModelColumns, row: Row): Row => {
     const out: Row = {};
     for (const k of Object.keys(row)) out[fieldFor(mc, k)] = row[k];

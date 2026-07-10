@@ -1,13 +1,12 @@
 /**
- * Commit-payload projection — the queue's wire vocabulary, lifted out of
- * `TransactionQueue.ts` as a pure leaf (no queue state, no timers).
- *
- * Owns the `Transaction` record shape plus every helper that turns a local
- * transaction into a wire-safe commit operation: schema-field projection
- * (`projectCommitPayload`), write-option projection (`applyWriteOptions`),
- * FK-aware priority scoring, and the transport-error duck-typing used to
- * classify server rejections. Because nothing here touches the queue's
- * runtime, the HTTP commit path can share this projection too.
+ * The vocabulary a local transaction uses on the wire. This module defines the
+ * {@link Transaction} record and the helpers that turn a transaction into a
+ * wire-safe commit operation: schema-field projection
+ * ({@link projectCommitPayload}), write-option projection
+ * ({@link applyWriteOptions}), foreign-key-aware priority scoring
+ * ({@link computePriorityScore}), and the structural checks used to classify
+ * transport errors. Nothing here holds queue state or timers, so the batched
+ * queue path and the HTTP commit path share the same projection.
  */
 
 import { getContext } from '../context.js';
@@ -33,24 +32,22 @@ export type MutationInput = Record<string, unknown>;
 const FRAMEWORK_KEYS = new Set(['__class', '__typename', 'clientId', 'syncStatus']);
 
 /**
- * Project a Model's serialized data onto its schema-declared fields
- * and return a wire-safe commit payload. Two jobs:
+ * Projects a model's serialized data onto the fields declared in its schema and
+ * returns a wire-safe commit payload. It does two things:
  *
- *   1. Drop framework internals (`__class`, `__typename`, `clientId`,
+ *   1. Drops framework-internal keys (`__class`, `__typename`, `clientId`,
  *      `syncStatus`) and anything not declared on the model's schema.
- *   2. JSON.stringify values typed as `field.json()` — TEXT columns
- *      storing JSON need explicit stringification; postgres.js won't
- *      auto-serialize for non-JSONB columns.
+ *   2. Passes each declared field's value through unchanged, including
+ *      JSON-typed fields, which are sent as objects rather than pre-serialized
+ *      strings (see the note in the body for why).
  *
- * For updates (`dropUndefined: true`), `undefined` values are also
- * stripped so they don't translate to `SET column = NULL` on the
- * server side.
+ * For updates (`dropUndefined: true`), `undefined` values are also removed so
+ * they are not written as `SET column = NULL` on the server.
  *
- * Fields are read from `ModelRegistry`, populated by
- * `registerModelsFromSchema` at SDK initialization. If the model
- * isn't registered with field metadata (edge case — e.g., tests or
- * manually registered models), projection falls back to identity and
- * the caller gets whatever the Model serialized.
+ * Field metadata comes from the model registry, populated when the schema is
+ * registered at initialization. If a model has no registered field metadata —
+ * for example a manually registered model — projection passes the serialized
+ * data through unchanged apart from dropping the framework keys.
  */
 export function projectCommitPayload(
   modelName: string,
@@ -71,29 +68,25 @@ export function projectCommitPayload(
     return out;
   }
 
-  for (const [key, meta] of Object.entries(fields)) {
+  for (const key of Object.keys(fields)) {
     if (!(key in source)) continue;
     const value = source[key];
     if (opts.dropUndefined && value === undefined) continue;
-    // JSON-typed fields (`jsonb` on the server): ship as OBJECTS over
-    // the wire, not pre-stringified strings. Previously we stringified
-    // here, which round-tripped incorrectly:
+    // JSON-typed fields (stored as jsonb on the server) are sent as objects,
+    // not pre-serialized strings. Pre-stringifying here corrupts a round trip:
     //
-    //   1. Client stringifies `position: {x, y}` → `'{"x":...}'`
-    //   2. Server writes to jsonb column (parses string → jsonb object, fine)
-    //   3. Server's delta echoes `data: JSON.stringify(op.input)` where
-    //      `op.input.position` is still the STRING from step 1
-    //   4. Client merges delta → `model.position = "{...}"` (STRING)
-    //   5. Next drag: `{ ...layer.position, x, y }` spreads the STRING
-    //      char-by-char, producing corrupted char-indexed objects like
-    //      `{"0":"{","1":"\"","2":"x",...,"x":null,"y":null,...}`
-    //   6. That corrupt object lands in the next commit, stored in jsonb.
+    //   1. The client stringifies `position: {x, y}` to `'{"x":...}'`.
+    //   2. The server writes it to the jsonb column, parsing the string, fine.
+    //   3. The server's delta echoes the input, where `position` is still the
+    //      string from step 1.
+    //   4. The client merges the delta and sets `model.position` to that string.
+    //   5. The next edit spreads the string character by character, producing a
+    //      corrupted, index-keyed object.
+    //   6. That corrupt object lands in the next commit and is stored in jsonb.
     //
-    // Sending objects avoids the round-trip mismatch: the wire carries
-    // the object through delta + commit unchanged, and `postgres-js`
-    // serializes JS objects to jsonb correctly via its own
-    // `json.serialize` (triggered by Postgres's ParameterDescription
-    // response identifying the column as type 3802 / jsonb).
+    // Sending objects avoids the mismatch: the value travels through the delta
+    // and the commit unchanged, and the Postgres driver serializes a JS object
+    // to jsonb correctly once the column is identified as jsonb.
     out[key] = value;
   }
   return out;
@@ -112,22 +105,23 @@ export interface Transaction {
   createdAt: number;
   attempts: number;
   priority: 'normal' | 'high';
-  priorityScore: number; // derived FK-aware priority used for sorting
+  priorityScore: number; // foreign-key-aware priority, derived, used for sorting
   writeOptions?: WriteOptions;
   batchId?: string;
   /** Completed locally without a server operation; no sync echo will arrive. */
   localOnly?: boolean;
-  /** LINEAR PATTERN: syncId threshold - transaction confirms when delta.id >= this value */
+  /** Sync-id threshold: the transaction confirms once a delta with an id at least this value arrives. */
   syncIdNeededForCompletion?: number;
   /**
-   * Resolves when the server has confirmed this transaction (delta arrived
-   * or HTTP ack). Rejects with the originating error if the transaction is
-   * permanently rolled back. Name matches the queue's existing `'confirmed'`
-   * status vocabulary (`commits.create({wait:'confirmed'})`,
-   * `waitForConfirmation`) — gives call sites a single `await` point for
-   * "did my write land?", so failures surface at the source instead of
-   * leaking via silent pool rollback. The rejection error is the same
-   * `AbloError` recorded on the queue's `transaction:failed` event.
+   * Resolves once the server has confirmed this transaction, whether by a delta
+   * or an HTTP acknowledgement, and rejects with the originating error if the
+   * transaction is permanently rolled back. It gives a caller one place to await
+   * the answer to "did my write land?", matching the
+   * `commits.create({ wait: 'confirmed' })` and
+   * {@link TransactionQueue.waitForConfirmation} vocabulary, so a failure
+   * surfaces at the call site instead of only as a silent local rollback. The
+   * rejection value is the same {@link AbloError} carried on the queue's
+   * `transaction:failed` event.
    */
   confirmation?: Promise<void>;
 }
@@ -137,19 +131,17 @@ export const normalizeModelKey = (modelName: string): string =>
 export const stripModelSuffix = (modelName: string): string => modelName.replace('Model', '');
 
 /**
- * FK-ordered create priority.
+ * Returns the priority score used to order create operations by foreign-key
+ * depth, so a parent row commits before its children.
  *
- * Reads `config.modelCreatePriority` out of the runtime SyncEngineContext —
- * this map is populated once at `createSyncEngine(...)` time by walking the
- * schema's `belongsTo` graph (see `computeFKDepthPriority` in
- * `client/createSyncEngine.ts`). The queue stays schema-agnostic: no model
- * names appear here, and consumer applications can override specific
- * priorities via `configOverrides.modelCreatePriority` without touching the
- * SDK.
+ * The score comes from a priority map on the runtime configuration, built once
+ * at initialization by walking the schema's `belongsTo` graph. No model names
+ * are hard-coded here, and an application can override specific priorities
+ * through `configOverrides.modelCreatePriority`.
  *
- * Non-create ops (update/delete/archive/unarchive) don't need FK ordering
- * because the row already exists, so they all share
- * `config.defaultNonCreatePriority`.
+ * Non-create operations (update, delete, archive, unarchive) need no
+ * foreign-key ordering because the row already exists, so they all share the
+ * configured default non-create priority.
  */
 export const computePriorityScore = (type: Transaction['type'], modelName: string): number => {
   const { modelCreatePriority, defaultCreatePriority, defaultNonCreatePriority } =
@@ -180,11 +172,11 @@ export interface WriteOperationFields {
 }
 
 /**
- * Project a transaction's `writeOptions` onto the wire operation. Stale
- * guards (`readAt`/`onStale`) ride at the op root; `idempotencyKey`/`label`
- * ride in the op's `options` slot (`MutationOperation.options` — the
- * mutation_log cache key + audit tag). This is the single place the
- * caller-supplied write vocabulary crosses onto the wire.
+ * Copies a transaction's `writeOptions` onto the wire operation. The
+ * stale-context guards (`readAt` and `onStale`) sit at the operation's root,
+ * while `idempotencyKey` and `label` go in its `options` slot — the
+ * `mutation_log` cache key and audit tag. This is the one place caller-supplied
+ * write options cross onto the wire.
  */
 export function applyWriteOptions<T extends object>(
   op: T,
@@ -211,10 +203,10 @@ export function applyWriteOptions<T extends object>(
 }
 
 /**
- * Structural shape we duck-type against for transport-layer errors.
- * Captures the union of GraphQL-style and HTTP-style error shapes the
- * mutation executor surfaces — kept narrow on purpose so we don't
- * pretend to know fields the runtime won't always supply.
+ * The structural shape used to inspect transport-layer errors. It covers the
+ * GraphQL-style and HTTP-style error shapes the mutation executor can surface,
+ * and is kept intentionally narrow so it does not claim fields the runtime may
+ * not supply.
  */
 export interface TransportError {
   message?: string;

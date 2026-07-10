@@ -1,39 +1,27 @@
 /**
- * `ablo connect` — connect your database for the READ path, via logical
- * replication. This is the Electric / PowerSync / Zero model.
+ * `ablo connect` sets up the read path: Ablo reads your database by tailing its
+ * write-ahead log through Postgres logical replication.
  *
- * Ablo reads your Postgres by tailing its WAL: it consumes the logical
- * replication stream and fans the changes out to clients as live shapes. It
- * NEVER runs DDL, owns, migrates, or HOSTS your schema, and it never writes —
- * your data stays in your database. This command is the read path, and only it:
+ * Ablo consumes the logical replication stream and fans the changes out to
+ * connected clients as live shapes. It does not run DDL, own, migrate, or host
+ * your schema, and it never writes — your data stays in your database. Writes
+ * continue to go through your own backend to your own Postgres, exactly as
+ * before; Ablo records its coordination and transaction deltas on top and is
+ * never in your write path.
  *
- *   reads   ← Ablo tails your WAL (this command) and serves live shapes.
- *   writes  → go through YOUR OWN backend to YOUR OWN Postgres, exactly as
- *             before. Ablo records coordination/transaction deltas on top; it
- *             is never in your write path. (Electric, verbatim: "Writes go
- *             through your existing backend.")
+ * The command has three modes:
  *
- * This is the data-residency-preserving posture, and the one we're keeping. The
- * DEPRECATED alternatives are the ones where Ablo touches your data store: the
- * `shared`/`dedicated` tenant tiers (Ablo HOSTS your rows) and `databaseUrl`
- * (Ablo dials in as a read/write client). Those are being removed — see
- * docs/plans/read-path-logical-replication-vs-hosting.md for the decision.
- *
- * Two modes:
- *   ablo connect           Print the exact, copy-pasteable setup SQL for YOUR
- *                          Postgres (wal_level, publication, replication role).
- *   ablo connect --check   Connect to DATABASE_URL and verify readiness:
- *                          wal_level=logical, the publication exists, the
- *                          current role has REPLICATION, and every published
- *                          table has a usable REPLICA IDENTITY. Prints a green
- *                          checklist, or the precise per-item fix.
- *
- * Modeled 1:1 on the logical-replication onboarding flows of Zero
- * (`rocicorp/mono` — `stream.ts`/`replication-slots.ts`) and PowerSync
- * (`powersync-ja/powersync-service` — `replication-utils.ts` publication +
- * replica-identity checks), and the same model Electric documents at
- * electric.ax/sync/postgres-sync (2026-06-27). See
- * docs/plans/read-path-logical-replication-vs-hosting.md.
+ *   ablo connect            Prints the exact, copy-pasteable setup SQL for your
+ *                           Postgres: the WAL level, the publication, and the
+ *                           replication role.
+ *   ablo connect --check    Connects to `DATABASE_URL` and verifies readiness —
+ *                           that `wal_level` is `logical`, the publication
+ *                           exists, the current role can stream replication, and
+ *                           every published table has a usable replica identity.
+ *                           It prints a checklist, with the precise fix for any
+ *                           item that fails.
+ *   ablo connect --register Verifies readiness, then registers the database so
+ *                           Ablo begins replicating it on the next sync.
  */
 
 import { AbloValidationError } from '../errors.js';
@@ -45,9 +33,9 @@ import { DEFAULT_URL } from './push';
 import { brand } from './theme';
 
 /**
- * The single canonical publication name. The WAL consumer subscribes to
- * exactly this — hard-coded on both sides so the recipe and the runtime can
- * never disagree (the same discipline `ablo_idempotency`/`ablo_outbox` follow).
+ * The canonical Postgres publication name that Ablo's replication reads from.
+ * The setup SQL and the replication consumer both use exactly this name, so the
+ * recipe you run and the runtime that connects can never disagree.
  */
 export const ABLO_PUBLICATION = 'ablo_publication';
 
@@ -58,21 +46,21 @@ export interface ConnectArgs {
   /** `--check`: connect to DATABASE_URL and validate readiness (no printing of SQL). */
   check: boolean;
   /**
-   * `--register`: validate readiness, then tell Ablo to replicate this database
-   * (`POST /v1/datasources { connectionString }`, authed by the project key). The
-   * registration IS the enable — no tier/flag. This is the one self-service step
-   * that turns "here's my database URL" into a replicated read path.
+   * `--register`: validate readiness, then register this database with Ablo so it
+   * begins replicating (`POST /v1/datasources { connectionString }`, authorized
+   * by your project key). Registering the database is what enables the read
+   * path — there is no separate tier or flag to turn on.
    */
   register: boolean;
   /**
-   * `--audit-infra`: read-only Stage 5 audit. Reports deprecated Ablo sync
-   * infrastructure artifacts that may remain in a customer DB after WAL cutover.
+   * `--audit-infra`: a read-only audit that reports leftover Ablo sync tables and
+   * types in the database — infrastructure a previous integration may have
+   * created. It only reports what it finds and never drops anything.
    */
   auditInfra: boolean;
   /**
-   * `--tables a,b,c`: publish only these tables instead of `FOR ALL TABLES`.
-   * Empty = all tables (the default, and what the WAL consumer expects unless
-   * you scope the schema to match).
+   * `--tables a,b,c`: publish only these tables instead of every table. When
+   * empty (the default), the publication covers all tables.
    */
   tables: readonly string[];
   /** `--role <name>`: name for the replication role (default `ablo_replicator`). */
@@ -117,21 +105,21 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
   return { check, register, auditInfra, tables, role };
 }
 
-/** Quote a Postgres identifier safely (mirrors dbRole's `q`). */
+/** Safely quotes a Postgres identifier by doubling any embedded quote marks. */
 function quoteIdent(id: string): string {
   return `"${id.replace(/"/g, '""')}"`;
 }
 
 /**
- * The exact, copy-pasteable setup SQL — returned as data so it's testable and
- * reused verbatim by the printed recipe. This is THE one way to connect: it
- * grants Ablo READ access to your WAL and nothing more. Ablo never runs DDL,
- * never owns your schema, never migrates it; your app keeps writing through its
- * own backend exactly as before.
+ * Returns the setup SQL for the read path as an array of statements, so it can be
+ * both printed as a recipe and asserted in tests. The statements grant Ablo
+ * read-only access to your write-ahead log and nothing more: Ablo does not run
+ * DDL, own your schema, or migrate it, and your app keeps writing through its own
+ * backend.
  *
- * The `<password>` placeholder is intentional — you choose the secret and put
- * the resulting connection string in `DATABASE_URL`; it never passes through
- * Ablo's CLI or servers on this path.
+ * The `<password>` placeholder is deliberate. You choose the secret and put the
+ * resulting connection string in `DATABASE_URL`; the password never passes
+ * through Ablo's CLI or servers.
  */
 export function connectSetupSql(input: {
   readonly tables?: readonly string[];
@@ -156,10 +144,9 @@ export function connectSetupSql(input: {
 }
 
 /**
- * Print the prescriptive recipe. Spelled out as numbered steps with the
- * provider-specific caveats (restart, RDS parameter group + `rds_replication`)
- * inline, because those are exactly where a developer gets stuck and then
- * reaches for the wrong seam.
+ * Prints the setup recipe as numbered steps, with the provider-specific caveats
+ * (the required restart, and the RDS parameter group and `rds_replication`
+ * grant) inline — the points where this setup most often trips people up.
  */
 export function printConnectRecipe(args: ConnectArgs): void {
   const sql = connectSetupSql({ tables: args.tables, role: args.role });
@@ -234,7 +221,7 @@ interface BadReplicaIdentityRow {
   relreplident: string;
 }
 
-/** A porsager/Postgres query error — the field worth surfacing. */
+/** A query error from the `postgres` client — the one field worth surfacing. */
 interface PgErrorLike {
   message?: string;
 }
@@ -281,9 +268,10 @@ function printCheckItem(item: CheckItem): void {
 }
 
 /**
- * Probe the connected database for the four readiness invariants. Pure-ish:
- * takes an already-open `sql` handle so it's exercised against a real ephemeral
- * Postgres in integration tests without re-implementing connection handling.
+ * Probes the connected database for the four readiness invariants and returns one
+ * {@link CheckItem} per check. It takes an already-open `sql` handle rather than a
+ * connection URL, so callers control connection handling and the checks can run
+ * against a real Postgres in tests.
  */
 export async function probeReadiness(
   sql: postgres.Sql,
@@ -293,10 +281,9 @@ export async function probeReadiness(
   const items: CheckItem[] = [];
 
   // 1. wal_level must be 'logical'.
-  // `SHOW wal_level` returns a column named `wal_level`, not `setting`; reading
-  // `.setting` off it is always undefined → a false "unknown" on every database
-  // (caught testing real Neon). `pg_settings` exposes the value in a `setting`
-  // column, matching {@link WalLevelRow}.
+  // `SHOW wal_level` returns a column named `wal_level`, not `setting`, so reading
+  // `.setting` off it is always undefined and every database looks like "unknown".
+  // `pg_settings` exposes the value in a `setting` column, matching {@link WalLevelRow}.
   const walRows = (await sql.unsafe(
     `SELECT setting FROM pg_settings WHERE name = 'wal_level'`,
   )) as unknown as WalLevelRow[];
@@ -353,9 +340,8 @@ export async function probeReadiness(
   );
 
   // 4. Every published table needs a usable REPLICA IDENTITY for UPDATE/DELETE.
-  //    'd' (DEFAULT) is usable ONLY when the table has a primary key; 'n'
-  //    (NOTHING) is never usable. 'f'/'i' are always fine. (PowerSync's
-  //    replication-utils replica-identity check, ported.)
+  //    'd' (DEFAULT) is usable only when the table has a primary key; 'n'
+  //    (NOTHING) is never usable; 'f' (FULL) and 'i' (USING INDEX) are always fine.
   if (pubRows.length > 0) {
     const badRows = (await sql.unsafe(
       `SELECT c.relname AS table_name, c.relreplident
@@ -395,9 +381,10 @@ export async function probeReadiness(
 }
 
 /**
- * Stage 5 audit: detect deprecated Ablo-owned sync infrastructure in a customer
- * DB. Read-only by design; cleanup is a per-org/customer-confirmed runbook, not
- * something the CLI executes.
+ * Detects leftover Ablo-owned sync tables and types in the connected database.
+ * Read-only by design — it reports what it finds and never drops anything, since
+ * removing this infrastructure is a deliberate, confirmed step rather than
+ * something the CLI does on its own.
  */
 export async function auditTenantSyncInfra(
   sql: postgres.Sql,
@@ -475,9 +462,19 @@ async function runCheck(): Promise<void> {
 }
 
 /**
+ * The registration endpoint for a given API base URL. The server mounts every
+ * route under `/api`, so the full path is `/api/v1/datasources` — the same path
+ * the SDK's `registerDataSource` resolves. A bare `/v1/datasources` matches no
+ * route and comes back as the server's global "Not found".
+ */
+export function registerEndpoint(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/api/v1/datasources`;
+}
+
+/**
  * Register DATABASE_URL as this project's data source: the engine replicates it
  * on the next sync. Validates readiness first (registering a database that can't
- * stream is a silent dead end), then `POST /v1/datasources { connectionString }`
+ * stream is a silent dead end), then `POST /api/v1/datasources { connectionString }`
  * authed by the project key — the org is derived server-side from the key, never
  * sent in the body.
  */
@@ -505,7 +502,7 @@ async function runRegister(): Promise<void> {
   const apiUrl = (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
   let res: Response;
   try {
-    res = await fetch(`${apiUrl}/v1/datasources`, {
+    res = await fetch(registerEndpoint(apiUrl), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({ connectionString: dbUrl }),
@@ -523,9 +520,8 @@ async function runRegister(): Promise<void> {
     process.exit(0);
   }
 
-  // The server's envelope is FLAT (`{ type, code, message, details }` —
-  // Stripe's error-object shape, see wire/errorEnvelope). The nested
-  // `error.code` fallback is kept for older/wrapped deployments.
+  // The server's error envelope is flat: `{ type, code, message, details }`. The
+  // nested `error.code` fallback is kept for older or wrapped deployments.
   const body = (await res.json().catch(() => ({}))) as {
     code?: string;
     message?: string;
@@ -545,9 +541,10 @@ async function runRegister(): Promise<void> {
       pc.dim(`  This deployment can’t accept connection strings — use a self-hosted/hosted engine, or the signed endpoint fallback.`),
     );
   } else if (code === 'database_not_replication_ready') {
-    // The server re-ran the readiness probes from ITS side and found failures
-    // (it can see a different truth than the local --check: e.g. a publication
-    // added since, or probes running as the replication role, not yours).
+    // The server re-ran the readiness probes from its own side and found failures.
+    // It can see a different picture than the local --check — for example a
+    // publication added since, or probes running as the replication role rather
+    // than yours.
     for (const f of body.details?.failures ?? []) {
       console.error(`  ${pc.red('✗')} ${pc.bold(f.item ?? 'item')}${f.actual ? pc.dim(` (${f.actual})`) : ''}`);
       if (f.fix) for (const line of f.fix.split('\n')) console.error(`      ${pc.red('•')} ${line}`);

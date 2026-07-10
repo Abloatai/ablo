@@ -1,16 +1,17 @@
 /**
- * Prisma Data Source adapter. The first real ORM adapter (Auth.js pattern: one
- * package per ORM, all behind the `DataSourceAdapter` interface, all proven by the
- * same conformance suite the in-memory reference passes).
+ * The Prisma adapter for the data-source interface. It implements
+ * {@link DataSourceAdapter} against a Prisma client and passes the same conformance
+ * suite as the in-memory reference and the other adapters.
  *
- * It owns the transactional outbox + idempotency so the customer never writes
- * them: `commit` runs the app-row mutations, the `ablo_outbox` append, and the
- * `ablo_idempotency` record in ONE `prisma.$transaction`. `migrations()` ships
- * the table-creation SQL for those two tables.
+ * The adapter owns the transactional outbox and idempotency bookkeeping, so you
+ * never write them: `commit` runs the row mutations, the `ablo_outbox` append, and
+ * the `ablo_idempotency` record inside a single `prisma.$transaction`, and
+ * `migrations` returns the SQL that creates those two tables.
  *
- * No `@prisma/client` dependency: the client is accepted structurally
- * (`PrismaLike`), so this compiles in the SDK package and is unit-testable with
- * a fake, while a real `PrismaClient` satisfies it at the call site.
+ * It takes no dependency on `@prisma/client`. The client is accepted structurally
+ * as {@link PrismaLike}, so this module compiles without Prisma installed and can
+ * be tested with a fake, while a real `PrismaClient` satisfies the shape at the
+ * call site.
  */
 
 import { AbloValidationError } from '../../errors.js';
@@ -26,7 +27,7 @@ import { adapterTableMigrations } from '../migrations.js';
 import type { SchemaRecord, Schema } from '../../schema/schema.js';
 import type { SourceListQuery, SourceWhere } from '../types.js';
 
-/** A Prisma model delegate (the subset we call). */
+/** A Prisma model delegate — the subset of its methods the adapter calls. */
 export interface PrismaDelegate {
   findUnique(args: { where: { id: string } }): Promise<Row | null>;
   findMany(args: {
@@ -45,7 +46,7 @@ export interface PrismaRaw {
   $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>;
 }
 
-/** A Prisma client (or interactive-transaction client) — structural, no SDK dependency. */
+/** A Prisma client, or its interactive-transaction client, as a structural shape that needs no `@prisma/client` import. */
 export interface PrismaLike extends PrismaRaw {
   $transaction<T>(fn: (tx: PrismaLike & PrismaRaw) => Promise<T>): Promise<T>;
 }
@@ -58,18 +59,14 @@ export interface PrismaDataSourceOptions {
 const lowerFirst = (s: string): string => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 
 /**
- * Resolve a model's Prisma delegate by name. This is the ONE irreducible cast in
- * the adapter layer, and it's a genuine type-system limit, not laziness:
- *
- *   - Inside `prisma.$transaction(tx => …)` the writes MUST go through the
- *     transactional client `tx`, and the model is only known as a runtime string.
- *   - Prisma's client (and transaction handle) is NOMINALLY keyed (`{ task: TaskDelegate; … }`), so a
- *     dynamic `tx[name]` is `unknown` to the compiler — there is no key to infer.
- *
- * Dynamic property access on a statically-keyed type cannot be typed without an
- * assertion; this is the reflection boundary, validated at runtime (`findMany` is
- * a function) right after. `ablo generate` removes even this by emitting a typed
- * `model → delegate` map, at which point this helper is replaced by a lookup.
+ * Resolves a model's Prisma delegate by name. This is the one unavoidable cast in
+ * the adapter, and it reflects a real limit of the type system rather than a
+ * shortcut. Writes inside `prisma.$transaction(tx => …)` must go through the
+ * transactional client `tx`, and the model is known only as a runtime string.
+ * Prisma keys its client by fixed property names (`{ task: TaskDelegate; … }`), so
+ * a dynamic `tx[name]` lookup is `unknown` to the compiler: there is no static key
+ * to infer from a string. The cast is checked at runtime immediately afterward by
+ * confirming that `findMany` is a function on the resolved delegate.
  */
 function delegateFor(client: PrismaLike, name: string): PrismaDelegate {
   const delegate = (client as unknown as Record<string, PrismaDelegate | undefined>)[name];
@@ -79,7 +76,7 @@ function delegateFor(client: PrismaLike, name: string): PrismaDelegate {
   return delegate;
 }
 
-/** Translate a Source `where` tuple set into a Prisma `where` object. */
+/** Translates a source-query `where` tuple set into a Prisma `where` object. */
 function toPrismaWhere(where: readonly SourceWhere[] | undefined): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const clause of where ?? []) {
@@ -132,7 +129,7 @@ export function prismaDataSource<S extends SchemaRecord>(
   options: PrismaDataSourceOptions = {},
 ): DataSourceAdapter {
   const delegateName = options.delegateName ?? lowerFirst;
-  void schema; // reserved for codegen-typed reads / model validation
+  void schema; // held for typed reads and model validation
 
   const applyOperation = async (tx: PrismaLike, op: Operation): Promise<Row> => {
     const delegate = delegateFor(tx, delegateName(op.model));
@@ -182,7 +179,7 @@ export function prismaDataSource<S extends SchemaRecord>(
           const row = await applyOperation(tx, op);
           rows.push(row);
           const entityId = String(row.id ?? rowId(op));
-          // Transactional outbox: one event per op, written in THIS transaction.
+          // Transactional outbox: one event per operation, written in this same transaction.
           await tx.$executeRawUnsafe(
             `INSERT INTO ablo_outbox (id, model, entity_id, type, data, client_tx_id, occurred_at)
              VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)`,

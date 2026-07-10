@@ -1,14 +1,14 @@
 /**
- * In-memory storage adapter — replaces IndexedDB for Node.js / agent / test.
+ * An in-memory {@link ObjectStoreContract} implementation for runtimes
+ * without IndexedDB, such as Node processes, agents, and tests. It keeps
+ * records in a map and maintains simple secondary indexes, satisfying the
+ * same contract the IndexedDB-backed store implements — so if the two ever
+ * diverge, the mismatch becomes a typecheck error here rather than a silent
+ * failure at a call site.
  *
- * Implements {@link ObjectStoreContract}, the shared surface that
- * IDB-backed `ObjectStore` also satisfies. Centralized contract so a
- * future drift between the two trips a typecheck error here, not
- * silently in a caller.
- *
- * No persistence — cleared on process restart. This is intentional:
- * the Node sync-server and agent workers get their state from the
- * server's delta stream, not from a local cache.
+ * Nothing is persisted; the data is cleared on process restart. That is
+ * deliberate: server-side runtimes and agent workers rebuild their state from
+ * the server's delta stream rather than from a local cache.
  */
 
 import type { ObjectStoreContract } from '../stores/ObjectStoreContract.js';

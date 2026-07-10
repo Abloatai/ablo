@@ -1,27 +1,28 @@
 /**
- * HydrationCoordinator — the lazy-load lane of the sync engine.
+ * Loads model rows on demand — the lazy-load path of the sync engine. When
+ * something needs an entity that the initial bootstrap did not fetch,
+ * {@link OnDemandLoader.fetch | fetch} finds it and populates the
+ * in-memory {@link InstanceCache} so the rest of the engine can read it normally.
  *
- * Bridges "I need this entity but bootstrap didn't fetch it" → pool
- * hydration. Replaces the per-app loader files (documentLoaders,
- * slideLayerLoaders, layoutLoaders, ensureVaultFiles, ensureDataroomFiles)
- * with one engine-level path.
+ * A fetch resolves against three tiers in order, stopping at the first that can
+ * answer:
+ *   1. The object pool — if rows already in memory match the query, return them.
+ *   2. Local storage — if matching rows exist there, hydrate the pool and return.
+ *   3. The network — post the query to `/sync/query`, then hydrate both the pool
+ *      and local storage.
  *
- * Lookup order on `fetch(modelName, where)`:
- *   1. ObjectPool — if rows already match the where, return them (cheap).
- *   2. IndexedDB — if matching rows exist locally, hydrate pool, return.
- *   3. Network — `postQuery` against `/sync/query`, hydrate pool + IDB.
+ * Concurrent calls with the same query key share one in-flight promise, so a
+ * burst of components mounting and asking for the same data on first paint
+ * triggers a single fetch rather than one each.
  *
- * Single-flight dedup: concurrent calls with the same query key share
- * one in-flight promise. Prevents the loader anti-pattern where N
- * components mount and fire N identical hydrations on first paint.
- *
- * The coordinator does NOT replace bootstrap (full sync of `instant`
- * models) or live deltas (WS push). It only fills the gap for `lazy`
- * models accessed by id/where after the engine is ready.
+ * The coordinator does not replace the bootstrap (which fully syncs instantly
+ * loaded models) or the live delta stream (pushed over the WebSocket). It only
+ * fills the gap for lazily loaded models read by id or filter after the engine
+ * is ready.
  */
 
-import type { ObjectPool } from '../ObjectPool.js';
-import { ModelScope } from '../ObjectPool.js';
+import type { InstanceCache } from '../InstanceCache.js';
+import { ModelScope } from '../InstanceCache.js';
 import { AbloValidationError } from '../errors.js';
 import type { Database } from '../Database.js';
 import type { Model } from '../Model.js';
@@ -31,8 +32,8 @@ import type { RecoveryClass } from '../errorCodes.js';
 import type { LoadWhere, Query, WhereClause, WhereOp, WherePrimitive } from '../query/types.js';
 import type { Schema } from '../schema/schema.js';
 
-export interface HydrationCoordinatorOptions {
-  readonly objectPool: ObjectPool;
+export interface OnDemandLoaderOptions {
+  readonly objectPool: InstanceCache;
   readonly database: Database;
   readonly registry: ModelRegistry;
   readonly schema: Schema;
@@ -49,11 +50,11 @@ export interface HydrationCoordinatorOptions {
 
 export interface FetchOptions<T> {
   /**
-   * Filter clauses for the lookup. Accepts either the equality-object
-   * form (`{ id: 'abc' }` → `WHERE id = 'abc'`, array values → `IN`)
-   * or the explicit tuple form (`[['name', 'ILIKE', '%Goldman%']]`)
-   * matching the wire `WhereClause[]` 1:1. Multiple entries AND
-   * together. See `LoadWhere` in `../query/types.ts` for the full shape.
+   * Filter clauses for the lookup. Accepts either the equality-object form
+   * (`{ id: 'abc' }` becomes `WHERE id = 'abc'`, and an array value becomes an
+   * `IN`) or the explicit tuple form (`[['name', 'ILIKE', '%Acme%']]`), which
+   * mirrors the wire `WhereClause[]` exactly. Multiple entries combine with AND.
+   * See {@link LoadWhere} for the full shape.
    */
   readonly where?: LoadWhere<T>;
   readonly orderBy?: { [K in keyof T]?: 'asc' | 'desc' };
@@ -77,8 +78,6 @@ export interface FetchOptions<T> {
   readonly expand?: readonly string[];
 }
 
-/** Equality-object shape accepted on input. Mixed with tuple form via `LoadWhere`. */
-type WhereLike = Record<string, unknown>;
 
 /**
  * The slice of a schema model definition the coordinator reads: the wire
@@ -94,7 +93,7 @@ interface SchemaModelDef {
   >;
 }
 
-export class HydrationCoordinator {
+export class OnDemandLoader {
   private readonly inFlight = new Map<string, Promise<Model[]>>();
   /**
    * Query keys with a background confirm currently in flight. Distinct from
@@ -107,9 +106,9 @@ export class HydrationCoordinator {
   /**
    * Query keys that have been satisfied from the server at least once this
    * session. Once a key is here, repeat reads serve purely from the pool with
-   * NO network: the WebSocket delta stream keeps those pool rows fresh, so
-   * re-running the HTTP query would be redundant polling. This is the ledger
-   * that stops an already-open deck from re-querying on every navigation.
+   * no network round-trip: the WebSocket delta stream keeps those pool rows
+   * fresh, so re-running the HTTP query would be redundant polling. This ledger
+   * is what stops an already-open view from re-querying on every navigation.
    *
    * Cleared on reconnect (see {@link invalidate}) so that, after a connection
    * drop where deltas may have been missed, the next read re-confirms once.
@@ -117,18 +116,22 @@ export class HydrationCoordinator {
   private readonly hydratedKeys = new Set<string>();
   private authTokenProvider: (() => string | null) | null = null;
   /**
-   * The auth-recovery backbone (the store's `recoverFromAuthRejection`),
-   * late-bound like {@link setAuthTokenProvider} because the store doesn't
+   * The credential-recovery hook (the store's `recoverFromAuthRejection`),
+   * late-bound like {@link setAuthTokenProvider} because the store does not
    * exist yet when the coordinator is constructed. Handed to `postQuery` so a
-   * 401 on the lazy lane re-mints through the SAME single-flight path the WS
-   * probe and proactive pre-roll use, then replays once — instead of silently
-   * returning empty rows against an expired key forever.
+   * 401 on the lazy lane re-mints through the same single-flight path the
+   * WebSocket probe uses, then replays the query once — instead of silently
+   * returning empty rows against an expired key.
    */
   private credentialRecovery:
     | ((recovery: RecoveryClass) => Promise<'retry' | 'stop'>)
     | null = null;
 
-  constructor(private readonly opts: HydrationCoordinatorOptions) {
+  constructor(private readonly opts: OnDemandLoaderOptions) {
+    // Reading the deprecated `getCapabilityToken` is deliberate: it's the
+    // back-compat shim that keeps older callers who still pass it working
+    // until they migrate to `getAuthToken`.
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
     this.authTokenProvider = opts.getAuthToken ?? opts.getCapabilityToken ?? null;
   }
 
@@ -167,7 +170,7 @@ export class HydrationCoordinator {
       ?? this.opts.registry.getModelByName(modelName);
     if (!ModelClass) {
       throw new AbloValidationError(
-        `HydrationCoordinator.fetch: unknown model "${modelName}" — ` +
+        `OnDemandLoader.fetch: unknown model "${modelName}" — ` +
           `not registered in the schema.`,
         { code: 'model_not_registered' },
       );
@@ -210,8 +213,8 @@ export class HydrationCoordinator {
 
     // Fast path — this exact query was already satisfied from the server this
     // session. The WebSocket delta stream has kept the pool fresh since, so a
-    // repeat read needs ZERO network: serve straight from local. This is what
-    // stops an already-open deck from re-querying on every navigation when no
+    // repeat read needs no network: serve straight from local. This is what
+    // stops an already-open view from re-querying on every navigation when no
     // new deltas have arrived.
     if (!explicitComplete && this.hydratedKeys.has(queryKey)) {
       return applyLimit(
@@ -221,17 +224,17 @@ export class HydrationCoordinator {
     }
 
     // Not yet hydrated (or an explicit complete read). For a non-complete read
-    // WITHOUT expand, if there's anything local to show (warm pool, or IDB
-    // after a reload), hand it back immediately and confirm with the server
-    // ONCE in the background — then mark the key hydrated so subsequent reads
-    // are pure-local. First paint never blocks on the network.
+    // without expand, if there is anything local to show (a warm pool, or local
+    // storage after a reload), hand it back immediately and confirm with the
+    // server once in the background — then mark the key hydrated so subsequent
+    // reads are purely local. First paint never blocks on the network.
     //
-    // Expand queries are deliberately excluded here: a present primary says
-    // nothing about whether its relations are loaded. Returning the parent now
-    // would surface it with empty children and let `layersReady` flip before
-    // the layers exist (the "pop-in" the deck gate guards against). So an
-    // un-hydrated expand query falls through to the blocking fetch that brings
-    // parent + children together; the SECOND open is served by the fast path.
+    // Expand queries are deliberately excluded here: the presence of a primary
+    // row says nothing about whether its relations are loaded. Returning the
+    // parent now would surface it with empty children, letting a readiness flag
+    // flip before the children exist. So an un-hydrated expand query falls
+    // through to the blocking fetch that brings parent and children together;
+    // the second open is served by the fast path.
     if (!explicitComplete && !hasExpand) {
       const local = await this.readLocal(modelName, typename, ModelClass, clauses, hasExpand, expand);
       if (local.length > 0) {
@@ -309,10 +312,10 @@ export class HydrationCoordinator {
   ): Promise<Model[]> {
     const networkRows = await this.queryNetwork(modelName, clauses, options);
     const networkModels = networkRows
-      // Strict: a row the SERVER returned whose typename this client never
-      // registered is a genuine schema collision (the org's pushed schema
-      // differs from local) — throw it here, naming the cause, rather than
-      // silently dropping the row and failing downstream as `entity_not_found`.
+      // Strict: a row the server returned whose type name this client never
+      // registered is a genuine schema collision (the pushed schema differs
+      // from the local one). Throw here, naming the cause, rather than silently
+      // dropping the row and failing downstream as `entity_not_found`.
       .map((raw) => this.hydrateOne(raw, typename, { strict: true }))
       .filter((m): m is Model => m !== null);
 
@@ -327,13 +330,13 @@ export class HydrationCoordinator {
   }
 
   /**
-   * Fire-and-forget the ONE server confirm for a query that was just served
-   * from local cache but isn't hydrated yet. On success the key is marked
-   * hydrated, so every later read serves pure-local with no network until a
+   * Fires the single background confirm for a query that was just served from
+   * local cache but is not hydrated yet. On success the key is marked hydrated,
+   * so every later read serves purely from local with no network until a
    * reconnect invalidates the ledger. Deduped per query key so a render burst
-   * doesn't stampede. Errors are swallowed — the caller already has a usable
-   * local snapshot, and a failed confirm leaves the key un-hydrated so the
-   * next read simply tries again.
+   * does not stampede. Errors are swallowed — the caller already has a usable
+   * local snapshot, and a failed confirm leaves the key un-hydrated so the next
+   * read simply tries again.
    */
   private scheduleHydratingFetch(
     queryKey: string,
@@ -463,7 +466,7 @@ export class HydrationCoordinator {
       // after a missed delta (WS dropped, tab slept, redeploy) silently
       // discards the fresh state and the consumer keeps seeing the
       // birth-time snapshot forever. `updateFromData` is the same
-      // primitive `ObjectPool.upsert()` uses for delta application,
+      // primitive `InstanceCache.upsert()` uses for delta application,
       // so the behaviour matches "delta-applied" semantics exactly.
       const existing = this.opts.objectPool.get(obj.id);
       if (existing) {
@@ -475,9 +478,9 @@ export class HydrationCoordinator {
     }
     // Stamp the known relation typename onto the row when the source
     // (IndexedDB rows, sometimes network rows) didn't carry one. Without
-    // this, ObjectPool.createFromData falls through to the 'Unknown'
+    // this, InstanceCache.createFromData falls through to the 'Unknown'
     // model-name branch and emits the
-    // "ObjectPool.createFromData: No model identifier found" warning,
+    // "InstanceCache.createFromData: No model identifier found" warning,
     // failing to hydrate the entity from cache (network path then has to
     // re-populate it). The typename comes from the schema relation
     // (`'SlideLayer'`, `'SlideLayoutLayer'`, etc.) so no guessing involved.
@@ -491,7 +494,7 @@ export class HydrationCoordinator {
    * `postgres.camel` driver leaves behind when the server's SQL
    * bakes `__typename` into a JSONB literal — the driver's
    * snake↔camel transform misreads `__typename` as `_typename` with
-   * a leading underscore and produces `_Typename`. ObjectPool only
+   * a leading underscore and produces `_Typename`. InstanceCache only
    * recognises `__typename`, so without this step nested rows fall
    * through to the 'Unknown' branch and never instantiate.
    */
@@ -518,7 +521,7 @@ export class HydrationCoordinator {
       ...(firstOrder
         ? {
             orderBy: this.columnizeField(modelName, firstOrder[0]),
-            order: (firstOrder[1] as 'asc' | 'desc') ?? 'asc',
+            order: (firstOrder[1] as 'asc' | 'desc' | undefined) ?? 'asc',
           }
         : {}),
       ...(options?.limit ? { limit: options.limit } : {}),
@@ -534,11 +537,11 @@ export class HydrationCoordinator {
       },
       { queries: [query] },
     );
-    const rows = Array.isArray(result.results[0]) ? result.results[0] : [];
+    const rows: unknown[] = Array.isArray(result.results[0]) ? result.results[0] : [];
     // Normalize: wire rows lack `__typename` when the server elides it.
     const normalized = rows.map((row) => {
       if (row && typeof row === 'object' && !('__typename' in row)) {
-        return { __typename: typename, ...(row as object) };
+        return { __typename: typename, ...row };
       }
       return row;
     });
@@ -620,7 +623,7 @@ export class HydrationCoordinator {
   private resolveTypename(modelName: string): string {
     // Schema is the source of truth for wire typenames. The model proxy
     // is keyed by camelCase plural (`slideLayers`) but the wire query +
-    // ObjectPool typeIndex use the typename (`SlideLayer`).
+    // InstanceCache typeIndex use the typename (`SlideLayer`).
     const def = (this.opts.schema as { models?: Record<string, { typename?: string }> })
       .models?.[modelName];
     return def?.typename ?? modelName;
@@ -678,7 +681,7 @@ function applyLimit<T>(arr: T[], limit: number | undefined): T[] {
 }
 
 function scanPool<M>(
-  pool: ObjectPool,
+  pool: InstanceCache,
   ModelClass: RegisteredModelClass,
   clauses: readonly WhereClause[],
 ): M[] {

@@ -1,15 +1,15 @@
 /**
- * Linear Sync Engine - Core Types
+ * Core type definitions for the model-driven sync layer.
  *
- * Foundational type definitions for the model-driven sync architecture.
- * These types define how properties are tracked, loaded, and synchronized.
+ * These types describe how a model's properties are declared, when their data
+ * is loaded, and how changes are represented on the wire as they synchronize.
  */
 
 import type { FieldMeta } from '../schema/field.js';
 
 /**
- * Model Scope - lifecycle filter for queries.
- * Controls whether live, archived, or all entities are returned.
+ * A lifecycle filter for queries: whether to return live entities, archived
+ * ones, or both.
  */
 export enum ModelScope {
   live = 'live',
@@ -18,55 +18,55 @@ export enum ModelScope {
 }
 
 /**
- * Property Types - EXACTLY 7 types as per Linear Sync Engine
- * These define how model properties behave in the sync system
+ * The kinds of property a model can declare. Each kind determines how the
+ * property behaves in the sync system — whether it is persisted, how it relates
+ * to other models, and how it is loaded.
  */
 export enum PropertyType {
-  /** Standard observable property - owned by model, persisted and synced */
+  /** A standard observable field owned by the model, both persisted and synced. */
   property = 'property',
 
-  /** Property that doesn't persist or sync - runtime only */
+  /** A runtime-only field that is neither persisted nor synced. */
   ephemeralProperty = 'ephemeralProperty',
 
-  /** Foreign key reference - stores ID only */
+  /** A foreign-key reference that stores only the related model's id. */
   reference = 'reference',
 
-  /** Lazy-loaded model reference - getter/setter for model based on ID */
+  /** A single related model resolved on demand from its id, exposed as a getter and setter. */
   referenceModel = 'referenceModel',
 
-  /** Collection of related models - one-to-many relationship */
+  /** A collection of related models — the many side of a one-to-many relationship. */
   referenceCollection = 'referenceCollection',
 
-  /** Back-reference computed property - inverse relationship */
+  /** A computed field that follows a relationship in the inverse direction. */
   backReference = 'backReference',
 
-  /** Array of foreign key references - many-to-many relationship */
+  /** An array of foreign-key ids — a many-to-many relationship. */
   referenceArray = 'referenceArray',
 }
 
 /**
- * Load Strategies - EXACTLY 5 strategies as per Linear Sync Engine
- * Controls when and how model data is loaded from the server
+ * When and how a model's data is loaded from the server.
  */
 export enum LoadStrategy {
-  /** Load immediately into ObjectPool during bootstrap - for critical models */
+  /** Loaded during startup, before it is first used — for models needed right away. */
   instant = 'instant',
 
-  /** Load all at once when first needed - for secondary models */
+  /** Loaded all at once the first time it is needed — for secondary models. */
   lazy = 'lazy',
 
-  /** Load on demand in subsets - for large collections */
+  /** Loaded on demand in subsets — for large collections. */
   partial = 'partial',
 
-  /** Only load when explicitly requested - for optional data */
+  /** Loaded only when the application asks for it — for optional data. */
   explicitlyRequested = 'explicitlyRequested',
 
-  /** Never sync with server, local only - for client-side state */
+  /** Never synced with the server; kept only on the client — for local-only state. */
   local = 'local',
 }
 
 /**
- * Property Metadata - Configuration for decorated properties
+ * The resolved configuration for a single model property.
  */
 export interface PropertyMetadata {
   type: PropertyType;
@@ -76,33 +76,34 @@ export interface PropertyMetadata {
   defaultValue?: unknown;
   loadStrategy?: LoadStrategy;
   /**
-   * MobX observability annotation for this property. Controls how deeply
-   * MobX wraps the value when `M1` registers the model.
+   * How deeply the reactivity layer wraps this property's value when the model
+   * is registered. The engine uses MobX, so the choice maps directly to MobX's
+   * observability modes.
    *
-   * - `'deep'` (default): full recursive observability. Every nested
-   *   object/array becomes its own atom. Correct for scalar fields and
-   *   small structured values where consumers subscribe to inner
-   *   properties.
-   * - `'shallow'`: track the reference and array/map/set operations, but
-   *   do NOT recurse into element internals. Right for collections whose
+   * - `'deep'` (the default): full recursive observability, where every nested
+   *   object or array becomes its own reactive node. Correct for scalar fields
+   *   and small structured values whose inner properties are read directly.
+   * - `'shallow'`: track the reference and array, map, and set operations, but
+   *   do not recurse into element internals. Right for collections whose
    *   elements are replaced wholesale.
-   * - `'ref'`: track ONLY reassignment. Right for opaque JSON blobs
-   *   (chart specs, ProseMirror docs, style maps) that are treated as
-   *   immutable values — consumers always read the whole blob and pass
-   *   it to a renderer. Deep enhancement on these produces a microtask
-   *   storm with no benefit.
+   * - `'ref'`: track only reassignment of the value. Right for opaque JSON
+   *   blobs — chart specs, rich-text documents, style maps — that are treated
+   *   as immutable values and always read whole before being handed to a
+   *   renderer. Deep-wrapping these produces many needless reactions for no
+   *   benefit.
    *
-   * Schema-driven registration auto-sets this to `'ref'` for fields with
-   * wire type `'json'`, which is the right default for the blob pattern.
+   * Schema-driven registration sets this to `'ref'` automatically for fields
+   * whose wire type is `'json'`, the right default for the blob pattern.
    */
   observability?: 'deep' | 'shallow' | 'ref';
 }
 
-/** Model constructor type for reference metadata */
+/** The constructor type of a model class, used by reference metadata to point at the related model. */
 type ModelConstructor = abstract new (...args: never[]) => unknown;
 
 /**
- * Reference Metadata - Configuration for reference properties
+ * The configuration for a reference property — which model it points to and how
+ * the relationship behaves.
  */
 export interface ReferenceMetadata {
   referencedModel: () => ModelConstructor;
@@ -112,7 +113,7 @@ export interface ReferenceMetadata {
 }
 
 /**
- * Model Metadata - Configuration for model classes
+ * The resolved configuration for a model class.
  */
 export interface ModelMetadata {
   loadStrategy: LoadStrategy;
@@ -122,43 +123,33 @@ export interface ModelMetadata {
   usedForPartialIndexes?: boolean;
   schemaVersion?: number;
   /**
-   * Schema-declared fields for this model, keyed by field name. Drives
-   * commit payload projection (filter to declared fields + stringify
-   * JSON-typed values) inside the transaction queue.
+   * The schema-declared fields for this model, keyed by field name. When a
+   * change is committed, the transaction queue uses this to project the payload
+   * down to the declared fields and to serialize JSON-typed values.
    *
-   * Populated by `registerModelsFromSchema`. Each entry carries the
-   * sync-engine type tag (the canonical {@link FieldMeta.type} union),
-   * which tells the wire serializer how to handle the value. Missing →
-   * projection becomes identity pass-through (back-compat for models
-   * registered outside the schema path).
-   *
-   * Narrowed to the canonical union via `Pick` rather than re-declared —
-   * a hand-rolled copy silently drifts when a new field type lands.
+   * Each entry carries the field's {@link FieldMeta.type} tag, which tells the
+   * wire serializer how to encode the value. When this is absent — a model
+   * registered without a schema — the payload is passed through unchanged.
    */
   fields?: Readonly<Record<string, Pick<FieldMeta, 'type'>>>;
   /**
-   * Fields to back-fill from the sync client identity when missing
-   * during IndexedDB self-healing. Populated from
-   * `ModelOptions.autoFill` in the schema. Each entry maps a field on
-   * this model to one of the identity values held by `SyncClient`
-   * (`organizationId` or `userId`).
-   *
-   * Used by `SyncClient.healModelRecord` to keep the engine
-   * product-neutral: the engine no longer hardcodes which models carry
-   * `organizationId` / `createdBy` — the consumer's schema declares it.
+   * Fields to fill in from the signed-in identity when they are missing from a
+   * stored row during self-healing. Each entry maps a field on this model to
+   * one of the identity values the client holds — `organizationId` or `userId`.
+   * Declaring it in the schema keeps the engine product-neutral: it does not
+   * assume which models carry an organization or owner field.
    */
   autoFill?: readonly { field: string; from: 'organizationId' | 'userId' }[];
   /**
-   * Fields whose absence makes a stored row orphaned. When healing
-   * encounters a record missing any of these fields, it returns `null`
-   * to signal the caller to skip the row. Populated from
-   * `ModelOptions.requiredFields` in the schema.
+   * Fields a stored row must have to be usable. During self-healing, a row
+   * missing any of these is treated as orphaned and skipped rather than loaded.
    */
   requiredFields?: readonly string[];
 }
 
 /**
- * Model Options - Options for @ClientModel decorator
+ * The options accepted when declaring a model — its load strategy, optional
+ * sync group, and optional table name.
  */
 export interface ModelOptions {
   loadStrategy: LoadStrategy;
@@ -167,7 +158,7 @@ export interface ModelOptions {
 }
 
 /**
- * Property Options - Options for @Property decorator
+ * The options accepted when declaring a model property.
  */
 export interface PropertyOptions {
   indexed?: boolean;
@@ -177,7 +168,7 @@ export interface PropertyOptions {
 }
 
 /**
- * Reference Options - Options for @Reference decorator
+ * The options accepted when declaring a reference property.
  */
 export interface ReferenceOptions {
   indexed?: boolean;
@@ -185,7 +176,7 @@ export interface ReferenceOptions {
 }
 
 /**
- * GraphQL Mutation Interface
+ * A GraphQL mutation: its query text and the variables to run it with.
  */
 export interface GraphQLMutation {
   mutationText: string;
@@ -193,7 +184,8 @@ export interface GraphQLMutation {
 }
 
 /**
- * Load Request Interface
+ * A request to load model rows by an indexed key. When the load completes,
+ * `resolve` is called with the matching rows.
  */
 export interface LoadRequest {
   modelName: string;
@@ -203,7 +195,7 @@ export interface LoadRequest {
 }
 
 /**
- * Sync Action Types - Complete Linear specification
+ * The one-letter code identifying what kind of change a sync action carries.
  */
 export type SyncActionType = 'I' | 'U' | 'A' | 'D' | 'C' | 'G' | 'S' | 'V';
 // I - Insert
@@ -216,29 +208,31 @@ export type SyncActionType = 'I' | 'U' | 'A' | 'D' | 'C' | 'G' | 'S' | 'V';
 // V - Unarchive (reVive)
 
 /**
- * Sync Action Interface - Linear format
+ * A single change to one model row, as carried on the sync stream.
  */
 export interface SyncAction {
-  id: number; // The sync ID (global version)
+  id: number; // Monotonic sync id (the global version)
   modelName: string;
   modelId: string;
   action: SyncActionType;
   data: unknown;
-  __class: 'SyncAction'; // Linear format marker
+  __class: 'SyncAction'; // Discriminant tag identifying the wire shape
 }
 
 /**
- * Delta Packet - Array of sync actions
+ * A batch of sync actions delivered together.
  */
 export type DeltaPacket = SyncAction[];
 
 /**
- * Bootstrap Types
+ * The kind of initial data load performed when a client starts: a full load, a
+ * partial subset, or local-only.
  */
 export type BootstrapType = 'full' | 'partial' | 'local';
 
 /**
- * Bootstrap Metadata
+ * The metadata returned with a bootstrap: the last sync id seen and the sync
+ * groups the client is subscribed to.
  */
 export interface BootstrapMetadata {
   lastSyncId: number;
@@ -246,18 +240,18 @@ export interface BootstrapMetadata {
 }
 
 /**
- * Database Metadata - Sync engine state tracking
+ * The locally tracked sync state that lets a client resume where it left off.
  */
 export interface DatabaseMetadata {
   lastSyncId: number; // Current sync version
-  firstSyncId: number; // Sync version at bootstrap
+  firstSyncId: number; // Sync version captured at bootstrap
   backendDatabaseVersion: number;
-  subscribedSyncGroups: string[]; // Or userSyncGroups in newer versions
+  subscribedSyncGroups: string[]; // Sync groups this client is subscribed to
   updatedAt: Date;
 }
 
 /**
- * Mutation operation types for batch mutations.
+ * The operation a batch mutation performs on a model row.
  */
 export enum MutationOperationType {
   ARCHIVE = 'ARCHIVE',
@@ -268,7 +262,7 @@ export enum MutationOperationType {
 }
 
 /**
- * Partial Index Information - For complex querying
+ * Describes a partial index used to load subsets of a large model.
  */
 export interface PartialIndexInfo {
   modelName: string;
@@ -277,16 +271,15 @@ export interface PartialIndexInfo {
   path: string[];
 }
 
-// Re-export stream + snapshot + principal types for the engine surface
-// (PresenceStream,
-// ClaimStream, Snapshot, etc.) consumed by `Ablo({...}).presence`,
-// `.claims`, `.snapshot()`.
+// Re-export the stream, snapshot, and coordination types that make up the
+// engine's public surface (PresenceStream, ClaimStream, Snapshot, and the
+// rest), reached through `Ablo({...}).presence`, `.claims`, and `.snapshot()`.
 //
-// Explicit named list (not `export *`): every addition to streams.ts must be
-// a deliberate export decision here, so new symbols don't silently become
-// public API of the published package.
+// The list is written out by name rather than `export *` so that adding a
+// symbol here is always a deliberate decision, and new types don't become
+// public API by accident.
 export type {
-  // Coordination wire shapes, canonical in `../coordination/schema` and
+  // Coordination wire shapes, defined in `../coordination/schema` and
   // re-exported through streams.ts.
   TargetRange,
   OnStaleMode,
@@ -294,7 +287,7 @@ export type {
   ClaimRejection,
   PresenceKind,
   ParticipantKind,
-  // Participant identity (canonical leaf: `./participant.ts`).
+  // Participant identity, defined in `./participant.ts`.
   ParticipantRef,
   // Streams' own types.
   JsonValue,

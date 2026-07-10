@@ -1,58 +1,57 @@
 /**
- * `mintSession` — the ONE implementation behind `sessions.create`, shared by the
- * stateful `Ablo` client and the stateless protocol / HTTP client so the two can
- * never drift on HOW a token is minted.
+ * Mints a session token. This is the single implementation behind
+ * `sessions.create`, shared by the schema-aware client and the schemaless HTTP
+ * client so the two never disagree on how a token is produced.
  *
- * Minting is a pure control-plane HTTP call (no socket, no synced pool): a backend
- * holding a secret `sk_` exchanges it for a short-lived scoped token — `ek_` for an
- * `{ user }` session (full end-user authority) or `rk_` for an `{ agent }` session
- * (scoped to exactly the operations named in `can`). The two arms map to the
- * server's two mint doors:
+ * Minting is a plain control-plane HTTP call — no socket, no synced data. A
+ * backend holding a secret key (`sk_`) exchanges it for a short-lived, scoped
+ * token whose kind depends on the session requested:
  *
- *   `{ user }`  → POST /auth/ephemeral-keys → `ek_`. The user-session door;
- *                 routing this arm through /auth/capability is structurally
- *                 impossible — that route rejects participantKind 'user' outright
- *                 (`invalid_participant_kind`, the 2026-06-11 Pulse cascade where
- *                 the SDK's own blessed pattern 403'd and integrators fell back to
- *                 minting humans as agents).
- *   `{ agent }` → POST /auth/capability → scoped `rk_`. `can: { tasks: ['update'] }`
- *                 serializes to the wire allowlist (`tasks.update`); the Hub matches
- *                 it against every registered alias of the model.
+ *   `{ user }`  → POST /auth/ephemeral-keys, returning an `ek_` key that carries
+ *                 full end-user authority. This is the only route that mints a
+ *                 user session; the capability route rejects a `user`
+ *                 participant with `invalid_participant_kind`.
+ *   `{ agent }` → POST /auth/capability, returning an `rk_` key scoped to exactly
+ *                 the operations named in `can`. For example
+ *                 `can: { tasks: ['update'] }` becomes the wire allowlist entry
+ *                 `tasks.update`, which the server matches against the model's
+ *                 registered names.
  *
- * The caller supplies the resolved control-plane credential + base URL in `ctx`;
- * WHICH key to use (the original `sk_`, never a derived `rk_` the startup exchange
- * may have installed) is the caller's concern — see the two call sites.
- *
- * Type-only imports of `CreateSessionParams` / `AbloSession` keep this module a
- * leaf (no runtime cycle back to `Ablo.ts`): at runtime it depends on `auth` +
- * `schema` only.
+ * The caller supplies the already-resolved secret key and base URL in
+ * {@link MintSessionContext}. Choosing which key to pass — the original secret
+ * key, not a derived key that an earlier exchange may have produced — is the
+ * caller's responsibility.
  */
 import { exchangeApiKey, mintUserSessionKey } from '../auth/index.js';
 import type { SchemaRecord } from '../schema/schema.js';
 import type { AbloSession, CreateSessionParams } from './resourceTypes.js';
 
-/** The resolved control-plane context a mint needs. `fetch` is optional — the
- *  auth helpers fall back to the runtime global when omitted. */
+/**
+ * The resolved control-plane details a mint needs: a secret key, a base URL,
+ * and an optional `fetch`. When `fetch` is omitted, the auth helpers fall back
+ * to the runtime's global `fetch`.
+ */
 export interface MintSessionContext {
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly fetch?: typeof fetch;
   /**
-   * Schema-key → wire typename map, supplied ONLY by the schema client
-   * (`Ablo`). A capability is scoped by the lowercased TYPENAME the Hub
-   * checks, but `can` is keyed by schema key — so `can: { documents: ['update'] }`
-   * on a model whose `typename` is overridden to `Document` must mint
-   * `document.update`, not `documents.update` (else the Hub denies it with
-   * `capability_scope_denied`). The schemaless `ApiClient` omits this map:
-   * there the `can` key already IS the wire token, so no translation applies.
+   * Maps each schema key to its wire type name. Only the schema-aware client
+   * supplies this. A capability is scoped by the lowercased type name the
+   * server checks, but `can` is keyed by schema key — so
+   * `can: { documents: ['update'] }` on a model whose type name is overridden
+   * to `Document` must mint `document.update`, not `documents.update`, or the
+   * server denies the write with `capability_scope_denied`. The schemaless
+   * client omits this map, because there the `can` key is already the wire
+   * token and needs no translation.
    */
   readonly modelTypenames?: Readonly<Record<string, string>>;
 }
 
 /**
- * Mint a session token from an already-resolved `sk_` credential + base URL.
- * Discriminates the `{ user }` / `{ agent }` union onto the server's two mint
- * doors and reshapes each flat response into the `AbloSession` resource.
+ * Mints a session token from an already-resolved secret key and base URL.
+ * Routes the `{ user }` or `{ agent }` request to the matching mint endpoint
+ * and reshapes the response into an {@link AbloSession}.
  */
 export async function mintSession<S extends SchemaRecord>(
   params: CreateSessionParams<S>,
@@ -90,10 +89,10 @@ export async function mintSession<S extends SchemaRecord>(
   }
 
   const operations = Object.entries(params.can).flatMap(([model, ops]) => {
-    // Translate the schema key the developer used in `can` to the wire
-    // typename the Hub gates on — see `modelTypenames` above. Falls back to
-    // the key when no map is supplied (schemaless client) or the key isn't
-    // in it, preserving the prior behaviour exactly for those callers.
+    // Translate the schema key the developer used in `can` into the wire type
+    // name the server checks — see `modelTypenames` above. Falls back to the
+    // key itself when no map is supplied (the schemaless client) or the key is
+    // absent from it.
     const ns = ctx.modelTypenames?.[model] ?? model;
     return (ops ?? []).map((op) => `${ns.toLowerCase()}.${op}`);
   });

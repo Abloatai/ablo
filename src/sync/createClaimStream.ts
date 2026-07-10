@@ -1,25 +1,25 @@
 /**
- * Transport-driven ClaimStream factory.
+ * Creates a {@link ClaimStream} over a live sync connection. A claim is a
+ * short-lived, advisory lease a participant takes on an entity (or a field of
+ * one) to signal "I'm working on this"; the stream lets you take claims, see
+ * everyone else's, and watch the wait queue when a claim is contended.
  *
- * Mirrors `createPresenceStream` — built directly on `SyncWebSocket`,
- * no SyncAgent wrapper. Claims derive their `others` view from the
- * same `presence_update` frames the presence stream consumes (the
- * Hub piggybacks `activeClaims` on every presence frame). Outbound
- * announce/revoke ride the same socket via `claim_begin` /
+ * The stream is built directly on the sync WebSocket and shares that one
+ * connection. It learns about other participants' claims from the same
+ * `presence_update` frames the {@link createPresenceStream} presence stream
+ * consumes — the server piggybacks each participant's `activeClaims` on every
+ * presence frame — and sends its own claims as `claim_begin` and
  * `claim_abandon` frames.
  *
- * Wire contract (apps/sync-server/src/hub/types.ts):
- *   • Outbound: `{ type: 'claim_begin', payload: { claimId,
- *       entityType, entityId, reason, field?, estimatedMs? } }`
- *   • Outbound: `{ type: 'claim_abandon', payload: { claimId,
- *       entityType?, entityId? } }`
- *   • Inbound (via presence): `event.activeClaims: Claim[]`
- *     stamped with `declaredAt`, `expiresAt`.
- *   • Inbound: `claim_rejected` event with conflict metadata.
- *
- * After the dual-engine collapse (step #36), this is the only
- * ClaimStream factory in the SDK; the older compatibility path
- * deletes.
+ * Wire frames:
+ *   • Outbound `claim_begin` — announce a claim: `{ claimId, entityType,
+ *       entityId, reason, field?, estimatedMs? }`.
+ *   • Outbound `claim_abandon` — release it: `{ claimId, entityType?,
+ *       entityId? }`.
+ *   • Inbound, via presence — `event.activeClaims`, each stamped with
+ *       `declaredAt` and `expiresAt`.
+ *   • Inbound `claim_rejected` — the server refused the claim, with conflict
+ *       metadata.
  */
 
 import type {
@@ -30,6 +30,8 @@ import type {
   ClaimOptions,
   ClaimTarget,
   Claim,
+  ClaimHeartbeat,
+  ClaimHeartbeatOptions,
   ClaimLeaseOptions,
   ClaimRejection,
   ClaimLost,
@@ -39,9 +41,12 @@ import type {
 import { asyncIteratorFrom } from '../utils/asyncIterator.js';
 import { toMs } from '../utils/duration.js';
 import {
+  claimHeartbeatAckPayloadSchema,
   descriptionFromMeta,
   participantKindFromWire,
 } from '../coordination/schema.js';
+import { AbloClaimedError, AbloConnectionError } from '../errors.js';
+import { resolveHeartbeatOptions } from '../client/claimHeartbeatLoop.js';
 import { getContext } from '../context.js';
 
 /** Readable target for the coordination trace: `documents:abc` / `documents:abc.title`. */
@@ -54,12 +59,20 @@ export interface ClaimStreamConfig {
   participantId: string;
 }
 
+/**
+ * How long a heartbeat waits for its `claim_heartbeat_ack` before giving up
+ * as transient (the auto-heartbeat loop's next tick retries). Comfortably
+ * above a round trip, comfortably below the ttl/3 beat cadence.
+ */
+const HEARTBEAT_ACK_TIMEOUT_MS = 10_000;
+
 export interface AttachableClaimStream extends ClaimStream {
   /**
-   * INTERNAL lease mint — sends the `claim_begin` frame and returns a held
-   * {@link Claim} (no row `data`; the model door reads the row and stamps it).
-   * Not part of the public `ClaimStream` surface: the only public way to take a
-   * claim is `ablo.<model>.claim({ id })`, which builds on this.
+   * Mints a lease directly: sends the `claim_begin` frame and returns a held
+   * {@link Claim} that carries no row `data` (the resource layer reads the row
+   * and stamps it). This is an internal entry point, not part of the public
+   * {@link ClaimStream}; application code takes a claim through
+   * `ablo.<model>.claim({ id })`, which is built on this.
    */
   claim(target: PresenceTarget, opts?: ClaimOptions): Claim;
   attach(transport: SyncWebSocket): void;
@@ -73,10 +86,11 @@ interface OwnClaim {
   readonly range?: ClaimTarget['range'];
   readonly field?: string;
   readonly meta?: ClaimTarget['meta'];
-  /** Human-readable phase. */
+  /** Human-readable reason for the claim, shown to other participants. */
   readonly reason: string;
   readonly estimatedMs: number | undefined;
-  /** Opt into the server's fair FIFO queue on contention (vs. reject). */
+  /** When set, wait in the server's fair first-come-first-served queue if the
+   *  entity is already claimed, instead of being rejected. */
   readonly queue?: boolean;
 }
 
@@ -107,6 +121,30 @@ export function createClaimStream(
   const listeners = new Set<() => void>();
   const rejectionListeners = new Set<(r: ClaimRejection) => void>();
   const lostListeners = new Set<(l: ClaimLost) => void>();
+
+  // ── State: in-flight heartbeats awaiting their ack, keyed by claimId ──
+  const pendingHeartbeats = new Map<
+    string,
+    {
+      resolve: (value: ClaimHeartbeat) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+
+  const settleHeartbeat = (
+    claimId: string,
+    settle: (pending: {
+      resolve: (value: ClaimHeartbeat) => void;
+      reject: (error: Error) => void;
+    }) => void,
+  ): void => {
+    const pending = pendingHeartbeats.get(claimId);
+    if (!pending) return;
+    pendingHeartbeats.delete(claimId);
+    clearTimeout(pending.timer);
+    settle(pending);
+  };
 
   const notifyListeners = () => {
     claimsSnapshot = Object.freeze(Array.from(activeByClaimId.values()));
@@ -222,8 +260,9 @@ export function createClaimStream(
       }),
     );
 
-    // (2a) Server-side LOSS frames — you held it, then lost it (preempted /
-    //      expired). Distinct from a rejection (a claim the server refused).
+    // (2a) Server-side loss frames — you held the claim, then lost it
+    //      (preempted or expired). Distinct from a rejection, which is a claim
+    //      the server refused.
     unsubs.push(
       t.subscribe('claim_lost', (payload) => {
         const lost = payload as unknown as ClaimLost;
@@ -262,7 +301,7 @@ export function createClaimStream(
         const line = Array.isArray(p.queue) ? p.queue : [];
         if (line.length === 0) queueByEntity.delete(key);
         else queueByEntity.set(key, Object.freeze([...line]));
-        // If WE are in this line, trace our position (the "agent queued behind a
+        // If we are in this line, trace our position (the "agent queued behind a
         // claim" moment) — once per position change, so advancing is visible.
         const ourIndex = line.findIndex((c) => ownClaims.has(c.id));
         const ourClaim = ourIndex >= 0 ? line[ourIndex] : undefined;
@@ -277,6 +316,37 @@ export function createClaimStream(
           }
         }
         notifyListeners();
+      }),
+    );
+
+    // (2c) Heartbeat replies — correlate back to the awaiting beat by
+    //      claimId. `held` resolves with the extended expiry; `queued` and
+    //      `lost` reject with a typed claimed error, because a heartbeat on
+    //      a handle we thought we held coming back as anything but `held`
+    //      means the lease is no longer ours.
+    unsubs.push(
+      t.subscribe('claim_heartbeat_ack', (payload) => {
+        const parsed = claimHeartbeatAckPayloadSchema.safeParse(payload);
+        if (!parsed.success) return;
+        const ack = parsed.data;
+        settleHeartbeat(ack.claimId, ({ resolve, reject }) => {
+          if (ack.status === 'held' && ack.expiresAt !== undefined) {
+            resolve({
+              expiresAt: ack.expiresAt,
+              ...(ack.queueDepth !== undefined
+                ? { queueDepth: ack.queueDepth }
+                : {}),
+            });
+            return;
+          }
+          const c = ownClaims.get(ack.claimId);
+          reject(
+            new AbloClaimedError(
+              `The lease behind ${c ? claimLabel(c.entityType, c.entityId, c.field) : `claim ${ack.claimId}`} is no longer held — it expired or was granted onward while this participant was working. Re-acquire the claim and retry; a write attempted under the old lease is rejected by its \`readAt\` guard.`,
+              { code: 'claim_lost' },
+            ),
+          );
+        });
       }),
     );
 
@@ -333,6 +403,56 @@ export function createClaimStream(
     });
   }
 
+  /**
+   * Send one heartbeat and await its ack. Rejects with
+   * {@link AbloConnectionError} (transient — the auto-heartbeat loop retries
+   * on its next tick) when the socket is down or the ack times out, and with
+   * {@link AbloClaimedError} (definitive) when the server answers that the
+   * lease is no longer ours.
+   */
+  function sendHeartbeat(
+    claimId: string,
+    claim: OwnClaim,
+    options: ClaimHeartbeatOptions,
+  ): Promise<ClaimHeartbeat> {
+    if (!attached?.isConnected()) {
+      return Promise.reject(
+        new AbloConnectionError(
+          `The heartbeat for ${claimLabel(claim.entityType, claim.entityId, claim.field)} was skipped because the connection is down. The keepalive renews held leases automatically on reconnect; the next beat retries.`,
+        ),
+      );
+    }
+    return new Promise<ClaimHeartbeat>((resolve, reject) => {
+      settleHeartbeat(claimId, ({ reject: rejectPrior }) => {
+        rejectPrior(
+          new AbloConnectionError(
+            'A newer heartbeat for this claim superseded the one still awaiting its reply.',
+          ),
+        );
+      });
+      const timer = setTimeout(() => {
+        settleHeartbeat(claimId, ({ reject: rejectTimeout }) => {
+          rejectTimeout(
+            new AbloConnectionError(
+              `No reply to the heartbeat for ${claimLabel(claim.entityType, claim.entityId, claim.field)} arrived within ${HEARTBEAT_ACK_TIMEOUT_MS / 1000}s. The next beat retries.`,
+            ),
+          );
+        });
+      }, HEARTBEAT_ACK_TIMEOUT_MS);
+      pendingHeartbeats.set(claimId, { resolve, reject, timer });
+      attached?.send({
+        type: 'claim_heartbeat',
+        payload: {
+          claimId,
+          entityType: claim.entityType,
+          entityId: claim.entityId,
+          ...(options.ttl !== undefined ? { ttlMs: toMs(options.ttl) } : {}),
+          ...(options.details !== undefined ? { details: options.details } : {}),
+        },
+      });
+    });
+  }
+
   function sendAbandon(claimId: string, claim?: OwnClaim): void {
     if (!attached?.isConnected()) return;
     // Carry the target so the server can dequeue us if we were only *waiting*
@@ -382,7 +502,7 @@ export function createClaimStream(
     };
     ownClaims.set(claimId, claim);
     sendBegin(claimId, claim);
-    // Coordination trace (info): the creator can SEE their human/agent claims.
+    // Coordination trace (info): the creator can see their human/agent claims.
     getContext().logger.info(
       `claim: requesting ${claimLabel(claim.entityType, claim.entityId, claim.field)} for "${claim.reason}"` +
         (claim.queue ? ' (will queue if contended)' : ''),
@@ -418,6 +538,8 @@ export function createClaimStream(
         revoke();
       },
       revoke,
+      heartbeat: (options?: ClaimLeaseOptions['ttl'] | ClaimHeartbeatOptions) =>
+        sendHeartbeat(claimId, claim, resolveHeartbeatOptions(options)),
       [Symbol.asyncDispose]: async () => {
         revoke();
       },
@@ -491,6 +613,15 @@ export function createClaimStream(
     dispose(): void {
       for (const off of unsubs) off();
       unsubs.length = 0;
+      for (const claimId of [...pendingHeartbeats.keys()]) {
+        settleHeartbeat(claimId, ({ reject }) => {
+          reject(
+            new AbloConnectionError(
+              'The claim stream was disposed while this heartbeat was awaiting its reply.',
+            ),
+          );
+        });
+      }
       listeners.clear();
       rejectionListeners.clear();
       lostListeners.clear();

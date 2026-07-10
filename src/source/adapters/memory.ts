@@ -1,12 +1,13 @@
 /**
- * In-memory reference Data Source adapter — the canonical correct implementation
- * of the adapter interface. It is the test double for the bridge/handler AND the thing the
- * conformance suite runs against to prove the suite itself is real (same role as
- * the server's `memoryTenantDirectory`). A new ORM adapter is "done" when it
- * passes the same suite this one passes.
+ * The in-memory reference implementation of {@link DataSourceAdapter}. It is the
+ * simplest correct adapter: a stand-in you can commit to and read from in tests
+ * without a database, and the fixture the conformance suite runs against to confirm
+ * the suite exercises real behavior. An adapter for a given object-relational
+ * mapper is complete when it passes the same suite this one passes.
  *
- * It models the real semantics minimally but faithfully: one canonical row store
- * per model, an idempotency ledger keyed by `clientTxId`, and a monotonic outbox.
+ * It models the semantics minimally but faithfully: one row store per model, an
+ * idempotency ledger keyed by `clientTxId`, and an append-only outbox with a
+ * monotonic cursor.
  */
 
 import { AbloValidationError } from '../../errors.js';
@@ -77,7 +78,7 @@ export function memoryDataSource(): DataSourceAdapter {
     capabilities: { transactions: true, propose: false, schemaIntrospection: false },
 
     migrations(): readonly Migration[] {
-      // In-memory: no table-creation SQL. A real ORM adapter ships ablo_idempotency + ablo_outbox here.
+      // Nothing to create in memory. A database-backed adapter returns the SQL for its ablo_idempotency and ablo_outbox tables here.
       return [];
     },
 

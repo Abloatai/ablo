@@ -27,9 +27,9 @@ import { AbloValidationError } from '../errors.js';
 import type { IdentityRole } from './roles.js';
 import { scopeSchema, grantsRefSchema } from './roles.js';
 
-// Sync-group roles (identity + entity) live in `./roles.js`. Re-exported here
-// so the long-standing `@ablo/schema` / `./schema.js` import paths keep working
-// after the rehome — see roles.ts for the full vocabulary.
+// Sync-group roles (identity and entity) are defined in `./roles.js` and
+// re-exported here so they can also be imported from this module. See
+// `./roles.js` for the full vocabulary.
 export {
   type IdentityRole,
   type IdentityRoleSource,
@@ -64,15 +64,13 @@ export {
 
 // ── Casing resolution ─────────────────────────────────────────────────────
 //
-// One-place-once identifier translation, modeled after Drizzle's `casing`
-// option. Applied at schema-build time to produce `rel.foreignKeyColumn`
-// — a resolved DB-column identifier that server-side SQL compilers can
-// interpolate directly without needing a transform of their own.
+// Identifier translation, resolved once at schema-build time into
+// `rel.foreignKeyColumn` — the database column name the server can interpolate
+// into SQL directly, with no transform of its own.
 //
-// A function-form option lets exotic consumers handle mixed legacy DBs
-// without forking the SDK. The string forms cover the two cases every
-// Postgres + TypeScript shop hits: camelCase everywhere, or the Postgres-
-// convention snake_case columns with camelCase JS fields.
+// The function form lets consumers with mixed or legacy databases supply their
+// own mapping. The string forms cover the two common cases: camelCase columns
+// throughout, or snake_case columns paired with camelCase field names.
 
 /** The set of built-in casing conventions supported by `defineSchema`. */
 export type CasingConvention = 'snake_case' | 'camelCase';
@@ -94,9 +92,9 @@ function resolveCasing(fn: Casing | undefined): CasingFn {
   }
 }
 
-/** Pure camelCase → snake_case. Matches postgres.fromCamel semantics but
- * kept local so the SDK stays free of any driver dependency — consumers
- * using Prisma/Drizzle/raw pg should all get the same result. */
+/** Converts a camelCase identifier to snake_case. Kept local so the package
+ * carries no database-driver dependency, and so consumers on any stack get the
+ * same result. */
 function camelToSnake(identifier: string): string {
   return identifier.replace(/[A-Z]/g, (ch) => `_${ch.toLowerCase()}`);
 }
@@ -120,17 +118,16 @@ export interface DefineSchemaOptions {
   readonly casing?: Casing;
 
   /**
-   * Identity-anchored sync-group roles. Server's
-   * `composeIdentitySyncGroups` iterates these to build the
-   * participant's allowed-set, replacing the prior hardcoded
-   * `org:/user:/team:` triad in `@ablo/schema`. See {@link IdentityRole}
-   * for the open-registration shape — no closed enum, consumer fully
-   * controls both the template string and the extractor function.
+   * Identity-anchored sync-group roles. The server's
+   * `composeIdentitySyncGroups` reads these to build the set of groups a
+   * participant may subscribe to. See {@link IdentityRole} for the shape: you
+   * define the `kind` and which identity field supplies the id, with no fixed
+   * vocabulary of kinds.
    *
-   * Leave unset for schemas that don't need identity-derived scoping
-   * (e.g. fully public read models). When unset, `composeIdentitySyncGroups`
-   * returns `[]` and consumers fall back to whatever explicit
-   * `syncGroups` the AuthProvider attaches to the Identity.
+   * Leave this unset for schemas that need no identity-derived scoping, such as
+   * fully public read models. When it is unset, `composeIdentitySyncGroups`
+   * returns `[]` and callers fall back to whatever explicit sync groups the
+   * authentication provider attached to the identity.
    */
   readonly identityRoles?: readonly IdentityRole[];
 }
@@ -156,12 +153,12 @@ export const baseFieldsSchema = z.object({
 });
 
 /**
- * The base-column names every model carries automatically (the keys of
- * {@link baseFieldsSchema}). The single source of truth — `generate.ts`
- * imports this to avoid double-emitting a redeclared base column, and the
- * `defineSchema` field loop uses it to reject a model that tries to redeclare
- * one (Zod `.merge` would otherwise silently overwrite the base field with the
- * user's, producing a `string & Date` type that breaks the build).
+ * The base-column names every model carries automatically — the keys of
+ * {@link baseFieldsSchema}, kept here as the single source of truth. Code
+ * generation reads it to avoid emitting a base column twice, and
+ * {@link defineSchema} uses it to reject a model that redeclares one, since
+ * merging the user's field over the base field would produce a `string & Date`
+ * type and break the build.
  */
 export const BASE_FIELDS = [
   'id',
@@ -175,9 +172,9 @@ export const BASE_FIELDS = [
 export type BaseModelFields = z.infer<typeof baseFieldsSchema>;
 
 /**
- * Methods every dynamic model class inherits from `Model`. Intersected
- * into `InferModel` (the read-side type) but NOT into `InferCreate` /
- * `UpdatePatch` — methods aren't legal create/update inputs.
+ * Methods every model instance carries. These are intersected into
+ * {@link InferModel}, the read-side type, but not into the create or update
+ * input types, since methods are not valid input.
  */
 export interface BaseModelMethods {
   /** Wire-format model name (e.g. `'Slide'`, `'Comment'`). */
@@ -226,15 +223,15 @@ type RegisteredSchema = import('../types/global.js').Register extends {
   : never;
 
 /**
- * THE model type helper. With the scaffold's `ablo/register.ts` registration
- * in place, one parameter is all it takes:
+ * The primary model-type helper. Once your project's `ablo/register.ts`
+ * registers the schema, a single argument is all it takes:
  *
  * ```ts
  * type Task = Model<'tasks'>;
  * ```
  *
- * Without registration (or for a second schema), pass the schema explicitly:
- * `Model<typeof schema, 'tasks'>`.
+ * Without that registration, or for a second schema, pass the schema
+ * explicitly: `Model<typeof schema, 'tasks'>`.
  */
 export type Model<A, B = never> = [B] extends [never]
   ? A extends keyof RegisteredSchema['models']
@@ -245,10 +242,9 @@ export type Model<A, B = never> = [B] extends [never]
     : never;
 
 /**
- * @deprecated Use {@link Model} — `type Task = Model<typeof schema, 'tasks'>`
- * reads as the domain ("the Task model from my schema"), not the machinery.
- * Drizzle deprecated its own `InferModel` for the same reason. Kept as an
- * alias; no behavior difference.
+ * @deprecated Use {@link Model} instead — `Model<typeof schema, 'tasks'>` reads
+ * as the domain ("the Task model from my schema") rather than the machinery.
+ * Kept as an alias with no behavioral difference.
  */
 export type InferModel<S extends Schema, ModelName extends keyof S['models']> =
   S['models'][ModelName] extends ModelDef<infer Shape, infer R, infer C>
@@ -267,19 +263,18 @@ export type InferModel<S extends Schema, ModelName extends keyof S['models']> =
     : never;
 
 /**
- * Infer relation accessor types from a model's relations record.
+ * Infer the relation accessor types from a model's relations record.
  *
- * The dynamic class installs prototype getters for each declared relation in
- * `createSyncEngine.ts` (`hasMany` → `store.getByForeignKey(...)`, `belongsTo`
- * → pool lookup by FK). This type mirrors those installations so callers can
- * write `slide.layers` and `slide.deck` without manual casts.
+ * At runtime the engine installs a getter for each declared relation, so this
+ * type mirrors them and you can read `slide.layers` and `slide.deck` without a
+ * cast.
  *
  * - `hasMany` → `InferModel<S, Target>[]`
  * - `belongsTo` / `hasOne` → `InferModel<S, Target> | undefined` (undefined
- *   when the FK is unset or the parent isn't in the pool yet)
+ *   when the foreign key is unset or the parent has not loaded yet)
  *
- * Kept as `readonly` because the accessors are prototype-level getters with
- * no setter — writing to `slide.layers = [...]` would be a no-op at runtime.
+ * Kept `readonly` because the accessors are getters with no setter — assigning
+ * to `slide.layers` would have no effect at runtime.
  */
 export type InferRelations<S extends Schema, R extends RelationRecord> =
   // Index-signature short-circuit. The schema-record constraint
@@ -357,13 +352,11 @@ export type InferCreate<S extends Schema, ModelName extends keyof S['models']> =
  */
 export type InferModelNames<S extends Schema> = keyof S['models'] & string;
 
-// ── CRUD value types (power TransactionMutate in /server) ────────────────
+// ── CRUD value types ──────────────────────────────────────────────────────
 
 /**
  * The value type for inserting a new row. Same shape as {@link InferCreate}:
- * consumer-writable fields + optional `id` for client-generated IDs.
- *
- * Matches Zero's `InsertValue<TableSchema>` from `zql/src/mutate/crud.ts`.
+ * the fields you can write, plus an optional `id` for client-generated ids.
  */
 export type InsertValue<S extends Schema, ModelName extends keyof S['models']> =
   InferCreate<S, ModelName>;
@@ -380,8 +373,6 @@ export type UpsertValue<S extends Schema, ModelName extends keyof S['models']> =
  * The value type for updating an existing row. `id` is required (identifies
  * the row to update); all other fields are optional (only provided fields
  * are changed).
- *
- * Matches Zero's `UpdateValue<TableSchema>` from `zql/src/mutate/crud.ts`.
  */
 export type UpdateValue<S extends Schema, ModelName extends keyof S['models']> =
   S['models'][ModelName] extends ModelDef<infer Shape>
@@ -390,8 +381,6 @@ export type UpdateValue<S extends Schema, ModelName extends keyof S['models']> =
 
 /**
  * The value type for deleting a row. Just the primary key.
- *
- * Matches Zero's `DeleteID<TableSchema>` from `zql/src/mutate/crud.ts`.
  */
 export interface DeleteId<S extends Schema, ModelName extends keyof S['models']> { id: string }
 
@@ -408,22 +397,21 @@ export interface DeleteId<S extends Schema, ModelName extends keyof S['models']>
  * ```
  */
 /**
- * Lowercase-first camelCase round-trip check. Must match the convention used
- * by `postgres.camel` in the client driver (porsager/postgres), which is:
+ * Rejects field names that will not survive the sync driver's snake_case ↔
+ * camelCase round-trip. The driver maps identifiers like this:
  *
- *   `content_json`       → `contentJson`  (snake → camel)
- *   `contentJson`        → `content_json` (camel → snake)
- *   `contentJSON`        → `content_j_s_o_n` (BROKEN — doesn't round-trip)
+ *   `content_json`       → `contentJson`   (snake → camel)
+ *   `contentJson`        → `content_json`  (camel → snake)
+ *   `contentJSON`        → `content_j_s_o_n` (does not round-trip)
  *
- * Any field name that doesn't round-trip under this pair of transforms will
- * silently fail to populate on the client: the wire delivers one casing,
- * the dynamic class's constructor reads another, and the field lands as
- * `undefined`. We catch it here so schema authors see an error at
- * definition time rather than at runtime.
+ * A name that does not round-trip through this pair of transforms will silently
+ * fail to populate on the client: the wire delivers one casing, the model reads
+ * another, and the field lands as `undefined`. Catching it here surfaces the
+ * problem when the schema is defined rather than at runtime.
  *
- * Rule: a standard camelCase identifier has runs of one uppercase letter
- * followed by lowercase letters — never two consecutive uppercase letters.
- * `contentJSON` has `JSON` all-uppercase, so we reject it.
+ * The rule: a standard camelCase identifier has runs of a single uppercase
+ * letter followed by lowercase letters, never two uppercase letters in a row.
+ * `contentJSON` has `JSON` in all caps, so it is rejected.
  */
 function assertRoundTrippableCamelCase(modelName: string, fieldName: string): void {
   // Base fields merged in by defineSchema are already validated; skip.
@@ -467,9 +455,9 @@ export function defineSchema<const S extends SchemaRecord>(
   options?: DefineSchemaOptions,
 ): Schema<S> {
   // Build validators with base fields merged in, and resolve defaults for
-  // `typename` and `persist.store` so downstream code (the generic loader,
-  // the hydration pipeline, the Go named-query registry) can rely on these
-  // fields being set without re-deriving them at every call site.
+  // `typename` and `persist.store` so downstream code (the loader and the
+  // hydration pipeline) can rely on these fields being set without re-deriving
+  // them at every call site.
   //
   // Defaults:
   //   typename      ← schema key (e.g. `slideLayer` → `'slideLayer'`)
@@ -554,10 +542,10 @@ export function defineSchema<const S extends SchemaRecord>(
 }
 
 /**
- * Validate the relation-driven sync-group declarations (`scope` / `grants`)
- * at schema-build time, so a mistyped membership edge fails *here* — with a
- * Stripe-shaped error (`code` + `param` + `doc_url`) pointing at the exact
- * declaration — instead of silently mis-routing deltas at runtime.
+ * Validates the relation-driven sync-group declarations (`scope` and `grants`)
+ * at schema-build time, so a mistyped membership edge fails here — with a
+ * structured error (`code`, `param`, `doc_url`) pointing at the exact
+ * declaration — rather than silently mis-routing changes at runtime.
  */
 function validateSyncGroupSchema(models: Record<string, ModelDef>): void {
   for (const [name, def] of Object.entries(models)) {

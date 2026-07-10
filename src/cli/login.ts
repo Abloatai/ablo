@@ -1,21 +1,22 @@
 /**
- * `ablo login` / `ablo logout` — manage the stored CLI credential.
+ * Manages the stored command-line credential through two commands.
  *
- *   ablo login                  Browser device flow (RFC 8628): approve at
- *                               /cli, the CLI provisions a test + live key
- *                               pair and stores both under the active project.
- *   ablo login --project <slug> Same, but scope (and mint) the pair to a named
- *                               project — Stripe's `login --project-name`. The
- *                               project becomes active.
- *   ablo logout                 Clear the stored keys.
+ *   ablo login                  Browser device flow (RFC 8628): you approve at
+ *                               /cli, and the command provisions a test and a
+ *                               live key pair, storing both under the active
+ *                               project.
+ *   ablo login --project <slug> The same, but scopes and mints the pair to a
+ *                               named project, which then becomes active.
+ *   ablo logout                 Clears the stored keys.
  *
- * With no `--project`, login targets the currently active project (so it
- * doubles as a refresh in place), falling back to the org-default. Headless/CI
- * doesn't log in — it sets `ABLO_API_KEY`, which always wins.
+ * With no `--project`, login targets the currently active project — so it
+ * doubles as a refresh in place — and otherwise falls back to the
+ * organization's default project. In a headless or CI environment you don't log
+ * in; you set `ABLO_API_KEY`, which always takes precedence.
  *
- * The device flow is two plain HTTP calls (code + token polling) so the
- * published CLI stays lean — no Better Auth client dependency. Visuals use
- * `@clack/prompts`; the browser is opened via the OS (no `open` dependency).
+ * The device flow is two plain HTTP calls, one for the code and one that polls
+ * for the token, which keeps the published command lean. Prompts are drawn with
+ * `@clack/prompts`, and the browser is opened through the operating system.
  */
 
 import { spawn } from 'child_process';
@@ -36,23 +37,22 @@ const CLIENT_ID = 'ablo-cli';
 const stripSlash = (u: string) => u.replace(/\/+$/, '');
 
 /**
- * The device flow spans TWO origins now that Better Auth runs as its own
- * service:
+ * The device flow talks to two separate hosts, each overridable by an
+ * environment variable.
  *
- * - AUTH_URL — the identity server (`auth.abloatai.com`). Owns the RFC 8628
- *   device endpoints (`/api/auth/device/*`). It's in-VPC, so it can reach the
- *   private Aurora the session lives in — which is exactly why these calls can
- *   no longer hit the Vercel `www` frontend (it 404s / can't reach the DB).
- *   Override with `ABLO_AUTH_URL` (e.g. `http://localhost:8081` in dev).
+ * - AUTH_URL — the identity server (`auth.abloatai.com`), which owns the RFC
+ *   8628 device endpoints (`/api/auth/device/*`) and the session store behind
+ *   them. Override it with `ABLO_AUTH_URL` (for example, `http://localhost:8081`
+ *   in local development).
  *
- * - DASHBOARD_URL — the product dashboard (`www.abloatai.com`, apps/sync-web).
- *   Serves the human approval page (`/cli`), the sign-up page, and the
- *   key-handoff route (`/api/cli/provision-key`) — none of which exist on the
- *   headless auth server. MUST be the canonical `www` host: the apex
- *   307-redirects to www and `fetch` strips the `Authorization` header on that
- *   cross-origin hop, so the authenticated provision call would silently arrive
- *   tokenless and 401 (symptom: browser says "Approved", CLI says "Could not
- *   provision a key"). Override with `ABLO_DASHBOARD_URL`.
+ * - DASHBOARD_URL — the product dashboard (`www.abloatai.com`), which serves the
+ *   browser approval page (`/cli`), the sign-up page, and the key-handoff route
+ *   (`/api/cli/provision-key`). None of these live on the auth server. Point it
+ *   at the canonical `www` host: the bare apex redirects to `www`, and a browser
+ *   fetch drops the `Authorization` header on that cross-origin hop, so the
+ *   authenticated provision call would arrive without its token and fail with a
+ *   401 — the browser reads "Approved" while the command reports "Could not
+ *   provision a key". Override it with `ABLO_DASHBOARD_URL`.
  */
 const AUTH_URL = stripSlash(process.env.ABLO_AUTH_URL ?? 'https://auth.abloatai.com');
 const DASHBOARD_URL = stripSlash(process.env.ABLO_DASHBOARD_URL ?? 'https://www.abloatai.com');
@@ -128,14 +128,14 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
   const requested = parseProjectFlag(argv) ?? getActiveProject()?.slug;
   const targetProject = requested === DEFAULT_PROFILE ? undefined : requested;
 
-  // Account choice — both paths complete in the browser; the CLI just opens
-  // the right page (sign-in vs sign-up) and then the same /cli approval.
-  // NON-TTY (agents — Claude Code, CI wrappers): skip the prompt entirely; a
-  // clack select can't receive input without a TTY and would HANG the agent.
-  // Default to the sign-in URL — the /cli approval page offers sign-up
-  // itself, and the device flow below is already agent-shaped: it PRINTS the
-  // approval URL + code (the agent relays it to the human) and polls until
-  // the human approves in their own browser.
+  // Account choice — both paths finish in the browser; the command only opens
+  // the right page (sign-in versus sign-up) and then the same /cli approval.
+  // Without a terminal (agents and CI wrappers), skip the prompt entirely: a
+  // clack select can't receive input without a terminal and would hang the
+  // caller. Default to the sign-in URL — the /cli approval page offers sign-up
+  // itself, and the device flow below already suits an unattended caller: it
+  // prints the approval URL and code for a human to approve, then polls until
+  // they do.
   const interactive = Boolean(process.stdout.isTTY && process.stdin.isTTY);
   let account: 'login' | 'signup' = 'login';
   if (interactive) {
@@ -164,14 +164,14 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
     process.exit(1);
   }
   const code = (await codeRes.json()) as DeviceCodeResponse;
-  // The approval page + sign-up live on the DASHBOARD host, never the auth
-  // server. We build the URL ourselves rather than trusting the server's
-  // `verification_uri_complete`: the device plugin resolves its relative
-  // `verificationUri: '/cli'` against the auth server's baseURL, which would
-  // send the browser to `auth.abloatai.com/cli` — a 404 (that page is a
-  // sync-web Next.js route). Sign-up opens the signup page (which returns to
-  // /cli after creating an org); log-in opens /cli directly (it bounces to
-  // sign-in if no session).
+  // The approval page and sign-up live on the dashboard host, not the auth
+  // server, so the URL is built here rather than trusting the server's
+  // `verification_uri_complete`: that value resolves the relative `/cli` path
+  // against the auth server's base URL and would send the browser to
+  // `auth.abloatai.com/cli`, which the auth server does not serve. Sign-up opens
+  // the sign-up page, which returns to /cli after creating an organization;
+  // log-in opens /cli directly, which falls back to sign-in when there's no
+  // session.
   const approvePath = `/cli?user_code=${code.user_code}`;
   const url =
     account === 'signup'
@@ -263,11 +263,11 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
     ...(prov.organizationId ? { organizationId: prov.organizationId } : {}),
     ...(k.expiresAt ? { expiresAt: k.expiresAt } : {}),
   });
-  // Store the pair under the project profile the server scoped them to and
-  // make that project active. Default to sandbox (the dev loop); the
-  // production key rides along so `ablo mode production` works without re-auth
-  // (Stripe mints both at login). The server's `project` (null = org-default)
-  // is authoritative — it resolved the slug → id.
+  // Store the pair under the project profile the server scoped them to and make
+  // that project active. Default to sandbox (the dev loop); the production key
+  // rides along so `ablo mode production` works without another login. The
+  // server's `project` field (null means the org-default) is authoritative — it
+  // resolved the slug to an id.
   const profileName = prov.project?.slug ?? DEFAULT_PROFILE;
   const path = setProfileKeys(
     profileName,

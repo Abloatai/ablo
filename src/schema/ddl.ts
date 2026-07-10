@@ -1,21 +1,25 @@
 /**
- * Schema → Postgres DDL — the one pure SQL emitter shared by every consumer.
+ * Turns a schema definition into the ordered Postgres DDL that provisions and
+ * migrates its tables. A schema built with `defineSchema(...)` and serialized to
+ * {@link SchemaJSON} is the single source of truth, and this module lowers it to
+ * ordered SQL strings.
  *
- * `defineSchema(...)` (serialized to {@link SchemaJSON}) is the single source of
- * truth; this module lowers it to ordered DDL strings. Both the hosted server
- * (which applies it to Ablo-managed Postgres on `schema push`) and the
- * `ablo migrate` CLI (which applies it to a customer's own Postgres) call these
- * generators, so the SQL — column types, RLS, enum checks — is identical no
- * matter who runs it. There is no second type map.
+ * The same generators run wherever tables are created — in a hosted server
+ * applying them to the Postgres it manages, and in the `ablo migrate` CLI
+ * applying them to a customer's own Postgres — so the SQL, from column types to
+ * row-level security to enum checks, is identical no matter who runs it.
  *
- * Everything here is pure (returns strings; no DB, no I/O); the execution side
- * (transaction + advisory lock) lives with each consumer because it's coupled
- * to that consumer's Postgres client and error type.
+ * Everything here is pure: it returns strings and touches no database. The
+ * execution side — the transaction and advisory lock that actually run the
+ * statements — lives with each caller, because it is coupled to that caller's
+ * Postgres client and error types.
  *
- *  - `generateProvisionPlan` — additive + idempotent (CREATE/ADD … IF NOT
- *    EXISTS + RLS). Never loses data. The "create my tables" primitive.
- *  - `generateMigrationPlan` — the destructive-aware counterpart driven by the
- *    {@link diffSchema} step list (drops, renames, type casts, backfills).
+ *  - {@link generateProvisionPlan} builds an additive, idempotent plan (CREATE
+ *    and ADD … IF NOT EXISTS, plus row-level security) that never loses data —
+ *    the "create my tables" primitive.
+ *  - {@link generateMigrationPlan} is its destructive-aware counterpart, driven
+ *    by a {@link diffSchema} step list: drops, renames, type casts, and
+ *    backfills.
  */
 
 import { AbloValidationError } from '../errors.js';
@@ -28,24 +32,24 @@ export interface ProvisionPlan {
   /** The Postgres schema the tables live in (`app_<id>` or `public`). */
   readonly appSchema: string;
   /** Ordered, idempotent DDL statements. Safe to run repeatedly. Executors run
-   *  these together in ONE transaction. */
+   *  these together in one transaction. */
   readonly statements: readonly string[];
-  /** Post-commit, NON-transactional DDL (`VALIDATE CONSTRAINT`, `CREATE INDEX
-   *  CONCURRENTLY`) — run AFTER {@link statements} commit, each outside any
-   *  transaction, best-effort. Keeps the lock-heavy / scan-heavy work off the
-   *  main transaction so adding a foreign key never freezes a large, live BYO
-   *  table. Optional + back-compat: absent = nothing to run. */
+  /** Post-commit, non-transactional DDL (`VALIDATE CONSTRAINT`, `CREATE INDEX
+   *  CONCURRENTLY`) — run after {@link statements} commit, each outside any
+   *  transaction, best-effort. Keeps the lock-heavy and scan-heavy work off the
+   *  main transaction so adding a foreign key never freezes a large, live table.
+   *  Optional: when absent, there is nothing to run. */
   readonly concurrent?: readonly string[];
 }
 
 export interface ProvisionOptions {
   /**
-   * Emit `DEFERRABLE INITIALLY DEFERRED` FOREIGN KEY constraints for every
-   * `parent: true` belongsTo relation (true ownership edges only — see
-   * {@link foreignKeyStatements}). Off by default: the soft-reference model keeps
-   * out-of-order sync robust on Ablo-managed tables. Turn on for a customer's own
-   * (BYO / dedicated) database, where a clean, navigable relational schema is
-   * wanted and the DB starts empty (nothing for the constraint to fail against).
+   * Emit `DEFERRABLE INITIALLY DEFERRED` foreign-key constraints for the
+   * belongsTo relations that opt in; see {@link foreignKeyStatements} for exactly
+   * which relations qualify. Off by default, so soft references keep out-of-order
+   * sync robust. Turn it on for a customer's own database, where a clean,
+   * navigable relational schema is wanted and the database starts empty, so a
+   * constraint has nothing to fail against.
    */
   readonly foreignKeys?: boolean;
 }
@@ -53,7 +57,7 @@ export interface ProvisionOptions {
 export interface MigrationPlan {
   /** The app Postgres schema the DDL targets (`app_<id>` or `public`). */
   readonly appSchema: string;
-  /** Ordered DDL statements (expand → contract). Run in ONE transaction. */
+  /** Ordered DDL statements (expand → contract). Run in one transaction. */
   readonly statements: readonly string[];
   /** Post-commit, non-transactional DDL — see {@link ProvisionPlan.concurrent}. */
   readonly concurrent?: readonly string[];
@@ -77,10 +81,10 @@ export function camelToSnake(identifier: string): string {
 }
 
 /**
- * Pure snake_case → camelCase — the inverse of {@link camelToSnake}, matching
- * `postgres.toCamel` semantics. Read-side translation: a column read back from a
- * BYO database (e.g. via `drizzleDataSource`) maps to the same JS field the SDK
- * wrote, so `camelToSnake('operatorId') === 'operator_id'` and
+ * Converts snake_case to camelCase — the inverse of {@link camelToSnake}. This
+ * is the read-side translation: a column read back from a customer's own
+ * database maps to the same JavaScript field the SDK wrote, so
+ * `camelToSnake('operatorId') === 'operator_id'` and
  * `snakeToCamel('operator_id') === 'operatorId'` round-trip.
  */
 export function snakeToCamel(identifier: string): string {
@@ -120,7 +124,7 @@ const BASE_COLUMNS = new Set(['id', 'organization_id', 'created_by', 'created_at
 /**
  * A Postgres-identifier-safe constraint name ≤63 bytes. When the natural
  * `<table>_<col>_<suffix>` exceeds the limit, fall back to a deterministic
- * hashed form so the name stays stable AND matches what Postgres actually stores
+ * hashed form so the name stays stable and matches what Postgres actually stores
  * — a silently-truncated name would never match the DO-block existence guard,
  * breaking idempotency (re-adds every push) and risking prefix collisions.
  */
@@ -139,52 +143,54 @@ interface ForeignKeyDdl {
    *  child-table scan, only a brief lock), plus the authoritative drop/recreate
    *  guard. */
   readonly statements: string[];
-  /** Run AFTER commit, each outside any transaction, best-effort: `VALIDATE
+  /** Run after commit, each outside any transaction, best-effort: `VALIDATE
    *  CONSTRAINT` + `CREATE INDEX CONCURRENTLY` — validates existing rows and
-   *  builds the child index WITHOUT blocking writes on a large, live table. */
+   *  builds the child index without blocking writes on a large, live table. */
   readonly concurrent: string[];
 }
 
 /**
- * Foreign-key constraints for a model's belongsTo relations marked `{ fk: true }`.
+ * Builds the foreign-key constraints for a model's belongsTo relations that opt
+ * in by setting `{ fk: true }`.
  *
- * Emission is driven by an explicit `fk` marker, DECOUPLED from `parent`
- * (`parent` = sync-group fan-out / visibility, control plane; `fk` = physical
- * referential integrity, data plane — orthogonal axes, per Drizzle's
- * relations()-vs-references() split and the Zanzibar "parent is permission-only"
- * rule). A relation sets `fk` only when its target is co-located in the same DB
- * AND written in the same commit, and is a strong / contained entity. Soft
- * references (provenance / template pointers, e.g. `sourceSlideId`, `templateId`)
- * stay plain columns — a hard FK there would reject a write pointing cross-scope
- * or at an absent row and break sync.
+ * The `fk` marker is deliberately separate from `parent`: `parent` controls
+ * sync-group fan-out and visibility, while `fk` requests physical referential
+ * integrity in the database. A relation sets `fk` only when its target lives in
+ * the same database, is written in the same commit, and is a strong, contained
+ * entity. Soft references — provenance or template pointers such as
+ * `sourceSlideId` or `templateId` — stay plain columns; a hard foreign key there
+ * would reject a write that points across scopes or at an absent row and break
+ * sync.
  *
- * LIVE / POPULATED tables: a plain ADD CONSTRAINT takes SHARE ROW EXCLUSIVE on
- * both tables and scans the whole child table — freezing writes on a customer's
- * production DB. So the constraint is added `NOT VALID` (instant, no scan, brief
- * lock) INSIDE the transaction, and the existing-row check (`VALIDATE
- * CONSTRAINT`, SHARE UPDATE EXCLUSIVE — allows writes) plus the child index
- * (`CREATE INDEX CONCURRENTLY`) are returned SEPARATELY in {@link
- * ForeignKeyDdl.concurrent}, run after commit, outside any transaction, and are
- * best-effort: if existing data violates a freshly-added FK the VALIDATE is
- * skipped (logged, never fatal), the constraint still enforces all new writes,
- * and nothing is destroyed.
+ * On a live, populated table a plain `ADD CONSTRAINT` takes a heavy lock and
+ * scans the whole child table, which would freeze writes on a customer's
+ * production database. To avoid that, the constraint is added `NOT VALID`
+ * (instant, no scan, brief lock) inside the transaction, and the existing-row
+ * check (`VALIDATE CONSTRAINT`, which allows concurrent writes) plus the child
+ * index (`CREATE INDEX CONCURRENTLY`) are returned separately in {@link
+ * ForeignKeyDdl.concurrent}, to run after commit, outside any transaction, and
+ * best-effort: if existing data violates a freshly added constraint the
+ * validation is skipped (logged, never fatal), the constraint still enforces
+ * every new write, and nothing is destroyed.
  *
- * The key is a pure `DEFERRABLE INITIALLY DEFERRED` **integrity guard** with
- * `ON DELETE NO ACTION`: it NEVER mutates a child row itself. (SET NULL / CASCADE
- * would change data server-side with NO sync_delta — invisible to other clients
- * until re-bootstrap — and would override the app-layer ModelRegistry onDelete
- * contract.) The app layer owns deletes + nullification and emits the deltas; the
- * deferred check just verifies — at COMMIT, so same-batch child-before-parent and
- * the app's own cascade both pass — that integrity holds, failing loudly only if
- * the app left a dangling reference.
+ * The constraint is a `DEFERRABLE INITIALLY DEFERRED` integrity guard with `ON
+ * DELETE NO ACTION`; it never mutates a child row itself. A `SET NULL` or
+ * `CASCADE` action would change data in the database with no matching
+ * sync_delta — invisible to other clients until they re-bootstrap — and would
+ * override the application layer's own onDelete handling. The application layer
+ * owns deletes and nullification and emits the deltas; the deferred check only
+ * verifies, at commit time (so a same-batch child-before-parent write and the
+ * application's own cascade both pass), that integrity holds, failing loudly
+ * only when a dangling reference is left behind.
  *
- * Authoritative + idempotent: a same-named constraint that isn't deferrable or
- * carries the wrong delete action (a hand-added or legacy FK) is dropped and
- * recreated; an already-correct one is left untouched (no re-validation cost).
- * Emitted in a final pass, after every referenced table exists.
+ * Emission is idempotent and authoritative: a same-named constraint that is not
+ * deferrable or carries the wrong delete action (a hand-added or older foreign
+ * key) is dropped and recreated, while an already-correct one is left untouched
+ * with no revalidation cost. It runs in a final pass, after every referenced
+ * table exists.
  *
- * The FK column is resolved the SAME way the table loop names columns
- * (`fieldMeta.column ?? camelToSnake(field)`), not from `rel.foreignKeyColumn` —
+ * The foreign-key column is resolved the same way the table loop names columns
+ * (`fieldMeta.column ?? camelToSnake(field)`), not from `rel.foreignKeyColumn`:
  * the table loop ignores relation casing, so trusting `foreignKeyColumn` would
  * mismatch the real column whenever `casing` is unset.
  */
@@ -207,7 +213,7 @@ function foreignKeyStatements(
   const statements: string[] = [];
   const concurrent: string[] = [];
   for (const rel of Object.values(model.relations)) {
-    if (rel.type !== 'belongsTo') continue; // only relations whose FK column lives on THIS table
+    if (rel.type !== 'belongsTo') continue; // only relations whose FK column lives on this table
     if (rel.options?.fk !== true) continue; // explicit `fk` marker — decoupled from `parent` (visibility)
     const targetModel = models[rel.target];
     if (!targetModel) continue; // target not provisioned into this DB → can't reference it
@@ -233,7 +239,7 @@ function foreignKeyStatements(
         `  END IF;\nEND $$;`,
     );
     // Post-commit, non-blocking: validate existing rows (SHARE UPDATE EXCLUSIVE,
-    // allows concurrent writes) then index the child column (Postgres does NOT
+    // allows concurrent writes) then index the child column (Postgres does not
     // auto-index the referencing column → parent deletes would seq-scan it).
     concurrent.push(`ALTER TABLE ${qt} VALIDATE CONSTRAINT ${q(cname)};`);
     concurrent.push(`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${q(iname)} ON ${qt} (${q(col)});`);
@@ -244,13 +250,13 @@ function foreignKeyStatements(
 // ── Provisioning (additive, idempotent) ─────────────────────────────────────
 
 /**
- * Build the additive, idempotent provisioning plan for an app. Pure — no DB
- * access.
+ * Builds the additive, idempotent provisioning plan for an app. Pure — it does
+ * not touch a database.
  *
- * `targetSchema` is where the tables live: the app's schema `app_<id>` on the
- * shared tier, or `public` on a dedicated tenant's own database (where the DB
- * itself is the isolation boundary). For `public` the `CREATE SCHEMA` is
- * skipped (it always exists).
+ * `targetSchema` is where the tables live: a per-app Postgres schema such as
+ * `app_<id>`, or `public` when the database itself is the isolation boundary
+ * (for example a customer's own database). For `public` the `CREATE SCHEMA`
+ * statement is skipped, since it always exists.
  */
 export function generateProvisionPlan(
   schema: SchemaJSON,
@@ -263,10 +269,11 @@ export function generateProvisionPlan(
   const concurrent: string[] = [];
 
   for (const [key, model] of Object.entries(schema.models)) {
-    // Control-plane models (Ablo's own sync log / attribution / audit) are never
-    // emitted into a tenant database — only `tenant`-plane models are. Absent
-    // plane = `tenant` (back-compat). This declared boundary is what makes "what
-    // a BYO customer DB gets" derivable instead of hand-coded.
+    // Control-plane models (the engine's own sync log, attribution, and audit
+    // tables) are never emitted into a tenant database — only `tenant`-plane
+    // models are. A model with no declared plane defaults to `tenant`. This
+    // declared boundary is what makes the set of tables a customer's own
+    // database receives derivable instead of hand-coded.
     if ((model.plane ?? 'tenant') === 'control') continue;
 
     // Default the physical table to the model key when `tableName` is omitted —
@@ -401,8 +408,8 @@ export function generateMigrationPlan(
     /** Constant seed values that let a required-field add / made-required step
      *  set NOT NULL on a non-empty table. Keyed by (model, field). */
     readonly backfills?: readonly BackfillValue[];
-    /** Emit DEFERRABLE FK constraints for `parent: true` edges of newly-created
-     *  models. Off by default — see {@link ProvisionOptions.foreignKeys}. */
+    /** Emit deferrable foreign-key constraints for the relations that opt in.
+     *  Off by default — see {@link ProvisionOptions.foreignKeys}. */
     readonly foreignKeys?: boolean;
   },
 ): MigrationPlan {
@@ -412,7 +419,7 @@ export function generateMigrationPlan(
   const concurrent: string[] = [];
 
   // The app schema must exist before any statement targets it. On a fresh
-  // org's FIRST push (`prev = null`) the migration plan IS the provisioning —
+  // org's first push (`prev = null`) the migration plan is the provisioning —
   // `app_<orgId>` has never been created, and skipping this line made every
   // first push die with `3F000 invalid_schema_name` at statement 0. Idempotent
   // (`IF NOT EXISTS`), so emitting it on every later migration is free.
@@ -566,8 +573,8 @@ export function generateMigrationPlan(
     }
   }
 
-  // Foreign keys (opt-in). Reconcile against the FULL `next` schema, not just
-  // create_model steps: a parent edge ADDED to an existing model surfaces only as
+  // Foreign keys (opt-in). Reconcile against the full `next` schema, not just
+  // create_model steps: a parent edge added to an existing model surfaces only as
   // an add_field (relation changes aren't diffed), so a create_model-only pass
   // would never materialize its FK. The DO-block is authoritative + idempotent
   // (a no-op when the constraint is already correct), so emitting the full set

@@ -1,9 +1,11 @@
 /**
- * Module-level context accessor
+ * Module-level accessor for the sync engine's shared context.
  *
- * Set once during SDK initialization via `initSyncEngine(context)`.
- * All internal SDK files access dependencies through `getContext()`.
- * This avoids threading context through every constructor.
+ * The context is set once, during initialization, by {@link initSyncEngine}.
+ * Code throughout the package reaches its shared dependencies — logger,
+ * observability, online-status detector, configuration, and the mutation
+ * executor — through {@link getContext} instead of receiving them through every
+ * constructor.
  */
 
 import type { SyncEngineContext } from './SyncEngineContext.js';

@@ -1,18 +1,16 @@
 /**
- * @abloatai/ablo/core — Framework extension
+ * The framework-extension entry point of this package. Import from here only
+ * when you are building on top of the sync engine — wiring your own store and
+ * provider stack, writing a sync adapter, or driving a test harness. Everyday
+ * application code should use the `Ablo({ schema })` client from the package
+ * root instead; the primitives exported here are lower-level building blocks.
  *
- * Only imported by the handful of files that extend or orchestrate the
- * sync engine (the app-shell store/provider stack, sync adapters, demo
- * harnesses). Regular model files and components should NOT import from
- * here — the consumer surface is `Ablo({ schema })` on the root.
- *
- * TRIMMED to what framework-level consumers actually import (verified by
- * a monorepo-wide import scan). Everything else the engine defines stays
- * module-private: if a new framework concern genuinely needs another
- * primitive, add the export deliberately — don't re-widen the barrel.
+ * The surface is deliberately narrow: it exposes only the types and classes an
+ * extension actually needs. Anything the engine does not export here is
+ * internal and may change.
  */
 
-// Base store class + the constructor shapes subclasses reference
+// The base store class, plus the constructor shapes that subclasses reference.
 export {
   BaseSyncedStore,
   type ModelConstructor,
@@ -22,7 +20,11 @@ export {
 // Core infrastructure classes
 export { SyncClient } from '../SyncClient.js';
 export { Database } from '../Database.js';
-export { ObjectPool, ModelScope } from '../ObjectPool.js';
+export { InstanceCache, ModelScope } from '../InstanceCache.js';
+/** @deprecated `ObjectPool` was renamed to {@link InstanceCache} — the class is an
+ *  identity-map cache of live model instances, not a reuse pool. This alias keeps existing
+ *  imports working and will be removed in a future major version. */
+export { InstanceCache as ObjectPool } from '../InstanceCache.js';
 export { Model } from '../Model.js';
 export {
   LazyReferenceCollection,
@@ -33,18 +35,19 @@ export {
   getActiveRegistry,
 } from '../ModelRegistry.js';
 
-// Lower-level network read — for per-app demand loaders that haven't
-// migrated to `ablo.<model>.list(...)` yet.
+// A lower-level network read primitive. Prefer `ablo.<model>.list(...)` for
+// ordinary reads; reach for this only when writing a custom on-demand loader.
 export { postQuery, type PostQueryOptions } from '../query/client.js';
 
-// FK-cycle / dependency-order helper — used by schema-aware test
-// fixtures and scaffolding tools to compute commit ordering.
+// Computes a dependency-safe ordering for a set of models by walking their
+// foreign-key relationships, so writes commit parents before children. Used by
+// schema-aware test fixtures and scaffolding tools.
 export { computeFKDepthPriority, type InternalAbloOptions } from '../client/Ablo.js';
 
-// ── Provider-facing DI types ──
-// Adapters the consumer wires into the provider stack (logger,
-// observability, mutation executor, session-error detector, etc.)
-// implement these interfaces.
+// ── Provider-facing dependency-injection types ──
+// The interfaces you implement to plug your own services into the provider
+// stack — a logger, an observability sink, a mutation executor, a
+// session-error detector, and so on.
 export type {
   SyncLogger,
   SyncObservabilityProvider,
@@ -55,20 +58,23 @@ export type {
   MutationOperation,
 } from '../interfaces/index.js';
 
-// Sync layer — the wire socket + delta shape, for sync adapters and the
-// multi-agent demo harnesses.
+// The sync layer: the WebSocket wrapper and the delta shape it carries. Needed
+// when writing a sync adapter or a multi-participant test harness.
 export {
   SyncWebSocket,
   type SyncDelta,
   type SyncWebSocketOptions,
 } from '../sync/SyncWebSocket.js';
-export { BootstrapHelper } from '../sync/BootstrapHelper.js';
+export { BootstrapFetcher } from '../sync/BootstrapFetcher.js';
+/** @deprecated `BootstrapHelper` was renamed to {@link BootstrapFetcher}. This alias keeps
+ *  existing imports working and will be removed in a future major version. */
+export { BootstrapFetcher as BootstrapHelper } from '../sync/BootstrapFetcher.js';
 
-// Claim coordination primitives (the lower-level pieces behind the
-// consumer-facing `ablo.<model>.claim`). The stream factory builds the
-// announce/await machinery on a SyncWebSocket; `awaitClaimGrant` is the
-// fair-queue grant coordinator. Exposed on /core for framework-level
-// orchestration and e2e harnesses — NOT on the consumer `.` root.
+// The lower-level claim-coordination primitives behind the `ablo.<model>.claim`
+// API. `createClaimStream` builds the announce-and-await machinery on top of a
+// `SyncWebSocket`; `awaitClaimGrant` coordinates fair, first-in-first-out
+// grants. These are for extension code and test harnesses; ordinary
+// application code should use `ablo.<model>.claim`.
 export {
   createClaimStream,
   type AttachableClaimStream,
@@ -79,6 +85,6 @@ export {
   type GrantTransport,
 } from '../sync/awaitClaimGrant.js';
 
-// Schema/model load strategy enum — referenced by model registration in
-// framework code.
+// An enum naming the strategies for loading a model's data. Referenced when
+// registering models in extension code.
 export { LoadStrategy } from '../types/index.js';

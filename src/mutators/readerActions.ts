@@ -4,15 +4,16 @@ import type { ModelDef } from '../schema/model.js';
 import type { SyncStoreContract } from '../react/context.js';
 
 /**
- * React-free imperative reads over a store: one-off `retrieve`/`list`/`count`
- * snapshots that do NOT subscribe to changes. Used by the transaction system
- * and `BaseSyncedStore`. For reactive reads in components use
- * `useAblo((ablo) => ablo.<model>.retrieve({ id }) / .list(opts))`.
+ * Imperative, non-reactive reads over a store for one model. The `retrieve`,
+ * `list`, and `count` actions each return a one-time snapshot and do not
+ * subscribe to later changes; the transaction system and `BaseSyncedStore`
+ * build on them. For reactive reads inside a component, read through `useAblo`,
+ * for example `useAblo((ablo) => ablo.<model>.list(options))`.
  */
 export interface ReaderFindOptions<T> {
-  /** Equality filter — uses FK index when the field is registered. */
+  /** Equality filter. Uses a foreign-key index when the field has one registered. */
   where?: Partial<T>;
-  /** Predicate applied AFTER `where` filtering. */
+  /** A predicate applied after the `where` filter. */
   filter?: (entity: T) => boolean;
   /** Sort field. */
   orderBy?: keyof T & string;
@@ -25,7 +26,7 @@ export interface ReaderFindOptions<T> {
 }
 
 export interface ReaderActions<S extends Schema, K extends keyof S['models'] & string> {
-  /** Get a single entity by id. Returns undefined if not in pool. */
+  /** Get a single entity by id, or `undefined` if it is not loaded in the store. */
   retrieve: (id: string) => InferModel<S, K> | undefined;
   /** Read a collection with optional filters. Snapshot — not reactive. */
   list: (options?: ReaderFindOptions<InferModel<S, K>>) => InferModel<S, K>[];
@@ -33,7 +34,7 @@ export interface ReaderActions<S extends Schema, K extends keyof S['models'] & s
   count: (options?: ReaderFindOptions<InferModel<S, K>>) => number;
 }
 
-/** Pure factory — builds imperative read actions over a store for one model. */
+/** Builds the read actions (`retrieve`, `list`, `count`) for one model over a store. */
 export function createReaderActions<
   S extends Schema,
   K extends keyof S['models'] & string,
@@ -42,7 +43,7 @@ export function createReaderActions<
   const typename = modelDef?.typename ?? modelKey;
 
   function read(options?: ReaderFindOptions<InferModel<S, K>>): InferModel<S, K>[] {
-    // FK index fast path: single-field `where` on a registered FK index → O(1).
+    // Fast path: a single-field `where` on a registered foreign-key index is O(1).
     let candidates: unknown[];
     const whereEntries = options?.where ? Object.entries(options.where) : [];
     const singleWhere = whereEntries.length === 1 ? whereEntries[0] : undefined;

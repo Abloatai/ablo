@@ -1,11 +1,13 @@
 /**
- * `ablo migrate` — create the schema's Postgres tables in your own database.
+ * `ablo migrate` creates your schema's tables in your own Postgres database.
  *
- * Direct Postgres connector counterpart to `ablo push` (hosted). Both lower
- * the schema through the SAME pure engine — `generateProvisionPlan` from
- * `@abloatai/ablo/schema` — so the SQL (column types, RLS, enum checks) is
- * identical whether Ablo applies it or you do. No second type map: a Zod
- * `number` is `DOUBLE PRECISION` here exactly as on the hosted path.
+ * It is the counterpart to `ablo push`: where `push` sends your schema to the
+ * hosted service to apply, `migrate` applies it directly to the database named
+ * by `DATABASE_URL`. Both commands lower the schema through the same planner,
+ * {@link generateProvisionPlan} from `@abloatai/ablo/schema`, so the SQL —
+ * column types, row-level security, enum checks — is identical no matter which
+ * side runs it. There is no second type map: a Zod `number` becomes
+ * `DOUBLE PRECISION` here exactly as it does on the hosted path.
  *
  * Usage:
  *   ablo migrate                       # apply to DATABASE_URL
@@ -53,7 +55,8 @@ export const MIGRATE_USAGE = `  ablo migrate — provision your schema's tables 
 export interface MigrateArgs {
   schemaPath: string;
   exportName: string;
-  /** Postgres schema the tables live in. `public` for a direct connector DB. */
+  /** The Postgres schema the tables live in. Defaults to `public` when you own
+   *  the database, since the database itself is the tenant boundary. */
   targetSchema: string;
   dryRun: boolean;
   outputFile: string | null;
@@ -62,7 +65,8 @@ export interface MigrateArgs {
 const DEFAULT_SCHEMA_PATH = 'ablo/schema.ts';
 const DEFAULT_EXPORT = 'schema';
 
-/** Parse `migrate` flags. Pure — unit-tested without touching a database. */
+/** Parses the `migrate` command's flags into {@link MigrateArgs}. Does no I/O,
+ *  so it can run without a database. */
 export function parseMigrateArgs(argv: readonly string[]): MigrateArgs {
   let schemaPath = DEFAULT_SCHEMA_PATH;
   let exportName = DEFAULT_EXPORT;
@@ -95,57 +99,56 @@ export function parseMigrateArgs(argv: readonly string[]): MigrateArgs {
   return { schemaPath, exportName, targetSchema, dryRun, outputFile };
 }
 
-/** Lower a loaded schema to its table-creation SQL — pure, the shared engine. */
+/** Lowers a loaded schema to the SQL that creates its tables, using the same
+ *  planner the hosted path uses. Does no I/O. */
 export function planFor(
   schema: Schema,
   targetSchema = 'public',
 ): { statements: readonly string[]; concurrent: readonly string[] } {
   const schemaJson = JSON.parse(serializeSchema(schema)) as SchemaJSON;
-  // A customer-owned DB is provisioned into `public` (the DB itself is the
-  // isolation boundary). Emit real foreign keys there for a clean relational
-  // schema — mirrors the hosted server's `conn.schema == null` rule so the two
-  // paths emit identical SQL for the same customer-owned database.
+  // A database you own is provisioned into `public`, since the database itself
+  // is the tenant boundary. Emit real foreign keys there for a clean relational
+  // schema; the hosted path applies the same rule, so both produce identical SQL
+  // for the same database.
   const plan = generateProvisionPlan(schemaJson, targetSchema, {
     foreignKeys: targetSchema === 'public',
   });
-  // Running against your own database (Data Source mode) also needs the
-  // adapter-owned tables (`ablo_idempotency` + `ablo_outbox`). They're idempotent
-  // (`IF NOT EXISTS`) and shipped from ONE canonical place so the adapters and
-  // this command never disagree — provisioning them here means the scaffold never
-  // has to ask the user to paste table-creation SQL by hand.
+  // Running against your own database also needs the two tables the runtime
+  // manages itself, `ablo_idempotency` and `ablo_outbox`. Their definitions come
+  // from a single source and use `IF NOT EXISTS`, so re-running is safe and the
+  // command never has to ask you to paste table-creation SQL by hand.
   const adapterTables = adapterTableMigrations().map((m) => m.up);
   return { statements: [...plan.statements, ...adapterTables], concurrent: plan.concurrent ?? [] };
 }
 
-/** A porsager/Postgres query error — the fields worth surfacing. */
+/** The fields worth surfacing from a query error raised by the `postgres` driver. */
 interface PgError {
   code?: string;
   detail?: string;
   message?: string;
 }
 
-/** Structured `[migrate]` lifecycle logs — same shape/vocabulary as the hosted
- *  executor's `[migration]` logs (`@abloatai/ablo` server `prefixedLogger`),
- *  so a failure reads identically whether Ablo applied it or you did. */
+/** Structured lifecycle logs, each tagged `[migrate]`. They use the same shape
+ *  and vocabulary as the hosted path's logs, so a failure reads the same way no
+ *  matter which side applied the migration. */
 const log = {
   info: (msg: string, fields: Record<string, unknown>) => { console.log(`[migrate] ${msg}`, fields); },
   warn: (msg: string, fields: Record<string, unknown>) => { console.warn(pc.yellow(`[migrate] ${msg}`), fields); },
   error: (msg: string, fields: Record<string, unknown>) => { console.error(pc.red(`[migrate] ${msg}`), fields); },
 };
 
-// Safe schema-change settings — SHARED with the hosted executor
-// (apps/sync-server/src/schema/ddlExec.ts) via `@abloatai/ablo/schema`'s
-// ddlLock leaf: a low lock_timeout so a blocked ALTER never freezes the table
-// behind the lock queue, + bounded retry on lock contention (55P03). Tunable
-// via ABLO_SCHEMA_LOCK_TIMEOUT / ABLO_SCHEMA_LOCK_ATTEMPTS (older ABLO_DDL_*
-// names still honored) — the SAME knobs on both paths; the copy-pasted pair
-// had drifted (this file hardcoded 5 attempts while the server honored env).
+// Safe schema-change settings, the same ones the hosted path uses: a low
+// `lock_timeout` so a blocked `ALTER` never freezes the table behind the lock
+// queue, plus a bounded retry when a lock is contended (SQLSTATE 55P03). Tune
+// them with the `ABLO_SCHEMA_LOCK_TIMEOUT` and `ABLO_SCHEMA_LOCK_ATTEMPTS`
+// environment variables (the older `ABLO_DDL_*` names still work).
 
 /**
- * Apply statements in one transaction under the same advisory-lock discipline
- * as the hosted executor. On failure, the transaction aborts (nothing partial
- * lands) and we report the canonical `migration_failed` shape — which statement
- * broke, its index, and the Postgres SQLSTATE.
+ * Applies the statements in a single transaction, guarded by the same advisory
+ * lock the hosted path uses. If any statement fails, the transaction aborts so
+ * nothing partial lands, and the failure is logged in the `migration_failed`
+ * shape: which statement broke, its position in the plan, and the Postgres
+ * SQLSTATE.
  */
 async function applyStatements(
   dbUrl: string,
@@ -200,10 +203,11 @@ async function applyStatements(
         throw err;
       }
     }
-    // Post-commit, NON-transactional pass: VALIDATE + CREATE INDEX CONCURRENTLY,
-    // best-effort — never aborts a completed migration (a VALIDATE that trips on a
-    // live table's pre-existing rows is logged only). statement_timeout 0 so a long
-    // non-blocking scan on a large direct-connector table isn't killed (max:1 → same connection).
+    // A best-effort pass after the commit, outside any transaction: `VALIDATE`
+    // and `CREATE INDEX CONCURRENTLY`, which cannot run inside a transaction.
+    // These never abort a migration that already committed; a `VALIDATE` that
+    // trips on a table's existing rows is only logged. `statement_timeout` is set
+    // to 0 so a long, non-blocking scan on a large table isn't killed partway.
     if (concurrent.length > 0) {
       await sql.unsafe(`SET statement_timeout = 0`);
       for (const statement of concurrent) {
@@ -256,11 +260,11 @@ export async function migrate(argv: readonly string[]): Promise<void> {
     return;
   }
 
-  // Resolve DATABASE_URL the way the app's framework will: process env first,
-  // then the env files frameworks load (`.env.local`, `.env`). The CLI runs via
-  // `npx` WITHOUT the app's env loader, so it must read the files itself — else
-  // `migrate` can't see a DATABASE_URL that `push` (and Next.js) read from
-  // `.env.local`, which is exactly where `push` WRITES the scoped-role URL.
+  // Resolve DATABASE_URL the way a web framework would: the process environment
+  // first, then the `.env.local` and `.env` files. Run through `npx`, this
+  // command has no framework to load those files for it, so it reads them
+  // directly — otherwise it would miss a DATABASE_URL that lives only in
+  // `.env.local`, which is a common place to keep it.
   const dbUrl = readProjectDatabaseUrl();
   if (!dbUrl) {
     console.error(
@@ -271,11 +275,11 @@ export async function migrate(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  // NOTE: `ablo migrate` provisions tables but does NOT create roles, force RLS,
-  // or rewrite DATABASE_URL on your database — it runs the DDL as the role you
-  // provide, like any migration tool. Securing the connection (scoped role, RLS)
-  // is your call; the docs show the recipe if you want it. This
-  // command is OPTIONAL — Ablo reads/writes your existing tables without it.
+  // `ablo migrate` provisions tables and nothing more: it does not create roles,
+  // enable row-level security, or rewrite DATABASE_URL. It runs the DDL as the
+  // role you supply, like any migration tool, so securing the connection with a
+  // scoped role and row-level security is up to you. The command is optional —
+  // your existing tables can be read and written without it.
   try {
     await applyStatements(dbUrl, args.targetSchema, plan.statements, plan.concurrent);
     console.log(`  ${pc.green('✓')} Migration complete`);

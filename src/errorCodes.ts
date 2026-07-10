@@ -1,47 +1,47 @@
 /**
- * The canonical Ablo error-code registry — the **`code` tier** of the
- * Stripe-style two-tier error model.
+ * The registry of every stable error code Ablo can produce. Error handling has
+ * two levels, and this file defines the finer one.
  *
- * ### The two tiers (mirrors Stripe)
+ *   - The `type` is the coarse category, and each one corresponds to an
+ *     {@link AbloError} subclass such as `AbloPermissionError` or
+ *     `AbloValidationError`. Catching by `instanceof` is equivalent to switching
+ *     on `error.type`.
+ *   - The `code` is the fine-grained, machine-readable identifier defined here,
+ *     written in `snake_case` (for example `entity_claimed` or `queue_too_deep`).
+ *     This is what you switch on to handle a specific situation, and what the
+ *     documentation link for an error is built from.
  *
- *   - **`type`** — coarse category, 1:1 with an {@link AbloError} subclass
- *     (`AbloPermissionError`, `AbloValidationError`, …). "Catch by
- *     `instanceof`" ≡ "switch on `e.type`". This tier lives in `errors.ts`.
- *   - **`code`** — the fine-grained, machine-readable identifier in this
- *     file. `snake_case`, ordered noun→state (`entity_claimed`) or
- *     condition→constraint (`queue_too_deep`). This is what callers
- *     `switch` on for specific handling, and what `doc_url` is derived from.
+ * The client, the server, and the tool-calling boundary all speak this same
+ * vocabulary, which makes the registry part of the API contract. Two things
+ * follow from that:
  *
- * Because sync-engine ↔ sync-server ↔ MCP all speak this code vocabulary,
- * the registry **is** the wire contract. Two consequences:
- *
- *   1. `ErrorCode` is a *closed* union (plus the `policy:${string}`
- *      dynamic family). Producing an unregistered code is a compile error
- *      — that's the whole point. {@link AbloError}'s constructor param is
- *      narrowed to `ErrorCode`; only the wire-parse boundary
- *      (`translateHttpError`, frame deserialization) casts an incoming
- *      string to `ErrorCode`, so an *older* SDK still tolerates a *newer*
- *      server's code (forward compat) while internal producers stay checked.
- *   2. The `surface: 'wire'` subset is what an HTTP/MCP boundary maps from
- *      and what the public error docs are generated from. `surface:
- *      'client'` codes are local SDK invariants (you forgot to open the DB,
- *      a model isn't registered) — never sent over the network, so they
- *      carry no `httpStatus`, exactly as Stripe omits client-side
- *      programmer errors from its published code list.
+ *   1. {@link ErrorCode} is a closed set — plus the dynamic `policy:${string}`
+ *      family — so producing a code that is not registered here is a
+ *      compile-time error. The {@link AbloError} constructor accepts only a
+ *      registered code. The one place an arbitrary string is accepted as a code
+ *      is where an incoming response is parsed, which lets an older client
+ *      tolerate a code from a newer server it does not yet recognize.
+ *   2. The codes marked `surface: 'wire'` are the ones that cross the network
+ *      and are mapped at the HTTP and tool-calling boundaries; the public error
+ *      documentation is generated from them. Codes marked `surface: 'client'`
+ *      describe local mistakes — accessing the database before opening it, or
+ *      writing to a model that was never registered — and are never sent over
+ *      the network, so they carry no HTTP status.
  */
 
 import { z } from 'zod';
 
 /**
- * Version of the error contract — the envelope shape + the set of codes and
- * their semantics. Date-based, like Stripe's API versions. Bump it (and only
- * it) when the contract changes in a way consumers can observe: a new/removed
- * code, a changed HTTP status, an envelope field. Emitted in `errors.json`
- * and on the `Ablo-Version` response header so a consumer can detect drift.
+ * The version of the error contract: the envelope shape together with the set of
+ * codes and their meanings. It is date-based, and changes only when the contract
+ * changes in a way a consumer can observe — a code added or removed, an HTTP
+ * status changed, or an envelope field changed. It is emitted in the generated
+ * error documentation and returned on the `Ablo-Version` response header, so a
+ * consumer can detect when its expected contract has drifted from the server's.
  */
 export const ERROR_CONTRACT_VERSION = '2026-07-03';
 
-/** Coarse grouping for metrics dashboards and docs sectioning. */
+/** A coarse grouping of error codes, used to organize metrics and documentation. */
 export type ErrorCategory =
   | 'auth'
   | 'permission'
@@ -59,30 +59,32 @@ export type ErrorCategory =
   | 'client';
 
 /**
- * The closed taxonomy of *how a failure recovers* — one rung above the raw
- * `code`. Where `code` says **what** went wrong, `RecoveryClass` says **what
- * the client should do about it**, which is exactly the discriminant the sync
- * FSM and the network probe need. It collapses what used to be three scattered
- * booleans (`retryable`, `authBlocked`, `sessionValid`) into one exhaustive,
- * Zod-validated enum so the connection layer branches on a single value with
- * compile-time completeness instead of ad-hoc `if (!isRetryableCode(...))`
- * chains.
+ * A closed classification of how a failure can be recovered from — a level above
+ * the raw {@link ErrorCode}. Where a code says what went wrong, a recovery class
+ * says what a client should do about it, which is exactly the distinction the
+ * connection layer needs to decide between retrying, re-minting a credential, and
+ * signing the user out. Every code maps to one of these, and the set is
+ * validated at runtime.
  *
- *   - `access_credential_expiry` — the Stripe-style ephemeral key (`ek_`/`rk_`)
- *     the sync-engine presents as its Bearer has expired. The long-lived login
- *     is fine; the remedy is to silently RE-MINT a fresh key from the session
- *     and retry the same request. This MUST NOT sign the user out (the whole
- *     point of the wake-from-sleep fix: a 15-min `ek_` dying after a laptop nap
- *     is routine, not a logout).
- *   - `session_expiry` — the LONG-LIVED login itself is gone. Terminal:
+ *   - `access_credential_expiry` — the short-lived access credential the client
+ *     presents (its ephemeral `ek_` or `rk_` key) has expired, while the
+ *     underlying login is still valid. The remedy is to mint a fresh key from the
+ *     session and retry the same request. This does not sign the user out; a
+ *     short-lived key expiring — for example after a laptop resumes from sleep —
+ *     is routine.
+ *   - `session_expiry` — the long-lived login itself is gone. This is terminal:
  *     sign out and route to re-authentication.
- *   - `auth_blocked` — reachable, but the credential TYPE/config was rejected
- *     (wrong key kind, untrusted issuer, no org). Re-auth re-mints the same
- *     rejected credential and loops, so STOP — don't reconnect, don't sign out.
- *   - `permission` — a 403 authorization denial (scope/role/membership).
- *   - `transient` — retry the same request unchanged (5xx, lease contention…).
- *   - `none` — not a recoverable-auth condition (validation, not-found, local
- *     invariants, and any forward-compat code an older SDK doesn't know).
+ *   - `auth_blocked` — the server was reachable but rejected the kind or
+ *     configuration of the credential (wrong key type, untrusted issuer, no
+ *     organization). Re-authenticating would present the same rejected credential
+ *     and loop, so the client should stop rather than reconnect or sign out.
+ *   - `permission` — an authorization denial (403) based on scope, role, or
+ *     membership.
+ *   - `transient` — a temporary failure, such as a server error or lease
+ *     contention, that may succeed if the same request is retried unchanged.
+ *   - `none` — not a recoverable authentication condition: validation errors,
+ *     not-found, local invariants, and any code an older client does not
+ *     recognize.
  */
 export const RECOVERY_CLASSES = [
   'access_credential_expiry',
@@ -93,35 +95,38 @@ export const RECOVERY_CLASSES = [
   'none',
 ] as const;
 
-/** Zod enum derived from {@link RECOVERY_CLASSES} — the runtime-validatable
- *  form of the recovery taxonomy. */
+/** A Zod enum over {@link RECOVERY_CLASSES}, for validating a recovery class at
+ *  runtime. */
 export const recoveryClassSchema = z.enum(RECOVERY_CLASSES);
 
-/** How a failure recovers. See {@link RECOVERY_CLASSES}. */
+/** The recovery classification of a failure. See {@link RECOVERY_CLASSES}. */
 export type RecoveryClass = z.infer<typeof recoveryClassSchema>;
 
-/** One registry entry. `httpStatus` is present only for `surface: 'wire'`
- *  codes — status is a property of the wire boundary, never of a
- *  purely-local client invariant. */
+/** One entry in the registry: everything known about a single error code.
+ *  `httpStatus` is present only for codes that cross the network, since an HTTP
+ *  status is a property of the wire boundary rather than of a purely local
+ *  error. */
 export interface ErrorCodeSpec {
   readonly category: ErrorCategory;
-  /** `'wire'` = crosses the network and is part of the API/MCP contract;
-   *  `'client'` = local SDK invariant, never serialized. */
+  /** `'wire'` for a code that crosses the network and is part of the API
+   *  contract; `'client'` for a local error that is never serialized. */
   readonly surface: 'wire' | 'client';
   /** Canonical HTTP status for the wire boundary. Omitted for client codes. */
   readonly httpStatus?: number;
-  /** Whether the same request can succeed on a later retry without the
-   *  caller changing anything. `false` for permission / validation /
-   *  not-found; `true` for transient transport / lease contention. */
+  /** Whether the same request can succeed on a later retry without the caller
+   *  changing anything. `false` for permission, validation, and not-found;
+   *  `true` for transient transport failures and lease contention. */
   readonly retryable: boolean;
-  /** One-line human description — the source text for the `doc_url` page. */
+  /** A one-line, human-readable description of the error — also the source text
+   *  for its documentation page. */
   readonly message: string;
   /**
-   * Explicit recovery class. Set ONLY where it diverges from what `category` /
-   * `httpStatus` / `retryable` already imply — i.e. the handful of auth codes
-   * whose remedy (`session_expiry` vs `access_credential_expiry`) the bare
-   * status can't distinguish. Everything else is derived by
-   * {@link classifyRecovery}, so adding a normal code needs no `recovery`.
+   * An explicit {@link RecoveryClass}, set only where it differs from what the
+   * category, HTTP status, and `retryable` flag already imply — mainly the few
+   * authentication codes whose remedy the status alone cannot reveal, such as
+   * telling a session expiry apart from an access-credential expiry. For every
+   * other code the recovery class is derived by {@link classifyRecovery}, so
+   * this field can be left unset.
    */
   readonly recovery?: RecoveryClass;
 }
@@ -140,19 +145,20 @@ const client = (
 ): ErrorCodeSpec => ({ category, surface: 'client', retryable: false, message });
 
 /**
- * The closed set of stable error codes. Add a code here BEFORE throwing it
- * — the narrowed {@link AbloError} constructor param enforces this.
+ * The complete set of stable error codes, keyed by code. A code must be added
+ * here before it can be thrown, since the {@link AbloError} constructor accepts
+ * only codes from this set.
  */
 export const ERROR_CODES = {
   // ── auth (401) ─────────────────────────────────────────────────────
   apikey_invalid: wire('auth', 401, false, "This API key isn't one Ablo recognizes — it may be mistyped, truncated, or belong to a different environment. Check the key and try again."),
   apikey_revoked: wire('auth', 401, false, 'This API key has been revoked and can no longer be used. Mint a new key from the dashboard.'),
-  // THE sync-engine access credential — the Stripe-style ephemeral key
-  // (`ek_` for users, `rk_` for agents) minted server-side from the login and
-  // presented as a Bearer. Its expiry is routine and re-mintable: get a fresh
-  // key from the still-valid session and retry — NEVER a sign-out. (An agent's
-  // expired `rk_` must not log a human out either.) This is the ONLY code on
-  // the silent re-mint path; see RecoveryClass `access_credential_expiry`.
+  // The short-lived access credential — the ephemeral key (`ek_` for users,
+  // `rk_` for agents) minted from the login and presented as a bearer token.
+  // Its expiry is routine and re-mintable: get a fresh key from the still-valid
+  // session and retry, rather than signing out. An agent's expired `rk_` must
+  // not sign a human out either. This is the one code on the silent re-mint
+  // path; see the `access_credential_expiry` recovery class.
   apikey_expired: wire('auth', 401, false, 'This ephemeral API key has expired. Mint a fresh key from your still-valid session and retry the request.', 'access_credential_expiry'),
   apikey_missing: wire('auth', 401, false, 'The request arrived without an API key. Send one as `Authorization: Bearer <key>`.'),
   api_key_required: wire('auth', 401, false, 'This operation requires an API key, and none was presented. Send one as `Authorization: Bearer <key>`.'),
@@ -161,12 +167,13 @@ export const ERROR_CODES = {
   identity_resolve_failed: wire('auth', 401, false, 'The server could not resolve an identity for this credential — the identity lookup was rejected. Check that the credential is still valid.'),
   auth_no_credentials: wire('auth', 401, false, 'No recognized authentication credential was presented — no API key and no bearer JWT. Send `Authorization: Bearer <token>`.'),
   identity_missing_organization: wire('auth', 401, false, 'Authentication succeeded, but the credential resolves to no organization, so requests cannot be scoped. Check that the key or token carries an organization.'),
-  // The long-lived login is gone — terminal, drives sign-out + re-auth.
+  // The long-lived login is gone; this is terminal and drives sign-out and
+  // re-authentication.
   session_expired: wire('auth', 401, false, 'Your session has expired or is no longer valid. Sign in again to continue.', 'session_expiry'),
-  // `jwt_invalid` is the residual fallback; the codes below split out the
-  // specific failure modes so an integrating customer can tell "I registered
-  // the wrong JWKS" from "my token has no org claim" from "wrong audience"
-  // rather than getting one opaque code for all of them.
+  // `jwt_invalid` is the general fallback; the codes below it split out specific
+  // failure modes, so an integrator can tell a wrong JWKS registration from a
+  // token with no organization claim from a wrong audience, instead of getting
+  // one opaque code for all of them.
   jwt_invalid: wire('auth', 401, false, "The bearer JWT failed validation for a reason the server could not classify further. Check the token's issuer, signature, audience, and expiry."),
   jwt_malformed: wire('auth', 401, false, 'The bearer token is not a well-formed JWT and could not be decoded. Check that the full, unmodified token was sent.'),
   jwt_missing_issuer: wire('auth', 401, false, 'The bearer JWT has no `iss` (issuer) claim, so it cannot be routed to a trusted issuer.'),
@@ -175,11 +182,10 @@ export const ERROR_CODES = {
   jwt_audience_mismatch: wire('auth', 401, false, "The bearer JWT's `aud` (audience) claim does not match the audience this issuer is registered with."),
   jwt_missing_subject: wire('auth', 401, false, 'The bearer JWT has no `sub` (subject) claim to identify the user.'),
   jwt_missing_organization: wire('auth', 401, false, 'The bearer JWT carries no organization context — neither a fixed org for the issuer nor the configured organization claim.'),
-  // Trusted-issuer / BYO-IdP path only — Ablo's own sync-engine no longer
-  // authenticates with JWTs (it uses the Stripe-style ephemeral key, below).
-  // When a customer DOES present an external-IdP JWT, its expiry means
-  // re-authenticate against that IdP, so it classifies as a session expiry
-  // (which also keeps `isSessionErrorResponse` behaviour unchanged).
+  // Applies only to the trusted-issuer path, where a customer authenticates with
+  // a JWT from their own identity provider. When such a token expires, the
+  // remedy is to re-authenticate against that provider, so it classifies as a
+  // session expiry.
   jwt_expired: wire('auth', 401, false, 'The bearer JWT has expired. Obtain a fresh token from your identity provider and retry.', 'session_expiry'),
   jwt_org_membership_denied: wire('auth', 403, false, "The bearer JWT's subject is not an active member of the organization in its `org_id` claim (removed, suspended, or the claim does not match a membership)."),
   file_upload_auth_required: wire('auth', 401, false, 'File uploads require an authenticated session. Sign in and retry.'),
@@ -199,23 +205,19 @@ export const ERROR_CODES = {
   database_role_unreadable: wire('permission', 403, false, 'Ablo could not introspect the database role it connects with, so it cannot verify that row-level security is enforced.'),
   database_tables_unforced_rls: wire('permission', 403, false, 'Some synced tables do not have `FORCE ROW LEVEL SECURITY` applied, so the table owner can bypass row isolation. Run `ALTER TABLE ... FORCE ROW LEVEL SECURITY` on each synced table.'),
   database_host_not_allowed: wire('permission', 403, false, "The database host resolves to a private, loopback, or link-local address, which Ablo's servers will not connect to. Use a publicly resolvable host."),
-  // Deprecated spellings of the `database_*` codes above — still emitted by
-  // older servers; kept so they classify identically. Do not use in new code.
+  // Older spellings of the `database_*` codes above, still sent by some servers
+  // and kept so they classify identically. Prefer the `database_*` codes.
   byo_role_cannot_enforce_rls: wire('permission', 403, false, 'The direct Postgres connector role cannot enforce row-level security.'),
   byo_role_unreadable: wire('permission', 403, false, 'The direct Postgres connector role could not be introspected.'),
   byo_tenant_tables_unforced_rls: wire('permission', 403, false, 'Tenant tables do not have RLS forced under the direct Postgres connector role.'),
   byo_host_not_allowed: wire('permission', 403, false, 'The direct Postgres connector host resolves to a private, loopback, or link-local address and cannot be used.'),
 
   // ── claim / claim conflict (409) ──────────────────────────────────
-  // Held-claim rejections are NOT queue-retryable (gRPC FAILED_PRECONDITION /
-  // ABORTED semantics; Replicache/Zero SETTLE a rejected mutation — reject the
-  // caller, roll back the optimistic effect — instead of resending it).
-  // Blindly re-sending the same payload cannot succeed while the lease is
-  // held, and a lease can outlive any sane retry budget. The correct recovery
-  // lives at the CALLER: take a claim (`ablo.<model>.claim` queues fairly
-  // behind the holder) or re-read and rebase. `retryable: true` here turned
-  // every cross-client claim conflict into an infinite client resend loop
-  // (~150ms storm — found by the claims journey, 2026-06-10).
+  // A rejection because another participant holds a claim is not retryable.
+  // Re-sending the same write cannot succeed while the claim is held, and a
+  // claim can outlive any reasonable retry budget, so an automatic retry would
+  // only loop. Recovery belongs to the caller: take a claim, which queues fairly
+  // behind the holder (`ablo.<model>.claim`), or re-read and rebase.
   claim_conflict: wire('claim', 409, false, 'Another participant holds a claim on this row, so the write was rejected. Take a claim with `ablo.<model>.claim` to queue fairly behind the holder, or re-read and rebase.'),
   claim_lost: wire('claim', 409, false, 'The claim held on this row was lost before the write could apply. Re-acquire the claim and retry.'),
   entity_claimed: wire('claim', 409, false, 'This row is currently claimed by another participant, so the write was blocked. Queue behind the holder with `ablo.<model>.claim`, or wait for the claim to clear.'),
@@ -229,9 +231,9 @@ export const ERROR_CODES = {
   // ── stale context / idempotency (409) ──────────────────────────────
   stale_context: wire('conflict', 409, true, "The row changed after you read it — the write's `readAt` watermark is older than the current row version. Re-read the row and retry."),
   // Raised by the functional `update(id, current => next)` form once its
-  // internal reconcile budget is exhausted — the row stayed continuously
-  // contended. Client-side: the SDK already retried; the caller decides whether
-  // to back off, raise `retries`, or move the row to the WebSocket transport.
+  // internal reconcile budget is exhausted, because the row stayed continuously
+  // contended. The SDK has already retried; the caller decides whether to back
+  // off, raise `retries`, or move the row to the WebSocket transport.
   contention_exhausted: client('conflict', 'A functional update kept losing to concurrent writes and exhausted its reconcile budget. Back off and retry, raise `retries`, or move the row to the WebSocket transport.'),
   update_aborted: client('conflict', 'The functional update was aborted via its `AbortSignal` before the write landed; nothing was written.'),
   idempotency_conflict: wire('conflict', 409, false, 'This `Idempotency-Key` was already used with a different request body. Reuse a key only to retry an identical request; otherwise generate a new one.'),
@@ -241,21 +243,20 @@ export const ERROR_CODES = {
   write_options_invalid: client('validation', 'The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `claim`) failed validation against the write-options schema.'),
   source_operation_id_required: client('validation', 'A data-source operation arrived without the entity `id` it targets.'),
   source_adapter_misconfigured: client('validation', 'The data-source ORM adapter could not map a schema model onto the backing client — the client exposes no matching delegate or model. Check that the adapter and schema agree on model names.'),
-  // Wire since 2026-07-01: the sync-server validates every pushed/polled
-  // source event before appending to the log and rejects the whole batch
-  // with this code (`param` names the offending index + field path, e.g.
-  // `events[3].entityId`). Also raised client-side by
-  // `sourceEventForOperation` when an outbox event cannot be built.
+  // The server validates every incoming data-source event before appending it
+  // to the log and rejects the whole batch with this code; `param` names the
+  // offending index and field path, such as `events[3].entityId`. It is also
+  // raised on the client when an outbound source event cannot be built.
   source_event_invalid: wire('validation', 400, false, 'A data-source event was malformed — missing or invalid id, model, entityId, type, or field value. The whole event batch was rejected and nothing was ingested; fix the offending outbox row and re-send.'),
   duration_invalid: client('validation', 'A duration value was not a number of seconds or a "500ms" | "30s" | "3m" | "24h" string.'),
   schema_definition_invalid: client('validation', 'A schema definition value was invalid (bad column identifier, non-finite backfill, or unsupported schema-JSON version).'),
   cli_invalid_arguments: client('validation', 'The CLI was invoked with an unknown flag or a malformed flag value.'),
   turn_validation_failed: wire('validation', 422, false, 'The agent turn payload failed server-side validation and was not applied.'),
   commit_operation_required: wire('validation', 400, false, 'A commit must carry `operation` or `operations`.'),
-  // Wire since 2026-07-01: both commit transports (WS `commit` frame and HTTP
-  // `/v1/commits`) validate every operation against `commitOperationSchema`
-  // (`wire/frames.ts`) and reject the whole batch with this code. `param`
-  // names the offending index + field path (e.g. `operations[3].readAt`).
+  // Both commit transports — the WebSocket `commit` frame and the HTTP
+  // `/v1/commits` endpoint — validate every operation and reject the whole batch
+  // with this code. `param` names the offending index and field path, such as
+  // `operations[3].readAt`.
   commit_operation_invalid: wire('validation', 400, false, 'A commit operation failed validation against the wire commit-operation schema — wrong field type (e.g. a string `readAt`), unknown `type`, or missing `model`. The whole batch was rejected; the error names the offending operation index and field path.'),
   commit_operation_model_required: wire('validation', 400, false, 'A commit operation is missing its `model`.'),
   commit_operations_ambiguous: wire('validation', 400, false, 'A commit supplied both `operation` and `operations`. Send one or the other, not both.'),
@@ -274,13 +275,12 @@ export const ERROR_CODES = {
   mutate_update_entity_not_found: wire('not_found', 404, false, 'The row targeted by this update does not exist — it may have been deleted since you read it. Re-read before retrying.'),
   task_id_missing: wire('server', 502, true, 'The task-create response arrived without a task id, so the result cannot be used. Retry the request.'),
 
-  // ── data integrity / DB constraints ────────────────────────────────
-  // Emitted when a write is rejected by a database integrity constraint
-  // (Postgres class-23). All NON-retryable: the same payload re-sent
-  // unchanged will fail identically, so the client must roll back, not
-  // retry. The server normalizer maps SQLSTATE → these codes and tucks the
-  // raw constraint/column/table detail into `details` rather than leaking
-  // the driver's message text onto the wire.
+  // ── data integrity / database constraints ──────────────────────────
+  // Emitted when a database integrity constraint rejects a write. None are
+  // retryable: the same payload re-sent unchanged fails identically, so the
+  // client must roll back rather than retry. The server maps the underlying SQL
+  // constraint to one of these codes and places the raw constraint, column, and
+  // table detail in `details` instead of exposing the driver's message text.
   not_null_violation: wire('validation', 400, false, 'The database rejected the write because a required column was left empty — a not-null constraint. The error details name the column; supply a value and retry.'),
   foreign_key_violation: wire('conflict', 409, false, 'The database rejected the write on a foreign-key constraint: a referenced row does not exist, or the row being deleted is still referenced by others. The error details name the constraint.'),
   unique_violation: wire('conflict', 409, false, 'The write duplicates a value that must be unique — another row already holds it. Choose a different value, or update the existing row.'),
@@ -350,18 +350,19 @@ export const ERROR_CODES = {
   // ── quota / rate limit (429) ──────────────────────────────────────
   quota_exceeded: wire('rate_limit', 429, true, 'Your organization has used up its configured usage quota. Requests will succeed again once the quota resets or the limit is raised.'),
   connection_limit_exceeded: wire('rate_limit', 429, true, 'Too many concurrent WebSocket connections for this principal or organization. Close idle connections, or retry once others drain.'),
-  // Per-CREDENTIAL request-rate limit — the fast (RPS/burst) axis, distinct from
-  // the slow-axis `quota_exceeded` (org daily/monthly usage). Keyed per API key,
-  // so one noisy key backs off without affecting the rest of the org. The
-  // `Retry-After` header carries the bucket-refill delay.
+  // A per-key request-rate limit — the fast, requests-per-second axis, as
+  // opposed to `quota_exceeded`, which is the slower organization-wide usage
+  // limit. It is keyed per API key, so one noisy key backs off without affecting
+  // the rest of the organization. The `Retry-After` header carries the delay
+  // before the next request is allowed.
   rate_limit_exceeded: wire('rate_limit', 429, true, 'This API key is sending requests faster than its rate limit allows. Slow down and retry after the delay in the `Retry-After` header.'),
 
   // ── server (5xx) ───────────────────────────────────────────────────
   internal_error: wire('server', 500, true, "Something went wrong on Ablo's side — an unexpected server error. It is safe to retry."),
   quota_lookup_failed: wire('server', 503, true, "The server could not load this organization's quota state, so the request was rejected rather than admitted unchecked. Retry shortly."),
-  // The per-key rate-limiter backend (Redis) was unreachable and the API is
-  // configured to FAIL CLOSED on that path, so the request was rejected rather
-  // than admitted unchecked. Retryable: the next attempt re-probes the backend.
+  // The rate-limiter backend was unreachable and this endpoint is configured to
+  // fail closed, so the request was rejected rather than admitted unchecked. It
+  // is retryable: the next attempt re-probes the backend.
   rate_limiter_unavailable: wire('server', 503, true, 'The rate-limiter backend is unavailable and this endpoint is configured to fail closed; retry shortly.'),
   turn_open_failed: wire('server', 500, true, 'The agent turn could not be opened on the server. It is safe to retry.'),
   turn_close_failed: wire('server', 500, true, 'The agent turn could not be closed cleanly on the server. It is safe to retry the close.'),
@@ -406,7 +407,7 @@ export const ERROR_CODES = {
   mock_mutation_failed: client('client', 'A mock mutation adapter was configured to fail.'),
   mock_unsupported_operation: client('client', 'A mock adapter received an unsupported operation.'),
 
-  // ── HTTP route edge codes (egress through app.onError) ─────────────
+  // ── HTTP route edge codes ──────────────────────────────────────────
   invalid_body: wire('validation', 400, false, 'The request body was missing, unparseable, or the wrong shape.'),
   invalid_json: wire('validation', 400, false, 'The request body was not valid JSON.'),
   capability_id_required: wire('validation', 400, false, 'A capability id is required for this request.'),
@@ -441,6 +442,7 @@ export const ERROR_CODES = {
   protocol_version_unsupported: wire('transport', 426, false, 'The client sync-protocol version is outside the range this server supports — upgrade the SDK (or the server was rolled back mid-fleet).'),
   database_unreachable: wire('validation', 400, false, "Ablo could not reach this database to check that it can stream replication. The connection string may be wrong, the host may not be reachable from Ablo's servers, or the credentials may not be accepted."),
   database_not_replication_ready: wire('validation', 400, false, 'This database is not set up for logical replication yet. Every failing item — wal_level, the publication, the replication grant, a replica identity — is listed in the error details with its exact fix. `ablo connect` prints the one-time setup; `ablo connect --check` verifies it.'),
+  replication_publication_drift: wire('validation', 400, false, 'Your schema maps to tables that are not members of the replication publication, so their changes silently never stream and the source looks frozen. The missing tables and the exact `ALTER PUBLICATION … ADD TABLE …` to add them are in the error details — Ablo never alters your database for you.'),
   query_unknown_relation: wire('validation', 400, false, 'The query references a relation the model does not define. Check the relation name against the schema.'),
   query_relation_target_unknown: wire('schema', 500, false, 'A relation in the query targets a model the schema does not define.'),
   query_invalid_identifier: wire('validation', 400, false, 'The query contained an invalid identifier.'),
@@ -474,52 +476,53 @@ export const ERROR_CODES = {
 } as const satisfies Record<string, ErrorCodeSpec>;
 
 /**
- * The closed set of registered codes, plus the `policy:${reason}` dynamic
- * family (conflict-policy rejections name their reason inline, the same way
- * Stripe carries a `decline_code` sub-detail). The constructor of
- * {@link AbloError} narrows its `code` option to this type, so a typo or an
- * unregistered code is a compile error. The wire-parse boundary casts
- * incoming strings to this type to preserve forward compatibility.
+ * The type of a valid error code: any key registered in {@link ERROR_CODES},
+ * plus the dynamic `policy:${reason}` family, where a conflict-policy rejection
+ * names its reason inline. The {@link AbloError} constructor accepts only this
+ * type, so a typo or an unregistered code is a compile-time error. Only the
+ * boundary that parses an incoming response casts an arbitrary string to this
+ * type, which preserves forward compatibility with a newer server.
  */
 export type ErrorCode = keyof typeof ERROR_CODES | `policy:${string}`;
 
-/** The subset of codes that cross the network — the actual API/MCP wire
- *  contract. HTTP/MCP boundaries map from this set; docs are generated
- *  from it. */
+/** The subset of {@link ErrorCode} values that cross the network — the codes
+ *  that make up the API contract, from which the HTTP and tool-calling
+ *  boundaries map and the public documentation is generated. */
 export type WireErrorCode = {
   [K in keyof typeof ERROR_CODES]: (typeof ERROR_CODES)[K]['surface'] extends 'wire'
     ? K
     : never;
 }[keyof typeof ERROR_CODES];
 
-/** Look up an error code's spec. Returns `undefined` for the dynamic
- *  `policy:*` family and for any forward-compat code an older SDK doesn't
- *  yet know. */
+/** Looks up the {@link ErrorCodeSpec} for a code. Returns `undefined` for the
+ *  dynamic `policy:*` family and for any newer code this client does not yet
+ *  recognize. */
 export function errorCodeSpec(code: string): ErrorCodeSpec | undefined {
   return (ERROR_CODES as Record<string, ErrorCodeSpec>)[code];
 }
 
-/** Whether a code's spec marks it retryable. Unknown / dynamic codes
- *  default to non-retryable (safe default — don't auto-retry the unknown). */
+/** Reports whether a code is marked retryable. Unknown and dynamic codes
+ *  default to non-retryable, so an unrecognized failure is never retried
+ *  automatically. */
 export function isRetryableCode(code: string): boolean {
   return errorCodeSpec(code)?.retryable ?? false;
 }
 
 /**
- * Classify a `code` into its {@link RecoveryClass} — the single discriminant
- * the connection FSM and the network probe branch on.
+ * Classifies a code into its {@link RecoveryClass} — the single value the
+ * connection layer and the network probe branch on to decide how to recover.
  *
- * The registry stays the source of truth: an explicit `spec.recovery` wins
- * (set only on the few auth codes whose remedy the status can't reveal), and
- * everything else is DERIVED from the spec so the registry stays terse:
- *   - retryable                → `transient`
- *   - 403                      → `permission`
- *   - residual `auth`-category → `auth_blocked` (the 401 credential-type codes)
- *   - otherwise / unknown      → `none`
+ * The registry is the source of truth. An explicit `recovery` on the code's spec
+ * wins; it is set only on the few authentication codes whose remedy the HTTP
+ * status cannot reveal. Every other code is derived from its spec:
+ *   - retryable                 → `transient`
+ *   - HTTP 403                  → `permission`
+ *   - remaining `auth` category → `auth_blocked` (the credential-type 401s)
+ *   - anything else, or unknown → `none`
  *
- * Unknown / dynamic `policy:*` / forward-compat codes (`spec === undefined`)
- * default to `none`, mirroring {@link isRetryableCode}'s safe default — never
- * silently treat an unrecognised code as a credential expiry or a logout.
+ * An unknown code, a dynamic `policy:*` code, or a code this client predates
+ * (no spec) defaults to `none`, the same safe default as {@link isRetryableCode}:
+ * an unrecognized code is never treated as a credential expiry or a sign-out.
  */
 export function classifyRecovery(code: string): RecoveryClass {
   const spec = errorCodeSpec(code);
@@ -532,10 +535,9 @@ export function classifyRecovery(code: string): RecoveryClass {
 }
 
 /**
- * Compile-time exhaustiveness guard: forces every {@link RecoveryClass} to be
- * acknowledged here, so adding a class to {@link RECOVERY_CLASSES} without
- * deciding its meaning is a type error rather than a silent gap. (Mirrors the
- * closed-union discipline `ERROR_CODES` itself uses via `satisfies`.)
+ * A compile-time exhaustiveness guard: it forces every {@link RecoveryClass} to
+ * be listed here, so adding a class to {@link RECOVERY_CLASSES} without deciding
+ * its meaning is a type error rather than a silent gap.
  */
 const _RECOVERY_CLASS_EXHAUSTIVE = {
   access_credential_expiry: true,

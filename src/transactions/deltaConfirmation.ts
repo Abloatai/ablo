@@ -1,12 +1,11 @@
 /**
- * Delta-confirmation tracking — the queue's "did my write's echo arrive?"
- * machinery, lifted out of `TransactionQueue.ts` as a stateful leaf.
- *
- * Owns the ack watermark (via the shared `SyncPosition`), the per-transaction
- * confirmation timeout map, and the retry-with-backoff/reconciliation policy
- * for `awaiting_delta` transactions. Talks back to the queue through the
- * minimal `DeltaConfirmationContext` interface (never the host class type),
- * so the leaf stays cycle-free and testable in isolation.
+ * Tracks whether the confirming delta for a write has arrived. It holds the
+ * acknowledgement watermark (through the shared {@link SyncPosition}), the
+ * per-transaction confirmation timeouts, and the retry-with-backoff and
+ * reconciliation policy for transactions in the `awaiting_delta` status. It
+ * reaches back to {@link TransactionQueue} only through the small
+ * {@link DeltaConfirmationContext} interface, not the queue class itself, so it
+ * has no cyclic dependency and can be tested on its own.
  */
 
 import { getContext } from '../context.js';
@@ -14,12 +13,13 @@ import type { SyncPosition } from '../sync/syncPosition.js';
 import type { Transaction } from './commitPayload.js';
 
 /**
- * The slice of the queue a confirmation tracker needs: store lookups +
- * status flips, dropping optimistic entries on confirm, the host's event
- * surface (`transaction:completed`, `reconciliation:needed`, …), the
- * connection check (timeouts re-schedule instead of escalating while
- * offline), and the shared client position (`noteAck` advances `acked`;
- * diagnostics read `applied`).
+ * The subset of {@link TransactionQueue} that the confirmation tracker needs:
+ * store lookups and status changes, removing optimistic entries once a write
+ * confirms, the queue's event emitter (`transaction:completed`,
+ * `reconciliation:needed`, and so on), a connection check (so timeouts
+ * re-schedule instead of escalating while offline), and the shared client
+ * position (`noteAck` advances the acknowledgement cursor; diagnostics read the
+ * applied cursor).
  */
 export interface DeltaConfirmationContext {
   store: {
@@ -34,16 +34,14 @@ export interface DeltaConfirmationContext {
 }
 
 export class DeltaConfirmationTracker {
-  // Delta confirmation retry config (Replicache-style exponential backoff)
-  // Max retries before requesting full reconciliation
+  // Retry configuration for delta confirmation, using exponential backoff.
+  // Maximum retries before requesting a full reconciliation.
   private static readonly DELTA_MAX_RETRIES = 5;
-  // Initial timeout (first attempt)
-  private static readonly DELTA_INITIAL_TIMEOUT_MS = 30_000;
-  // Max timeout cap (like Replicache's maxDelayMs of 60s)
+  // Upper bound on the backoff timeout.
   private static readonly DELTA_MAX_TIMEOUT_MS = 120_000;
 
-  // LINEAR PATTERN: Track delta confirmation timeouts for awaiting_delta transactions
-  // Following Replicache/PowerSync pattern: retry with backoff instead of rolling back
+  // Pending confirmation timeouts for transactions awaiting their delta. On
+  // timeout the tracker retries with backoff rather than rolling back.
   private deltaConfirmationTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
   // Track retry attempts per transaction for exponential backoff
@@ -61,12 +59,12 @@ export class DeltaConfirmationTracker {
   }
 
   /**
-   * LINEAR PATTERN: Confirm all awaiting transactions when delta with syncId >= threshold arrives.
-   * This replaces clientMutationId echoing - transactions are confirmed by sync ID threshold.
-   * @param syncId - The sync ID of the received delta
+   * Confirms every awaiting transaction whose sync-id threshold this delta
+   * meets or exceeds.
+   * @param syncId - The sync id of the received delta.
    */
   onDeltaReceived(syncId: number): void {
-    // Cursor advancing happens where the delta is APPLIED (the store calls
+    // The cursor advances where the delta is applied (the store calls
     // position.advanceApplied / advancePersisted); this hook only resolves
     // confirmation thresholds against the incoming id.
 
@@ -116,7 +114,7 @@ export class DeltaConfirmationTracker {
 
     // Log batch summary only if we confirmed something
     if (confirmedCount > 0) {
-      // Use warn for staging visibility when transactions confirm
+      // Leave a breadcrumb when transactions confirm.
       getContext().observability.breadcrumb('Transactions confirmed via delta', 'sync.transaction', 'info', {
         count: confirmedCount,
         syncId,
@@ -125,16 +123,17 @@ export class DeltaConfirmationTracker {
     }
   }
 
-  // REPLICACHE/POWERSYNC PATTERN: Schedule delta confirmation with retry + reconciliation
-  // Instead of rolling back on timeout (which destroys confirmed server state),
-  // retry with exponential backoff and request reconciliation to catch up on missed deltas.
-  // Only rollback on explicit server rejection, never on timeout.
+  // Schedule the confirmation wait for a transaction. On timeout the tracker
+  // retries with exponential backoff and requests reconciliation to catch up on
+  // missed deltas, rather than rolling back, which would discard state the
+  // server has already confirmed. A rollback happens only on an explicit server
+  // rejection, never on a timeout.
   scheduleDeltaConfirmationTimeout(tx: Transaction, timeoutMs: number): void {
     // Cancel any existing timeout for this transaction
     this.cancelDeltaConfirmationTimeout(tx.id);
 
-    // NB: deliberately NOT an async callback — the body is fully synchronous,
-    // and `setTimeout(async …)` turns any throw into an unhandled promise
+    // Deliberately not an async callback: the body is fully synchronous, and
+    // `setTimeout(async …)` would turn any throw into an unhandled promise
     // rejection instead of a catchable synchronous error.
     const timeoutHandle = setTimeout(() => {
       const currentTx = this.ctx.store.get(tx.id);
@@ -157,13 +156,6 @@ export class DeltaConfirmationTracker {
       }
 
       const retryCount = this.deltaConfirmationRetries.get(tx.id) ?? 0;
-      const diagnosis =
-        this.lastSeenSyncId === 0
-          ? 'No deltas received - delta pipeline may be broken'
-          : currentTx.syncIdNeededForCompletion &&
-              this.lastSeenSyncId < currentTx.syncIdNeededForCompletion
-            ? 'Delta not yet received - may be lost or delayed'
-            : 'Delta should have confirmed - possible race condition';
 
       getContext().observability.captureReconciliation({
         reason: 'delta_timeout',
@@ -176,16 +168,17 @@ export class DeltaConfirmationTracker {
       });
 
       if (retryCount < DeltaConfirmationTracker.DELTA_MAX_RETRIES) {
-        // RETRY: Request reconciliation and re-schedule with exponential backoff
-        // The server already committed this mutation — we just need the delta to arrive
+        // Retry: request reconciliation and re-schedule with exponential
+        // backoff. The server has already committed the mutation; only the
+        // delta is outstanding.
         this.deltaConfirmationRetries.set(tx.id, retryCount + 1);
         this.deltaConfirmationTimeouts.delete(tx.id);
 
         // Exponential backoff: 30s → 60s → 120s → 120s → 120s (capped)
         const nextTimeout = Math.min(timeoutMs * 2, DeltaConfirmationTracker.DELTA_MAX_TIMEOUT_MS);
 
-        // Emit reconciliation request so SyncedStore can cycle the WebSocket
-        // to trigger delta catch-up from the server
+        // Request reconciliation so the client can cycle the connection and
+        // catch up on missed deltas from the server.
         this.ctx.emit('reconciliation:needed', {
           reason: 'delta_confirmation_timeout',
           txId: tx.id,
@@ -207,10 +200,10 @@ export class DeltaConfirmationTracker {
 
         this.scheduleDeltaConfirmationTimeout(tx, nextTimeout);
       } else {
-        // LINEAR PATTERN: Retries exhausted — persist to IndexedDB instead of rolling back.
-        // The transaction succeeded on the server (HTTP 200), so the data exists server-side.
-        // Persist the awaiting state so it survives tab close. On next session, the WebSocket
-        // reconnect + delta catch-up will naturally confirm it (like Linear's IndexedDB caching).
+        // Retries exhausted: persist the awaiting state instead of rolling back.
+        // The commit succeeded on the server, so the data exists there. Saving
+        // the awaiting state lets it survive the page closing; on the next
+        // session, reconnecting and catching up on deltas will confirm it.
         this.deltaConfirmationRetries.delete(tx.id);
         this.deltaConfirmationTimeouts.delete(tx.id);
 
@@ -222,7 +215,7 @@ export class DeltaConfirmationTracker {
           syncIdNeeded: currentTx.syncIdNeededForCompletion,
         });
 
-        // Emit persist event — SyncClient handles the IDB write
+        // Emit the persist event; the client performs the write to local storage.
         this.ctx.emit('transaction:persist_awaiting', {
           txId: tx.id,
           model: tx.modelName,
@@ -258,10 +251,9 @@ export class DeltaConfirmationTracker {
   }
 
   /**
-   * Tear down every armed confirmation timer (30–120s each, one per
-   * in-flight transaction). Called from `TransactionQueue.dispose()` —
-   * without it a disposed queue kept the Node process alive and fired
-   * callbacks against an already-cleared store (T1.19).
+   * Clears every armed confirmation timer, one per in-flight transaction.
+   * {@link TransactionQueue.dispose} calls this; without it a disposed queue
+   * would keep the process alive and fire callbacks against a cleared store.
    */
   dispose(): void {
     for (const timeoutHandle of this.deltaConfirmationTimeouts.values()) {

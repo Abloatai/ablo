@@ -1,14 +1,12 @@
 /**
- * `@abloatai/ablo/source` — the Data Source barrel.
+ * The entry point for the Data Source API, re-exporting the pieces you need from
+ * their individual modules:
  *
- * Pure re-exports only: the implementation lives in cohesive leaf modules so
- * sibling source/* files (`pushQueue.ts`, `adapter.ts`, `contract.ts`, the ORM
- * adapters) import the leaves directly instead of routing a runtime circular
- * dependency through this barrel.
- *
- *   - `types.ts`   — shared wire/handler types + `sourceEventForOperation`
- *   - `signing.ts` — Standard Webhooks request signing/verification
+ *   - `types.ts`   — the shared wire and handler types, plus `sourceEventForOperation`
+ *   - `signing.ts` — request signing and verification
  *   - `factory.ts` — the `abloSource()` / `dataSource()` endpoint factory
+ *
+ * Import from here; the sibling modules import one another directly.
  */
 
 export {
@@ -97,10 +95,10 @@ export {
   type PushQueueStorage,
 } from './pushQueue.js';
 
-// ── Reverse-channel connector (outbound transport for the commit/load/list leg) ──
-// The dial-out counterpart to `createPushQueue`. Lets a customer serve Data
-// Source `commit`/`load`/`list` from localhost or a locked-down VPC with no
-// public inbound URL — see `connector-protocol.ts`.
+// The reverse-channel connector — an outbound transport for the load, list, and
+// commit leg, and the dial-out counterpart to `createPushQueue`. It lets you serve
+// a Data Source from localhost or a private network that has no public inbound
+// URL. See `connectorProtocol.ts` for the frames it exchanges.
 export {
   createSourceConnector,
   DEFAULT_RECONNECT_SCHEDULE,
@@ -125,9 +123,9 @@ export {
   type RequestFrame,
   type ResponseFrame,
   type ErrorFrame,
-} from './connector-protocol.js';
+} from './connectorProtocol.js';
 
-// ── Data Source adapter interface (Zod contract + one interface, per-ORM packages) ──
+// The Data Source adapter interface and its Zod contract, with per-ORM implementations.
 export {
   type DataSourceAdapter,
   type AdapterReadRequest,

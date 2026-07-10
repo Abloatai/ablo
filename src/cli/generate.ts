@@ -1,12 +1,13 @@
 /**
- * `ablo generate` — emit TypeScript types from the local schema.
+ * Implements `ablo generate`, which emits TypeScript types from your local
+ * schema.
  *
  *   ablo generate [--schema ablo/schema.ts] [--export schema] [--out ablo/generated.ts]
  *
- * Loads the same `defineSchema(...)` that `ablo schema push` uploads, lowers it
- * to row interfaces + an `AbloSchema` map via `generateTypes`, and writes them.
- * Generating from the SAME schema that's pushed is the point: the types the app
- * codes against are provably the ones the database and sync layer enforce.
+ * It loads the same `defineSchema(...)` that `ablo push` uploads, lowers it to
+ * row interfaces and an `AbloSchema` map with `generateTypes`, and writes the
+ * result. Because the types come from the very schema you push, the types your
+ * app compiles against are the ones the database and sync layer enforce.
  */
 
 import { AbloValidationError } from '../errors.js';
@@ -26,7 +27,7 @@ const DEFAULT_SCHEMA_PATH = 'ablo/schema.ts';
 const DEFAULT_EXPORT = 'schema';
 const DEFAULT_OUT = 'ablo/generated.ts';
 
-/** Parse `generate` flags. Pure — unit-tested without touching disk. */
+/** Parses the `generate` command's flags into {@link GenerateArgs}. Does no I/O, so it can be unit-tested without touching disk. */
 export function parseGenerateArgs(argv: readonly string[]): GenerateArgs {
   let schemaPath = DEFAULT_SCHEMA_PATH;
   let exportName = DEFAULT_EXPORT;

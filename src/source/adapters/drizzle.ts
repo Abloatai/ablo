@@ -1,32 +1,37 @@
 /**
- * Drizzle Data Source adapter. Same adapter interface + conformance as `prismaDataSource`,
- * built against Drizzle's REAL API (read from drizzle-orm's own source/docs):
- *   - `db.transaction(async (tx) => …)` — interactive transaction (commit/rollback).
- *   - `db.execute(sql`…`)` — parametrized raw SQL; `sql.identifier()` safely quotes
- *     dynamic table/column names, `sql`${value}`` parametrizes values.
+ * The Drizzle adapter for the data-source interface. It implements the same
+ * {@link DataSourceAdapter} contract as {@link prismaDataSource} and passes the
+ * same conformance suite, built against Drizzle's query API:
+ *   - `db.transaction(async (tx) => …)` runs an interactive transaction that
+ *     commits or rolls back as a unit.
+ *   - `db.execute(sql`…`)` runs parameterized raw SQL; `sql.identifier()` safely
+ *     quotes dynamic table and column names, and `sql`${value}`` parameterizes
+ *     values.
  *
- * SCHEMA-DRIVEN COLUMNS. Unlike Prisma — whose delegate applies the model's
- * `@map` for free — this adapter writes raw SQL, so it would otherwise bypass any
- * field→column translation. It therefore derives every table + column name from
- * the SAME rule the provisioner uses (`generateProvisionPlan`):
+ * Table and column names come from your schema, not from a hand-written Drizzle
+ * table. Because this adapter issues raw SQL, it would otherwise bypass any
+ * field-to-column translation, so it derives every name from the same rule the
+ * table provisioner uses:
  *   table  = `model.tableName ?? key`
- *   column = `fieldMeta.column ?? camelToSnake(field)`   (+ the model's tenancy column)
- * so `ablo migrate` (which emits `operator_id`) and this adapter (which now writes
- * `operator_id`) COMPOSE. Define the schema once, point Ablo at your Postgres —
- * no hand-written parallel Drizzle table. The adapter is the translation boundary:
- * its public surface (rows in/out, outbox `data`) is field-keyed (the SDK shape);
- * the physical columns it reads/writes are snake_case.
+ *   column = `fieldMeta.column ?? camelToSnake(field)`   (plus the tenancy column)
+ * This keeps the tables `ablo migrate` creates (for example `operator_id`) and the
+ * columns this adapter reads and writes in agreement. You define the schema once
+ * and point the engine at your Postgres database. The adapter is the translation
+ * boundary: the rows it accepts and returns, and the outbox `data` it writes, are
+ * keyed by field name, while the physical columns it touches are snake_case.
  *
- * IMPORTANT GOTCHAS (from drizzle-orm docs):
- *   1. Interactive `db.transaction` requires a driver that supports it. Neon's
- *      `neon-http` driver does NOT (single-shot only) — use `neon-serverless`
- *      (WebSocket) or `pg`. With neon-http the commit path throws at runtime.
- *   2. `db.execute` result shape is driver-specific (postgres-js returns an
- *      array-like RowList; node-postgres returns `{ rows }`). `rowsOf()`
+ * Two things to know about drivers:
+ *   1. Interactive `db.transaction` needs a driver that supports it. Neon's
+ *      `neon-http` driver is single-shot and does not, so use `neon-serverless`
+ *      (over WebSocket) or `pg`; under `neon-http` the commit path throws at
+ *      runtime.
+ *   2. The `db.execute` result shape is driver-specific — `postgres-js` returns an
+ *      array-like row list, while `node-postgres` returns `{ rows }`. `rowsOf`
  *      normalizes both.
  *
- * We use `sql` + `db.execute` for ALL writes (not the fluent builder) so the
- * adapter is one small, fully-typed unit with no per-driver builder generics.
+ * Every write goes through `sql` and `db.execute` rather than the fluent builder,
+ * which keeps the adapter one small, fully typed unit with no per-driver builder
+ * generics.
  */
 
 import { AbloValidationError } from '../../errors.js';
@@ -71,11 +76,12 @@ const identList = (cols: readonly string[]): SQL =>
   sql.join(cols.map((c) => sql.identifier(c)), sql`, `);
 
 /**
- * Per-model name resolution, precomputed once from the schema. `table` is the
- * physical table; the override maps hold ONLY the cases where the column name
- * diverges from `camelToSnake(field)` (an explicit `field.from('…')` or a custom
- * tenancy column) — every other field falls back to the pure casing rule, so the
- * maps stay tiny and the reverse (`snakeToCamel`) inverts the common case.
+ * Per-model name resolution, computed once from the schema. `table` is the physical
+ * table name. The override maps record only the fields whose column name diverges
+ * from `camelToSnake(field)` — an explicit `field.from('…')` or a custom tenancy
+ * column — while every other field falls back to the plain casing rule. Keeping
+ * only the exceptions makes the maps small and lets the reverse direction
+ * (`snakeToCamel`) invert the common case without a lookup.
  */
 interface ModelColumns {
   readonly table: string;
@@ -122,13 +128,13 @@ export function drizzleDataSource<S extends SchemaRecord>(
   const fieldFor = (mc: ModelColumns, column: string): string =>
     mc.columnToField.get(column) ?? snakeToCamel(column);
 
-  /** Field-keyed (SDK shape) → column-keyed (physical), for INSERT/UPDATE. */
+  /** Field-keyed row to column-keyed row, for INSERT and UPDATE values. */
   const toColumns = (mc: ModelColumns, row: Row): Row => {
     const out: Row = {};
     for (const k of Object.keys(row)) out[columnFor(mc, k)] = row[k];
     return out;
   };
-  /** Column-keyed (RETURNING * / SELECT *) → field-keyed (SDK shape), for reads + results. */
+  /** Column-keyed row (from `RETURNING *` or `SELECT *`) back to a field-keyed row, for reads and results. */
   const toFields = (mc: ModelColumns, row: Row): Row => {
     const out: Row = {};
     for (const k of Object.keys(row)) out[fieldFor(mc, k)] = row[k];

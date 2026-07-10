@@ -1,45 +1,39 @@
 /**
- * Credential POLICY — the single source of truth for "what KIND of credential
- * did the caller hand us, and what do we DO with it at connect time".
+ * Decides what a credential is and how to use it when a client connects. A
+ * caller configures an Ablo client with an API key, and this module answers two
+ * questions about that value: which of the four key kinds it is, and which
+ * connect-time route it takes.
  *
- * Before this module the prefix-dispatch decision (`sk_`/`ek_`/`rk_`/`pk_`) was
- * re-implemented with raw `startsWith()` sniffs in ~5 places (identity.ts ×3,
- * auth.ts browser guard, cli/dev.ts, cli/push.ts) and the connect-time routing
- * lived as a 4-branch if/elif tree inside `resolveParticipantIdentity`. Folding
- * the policy here keeps the kind-taxonomy and the connect decision in ONE place;
- * the consumers below just call into it.
+ * The routing decision is the only thing that lives here. This module does not
+ * perform the network calls that mint or exchange credentials;
+ * {@link resolveCredential} delegates those to primitives the caller supplies,
+ * so the decision of what to do stays separate from the work of doing it.
  *
- * This module is deliberately POLICY-ONLY. It does NOT own the auth primitives
- * (`exchangeApiKey` / `mintUserSessionKey` / `resolveIdentity`), the credential
- * lifecycle (`startCredentialLifecycle` / refresh scheduler), or the connection
- * FSM — those are correctly distributed consumers. `resolveCredential` DELEGATES
- * to injected primitives rather than reimplementing any HTTP mint call.
- *
- * Browser-safe: `classifyCredentialKind` is a pure-string helper and MUST NOT
- * import the Node-only `keys` module (`node:crypto`). The key-prefix contract it
- * encodes mirrors `keys/index.ts`'s `KIND_BY_PREFIX` (the Stripe-style model:
- * sk_=secret, rk_=restricted, ek_=ephemeral, pk_=publishable) but stays a plain
- * prefix lookup so it can ship in the client bundle.
+ * {@link classifyCredentialKind} is a plain string check with no Node
+ * dependencies, so it is safe to run in a browser bundle. It recognizes the key
+ * prefixes `sk_` (secret), `rk_` (restricted), `ek_` (ephemeral), and `pk_`
+ * (publishable), but does not validate a key's checksum or environment segment.
  */
 
 import { AbloAuthenticationError } from '../errors.js';
 import type { exchangeApiKey, mintUserSessionKey, resolveIdentity } from './index.js';
 
 /**
- * Structural signature of `client/auth.ts`'s `resolveApiKeyValue` — declared
- * locally (not `typeof`-imported) because `client/auth.ts` runtime-imports
- * {@link classifyCredentialKind} from THIS module; a back-edge here was the
- * SDK's last auth-layer import cycle. The setter shape matches `ApiKeySetter`.
- * `identity.ts` passes the real function; structural typing keeps them bound.
+ * The shape of the function that resolves a configured `apiKey` — which may be a
+ * string or an async setter — down to a concrete string, or `null` when no key
+ * is available. It is declared here structurally, rather than imported, to avoid
+ * a circular dependency between this module and the code that supplies the
+ * function. Any function with a matching shape satisfies it.
  */
 type ResolveApiKeyValueFn = (
   apiKey: string | (() => Promise<string | null>) | null,
 ) => Promise<string | null>;
 
 /**
- * The four Ablo API-key kinds (Stripe-style). Prefix contract — kept in lockstep
- * with `keys/index.ts` `API_KEY_KINDS` / `KIND_BY_PREFIX`, but declared locally
- * so this browser-safe module never pulls in `node:crypto`.
+ * The four kinds of Ablo API key, one per prefix: `sk_` is secret, `ek_` is
+ * ephemeral, `rk_` is restricted, and `pk_` is publishable. The list is declared
+ * here, rather than imported, so this browser-safe module stays free of Node-only
+ * dependencies.
  */
 export type CredentialKind = 'secret' | 'ephemeral' | 'restricted' | 'publishable';
 
@@ -51,14 +45,12 @@ const KIND_BY_PREFIX: readonly (readonly [string, CredentialKind])[] = [
 ];
 
 /**
- * Lightweight, browser-safe prefix → kind classifier. The SINGLE source of truth
- * for prefix dispatch across the SDK (connect routing, the browser guard, the
- * CLI key-gating). Returns `null` for a value that carries no recognized Ablo
- * key prefix (a caller-supplied capability/auth token, an empty/garbage value).
- *
- * Pure string check — does NOT validate the checksum or environment segment
- * (that's `keys/index.ts` `parseApiKey`, which is Node-only). This is only the
- * "which of the four buckets" decision.
+ * Classifies a credential by its prefix, returning its {@link CredentialKind}, or
+ * `null` when the value carries no recognized Ablo key prefix — for example a
+ * capability or auth token the caller supplied, or an empty string. This is a
+ * plain string check that is safe to run in a browser; it decides only which of
+ * the four kinds a value is, and does not validate the key's checksum or
+ * environment segment.
  */
 export function classifyCredentialKind(value: string): CredentialKind | null {
   for (const [prefix, kind] of KIND_BY_PREFIX) {
@@ -70,12 +62,12 @@ export function classifyCredentialKind(value: string): CredentialKind | null {
 // ─────────────────────────────────────────────────────────────────────
 
 /**
- * Auth primitives injected into {@link resolveCredential}. Each is the canonical
- * implementation from `auth/index.ts` / `client/auth.ts`; the policy DELEGATES to
- * them so the HTTP mint logic stays in ONE place and only the routing decision
- * lives here. `mintUserSessionKey` is carried for completeness of the primitive
- * surface (the browser/session path mints it before connect); `resolveCredential`
- * never re-mints it — a pre-minted `ek_` arrives ready to use.
+ * The set of authentication primitives that {@link resolveCredential} delegates
+ * to. Injecting them keeps the network calls that mint and exchange credentials
+ * in one place and leaves this module responsible only for the routing decision.
+ * {@link resolveCredential} never calls `mintUserSessionKey` itself — an
+ * ephemeral `ek_` key is minted before the client connects and arrives ready to
+ * use — but it is listed here to describe the full primitive surface.
  */
 export interface CredentialPrimitives {
   readonly exchangeApiKey: typeof exchangeApiKey;
@@ -87,10 +79,10 @@ export interface CredentialPrimitives {
 export interface ResolveCredentialContext {
   readonly primitives: CredentialPrimitives;
   /**
-   * Build the argument bag for the hosted exchange. identity.ts owns the baseUrl
-   * derivation + participant scope, so it supplies the args; the policy invokes
-   * `primitives.exchangeApiKey` with them. The `apiKey` is filled in by the policy
-   * from the resolved value.
+   * The arguments for the credential exchange, minus the `apiKey`. The caller
+   * derives the base URL and participant scope and supplies them here;
+   * {@link resolveCredential} fills in the resolved `apiKey` and calls
+   * `exchangeApiKey`.
    */
   readonly exchangeArgs: Omit<
     Parameters<typeof exchangeApiKey>[0],
@@ -107,24 +99,24 @@ export interface ResolveCredentialInput {
   readonly capabilityToken: string | undefined;
   /** Configured static `authToken`. */
   readonly authToken: string | null;
-  /** True once the caller knows its own identity (legacy explicit path). */
+  /** True when the caller already knows its own identity, so no server round-trip is needed to resolve it. */
   readonly hasExplicitIdentity: boolean;
 }
 
 /**
- * The connect-time decision, expressed as a discriminated union over the routing
- * kind (NOT the raw key kind — `ek_` and `rk_` collapse into the same
- * `pre-minted` route, and a bare capability token routes the same way). The
- * caller (`identity.ts`) switches on `kind` and performs the scope/side-effect
- * wiring each route needs.
+ * The outcome of the connect-time decision, as a discriminated union over the
+ * route rather than the key kind: an `ek_` and an `rk_` key both take the
+ * `pre-minted` route, as does a bare capability token. The caller switches on
+ * `kind` and wires up the scope and side effects each route needs.
  *
- * Fields carry exactly what each branch in the old if/elif tree produced:
- *   - `getBearer`        — the token to authenticate the bootstrap/`/auth/*` HTTP
- *                          and to seed the credential source with.
- *   - `expiresAtMs`      — exchange expiry (drives the refresh scheduler) or null
- *                          when the credential never expires / nothing to refresh.
- *   - `controlPlaneKey`  — the ORIGINAL configured apiKey when the route minted
- *                          via exchange (so a refresh can re-mint), else null.
+ * Every variant carries the same three fields:
+ *   - `getBearer` — the token used to authenticate the bootstrap and `/auth/*`
+ *     requests, and to seed the credential source.
+ *   - `expiresAtMs` — when the credential expires, which drives the refresh
+ *     scheduler, or `null` when there is nothing to refresh.
+ *   - `controlPlaneKey` — the original configured API key when the route minted
+ *     its bearer through an exchange, so a refresh can mint again; otherwise
+ *     `null`.
  */
 export type ResolvedCredential =
   /** `pk_` — long-lived browser-safe read-only project key. Used directly as the
@@ -146,16 +138,16 @@ export type ResolvedCredential =
       /** The configured apiKey (string or setter) — read fresh on each refresh. */
       readonly controlPlaneKey: string | (() => Promise<string | null>);
     }
-  /** Pre-minted `ek_`/`rk_` OR an explicit capability/auth token — used AS-IS as
-   *  the bearer (never exchanged). Identity resolved via `/auth/identity`. */
+  /** A pre-minted `ek_` or `rk_` key, or an explicit capability or auth token,
+   *  used as the bearer without any exchange. Identity resolved via `/auth/identity`. */
   | {
       readonly kind: 'pre-minted';
       readonly getBearer: string;
       readonly expiresAtMs: null;
       readonly controlPlaneKey: null;
     }
-  /** Legacy explicit — caller knows its own organizationId + user/agentId. No
-   *  server round-trip; the (optional) bearer is the initial cap token. */
+  /** The caller already knows its own organization and user or agent id, so there
+   *  is no server round-trip; the optional bearer is the initial capability token. */
   | {
       readonly kind: 'explicit';
       readonly getBearer: string | undefined;
@@ -164,19 +156,22 @@ export type ResolvedCredential =
     };
 
 /**
- * Connect-time credential routing — absorbs the decision tree that used to live
- * inline in `resolveParticipantIdentity`. Classifies the configured apiKey, then
- * routes to one of four outcomes, DELEGATING the actual HTTP exchange to the
- * injected `exchangeApiKey` primitive. The caller switches on
- * `ResolvedCredential.kind` to perform scope wiring + scheduler setup.
+ * Routes a configured API key to its connect-time outcome. It classifies the
+ * key, then returns one of four {@link ResolvedCredential} variants, delegating
+ * any credential exchange to the injected `exchangeApiKey` primitive. The caller
+ * switches on the result's `kind` to wire up scope and the refresh scheduler.
  *
- * Routing (preserves the old branch order exactly):
- *   0. `pk_` + no explicit cap token → `publishable` (direct bearer, no refresh).
- *   1. exchangeable apiKey (any prefix that ISN'T a pre-minted `ek_`/`rk_`) +
- *      no explicit cap token → `exchange` (hosted-cloud round-trip + scheduler).
- *   2. otherwise, identity unknown → `pre-minted` (use the cap token as-is). Throws
- *      `session_expired` when there is no token to authenticate `/auth/identity`.
- *   3. otherwise (identity known) → `explicit` (legacy self-hosted, no round-trip).
+ * The routes, in the order they are tried:
+ *   0. A `pk_` key with no explicit capability token becomes `publishable`: used
+ *      directly as the bearer, with no refresh.
+ *   1. Any other exchangeable key (one that is not a pre-minted `ek_` or `rk_`)
+ *      with no explicit capability token becomes `exchange`: a round-trip mints a
+ *      capability token, and the refresh scheduler renews it before it expires.
+ *   2. Otherwise, when the caller's identity is not yet known, the result is
+ *      `pre-minted`: the capability token is used as-is. Throws `session_expired`
+ *      when there is no token to authenticate `/auth/identity`.
+ *   3. Otherwise, when the caller already knows its identity, the result is
+ *      `explicit`, with no round-trip.
  */
 export async function resolveCredential(
   input: ResolveCredentialInput,
@@ -186,10 +181,9 @@ export async function resolveCredential(
 
   const kind = apiKeyValue != null ? classifyCredentialKind(apiKeyValue) : null;
 
-  // A pre-minted capability bearer (`ek_` ephemeral / `rk_` restricted) is NOT
-  // exchangeable — it was already minted into the credential source before
-  // connect and must be USED DIRECTLY as the bearer (Route 2), never sent through
-  // `exchangeApiKey` (Route 1, which expects an `sk_`).
+  // A pre-minted capability bearer (an ephemeral `ek_` or restricted `rk_` key)
+  // is not exchangeable: it was minted before connect and is used directly as the
+  // bearer on Route 2, never sent through `exchangeApiKey`, which expects an `sk_`.
   const isPreMintedCapabilityBearer =
     kind === 'ephemeral' || kind === 'restricted';
 
@@ -199,8 +193,9 @@ export async function resolveCredential(
     authToken ??
     undefined;
 
-  // Route 0: publishable key (`pk_`) — long-lived, browser-safe, READ-ONLY. Used
-  // DIRECTLY as the bearer; never exchanged → never expires → nothing to refresh.
+  // Route 0: a publishable `pk_` key — long-lived, browser-safe, and read-only.
+  // Used directly as the bearer; it is never exchanged, so it never expires and
+  // there is nothing to refresh.
   if (apiKeyValue != null && kind === 'publishable' && capabilityToken == null) {
     return {
       kind: 'publishable',
@@ -210,8 +205,9 @@ export async function resolveCredential(
     };
   }
 
-  // Route 1: hosted-cloud (secret/exchangeable apiKey, no caller-supplied cap
-  // token). A pre-minted `ek_`/`rk_` is NOT exchangeable → falls through.
+  // Route 1: an exchangeable key (such as a secret `sk_`) with no caller-supplied
+  // capability token. A pre-minted `ek_` or `rk_` is not exchangeable and falls
+  // through to the next route.
   if (
     apiKeyValue != null &&
     capabilityToken == null &&
@@ -230,15 +226,15 @@ export async function resolveCredential(
     };
   }
 
-  // Route 2: self-derived / pre-minted (use the cap token as-is). Reached when
-  // identity is NOT caller-supplied.
+  // Route 2: pre-minted — use the capability token as-is. Reached when the
+  // caller's identity was not supplied.
   if (!hasExplicitIdentity) {
     if (initialCapToken == null) {
-      // No apiKey to exchange (Route 1) and no caller-supplied identity (Route 3),
-      // so `initialCapToken` is the only thing that could authenticate
-      // `/auth/identity`. Absent — commonly the function `apiKey` resolver
-      // returning `null` (no/expired session) — surface the real, re-auth-able
-      // condition locally instead of making a doomed round-trip.
+      // With no key to exchange and no caller-supplied identity, this token is the
+      // only thing that could authenticate `/auth/identity`. When it is absent —
+      // commonly a function `apiKey` resolver returning `null` for a missing or
+      // expired session — report the re-authenticable condition here instead of
+      // making a round-trip that is bound to fail.
       throw new AbloAuthenticationError(
         'No auth token available to resolve identity — the session token is ' +
           'missing or expired. Ensure your `apiKey` resolver returns a valid token, or ' +
@@ -254,8 +250,8 @@ export async function resolveCredential(
     };
   }
 
-  // Route 3: legacy explicit (self-hosted — caller knows its own
-  // organizationId + user/agentId).
+  // Route 3: explicit — the caller already knows its own organization and user
+  // or agent id.
   return {
     kind: 'explicit',
     getBearer: initialCapToken,

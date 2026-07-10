@@ -1,15 +1,15 @@
 /**
- * Auth + URL resolution for `Ablo()`.
+ * Authentication and URL resolution for the `Ablo()` client.
  *
- * Mirrors the small, focused helpers Anthropic ships in `client.ts`
- * (`apiKeyAuth`, `bearerAuth`, `validateHeaders`). Each function does
- * one thing — resolve a value with the right precedence, or fail
- * with an actionable message — so the constructor reads as a
- * sequence of named decisions rather than a stream of `??`-chains.
+ * Each function here makes one decision: it resolves a configuration value with
+ * the right precedence, or fails with an actionable message. Together they let
+ * the client constructor read as a sequence of named steps rather than a chain
+ * of fallbacks.
  *
- * Customer-facing env surface is intentionally small: `ABLO_API_KEY`
- * is the only environment fallback. Other routing/auth overrides are
- * explicit options so generated apps do not accrete hidden env knobs.
+ * The environment surface is deliberately small: `ABLO_API_KEY` is the only
+ * value read from the environment. Every other routing or authentication
+ * override is an explicit option, so an app never picks up hidden behavior from
+ * a stray environment variable.
  */
 
 import { AbloAuthenticationError, AbloValidationError } from '../errors.js';
@@ -18,19 +18,19 @@ import { ABLO_HOSTED_API_DOMAIN, ABLO_DEFAULT_BASE_URL } from './hostedEndpoints
 import { isCredentialEndpoint, createEndpointCredentialResolver } from './credentialEndpoint.js';
 
 /**
- * The credential-resolver callable contract. Defined in the `credentialEndpoint`
- * leaf (which produces one) and re-exported here — the historical home — so
- * `./auth` importers keep working while the module graph stays one-directional
- * (`auth → credentialEndpoint`, never back). See there for the full contract.
+ * The credential-resolver callable type. It is defined alongside
+ * {@link createEndpointCredentialResolver} in `./credentialEndpoint` and
+ * re-exported here so importers of this module keep working. See that module
+ * for the full contract.
  */
 import type { ApiKeySetter } from './credentialEndpoint.js';
 export type { ApiKeySetter };
 
 export interface AuthResolveInput {
   /**
-   * The full options bag the caller passed to `Ablo()`. Resolvers
-   * read only the fields they care about; the wide shape avoids
-   * passing N parameters into each helper.
+   * The full set of options the caller passed to the client constructor. Each
+   * resolver reads only the fields it needs; passing the whole object avoids
+   * threading many separate parameters through every helper.
    */
   readonly options: {
     readonly apiKey?: string | ApiKeySetter | null;
@@ -58,13 +58,12 @@ export function readProcessEnv(): Record<string, string | undefined> {
 export function resolveApiKey(
   input: AuthResolveInput,
 ): string | ApiKeySetter | null {
-  // `authEndpoint` — the NAMED session-mint field (Liveblocks `authEndpoint` /
-  // Ably `authUrl`): a route string the SDK exchanges for a short-lived token,
-  // or an async resolver for custom exchanges. Resolved HERE — the one
-  // resolution point all three factory branches (WS, `transport: 'http'`,
-  // protocol client) share — into an `ApiKeySetter`, so every downstream
-  // consumer sees the familiar resolver and the credential lifecycle drives
-  // renewal off it.
+  // `authEndpoint` is the option that names a session-mint route: a URL the
+  // client exchanges for a short-lived token, or an async resolver for custom
+  // exchanges. It is resolved into an `ApiKeySetter` here — the single point
+  // shared by every client variant (WebSocket, HTTP, and protocol clients) — so
+  // every downstream consumer sees the same resolver and the credential
+  // lifecycle drives renewal off it.
   const endpoint = input.options.authEndpoint;
   const configured = input.options.apiKey;
   if (endpoint != null) {
@@ -86,10 +85,10 @@ export function resolveApiKey(
     }
     return createEndpointCredentialResolver(endpoint);
   }
-  // `apiKey` also accepts the endpoint-string shape directly (same detection —
-  // key strings are `sk_`/`ek_`/`rk_`-prefixed so the shapes can't collide).
-  // Deliberately only the EXPLICIT option: an `ABLO_API_KEY` env value is
-  // always a literal key, never endpoint-detected.
+  // `apiKey` also accepts the endpoint-string form directly, detected the same
+  // way — key strings are prefixed (`sk_`/`ek_`/`rk_`), so the two shapes never
+  // collide. Only the explicit option is treated this way: an `ABLO_API_KEY`
+  // environment value is always a literal key, never an endpoint.
   if (typeof configured === 'string' && isCredentialEndpoint(configured)) {
     return createEndpointCredentialResolver(configured);
   }
@@ -128,7 +127,7 @@ function keyPrefix(key: string): string {
   return `${key.slice(0, 12)}…`;
 }
 
-/** Infer sandbox/production from Ablo key prefixes without importing CLI code. */
+/** Infer the sandbox or production mode from an Ablo key's prefix. */
 export function modeFromApiKey(key: string): CliMode | undefined {
   if (/^(sk|rk)_test_/.test(key)) return 'sandbox';
   if (/^(sk|rk)_live_/.test(key)) return 'production';
@@ -309,40 +308,39 @@ export function describeCliKeyMismatch(
 }
 
 /**
- * Resolve the direct-URL connector's Postgres connection string.
+ * Resolves the Postgres connection string for the direct-connection option, or
+ * `null` when none was given.
  *
- * `databaseUrl` is an EXPLICIT, opt-in option: Ablo registers a dedicated
- * tenant database only when the caller passes it to `Ablo(...)`. It is NOT
- * read from `process.env.DATABASE_URL` — per this module's invariant
- * (`ABLO_API_KEY` is the only environment fallback), an app's `DATABASE_URL`
- * (commonly set for Prisma/Drizzle/docker) must never silently flip the client
- * into connection-string mode. The default Data Source path keeps `DATABASE_URL`
- * in the app and exposes `dataSource(...)`; that path leaves this null.
- * `warnIfDatabaseUrlEnvIgnored` nudges callers who set the env but omitted the option.
+ * `databaseUrl` is opt-in: the client registers a dedicated database only when
+ * the caller passes it explicitly. It is never read from
+ * `process.env.DATABASE_URL`, because this module treats `ABLO_API_KEY` as the
+ * one environment fallback — an app's `DATABASE_URL`, commonly set for other
+ * tools, must not silently switch the client into connection-string mode. The
+ * default path leaves `DATABASE_URL` untouched and reads through `dataSource(...)`
+ * instead, so this returns `null`. {@link warnIfDatabaseUrlEnvIgnored} nudges a
+ * caller who set the environment variable but omitted the option.
  */
 export function resolveDatabaseUrl(input: AuthResolveInput): string | null {
   return input.options.databaseUrl ?? null;
 }
 
 /**
- * One-time migration nudge for the dropped `DATABASE_URL` env fallback.
+ * Warns once when `DATABASE_URL` is set in the environment but `databaseUrl` was
+ * not passed as an option.
  *
- * Earlier versions silently adopted `process.env.DATABASE_URL` when `databaseUrl`
- * was not passed, registering a direct connector behind the caller's back — which
- * surprised any app that keeps `DATABASE_URL` for another tool (Prisma, Drizzle,
- * docker-compose) and, on localhost, tried to register a database Ablo's cloud
- * cannot reach. The env value is now ignored; this points the developer at the
- * explicit option instead of flipping their mode for them. Warns once per process
- * so it never spams, and falls back to `console.warn` when no logger is supplied
- * (the `transport: 'api'` client has none).
+ * The client does not adopt `process.env.DATABASE_URL` on its own, because that
+ * value is commonly set for other tools and switching the client into
+ * connection-string mode behind the caller's back is surprising — and on
+ * localhost it would try to register a database the hosted service cannot reach.
+ * This warning points the developer at the explicit option instead. It fires at
+ * most once per process and falls back to `console.warn` when no logger is
+ * supplied.
  *
- * Suppressed entirely on the hosted/token path: if an `apiKey` resolves (option
- * or `ABLO_API_KEY` env), the caller has chosen the hosted capability-token /
- * Data Source transport, which is mutually exclusive with direct `databaseUrl`
- * mode. A `DATABASE_URL` sitting in that environment is unrelated infra (Prisma,
- * Drizzle, the sync-server) — never an omitted option — so nudging would be a
- * false positive. This is the first-party hosted app's exact shape, where the
- * stray nudge otherwise reaches end-user desktop logs.
+ * The warning is skipped entirely when an `apiKey` resolves (from the option or
+ * `ABLO_API_KEY`): that caller has chosen the hosted, token-based transport,
+ * which is separate from the direct `databaseUrl` connection. A `DATABASE_URL`
+ * present in that environment belongs to unrelated infrastructure, not an omitted
+ * option, so warning would be a false positive.
  */
 let warnedDatabaseUrlEnvIgnored = false;
 export function warnIfDatabaseUrlEnvIgnored(
@@ -366,19 +364,18 @@ export function warnIfDatabaseUrlEnvIgnored(
 }
 
 /**
- * One-time deprecation nudge for the `databaseUrl` direct connector.
+ * Warns once when the deprecated `databaseUrl` option is used.
  *
- * `databaseUrl` registers the `dedicated` storage mode — Ablo opens a pool INTO
- * the caller's Postgres and writes into it directly. That is the operate-their-
- * database posture we are moving off. Ablo is Stripe-shaped: it hosts only the
- * transaction log (the ordered sync_deltas) + coordination, never your data — your
- * rows always live in your own database. The supported path is the signed Data
- * Source endpoint (`dataSource(...)`), where your app owns the write and your
- * credentials never leave it. See docs/plans/stripe-shaped-storage-posture.md.
+ * Passing `databaseUrl` opens a connection pool directly into your Postgres and
+ * writes to it. That option is deprecated. Ablo is designed to host only the
+ * ordered transaction log (the `sync_deltas` table) and coordination state,
+ * never your rows — your data stays in your own database. The supported path is
+ * a signed data-source endpoint (`dataSource(...)`), where your app owns the
+ * write and your database credentials never leave it.
  *
- * Still honored at runtime so existing integrations keep working; this only warns
- * once per process (so it never spams) and falls back to `console.warn` when no
- * logger is supplied (the `transport: 'http'`/`'api'` client has none).
+ * The option still works at runtime so existing integrations keep running. This
+ * warning fires at most once per process and falls back to `console.warn` when
+ * no logger is supplied.
  */
 let warnedDatabaseUrlDeprecated = false;
 export function warnIfDatabaseUrlDeprecated(
@@ -417,8 +414,8 @@ export async function warnIfCliKeyMismatch(
   else if (typeof console !== 'undefined') console.warn('[Ablo]', mismatch.message);
 }
 
-// Declared in the dependency-free `hostedEndpoints.ts` leaf (single source of
-// the hosted domain); re-exported here so existing import paths keep working.
+// Declared in `./hostedEndpoints`, the single source of the hosted domain, and
+// re-exported here so existing import paths keep working.
 export { ABLO_HOSTED_API_DOMAIN, ABLO_HOSTED_HTTP_BASE_URL, ABLO_DEFAULT_BASE_URL } from './hostedEndpoints.js';
 
 const LEGACY_HOSTED_API_HOSTS = new Set([
@@ -429,30 +426,30 @@ const LEGACY_HOSTED_API_HOSTS = new Set([
 ]);
 
 /**
- * Normalize old hosted aliases to the public API domain. Self-hosted/custom
- * URLs pass through unchanged; only first-party legacy hosts are rewritten.
+ * Normalizes older hosted host names to the current public API domain.
+ * Self-hosted or custom URLs pass through unchanged; only the retired
+ * first-party host names are rewritten.
  */
 export function normalizeAbloHostedBaseUrl(rawUrl: string): string {
   const trimmed = rawUrl.trim();
   if (!trimmed) return trimmed;
 
-  // A scheme-less value (e.g. `api-staging.abloatai.com`) is a RELATIVE URL:
-  // `new URL()` throws on it, and downstream `fetch` then resolves it against
-  // the current page — producing `https://<app-host>/<route>/api-staging…/api/
-  // auth/identity`, a 404 from the app's own origin. Prepend a scheme so the
-  // base is absolute. `https` mirrors `ABLO_HOSTED_HTTP_BASE_URL`; the socket
-  // layer derives `wss` from it. An existing scheme (ws/wss/http/https) is
-  // preserved untouched.
+  // A scheme-less value (e.g. `api-staging.abloatai.com`) is treated as a
+  // relative URL: `new URL()` throws on it, and a later `fetch` would resolve it
+  // against the current page — producing a 404 from the app's own origin.
+  // Prepending a scheme makes the base absolute. `https` matches
+  // {@link ABLO_HOSTED_HTTP_BASE_URL}; the socket layer derives `wss` from it.
+  // An existing scheme (ws, wss, http, or https) is preserved untouched.
   const schemed = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 
   try {
     const url = new URL(schemed);
-    // Canonicalize the scheme to the HTTP family — the WHATWG WebSocket
-    // model: accept all four schemes (`http`/`https`/`ws`/`wss`), normalize
-    // ONCE at the entry point, and let each layer derive its own protocol
-    // (the socket layer maps http→ws / https→wss; fetch uses it as-is).
-    // Before this, a `ws://` baseURL reached HTTP consumers un-normalized
-    // and the client wedged at startup instead of connecting.
+    // Canonicalize the scheme to the HTTP family: accept all four schemes
+    // (http, https, ws, wss), normalize at this single entry point, and let
+    // each layer derive its own protocol (the socket layer maps http to ws and
+    // https to wss; fetch uses the URL as-is). Without this, a `ws://` base URL
+    // reaches HTTP consumers un-normalized and the client fails at startup
+    // instead of connecting.
     if (url.protocol === 'ws:') url.protocol = 'http:';
     if (url.protocol === 'wss:') url.protocol = 'https:';
 
@@ -473,11 +470,12 @@ export function resolveBaseURL(input: AuthResolveInput): string {
 }
 
 /**
- * Browser guard — apiKey is server-side-only by default. Same check
- * Anthropic, OpenAI, and Stripe ship: shipping `sk_live_...` to a
- * browser exposes it in every visitor's network tab. Consumers opt
- * in explicitly when the browser holds a minted session token
- * (`ek_`/`rk_`) or routes through a server proxy.
+ * Guards against using a secret `apiKey` in a browser. A secret key is
+ * server-side only by default: shipping an `sk_live_...` key to a browser would
+ * expose it in every visitor's network tab. Callers opt in explicitly when the
+ * browser instead holds a minted session token (`ek_`/`rk_`) or routes through a
+ * server proxy. Throws {@link AbloAuthenticationError} when a secret key is
+ * detected in a browser without opt-in.
  */
 export function assertBrowserSafety(input: {
   apiKey: string | ApiKeySetter | null;
@@ -501,9 +499,9 @@ export function assertBrowserSafety(input: {
       { code: 'browser_apikey_blocked' },
     );
   }
-  // `databaseUrl` carries DB credentials and is NEVER browser-safe, so
-  // `dangerouslyAllowBrowser` does not override it. Register your database from
-  // a server-side runtime.
+  // `databaseUrl` carries database credentials and is never browser-safe, so
+  // `dangerouslyAllowBrowser` does not override this check. Register your
+  // database from a server-side runtime.
   if (inBrowser && typeof input.databaseUrl === 'string' && input.databaseUrl.length > 0) {
     throw new AbloAuthenticationError(
       'Ablo `databaseUrl` cannot be used in a browser-like environment — it ' +
@@ -515,12 +513,10 @@ export function assertBrowserSafety(input: {
 }
 
 /**
- * Resolve an `ApiKeySetter` callable to its current string value.
- * Used at request time so a rotating credential picks up rotations
- * between requests. Returns `null` when no key was configured.
- *
- * Mirrors Anthropic's pattern of supporting both a static string and
- * a callable for credential rotation.
+ * Resolves an {@link ApiKeySetter} callable to its current string value, or
+ * returns a plain string key as-is. Called at request time so a rotating
+ * credential picks up new values between requests. Returns `null` when no key
+ * was configured.
  */
 export async function resolveApiKeyValue(
   apiKey: string | ApiKeySetter | null,
@@ -531,29 +527,26 @@ export async function resolveApiKeyValue(
 }
 
 /**
- * Translate a sync-engine WebSocket URL to the matching HTTP API
- * base URL, defaulting to `${url}/api` when the caller hasn't
- * overridden `bootstrapBaseUrl`. Used by `BootstrapHelper`,
- * `HydrationCoordinator`, the apiKey-exchange flow, and the
- * self-derived identity flow — same derivation in all four spots,
- * so it lives here as a single source of truth.
+ * Translates a WebSocket URL into the matching HTTP API base URL, defaulting to
+ * `${url}/api` when the caller has not overridden `bootstrapBaseUrl`. The
+ * bootstrap helper, the hydration coordinator, the credential-exchange flow, and
+ * the identity flow all derive their base URL through this one function, so the
+ * derivation stays consistent across them.
  *
- * Note: when both `wss://` and `https://` are valid, `replace(/^ws/, 'http')`
- * preserves the protocol family (ws → http, wss → https).
+ * When both `wss://` and `https://` are valid, the ws-to-http rewrite preserves
+ * the protocol family: ws becomes http and wss becomes https.
  */
 export function resolveBootstrapBaseUrl(input: {
   readonly url: string;
   readonly bootstrapBaseUrl?: string;
 }): string {
   if (input.bootstrapBaseUrl) {
-    // Coerce ws/wss → http/https on the override path too. This base URL is
-    // used for HTTP fetches (identity resolve, apiKey exchange, bootstrap) and
-    // the browser `fetch` rejects ws/wss schemes outright ("URL scheme \"wss\"
-    // is not supported"). apps/web derives this override as `${baseUrl}/api`
-    // where `baseUrl` may carry a WebSocket scheme, so the override can
-    // legitimately arrive as `wss://…` — normalize it here rather than
-    // faceplanting at fetch time. The derive branch below already does this;
-    // the override branch silently skipped it.
+    // Coerce ws/wss to http/https on the override path as well. This base URL is
+    // used for HTTP fetches (identity resolution, credential exchange, and
+    // bootstrap), and the browser `fetch` rejects ws and wss schemes outright.
+    // The override can legitimately arrive with a WebSocket scheme when a caller
+    // derives it as `${baseUrl}/api` from a WebSocket base URL, so normalize it
+    // here rather than failing at fetch time.
     return ensureApiSuffix(normalizeAbloHostedBaseUrl(input.bootstrapBaseUrl).replace(/^ws/, 'http'));
   }
   const url = normalizeAbloHostedBaseUrl(input.url);
@@ -561,18 +554,16 @@ export function resolveBootstrapBaseUrl(input: {
 }
 
 /**
- * Guarantee the HTTP base ends in the `/api` route segment the sync-server
- * mounts every endpoint under (`apps/sync-server/src/index.ts` — `app.route('/api', …)`).
+ * Ensures the HTTP base ends in the `/api` route segment that every endpoint is
+ * mounted under.
  *
- * The derive branch always appended `/api`; the override branch did NOT,
- * trusting the caller (apps/web passes `${baseUrl}/api`). But a hosted
- * customer setting a custom `baseURL`/`bootstrapBaseUrl` (their own subdomain,
- * staging, etc.) without the suffix sent every credential exchange to
- * `…/auth/capability` instead of `…/api/auth/capability` → a 404 surfaced as
- * `exchange_failed`. Since the SDK hardcodes routes relative to this base and
- * there is no valid Ablo deployment that serves them off the root, normalizing
- * to a single trailing `/api` here is always correct — and idempotent for
- * callers who already include it.
+ * A hosted deployment that sets a custom `baseURL` or `bootstrapBaseUrl` (a
+ * custom subdomain, a staging host, and so on) without the `/api` suffix would
+ * send every credential exchange to `…/auth/capability` instead of
+ * `…/api/auth/capability`, producing a 404 that surfaces as `exchange_failed`.
+ * Since the client builds routes relative to this base and no valid deployment
+ * serves them from the root, appending a single trailing `/api` here is always
+ * correct, and it is idempotent for callers who already include it.
  */
 function ensureApiSuffix(httpBase: string): string {
   const trimmed = httpBase.replace(/\/+$/, '');
@@ -583,8 +574,8 @@ function ensureApiSuffix(httpBase: string): string {
     u.pathname = `${u.pathname.replace(/\/+$/, '')}/api`;
     return u.toString().replace(/\/+$/, '');
   } catch {
-    // Should be unreachable post-`normalizeAbloHostedBaseUrl` (which yields an
-    // absolute URL), but fall back to a string check rather than throwing.
+    // Should be unreachable after `normalizeAbloHostedBaseUrl`, which yields an
+    // absolute URL, but fall back to a string check rather than throwing.
     return trimmed.endsWith("/api") ? trimmed : `${trimmed}/api`;
   }
 }

@@ -1,46 +1,27 @@
 /**
- * Structured query types for the generic /sync/query endpoint.
+ * Structured query types for the `/sync/query` endpoint.
  *
- * Zero-shaped ZQL-ish wire format: `where` is a flat list of `[col, op, val]`
- * tuples (AND'd together), and `related` is a list of schema-declared
- * relation names to traverse. The server compiler reads the schema's
- * relation metadata to turn `related: ['layers']` into the right JOIN.
+ * A query describes a filtered read in a compact wire format. `where` is a flat
+ * list of `[column, operator, value]` conditions combined with AND, and
+ * `related` names the schema relations to fetch alongside each row. The server
+ * compiles a query against your schema: it reads the model's relation metadata
+ * to turn `related: ['layers']` into the right join, and turns each condition
+ * into a WHERE fragment. The protocol carries no model-specific logic, so
+ * adding a model or relation is a schema change rather than a server change.
  *
- * # Why this shape
- *
- * An earlier revision used equality-only `where: Record<string, unknown>`
- * plus a PK-only `ids: string[]` batch field. That worked for simple cases
- * but collapsed on two real workloads:
- *
- *   1. "Fetch all layers for these slide IDs" — the IDs are foreign keys
- *      (`SlideLayer.slideId`), not primary keys. The old `ids` field
- *      filtered on `id`, silently returning empty.
- *
- *   2. "Fetch all layers for this deck" — needs a JOIN through
- *      `slides.deck_id → slide_layers.slide_id`. Equality-only `where` had
- *      no way to express it, so the Go server hardcoded a dispatch case.
- *
- * Both are generic patterns ("batch by FK column", "filter via relation")
- * that should be first-class in the protocol, not model-specific escape
- * hatches on the server. This shape matches Zero's ZQL:
- *
- *   - `where('slideId', 'IN', ids)` → `['slideId', 'IN', ids]`
- *   - `.related('layers')` → `related: ['layers']`
- *
- * The server's compiler stays schema-driven: given a model name, it reads
- * the schema's declared relations to emit JOIN SQL, and given a `[col, op,
- * val]` tuple it emits a WHERE fragment — never a switch on specific model
- * names. Adding a new model or relation is a schema change, not a server
- * change.
+ * The `IN` operator lets you batch a read by any column, including a foreign
+ * key — for example, fetching every layer whose `slideId` falls in a set of
+ * ids.
  */
 
 /** Primitive operand types allowed in a where clause. */
 export type WherePrimitive = string | number | boolean | null;
 
 /**
- * Comparison operators. Mirrors Zero's ZQL set so client authors can
- * lean on familiar semantics and server compilers that already target
- * ZQL stay portable.
+ * The comparison operators a {@link WhereClause} may use: equality and
+ * inequality, ordering, set membership (`IN` / `NOT IN`), null checks
+ * (`IS` / `IS NOT`), and case-sensitive or case-insensitive pattern
+ * matching (`LIKE`, `ILIKE`, and their negations).
  */
 export type WhereOp =
   | '='
@@ -100,21 +81,18 @@ export interface Query {
   model: string;
 
   /**
-   * List of where clauses AND'd together. Empty or omitted means "no
-   * filter" (still subject to server-side org scoping).
-   *
-   * Use `['col', 'IN', values]` to batch by any column — the old
-   * primary-key-only `ids` field is subsumed by this form.
+   * The conditions to filter by, combined with AND. Empty or omitted returns
+   * every row the caller may see; reads are still scoped to the caller's
+   * organization on the server. Use `['col', 'IN', values]` to batch a read by
+   * any column.
    */
   where?: readonly WhereClause[];
 
   /**
-   * Relation names declared in the schema for this model. The server's
-   * compiler resolves each name via the schema's relation metadata
-   * (`relation.hasMany` / `relation.belongsTo`) and emits the JOIN
-   * SQL — no model-specific dispatch on the server.
-   *
-   * Results come back as nested objects under the relation key:
+   * The relations to fetch with each row, named as they are declared on this
+   * model in the schema. The server resolves each name from the schema's
+   * relation metadata and joins the related rows in. They come back nested
+   * under the relation key:
    *
    *   { __typename: 'Slide', id: '…', layers: [{ __typename: 'SlideLayer', … }] }
    */
@@ -148,25 +126,24 @@ export interface QueryBatch {
 /** Response body from POST /sync/query. */
 export interface QueryBatchResult {
   /**
-   * Per-query results in request order. `results[i]` corresponds to
-   * `queries[i]`. Each element is an array of rows for array-shaped
-   * queries, or a bundled object for providers that return multiple
-   * collections under named keys.
+   * The result of each query, in request order: `results[i]` corresponds to
+   * `queries[i]`. Each element is an array of rows, or an object bundling
+   * several named row collections when the source returns more than one. Every
+   * row carries a `__typename` field naming its model, so callers can dispatch
+   * on it, along with any requested `related` rows nested under their relation
+   * key.
    *
-   * Each row carries `__typename` for client-side model dispatch, plus
-   * any `related` keys nested under the row.
-   *
-   * Failed queries surface as empty arrays. The server logs them via
-   * `console.error('[query.error] ...')` — alert on that prefix rather
-   * than trying to infer failure from empty results. A tagged-union
-   * wire shape that forces caller acknowledgement is the right next
-   * step once every `postQuery` consumer is updated at once.
+   * A query that fails on the server comes back as an empty array, which is
+   * indistinguishable from a query that simply matched nothing — treat an empty
+   * result as "no rows", not as proof the query succeeded. The element type is
+   * `unknown` because one batch can mix row shapes, so narrow each result
+   * before use.
    */
   results: unknown[];
   /**
-   * Server watermark observed after the batch ran. Public model reads
-   * expose this as `stamp` and callers thread it into `commits.create({
-   * readAt })` to reject stale writes.
+   * The server watermark observed after the batch ran. Model reads expose this
+   * as `stamp`, and callers thread it into `commits.create({ readAt })` so the
+   * server can reject a write built on stale data.
    */
   lastSyncId?: number;
 }

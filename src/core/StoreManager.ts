@@ -1,9 +1,10 @@
 /**
- * Linear Sync Engine - Store Manager
- *
- * Manages all ObjectStore instances for registered models.
- * Creates appropriate store types based on model load strategies.
- * Follows Linear's architecture with 80+ ObjectStore instances.
+ * Manages the {@link ObjectStore} instances the sync engine keeps in the
+ * browser — one per registered model — alongside the single
+ * {@link SyncActionStore} for pending changes. It creates each store from the
+ * model's metadata, tracks readiness, and provisions the underlying IndexedDB
+ * object stores. A model's load strategy (instant, lazy, or partial) decides
+ * how and when its data is loaded.
  */
 
 import { ModelRegistry } from '../ModelRegistry.js';
@@ -85,7 +86,7 @@ export class StoreManager {
     // Use model name directly as store name
     const storeName = modelName;
 
-    // Create ObjectStore (MVP: simplified - use single store type for all strategies)
+    // Create the ObjectStore. One store type currently serves every load strategy.
     const store = new ObjectStore(this.db!, modelName, storeName, metadata);
 
     this.stores.set(modelName, store);
@@ -147,7 +148,7 @@ export class StoreManager {
 
     // Create __meta table for model persistence state and database metadata
     if (!db.objectStoreNames.contains('__meta')) {
-      const metaStore = db.createObjectStore('__meta');
+      db.createObjectStore('__meta');
       getContext().logger.debug('Created __meta table');
     }
 
@@ -226,15 +227,12 @@ export class StoreManager {
   }
 
   /**
-   * Check if ANY data store has at least one record.
-   *
-   * This is the Zero-style cache-validity check: if the stores are empty,
-   * the sync cursor (lastSyncId) is invalid regardless of what the metadata
-   * says. The cursor and the data must be co-located — no data means no
-   * cursor, which means full bootstrap.
-   *
-   * Samples up to 3 stores to avoid a full scan. If any store has records,
-   * returns true (we have cached data worth preserving).
+   * Reports whether any data store holds at least one record. This is a
+   * cache-validity check: if the stores are empty, the sync cursor
+   * (`lastSyncId`) is meaningless no matter what the metadata says, because the
+   * cursor and the data must travel together — no data means no cursor, which
+   * forces a full bootstrap. To stay cheap it samples up to three stores rather
+   * than scanning them all, and returns true as soon as one has records.
    */
   async hasAnyData(): Promise<boolean> {
     const storeEntries = Array.from(this.stores);
@@ -338,8 +336,8 @@ export class StoreManager {
    * Clear all stores
    */
   async clearAllStores(): Promise<void> {
-    // Lifecycle chatter (logout / identity switch / reset) — NOT a warning.
-    // `debug` so it's silent under the default `warn` threshold.
+    // Lifecycle chatter (logout / identity switch / reset), not a warning.
+    // Logged at `debug` so it stays silent under the default `warn` threshold.
     getContext().logger.debug('Clearing all stores');
 
     const promises = Array.from(this.stores.values()).map((store) => store.clear());
@@ -360,12 +358,11 @@ export class StoreManager {
       store.markAsClosing();
     }
 
-    // SyncActionStore is a standalone store (does NOT extend ObjectStore)
-    // and has no markAsClosing equivalent. The previous `(syncactionStore
-    // as any).markAsClosing?.()` was a silent no-op disguised as a real
-    // call — the optional chain swallowed the missing method. If
-    // closing-state coordination is needed for sync actions, add it
-    // explicitly to SyncActionStore rather than reintroducing the cast.
+    // SyncActionStore is a standalone store that does not extend ObjectStore
+    // and has no markAsClosing equivalent, so it is intentionally skipped here.
+    // If closing-state coordination is ever needed for sync actions, add it
+    // explicitly to SyncActionStore rather than casting to reach a method that
+    // may not exist.
 
     getContext().logger.debug('All stores marked as closing');
   }

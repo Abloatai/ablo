@@ -1,18 +1,19 @@
 /**
- * THE write-options schema — one Zod schema for the write dialect every
- * door speaks (`ablo.<model>.create/update/delete`, `commits.create`, the
- * HTTP model routes). Validated once at each public boundary so a plain-JS
- * caller passing `onStale: 'rejct'` fails loudly at the call site with a
- * typed `AbloValidationError`, not silently (or 400) at the server.
+ * The Zod schema for write options — the settings accepted by every write
+ * entry point, including `ablo.<model>.create/update/delete`, `commits.create`,
+ * and the HTTP write routes. Each of those boundaries validates against this
+ * one schema, so a caller who passes, say, `onStale: 'rejct'` fails right away
+ * with a typed {@link AbloValidationError} at the call site instead of silently
+ * or with a 400 from the server.
  *
- * Mirrors `source/contract.ts`: the schema is the runtime twin of the
- * `MutationOptions` interface, with a compile-time drift guard at the
- * bottom so the two can never silently diverge.
+ * The schema is the runtime counterpart of the {@link MutationOptions}
+ * interface. A compile-time check at the bottom of this file asserts that the
+ * two describe the same shape, so they cannot drift apart.
  *
- * Validation-only by design: callers keep their ORIGINAL options object.
- * Zod's parse output strips unknown keys, and the `claim` slot legally
- * carries live handles (`ClaimHandle` / claim leases) whose
- * `release`/`revoke` functions must survive — so we assert, never replace.
+ * Validation only inspects; it never transforms. Callers keep the exact options
+ * object they passed in. This matters because the `claim` field can hold a live
+ * claim handle whose `release` and `revoke` functions must survive, so the code
+ * asserts the shape rather than replacing the value with a parsed copy.
  */
 
 import { z } from 'zod';
@@ -22,7 +23,8 @@ import { AbloValidationError } from '../errors.js';
 export const onStaleModeSchema = z.enum(['reject', 'overwrite', 'notify']);
 
 export const writeOptionsSchema = z.object({
-  /** Server-side mutation_log cache key; `null` opts out of retry-safety. */
+  /** Idempotency key the server records in `mutation_log` to make retries
+   *  safe; `null` opts out of that protection. */
   idempotencyKey: z.string().min(1).max(255).nullish(),
   /** Human-readable audit tag, persisted to `mutation_log.label`. */
   label: z.string().max(255).optional(),
@@ -32,20 +34,21 @@ export const writeOptionsSchema = z.object({
   readAt: z.number().int().nonnegative().nullish(),
   /** What the server does when the target moved past `readAt`. */
   onStale: onStaleModeSchema.nullish(),
-  /** Claim/claim attribution — an id, or a live lease handle (loose: the
-   *  handle's `release`/`revoke` functions ride along untouched). */
+  /** The claim this write belongs to — either a claim id, or a live claim
+   *  handle whose `release`/`revoke` functions are preserved untouched. */
   claim: z.union([z.string(), z.looseObject({ id: z.string() })]).nullish(),
-  /** Dormant wire-compat field; always `null` from current clients. */
+  /** Reserved wire-compatibility field; current clients always send `null`. */
   causedByTaskId: z.string().nullish(),
 });
 
 export type WriteOptionsInput = z.infer<typeof writeOptionsSchema>;
 
 /**
- * Assert a write-options bag against THE schema. Throws a typed
- * `AbloValidationError` (`code: 'write_options_invalid'`, Stripe-style
- * `param` pointing at the offending field) and returns nothing — the
- * caller keeps its original object.
+ * Validates a write-options object against {@link writeOptionsSchema}. On
+ * failure it throws a typed {@link AbloValidationError} — with
+ * `code: 'write_options_invalid'` and a `param` pointing at the offending
+ * field — and on success returns nothing, leaving the caller's original object
+ * untouched. A `null` or `undefined` value passes.
  */
 export function assertWriteOptions(
   value: unknown,

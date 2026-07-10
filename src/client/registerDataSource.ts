@@ -1,39 +1,38 @@
 /**
- * Self-serve direct-kind datasource registration.
+ * Registers a direct database connection as an organization's data source.
  *
- * When a client is constructed with `databaseUrl`, the SDK registers that
- * connection string BEFORE bootstrap so the server resolves the org's data plane
- * to that direct connection.
+ * When a client is constructed with `databaseUrl`, the SDK calls this before
+ * bootstrap so the server points the organization's data plane at that connection.
  *
- * Targets the unified `POST /v1/datasources` resource; on a 404 (an older
- * server without the unified route) it falls back to the legacy
- * `POST /v1/datasource` alias so an SDK upgrade never strands registration.
+ * It posts to `POST /v1/datasources`, falling back to the older
+ * `POST /v1/datasource` route on a 404 so registration still works against an
+ * earlier server.
  *
- * The org is derived server-side from the API key — the caller never sends an
- * organization id. The connection string is sent once over TLS and is never
- * echoed back (the server stores it as a secret and returns only a safe
- * `datasource` projection: host, database, schema).
+ * The organization is derived on the server from the API key; the caller never
+ * sends an organization id. The connection string is sent once over TLS and is
+ * never echoed back — the server stores it as a secret and returns only a safe
+ * projection of the data source (host, database, schema).
  */
 import { AbloError } from '../errors.js';
 
 export interface RegisterDataSourceInput {
-  /** HTTP API base, e.g. `https://api.abloatai.com/api` (from resolveBootstrapBaseUrl). */
+  /** The HTTP API base, for example `https://api.abloatai.com/api`. */
   readonly baseUrl: string;
-  /** Secret key (`sk_…`) used to authenticate + derive the org. */
+  /** The secret key (`sk_…`) used to authenticate the call and derive the organization. */
   readonly apiKey: string | null;
-  /** Postgres connection string for the direct connector. */
+  /** The Postgres connection string to register. */
   readonly databaseUrl: string;
-  /** Optional Postgres schema (defaults server-side to `public`). */
+  /** An optional Postgres schema; the server defaults to `public`. */
   readonly schema?: string;
-  /** Custom fetch (tests/proxies/odd runtimes). */
+  /** A custom fetch implementation for tests, proxies, or unusual runtimes. */
   readonly fetchImpl?: typeof fetch;
 }
 
 /**
- * POST the connection string to the self-serve datasource route. Resolves on
- * success (the org's data plane now points at this DB); throws an `AbloError`
- * with `datasource_registration_failed` otherwise so `ready()` surfaces it
- * instead of silently bootstrapping against the wrong store.
+ * Posts the connection string to the data-source registration route. Resolves once
+ * the organization's data plane points at this database; otherwise throws an
+ * {@link AbloError} with code `datasource_registration_failed`, so `ready()`
+ * surfaces the failure instead of quietly bootstrapping against the wrong store.
  */
 export async function registerDataSource(input: RegisterDataSourceInput): Promise<void> {
   if (!input.apiKey) {
@@ -67,7 +66,7 @@ export async function registerDataSource(input: RegisterDataSourceInput): Promis
   };
   let response = await post(`${base}/v1/datasources`);
   if (response.status === 404) {
-    // Older server without the unified resource — use the legacy alias.
+    // The newer route is absent on an older server; use the earlier one.
     response = await post(`${base}/v1/datasource`);
   }
   if (!response.ok) {

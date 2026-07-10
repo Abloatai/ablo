@@ -1,27 +1,28 @@
 /**
- * `ablo upgrade` — codemod that migrates a consumer's code to the current
- * (0.9.x) API. The single highest-leverage thing for stability perception: a
- * working integration on an old version gets rewritten instead of broken.
+ * `ablo upgrade` — a codemod that migrates a project's code to the current
+ * (0.9.x) API, so an integration written against an older version is rewritten
+ * rather than left broken.
  *
- * SAFE BY DEFAULT: previews the changes (dry-run). Pass `--write` to apply.
+ * Safe by default: it previews the changes (a dry run). Pass `--write` to apply
+ * them.
  *
- * Auto-rewrites (mechanical, high-confidence):
- *   - positional model verbs → one options object:
+ * Mechanical, high-confidence rewrites it applies automatically:
+ *   - positional model verbs → a single options object:
  *       update(id, data, opts?) → update({ id, data, ...opts })
  *       create(data, opts?)     → create({ data, ...opts })
  *       delete(id, opts?)       → delete({ id, ...opts })
  *       retrieve(id, opts?)     → retrieve({ id, ...opts })
  *   - load()  → retrieve({ id }) (when filtering by id) / list({ where })
- *   - withSync(X) → observer(X)  (withSync was a no-op alias of observer)
+ *   - withSync(X) → observer(X)  (withSync was an alias of observer)
  *
- * Reports for manual review (structural — too risky to auto-rewrite):
+ * Structural changes it flags for manual review instead of rewriting:
  *   - drizzleDataSource(db, tables) → (db, schema)
  *   - <AbloProvider schema|teamIds|authEndpoint=...>  → build a client, pass client={ablo}
  *   - ablo.claims.* → ablo.<model>.claim.*
  *   - callback claim(id, async (row) => …) → `await using claim = await …claim({ id })`
  *
  * Usage:
- *   npx ablo upgrade                 # preview (dry-run), default globs
+ *   npx ablo upgrade                 # preview (dry run), default globs
  *   npx ablo upgrade --write         # apply
  *   npx ablo upgrade "app/**" "src/**" # custom path(s) / globs
  */
@@ -98,8 +99,9 @@ function verbRewrite(call: CallExpression, verb: string): string | null {
   const calleeText = call.getExpression().getText(); // e.g. "ablo.tasks.update"
 
   if (verb === 'create') {
-    // old: create(data, opts?) → new: create({ data, ...opts }). The OLD `data` is
-    // itself an object literal, so detect already-migrated by an explicit `data` key.
+    // create(data, opts?) becomes create({ data, ...opts }). The old `data`
+    // argument is itself an object literal, so an explicit `data` key means the
+    // call is already migrated.
     if (Node.isObjectLiteralExpression(first) && hasKey(first, 'data')) return null;
     return `${calleeText}({ data: ${first.getText()}${spreadOpts(args[1])} })`;
   }
@@ -122,7 +124,7 @@ function loadRewrite(call: CallExpression): string | null {
       const whereVal = where.getInitializerOrThrow();
       if (Node.isObjectLiteralExpression(whereVal)) {
         const idProp = whereVal.getProperty('id');
-        // load({ where: { id } }) with ONLY id → retrieve({ id })
+        // load({ where: { id } }) with only `id` → retrieve({ id })
         if (idProp && whereVal.getProperties().length === 1 && Node.isPropertyAssignment(idProp)) {
           return `${base}.retrieve({ id: ${idProp.getInitializerOrThrow().getText()} })`;
         }

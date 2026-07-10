@@ -94,9 +94,9 @@ class MockGlobalWebSocket {
 // ─────────────────────────────────────────────
 // Make navigator.onLine writable for offline tests
 // ─────────────────────────────────────────────
-// Both globals are jsdom-only; guard so suites that opt into the node
-// environment (`@jest-environment node` docblock — e.g. the windowless
-// credential pre-roll tests) can share this setup file.
+// navigator and document exist only under the jsdom environment. Guard the
+// access so suites that opt into the node environment (via the
+// `@jest-environment node` docblock) can share this setup file without error.
 
 if (typeof navigator !== 'undefined') {
   Object.defineProperty(navigator, 'onLine', {

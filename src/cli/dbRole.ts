@@ -1,20 +1,17 @@
 /**
- * Scoped-role bootstrap — the CLI side of the RLS gate.
+ * Creates a limited Postgres role so a connection can pass the server's
+ * row-level-security check. The server refuses connections made as a superuser,
+ * or as any role with the BYPASSRLS attribute, because row-level security — the
+ * mechanism that keeps one tenant from reading another's rows — cannot be
+ * enforced over such a connection; the rejection carries the code
+ * `database_role_cannot_enforce_rls`. Many managed-Postgres dashboards hand out
+ * exactly such a role in their default connection string.
  *
- * Ablo's server refuses BYPASSRLS/superuser connections
- * (`database_role_cannot_enforce_rls`) because row-level security would be
- * unenforceable — and Neon/Supabase dashboard connection strings use exactly
- * such a role (Neon's `neondb_owner` is `neon_superuser`, which includes
- * BYPASSRLS). That gate is non-negotiable; making the user hand-write
- * `CREATE ROLE` SQL to cross it is not.
- *
- * The reconciliation: the CLI creates the scoped role FROM THE USER'S
- * MACHINE, with the credential already sitting in their `DATABASE_URL` —
- * the same trust context `ablo migrate` already uses to run DDL. The owner
- * credential never reaches Ablo's servers (product decision 2026-06-10:
- * Ablo never wields owner credentials, even transiently); the user never
- * opens a SQL editor. The generated password is written to the env file and
- * never printed.
+ * Rather than ask you to hand-write `CREATE ROLE` SQL, this module creates the
+ * scoped role on your own machine, using the credential already in your
+ * `DATABASE_URL` — the same access the migrate command uses to run schema
+ * changes. That owner credential is never sent anywhere; the generated password
+ * for the new role is written to your environment file and never printed.
  */
 
 import { randomBytes, pbkdf2Sync, createHmac, createHash } from 'crypto';
@@ -26,11 +23,11 @@ export interface RoleSafety {
   readonly role: string;
   readonly superuser: boolean;
   readonly bypassRls: boolean;
-  /** True when the server-side RLS gate would reject this connection. */
+  /** True when the server would reject this connection because its role can bypass row-level security. */
   readonly unsafe: boolean;
 }
 
-/** Introspect the CONNECTED role the way the server's safety probe does. */
+/** Inspects the currently connected role and reports whether the server would accept it, mirroring the server's own safety check. */
 export async function detectRoleSafety(sql: postgres.Sql): Promise<RoleSafety> {
   const rows = await sql<
     { rolname: string; rolsuper: boolean; rolbypassrls: boolean }[]
@@ -45,18 +42,18 @@ export async function detectRoleSafety(sql: postgres.Sql): Promise<RoleSafety> {
   };
 }
 
-/** URL-safe generated password — never printed, only written to the env file. */
+/** Generates a URL-safe random password for the scoped role. Callers write it to the environment file; it is never printed. */
 export function generateRolePassword(): string {
   return randomBytes(24).toString('base64url');
 }
 
 /**
- * Client-side SCRAM-SHA-256 verifier (RFC 5803 / PG `auth-password` format:
- * `SCRAM-SHA-256$<iter>:<salt>$<StoredKey>:<ServerKey>`) — what `psql`'s
- * `\\password` computes. Sending the VERIFIER instead of the plaintext in the
- * PASSWORD clause keeps the password out of the server's statement logs
- * (`log_statement` would otherwise capture `CREATE ROLE ... PASSWORD '...'`
- * verbatim — Vault tolerates that; psql does not, and neither do we).
+ * Computes the client-side SCRAM-SHA-256 verifier for a password, in the format
+ * PostgreSQL stores it (RFC 5803:
+ * `SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>`) — the same value
+ * `psql`'s `\\password` sends. Putting this verifier in a `CREATE ROLE ...
+ * PASSWORD` clause, rather than the plaintext, keeps the password out of the
+ * server's statement log, which would otherwise record the statement verbatim.
  */
 export function scramSha256Verifier(password: string, iterations = 4096): string {
   const salt = randomBytes(16);
@@ -68,22 +65,22 @@ export function scramSha256Verifier(password: string, iterations = 4096): string
 }
 
 /**
- * The exact statements the docs recipe prescribes, as data (testable, and
- * shown to the user on request). Idempotent across reruns: an existing role
- * gets its password rotated instead of erroring. The PASSWORD clause carries
- * the client-side SCRAM verifier, never the plaintext.
+ * Returns the SQL statements that create the scoped role and grant it the
+ * privileges it needs, as an array a caller can run or display. Safe to run
+ * more than once: if the role already exists, its password is rotated instead
+ * of raising an error. The password clause carries the client-side SCRAM
+ * verifier rather than the plaintext.
  */
 export function scopedRoleStatements(input: {
   readonly database: string;
   readonly role?: string;
   readonly password: string;
   /**
-   * `scram-verifier` (default) sends the client-side hash — the plaintext
-   * never reaches the server's statement log. Some managed providers
-   * intercept role DDL and refuse verifiers (Neon's control plane: "Neon
-   * only supports being given plaintext passwords") — `plaintext` is the
-   * detected fallback, still over TLS (the same posture Vault's database
-   * secrets engine ships with).
+   * How the password is written into the SQL. `scram-verifier` (the default)
+   * sends the client-side hash, so the plaintext never reaches the server's
+   * statement log. Some managed providers intercept role statements and reject
+   * a verifier, asking for a plaintext password instead; `plaintext` is the
+   * fallback for those, still sent over TLS.
    */
   readonly passwordMode?: 'scram-verifier' | 'plaintext';
 }): readonly string[] {
@@ -109,7 +106,7 @@ END $$;`,
   ];
 }
 
-/** Same host/db/params, scoped user+password — pure and unit-testable. */
+/** Returns a copy of the connection URL with the username and password replaced by the scoped role's credentials, leaving host, database, and query parameters intact. */
 export function rewriteDatabaseUrl(ownerUrl: string, role: string, password: string): string {
   const url = new URL(ownerUrl);
   url.username = role;
@@ -124,9 +121,10 @@ export interface ScopedRoleResult {
 }
 
 /**
- * Create (or rotate) the scoped role using the owner connection, from the
- * user's machine. Returns the replacement URL; the caller owns persisting it
- * (env file) and MUST NOT print it.
+ * Creates the scoped role — or rotates its password if it already exists —
+ * using the owner connection from the local machine. Returns the replacement
+ * connection URL; the caller is responsible for saving it to the environment
+ * file and should not print it, since it contains the generated password.
  */
 export async function createScopedRole(
   ownerUrl: string,
@@ -142,9 +140,9 @@ export async function createScopedRole(
         await sql.unsafe(statement);
       }
     } catch (err) {
-      // Managed providers that intercept role DDL (Neon) refuse SCRAM
-      // verifiers outright. Fall back to plaintext-over-TLS for exactly that
-      // refusal — anything else is a real error and propagates.
+      // Some managed providers intercept role statements and reject a SCRAM
+      // verifier outright. Retry with a plaintext password over TLS for that
+      // specific refusal; any other error is genuine and propagates.
       const message = err instanceof Error ? err.message : String(err);
       if (!/plaintext password/i.test(message)) throw err;
       for (const statement of scopedRoleStatements({ database, role, password, passwordMode: 'plaintext' })) {
@@ -163,15 +161,15 @@ import { writeFileSync, existsSync, readFileSync, appendFileSync } from 'fs';
 import { resolve } from 'path';
 
 /**
- * The CLI side of the server's RLS gate. Neon/Supabase dashboard connection
- * strings use the database OWNER role (BYPASSRLS) — Ablo's server refuses
- * those (`database_role_cannot_enforce_rls`) because row-level security
- * would be unenforceable. Instead of making the user hand-write SQL, offer
- * to create the scoped role HERE, from their machine, with the credential
- * they already configured — the owner string never reaches Ablo's servers,
- * and the generated password is written to the env file, never printed.
- *
- * Returns the URL the migration (and the app) should use from now on.
+ * Checks the configured `DATABASE_URL` and, when it connects as a superuser or
+ * a BYPASSRLS role the server would reject, offers to create the limited role
+ * for the developer. Everything runs on the local machine using the credential
+ * already in `DATABASE_URL`; that credential is never sent anywhere, and the new
+ * role's password is written to the environment file, not printed. In a
+ * non-interactive session (no terminal) it explains the situation and returns
+ * the URL unchanged rather than prompting. Returns the connection URL to use
+ * from then on — the freshly scoped one if the role was created, otherwise the
+ * original. {@link createScopedRole} does the actual work.
  */
 export async function ensureScopedRoleInteractive(dbUrl: string): Promise<string> {
   let safety;
@@ -188,10 +186,10 @@ export async function ensureScopedRoleInteractive(dbUrl: string): Promise<string
   if (!safety.unsafe) return dbUrl;
 
   const why = safety.superuser ? 'a superuser role' : 'an admin role that bypasses row-level security';
-  // Lead with the plain-language WHY, then pre-empt the two misreads this prompt
-  // reliably triggers (especially for AI agents): that Ablo wants your owner
-  // credential, or that "ownership" is being handed over. Neither is true — the
-  // role is created locally and Ablo only ever sees the limited role's password.
+  // Lead with the plain-language reason, then head off the two misreadings this
+  // prompt tends to trigger: that Ablo wants the owner credential, or that
+  // ownership is being handed over. Neither is true — the role is created
+  // locally, and Ablo only ever sees the limited role's password.
   console.log(
     `\n  ${pc.yellow('!')} Your ${pc.bold('DATABASE_URL')} connects as ${pc.bold(safety.role)} — ${why}.\n` +
       `    Ablo enforces tenant isolation with row-level security (so one org can never\n` +
@@ -234,9 +232,12 @@ export async function ensureScopedRoleInteractive(dbUrl: string): Promise<string
 }
 
 /**
- * Update DATABASE_URL where the user keeps it: the env file that already
- * defines it (.env.local, then .env), else append to .env.local (0600) and
- * make sure it's gitignored. Mirrors \`wireEnvLocal\`'s behavior for keys.
+ * Writes the new `DATABASE_URL` back to wherever the project keeps it: the
+ * environment file that already defines it (`.env.local`, then `.env`);
+ * otherwise it appends to `.env.local`, creating it with `0600` permissions,
+ * and ensures the file is listed in `.gitignore`. This is the `DATABASE_URL`
+ * counterpart to how `wireEnvLocal` handles the API key. Returns the name of the
+ * file it wrote.
  */
 export function persistDatabaseUrl(databaseUrl: string, cwd: string = process.cwd()): string {
   const line = `DATABASE_URL=${databaseUrl}`;
@@ -288,18 +289,18 @@ export function readProjectDatabaseUrl(cwd: string = process.cwd()): string | nu
 export type ApiKeySource = 'env' | '.env.local' | '.env';
 
 /**
- * Resolve `ABLO_API_KEY` the way the app's framework does — `process.env` first,
- * then the env files frameworks load (`.env.local`, then `.env`). `npx ablo …`
- * runs WITHOUT Next/Vite's env loader, so a key a developer put in `.env.local`
- * (the natural place — it's where the SDK reads it at runtime) is invisible to
- * `process.env`. Without this, the CLI silently falls back to the stored
- * `ablo login` sandbox key and uses the WRONG key (the reported "my production
- * key in .env.local is never used" bug). Returns the key + which source it came
- * from (so the caller can say so in an error), or `null` if none is set.
+ * Resolves `ABLO_API_KEY` the way a framework would: `process.env` first, then
+ * the environment files a framework loads (`.env.local`, then `.env`). Run
+ * through `npx`, the CLI has no framework env loader, so a key placed in
+ * `.env.local` — where the SDK reads it at runtime — is invisible to
+ * `process.env`; reading the files here keeps the CLI from falling back to the
+ * stored login credential and using a different key than the app does. Returns
+ * the key together with the source it came from, so a caller can name that
+ * source in an error, or `null` when no key is set.
  *
- * Consumed via `resolveEffectiveApiKey` (`cli/config.ts`) — the ONE chain
- * `push`, `dev`, `status`, and `resolvePushPlan` all share; don't call this
- * directly from a command, or the diagnostics and the deploy can diverge again.
+ * Prefer {@link resolveEffectiveApiKey} over calling this directly: it is the
+ * single resolution chain that `push`, `dev`, and `status` share, which keeps
+ * the key reported by diagnostics identical to the key used to deploy.
  */
 export function readProjectApiKey(
   cwd: string = process.cwd(),

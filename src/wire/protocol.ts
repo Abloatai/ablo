@@ -1,46 +1,39 @@
 /**
- * Cross-boundary protocol TIMING constants — the one place the 30s ping
- * cadence and the claim/presence lease window are defined. Before this leaf
- * existed the pair was copy-pasted across five sites in four modules, kept
- * in sync only by comments ("~3× the 30s ping"); changing the server ping
- * silently skewed the SDK's claim-expiry estimate and presence reaping.
+ * The timing constants both sides of the protocol must agree on: the ping
+ * cadence and the lease window derived from it. Defining them here once keeps
+ * the client and the server from skewing apart — a change to the ping interval
+ * that did not also move the lease window would make claim expiry and presence
+ * timeouts disagree between the two.
  *
- * Consumers (SDK side, relative import):
- *   - `sync/heartbeat.ts` — `HEARTBEAT_INTERVAL_MS`, the SDK's
- *     application-level `{ type: 'ping' }` cadence.
- *   - `client/createModelProxy.ts` — `DEFAULT_LEASE_TTL_MS`, the client's
- *     expiry estimate for a claim taken without an explicit TTL.
+ * {@link PING_INTERVAL_MS} is how often the connection pings to prove it is
+ * alive. {@link LEASE_TTL_MS} is how long a claim or presence entry stays valid
+ * without a renewing ping. On the client, these set the heartbeat cadence and
+ * the fallback expiry for a claim taken without an explicit lease. On the
+ * server, they set the keepalive interval, the lease granted per keepalive, and
+ * the presence-entry lifetime, so a silently disconnected client drops off the
+ * roster within one lease window.
  *
- * Consumers (server side, via `@abloatai/ablo/wire`):
- *   - `apps/sync-server/src/hub/Hub.ts` — the RFC 6455 `ws.ping()`
- *     keepalive interval (the tick that renews claim leases).
- *   - `apps/sync-server/src/hub/claimCoordinator.ts` —
- *     `LEASE_RENEW_TTL_MS`, the lease lifetime granted per keepalive tick.
- *   - `apps/sync-server/src/presence/PresenceStore.ts` — the default
- *     presence-entry TTL (a silently-dead client leaves the roster within
- *     one lease window).
- *
- * INVARIANT: `LEASE_TTL_MS === 3 * PING_INTERVAL_MS`. The lease is renewed
- * on every ping, so a live holder always has ≥ 2 ping intervals of runway,
- * and a silent one lapses ~2 missed pings after it stops renewing. TTL is
- * liveness, not work-duration — never widen the lease without widening the
- * ping (or holders will flap), and never derive either value locally.
+ * The lease is three ping intervals long and is renewed on every ping, so a
+ * live holder always has at least two intervals of runway and a silent one
+ * lapses about two missed pings after it stops renewing. The window measures
+ * liveness, not how long a task may run: widening the lease without also
+ * widening the ping makes holders flap, and neither value should be redefined
+ * anywhere else.
  */
 export const PING_INTERVAL_MS = 30_000;
 export const LEASE_TTL_MS = 3 * PING_INTERVAL_MS;
 
 /**
- * WebSocket subprotocols used to carry the bearer credential OUT of the URL.
+ * The WebSocket subprotocols that carry the bearer credential out of the URL.
  *
- * Browsers cannot set an `Authorization` header on a WebSocket, so the SDK
+ * A browser cannot set an `Authorization` header on a WebSocket, so the client
  * offers the token as a `Sec-WebSocket-Protocol` value — `ablo.bearer.<token>` —
  * alongside the real `ablo.sync.v1` protocol the server selects. This keeps the
- * credential out of the query string, which ALB access logs, proxies, and
- * browser history capture. The server reads the token from the subprotocol and
- * echoes back ONLY `ablo.sync.v1`, never the token-bearing value. Lives in
- * `wire/` (not `auth/`) because it IS the wire contract: client and server
- * import the same constants so the handshake format can never drift.
- * Re-exported from `auth/credentialSource.ts` for existing SDK importers.
+ * credential out of the query string, which access logs, proxies, and browser
+ * history would otherwise capture. The server reads the token from the
+ * subprotocol and echoes back only `ablo.sync.v1`, never the token-bearing
+ * value. Both the client and the server import these constants, so the
+ * handshake format cannot drift.
  */
 export const WS_BEARER_SUBPROTOCOL_PREFIX = 'ablo.bearer.';
 export const WS_SYNC_SUBPROTOCOL = 'ablo.sync.v1';

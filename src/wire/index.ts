@@ -1,35 +1,34 @@
 /**
- * `@abloatai/ablo/wire` — the canonical HTTP/frame WIRE CONTRACT, with no
- * client-runtime (mobx / react / IndexedDB) dependency, so a server-side
- * consumer — a Next.js route handler, an edge function — can import the
- * envelope producers without pulling in the whole sync client.
+ * The wire contract for the sync protocol: the HTTP envelope shapes and the
+ * write-path frames, with no dependency on the client runtime. A server — a
+ * route handler, an edge function — can import the envelope producers here
+ * without pulling in the full sync client.
  *
- * Two halves, both Stripe-shaped and used across every Ablo surface:
- *   - ERROR egress — {@link errorEnvelope} / {@link ErrorEnvelope} /
- *     {@link statusForType} turn any thrown value into
- *     `{ type, code, param, message, doc_url, request_id }`.
- *   - LIST egress — {@link listEnvelope} / {@link ListEnvelope} stamp the
+ * It has two halves, used across every endpoint:
+ *   - Error responses — {@link errorEnvelope}, {@link ErrorEnvelope}, and
+ *     {@link statusForType} turn any thrown value into the uniform
+ *     `{ type, code, param, message, doc_url, request_id }` body.
+ *   - List responses — {@link listEnvelope} and {@link ListEnvelope} stamp the
  *     uniform `{ object: 'list', data, has_more, next_cursor }` collection.
  *
- * The {@link AbloError} hierarchy + {@link docUrlForCode} + the wire-PARSE
- * helpers are re-exported so a route can THROW the right typed error and
- * SERIALIZE it through a single import.
+ * The {@link AbloError} hierarchy, {@link docUrlForCode}, and the wire-parsing
+ * helpers are re-exported too, so a single import lets a route throw the right
+ * typed error and serialize it back out.
  */
 export { errorEnvelope, statusForType } from './errorEnvelope.js';
 export type { ErrorEnvelope } from './errorEnvelope.js';
 export { listEnvelope } from './listEnvelope.js';
 export type { ListEnvelope } from './listEnvelope.js';
 
-// Commit-path frame contract — the canonical write-path message shapes shared
-// by the SDK client, the sync-server, and any `@abloatai/ablo/server` host.
-// The runtime Zod validators live beside the interfaces (z.infer-bound so the
-// two cannot drift) — the per-op / per-payload ingest gates for both commit
+// The write-path frame contract: the message shapes shared by the client and
+// the server. The runtime Zod validators sit beside the interfaces and are
+// pinned to them, and they gate every operation and payload on both commit
 // transports.
 export { commitOperationSchema, commitPayloadSchema } from './frames.js';
 
-// Protocol versioning — the one integer client and server compare to know
-// they can speak, plus the typed WS rejection close code. See the module's
-// changelog + deploy contract.
+// Protocol versioning: the single integer the client and server compare to
+// confirm they can speak to each other, plus the WebSocket close code used to
+// reject a mismatch. See protocolVersion.ts for the changelog and deploy rules.
 export {
   PROTOCOL_VERSION,
   MIN_SUPPORTED_PROTOCOL_VERSION,
@@ -43,6 +42,31 @@ export type {
   CommitMessage,
   MutationResultMessage,
 } from './frames.js';
+
+// The read-path delta contract: the shape the server broadcasts to clients as the
+// payload of a `delta` or `sync_response` frame, together with the shared
+// participant vocabulary it carries. Both ends derive their delta type from these
+// schemas, so the client and server cannot drift apart.
+export {
+  participantKindSchema,
+  confirmationStateSchema,
+  syncDeltaActionSchema,
+  wireDeltaDataSchema,
+  participantRefSchema,
+  syncDeltaWireCoreSchema,
+  clientSyncDeltaSchema,
+  serverSyncDeltaSchema,
+} from './delta.js';
+export type {
+  ParticipantKind,
+  ConfirmationState,
+  SyncDeltaAction,
+  WireDeltaData,
+  ParticipantRef,
+  SyncDeltaWireCore,
+  ClientSyncDelta,
+  ServerSyncDelta,
+} from './delta.js';
 
 // The error surface a wire consumer needs to throw, classify, and serialize.
 export {
@@ -63,17 +87,17 @@ export {
   errorFromWire,
   toAbloError,
   ERROR_CONTRACT_VERSION,
-  // The code→{httpStatus,retryable} registry table — dependency-free data a
-  // server needs to resolve a code's canonical status exactly like the SDK's
-  // wire producer does (pinned by the sync-server envelope parity test).
+  // The table mapping each error code to its HTTP status and retryable flag —
+  // plain data a server can use to resolve a code's canonical status the same
+  // way the client's error serializer does.
   errorCodeSpec,
 } from '../errors.js';
 export type { ErrorCode, WireErrorCode } from '../errors.js';
 
-// Protocol timing constants — the 30s ping cadence + the 3×-ping claim/
-// presence lease window shared by the SDK heartbeat, the Hub keepalive,
-// the claim coordinator, and the presence reaper (see protocol.ts) — plus
-// the WS auth-handshake subprotocols shared by SyncWebSocket and the Hub.
+// Protocol timing constants — the 30-second ping cadence and the lease window
+// derived from it, shared by the client heartbeat and the server keepalive,
+// claim leasing, and presence expiry (see protocol.ts) — plus the WebSocket
+// subprotocols used during the authenticated handshake.
 export {
   PING_INTERVAL_MS,
   LEASE_TTL_MS,

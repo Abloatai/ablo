@@ -1,8 +1,7 @@
 /**
- * Schema Model Definition
- *
- * A model is a Zod object schema + optional relations.
- * Types are inferred directly from Zod — no custom type system.
+ * Defines a model — one table's worth of fields plus its relations and options. A
+ * model is a Zod object schema paired with optional relation definitions; the row
+ * type is inferred directly from Zod, with no separate type system to keep in sync.
  *
  * Usage:
  *   import { z } from 'zod';
@@ -21,17 +20,15 @@ import { z } from 'zod';
 import type { RelationDef } from './relation.js';
 import type { EntityRole, GroupsInput } from './roles.js';
 import { getFieldMeta, inferFieldMetaFromZod, type FieldMeta } from './field.js';
-// Tenancy is owned by `tenancy.ts` (single source of truth). `ScopedViaRef` is
-// re-exported so existing `import { ScopedViaRef } from './model'` call sites
-// keep resolving. Authoring uses the `policy` option (`PolicyInput`, named for
-// Postgres/Supabase RLS), normalized to the canonical `Tenancy` by
-// `resolvePolicy` at build time.
+// Tenancy lives in `tenancy.ts`. Authoring uses the `policy` option
+// (`PolicyInput`), which `resolvePolicy` normalizes into the canonical `Tenancy`
+// at build time.
 import { resolvePolicy, type Tenancy, type ScopedViaRef, type PolicyInput } from './tenancy.js';
 export type { ScopedViaRef, Tenancy, PolicyInput } from './tenancy.js';
 import { DEFAULT_RESIDENCY, type ModelResidency } from './residency.js';
-// Axis 3 — write-conflict disposition. Pure-data type (the onStale vocabulary)
-// so it round-trips through schema serialization; the generic engine interprets
-// it (`interpretConflictAxis`) at the commit chokepoint.
+// The write-conflict disposition. It is plain data (the `onStale` vocabulary) so it
+// round-trips through schema serialization, and the engine interprets it when a
+// commit is applied.
 import type { ConflictAxis } from '../policy/types.js';
 export type { ConflictAxis } from '../policy/types.js';
 
@@ -98,18 +95,14 @@ export interface ModelOptions {
   /** Order to sort by during bootstrap (e.g., 'created_at DESC'). */
   bootstrapOrderBy?: string;
   /**
-   * The GraphQL/wire `__typename` value for this model.
+   * The wire type name for this model — the value that identifies its rows on the
+   * wire (the `__typename`). The loader stamps it onto incoming rows and uses it to
+   * find the matching model class. It defaults to the schema key (`tasks` →
+   * `'tasks'`); set it explicitly when the wire shape uses different casing, such as
+   * schema key `slideLayer` mapping to typename `'SlideLayer'`.
    *
-   * Used by the generic loader + hydration pipeline to stamp `__typename`
-   * on raw rows before `pool.createFromData(...)`, and to look up the
-   * matching class in the model registry. Defaults to the schema key
-   * (e.g., `tasks` → `'tasks'`). Provide explicitly when the wire shape
-   * uses a different casing (e.g., schema key `slideLayer` → typename
-   * `'SlideLayer'`).
-   *
-   * This is the single source of truth for "what identifies this model
-   * on the wire." Every other layer (IDB store name, query.returns
-   * references, delta routing) resolves through this value.
+   * This is the one value that identifies the model on the wire; the client-side
+   * store name, query result references, and delta routing all resolve through it.
    */
   typename?: string;
   /**
@@ -117,59 +110,59 @@ export interface ModelOptions {
    */
   persist?: PersistOptions;
   /**
-   * The actual database table name. Defaults to snake_case of the model
-   * name if not provided. Used by the bootstrap query builder to know
-   * which table to SELECT from — without this, the server has to guess
-   * via a naming convention that may not match the Prisma @@map directive.
+   * The database table this model maps to. Defaults to the snake_case form of the
+   * model name. Set it when the real table name does not follow that convention, so
+   * queries read from the right table instead of a guessed name.
    */
   tableName?: string;
 
   /**
-   * **Axis 1 — row-access policy (tenant isolation / RLS).** Decides who may
-   * *read* a row at all. Named after Postgres/Supabase, where a `policy` is the
-   * rule that scopes which rows a tenant sees. A discriminated union on `by` —
-   * one option replacing the old `orgScoped`/`scopedVia`/`orgColumn` trio:
+   * Row-access policy — decides which rows a tenant may read at all. A discriminated
+   * union on `by`:
    *
-   * - `{ by: 'column' }` — row-local tenancy column (the DEFAULT when omitted).
-   *   `column` overrides the name (default `organization_id`).
-   * - `{ by: 'parent', fk, parent }` — inherit tenancy through a foreign key
-   *   when THIS table has no tenancy column of its own (e.g. `slide_layers` →
-   *   slide → deck → org). Emits, in place of `organization_id = $1`:
+   * - `{ by: 'column' }` — the row carries its own tenancy column (the default when
+   *   omitted). `column` overrides the column name, which defaults to
+   *   `organization_id`.
+   * - `{ by: 'parent', fk, parent }` — inherit tenancy through a foreign key when the
+   *   table has no tenancy column of its own (for example `slide_layers` → slide →
+   *   deck → organization). In place of `organization_id = $1` the read emits
    *   `WHERE <table>.<fk> IN (SELECT <parentKey> FROM <parent> WHERE
-   *   <parentTenantColumn> = $1)`. Use this for any `load: 'instant'` child
-   *   table that would otherwise leak cross-tenant on bootstrap.
-   * - `{ by: 'none' }` — genuinely global / reference data (the `organizations`
-   *   table itself, global lookups). ⚠ Makes the whole table readable
-   *   cross-tenant — only correct for tenant-less tables. Because it's an
-   *   explicit, named branch (not a falsy flag) it can't be reached by accident.
+   *   <parentTenantColumn> = $1)`. Use it for any `load: 'instant'` child table that
+   *   would otherwise expose other tenants' rows at bootstrap.
+   * - `{ by: 'none' }` — genuinely global or reference data, such as a lookup table.
+   *   This makes the whole table readable across tenants, so it is only correct for
+   *   tables that have no tenant at all. It is a named branch rather than a falsy
+   *   flag, so it cannot be selected by accident.
    *
-   * Normalized into the canonical {@link Tenancy} by `resolvePolicy` at build.
+   * {@link resolvePolicy} normalizes this into the canonical {@link Tenancy} when the
+   * model is built.
    */
   policy?: PolicyInput;
 
   /**
-   * Which database plane this model's rows live in. `tenant` (default) =
-   * the tenant data plane, emitted into a customer's BYO/dedicated DB by
-   * provisioning. `control` = Ablo's control plane (sync log, attribution,
-   * audit) — never emitted into a customer DB. See `./plane.ts`.
+   * Which database a model's rows live in. `tenant` (the default) is tenant data
+   * that provisioning places in the customer's own database; `control` is Ablo's own
+   * data — the sync log, attribution, and audit records — which never leaves Ablo's
+   * database. See {@link ModelResidency}.
    */
   plane?: ModelResidency;
 
   /**
-   * **Axis 2 — sync-group routing.** Decides which delta *channels* a row fans
-   * into. Orthogonal to {@link policy} (read access). One namespaced object
-   * replacing the old flat `scope`/`grants`/`entityRoles`:
+   * Sync-group routing — decides which delta channels a row fans out to. This is
+   * independent of {@link policy}, which governs read access. One object with three
+   * optional parts:
    *
-   * - `root` — mark this model a scope root; its records form the group
-   *   `<kind>:<id>` (kind defaults from the lowercased typename, e.g. `Deck` →
-   *   `deck:<id>`; pass a string to override, `root: 'matter'`). Child models
-   *   inherit a root's group via their `belongsTo` relations. Was `scope` —
-   *   renamed so it no longer collides with the old `scopedVia` tenancy sugar.
-   * - `grants` — a membership edge granting an identity access to a scope root.
-   *   Both values name `belongsTo` relations on this model (`subject` → identity,
-   *   `scope` → scope root). Only needed for sub-org sharing.
-   * - `roles` — explicit non-relational record→group roles (the inbox-fan-out
-   *   escape hatch, keyed on a plain field). Was `entityRoles`. One or many.
+   * - `root` — marks this model a scope root, so each of its records forms the group
+   *   `<kind>:<id>`. The kind defaults to the lowercased typename (`Deck` →
+   *   `deck:<id>`); pass a string to override it (`root: 'matter'`). Child models
+   *   inherit a root's group through their `belongsTo` relations.
+   * - `grants` — a membership edge that grants an identity access to a scope root.
+   *   Both values name `belongsTo` relations on this model (`subject` names the
+   *   identity, `scope` names the scope root). Use it only for sharing within an
+   *   organization.
+   * - `roles` — explicit record-to-group roles keyed on a plain field, for routing
+   *   that does not follow a relation, such as fanning a message into a recipient's
+   *   inbox. Accepts one role or many.
    *
    * ```ts
    * // dataroomMember: { userId, dataroomId }
@@ -181,20 +174,20 @@ export interface ModelOptions {
   groups?: GroupsInput;
 
   /**
-   * **Axis 3 — write-conflict disposition, per committer kind.** Decides what
-   * happens when a commit collides with a foreign claim or a stale snapshot on
-   * this model — orthogonal to {@link policy} (read access) and {@link groups}
-   * (delta routing). A plain map keyed by the COMMITTER's participant kind
-   * (`user` / `agent` / `system`), with the `onStale` vocabulary as values:
+   * Write-conflict disposition, set per committer kind — decides what happens when a
+   * commit collides with another participant's claim or with a stale snapshot of this
+   * model. This is independent of {@link policy} (read access) and {@link groups}
+   * (delta routing). It is a map keyed by the committer's kind (`user`, `agent`, or
+   * `system`), with these outcomes as values:
    *
    * - `'overwrite'` — the write wins; that committer is never blocked.
    * - `'reject'`    — the write is refused; that committer yields.
-   * - `'notify'`    — hold the write and hand back the current value so the
-   *                   committer re-reads and re-applies (stale writes only).
+   * - `'notify'`    — hold the write and hand the current value back so the committer
+   *                   re-reads and re-applies (for stale writes only).
    *
-   * An omitted kind falls through to the engine default (reject; honor
-   * `onStale: 'notify'`). It is pure data (serializes through the schema
-   * registry to the server) and the generic engine interprets it — so e.g.
+   * A kind you omit falls back to the engine default: reject, while honoring
+   * `onStale: 'notify'`. The value is plain data that travels with the schema to the
+   * server, where the engine interprets it. For example:
    *
    * ```ts
    * // "a human's edit always wins (never blocked); an agent yields"
@@ -204,43 +197,35 @@ export interface ModelOptions {
   conflict?: ConflictAxis;
 
   /**
-   * Whether clients may issue CREATE/UPDATE/DELETE mutations for this
-   * model via the `commit` wire protocol. Default: **true** — declaring a
-   * model in the schema IS the opt-in; if you put an entity in your synced
-   * schema, you almost always want to write it (product decision
-   * 2026-06-10, reversing the earlier default-deny that made every fresh
-   * quickstart's first write die with `server_execute_unknown_model`).
+   * Whether clients may create, update, and delete this model's rows through the
+   * commit protocol. Defaults to true: declaring a model in your schema is the
+   * opt-in, since a synced entity is almost always one you want to write. A model
+   * left out of the mutation allowlist rejects writes with
+   * `server_execute_unknown_model`.
    *
-   * Opt OUT for server-managed projections (stats, digests, audit views):
-   * `mutable: false`, or the `readOnly.*` sugar which sets it for you.
-   * That keeps the 2026-04-20 `AgentJob`-class protection available where
-   * it matters, as a deliberate marking instead of a silent default.
-   *
-   * The server's `buildModelMap` (src/server/commit.ts) derives
-   * the mutation allowlist from this flag — no parallel hardcoded list.
+   * Set `mutable: false` (or use the `readOnly.*` shorthand, which sets it for you)
+   * for server-managed projections such as stats, digests, or audit views, so those
+   * cannot be written from a client. The server derives its mutation allowlist from
+   * this flag; there is no separate hardcoded list to keep in step.
    */
   mutable?: boolean;
 
   /**
-   * Defer MobX observability setup until the model is first accessed
-   * by an observer component. Default: false (observe immediately).
+   * Defer setting up MobX observability until the model is first accessed by an
+   * observing component. Defaults to false, which observes immediately.
    *
-   * Use for models that are created in bulk (e.g., during import or
-   * batch bootstrap) where most instances are never rendered. The
-   * model's constructor skips makeObservable(); instead, consuming
-   * code calls model.makeObservable() when the model enters the
-   * render tree. This matches Ablo's SlideLayer.ensureObservable()
-   * pattern and avoids ~10ms of MobX setup overhead per instance
-   * when creating hundreds of models that never get observed.
+   * Use it for models created in bulk — during an import or a batch bootstrap —
+   * where most instances are never rendered. The constructor skips the observability
+   * setup, and calling `model.makeObservable()` performs it later when the model
+   * enters the render tree. This avoids roughly 10ms of setup per instance when
+   * creating hundreds of models that are never observed.
    */
   lazyObservable?: boolean;
 
   /**
-   * Computed getters installed on the dynamic model class prototype.
-   *
-   * Each key becomes a getter on the model instance. The function receives
-   * `self` (the model instance) and returns the computed value. These replace
-   * hand-coded getter methods on legacy Model subclasses.
+   * Computed getters to install on the model instance. Each key becomes a getter;
+   * its function receives the model instance as `self` and returns the computed
+   * value.
    *
    * @example
    * model({ title: z.string(), metadata: z.string() }, {}, {
@@ -256,16 +241,15 @@ export interface ModelOptions {
   computed?: ComputedRecord;
 
   /**
-   * Fields to back-fill from the sync client identity when missing
-   * during IndexedDB self-healing.
+   * Fields to back-fill from the connected sync identity when a stored row is missing
+   * them, during self-healing of the local store.
    *
-   * Healing runs on every row loaded from IDB at hydration time and on
-   * every delta merge. If the row is missing one of these fields, the
-   * engine writes the corresponding identity value (`organizationId` /
-   * `userId` from `SyncClient.initialize`) into the row before passing
-   * it to the ObjectPool. Without this, rows from a past version that
-   * didn't write the field would surface as `undefined` and break any
-   * code that assumes the field is set.
+   * Healing runs on every row loaded from the local store at hydration and on every
+   * delta merge. When a row is missing one of these fields, the engine writes the
+   * matching identity value (the `organizationId` or `userId` passed to the sync
+   * client) into the row before it is loaded. Without this, rows written by an older
+   * version that did not set the field would read as `undefined` and break code that
+   * assumes it is present.
    *
    * @example
    * autoFill: [
@@ -276,13 +260,12 @@ export interface ModelOptions {
   autoFill?: readonly AutoFillRule[];
 
   /**
-   * Fields whose absence makes a stored row "orphaned" — corrupt
-   * enough that the engine should drop it instead of loading it.
+   * Fields whose absence marks a stored row as orphaned — corrupt enough that the
+   * engine drops it instead of loading it.
    *
-   * Healing returns `null` for the row when any listed field is
-   * missing, which causes the caller to skip pool insertion for that
-   * record. Use for foreign keys whose absence would crash dependent
-   * code (e.g. a `SlideLayer` with no `slideId` can't render anywhere).
+   * During self-healing, a row missing any listed field is discarded rather than
+   * loaded. Use it for foreign keys whose absence would crash code that depends on
+   * them — for example a child row that cannot be placed without its parent's id.
    *
    * @example requiredFields: ['slideId']
    */
@@ -303,13 +286,10 @@ export type ComputedRecord = Record<string, (self: any) => any>;
 export type AutoFillSource = 'organizationId' | 'userId';
 
 /**
- * Declaration of a field that should be back-filled from the connected
- * sync identity if missing from a stored row.
- *
- * Used by `SyncClient.healModelRecord` to repair pre-existing IDB rows
- * that were written without `organizationId` / `createdBy` due to past
- * bugs in delta merging. Declared per-model so the engine itself stays
- * product-neutral.
+ * Declares one field to back-fill from the connected sync identity when it is
+ * missing from a stored row. The engine repairs rows during self-healing — for
+ * example rows written by an older version without an `organizationId` or
+ * `createdBy`. Declared per model, so the engine stays product-neutral.
  */
 export interface AutoFillRule {
   /** Field name on the model (e.g. `'organizationId'`, `'createdBy'`). */
@@ -348,30 +328,29 @@ export interface ModelDef<
   /** Sort order for bootstrap */
   readonly bootstrapOrderBy?: string;
   /**
-   * The GraphQL/wire `__typename` value for this model. When unset in
-   * {@link ModelOptions}, this falls back to the schema key at schema
-   * assembly time (see `defineSchema`).
+   * The wire type name (`__typename`) for this model. When left unset in
+   * {@link ModelOptions}, it falls back to the schema key when the schema is
+   * assembled. See {@link ModelOptions.typename}.
    */
   readonly typename?: string;
   /** IndexedDB persistence hints. See {@link PersistOptions}. */
   readonly persist?: PersistOptions;
-  /** The actual database table name from Prisma @@map. See {@link ModelOptions.tableName}. */
+  /** The database table this model maps to. See {@link ModelOptions.tableName}. */
   readonly tableName?: string;
-  /** Whether the table has organization_id. See {@link ModelOptions.orgScoped}. */
-  /** Canonical tenancy descriptor — the single source of truth, normalized from
-   *  the `orgScoped`/`scopedVia`/`orgColumn` authoring sugar at build. */
+  /** The canonical tenancy descriptor for this model, normalized from the `policy`
+   *  option at build time. See {@link ModelOptions.policy}. */
   readonly tenancy: Tenancy;
-  /** Database plane — `tenant` (default) is portable to a customer DB; `control`
-   *  is Ablo-only. See {@link ModelOptions.plane} and `./plane.ts`. */
+  /** Which database this model's rows live in — `tenant` (default) can be a
+   *  customer's own database; `control` is Ablo's. See {@link ModelOptions.plane}. */
   readonly plane?: ModelResidency;
-  /** Scope-root marker. See {@link ModelOptions.scope}. */
+  /** Scope-root marker. See {@link ModelOptions.groups}. */
   readonly scope?: boolean | string;
-  /** Membership edge granting identity → scope-root access. See {@link ModelOptions.grants}. */
+  /** Membership edge granting an identity access to a scope root. See {@link ModelOptions.groups}. */
   readonly grants?: GrantsRef;
-  /** Explicit non-relational record→group roles (normalized to an array). See {@link ModelOptions.entityRoles}. */
+  /** Explicit record-to-group roles, normalized to an array. See {@link ModelOptions.groups}. */
   readonly entityRoles?: readonly EntityRole[];
-  /** Axis 3 — declared write-conflict disposition per committer kind. Already
-   *  canonical pure data (unlike `policy`, no resolve step). See {@link ModelOptions.conflict}. */
+  /** The write-conflict disposition per committer kind, carried as plain data. See
+   *  {@link ModelOptions.conflict}. */
   readonly conflict?: ConflictAxis;
   /** Whether wire-level CREATE/UPDATE/DELETE is allowed. See {@link ModelOptions.mutable}. */
   readonly mutable?: boolean;
@@ -388,35 +367,30 @@ export interface ModelDef<
 // ── Model factory ─────────────────────────────────────────────────────────
 
 /**
- * Define a model with a Zod shape and optional relations.
+ * Defines a model from a Zod shape, with optional relations and options. The row
+ * type is inferred from the shape; fields built with the {@link field} builders
+ * carry extra metadata, while plain Zod fields get metadata inferred from their Zod
+ * type. The third argument sets options such as the {@link LoadStrategy}.
  *
  * ```ts
  * import { z } from 'zod';
  * import { model, relation } from '@abloatai/ablo/schema';
  *
+ * // Loaded at bootstrap (the default)
  * const tasks = model({
  *   title: z.string(),
  *   status: z.enum(['todo', 'doing', 'done']).default('todo'),
- *   priority: z.number().default(0),
  *   projectId: z.string().optional(),
  * }, {
  *   project: relation.belongsTo('projects', 'projectId'),
  * });
- * ```
- */
-/**
- * Define a model with fields, optional relations, and load strategy.
  *
- * ```ts
- * // Loaded at bootstrap (default)
- * const tasks = model({ title: z.string() });
- *
- * // Loaded on first access (lazy)
+ * // Loaded on first access
  * const slideLayers = model({ slideId: z.string(), type: z.string() }, {
  *   slide: relation.belongsTo('slides', 'slideId'),
  * }, { load: 'lazy' });
  *
- * // Only loaded when explicitly requested
+ * // Loaded only when explicitly requested
  * const auditLogs = model({ action: z.string() }, {}, { load: 'manual' });
  * ```
  */
@@ -453,17 +427,15 @@ export function model<
     typename: options?.typename,
     persist: options?.persist,
     tableName: options?.tableName,
-    // Axis 1 — normalize the `policy` authoring option into the one canonical
-    // tenancy descriptor (defaults to a row-local org column).
+    // Normalize the `policy` option into the canonical tenancy descriptor (defaults
+    // to a row-local organization column).
     tenancy: resolvePolicy(options?.policy),
     plane: options?.plane ?? DEFAULT_RESIDENCY,
-    // Axis 2 — unpack the `groups` routing namespace into the wire fields the
-    // server reads (`scope`/`grants`/`entityRoles` on ModelDef/ModelJSON).
+    // Unpack the `groups` option into the individual routing fields the server reads.
     scope: options?.groups?.root,
     grants: options?.groups?.grants,
     entityRoles: normalizeEntityRoles(options?.groups?.roles),
-    // Axis 3 — already canonical pure data (a per-kind disposition map), so it
-    // passes through verbatim; no resolve step like `resolvePolicy`.
+    // The conflict disposition is already plain data, so it passes through unchanged.
     conflict: options?.conflict,
     mutable: options?.mutable ?? true,
     lazyObservable: options?.lazyObservable,
@@ -474,12 +446,11 @@ export function model<
 }
 
 /**
- * The sync-group kind a scope-root model mints, or `undefined` when the model
- * isn't a scope root. `scope: true` derives the kind from the lowercased
- * typename (`SlideDeck` → `slidedeck`); `scope: 'deck'` sets it explicitly
- * (the form to use when the wire kind must differ from the typename). One place
- * so the commit path, the membership resolver, and the participant join-side
- * all agree on what a record's own group is.
+ * Returns the sync-group kind a scope-root model produces, or `undefined` when the
+ * model is not a scope root. `scope: true` derives the kind from the lowercased
+ * typename (`SlideDeck` → `slidedeck`); `scope: 'deck'` sets it explicitly, which
+ * you use when the wire kind must differ from the typename. This is the single place
+ * that decides a record's own group, so every layer that reads it agrees.
  */
 export function scopeKindOf(
   def: { scope?: boolean | string; typename?: string },

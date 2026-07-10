@@ -1,19 +1,17 @@
 /**
- * Machine-checked public API-surface manifest — the SDK owns the description of
- * its OWN surface, bound to the real exported types at COMPILE TIME so the MCP
- * `get_api_surface` / docs can never drift from reality.
+ * A machine-checked manifest of this package's public API surface. It lists,
+ * as string tuples, the method names on `ablo.<model>`, the keys accepted by
+ * the list-style read options, and the keys of the client constructor
+ * options. Each tuple is proven equal to the keys of its source interface at
+ * compile time, so the lists cannot drift from the real types: add or remove
+ * a name on either side without updating the matching tuple and this file
+ * fails to compile, in both directions — no name the interface lacks, and no
+ * interface key the tuple omits.
  *
- * This exists because the hand-authored surface (apps/sync-web/.../api-surface.ts)
- * once named `load` / `count` / `scope` — verbs/options that don't exist — with no
- * coupling to the code. The fix: the name lists live HERE, next to the types, and
- * each is proven EXACTLY equal to the keys of its source interface via
- * `Expect<Equal<…>>`. Add or remove a verb/option without updating the matching
- * tuple and THIS FILE FAILS TO COMPILE (the `Equal` constraint is checked eagerly
- * at the alias declaration — both directions: no phantom name, no missing name).
- *
- * Consumers (the MCP `get_api_surface`) import these NAME tuples and build their
- * prose from them, so a summary can never reference a verb that doesn't exist.
- * NAMES are guaranteed; descriptions stay hand-written (prose can't be type-checked).
+ * Documentation tooling reads these tuples to describe the surface, which
+ * guarantees a generated summary never names a method or option that does
+ * not exist. The names are verified here; their prose descriptions are
+ * written by hand, since prose cannot be type-checked.
  */
 
 import type { ModelOperations, LocalReadOptions } from './client/createModelProxy.js';
@@ -27,8 +25,12 @@ type Equal<A, B> =
 type Expect<T extends true> = T;
 
 // ── the per-`ablo.<model>` verb surface ────────────────────────────────────
-/** Every method on `ablo.<model>` (the stateful `ModelOperations`). The single
- *  source of truth for the model-verb names the docs/MCP may describe. */
+/**
+ * The names of every method available on `ablo.<model>`, matching the keys of
+ * the {@link ModelOperations} interface. Documentation tooling reads this
+ * tuple, so it is the one list of model-verb names a generated summary can
+ * describe.
+ */
 export const PUBLIC_MODEL_VERBS = [
   'retrieve',
   'list',
@@ -48,8 +50,11 @@ type _ModelVerbsExact = Expect<
 >;
 
 // ── the read/list query option surface ─────────────────────────────────────
-/** Keys accepted by `list`/`getAll`/`onChange` options (`LocalReadOptions`).
- *  Note `state` (lifecycle filter) — NOT `scope` (a historic doc drift). */
+/**
+ * The option keys accepted by `list`, `getAll`, and `onChange`, matching the
+ * keys of {@link LocalReadOptions}. Note that the lifecycle filter is named
+ * `state`, not `scope`.
+ */
 export const PUBLIC_LIST_OPTION_KEYS = [
   'where',
   'filter',
@@ -64,8 +69,10 @@ type _ListOptionKeysExact = Expect<
 >;
 
 // ── the `Ablo({ … })` constructor option surface ───────────────────────────
-/** Public keys of `AbloOptions`. `schema` is required; the rest are optional
- *  (the locked happy path is `Ablo({ schema, apiKey, databaseUrl, transport })`). */
+/**
+ * The keys of the client constructor options, {@link AbloOptions}. Only
+ * `schema` is required; every other key is optional.
+ */
 export const PUBLIC_ABLO_OPTION_KEYS = [
   'schema',
   'apiKey',

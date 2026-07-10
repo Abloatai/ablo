@@ -1,18 +1,18 @@
 /**
- * The table-creation SQL every ORM adapter ships for its OWN infrastructure tables —
- * `ablo_idempotency` (dedupe by clientTxId) and `ablo_outbox` (transactional
- * outbox the `events()` feed reads). Defined ONCE here so the Prisma adapter, the
- * Drizzle adapter, and `ablo migrate` can never disagree on the shape (they used
- * to inline their own copies, which had already drifted in whitespace).
+ * The table-creation SQL every ORM adapter ships for its own infrastructure
+ * tables: `ablo_idempotency`, which dedupes commits by `clientTxId`, and
+ * `ablo_outbox`, the transactional outbox the `events()` feed reads. Defining it in
+ * one place keeps the Prisma adapter, the Drizzle adapter, and `ablo migrate` in
+ * agreement on the exact shape.
  *
- * These are NOT model tables and are NOT emitted by the hosted provisioner
- * (`generateProvisionPlan`) — the hosted path uses `sync_deltas` directly. They
- * exist only on a customer's own database in Data Source mode.
+ * These are infrastructure tables, not model tables, and they exist only on your
+ * own database when you run a Data Source. Ablo's hosted storage does not use them;
+ * it records changes in its own `sync_deltas` log instead.
  */
 
 import type { Migration } from './contract.js';
 
-/** Canonical adapter-owned table-creation SQL. Idempotent (`IF NOT EXISTS`). */
+/** Returns the adapter's table-creation migrations. The SQL is idempotent, guarded by `IF NOT EXISTS`. */
 export function adapterTableMigrations(): readonly Migration[] {
   return [
     {

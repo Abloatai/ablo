@@ -1,13 +1,10 @@
 /**
- * credentialLifecycle — reconnect-credential re-mint + proactive pre-roll.
- *
- * Extracted from BaseSyncedStore.ts as a cohesive leaf: owns the re-mint
- * hook, the single-flight guard, and the browser-only proactive refresh
- * (timer + OS-wake listener). The store keeps thin public delegates
- * (`setCredentialRefresher` / `performCredentialRefresh` /
- * `startCredentialLifecycle`) so its published surface is unchanged, and
- * talks back through the minimal {@link CredentialLifecycleContext} —
- * never the store's class type — so no module cycle forms.
+ * Keeps the short-lived access credential fresh. It owns the re-mint hook, a
+ * single-flight guard that stops concurrent triggers from minting more than
+ * once, and a browser-only proactive refresh — a timer plus an OS-wake listener
+ * — that renews the credential ahead of expiry. It reaches the rest of the
+ * client only through the small {@link CredentialLifecycleContext} interface,
+ * so the two can reference each other without an import cycle.
  */
 
 import { getContext } from '../context.js';
@@ -20,20 +17,20 @@ import type { RecoveryClass } from '../errorCodes.js';
 export type CredentialRefreshOutcome = 'refreshed' | 'session_error' | 'network_error';
 
 /**
- * What an auth-rejected transport should do after the backbone has run:
- * `'retry'` = a fresh credential is in the credential source, replay the
- * request ONCE; `'stop'` = don't replay (terminal session loss, a rejection
- * a re-mint can't cure, or a transient mint failure the caller's own
- * retry/revalidation path will recover later).
+ * What an auth-rejected transport should do after recovery has run. `'retry'`
+ * means a fresh credential is now in place — replay the request once. `'stop'`
+ * means don't replay: either the session is gone for good, the rejection is one
+ * a re-mint can't cure, or the mint failed transiently and the caller's own
+ * retry path will recover later.
  */
 export type CredentialRecoveryOutcome = 'retry' | 'stop';
 
 /**
- * What a credential refresher may resolve with. The plain-string form is the
- * classic `getToken` contract; the object form additionally carries the mint
- * response's `expiresAt` (ISO string / epoch ms / Date) so the proactive
- * pre-roll can schedule off the credential's ACTUAL lifetime instead of
- * assuming the server's default TTL.
+ * What a credential refresher may resolve with. The plain-string form returns
+ * just the token. The object form also carries the mint response's `expiresAt`
+ * (an ISO string, epoch milliseconds, or a `Date`), which lets the proactive
+ * pre-roll schedule against the credential's real lifetime rather than assume
+ * the server's default expiry.
  */
 export type CredentialRefreshResult =
   | string
@@ -44,19 +41,21 @@ export type CredentialRefreshResult =
  *  assignable — the widened result type is a superset. */
 export type CredentialRefresher = () => Promise<CredentialRefreshResult>;
 
-/** Fallback pre-roll cadence AND ceiling — the historical 10-minute value,
- *  comfortably inside the server's 15m default `ek_` TTL. Used verbatim when
- *  the refresher reports no expiry. */
+/** The fallback pre-roll interval, and also its ceiling: 10 minutes, which sits
+ *  comfortably inside the server's 15-minute default credential lifetime. Used
+ *  as-is when the refresher reports no expiry. */
 export const DEFAULT_PREROLL_INTERVAL_MS = 10 * 60 * 1000;
 
 /** Floor so a very short (or already-elapsed) TTL can't hot-loop the mint. */
 export const MIN_PREROLL_DELAY_MS = 30 * 1000;
 
 /**
- * When to pre-roll a credential that expires at `expiresAtMs`: after ~2/3 of
- * the REMAINING lifetime (15m TTL → 10m, exactly the historical cadence),
- * clamped to [{@link MIN_PREROLL_DELAY_MS}, {@link DEFAULT_PREROLL_INTERVAL_MS}].
- * Unknown expiry (`null`) → the 10-minute fallback. Exported for unit tests.
+ * Computes how long to wait before pre-rolling a credential that expires at
+ * `expiresAtMs`: about two-thirds of the remaining lifetime (a 15-minute
+ * credential yields 10 minutes), clamped to
+ * [{@link MIN_PREROLL_DELAY_MS}, {@link DEFAULT_PREROLL_INTERVAL_MS}]. An
+ * unknown expiry (`null`) falls back to the 10-minute interval. Exported for
+ * unit tests.
  */
 export function computePrerollDelayMs(expiresAtMs: number | null, nowMs: number): number {
   if (expiresAtMs === null || !Number.isFinite(expiresAtMs)) {
@@ -82,32 +81,33 @@ function normalizeExpiresAtMs(expiresAt: string | number | Date | undefined): nu
 }
 
 /**
- * What the lifecycle needs back from its host store. Deliberately minimal —
- * three callbacks, all resolved lazily at call time (the ConnectionManager
- * behind two of them doesn't exist until `setupWebSocketSync`).
+ * The callbacks this lifecycle needs back from the surrounding client. It is
+ * deliberately minimal — three callbacks, each resolved lazily at call time,
+ * because the connection machinery behind two of them isn't constructed until
+ * the sync connection is set up.
  */
 export interface CredentialLifecycleContext {
   /** Push a freshly-minted access token into the shared credential source
    *  (no-op when the deployment wired no credential source). */
   setAuthToken(token: string): void;
-  /** Nudge the connection FSM to re-probe with the current credential —
-   *  the host's `nudgeReconnect()` (`CREDENTIAL_REFRESHED`). */
+  /** Nudge the connection to re-probe using the credential now in place. */
   nudgeReconnect(): void;
-  /** Surface a terminal session loss to the connection FSM
-   *  (`BOOTSTRAP_FAILED_SESSION`) — the long-lived login is gone. */
+  /** Report that the long-lived login is gone, so the connection can move to
+   *  its signed-out state. */
   reportSessionExpired(): void;
 }
 
 export class CredentialLifecycle {
   /**
-   * Re-mint hook for the short-lived access credential (the Stripe-style
-   * `ek_`/`rk_`). Wired by the React provider from its `getToken`/`authEndpoint`
-   * — the engine owns WHEN to refresh (a stale-credential probe / an external
-   * nudge), the integrator owns HOW to mint. Mirrors the `getToken` contract:
-   * resolves a token string on success, `null` when the long-lived login is
-   * gone (terminal), and THROWS on a transient/offline failure. Used by
-   * {@link refresh}. Absent ⇒ no silent re-mint (e.g. a static
-   * `apiKey` deployment whose credential source refreshes out-of-band).
+   * The hook that mints a fresh short-lived access credential (the `ek_`/`rk_`
+   * key). An integrator wires it from their own token endpoint: this lifecycle
+   * decides when to refresh (a stale-credential probe or an external nudge),
+   * and the hook decides how to mint. It follows the same contract as a
+   * `getToken` function — it resolves a token string on success, `null` when
+   * the long-lived login is gone (a terminal state), and throws on a transient
+   * or offline failure. Used by {@link refresh}. When it is absent there is no
+   * silent re-mint, as with a static `apiKey` whose credential source is
+   * refreshed elsewhere.
    */
   private credentialRefresher: CredentialRefresher | null = null;
 
@@ -115,50 +115,49 @@ export class CredentialLifecycle {
    *  all mint at once (the classic "token thrash → random logout" bug). */
   private inFlightCredentialRefresh: Promise<CredentialRefreshOutcome> | null = null;
 
-  /** Teardown for the proactive credential lifecycle (refresh timer + wake/
-   *  online/focus listeners) installed by {@link start};
-   *  cleared on `BaseSyncedStore.disconnect`. Null when no resolver is wired. */
+  /** Tears down the proactive credential lifecycle (the refresh timer and the
+   *  OS-wake listener) installed by {@link start}; cleared when the client
+   *  disconnects. Null when no refresher is wired. */
   private credentialLifecycleTeardown: (() => void) | null = null;
 
-  /** Epoch ms the CURRENT credential expires, when the refresher reports it
-   *  (object-form {@link CredentialRefreshResult}); `null` for the classic
-   *  string-form resolver → the pre-roll falls back to its fixed cadence. */
+  /** Epoch milliseconds at which the current credential expires, when the
+   *  refresher reports it (the object form of {@link CredentialRefreshResult}).
+   *  `null` for the string-form resolver, in which case the pre-roll uses its
+   *  fixed interval. */
   private credentialExpiresAtMs: number | null = null;
 
-  /** Re-arm hook for the proactive pre-roll timer (set by {@link start}).
-   *  Invoked after every successful mint so a REACTIVE refresh (probe, wake,
-   *  the initial `ready()` mint) immediately re-anchors the schedule to the
-   *  fresh credential's real expiry instead of a stale fixed delay. */
+  /** Re-arms the proactive pre-roll timer (set by {@link start}). Called after
+   *  every successful mint, so a refresh triggered reactively (by a probe, an
+   *  OS wake, or the first mint) re-anchors the schedule to the fresh
+   *  credential's real expiry instead of a stale fixed delay. */
   private prerollReschedule: (() => void) | null = null;
 
   constructor(private readonly ctx: CredentialLifecycleContext) {}
 
   /**
-   * Register the access-credential re-mint hook. Called by the React provider
-   * with a thunk that mints a fresh `ek_`/`rk_` (typically its `getToken`).
-   * See {@link credentialRefresher}.
+   * Registers the re-mint hook for the access credential — a function that
+   * mints a fresh `ek_`/`rk_` key, typically the integrator's `getToken`. See
+   * {@link credentialRefresher}.
    */
   setRefresher(refresher: CredentialRefresher | null): void {
     this.credentialRefresher = refresher;
   }
 
   /**
-   * Re-mint the short-lived access credential and push it into the credential
-   * source, reporting a tri-state outcome the `ConnectionManager` maps to
-   * its FSM. The contract mirrors `getToken` (and PowerSync's `fetchCredentials`
-   * / Liveblocks' `authEndpoint`, but made explicit instead of overloading
-   * return/throw):
-   *   - token string  → `'refreshed'`     (fresh key in place; re-probe & reconnect)
-   *   - `null`        → `'session_error'` (login itself is gone → terminal, sign out)
-   *   - throw         → `'network_error'` (couldn't reach the mint endpoint → transient)
+   * Re-mints the short-lived access credential, pushes it into the credential
+   * source, and reports a three-way outcome the connection layer acts on:
+   *   - a token string → `'refreshed'`     (the fresh key is in place; re-probe and reconnect)
+   *   - `null`         → `'session_error'` (the login itself is gone — terminal, sign out)
+   *   - a thrown error → `'network_error'` (the mint endpoint was unreachable — transient)
    *
-   * SINGLE-FLIGHT: concurrent callers (a wake nudge, an in-flight request, the
-   * probe) share one in-flight promise so we never double-mint — the canonical
-   * fix for the "every 401 mints a token → thrash → spurious logout" anti-pattern.
+   * The call is single-flight: concurrent triggers (an OS wake, an in-flight
+   * request, a probe) share one in-flight promise, so the credential is never
+   * minted twice at once. This avoids the failure where every rejected request
+   * mints a new token and the resulting thrash logs the user out.
    *
-   * No refresher wired ⇒ `'refreshed'` (a no-op re-probe): a static-`apiKey`
-   * deployment has no session to re-mint from; its credential source refreshes
-   * out-of-band, so we just re-probe with whatever it currently holds.
+   * With no refresher wired, it resolves `'refreshed'` as a no-op re-probe: a
+   * static-`apiKey` client has no session to mint from and its credential
+   * source is refreshed elsewhere, so it simply re-probes with what it holds.
    */
   async refresh(): Promise<CredentialRefreshOutcome> {
     const refresher = this.credentialRefresher;
@@ -170,8 +169,8 @@ export class CredentialLifecycle {
         const result = await refresher();
         const token = typeof result === 'string' ? result : result?.token;
         if (!token) {
-          // null = the long-lived login is gone (mint endpoint answered 401/403).
-          // Terminal — the FSM routes this to sign-out.
+          // null = the long-lived login is gone (the mint endpoint answered
+          // 401/403). Terminal — this routes to sign-out.
           return 'session_error';
         }
         // Object-form resolvers carry the mint's actual expiry; remember it so
@@ -190,12 +189,12 @@ export class CredentialLifecycle {
         // login may be perfectly valid; never sign out for this — back off and
         // retry. Mirrors the `getToken` throw-vs-null contract end-to-end.
         const message = (error as Error)?.message ?? String(error);
-        // A relative-URL resolver invoked server-side (Node fetch has no origin
-        // to resolve against) emits the opaque "Failed to parse URL" / "Only
-        // absolute URLs are supported". Translate it into something actionable
-        // instead of a mystery transient blip — the proactive refresh is now
-        // browser-only, so hitting this means the resolver fired from SSR/RSC or
-        // a server route.
+        // A relative-URL resolver invoked on the server (Node's fetch has no
+        // origin to resolve against) throws the opaque "Failed to parse URL" or
+        // "Only absolute URLs are supported". Translate it into something
+        // actionable rather than a mystery transient blip: the proactive
+        // refresh is browser-only, so reaching here means the resolver fired
+        // from a server render or a server route.
         if (typeof window === 'undefined' && /parse URL|absolute URLs?/i.test(message)) {
           getContext().logger.warn(
             'credential resolver ran on the server with a relative URL — Node fetch needs an absolute URL. ' +
@@ -219,9 +218,10 @@ export class CredentialLifecycle {
   }
 
   /**
-   * Route a refresh outcome into the FSM — the ONE place the tri-state is
-   * interpreted, shared by the proactive pre-roll, the wake nudge, and the
-   * HTTP auth-recovery path so every trigger converges on identical behavior.
+   * Interprets a refresh outcome and drives the connection accordingly. This is
+   * the single place the three-way outcome is acted on, shared by the proactive
+   * pre-roll, the OS-wake nudge, and the HTTP auth-recovery path, so every
+   * trigger converges on the same behavior.
    */
   private routeRefreshOutcome(outcome: CredentialRefreshOutcome): CredentialRecoveryOutcome {
     if (outcome === 'refreshed') {
@@ -231,33 +231,32 @@ export class CredentialLifecycle {
       return 'retry';
     }
     if (outcome === 'session_error') {
-      // The long-lived login is gone (mint answered 401/403). Surface it —
-      // a no-op in FSM states that don't accept the event (the probe
-      // converges on sign-out there anyway); `session_expired`'s onEnter
-      // owns the authoritative log.
+      // The long-lived login is gone (the mint answered 401/403). Report it;
+      // this is harmless in connection states that don't accept the event,
+      // which converge on sign-out anyway.
       this.ctx.reportSessionExpired();
       return 'stop';
     }
-    // 'network_error' → transient (offline / mint hiccup); the next proactive
-    // tick or the FSM's own probe retries. Never sign out, never replay now.
+    // 'network_error' → transient (offline or a mint hiccup); the next proactive
+    // tick or the connection's own probe retries. Never sign out, never replay now.
     return 'stop';
   }
 
   /**
-   * THE recovery backbone for auth-rejected requests, whatever the transport.
-   * The WS probe already routes 401s through the FSM; HTTP consumers (the
-   * lazy-query lane, bootstrap helpers) call THIS instead of inventing their
-   * own handling — one single-flight mint, one outcome routing, one taxonomy.
-   *
-   * Mirrors `NetworkProbe`'s classification of the same codes:
-   *   - `access_credential_expiry` — the routine case (an expired `ek_`/`rk_`):
-   *     silently re-mint via the single-flight {@link refresh} and tell the
-   *     caller to replay ONCE on success. Never a sign-out by itself — the
-   *     only terminal path is the mint itself resolving `null`.
-   *   - `session_expiry` — the login is gone. Report to the FSM (sign-out
-   *     path) and stop; replaying is pointless.
-   *   - `auth_blocked` / `permission` / everything else — re-minting produces
-   *     the same rejected credential; stop without touching the FSM.
+   * The shared recovery path for a request rejected on authentication, over any
+   * transport. The WebSocket probe already routes its own 401s; HTTP callers
+   * call this instead of inventing their own handling, so every path shares one
+   * single-flight mint, one outcome routing, and one taxonomy. It classifies
+   * the same recovery codes the connection probe does:
+   *   - `access_credential_expiry` — the routine case, an expired `ek_`/`rk_`:
+   *     silently re-mint through the single-flight {@link refresh} and tell the
+   *     caller to replay once on success. This never signs out on its own; the
+   *     only terminal path is the mint resolving `null`.
+   *   - `session_expiry` — the login is gone: report it (which drives sign-out)
+   *     and stop, since replaying is pointless.
+   *   - `auth_blocked`, `permission`, and everything else — re-minting would
+   *     produce the same rejected credential, so stop and leave the connection
+   *     alone.
    */
   async recoverFromAuthRejection(recovery: RecoveryClass): Promise<CredentialRecoveryOutcome> {
     switch (recovery) {
@@ -272,41 +271,39 @@ export class CredentialLifecycle {
   }
 
   /**
-   * Install the access-credential lifecycle the CLIENT owns (this used to live
-   * in the React provider — wrong layer). Two parts:
-   *   1. REACTIVE — register `getToken` as the re-mint hook the FSM calls when a
-   *      probe finds the key stale (`credential_stale`) or on a nudge.
-   *   2. PROACTIVE — keep the short-lived key fresh ahead of trouble: a refresh
-   *      timer inside the TTL, plus re-mint on OS wake. The ENTIRE proactive
-   *      block is browser-gated (`typeof window`): server/SSR has no socket to
-   *      keep warm and the resolver is browser-oriented, so arming it in Node
-   *      would fire a relative-URL fetch and throw. (Agents pass a static
-   *      `apiKey` with no resolver, so this method is never called for them.)
+   * Installs the credential lifecycle. It has two parts:
+   *   1. Reactive — registers `getToken` as the re-mint hook the connection
+   *      calls when a probe finds the key stale, or on a nudge.
+   *   2. Proactive — keeps the short-lived key fresh ahead of expiry with a
+   *      refresh timer inside the credential's lifetime, plus a re-mint on OS
+   *      wake. The whole proactive block is browser-gated on `typeof window`,
+   *      because a server render has no socket to keep warm and the resolver is
+   *      browser-oriented; arming it under Node would fire a relative-URL fetch
+   *      and throw. (Agents pass a static `apiKey` with no resolver, so this
+   *      method is never called for them.)
    *
-   * Config-driven and invisible, like Supabase's `autoRefreshToken` — consumers
-   * never call a refresh method. Idempotent (a second call replaces the first);
-   * torn down on `BaseSyncedStore.disconnect`.
+   * Refreshing is automatic — a consumer never calls a refresh method. The call
+   * is idempotent: a second call replaces the first, and it is torn down when
+   * the client disconnects.
    *
-   * `opts.proactiveInNode` arms the refresh TIMER on a windowless host too —
-   * set for agent/system participants (long-lived server sockets whose
-   * `rk_`/`ek_` must renew BEFORE the hub's keepalive reaper closes them; the
-   * PowerSync/Ably "SDK renews everywhere" model). Node timers are `unref`ed
-   * so a finishing script is never kept alive by the pre-roll. The OS-wake
-   * listener remains browser-only regardless (no `window` to listen on).
+   * `opts.proactiveInNode` arms the refresh timer on a windowless host as well.
+   * Set it for agent or system participants — long-lived server sockets whose
+   * `rk_`/`ek_` must renew before the server's keepalive check closes them.
+   * Node timers are `unref`ed, so a finishing script is never held alive by the
+   * pre-roll. The OS-wake listener stays browser-only regardless, since there
+   * is no `window` to listen on.
    */
   start(getToken: CredentialRefresher, opts?: { proactiveInNode?: boolean }): void {
     this.stop();
     this.setRefresher(getToken);
 
-    // Re-mint through the SAME single-flight path the FSM's reactive probe uses
-    // (`refresh`) rather than calling `getToken()` directly. Two
-    // wins over the old direct call:
-    //   - SINGLE-FLIGHT: a wake nudge, an in-flight probe, and this proactive
-    //     roll share one in-flight promise — no double-mint thrash.
-    //   - The tri-state is HONOURED. The old code did `if (token) {…}` and
-    //     dropped a `null` on the floor — a zombie session that re-minted on
-    //     every tab focus and logged "signing out" forever without ever signing
-    //     out. `session_error` now drives the FSM to actually expire.
+    // Re-mint through the same single-flight path the reactive probe uses
+    // (`refresh`) rather than calling `getToken()` directly. This gives two
+    // things: the mint stays single-flight, so an OS wake, an in-flight probe,
+    // and this proactive roll share one in-flight promise instead of thrashing;
+    // and the three-way outcome is honored, so a `null` result (the login is
+    // gone) actually drives expiry instead of being dropped, which would leave a
+    // zombie session that re-mints on every tab focus.
     const refresh = async (): Promise<void> => {
       // Same outcome routing as every other trigger (see routeRefreshOutcome):
       // refreshed → nudge, session_error → report, network_error → wait for
@@ -316,36 +313,36 @@ export class CredentialLifecycle {
 
     const teardowns: (() => void)[] = [];
 
-    // The proactive pre-roll arms in the browser, or in Node when the host
-    // OPTED IN (`proactiveInNode` — agent/system participants). The default
-    // Node posture stays reactive-only because a Next.js SSR/RSC eval of the
-    // `providers` module constructs user-kind clients whose scaffolded
-    // resolver is browser-oriented (a relative-URL `fetch('/api/ablo-session')`)
-    // — arming a timer there fires that resolver in Node, where fetch has no
-    // origin to resolve a relative URL against → "Failed to parse URL" on
-    // every tick. Long-lived server participants are the opposite case: their
-    // socket MUST outlive the credential TTL, so they get the timer (the
-    // PowerSync/Ably model — "the SDK invokes fetchCredentials when a token is
-    // nearing expiry", on every platform). The reactive re-mint hook
-    // (`setRefresher` above) stays UNCONDITIONAL: it only fires on a
-    // real connection probe, which can't happen during a bare SSR module eval.
+    // The proactive pre-roll arms in the browser, or under Node when the host
+    // opts in (`proactiveInNode`, for agent or system participants). The
+    // default Node posture stays reactive-only, because a server render can
+    // construct user-kind clients whose resolver is browser-oriented (a
+    // relative-URL `fetch('/api/ablo-session')`); arming a timer there fires
+    // that resolver under Node, where fetch has no origin for a relative URL and
+    // throws "Failed to parse URL" on every tick. Long-lived server
+    // participants are the opposite case: their socket must outlive the
+    // credential's lifetime, so they get the timer. The reactive re-mint hook
+    // (`setRefresher` above) stays unconditional: it only fires on a real
+    // connection probe, which can't happen during a bare server-side module
+    // evaluation.
     if (typeof window !== 'undefined' || opts?.proactiveInNode === true) {
-      // A missed (background-throttled) tick is recovered by the next, or by
-      // the reactive probe. The timer is the sole proactive PRE-ROLL — it keeps
-      // the key warm ahead of expiry even while the socket sits healthy-
-      // `connected` (a state the FSM never probes). The delay is derived from
-      // the minted credential's ACTUAL `expiresAt` when the refresher reports
-      // one (~2/3 of remaining TTL), with the historical 10-minute value as
-      // ceiling AND fallback — a deployment minting shorter-TTL keys no longer
-      // outlives a fixed pre-roll and drops to reactive-only recovery.
+      // A missed tick (throttled in the background) is recovered by the next
+      // one, or by the reactive probe. This timer is the only proactive
+      // pre-roll — it keeps the key warm ahead of expiry even while the socket
+      // sits healthy and connected, a state the connection never probes. The
+      // delay comes from the minted credential's real `expiresAt` when the
+      // refresher reports one (about two-thirds of the remaining lifetime), with
+      // the 10-minute value as both ceiling and fallback, so a deployment that
+      // mints shorter-lived keys still pre-rolls in time rather than dropping to
+      // reactive-only recovery.
       let timer: ReturnType<typeof setTimeout> | null = null;
       const scheduleNext = (): void => {
         if (timer !== null) clearTimeout(timer); // idempotent re-arm
         const delay = computePrerollDelayMs(this.credentialExpiresAtMs, Date.now());
         timer = setTimeout(() => {
-          // `.finally` keeps the chain alive on transient failures; a
-          // SUCCESSFUL mint already re-armed via `prerollReschedule` (no-op
-          // double-arm thanks to the clearTimeout above).
+          // `.finally` keeps the chain alive after a transient failure; a
+          // successful mint has already re-armed via `prerollReschedule` (the
+          // clearTimeout above makes the double-arm a no-op).
           void refresh().finally(scheduleNext);
         }, delay);
         // Node: never keep a finishing process alive just for the pre-roll
@@ -360,19 +357,15 @@ export class CredentialLifecycle {
         this.prerollReschedule = null;
       });
 
-      // OS-wake (desktop only): the Electron shell bridges `powerMonitor`
-      // 'resume' to this DOM event. This is the ONE event-trigger the lifecycle
-      // still owns, because `visibilitychange` does NOT fire on wake-from-sleep
-      // and — unlike `online`/`visibilitychange` — the ConnectionManager's own
-      // browser listeners (`setupBrowserListeners`) don't cover wake.
-      // Browser-gated separately from the timer: a `proactiveInNode` host has
-      // no `window` to listen on (and no OS sleep to wake from).
-      //
-      // The `online` and `visibilitychange` listeners that used to live here
-      // were REMOVED: the FSM already re-probes on NETWORK_ONLINE / TAB_VISIBLE
-      // through this exact credential path, so registering them here too only
-      // fired a second, null-swallowing mint per focus — the "session-key
-      // POSTed on every tab focus" spam in the console.
+      // OS-wake, on desktop only: the Electron shell bridges `powerMonitor`
+      // 'resume' to this DOM event. It is the one event trigger this lifecycle
+      // still owns, because `visibilitychange` does not fire on wake-from-sleep
+      // and the connection's own browser listeners don't cover wake. It is
+      // browser-gated separately from the timer, since a `proactiveInNode` host
+      // has no `window` to listen on and no OS sleep to wake from. Coming back
+      // online and regaining tab visibility are handled elsewhere — the
+      // connection already re-probes through this same credential path — so
+      // listening for them here too would only fire a second, redundant mint.
       if (typeof window !== 'undefined') {
         const onWake = (): void => void refresh();
         window.addEventListener('ablo:wake', onWake);

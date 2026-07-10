@@ -13,23 +13,23 @@ import { observable, runInAction, type IObservableArray } from 'mobx';
 import { type Model, modelAsRow } from '../Model.js';
 import { ModelScope } from '../types/index.js';
 import type { ViewRegistry } from './ViewRegistry.js';
-import type { IncrementalView } from './query-utils.js';
+import type { IncrementalView } from './queryUtils.js';
 import {
   compareValues,
   binaryInsertionIndex,
   findIndexById,
-} from './query-utils.js';
+} from './queryUtils.js';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 /**
- * The slice of `ObjectPool` a QueryView reads — a minimal structural
- * interface (LogFoldContext-style) instead of the concrete class, so this
- * module never imports `../ObjectPool.js` back (ObjectPool imports QueryView
- * at runtime for `createView()`; the reverse edge was the last core-layer
- * import cycle). `ObjectPool` satisfies it structurally.
+ * The slice of the object pool that a {@link QueryView} reads. It is a minimal
+ * structural interface rather than the concrete pool class, which lets a query
+ * view avoid importing the pool and so breaks what would otherwise be an import
+ * cycle — the pool imports {@link QueryView} to construct one. The concrete
+ * pool satisfies this interface structurally.
  */
 export interface QueryViewPool {
   hasForeignKeyIndex(typename: string, fieldName: string): boolean;
@@ -44,8 +44,8 @@ export interface QueryViewOptions<T> {
   order?: 'asc' | 'desc';
   limit?: number;
   offset?: number;
-  /** Lifecycle filter — `live` (default), `archived`, or `all`. Named `state`
-   *  (GitHub's open/closed/all precedent) so it doesn't collide with the
+  /** Lifecycle filter — `live` (the default), `archived`, or `all`. It is
+   *  named `state` rather than `scope` so it does not collide with the
    *  sync-group `scope`. */
   state?: ModelScope;
 }
@@ -248,7 +248,7 @@ export class QueryView<T extends Record<string, unknown>> implements Incremental
 
   /** Check whether an entity passes both `where` and `filter`. */
   private matchesFilter(entity: T): boolean {
-    // Note: scope is tracked per-entry in the ObjectPool, not on the model.
+    // Note: scope is tracked per-entry in the InstanceCache, not on the model.
     // The initial scan handles scope via getByTypeName(typename, scope).
     // Incremental notifications from the pool are scope-appropriate since
     // add/upsert/remove reflect the pool's authoritative scope tracking.

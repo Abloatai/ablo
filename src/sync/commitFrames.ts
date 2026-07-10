@@ -1,14 +1,13 @@
 /**
- * Commit-path frame builders and claim instrumentation for the sync
- * WebSocket — pure functions with no socket state, extracted from
- * SyncWebSocket so the wire codec is a leaf the transport (and the frame
- * dispatch table) can share.
+ * Builds the outgoing frames the sync WebSocket sends on the commit path, and
+ * provides the single place claim events are traced. These are stateless
+ * helpers that hold no socket state, so both the transport and its frame
+ * dispatch can share them.
  */
 
 import { getContext } from '../context.js';
-// Canonical commit-path frame contract. The SDK previously DESCRIBED these
-// shapes in comments ("mirrors hub/types.ts …"); importing the wire types makes
-// the compiler enforce the outgoing frame so client and server cannot drift.
+// The wire types for the outgoing commit frame. Importing them lets the
+// compiler enforce the frame shape, so the client and server can't drift apart.
 import type { CommitMessage, CommitOperation } from '../wire/index.js';
 import type { MutationOperation, ClaimEvent } from '../interfaces/index.js';
 import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
@@ -19,9 +18,10 @@ import {
 import { formatClaim } from '../coordination/trace.js';
 
 /**
- * Resolution value of a commit ack. `notifications` is present only when a
- * guarded write (`onStale: 'notify') hit a concurrent change — the
- * advisory self-heal signal, surfaced both here and via `conflict:notified`.
+ * The value a commit acknowledgement resolves to. `notifications` is present
+ * only when a guarded write (`onStale: 'notify'`) met a concurrent change; it
+ * carries the advisory signal that lets the writer self-heal, and the same
+ * signal also arrives on the `conflict:notified` event.
  */
 export interface CommitAck {
   lastSyncId: number;
@@ -29,13 +29,13 @@ export interface CommitAck {
 }
 
 /**
- * Project the SDK's `MutationOperation[]` onto the canonical wire
- * `CommitMessage`. This is the single serialize boundary between the SDK op
- * type (loose `type: string`, plus an SDK-internal `options` the server never
- * reads) and the strict wire contract. The per-field map gives compile-time
- * drift detection (a `CommitOperation` shape change breaks here) and the lone
- * `as` narrows the validated op `type` to the wire union — the only
- * loosening, localized to this boundary.
+ * Converts the client's list of {@link MutationOperation} values into the wire
+ * {@link CommitMessage} the server accepts. This is the one place the loosely
+ * typed operation — its `type` is a string, and it carries client-only
+ * `options` the server never reads — becomes the strict wire contract. Mapping
+ * each field by hand means a change to {@link CommitOperation} fails to compile
+ * here; the single `as` cast narrows the validated `type` to the wire union and
+ * is the only place that loosening happens.
  */
 export function buildCommitFrame(
   operations: readonly MutationOperation[],
@@ -56,7 +56,7 @@ export function buildCommitFrame(
     clientTxId,
   };
   if (causedByTaskId) payload.causedByTaskId = causedByTaskId;
-  // Batch-level read-set (STORM layer): rows/groups the batch was premised on.
+  // The read set the batch was premised on: the rows or groups the writer read before committing.
   if (reads && reads.length > 0) payload.reads = [...reads];
   return { type: 'commit', payload };
 }
@@ -77,12 +77,12 @@ export function parseNotifications(raw: unknown): StaleNotification[] | undefine
 }
 
 /**
- * Single instrumentation point for claim events. Every `claim_*` frame routes
- * through here so a developer debugging a collision gets one consistent trace
- * — a console line AND a structured capture — without each dispatch case
- * re-deriving the row/holder shape. The wire payload is loosely typed
- * (`Record<string, unknown>`), so this is the one place that narrows it into
- * a {@link ClaimEvent}.
+ * The single place claim events are traced. Every `claim_*` frame passes
+ * through here, so a developer debugging a collision gets one consistent record
+ * — a console line and a structured capture — without each frame case
+ * re-deriving the row and holder shape. The wire payload is loosely typed
+ * (`Record<string, unknown>`), so this is the one place that narrows it into a
+ * {@link ClaimEvent}.
  */
 export function recordClaim(
   phase: ClaimEvent['phase'],

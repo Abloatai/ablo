@@ -1,22 +1,20 @@
 /**
- * Shared intermediate representation + emitter for the *lossless* schema
- * front-ends (`ablo pull prisma`, and the upcoming `ablo pull drizzle`).
+ * A shared intermediate representation and emitter for the schema importers that
+ * read an ORM's own source. `ablo pull prisma` and `ablo pull drizzle` each lower
+ * their input into this representation, then run it through one emitter that
+ * prints `defineSchema(...)` TypeScript source, so the two importers stay
+ * consistent.
  *
- * Why this exists separately from `pull.ts`:
- *   `ablo pull` introspects the live DATABASE (`information_schema`). By the
- *   time a schema reaches Postgres, the ORM's claim is gone — enums have
- *   collapsed to `text` + a check constraint, relations to bare columns, JSON
- *   shape to `jsonb`. So DB-pull is lossy *by construction*.
+ * These importers exist alongside the database-introspection path (`ablo pull`
+ * against a live Postgres database) because introspection loses information. By
+ * the time a schema reaches the database, enums have collapsed to text plus a
+ * check constraint, relations to bare columns, and JSON shape to `jsonb`. Reading
+ * the ORM source instead preserves the enum member list and the relation field
+ * and cardinality the database no longer records.
  *
- *   These front-ends read the ORM SOURCE instead (the `.prisma` file, the
- *   Drizzle module), where enum members and relation field/cardinality are
- *   still declared. That's the same move `drizzle-zero` / `prisma-zero` make.
- *   Each front-end lowers its input into this IR, then emits `defineSchema(...)`
- *   source through one shared emitter so the two paths stay consistent.
- *
- * The emitter prefers the `field.*` builder over raw `z.*` precisely because
+ * The emitter favors the `field.*` builder over raw `z.*` for the same reason:
  * `field.enum([...])` carries the member list and `field.from(col)` carries a
- * physical-column override — the two things DB-pull can't express.
+ * physical-column override — the two facts database introspection cannot express.
  */
 
 export type IRScalarKind = 'string' | 'number' | 'boolean' | 'date' | 'json';
@@ -26,7 +24,7 @@ export interface IRField {
   /** The `defineSchema` field key. */
   name: string;
   kind: IRFieldKind;
-  /** Allowed values when `kind === 'enum'`. Non-empty by contract. */
+  /** The allowed values, present and never empty when `kind` is `'enum'`. */
   enumValues?: readonly string[];
   optional: boolean;
   /**
@@ -48,7 +46,7 @@ export interface IRRelation {
 }
 
 export interface IRModel {
-  /** Model key == physical table name. */
+  /** The model key, which equals the physical table name. */
   key: string;
   fields: IRField[];
   relations: IRRelation[];
@@ -65,8 +63,9 @@ export interface IRSchema {
 }
 
 // ── Casing / identifiers ────────────────────────────────────────────────────
-// Kept local (not imported from pull.ts) so the lossless front-ends don't drag
-// in the `postgres` client that the DB-pull path needs.
+// These helpers are kept local rather than shared with the database-introspection
+// path, so the source-reading importers don't pull in the Postgres client that
+// path depends on.
 
 /** Mirror of the engine's field→column derivation (camelCase → snake_case). */
 export function camelToSnake(s: string): string {

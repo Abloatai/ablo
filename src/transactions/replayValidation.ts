@@ -1,26 +1,25 @@
 /**
- * persistedReplay — the Zod boundary for IDB → commit replay (T1.8).
+ * The validation boundary for replaying persisted transactions after a restart.
  *
- * Rows read back from the persisted-transaction store were written by a
- * PREVIOUS session — possibly by an older SDK version, possibly corrupted.
- * Spreading them straight into a `Transaction` re-entered the commit path
- * with zero validation. These schemas validate exactly the fields the queue
- * (and the offline mutation-queue restore) actually read on replay; rows
- * that don't parse are DROPPED (and surfaced through observability), never
- * replayed as garbage commits.
+ * Rows read back from the on-disk transaction store may have been written by an
+ * earlier run — possibly by an older version of this package, possibly
+ * corrupted. Rather than trust them, the schemas here validate exactly the
+ * fields the transaction queue and the offline-mutation restore read during
+ * replay. A row that fails to parse is dropped and reported, never replayed as
+ * a malformed commit.
  *
- * The same IDB store also holds two NON-replayable row kinds written by
- * other subsystems — the `'queue'` record (`SyncClient.persistMutationQueue`)
- * and `'awaiting_delta'` markers (`setupAwaitingTransactionPersistence`).
- * Those are recognized and skipped silently: they are expected neighbors,
- * not corruption.
+ * The same store also holds two kinds of rows that are not replayable
+ * transactions — the offline mutation queue (`type: 'queue'`) and delta-await
+ * markers (`type: 'awaiting_delta'`), each owned by another part of the client.
+ * {@link isNonReplayablePersistedRow} recognizes them so they are skipped
+ * quietly rather than flagged as corruption.
  */
 
 import { z } from 'zod';
 import type { Transaction } from './commitPayload.js';
 import { computePriorityScore, normalizeModelKey } from './commitPayload.js';
 
-/** Write-option subset persisted per transaction / mutation. */
+/** The subset of a write's options that is stored with each transaction or queued mutation. */
 const persistedWriteOptionsSchema = z
   .object({
     readAt: z.number().nullable().optional(),
@@ -28,12 +27,14 @@ const persistedWriteOptionsSchema = z
     idempotencyKey: z.string().optional(),
     label: z.string().optional(),
   })
-  .passthrough();
+  .loose();
 
 /**
- * A replayable persisted transaction — the fields `TransactionQueue`
- * actually reads when re-enqueueing (id/type/model addressing + payload +
- * identity context). Everything else is defaulted at rehydration time.
+ * The shape of a persisted transaction that can be replayed: the fields the
+ * transaction queue reads when it re-enqueues the row — its id, operation type,
+ * model addressing, payload, and identity context. Any remaining bookkeeping is
+ * filled in with defaults when the row is rehydrated by
+ * {@link deserializePersistedTransaction}.
  */
 export const persistedTransactionSchema = z
   .object({
@@ -55,14 +56,17 @@ export const persistedTransactionSchema = z
     writeOptions: persistedWriteOptionsSchema.optional(),
     localOnly: z.boolean().optional(),
   })
-  .passthrough();
+  .loose();
 
 export type PersistedReplayableTransaction = z.infer<typeof persistedTransactionSchema>;
 
-/** Row kinds that share the store but are owned by other subsystems. */
+/** The `type` values of stored rows that belong to other parts of the client and are not replayable transactions. */
 const NON_REPLAYABLE_TYPES = new Set(['queue', 'awaiting_delta']);
 
-/** Whether a persisted row belongs to another subsystem (skip, don't flag). */
+/**
+ * Reports whether a stored row is one of the non-transaction kinds, so callers
+ * skip it instead of treating it as a corrupt transaction.
+ */
 export function isNonReplayablePersistedRow(row: unknown): boolean {
   return (
     typeof row === 'object' &&
@@ -73,9 +77,10 @@ export function isNonReplayablePersistedRow(row: unknown): boolean {
 }
 
 /**
- * Validate + rehydrate one persisted row into a replayable `Transaction`,
- * or `null` when the row doesn't parse. Missing bookkeeping fields are
- * re-derived exactly like a fresh staging would derive them.
+ * Validates one stored row and rehydrates it into a {@link Transaction} ready
+ * to replay, or returns `null` when the row fails validation. Bookkeeping
+ * fields the stored row lacks — status, attempts, priority, timestamp — are
+ * re-derived the same way a freshly staged transaction derives them.
  */
 export function deserializePersistedTransaction(row: unknown): Transaction | null {
   const parsed = persistedTransactionSchema.safeParse(row);
@@ -102,8 +107,9 @@ export function deserializePersistedTransaction(row: unknown): Transaction | nul
 }
 
 /**
- * One entry of the persisted offline mutation queue (the `'queue'` row's
- * `mutations` array) — the fields `SyncClient.restoreMutationQueue` reads.
+ * The shape of one entry in the persisted offline mutation queue — an item of
+ * the `'queue'` row's `mutations` array, carrying the fields read when the
+ * queue is restored on reconnect.
  */
 export const persistedMutationSchema = z
   .object({
@@ -113,6 +119,6 @@ export const persistedMutationSchema = z
     timestamp: z.string(),
     writeOptions: persistedWriteOptionsSchema.optional(),
   })
-  .passthrough();
+  .loose();
 
 export type PersistedQueuedMutation = z.infer<typeof persistedMutationSchema>;

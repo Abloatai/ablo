@@ -1,16 +1,14 @@
 /**
- * QueryProcessor - Centralized query processing for the sync engine
- *
- * Responsibilities:
- * - Complex filtering, sorting, and pagination logic
- * - Query optimization and caching strategies
- * - Predicate evaluation and result processing
- *
- * This extracts query processing logic from SyncedStore for proper separation of concerns
+ * Runs in-memory queries over a set of models — filtering by predicate,
+ * sorting, paginating, and caching the results. A caller hands
+ * {@link QueryProcessor} the candidate models and the query options, and it
+ * returns a {@link QueryResult}. It keeps two caches: a string-keyed cache for
+ * plain queries, and a structural-identity cache for predicate queries, whose
+ * closures cannot be turned into a stable string key.
  */
 
 import type { Model } from '../Model.js';
-import type { ModelScope } from '../ObjectPool.js';
+import type { ModelScope } from '../InstanceCache.js';
 
 export interface QueryOptions<T extends Model> {
   predicate?: (model: T) => boolean;
@@ -46,12 +44,11 @@ interface QueryCache {
 }
 
 /**
- * Optimized in-memory cache implementation
- *
- * 2025 Best Practice: O(1) invalidation by model type instead of O(n) regex matching
- * - Maintains a reverse index from model type to cache keys
- * - Invalidation by model type is O(k) where k = keys for that model type
- * - No regex compilation or full cache iteration needed
+ * The default in-memory cache. It keeps a reverse index from model type to the
+ * cache keys for that type, so invalidating one model type costs work
+ * proportional to that type's keys rather than a scan of the whole cache. A
+ * regex fallback still covers the rare pattern that is not a plain model-type
+ * match.
  */
 class BasicQueryCache implements QueryCache {
   private cache = new Map<string, unknown>();
@@ -135,8 +132,7 @@ class BasicQueryCache implements QueryCache {
    * Cache key format: "operation:ModelType:options"
    */
   private extractModelType(key: string): string | null {
-    // `?? null` is equivalent to the old length check: a missing second
-    // segment reads as undefined, and split never yields undefined otherwise.
+    // A missing second segment reads as undefined, so `?? null` yields null.
     return key.split(':')[1] ?? null;
   }
 }
@@ -145,13 +141,12 @@ export class QueryProcessor {
   private cache: QueryCache;
   private enableCache: boolean;
 
-  // Stable-reference cache for predicate queries.
-  // String-based cache keys can't represent closures, so we use a separate
-  // identity-based cache that compares result model IDs. This follows the same
-  // principle as MobX's comparer.structural — return the previous reference
-  // when the structural content hasn't changed.
-  // Key: deterministic portion of query (modelName + serializable options)
-  // Value: previous result + its ID fingerprint
+  // Stable-reference cache for predicate queries. A string cache key cannot
+  // capture a closure, so predicate queries use a separate identity-based
+  // cache keyed on the deterministic part of the query (model name plus
+  // serializable options). Each entry stores the previous result and a
+  // fingerprint of its model ids; when the ids are unchanged, the processor
+  // returns the previous array reference so observers do not re-render.
   private predicateResultCache = new Map<string, { ids: string; result: QueryResult<Model> }>();
 
   constructor(config: { enableCache?: boolean } = {}) {
@@ -200,10 +195,9 @@ export class QueryProcessor {
       fromCache: false,
     };
 
-    // For predicate queries: use structural identity comparison
-    // Return the previous array reference if model IDs haven't changed.
-    // This is the query-layer equivalent of MobX's comparer.structural —
-    // observers won't re-render when the result is structurally identical.
+    // For predicate queries: compare by structural identity. Return the
+    // previous array reference when the model ids are unchanged, so observers
+    // don't re-render on a structurally identical result.
     if (options.predicate && this.enableCache) {
       const ids = data.map((m) => m.id).join(',');
       const cached = this.predicateResultCache.get(cacheKey);
@@ -217,7 +211,7 @@ export class QueryProcessor {
       this.predicateResultCache.set(cacheKey, { ids, result });
     }
 
-    // For non-predicate queries: use string-based cache as before
+    // For non-predicate queries: use the string-based cache.
     if (!options.predicate && this.enableCache) {
       this.cache.set(cacheKey, result);
     }

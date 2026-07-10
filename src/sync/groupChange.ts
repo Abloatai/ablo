@@ -1,13 +1,13 @@
 /**
- * groupChange — sync-group change / shrinkage handling.
+ * Handles the delta types that change which sync groups a session can see. A
+ * sync group is a fan-out scope the server uses to decide which entities a
+ * client receives. When a session's membership changes, these handlers update
+ * the client's subscription list; when access is revoked, they clear cached
+ * data and trigger a full re-bootstrap so revoked rows cannot linger on the
+ * device.
  *
- * Extracted from BaseSyncedStore.ts as a cohesive leaf: the 'G'/'S' delta
- * handlers (incremental group-added, legacy group-diff, group-removed), the
- * group-set math, the force-re-bootstrap trigger, and the security-critical
- * shrinkage check. The store keeps thin protected delegates with unchanged
- * signatures — subclass override points stay overridable, and the leaf
- * routes every cross-handler call back through the minimal
- * {@link GroupChangeContext} so dynamic dispatch is preserved.
+ * Every handler takes a {@link GroupChangeContext}, the narrow facade through
+ * which it reaches the client's local storage and connection lifecycle hooks.
  */
 
 import { getContext } from '../context.js';
@@ -18,48 +18,60 @@ import type {
 } from './SyncWebSocket.js';
 
 /**
- * What the group-change handlers need back from their host store —
- * narrow collaborator facades plus the host's own protected hooks (so a
- * subclass override of e.g. `forceFullRebootstrap` still takes effect).
+ * The collaborators the group-change handlers depend on. It gathers the
+ * client's local storage, in-memory pool, and connection lifecycle hooks
+ * behind one narrow interface, so the handlers stay decoupled from the larger
+ * store that supplies them.
  */
 export interface GroupChangeContext {
-  /** Local persistence — SECURITY clears, subscription metadata, and the
-   *  full-bootstrap flag. Structural subset of `Database`. */
+  /**
+   * Local persistence. Performs the security clear, reads and writes the
+   * subscription metadata, and sets the flag that forces a full bootstrap.
+   */
   readonly database: {
     clear(): Promise<void>;
     getWorkspaceMetadata(): Promise<{ subscribedSyncGroups?: string[] } | null>;
     updateWorkspaceMetadata(metadata: { subscribedSyncGroups: string[] }): Promise<void>;
     markRequiresFullBootstrap(): void;
   };
-  /** The in-memory pool — cleared alongside IDB on revocation. */
+  /** The in-memory object cache, cleared alongside local storage when access is revoked. */
   readonly objectPool: { clear(): void };
-  /** Groups the CURRENT socket is subscribed to (`syncWebSocket?.getSyncGroups() ?? []`). */
+  /** Returns the sync groups the live connection is currently subscribed to. */
   getSubscribedSyncGroups(): readonly string[];
-  /** The session's authoritative groups via the host's `resolveSyncGroups`;
-   *  null when no user context has been set yet. */
+  /**
+   * Returns the session's authoritative sync groups, resolved from the current
+   * user context via {@link resolveSyncGroups}; null when no user context has
+   * been set yet.
+   */
   getCurrentSyncGroups(): readonly string[] | null;
-  /** `userContext?.bootstrapMode` — 'none' participants never re-bootstrap. */
+  /**
+   * Returns the session's bootstrap mode. A value of 'none' means the
+   * participant never pulls a baseline, so it never re-bootstraps.
+   */
   getBootstrapMode(): 'full' | 'none' | undefined;
-  /** Disconnect the live socket (part of the force-re-bootstrap cycle). */
+  /** Disconnects the live connection, one step of the forced re-bootstrap cycle. */
   disconnectWebSocket(): void;
-  /** Forward to the host's `onConnectionEvent` lifecycle hook (no-op when unwired). */
+  /** Emits a connection lifecycle event to any registered listener; a no-op when none is set. */
   emitConnectionEvent(event: string): void;
-  // Dynamic-dispatch hooks back into the store (protected override points).
+  // Entry points the handlers call into each other through. Routing them via
+  // the context keeps any override the surrounding store provides in effect.
   handleGroupAdded(payload: GroupAddedPayload, syncId: number): Promise<void>;
   computeUpdatedSyncGroups(payload: SyncGroupChangePayload): string[];
   forceFullRebootstrap(): void;
 }
 
-/** Sentinel for a 'G'/'S' payload that could not be parsed (vs a valid
- *  `null`/absent payload, which the handlers already tolerate). */
+/**
+ * Marker returned when a group-change payload cannot be parsed, kept distinct
+ * from a valid null or absent payload, which the handlers accept normally.
+ */
 const MALFORMED_PAYLOAD: unique symbol = Symbol('malformed-group-change-payload');
 
 /**
- * Parse a group-change delta payload without ever throwing. The server
- * serializes these as JSON strings; a corrupt frame used to escape the
- * whole delta pipeline as an unhandled rejection AFTER the watermark had
- * advanced — the delta is never re-delivered, so the security clear it
- * carried was permanently lost.
+ * Parses a group-change delta payload without ever throwing. The server sends
+ * these as JSON strings. If a frame is corrupt, this returns
+ * {@link MALFORMED_PAYLOAD} rather than raising, because an error escaping here
+ * would leave the delta pipeline after the watermark has already advanced. The
+ * delta is never re-delivered, so the security clear it carried would be lost.
  */
 function parseGroupChangePayload(delta: SyncDelta): unknown {
   if (typeof delta.data !== 'string') return delta.data;
@@ -76,9 +88,10 @@ function parseGroupChangePayload(delta: SyncDelta): unknown {
 }
 
 /**
- * The legacy-clear fallback for an unparseable group-change delta: we know
- * access changed but not how, so treat it as a revocation — clear cached
- * data (IDB + pool) and force a full re-bootstrap with server truth.
+ * Fallback for a group-change delta that could not be read. Because we know
+ * access changed but not how, this treats it as a revocation: it clears cached
+ * data from both local storage and the in-memory pool, then forces a full
+ * re-bootstrap from the server.
  */
 async function clearForUnknownGroupChange(
   ctx: GroupChangeContext,
@@ -89,28 +102,24 @@ async function clearForUnknownGroupChange(
     `[BaseSyncedStore] Unreadable ${kind} payload — clearing cached data and re-bootstrapping`,
     { syncId: delta.id },
   );
-  // SECURITY: same rationale as the legacy removedGroups path — revoked data
-  // must not persist if the device goes offline before the re-bootstrap.
+  // Revoked data must not persist if the device goes offline before the
+  // re-bootstrap, the same reasoning as the explicit removed-groups path.
   await ctx.database.clear();
   ctx.objectPool.clear();
   ctx.forceFullRebootstrap();
 }
 
 /**
- * Handle an actionType 'G' delta.
+ * Handles a 'G' (group-change) delta. The server sends two shapes of this
+ * delta, told apart by the payload:
  *
- * The server emits 'G' via two distinct pathways, distinguished by payload
- * shape:
+ *   Incremental — `{ group, userId }`: the recipient was added to a single
+ *   sync group. No re-bootstrap follows; the newly visible entities arrive as
+ *   ordinary 'C' (covering) deltas through the normal insert path.
  *
- *   Incremental (EmitGroupAdded):   { group, userId }
- *     - The recipient was added to a single sync group.
- *     - Subsequent 'C' (Covering) deltas deliver each newly-visible entity.
- *     - No re-bootstrap — entities arrive via the normal insert path.
- *
- *   Legacy (EmitGroupChange):       { addedGroups, removedGroups }
- *     - Single delta carrying the full group membership diff.
- *     - Forces a full re-bootstrap (disconnect + reconnect + fetch all).
- *     - Deprecated on the server; kept here for wire-level backward compat.
+ *   Full diff — `{ addedGroups, removedGroups }`: one delta carrying the whole
+ *   membership change. This forces a full re-bootstrap (disconnect, reconnect,
+ *   and refetch), clearing cached data first if any group was removed.
  */
 export async function handleSyncGroupChange(
   ctx: GroupChangeContext,
@@ -118,10 +127,10 @@ export async function handleSyncGroupChange(
 ): Promise<void> {
   const raw = parseGroupChangePayload(delta);
   if (raw === MALFORMED_PAYLOAD) {
-    // Malformed payload — we can't know WHICH groups changed, and this
-    // delta will never be re-delivered (the watermark already advanced).
-    // Degrade to the legacy security path: assume a removal, clear cached
-    // data, and rebuild from server truth. Never throw out of the pipeline.
+    // The payload is unreadable, so we cannot tell which groups changed, and
+    // this delta will never be re-delivered because the watermark has already
+    // advanced. Fall back to the safe direction: assume a revocation, clear
+    // cached data, and rebuild from the server rather than throwing.
     await clearForUnknownGroupChange(ctx, delta, 'sync-group change');
     return;
   }
@@ -137,7 +146,7 @@ export async function handleSyncGroupChange(
     return;
   }
 
-  // Legacy payload: { addedGroups, removedGroups }
+  // Full-diff payload: { addedGroups, removedGroups }
   const payload: SyncGroupChangePayload = {
     removedGroups: (rawObj.removedGroups as string[]) ?? [],
     addedGroups: (rawObj.addedGroups as string[]) ?? [],
@@ -149,9 +158,9 @@ export async function handleSyncGroupChange(
     syncId: delta.id,
   });
 
-  // SECURITY: If groups were removed, clear cached data immediately.
-  // This prevents revoked data from persisting if the device goes offline
-  // before the full re-bootstrap completes.
+  // If any groups were removed, clear cached data immediately so revoked data
+  // cannot persist should the device go offline before the re-bootstrap
+  // completes.
   if (payload.removedGroups.length > 0) {
     await ctx.database.clear();
     ctx.objectPool.clear();
@@ -166,11 +175,10 @@ export async function handleSyncGroupChange(
 }
 
 /**
- * Handle an incremental GroupAdded delta.
- *
- * Adds the new group to the subscription metadata without triggering a
- * re-bootstrap. The server will follow up with 'C' (Covering) deltas for
- * each newly-visible entity, which flow through the normal insert path.
+ * Handles an incremental group-added delta. It records the new sync group in
+ * the subscription metadata without forcing a re-bootstrap; the server then
+ * sends a 'C' (covering) delta for each newly visible entity, which flows
+ * through the normal insert path.
  */
 export async function handleGroupAdded(
   ctx: GroupChangeContext,
@@ -185,20 +193,14 @@ export async function handleGroupAdded(
   const current = new Set(ctx.getSubscribedSyncGroups());
   current.add(payload.group);
   await ctx.database.updateWorkspaceMetadata({ subscribedSyncGroups: Array.from(current) });
-  // Note: no forceFullRebootstrap() — covering deltas will bring the entities.
+  // No forceFullRebootstrap() here; the covering deltas will bring the entities.
 }
 
 /**
- * Handle an actionType 'S' (GroupRemoved) delta.
- *
- * Signals that the recipient has lost access to a sync group. Because
- * the client does not track per-entity group membership, we can't
- * selectively purge entities belonging to that group. The safe fallback
- * is the legacy behavior: clear local state and force a re-bootstrap
- * with the updated group list.
- *
- * Future optimization: track group membership in the ObjectPool so 'S'
- * can do a targeted purge instead of a full re-bootstrap.
+ * Handles an 'S' (group-removed) delta, which signals the recipient has lost
+ * access to a sync group. The client does not track which entities belong to
+ * which group, so it cannot purge only the affected rows; instead it clears
+ * local state and forces a re-bootstrap with the updated group list.
  */
 export async function handleGroupRemoved(
   ctx: GroupChangeContext,
@@ -206,9 +208,9 @@ export async function handleGroupRemoved(
 ): Promise<void> {
   const raw = parseGroupChangePayload(delta);
   if (raw === MALFORMED_PAYLOAD) {
-    // Malformed 'S' payload — access WAS revoked but we can't tell which
-    // group. Degrade to the legacy clear (the safe direction for a
-    // security delta) instead of throwing out of the pipeline.
+    // The payload is unreadable: access was revoked but we cannot tell which
+    // group. Fall back to a full clear, the safe direction for an
+    // access-revocation delta, rather than throwing.
     await clearForUnknownGroupChange(ctx, delta, 'group-removed');
     return;
   }
@@ -227,9 +229,9 @@ export async function handleGroupRemoved(
     syncId: delta.id,
   });
 
-  // SECURITY: Clear cached data before re-bootstrap. This prevents
-  // revoked-group data from persisting if the device goes offline
-  // between receiving 'S' and completing the re-bootstrap.
+  // Clear cached data before the re-bootstrap so revoked-group data cannot
+  // persist if the device goes offline between receiving this delta and
+  // completing the re-bootstrap.
   await ctx.database.clear();
   ctx.objectPool.clear();
 
@@ -242,7 +244,7 @@ export async function handleGroupRemoved(
   ctx.forceFullRebootstrap();
 }
 
-/** Compute new sync groups after applying additions and removals */
+/** Computes the new sync-group set after applying the additions and removals in a diff. */
 export function computeUpdatedSyncGroups(
   ctx: GroupChangeContext,
   payload: SyncGroupChangePayload,
@@ -253,12 +255,12 @@ export function computeUpdatedSyncGroups(
   return Array.from(current);
 }
 
-/** Force a full re-bootstrap via connection lifecycle event.
- *
- * No-op for `bootstrapMode: 'none'` participants — they never pull
- * baseline state, so a "force re-bootstrap" trigger (sync-group
- * shrink, scope revocation) instead just flushes the local pool and
- * relies on covering deltas to repopulate the data they actually
+/**
+ * Forces a full re-bootstrap by marking local storage as needing one,
+ * disconnecting, and emitting a connection lifecycle event that the reconnect
+ * path acts on. Does nothing for participants whose bootstrap mode is 'none':
+ * they never pull a baseline, so after a trigger such as a sync-group shrink or
+ * an access revocation they rely on covering deltas to repopulate the data they
  * subscribe to.
  */
 export function forceFullRebootstrap(ctx: GroupChangeContext): void {
@@ -274,12 +276,12 @@ export function forceFullRebootstrap(ctx: GroupChangeContext): void {
 }
 
 /**
- * Single source of truth for the sync-group list this session is
- * subscribed to. Server-issued (`context.syncGroups`) is authoritative.
- * When absent, the SDK subscribes to no explicit groups. Both
- * `checkSyncGroupShrinkage` and `setupWebSocketSync` resolve through
- * here so the WS subscription and the security-critical shrinkage
- * check can never disagree.
+ * Resolves the sync-group list this session subscribes to, and is the single
+ * place that decision is made. The server-issued `context.syncGroups` is
+ * authoritative; when it is absent, the session subscribes to no explicit
+ * groups. {@link checkSyncGroupShrinkage} and connection setup both read
+ * through here, so the live subscription and the access-revocation check can
+ * never disagree.
  */
 export function resolveSyncGroups(context: {
   syncGroups?: readonly string[];
@@ -290,7 +292,11 @@ export function resolveSyncGroups(context: {
   return [];
 }
 
-/** Check if sync groups shrank since last session — force full bootstrap if so */
+/**
+ * Compares the session's current sync groups against the set stored from the
+ * last session. If any group is now missing, access has narrowed, so this
+ * clears cached data and forces a full bootstrap before recording the new set.
+ */
 export async function checkSyncGroupShrinkage(ctx: GroupChangeContext): Promise<void> {
   const currentSyncGroups = ctx.getCurrentSyncGroups();
   if (!currentSyncGroups) return;
@@ -311,8 +317,8 @@ export async function checkSyncGroupShrinkage(ctx: GroupChangeContext): Promise<
         currentCount: currentGroups.size,
       });
 
-      // SECURITY: Clear cached data before re-bootstrap to prevent
-      // revoked-group data from persisting if device goes offline
+      // Clear cached data before the re-bootstrap so revoked-group data cannot
+      // persist if the device goes offline first.
       await ctx.database.clear();
       ctx.objectPool.clear();
 

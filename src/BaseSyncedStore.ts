@@ -1,30 +1,29 @@
 /**
- * BaseSyncedStore — Generic sync store base class for the SDK.
+ * The base class that application-specific sync stores extend. It supplies the
+ * shared orchestration for reads, writes, delta processing, and bootstrap, and
+ * exports the core types those stores build on.
  *
- * Exports the core types, interfaces, and a base class that app-specific
- * stores extend. The base class provides query/mutation/delta/bootstrap
- * orchestration. Subclasses add domain-specific lazy-loading, collaboration
- * events, and model enrichment.
- *
- * Design: The app's SyncedStore extends this and adds its own methods.
- * This file only contains types and the abstract contract — the actual
- * implementation stays in the app's SyncedStore.ts until we incrementally
- * pull generic methods into this base class.
+ * A subclass adds its own domain behavior — lazy-loaded relations,
+ * collaboration events, and model enrichment — by overriding the protected
+ * extension points defined here. The heavy lifting is delegated to injected
+ * collaborators: {@link SyncClient} owns pool writes and the transaction
+ * queue, {@link Database} owns local persistence, {@link InstanceCache} holds the
+ * in-memory models, and {@link ModelRegistry} holds their metadata.
  */
 
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
 import { AbloConnectionError, AbloValidationError, toAbloError } from './errors.js';
 import type { RecoveryClass } from './errorCodes.js';
 import { ConnectionManager } from './sync/ConnectionManager.js';
-import { AreaOfInterestManager } from './sync/AreaOfInterestManager.js';
+import { SubscriptionManager } from './sync/SubscriptionManager.js';
 import {
   resolveParticipantSyncGroups,
   type ParticipantScope,
 } from './sync/participants.js';
 import type { SyncClient } from './SyncClient.js';
 import type { Database, BootstrapResult } from './Database.js';
-import type { BootstrapData } from './sync/BootstrapHelper.js';
-import type { ObjectPool } from './ObjectPool.js';
+import type { BootstrapData } from './sync/BootstrapFetcher.js';
+import type { InstanceCache } from './InstanceCache.js';
 import { ModelRegistry } from './ModelRegistry.js';
 import { PropertyType } from './types/index.js';
 import {
@@ -43,11 +42,11 @@ import { QueryProcessor } from './core/QueryProcessor.js';
 import { Model, rowAsModel } from './Model.js';
 import { getContext } from './context.js';
 import { SyncSessionError, isAccessCredentialExpiryCloseReason } from './errors.js';
-import { ModelScope } from './ObjectPool.js';
+import { ModelScope } from './InstanceCache.js';
 import { LazyReferenceCollection } from './LazyReferenceCollection.js';
 import type { Schema } from './schema/schema.js';
-// The store contract (SyncStoreContract/LocalMutation/SyncStatus) lives in a
-// react-free core leaf — react/context.ts re-exports it for React consumers.
+// The store contract types (SyncStoreContract, LocalMutation, SyncStatus)
+// live in a React-free core module and are re-exported for React consumers.
 import type { SyncStatus, SyncStoreContract, LocalMutation } from './core/storeContract.js';
 import type { AuthCredentialSource } from './auth/credentialSource.js';
 import type { ModelData } from './types/modelData.js';
@@ -70,8 +69,8 @@ export type ModelConstructor<T extends Model> = abstract new (...args: never[]) 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Constructor args vary per model (PrismaTask, Record<string, unknown>, etc.)
 export type ConcreteModelConstructor<T extends Model> = new (data?: any) => T;
 
-// ModelData moved to types/modelData.ts (breaks the BaseSyncedStore <->
-// SyncClient mutual type cycle); re-exported so importers are unchanged.
+// ModelData is defined in a separate module to break the type cycle between
+// BaseSyncedStore and SyncClient, and is re-exported here.
 export type { ModelData } from './types/modelData.js';
 
 /** Query result interface */
@@ -82,8 +81,8 @@ export interface QueryResult<T extends Model> {
   fromCache?: boolean;
 }
 
-// ForeignKeyIndexSpec + EnrichmentPlanEntry moved to sync/syncPlan.ts
-// alongside deriveSyncPlanFromSchema; re-exported so importers are unchanged.
+// ForeignKeyIndexSpec and EnrichmentPlanEntry are defined alongside
+// deriveSyncPlanFromSchema and re-exported here.
 export type { ForeignKeyIndexSpec, EnrichmentPlanEntry } from './sync/syncPlan.js';
 
 /** Configuration for SyncedStore behavior */
@@ -101,7 +100,7 @@ export interface SyncedStoreConfig {
   enrichmentPlan?: readonly EnrichmentPlanEntry[];
 
   /**
-   * Foreign-key indexes to register on the ObjectPool at construction
+   * Foreign-key indexes to register on the InstanceCache at construction
    * time. Replaces the subclass override of `registerForeignKeys` for
    * per-model FK registration. Merged with schema-derived entries
    * (relations marked `{ index: true }` on `belongsTo`). Both sets
@@ -111,9 +110,8 @@ export interface SyncedStoreConfig {
   foreignKeyIndexes?: readonly ForeignKeyIndexSpec[];
 }
 
-// SyncStatus moved to core/storeContract.ts (the react-free store-contract
-// leaf, next to SyncStoreContract which embeds it); re-exported so importers
-// are unchanged.
+// SyncStatus is defined in the React-free store-contract module, next to
+// SyncStoreContract which embeds it, and is re-exported here.
 export type { SyncStatus } from './core/storeContract.js';
 
 /** User context for initialization */
@@ -129,8 +127,7 @@ export interface UserContext {
   kind?: 'user' | 'agent' | 'system';
   /** Restricted (`rk_`) API key for `kind: 'agent'` — the agent's
    *  bearer credential. Sent in the `ablo.bearer.<token>` WebSocket
-   *  subprotocol, never in the URL. (Field name predates the
-   *  Biscuit→opaque-key migration.) */
+   *  subprotocol, never in the URL. */
   capabilityToken?: string;
   /** Server-authoritative sync groups, supplied by auth/capability
    *  exchange. The SDK does not invent org/user/default groups; app
@@ -160,8 +157,8 @@ export interface SmartSyncOptions {
   maxBatchSize?: number;
 }
 
-// RehydrationStats moved to sync/bootstrapApply.ts alongside the bootstrap
-// apply path; re-exported so importers are unchanged.
+// RehydrationStats is defined alongside the bootstrap-apply path and is
+// re-exported here.
 export type { RehydrationStats } from './sync/bootstrapApply.js';
 
 /** Bootstrap timeout configuration */
@@ -185,23 +182,22 @@ export type {
   PresenceUpdateEvent,
 };
 
-// deriveSyncPlanFromSchema (pure schema → sync-plan derivation) moved to
-// sync/syncPlan.ts; re-exported so importers are unchanged.
+// deriveSyncPlanFromSchema derives a sync plan from a schema and is
+// re-exported here.
 export { deriveSyncPlanFromSchema } from './sync/syncPlan.js';
 
 // ── Base class ──────────────────────────────────────────────────────────────
 
 /**
- * BaseSyncedStore — abstract base for app-specific sync stores.
+ * The abstract base class that application-specific sync stores extend. It
+ * carries the injected collaborators, the observable sync status, and the
+ * orchestration for initialization, delta processing, bootstrap, and the
+ * read and write API. A subclass supplies its own domain behavior by
+ * overriding the protected extension points defined here and by typing its
+ * collaboration events through the generic parameter.
  *
- * Provides the dependency structure, observable status, and protected
- * accessors that subclasses use. The actual sync orchestration (initialize,
- * delta processing, bootstrap, query, save, delete, etc.) lives in the
- * app's concrete subclass for now — methods will be pulled up into this
- * base class incrementally as they are genericized.
- *
- * Subclasses MUST call `super(dependencies, config)` and then set up
- * their own MobX observables.
+ * A subclass must call `super(dependencies, config)` and then set up its own
+ * MobX observables.
  *
  * Generic over `TCollaboration` — an app-defined event map for real-time
  * collaboration events (cursors, selections, presence beyond the core set).
@@ -231,7 +227,7 @@ export class BaseSyncedStore<
   TCollaboration extends EventMap<TCollaboration> = DefaultCollaborationEvents,
   // The app's schema, so `query.<modelKey>` + `create(key, data)` return
   // precisely-typed entities. Defaulting to the erased `Schema` shape lets
-  // legacy callers that don't know their schema continue to compile; app
+  // callers that don't know their schema continue to compile; app
   // subclasses parameterize with `typeof schema` to get real inference.
   TSchema extends Schema = Schema
 > {
@@ -246,7 +242,7 @@ export class BaseSyncedStore<
   // ── Injected dependencies ──
   protected readonly syncClient: SyncClient;
   protected readonly database: Database;
-  protected readonly objectPool: ObjectPool;
+  protected readonly objectPool: InstanceCache;
   protected readonly modelRegistry: ModelRegistry;
   protected readonly auth?: AuthCredentialSource;
   /**
@@ -265,7 +261,7 @@ export class BaseSyncedStore<
    * to whichever instance is current, so callers (the React participant
    * hook) never hold a stale reference. Null until `setupWebSocketSync`.
    */
-  protected areaOfInterest: AreaOfInterestManager | null = null;
+  protected areaOfInterest: SubscriptionManager | null = null;
   /** Sync groups whose current state has been backfilled into the pool
    *  (hydrate-on-enter). Cleared when the pool is reset on (re)bootstrap. */
   private readonly hydratedGroups = new Set<string>();
@@ -289,25 +285,25 @@ export class BaseSyncedStore<
   // ── Area-of-interest (dynamic read subscription) ─────────────────
   //
   // `enterScope`/`leaveScope` move the connection's read interest as the
-  // user navigates (open/close a deck, sheet, doc); `pinScope`/`unpinScope`
+  // user navigates (open or close a deck, sheet, or doc); `pinScope`/`unpinScope`
   // express prominence (an active claim keeps a group subscribed). All four
-  // resolve the scope to sync-group strings through the SAME resolver the
+  // resolve the scope to sync-group strings through the same resolver the
   // claim path uses (`resolveParticipantSyncGroups`), so read interest and
-  // write claims always agree on the string for a given entity. No-ops
-  // before the socket exists. Soft state — they never reject for an offline
-  // transport (see `AreaOfInterestManager.reconcile`).
+  // write claims always agree on the string for a given entity. They are
+  // no-ops before the socket exists, and they never reject when the transport
+  // is offline (see {@link SubscriptionManager.reconcile}).
 
   private scopeToGroups(scope: ParticipantScope): string[] {
     return resolveParticipantSyncGroups(scope, this.schema);
   }
 
   /**
-   * Bring a scope into view → subscribe to its groups. With
-   * `{ hydrate: true }`, ALSO backfill the groups' current state into the pool
-   * after the subscription is active (the game "spawn snapshot + delta stream"
-   * pattern): subscribe-first so no live delta is missed in the gap, then
-   * snapshot. Hydration is soft — a failed backfill never rejects `enterScope`
-   * and the live tail still flows.
+   * Bring a scope into view and subscribe to its sync groups. With
+   * `{ hydrate: true }`, also backfill the groups' current state into the pool
+   * once the subscription is active. The order matters: subscribing first
+   * guarantees no live delta is missed in the gap before the snapshot lands.
+   * Hydration is best-effort — a failed backfill never rejects `enterScope`,
+   * and the live delta stream keeps flowing regardless.
    */
   enterScope(scope: ParticipantScope, opts?: { hydrate?: boolean }): Promise<void> {
     const mgr = this.areaOfInterest;
@@ -319,11 +315,11 @@ export class BaseSyncedStore<
   }
 
   /**
-   * Backfill the current state of `syncGroups` into the pool via a PURE scoped
-   * snapshot fetch + the version-guarded, ghost-free scoped apply. Idempotent
-   * (skips groups already hydrated) and single-flight (concurrent enters of the
-   * same group share one fetch). Soft-fails: on error the groups are NOT marked
-   * hydrated, so a later re-enter retries.
+   * Backfill the current state of `syncGroups` into the pool with a side-effect-free
+   * scoped snapshot fetch followed by the version-guarded scoped apply. The call
+   * is idempotent (it skips groups already hydrated) and single-flight (concurrent
+   * enters of the same group share one fetch). On error the groups are left
+   * unmarked, so a later re-enter retries.
    */
   protected async hydrateGroups(syncGroups: readonly string[]): Promise<void> {
     const need = syncGroups.filter(
@@ -401,15 +397,9 @@ export class BaseSyncedStore<
   protected dataReady = false;
 
   // ── User context ──
-  // Identity context the consumer wired in at construction. The shape
-  // (`{userId, organizationId, teamIds}`) is currently a fixed contract
-  // because the Go-era bootstrap protocol embedded those keys in scope
-  // tokens; the SDK should eventually expose this as an opaque
-  // `principal` blob so consumers with different identity models
-  // aren't forced into user/org. See the architectural note in the
-  // README — "currentUserId" is a domain concept, not an SDK
-  // primitive, and the host (apps/web/SyncEngineProvider) is the
-  // right place to surface it.
+  // The identity the consumer supplied to `initialize()`: user id,
+  // organization id, and optional team ids. Reads are scoped to this
+  // identity, and the sync-group subscription is derived from it.
   protected userContext: UserContext | null = null;
 
   // ── Smart sync ──
@@ -450,15 +440,14 @@ export class BaseSyncedStore<
     dependencies: {
       syncClient: SyncClient;
       database: Database;
-      objectPool: ObjectPool;
+      objectPool: InstanceCache;
       modelRegistry: ModelRegistry;
       /**
-       * Optional schema. When provided, `deriveSyncPlanFromSchema` walks
-       * the schema's models + relations to auto-populate FK indexes and
-       * the enrichment plan from declarative annotations. Class-based
-       * subclass users (like Ablo's legacy SyncedStore) typically pass
-       * explicit `config.foreignKeyIndexes` / `config.enrichmentPlan`
-       * instead.
+       * Optional schema. When provided, {@link deriveSyncPlanFromSchema} walks
+       * the schema's models and relations to auto-populate foreign-key indexes
+       * and the enrichment plan from their declarative annotations. Subclasses
+       * that register model classes directly can instead pass explicit
+       * `config.foreignKeyIndexes` / `config.enrichmentPlan`.
        */
       schema?: TSchema;
       /** Sync server URL for WebSocket connection. Converted to wss:// automatically. */
@@ -479,18 +468,16 @@ export class BaseSyncedStore<
     // Set this store as the global Model store
     Model.setStore(this as Parameters<typeof Model.setStore>[0]);
 
-    // ── Schema-derived sync plan (Phase 2) ─────────────────────────────
+    // ── Schema-derived sync plan ───────────────────────────────────────
     //
-    // When a schema is provided, derive FK indexes and the enrichment
-    // plan from declarative annotations on the schema's `belongsTo`
-    // relations. Explicit config fields layer on top, so subclasses
-    // (like Ablo's SyncedStore) can pass hardcoded arrays without
-    // needing a full schema.generated.ts.
+    // When a schema is provided, derive foreign-key indexes and the
+    // enrichment plan from the declarative annotations on its `belongsTo`
+    // relations. Explicit config fields layer on top, so a subclass can
+    // pass hardcoded arrays without supplying a full schema.
     //
-    // Order matters: schema-derived first, config second, so that in a
-    // future where Ablo passes both (schema AND explicit config), the
-    // explicit config entries are registered last and can't be
-    // accidentally shadowed by schema derivation.
+    // Order matters: schema-derived entries are registered first and
+    // config entries second, so that when a caller supplies both, the
+    // explicit config entries win and are never shadowed by derivation.
     const derived = dependencies.schema
       ? deriveSyncPlanFromSchema(dependencies.schema)
       : { enrichmentPlan: [], foreignKeyIndexes: [] };
@@ -503,9 +490,8 @@ export class BaseSyncedStore<
       this.objectPool.registerForeignKey(modelName, fieldName);
     }
 
-    // Legacy override hook — still called AFTER schema-driven registration
-    // so subclasses can add more FKs on top of the declarative set.
-    // Kept for backwards compat; subclasses migrate to config at leisure.
+    // Override hook — called after schema-driven registration so a subclass
+    // can add more foreign keys on top of the declarative set.
     this.registerForeignKeys();
 
     this.enrichmentPlan = [
@@ -544,15 +530,13 @@ export class BaseSyncedStore<
       }
     });
 
-    // Make sync status fields observable so consumer code can do
+    // Make the sync-status fields observable so consumer code can do
     //   reaction(() => store.isReady, ...)
     //   observer(() => store.isOffline)
     // and actually receive notifications. Without these annotations,
-    // `syncStatus` / `dataReady` are plain properties and the derived
-    // getters (isReady, isSyncing, isOffline, ...) never emit change
-    // signals — a trap that has burned multiple downstream apps
-    // (one stuck forever on the loading skeleton because `reaction`
-    // to `store.isReady` never fired). Explicit > accidental.
+    // `syncStatus` and `dataReady` are plain properties, and the derived
+    // getters (isReady, isSyncing, isOffline, and the rest) never emit
+    // change signals — so a `reaction` on `store.isReady` would never fire.
     makeObservable<this, 'dataReady'>(this, {
       syncStatus: observable,
       dataReady: observable,
@@ -568,18 +552,18 @@ export class BaseSyncedStore<
   // ── Protected extension points ────────────────────────────────────────────
 
   /**
-   * Register foreign key indexes for O(1) lookups.
+   * Register foreign-key indexes for constant-time lookups.
    *
-   * Legacy override hook — in Phase 2 the preferred way to declare FK
-   * indexes is via `config.foreignKeyIndexes` at construction time, or
-   * by marking the `belongsTo` relation with `{ index: true }` in the
-   * schema. This hook still fires AFTER the schema-derived + config
-   * registrations, so subclasses can layer additional FKs on top.
+   * This is an override hook. The preferred way to declare a foreign-key
+   * index is `config.foreignKeyIndexes` at construction time, or marking the
+   * `belongsTo` relation with `{ index: true }` in the schema. The hook fires
+   * after the schema-derived and config registrations, so a subclass can
+   * layer additional indexes on top.
    */
   protected registerForeignKeys(): void {}
 
   /**
-   * Enrich delta data with related models from the ObjectPool.
+   * Enrich delta data with related models from the InstanceCache.
    *
    * Base implementation walks `this.enrichmentPlan` — entries populated
    * from the schema's `{ enrich: true }` relations and from
@@ -932,11 +916,12 @@ export class BaseSyncedStore<
   }
 
   /**
-   * THE auth-recovery backbone for HTTP transports (lazy query lane etc.):
-   * classify-driven single-flight re-mint with the same FSM outcome routing
-   * the WS probe and proactive pre-roll use. `'retry'` ⇒ a fresh credential
-   * is in the credential source, replay the request ONCE. Full contract on
-   * {@link CredentialLifecycle.recoverFromAuthRejection}.
+   * The authentication-recovery path for HTTP transports, such as the lazy
+   * query lane. It runs a single-flight credential re-mint driven by the
+   * rejection's recovery class, routing outcomes through the same state
+   * machine the WebSocket probe uses. `'retry'` means a fresh credential is
+   * now in the credential source and the request should be replayed once.
+   * Full contract on {@link CredentialLifecycle.recoverFromAuthRejection}.
    */
   async recoverFromAuthRejection(recovery: RecoveryClass): Promise<'retry' | 'stop'> {
     return this.credentialLifecycle.recoverFromAuthRejection(recovery);
@@ -954,11 +939,11 @@ export class BaseSyncedStore<
   }
 
   /**
-   * Install the access-credential lifecycle the CLIENT owns: register
-   * `getToken` as the reactive re-mint hook AND arm the browser-only
-   * proactive pre-roll (refresh timer + OS-wake re-mint). Idempotent
-   * (a second call replaces the first); torn down on {@link disconnect}.
-   * Full rationale on {@link CredentialLifecycle.start}.
+   * Install the client-owned access-credential lifecycle: register `getToken`
+   * as the reactive re-mint hook and arm the browser-only proactive refresh
+   * (a refresh timer plus an OS-wake re-mint). Idempotent — a second call
+   * replaces the first — and torn down on {@link disconnect}. Full rationale
+   * on {@link CredentialLifecycle.start}.
    */
   startCredentialLifecycle(
     getToken: CredentialRefresher,
@@ -972,12 +957,12 @@ export class BaseSyncedStore<
     this.credentialLifecycle.stop();
   }
 
-  // ── Sync Group Management ────────────────────────────────────────────────
+  // ── Sync group management ────────────────────────────────────────────────
   //
-  // Implementation extracted to sync/groupChange.ts. The methods below stay
-  // as thin protected delegates with unchanged signatures — subclass
-  // override points remain overridable, and the leaf routes cross-handler
-  // calls back through `groupChangeContext()` so dynamic dispatch holds.
+  // The implementation lives in the sync/groupChange module. The methods
+  // below are thin protected delegates that keep their signatures, so
+  // subclass override points still work; the module routes cross-handler
+  // calls back through `groupChangeContext()` to preserve dynamic dispatch.
 
   /** Narrow context the group-change leaf talks back through. */
   private groupChangeContext(): GroupChangeContext {
@@ -1014,8 +999,9 @@ export class BaseSyncedStore<
   }
 
   /**
-   * Handle an actionType 'S' (GroupRemoved) delta — SECURITY clear of local
-   * state + full re-bootstrap. See {@link groupChange.handleGroupRemoved}.
+   * Handle an actionType 'S' (GroupRemoved) delta: for safety, clear the
+   * revoked local state and trigger a full re-bootstrap. See
+   * {@link groupChange.handleGroupRemoved}.
    */
   protected async handleGroupRemoved(delta: SyncDelta): Promise<void> {
     return groupChange.handleGroupRemoved(this.groupChangeContext(), delta);
@@ -1051,10 +1037,10 @@ export class BaseSyncedStore<
 
   // ── Bootstrap apply ──────────────────────────────────────────────────────
   //
-  // Implementation extracted to sync/bootstrapApply.ts. Thin protected
-  // delegates below keep the signatures (and subclass overridability)
-  // unchanged; the leaf talks back through `poolContext()` — enrichment
-  // stays pre-bound to `this.enrichRelations` so that override point holds.
+  // The implementation lives in the sync/bootstrapApply module. The protected
+  // delegates below keep their signatures and subclass overridability; the
+  // module talks back through `poolContext()`, with enrichment pre-bound to
+  // `this.enrichRelations` so that override point still applies.
 
   /** Narrow context the bootstrap-apply leaf talks back through. */
   private poolContext(): PoolContext {
@@ -1075,8 +1061,7 @@ export class BaseSyncedStore<
     };
   }
 
-  /** Apply bootstrap data to the ObjectPool with ghost removal */
-  /** Apply bootstrap data to the ObjectPool. Delegates pool writes to SyncClient. */
+  /** Apply bootstrap data to the {@link InstanceCache}, removing entities that are no longer present (ghost removal). Pool writes are delegated to {@link SyncClient}. */
   protected applyBootstrapToPool(
     bootstrapResult: BootstrapResult,
     protectedIds?: ReadonlySet<string>
@@ -1098,14 +1083,11 @@ export class BaseSyncedStore<
 
     this.userContext = context;
 
-    // Propagate identity to SyncClient. Without this, every mutation
-    // silently drops in `processPendingMutations` / `stageMutation` with
-    // `userId=null, organizationId=null`. Previously the SDK assumed
-    // callers would call `syncClient.initialize()` themselves as a
-    // separate step — that never happened from createSyncEngine, and
-    // the drop was invisible because both guard sites just early-return
-    // rather than throw. The right fix is to do it here where the store
-    // receives the context, so identity is one source of truth.
+    // Propagate identity to the SyncClient. Without this, every mutation
+    // silently drops in the mutation-staging path with a null userId and
+    // organizationId, because those guards early-return rather than throw.
+    // Setting it here, where the store receives the context, keeps identity
+    // in a single place.
     yield this.syncClient.initialize(
       context.userId,
       context.organizationId,
@@ -1490,7 +1472,7 @@ export class BaseSyncedStore<
     // connection. baseGroups (the org/user scopes) are always subscribed;
     // enterScope/leaveScope move per-entity interest. Recreated with the
     // socket; torn down via the disposer pushed below.
-    this.areaOfInterest = new AreaOfInterestManager({
+    this.areaOfInterest = new SubscriptionManager({
       transport: this.syncWebSocket,
       baseGroups: this.resolveSyncGroups(context),
     });
@@ -1765,14 +1747,14 @@ export class BaseSyncedStore<
     this.syncWebSocket.connect();
   }
 
-  // ── Delta Processing Pipeline ─────────────────────────────────────────────
+  // ── Delta processing pipeline ─────────────────────────────────────────────
   //
-  // Implementation extracted to sync/deltaPipeline.ts (dedup, enqueue
-  // bookkeeping, debounce, flush). The methods below stay as thin protected
-  // delegates with unchanged signatures, and the leaf routes every call to
-  // a protected override point back through `deltaPipelineContext` so
-  // subclass dynamic dispatch is preserved. `applyDeltaFrame` — the
-  // authoritative-apply correctness seam — deliberately stays here.
+  // The implementation lives in the sync/deltaPipeline module (deduplication,
+  // enqueue bookkeeping, debounce, flush). The methods below are thin protected
+  // delegates with unchanged signatures, and the module routes every call to a
+  // protected override point back through `deltaPipelineContext`, so subclass
+  // dynamic dispatch is preserved. `applyDeltaFrame`, the authoritative-apply
+  // correctness point, deliberately stays here.
 
   /** Memoized pipeline context — `enqueueDelta` runs once per delta, so the
    *  accessor object is built once and reused (the get/set accessors always
@@ -1842,35 +1824,36 @@ export class BaseSyncedStore<
   /**
    * Apply a complete, server-delivered delta frame atomically.
    *
-   * A `delta_batch` WS event (reconnect/catch-up replay) already carries
-   * the FULL set of missed deltas. Routing it through the per-delta
-   * `processDeltaWithBatching` path re-chunks it via the live-traffic
-   * debounce timer + `maxBatchSize` force-flush, so a 300-delta catch-up
-   * fans out into ~6 separate `flushPendingDeltas` cycles — each its own
-   * IDB write, pool mutation, `models:changed` emit, and React re-render.
-   * The decks gallery visibly re-sorts and "pops in" once per chunk.
+   * A `delta_batch` WebSocket event (a reconnect or catch-up replay) already
+   * carries the full set of missed deltas. Routing it through the per-delta
+   * `processDeltaWithBatching` path would re-chunk it via the live-traffic
+   * debounce timer and `maxBatchSize` force-flush, so a 300-delta catch-up
+   * would fan out into several separate `flushPendingDeltas` cycles — each its
+   * own local write, pool mutation, `models:changed` emit, and re-render, so
+   * the UI visibly repaints once per chunk.
    *
-   * Here we run the per-delta bookkeeping (dedup, ack, version vector,
-   * watermark, G/S routing, D cascade) for every delta WITHOUT scheduling
-   * a flush, then flush ONCE — collapsing the whole frame into a single
-   * IDB write + pool mutation + `models:changed` + re-render. Same code
-   * for the post-bootstrap replay of deltas queued during bootstrap.
+   * Instead, this runs the per-delta bookkeeping (deduplication, ack, version
+   * vector, watermark, group-change routing, delete cascade) for every delta
+   * without scheduling a flush, then flushes once — collapsing the whole frame
+   * into a single local write, pool mutation, `models:changed` emit, and
+   * re-render. The post-bootstrap replay of deltas queued during bootstrap
+   * uses the same path.
    *
-   * (Named `applyDeltaFrame`, not `processDeltaBatch`, to avoid confusion
-   * with `Database.processDeltaBatch` — the lower-level IDB write this
-   * eventually drives through `flushPendingDeltas`.)
+   * It is named `applyDeltaFrame`, not `processDeltaBatch`, to avoid confusion
+   * with {@link Database.processDeltaBatch} — the lower-level local write this
+   * eventually drives through `flushPendingDeltas`.
    */
   protected applyDeltaFrame(deltas: SyncDelta[]): void {
     let enqueuedAny = false;
     for (const delta of deltas) {
-      // A delta_batch frame is the server's AUTHORITATIVE, ordered answer to
+      // A delta_batch frame is the server's authoritative, ordered answer to
       // "everything in my stream after cursor C" (reconnect/catch-up replay or
-      // post-bootstrap drain). Apply every delta it carries — do NOT subject it
+      // post-bootstrap drain). Apply every delta it carries; do not subject it
       // to the live-traffic watermark dedup (`id <= applied`).
       //
       // That watermark is only valid under in-order delivery, and reconnect
-      // breaks the assumption: an in-flight LIVE broadcast for a gap delta can
-      // land out of order BEFORE the catch-up fills the ids below it (e.g. the
+      // breaks the assumption: an in-flight live broadcast for a gap delta can
+      // land out of order before the catch-up fills the ids below it (e.g. the
       // server acks a write, then the test/client reconnects, then that write's
       // pending broadcast arrives on the fresh socket — id 4 live before the
       // catch-up's [2,3,4]). Applying id 4 advances `applied` to 4, and the
@@ -1949,17 +1932,16 @@ export class BaseSyncedStore<
     }
   }
 
-  /** Flush pending deltas with deduplication and batched ObjectPool mutations */
-  /** Flush pending deltas with deduplication. Delegates pool writes to SyncClient. */
+  /** Flush pending deltas with deduplication. Pool writes are delegated to {@link SyncClient}. */
   protected async flushPendingDeltas(): Promise<void> {
     return deltaPipeline.flushPendingDeltas(this.deltaPipelineContext);
   }
 
-  // ── Core Mutations (thin delegation to SyncClient) ────────────────────────
+  // ── Core mutations (thin delegation to SyncClient) ────────────────────────
   //
-  // BaseSyncedStore is an orchestrator, not an implementor.
-  // SyncClient owns: ObjectPool operations, TransactionQueue, IDB writes.
-  // BaseSyncedStore owns: validation, hooks, pending delete tracking.
+  // This class orchestrates; it does not implement the writes. {@link SyncClient}
+  // owns the object-pool operations, the transaction queue, and local writes.
+  // This class owns validation, lifecycle hooks, and pending-delete tracking.
 
   /** Check if a model type is local-only (no sync). Override for domain-specific models. */
   protected isLocalOnlyModel(_modelName: string): boolean {
@@ -2048,9 +2030,9 @@ export class BaseSyncedStore<
 
 
   // ── Query API ────────────────────────────────────────────────────────────
-  // `store.query.<model>.*` was DELETED — `ablo.<model>.get/getAll` is the
-  // one read surface. Custom mutators still read transactionally through
-  // `tx.<model>` (mutators/Transaction.ts), which owns `createReaderActions`.
+  // `ablo.<model>.get` / `ablo.<model>.getAll` is the read surface for
+  // application code. Custom mutators read transactionally through
+  // `tx.<model>`, backed by `createReaderActions`.
 
   /** Retrieve a single entity by id. Synchronous pool read. */
   retrieve(_modelClass: ModelConstructor<Model>, id: string): Model | undefined {
@@ -2108,10 +2090,10 @@ export class BaseSyncedStore<
   }
 
   /**
-   * Legacy class-based query entry point — kept for callers that still pass
-   * a Model constructor + options object. New code should use the typed
-   * `store.query.<modelKey>` namespace instead, which returns properly
-   * inferred schema types without needing a class value or cast.
+   * Query entry point for callers that hold a {@link Model} constructor and an
+   * options object. It filters, orders, and paginates the matching models from
+   * the pool. Prefer the schema-typed read surface (`ablo.<model>.list`) where
+   * you can, since it infers concrete row types without a class value or cast.
    */
   queryByClass(
     modelClass: ModelConstructor<Model>,
@@ -2244,7 +2226,7 @@ export class BaseSyncedStore<
 
   // ── Accessors ─────────────────────────────────────────────────────────────
 
-  get pool(): ObjectPool {
+  get pool(): InstanceCache {
     return this.objectPool;
   }
 
@@ -2253,8 +2235,7 @@ export class BaseSyncedStore<
   }
 
   // ── Status convenience getters ──────────────────────────────────────────
-  // Thin wrappers over syncStatus for consumer ergonomics. Previously on
-  // SyncedStore; moved here so createSyncEngine consumers get them too.
+  // Thin wrappers over `syncStatus` for consumer ergonomics.
 
   get isReady(): boolean {
     // Ready if: fully synced (idle + 100%) OR local data loaded (dataReady + syncing in background)

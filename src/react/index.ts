@@ -1,48 +1,47 @@
 /**
- * @abloatai/ablo/react — React bindings (v0.3.0)
+ * React bindings for `@abloatai/ablo`.
  *
- * Umbrella provider:
- *   const ablo = Ablo({ schema, apiKey })   // build once — module scope or useMemo
+ * # Provider
+ *
+ * Build a client once — at module scope or with `useMemo` — and wrap your tree:
+ *
+ *   const ablo = Ablo({ schema, apiKey })
  *   <AbloProvider client={ablo} fallback={<Skeleton/>}>
- *     — `client` is the only required prop (construct it yourself; the provider
- *     is the thin reactive binding, like `<Elements stripe={...}>`). `userId`
- *     is optional + informational. Owns sync engine + multiplayer lifecycle;
- *     the `fallback` prop
- *     gates children on first bootstrap. Pass `fallback="passthrough"`
- *     to disable the gate.
- *   <ClientSideSuspense fallback={<Skeleton/>}> — NESTED gate inside an
- *     already-ready provider. Use only when you need a separate gate
- *     for a heavy subtree (e.g. a canvas) while app chrome renders
- *     immediately. The provider-level `fallback` is the default path.
  *
- * Data hooks:
- *   useAblo((ablo) => ablo.tasks.get(id))     — primary React read API (sync local snapshot)
- *   useAblo()                                  — typed client for callbacks/effects
- *                                                (sync local reads: ablo.<model>.get/getAll;
- *                                                 async server reads: ablo.<model>.retrieve/list;
- *                                                 writes: ablo.<model>.create/update/delete)
- *   useMutators(defs, opts?)                   — Zero-style custom mutators
- *   useUndoScope(name)                         — per-surface undo/redo
+ * `client` is the only required prop; you construct it, and the provider is the
+ * thin reactive binding around it. The provider owns the sync-engine and
+ * multiplayer lifecycle. Its `fallback` gates children until the first sync
+ * bootstrap completes — pass `fallback="passthrough"` to render children
+ * immediately. `userId` is optional and informational.
  *
- * Status + errors:
- *   useSyncStatus()           — tagged-union lifecycle snapshot
- *   useErrorListener(cb)      — imperative error callback (Sentry/Datadog)
- *   useCurrentUserId()        — the provider's userId prop
+ * {@link ClientSideSuspense} adds a nested gate inside an already-ready
+ * provider. Reach for it only when a heavy subtree, such as a canvas, needs its
+ * own gate while the rest of the app renders right away; the provider-level
+ * `fallback` is the usual path.
  *
- * Multiplayer (always available — `<AbloProvider>` always constructs a client):
- *   useAblo((ablo) => ablo.<model>.claim.state(...)) — reactive coordination reads
- *   useWatch({ scope }) — join multiplayer for a scope, get peers/claims
+ * # Data hooks
  *
- * ── Breaking changes from v0.2.x ───────────────────────────────────
- * Removed: <SyncProvider>, SyncContext, useSyncContext — folded into
- *   <AbloProvider>. Access the raw engine with `useSync()`.
- * Removed: createAbloContext() factory + its returned AbloProvider —
- *   multiplayer is now always-on inside <AbloProvider>. Schema-typed
- *   participant hooks ship in a follow-up release.
- * Removed: withSync (no-op alias of observer). Import observer
- *   from mobx-react-lite directly if you still need it.
- * Changed: useSyncStatus() now returns a discriminated union. See the
- *   migration notes in CHANGELOG.md.
+ *   useAblo((ablo) => ablo.tasks.get(id))  — subscribe to a local snapshot (the main read API)
+ *   useAblo()                              — the typed client, for callbacks and effects:
+ *                                            synchronous local reads (`ablo.<model>.get`/`getAll`),
+ *                                            async server reads (`retrieve`/`list`),
+ *                                            and writes (`create`/`update`/`delete`)
+ *   useMutators(defs, opts?)               — define custom mutators
+ *   useUndoScope(name)                     — per-surface undo and redo
+ *
+ * # Status and errors
+ *
+ *   useSyncStatus()       — a discriminated-union snapshot of the sync lifecycle
+ *   useErrorListener(cb)  — an imperative error callback, for telemetry or toasts
+ *   useCurrentUserId()    — the provider's `userId` prop
+ *
+ * # Multiplayer
+ *
+ * Multiplayer is always available, because `<AbloProvider>` always constructs a
+ * client:
+ *
+ *   useAblo((ablo) => ablo.<model>.claim.state(...))  — reactive coordination reads
+ *   useWatch({ scope })                               — join a scope to get its peers and claims
  */
 
 // ── Typed-global resolvers ─────────────────────────────────────────
@@ -102,9 +101,8 @@ export { useCurrentUserId } from './useCurrentUserId.js';
 export { useReactive } from './useReactive.js';
 
 // ── Data hooks ─────────────────────────────────────────────────────
-// CRUD/read action types live in the React-free core now (the legacy
-// useQuery/useOne/useMutate/useReader hooks were removed — use `useAblo` +
-// `ablo.<model>.*`). Re-exported here for callers that referenced the types.
+// The CRUD and read action types are defined in a React-free module and
+// re-exported here. Read and write through `useAblo` and `ablo.<model>.*`.
 export type { MutateActions } from '../mutators/mutateActions.js';
 export type { ReaderActions, ReaderFindOptions } from '../mutators/readerActions.js';
 export {

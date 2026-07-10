@@ -1,35 +1,20 @@
 /**
- * Claim-first shorthand for `model(...)` — the Modal-inspired DX layer.
+ * A concise, claim-first way to declare a model. Each verb is shorthand for a
+ * {@link model} call with two decisions already made, so a reader learns the two
+ * facts that matter most about an entity before scanning its fields:
  *
- * The factory verbs encode the two orthogonal axes that matter for
- * safety and bootstrap behavior:
+ *   - Writability: `mutable.*` lets clients send create, update, and delete
+ *     operations over the commit protocol. `readOnly.*` means the server owns the
+ *     model — its changes stream to clients as deltas, but clients cannot mutate it.
+ *   - Load strategy: `.instant` loads the model at bootstrap, `.lazy` loads it on
+ *     first access, and `.manual` loads it only when you query it explicitly.
  *
- *   - **Writability** (axis 1): `mutable.*` means clients may send
- *     CREATE/UPDATE/DELETE over the `commit` wire protocol.
- *     `readOnly.*` means the model is server-managed — deltas stream
- *     to clients but clients cannot mutate.
- *   - **Load strategy** (axis 2): `.instant` loads at bootstrap,
- *     `.lazy` loads on first access, `.manual` requires explicit
- *     queries.
+ * The two-token form (`mutable.lazy({...})`) states the safety claim in the first
+ * token and the load shape in the second. The plain {@link model} factory remains
+ * available; these verbs are a convenience layered over it.
  *
- * The two-token form (`mutable.lazy({...})`) reads the safety claim
- * in the first token and the load shape in the second — you know both
- * key facts about the entity before scanning its fields.
- *
- * This is additive: the original `model(...)` factory keeps working.
- * New entities should prefer the verbs; existing entities can migrate
- * entity-by-entity.
- *
- * Example:
+ * @example
  * ```ts
- * // Before — 7 options to read before the fields make sense
- * tasks: model({ title: z.string() }, { ... }, {
- *   typename: 'Task', tableName: 'tasks', mutable: true,
- *   load: 'lazy', lazyObservable: true, computed: tasksComputed,
- * }),
- *
- * // After — claim reads off the verb; options carry only the
- * // fields that actually diverge from defaults
  * tasks: mutable.lazy({ title: z.string() }, {
  *   typename: 'Task', tableName: 'tasks',
  *   relations: { ... },
@@ -68,14 +53,14 @@ export interface SugarOptions<
    */
   typename?: string;
   /**
-   * Actual Postgres table name. Override when Prisma's `@@map` diverges
-   * from the naive snake_case of the typename (e.g. `Member` maps to
-   * `'member'` singular, not `'members'`).
+   * The physical table name. Override it when the table name differs from the
+   * snake_case of the typename — for example, a `Member` type stored in a table
+   * named `'member'` rather than `'members'`.
    */
   tableName?: string;
   /**
-   * Row-access policy (tenant isolation / RLS) — who may *read* a row.
-   * Discriminated union on `by` (`column` | `parent` | `none`). See
+   * The row-access policy for tenant isolation — the rule deciding who may read a
+   * row. A discriminated union on `by` (`column`, `parent`, or `none`). See
    * {@link ModelOptions.policy}.
    */
   policy?: ModelOptions['policy'];
@@ -188,8 +173,8 @@ export const readOnly = {
     shape: Shape,
     opts?: SugarOptions<R, C>,
   ): ModelDef<Shape, R, C> =>
-    // Reactive by default (like every variant now): a remote delta that mutates
-    // a row in place must re-render reactive reads. Opt out per-model with
+    // Reactive by default, like every variant: a remote delta that mutates a row
+    // in place must re-render reactive reads. Opt out per-model with
     // `lazyObservable: false` for very large read-only lists where per-field
     // atoms cost more than the QueryView's entry-replaced reactivity.
     build(shape, opts, { mutable: false, load: 'instant', lazyObservable: true }),

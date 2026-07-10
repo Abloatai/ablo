@@ -1,20 +1,16 @@
 /**
- * Duration parser — `'3m'`, `'24h'`, `500` (ms), `'15s'`, etc.
- *
- * The same TTL flavor every config-driven tool uses (Vercel's `ms`,
- * Zod's `.duration()`, a hundred CLIs). Zero deps, one regex, three
- * units that cover everything the SDK needs:
+ * Parses a duration into milliseconds. A duration is either a number of seconds
+ * or a string with a unit suffix — milliseconds, seconds, minutes, or hours:
  *
  *   - `'500ms'` → 500 ms
  *   - `'30s'`   → 30 000 ms
  *   - `'3m'`    → 180 000 ms
  *   - `'24h'`   → 86 400 000 ms
  *
- * Back-compat escape hatch: plain numbers are kept as-is and
- * interpreted in the caller's existing unit (seconds for TTL APIs).
- * This lets us retrofit the string form to every `ttlSeconds` field
- * without breaking numeric callers — the wrapper below branches on
- * the input type.
+ * A bare number is interpreted as seconds rather than milliseconds, matching the
+ * `ttlSeconds` fields used throughout the SDK, so a numeric caller and a string
+ * caller can pass the same field interchangeably. {@link toMs} returns
+ * milliseconds; {@link toSeconds} returns whole seconds.
  */
 
 import { AbloValidationError } from '../errors.js';
@@ -31,10 +27,11 @@ const UNIT_MS: Record<'ms' | 's' | 'm' | 'h', number> = {
 };
 
 /**
- * Parse a duration expressed as a number-of-seconds OR a unit-suffixed
- * string. Returns milliseconds. A bare number is interpreted as
- * **seconds** (matches the existing `ttlSeconds` semantics — prevents
- * silent breakage when a caller migrates from numeric to string).
+ * Parses a duration and returns the equivalent number of milliseconds. Accepts
+ * either a bare number, interpreted as seconds, or a unit-suffixed string such
+ * as `'500ms'`, `'30s'`, `'3m'`, or `'24h'`. Throws an
+ * {@link AbloValidationError} with code `duration_invalid` when a string does
+ * not match a supported unit.
  */
 export function toMs(input: Duration): number {
   if (typeof input === 'number') return input * 1_000;
@@ -51,7 +48,7 @@ export function toMs(input: Duration): number {
   return value * UNIT_MS[unit];
 }
 
-/** Convenience: same as `toMs` but divides out to seconds. */
+/** Parses a duration like {@link toMs} but returns whole seconds, rounding down. */
 export function toSeconds(input: Duration): number {
   return Math.floor(toMs(input) / 1_000);
 }

@@ -1,10 +1,10 @@
 /**
- * Schema-derived engine config — `computeFKDepthPriority` (the Tarjan-SCC
- * create-order derivation) and `deriveConfigFromSchema` (the `SyncEngineConfig`
- * the factory seeds the DI context with).
- *
- * Extracted from `Ablo.ts` as a pure leaf: both functions are deterministic
- * schema → value derivations with no engine state.
+ * Derives engine configuration from a schema. This module holds two pure
+ * functions: {@link computeFKDepthPriority} works out a safe row-insertion
+ * order from the schema's foreign-key relations, and
+ * {@link deriveConfigFromSchema} packages that ordering, together with a few
+ * defaults, into the {@link SyncEngineConfig} a client uses at startup. Both
+ * are deterministic transforms of the schema and hold no engine state.
  */
 
 import type { Schema } from '../schema/schema.js';
@@ -15,48 +15,36 @@ import { schemaHash } from '../schema/serialize.js';
 // ── Config derivation from schema ─────────────────────────────────────────
 
 /**
- * Compute a create-priority map from schema `belongsTo` relations using
- * Tarjan's strongly-connected-components algorithm.
+ * Computes a create-priority map that gives the engine a safe order for
+ * inserting rows, so a child row is never written before the parent its
+ * foreign key references.
  *
- * The FK graph has an edge `child → parent` for every `belongsTo`. Tarjan
- * runs a single linear DFS that simultaneously (a) detects cycles by
- * grouping mutually-reachable nodes into SCCs and (b) emits those SCCs
- * in reverse topological order of the condensation graph. In this edge
- * convention a "sink" SCC has no outgoing edges — i.e. no parents — so
- * it is an *FK root* (`organizations`, `themes`, etc.). Tarjan emits
- * roots first and leaves last, exactly the order in which rows must be
- * inserted to satisfy FK constraints.
+ * Every `belongsTo` relation is an edge from a child model to its parent. This
+ * function runs Tarjan's strongly-connected-components algorithm over that
+ * graph, which does two things at once: it groups any models that reference
+ * each other in a cycle into a single component, and it produces those
+ * components in an order where parents come before children. Each model then
+ * gets a numeric priority from that order, where a lower number means "insert
+ * earlier". Top-level models with no parent — an organization or a theme, say —
+ * come first, and the deepest descendants come last.
  *
- * Priorities are assigned by emit order: SCC #0 → 10, SCC #1 → 20, …
- * Members of the same SCC share a priority, so insertion order wins the
- * tiebreak inside a cycle (this matters for cyclic schemas like
- * `slideDecks ↔ layouts`, where one direction is the user's chosen
- * "soft" edge — only the consumer's mutator sequence knows which one).
+ * Models in the same cycle share a priority, so within a cycle the order rows
+ * were queued in breaks the tie. To break a cycle deterministically instead,
+ * mark one side of it with `belongsTo(target, fk, { defer: true })`. A deferred
+ * edge is left out of the graph, which turns the cycle into a chain and gives
+ * the deferred child a strictly higher priority than its parent. Pair it with a
+ * Postgres `DEFERRABLE INITIALLY DEFERRED` constraint if you also want the
+ * database to relax its check. See {@link BelongsToOptions.defer}.
  *
- * This algorithm is iteration-order-independent: starting the DFS from
- * any node yields the same SCC partitioning, and SCCs always come out
- * in valid topological order. The previous DFS-with-memoization
- * heuristic broke under cycles by treating the back-edge as depth 0,
- * which made priorities depend on which node the walk happened to
- * enter the cycle at.
+ * The returned map is keyed by each model's wire type name
+ * ({@link ModelDef.typename}, falling back to the schema key), because that is
+ * the name the engine looks up at commit time. Keying by the schema key would
+ * miss that lookup, and every model would fall back to the default priority.
  *
- * Schema authors can mark one side of a cycle with
- * `belongsTo(target, fk, { defer: true })`. Those edges are excluded
- * from the dependency graph entirely, which deterministically breaks
- * the cycle and turns the SCC into a chain — the marked child gets a
- * strictly higher priority than its parent instead of being tied with
- * it. Pair with a Postgres `DEFERRABLE INITIALLY DEFERRED` constraint
- * if you want the database side of the cycle to also relax. See
- * {@link BelongsToOptions.defer}.
- *
- * The returned map is keyed by {@link ModelDef.typename} (falling back
- * to the schema key), because that is what `Model.getModelName()`
- * returns at transaction time — keying by schema key would silently
- * miss the lookup and every model would fall through to
- * `defaultCreatePriority`.
- *
+ * The result does not depend on which model the walk starts from, and the
+ * algorithm runs in time linear in the number of models plus relations.
  * Reference: Tarjan, R. (1972), "Depth-first search and linear graph
- * algorithms." Linear in V + E.
+ * algorithms."
  */
 export function computeFKDepthPriority(schema: Schema): ReadonlyMap<string, number> {
   // schemaKey → typename (wire name used at transaction time)
@@ -177,19 +165,19 @@ export function computeFKDepthPriority(schema: Schema): ReadonlyMap<string, numb
 }
 
 export function deriveConfigFromSchema(schema: Schema): SyncEngineConfig {
-  // Commit payload projection is done directly inside `TransactionQueue`
-  // — see `projectCommitPayload` there. Each model's field metadata
-  // rides on `ModelRegistry` (populated by `registerModelsFromSchema`),
-  // so there's no config-layer shim: the queue asks the registry for
-  // the declared fields and serializes accordingly.
+  // Field-level serialization for commits happens in the transaction queue,
+  // which reads each model's declared fields from the model registry at commit
+  // time. There is no per-field metadata to configure here, so these maps stay
+  // empty.
   return {
     modelCreatePriority: computeFKDepthPriority(schema),
     defaultCreatePriority: 40,
     defaultNonCreatePriority: 50,
     essentialFields: {},
     classNameFallbackMap: {},
-    // Hash this client's schema once so bootstrap can detect drift against the
-    // server's active hash (same `schemaHash` the CLI push + server compute).
+    // Hash this schema once, so startup can detect when it has drifted from the
+    // schema the server currently has active. The server and the `ablo push`
+    // command compute this same hash.
     expectedSchemaHash: schemaHash(schema),
   };
 }

@@ -1,24 +1,22 @@
 /**
- * Up-front validation of `AbloOptions`. Returns the first error
- * encountered or null if all checks pass — caller writes the error
- * into `store.syncStatus` so consumers see it through the existing
- * status surface rather than catching it at the call site.
+ * Validates the options passed when constructing a client, before any
+ * connection is attempted. Returns the first problem it finds as an
+ * {@link AbloError}, or null when every check passes. The caller records that
+ * error on the client's sync status, so a misconfiguration surfaces through the
+ * normal status channel rather than throwing at the call site.
  *
- * Extracted from `Ablo.ts` (which was ~2300 LOC of constructor wiring)
- * so the validation rules are readable in isolation. The order of
- * checks matters: missing `url` is checked before identity options
- * because the error messages reference URLs and would mislead if a
- * URL was actually present.
+ * The order of checks matters: a missing `url` is reported before any identity
+ * problem, because the identity error messages mention the URL and would
+ * mislead if the URL were the thing actually missing.
  */
 
 import { AbloError, AbloValidationError } from '../errors.js';
 
 /**
- * Minimal subset of `AbloOptions` the validator actually inspects.
- * Defined here as its own interface so the validator doesn't pull
- * the whole 200+-line `AbloOptions` type — and to avoid a circular
- * import with `Ablo.ts`. Fields are kept structurally identical to
- * `AbloOptions` so a real options object satisfies this shape.
+ * The subset of client options this validator reads. It is declared as its own
+ * interface, structurally compatible with the full options type, so a real
+ * options object satisfies it without the validator having to depend on the
+ * complete type.
  */
 export interface ValidatableAbloOptions {
   readonly schema?: { readonly models?: Record<string, unknown> } | null;

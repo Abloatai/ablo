@@ -1,17 +1,16 @@
 /**
- * Single mutable source for the SDK's active bearer credential.
+ * The single mutable holder for the active bearer credential every transport
+ * uses.
  *
- * Every transport should read from this object at request/connect time:
- * bootstrap HTTP, lazy query HTTP, identity/probe HTTP, and WebSocket URL
- * auth. Token refresh writes here once; consumers observe the new value
- * through their getter without being manually patched one by one.
+ * Each transport reads the current token from this object at request or connect
+ * time — the HTTP request paths and the WebSocket URL authorizer alike. When the
+ * token is refreshed, it is written here once, and every reader observes the new
+ * value through its getter rather than being updated one by one.
  */
 
-// The WS bearer-subprotocol constants moved to `../wire/protocol.js` — they are
-// the wire contract shared with the sync-server (which imports them via
-// `@abloatai/ablo/wire`, never the root barrel). Re-exported here so
-// existing SDK-side importers (`SyncWebSocket`, `source/connector-protocol`)
-// keep their import path.
+// The WebSocket bearer-subprotocol constants are defined in `../wire/protocol.js`
+// as part of the wire contract shared between client and server. They are
+// re-exported here so this module stays a stable import site for them.
 export { WS_BEARER_SUBPROTOCOL_PREFIX, WS_SYNC_SUBPROTOCOL } from '../wire/protocol.js';
 
 export interface AuthCredentialSource {

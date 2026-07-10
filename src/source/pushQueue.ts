@@ -1,70 +1,80 @@
 /**
- * Customer-side push retry queue.
+ * A durable retry queue for delivering source events to the server.
  *
- * The push path (`POST /api/source/events` on Ablo Cloud) acks
- * synchronously. If the customer's app crashes mid-call, the network
- * drops, or Ablo returns 5xx, those events would otherwise be lost
- * — the poll path is the durability backstop, but it's higher
- * latency.
+ * When your application changes a row, it can push the resulting event to
+ * the server, which acknowledges delivery synchronously. If your process
+ * crashes mid-call, the network drops, or the server returns a 5xx, that
+ * event would be lost without a safety net. This queue is the safety net:
+ * it persists each event first, then delivers it from a background worker
+ * with automatic retries. (Polling the change feed is the slower fallback
+ * for anything the queue never manages to deliver.)
  *
- * `PushQueue` lives in the customer's process and gives them a
- * queue+worker pattern matching Stripe / Svix semantics:
+ * The queue follows a familiar enqueue-and-worker shape:
  *
- *   - `enqueue(events)` returns immediately after persisting
- *   - background worker delivers and retries per the Standard
- *     Webhooks schedule (0, 5s, 5m, 30m, 2h, 5h, 10h, 14h, 20h, 24h
- *     — ~3 days total)
- *   - exhausted items move to DLQ for customer-owned monitoring
+ *   - `enqueue(events)` returns as soon as the events are persisted.
+ *   - A background worker delivers them and retries on failure, following
+ *     the Standard Webhooks schedule (0, 5s, 5m, 30m, 2h, 5h, 10h, 14h,
+ *     20h, 24h — roughly three days in total).
+ *   - Items that exhaust every retry move to a dead-letter queue you can
+ *     monitor.
  *
- * Persistence is pluggable — `InMemoryPushQueueStorage` for single-
- * process customers, a SQL implementation against the customer's own
- * outbox table for production.
+ * Persistence is pluggable through {@link PushQueueStorage}. Use
+ * {@link InMemoryPushQueueStorage} for a single process, or implement that
+ * interface against your own outbox table for production durability.
  */
 
 import { ABLO_SOURCE_HEADERS, signAbloSourceRequest } from './signing.js';
 import type { SourceEvent } from './types.js';
 
+/** One queued delivery: a batch of source events plus its retry bookkeeping. */
 export interface PushQueueItem {
   readonly id: string;
   readonly events: readonly SourceEvent[];
   readonly attempts: number;
-  /** Timestamp (ms) of the next attempt. Workers skip earlier items. */
+  /** When the next attempt is due, in epoch milliseconds. The worker skips items due later. */
   readonly nextAttemptAt: number;
-  /** Most recent error message, when any attempt has failed. */
+  /** The most recent error message, set once an attempt has failed. */
   readonly lastError?: string;
-  /** `dlq` once retries exhausted. */
+  /** `pending` while awaiting delivery, `delivered` on success, `dlq` once retries are exhausted. */
   readonly status: 'pending' | 'delivered' | 'dlq';
 }
 
+/**
+ * The persistence behind a {@link PushQueue}. Implement it against your own
+ * durable table (or use {@link InMemoryPushQueueStorage}) so queued events
+ * survive a process restart. The queue calls these methods; you decide where
+ * the rows actually live.
+ */
 export interface PushQueueStorage {
   /**
-   * Append a new item; returns the persisted record. Implementations
-   * generate a stable id (used as the `webhook-id`) and set
-   * `nextAttemptAt = now`.
+   * Append a new item and return the persisted record. Generate a stable id
+   * — it doubles as the `webhook-id` on the delivered request — and set
+   * `nextAttemptAt` to the current time so the item is due immediately.
    */
   enqueue(events: readonly SourceEvent[]): Promise<PushQueueItem>;
-  /** Items whose `nextAttemptAt <= now` and `status === 'pending'`. */
+  /** Return pending items whose `nextAttemptAt` is at or before `now`, up to `limit`. */
   due(now: number, limit: number): Promise<readonly PushQueueItem[]>;
-  /** Bump attempt count + reschedule. */
+  /** Increase the attempt count and set the next attempt time after a failed delivery. */
   reschedule(
     id: string,
     nextAttemptAt: number,
     lastError: string,
   ): Promise<void>;
-  /** Mark the item delivered (no further attempts). */
+  /** Mark the item delivered so no further attempts are made. */
   markDelivered(id: string): Promise<void>;
-  /** Mark the item DLQ (retries exhausted). */
+  /** Move the item to the dead-letter queue after its retries are exhausted. */
   markDlq(id: string, lastError: string): Promise<void>;
-  /** Read DLQ contents — customer monitors this. */
+  /** Read the dead-letter queue. Your monitoring reads this to surface deliveries that never succeeded. */
   listDlq(): Promise<readonly PushQueueItem[]>;
 }
 
 /**
- * Standard Webhooks retry schedule. Index = attempt number; value =
- * delay-ms after the previous attempt. After the last entry, items
- * move to DLQ.
+ * The default retry schedule, taken from the Standard Webhooks
+ * specification. The index is the attempt number and the value is the delay
+ * in milliseconds after the previous attempt failed. Once an item runs off
+ * the end of this array, it moves to the dead-letter queue.
  *
- * Source: https://www.standardwebhooks.com/
+ * See https://www.standardwebhooks.com/.
  */
 export const STANDARD_WEBHOOKS_RETRY_SCHEDULE: readonly number[] = [
   0, // immediate
@@ -79,37 +89,49 @@ export const STANDARD_WEBHOOKS_RETRY_SCHEDULE: readonly number[] = [
   24 * 60 * 60_000, // 24h
 ];
 
+/** Configuration for {@link createPushQueue}. */
 export interface PushQueueOptions {
+  /** The URL the worker delivers events to. */
   readonly endpoint: string;
+  /** The API key used to sign each delivery. */
   readonly apiKey: string;
+  /** Where queued items are persisted. */
   readonly storage: PushQueueStorage;
   /**
-   * Override the retry delays. Default: Standard Webhooks schedule.
-   * The number of attempts equals the array length; the i-th entry
-   * is the delay after attempt `i` failed.
+   * Override the retry delays. Defaults to {@link STANDARD_WEBHOOKS_RETRY_SCHEDULE}.
+   * The number of attempts equals the array length, and the i-th entry is the
+   * delay after attempt `i` failed.
    */
   readonly retrySchedule?: readonly number[];
-  /** Worker poll interval. Default 1000ms. */
+  /** How often the worker checks for due items, in milliseconds. Defaults to 1000. */
   readonly tickIntervalMs?: number;
-  /** Max items pulled per tick. Default 50. */
+  /** The most items the worker delivers per tick. Defaults to 50. */
   readonly batchSize?: number;
-  /** Pluggable for tests / non-Node fetch impls. */
+  /** A custom fetch implementation, for tests or runtimes without a global `fetch`. */
   readonly fetch?: typeof fetch;
-  /** Pluggable for tests. */
+  /** A custom clock source, mainly for tests. Defaults to `Date.now`. */
   readonly now?: () => number;
-  /** Random jitter on retry delays. Default ±10%. Set to 0 to disable. */
+  /** Random jitter applied to each retry delay, as a fraction. Defaults to ±10%; set 0 to disable. */
   readonly jitter?: number;
+  /** Called when an item is dead-lettered or the worker loop hits an error. */
   readonly onError?: (item: PushQueueItem, err: unknown) => void;
 }
 
+/** A running push queue: persist events, deliver them, and recover dead-lettered ones. */
 export interface PushQueue {
+  /** Persist a batch of events for delivery and return the queued item. */
   enqueue(events: readonly SourceEvent[]): Promise<PushQueueItem>;
-  /** Run the worker loop until `signal` aborts. */
+  /** Run the delivery worker until `signal` aborts. */
   run(signal: AbortSignal): Promise<void>;
-  /** Drain the DLQ by re-enqueueing — customer-triggered redrive. */
+  /**
+   * Re-enqueue every dead-lettered item for another round of delivery. Call
+   * this yourself once you have fixed whatever caused the failures. Returns
+   * the number of items re-enqueued.
+   */
   redriveDlq(): Promise<number>;
 }
 
+/** Create a {@link PushQueue} from the given {@link PushQueueOptions}. */
 export function createPushQueue(options: PushQueueOptions): PushQueue {
   const tickIntervalMs = options.tickIntervalMs ?? 1000;
   const batchSize = options.batchSize ?? 50;
@@ -219,8 +241,8 @@ export function createPushQueue(options: PushQueueOptions): PushQueue {
     error: string,
   ): Promise<void> {
     const nextAttempt = item.attempts + 1;
-    // Off the end of the backoff schedule (same check as the old
-    // `nextAttempt >= schedule.length`) — dead-letter the item.
+    // Past the end of the backoff schedule: no attempts left, so dead-letter
+    // the item.
     const backoff = schedule[nextAttempt];
     if (backoff === undefined) {
       await options.storage.markDlq(item.id, error);
@@ -232,13 +254,13 @@ export function createPushQueue(options: PushQueueOptions): PushQueue {
   }
 }
 
+/**
+ * A {@link PushQueueStorage} that keeps items in memory. It is not durable —
+ * items are lost when the process restarts — so it suits development and
+ * low-volume use. For production, implement {@link PushQueueStorage} against
+ * your own table.
+ */
 export class InMemoryPushQueueStorage implements PushQueueStorage {
-  /**
-   * Real implementation, not a mock. Suitable for low-volume single-
-   * process customers; not durable across restarts (in-flight items
-   * are lost). Production customers should swap in a SQL-backed
-   * storage that writes to their existing outbox table.
-   */
   private items = new Map<string, PushQueueItem>();
   private nextId = 0;
   private readonly now: () => number;

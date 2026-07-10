@@ -1,8 +1,9 @@
 /**
- * `ablo status` — orientation, the way Stripe always shows account + mode.
- *
- * Answers "who am I, sandbox or production, which key, is it expired, is the
- * server reachable" in one glance — so a dev never has to guess from a 403.
+ * `ablo status` — a one-glance orientation command. It answers who you are
+ * authenticated as, whether you are pointed at the sandbox or production
+ * environment, which API key is in play and whether it has expired, and whether
+ * the server is reachable — so you can see your setup at a glance instead of
+ * inferring it from a failed request.
  */
 
 import pc from 'picocolors';
@@ -40,8 +41,8 @@ async function ping(apiUrl: string): Promise<boolean> {
   }
 }
 
-/** A model as the server reports it active on this plane — the schema key the
- *  local code addresses vs. the wire typename the engine actually routes on. */
+/** A model as the server reports it active for this key — pairing the schema key
+ *  your local code addresses with the wire typename the engine routes on. */
 interface PushedModel {
   key: string;
   typename: string;
@@ -55,10 +56,11 @@ interface PushedSchema {
 }
 
 /**
- * Fetch the schema CURRENTLY ACTIVE on the key's plane (`GET /api/schema`).
- * Best-effort: any failure (unreachable, unauthorized, old server without the
- * route) returns null so `status` degrades to its pre-schema output rather than
- * erroring. The key's scope decides the plane — never passed by hand.
+ * Fetch the schema currently active for this key's environment (`GET /api/schema`).
+ * Best-effort: any failure — unreachable server, unauthorized key, or a server
+ * too old to serve the route — returns null, so `status` falls back to its
+ * shorter output rather than erroring. The key's scope determines which
+ * environment is read; there is no environment argument to pass.
  */
 async function fetchPushedSchema(apiUrl: string, apiKey: string | undefined): Promise<PushedSchema | null> {
   if (!apiKey) return null;
@@ -78,7 +80,7 @@ async function fetchPushedSchema(apiUrl: string, apiKey: string | undefined): Pr
   }
 }
 
-/** Result of the DATA-plane probe — see {@link probeDataPlane}. */
+/** The outcome of the data-plane probe. See {@link probeDataPlane}. */
 type DataPlaneProbe =
   | { status: 'ok' }
   | { status: 'no_database' }
@@ -87,18 +89,20 @@ type DataPlaneProbe =
   | { status: 'unknown'; detail: string }
   | { status: 'skipped' };
 
-/** One sample's outcome. `routed` = the request reached the tenant DB (a row
- *  miss is fine); `no_route` = tenant_routing_failed before any query. */
+/** One sample's outcome. `routed` means the request reached the customer's
+ *  database (a missing row still counts); `no_route` means routing failed with
+ *  `tenant_routing_failed` before any query ran. */
 type Sample = 'routed' | 'no_route' | { forbidden: string | undefined } | { other: string };
 
 async function sampleRead(apiUrl: string, apiKey: string, modelTypename: string, n: number): Promise<Sample> {
   const ctrl = new AbortController();
   const t = setTimeout(() => { ctrl.abort(); }, 4000);
   try {
-    // A by-id read for an absent id. Per the server's entity route, tenant
-    // routing happens BEFORE the query, so `entity_not_found` (404) is only
-    // reachable once routing succeeds → a clean "DB answered" signal, while
-    // `tenant_routing_failed` means routing itself failed.
+    // A read by id for an id that does not exist. Routing to the customer's
+    // database happens before the query runs, so `entity_not_found` (404) is
+    // only reachable once routing has succeeded — a clean "the database
+    // answered" signal — while `tenant_routing_failed` means routing itself
+    // failed.
     const res = await fetch(
       `${apiUrl}/v1/models/${encodeURIComponent(modelTypename)}/__ablo_health_probe_${n}__`,
       { headers: { authorization: `Bearer ${apiKey}` }, signal: ctrl.signal },
@@ -123,13 +127,14 @@ async function sampleRead(apiUrl: string, apiKey: string, modelTypename: string,
 }
 
 /**
- * Probe the DATA plane, not just the control plane. `ablo status` otherwise
- * reports "api reachable" + "schema pushed" — both control-plane facts — and
- * looks healthy while reads/writes fail because the org's database isn't
- * routable (a redeploy/reaper drops the registration, or the key targets an org
- * that never had one). Worse, the registration can be INTERMITTENT — a single
- * read can't see that. So we sample a few times and report the worst case, so
- * the gap surfaces HERE with a fix, not as an opaque mid-operation failure.
+ * Probe the data plane, not just the control plane. On its own, `ablo status`
+ * reports that the API is reachable and a schema is pushed — both control-plane
+ * facts — and can look healthy while reads and writes fail because the
+ * organization's database isn't routable (a redeploy dropped the registration,
+ * or the key targets an organization that never registered one). The
+ * registration can also be intermittent, which a single read can't detect, so
+ * this samples a few times and reports the worst case. The gap then surfaces
+ * here, with a fix, rather than as an opaque failure mid-operation.
  */
 async function probeDataPlane(
   apiUrl: string,
@@ -164,27 +169,27 @@ export async function status(args: string[] = []): Promise<void> {
   const cfg = readConfig();
   const mode = getMode();
 
-  // Machine-readable mode — `ablo status --json`. Integrators and agents
-  // previously regex-scraped the human output for the org id (the 2026-06-11
-  // Pulse cascade); this is the supported surface. In-process consumers
-  // should prefer `ablo.organizationId` on the client after `ready()`.
+  // Machine-readable output — `ablo status --json`. This is the supported way
+  // for scripts and agents to read status, rather than parsing the human output.
+  // In-process consumers should prefer `ablo.organizationId` on the client after
+  // `ready()`.
   if (args.includes('--json')) {
     const entry = getKeyEntry(mode);
     const key = describeEffectiveKey(mode, process.env.ABLO_API_KEY, entry);
     const plan = resolvePushPlan();
     const activeProject = getActiveProject();
-    // The ONE shared credential chain (env → .env.local → .env → stored) —
-    // the same key `ablo push` would present, so this diagnostic can never
-    // report a different credential than a deploy uses.
+    // The shared credential chain (env → .env.local → .env → stored), the same
+    // key `ablo push` would present — so this diagnostic can never report a
+    // different credential than a deploy uses.
     const effective = resolveEffectiveApiKey();
     const pushed = await fetchPushedSchema(apiUrl, effective.key);
     const out = {
       mode,
       // The locally-active project (`ablo projects use`); null = org-default.
       project: activeProject ?? null,
-      // The credential the CLI resolves for requests, with its provenance —
-      // 'env' | '.env.local' | '.env' | 'stored' (users debug key confusion
-      // constantly; the SOURCE is usually the answer).
+      // The credential the CLI resolves for requests, with its source —
+      // 'env' | '.env.local' | '.env' | 'stored'. Key confusion is a common
+      // source of trouble, and the source is usually the answer.
       effectiveKey: {
         prefix: effective.key ? effective.key.slice(0, 12) : null,
         source: effective.source,
@@ -197,16 +202,16 @@ export async function status(args: string[] = []): Promise<void> {
       keyMatchesStoredActiveKey: key.keyMatchesStoredActiveKey,
       keyMismatch: key.keyMismatch,
       organizationId: entry?.organizationId ?? null,
-      // What `ablo push` would do right now — the one-command answer to
-      // "why did push demand a different key" (2026-06-11 live-key incident).
+      // What `ablo push` would do right now — the answer to "why did push
+      // demand a different key".
       push: {
         flow: plan.flow,
         keyPrefix: plan.apiKey?.slice(0, 12) ?? null,
         keySource: plan.source,
       },
-      // The schema ACTIVE on this key's plane — the typename/conflict the
-      // engine enforces, which may differ from local `schema.ts`. null = the
-      // server didn't answer (unreachable / old server / no key).
+      // The schema active for this key's environment — the typename and conflict
+      // rules the engine enforces, which may differ from your local `schema.ts`.
+      // null means the server did not answer (unreachable, too old, or no key).
       schema: pushed
         ? {
             active: pushed.active,
@@ -224,10 +229,10 @@ export async function status(args: string[] = []): Promise<void> {
 
   console.log(`\n  ${brand('ablo')} ${pc.dim('status')}\n`);
 
-  // The ONE shared credential chain (env → .env.local → .env → stored) — the
-  // same key `push`/`dev` resolve, so status never reports a different
-  // credential than a deploy would present. An explicit key (env var or a
-  // project env file) overrides the stored login key; SAY so, with its source.
+  // The shared credential chain (env → .env.local → .env → stored), the same key
+  // `push` and `dev` resolve — so status never reports a different credential than
+  // a deploy would present. An explicit key (an env var or a project env file)
+  // overrides the stored login key; when that happens, say so, with its source.
   const effective = resolveEffectiveApiKey();
   if (effective.key && effective.source && effective.source !== 'stored') {
     const label = effective.source === 'env' ? 'ABLO_API_KEY env' : effective.source;
@@ -300,16 +305,15 @@ export async function status(args: string[] = []): Promise<void> {
       console.log(`  ${pc.dim('schema')}  ${pc.yellow('none pushed')} ${pc.dim(`(run ${pc.bold('ablo push')} or ${pc.bold('ablo dev')})`)}`);
     }
 
-    // Data-plane health — the check that turns a lying-green status into the truth.
+    // Data-plane health — the check that catches a green status that is actually broken.
     const firstPushedModel = pushed?.active ? pushed.models[0] : undefined;
     if (firstPushedModel !== undefined) {
       const probe = await probeDataPlane(apiUrl, introspectKey, firstPushedModel.typename);
-      // Deliberately NO green "healthy" line. This bare-key probe carries only
-      // the key — it can resolve a different tenant than the typed SDK does (the
-      // SDK's identity carries project/sandbox), so an apparent "ok" here is not
-      // trustworthy enough to reassure. The probe only ever WARNS: it speaks when
-      // it catches a definite failure, and stays silent otherwise. (Faithful
-      // SDK-path probe is a follow-up — see the read-path decision doc.)
+      // Deliberately no green "healthy" line. This probe carries only the API
+      // key, so it can resolve a different tenant than the typed SDK does (the
+      // SDK's identity also carries project and sandbox), which makes an apparent
+      // "ok" here not trustworthy enough to reassure. The probe only warns: it
+      // speaks when it catches a definite failure and stays silent otherwise.
       if (probe.status === 'no_database') {
         console.log(`  ${pc.dim('data')}    ${pc.red('✗ no database registered')}${org ? pc.dim(` for org ${org}`) : ''}`);
         console.log(

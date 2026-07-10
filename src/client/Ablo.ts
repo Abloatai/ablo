@@ -1,8 +1,8 @@
 /**
- * Ablo — The one-liner consumer API.
- *
- * Hides all internal wiring (ObjectPool, Database, SyncClient, WebSocket,
- * bootstrap, offline queue, DI adapters) behind a single function call.
+ * `Ablo` — the one-call entry point to the sync engine client. It hides the
+ * internal wiring — the object pool, local database, sync client, WebSocket,
+ * bootstrap, and offline queue — behind a single function that returns a typed
+ * client with one property per model in your schema.
  *
  * Usage:
  *   import { Ablo } from '@abloatai/ablo';
@@ -28,10 +28,10 @@ import type {
 } from '../interfaces/index.js';
 import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, AbloNotFoundError, translateHttpError, toAbloError, claimedError } from '../errors.js';
 import { descriptionFromMeta } from '../coordination/schema.js';
-// `ModelTarget` (the `model`/`id` locator) and `ModelClaim` (the resolved claim
-// view) are canonical in `../coordination/schema` — derived there from one zod
-// schema so the SDK, the HTTP client, and the sync-server routes share a single
-// definition instead of hand-redeclaring it. Imported for local use AND
+// `ModelTarget` (the model/id locator) and `ModelClaim` (the resolved claim
+// view) are defined once in `../coordination/schema`, derived from a single zod
+// schema so the typed client, the HTTP client, and the server share one
+// definition rather than redeclaring it. Imported here for local use and
 // re-exported so `ablo.ModelTarget` / `ablo.ModelClaim` stay stable.
 import type { ModelTarget, ModelClaim } from '../coordination/schema.js';
 export type { ModelTarget, ModelClaim };
@@ -44,7 +44,7 @@ import {
 } from '../SyncEngineContext.js';
 import { alwaysOnline } from '../adapters/alwaysOnline.js';
 import { validateAbloOptions } from './validateAbloOptions.js';
-import { ObjectPool } from '../ObjectPool.js';
+import { InstanceCache } from '../InstanceCache.js';
 import type { SyncStoreContract } from '../react/context.js';
 import type { SyncWebSocket } from '../sync/SyncWebSocket.js';
 import { type RefreshScheduler } from '../auth/index.js';
@@ -99,15 +99,14 @@ import {
 import { registerDataSource } from './registerDataSource.js';
 import { shouldUseInMemoryPersistence } from './persistence.js';
 
-// ── Leaf modules (the factory's split-out cohesive units) ─────────────────
-// The option types, the shared resource-type surface, the schema-derived
-// config, model registration, the default console logger, and the default WS
-// mutation executor each live in their own leaf module. The two type leaves
-// (`options`, `resourceTypes`) have ZERO runtime imports, which is what lets
-// `ApiClient.ts` / `httpClient.ts` / `sessionMint.ts` take the client types
-// without importing this factory back (the old 4-cycle cluster). Everything
-// is re-exported below so importers of `./Ablo.js` (the root barrel,
-// `/core`) stay unchanged.
+// ── Supporting modules ────────────────────────────────────────────────────
+// The option types, the shared resource-type surface, the schema-derived config,
+// model registration, the default console logger, and the default WebSocket
+// mutation executor each live in their own module. The two type-only modules
+// (`options`, `resourceTypes`) carry no runtime imports, which lets the HTTP
+// client and session-mint helpers reference the client types without importing
+// this factory back and creating an import cycle. Everything is re-exported below
+// so importers of `./Ablo.js` stay unchanged.
 import type { AbloOptions, InternalAbloOptions } from './options.js';
 import type {
   AbloSession,
@@ -146,6 +145,8 @@ export type {
   ClaimLookupParams,
   ClaimReorderParams,
   Claim,
+  ClaimHeartbeat,
+  ClaimHeartbeatOptions,
   HeldClaim,
   ModelOperations,
   ModelOperationAction,
@@ -228,33 +229,34 @@ export type Ablo<S extends SchemaRecord> = {
   dispose(): Promise<void>;
 
   /**
-   * Replace the bearer auth token used for the WebSocket upgrade and HTTP
-   * requests, WITHOUT tearing down the engine. Use to push a refreshed
-   * short-lived access key (the Stripe-style `ek_`/`rk_`) before it expires —
-   * the client's `apiKey`-resolver refresh loop calls this. Reuses the same
-   * rotation path as the internal capability-token refresh; safe to call before
-   * `ready()`. Also nudges a parked connection to re-probe with the new token.
+   * Replace the bearer token used for the WebSocket upgrade and HTTP requests,
+   * without tearing down the engine. Use it to push a refreshed short-lived
+   * access key (an `ek_` or `rk_`) before it expires — the client's `apiKey`
+   * resolver refresh loop calls this for you. It reuses the same rotation path as
+   * the internal capability-token refresh and is safe to call before `ready()`.
+   * It also nudges a parked connection to re-probe with the new token.
    */
   setAuthToken(token: string): void;
 
   /**
    * Resolve the active bearer credential this engine authenticates with — the
-   * live `ek_`/`rk_` the WebSocket and HTTP transports currently carry (kept
-   * fresh by the `apiKey`-resolver refresh loop), falling back to a configured
+   * live `ek_` or `rk_` the WebSocket and HTTP transports currently carry (kept
+   * fresh by the `apiKey` resolver refresh loop), falling back to a configured
    * API key. Returns `null` when no credential is set yet. Use it to authenticate
-   * a side-band request to the same server with the very token this client
-   * already holds — no extra mint round-trip.
+   * a side-band request to the same server with the token this client already
+   * holds, avoiding an extra mint round-trip.
    */
   getAuthToken(): Promise<string | null>;
 
   /**
-   * Register a re-mint hook for the short-lived access key. The connection
-   * layer calls it WHEN it finds the key stale (a `credential_stale` probe) or
-   * on an external nudge; the hook mints a fresh `ek_`/`rk_` from the still-valid
-   * login. Mirrors the `apiKey`-resolver contract: resolve a token, resolve
-   * `null` when the login itself is gone (→ sign out), or THROW on a transient
-   * failure (→ back off, never sign out). The client wires this automatically
-   * from a function `apiKey`. Safe to call before `ready()`.
+   * Register a re-mint hook for the short-lived access key. The connection layer
+   * calls it when it finds the key stale (a `credential_stale` probe) or on an
+   * external nudge; the hook mints a fresh `ek_` or `rk_` from the still-valid
+   * login. It follows the same contract as the `apiKey` resolver: resolve a
+   * token, resolve `null` when the login itself is gone (which signs the user
+   * out), or throw on a transient failure (which backs off without signing out).
+   * The client wires this automatically from a function `apiKey`. Safe to call
+   * before `ready()`.
    */
   setCredentialRefresher(refresher: (() => Promise<string | null>) | null): void;
 
@@ -268,21 +270,19 @@ export type Ablo<S extends SchemaRecord> = {
   nudgeReconnect(): void;
 
   /**
-   * Mint a short-lived, scoped **session token** for one end user — the
-   * Stripe `ephemeralKeys.create` / Supabase session shape. Call this on YOUR
-   * BACKEND (where the `sk_` secret key lives), then hand the returned
-   * `token` to that user's browser (typically via a token route the browser's
-   * `apiKey` resolver fetches). The browser presents it as the bearer; the sync-server verifies
-   * it via `apiKeyProvider`.
+   * Mint a short-lived, scoped session token for one end user. Call this on your
+   * backend, where the `sk_` secret key lives, then hand the returned `token` to
+   * that user's browser — typically through a token route the browser's `apiKey`
+   * resolver fetches. The browser presents the token as its bearer, and the
+   * server verifies it. The browser must never see the `sk_` key, only the
+   * per-user session token.
    *
-   * The browser must NEVER see the `sk_` key — only the per-user session token.
-   *
-   * Pass `{ user: { id } }` for a full-authority end-user session (mints `ek_`,
-   * `participantKind: 'user'` attribution, stored as `actor_kind` on the delta
-   * row), or `{ agent: { id }, can: { tasks:
-   * ['update'] } }` for a scoped agent session (mints `rk_`); `can` is typed
-   * against your schema's model names. Always authenticates with the original
-   * `sk_` — never the client's exchanged sync credential.
+   * Pass `{ user: { id } }` for a full-authority end-user session, which mints an
+   * `ek_` and attributes writes to a user (recorded as `actor_kind` on the delta
+   * row). Pass `{ agent: { id }, can: { tasks: ['update'] } }` for a scoped agent
+   * session, which mints an `rk_`; `can` is typed against your schema's model
+   * names. This always authenticates with the original `sk_`, never the client's
+   * exchanged sync credential.
    */
   sessions: {
     create(params: CreateSessionParams<S>): Promise<AbloSession>;
@@ -304,15 +304,16 @@ export type Ablo<S extends SchemaRecord> = {
    * await agent.dispose(); // when the agent is done
    * ```
    *
-   * Server-side only (requires the `sk_` secret key, like `sessions.create`);
-   * throws `AbloAuthenticationError` in the browser. The returned client holds
-   * its own auto-refreshing `rk_`, so a long run never hits token expiry, and
-   * the `sk_` never leaves this process. Each call is a DISTINCT participant by
-   * default (omit `id` → fresh uuid), so even two agents sharing a `name` queue
-   * behind one another on a contended row — `name` is display only and never
-   * collapses identity. Humans don't get a server-built client — ship them a
-   * token via `sessions.create({ user })`. Need the raw token for revocation,
-   * or a stable re-attachable id? Use `sessions.create({ agent })` / pass `id`.
+   * Server-side only: it requires the `sk_` secret key (like `sessions.create`)
+   * and throws `AbloAuthenticationError` in the browser. The returned client
+   * holds its own auto-refreshing `rk_`, so a long run never hits token expiry,
+   * and the `sk_` never leaves this process. Each call is a distinct participant
+   * by default (omit `id` for a fresh uuid), so even two agents sharing a `name`
+   * queue behind one another on a contended row — `name` is display only and
+   * never collapses identity. Humans don't get a server-built client; ship them a
+   * token via `sessions.create({ user })`. If you need the raw token for
+   * revocation, or a stable re-attachable id, use `sessions.create({ agent })`
+   * or pass `id`.
    */
   agents: {
     create(params: CreateAgentClientParams<S>): Promise<Ablo<S>>;
@@ -410,25 +411,24 @@ export type Ablo<S extends SchemaRecord> = {
   readonly schema: Schema<S>;
 
   /**
-   * Real-time presence livestream — who else is connected on this
-   * engine's sync groups, what they're doing, and a write surface for
-   * announcing this user's own activity. Rides the engine's existing
-   * WebSocket; opening a participant for presence does NOT open a
-   * second socket. See `PresenceStream` in `types/streams.ts`.
+   * A real-time presence livestream — who else is connected on this engine's
+   * sync groups, what they're doing, and a write surface for announcing this
+   * user's own activity. It rides the engine's existing WebSocket; opening a
+   * participant for presence does not open a second socket. See
+   * {@link PresenceStream}.
    *
-   * Stable reference for the engine's lifetime — the underlying
-   * connection is rotated on `dispose()` but this object is the same.
+   * The reference is stable for the engine's lifetime — the underlying connection
+   * is rotated on `dispose()`, but this object stays the same.
    */
   readonly presence: PresenceStream;
 
   /**
-   * @internal — the public coordination API is `ablo.<model>.claim`. This
-   * accessor is the internal stream `claim` is built on; it is NOT part of the
-   * supported public surface and will be moved off the public type (it currently
-   * stays only because internal SDK modules are still typed against it).
+   * @internal The supported coordination API is `ablo.<model>.claim`. This
+   * accessor is the internal stream that surface is built on and is not part of
+   * the public API.
    *
-   * Cooperative-mutex layer over presence — announce "I'm about to do X on Y" so
-   * peers can yield before colliding. Same socket as entity sync.
+   * A cooperative-mutex layer over presence — announce "I'm about to do X on Y"
+   * so peers can yield before colliding. It uses the same socket as entity sync.
    */
   readonly claims: ClaimResource;
 
@@ -449,7 +449,7 @@ export type Ablo<S extends SchemaRecord> = {
    * Capture a context-staleness watermark over a set of entities.
    * Returns a flat snapshot with `stamp` (thread into writes as
    * `readAt`), `signal` (aborts on any captured-entity delta), and
-   * `onChange` (callback form). Reads from the engine's ObjectPool;
+   * `onChange` (callback form). Reads from the engine's InstanceCache;
    * subscription is on the engine's existing transport.
    *
    * Use before an LLM call to prevent the model from completing
@@ -466,14 +466,14 @@ export type Ablo<S extends SchemaRecord> = {
   // ── Internal accessors for framework integration ─────────────────
 
   /**
-   * The internal BaseSyncedStore. Implements SyncStoreContract — pass to
-   * SyncContext.Provider so the SDK's useModel/useModels/useMutations hooks
-   * can access it. Also satisfies useSyncStore() consumers during migration.
+   * The internal store. It implements {@link SyncStoreContract} — pass it to
+   * `SyncContext.Provider` so the SDK's `useModel` / `useModels` / `useMutations`
+   * hooks can reach it.
    */
   readonly _store: SyncStoreContract;
 
-  /** The ObjectPool — for demand loaders and direct pool operations. */
-  readonly _pool: ObjectPool;
+  /** The InstanceCache — for demand loaders and direct pool operations. */
+  readonly _pool: InstanceCache;
 
   /**
    * The SyncWebSocket handle — for collaboration events (slide selection,
@@ -488,17 +488,18 @@ export type Ablo<S extends SchemaRecord> = {
 // ── Auth normalization ─────────────────────────────────────────────────────
 
 /**
- * The one resolver the credential lifecycle needs: an async `() => token | null`,
- * or `null` when auth is static (a plain long-lived `apiKey` STRING with no
- * refresh — the common case).
+ * The single resolver the credential lifecycle needs: an async
+ * `() => token | null`, or `null` when auth is static — a plain long-lived
+ * `apiKey` string with no refresh, which is the common case.
  *
- * The short-lived per-user browser path passes a FUNCTION `apiKey` (an
- * `ApiKeySetter`): the SDK then drives the full credential lifecycle off it —
- * mint-before-connect, the proactive refresh timer + wake/online/focus re-mint,
- * and the reactive `credential_stale` re-mint. The resolver's contract is the
- * `ApiKeySetter` contract end-to-end: resolve a token, resolve `null` when the
- * login is gone (terminal → `session_expired` → sign out), or THROW on a
- * transient failure (→ back off, never sign out).
+ * The short-lived per-user browser path passes a function `apiKey` (an
+ * {@link ApiKeySetter}), and the SDK then drives the whole credential lifecycle
+ * from it: mint-before-connect, the proactive refresh timer with its
+ * wake/online/focus re-mint, and the reactive `credential_stale` re-mint. The
+ * resolver follows the `ApiKeySetter` contract end to end: resolve a token,
+ * resolve `null` when the login is gone (terminal — surfaces `session_expired`
+ * and signs the user out), or throw on a transient failure (backs off, without
+ * signing out).
  */
 function resolveCredentialResolver(
   apiKey: string | ApiKeySetter | null,
@@ -561,10 +562,10 @@ export function Ablo<const S extends SchemaRecord>(
   const authInput = { options, env };
   const configuredApiKey = resolveApiKey(authInput);
   const configuredAuthToken = resolveAuthToken(authInput);
-  // The client OWNS its credential lifecycle (not the React layer): this resolver
-  // drives both the reactive re-mint (FSM `credential_stale`) and the proactive
-  // refresh timer + wake/online/focus triggers. Null for the common static
-  // `apiKey` path — no refresh needed.
+  // The client owns its credential lifecycle (not the React layer): this resolver
+  // drives both the reactive re-mint (the connection's `credential_stale` state)
+  // and the proactive refresh timer with its wake/online/focus triggers. Null for
+  // the common static `apiKey` path, which needs no refresh.
   const credentialResolver = resolveCredentialResolver(configuredApiKey);
   const authCredentials = createAuthCredentialSource(
     // eslint-disable-next-line @typescript-eslint/no-deprecated -- load-bearing on the self-hosted path; server-internal cap-mint (Phase 3) not shipped
@@ -598,24 +599,19 @@ export function Ablo<const S extends SchemaRecord>(
     ...internalOptions.configOverrides,
   };
 
-  // 2. Create the mutation executor + dispatcher.
+  // 2. Create the mutation executor and dispatcher.
   //
-  //    The default executor sends `{ type: 'commit', ... }` over the
-  //    engine's WebSocket. The WS doesn't exist yet at this point (it's
-  //    created later when `BaseSyncedStore` initializes), so the default
-  //    takes a lazy getter that resolves the live WS at commit time.
-  //    `storeForTransport` is captured by the closure and assigned below
-  //    once the store is built — JS closures close over bindings, not
-  //    values, so by the time the first commit fires the store is live.
+  //    The default executor sends `{ type: 'commit', ... }` over the engine's
+  //    WebSocket. The socket doesn't exist yet at this point (it's created later
+  //    when the store initializes), so the default takes a lazy getter that
+  //    resolves the live socket at commit time. `storeHolder` is captured by the
+  //    closure and assigned below once the store is built — JS closures close
+  //    over bindings, not values, so by the time the first commit fires the store
+  //    is live.
   //
-  //    Caller-supplied executors are still honored for advanced cases
-  //    (test mocks, alternative transports) but the public `<AbloProvider>`
-  //    surface will mark this option `@internal` — apps should almost
-  //    never need to override transport. See Zero's `ClientOptions`
-  //    (packages/zero-client/src/client/options.ts) and Liveblocks'
-  //    `ClientOptions` (packages/liveblocks-core/src/client.ts) for the
-  //    reference shape: URLs + auth + declarative mutators, never a
-  //    pluggable commit transport.
+  //    Caller-supplied executors are still honored for advanced cases (test
+  //    mocks, alternative transports), but apps should almost never need to
+  //    override the transport.
   // Captured-by-reference binding — assigned below after BaseSyncedStore
   // is constructed. The default executor's `getWs` closure reads it
   // lazily at commit time.
@@ -688,18 +684,16 @@ export function Ablo<const S extends SchemaRecord>(
 
   // Hand the credential lifecycle to the client (refresher + proactive refresh
   // timer + wake/online/focus re-mint). Installed once here so refresh works for
-  // ANY consumer of `Ablo({ auth })` — not only those who render `<AbloProvider>`.
+  // any consumer of `Ablo({ auth })`, not only those who render `<AbloProvider>`.
   // The first mint happens in `ready()` so the first connection carries a token.
   //
-  // Long-lived server clients also get the pre-roll TIMER on windowless hosts
-  // (`proactiveInNode`): their socket must renew its `rk_`/`ek_` BEFORE the
-  // hub's keepalive reaper closes it (4001 `credential_expired`). Two signals
-  // qualify — agent/system participants (the axis `createConnectionManager`
-  // gates on; `kind` is deprecated but still what agent runtimes pass today),
-  // and an ABSOLUTE endpoint-string `apiKey` (a relative one can't fetch in
-  // Node at all, so an absolute URL is unambiguously a deliberate server
-  // client, kind or no kind). User-kind clients in Node (an SSR/RSC module
-  // eval of scaffolded browser code) stay reactive-only.
+  // Long-lived server clients also get the pre-roll timer on windowless hosts
+  // (`proactiveInNode`): their socket must renew its `rk_` or `ek_` before the
+  // server's keepalive reaper closes it (4001 `credential_expired`). Two signals
+  // qualify — an agent or system participant, and an absolute endpoint-string
+  // `apiKey` (a relative one can't be fetched in Node, so an absolute URL is
+  // unambiguously a deliberate server client). User-kind clients in Node (an
+  // SSR/RSC module evaluating scaffolded browser code) stay reactive-only.
   if (credentialResolver) {
     const rawEndpoint = internalOptions.authEndpoint ?? internalOptions.apiKey;
     const absoluteEndpoint =
@@ -714,12 +708,11 @@ export function Ablo<const S extends SchemaRecord>(
     });
   }
 
-  // Put the lazy-query lane on the SAME auth-recovery backbone as the WS probe
+  // Put the lazy-query lane on the same auth-recovery path as the WebSocket probe
   // and the proactive pre-roll: a 401 on `/sync/query` re-mints via the store's
-  // single-flight lifecycle and replays once, instead of silently returning
-  // empty rows against an expired `ek_` until the next proactive tick (the
-  // "Could not load documents — apikey_expired" wedge). Late-bound because the
-  // coordinator is constructed before the store exists.
+  // single-flight lifecycle and replays once, instead of silently returning empty
+  // rows against an expired `ek_` until the next proactive tick. Late-bound
+  // because the coordinator is constructed before the store exists.
   hydration.setCredentialRecovery((recovery) => store.recoverFromAuthRejection(recovery));
 
   // Wire the store back into the default executor's lazy getter (see
@@ -728,15 +721,14 @@ export function Ablo<const S extends SchemaRecord>(
   // the engine's WebSocket once it opens.
   storeHolder.store = store;
 
-  // Bind THIS executor to THIS Ablo's TransactionQueue. Without this,
-  // the queue resolves `mutationExecutor` from the module-level
-  // `getContext()`, which `initSyncEngine()` overwrites on every Ablo
-  // construction. In multi-Ablo flows (e.g. agent-worker's worker +
-  // per-job peer) the second `initSyncEngine()` call would silently
-  // redirect the first Ablo's queue through the second Ablo's executor
-  // closure — and when the second Ablo disposes, its `storeHolder.store`
-  // becomes null, so the first Ablo's commits start throwing
-  // `ws_not_ready` forever (terminal AgentJob writes hang on retry).
+  // Bind this executor to this client's TransactionQueue. Without it, the queue
+  // resolves `mutationExecutor` from the module-level `getContext()`, which
+  // `initSyncEngine()` overwrites on every client construction. In multi-client
+  // flows (for example a worker plus a per-job peer) the second `initSyncEngine()`
+  // call would silently redirect the first client's queue through the second
+  // client's executor closure — and when the second client disposes, its
+  // `storeHolder.store` becomes null, so the first client's commits start throwing
+  // `ws_not_ready` forever.
   syncClient.getTransactionQueue().setMutationExecutor(executor);
 
   // Presence + claim streams — built eagerly so `engine.presence`
@@ -823,13 +815,13 @@ export function Ablo<const S extends SchemaRecord>(
 
     _readyPromise = (async () => {
       try {
-        // Mint the FIRST access credential before we connect, so the initial
-        // WebSocket upgrade + bootstrap carry a valid bearer (no tokenless first
-        // connect that has to self-heal). Only when a refreshing resolver is
-        // wired AND no static credential is already present. Contract mirrors
-        // the `apiKey` resolver: `null` ⇒ the login is gone (terminal — fail ready so the
-        // app shows sign-in); a THROW ⇒ transient (rethrown; autoStart swallows
-        // and the lifecycle's online/wake triggers retry).
+        // Mint the first access credential before we connect, so the initial
+        // WebSocket upgrade and bootstrap carry a valid bearer (no tokenless first
+        // connect that has to self-heal). Only when a refreshing resolver is wired
+        // and no static credential is already present. Follows the `apiKey`
+        // resolver contract: `null` means the login is gone (terminal — fail ready
+        // so the app shows sign-in); a throw means transient (rethrown; autoStart
+        // swallows it and the lifecycle's online/wake triggers retry).
         if (credentialResolver && !authCredentials.getAuthToken()) {
           const token = await credentialResolver();
           if (!token) {
@@ -841,7 +833,7 @@ export function Ablo<const S extends SchemaRecord>(
           authCredentials.setAuthToken(token);
         }
 
-        // Register the caller's own database for write-back BEFORE bootstrap, so
+        // Register the caller's own database for write-back before bootstrap, so
         // the server resolves this org's data plane to the customer's DB rather
         // than serving an empty/wrong store. The org is derived server-side from
         // the API key. Idempotent server-side (register-or-update). Skipped when
@@ -864,15 +856,15 @@ export function Ablo<const S extends SchemaRecord>(
           url,
           kind,
           configuredApiKey,
-          // Resolve identity against the LIVE token, not the construction-time
-          // `configuredAuthToken`. Consumers using a function `apiKey` (apps/web)
-          // never pass `authToken` at construction — the lifecycle mints the
-          // first `ek_`/`rk_` and calls `setAuthToken()` before
-          // `ready()`, which updates the shared credential source. Reading the frozen
-          // `configuredAuthToken` here made `/auth/identity` fire with no Bearer
-          // (→ `no_matching_provider` / `session_expired`) even though the JWT
-          // was present. Mirrors every other transport by reading the shared
-          // credential source.
+          // Resolve identity against the live token, not the construction-time
+          // `configuredAuthToken`. Consumers using a function `apiKey` never pass
+          // `authToken` at construction — the lifecycle mints the first `ek_` or
+          // `rk_` and calls `setAuthToken()` before `ready()`, which updates the
+          // shared credential source. Reading the frozen `configuredAuthToken`
+          // here made `/auth/identity` fire with no bearer (returning
+          // `no_matching_provider` / `session_expired`) even though the token was
+          // present. This reads the shared credential source, like every other
+          // transport.
           configuredAuthToken: authCredentials.getAuthToken() ?? configuredAuthToken,
           bootstrapHelper,
           auth: authCredentials,
@@ -888,11 +880,11 @@ export function Ablo<const S extends SchemaRecord>(
 	        } = resolved;
 
 	        // Fail-loud guard: detect the degenerate "no real sync groups
-	        // resolved" state before opening the WS. Same class of bug as
-	        // the schema-drift `[commit] dropped stale field` warning —
+	        // resolved" state before opening the socket. It is the same class of bug as
+	        // a
 	        // sensible-looking default that's functionally broken: the
 	        // SDK ends up subscribing only to the server-side
-	        // `['default']` fallback (bootstrap.ts:45, Hub.ts:480), no
+	        // `['default']` fallback, no
 	        // delta has that tag, live fan-out silently never delivers.
 	        // For human users (kind:'user') this is almost certainly a
 	        // misconfiguration upstream — either the caller didn't pass
@@ -906,9 +898,9 @@ export function Ablo<const S extends SchemaRecord>(
 	          (resolvedSyncGroups.length === 0 ||
 	            (resolvedSyncGroups.length === 1 && resolvedSyncGroups[0] === 'default'))
 	        ) {
-	          // Actionable and NOT self-healing (no live updates until fixed):
-	          // kept at warn, consumer register — engine jargon and the internal
-	          // file pointer stripped; forensic fields ride the debug companion.
+	          // Actionable and not self-healing (no live updates until fixed):
+	          // kept at warn level for consumers; the low-level diagnostic
+	          // fields ride the debug log below.
 	          logger.warn(
 	            'This client was started without sync groups, so it will not receive ' +
 	              'live updates. Pass `syncGroups` (for example ' +
@@ -989,15 +981,15 @@ export function Ablo<const S extends SchemaRecord>(
           httpStatus: error.httpStatus,
           error: error.message,
         });
-        // Clear the memo so a FUTURE `ready()` re-attempts bootstrap instead of
-        // replaying this rejection forever. Bootstrap failures here are
-        // transient by nature — offline, an IndexedDB open timeout, a bootstrap
-        // fetch hiccup — and used to brick the engine until a full page reload
-        // because line ~2013 (`if (_readyPromise) return _readyPromise`) handed
-        // every later caller this same dead promise. Nulling it lets the
-        // provider's online/wake/retry triggers drive a clean re-bootstrap.
-        // (The terminal `_validationError` branch above intentionally stays
-        // cached — config can't change without recreating the engine.)
+        // Clear the memo so a future `ready()` re-attempts bootstrap instead of
+        // replaying this rejection forever. Bootstrap failures here are transient
+        // by nature — offline, an IndexedDB open timeout, a bootstrap fetch
+        // hiccup — and the early `if (_readyPromise) return _readyPromise` guard
+        // would otherwise hand every later caller this same dead promise, bricking
+        // the engine until a full page reload. Nulling it lets the provider's
+        // online/wake/retry triggers drive a clean re-bootstrap. (The terminal
+        // `_validationError` branch above intentionally stays cached — config
+        // can't change without recreating the engine.)
         _readyPromise = null;
         throw error;
       }
@@ -1140,28 +1132,6 @@ export function Ablo<const S extends SchemaRecord>(
 	    };
 	  }
 
-	  function modelClaimFromQueued(claim: Claim): ModelClaim {
-	    return {
-	      id: claim.id,
-	      actor: claim.heldBy ?? "",
-	      participantKind: claim.participantKind ?? "user",
-	      reason: claim.reason,
-	      ...(claim.description ? { description: claim.description } : {}),
-	      field: claim.target.field,
-	      status: 'queued',
-	      position: claim.position,
-	      expiresAt: claim.expiresAt ?? 0,
-	      target: {
-	        model: claim.target.type,
-	        id: claim.target.id,
-	        path: claim.target.path,
-	        range: claim.target.range,
-	        field: claim.target.field,
-	        meta: claim.target.meta,
-	      },
-	    };
-	  }
-
 	  function targetMatchesModel(
 	    target: { readonly model?: string; readonly id?: string; readonly field?: string },
 	    claim: Claim,
@@ -1181,14 +1151,6 @@ export function Ablo<const S extends SchemaRecord>(
 	    return claimStream.others
 	      .filter((claim) => (target ? targetMatchesModel(target, claim) : true))
 	      .map(modelClaimFromActive);
-	  }
-
-	  function listModelClaimQueue(target?: Partial<ModelTarget>): readonly ModelClaim[] {
-	    if (!target?.model || !target.id) return [];
-	    return publicClaims
-	      .queueFor({ type: target.model, id: target.id })
-	      .filter((claim) => (target.field ? claim.target.field === target.field : true))
-	      .map(modelClaimFromQueued);
 	  }
 
 	  function waitForModelUnclaimed(
@@ -1281,6 +1243,10 @@ export function Ablo<const S extends SchemaRecord>(
 	      waited,
 	      release,
 	      revoke: claim.revoke,
+	      // The lease-control members are forwarded explicitly — this wrapper
+	      // rebuilds the handle field by field, so anything not named here is
+	      // silently dropped from the public claim.
+	      heartbeat: claim.heartbeat,
 	      [Symbol.asyncDispose]: release,
 	    };
 	  }
@@ -1355,7 +1321,7 @@ export function Ablo<const S extends SchemaRecord>(
           createSnapshot({
             pool: objectPool,
             transport: store.getSyncWebSocket(),
-            // `position.readFloor` is THE value claims/snapshots stamp as
+            // `position.readFloor` is the value claims and snapshots stamp as
             // `readAt` (max of the pool-applied cursor and the acked
             // watermark for our own writes — see sync/syncPosition.ts).
             // Stamping a bare stream cursor made a claim taken right after
@@ -1406,19 +1372,18 @@ export function Ablo<const S extends SchemaRecord>(
         selfParticipantKind: kind,
         // Read-interest / write-intent enrolment for the typed surface.
         // `enterScope`/`pinScope` resolve the `{ [schemaKey]: id }` scope
-        // through the SAME resolver the claim path uses, landing this client in
+        // through the same resolver the claim path uses, landing this client in
         // the entity-scoped group the holder's claim presence fans out on.
-        // Return the store promise so the claim write path can AWAIT pinScope
-        // BEFORE acquiring the lease (closing the subscribe-vs-broadcast race);
+        // Returns the store promise so the claim write path can await pinScope
+        // before acquiring the lease (closing the subscribe-vs-broadcast race);
         // read-interest callers (`retrieve`/`claim.state`) still `void` it and
-        // stay fire-and-forget. SOFT either way — the store swallows reconcile
-        // errors so read interest never makes a read reject or stall.
+        // stay fire-and-forget. It's soft either way — the store swallows
+        // reconcile errors so read interest never makes a read reject or stall.
         enterScope: (scope) => store.enterScope(scope),
         pinScope: (scope) => store.pinScope(scope),
-        // `ablo.<model>.watch(ids, { ttl })` → a scoped participant join on
-        // this model's sync group(s). The model-scoped relocation of the old
-        // `ablo.participants.join({ scope: { <model>: ids } })`. WebSocket
-        // only — `join` throws AbloConnectionError if the socket isn't ready.
+        // `ablo.<model>.watch(ids, { ttl })` performs a scoped participant join
+        // on this model's sync group(s). WebSocket only — `join` throws
+        // `AbloConnectionError` if the socket isn't ready.
         createWatch: (modelKey, ids, options) =>
           participantManager.join({
             scope: { [modelKey]: ids },
@@ -1615,7 +1580,7 @@ export function Ablo<const S extends SchemaRecord>(
 	        const id = params.id ?? createModelId();
 	        await applyClaimedPolicy({ model: name, id }, params);
 	        // Confirm, then return the authoritative row (with framework defaults;
-	        // the EXISTING row on an idempotent re-create) — mirrors the WS client.
+	        // the existing row on an idempotent re-create) — mirrors the WebSocket client.
 	        await commits.create({
 	          claimRef: params.claimRef,
 	          idempotencyKey: params.idempotencyKey,
@@ -1666,13 +1631,13 @@ export function Ablo<const S extends SchemaRecord>(
 	  }
 
 	  /**
-	   * The CONTROL-PLANE credential: always the original configured secret key.
+	   * The control-plane credential: always the original configured secret key.
 	   * Never reads `authCredentials` — that holds the exchanged sync credential
 	   * (a wide-scope `rk_` on the hosted path), which control-plane routes
 	   * rightly refuse (e.g. the user-session mint is sk_-gated). Counterpart to
 	   * `getAuthToken()`, which resolves the sync-plane token.
 	   *
-	   * The sk_-only rule is enforced server-side; the credential KIND taxonomy
+	   * The secret-key-only rule is enforced on the server; the credential-kind taxonomy
 	   * (secret/restricted/ephemeral/publishable) lives in `auth/credentialPolicy`.
 	   */
 	  async function controlPlaneApiKey(): Promise<string | null> {
@@ -1681,7 +1646,7 @@ export function Ablo<const S extends SchemaRecord>(
 
 	  /**
 	   * Resolve the control-plane context a session/agent mint needs (sk_ +
-	   * bootstrap base URL + the schema-key→typename map the Hub gates on).
+	   * bootstrap base URL + the schema-key→typename map the server gates on).
 	   * Shared by `sessions.create` and `agents.create` so the two mint doors
 	   * can never drift on how a token is minted. Throws if no `sk_` is present —
 	   * minting is a backend-only operation.
@@ -1701,7 +1666,7 @@ export function Ablo<const S extends SchemaRecord>(
 	        bootstrapBaseUrl: internalOptions.bootstrapBaseUrl,
 	      }),
 	      ...(internalOptions.fetch ? { fetch: internalOptions.fetch } : {}),
-	      // Map every `can` schema-key to the wire typename the Hub gates on, so a
+	      // Map every `can` schema-key to the wire typename the server gates on, so a
 	      // typename override (`documents` → `Document`) doesn't mint a capability
 	      // the server then denies. See `MintSessionContext`.
 	      modelTypenames: Object.fromEntries(
@@ -1735,9 +1700,9 @@ export function Ablo<const S extends SchemaRecord>(
       // The live short-lived bearer (set via `setAuthToken` / `apiKey`-resolver refresh)
       // is the canonical credential; fall back to a configured API key.
       //
-      // This is the SYNC-PLANE token (bootstrap, WS, query HTTP). Control-plane
+      // This is the sync-plane token (bootstrap, WebSocket, query HTTP). Control-plane
       // calls (sessions.create, datasource registration) never use it — they
-      // present the ORIGINAL secret key via `controlPlaneApiKey()` below. The
+      // present the original secret key via `controlPlaneApiKey()` below. The
       // split matters: after the startup exchange this resolver returns the
       // derived wide-scope `rk_`, a credential the control-plane routes
       // correctly refuse (an agent token must never mint humans).
@@ -1753,9 +1718,8 @@ export function Ablo<const S extends SchemaRecord>(
       store.setCredentialRefresher(refresher);
     },
 
-    // The org this client resolved to — null until `ready()` completes.
-    // Integrators previously had no programmatic way to learn it (the Pulse
-    // agent regex-scraped `ablo status` output); now it's a property.
+    // The org this client resolved to — null until `ready()` completes. Exposed
+    // as a property so integrators can read it programmatically.
     get organizationId(): string | null {
       return _resolvedOrganizationId;
     },
@@ -1765,34 +1729,34 @@ export function Ablo<const S extends SchemaRecord>(
     },
 
     sessions: {
-      // Stripe `ephemeralKeys.create` shape: a BACKEND (holding `sk_`) mints a
-      // short-lived scoped token for one end user OR one agent.
+      // A backend (holding `sk_`) mints a short-lived scoped token for one end
+      // user or one agent.
       //
-      // CONTROL-PLANE CREDENTIAL RULE: both arms authenticate with the
-      // ORIGINAL secret key (`controlPlaneApiKey()`), never the wide-scope
-      // `rk_` the startup exchange installed as the sync credential. A derived
-      // agent credential silently replacing the secret key on control-plane
-      // calls is how humans get minted as agents — attribution is the product.
+      // Both arms authenticate with the original secret key
+      // (`controlPlaneApiKey()`), never the wide-scope `rk_` the startup exchange
+      // installed as the sync credential. A derived agent credential silently
+      // replacing the secret key on control-plane calls is how humans would get
+      // minted as agents — and correct attribution is the point.
       async create(params: CreateSessionParams<S>): Promise<AbloSession> {
-        // Both mint doors (`{ user }` → /auth/ephemeral-keys → `ek_`,
+        // Both mint paths (`{ user }` → /auth/ephemeral-keys → `ek_`,
         // `{ agent, can }` → /auth/capability → scoped `rk_`) resolve their
         // control-plane context through the shared `buildMintContext`, so this
-        // client, `agents.create`, and the stateless HTTP client can never drift
-        // on how a token is minted.
+        // client, `agents.create`, and the stateless HTTP client can't drift on
+        // how a token is minted.
         return mintSession(params, await buildMintContext('sessions.create'));
       },
     },
 
-    // Mint a scoped agent IDENTITY and hand back a connected client bound to it
-    // — `sessions.create({ agent })` + `Ablo({ apiKey })` fused into one call,
-    // for agents that run in THIS (sk_-holding) process. Omitting `id` yields a
-    // fresh uuid per call, so concurrent agents are distinct participants that
-    // queue behind each other (even when they share a `name`). Humans don't get
-    // a server-built client — ship them a token via `sessions.create({ user })`.
+    // Mint a scoped agent identity and hand back a connected client bound to it —
+    // `sessions.create({ agent })` plus `Ablo({ apiKey })` fused into one call,
+    // for agents that run in this (secret-key-holding) process. Omitting `id`
+    // yields a fresh uuid per call, so concurrent agents are distinct participants
+    // that queue behind each other (even when they share a `name`). Humans don't
+    // get a server-built client — ship them a token via `sessions.create({ user })`.
     agents: {
       async create(params: CreateAgentClientParams<S>): Promise<Ablo<S>> {
         // Distinct participant by default: omit `id` → a fresh uuid, so even two
-        // agents that share a `name` are INDEPENDENT participants and queue
+        // agents that share a `name` are independent participants and queue
         // behind one another. `name` is display only (→ userMeta.name); it never
         // derives the id. Pass an explicit `id` only to re-attach an agent to
         // its own held claims.
@@ -1807,7 +1771,7 @@ export function Ablo<const S extends SchemaRecord>(
           ...(userMeta ? { userMeta } : {}),
         } satisfies CreateAgentSessionParams<S>;
         // Re-mint the `rk_` on every resolver call so a long-lived agent client
-        // never hits token expiry; the `sk_` stays in THIS process — the child
+        // never hits token expiry; the `sk_` stays in this process — the child
         // only ever sees its own short-lived `rk_`.
         const mintToken = async (): Promise<string> =>
           (await mintSession(sessionParams, await buildMintContext('agents.create')))
@@ -1857,7 +1821,7 @@ export function Ablo<const S extends SchemaRecord>(
      * the session (WebSocket close code 1008/4001/4003 or a session_error
      * frame). Multiple subscribers supported; returns an unsubscribe
      * function. Consumers typically use this to trigger auth-failed UI
-     * flows (e.g., redirect to sign-in). Does NOT automatically purge the
+     * flows (e.g., redirect to sign-in). Does not automatically purge the
      * IndexedDB — call `engine.purge()` from the listener if you need
      * that behavior (the SDK's `<AbloProvider>` does this by default).
      */
@@ -1897,7 +1861,7 @@ export function Ablo<const S extends SchemaRecord>(
     /** The BaseSyncedStore — implements SyncStoreContract for SyncContext.Provider. */
     get _store() { return store; },
 
-    /** The ObjectPool — for demand loaders that need pool.createFromData(). */
+    /** The InstanceCache — for demand loaders that need pool.createFromData(). */
     get _pool() { return objectPool; },
 
     /** The SyncWebSocket — for collaboration events (slide selection, cursors). */
@@ -1935,16 +1899,14 @@ export function Ablo<const S extends SchemaRecord>(
 //  Ablo namespace — type access via `Ablo.X` for the modern SDK shape
 // ─────────────────────────────────────────────────────────────────────
 //
-// Stripe, Anthropic, OpenAI, Cursor: one default import, types hung
-// underneath via namespace dots. `import Ablo from "@abloatai/ablo"`
-// gets the factory, the return type, AND every type a typical consumer
-// references (`Ablo.Peer`, `Ablo.Snapshot<S, K>`, etc.) — all
-// purely type-level (zero runtime).
+// One default import, with types hung underneath via namespace dots:
+// `import Ablo from "@abloatai/ablo"` gets the factory, its return type, and
+// every type a typical consumer references (`Ablo.Peer`, `Ablo.Snapshot<S, K>`,
+// and so on) — all purely type-level, with zero runtime cost.
 //
-// Types still live in their canonical homes (`types/streams`,
-// `principal`, this file). The namespace re-exports them as a
-// convenience path. Named imports continue to work for callers who
-// prefer them.
+// The types still live in their canonical homes (`types/streams`, `principal`,
+// this file); the namespace re-exports them as a convenience path. Named imports
+// continue to work for callers who prefer them.
 
 import type * as _Streams from '../types/streams.js';
 import type * as _Participants from '../sync/participants.js';
@@ -1961,22 +1923,20 @@ import type * as _Conn from '../sync/ConnectionManager.js';
 import type * as _Global from '../types/global.js';
 
 /**
- * Canonical type namespace.
+ * The canonical type namespace.
  *
- * Locked rules — apply uniformly to every future addition:
+ * Rules applied uniformly to every addition:
  *
- *   1. Flat by default.    `Ablo.X`. Fewest dots wins.
- *   2. Sub-namespace ONLY when (a) 4+ types share a single conceptual
- *      prefix, AND (b) names read better with the prefix (`Conflict.Kind`
- *      over `ConflictKind`). If the cluster is heterogeneous (streams +
- *      data + handles), keep flat.
- *   3. Only types a consumer would write `: Ablo.X` for. Inferred-only
- *      types stay un-exported.
- *   4. Wire shapes never on `Ablo.*`. Engine vocabulary only.
- *   5. Advanced / framework-integration types stay internal unless they
- *      graduate into one of the public subpaths.
- *
- * Anything not on this list stays internal.
+ *   1. Flat by default. `Ablo.X`. Fewest dots wins.
+ *   2. Sub-namespace only when (a) four or more types share a single conceptual
+ *      prefix and (b) the names read better with it (`Conflict.Kind` over
+ *      `ConflictKind`). If the cluster is heterogeneous (streams, data, handles),
+ *      keep it flat.
+ *   3. Only types a consumer would write `: Ablo.X` for. Inferred-only types stay
+ *      unexported.
+ *   4. Wire shapes never appear on `Ablo.*` — engine vocabulary only.
+ *   5. Advanced or framework-integration types stay internal unless they graduate
+ *      into one of the public subpaths.
  */
 // eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace Ablo {
@@ -2009,6 +1969,15 @@ export namespace Ablo {
   export type Claim = _Streams.Claim;
   export type ClaimRejection = _Streams.ClaimRejection;
   export type ClaimLost = _Streams.ClaimLost;
+
+  // ── Long-running work (flat — the async surface of a claim) ───────
+  // Work that outlives a claim's crash-cleanup TTL holds its lease by
+  // BEATING (`held.heartbeat()` / `claim({ heartbeat: true })`). The beat's
+  // answer carries the extended expiry and the queue pressure behind the
+  // lease; a beat on a lapsed lease rejects with `AbloClaimedError` — for a
+  // socketless worker, the failed beat IS the loss notification.
+  export type ClaimHeartbeat = _Streams.ClaimHeartbeat;
+  export type ClaimHeartbeatOptions = _Streams.ClaimHeartbeatOptions;
 
   // ── Singletons (flat — no cohort) ─────────────────────────────────
   export type Snapshot<

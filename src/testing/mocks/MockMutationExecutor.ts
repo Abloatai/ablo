@@ -1,8 +1,9 @@
 /**
- * MockMutationExecutor — Test double for the MutationExecutor interface.
- *
- * Captures all mutation calls, allows controlled responses (success/failure/latency),
- * and returns configurable lastSyncId for delta confirmation testing.
+ * A test double for {@link MutationExecutor} that records every call instead
+ * of writing to a database. Use it to assert what a component tried to commit
+ * and to script the response — success, failure, or added latency — without a
+ * live backend. Each successful commit hands back an incrementing `lastSyncId`,
+ * so tests can drive the delta-confirmation flow that depends on those ids.
  */
 
 import type {
@@ -25,16 +26,16 @@ export interface CapturedMutation {
 }
 
 export interface MockMutationExecutorOptions {
-  /** Starting lastSyncId — increments by 1 per commit call */
+  /** The first `lastSyncId` to return. It increments by one after each commit. */
   initialSyncId?: number;
-  /** Whether mutations should succeed by default */
+  /** Whether mutations succeed by default. Set this false to make every call reject. */
   shouldSucceed?: boolean;
-  /** Simulated network latency in ms */
+  /** A delay applied before each call resolves, in milliseconds, to simulate a slow network. */
   latencyMs?: number;
 }
 
 export class MockMutationExecutor implements MutationExecutor {
-  /** All captured mutation calls in order */
+  /** Every captured call, in the order it was made. Assertions read from this list. */
   readonly calls: CapturedMutation[] = [];
 
   /** Current sync ID — incremented on each successful commit */
@@ -58,17 +59,17 @@ export class MockMutationExecutor implements MutationExecutor {
   // Test control API
   // ─────────────────────────────────────────────
 
-  /** Get current sync ID without incrementing */
+  /** Returns the current sync id without advancing it. */
   get currentSyncId(): number {
     return this._syncId;
   }
 
-  /** Set the next sync ID to return */
+  /** Sets the next sync id the executor will return. */
   setSyncId(id: number): void {
     this._syncId = id;
   }
 
-  /** Make all mutations fail with given error */
+  /** Makes every mutation reject. Pass an error to control what is thrown. */
   failAll(error?: Error): void {
     this._shouldSucceed = false;
     if (error) {
@@ -76,33 +77,33 @@ export class MockMutationExecutor implements MutationExecutor {
     }
   }
 
-  /** Make all mutations succeed again */
+  /** Restores the default where mutations succeed, clearing any failure overrides. */
   succeedAll(): void {
     this._shouldSucceed = true;
     this._failureOverrides.clear();
   }
 
-  /** Make a specific method fail */
+  /** Makes a single named method reject. Pass an error to control what is thrown. */
   failMethod(method: string, error?: Error): void {
     this._failureOverrides.set(method, error ?? new Error(`Mock ${method} failed`));
   }
 
-  /** Clear failure override for a method */
+  /** Removes the failure override for one method. */
   clearFailure(method: string): void {
     this._failureOverrides.delete(method);
   }
 
-  /** Get calls filtered by method */
+  /** Returns the captured calls for one method, in order. */
   getCallsByMethod(method: string): CapturedMutation[] {
     return this.calls.filter((c) => c.method === method);
   }
 
-  /** Get the last call made */
+  /** The most recent captured call, or undefined if none have been made. */
   get lastCall(): CapturedMutation | undefined {
     return this.calls[this.calls.length - 1];
   }
 
-  /** Reset all state */
+  /** Clears captured calls and restores the initial options. */
   reset(options?: MockMutationExecutorOptions): void {
     this.calls.length = 0;
     this._syncId = options?.initialSyncId ?? 1;

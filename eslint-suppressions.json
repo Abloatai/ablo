@@ -291,14 +291,6 @@
       "count": 1
     }
   },
-  "__tests__/unit/AreaOfInterestManager.test.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 3
-    },
-    "@typescript-eslint/require-await": {
-      "count": 1
-    }
-  },
   "__tests__/unit/BaseSyncedStore.areaOfInterest.test.ts": {
     "@typescript-eslint/no-empty-function": {
       "count": 1
@@ -309,14 +301,6 @@
   },
   "__tests__/unit/BaseSyncedStore.hydrateGroups.test.ts": {
     "@typescript-eslint/require-await": {
-      "count": 2
-    }
-  },
-  "__tests__/unit/BootstrapHelper.auth.test.ts": {
-    "@typescript-eslint/require-await": {
-      "count": 3
-    },
-    "jest/unbound-method": {
       "count": 2
     }
   },
@@ -770,29 +754,6 @@
       "count": 1
     }
   },
-  "src/ObjectPool.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 5
-    },
-    "@typescript-eslint/no-unnecessary-type-parameters": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 3
-    },
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 14
-    },
-    "@typescript-eslint/prefer-optional-chain": {
-      "count": 2
-    }
-  },
   "src/SyncClient.ts": {
     "@typescript-eslint/no-misused-spread": {
       "count": 1
@@ -869,7 +830,7 @@
       "count": 6
     }
   },
-  "src/ai-sdk/coordination-context.ts": {
+  "src/ai-sdk/coordinationContext.ts": {
     "@typescript-eslint/prefer-nullish-coalescing": {
       "count": 2
     },
@@ -974,7 +935,7 @@
       "count": 4
     }
   },
-  "src/cli/drizzle-pull.ts": {
+  "src/cli/drizzlePull.ts": {
     "@typescript-eslint/no-unused-vars": {
       "count": 1
     }
@@ -1003,7 +964,7 @@
       "count": 1
     }
   },
-  "src/cli/prisma-pull.ts": {
+  "src/cli/prismaPull.ts": {
     "@typescript-eslint/no-unused-vars": {
       "count": 1
     },
@@ -1054,16 +1015,13 @@
       "count": 2
     },
     "@typescript-eslint/no-unused-vars": {
-      "count": 10
+      "count": 9
     },
     "@typescript-eslint/prefer-nullish-coalescing": {
       "count": 1
     },
     "@typescript-eslint/require-await": {
       "count": 2
-    },
-    "@typescript-eslint/unbound-method": {
-      "count": 1
     },
     "prefer-const": {
       "count": 1
@@ -1274,9 +1232,6 @@
     "@typescript-eslint/no-empty-function": {
       "count": 1
     },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 21
-    },
     "@typescript-eslint/no-unused-vars": {
       "count": 7
     }
@@ -1384,7 +1339,7 @@
       "count": 2
     },
     "@typescript-eslint/no-unused-vars": {
-      "count": 2
+      "count": 1
     },
     "@typescript-eslint/require-await": {
       "count": 2
@@ -1749,7 +1704,7 @@
       "count": 1
     },
     "@typescript-eslint/no-unused-vars": {
-      "count": 11
+      "count": 10
     },
     "@typescript-eslint/prefer-nullish-coalescing": {
       "count": 6
@@ -1795,62 +1750,11 @@
       "count": 2
     }
   },
-  "src/sync/AreaOfInterestManager.ts": {
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 1
-    }
-  },
-  "src/sync/BootstrapHelper.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-boolean-literal-compare": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 3
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-return": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 5
-    },
-    "@typescript-eslint/prefer-optional-chain": {
-      "count": 2
-    },
-    "no-empty": {
-      "count": 2
-    }
-  },
   "src/sync/ConnectionManager.ts": {
     "@typescript-eslint/no-unnecessary-boolean-literal-compare": {
       "count": 1
     },
     "@typescript-eslint/switch-exhaustiveness-check": {
-      "count": 1
-    }
-  },
-  "src/sync/HydrationCoordinator.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-return": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unused-vars": {
       "count": 1
     }
   },
@@ -1880,11 +1784,6 @@
     },
     "@typescript-eslint/require-await": {
       "count": 2
-    }
-  },
-  "src/sync/__tests__/BootstrapHelper.schemaDrift.test.ts": {
-    "@typescript-eslint/require-await": {
-      "count": 3
     }
   },
   "src/sync/__tests__/NetworkProbe.defaultUrl.test.ts": {
@@ -2119,17 +2018,6 @@
       "count": 1
     }
   },
-  "src/transactions/__tests__/persistedReplay.test.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 6
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 2
-    },
-    "@typescript-eslint/require-await": {
-      "count": 7
-    }
-  },
   "src/transactions/__tests__/updatePreviousDataRebaseline.test.ts": {
     "@typescript-eslint/no-non-null-assertion": {
       "count": 3
@@ -2163,32 +2051,9 @@
       "count": 2
     }
   },
-  "src/transactions/commitPayload.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
-  },
   "src/transactions/deltaConfirmation.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
     "@typescript-eslint/prefer-optional-chain": {
       "count": 1
-    }
-  },
-  "src/transactions/mutation-error-handler.ts": {
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 2
-    }
-  },
-  "src/transactions/optimistic.ts": {
-    "@typescript-eslint/require-await": {
-      "count": 1
-    }
-  },
-  "src/transactions/persistedReplay.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 3
     }
   },
   "src/types/streams.ts": {
@@ -2204,9 +2069,9 @@
       "count": 4
     }
   },
-  "src/utils/mobx-setup.ts": {
+  "src/utils/mobxSetup.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 6
+      "count": 5
     },
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 4
@@ -2218,19 +2083,16 @@
       "count": 1
     },
     "@typescript-eslint/no-unsafe-assignment": {
-      "count": 8
+      "count": 2
     },
     "@typescript-eslint/no-unsafe-call": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 10
-    },
-    "@typescript-eslint/no-unsafe-return": {
       "count": 1
     },
+    "@typescript-eslint/no-unsafe-member-access": {
+      "count": 3
+    },
     "@typescript-eslint/no-unused-vars": {
-      "count": 2
+      "count": 1
     },
     "no-case-declarations": {
       "count": 1

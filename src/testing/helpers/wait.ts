@@ -1,12 +1,14 @@
 /**
- * Async test helpers for timing-sensitive sync engine tests.
+ * Asynchronous helpers for tests whose assertions depend on timing — for
+ * flushing pending work, polling for a condition, or waiting a fixed delay.
  */
 
 import { AbloConnectionError } from '../../errors.js';
 
 /**
- * Flush all pending microtasks (Promise.resolve, queueMicrotask).
- * Critical for testing TransactionQueue's microtask batching.
+ * Flushes all pending microtasks, such as resolved promises and
+ * `queueMicrotask` callbacks. Useful for testing work the transaction queue
+ * batches on the microtask queue.
  */
 export function flushMicrotasks(): Promise<void> {
   return new Promise((resolve) => {
@@ -16,8 +18,9 @@ export function flushMicrotasks(): Promise<void> {
 }
 
 /**
- * Wait for a condition to become true, polling at intervals.
- * Times out after maxWait ms.
+ * Polls `condition` until it returns true, checking every `interval`
+ * milliseconds. Rejects with an {@link AbloConnectionError} if `maxWait`
+ * milliseconds pass first.
  */
 export async function waitFor(
   condition: () => boolean,
@@ -37,15 +40,17 @@ export async function waitFor(
 }
 
 /**
- * Wait for N milliseconds. Use sparingly — prefer flushMicrotasks() or waitFor().
+ * Waits for the given number of milliseconds. Use sparingly; prefer
+ * {@link flushMicrotasks} or {@link waitFor}, which don't tie tests to
+ * wall-clock time.
  */
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Run a callback after flushing microtasks.
- * Useful for asserting state after TransactionQueue batch processing.
+ * Flushes pending microtasks, then runs `fn` and returns its result. Handy
+ * for asserting state after the transaction queue processes a batch.
  */
 export async function afterMicrotasks<T>(fn: () => T): Promise<T> {
   await flushMicrotasks();

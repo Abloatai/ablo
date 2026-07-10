@@ -1,19 +1,16 @@
 /**
- * Data Source adapter contract — Zod-first.
+ * Defines the data an ORM adapter exchanges with Ablo, expressed as Zod schemas
+ * rather than plain interfaces so every value is validated where it crosses the
+ * boundary. A malformed operation or outbox row is rejected at the edge instead of
+ * failing deep inside a transaction, and each TypeScript type is inferred from the
+ * one schema that validates it.
  *
- * The wire shapes an ORM adapter (Prisma/Drizzle/Kysely) consumes and produces
- * are defined here as Zod schemas, not hand-typed interfaces, so they are
- * VALIDATED at the boundary (a malformed op / outbox row is rejected at the
- * edge, not deep inside a transaction) and every inferred type flows from one
- * source. This mirrors the server's `tenant-connection.schema.ts` convention:
- * schema-validate what crosses a trust boundary, infer the TS types from it.
- *
- * Scope note: the existing `SourceOperation` / `SourceEvent` interfaces in
- * `index.ts` are the established cross-package wire types — this module does NOT
- * redefine them. It owns the ADAPTER-level contract (the change envelope the
- * adapter commits, the outbox row it persists, the migration it ships) and keeps
- * `operationSchema` structurally compatible with `SourceOperation` (asserted at
- * the bottom of the file) so the two never drift.
+ * These schemas describe the adapter's own contract: the change set it commits,
+ * the outbox row it stores, and the table migrations it ships. They do not
+ * redefine the shared `SourceOperation` and `SourceEvent` wire types, which live
+ * in `types.ts`; instead `operationSchema` is kept structurally compatible with
+ * `SourceOperation`, a compatibility the assertion at the end of this file proves
+ * at compile time so the schema and the interface cannot drift apart.
  */
 
 import { z } from 'zod';
@@ -32,8 +29,9 @@ export const operationTypeSchema = z.enum([
 export type OperationType = z.infer<typeof operationTypeSchema>;
 
 /**
- * One operation in a change set. Structurally compatible with `SourceOperation`
- * (see the assertion below) — this is its runtime validator.
+ * A single operation within a change set, and the runtime validator for it. It is
+ * structurally compatible with the shared `SourceOperation` type, as the assertion
+ * at the end of this file confirms.
  */
 export const operationSchema = z.object({
   type: operationTypeSchema,
@@ -47,9 +45,9 @@ export const operationSchema = z.object({
 export type Operation = z.infer<typeof operationSchema>;
 
 /**
- * The atomic unit an adapter commits: one or more operations under a single
- * `clientTxId`. The `clientTxId` is the idempotency key — committing the same
- * change set twice must produce the same result exactly once.
+ * The unit an adapter commits atomically: one or more operations grouped under a
+ * single `clientTxId`. That `clientTxId` is the idempotency key, so committing the
+ * same change set twice applies it once and returns the same result.
  */
 export const changeSetSchema = z.object({
   operations: z.array(operationSchema).min(1),
@@ -58,10 +56,11 @@ export const changeSetSchema = z.object({
 export type ChangeSet = z.infer<typeof changeSetSchema>;
 
 /**
- * A row in the adapter-owned `ablo_outbox` table. Written in the SAME
- * transaction as the app-row mutation (transactional outbox), then read back by
- * `events()` and handed to Ablo. `cursor` is the monotonic ordering key Ablo
- * round-trips to resume.
+ * A row in the adapter's `ablo_outbox` table. The adapter writes it in the same
+ * transaction as the underlying row change — the transactional-outbox pattern — so
+ * a change and its event commit together or not at all. The `events()` feed later
+ * reads these rows back and hands them to Ablo, and `cursor` is the monotonic
+ * ordering key Ablo round-trips to resume where it left off.
  */
 export const outboxEventSchema = z.object({
   /** Stable, globally-unique id — Ablo's replay-protection key. */
@@ -71,7 +70,7 @@ export const outboxEventSchema = z.object({
   type: operationTypeSchema,
   data: jsonObject.nullish(),
   organizationId: z.string().nullish(),
-  /** Round-tripped so Ablo can filter SDK-origin echoes after a direct append. */
+  /** The originating transaction id, carried so Ablo can drop echoes of changes the SDK itself wrote. */
   clientTxId: z.string().nullish(),
   occurredAt: z.number().nullish(),
   /** Monotonic ordering key (bigint as string). `events()` pages by `cursor > ?`. */
@@ -87,9 +86,9 @@ export const eventsPageSchema = z.object({
 export type EventsPage = z.infer<typeof eventsPageSchema>;
 
 /**
- * A table-creation migration an adapter ships so a customer never hand-writes the
- * `ablo_idempotency` / `ablo_outbox` tables — the adapter returns them from
- * `migrations()`.
+ * A table-creation migration an adapter ships, so you never hand-write the
+ * `ablo_idempotency` and `ablo_outbox` tables yourself. An adapter returns these
+ * from its `migrations()` method.
  */
 export const migrationSchema = z.object({
   /** Stable name, used as the migration filename + applied-ledger key. */
@@ -99,11 +98,11 @@ export const migrationSchema = z.object({
 });
 export type Migration = z.infer<typeof migrationSchema>;
 
-/** What an adapter's backend can do — a capability profile (no behavior inference). */
+/** Describes what an adapter's backend supports, so callers check a capability rather than infer it from behavior. */
 export const adapterCapabilitiesSchema = z.object({
   /** `commit` is atomic across all operations in the change set. */
   transactions: z.boolean(),
-  /** A dry-run `propose` is supported (else proposal lives above the adapter). */
+  /** A dry-run `propose` is available; when false, proposing a change happens before the adapter is called. */
   propose: z.boolean(),
   /** The backend can be introspected for its schema. */
   schemaIntrospection: z.boolean(),

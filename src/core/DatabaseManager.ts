@@ -1,11 +1,9 @@
 /**
- * Ablo Sync Engine - Database Manager
- *
- * Manages the two-tier database architecture:
- * 1. ablo_databases - Metadata about workspace databases
- * 2. ablo_(hash) - Workspace-specific data storage
- *
- * Follows Ablo's architecture for database management.
+ * Manages the client-side IndexedDB databases the sync engine keeps in the
+ * browser. There are two tiers. A single registry database, `ablo_databases`,
+ * records metadata about every workspace database. Each user-and-workspace pair
+ * then gets its own data database, named `ablo_<hash>`, that holds the synced
+ * rows. {@link DatabaseManager} creates, versions, and deletes both tiers.
  */
 
 import { getContext } from '../context.js';
@@ -132,7 +130,7 @@ export class DatabaseManager {
       schemaVersion = existingInfo.schemaVersion || 1;
     }
 
-    // DEBUG: Log all existing databases for this user to detect duplicates
+    // Record the existing databases for this user so duplicates can be detected.
     const allUserDatabases = await this.getDatabasesForUser(userId);
     const allIndexedDBs = (await indexedDB.databases?.()) || [];
     const abloDatabases = allIndexedDBs.filter((db: IDBDatabaseInfo) =>
@@ -169,7 +167,7 @@ export class DatabaseManager {
     // Combine userId, workspaceId, and userVersion for unique database
     const combined = `${userId}:${workspaceId}:${userVersion}`;
 
-    // Generate hash similar to Linear's approach
+    // Hash the combined key into a compact, deterministic identifier.
     let hash = 0;
     for (let i = 0; i < combined.length; i++) {
       hash = (hash << 5) - hash + combined.charCodeAt(i);
@@ -251,13 +249,12 @@ export class DatabaseManager {
         onUpgrade: (request, event) => {
           const db = request.result;
           const tx = (event.target as IDBOpenDBRequest).transaction;
-          // Per jakearchibald/idb's "Transaction Lifetime Management":
-          // only IDB-request awaits keep an upgrade transaction alive; any
-          // non-IDB await (fetch, timer, etc.) commits it prematurely and
-          // later ops throw `TransactionInactiveError`. StoreManager.createStores
-          // (src/core/StoreManager.ts:93) is only synchronous createObjectStore
-          // / createIndex calls wrapped in an `async` keyword, so firing it
-          // without awaiting is safe and matches the VCS-slot semantics.
+          // IndexedDB rule: only awaits on IndexedDB requests keep an upgrade
+          // transaction alive. Any other await — a fetch, a timer — commits the
+          // transaction early, and later operations then throw
+          // `TransactionInactiveError`. StoreManager.createStores runs only
+          // synchronous createObjectStore / createIndex calls under an `async`
+          // keyword, so calling it without awaiting is safe here.
           if (createStoresFn && tx) {
             try {
               void createStoresFn(db, tx).catch((err) => {
@@ -305,9 +302,8 @@ export class DatabaseManager {
           updatedAt: data.updatedAt ? new Date(data.updatedAt) : new Date(),
           schemaHash: data.schemaHash,
           syncGroups: data.syncGroups,
-          // NOTE: old persisted records may still carry a `versions` key
-          // (the removed per-entity version vector) — tolerated by simply
-          // not picking it here.
+          // Older persisted records may still carry an extra `versions` key
+          // that is no longer used; it is tolerated by simply not reading it here.
         } as WorkspaceMetadata;
         resolve(meta);
       };

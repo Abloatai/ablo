@@ -1,24 +1,24 @@
 /**
  * The functional update — `ablo.<model>.update(id, current => next)`.
  *
- * This is the "just works under contention" surface. The developer expresses
- * ONLY their intent — "given the latest row, here is the next state" — and the
- * SDK owns everything else: read the fresh row + its watermark, run the updater,
- * write it as a compare-and-swap against that watermark, and on any concurrent
- * write re-read → recompute → retry. No claim, no identity, no transport
- * awareness, and no `stale_context` / `claim_*` error codes ever reach the
+ * This is the surface that just works under contention. You express only your
+ * intent — given the latest row, here is the next state — and the client does
+ * the rest: it reads the fresh row and its watermark, runs your updater, writes
+ * the result as a compare-and-swap against that watermark, and on any concurrent
+ * write it re-reads, recomputes, and retries. No claim, no identity, no transport
+ * awareness, and no `stale_context` or `claim_*` error codes ever reach the
  * caller. The write either lands or, at the extreme, throws a single
- * {@link AbloContentionError} after the reconcile budget is spent.
+ * {@link AbloContentionError} once the reconcile budget is spent.
  *
- * Correctness comes from the `readAt` watermark + `onStale: 'reject'`
- * (optimistic concurrency / compare-and-swap), NOT from participant identity —
- * which is why it is immune to the shared-credential silent-clobber footgun and
- * behaves identically on both transports. The HTTP and WebSocket clients inject
- * the same two thunks ({@link ReconcileTransport}); the loop below is shared, so
- * the guarantee can never drift between them — only the mechanism differs.
+ * Correctness comes from the `readAt` watermark plus `onStale: 'reject'`
+ * (optimistic concurrency, or compare-and-swap), not from participant identity.
+ * That is why it is immune to the shared-credential silent-overwrite hazard and
+ * behaves identically on both transports: the HTTP and WebSocket clients inject
+ * the same two functions ({@link ReconcileTransport}) into the shared loop below,
+ * so the guarantee cannot drift between them — only the mechanism differs.
  *
  * The mental model is React's `setState(prev => next)`: pass a function of the
- * current state, the runtime owns reconciliation.
+ * current state and the runtime owns reconciliation.
  */
 
 import {
@@ -31,8 +31,8 @@ import {
 
 /**
  * The functional form of an update: given the freshly-read row, return the
- * fields to write. Return `null` / `undefined` to make NO write — a no-op the
- * caller decided on after seeing the latest state (e.g. "already done").
+ * fields to write. Return `null` or `undefined` to make no write — a no-op the
+ * caller chose after seeing the latest state (for example, "already done").
  */
 export type ModelUpdater<T> = (
   current: T,
@@ -54,11 +54,11 @@ export interface ContentionOptions {
 export const DEFAULT_CONTENTION_RETRIES = 16;
 
 /**
- * Does this thrown error mean "another writer moved the row — re-read and
- * retry" rather than a genuine failure to surface? These are the optimistic-
- * concurrency signals the functional update reconciles against:
- *   - `stale_context` — our `readAt` watermark was overtaken by a concurrent write
- *   - `claim_lost`    — a holder preempted us (e.g. a human under `humansOverwrite`)
+ * Reports whether a thrown error means "another writer moved the row — re-read
+ * and retry" rather than a genuine failure to surface. These are the
+ * optimistic-concurrency signals the functional update reconciles against:
+ *   - `stale_context` — the `readAt` watermark was overtaken by a concurrent write
+ *   - `claim_lost`    — a holder preempted the write (for example a human under `humansOverwrite`)
  *   - `claim_queued`  — a holder is actively editing the row right now
  */
 export function isReconcilableConflict(err: unknown): boolean {
@@ -81,18 +81,20 @@ function backoffMs(attempt: number): number {
 }
 
 /**
- * Transport-specific read/write the shared loop drives. Each client injects its
- * own pair — that's the ONLY thing that differs between HTTP and WebSocket.
+ * The transport-specific read and write that the shared loop drives. Each client
+ * injects its own pair — the one thing that differs between the HTTP and
+ * WebSocket transports.
  */
 export interface ReconcileTransport<T, R> {
   readonly model: string;
   readonly id: string;
-  /** Read the latest row + its watermark from the authoritative store. */
+  /** Read the latest row and its watermark from the authoritative store. */
   readFresh: () => Promise<{ readonly data: T | null | undefined; readonly stamp: number }>;
   /**
-   * Write the computed patch as a compare-and-swap against `readAt`. MUST throw
-   * a reconcilable conflict (`stale_context` / `claim_*`) when the watermark was
-   * overtaken — that rejection is what drives the next reconcile round.
+   * Write the computed patch as a compare-and-swap against `readAt`. It must
+   * throw a reconcilable conflict (`stale_context` or `claim_*`) when the
+   * watermark was overtaken — that rejection is what drives the next reconcile
+   * round.
    */
   writeNext: (patch: Partial<T>, readAt: number) => Promise<R>;
 }
@@ -144,6 +146,6 @@ export async function reconcileFunctionalUpdate<T, R>(
   });
 }
 
-// Re-exported so call sites import the loop + its terminal error from one place;
-// the class itself lives with the rest of the hierarchy in `errors.ts`.
+// Re-exported so call sites import the loop and its terminal error from one
+// place; the class itself lives with the rest of the error hierarchy.
 export { AbloContentionError };

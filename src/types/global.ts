@@ -1,23 +1,24 @@
 /**
- * Type registration point for SDK consumers.
+ * The single place where you tell the SDK about your application's types.
  *
- * A consumer registers their Schema, Presence, Claims, and UserMeta ONCE by
- * augmenting the {@link Register} interface, and every SDK hook — `useAblo`,
- * `useQuery`, `useOne`, `usePresence`, `useClaim` — reads its types from the
- * resolved registration. No generics at call sites, no `schema` arg per call.
+ * You register your Schema, Presence, Claims, and UserMeta once by augmenting
+ * the {@link Register} interface. From then on every SDK hook — `useAblo`,
+ * `useQuery`, `useOne`, `usePresence`, `useClaim` — reads its types from that
+ * registration, so you never pass a generic or a `schema` argument at a call
+ * site.
  *
- * Registration is done via **module augmentation** of `@abloatai/ablo` —
- * the same pattern TanStack Router uses for its `Register` interface. The brand
- * lives in the module specifier, so the interface is just `Register` (not a
- * global, not prefixed). It's a language feature, not a library trick: any file
- * in the compilation can augment it and every resolver below picks it up.
+ * Registration uses TypeScript module augmentation: any file in your project
+ * can add an `interface Register` to a `declare module '@abloatai/ablo'`
+ * block, and every resolver below picks it up. Because the name is scoped to
+ * this module, the interface is simply `Register` — not a global and not
+ * prefixed.
  *
- * Consumer example (`npx ablo init` scaffolds this as `ablo/register.ts`, a
- * sibling of `ablo/schema.ts`). It's a regular `.ts` module, NOT a hand-authored
- * `.d.ts`: the top-level `import type { schema }` makes the `declare module`
- * block MERGE (augment) this interface rather than collide with it — the same
- * shape TanStack Router uses in `src/router.tsx`. Any `.ts` file in the
- * `tsconfig` `include` works; it never needs to be imported.
+ * The `npx ablo init` command scaffolds this file as `ablo/register.ts`, next
+ * to `ablo/schema.ts`. Write it as a normal `.ts` module, not a hand-authored
+ * `.d.ts`: the top-level `import type { schema }` is what makes the
+ * `declare module` block merge into this interface rather than collide with it.
+ * Any `.ts` file covered by your `tsconfig` works, and it never needs to be
+ * imported anywhere.
  *
  * ```ts
  * // ablo/register.ts
@@ -34,16 +35,16 @@
  * export {};
  * ```
  *
- * If `Register` is never augmented, every resolver falls back to
- * {@link DefaultSyncShape} — a loose shape that keeps consumers compiling
- * without typed benefits until they opt in.
+ * When `Register` is never augmented, every resolver falls back to
+ * {@link DefaultSyncShape} — a loose shape that keeps your code compiling
+ * without typed results until you opt in.
  */
 
 /**
- * Default fallback shapes used when the consumer hasn't augmented
- * {@link Register}. `DefaultSyncShape.Schema` is intentionally structural — it
- * carries `{ models: Record<string, unknown> }` so hooks can still validate the
- * model key argument against *something*, just without a typed entity shape.
+ * The fallback shapes the resolvers use when {@link Register} has not been
+ * augmented. `DefaultSyncShape.Schema` is deliberately structural — it carries
+ * `{ models: Record<string, unknown> }` so hooks can still check a model-key
+ * argument against something, just without a typed entity shape behind it.
  */
 export interface DefaultSyncShape {
   readonly Schema: { readonly models: Record<string, unknown> };
@@ -53,21 +54,22 @@ export interface DefaultSyncShape {
 }
 
 /**
- * The registration interface. Consumers augment it via
- * `declare module '@abloatai/ablo' { interface Register { Schema: ...; … } }`.
- * Empty by default — every SDK resolver falls back to {@link DefaultSyncShape}
- * when an expected key is absent. Exported from the package root so the module
- * augmentation merges into this declaration.
+ * The registration interface you augment to declare your application's types.
+ * Add keys inside a `declare module '@abloatai/ablo'` block — for example
+ * `interface Register { Schema: ...; Presence: ...; }`. It is empty by default,
+ * so any key you omit falls back to {@link DefaultSyncShape}. It is exported
+ * from the package root so your augmentation merges into this declaration.
  *
- * The `Schema` augmentation key holds the type produced by `defineSchema`, so
- * the same noun reads consistently here and in {@link ResolveSchema}.
+ * The `Schema` key holds the type returned by `defineSchema`, and
+ * {@link ResolveSchema} reads it back out.
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface Register {}
 
 /**
- * The consumer's schema, or the default shape if unregistered. Hooks use this
- * to type their model-key argument and infer the entity type returned.
+ * Your registered schema, or the default shape when none is registered. Hooks
+ * read this to type their model-key argument and to infer the entity type they
+ * return.
  */
 export type ResolveSchema = Register extends { Schema: infer S }
   ? S extends { models: Record<string, unknown> }
@@ -76,33 +78,36 @@ export type ResolveSchema = Register extends { Schema: infer S }
   : DefaultSyncShape['Schema'];
 
 /**
- * The consumer's presence shape, or the default if unregistered. Used by
- * `usePresence`. Free-form — any serializable JSON broadcast per session.
+ * Your registered presence shape, or the default when none is registered.
+ * `usePresence` reads it. The shape is free-form — any JSON-serializable value
+ * you broadcast per session.
  */
 export type ResolvePresence = Register extends { Presence: infer P }
   ? P
   : DefaultSyncShape['Presence'];
 
 /**
- * The consumer's claim vocabulary, or the default if unregistered. Keys are
- * claim names; values are the claim payload for each claim. Used by
- * `useClaim(claimName)`.
+ * Your registered claim vocabulary, or the default when none is registered.
+ * Each key is a claim name and its value is that claim's payload.
+ * `useClaim(claimName)` reads it.
  */
 export type ResolveClaims = Register extends { Claims: infer I }
   ? I
   : DefaultSyncShape['Claims'];
 
 /**
- * The consumer's user-metadata shape, or the default if unregistered. Carries
- * identity info the consumer trusts from their auth layer — not SDK-validated.
+ * Your registered user-metadata shape, or the default when none is registered.
+ * It carries identity information you trust from your own auth layer; the SDK
+ * does not validate it.
  */
 export type ResolveUserMeta = Register extends { UserMeta: infer U }
   ? U
   : DefaultSyncShape['UserMeta'];
 
 /**
- * The keys of the consumer's schema models. `useQuery(modelKey)` narrows its
- * first argument to this union, so unknown key literals fail at compile time.
+ * The union of your schema's model names. `useQuery(modelKey)` narrows its
+ * first argument to this union, so a misspelled or unknown model name fails at
+ * compile time.
  */
 export type ResolveModelKey = ResolveSchema extends { models: infer M }
   ? keyof M & string

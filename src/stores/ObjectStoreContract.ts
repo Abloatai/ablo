@@ -1,21 +1,18 @@
 /**
- * Shared contract for record-shaped object stores.
+ * The shared interface for record-shaped object stores. Two implementations
+ * satisfy it:
  *
- * The SDK has two implementations:
- *   - {@link ObjectStore} — IndexedDB-backed (browser persistence)
- *   - {@link InMemoryObjectStore} — Map-backed (tests, SSR fallback)
+ *   - {@link ObjectStore} — backed by IndexedDB, for durable persistence in
+ *     the browser.
+ *   - {@link InMemoryObjectStore} — backed by a Map, for tests and
+ *     environments without IndexedDB.
  *
- * Both expose the same async surface: `put` / `get` / `getAll` /
- * `delete` / `getAllFromIndex` / `clear` / `markAsClosing`.
- * Callers depend on this interface so they don't have to
- * branch on which concrete class they got from `Database.getStore` —
- * the bootstrap, hydration, transaction-persistence, and reconciler
- * paths all consume the contract.
- *
- * Centralizing the types here means a future drift between the two
- * stores trips a typecheck error at the implementor, not silently in
- * a caller. This replaced ad-hoc `as unknown as ReturnType<...>`
- * casts in `Database.ts` that bridged the two classes.
+ * Both expose the same asynchronous surface — `put`, `get`, `getAll`,
+ * `delete`, `getAllFromIndex`, `clear`, and `markAsClosing` — so callers
+ * work against this interface and never branch on which concrete store they
+ * hold. Because both implementations are checked against one interface, any
+ * drift between them surfaces as a typecheck error at the store rather than
+ * a silent failure in a caller.
  */
 export interface ObjectStoreContract {
   /** Insert or update a record. The record must carry an `id` field. */

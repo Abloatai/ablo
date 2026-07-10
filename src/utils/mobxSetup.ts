@@ -1,7 +1,8 @@
 /**
- * M1 Helper - Simplified MobX Setup
- *
- * Fixed version that doesn't conflict with existing getters/setters
+ * Wires a model instance into MobX so its schema-defined fields become
+ * observable and its mutations are tracked. This module reads the property
+ * metadata generated from a schema and applies the matching MobX annotation to
+ * each field, leaving any hand-written getter or setter in place.
  */
 
 import {
@@ -17,12 +18,11 @@ import { PropertyType, type PropertyMetadata, type ReferenceMetadata } from '../
 import { getContext } from '../context.js';
 
 /**
- * The internal contract M1 relies on. Models invoke M1 from inside
- * their constructor, where these fields are guaranteed to exist on
- * `this`. Declared here as the bound on M1's generic so the body can
- * reference them without `as any` casts. Each field is optional so a
- * partial Model implementation (e.g., a test fixture) still satisfies
- * the bound.
+ * The subset of a model instance that {@link M1} reads and writes. A model calls
+ * {@link M1} from its constructor, where these members exist on `this`;
+ * declaring them here lets {@link M1} reference them without loose casts. Every
+ * member is optional, so a partial model — such as a test fixture — still
+ * satisfies the type.
  */
 interface M1Target {
   _hasCustomObservability?: boolean;
@@ -33,9 +33,13 @@ interface M1Target {
 }
 
 /**
- * M1 - Make properties observable with proper MobX setup
- *
- * Simplified version that respects existing getters/setters
+ * Makes a model instance's schema-defined properties observable with MobX. For
+ * each field it reads the {@link PropertyMetadata} and applies the matching MobX
+ * annotation — a plain observable for stored values, a computed for derived
+ * getters, and an action for mutating methods — while leaving any field that
+ * already declares its own getter and setter untouched. If the model provides
+ * its own `setupObservability` or sets `_hasCustomObservability`, this function
+ * defers to it and does nothing.
  */
 export function M1<T extends M1Target>(
   target: T,
@@ -211,27 +215,18 @@ export function M1<T extends M1Target>(
     if (Object.keys(annotations).length > 0) {
       makeObservable(target, annotations);
 
-      // Bridge MobX's observable setter to `propertyChanged()` so the
-      // dynamic-class mutation path sees direct assignments like
-      // `layer.position = newPos` — i.e., the transaction queue gets an
-      // update and the server eventually sees it.
+      // Bridge MobX's observable setter to `propertyChanged()` so a direct
+      // assignment like `layer.position = newPos` still records a change for the
+      // transaction queue, and the update reaches the server. Product code
+      // assigns model properties directly in many places (drag, resize,
+      // formatting, keyboard nudge, AI tools), so those writes must sync.
       //
-      // History: the old hand-coded models wired setters via
-      // `setupSimplePropertyTracking` which overrode MobX's accessors and
-      // broke reactivity — that function was correctly kept off the
-      // schema-driven dynamic-class path. The intended replacement was
-      // "use `store.mutate.slideLayers.update(...)` from callers," but a
-      // large amount of existing product code (drag, resize, formatting,
-      // keyboard nudge, AI tools, etc.) still assigns properties directly,
-      // and making that silently not sync was the regression that broke
-      // all slide-layer edits.
-      //
-      // `observe()` attaches a post-set listener WITHOUT replacing MobX's
-      // accessors — so the observable keeps its normal reactivity and we
-      // get a synchronous change event we can forward to
-      // `propertyChanged()`. We scope it to `PropertyType.property`
-      // (persisted fields) so ephemeral UI state and computed/reference
-      // virtual fields don't leak into `modifiedProperties`.
+      // `observe()` attaches a post-set listener without replacing MobX's
+      // accessors, so the observable keeps its normal reactivity and we get a
+      // synchronous change event to forward to `propertyChanged()`. Only
+      // persisted fields (`PropertyType.property`) are observed, so ephemeral UI
+      // state and computed or reference fields do not leak into
+      // `modifiedProperties`.
       //
       // Construction-time writes (the constructor's initial field
       // population from wire data) also fire `observe` — so we gate with
@@ -241,16 +236,15 @@ export function M1<T extends M1Target>(
       if (!target._hasCustomObservability) {
         for (const [propName, metadata] of propertyMetadata) {
           if (metadata.type !== PropertyType.property) continue;
-          // Only `annotations[propName] === observable` entries are
-          // safe to `observe()`. DON'T gate on
-          // `Object.getOwnPropertyDescriptor(target, propName).get/set` —
-          // `makeObservable(target, annotations)` has ALREADY installed
-          // its own getter/setter by this point, so that descriptor
-          // check flags every field as "custom" and silently skips
-          // every observer. That was the root cause of `input: {}` on
-          // the wire: `modifiedProperties` stayed empty for dynamic
-          // models, the transaction queue couldn't find any changes to
-          // send, and the server acked a no-op mutation.
+          // Only entries annotated as `observable` are safe to `observe()`. Do
+          // not gate on
+          // `Object.getOwnPropertyDescriptor(target, propName).get/set`:
+          // `makeObservable(target, annotations)` has already installed its own
+          // getter/setter by this point, so that descriptor check flags every
+          // field as custom and silently skips every observer. That mistake left
+          // `modifiedProperties` empty for dynamic models, so the transaction
+          // queue found no changes to send and the server acked a no-op
+          // mutation.
           if (!(propName in annotations)) continue;
           // Accept any flavor of `observable` (deep, ref, shallow). `observe()`
           // works on all three — the listener fires on the property
@@ -313,79 +307,11 @@ export function M1<T extends M1Target>(
 }
 
 /**
- * Setup simple property tracking for change detection
- * Only for properties without existing getters/setters
- */
-function setupSimplePropertyTracking(
-  target: any,
-  propertyMetadata: Map<string, PropertyMetadata>
-): void {
-  for (const [propName, metadata] of propertyMetadata) {
-    // Only track regular properties
-    if (
-      metadata.type !== PropertyType.property &&
-      metadata.type !== PropertyType.ephemeralProperty
-    ) {
-      continue;
-    }
-
-    // Check if property already has custom getter/setter
-    const descriptor = Object.getOwnPropertyDescriptor(target, propName);
-    if (descriptor && (descriptor.get || descriptor.set)) {
-      // Property already managed, skip
-      continue;
-    }
-
-    // Check prototype chain
-    let proto = Object.getPrototypeOf(target);
-    let hasCustomAccessor = false;
-    while (proto && proto !== Object.prototype) {
-      const protoDescriptor = Object.getOwnPropertyDescriptor(proto, propName);
-      if (protoDescriptor && (protoDescriptor.get || protoDescriptor.set)) {
-        hasCustomAccessor = true;
-        break;
-      }
-      proto = Object.getPrototypeOf(proto);
-    }
-
-    if (hasCustomAccessor) {
-      continue;
-    }
-
-    // Only add tracking if property exists and isn't already tracked
-    if (propName in target) {
-      const currentValue = target[propName];
-
-      // Store value in a private field
-      const privateField = `_tracked_${propName}`;
-      target[privateField] = currentValue;
-
-      // Create simple getter/setter for tracking
-      Object.defineProperty(target, propName, {
-        get() {
-          return this[privateField];
-        },
-        set(newValue) {
-          const oldValue = this[privateField];
-          if (oldValue !== newValue) {
-            this[privateField] = newValue;
-
-            // Only track changes for non-ephemeral properties
-            if (metadata.type === PropertyType.property && this.propertyChanged) {
-              this.propertyChanged(propName, oldValue, newValue);
-            }
-          }
-        },
-        enumerable: true,
-        configurable: true,
-      });
-    }
-  }
-}
-
-/**
- * Helper to make a class observable
- * For classes that don't have custom observability
+ * Wraps a model class so every instance is made observable at construction time
+ * by calling {@link M1}. A class that manages its own observability — one whose
+ * prototype declares `setupObservability` or `_hasCustomObservability` — is
+ * returned unchanged. The wrapper preserves the original class name and its
+ * static members.
  */
 export function makeModelObservable(
   modelClass: any,
@@ -418,7 +344,10 @@ export function makeModelObservable(
 }
 
 /**
- * Utility to check if a property is observable
+ * Reports whether a named property is one that {@link M1} makes observable —
+ * that is, a stored value, an ephemeral value, a reference collection, or a
+ * reference array. Returns `false` for an unknown property and for a computed
+ * reference.
  */
 export function isObservableProperty(
   target: any,
@@ -437,7 +366,8 @@ export function isObservableProperty(
 }
 
 /**
- * Utility to get computed properties
+ * Returns the names of the properties that {@link M1} treats as computed: the
+ * referenced-model and back-reference fields derived from a foreign key.
  */
 export function getComputedProperties(propertyMetadata: Map<string, PropertyMetadata>): string[] {
   const computed: string[] = [];

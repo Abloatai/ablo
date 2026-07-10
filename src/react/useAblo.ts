@@ -11,11 +11,10 @@ import type { ResolveSchema } from '../types/global.js';
 import { useReactive } from './useReactive.js';
 
 /**
- * Resolved schema-record type for the consumer's app. Reads the
- * `Register` module augmentation if declared, falls back to the
- * loose `SchemaRecord` if not. This lets `useAblo()` produce a
- * fully typed engine handle without the consumer having to pass
- * `<(typeof schema)['models']>` at every call site.
+ * The app's resolved schema-record type. It reads your `Register` module
+ * augmentation when you declare one and falls back to the loose
+ * {@link SchemaRecord} otherwise, so `useAblo()` returns a fully typed client
+ * without you passing `<(typeof schema)['models']>` at every call site.
  */
 type DefaultModels = ResolveSchema extends { models: infer M }
   ? M extends SchemaRecord
@@ -31,18 +30,18 @@ type AbloSelector<R extends SchemaRecord, T> = (ablo: Ablo<R>) => T;
 
 export interface UseAbloModelOptions<T> {
   /**
-   * Initial row, usually from a Server Component or loader. The hook returns it
-   * until the model client has a newer row in the local pool.
+   * An initial row, usually from a server component or a route loader. The hook
+   * returns it until sync delivers a newer row for the same id.
    */
   readonly initial?: T;
 }
 
 export interface UseAbloModelResult<T> {
-  /** Current row for the id, or `initial` until the row has hydrated. */
+  /** The current row for the id, or `initial` until the row has synced. */
   readonly data: T | undefined;
-  /** Active work claims on this model row. */
+  /** The work claims currently held on this row by any participant. */
   readonly claims: readonly ModelClaim[];
-  /** Convenience flag for disabling UI while another participant is active. */
+  /** True while another participant holds a claim — handy for disabling UI. */
   readonly claimed: boolean;
 }
 
@@ -69,14 +68,15 @@ function readModelResult<T, C>(
 }
 
 /**
- * Project a reactive read into the value `useReactive` caches and returns.
+ * Projects a reactive read into the value that `useReactive` caches and
+ * returns.
  *
- * For a `Model`, this MUST read the row's fields (via `toReactiveSnapshot`),
- * not return the bare instance: MobX tracks property access, so reading the
- * fields inside this tracked function is what subscribes the reaction to them —
- * and the fresh object identity lets `useReactive`'s equality detect an
- * in-place delta update. Returning `modelAsRow(value)` (the live instance, no
- * field read) is why `useAblo(a => a.x.get(id))` used to ignore remote edits.
+ * For a `Model`, this reads the row's fields through `toReactiveSnapshot`
+ * rather than returning the instance itself. Property access is what subscribes
+ * the reaction to those fields, so the read has to happen inside this tracked
+ * function; returning the live instance without reading its fields would leave
+ * the component blind to later edits. The fresh object it produces also lets
+ * `useReactive`'s equality check detect an in-place update.
  */
 function snapshotValue<T>(value: T): T {
   if (value instanceof Model) {
@@ -89,31 +89,33 @@ function snapshotValue<T>(value: T): T {
 }
 
 /**
- * useAblo — access the typed engine instance, or subscribe to a specific
- * `ablo.<model>` row from inside an `<AbloProvider>` subtree.
+ * Reads Ablo from inside an `<AbloProvider>` subtree. Called with no arguments
+ * it returns the typed client for use in callbacks and effects; called with a
+ * selector it subscribes the component to a reactive read — such as one
+ * `ablo.<model>` row — and re-renders when that read changes.
  *
- * Zero-arg when the consumer declares the `Register` global
- * augmentation (`declare module '@abloatai/ablo' { interface Register { Schema:
- * typeof schema } }`). The default generic resolves through
- * `ResolveSchema['models']` so call sites stay clean:
+ * You can call it with no type arguments once you declare the `Register` module
+ * augmentation (`declare module '@abloatai/ablo' { interface Register {
+ * Schema: typeof schema } }`); the default type then resolves through your
+ * schema's models, so call sites stay clean:
  *
  * ```ts
- * // With Register augmentation (recommended):
+ * // With the Register augmentation (recommended):
  * const ablo = useAblo();
  * if (!ablo) return <Loading />;
  * const doc = await ablo.documents.retrieve({ id }); // async server read
  *
- * // Reactive selector (sync local-graph snapshot):
+ * // Reactive selector (a synchronous local snapshot):
  * const doc = useAblo((ablo) => ablo.documents.get(id)) ?? serverDoc;
  * const active = useAblo((ablo) => ablo.documents.claim.state({ id }));
  *
- * // Without augmentation, pass the schema generic:
+ * // Without the augmentation, pass the schema as a type argument:
  * const ablo = useAblo<(typeof schema)['models']>();
  * ```
  *
- * Returns `null` while the engine is bootstrapping. Branch on null
- * and render a loading state (or use `useSyncStatus()` to gate on
- * `'connected'`) before reaching for model methods.
+ * The no-argument form returns `null` while the engine is still bootstrapping.
+ * Branch on `null` and render a loading state — or gate on `useSyncStatus()`
+ * reaching `'connected'` — before calling model methods.
  */
 export function useAblo<R extends SchemaRecord = DefaultModels>(): Ablo<R> | null;
 export function useAblo<
@@ -172,13 +174,14 @@ export function useAblo<
         ? undefined
         : modelOrSelect;
 
-  // Claims live on a non-MobX event emitter (engine.claims), so the useReactive
-  // reactions below cannot track them — we bridge changes through a setState bump.
-  // ONLY the model-row form (`id !== undefined`) actually reads claims, so gate the
-  // subscription on `id`. The selector-only form (`useAblo((a) => a.x.get/getAll)`)
-  // never reads claims; subscribing it to the workspace-global claim stream would
-  // re-render + double-compute it on every claim/presence delta anywhere (a real
-  // storm during AI editing / live collaboration) for a value that can't change.
+  // Claims arrive through an event emitter (engine.claims), not through MobX, so
+  // the useReactive reactions below cannot track them; we bridge changes with a
+  // setState bump instead. Only the model-row form (`id !== undefined`) reads
+  // claims, so we subscribe only when `id` is set. The selector-only form never
+  // reads claims, and subscribing it to the workspace-wide claim stream would
+  // re-render and recompute it on every claim or presence change anywhere — a
+  // real storm during AI editing or live collaboration — for a value that cannot
+  // change.
   const [claimVersion, setClaimVersion] = useState(0);
   useEffect(() => {
     if (!engine || id === undefined) return;

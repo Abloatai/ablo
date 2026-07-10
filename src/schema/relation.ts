@@ -1,10 +1,10 @@
 /**
- * Schema Relation Definitions
- *
- * Declarative relations between models. Used for:
- * - FK index registration (ObjectPool.registerForeignKey)
- * - Model create priority derivation (parents before children)
- * - Query include/join support
+ * Declarative relations between your models — the edges that turn a flat set
+ * of models into a graph. You attach relations to a model with the
+ * {@link relation} factories; the engine reads them to index foreign keys for
+ * fast child lookups, to order inserts so a parent row lands before the rows
+ * that reference it, and to generate the accessor properties that let you read
+ * `task.project` or `project.tasks` directly.
  *
  * Usage:
  *   import { relation } from '@abloatai/ablo/schema';
@@ -19,44 +19,38 @@
 // ── Relation options ──────────────────────────────────────────────────────
 
 /**
- * Options for `relation.belongsTo(...)`. All default to `false` — behavior
- * is opt-in per relation.
+ * Options for `relation.belongsTo`. Each defaults to `false`, so every
+ * behavior below is opt-in per relation.
  *
- * When `index: true`, the sync engine registers an O(1) foreign-key index
- * on the child model's ObjectPool entry at construction time, so that
- * `pool.getByForeignKey(childType, foreignKey, parentId)` becomes constant-
- * time instead of a full scan. Use on hot paths like `SlideLayer.slideId`
- * where you frequently want "all layers for this slide."
+ * `index: true` registers a foreign-key index for the child model when the
+ * engine starts, turning "every child that points at this parent" from a full
+ * scan into a constant-time lookup. Reach for it on relations you query this
+ * way often, such as a slide layer's `slideId`.
  *
- * When `enrich: true`, incoming deltas for the child model have their
- * parent reference auto-populated from the ObjectPool before the model
- * data lands. I.e., a delta for `Task { teamId: 't1' }` picks up the
- * `teams:t1` entity from the pool and attaches it as `data.team`, so
- * consumers can read `task.team` directly without a second lookup.
- * If the parent isn't in the pool yet, enrichment silently no-ops
- * (the child data is still applied) — enrichment is best-effort.
+ * `enrich: true` auto-populates the parent reference on an incoming change
+ * before the child data lands. A change to `Task { teamId: 't1' }` picks up the
+ * already-loaded `teams:t1` record and attaches it as `data.team`, so you can
+ * read `task.team` without a second lookup. Enrichment is best-effort: if the
+ * parent has not loaded yet it quietly does nothing, and the child data still
+ * applies.
  *
- * When `defer: true`, the FK-create-priority computer (Tarjan SCC in
- * `client/createSyncEngine.ts`) ignores this edge when building the
- * dependency graph. Use on the *soft* side of a real cycle to break it
- * deterministically — i.e. the side where you're willing to insert the
- * child first with the FK left null and patch it in a follow-up
- * UPDATE. The other side of the cycle then becomes a strict topological
- * predecessor, so the child gets a higher priority than the parent
- * instead of being tied with it.
+ * `defer: true` tells the engine to ignore this edge when it works out the
+ * order in which to insert rows. Use it on the soft side of a genuine reference
+ * cycle — the side where you are willing to insert the child first with the
+ * foreign key left null and fill it in with a later update. The other side of
+ * the cycle then becomes a strict predecessor, so the child is ordered after
+ * the parent rather than tied with it.
  *
- * `defer` only affects priority computation, not what the engine sends
- * on the wire — it does NOT auto-rewrite an INSERT to (insert-null +
- * update-later). Pair with a Postgres `DEFERRABLE INITIALLY DEFERRED`
- * constraint when you actually want the FK check to be relaxed at the
- * database level. Example use case:
+ * `defer` changes only that ordering, not what the engine sends on the wire; it
+ * does not rewrite an insert into an insert-then-update. Pair it with a Postgres
+ * `DEFERRABLE INITIALLY DEFERRED` constraint when you also want the database to
+ * relax the foreign-key check itself. For example:
  *
  *   ```ts
  *   layouts: model({ deckId: z.string().nullish() }, {
- *     // The deck-owns-layout link is nullable AND the consumer always
- *     // creates the layout first; mark it `defer` so SlideDeck can
- *     // commit ahead of Layout instead of being trapped in the same
- *     // SCC priority bucket.
+ *     // The deck-owns-layout link is nullable and the layout is always
+ *     // created first; marking it `defer` lets the deck commit ahead of the
+ *     // layout instead of sharing its insert-order slot.
  *     deck: relation.belongsTo('slideDecks', 'deckId', { defer: true }),
  *   }),
  *   ```
@@ -66,41 +60,40 @@ export interface BelongsToOptions {
   readonly enrich?: boolean;
   readonly defer?: boolean;
   /**
-   * Marks the relation's target as this record's **parent** in the Zanzibar/
-   * ReBAC sense — the entity it lives in, that scope inherits *from*. Sync-group
-   * fan-out routes a record into its parent's group (directly, or transitively
-   * up a chain of `parent` edges), so a write reaches everyone subscribed to the
-   * owning entity — the same "access inherits from parent" rule OpenFGA/Zanzibar
-   * and filesystems use.
+   * Marks the relation's target as this record's parent: the entity the record
+   * lives inside and inherits its access scope from. When a record is written,
+   * the engine routes it into its parent's sync group — following a chain of
+   * `parent` edges all the way up — so the change reaches everyone subscribed to
+   * the owning entity. This is the familiar rule that access flows down from a
+   * container to the things it holds, as a folder does to its files.
    *
-   * A reference (provenance/template pointer like `sourceSlideId`, `templateId`)
-   * must NOT set this, or the record would leak into an unrelated scope.
-   * Optionality is NOT a proxy — many parent FKs are optional (a root folder, an
-   * inbox task) — so the parent edge must be declared, not inferred.
+   * Do not set `parent` on a reference that merely points at another record for
+   * provenance or as a template, such as `sourceSlideId` or `templateId`; doing
+   * so would leak the record into an unrelated scope. The engine also cannot
+   * infer the parent from whether a field is optional — many real parent keys
+   * are optional, like a root folder or an inbox task — so you must declare the
+   * parent edge explicitly.
    *
-   * Reads on the relation: `belongsTo('deck', 'deckId', { parent: true })` —
-   * "the deck is the parent."
+   * It reads naturally at the call site:
+   * `belongsTo('deck', 'deckId', { parent: true })` — the deck is the parent.
    */
   readonly parent?: boolean;
 
   /**
-   * Emit a real Postgres FOREIGN KEY for this relation when provisioning a
-   * customer-owned (BYO / dedicated) database. **Independent of `parent`:**
-   * `parent` governs sync-group fan-out / visibility (control plane); `fk`
-   * governs physical referential integrity (data plane). The two are orthogonal
-   * — a relation may set either, both, or neither (mirrors Drizzle's
-   * `relations()` vs `references()` split; Zanzibar's `parent` is permission-only
-   * and "says nothing about data ownership or lifecycle").
+   * Emit a real Postgres foreign-key constraint for this relation when the
+   * engine provisions tables in a customer-owned database. This is independent
+   * of `parent`: `parent` decides which subscribers a change reaches, while
+   * `fk` decides whether the database enforces referential integrity. A relation
+   * may set either, both, or neither.
    *
-   * Set `fk: true` ONLY when the target row is co-located in the SAME database
-   * AND written in the SAME commit as this row, and the reference is to a
-   * strong / contained entity. Do NOT set it on provenance / template pointers
-   * (`sourceSlideId`, `templateId`), cross-tenant refs, or anything that may be
-   * written in a different transaction than its target — a hard FK there would
-   * reject the write and break out-of-order sync. Emitted as `DEFERRABLE
-   * INITIALLY DEFERRED, ON DELETE NO ACTION` — a pure integrity guard; cascade /
-   * nullify is owned by the app-layer mutation pipeline, not the DB. See
-   * `foreignKeyStatements` in `ddl.ts`.
+   * Set `fk: true` only when the target row lives in the same database and is
+   * written in the same commit as this row, and points at a strong, contained
+   * entity. Leave it off provenance or template pointers (`sourceSlideId`,
+   * `templateId`), cross-tenant references, or anything that may be written in a
+   * different transaction than its target — a hard constraint there would reject
+   * the write and break out-of-order sync. The constraint is emitted as
+   * `DEFERRABLE INITIALLY DEFERRED, ON DELETE NO ACTION`: a plain integrity
+   * guard, leaving any cascade or null-on-delete behavior to the application.
    */
   readonly fk?: boolean;
 }
@@ -114,20 +107,18 @@ declare const __relationField: unique symbol;
 export type RelationType = 'belongsTo' | 'hasMany' | 'hasOne';
 
 /**
- * A relation definition with embedded type information.
+ * A relation definition, carrying its type information at both the type and
+ * runtime level.
  *
- * The 4th generic `Options` captures per-relation options at the type
- * level (currently only `belongsTo` uses this — `hasMany`/`hasOne`
- * default to empty). The `const Opts` modifier on the `belongsTo`
- * factory preserves literal inference: `{ enrich: true }` narrows to
- * `true`, not `boolean`, so future type-level features (like
- * `InferModel` auto-adding enriched-parent properties) can read the
- * literal value off the relation def at compile time.
+ * The `Options` generic captures a relation's options in the type system; only
+ * `belongsTo` uses it, while `hasMany` and `hasOne` leave it empty. The `const`
+ * modifier on the `belongsTo` factory preserves literal inference, so
+ * `{ enrich: true }` is remembered as `true` rather than widened to `boolean`,
+ * letting type-level features read the exact option value.
  *
- * `options` is always present at runtime — the factory assigns an
- * empty object when the caller omits it, which keeps
- * `relation.options.index` / `relation.options.enrich` safe to read
- * without a null guard downstream.
+ * `options` is always present at runtime: the factory substitutes an empty
+ * object when you omit it, so reading `options.index` or `options.enrich` needs
+ * no null check.
  */
 export interface RelationDef<
   Type extends RelationType = RelationType,
@@ -143,25 +134,24 @@ export interface RelationDef<
   readonly type: Type;
   readonly target: Target;
   /**
-   * The child model's JS field that holds the parent's id. Always the
-   * camelCase schema field name — used by the client ObjectPool to read
-   * `model[foreignKey]`, by `LazyReferenceCollection` for IndexedDB
-   * index keys, and by `ModelRegistry` for cascade wiring. Never used
-   * verbatim in raw SQL.
+   * The field on the child model that holds the parent's id, as a camelCase
+   * schema field name. The engine reads `model[foreignKey]` to resolve the
+   * relation and to build client-side index keys; it is never interpolated into
+   * raw SQL — that is what {@link foreignKeyColumn} is for.
    */
   readonly foreignKey: Field;
   /**
-   * The same foreign key expressed as a database column identifier. Set
-   * by `defineSchema` when a `casing` option is configured (e.g.
-   * `'snake_case'` produces `message_id` from `messageId`). Used by
-   * server-side SQL compilers to interpolate the real column name into
-   * queries — `postgres.camel`-style data-layer transforms do NOT rewrite
-   * identifiers embedded in raw SQL, so the translation has to happen
-   * somewhere, and schema-build time is the one-place-once answer.
+   * The same foreign key expressed as a database column identifier.
+   * {@link foreignKey} is translated into this when you configure a `casing`
+   * option on `defineSchema` — for example `'snake_case'` turns `messageId`
+   * into `message_id`. The server interpolates this column name into SQL
+   * directly, because a driver's automatic camelCase-to-snake_case mapping does
+   * not reach identifiers embedded in raw SQL; resolving the name once at
+   * schema-build time is what makes it available there.
    *
-   * Defaults to {@link foreignKey} when `casing` is unset (identity) —
-   * the SDK stays backward-compatible for consumers whose DB columns
-   * already match their JS field names.
+   * Defaults to {@link foreignKey} when no `casing` option is set, so consumers
+   * whose database columns already match their field names need no
+   * configuration.
    */
   readonly foreignKeyColumn: string;
   readonly options: Options;
@@ -253,12 +243,12 @@ export const relation = {
   },
 
   /**
-   * This model has many of another model.
-   * e.g., Project has many Tasks (via Task.projectId)
+   * This model has many of another model — for example, a project has many
+   * tasks via `Task.projectId`.
    *
-   * At runtime, generates a getter on the parent model that returns
-   * all child models matching the FK via ObjectPool.getByForeignKey.
-   * The FK index on the child model is auto-registered.
+   * At runtime the engine adds a getter to the parent model that returns every
+   * child whose foreign key matches, and registers the foreign-key index on the
+   * child model automatically.
    *
    * ```ts
    * slides: relation.hasMany('slideLayers', 'slideId'),
@@ -281,8 +271,8 @@ export const relation = {
   },
 
   /**
-   * This model has one of another model.
-   * e.g., User has one Profile (via Profile.userId)
+   * This model has one of another model — for example, a user has one profile
+   * via `Profile.userId`.
    */
   hasOne<Target extends string, Field extends string>(
     target: Target,

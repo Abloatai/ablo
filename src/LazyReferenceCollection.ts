@@ -1,8 +1,7 @@
 /**
- * Linear Sync Engine - Lazy Reference Collection
- *
- * Efficient implementation of one-to-many relationships that loads
- * data on-demand with intelligent caching and batching.
+ * LazyReferenceCollection implements a lazy-loaded one-to-many relationship.
+ * It loads related rows on demand, caches them, and batches lookups so that
+ * reading a parent's children does not trigger a query per parent.
  */
 
 import {
@@ -15,7 +14,7 @@ import {
 } from 'mobx';
 import type { Model } from './Model.js';
 import { Database } from './Database.js';
-import { ObjectPool } from './ObjectPool.js';
+import { InstanceCache } from './InstanceCache.js';
 import { getActiveRegistry } from './ModelRegistry.js';
 import { AbloValidationError } from './errors.js';
 
@@ -40,25 +39,22 @@ export interface LazyCollectionOptions {
 }
 
 /**
- * LazyReferenceCollection - Lazy-loaded one-to-many relationships
- *
- * Key features:
- * - Loads from IndexedDB first, then network if needed
- * - Automatic batching to prevent N+1 queries
- * - Observable for React integration
- * - Memory efficient with intelligent caching
- * - Support for filtering and sorting
+ * A lazy-loaded one-to-many relationship between a parent {@link Model} and
+ * its children. It reads from the local store first and falls back to the
+ * network, batches lookups to avoid one query per parent, and is observable so
+ * a React component re-renders when the set of children changes. Loaded items
+ * can be filtered, sorted, and limited through {@link LazyCollectionOptions}.
  */
 export class LazyReferenceCollection<T extends Model> {
   /** Static dependencies - shared across all instances */
   private static _database: Database | null = null;
-  private static _objectPool: ObjectPool | null = null;
+  private static _objectPool: InstanceCache | null = null;
 
   /**
    * Set global dependencies for all LazyReferenceCollection instances
    * Called once during SyncedStore initialization
    */
-  static setDependencies(database: Database, objectPool: ObjectPool): void {
+  static setDependencies(database: Database, objectPool: InstanceCache): void {
     LazyReferenceCollection._database = database;
     LazyReferenceCollection._objectPool = objectPool;
     getContext().logger.debug('LazyReferenceCollection dependencies set');
@@ -99,7 +95,7 @@ export class LazyReferenceCollection<T extends Model> {
   }
 
   /** Get objectPool from static dependencies */
-  private get objectPool(): ObjectPool | null {
+  private get objectPool(): InstanceCache | null {
     return LazyReferenceCollection._objectPool;
   }
 
@@ -178,7 +174,7 @@ export class LazyReferenceCollection<T extends Model> {
   /**
    * Get the collection value (triggers hydration if needed).
    *
-   * Filters out items whose id is no longer in the ObjectPool. The
+   * Filters out items whose id is no longer in the InstanceCache. The
    * local `items` array isn't auto-synced with `pool.remove()` — a
    * deleted entity would linger here until hydrate() re-runs on
    * reload. Reading `pool.has(item.id)` inside this computed getter
@@ -326,7 +322,7 @@ export class LazyReferenceCollection<T extends Model> {
 
       if (!this.objectPool) {
         throw new AbloValidationError(
-          `ObjectPool dependency not provided to LazyReferenceCollection for ${this.modelName}`,
+          `InstanceCache dependency not provided to LazyReferenceCollection for ${this.modelName}`,
           { code: 'lazy_ref_pool_missing' },
         );
       }
@@ -356,7 +352,7 @@ export class LazyReferenceCollection<T extends Model> {
         // narrow-checked here rather than assumed.
         if (typeof id !== 'string') continue;
 
-        // Check if already in ObjectPool
+        // Check if already in InstanceCache
         let model = this.objectPool.get(id);
 
         if (!model) {

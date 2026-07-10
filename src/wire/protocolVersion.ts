@@ -1,58 +1,62 @@
 /**
- * The sync protocol version — ONE monotonically increasing integer covering
- * everything client and server must agree on to speak: WS frame shapes
- * (hub `ClientMessage`/`ServerMessage`), HTTP request/response envelopes, and
- * the persisted delta encodings a client replays. Zero's recipe: schemaHash
- * (WS close 4009) only detects APP-schema drift; this detects PROTOCOL drift —
- * before it, every main-push deploy was an old-client/new-server encounter
- * with no detector at all.
+ * The sync protocol version — a single integer, increasing over time, that
+ * covers everything the client and server must agree on to talk to each other:
+ * the WebSocket frame shapes, the HTTP request and response envelopes, and the
+ * delta encodings a client replays. It is separate from the app-schema hash
+ * (WebSocket close code 4009), which detects drift in your data model; this
+ * detects drift in the protocol itself.
  *
- * Deploy contract: SERVER DEPLOYS FIRST. The server accepts every version in
- * `[MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION]`; a client never
- * connects to a server older than itself (if it does — a rollback mid-fleet —
- * the too-new rejection below makes it visible instead of undefined behavior).
+ * Deploy ordering: the server is deployed first. It accepts every version in
+ * the inclusive range from {@link MIN_SUPPORTED_PROTOCOL_VERSION} to
+ * {@link PROTOCOL_VERSION}, and a client is never expected to connect to a
+ * server older than itself. If that does happen — for example a partial server
+ * rollback — {@link protocolVersionProblem} reports it as `too_new` so the
+ * mismatch is visible rather than undefined.
  *
- * How to change the protocol:
- *   1. Make the wire change backward-tolerant where possible (the server's
- *      `clientMessageSchema` accepts-and-ignores unknown payload keys — an
- *      ADDITIVE field usually needs NO version bump).
- *   2. For a breaking change: bump `PROTOCOL_VERSION`, append a changelog
- *      entry below, and keep `MIN_SUPPORTED_PROTOCOL_VERSION` covering every
- *      SDK version still in the wild; raise it only with a deprecation window.
- *   3. The contract test (`__tests__/protocolVersion.test.ts`) fails on any
- *      bump — update it in the same change, deliberately.
+ * To change the protocol:
+ *   1. Make the change backward-tolerant where you can. The server ignores
+ *      unknown payload keys, so an additive field usually needs no version bump.
+ *   2. For a breaking change, bump {@link PROTOCOL_VERSION}, add a changelog
+ *      entry below, and keep {@link MIN_SUPPORTED_PROTOCOL_VERSION} low enough
+ *      to cover every client still in use; raise it only after a deprecation
+ *      window.
+ *   3. The protocol-version contract test fails on any bump — update it in the
+ *      same change, deliberately.
  *
- * CHANGELOG
- *   v1 (2026-07-03) — the protocol as of the version field's introduction:
- *      sync_request{cursor,lastSyncId,capabilities,protocolVersion?},
- *      commit/mutation/claim/release/ack/presence_update frames, bootstrap +
- *      delta batches, HTTP envelopes per `wire/errorEnvelope` +
- *      `wire/listEnvelope`. Clients that predate the field send NO
- *      `protocolVersion` — treated as v1 (the field's introduction changed no
- *      semantics).
+ * Changelog
+ *   v1 (2026-07-03) — the protocol as of this field's introduction: the
+ *      sync-request frame (`cursor`, `lastSyncId`, `capabilities`, optional
+ *      `protocolVersion`), the commit, mutation, claim, release, ack, and
+ *      presence-update frames, the bootstrap and delta batches, and the HTTP
+ *      error and list envelopes. A client that predates this field sends no
+ *      `protocolVersion` and is treated as v1, since introducing the field
+ *      changed no behavior.
  */
 export const PROTOCOL_VERSION = 1;
 
 /**
- * Oldest client protocol this build still serves. Raising it is a BREAKING
- * cut for un-upgraded clients — do it only with a deprecation window and a
- * changelog entry.
+ * The oldest client protocol version this build still serves. Raising it cuts
+ * off clients that have not upgraded, so do it only after a deprecation window
+ * and with a changelog entry.
  */
 export const MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 
 /**
- * WS application close code for a protocol-version rejection (4001 =
- * credential, 4009 = app-schema drift). The reason string is the error code
- * `protocol_version_unsupported`; the SDK treats this close as TERMINAL —
- * reconnecting cannot heal a version mismatch, upgrading the SDK (or rolling
- * the server forward) can.
+ * The WebSocket close code the server sends to reject a protocol-version
+ * mismatch. It sits alongside the other application close codes (4001 for a
+ * credential problem, 4009 for app-schema drift), and its reason string is the
+ * error code `protocol_version_unsupported`. A client should treat this close
+ * as terminal: reconnecting cannot heal a version mismatch, but upgrading the
+ * client or rolling the server forward can.
  */
 export const WS_CLOSE_PROTOCOL_VERSION = 4010;
 
 /**
- * Classify a peer's announced protocol version. `undefined` (a pre-versioning
- * client) is v1 by definition. Non-integer garbage classifies as `too_old` —
- * fail closed, visibly.
+ * Classifies a peer's announced protocol version against what this build
+ * supports, returning `'too_old'`, `'too_new'`, or `null` when the versions are
+ * compatible. An `undefined` version — a client from before versioning existed
+ * — counts as v1. A non-integer value is treated as `'too_old'` so the check
+ * fails closed and visibly.
  */
 export function protocolVersionProblem(
   announced: number | undefined,
@@ -63,5 +67,5 @@ export function protocolVersionProblem(
   return null;
 }
 
-/** HTTP request header carrying the client's protocol version. */
+/** The HTTP request header a client uses to announce its protocol version. */
 export const PROTOCOL_VERSION_HEADER = 'Ablo-Protocol-Version';

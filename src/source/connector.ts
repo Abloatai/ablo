@@ -1,15 +1,13 @@
 /**
- * Customer-side Data Source reverse-channel connector.
+ * Opens the connector's side of the Data Source reverse channel. You run this
+ * process next to your database; it dials an outbound WebSocket to Ablo and serves
+ * the load, list, and commit requests over that socket, so a handler with no
+ * public URL never needs to receive inbound webhooks. It is the counterpart to
+ * `createPushQueue`, which gives the outbound events feed the same treatment, and
+ * it speaks the frames defined in `connectorProtocol.ts`.
  *
- * The dial-out half of the reverse channel (see `connector-protocol.ts`). The
- * customer runs this next to their database; it opens an OUTBOUND WebSocket to
- * Ablo Cloud and serves the `commit`/`load`/`list` leg over that socket instead
- * of receiving inbound webhooks. This is the symmetric primitive to
- * `createPushQueue` (which already gives the `events` leg an outbound transport)
- * and mirrors the Stripe CLI's `stripe listen`.
- *
- * The connector does NOT reimplement any handler logic. It wraps the SAME
- * `(request: Request) => Promise<Response>` the customer's deployed route uses:
+ * The connector reimplements none of the handler logic. It wraps the same
+ * `(request: Request) => Promise<Response>` your deployed route already uses:
  *
  *   import { dataSource, createSourceConnector } from '@abloatai/ablo';
  *   import { sourceOptions } from './ablo.source'; // shared with route.ts
@@ -20,10 +18,10 @@
  *   });
  *   await connector.run(controller.signal);
  *
- * Each drained `request` frame is replayed into a synthesized `Request` carrying
- * the original Standard Webhooks signature headers, so the handler verifies it
- * through the unchanged `verifyAbloSourceRequest` — identical to the webhook
- * path. The transport changes; the trust model does not.
+ * Each incoming `request` frame is replayed into a `Request` that carries the
+ * original signature headers, so the handler verifies it through the same
+ * `verifyAbloSourceRequest` it uses on the webhook path. The transport changes;
+ * the trust model does not.
  */
 
 import {
@@ -37,19 +35,21 @@ import {
   type RequestFrame,
   type ResponseFrame,
   type ReadyFrame,
-} from './connector-protocol.js';
+} from './connectorProtocol.js';
 import { ABLO_HOSTED_HTTP_BASE_URL } from '../client/hostedEndpoints.js';
 
-/** Default Ablo Cloud base. The connector appends `SOURCE_CONNECTOR_WS_PATH`.
- *  Single-sourced from the dependency-free hosted-endpoints leaf. */
+/**
+ * The default Ablo base URL the connector dials, to which it appends
+ * `SOURCE_CONNECTOR_WS_PATH`.
+ */
 const DEFAULT_BASE_URL = ABLO_HOSTED_HTTP_BASE_URL;
 
 /**
- * Reconnect backoff, in ms, indexed by consecutive failed connect attempts.
- * Unlike the (multi-day) Standard Webhooks delivery schedule, a long-lived
- * control socket should re-establish quickly and cap at a steady interval, so
- * this is a short capped curve. The last entry repeats for further attempts. A
- * clean `ready` resets the counter to 0.
+ * The reconnect backoff, in milliseconds, indexed by the number of consecutive
+ * failed connect attempts. A long-lived control socket should recover quickly and
+ * then settle at a steady interval, so this is a short curve that caps rather than
+ * growing without bound. The final entry repeats for any further attempts, and a
+ * connection that reaches `ready` resets the count to zero.
  */
 export const DEFAULT_RECONNECT_SCHEDULE: readonly number[] = [
   0, // immediate first reconnect
@@ -61,9 +61,10 @@ export const DEFAULT_RECONNECT_SCHEDULE: readonly number[] = [
 ];
 
 /**
- * Minimal structural WebSocket surface — the browser/`globalThis.WebSocket` API,
- * which Node 24+ implements natively. The `ws` package's default export also
- * satisfies this (it exposes `addEventListener`). Injectable for tests.
+ * The minimal WebSocket surface the connector needs, matching the standard
+ * `globalThis.WebSocket` API that browsers and current Node versions provide. The
+ * `ws` package's default export also satisfies it. Supply your own implementation
+ * to substitute a fake in tests.
  */
 export interface ConnectorWebSocket {
   send(data: string): void;
@@ -91,18 +92,18 @@ export type ConnectorStatus = 'connecting' | 'ready' | 'disconnected';
 
 export interface SourceConnectorOptions {
   /**
-   * Ablo project API key. Defaults gate to `sk_test_*` (local-dev / sandbox);
-   * an `sk_live_*` key is only accepted when the source has opted into
-   * reverse-channel for production server-side.
+   * Your Ablo project API key. A test key (`sk_test_*`) works by default for local
+   * development and sandboxes; a live key (`sk_live_*`) is accepted only once the
+   * source has opted the reverse channel in for production use.
    */
   readonly apiKey: string;
   /**
-   * The unchanged Data Source handler — `dataSource(options)` /
-   * `abloSource(options)`. The connector feeds it synthesized `Request`s and
-   * relays the `Response`s back; it never inspects or alters them.
+   * The Data Source handler to serve, as returned by `dataSource(options)` or
+   * `abloSource(options)`. The connector feeds it each request and relays the
+   * response back untouched; it never inspects or alters either one.
    */
   readonly handler: (request: Request) => Promise<Response>;
-  /** Ablo Cloud base URL. Default `https://api.abloatai.com`. */
+  /** The Ablo base URL to dial. Defaults to `https://api.abloatai.com`. */
   readonly baseURL?: string;
   /** Inject a WebSocket implementation. Default `globalThis.WebSocket`. */
   readonly webSocket?: ConnectorWebSocketFactory;
@@ -122,9 +123,9 @@ export interface SourceConnectorOptions {
 
 export interface SourceConnector {
   /**
-   * Run the connect → serve → reconnect loop until `signal` aborts. Resolves
-   * when aborted. Rejects only on a fatal, non-retryable condition (e.g. no
-   * WebSocket implementation available).
+   * Runs the connect, serve, and reconnect loop until `signal` aborts, then
+   * resolves. It rejects only on a fatal condition that cannot be retried, such as
+   * no WebSocket implementation being available.
    */
   run(signal: AbortSignal): Promise<void>;
 }
@@ -166,10 +167,10 @@ export function createSourceConnector(
 }
 
 /**
- * One connection lifecycle: open → register → serve drained requests until the
- * socket closes or `signal` aborts. Resolves to whether the connection reached
- * the `ready` state (used to reset reconnect backoff). Never rejects — transport
- * failures are normal and drive a reconnect.
+ * Runs one connection: open the socket, register, then serve requests until the
+ * socket closes or `signal` aborts. Resolves to whether the connection reached the
+ * `ready` state, which the caller uses to reset the reconnect backoff. It never
+ * rejects, because a dropped transport is expected and simply drives a reconnect.
  */
 function connectOnce(params: {
   readonly url: string;
@@ -310,8 +311,8 @@ function connectOnce(params: {
         };
       } catch (err) {
         params.onError?.(err);
-        // Surface as a 500 so the server-side SourceClient treats it as a
-        // retryable failure, exactly like a webhook endpoint throwing.
+        // Surface this as a 500 so Ablo treats it as a retryable failure, exactly
+        // as it would a webhook endpoint that threw.
         return {
           type: 'response',
           id: frame.id,

@@ -1,14 +1,12 @@
 /**
- * MockWebSocket — Controllable WebSocket for sync engine tests.
- *
- * Simulates the SyncWebSocket event interface without a real connection.
- * Provides methods to inject deltas, simulate disconnection/reconnection,
- * and trigger bootstrap hints.
+ * A controllable WebSocket stand-in for sync engine tests. It reproduces the
+ * event interface of the real connection without opening a socket, so tests
+ * can drive connection changes, deltas, and bootstrap hints by hand.
  */
 
 import type { SyncActionType } from '../../types/index.js';
 
-/** Delta shape matching the SyncAction interface */
+/** The shape of a single delta — one change the server pushes to the client. */
 export interface MockDelta {
   id: number;
   modelName: string;
@@ -17,7 +15,10 @@ export interface MockDelta {
   data: Record<string, unknown>;
 }
 
-/** Bootstrap hint from server */
+/**
+ * A hint from the server that the client has fallen too far behind and should
+ * rebuild its data from scratch rather than catch up one delta at a time.
+ */
 export interface MockBootstrapHint {
   reason: 'too_far_behind' | 'too_many_deltas' | 'missing_entities';
   tables?: string[];
@@ -27,15 +28,18 @@ export interface MockBootstrapHint {
 type EventHandler = (...args: unknown[]) => void;
 
 /**
- * MockWebSocket provides a controllable event-based interface
- * for testing sync engine components that consume WebSocket events.
+ * A controllable, event-based stand-in for the sync engine's WebSocket
+ * connection. Subscribe with {@link MockWebSocket.on} exactly as production
+ * code does, then use the `simulate*` and `receive*` methods to push
+ * connection changes, deltas, and bootstrap hints. Every event the mock emits
+ * is recorded on {@link MockWebSocket.emittedEvents} for assertions.
  */
 export class MockWebSocket {
   private _connected = false;
   private _sessionError = false;
   private _listeners = new Map<string, Set<EventHandler>>();
 
-  /** Track all emitted events for assertions */
+  /** Every event the mock has emitted, in order, for assertions. */
   readonly emittedEvents: { type: string; data: unknown }[] = [];
 
   get connected(): boolean {
@@ -47,7 +51,7 @@ export class MockWebSocket {
   }
 
   // ─────────────────────────────────────────────
-  // Event subscription (matches SyncWebSocket API)
+  // Event subscription (matches the real connection's API)
   // ─────────────────────────────────────────────
 
   on(event: string, handler: EventHandler): () => void {
@@ -75,32 +79,32 @@ export class MockWebSocket {
   // Test control: connection lifecycle
   // ─────────────────────────────────────────────
 
-  /** Simulate successful connection */
+  /** Fires a successful connection, emitting the `connected` event. */
   simulateConnect(): void {
     this._connected = true;
     this._sessionError = false;
     this.emit('connected');
   }
 
-  /** Simulate disconnection */
+  /** Drops the connection, emitting the `disconnected` event. */
   simulateDisconnect(): void {
     this._connected = false;
     this.emit('disconnected');
   }
 
-  /** Simulate reconnection attempt */
+  /** Emits a `reconnecting` event carrying the attempt number and retry delay. */
   simulateReconnecting(attempt: number, delay: number): void {
     this.emit('reconnecting', { attempt, delay });
   }
 
-  /** Simulate session error (401/403) */
+  /** Emits a `session_error` event, as when the server rejects the session as unauthorized. The code defaults to 401. */
   simulateSessionError(code = 401): void {
     this._sessionError = true;
     this._connected = false;
     this.emit('session_error', { code });
   }
 
-  /** Simulate reconnection failure (max attempts reached) */
+  /** Emits a `reconnect_failed` event, signaling the client gave up after exhausting its retries. */
   simulateReconnectFailed(): void {
     this._connected = false;
     this.emit('reconnect_failed');
@@ -110,12 +114,12 @@ export class MockWebSocket {
   // Test control: delta injection
   // ─────────────────────────────────────────────
 
-  /** Inject a single delta (as if received from server) */
+  /** Delivers a single delta, emitting a `delta` event as if the server had sent it. */
   receiveDelta(delta: MockDelta): void {
     this.emit('delta', delta);
   }
 
-  /** Inject a batch of deltas */
+  /** Delivers a batch of deltas, emitting a `delta_batch` event. */
   receiveDeltas(deltas: MockDelta[]): void {
     this.emit('delta_batch', deltas);
   }
@@ -124,7 +128,7 @@ export class MockWebSocket {
   // Test control: bootstrap hints
   // ─────────────────────────────────────────────
 
-  /** Inject a bootstrap_required hint from server */
+  /** Emits a `bootstrap_required` hint, telling the client to rebuild its data instead of catching up. */
   simulateBootstrapHint(hint: MockBootstrapHint): void {
     this.emit('bootstrap_required', hint);
   }
@@ -133,7 +137,7 @@ export class MockWebSocket {
   // Test control: presence
   // ─────────────────────────────────────────────
 
-  /** Inject a presence update */
+  /** Emits a `presence_update` event carrying the given payload. */
   simulatePresenceUpdate(data: Record<string, unknown>): void {
     this.emit('presence_update', data);
   }
@@ -142,17 +146,17 @@ export class MockWebSocket {
   // Assertions
   // ─────────────────────────────────────────────
 
-  /** Get all events of a specific type */
+  /** Returns the payloads of every emitted event of the given type, in order. */
   getEvents(type: string): unknown[] {
     return this.emittedEvents.filter((e) => e.type === type).map((e) => e.data);
   }
 
-  /** Check if a specific event was emitted */
+  /** Reports whether an event of the given type has been emitted. */
   hasEmitted(type: string): boolean {
     return this.emittedEvents.some((e) => e.type === type);
   }
 
-  /** Reset all state */
+  /** Clears connection state, listeners, and the record of emitted events. */
   reset(): void {
     this._connected = false;
     this._sessionError = false;

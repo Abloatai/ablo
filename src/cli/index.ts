@@ -20,8 +20,8 @@ import { webhooks } from './webhooks';
 import { check } from './check';
 import { upgrade } from './upgrade';
 import { pull, buildSchemaSourceFromDb } from './pull';
-import { prismaPull } from './prisma-pull';
-import { drizzlePull } from './drizzle-pull';
+import { prismaPull } from './prismaPull';
+import { drizzlePull } from './drizzlePull';
 import { brand } from './theme';
 import { renderCliError } from './renderError';
 
@@ -72,11 +72,11 @@ async function main() {
   } else if (command === 'webhooks') {
     await webhooks(process.argv.slice(3));
   } else if (command === 'dev') {
-    // Renamed: nothing runs locally, so `dev` was a lie. Kept as an alias for
-    // `ablo push --watch`. Honor an explicit `--no-watch` (push once, then exit):
-    // appending `--watch` unconditionally clobbered it (last-flag-wins parsing),
-    // so `ablo dev --no-watch` watched forever — the exact runaway-in-an-agent
-    // footgun the `--no-watch` escape hatch exists to prevent.
+    // `dev` is an alias for `ablo push --watch`, since nothing about it runs
+    // locally. Honor an explicit `--no-watch` (push once, then exit): appending
+    // `--watch` unconditionally would clobber it under last-flag-wins parsing, so
+    // `ablo dev --no-watch` would watch forever — the runaway an unattended
+    // caller most needs the `--no-watch` escape hatch to prevent.
     const devArgs = process.argv.slice(3);
     const oneShot = devArgs.includes('--no-watch');
     console.log(
@@ -109,7 +109,7 @@ async function main() {
     // Two flows: the sandbox dev flow (role check, env wiring, server-side
     // provisioning, optional --watch) and the raw one-shot pusher (production
     // deploys, advanced flags). The credential resolves explicit ABLO_API_KEY
-    // → the ACTIVE mode's stored credential (`resolvePushPlan`), so
+    // → the active mode's stored credential (`resolvePushPlan`), so
     // `ablo login` + `ablo mode production` + `npx ablo push` deploys to
     // production instead of demanding sk_test_. `--watch` stays sandbox-only:
     // it routes to the dev flow, whose live-key refusal names the supported
@@ -214,19 +214,22 @@ function bailIfCancelled<T>(value: T | symbol): asserts value is T {
 }
 
 // ── init flags (so agents / CI can run init without a TTY) ──────────────────
-// Interactive clack prompts (`select`/`confirm`) need a TTY — an agent or CI run
-// has none, so the prompts would hang/crash. When stdin isn't a TTY, or `--yes`
-// / `CI` is set, init runs NON-INTERACTIVELY: every choice comes from a flag or a
-// sane default, and no prompt is shown. Flags also override in interactive mode.
+// Interactive clack prompts (`select`/`confirm`) need a terminal — an agent or
+// CI run has none, so the prompts would hang or crash. When stdin isn't a
+// terminal, or `--yes` / `CI` is set, init runs non-interactively: every choice
+// comes from a flag or a sensible default, and no prompt appears. Flags also
+// override a choice in interactive mode.
 const INIT_FRAMEWORKS = ['nextjs', 'vite', 'remix', 'vanilla'];
 const INIT_AUTHS = ['apikey', 'firebase', 'auth0', 'clerk', 'supabase', 'betterauth', 'jwt'];
-// Your data always lives in YOUR database — Ablo hosts only the transaction log
-// (sync_deltas) + coordination, never your rows. 'replication' (Postgres logical
-// replication via `ablo connect`) is THE path and the default — Ablo consumes your
-// WAL, your app owns the write path. 'endpoint' (a signed Data Source endpoint) is
-// the FALLBACK for DBs that can't grant a REPLICATION role; 'datasource' is its
-// legacy alias. 'direct' (the `databaseUrl` connector that lets Ablo dial into your
-// DB) is DEPRECATED — accepted for back-compat only. See ADR 0002.
+// Your data always lives in your own database — Ablo stores only the
+// transaction log (sync_deltas) and coordination state, never your rows.
+// 'replication' (Postgres logical replication, set up with `ablo connect`) is
+// the primary path and the default: Ablo consumes your write-ahead log while
+// your app keeps the write path. 'endpoint' (a signed data-source endpoint) is
+// the fallback for databases that cannot grant a REPLICATION role, and
+// 'datasource' is an alias for it. 'direct' (the `databaseUrl` connector that
+// lets Ablo dial into your database) is deprecated and accepted only for
+// existing projects.
 const INIT_STORAGES = ['replication', 'endpoint', 'direct', 'datasource'];
 type InitStorage = 'endpoint' | 'direct' | 'replication';
 
@@ -271,11 +274,12 @@ function parseInitArgs(args: readonly string[]): InitOptions {
 }
 
 /**
- * Init's project step: every app gets its OWN Ablo project (the Neon/
- * Supabase shape — its keys, schema, and data plane are isolated from the
- * org's other apps). Slug = `--project` or the package.json name. Requires
- * an authorized credential; keyless init skips silently (the org-default
- * project keeps working) and `ablo projects create` picks it up later.
+ * The project step of init: every app gets its own Ablo project, whose keys,
+ * schema, and data plane are isolated from the organization's other apps. The
+ * slug comes from `--project` or the package.json name. This step needs an
+ * authorized credential; without one it skips silently — the organization's
+ * default project keeps working, and `ablo projects create` can claim the app's
+ * project later.
  */
 async function ensureInitProject(opts: InitOptions): Promise<void> {
   if (!opts.useProject) return;
@@ -303,12 +307,13 @@ const INIT_ORMS = ['prisma', 'drizzle', 'none'] as const;
 type DetectedOrm = (typeof INIT_ORMS)[number];
 
 /**
- * Pick the ORM to scaffold against. An explicit `--orm` wins; otherwise DETECT
- * from the project's dependencies so we never emit an import the project can't
- * resolve (a `@prisma/client` import in a non-Prisma app breaks the build on init
- * — worse than a neutral template) AND so the developer never has to choose
- * between adapters they'd have to reason about: we meet them on the ORM they
- * already use. Default to a neutral, always-compiling route when none is present.
+ * Picks the ORM to scaffold against. An explicit `--orm` wins; otherwise the
+ * choice is detected from the project's dependencies, for two reasons. It avoids
+ * emitting an import the project can't resolve — a `@prisma/client` import in a
+ * non-Prisma app would break the build on init, which is worse than a neutral
+ * template. And it spares you a choice between adapters you'd have to reason
+ * about, meeting you on the ORM you already use. When no ORM is present, it falls
+ * back to a neutral route that always compiles.
  */
 function detectOrm(override?: string): DetectedOrm {
   if (override === 'prisma' || override === 'drizzle' || override === 'none') return override;
@@ -327,12 +332,12 @@ function detectOrm(override?: string): DetectedOrm {
 }
 
 /**
- * Detect the Next.js layout: routes at `app/` (root) or `src/app/`. create-next-app
- * maps the `@/*` alias to the project root in the first and to `src/` in the second.
- * The generated route/provider files import the `ablo/` dir via `@/ablo`, so init
- * must place BOTH the routes (`appBase`) and the `ablo/` dir (under `aliasBase`)
- * to match — otherwise the routes land where Next.js can't see them, or the
- * `@/ablo` imports dangle.
+ * Detects the Next.js layout: routes at `app/` (root) or `src/app/`.
+ * create-next-app maps the `@/*` alias to the project root in the first case and
+ * to `src/` in the second. The generated route and provider files import the
+ * `ablo/` directory through `@/ablo`, so init must place both the routes
+ * (`appBase`) and the `ablo/` directory (under `aliasBase`) to match — otherwise
+ * the routes land where Next.js can't see them, or the `@/ablo` imports dangle.
  */
 function detectNextLayout(): { appBase: string; aliasBase: string } {
   const useSrc = existsSync(join('src', 'app')) || (!existsSync('app') && existsSync('src'));
@@ -440,7 +445,7 @@ async function init(args: readonly string[] = []) {
   );
 
   // Opt-in: generate the schema from an existing database (like `prisma db pull`).
-  // Read-only. Defaults OFF non-interactively (needs DATABASE_URL).
+  // Read-only. Defaults off non-interactively (it needs DATABASE_URL).
   const pullExisting = await chooseBool(opts.pull, false, interactive, () =>
     confirm({ message: 'Pull models from an existing database? (needs DATABASE_URL)', initialValue: false }),
   );
@@ -512,7 +517,7 @@ async function init(args: readonly string[] = []) {
 
   const envFile = framework === 'nextjs' ? '.env.local' : '.env';
   // When the user is already authenticated (and isn't passing ABLO_API_KEY via
-  // the shell), wire the REAL stored sandbox key instead of a placeholder, so
+  // the shell), wire the real stored sandbox key instead of a placeholder, so
   // `init` + `push` runs without an "unknown key" detour. `wireEnvLocal` owns the
   // ABLO_API_KEY line and only targets `.env.local`, so this applies to the
   // Next.js path; other frameworks keep the documented placeholder.
@@ -547,7 +552,7 @@ async function init(args: readonly string[] = []) {
     // stream. In direct mode the rows already land in your database through the
     // registered connection, so there is nothing to mirror.
     if (storage === 'endpoint') {
-      // Webhook receiver at a DEDICATED path (not a catch-all), so it can't collide
+      // Webhook receiver at a dedicated path (not a catch-all), so it can't collide
       // with the Ablo HTTP handler's `[...all]` mount or the `/api/ablo/source` route.
       const webhookDir = join(layout.appBase, 'api', 'ablo', 'webhooks');
       mkdirSync(webhookDir, { recursive: true });
@@ -711,13 +716,13 @@ export type Sync = typeof sync;
 `;
 }
 
-// Register the project's schema into the SDK's global `Register` interface so
+// Registers the project's schema into the SDK's global `Register` interface so
 // `ablo.<model>` is typed across the project without re-passing the schema type.
-// Emitted as a REGULAR `.ts` module (`ablo/register.ts`, a sibling of schema.ts).
-// It's never imported anywhere — the `declare module` augmentation merges purely
-// because the file is a module in the tsconfig `include` (the `import type` +
-// `export {}` make it a module). TanStack Router relies on the same mechanism for
-// its `Register` augmentation living in `src/router.tsx`. A `.d.ts` is NOT needed.
+// Emitted as a plain `.ts` module (`ablo/register.ts`, a sibling of schema.ts).
+// Nothing imports it — the `declare module` augmentation merges simply because
+// the file is a module the tsconfig `include` picks up (the `import type` and
+// `export {}` make it a module). TanStack Router uses the same mechanism for its
+// own `Register` augmentation. A `.d.ts` file is not needed.
 function generateRegister(): string {
   return `import type { schema } from './schema';
 
@@ -762,12 +767,13 @@ function generateEnv(storage: InitStorage, opts: { includeApiKey?: boolean } = {
 }
 
 /**
- * The "Ablo → your database" Data Source endpoint, scaffolded for the ORM the
- * project already uses — one clean track, no adapter menu. Both variants derive
- * the SYNCED-model tables from the one Zod `schema` and rely on `ablo migrate` to
- * provision those plus the adapter's bookkeeping tables. Your non-synced tables
- * (auth, billing, anything without an organization_id) keep living in your own
- * ORM schema, provisioned by your own migrations — one database, two schemas.
+ * The "Ablo → your database" data-source endpoint, scaffolded for the ORM the
+ * project already uses so there's one clean track and no adapter menu. Both
+ * variants derive the synced-model tables from the single Zod `schema` and rely
+ * on `ablo migrate` to provision those tables plus the adapter's bookkeeping
+ * tables. Your non-synced tables — auth, billing, anything without an
+ * organization_id — keep living in your own ORM schema, provisioned by your own
+ * migrations: one database, two schemas.
  */
 function generateDataSource(orm: DetectedOrm): string {
   return orm === 'drizzle' ? drizzleDataSourceScaffold() : prismaDataSourceScaffold();
@@ -833,9 +839,9 @@ export const { POST } = dataSourceNext({
 }
 
 /**
- * The "Ablo → your database" webhook receiver. Two variants so the scaffold
- * ALWAYS compiles: a working Prisma mirror when the project uses Prisma, and a
- * neutral, ORM-agnostic route (no foreign imports) otherwise.
+ * The "Ablo → your database" webhook receiver. It comes in two variants so the
+ * scaffold always compiles: a working Prisma mirror when the project uses
+ * Prisma, and a neutral, ORM-agnostic route with no foreign imports otherwise.
  */
 function generateWebhookRoute(orm: DetectedOrm): string {
   return orm === 'prisma' ? prismaWebhookRoute() : neutralWebhookRoute();
@@ -859,7 +865,7 @@ const WEBHOOK_DOC = `/**
  * dedupe (skip a \`syncId\` you've already stored).
  */`;
 
-/** Prisma project → a WORKING generic mirror: one upsert/delete for every model. */
+/** Prisma project → a working generic mirror: one upsert or delete for every model. */
 function prismaWebhookRoute(): string {
   return `${WEBHOOK_INTRO}
 import { PrismaClient } from '@prisma/client';
@@ -908,7 +914,7 @@ export async function POST(req: Request): Promise<Response> {
 `;
 }
 
-/** No detected ORM → a neutral route that COMPILES; one clearly-marked database write point. */
+/** No detected ORM → a neutral route that compiles, with one clearly marked place to write to your database. */
 function neutralWebhookRoute(): string {
   return `${WEBHOOK_INTRO}
 
@@ -1042,9 +1048,10 @@ export function TaskList() {
 `;
 }
 
-// The browser provider. Builds ONE Ablo client that authenticates via the
-// session route (never the sk_ key) and mounts it so \`useAblo()\` works in any
-// client component. AbloProvider takes a built \`client\` (Stripe <Elements> model).
+// The browser provider. It builds a single Ablo client that authenticates
+// through the session route rather than the sk_ key, and mounts it so
+// `useAblo()` works in any client component. AbloProvider takes an
+// already-built `client`.
 function generateProviders(): string {
   return `'use client';
 
@@ -1065,8 +1072,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
 `;
 }
 
-// The session-mint route. Runs server-side with your sk_ key, asserts WHO the
-// browser is acting as (your auth), and returns ONLY a short-lived token.
+// The session-mint route. Runs server-side with your sk_ key, asserts who the
+// browser is acting as (your auth), and returns only a short-lived session
+// token.
 function generateSessionRoute(): string {
   return `import { headers } from 'next/headers';
 import { sync } from '@/ablo';

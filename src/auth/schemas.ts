@@ -39,10 +39,11 @@ export const IdentityResolveResponseSchema = z
 export type IdentityResolveResponse = z.infer<typeof IdentityResolveResponseSchema>;
 
 /**
- * Response of `POST /auth/ephemeral-keys` — the sk_-gated END-USER session
- * mint (`ek_`). Flat shape (no `scope` block): the server stores the scope on
- * the key row and re-derives it at every verify; the client only needs the
- * token + identity facts to hand to the browser.
+ * The response shape of `POST /auth/ephemeral-keys`, the endpoint that mints an
+ * end-user session key (an `ek_` key). The shape is flat, with no nested scope
+ * block: the server records the scope on the key itself and re-derives it on
+ * every request, so the client only needs the token and identity fields to hand
+ * to the browser.
  */
 export const EphemeralKeyResponseSchema = z
   .object({

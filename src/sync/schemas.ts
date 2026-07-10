@@ -10,7 +10,8 @@ import { getContext } from "../context.js";
 import { AbloValidationError } from "../errors.js";
 
 // ─── Sync Action Types ───────────────────────────────────────────────────────
-// Mirror of SyncActionType from sync-engine/types.ts
+// The action codes a server delta can carry, matching the wire protocol's
+// action-type set.
 
 const SYNC_ACTION_VALUES = ['I', 'U', 'D', 'A', 'C', 'G', 'S', 'V'] as const;
 
@@ -31,11 +32,12 @@ export const ServerDeltaSchema = z
 export type ValidatedServerDelta = z.infer<typeof ServerDeltaSchema>;
 
 // ─── Model Value Schema ─────────────────────────────────────────────────────
-// Server model values arrive in multiple shapes depending on Go serialization:
-//   - Array: already-parsed JSON array (most common)
-//   - String: double-encoded JSON string from json.RawMessage
-//   - null: from PostgreSQL jsonb_agg with no matching rows
-// This schema normalizes all variants into unknown[] before downstream use.
+// A model's values can arrive in more than one shape depending on how the
+// server serialized them:
+//   - Array: an already-parsed JSON array (the common case)
+//   - String: a JSON array still encoded as a string, which must be parsed
+//   - null: no matching rows
+// This schema normalizes every variant into an array before downstream use.
 
 const ModelValueSchema = z
   .union([z.array(z.unknown()), z.string(), z.null()])
@@ -63,8 +65,9 @@ export const BootstrapResponseSchema = z
     deltaCount: z.number().optional(),
     failedModels: z.array(z.string()).optional(),
     timestamp: z.number().default(() => Date.now()),
-    // Server's active schema hash (drift detection). Optional: absent from
-    // older servers / tenants that have never pushed a schema.
+    // The server's active schema hash, used to detect schema drift. Optional:
+    // absent when the server predates this field or the tenant has never
+    // pushed a schema.
     schemaHash: z.string().optional(),
   })
   .passthrough();
@@ -74,8 +77,9 @@ export type ValidatedBootstrapResponse = z.infer<typeof BootstrapResponseSchema>
 // ─── Parse Helpers ───────────────────────────────────────────────────────────
 
 /**
- * Validate a raw bootstrap response from the server.
- * Logs validation failures via SyncObservability and throws a descriptive error.
+ * Validates a raw bootstrap response from the server and returns the typed
+ * result. On failure it records a diagnostic breadcrumb and throws an
+ * {@link AbloValidationError} describing which fields were invalid.
  */
 export function parseBootstrapResponse(raw: unknown): ValidatedBootstrapResponse {
   const result = BootstrapResponseSchema.safeParse(raw);

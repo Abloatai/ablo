@@ -1,17 +1,19 @@
 /**
- * `ablo pull` — generate `defineSchema(...)` from your existing database.
+ * `ablo pull` generates a `defineSchema(...)` starting point from your existing
+ * database.
  *
- * The inverse of `migrate`, and the read-only counterpart to `check`: instead of
- * hand-writing the schema, introspect the tables you already have and emit a
- * starting-point `ablo/schema.ts`. Like `prisma db pull` / `drizzle-kit pull`.
+ * It is the inverse of `ablo migrate` and the read-only counterpart to `ablo
+ * check`: rather than hand-writing the schema, it introspects the tables you
+ * already have and writes a first draft to `ablo/schema.ts`. This mirrors the
+ * `db pull` step familiar from other ORMs.
  *
- * Non-infringing: it only READS the database (`information_schema`) and writes a
- * local file. It never alters the database, and won't overwrite an existing
- * schema file without `--force`.
+ * The command only reads the database, through `information_schema`, and writes
+ * a local file. It never alters the database, and it won't overwrite an existing
+ * schema file unless you pass `--force`.
  *
- * Introspection is lossy (same as Prisma's): enum members, JSON shape,
- * relations, and defaults can't be recovered from columns alone — so the output
- * is a starting point to refine, then confirm with `ablo check`.
+ * Introspection is lossy: enum members, JSON shape, relations, and defaults
+ * can't be recovered from columns alone. Treat the output as a draft to refine,
+ * then confirm it with `ablo check`.
  */
 
 import { AbloValidationError } from '../errors.js';
@@ -103,8 +105,9 @@ export interface PulledSchema {
 }
 
 /**
- * Introspect the database and build the `defineSchema(...)` source. Read-only;
- * adopts only tables that clear the contract (`id` + `organization_id`).
+ * Introspects the database and builds the `defineSchema(...)` source. Reads
+ * only; adopts a table only when it has both an `id` and an `organization_id`
+ * column.
  */
 export async function buildSchemaSourceFromDb(opts: {
   dbUrl: string;
@@ -142,7 +145,7 @@ export async function buildSchemaSourceFromDb(opts: {
 
   for (const [table, cols] of [...byTable.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     const names = new Set(cols.map((c) => c.column_name));
-    // Only tables that clear the adopt contract become models.
+    // A table becomes a model only if it has both an id and an organization_id column.
     if (!names.has('id') || !names.has(TENANCY_COLUMN)) {
       skipped++;
       continue;
@@ -152,11 +155,11 @@ export async function buildSchemaSourceFromDb(opts: {
     lines.push(`  ${key}: model({`);
     for (const col of cols) {
       if (BASE_COLUMNS.has(col.column_name)) continue;
-      // Prefer a camelCase field name, but only when it maps back to the EXACT
-      // column (the engine derives the column via `camelToSnake(field)`). When it
-      // wouldn't round-trip (e.g. `step_2` → `step2` → `step2`), keep the raw
-      // column name so the mapping is 1:1 — Prisma's `@map` claim, the exact
-      // column, never an approximation.
+      // Prefer a camelCase field name, but only when it maps back to the exact
+      // column (the runtime derives the column with `camelToSnake(field)`). When
+      // the round-trip wouldn't recover the original — for example `step_2` →
+      // `step2` → `step2` — keep the raw column name so the field maps to its
+      // column one-to-one rather than to an approximation.
       const camel = snakeToCamel(col.column_name);
       const fieldName = camelToSnake(camel) === col.column_name ? camel : col.column_name;
       const key = /^[a-z_][a-z0-9_]*$/i.test(fieldName) ? fieldName : `'${fieldName}'`;

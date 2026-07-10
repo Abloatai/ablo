@@ -1,23 +1,18 @@
 /**
- * Participant identity + scope resolution for `Ablo()`.
+ * Resolves a participant's identity and scope when an {@link Ablo} client is
+ * constructed, following whichever of three authentication paths the caller's
+ * options select:
  *
- * Three branches, mirroring the three auth paths the SDK supports:
+ *   1. **Hosted cloud** — the caller passed an `apiKey`. The client exchanges it
+ *      for a capability token and scope, then starts a scheduler that re-mints the
+ *      token before it expires, so the rotation is invisible to the caller.
+ *   2. **Self-derived** — the caller passed a bearer or capability token but not
+ *      an identity. The client asks the identity endpoint to recover the
+ *      participant id and scope from the token.
+ *   3. **Explicit** — a self-hosted caller passed the organization id and a user
+ *      or agent id directly. No server round-trip; the client trusts the caller.
  *
- *   1. **Hosted-cloud** — caller passed `apiKey`. SDK exchanges it
- *      server-side for a capability token + scope blob, then sets
- *      up a refresh scheduler that re-mints transparently before
- *      expiry.
- *   2. **Self-derived** — caller passed an authToken / capability
- *      token but the SDK doesn't yet know the identity. Calls
- *      `resolveIdentity` against the bootstrap endpoint to recover
- *      `participantId` + scope from the token.
- *   3. **Legacy explicit** — self-hosted callers that pass
- *      `organizationId` + `user.id` (or `agentId`) directly. No
- *      server round-trip; SDK trusts the caller.
- *
- * Extracted from `Ablo.ts` so each branch is testable in isolation
- * and the constructor body reads as a single named call rather than
- * a 100+-line if/elif/else with three different side-effect chains.
+ * Each branch is a separate function below, so it can be read and tested on its own.
  */
 
 import { AbloAuthenticationError } from '../errors.js';
@@ -32,7 +27,7 @@ import {
   resolveCredential,
   type ResolvedCredential,
 } from '../auth/credentialPolicy.js';
-import type { BootstrapHelper } from '../sync/BootstrapHelper.js';
+import type { BootstrapFetcher } from '../sync/BootstrapFetcher.js';
 import type { SyncLogger } from '../interfaces/index.js';
 import type { AuthCredentialSource } from '../auth/credentialSource.js';
 import type { ApiKeySetter } from './auth.js';
@@ -51,7 +46,7 @@ export interface IdentityResolveInput {
   readonly kind: 'user' | 'agent' | 'system';
   readonly configuredApiKey: string | ApiKeySetter | null;
   readonly configuredAuthToken: string | null;
-  readonly bootstrapHelper: BootstrapHelper;
+  readonly bootstrapHelper: BootstrapFetcher;
   readonly auth: AuthCredentialSource;
   readonly logger: SyncLogger;
 }
@@ -63,7 +58,7 @@ export interface ResolvedIdentity {
   readonly capabilityToken: string | undefined;
   readonly syncGroups: readonly string[] | undefined;
   readonly participantKind: 'user' | 'agent' | 'system';
-  /** Non-null on the hosted-cloud path; caller stores it for shutdown. */
+  /** Set only on the hosted-cloud path; the caller keeps it to stop refreshes on shutdown. */
   readonly refreshScheduler: RefreshScheduler | null;
 }
 
@@ -84,25 +79,24 @@ export async function resolveParticipantIdentity(
 
   const apiKeyValue = await resolveApiKeyValue(configuredApiKey);
 
-  // Single source of truth for the http(s) base — coerces ws/wss → http/https
-  // even when `bootstrapBaseUrl` is an explicit override (see auth.ts).
+  // Resolve the http(s) base URL, coercing ws/wss to http/https even when
+  // `bootstrapBaseUrl` is an explicit override (see auth.ts).
   const baseUrl = resolveBootstrapBaseUrl({
     url,
     bootstrapBaseUrl: options.bootstrapBaseUrl,
   });
 
-  // `internalOptions.organizationId` + a caller-supplied participant id is the
-  // legacy explicit path: the caller already knows its own identity, so no
-  // server round-trip is needed.
+  // An organization id plus a caller-supplied participant id is the explicit path:
+  // the caller already knows its own identity, so no server round-trip is needed.
   const hasExplicitIdentity =
     internalOptions.organizationId != null &&
     (kind === 'agent' ? options.agentId != null : options.user?.id != null);
 
-  // The connect-time credential ROUTING decision lives in `credentialPolicy`:
-  // classify the apiKey (sk_/ek_/rk_/pk_) and route. The hosted exchange is the
-  // one mint the policy performs (delegating to the injected `exchangeApiKey`);
-  // every other route just hands back the bearer to use. We then switch on the
-  // resolved `kind` below to wire up scope + the refresh scheduler.
+  // The credential-routing decision lives in `credentialPolicy`: it classifies the
+  // apiKey by prefix (`sk_`/`ek_`/`rk_`/`pk_`) and picks a route. The hosted
+  // exchange is the one mint the policy performs (via the injected
+  // `exchangeApiKey`); every other route simply returns the bearer to use. The
+  // switch below applies scope and sets up the refresh scheduler for each case.
   const cred = await resolveCredential(
     {
       apiKeyValue,
@@ -130,12 +124,12 @@ export async function resolveParticipantIdentity(
 
   switch (cred.kind) {
     case 'publishable':
-      // `pk_` — a long-lived, browser-safe, READ-ONLY project key. Used DIRECTLY
-      // as the bearer and NEVER exchanged for a short-lived capability — so it
-      // never expires and there is nothing to refresh. The sync-server's
-      // `apiKeyProvider` resolves the org + read-only scope from the key itself;
-      // we still call `/auth/identity` (authenticated by the `pk_` bearer) to
-      // learn the account scope + syncGroups for the bootstrap cache.
+      // `pk_` is a long-lived, browser-safe, read-only project key. It is used
+      // directly as the bearer and is never exchanged for a short-lived
+      // capability, so it never expires and there is nothing to refresh. The
+      // server resolves the organization and read-only scope from the key itself;
+      // we still call `/auth/identity` with the `pk_` bearer to learn the account
+      // scope and sync groups for the bootstrap cache.
       return resolveViaIdentity({
         bearer: cred.getBearer,
         baseUrl,
@@ -170,8 +164,8 @@ export async function resolveParticipantIdentity(
       });
 
     case 'explicit': {
-      // Legacy explicit (self-hosted, pre-Phase-3 — caller knows its own
-      // organizationId + user/agentId).
+      // Explicit self-hosted identity: the caller supplied its own organization id
+      // and user or agent id.
       const userId = kind === 'agent' ? options.agentId! : options.user!.id;
       const accountScope = internalOptions.organizationId!;
       bootstrapHelper.setCacheScope(accountScope);
@@ -194,31 +188,28 @@ interface ResolveViaIdentityInput {
   readonly bearer: string;
   readonly baseUrl: string;
   readonly options: IdentityResolveInput['options'];
-  readonly bootstrapHelper: BootstrapHelper;
+  readonly bootstrapHelper: BootstrapFetcher;
   readonly auth: AuthCredentialSource;
 }
 
 /**
- * Shared `/auth/identity` resolution for the `pk_` (publishable) and pre-minted
- * (`ek_`/`rk_` or explicit cap token) routes: the bearer is used as-is, the
- * server resolves the identity, and caller-passed syncGroups are MERGED with the
- * server-resolved set.
+ * Resolves identity through the `/auth/identity` endpoint for the publishable
+ * (`pk_`) and pre-minted (`ek_`/`rk_` or explicit capability token) routes. The
+ * bearer is used as-is, the server resolves the identity, and any caller-passed
+ * sync groups are merged with the server-resolved set.
  */
 async function resolveViaIdentity(
   input: ResolveViaIdentityInput,
 ): Promise<ResolvedIdentity> {
   const { bearer, baseUrl, options, bootstrapHelper, auth } = input;
   const identity = await resolveIdentity({ baseUrl, authToken: bearer });
-  // Merge caller-passed syncGroups with server-resolved ones rather than letting
-  // the server's response silently overwrite. Browser consumers (apps/web's
-  // SyncEngineProvider) compose `['default', 'org:${orgId}', 'user:${userId}',
-  // ...team:]` from the resolved session and pass it via `<AbloProvider
-  // syncGroups>`; before this merge, the self-derived path dropped that set on
-  // the floor in favor of `/auth/identity`'s response, which is empty for
-  // cookie-auth users today (apps/sync-server/src/routes/auth.ts only populates
-  // from `effectiveSyncGroups`, the cap-narrowed list). Empty syncGroups →
-  // server bootstrap falls back to `['default']` → no deltas fan out → live
-  // updates appear only on hard reload.
+  // Merge the caller's sync groups with the server-resolved set rather than
+  // letting the server response overwrite them. A client may compose groups such
+  // as `['default', 'org:<id>', 'user:<id>', 'team:<id>']` from the resolved
+  // session and pass them in; the identity endpoint can return an empty set (for
+  // example, for cookie-authenticated users), and an empty set makes the server
+  // bootstrap fall back to `['default']`, so no deltas fan out and live updates
+  // appear only on a hard reload. Merging keeps the caller's groups intact.
   const callerGroups = options.syncGroups ?? [];
   const mergedSyncGroups =
     callerGroups.length > 0
@@ -249,15 +240,15 @@ interface HostedInput {
     readonly user?: { id: string };
     readonly agentId?: string;
   };
-  readonly bootstrapHelper: BootstrapHelper;
+  readonly bootstrapHelper: BootstrapFetcher;
   readonly auth: AuthCredentialSource;
   readonly logger: SyncLogger;
 }
 
 async function resolveHosted(input: HostedInput): Promise<ResolvedIdentity> {
-  // Pure managed-cloud shape: `Ablo({schema, apiKey})`. The credential policy
-  // already exchanged the apiKey (delegating to `exchangeApiKey`); here we apply
-  // the returned scope + userMeta and stand up the refresh scheduler.
+  // The managed-cloud shape, `Ablo({ schema, apiKey })`. The credential policy has
+  // already exchanged the apiKey via `exchangeApiKey`; here we apply the returned
+  // scope and set up the refresh scheduler.
   const { exchange } = input.cred;
   const baseUrl = input.baseUrl;
   // The refresh path re-runs `exchangeApiKey` with a freshly-resolved apiKey, so
@@ -275,12 +266,10 @@ async function resolveHosted(input: HostedInput): Promise<ResolvedIdentity> {
   input.bootstrapHelper.setSyncGroups(exchange.scope.syncGroups);
   input.auth.setAuthToken(exchange.token);
 
-  // Cap tokens have a server-set TTL (3600s by default). Without
-  // proactive refresh the WS would either get force-closed at expiry
-  // or fail its next reconnect with 401. The scheduler re-mints
-  // transparently before that fires; the consumer never sees the
-  // rotation. Rationale + tradeoffs in
-  //   `packages/sync-engine/src/auth/refreshScheduler.ts`
+  // Capability tokens carry a server-set TTL (3600s by default). Without proactive
+  // refresh, the socket would be force-closed at expiry, or the next reconnect
+  // would fail with a 401. The scheduler re-mints ahead of that, so the consumer
+  // never sees the rotation.
   const refreshScheduler = createRefreshScheduler({
     initialExpiresAtMs: Date.parse(exchange.expiresAt),
     refresh: async () => {

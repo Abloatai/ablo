@@ -1,8 +1,10 @@
 /**
- * In-memory transaction index — id map plus a by-status secondary index so
- * the queue's hot paths (`getByStatus('pending')` on every batch/coalesce
- * decision) stay O(status bucket) instead of O(all transactions). Lifted out
- * of `TransactionQueue.ts` as a stateful leaf with no queue coupling.
+ * An in-memory index of transactions by id, with a secondary index by status.
+ * The status index keeps the queue's hot paths — such as `getByStatus('pending')`
+ * on every batch and coalesce decision — proportional to the number of
+ * transactions in that status rather than the total across all statuses.
+ * {@link TransactionQueue} owns an instance and routes every status change
+ * through {@link updateStatus}, which keeps the two indexes consistent.
  */
 
 import type { Transaction } from './commitPayload.js';

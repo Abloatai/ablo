@@ -1,9 +1,10 @@
 /**
- * MockSyncContext — Creates a fully-wired SyncEngineContext for tests.
- *
- * `createTestContext()` is the primary test utility: it builds a complete
- * DI container with mock implementations, calls initSyncEngine(), and
- * returns handles to all mocks for test assertions.
+ * Assembles a ready-to-use {@link SyncEngineContext} for tests. The context
+ * bundles every dependency the engine needs — logger, network monitor,
+ * mutation executor, and configuration — so a test can start the engine
+ * without a real backend. {@link createTestContext} is the entry point: it
+ * wires the mocks, installs the context globally through {@link initSyncEngine},
+ * and returns handles to each mock for assertions.
  */
 
 import type { SyncEngineContext } from '../../SyncEngineContext.js';
@@ -32,39 +33,41 @@ import { MockMutationExecutor } from './MockMutationExecutor.js';
 import { MockNetworkMonitor } from './MockNetworkMonitor.js';
 
 export interface TestContextOptions {
-  /** Override the logger (default: noopLogger) */
+  /** Replaces the default no-op logger. */
   logger?: SyncLogger;
-  /** Override observability (default: noopObservability) */
+  /** Replaces the default no-op observability provider. */
   observability?: SyncObservabilityProvider;
-  /** Override session error detector */
+  /** Replaces the detector that decides whether an error means the session has expired. */
   sessionErrorDetector?: SessionErrorDetector;
-  /** Override mutation executor options */
+  /** Options forwarded to the {@link MockMutationExecutor} that the context creates. */
   mutationExecutorOptions?: ConstructorParameters<typeof MockMutationExecutor>[0];
-  /** Override the sync engine config */
+  /** A partial {@link SyncEngineConfig} merged over the defaults. */
   config?: Partial<SyncEngineConfig>;
-  /** Start offline (default: false) */
+  /** Starts the network monitor offline. Defaults to online. */
   startOffline?: boolean;
 }
 
 export interface TestContextResult {
-  /** The full SyncEngineContext passed to initSyncEngine */
+  /** The assembled context that {@link createTestContext} installed globally. */
   context: SyncEngineContext;
 
-  /** Mock handles for test assertions */
+  /** Handles to the underlying mocks, so tests can drive them and assert on them. */
   mocks: {
     mutationExecutor: MockMutationExecutor;
     networkMonitor: MockNetworkMonitor;
   };
 
-  /** Cleanup: calls resetSyncEngine() */
+  /** Tears the test down by resetting the engine and the mocks. Call it when the test finishes. */
   cleanup: () => void;
 }
 
 /**
- * Create a test SyncEngineContext with all mocks pre-wired.
- * Calls initSyncEngine() so the global context is set.
+ * Builds a {@link SyncEngineContext} with every mock pre-wired and installs it
+ * globally through {@link initSyncEngine}, so code under test reaches the engine
+ * the same way it would in production. Returns the context, the mock handles,
+ * and a cleanup function to call when the test finishes.
  *
- * Usage:
+ * @example
  * ```ts
  * const { context, mocks, cleanup } = createTestContext();
  * // ... run tests using mocks.mutationExecutor, mocks.networkMonitor
@@ -112,11 +115,10 @@ export function createTestContext(options: TestContextOptions = {}): TestContext
     },
     cleanup: () => {
       resetSyncEngine();
-      // Intentionally do NOT clear the active ModelRegistry — async callbacks
-      // from in-flight transactions (e.g. fc.asyncProperty iterations) may
-      // call Model.toJSON() after afterEach runs. Leaving the default
-      // registry in place keeps those calls valid; the next createTestContext
-      // with hasActiveRegistry()===true simply reuses it.
+      // Leave the active ModelRegistry in place on purpose. Async callbacks
+      // from in-flight transactions can call Model.toJSON() after a test's
+      // teardown has run; keeping the default registry available keeps those
+      // late calls valid, and the next createTestContext simply reuses it.
       mutationExecutor.reset();
       networkMonitor.reset();
     },

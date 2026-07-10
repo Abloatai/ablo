@@ -1,67 +1,67 @@
 /**
- * THE sync-position structure — one typed object for "where is this client
- * in the global delta order", replacing five scattered private counters
- * (`lastSeenSyncId` on the queue, `highestProcessedSyncId` + `lastAckedId`
- * on the store, ad-hoc acked watermarks, `max()` calls at snapshot sites).
+ * Records where this client stands in the global delta order. It is a single
+ * typed object holding three related but distinct positions, each with its own
+ * rule for when it may advance. Keeping them separate is deliberate: collapsing
+ * them into one counter is a classic source of sync bugs.
  *
- * Three facts with DIFFERENT advance disciplines — flattening them was the
- * historical bug source, so the structure models them explicitly:
+ *   - `persisted` — the resume cursor. It advances only after deltas have
+ *     committed to durable local storage. This is the value reconnect catch-up
+ *     sends to the server, so it must never run ahead of what actually landed
+ *     on disk; otherwise the server would skip deltas the client never stored.
  *
- *   - `persisted` — the resume/ack cursor. Advances ONLY after deltas have
- *     committed to IndexedDB (the Replicache "lastMutationID read in the
- *     same transaction as the client view" rule — see SyncWebSocket.sendAck).
- *     This is what reconnect catch-up sends; it must never run ahead of
- *     durable state or the server skips deltas that never landed.
+ *   - `applied` — the in-memory cursor: the last delta applied to the object
+ *     pool. It drives the guards that deduplicate and reject replayed deltas.
+ *     It may run ahead of `persisted`, because the pool is updated before the
+ *     flush to disk, and behind what has merely been received, because
+ *     bootstrap-queued deltas arrive before they are applied.
  *
- *   - `applied` — the in-memory cursor: the last delta APPLIED to the
- *     object pool. Drives delta dedup/replay guards. May run ahead of
- *     `persisted` (pool applies before the IDB flush) and behind receipt
- *     (bootstrap-queued deltas are received but not yet applied).
+ *   - `acked` — the highest server position acknowledged for this client's own
+ *     commits. An acknowledgement at N means the server applied our write at N;
+ *     the optimistic pool already reflects it, so for the entities we wrote we
+ *     have effectively read through N even before the echo returns on the
+ *     stream.
  *
- *   - `acked` — the highest server watermark ACKED to this client's OWN
- *     commits. An ack at N means the server applied our write at N; the
- *     optimistic pool already reflects it, so for entities we wrote we have
- *     logically read through N even before the stream echo arrives.
+ * One value is derived: `readFloor` is the greater of `applied` and `acked`,
+ * and is the only position a snapshot or claim should stamp as its read point.
+ * Using the raw stream cursor alone would make a claim taken right after a
+ * confirmed write look stale against that write's own delta; using the raw
+ * acknowledgement alone would be wrong for read-only clients. The maximum is
+ * correct per entity, because a competing change to an entity we just wrote
+ * necessarily lands above our acknowledgement and still rejects as stale.
  *
- * One derived read: `readFloor` = max(applied, acked) — the ONLY value
- * snapshots/claims may stamp as `readAt`. The bare stream cursor made a
- * claim taken right after an ack-confirmed write stale against that write's
- * own delta; the bare ack would be wrong for read-only clients. Per-entity
- * correct: a foreign change to an entity we just wrote necessarily lands
- * ABOVE our ack and still stale-rejects.
- *
- * The Zod schema IS the state shape — the class holds exactly one
- * `SyncPositionSnapshot` and applies monotonic merges to it, so
- * snapshot/restore are identity-shaped and the schema is the single gate
- * for anything loaded from disk (`parseSyncPosition`; a corrupted stored
- * cursor "ahead of reality" is an existing, known failure mode).
+ * The validation schema is the state shape: the class holds exactly one
+ * {@link SyncPositionSnapshot} and merges monotonically into it, so snapshot
+ * and restore share that shape and {@link parseSyncPosition} is the single gate
+ * for anything loaded from disk — a corrupted cursor stored "ahead of reality"
+ * being a known failure mode.
  */
 
 import { z } from 'zod';
 
 export const syncPositionSchema = z.object({
-  /** Resume/ack cursor — advances only after IDB persistence. */
+  /** The resume cursor; advances only after deltas persist to durable local storage. */
   persisted: z.number().int().nonnegative(),
-  /** In-memory cursor — last delta applied to the pool. */
+  /** The in-memory cursor: the last delta applied to the object pool. */
   applied: z.number().int().nonnegative(),
-  /** Highest server watermark acked to this client's own commits. */
+  /** The highest server position acknowledged for this client's own commits. */
   acked: z.number().int().nonnegative(),
 });
 
 export type SyncPositionSnapshot = z.infer<typeof syncPositionSchema>;
 
 /**
- * PERSISTENCE DESIGN: only the `persisted` cursor is stored durably (as
- * `WorkspaceMetadata.lastSyncId`, written by Database after each IDB delta
- * commit and gated on load through `syncPositionSchema.shape.persisted` in
- * `Database.requiredBootstrap`). Persisting `applied`/`acked` would be
- * meaningless: on resume the pool is rebuilt FROM the persisted state, so
- * the correct restore is exactly `advancePersisted(storedCursor)` — which
- * implies `applied`, while `acked` starts at 0 (a dead session's acks carry
- * no read authority; the offline queue re-acks its own replays).
+ * Only the `persisted` cursor is stored durably; `applied` and `acked` are
+ * not. On resume the object pool is rebuilt from the persisted state, so the
+ * correct restore is simply to advance `persisted` to the stored value, which
+ * also implies `applied`. `acked` starts at zero, because a past session's
+ * acknowledgements carry no read authority and the offline queue
+ * re-acknowledges its own replays.
  */
 
-/** Validate a persisted/foreign value into a position snapshot. */
+/**
+ * Validates an untrusted value, such as one loaded from disk, into a position
+ * snapshot, or returns null when it does not match the schema.
+ */
 export function parseSyncPosition(value: unknown): SyncPositionSnapshot | null {
   const result = syncPositionSchema.safeParse(value);
   return result.success ? result.data : null;
@@ -81,12 +81,14 @@ function advance(
   };
 }
 
-/** The live position. One instance per client (owned by SyncClient); the
- *  three producers advance their own fact, consumers read. */
+/**
+ * The live sync position: one instance per client. Three producers each
+ * advance their own cursor, and consumers read the result.
+ */
 export class SyncPosition {
   #state = ZERO;
 
-  /** Current state — the schema shape, frozen-by-copy. */
+  /** Returns a copy of the current state in the schema's shape. */
   snapshot(): SyncPositionSnapshot {
     return { ...this.#state };
   }
@@ -103,28 +105,31 @@ export class SyncPosition {
     return this.#state.acked;
   }
 
-  /** THE value snapshots/claims stamp as `readAt`. */
+  /** The position a snapshot or claim stamps as its read point: the greater of `applied` and `acked`. */
   get readFloor(): number {
     return Math.max(this.#state.applied, this.#state.acked);
   }
 
-  /** Deltas through `syncId` have COMMITTED to IndexedDB. Persisting
-   *  implies applied — the flush path applies before/with persisting. */
+  /**
+   * Records that deltas through `syncId` have committed to durable local
+   * storage. This also advances `applied`, since the flush applies each delta
+   * before or as it persists.
+   */
   advancePersisted(syncId: number): void {
     this.#state = advance(this.#state, { persisted: syncId, applied: syncId });
   }
 
-  /** A delta was APPLIED to the in-memory pool. */
+  /** Records that a delta was applied to the in-memory object pool. */
   advanceApplied(syncId: number): void {
     this.#state = advance(this.#state, { applied: syncId });
   }
 
-  /** The server acked one of OUR commits at this watermark. */
+  /** Records that the server acknowledged one of this client's commits at the given position. */
   noteAck(lastSyncId: number | undefined): void {
     if (lastSyncId !== undefined) this.#state = advance(this.#state, { acked: lastSyncId });
   }
 
-  /** Restore from a VALIDATED snapshot (e.g. IDB resume). Monotonic. */
+  /** Restores from an already-validated snapshot, for example on resume from disk. The merge is monotonic. */
   restore(snapshot: SyncPositionSnapshot): void {
     this.#state = advance(this.#state, snapshot);
   }

@@ -1,7 +1,8 @@
 /**
- * Delta factories for sync engine tests.
- *
- * Creates well-formed SyncAction objects matching the server wire format.
+ * Factories that build well-formed delta objects for tests. A delta, a
+ * {@link SyncAction}, is a single change to one model instance in the wire
+ * format the server sends: an insert, update, delete, archive, and so on.
+ * These helpers let tests construct deltas without a live server.
  */
 
 import type { SyncActionType, SyncAction } from '../../types/index.js';
@@ -27,7 +28,7 @@ export interface CreateDeltaOptions {
 }
 
 /**
- * Create a single SyncAction (delta) matching the server wire format.
+ * Builds a single delta ({@link SyncAction}) in the server's wire format.
  */
 export function createDelta(options: CreateDeltaOptions): SyncAction {
   deltaCounter++;
@@ -42,7 +43,7 @@ export function createDelta(options: CreateDeltaOptions): SyncAction {
 }
 
 /**
- * Create an INSERT delta for a new entity.
+ * Builds an insert delta for a new entity.
  */
 export function createInsertDelta(
   modelName: string,
@@ -54,7 +55,7 @@ export function createInsertDelta(
 }
 
 /**
- * Create an UPDATE delta for an existing entity.
+ * Builds an update delta for an existing entity.
  */
 export function createUpdateDelta(
   modelName: string,
@@ -66,7 +67,7 @@ export function createUpdateDelta(
 }
 
 /**
- * Create a DELETE delta.
+ * Builds a delete delta.
  */
 export function createDeleteDelta(
   modelName: string,
@@ -77,7 +78,7 @@ export function createDeleteDelta(
 }
 
 /**
- * Create an ARCHIVE delta.
+ * Builds an archive delta, stamping `archivedAt` with the current time.
  */
 export function createArchiveDelta(
   modelName: string,
@@ -94,7 +95,7 @@ export function createArchiveDelta(
 }
 
 /**
- * Create an UNARCHIVE (reVive) delta.
+ * Builds an unarchive delta, clearing `archivedAt`.
  */
 export function createUnarchiveDelta(
   modelName: string,
@@ -111,11 +112,10 @@ export function createUnarchiveDelta(
 }
 
 /**
- * Create a COVERING ('C') delta.
- *
- * Signals that the client has gained permission to see an existing entity.
- * Treated as an insert by the client — the entity is added to the local
- * store as if newly created. Typically follows a GroupAdded delta.
+ * Builds a covering ('C') delta. It signals that the client has gained
+ * permission to see an entity that already exists. The client treats it
+ * like an insert, adding the entity to its local store as if newly created.
+ * A covering delta typically follows a group-added delta.
  */
 export function createCoveringDelta(
   modelName: string,
@@ -127,12 +127,11 @@ export function createCoveringDelta(
 }
 
 /**
- * Create a GROUP ADDED ('G') delta using the incremental payload shape.
- *
- * Signals that the recipient was added to a single sync group. The client
- * updates its subscription metadata and waits for Covering deltas to
- * deliver the newly-visible entities. Unlike the legacy 'G' payload
- * (addedGroups/removedGroups), this does not trigger a re-bootstrap.
+ * Builds a group-added ('G') delta in the incremental payload shape. It
+ * signals that the recipient was added to a single sync group. The client
+ * updates its subscription state and waits for covering deltas to deliver
+ * the newly visible entities. Unlike the older payload that carries both
+ * added and removed groups, this shape does not trigger a re-bootstrap.
  */
 export function createGroupAddedDelta(
   userId: string,
@@ -149,11 +148,10 @@ export function createGroupAddedDelta(
 }
 
 /**
- * Create a legacy GROUP CHANGE ('G') delta with the old payload shape.
- *
- * Carries both added and removed groups in one delta and forces a full
- * re-bootstrap on the client. Use for testing backward compatibility with
- * the deprecated EmitGroupChange path.
+ * Builds a group-change ('G') delta in the older payload shape, which
+ * carries both added and removed groups in one delta and forces a full
+ * re-bootstrap on the client. Useful for testing backward compatibility
+ * with that older shape.
  */
 export function createLegacyGroupChangeDelta(
   userId: string,
@@ -171,11 +169,9 @@ export function createLegacyGroupChangeDelta(
 }
 
 /**
- * Create a GROUP REMOVED ('S') delta.
- *
- * Signals that the recipient lost access to a sync group. The client
- * purges affected local state and triggers a re-bootstrap with the
- * updated group list.
+ * Builds a group-removed ('S') delta. It signals that the recipient lost
+ * access to a sync group. The client purges the affected local state and
+ * re-bootstraps with the updated group list.
  */
 export function createGroupRemovedDelta(
   userId: string,
@@ -192,7 +188,7 @@ export function createGroupRemovedDelta(
 }
 
 /**
- * Create a batch of deltas with sequential sync IDs.
+ * Builds a batch of deltas with sequential sync IDs.
  */
 export function createDeltaBatch(
   deltas: Omit<CreateDeltaOptions, 'id'>[],
@@ -203,8 +199,9 @@ export function createDeltaBatch(
 }
 
 /**
- * Create a confirmation delta — used to confirm that a mutation
- * was persisted by the server (TransactionQueue watches for this).
+ * Builds a confirmation delta, which signals that a mutation was persisted
+ * by the server. The client's transaction queue watches for these to
+ * confirm its in-flight writes.
  */
 export function createConfirmationDelta(
   modelName: string,

@@ -1,26 +1,20 @@
 /**
- * `@abloatai/ablo/wire` — canonical COMMIT-PATH frame contract.
+ * The write-path message shapes for the sync protocol. These cover the frames
+ * a client sends to commit work — {@link CommitMessage} (a batch of raw
+ * operations) and {@link MutationMessage} (a single named mutation) — and the
+ * server's {@link MutationResultMessage} acknowledgement. The same frames flow
+ * over a WebSocket connection and over the HTTP commit endpoint.
  *
- * These are the WebSocket (and HTTP-fallback) message shapes for the
- * write path: the client's `commit` / `mutation` frames and the server's
- * `mutation_result` ack. They live here — not in the server app and not
- * inlined in the SDK's `SyncWebSocket` — so the client, the server, and
- * any future `@abloatai/ablo/server` host all import ONE definition
- * and cannot drift.
- *
- * Scope note: the delta/sync frames (`sync_response`, `delta`) are NOT
- * here yet — they reference `SyncDelta`, which currently has two
- * definitions (server `db/deltas` vs package `core`) pending unification.
- * They stay server-local until that lands. Everything in this file
- * depends only on package-canonical types (`OnStaleMode`, `ErrorCode`,
- * `RequiredCapability`), so it is safe to share today.
- *
- * Changing any shape here is a wire-contract change — it requires
- * coordinated client + server updates.
+ * Both the client and the server import these definitions from here, so the two
+ * sides cannot drift. Each interface is paired with a Zod validator
+ * ({@link commitOperationSchema}, {@link commitPayloadSchema}) pinned to it at
+ * compile time, so the runtime check and the type stay in lockstep. Changing
+ * any shape in this file changes the wire contract and requires the client and
+ * server to update together.
  */
 import { z } from 'zod';
-// Runtime schema primitives come from the coordination LEAF module (a pure
-// zod file), not the barrel — keeps `wire/` lean (zod-leaf runtime deps only).
+// The runtime schema primitives are imported straight from the coordination
+// schema module to keep this file's runtime dependencies limited to Zod.
 import {
   commitOperationSchema as coordinationCommitOperationSchema,
   readDependencySchema,
@@ -28,16 +22,17 @@ import {
 import type { OnStaleMode, StaleNotification, ReadDependency } from '../coordination/index.js';
 import type { ErrorCode, RequiredCapability } from '../errors.js';
 
-/** Compile-time two-way equality pin: `_AssertExact<z.infer<schema>, Interface>`
- *  fails to typecheck the moment either side drifts. */
+/** Asserts two types are exactly equal in both directions. Used to pin each
+ *  Zod schema to its interface: the assignment fails to compile the moment
+ *  either side drifts from the other. */
 type _AssertExact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 
 // ── Client → Server ────────────────────────────────────────────────────────
 
 /**
- * A single operation within a {@link CommitMessage} batch. The atomic unit
- * the server's commit executor applies (and, once the mutator seam lands,
- * the raw-op fallback path when no named mutator is registered).
+ * A single operation within a {@link CommitMessage} batch. Each operation is
+ * the smallest unit the server applies atomically — one create, update,
+ * delete, archive, or unarchive against one model row.
  */
 export interface CommitOperation {
   type: 'CREATE' | 'UPDATE' | 'DELETE' | 'ARCHIVE' | 'UNARCHIVE';
@@ -45,51 +40,50 @@ export interface CommitOperation {
   id?: string | null;
   input?: Record<string, unknown> | null;
   /**
-   * Per-op client transaction id. Stamped onto `sync_deltas.transaction_id`
-   * so the originating client can recognize the broadcast as an echo of its
-   * own optimistic mutation. Distinct from the batch-level `clientTxId`
-   * (which keys `mutation_log` for retry idempotency).
+   * A client-generated transaction id for this one operation. The server
+   * stamps it onto the `sync_deltas.transaction_id` column so the originating
+   * client can recognize the resulting broadcast as an echo of its own
+   * optimistic write. This is distinct from the batch-level `clientTxId` on
+   * {@link CommitMessage}, which the server uses to deduplicate retried batches.
    */
   transactionId?: string | null;
   /**
-   * Watermark from `context.capture`. The server checks whether the target
-   * has received deltas since this id; if so the operation's `onStale` mode
-   * applies.
+   * A read watermark captured when the client last read this row. The server
+   * checks whether the target has changed since this point; if it has, the
+   * operation's {@link CommitOperation.onStale} mode decides what happens.
    */
   readAt?: number | null;
   /**
-   * Mode on stale detection (non-coercion). `'reject'` (default) throws
-   * AbloStaleContextError; `'overwrite'` applies unconditionally (blind LWW);
-   * `'notify'` holds the write and returns a `StaleNotification` for the actor
-   * to resolve.
+   * What to do when the server detects the row changed since
+   * {@link CommitOperation.readAt}. `'reject'` (the default) fails the
+   * operation with a stale-context error; `'overwrite'` applies the write
+   * regardless; `'notify'` holds the write and returns a
+   * {@link StaleNotification} for the caller to resolve.
    */
   onStale?: OnStaleMode | null;
   /**
-   * Write even if another participant holds a claim on this entity. The
-   * default (`false`) rejects with `AbloClaimedError` when claimed — `bypass`
-   * is the explicit, recorded override, honored only for participants the
-   * claim guard trusts (humans / framework identities; agent `bypass` is
-   * ignored). Previously honored by the server's commit executor without
-   * being declared here — the exact contract drift this file exists to
-   * prevent.
+   * Write even when another participant holds a claim on this row. The default
+   * (`false`) rejects the operation with a claimed-entity error while a claim
+   * is held. Setting `bypass` overrides that, and the override is recorded. It
+   * is honored only for participants the claim guard trusts, such as human and
+   * framework identities; a bypass requested by an agent is ignored.
    */
   bypass?: boolean | null;
 }
 
 /**
- * Runtime validator for {@link CommitOperation} — the per-op ingest gate both
- * commit transports (WS `commit` frame, HTTP `/v1/commits`) run before an
- * operation reaches the executor. Extends the canonical coordination-layer
- * schema (writeGuard `readAt`/`onStale`/`bypass` + op identity), widening only
- * `bypass` to `nullish` to match the interface (`boolean | null`).
- *
- * `readAt` is `z.number()` — a string watermark previously flowed into the
- * stale-guard SQL (`id > $3`) unvalidated.
+ * Runtime validator for {@link CommitOperation}. Both commit transports — the
+ * WebSocket `commit` frame and the HTTP `/v1/commits` endpoint — run this check
+ * on every operation before it is applied, so a malformed operation is rejected
+ * at the edge. It builds on the shared coordination schema, widening `bypass`
+ * to also accept `null` so the validator and the interface match exactly. Note
+ * that `readAt` must be a number: it feeds the server's stale-check comparison,
+ * so a non-numeric watermark is refused here.
  */
 export const commitOperationSchema = coordinationCommitOperationSchema.extend({
   bypass: z.boolean().nullish(),
 });
-// z.infer-bound: the schema and the interface cannot drift in either direction.
+// Pins the schema to the interface: this fails to compile if either side drifts.
 const _commitOperationContract: _AssertExact<
   z.infer<typeof commitOperationSchema>,
   CommitOperation
@@ -97,10 +91,10 @@ const _commitOperationContract: _AssertExact<
 void _commitOperationContract;
 
 /**
- * Client → Server single named-mutation frame. The named-mutator write
- * primitive (claim + args), as opposed to the raw-op {@link CommitMessage}
- * batch. Server-side mutator dispatch resolves `mutatorName` against the
- * host-provided registry.
+ * A client-to-server frame that invokes a single named mutation by name and
+ * arguments, as opposed to the raw operation batch in {@link CommitMessage}.
+ * The server resolves `mutatorName` against the set of mutations registered on
+ * it and runs the matching one.
  */
 export interface MutationMessage {
   type: 'mutation';
@@ -112,10 +106,10 @@ export interface MutationMessage {
 }
 
 /**
- * Client → Server "commit this batch of operations" frame. Formerly named
- * `batch_ack` / `BatchAckMessage` — renamed pre-stable to the customer-facing
- * verb (`commit`) consistently across the wire and the SDK method
- * (`MutationExecutor.commit`).
+ * A client-to-server frame that asks the server to commit a batch of operations
+ * atomically. This is the raw-operation counterpart to {@link MutationMessage};
+ * it carries a list of {@link CommitOperation} entries plus the batch metadata
+ * below.
  */
 export interface CommitMessage {
   type: 'commit';
@@ -123,31 +117,29 @@ export interface CommitMessage {
     operations: CommitOperation[];
     clientTxId: string;
     /**
-     * Dormant agent-task lineage field. The SDK no longer populates it —
-     * turns/tasks were removed and write attribution now rides on the
-     * claim (`claim`) id plus the server-stamped actor/capability. Kept
-     * optional for wire-compat; when present the Hub still validates and
-     * threads it onto `caused_by_task_id`, but client writes leave it
-     * `null` (the audit pane treats null as "no prompt-side context").
+     * Optional lineage id linking this batch to the task that caused it. When
+     * present, the server validates it and records it on the delta's
+     * `caused_by_task_id` column for audit trails; when omitted or `null`, the
+     * batch simply carries no task attribution.
      */
     causedByTaskId?: string | null;
     /**
-     * Batch-level read dependencies (the STORM "did anything I looked at
-     * change?" layer). Each entry is a row (`{model,id,readAt,fields?}`) or a
-     * sync group (`{group,readAt}`) the batch's writes were premised on; the
-     * server validates none moved since `readAt` and fires the entry's
-     * `onStale` disposition over the batch. Omitted ⇒ only write-targets are
-     * checked (legacy behavior).
+     * The reads this batch's writes were premised on. Each entry names either a
+     * specific row (`{ model, id, readAt, fields? }`) or a sync group
+     * (`{ group, readAt }`) that must not have changed since its `readAt`
+     * watermark. The server checks every entry and applies its `onStale`
+     * disposition to the whole batch if one moved. When omitted, only the rows
+     * being written are checked for staleness.
      */
     reads?: ReadDependency[] | null;
   };
 }
 
 /**
- * Runtime validator for {@link CommitMessage}'s payload — every field the
- * server's commit path actually honors (`operations`, `clientTxId`,
- * `causedByTaskId`, `reads`), each entry validated by
- * {@link commitOperationSchema} / the canonical `readDependencySchema`.
+ * Runtime validator for the payload of {@link CommitMessage}. It checks every
+ * field the server acts on — `operations`, `clientTxId`, `causedByTaskId`, and
+ * `reads` — validating each operation with {@link commitOperationSchema} and
+ * each read dependency with the shared read-dependency schema.
  */
 export const commitPayloadSchema = z.object({
   operations: z.array(commitOperationSchema),
@@ -155,7 +147,7 @@ export const commitPayloadSchema = z.object({
   causedByTaskId: z.string().nullish(),
   reads: z.array(readDependencySchema).nullish(),
 });
-// z.infer-bound: payload schema and CommitMessage['payload'] cannot drift.
+// Pins the schema to the payload type: fails to compile if either side drifts.
 const _commitPayloadContract: _AssertExact<
   z.infer<typeof commitPayloadSchema>,
   CommitMessage['payload']
@@ -165,13 +157,13 @@ void _commitPayloadContract;
 // ── Server → Client ──────────────────────────────────────────────────────
 
 /**
- * Wire ack for a `commit` frame. Payload mirrors the canonical
- * `CommitReceipt` shape so WebSocket, HTTP `/v1/commits`, and persisted
- * `AgentJob.result.receipt` all carry identical fields.
+ * The server's acknowledgement of a {@link CommitMessage}. Its payload mirrors
+ * the commit-receipt shape, so a commit acknowledged over a WebSocket, over the
+ * HTTP `/v1/commits` endpoint, or read back from a persisted job result all
+ * carry the same fields.
  *
- * `object`, `status`, and `ops` are typed optional because pre-unification
- * WS clients didn't ship them; servers always populate them on the way out.
- * New clients can rely on them.
+ * `object`, `status`, and `ops` are optional in the type but the server always
+ * populates them, so a current client can rely on them being present.
  */
 export interface MutationResultMessage {
   type: 'mutation_result';
@@ -184,25 +176,27 @@ export interface MutationResultMessage {
     lastSyncId?: number;
     ops?: number;
     /**
-     * Stale-context notifications for `onStale: 'notify' ops whose
-     * premise moved concurrently. Present only on a successful ack that hit a
-     * notify-resolved conflict; the client surfaces these via the
-     * `conflict:notified` event and the commit receipt instead of rejecting.
+     * Notifications for operations that used `onStale: 'notify'` and whose
+     * premise changed while the batch was being applied. Present only on a
+     * successful acknowledgement that resolved such a conflict; the client
+     * surfaces each one through its `conflict:notified` event and the commit
+     * receipt rather than failing the write.
      */
     notifications?: StaleNotification[];
     /**
-     * Ids of UPDATE/DELETE targets that matched ZERO rows (don't exist or are
-     * outside the org). Present (non-empty) only when a write missed. The
-     * client turns this into a loud `AbloNotFoundError` for the affected
-     * caller instead of treating the no-op as success.
+     * Ids of update or delete targets that matched no rows — because they do
+     * not exist or fall outside the caller's organization. Present and
+     * non-empty only when a write missed. The client raises a not-found error
+     * for the affected caller rather than treating the no-op as a success.
      */
     missingIds?: string[];
     error?: {
       code: ErrorCode;
       message: string;
       field?: string;
-      /** Structured rejection body (x402-style) emitted when the cap
-       *  verifier denies the commit. */
+      /** The capability the commit required but the caller lacked. Present when
+       *  the commit was denied for want of a capability, so the client can tell
+       *  the caller exactly what to obtain. */
       requiredCapability?: RequiredCapability;
     };
   };

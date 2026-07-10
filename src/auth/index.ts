@@ -1,15 +1,12 @@
 /**
- * Internal apiKey → capability exchange.
+ * Exchanges an API key for a capability token and the scope it grants.
  *
- * Called by the `Ablo({...})` factory's `ready()` flow when the
- * consumer passed `apiKey` without an explicit `capabilityToken` /
- * `organizationId` / `user.id`. SDK calls `/auth/capability` once,
- * server returns the scope + userMeta blobs (Phases 1A + 1B),
- * SDK populates internal state from the response.
- *
- * Consumer never sees this happen. Same shape as Stripe / Anthropic
- * SDKs hide their internal auth-handshake — the apiKey is the only
- * credential the consumer touches.
+ * The `Ablo({...})` factory calls this during startup when you provide an
+ * `apiKey` but no explicit capability token, organization, or user identity. It
+ * sends one `POST /auth/capability` request; the server responds with the
+ * granted scope and any user metadata, which the client uses to populate its
+ * session state. The API key is the only credential you handle directly — this
+ * exchange happens automatically behind it.
  */
 
 import {
@@ -36,11 +33,9 @@ export interface ExchangeApiKeyRequest {
   readonly syncGroups?: readonly string[];
   readonly operations?: readonly string[];
   /**
-   * Bypass narrow-by-default scoping (admin/apikey callers only). SDK-internal:
-   * only the startup exchange (`identity.ts` `resolveHosted`) sets it. Stripped
-   * from the published `.d.ts` (`stripInternal`) — agents read declaration
-   * files as API, and this flag advertised an escalation knob consumers should
-   * never reach for (`sessions.create` scopes via `can` + `syncGroups`).
+   * Grants a wider scope than the narrow-by-default behavior. This is an internal
+   * escalation used only by the startup exchange; it is stripped from the
+   * published type declarations and is not meant to be set by application code.
    * @internal
    */
   readonly wideScope?: boolean;
@@ -112,12 +107,10 @@ export async function exchangeApiKey(
     } catch {
       // ignore — server returned non-JSON error
     }
-    // Route through the canonical wire-error translator so the server's
-    // envelope (`code` + `message` + `doc_url`) propagates verbatim and maps to
-    // the right AbloError subclass — instead of the legacy `error`/`reason`
-    // shape this used to read (which the server no longer emits, collapsing
-    // every failure to a generic code with an empty message). Fall back to
-    // `exchange_failed` only when the body carried no recognizable code.
+    // Route the error through the wire-error translator so the server's envelope
+    // (`code`, `message`, `doc_url`) is preserved and mapped to the matching
+    // AbloError subclass. Fall back to `exchange_failed` only when the body
+    // carried no recognizable error code.
     const requestId = response.headers.get('x-request-id') ?? undefined;
     throw hasWireCode(body)
       ? translateHttpError(response.status, body, requestId)
@@ -133,24 +126,27 @@ export async function exchangeApiKey(
 // ─────────────────────────────────────────────────────────────────────
 
 export interface MintUserSessionRequest {
-  /** The ORIGINAL secret (`sk_`) key — control-plane calls always present it,
-   *  never the exchanged sync credential. */
+  /** Your secret API key (an `sk_` key). Minting a session is a server-side
+   *  operation, so it always presents the secret key, never a token derived
+   *  from it. */
   readonly apiKey: string;
   readonly baseUrl: string;
-  /** The end user's external IdP id — becomes the session's `participantId`. */
+  /** The end user's identifier in your identity provider. It becomes the
+   *  session's `participantId`. */
   readonly userId: string;
-  /** Target org for a cross-org (platform) mint — the Stripe-Connect
-   *  `Stripe-Account` analogue. Requires the `sk_` to carry
-   *  `ephemeral:mint-any-org`; omit to mint into the key's own org. */
+  /** The organization to mint the session into, for a platform that manages many
+   *  organizations. Requires the secret key to carry the `ephemeral:mint-any-org`
+   *  capability. Omit to mint into the key's own organization. */
   readonly organizationId?: string;
-  /** SHARED SCHEMA — point this session's SCHEMA at the project that owns it,
-   *  while its DATA stays scoped to `organizationId`. Use this for org-per-customer
-   *  isolation: keep one schema project, and every customer's session resolves its
-   *  schema from it instead of re-pushing the schema into each customer's org.
-   *  Requires the `sk_` to carry `ephemeral:mint-any-org`. Omit for the default
-   *  (the session resolves its schema from its own org). */
+  /** Points this session's schema at a shared project while its data stays scoped
+   *  to `organizationId`. Use this when each customer has its own organization but
+   *  they all share one schema: keep a single schema project, and every customer's
+   *  session resolves its schema from it instead of pushing the schema into each
+   *  organization separately. Requires the secret key to carry the
+   *  `ephemeral:mint-any-org` capability. Omit to resolve the schema from the
+   *  session's own organization. */
   readonly schemaProject?: {
-    /** The org that owns the schema project. */
+    /** The organization that owns the shared schema project. */
     readonly organizationId: string;
     /** The project the schema was pushed under. */
     readonly projectId: string;
@@ -163,13 +159,13 @@ export interface MintUserSessionRequest {
 }
 
 /**
- * Mint an END-USER session key (`ek_`) via `POST /auth/ephemeral-keys` — the
- * sk_-gated user-session door. This is deliberately a DIFFERENT endpoint from
- * `/auth/capability`: that route can never mint humans (its
- * `invalid_participant_kind` gate is what fired in the 2026-06-11 Pulse
- * cascade, when `sessions.create({ user })` was funneled through the agent
- * door). The server trusts the `ek_` because a secret key minted it; the
- * browser presents it as its bearer.
+ * Mints an end-user session key (an `ek_` key) by calling
+ * `POST /auth/ephemeral-keys`, using your secret key as authorization. Your
+ * backend calls this to issue a session that a browser can present as its bearer
+ * credential; the server trusts the resulting key because a secret key minted it.
+ *
+ * This is a distinct endpoint from `/auth/capability`, which exchanges keys for
+ * agents and systems and cannot mint sessions for human users.
  */
 export async function mintUserSessionKey(
   options: MintUserSessionRequest,
@@ -206,8 +202,8 @@ export async function mintUserSessionKey(
       body: JSON.stringify({
         user: { id: options.userId },
         ...(options.organizationId ? { organizationId: options.organizationId } : {}),
-        // Flattened to the existing wire keys — the public param is project-centric,
-        // the transport contract is unchanged (no coordinated server deploy needed).
+        // The public option is project-centric; map it to the flat wire keys the
+        // endpoint expects.
         ...(options.schemaProject
           ? {
               schemaProjectId: options.schemaProject.projectId,
@@ -258,9 +254,10 @@ export interface ResolveIdentityRequest {
 }
 
 /**
- * Resolve the caller's Ablo identity from the authenticated request
- * context. Used by browser/session/capability flows where the SDK should
- * not require a public `userId` prop just to open local storage.
+ * Resolves the caller's identity from an authenticated request by calling
+ * `GET /auth/identity`. This lets browser and session flows learn who the
+ * current user is without requiring the application to pass a user id up front —
+ * for example, to key local storage.
  */
 export async function resolveIdentity(
   options: ResolveIdentityRequest,
@@ -305,12 +302,10 @@ export async function resolveIdentity(
     } catch {
       // ignore non-JSON auth errors
     }
-    // Canonical envelope translation (see `exchangeApiKey` above). This is what
-    // surfaces the sync-server's precise auth diagnosis — e.g.
-    // `jwt_issuer_untrusted` with its full message — to the SDK consumer,
-    // instead of collapsing every 401 to `identity_resolve_failed` with an
-    // empty reason because the old parser looked for `error`/`reason` keys the
-    // server doesn't emit.
+    // Translate the error envelope the same way `exchangeApiKey` does, so the
+    // server's precise auth diagnosis (for example `jwt_issuer_untrusted` with
+    // its full message) reaches the caller instead of collapsing every 401 to a
+    // generic `identity_resolve_failed`.
     const requestId = response.headers.get('x-request-id') ?? undefined;
     throw hasWireCode(body)
       ? translateHttpError(response.status, body, requestId)
@@ -326,31 +321,31 @@ export async function resolveIdentity(
 // ─────────────────────────────────────────────────────────────────────
 
 /**
- * Capability-token refresh scheduler.
+ * Keeps a capability token fresh so a long-lived client never disconnects when
+ * its token expires.
  *
- * Long-lived `@abloatai/ablo` clients hold a server-issued capability
- * token whose TTL (1h default) is shorter than typical browser sessions.
- * Without proactive refresh, the WebSocket would either be force-closed
- * by the server at expiry (code 1008) or fail its next reconnect with
- * 401. Either way the user sees a mid-session disconnect.
+ * A capability token has a shorter lifetime — one hour by default — than a
+ * typical browser session. Without a refresh, the WebSocket is force-closed at
+ * expiry (close code 1008) or the next reconnect fails with a 401, and either way
+ * the user sees a mid-session disconnect. The scheduler prevents that by
+ * re-minting the token ahead of time.
  *
- * This scheduler keeps the token fresh transparently. Three triggers,
- * one refresh path:
+ * Three triggers share one refresh path:
  *
- *   1. Proactive  — `setTimeout` for `(expiresAtMs - bufferMs - now)`.
- *   2. Visibility — on `document.visibilitychange→visible`, if the
- *                   token is within the buffer window, refresh now.
- *                   Defends against dormant-tab `setTimeout` throttling.
- *   3. Reactive   — caller invokes `.refreshNow()` on observed auth
- *                   failure (WS close 1008/4001 etc).
+ *   1. Proactive  — a timer set for `expiresAtMs - bufferMs - now`.
+ *   2. Visibility — when a hidden tab becomes visible and the token is already
+ *                   within the buffer window, refresh immediately. This covers a
+ *                   background tab whose timers were throttled while it was idle.
+ *   3. Reactive   — the caller invokes {@link RefreshScheduler.refreshNow} after
+ *                   observing an auth failure, such as a WebSocket close 1008 or
+ *                   4001.
  *
- * All three resolve through the same `inFlight` promise so concurrent
- * triggers don't double-mint. On any successful refresh the new
- * `expiresAtMs` is captured and trigger 1 is rescheduled.
+ * All three await the same in-flight promise, so concurrent triggers mint the
+ * token only once. Each successful refresh records the new expiry and reschedules
+ * the proactive timer.
  *
- * Buffer policy: `max(60s, ttl/10)` — for a 1h TTL that's 360s, which
- * matches the AWS SDK / MSAL.js de-facto 5-minute standard while
- * scaling sensibly for shorter TTLs.
+ * The refresh margin is `max(60s, ttl/10)` — six minutes for a one-hour token,
+ * and it scales down for shorter lifetimes.
  */
 
 export interface RefreshSchedulerOptions {
@@ -358,10 +353,10 @@ export interface RefreshSchedulerOptions {
   readonly initialExpiresAtMs: number;
 
   /**
-   * Performs the actual exchange. Returns the new expiry. Errors
-   * propagate to `onError`; the scheduler stays alive and retries on
-   * next trigger (no exponential backoff in v1 — most failures here are
-   * the user's apiKey being revoked, in which case retrying is futile).
+   * Performs the token exchange and returns the new expiry. Errors propagate to
+   * `onError`; the scheduler stays alive and retries on its next trigger. It does
+   * not back off between retries, since the common failure here is a revoked API
+   * key, for which retrying would not help.
    */
   readonly refresh: () => Promise<{ expiresAtMs: number }>;
 
@@ -382,7 +377,7 @@ export interface RefreshSchedulerOptions {
    * If true, install a `visibilitychange` listener on `document` that
    * triggers a refresh when the tab becomes visible and the token is
    * within the buffer window. No-op if `document` is undefined (Node).
-   * Default: true in browser-ish environments.
+   * Default: true in browser environments.
    */
   readonly attachVisibilityListener?: boolean;
 
@@ -420,9 +415,9 @@ export function createRefreshScheduler(
   let inFlight: Promise<{ expiresAtMs: number }> | null = null;
   let disposed = false;
 
-  // Default visibility attach: only when running in a browser-like env.
-  // The Node-side agent worker never has `document`, so the default
-  // does the right thing without explicit opt-out.
+  // Attach the visibility listener only in a browser-like environment. A
+  // non-browser runtime has no `document`, so the default behaves correctly
+  // without an explicit opt-out.
   const wantsVisibility = options.attachVisibilityListener ?? true;
   const hasDocument = typeof document !== 'undefined';
   const visibilityActive = wantsVisibility && hasDocument;

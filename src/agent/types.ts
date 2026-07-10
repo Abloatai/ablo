@@ -1,11 +1,10 @@
 /**
- * Agent-SDK abstractions. The engine's data vocabulary
- * (`Peer`, `Activity`, `Claim`, `ActiveClaim`,
- * `PresenceUpdatePayload`, `PresenceKind`) lives in
- * `../types/streams.ts`. This file holds only the bits that are
- * specific to the agent module: the `PresenceAnnouncer` abstraction
- * (transport-agnostic announce contract) and `AgentContext` (the AI
- * SDK `experimental_context` bag).
+ * Types specific to running AI agents. The shared data vocabulary — `Peer`,
+ * {@link Activity}, `Claim`, `ActiveClaim`, `PresenceUpdatePayload`, and
+ * `PresenceKind` — lives in the streams module. This file adds only the two
+ * pieces the agent layer needs on top of it: {@link PresenceAnnouncer}, a
+ * transport-agnostic way to announce presence, and {@link AgentContext}, the bag
+ * of ambient state passed to AI SDK tools.
  */
 
 import type { Activity } from '../types/streams.js';
@@ -13,10 +12,10 @@ import type { Activity } from '../types/streams.js';
 // ── Transport-agnostic announce contract ─────────────────────────────────
 
 /**
- * A minimal interface for announcing presence — abstract over WebSocket
- * (`Ablo({kind: 'agent'})`) and REST (`Agent`). Both
- * implementations satisfy this, so higher-level code can depend on it
- * without caring about transport.
+ * A minimal interface for announcing an agent's presence, independent of how it
+ * connects. Both the WebSocket-based agent client and the REST-based agent
+ * implement it, so higher-level code can depend on this interface without caring
+ * which transport is in use.
  */
 export interface PresenceAnnouncer {
   announce(
@@ -28,20 +27,16 @@ export interface PresenceAnnouncer {
 // ── AgentContext ──────────────────────────────────────────────────────────
 
 /**
- * Ambient context threaded into AI SDK tools via `experimental_context`.
+ * The ambient state passed to AI SDK tools through the AI SDK's
+ * `experimental_context`. Build one {@link AgentContext} per agent invocation and
+ * pass it as `experimental_context`; each tool's `execute` function then reads
+ * what it needs from `options.experimental_context` rather than closing over
+ * shared module state.
  *
- * The pattern: the caller constructs an AgentContext once per agent
- * invocation and passes it as `experimental_context`. Each tool's
- * `execute` function extracts what it needs from
- * `options.experimental_context` instead of closing over module-level
- * state.
- *
- * Benefits over closure-based tool wiring:
- * - Tools are framework-agnostic module exports (portable across agents)
- * - The context is typed in one place, not scattered across closures
- * - New tools can access any field without changing tool signatures
- *
- * Ported from the vercel-labs/open-agents pattern.
+ * Passing context this way, rather than capturing it in each tool's closure,
+ * keeps tools as plain module exports that any agent can reuse, types the context
+ * in one place, and lets a new tool read any field without changing its
+ * signature.
  *
  * ```ts
  * import { generateText, tool } from 'ai';
@@ -64,11 +59,11 @@ export interface PresenceAnnouncer {
  * });
  * ```
  *
- * Consumers can extend AgentContext via module augmentation or by
- * intersecting with their own context type.
+ * Extend {@link AgentContext} with your own fields through module augmentation or
+ * by intersecting it with your own context type.
  */
 export interface AgentContext {
-  /** Presence / freshness / AI SDK hook primitives. Required. */
+  /** Announces presence and checks whether an entity has changed since a given time. Required. */
   perception: PresenceAnnouncer & {
     checkFreshness?: (
       entityType: string,
@@ -76,12 +71,12 @@ export interface AgentContext {
       lastSeenAt: number,
     ) => Promise<unknown>;
   };
-  /** Organization scope for all operations. */
+  /** The organization every operation is scoped to. */
   organizationId?: string;
-  /** User or agent identifier — format: "agent:<id>" for agents. */
+  /** Identifier for the user or agent. Agents use the form `agent:<id>`. */
   userId?: string;
-  /** Sync groups the agent belongs to. */
+  /** The sync groups this agent belongs to. */
   syncGroups?: string[];
-  /** Allow extension with product-specific fields. */
+  /** Room for your own product-specific fields. */
   [key: string]: unknown;
 }

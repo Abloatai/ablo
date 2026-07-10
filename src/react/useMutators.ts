@@ -12,19 +12,19 @@ import { AbloValidationError } from '../errors.js';
 import { getContext } from '../context.js';
 
 /**
- * useMutators — turn a `defineMutators` tree into callable invokers.
+ * Turns a mutator tree built with `defineMutators` into callable invokers. The
+ * returned object mirrors that tree one-to-one, but each leaf becomes an
+ * `(args) => Promise<TResult>` function.
  *
- * The returned object mirrors the mutator tree one-to-one, but each leaf is
- * now a `(args) => Promise<TResult>` function. Internally each invocation:
- *   1. Builds a fresh `Transaction` bound to the current store/org context.
- *   2. Calls the user's mutator with `{ tx, args }`.
- *   3. Returns the mutator's resolved value.
+ * Each invocation builds a fresh `Transaction` bound to the current store and
+ * organization, calls your mutator with `{ tx, args }`, and returns whatever
+ * the mutator resolves to.
  *
- * V1 error handling: if the mutator throws, we `console.error` + rethrow.
- * Any writes that already dispatched stay in place (no rollback). That
- * matches the existing behaviour of batch helpers like `saveManyOptimized`
- * and keeps the contract honest — consumers can layer their own try/catch
- * + compensating writes until V2 adds atomicity.
+ * If a mutator throws, the error propagates to the caller and any writes it
+ * already dispatched stay in place — there is no automatic rollback. Wrap the
+ * call in your own try/catch and issue compensating writes when you need to
+ * undo a partial change, or pass an `undoScope` (see {@link UseMutatorsOptions})
+ * to record inverses for undo and redo.
  */
 
 /**
@@ -134,8 +134,8 @@ export function useMutators(
           // inverse. On success, push the captured entry to the scope.
           //
           // The whole snapshot → write → record sequence runs on the scope's
-          // serialization chain so concurrent invocations (the slides UI fires
-          // writes un-awaited) record in *invocation* order and never
+          // serialization chain so concurrent invocations (a caller may fire
+          // writes without awaiting them) record in invocation order and never
           // interleave their shared-model snapshots. See UndoScope.runRecorded.
           if (undoScope) {
             return undoScope.runRecorded(async () => {
@@ -157,7 +157,7 @@ export function useMutators(
             });
           }
 
-          // Non-recording path — plain transaction, identical to pre-undo V1.
+          // Non-recording path — plain transaction, no inverse capture.
           const tx = createTransaction(schema, store, organizationId);
           try {
             return await fn({ tx, args });

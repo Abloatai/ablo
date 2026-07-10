@@ -1,26 +1,23 @@
 /**
- * `createAbloHttpClient` — a STATELESS, typed HTTP client for server-side actors
- * (agents, workers, serverless), modelled on `@liveblocks/node` / the Stripe
- * server SDK / Netflix Conductor workers: it talks to Ablo over plain HTTP with
- * the credential as identity, and holds **no WebSocket and no connection state**.
+ * Creates a stateless, typed HTTP client for server-side actors — agents,
+ * workers, and serverless handlers. It talks to Ablo over plain request/response
+ * HTTP, uses the bearer credential as its identity, and holds no WebSocket and no
+ * connection state.
  *
- * Why this exists (docs/plans/agent-transport-event-driven.md): the stateful
- * `Ablo({ schema })` client is for INTERACTIVE participants — it opens a
- * WebSocket and seeds its identity (userId/orgId) during the connect/bootstrap
- * step, then routes writes through a `TransactionQueue` that drops mutations
- * until that identity exists. A reactive agent has no socket, so that identity is
- * never seeded and writes drop. The proven fix (unanimous across Liveblocks,
- * Stripe, PlanetScale, Conductor, Better Auth) is NOT to de-socket the stateful
- * client — it's a separate stateless client where the credential carries identity
- * and the SERVER resolves it per request.
+ * This is the counterpart to the stateful {@link Ablo} client. The stateful
+ * client is for interactive participants: it opens a WebSocket, learns its
+ * identity (user id and organization id) during the connect-and-bootstrap step,
+ * and routes writes through a queue that waits for that identity. A server-side
+ * actor has no socket, so instead of reusing that machinery it uses this client,
+ * where the credential itself carries identity and the server resolves it on
+ * every request.
  *
- * Ablo already has that stateless surface: `Ablo({ schema: null })` returns the
- * protocol client (`createProtocolClient` → `AbloApi`), which commits via
- * `POST /v1/commits` and reads via the HTTP `ApiClient`, authenticating with the
- * Bearer token on every request. Its only ergonomic gap is that model access is
- * string-keyed (`api.model('slides')`) rather than typed (`api.slides`). This
- * wraps it in a typed proxy facade so server code gets the SAME `client.<model>`
- * surface as the browser client — typed proxies, stateless transport.
+ * Under the hood this wraps the schema-agnostic protocol client that
+ * {@link createProtocolClient} returns in a typed proxy. The protocol client
+ * commits over `POST /v1/commits` and reads over HTTP, authenticating with the
+ * bearer token each time; its model access is string-keyed (`api.model('slides')`).
+ * The proxy gives server code the same typed `client.<model>` surface the
+ * stateful client offers, over stateless transport.
  */
 import {
   createProtocolClient,
@@ -53,39 +50,43 @@ import type { ModelUpdater, ContentionOptions } from './functionalUpdate.js';
 
 export interface AbloHttpClientOptions<S extends SchemaRecord>
   extends Omit<AbloApiClientOptions, 'schema'> {
-  /** The schema — used for TYPING only (typed model proxies); never sent or used at runtime. */
+  /** The schema. Used only to type the model proxies; it is never sent over the wire or read at runtime. */
   readonly schema: Schema<S>;
 }
 
 /**
- * The per-model HTTP surface — exactly what a stateless client can do over
- * request/response: reads (`retrieve`/`list`), writes (`create`/`update`/`delete`),
- * and the durable-lease claim plane (`claim` — acquire/hold/release). It does NOT
- * include `get`/`getAll`/`getCount` (local synced-pool reads) or `onChange` (live
- * subscription); those need the stateful plane and are absent BY TYPE here.
+ * The per-model surface of the stateless HTTP client — everything reachable over
+ * request/response: reads (`retrieve` and `list`), writes (`create`, `update`,
+ * and `delete`), and the durable-lease {@link HttpClaimApi | claim} plane for
+ * coordinated writes. It deliberately omits the stateful client's local-cache
+ * reads (`get`, `getAll`, `getCount`) and live subscriptions (`onChange`), which
+ * need a persistent socket; those are absent from the type, so reaching for one
+ * is a compile error rather than a runtime gap.
  *
- * Read-shape asymmetry (by design, not a gap): `retrieve(...)` returns a
- * `ModelRead<T>` envelope `{ data, stamp, claims }` — the stateless client has no
- * local graph, so the watermark/claims the stateful client reads from its pool
- * must ride inline on the read (an agent needs the `stamp` to do a stale-guarded
- * write; there is no `snapshot()` to fetch it from). `list(...)` returns a bare `T[]`.
+ * The read shapes differ on purpose. `retrieve` returns a {@link ModelRead}
+ * envelope of `{ data, stamp, claims }`, because a stateless client keeps no local
+ * copy of the data: the watermark (`stamp`) and any active claims must travel
+ * inline on the read so a caller can follow it with a stale-guarded write. `list`
+ * returns a plain array.
  */
 export interface HttpModelClient<T, C = T> {
   retrieve(params: ModelRetrieveParams & ModelReadOptions): Promise<ModelRead<T>>;
   list(options?: ServerReadOptions<T>): Promise<T[]>;
   /**
-   * Create a row and return it — the confirmed, authoritative server row (with
-   * framework defaults), mirroring the WebSocket client's `create`. A re-create
-   * of an existing caller-supplied id is idempotent and returns the EXISTING row.
+   * Creates a row and returns the confirmed server row, including any
+   * framework-applied defaults. Matches the stateful client's `create`. Passing an
+   * id that already exists is idempotent: the existing row is returned unchanged.
    */
   create(params: ModelCreateParams<T, C>): Promise<T>;
   update(params: ModelUpdateParams<C>): Promise<CommitReceipt>;
   /**
-   * Functional update under contention — `update(id, current => next)`, the
-   * `setState(prev => next)` of the data layer. The SDK reads the freshest row,
-   * runs your updater, writes it as a compare-and-swap, and re-reads + re-runs on
-   * any concurrent write. No claim, no identity, no conflict codes: the write
-   * lands or throws `AbloContentionError`. Return `null`/`undefined` to skip.
+   * Updates a row with a function of its latest value — `update(id, current =>
+   * next)`, the data-layer equivalent of a `setState(prev => next)` reducer. The
+   * client reads the freshest row, runs your updater, and writes the result as a
+   * compare-and-swap against the row's watermark; if another write landed first it
+   * re-reads and re-runs. No claim or conflict handling is needed: the write either
+   * lands or throws `AbloContentionError` once its retry budget is spent. Return
+   * `null` or `undefined` from the updater to skip the write.
    */
   update(
     id: string,
@@ -97,11 +98,12 @@ export interface HttpModelClient<T, C = T> {
 }
 
 /**
- * The honest type of the stateless HTTP client: typed model proxies (the
- * request/response subset) + `commits` + `dispose`. Reaching for a
- * stateful-only capability (`get`/`getAll`/`getCount`, `onChange`,
- * `claim.state`/`queue`/`reorder`) is a COMPILE error here, not a latent runtime
- * `undefined` — the type matches what the transport can actually do.
+ * The type of the stateless HTTP client: a typed {@link HttpModelClient} per
+ * schema model, plus `commits`, `dispose`, and the session-mint surface. It
+ * exposes only what request/response transport can do, so reaching for a
+ * stateful-only capability — `get`, `getAll`, `getCount`, `onChange`, or the
+ * synchronous `claim.state`/`queue`/`reorder` reads — is a compile error rather
+ * than a value that is `undefined` at runtime.
  */
 export type AbloHttpClient<S extends SchemaRecord> = {
   readonly [K in keyof S & string]: HttpModelClient<
@@ -109,28 +111,29 @@ export type AbloHttpClient<S extends SchemaRecord> = {
     InferCreate<Schema<S>, K>
   >;
 } & {
-  /** Register `databaseUrl` when configured. Also runs lazily before the first request. */
+  /** Runs one-time setup, such as registering a configured `databaseUrl` data source, before the client is used. It also runs lazily ahead of the first request, so calling it yourself is optional. */
   ready(): Promise<void>;
   readonly commits: CommitResource;
   dispose(): Promise<void>;
-  /** Resolve the bearer credential this client authenticates with (see `AbloApi.getAuthToken`). */
+  /** Resolves the bearer credential this client authenticates with, or `null` if none is set. */
   getAuthToken(): Promise<string | null>;
   /**
-   * Mint a short-lived scoped session (Stripe ephemeral-key shape). Minting is a
-   * stateless control-plane call, so — unlike `get`/`getAll`/`onChange` — it IS
-   * available on the HTTP client. `{ user }` → `ek_`, `{ agent, can }` → `rk_`.
+   * Mints a short-lived, scoped session token. Minting is itself a stateless
+   * request, so it is available here even though the local-cache reads are not.
+   * Pass `{ user }` to mint an end-user key (`ek_`) or `{ agent, can }` to mint a
+   * scoped agent key (`rk_`). See {@link CreateSessionParams}.
    */
   readonly sessions: { create(params: CreateSessionParams<S>): Promise<AbloSession> };
-  /** String-keyed model accessor (for dynamic model names). */
+  /** Looks up a model client by name, for when the model name is only known at runtime. */
   model<T = Record<string, unknown>>(name: string): HttpModelClient<T>;
 };
 
 /**
- * Members of the underlying `AbloApi` that pass straight through the facade.
- * Deliberately EXCLUDES the resource names that collide with common schema model
- * names — `tasks`, `claims`, `capabilities`, `agent` — so `client.tasks` resolves
- * to the schema model `tasks`, not the protocol `TaskResource`. Only lifecycle +
- * the genuinely-protocol methods an agent uses pass through.
+ * Names on the underlying protocol client that pass straight through the proxy.
+ * This set intentionally leaves out names that collide with common schema models —
+ * `tasks`, `claims`, `capabilities`, `agent` — so that `client.tasks` resolves to
+ * the schema model named `tasks` rather than a protocol resource. Only lifecycle
+ * methods and the genuinely protocol-level members belong here.
  */
 const PROTOCOL_MEMBERS = new Set<string>([
   'ready',
@@ -144,9 +147,10 @@ const PROTOCOL_MEMBERS = new Set<string>([
 ]);
 
 /**
- * Stateless, typed HTTP client. Each `client.<model>` resolves to the protocol
- * client's `model(name)`; `commits`, `dispose`, etc. pass through. No socket is
- * ever opened; identity is the Bearer credential.
+ * Builds the stateless, typed HTTP client. Each `client.<model>` resolves to the
+ * protocol client's model accessor, while `commits`, `dispose`, and the other
+ * protocol members pass through unchanged. No socket is ever opened; the bearer
+ * credential is the identity.
  */
 export function createAbloHttpClient<S extends SchemaRecord>(
   options: AbloHttpClientOptions<S>,
@@ -167,8 +171,8 @@ export function createAbloHttpClient<S extends SchemaRecord>(
     },
   });
 
-  // One boundary cast — and now an HONEST one: `AbloHttpClient<S>` declares only
-  // what `api.model()` + the passed-through protocol members actually implement,
-  // so there is no method on this type that fails at runtime.
+  // A single boundary cast. `AbloHttpClient<S>` declares only what the model
+  // accessor and the passed-through protocol members actually implement, so no
+  // method on this type is missing at runtime.
   return facade as unknown as AbloHttpClient<S>;
 }

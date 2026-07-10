@@ -72,22 +72,24 @@
  * to one entity before any tool is chosen; tool implementations stay exactly
  * the same.
  *
- * ## Multi-agent coordination — the canonical way
+ * ## Multi-agent coordination
  *
- * When several agents (or agents + humans) write the SAME row concurrently, the
- * outcome is decided by **(write path) × (the model's conflict policy)**, NOT by
- * how smart the model is. The same model silently loses 3 of 4 concurrent
- * contributions through a blind whole-row write, and lands all 4 through a
- * coordinated one — because the coordinated write returns a *signal* the model
- * (or the runtime) acts on. Two empirical laws fall out:
+ * When several agents, or agents and people, write the same row at once, the
+ * outcome depends on the write path and the model's conflict policy, not on how
+ * capable the model is. The same model silently loses three of four concurrent
+ * contributions through a blind whole-row write, yet lands all four through a
+ * coordinated one, because a coordinated write returns a signal the model or the
+ * runtime can act on. Two rules follow:
  *
- *   1. **Surface the signal.** A write that swallows the conflict and reports
- *      success is the footgun. Every robust path returns a legible result
- *      (`reject` → re-read & retry; `claimed` → the model tries again) instead of
- *      clobbering. Reaching for a bigger model does not fix a silent write.
- *   2. **Back off.** Under N-way contention, writers that retry in lock-step just
- *      re-collide. The shared reconcile loop already jitters its backoff; any
- *      hand-rolled retry must too, or it exhausts its budget and drops a writer.
+ *   1. Surface the signal. A write that swallows the conflict and reports success
+ *      is the trap. Every reliable path returns a legible result instead of
+ *      overwriting — a rejection leads to a re-read and retry, and a `'claimed'`
+ *      result leads the model to try again. A larger model does not fix a silent
+ *      write.
+ *   2. Back off. Under heavy contention, writers that retry in lock-step simply
+ *      collide again. The shared reconcile loop already jitters its backoff, and
+ *      any retry you write by hand should too, or it exhausts its budget and drops
+ *      a writer.
  *
  * `coordinatedTool` (below) encodes both. Prefer it over a hand-written tool for
  * "save the agent's contribution into the shared row":
@@ -107,18 +109,19 @@
  * |----------|-------------------|---------------|------------------------|
  * | `merge`  | accumulate (CAS)  | re-read + re-apply (silent, backed off) | must be `reject` (default) |
  * | `claim`  | mutual exclusion  | returns `{status:'claimed'}` → model retries | any |
- * | `queue`  | FIFO-ish (SQS)    | poll-acquire until granted / timeout | any |
+ * | `queue`  | FIFO-ish (poll)   | poll-acquire until granted / timeout | any |
  *
- * Note: a model declaring `agentsNotify()` HOLDS a losing write instead of
- * rejecting it, which defeats `merge`'s reconcile (the loser is dropped, not
- * retried). Use `agentsReject()` for accumulate semantics, or `claim`/`queue`.
+ * Note: a model that declares `agentsNotify()` holds a losing write rather than
+ * rejecting it, which defeats `'merge'`'s reconcile loop — the loser is dropped
+ * instead of retried. Use `agentsReject()` for accumulate semantics, or the
+ * `'claim'` or `'queue'` strategy.
  */
 
 export {
   coordinationContextMiddleware,
   type CoordinationContextMiddlewareOptions,
   type ClaimTarget,
-} from './coordination-context.js';
+} from './coordinationContext.js';
 
 export { wrapWithMultiplayer, type WrapWithMultiplayerOptions } from './wrap.js';
 
@@ -127,4 +130,4 @@ export {
   type CoordinationStrategy,
   type CoordinatedToolOptions,
   type CoordinatedWriteResult,
-} from './coordinated-tool.js';
+} from './coordinatedTool.js';

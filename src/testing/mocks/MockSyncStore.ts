@@ -1,12 +1,11 @@
 /**
- * MockSyncStore — a SyncStoreContract implementation for testing.
- *
- * Provides an in-memory store that tests can configure, inspect, and mutate.
- * All reactive operations are synchronous and observable via Jest spies.
+ * An in-memory {@link SyncStoreContract} for tests. It lets you seed rows,
+ * read and write them synchronously, and inspect every call the code under
+ * test made — all without a real sync backend.
  */
 
 import type { Model } from '../../Model.js';
-import type { ModelScope } from '../../ObjectPool.js';
+import type { ModelScope } from '../../InstanceCache.js';
 import type { SyncStoreContract } from '../../react/context.js';
 import type { QueryView, QueryViewOptions } from '../../core/QueryView.js';
 import { ViewRegistry } from '../../core/ViewRegistry.js';
@@ -29,9 +28,10 @@ interface QueryResult<T extends Model> {
 type ModelCtor<T extends Model> = abstract new (...args: never[]) => T;
 
 /**
- * MockSyncStore is an in-memory implementation of SyncStoreContract.
- * Tests can seed data with `setModels()`, inspect calls via `calls`,
- * and assert behavior without needing a real sync backend.
+ * An in-memory implementation of {@link SyncStoreContract}. Seed rows with
+ * {@link MockSyncStore.setModels}, then read and write through the contract
+ * methods; every call is recorded on {@link MockSyncStore.calls} so tests can
+ * assert on what happened.
  */
 export class MockSyncStore implements SyncStoreContract {
   // Seeded data, keyed by model class
@@ -62,7 +62,7 @@ export class MockSyncStore implements SyncStoreContract {
   }
 
   /**
-   * Add a single model (upsert).
+   * Adds or replaces a single model, keyed by its id.
    */
   addModel<T extends Model>(modelClass: ModelCtor<T>, model: T): void {
     let map = this.byClass.get(modelClass);
@@ -149,8 +149,8 @@ export class MockSyncStore implements SyncStoreContract {
 
   async save(model: Model): Promise<void> {
     this.calls.save.push(model);
-    // Auto-seed on save so findById returns it afterwards
-    // Consumer passes a concrete class-less object; we store by constructor
+    // Store the model under its constructor so a later retrieve or query
+    // returns it.
     const ctor = model.constructor as ModelCtor<Model>;
     this.addModel(ctor, model);
   }
@@ -184,7 +184,7 @@ export class MockSyncStore implements SyncStoreContract {
     isSessionError: false,
   };
 
-  /** Mock pool for useEntity/useEntities hooks. */
+  /** A minimal object pool backing the useEntity and useEntities hooks in tests. */
   pool: SyncStoreContract['pool'] = {
     get: <T extends Model>(id: string): T | undefined => {
       for (const models of this.byClass.values()) {

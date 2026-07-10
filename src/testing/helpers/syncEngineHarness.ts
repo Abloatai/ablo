@@ -1,12 +1,12 @@
 /**
- * Full sync engine test harness.
- *
- * Creates a complete stack (ModelRegistry, ObjectPool, TransactionQueue, etc.)
- * with real implementations backed by mocked I/O for integration tests.
+ * An integration-test harness that assembles a full sync engine stack —
+ * the model registry, object pool, transaction queue, and related parts —
+ * from the real implementations, but with mocked input and output. It lets
+ * tests exercise the engine end to end without a network or a live server.
  */
 
 import { ModelRegistry, setActiveRegistry } from '../../ModelRegistry.js';
-import { ObjectPool } from '../../ObjectPool.js';
+import { InstanceCache } from '../../InstanceCache.js';
 import { MockMutationExecutor } from '../mocks/MockMutationExecutor.js';
 import { MockNetworkMonitor } from '../mocks/MockNetworkMonitor.js';
 import { MockWebSocket } from '../mocks/MockWebSocket.js';
@@ -20,25 +20,25 @@ import {
 import { resetDeltaCounter } from '../fixtures/deltas.js';
 
 export interface TestHarness {
-  /** Pre-registered ModelRegistry with test models */
+  /** A model registry pre-loaded with the test models. */
   registry: ModelRegistry;
 
-  /** Real ObjectPool with FK indexes configured */
-  pool: ObjectPool;
+  /** A real object pool with the test foreign-key indexes configured. */
+  pool: InstanceCache;
 
-  /** Mock WebSocket for delta injection */
+  /** A mock WebSocket for injecting deltas into the engine. */
   webSocket: MockWebSocket;
 
-  /** DI context with all mocks */
+  /** The dependency-injection context holding every mock. */
   context: TestContextResult;
 
-  /** Shorthand: mock mutation executor */
+  /** Shorthand for the mock mutation executor on {@link context}. */
   mutationExecutor: MockMutationExecutor;
 
-  /** Shorthand: mock network monitor */
+  /** Shorthand for the mock network monitor on {@link context}. */
   networkMonitor: MockNetworkMonitor;
 
-  /** Cleanup everything */
+  /** Tears down the harness and resets its counters. */
   cleanup: () => void;
 }
 
@@ -47,7 +47,7 @@ export interface TestHarnessOptions {
   startOffline?: boolean;
   /** Initial sync ID for mutation executor */
   initialSyncId?: number;
-  /** ObjectPool config overrides */
+  /** InstanceCache config overrides */
   poolConfig?: {
     maxSize?: number;
     maxAge?: number;
@@ -57,7 +57,9 @@ export interface TestHarnessOptions {
 }
 
 /**
- * Create a full test harness with real sync engine components + mocked I/O.
+ * Builds a full test harness: real sync engine components wired to mocked
+ * input and output. Reset the counters and tear everything down through the
+ * returned {@link TestHarness.cleanup}.
  *
  * Usage:
  * ```ts
@@ -76,7 +78,7 @@ export function createTestHarness(options: TestHarnessOptions = {}): TestHarness
   setActiveRegistry(registry);
   registerTestModels(registry);
 
-  // Create DI context with test config
+  // Create the dependency-injection context with the test config
   const testConfig = createTestConfig();
   const context = createTestContext({
     config: testConfig,
@@ -86,8 +88,8 @@ export function createTestHarness(options: TestHarnessOptions = {}): TestHarness
     },
   });
 
-  // Create real ObjectPool with FK indexes
-  const pool = new ObjectPool(
+  // Create the real object pool with foreign-key indexes
+  const pool = new InstanceCache(
     {
       maxSize: options.poolConfig?.maxSize ?? 10000,
       maxAge: options.poolConfig?.maxAge ?? 5 * 60 * 1000,
@@ -97,7 +99,7 @@ export function createTestHarness(options: TestHarnessOptions = {}): TestHarness
     registry
   );
 
-  // Register FK indexes for test models
+  // Register foreign-key indexes for the test models
   pool.registerForeignKey('Task', 'projectId');
   pool.registerForeignKey('Comment', 'taskId');
   pool.registerForeignKey('Slide', 'deckId');

@@ -1,18 +1,18 @@
 /**
- * `ablo projects` — manage the org's control-plane projects.
+ * `ablo projects` manages the projects within your organization.
  *
- *   ablo projects list                 List projects (marks active + default)
+ *   ablo projects list                 List projects (marks active and default)
  *   ablo projects create <slug>        Create a project (--name "Display Name")
  *   ablo projects rename <ref> <name>  Rename a project's display name (the
- *                                      slug is the stable handle, never changes)
- *   ablo projects use <slug|id>        Set the ACTIVE project (stored in
- *                                      config.json like `mode`)
- *   ablo projects use default          Back to the org-default project
+ *                                      slug is the stable handle and never changes)
+ *   ablo projects use <slug|id>        Set the active project (stored locally
+ *                                      in config.json, like `ablo mode`)
+ *   ablo projects use default          Return to the organization's default project
  *
- * The active project is a local, non-secret targeting preference: status
- * shows it, and key mints made through the CLI/dashboard pick it up. A key's
- * project SCOPE is decided server-side at mint — switching `use` never
- * changes what an existing key can reach.
+ * The active project is a local, non-secret targeting preference: `ablo status`
+ * shows it, and keys minted through the CLI or dashboard pick it up. A key's
+ * project scope is fixed by the server when the key is minted, so switching the
+ * active project never changes what an existing key can reach.
  */
 
 import pc from 'picocolors';
@@ -111,10 +111,11 @@ export function projectSlugFromPackageName(name: unknown): string | undefined {
 }
 
 /**
- * Ensure a project with this slug exists and make it the ACTIVE one —
- * idempotent (a `project_slug_taken` clash resolves to the existing row).
- * Returns null on any failure (no key, unreachable, denied): callers like
- * `ablo init` degrade to the org-default project rather than failing.
+ * Ensures a project with this slug exists and makes it the active one. The call
+ * is idempotent: if the slug is already taken, it resolves to the existing
+ * project instead of failing. Returns null on any failure — no key, an
+ * unreachable server, or a denial — so a caller such as `ablo init` can fall
+ * back to the organization's default project rather than stop.
  */
 export async function ensureProject(
   slug: string,
@@ -254,9 +255,9 @@ export async function projects(argv: readonly string[]): Promise<void> {
       setActiveProject({ id: target.id, slug: target.slug });
       console.log(`  ${pc.green('✓')} now targeting project ${pc.bold(target.slug)} ${pc.dim(`(${target.id})`)}`);
     }
-    // A key's project scope is fixed at mint, so switching never re-scopes an
-    // existing key. If this project has none yet, point at the one command
-    // that mints it (Stripe's per-project re-login), rather than failing later.
+    // A key's project scope is fixed when it is minted, so switching never
+    // re-scopes an existing key. If this project has no key yet, point at the
+    // command that mints one rather than let a later command fail.
     const guard = guardActiveProjectKey();
     if (!guard.ok) {
       const loginCmd =

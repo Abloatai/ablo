@@ -1,9 +1,6 @@
 /**
- * Linear Sync Engine - Object Store Base Class
- *
- * Abstract base class for all store implementations.
- * Provides the interface for storing and retrieving models from IndexedDB.
- * Uses native IndexedDB for maximum performance (no wrapper overhead).
+ * The IndexedDB-backed object store: durable, per-model record storage for
+ * the browser. See {@link ObjectStore}.
  */
 
 import type { ModelMetadata } from '../types/index.js';
@@ -20,14 +17,16 @@ interface IDBTransactionOptionsWithDurability {
 }
 
 /**
- * ObjectStore - IDB-backed model storage.
+ * An IndexedDB-backed store holding the records of a single model.
  *
- * Implements {@link ObjectStoreContract}, the shared surface that
- * `InMemoryObjectStore` also satisfies. Centralizing the contract
- * means callers can hold either implementation behind one type and
- * a future drift between the two trips a typecheck error here.
+ * It implements {@link ObjectStoreContract}, the shared surface that
+ * {@link InMemoryObjectStore} also satisfies, so callers can hold either
+ * implementation behind one type. Because both are checked against the same
+ * interface, any drift between them surfaces as a typecheck error rather
+ * than a runtime surprise.
  *
- * Uses native IndexedDB API for Linear-level performance.
+ * The store talks to the native IndexedDB API directly and uses relaxed
+ * transaction durability on writes.
  */
 export class ObjectStore implements ObjectStoreContract {
   private isClosing = false;
@@ -59,7 +58,7 @@ export class ObjectStore implements ObjectStoreContract {
     // but we can check if the database object is still valid
     try {
       // Accessing objectStoreNames will throw if the database is closed
-      const _ = this.db.objectStoreNames;
+      void this.db.objectStoreNames;
       return true;
     } catch (error) {
       return false;

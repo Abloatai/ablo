@@ -26,7 +26,7 @@ const DEFAULT_EXPORT = 'schema';
 /** Columns the engine provisions/owns; never expected to be a declared field. */
 const BASE_COLUMNS = new Set(['id', 'organization_id', 'created_by', 'created_at', 'updated_at']);
 
-/** Mirror of the engine's field→column rule (ddl.ts `camelToSnake`). */
+/** Mirrors the engine's rule for turning a field name into a column name. */
 function camelToSnake(identifier: string): string {
   return identifier.replace(/[A-Z]/g, (ch) => `_${ch.toLowerCase()}`);
 }

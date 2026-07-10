@@ -1,23 +1,17 @@
 /**
- * Transaction — Zero-style typed transaction object exposed to custom mutators.
+ * The typed transaction object passed to a custom mutator. A mutator receives
+ * `{ tx, args }` and uses `tx.mutations.<modelKey>.*` to write and
+ * `tx.read.<modelKey>.*` to take synchronous snapshots of the current data.
  *
- * A mutator function receives `{ tx, args }`. Through `tx.mutations.<modelKey>.*`
- * it performs writes; through `tx.read.<modelKey>.*` it takes imperative
- * snapshots of the ObjectPool.
+ * Writes are applied eagerly as they are called, with no buffering: if a mutator
+ * throws partway through, the writes it already made stand. Reads are synchronous
+ * snapshots and use a fast index lookup where one is available for the field.
  *
- * Semantics:
- *   - Writes dispatch eagerly via the existing `createMutateActions` / store
- *     primitives (no buffering, no rollback). Partial state is possible if
- *     a mutator throws midway. Atomic rollback is a follow-up.
- *   - Reads are synchronous snapshots via `createReaderActions`. They use the
- *     FK index fast path where available (O(1) on registered FK fields).
- *
- * The mutate surface is intentionally one-row-at-a-time
- * (`create`/`update`/`delete`). For batches, mutator authors compose
- * `Promise.all(rows.map((r) => tx.mutations.x.create(r)))` — every push
- * stages in the same synchronous tick, the await happens once, and the
- * microtask coalescer in `TransactionQueue` collapses N pushes into one
- * wire commit. Same shape Zero uses: no `insertMany`, just an array map.
+ * The write surface deliberately works one row at a time. To write a batch,
+ * compose the calls yourself — `Promise.all(rows.map((r) => tx.mutations.x.create(r)))`.
+ * Every call stages its write in the same synchronous tick and the engine
+ * coalesces them into a single commit on the wire, so there is no separate
+ * bulk-insert method to learn.
  */
 
 import type { Schema } from '../schema/schema.js';
@@ -27,12 +21,10 @@ import { createReaderActions, type ReaderActions, type ReaderFindOptions } from 
 import { AbloValidationError } from '../errors.js';
 
 /**
- * The full transaction surface. `tx.mutations.<key>.*` for writes,
- * `tx.read.<key>.*` for imperative reads. Re-exports the base read options
- * type so mutator authors can type `where` payloads without reaching into
- * the React barrel.
- *
- * The name `mutations` (not `mutate`) matches the React hook naming.
+ * The full transaction surface: `tx.mutations.<key>.*` for writes and
+ * `tx.read.<key>.*` for reads. It also re-exports the read-options type so a
+ * mutator author can type a `where` payload without importing it separately. The
+ * property is named `mutations` to match the corresponding React hook.
  */
 export interface Transaction<S extends Schema> {
   mutations: {
@@ -46,9 +38,9 @@ export interface Transaction<S extends Schema> {
 export type { ReaderFindOptions };
 
 /**
- * Build a Transaction for a single mutator invocation. The returned object
- * lazily instantiates per-model actions on first access so we don't pay for
- * models the mutator never touches.
+ * Builds a {@link Transaction} for a single mutator invocation. The returned
+ * object creates each model's actions lazily on first access, so a mutator pays
+ * nothing for the models it never touches.
  */
 export function createTransaction<S extends Schema>(
   schema: S,

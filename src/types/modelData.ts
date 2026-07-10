@@ -1,13 +1,11 @@
 /**
- * ModelData — the generic record shape for model payloads.
+ * The generic record shape for a model's data — a map from field name to value.
  *
- * Lives in its own dependency-free leaf so BOTH `BaseSyncedStore` and
- * `SyncClient` can import it without importing each other. (The alias
- * used to live in BaseSyncedStore.ts, which made SyncClient.ts and
- * BaseSyncedStore.ts a mutual type cycle: the store needs the SyncClient
- * class type, and SyncClient needed this alias back from the store.)
- * `BaseSyncedStore` re-exports it, so existing importers are unchanged.
+ * Because the values are typed as `unknown`, read the data as the
+ * schema-inferred entity type rather than accessing fields off this shape
+ * directly. It has no imports of its own, so any module can depend on it
+ * without creating an import cycle.
  */
 
-/** Generic record type for model data */
+/** A record mapping each model field name to its value. */
 export type ModelData = Record<string, unknown>;

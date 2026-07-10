@@ -1,15 +1,15 @@
 /**
- * SyncClient - Mutation and offline queue manager
- *
- * Responsibilities:
- * - Handle model mutations (create, update, delete, archive)
- * - Manage offline mutation queue with persistence
- * - Send mutations to server via API client
- * - Handle conflict resolution for local changes
+ * Applies model mutations and manages the offline write queue. The
+ * SyncClient turns local create, update, delete, and archive calls into
+ * optimistic changes, holds them while the client is offline, sends them to
+ * the server when connectivity returns, and resolves conflicts when the
+ * server's version of a row disagrees with the local one. It sits between the
+ * reactive object pool and the {@link TransactionQueue} that delivers writes
+ * over the network.
  */
 
 import { runInAction } from 'mobx';
-import { ObjectPool, ModelScope } from './ObjectPool.js';
+import { InstanceCache, ModelScope } from './InstanceCache.js';
 import { Model } from './Model.js';
 import type { ModelData } from './types/modelData.js';
 // ModelRegistry instance accessed via this.objectPool.registry
@@ -19,11 +19,11 @@ import { AbloAuthenticationError, AbloError, AbloValidationError } from './error
 import { EventEmitter } from 'events';
 import { NetworkMonitor } from './NetworkMonitor.js';
 import { TransactionQueue } from './transactions/TransactionQueue.js';
-import { persistedMutationSchema } from './transactions/persistedReplay.js';
+import { persistedMutationSchema } from './transactions/replayValidation.js';
 import {
-  OptimisticEchoTracker,
-  type OptimisticEchoMetrics,
-} from './transactions/OptimisticEchoTracker.js';
+  UnconfirmedWrites,
+  type UnconfirmedWritesMetrics,
+} from './transactions/UnconfirmedWrites.js';
 import type { Database } from './Database.js';
 import type { WriteOptions } from './interfaces/index.js';
 import { SyncPosition } from './sync/syncPosition.js';
@@ -59,13 +59,14 @@ export interface RehydrationStats {
 type EventHandler = () => void;
 
 /**
- * Is the raw snapshot record strictly newer than the pooled model? Compares
- * server-stamped `updatedAt` (the engine has no numeric row version; the delta
- * pipeline is arrival-ordered last-write-wins). An undefined incoming time is
- * treated as NOT newer (don't clobber a known row); an undefined existing time
- * means the pool row is unversioned, so the incoming record wins. Used by the
- * scoped hydrate-on-enter apply to drop snapshot rows a live delta already
- * advanced past the snapshot watermark.
+ * Reports whether an incoming snapshot record is strictly newer than the
+ * model already in the pool. The comparison uses the server-stamped
+ * `updatedAt` timestamp, since rows carry no numeric version and the delta
+ * pipeline resolves order by arrival (last write wins). An undefined incoming
+ * timestamp counts as not newer, so a known row is never clobbered; an
+ * undefined existing timestamp means the pooled row is unversioned, so the
+ * incoming record wins. The scoped hydrate-on-enter path uses this to drop
+ * snapshot rows that a live delta has already advanced past.
  */
 function rawRecordIsNewer(data: Record<string, unknown>, existing: Model): boolean {
   const raw = data.updatedAt;
@@ -84,10 +85,10 @@ function rawRecordIsNewer(data: Record<string, unknown>, existing: Model): boole
 }
 
 /**
- * Narrow an untyped server `updatedAt` (ISO string / epoch / Date, off a
- * `Record<string, unknown>` row) to epoch ms for LWW comparison. Falsy /
- * non-date values → 0, matching the conflict resolver's historical
- * "no timestamp = epoch" behavior.
+ * Converts an untyped server `updatedAt` value — an ISO string, epoch number,
+ * or Date read off an untyped row — into epoch milliseconds for
+ * last-write-wins comparison. Falsy or non-date values become 0, matching the
+ * conflict resolver's rule that a missing timestamp sorts as the epoch.
  */
 function toEpochMs(value: unknown): number {
   if (!value) return 0;
@@ -99,7 +100,7 @@ function toEpochMs(value: unknown): number {
 }
 
 export class SyncClient extends EventEmitter {
-  private objectPool: ObjectPool;
+  private objectPool: InstanceCache;
   private database: Database;
   private get mutationExecutor() { return getContext().mutationExecutor; }
   private networkMonitor: NetworkMonitor;
@@ -120,39 +121,35 @@ export class SyncClient extends EventEmitter {
   }[] = [];
 
   /**
-   * Tracks transaction ids the client has optimistically applied but
-   * the server has not yet confirmed. The receive path consults it
-   * to recognize delta echoes of own mutations and suppress the
-   * (otherwise-redundant) pool mutation — the IDB write still runs
-   * because the delta is the authoritative version of the row.
+   * Tracks the ids of transactions the client has applied optimistically but
+   * the server has not yet confirmed. When a delta arrives, the receive path
+   * consults this set to recognize the echo of the client's own mutation and
+   * skip the now-redundant pool update; the IndexedDB write still runs,
+   * because the delta is the authoritative version of the row. Without this
+   * discriminator, an optimistically applied delete followed by a
+   * server-confirmed create echo would resurrect the row for the window
+   * between the two confirmations.
    *
-   * The receive-layer discriminator named in
-   * `apps/sync-server/docs/OPTIMISTIC_RECONCILIATION.md`. Without
-   * it, an optimistically-applied DELETE followed by a
-   * server-confirming CREATE echo resurrects the row for the window
-   * between the two confirmations (the chart-delete flicker).
-   *
-   * Bounded with FIFO eviction; observability via `getEchoMetrics()`.
+   * The set is bounded with first-in-first-out eviction, and
+   * {@link SyncClient.getEchoMetrics} exposes its counters.
    */
-  private readonly echoTracker = new OptimisticEchoTracker();
+  private readonly echoTracker = new UnconfirmedWrites();
 
   // Connection state
   private connectionState: 'connected' | 'disconnected' | 'connecting' = 'disconnected';
-  private offlineSince?: Date;
 
   // Configuration
-  private maxRetries = 3;
   private isDisposed = false;
 
   /**
-   * THE client's place in the global delta order — the one canonical
-   * instance (see `sync/syncPosition.ts`). The store advances
-   * `applied`/`persisted` as deltas land; the queue advances `acked` on
-   * commit responses; snapshots/claims read `readFloor`.
+   * The client's position in the global delta order, held as the single
+   * canonical {@link SyncPosition} instance. The store advances `applied` and
+   * `persisted` as deltas land, the queue advances `acked` on commit
+   * responses, and snapshots and claims read `readFloor`.
    */
   readonly position = new SyncPosition();
 
-  constructor(objectPool: ObjectPool, database: Database) {
+  constructor(objectPool: InstanceCache, database: Database) {
     super();
     this.objectPool = objectPool;
     this.database = database;
@@ -161,8 +158,8 @@ export class SyncClient extends EventEmitter {
     // Initialize TransactionQueue with proper configuration
     this.transactionQueue = new TransactionQueue({
       position: this.position,
-      maxBatchSize: 50, // Increased from 10 to reduce batch count for large operations
-      // Lower delay for snappier dev UX; batching still happens via coalescing
+      maxBatchSize: 50, // Larger batches keep the batch count low for bulk operations
+      // A short delay keeps writes responsive; coalescing still groups them
       batchDelay: 150,
       maxRetries: 3,
       enableOptimistic: true,
@@ -175,18 +172,19 @@ export class SyncClient extends EventEmitter {
     // Provide connection state to TransactionQueue - prevents rollbacks during disconnection
     this.transactionQueue.setConnectionChecker(() => this.connectionState === 'connected');
 
-    // LINEAR PATTERN: Subscribe to rollback events to restore ObjectPool state
-    // When a transaction fails (server rejects or timeout), we need to restore the model
-    // Since we no longer write to IndexedDB optimistically, IndexedDB already has correct state
+    // Restore object-pool state when a transaction is rolled back. If the
+    // server rejects a write or it times out, the model's previous state is
+    // put back. Because writes are no longer applied to IndexedDB
+    // optimistically, that store already holds the correct state.
     this.setupTransactionRollbackHandling();
 
-    // REPLICACHE PATTERN: Forward reconciliation requests from TransactionQueue
-    // When delta confirmation times out, instead of rolling back we request the sync layer
-    // to cycle the WebSocket connection, triggering a delta catch-up from the server
+    // Forward reconciliation requests from the transaction queue. When delta
+    // confirmation times out, the client cycles the WebSocket connection to
+    // trigger a catch-up from the server rather than rolling the write back.
     this.setupReconciliationForwarding();
 
-    // LINEAR PATTERN: Persist unconfirmed transactions to IndexedDB
-    // When delta retries exhaust, cache in IDB so they survive tab close
+    // Persist unconfirmed transactions to IndexedDB. When delta retries are
+    // exhausted, the write is cached so it survives a tab close.
     this.setupAwaitingTransactionPersistence();
 
     // Setup network monitoring
@@ -364,10 +362,10 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Forward reconciliation requests from TransactionQueue to the sync layer.
-   * When delta confirmation times out, TransactionQueue emits 'reconciliation:needed'
-   * instead of rolling back — following the Replicache/PowerSync pattern of never
-   * destroying optimistic state that the server may have committed.
+   * Forward reconciliation requests from the {@link TransactionQueue} to the
+   * sync layer. When delta confirmation times out, the queue emits
+   * `reconciliation:needed` instead of rolling back, so optimistic state the
+   * server may already have committed is never destroyed.
    */
   private setupReconciliationForwarding(): void {
     this.transactionQueue.on(
@@ -398,10 +396,10 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * LINEAR PATTERN: Persist unconfirmed transactions to IndexedDB.
-   * When delta confirmation retries exhaust, the transaction data is cached in IDB
-   * so it survives tab close. On next session, WebSocket reconnect + delta catch-up
-   * will deliver the missing deltas and naturally confirm the transaction.
+   * Persist unconfirmed transactions to IndexedDB. When delta-confirmation
+   * retries are exhausted, the transaction is cached so it survives a tab
+   * close. On the next session, a WebSocket reconnect and delta catch-up
+   * deliver the missing deltas and confirm the transaction.
    */
   private setupAwaitingTransactionPersistence(): void {
     this.transactionQueue.on(
@@ -449,7 +447,7 @@ export class SyncClient extends EventEmitter {
     );
   }
 
-  /** Persist an unconfirmed transaction to IDB (never rejects — failures are captured). */
+  /** Persist an unconfirmed transaction to IndexedDB (never rejects — failures are captured). */
   private async persistAwaitingTransaction(event: {
     txId: string;
     model: string;
@@ -514,18 +512,16 @@ export class SyncClient extends EventEmitter {
     // Restore queued mutations from previous session
     await this.restoreMutationQueue();
 
-    // Check network status via the DI'd OnlineStatusProvider (see interfaces.ts:192).
-    // In the browser this is wired to the service worker's connectivity signal via
-    // abloOnlineStatus in ablo-sync-adapters.ts; in Node it returns true (assume
-    // online) via the browserOnlineStatus fallback. NetworkMonitor still drives
-    // event-based online/offline transitions below; this read is just the initial
-    // status snapshot at registerUser() time.
+    // Read the initial network status from the injected OnlineStatusProvider.
+    // In the browser this reflects the host's connectivity signal; in Node it
+    // reports online by default. NetworkMonitor drives the ongoing
+    // online/offline transitions below — this read is only the initial
+    // snapshot taken when identity is set.
     if (getContext().onlineStatus.isOnline()) {
       this.setConnectionState('connected');
     } else {
       // Offline - start in offline mode
       this.setConnectionState('disconnected');
-      this.offlineSince = new Date();
       this.emit('sync:offline');
     }
   }
@@ -543,7 +539,7 @@ export class SyncClient extends EventEmitter {
    * Self-healing helper for individual model records.
    *
    * Two registry-driven repair passes run on every row hydrated from
-   * IDB or merged from a delta:
+   * IndexedDB or merged from a delta:
    *
    * 1. **Auto-fill** — for each `autoFill` rule the consumer's schema
    *    declares on this model, copy the corresponding identity value
@@ -604,7 +600,7 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Hydrate ObjectPool with data from Database
+   * Hydrate InstanceCache with data from Database
    * Called after bootstrap is complete
    */
   async hydrateFromDatabase(): Promise<void> {
@@ -747,7 +743,7 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Re-hydrate ObjectPool from IndexedDB when the pool already has data.
+   * Re-hydrate InstanceCache from IndexedDB when the pool already has data.
    *
    * Unlike hydrateFromDatabase() (which uses addBatch and skips existing IDs),
    * this method properly:
@@ -905,13 +901,14 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Mutate model optimistically and queue for server sync.
-   * IndexedDB is only updated when server confirms via delta packet.
+   * Apply a mutation to a model optimistically and queue it for server sync.
+   * IndexedDB is updated only once the server confirms the change with a delta
+   * packet.
    *
-   * CRITICAL: Changes are captured BEFORE poolAction to prevent data loss.
-   * The captured changes are frozen and passed to queueMutation.
-   *
-   * @see src/sync-engine/types/TrackableModel.ts for change capture pattern
+   * A model's changes are captured before the pool action runs, because a pool
+   * operation such as an upsert can clear the model's local change set;
+   * capturing first ensures those changes are never lost. The captured set is
+   * frozen and handed to {@link queueMutation}.
    */
   private mutate(
     type: 'create' | 'update' | 'delete' | 'archive',
@@ -933,9 +930,9 @@ export class SyncClient extends EventEmitter {
     // real write. Only a genuine Model with an empty dirty-set is skipped.
     if (type === 'update' && model.hasChanges === false) return;
 
-    // CRITICAL FIX: Capture changes BEFORE pool action
-    // Pool operations (especially upsert) can clear _local changes
-    // By capturing first, we ensure changes are never lost
+    // Capture changes before the pool action runs. Pool operations —
+    // upsert in particular — can clear the model's local changes, so
+    // capturing first ensures they are never lost.
     const capturedChanges =
       type === 'update' || type === 'create' ? this.captureModelChanges(model) : undefined;
 
@@ -1063,8 +1060,9 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Upload file and create attachment (UPLOAD operation)
-   * Uses Linear-style pattern with immediate URL generation
+   * Upload a file and create its attachment record. The upload runs through
+   * the {@link TransactionQueue}, and a model is built from the server's
+   * response and added to the pool.
    */
   async uploadFile(
     file: File,
@@ -1186,16 +1184,17 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Append a mutation and schedule its sync work.
+   * Append a mutation to the pending queue and schedule its sync work.
    *
-   * IDB persistence and the server push are deferred to a microtask so N
-   * pushes inside the same tick collapse into ONE IDB serialization + ONE
-   * process call. Without the deferral, queueing 100 mutations (paste,
-   * PPTX import, AI sandbox layer creation) reserializes the entire
-   * growing queue 100× — O(N²) `model.toJSON()`.
+   * IndexedDB persistence and the server push are deferred to a microtask, so
+   * many pushes within the same tick collapse into a single serialization and
+   * a single process call. Without the deferral, queueing a hundred mutations
+   * at once — a large paste, a document import, bulk layer creation — would
+   * reserialize the whole growing queue a hundred times, an O(N²) cost in
+   * `model.toJSON()`.
    *
-   * @param mutation.capturedChanges - Pre-captured changes (frozen), used
-   *   to avoid re-reading changes after pool ops that might clear them.
+   * @param mutation.capturedChanges - Pre-captured, frozen changes, used to
+   *   avoid re-reading a model after pool operations that might clear them.
    */
   private queueMutation(mutation: {
     type: 'create' | 'update' | 'delete' | 'archive';
@@ -1264,12 +1263,13 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Restore mutation queue from IndexedDB.
+   * Restore the mutation queue from IndexedDB.
    *
-   * The persisted record was written by a PREVIOUS session (possibly an older
-   * SDK build), so each entry is validated at this replay boundary (T1.8):
-   * corrupt entries are dropped + logged at debug, and a failure never
-   * vanishes into an empty catch — offline write survival must be observable.
+   * The persisted record was written by an earlier session, possibly by an
+   * older build of the SDK, so each entry is validated as it is replayed:
+   * corrupt entries are dropped and logged at debug level, and a failure is
+   * never swallowed silently, because the survival of offline writes must be
+   * observable.
    */
   private async restoreMutationQueue(): Promise<void> {
     if (!this.database || !this.userId) return;
@@ -1356,8 +1356,8 @@ export class SyncClient extends EventEmitter {
     // Clear persisted queue before processing
     await this.persistMutationQueue();
 
-    // LINEAR PATTERN: Stage all mutations synchronously in same event loop tick
-    // TransactionQueue's microtask will batch and send them together
+    // Stage every mutation synchronously within the same event-loop tick;
+    // the transaction queue's microtask batches and sends them together.
     for (const mutation of mutations) {
       // Skip mutations for deleted models (prevents "not found" errors)
       if (mutation.type !== 'delete' && !this.objectPool.get(mutation.model.id)) {
@@ -1408,11 +1408,10 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Resolve conflicts between local and server data
-   * Used when processing deltas from WebSocket
-   *
-   * CRITICAL: Always respects certain server states (deletes, deactivations)
-   * even when there are local changes, to maintain data consistency.
+   * Resolve a conflict between the local model and incoming server data,
+   * called while processing deltas from the WebSocket. Certain server states,
+   * such as deletions and deactivations, always take precedence even when the
+   * local model has unsynced changes, so the two sides stay consistent.
    */
   resolveConflicts(localModel: Model, serverData: Record<string, unknown>): Model {
     const hasLocalChanges = localModel.hasChanges;
@@ -1487,9 +1486,9 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Extract critical state fields from server data
-   * These are states that must always be respected, even with local changes.
-   * The conflict brain reads exactly these known fields — nothing else.
+   * Extract the critical state fields from server data. These are the states
+   * that must be honored even when the local model has unsynced changes. The
+   * conflict resolver reads exactly these fields and no others.
    */
   private extractCriticalState(serverData: Record<string, unknown>): Record<string, unknown> {
     const critical: Record<string, unknown> = {};
@@ -1545,9 +1544,6 @@ export class SyncClient extends EventEmitter {
 
       this.setConnectionState('connected');
       this.emit('sync:reconnected');
-
-      // Clear offline timestamp
-      this.offlineSince = undefined;
     } catch (error) {
       getContext().observability.captureTransactionFailure({
         context: 'reconnection-sync',
@@ -1563,7 +1559,6 @@ export class SyncClient extends EventEmitter {
   private async handleDisconnection(): Promise<void> {
     getContext().observability.breadcrumb('Network disconnected', 'sync.offline');
     this.setConnectionState('disconnected');
-    this.offlineSince = new Date();
     this.emit('sync:offline');
   }
 
@@ -1670,9 +1665,10 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * LINEAR PATTERN: Notify TransactionQueue of incoming delta for sync ID threshold confirmation.
-   * Transactions are confirmed when any delta with id >= their lastSyncId threshold arrives.
-   * @param syncId - The sync ID of the received delta
+   * Notify the {@link TransactionQueue} of an incoming delta so it can confirm
+   * transactions by sync-id threshold. A transaction is confirmed once any
+   * delta with an id at or beyond its `lastSyncId` threshold arrives.
+   * @param syncId - The sync id of the received delta.
    */
   onDeltaReceived(syncId: number): void {
     try {
@@ -1690,15 +1686,14 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * LINEAR PATTERN: Cancel transactions for orphaned child entities
+   * Cancel pending transactions for child entities orphaned by a parent's
+   * deletion. The store calls this when a delete delta arrives for a parent,
+   * cancelling any queued writes on children that reference it.
    *
-   * Called by SyncedStore when a DELETE delta arrives for a parent entity.
-   * Cancels pending transactions for children that reference the deleted parent.
-   *
-   * @param childModelName - The child model type (e.g., 'SlideLayer')
-   * @param foreignKey - The FK property name (e.g., 'slideId')
-   * @param parentId - The deleted parent's ID
-   * @returns Number of transactions cancelled
+   * @param childModelName - The child model type (for example, `SlideLayer`).
+   * @param foreignKey - The foreign-key property name (for example, `slideId`).
+   * @param parentId - The id of the deleted parent.
+   * @returns The number of transactions cancelled.
    */
   cancelTransactionsByForeignKey(
     childModelName: string,
@@ -1713,8 +1708,8 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Wait for a transaction to be confirmed via delta echo (Linear pattern)
-   * Delegates to TransactionQueue which already handles timeouts
+   * Wait for a transaction to be confirmed by its delta echo. Delegates to the
+   * {@link TransactionQueue}, which handles the confirmation timeout.
    */
   waitForDeltaConfirmation(transactionId: string): Promise<void> {
     return this.transactionQueue.waitForConfirmation(transactionId);
@@ -1730,12 +1725,12 @@ export class SyncClient extends EventEmitter {
   /**
    * Get sync statistics. Return type is inferred from the literal so
    * the call site sees the actual shape — `connectionState` narrowed
-   * to its three states, `objectPoolStats` typed by `ObjectPool.getStats`.
+   * to its three states, `objectPoolStats` typed by `InstanceCache.getStats`.
    */
   getSyncStats(): {
     connectionState: 'connected' | 'disconnected' | 'connecting';
     pendingMutations: number;
-    objectPoolStats: ReturnType<ObjectPool['getStats']>;
+    objectPoolStats: ReturnType<InstanceCache['getStats']>;
   } {
     return {
       connectionState: this.connectionState,
@@ -1772,10 +1767,10 @@ export class SyncClient extends EventEmitter {
    * can render typed UI (toast keyed by `AbloError.type`, route-level
    * "this entity reverted" boundaries, telemetry).
    *
-   * Distinct from `onTransactionEvent('failed', cb)`, which exists only
-   * for the legacy parameterless `pendingChanges` counter and intentionally
-   * drops the payload. The two coexist — keep the counter callback fast
-   * and the typed listener for user-visible surfaces.
+   * Distinct from `onTransactionEvent('failed', cb)`, which serves the
+   * parameterless `pendingChanges` counter and intentionally drops the
+   * payload. The two coexist: the counter callback stays lightweight, while
+   * this typed listener drives user-visible surfaces.
    */
   onMutationFailure(
     listener: (payload: {
@@ -1789,15 +1784,16 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Subscribe to LOCAL transaction creation with the full {@link Transaction}
+   * Subscribe to local transaction creation with the full {@link Transaction}
    * payload (`type`, `modelName`, `modelId`, `data`, `previousData`). This is
-   * the feed `BaseSyncedStore.subscribeLocalMutations` taps for undo recording.
+   * the feed the store's local-mutation subscription taps for undo recording.
    *
-   * MUST subscribe to the TransactionQueue's emitter directly — that is the
-   * ONLY emitter that fires `transaction:created`. SyncClient's own emitter
-   * (reached via `subscribe()`) never re-broadcasts it, so routing undo through
-   * `subscribe('transaction:created')` silently records nothing. Mirrors
-   * `onMutationFailure`, which taps the queue for the same reason.
+   * It subscribes to the {@link TransactionQueue}'s emitter directly, since
+   * that is the only emitter that fires `transaction:created`. The SyncClient's
+   * own emitter (reached through {@link subscribe}) never rebroadcasts that
+   * event, so routing undo through `subscribe('transaction:created')` would
+   * record nothing. {@link onMutationFailure} taps the queue for the same
+   * reason.
    */
   onLocalTransaction(
     listener: (tx: import('./transactions/TransactionQueue.js').Transaction) => void,
@@ -1919,12 +1915,12 @@ export class SyncClient extends EventEmitter {
     });
   }
 
-  // ── Delta + Bootstrap application (owns ObjectPool writes) ──────────────
+  // ── Delta + Bootstrap application (owns InstanceCache writes) ──────────────
 
   /**
-   * Apply a batch of delta results from Database to the ObjectPool.
+   * Apply a batch of delta results from Database to the InstanceCache.
    * Owns: model creation, upsert, remove, archive, conflict resolution.
-   * Returns: nothing — ObjectPool is updated in place.
+   * Returns: nothing — InstanceCache is updated in place.
    */
   /**
    * Mark a local transaction as optimistically applied. The matching
@@ -1943,17 +1939,17 @@ export class SyncClient extends EventEmitter {
    * — a sustained `evictions > 0` rate or `rollbacks` spike is a
    * health signal worth alerting on.
    */
-  getEchoMetrics(): Readonly<OptimisticEchoMetrics> {
+  getEchoMetrics(): Readonly<UnconfirmedWritesMetrics> {
     return this.echoTracker.getMetrics();
   }
 
   /**
-   * Package-internal accessor for the TransactionQueue. Used by
-   * `Ablo.commits.create()` to route raw multi-op envelopes through the
-   * same retry-on-reconnect lane as the Model proxy path, and by tests
-   * to exercise the queue ↔ markTransactionPending wiring on the real
-   * instance the SyncClient subscribes to. NOT re-exported to SDK
-   * consumers — `Ablo` itself is the public surface.
+   * Package-internal accessor for the {@link TransactionQueue}. Used by
+   * `Ablo.commits.create()` to route raw multi-operation envelopes through the
+   * same retry-on-reconnect lane as the model proxy path, and by tests to
+   * exercise the queue's interaction with {@link markTransactionPending} on the
+   * real instance the SyncClient subscribes to. It is not re-exported to SDK
+   * consumers; `Ablo` is the public surface.
    */
   getTransactionQueue(): TransactionQueue {
     return this.transactionQueue;
@@ -2000,16 +1996,14 @@ export class SyncClient extends EventEmitter {
     for (const result of dbResults) {
       const { modelName, modelId, action, transactionId } = result;
 
-      // ECHO DETECTION. If this delta carries a transaction id that
-      // matches one we've optimistically applied locally, the pool
-      // already reflects this mutation — skip the pool op. The
-      // upstream IDB write (in `Database.processDeltaBatch`) still
-      // runs; only the in-memory pool mutation is suppressed. This is
-      // the architectural fix for the chart-delete flicker: a
-      // server-confirmed CREATE arriving AFTER the user has
-      // optimistically deleted the row would otherwise re-add the row
-      // for the ~2s window before the matching DELETE confirmation
-      // lands. See `OPTIMISTIC_RECONCILIATION.md` for the framing.
+      // Echo detection: if this delta carries a transaction id that matches
+      // one already applied optimistically, the pool already reflects the
+      // mutation, so the pool operation is skipped. The IndexedDB write in
+      // Database.processDeltaBatch still runs; only the in-memory pool update
+      // is suppressed. This prevents a resurrection flicker: a server-confirmed
+      // create arriving after the user has optimistically deleted the row would
+      // otherwise re-add it for the brief window before the matching delete
+      // confirmation lands.
       if (this.echoTracker.consumeEcho(transactionId)) {
         continue;
       }
@@ -2076,17 +2070,15 @@ export class SyncClient extends EventEmitter {
       }
     }
 
-    // Reveal the whole frame in ONE MobX action. `addBatch`/`upsertBatch`/
-    // `removeBatch`/`updateScope` are each individually `action`-wrapped,
-    // so calling them sequentially flushes reactions at every action
-    // boundary — a catch-up frame that adds + updates + removes would fire
-    // every dependent reaction (the decks gallery, each open editor) 3-4×
-    // in a row, re-rendering and re-sorting on each. Wrapping them in a
-    // single outer `runInAction` defers all reaction flushes to ONE
-    // boundary: dependents recompute exactly once regardless of how many
-    // models or how many op-kinds the frame touched. This is the MobX
-    // equivalent of Replicache's "atomically reveal the new state" — the
-    // app never observes a partially-applied frame.
+    // Reveal the whole frame in a single MobX action. `addBatch`,
+    // `upsertBatch`, `removeBatch`, and `updateScope` are each individually
+    // wrapped in an action, so calling them in sequence flushes reactions at
+    // every action boundary — a catch-up frame that adds, updates, and removes
+    // would fire every dependent reaction several times in a row, re-rendering
+    // and re-sorting on each. Wrapping them in one outer `runInAction` defers
+    // all reaction flushes to a single boundary, so dependents recompute
+    // exactly once regardless of how many models or operation kinds the frame
+    // touched. The app therefore never observes a partially applied frame.
     runInAction(() => {
       if (modelsToAdd.length > 0) this.objectPool.addBatch(modelsToAdd, ModelScope.live);
       if (modelsToUpsert.length > 0) this.objectPool.upsertBatch(modelsToUpsert, ModelScope.live);
@@ -2102,7 +2094,7 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Apply bootstrap data to the ObjectPool with ghost removal.
+   * Apply bootstrap data to the InstanceCache with ghost removal.
    * Owns: model creation, batch upsert, ghost detection + removal.
    */
   applyBootstrapDataToPool(
@@ -2110,13 +2102,13 @@ export class SyncClient extends EventEmitter {
     protectedIds?: ReadonlySet<string>,
     options?: {
       /**
-       * SCOPED backfill (P4 hydrate-on-enter): the snapshot covers only the
-       * groups just entered, NOT the whole type. Two behaviors change to keep
-       * it from corrupting the pool:
-       *   - upsert is version-guarded ({@link ObjectPool.upsertIfNewer}) so a
-       *     concurrent live delta isn't clobbered back to the snapshot version;
-       *   - ghost removal is SKIPPED — a subset snapshot must never evict rows
-       *     of the same type that belong to other (unhydrated) groups.
+       * Scoped backfill for the hydrate-on-enter path: the snapshot covers only
+       * the groups just entered, not the whole model type. Two behaviors change
+       * so the subset cannot corrupt the pool. First, the upsert is
+       * version-guarded ({@link InstanceCache.upsertIfNewer}) so a concurrent live
+       * delta is not clobbered back to the snapshot version. Second, ghost
+       * removal is skipped, because a subset snapshot must never evict rows of
+       * the same type that belong to other, unhydrated groups.
        */
       scoped?: boolean;
     },
@@ -2154,12 +2146,12 @@ export class SyncClient extends EventEmitter {
         const recordId = data.id as string | undefined;
         if (recordId) idsForType.add(recordId);
 
-        // Scoped backfill (P4 hydrate-on-enter): a subset snapshot is taken at
-        // a server watermark. If a concurrent live delta already advanced this
-        // row past the snapshot, skip it — `createFromData` mutates the pooled
-        // model IN PLACE (the "keep instances alive" Linear pattern), so this
-        // version guard MUST run BEFORE it; an upsert-layer guard would be too
-        // late, the row would already be clobbered.
+        // Scoped backfill for the hydrate-on-enter path: a subset snapshot is
+        // taken at a server watermark. If a concurrent live delta already
+        // advanced this row past the snapshot, skip it. `createFromData`
+        // mutates the pooled model in place to keep instances alive, so this
+        // version guard has to run before it; a guard at the upsert layer would
+        // be too late, because the row would already be clobbered.
         if (options?.scoped && recordId) {
           const existing = this.objectPool.get(recordId);
           if (existing && !rawRecordIsNewer(data, existing)) { skippedCount++; continue; }
@@ -2181,10 +2173,10 @@ export class SyncClient extends EventEmitter {
     const addedCount = this.objectPool.size - beforeSize;
     const updatedCount = allModels.length - addedCount;
 
-    // Ghost removal — remove pool entities not in the server snapshot. Only
-    // valid for a FULL bootstrap, where the snapshot is authoritative for each
-    // returned type. A SCOPED subset snapshot must NOT remove rows of the same
-    // type that belong to other (unhydrated) groups.
+    // Ghost removal: drop pool entities absent from the server snapshot. This
+    // is valid only for a full bootstrap, where the snapshot is authoritative
+    // for each returned type. A scoped subset snapshot must not remove rows of
+    // the same type that belong to other, unhydrated groups.
     let removedCount = 0;
     if (!options?.scoped) {
       const ghostIds: string[] = [];

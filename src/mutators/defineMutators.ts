@@ -1,57 +1,46 @@
 /**
- * defineMutators — Zero-style custom mutator declaration.
+ * Declares a tree of named custom mutators grouped by model key. Each mutator is
+ * a plain async function that receives `{ tx, args }` and composes any number of
+ * `tx.mutations.*` and `tx.read.*` calls to carry out a named operation, such as
+ * `slides.createWithLayers`.
  *
- * Consumers declare a tree of named mutators grouped by model key. Each
- * mutator is a plain async function that receives `{ tx, args }`. The body
- * composes any number of `tx.mutate.*` / `tx.read.*` calls to implement a
- * named operation (e.g. `slides.createWithLayers`).
- *
- * This file is pure type scaffolding + a pass-through factory. The runtime
- * dispatcher lives in `./Transaction` (the `tx` object) and
- * `../react/useMutators` (the React-side invoker builder). Keeping those
- * concerns separate makes the types trivially inferable at the call site:
- * `defineMutators(schema, { ... })` returns the literal object the consumer
- * wrote, so `typeof mutators` carries every mutator's exact `args`/result
- * signature into `useMutators`.
+ * The function is purely a place for types to anchor and returns its input
+ * unchanged; the runtime that dispatches a mutator lives elsewhere — the
+ * transaction object it receives and the React hook that invokes it. Because
+ * `defineMutators(schema, { ... })` returns the exact object you wrote,
+ * `typeof mutators` carries every mutator's precise `args` and result types
+ * through to wherever they are invoked.
  */
 
 import type { Schema } from '../schema/schema.js';
 import type { Transaction } from './Transaction.js';
 
 /**
- * Signature of a single custom mutator. The host injects `tx`; the consumer
- * controls `args` (whatever shape they want) and the resolved return value.
- *
- * We bound `TArgs`/`TResult` with `unknown` rather than `any` so consumers
- * opt into the inference they need — the `MutatorDefs` record relaxes to
- * `unknown` to let heterogeneous mutator trees unify without `any`.
+ * The signature of a single custom mutator. The engine supplies `tx`; you control
+ * `args`, in whatever shape you like, and the resolved return value. `TArgs` and
+ * `TResult` are bounded by `unknown` rather than `any`, so a mixed tree of
+ * mutators can be typed together without falling back to `any`.
  */
 export type MutatorFn<S extends Schema, TArgs, TResult = void> = (
   options: { tx: Transaction<S>; args: TArgs },
 ) => Promise<TResult>;
 
 /**
- * The shape `defineMutators` accepts: an optional record per model key whose
- * values are named mutator functions.
- *
- * We intentionally use `unknown` in the bounds rather than `any` to preserve
- * type-safety at the public API boundary. When a consumer writes their
- * mutators inline, TypeScript infers the concrete `TArgs`/`TResult` for each
- * function — the `unknown` here is just a ceiling, not what the consumer
- * ends up seeing.
+ * The shape {@link defineMutators} accepts: an optional record per model key
+ * whose values are named mutator functions. The `unknown` bounds keep the public
+ * boundary type-safe without `any`; when you write your mutators inline,
+ * TypeScript still infers the concrete `args` and result of each function, so the
+ * `unknown` here is only a ceiling, not what you end up working with.
  */
 export type MutatorDefs<S extends Schema> = {
   [K in keyof S['models']]?: Record<string, MutatorFn<S, never, unknown>>;
 };
 
 /**
- * Identity function that forwards the mutators object while constraining its
- * shape against the schema. The `S` generic pins model keys; the `M` generic
- * is `const`-inferred so each mutator's literal signature survives.
- *
- * Pattern mirrors Zero's own `defineMutators` / `createBuilder` — there is
- * no runtime work to do here, it's purely a location for type inference to
- * anchor.
+ * Returns the mutators object unchanged while constraining its shape against the
+ * schema. The `S` generic pins the model keys, and the `M` generic is inferred as
+ * a `const`, so each mutator's literal signature survives. There is no runtime
+ * work here; the function exists purely as a place for type inference to anchor.
  */
 export function defineMutators<
   S extends Schema,

@@ -1,12 +1,10 @@
 /**
- * Always-online network provider — for Node.js / agent / sidecar.
- *
- * The server IS the network — it doesn't go offline. If the Postgres
- * connection drops, that's a database error, not a network error.
- * The "online/offline" concept only applies to browser clients that
- * can lose their WiFi connection.
- *
- * Implements OnlineStatusProvider (same interface as browserOnlineStatus).
+ * An {@link OnlineStatusProvider} that always reports the client as online.
+ * Server-side runtimes — Node processes, agents, and sidecars — have no
+ * browser network stack to lose, so there is no offline state to track. A
+ * dropped database connection surfaces as a database error, not a network
+ * transition. This is the server-side counterpart to the browser's
+ * connectivity-aware provider, which watches the real online/offline signal.
  */
 
 import type { OnlineStatusProvider } from '../interfaces/index.js';

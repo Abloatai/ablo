@@ -1,24 +1,16 @@
 /**
- * The canonical Ablo LIST envelope — the one shape every endpoint that returns
- * a collection uses, so a consumer can detect + paginate any list uniformly
- * instead of learning a per-endpoint payload key (`{ keys }`, `{ origins }`,
- * `{ events }`, `{ buckets }`…).
+ * The envelope every endpoint that returns a collection wraps its results in.
+ * Because the shape is always the same — `{ object: 'list', data, has_more,
+ * next_cursor }` — a consumer can detect and paginate any list the same way,
+ * instead of learning a different payload key for each endpoint.
  *
- * `{ object: 'list', data: [...], has_more, next_cursor }` is the shape the
- * hosted `GET /v1/models/:model` endpoint already emits (apps/sync-server
- * `routes/query.ts`) and that `@ablo/mcp` already consumes — promoted here so
- * sync-web's dashboard lists, the SDK, and any future surface produce the
- * identical envelope from one definition.
- *
- * The field NAMES are Stripe's (`object`/`has_more`/`next_cursor`), not
- * PlanetScale's (`type`/`cursor_start`/`has_next`): the rest of the Ablo API is
- * Stripe-modeled, so this keeps one vocabulary across the surface. The
- * PlanetScale discipline we deliberately borrow is *"every list is the same
- * envelope"* — not the concrete key names.
+ * The list endpoints emit this shape and the {@link listEnvelope} helper
+ * produces it, so every list across the API reads from one definition. The
+ * generic type parameter carries the row type of `data`.
  */
 export interface ListEnvelope<T> {
-  /** Discriminator — always `'list'`. Lets a generic client recognise a
-   *  paginated collection without per-endpoint special-casing. */
+  /** Always the literal `'list'`. Lets a generic client recognize a collection
+   *  response without special-casing each endpoint. */
   readonly object: 'list';
   /** The page of results. Always present (an empty array when there are none),
    *  never omitted, so `body.data` is a stable access path. */
@@ -32,13 +24,14 @@ export interface ListEnvelope<T> {
 }
 
 /**
- * Stamp the uniform {@link ListEnvelope} onto an already-resolved page of rows.
+ * Wraps an already-fetched page of rows in the uniform {@link ListEnvelope}.
  *
- * Pagination stays the caller's responsibility (fetch `limit + 1`, decide
- * `hasMore`, derive the cursor from the last row's order key) — this only
- * applies the envelope so no endpoint hand-rolls the shape. The defaults model
- * the common "small, unpaginated collection" case (`has_more: false`,
- * `next_cursor: null`); a paginated endpoint passes both explicitly.
+ * Pagination stays the caller's job — fetch one more row than the limit to
+ * decide `hasMore`, and derive the cursor from the last row's sort key. This
+ * helper only applies the envelope so no endpoint has to build the shape by
+ * hand. The defaults describe a small, unpaginated collection
+ * (`has_more: false`, `next_cursor: null`); a paginated endpoint passes both
+ * explicitly.
  */
 export function listEnvelope<T>(
   data: readonly T[],

@@ -1,13 +1,9 @@
 /**
- * Schema → Model-class registration — `registerModelsFromSchema` walks the
- * declarative schema and populates the `ModelRegistry`: a dynamic `Model`
- * subclass per model (`createDynamicModelClass`, with `${field}Json` getters,
- * computed getters, and opt-in MobX field observability), property/relation
- * registration, and IDB index selection.
- *
- * Extracted from `Ablo.ts` — the factory calls `registerModelsFromSchema`
- * right after `createInternalComponents` builds the registry. The zod unwrap
- * helpers stay module-local.
+ * Registers model classes from a declarative schema. {@link registerModelsFromSchema}
+ * walks the schema and populates the model registry: for each model it builds a
+ * dynamic {@link Model} subclass (with `${field}Json` getters, computed getters,
+ * and opt-in field-level reactivity) and registers the model's properties,
+ * relations, and any local-database indexes.
  */
 
 import { z } from 'zod';
@@ -41,25 +37,22 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
 
     // Create a dynamic Model subclass with JSON sub-property getters.
     //
-    // Field-level MobX observability is ON BY DEFAULT. A reactive read like
-    // `useAblo((a) => a.documents.get(id))` must re-render when a remote delta
-    // mutates the row IN PLACE (the common collaborative case); without
-    // per-field observability that update fires no reaction and the UI silently
-    // goes stale. Models opt OUT with an explicit `lazyObservable: false` —
-    // appropriate only for very large read-only list models where per-field
-    // atoms cost more than the QueryView's entry-replaced reactivity already
-    // provides. json fields register as `observable.ref` (see
-    // `registerModelsFromSchema`), so the default is ~one atom per scalar field
-    // per loaded row — cheap — not a deep atom tree per blob.
+    // Field-level reactivity is on by default. A reactive read must re-render when
+    // a remote delta mutates a row in place, which is the common collaborative
+    // case; without per-field reactivity that update fires no reaction and the UI
+    // silently goes stale. A model opts out with `lazyObservable: false`, which
+    // suits only very large read-only list models where per-field atoms cost more
+    // than the coarser entry-replaced reactivity already provides. JSON fields
+    // register as reference-tracked, so the default is about one atom per scalar
+    // field per loaded row — cheap — not a deep atom tree per blob.
     const isLazy = modelDef.lazyObservable !== false;
     // Base provenance fields (`organizationId`, `createdBy`) live in
-    // `baseFieldsSchema`, not the per-model `shape`. The server stamps + emits
-    // them (camelCased on the wire), but hydration (`Model.assignFieldsFromData`)
-    // only assigns keys that already exist as an own/prototype property — so
-    // without a slot here, `deck.createdBy` / `deck.organizationId` silently read
-    // `undefined` (this is why the profile decks tab showed nothing: it filters
-    // `decks.filter(d => d.createdBy === userId)`). `id`/`createdAt`/`updatedAt`
-    // are already seeded by the base Model constructor, so they're excluded.
+    // `baseFieldsSchema`, not in the per-model `shape`. The server stamps and emits
+    // them (camelCased on the wire), but hydration only assigns keys that already
+    // exist as own or prototype properties — so without a slot here, reads like
+    // `row.createdBy` or `row.organizationId` would silently be `undefined`.
+    // `id`, `createdAt`, and `updatedAt` are already seeded by the base Model
+    // constructor, so they are excluded.
     const fieldNames = [
       ...Object.keys(modelDef.shape),
       ...Object.keys(baseFieldsSchema.shape).filter(
@@ -81,18 +74,14 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
       requiredFields: modelDef.requiredFields,
     });
 
-    // Collect the set of fields that should get an IDB secondary index.
+    // Collect the fields that should get a local-database secondary index.
     //
-    // Matches Linear's opt-in model (see wzhudev/reverse-linear-sync-engine):
-    // `@Reference(..., { indexed: true })`. Only `belongsTo` relations that
-    // explicitly set `{ index: true }` in their options get an IDB secondary
-    // index. Every other FK (and every scalar) is resolved via in-memory
-    // ObjectPool scans, which are fast enough at org-scope sizes (~10k rows)
-    // and reactive via MobX.
-    //
-    // Auto-indexing every belongsTo was wrong: it bloated write amplification
-    // for the vast majority of FKs that are never queried by fk. Indexing
-    // every scalar (like the legacy Go backend did) is even worse.
+    // Only `belongsTo` relations that explicitly set `{ index: true }` are indexed.
+    // Every other foreign key, and every scalar, is resolved by in-memory scans,
+    // which are fast enough at organization-scope sizes (on the order of 10k rows)
+    // and stay reactive. Indexing is opt-in deliberately: auto-indexing every
+    // foreign key inflates write amplification for the many keys never queried by
+    // id, and indexing every scalar is worse still.
     const indexedFields = new Set<string>();
     for (const relDef of Object.values(modelDef.relations)) {
       if (relDef.type === 'belongsTo' && relDef.foreignKey && relDef.options?.index === true) {
@@ -104,17 +93,16 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
     for (const [fieldName, rawZodType] of Object.entries(modelDef.shape)) {
       const zodType = rawZodType as z.ZodType;
       const isOptional = zodType.isOptional?.() ?? false;
-      // A field is indexed if it's the FK of a `belongsTo({ index: true })`
-      // relation. Legacy `description === 'indexed'` still works for
-      // consumers using `field.*().indexed()`.
+      // A field is indexed if it is the foreign key of a
+      // `belongsTo({ index: true })` relation. A `description === 'indexed'` tag
+      // also works, for consumers using the `field.*().indexed()` builder.
       const isIndexed =
         indexedFields.has(fieldName) || zodType.description === 'indexed';
-      // JSON-typed fields (per the schema's wire-type tag) are opaque
-      // blobs from MobX's perspective — chart specs, ProseMirror docs,
-      // style maps. Deep observability on them recursively walks every
-      // nested property and creates an atom for each leaf, producing a
-      // microtask storm on every commit/streaming update. `ref` tracks
-      // only reassignment, which is how blob consumers actually use them.
+      // JSON-typed fields (per the schema's wire-type tag) are opaque blobs —
+      // chart specs, rich-text documents, style maps. Deep reactivity on them
+      // would walk every nested property and create an atom per leaf, producing a
+      // storm of updates on each commit or streaming change. Reference tracking
+      // watches only reassignment, which is how blob consumers actually use them.
       const wireType = modelDef.fields?.[fieldName]?.type;
       const observability: 'deep' | 'shallow' | 'ref' | undefined =
         wireType === 'json' ? 'ref' : undefined;
@@ -204,9 +192,8 @@ function unwrapZodType(schema: z.ZodType): z.ZodType {
       continue;
     }
     if (current instanceof z.ZodDefault) {
-      // v4 deprecates removeDefault in favor of unwrap, but the
-      // installed @types declarations only expose removeDefault on
-      // ZodDefault. Use it — it's the same runtime function.
+      // Zod v4 unwraps a default via `.unwrap()`, the same runtime function older
+      // versions exposed as `removeDefault`.
       current = current.unwrap() as z.ZodType;
       continue;
     }
@@ -237,46 +224,40 @@ function createDynamicModelClass(
 
     constructor(data?: Record<string, unknown>) {
       super(data);
-      // Gate `propertyChanged`-via-`observe` tracking during initial
-      // hydration. M1 installs a MobX `observe()` listener per schema
-      // property that forwards writes to `propertyChanged()` so direct
-      // assignments like `layer.position = newPos` still round-trip
-      // through the transaction queue. During construction we're writing
-      // wire data, NOT user edits — flagging this as "constructing" lets
-      // the listener early-return on those writes so `modifiedProperties`
-      // doesn't get polluted with every field of every hydrated model.
+      // Suppress change tracking during initial hydration. `makeObservable()`
+      // installs a listener per schema property that forwards writes to the
+      // transaction queue, so direct assignments like `row.position = next` still
+      // round-trip. During construction we are writing wire data, not user edits,
+      // so this flag lets that listener skip these writes and keeps the set of
+      // modified properties from filling up with every field of every hydrated row.
       //
-      // The listener is installed by `makeObservable()` below (inside
-      // M1), so writes that happen BEFORE that line won't fire it; this
-      // flag is defensive in case a subclass or call path reorders the
-      // steps later.
+      // The listener is installed by `makeObservable()` below, so writes before
+      // that line never reach it; this flag is defensive in case a subclass or call
+      // path later reorders the steps.
       (this as { _isConstructing?: boolean })._isConstructing = true;
-      // MobX 6 requires fields to exist as own properties BEFORE makeObservable().
-      // Model base only sets id/createdAt/updatedAt. Schema fields (title, userId, etc.)
-      // must be initialized here so M1's annotations can find them.
+      // Reactive fields must exist as own properties before `makeObservable()` runs.
+      // The base Model sets only id, createdAt, and updatedAt, so schema fields
+      // (title, userId, and so on) are initialized here for the annotations to find.
       for (const field of fieldNames) {
         if (!(field in this)) {
           (this as Record<string, unknown>)[field] = data?.[field] ?? undefined;
         }
       }
-      // Per-field MobX observability opt-in via `lazyObservable: true` on
-      // the model definition. Defaults to plain objects — reactivity comes
-      // from the QueryView "entry replaced" pattern, which is cheap for
-      // read-only list UIs but invisible to in-place field mutations.
+      // When field-level reactivity is enabled (the default; a model turns it off
+      // with `lazyObservable: false`), make each field observable. Without it,
+      // reactivity comes only from the coarser entry-replaced pattern, which is
+      // cheap for read-only lists but invisible to in-place field mutations.
       //
-      // Multiplayer editors need live field-level reactivity so remote
-      // deltas AND local drag/resize/rename mutations surface through
-      // `observer()` components without the whole pool entry being
-      // replaced. Without observability, `layer.position.x = 500` emits
-      // nothing and the UI lags until some unrelated state change triggers
-      // a pass (toolbar close, deselect).
+      // Collaborative editors need field-level reactivity so both remote deltas and
+      // local edits surface through observer components without the whole cache
+      // entry being replaced. Otherwise an in-place mutation such as
+      // `row.position.x = 500` emits nothing and the UI lags until an unrelated
+      // change triggers a pass.
       //
-      // Delegates to `Model.makeObservable()` (the inherited method) so
-      // MobX annotations are derived from the same registry that M1 reads.
-      // That means computed getters, reference collections, custom
-      // getters/setters, and property-change tracking all integrate
-      // correctly — reimplementing `makeObservable` inline here would miss
-      // those seams.
+      // This delegates to the inherited `Model.makeObservable()` so the annotations
+      // come from the same registry the rest of the model reads, keeping computed
+      // getters, reference collections, custom getters and setters, and change
+      // tracking all consistent; reimplementing it inline here would miss those.
       if (lazyObservable) {
         this.makeObservable();
       }
@@ -288,15 +269,14 @@ function createDynamicModelClass(
     }
   };
 
-  // Generate ${field}Json getters for JSON fields with sub-properties.
+  // Generate `${field}Json` getters for JSON fields that have sub-properties.
   //
-  // The getter reads the raw JSON string from the instance (set via
-  // updateFromData), parses it, applies Zod defaults, and caches by
-  // raw value. This replaces the hand-coded metadataObject + sub-property
-  // getter pattern that 11+ Ablo models currently repeat.
+  // Each getter reads the raw JSON from the instance, parses it, applies the
+  // sub-schema's defaults, and caches the result keyed by the raw value.
   //
-  // Example: field named 'metadata' with sub-schema { icon: z.string().default('presentation') }
-  // → model.metadataJson returns { icon: 'presentation', ... } (typed, cached)
+  // Example: a field named `metadata` with sub-schema
+  // `{ icon: z.string().default('presentation') }` yields a `metadataJson` getter
+  // returning `{ icon: 'presentation', ... }` — typed and cached.
   for (const { fieldName, subSchema } of jsonSubFields) {
     const getterName = `${fieldName}Json`;
     const cacheKey = `__${fieldName}JsonCache`;

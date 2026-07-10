@@ -1,20 +1,18 @@
 /**
- * Engine-attached snapshot factory.
+ * Captures a {@link Snapshot} of a chosen set of entities, along with a
+ * watermark, so a caller can detect when that state has gone stale. This is
+ * what an LLM caller threads into a prompt: `stamp` flows into later writes as
+ * `readAt`, so the server rejects a mutation premised on data that has since
+ * changed; `signal` is an `AbortSignal` that fires as soon as any captured
+ * entity receives a delta, so a mid-generation invalidation can abort the token
+ * stream instead of producing output against stale context.
  *
- * Captures the engine's current entity state + watermark for context-
- * staleness detection. The returned Snapshot is what an LLM caller
- * threads into a prompt: `stamp` flows into writes as `readAt` so the
- * server rejects mutations against now-stale data; `signal` fires on
- * any captured-entity delta so mid-generation invalidations abort
- * the token stream rather than producing output against dead context.
- *
- * Reads from the engine's MobX-reactive ObjectPool, picks up the
- * engine's `lastSyncId`, and subscribes to delta frames on the
- * engine's transport. Same socket as entity sync — no second
- * connection.
+ * It reads the current entity state from the in-memory pool, reads the engine's
+ * current `lastSyncId` as the watermark, and subscribes to delta frames on the
+ * existing sync connection — no second connection.
  */
 
-import type { ObjectPool } from '../ObjectPool.js';
+import type { InstanceCache } from '../InstanceCache.js';
 import type { Schema } from '../schema/schema.js';
 import type { SyncDelta, SyncWebSocket } from './SyncWebSocket.js';
 import type {
@@ -25,9 +23,9 @@ import { AbloValidationError } from '../errors.js';
 import { Model, modelAsRow } from '../Model.js';
 
 /**
- * Three top-level keys that conflict with the per-model buckets if a
- * customer's schema declares a model named `stamp` / `signal` /
- * `onChange`. Throw at snapshot time so the collision is loud.
+ * The snapshot result exposes `stamp`, `signal`, and `onChange` at its top
+ * level, alongside one bucket per model. If a schema declares a model with one
+ * of these names, the two would collide, so snapshot creation throws instead.
  */
 const RESERVED_SNAPSHOT_KEYS: ReadonlySet<string> = new Set([
   'stamp',
@@ -39,7 +37,7 @@ export interface CreateSnapshotArgs<
   TSchema extends Schema = Schema,
   K extends keyof TSchema['models'] & string = keyof TSchema['models'] & string,
 > {
-  pool: ObjectPool;
+  pool: InstanceCache;
   /** Live transport for delta subscriptions. May be null if the engine
    *  hasn't connected yet — the snapshot still resolves with current
    *  pool state, but `signal` won't fire until reconnect. */
@@ -120,9 +118,7 @@ export function createSnapshot<
     unsubDelta = transport.subscribe('delta', (delta: SyncDelta) => {
       const key = `${delta.modelName}:${delta.modelId}`;
       if (!watched.has(key)) return;
-      // The snapshot API treats every delta as 'semantic' severity.
-      // Future: distinguish metadata-only deltas (e.g., updatedAt
-      // bumps) from content changes — that's a separate scope.
+      // Every delta to a captured entity is reported as 'semantic' severity.
       fireChange({
         model: delta.modelName,
         id: delta.modelId,
@@ -137,16 +133,14 @@ export function createSnapshot<
     signal: controller.signal,
     onChange: (listener: (change: ContextChange) => void) => {
       listeners.add(listener);
-      // Caller is responsible for unsubscribing when they're done.
-      // The delta subscription itself stays for the snapshot's life;
-      // there's no public dispose because snapshots are short-lived
-      // (one LLM call's worth) and the transport-level subscription
-      // is cheap. If a long-lived consumer needs explicit teardown,
-      // we can add `.dispose()` in a follow-up.
+      // The caller unsubscribes its own listener via the returned function.
+      // The underlying delta subscription lives for the snapshot's lifetime;
+      // there is no explicit dispose because a snapshot is short-lived (one
+      // LLM call's worth) and the subscription is cheap.
       return () => {
         listeners.delete(listener);
-        // If the last listener AND the abort fired, drop the delta
-        // subscription too — no one's listening anymore.
+        // Once the last listener is gone and the abort has fired, drop the
+        // delta subscription too — nothing is listening anymore.
         if (listeners.size === 0 && controller.signal.aborted && unsubDelta) {
           unsubDelta();
           unsubDelta = null;

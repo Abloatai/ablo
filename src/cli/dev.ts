@@ -1,27 +1,18 @@
 /**
- * `ablo push` (sandbox flow) — push your schema to the hosted API.
+ * Implements the sandbox flow of `ablo push`: it uploads your schema to the
+ * hosted Ablo API with a sandbox key, and nothing runs locally. It checks the
+ * role in your `DATABASE_URL`, uploads the schema definition, provisions your
+ * tables in the database you registered, and writes `ABLO_API_KEY` into
+ * `.env.local` so the SDK finds it without any copy-paste. With `--watch`, it
+ * re-pushes every time you save the schema file — the inner-loop workflow.
  *
- * Named for what it DOES: nothing runs locally (no dev server) — your app
- * talks to Ablo's hosted API with a sandbox key. `push` checks your
- * DATABASE_URL role, pushes the schema definition, provisions your tables
- * server-side in YOUR registered database, and wires ABLO_API_KEY into
- * .env.local. `--watch` re-pushes on every schema save (the dev loop).
- *
- * The missing onboarding step between `ablo init` and a hosted account: it
- * takes a developer's `sk_test_` key, pushes their `ablo/schema.ts` to the
- * sandbox environment, writes `ABLO_API_KEY` into `.env.local` (so the SDK finds
- * the key with zero copy-paste), then watches the schema file and re-pushes
- * on every save.
- *
- * Why hosted (not a bundled local server): the sync-server is the proprietary
- * hosted backend. A `sk_test_` key hits the same hosted API as production, so the
- * SDK needs nothing changed but the key — the default `baseURL`
- * (`wss://api.abloatai.com`) already routes there. `ablo dev` is therefore a
- * thin client-side command, not a server.
- *
- * Safety: `ablo dev` refuses `sk_live_` keys. Re-pushing schema in a tight
- * save loop against production data is exactly the hazard the sandbox exists to
- * avoid, so the command hard-stops rather than warn.
+ * A sandbox key reaches the same hosted API as a production key, so nothing in
+ * the SDK changes but the key; the default endpoint (`wss://api.abloatai.com`)
+ * already routes there. Only a secret sandbox key (`sk_test_`) is accepted here
+ * — a production key (`sk_live_`) is refused, because re-pushing schema in a
+ * tight save loop against production data is exactly what the sandbox exists to
+ * keep you away from. {@link classifyKey} enforces that rule and names the
+ * production path in its refusal.
  *
  * Usage:
  *   ablo dev
@@ -55,7 +46,7 @@ export interface DevArgs {
   watch: boolean;
 }
 
-/** Parse `dev` flags. Pure — unit-testable without touching the network. */
+/** Parses the `dev` command's flags into {@link DevArgs}. Does no I/O, so it can be unit-tested without a network. */
 export function parseDevArgs(argv: readonly string[]): DevArgs {
   let schemaPath = DEFAULT_SCHEMA_PATH;
   let exportName = DEFAULT_EXPORT;
@@ -77,7 +68,7 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
       case '--watch':
         watchEnabled = true;
         break;
-      case '--no-watch': // historical alias; one-shot is the default now
+      case '--no-watch': // push once and exit; do not start the file watcher
         watchEnabled = false;
         break;
       default:
@@ -90,17 +81,17 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
 }
 
 /**
- * Classify the configured key. The sandbox flow only accepts a secret SANDBOX
- * key (sk_test_):
- *  - `sk_test_` → ok
- *  - `sk_live_` → refused here, but the refusal NAMES the production path
- *  - `rk_*`     → wrong kind (restricted/agent key can't push schema)
- *  - anything else → not an Ablo key
+ * Decides whether the configured key may drive the sandbox flow, which accepts
+ * only a secret sandbox key:
+ *  - `sk_test_` — accepted.
+ *  - `sk_live_` — refused, with a message pointing to the production path.
+ *  - `rk_...`   — a restricted key, which cannot push schema.
+ *  - anything else — not an Ablo key.
  *
- * Message contract (suite-wide): error guidance must enumerate the DOORS, not
- * just the nearest one — every refusal here names both the sandbox path and
- * the production path, because "guidance by omission" is how a user with a
- * perfectly valid live key ends up believing only sk_test_ exists.
+ * A refusal names both the sandbox and production paths rather than only the one
+ * that applies, so a developer holding a valid production key isn't left
+ * assuming the sandbox key is the only option. Returns `{ ok: true }` when the
+ * key is accepted, or `{ ok: false, reason }` with text ready to print.
  */
 export function classifyKey(
   apiKey: string | undefined,
@@ -141,11 +132,12 @@ export function classifyKey(
 }
 
 /**
- * Wire the resolved sandbox key into `.env.local` so the SDK finds it without a
- * copy-paste step (frameworks load `.env.local`; vanilla Node uses
- * `node --env-file=.env.local`). Idempotent: creates the file, appends the
- * line, or updates a differing value — and says which it did. Never touches
- * anything when the key already came from the environment (CI / explicit).
+ * Writes the resolved sandbox key into `.env.local` so the SDK finds it without
+ * a copy-paste step (frameworks load `.env.local` automatically; with plain
+ * Node, use `node --env-file=.env.local`). Safe to run repeatedly: it creates
+ * the file, appends the key line, or updates a differing value, and returns a
+ * short description of which it did. It also adds `.env.local` to `.gitignore`
+ * when nothing already covers it, so the secret can't be committed.
  */
 export function wireEnvLocal(apiKey: string, cwd: string = process.cwd()): string {
   const envPath = resolve(cwd, '.env.local');
@@ -242,14 +234,15 @@ async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; me
     return { ok: false, message: lines.join('\n') };
   }
   if (status === 403) {
-    // Stripe-shaped errors carry the actionable text in `message` (e.g.
-    // `test_database_not_registered` tells you to register a dev database).
-    // Guessing "missing scope" here MASKED that instruction — print the
-    // server's words first, fall back to the scope hint only when absent.
+    // The server's error carries the actionable text in `message` (for example,
+    // `test_database_not_registered` tells you to register a development
+    // database). Print the server's words first and fall back to the scope hint
+    // only when they're absent, so a specific instruction isn't hidden behind a
+    // guessed "missing scope".
     const serverSays = (body.message ?? body.reason) as string | undefined;
-    // The RLS gate has a one-command fix — say so instead of leaving the
-    // user to hand-write SQL (the gate is hit by every Neon/Supabase
-    // dashboard connection string, whose default role is BYPASSRLS).
+    // The row-level-security rejection has a one-command fix, so point to it
+    // rather than leaving the developer to hand-write SQL. It is triggered by any
+    // connection string whose default role can bypass row-level security.
     const hint =
       body.code === 'database_role_cannot_enforce_rls'
         ? `Run ${pc.bold('npx ablo migrate')} — it creates the scoped role for you (your DB credential never leaves this machine).`
@@ -272,13 +265,12 @@ export async function dev(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  // Resolve through the ONE shared chain (env var → .env.local → .env → the
-  // stored `ablo login` credential) so `dev` sees the same key `push`/`status`
-  // report. `dev` is always the SANDBOX loop, so the stored fallback resolves
-  // the sandbox key regardless of the active mode; a production key found in a
-  // project env file is refused just below by `classifyKey`, which names the
-  // production path. (Pre-fix, dev skipped the env files — it could silently
-  // use the stored sandbox key and then OVERWRITE the key in `.env.local`.)
+  // Resolve through the shared chain (environment variable, then `.env.local`,
+  // then `.env`, then the stored login credential) so `dev` sees the same key
+  // that `push` and `status` report. `dev` is always the sandbox loop, so the
+  // stored fallback resolves the sandbox key regardless of the active mode; a
+  // production key found in a project env file is refused just below by
+  // `classifyKey`, which names the production path.
   if (!args.apiKey) args.apiKey = resolveEffectiveApiKey('sandbox').key;
 
   const key = classifyKey(args.apiKey, getMode());
@@ -289,11 +281,11 @@ export async function dev(argv: readonly string[]): Promise<void> {
 
   console.log(`\n  ${brand('ablo')} ${pc.dim('push')} ${pc.dim('(sandbox)')}\n`);
 
-  // `ablo dev` does NOT touch your database — no role creation, no RLS changes,
-  // no migrations. Ablo connects to your DB as-is (the server warns, but serves,
-  // if the role can't enforce RLS — tenant isolation on your own database is your
-  // call). Removed the auto scoped-role prompt that used to run here on every
-  // dev loop; securing the connection is opt-in (see the docs).
+  // `ablo dev` does not touch your database — no role creation, no
+  // row-level-security changes, no migrations. Ablo connects as-is; if the role
+  // can't enforce row-level security the server warns but still serves, leaving
+  // tenant isolation on your own database to you. Securing the connection is
+  // opt-in; see the docs.
   const schema = await loadSchema(args.schemaPath, args.exportName);
   const modelCount = Object.keys(schema.models).length;
   console.log(

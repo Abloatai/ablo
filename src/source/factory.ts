@@ -1,13 +1,9 @@
 /**
- * The `abloSource()` / `dataSource()` endpoint factory — the customer-owned
- * Data Source handler. Takes the options (schema, apiKey, handlers or ORM
- * adapter), verifies the signed request, enforces per-key scopes, and
- * dispatches the four wire operations (`load`/`list`/`commit`/`events`) to
- * the configured handlers.
- *
- * `AbloSourceOptions` lives here (not `types.ts`) because it references the
- * ORM `DataSourceAdapter` — keeping it with the factory keeps `types.ts` a
- * dependency-free leaf for `adapter.ts`/`contract.ts` to import from.
+ * Builds the Data Source request handler returned by `abloSource()` and its alias
+ * `dataSource()`. Given your options — the schema, the API key, and either
+ * per-model handlers or an ORM adapter — the handler verifies each signed request,
+ * enforces the per-key scopes, and routes the four wire operations (`load`,
+ * `list`, `commit`, and `events`) to whichever handlers you configured.
  */
 
 import type {
@@ -48,41 +44,35 @@ type SourceModels<S extends SchemaRecord, TAuth> = Partial<{
 export type AbloSourceOptions<S extends SchemaRecord, TAuth = unknown> = {
   readonly schema: Schema<S>;
   /**
-   * Customer-visible Ablo credential. In the API-key-only onboarding
-   * path, Ablo signs Data Source calls with the same project API key
-   * that the customer's server-side SDK uses. This keeps the customer
-   * env surface to one Ablo credential while preserving signed request
-   * verification before any handler runs.
+   * Your Ablo project credential. Ablo signs each Data Source call with the same
+   * project API key your server-side SDK already uses, so your environment holds a
+   * single Ablo credential and every request is signature-verified before any
+   * handler runs.
    */
   readonly apiKey: SourceApiKey;
   /**
-   * Clock-skew window for signed source requests. Default: 5 minutes.
+   * How much clock skew to tolerate when verifying a request's signed timestamp.
+   * Defaults to five minutes.
    */
   readonly signatureToleranceMs?: number;
   /**
-   * Verify the Ablo request and return customer-owned context such as
-   * a database handle, account scope, or current actor. Keep database
-   * credentials in this function's environment; never send them to Ablo.
-   *
-   * Signature verification is handled by `apiKey` before this function
-   * runs. `authorize` should only attach business context.
+   * Attaches your own context to a verified request and returns it — for example a
+   * database handle, an account scope, or the current actor. Keep database
+   * credentials inside this function's environment and never send them to Ablo. The
+   * signature has already been checked against `apiKey` by the time this runs, so
+   * `authorize` only needs to supply business context, not re-verify the caller.
    */
   readonly authorize?: (
     context: SourceAuthorizeContext,
   ) => Promise<TAuth> | TAuth;
   /**
-   * Optional per-request scope resolver. When set, the helper checks
-   * the resolved scope set against the request's operation
-   * (`load`/`list`/`commit`/`events`) and returns 403
-   * `source_forbidden` if not allowed — before any model handler
-   * runs.
-   *
-   * Customers typically extract a key id from the request (e.g.
-   * `webhook-id` prefix, a custom header, or the API key itself) and
-   * look up the scopes for that key in their store.
-   *
-   * When omitted, all operations are allowed. Returning an empty set
-   * denies all operations.
+   * Resolves the set of operations a request's key may perform. When you provide
+   * it, the handler checks the operation the request is asking for (`load`, `list`,
+   * `commit`, or `events`) against the returned set and responds 403
+   * `source_forbidden` if it is not allowed, before any model handler runs. A
+   * typical implementation reads a key id from the request — a `webhook-id` prefix,
+   * a custom header, or the API key itself — and looks that key's scopes up in your
+   * store. Omit it to allow every operation; return an empty set to deny them all.
    */
   readonly resolveScopes?: (params: {
     readonly auth: TAuth;
@@ -91,35 +81,33 @@ export type AbloSourceOptions<S extends SchemaRecord, TAuth = unknown> = {
   }) => Promise<ReadonlySet<SourceScope> | readonly SourceScope[]> |
     ReadonlySet<SourceScope> | readonly SourceScope[];
   /**
-   * Top-level atomic commit handler. Prefer this for real applications:
-   * one UI/action commit can span several models and should run inside
-   * one customer-owned transaction.
+   * Handles a commit atomically across every model it touches. Prefer this in real
+   * applications: a single user action can change several models at once and should
+   * run inside one transaction you control.
    */
   readonly commit?: SourceCommitHandler<TAuth>;
   /**
-   * External-write feed. Ablo polls this to learn about changes that
-   * happened outside the SDK (cron jobs, dashboard edits, batch
-   * imports). Each returned event becomes a delta and fans out to
-   * connected clients.
-   *
-   * Handlers may return the raw outbox feed. Ablo dedupes stable
-   * `event.id` values and filters SDK-origin echoes when rows carry
-   * the originating `clientTxId`; customers should persist both fields
-   * in their outbox table.
+   * Reports changes that happened outside the SDK — cron jobs, dashboard edits,
+   * batch imports — which Ablo polls for. Each event you return becomes a delta and
+   * fans out to connected clients. You can return your outbox rows directly: Ablo
+   * dedupes on the stable `event.id` and drops echoes of the SDK's own writes when a
+   * row carries the originating `clientTxId`, so store both fields in your outbox
+   * table.
    */
   readonly events?: SourceEventsHandler<TAuth>;
   /**
-   * Optional grouped form. The object-key form below is usually terser:
-   * `abloSource({ schema, files: { load, list, commit } })`.
+   * Groups per-model handlers under a `models` key. The spread form below is
+   * usually shorter — `abloSource({ schema, files: { load, list, commit } })` —
+   * but this explicit form is available when you prefer it.
    */
   readonly models?: SourceModels<S, TAuth>;
   /**
-   * An ORM adapter (`prismaDataSource(prisma, schema)`, …). When set, it serves
-   * ALL four operations — read (load/list), commit (idempotent + outbox), and
-   * events — so no hand-written `commit`/`events`/model handlers are needed. The
-   * adapter is consumed at the generic dispatch layer (rows are JSON on the wire),
-   * which is why it carries no per-model types and needs no cast at the call site.
-   * Mutually exclusive with hand-written handlers.
+   * An ORM adapter, such as `prismaDataSource(prisma, schema)`. When set, it serves
+   * all four operations on its own — reads for `load` and `list`, an idempotent
+   * `commit` backed by the outbox, and `events` — so you write no handlers by hand.
+   * Because rows travel as JSON, the adapter is applied at a single generic
+   * dispatch point and needs no per-model types. Use either an adapter or
+   * hand-written handlers, not both.
    */
   readonly adapter?: DataSourceAdapter;
 } & SourceModels<S, TAuth>;
@@ -132,9 +120,9 @@ function json(data: unknown, status = 200): Response {
 }
 
 /**
- * Serve a request from an ORM `adapter`. Routes the four operations to the adapter
- * interface (`read`/`commit`/`events`) and shapes the wire response. The adapter is the
- * single point of dispatch — no per-model branching here.
+ * Serves one request from an ORM `adapter`, mapping each of the four operations to
+ * the adapter's `read`, `commit`, or `events` method and shaping the wire response.
+ * The adapter is the only dispatch point, so there is no per-model branching here.
  */
 async function handleViaAdapter(
   adapter: DataSourceAdapter,
@@ -223,10 +211,9 @@ async function resolveApiKey(
 }
 
 /**
- * Map a wire request to its scope tag. Each request type corresponds
- * to one scope, so the function is total and exhaustive — adding a
- * new request type forces a new scope tag, which is the right design
- * pressure for keeping the scope vocabulary in sync with the wire.
+ * Maps a wire request to the single scope it requires. The mapping is exhaustive,
+ * so a new request type must be given its own scope, keeping the scope vocabulary
+ * in step with the set of operations.
  */
 function scopeFor(body: SourceRequest): SourceScope {
   switch (body.type) {
@@ -270,12 +257,12 @@ function sameModel(operations: readonly SourceOperation[]): string | null {
 }
 
 /**
- * Create a customer-owned data source endpoint.
+ * Creates a Data Source endpoint you host in front of your own database.
  *
- * App code still talks to Ablo with `ablo.files.load/list/update`.
- * This helper is only for customers who keep canonical rows in their own
- * database and want Ablo Cloud to call a narrow, signed endpoint instead
- * of receiving database credentials.
+ * Your application code still reads and writes through Ablo, as in
+ * `ablo.files.load`, `.list`, and `.update`. This helper is for keeping the
+ * canonical rows in your database: Ablo calls a narrow, signed endpoint you
+ * control rather than holding your database credentials.
  */
 export function abloSource<const S extends SchemaRecord, TAuth = unknown>(
   options: AbloSourceOptions<S, TAuth>,
@@ -328,9 +315,9 @@ export function abloSource<const S extends SchemaRecord, TAuth = unknown>(
       ? await options.authorize({ request, body, rawBody })
       : (undefined as TAuth);
 
-    // Per-key permission scope check. When `resolveScopes` is set,
-    // the customer returns the operation set this key is allowed to
-    // invoke; we enforce before any model handler runs.
+    // Enforce the per-key scope. When `resolveScopes` is set, it returns the
+    // operations this key may invoke, and we check the request against that set
+    // before any model handler runs.
     if (options.resolveScopes) {
       const required = scopeFor(body);
       const granted = await options.resolveScopes({ auth, request, body });
@@ -356,9 +343,9 @@ export function abloSource<const S extends SchemaRecord, TAuth = unknown>(
       ...(body.scope ? { scope: body.scope } : {}),
     };
 
-    // Adapter path: when an ORM adapter is configured it serves every operation,
-    // consumed at this generic layer (rows are JSON on the wire), so no per-model
-    // handler lookup and no typed↔generic boundary.
+    // When an ORM adapter is configured it serves every operation here, at the
+    // generic layer where rows are plain JSON, so there is no per-model handler
+    // lookup on this path.
     if (options.adapter) {
       return handleViaAdapter(options.adapter, body, context.scope);
     }
@@ -429,8 +416,8 @@ export function abloSource<const S extends SchemaRecord, TAuth = unknown>(
   };
 }
 
-// ── DataSource* naming aliases (kept 1:1 with the Source* names above; any
-// deprecation of one naming family is a separate decision) ──
+// The `DataSource*` names below alias the `Source*` names above one-to-one, so
+// either naming family may be used.
 export type DataSourceOptions<
   S extends SchemaRecord,
   TAuth = unknown,

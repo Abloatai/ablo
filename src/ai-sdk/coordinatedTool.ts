@@ -1,15 +1,14 @@
 /**
- * `coordinatedTool` — the one-liner that turns an Ablo model write into a Vercel
- * AI SDK tool with multi-agent coordination already handled, so an AI agent can
- * contribute to shared state without ever silently clobbering a concurrent
- * writer.
+ * Turns a write to one of your models into a Vercel AI SDK tool that handles
+ * multi-agent coordination for you, so an agent can contribute to shared state
+ * without silently overwriting another writer's concurrent change.
  *
- * The base `./ai-sdk` pattern (see index.ts) is "write your own `tool()` and
- * call `ablo.<model>.update({ id, data, claim })` inside `execute`". That's the
- * right amount of control when a tool does something bespoke. But the *common*
- * case — "the agent produced some content; save it into the shared row" — should
- * not require every integration to re-derive optimistic concurrency by hand. This
- * collapses it to a declaration:
+ * The lower-level approach is to write your own `tool()` and call
+ * `ablo.<model>.update({ id, data, claim })` inside its `execute` — the right
+ * amount of control for a bespoke tool. This helper covers the common case
+ * instead: the agent produced some content and you want to save it into a shared
+ * row, without re-deriving optimistic concurrency each time. You declare the
+ * write:
  *
  * ```ts
  * import { coordinatedTool } from '@abloatai/ablo/ai-sdk';
@@ -26,31 +25,37 @@
  * await streamText({ model, messages, tools: { saveSection } });
  * ```
  *
- * `apply` is the whole API: a pure function of `(freshest row, tool input) →
- * patch`, exactly like React's `setState(prev => next)`. Everything underneath —
- * reading the latest row, the compare-and-swap, the jittered backoff between
- * reconcile rounds, releasing claims — is the runtime's job, not yours.
+ * The {@link CoordinatedToolOptions.apply} function is the whole API: a pure
+ * function from the freshest row and the tool input to a patch, in the same
+ * spirit as a functional state update. Everything beneath it — reading the latest
+ * row, the compare-and-swap, backing off between retries, and releasing claims —
+ * is the runtime's job.
  *
- * ## Strategies (pick by how writers should relate; all verified to converge
- * under N-way agent contention)
+ * ## Strategies
  *
- * - `'merge'` *(default)* — delegates straight to the functional update
- *   `ablo.<model>.update(id, current => apply(current, input))`. The SDK re-reads
- *   and re-applies `apply` on top of every concurrent write and backs off between
- *   rounds, so N agents *accumulate* into one row and the model never sees a
- *   conflict. **Requires the model's agent conflict policy to be `reject`** (the
- *   default, or `agentsReject()`); a model declaring `agentsNotify()` HOLDS the
- *   losing write instead of rejecting it, which defeats the reconcile — use
- *   `claim`/`queue` there, or switch the policy.
+ * Choose a strategy by how you want concurrent writers to relate. Each is
+ * designed to converge under many agents writing at once.
  *
- * - `'claim'` — mutual exclusion. Takes a fail-fast claim; if another participant
- *   holds the row it returns `{ status: 'claimed' }` so the *model* decides to
- *   retry (a legible signal beats a hidden wait when the agent might do something
- *   better with its turn). Works regardless of conflict policy.
+ * - `'merge'` (the default) delegates to the functional update
+ *   `ablo.<model>.update(id, current => apply(current, input))`. The runtime
+ *   re-reads and re-applies `apply` on top of every concurrent write, backing off
+ *   between rounds, so many agents accumulate into one row and the model never
+ *   sees a conflict. This requires the model's agent conflict policy to be
+ *   `reject` (the default, or `agentsReject()`). A model that declares
+ *   `agentsNotify()` holds the losing write instead of rejecting it, which
+ *   defeats the reconcile loop — there, use `'claim'` or `'queue'`, or change the
+ *   policy.
  *
- * - `'queue'` — fair-ish serialization over stateless HTTP, the SQS shape: a
- *   client poll-acquire loop (true FIFO needs a socket) until the claim is granted
- *   or `poll.timeoutMs` elapses. The model calls once and the tool waits its turn.
+ * - `'claim'` gives mutual exclusion. It takes a fail-fast claim; if another
+ *   participant holds the row, it returns `{ status: 'claimed' }` and leaves the
+ *   decision to retry up to the model. A visible signal serves the agent better
+ *   than a hidden wait when it might spend its turn on something else. Works under
+ *   any conflict policy.
+ *
+ * - `'queue'` serializes writers over stateless HTTP. The tool polls to acquire
+ *   the claim until it is granted or `poll.timeoutMs` elapses, so the model calls
+ *   once and the tool waits its turn. Ordering is approximate rather than strict
+ *   first-in-first-out, which would require a persistent connection.
  */
 
 import { tool } from 'ai';
@@ -63,9 +68,10 @@ export type CoordinationStrategy = 'merge' | 'claim' | 'queue';
 /** The structured result the tool hands back to the model (or the caller). */
 export interface CoordinatedWriteResult<T> {
   /**
-   * `'written'` — saved. `'claimed'` — another participant holds the row; NOT
-   * saved, the model should try again. `'timeout'` — the queue strategy could not
-   * acquire the row within `poll.timeoutMs`.
+   * `'written'` means the change was saved. `'claimed'` means another participant
+   * holds the row, so nothing was saved and the model should try again.
+   * `'timeout'` means the `'queue'` strategy could not acquire the row within
+   * `poll.timeoutMs`.
    */
   status: 'written' | 'claimed' | 'timeout';
   /** The reconciled row, on `'written'`. */
@@ -78,24 +84,25 @@ export interface CoordinatedWriteResult<T> {
 export interface CoordinatedToolOptions<TInput, T> {
   /** Tool description shown to the model. */
   description: string;
-  /** What the model may send — a normal AI SDK / zod input schema. */
+  /** The schema of what the model may send, as a standard AI SDK / Zod input schema. */
   inputSchema: z.ZodType<TInput>;
   /** Which row this write targets, derived from the tool input. */
   id: (input: TInput) => string;
   /**
-   * Produce the write patch from the freshest current row + the tool input — a
-   * pure `(prev, input) => next`. Under `merge` it re-runs on every concurrent
-   * write, so it must be idempotent w.r.t. its own contribution (e.g. skip if its
-   * marker is already present) to be safe across reconcile rounds.
+   * Produces the write patch from the freshest current row and the tool input, as
+   * a pure function of the two. Under `'merge'` it re-runs on top of every
+   * concurrent write, so it must be idempotent with respect to its own
+   * contribution — for example, skip its change when its marker is already
+   * present — to stay correct across retries.
    */
   apply: (current: T, input: TInput) => Partial<T>;
   /** How concurrent writers relate. Defaults to `'merge'`. */
   strategy?: CoordinationStrategy;
-  /** Human-legible coordination metadata attached to the claim (`claim`/`queue`). */
+  /** Human-readable coordination metadata attached to the claim, used by the `'claim'` and `'queue'` strategies. */
   claim?: { reason?: string; description?: string };
-  /** Reconcile budget for `merge` (rounds before `AbloContentionError`). */
+  /** How many reconcile rounds `'merge'` may take before it gives up with `AbloContentionError`. */
   retries?: number;
-  /** Poll cadence / ceiling for `queue` (defaults 250ms / 30s). */
+  /** Poll interval and overall timeout for `'queue'`. Defaults to 250ms and 30s. */
   poll?: { intervalMs?: number; timeoutMs?: number };
 }
 
@@ -115,18 +122,19 @@ export function coordinatedTool<
       const id = options.id(input);
 
       if (strategy === 'merge') {
-        // The setState of the data layer: read fresh → apply → CAS → re-read +
-        // re-apply with backoff on any concurrent write. Self-healing; the model
-        // never sees a conflict. (Backoff lives in the shared reconcile loop.)
+        // Read the freshest row, apply the patch, and commit it with a
+        // compare-and-swap; on any concurrent write, re-read and re-apply with
+        // backoff. The model never sees a conflict.
         const row = await model.update(id, (current) => options.apply(current, input), {
           retries: options.retries,
         });
         return { status: 'written', row: row ?? undefined };
       }
 
-      // claim / queue both take a claim, write under it, and release. The only
-      // difference is what they do when the row is already held: claim returns the
-      // signal to the model; queue waits and retries (SQS-style poll-acquire).
+      // The 'claim' and 'queue' strategies both acquire a claim, write under it,
+      // and release it. They differ only in what they do when the row is already
+      // held: 'claim' returns a signal to the model, while 'queue' waits and
+      // retries by polling to acquire.
       const acquireWriteRelease = async (): Promise<CoordinatedWriteResult<T>> => {
         const claim = await model.claim({
           id,
@@ -160,7 +168,7 @@ export function coordinatedTool<
         }
       }
 
-      // strategy === 'queue': SQS-style poll-acquire over stateless HTTP.
+      // strategy === 'queue': poll to acquire the claim over stateless HTTP.
       const interval = options.poll?.intervalMs ?? 250;
       const timeout = options.poll?.timeoutMs ?? 30_000;
       const start = Date.now();

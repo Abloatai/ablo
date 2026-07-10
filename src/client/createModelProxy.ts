@@ -1,18 +1,14 @@
 /**
- * Per-model client factory.
+ * Builds the typed client for a single schema model — the object reached as
+ * `ablo.<model>`.
  *
- * Mirrors Anthropic SDK's per-endpoint module pattern: each model client
- * has its own file, and the root client just instantiates
- * one per model. Extracted from `Ablo.ts` so the proxy logic is
- * testable in isolation and the constructor doesn't carry it.
- *
- * Each schema model gets one `ModelOperations<T, CreateInput>` —
- * exposes the async server reads `retrieve` / `list`, the synchronous
- * local-graph snapshots `get` / `getAll` / `getCount`, the writes
- * `create` / `update` / `delete`, the coordination namespace `claim`
- * (`claim({ id })` plus `claim.state` / `claim.queue` / `claim.release` /
- * `claim.reorder`), and `onChange`. The factory returns a plain object; the
- * client assembles the `ablo.<model>` lookup table from these.
+ * Each schema model gets one {@link ModelOperations}: the async server reads
+ * `retrieve` and `list`, the synchronous local-graph snapshots `get`, `getAll`,
+ * and `getCount`, the writes `create`, `update`, and `delete`, the coordination
+ * namespace `claim` (callable as `claim({ id })`, plus `claim.state`,
+ * `claim.queue`, `claim.release`, and `claim.reorder`), `watch`, and `onChange`.
+ * The factory returns a plain object; the client assembles the `ablo.<model>`
+ * lookup table from one of these per model.
  */
 
 import { autorun } from 'mobx';
@@ -34,17 +30,24 @@ import type { MutationOptions } from '../interfaces/index.js';
 import { Model, modelAsRow } from '../Model.js';
 import { toMs } from '../utils/duration.js';
 import { LEASE_TTL_MS } from '../wire/protocol.js';
+import {
+  heartbeatCadenceMs,
+  resolveHeartbeatOptions,
+  startClaimHeartbeatLoop,
+} from './claimHeartbeatLoop.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
 import type { ModelRegistry } from '../ModelRegistry.js';
-import type { ObjectPool } from '../ObjectPool.js';
+import type { InstanceCache } from '../InstanceCache.js';
 import type { SyncClient } from '../SyncClient.js';
-import type { HydrationCoordinator } from '../sync/HydrationCoordinator.js';
+import type { OnDemandLoader } from '../sync/OnDemandLoader.js';
 import type { JoinedParticipant } from '../sync/participants.js';
 import type { LoadWhere } from '../query/types.js';
 import { ModelScope } from '../types/index.js';
 import type {
   Duration,
   Claim,
+  ClaimHeartbeat,
+  ClaimHeartbeatOptions,
   HeldClaim,
   ClaimWaitOptions,
   ClaimTarget,
@@ -66,9 +69,10 @@ export function getModelClientMeta(modelClient: unknown): ModelClientMeta | unde
 
 export type ModelListScope = ModelScope | 'live' | 'archived' | 'all';
 
-/** Options for the sync LOCAL-pool reads `get`/`getAll`/`onChange` (JS
- *  `filter`, equality `where`, lifecycle `state`). The local-reactive axis;
- *  contrast {@link ServerReadOptions} (the async server axis). */
+/** Options for the synchronous local-pool reads `get`, `getAll`, and
+ *  `onChange` — a JavaScript `filter`, an equality `where`, and a lifecycle
+ *  `state`. This is the local, reactive axis; contrast {@link ServerReadOptions},
+ *  the asynchronous server axis. */
 export interface LocalReadOptions<T> {
   where?: Partial<T>;
   /** Arbitrary local predicate. Applied after `where`. */
@@ -76,9 +80,8 @@ export interface LocalReadOptions<T> {
   orderBy?: { [K in keyof T]?: 'asc' | 'desc' };
   limit?: number;
   offset?: number;
-  /** Lifecycle filter — `live` (default), `archived`, or `all`. Named `state`
-   *  (GitHub's open/closed/all precedent) so it doesn't collide with the
-   *  sync-group `scope`. */
+  /** Lifecycle filter — `live` (the default), `archived`, or `all`. Named
+   *  `state` so it does not collide with the sync-group `scope`. */
   state?: ModelListScope;
 }
 
@@ -87,17 +90,17 @@ export type LocalCountOptions<T> = Pick<
   'where' | 'filter' | 'state'
 >;
 
-/** Options for the async SERVER reads `retrieve`/`list` (operator `where` DSL,
- *  `type`, `expand`). The server-async axis; contrast {@link LocalReadOptions}
- *  (the local-reactive axis). */
+/** Options for the asynchronous server reads `retrieve` and `list` — the
+ *  operator `where` filter, `type`, and `expand`. This is the server axis;
+ *  contrast {@link LocalReadOptions}, the local, reactive axis. */
 export interface ServerReadOptions<T> {
   /**
-   * Filter for the lookup. Accepts:
-   *   - object form: `{ name: 'foo' }` (equality, array values → `IN`)
-   *   - tuple form: `[['name', 'ILIKE', '%Goldman%']]` for operators
+   * Filter for the lookup. Accepts two forms:
+   *   - object form — `{ name: 'foo' }`: equality, where an array value means `IN`
+   *   - tuple form — `[['name', 'ILIKE', '%Goldman%']]`: explicit operators
    *
-   * See `LoadWhere<T>` in `query/types.ts`. For OR semantics, run two
-   * `list()` calls and union — the wire protocol is AND-only.
+   * See {@link LoadWhere} for the full grammar. The wire protocol matches on AND
+   * only; for OR semantics, run two `list()` calls and union the results.
    */
   where?: LoadWhere<T>;
   orderBy?: { [K in keyof T]?: 'asc' | 'desc' };
@@ -181,36 +184,33 @@ export interface ModelCollaboration<T> {
    */
   readonly selfParticipantId: string;
   /**
-   * The local participant's kind (`'user' | 'agent' | 'system'`). Used to
-   * stamp the synthesized self-claim returned from `claim.state` when the
-   * LOCAL proxy holds the lease (server presence frames exclude one's own
-   * claims, so the holder must build its own view).
+   * The local participant's kind (`'user' | 'agent' | 'system'`). Used to stamp
+   * the synthesized self-claim returned from `claim.state` when this client
+   * holds the lease: server presence frames exclude a holder's own claims, so
+   * the holder builds its own view.
    */
   readonly selfParticipantKind?: 'user' | 'agent' | 'system';
   /**
-   * Subscribe the connection to a scope's sync group(s) (read-interest).
-   * The typed surface calls this on single-entity reads/claim observation so
-   * a Node/agent client lands in the SAME entity-scoped group the holder's
-   * claim presence fans out on — otherwise a peer subscribed only to
-   * `org:`/`user:` groups never sees claim broadcasts. Fire-and-forget and
-   * SOFT: read interest is best-effort and must never make a read reject or
-   * stall (see `AreaOfInterestManager.reconcile`). Optional so minimal test
-   * doubles can omit it. Forwards to `BaseSyncedStore.enterScope`.
+   * Subscribes the connection to a scope's sync group(s) — read interest. The
+   * typed surface calls this on single-entity reads and claim observation so a
+   * client lands in the same entity-scoped group the holder's claim presence
+   * fans out on; a peer subscribed only to broader `org:` or `user:` groups
+   * would otherwise never see claim broadcasts. Fire-and-forget and best-effort:
+   * read interest must never make a read reject or stall. Optional so minimal
+   * test doubles can omit it.
    */
   enterScope?(scope: Record<string, string>): void | Promise<void>;
   /**
-   * Pin a scope's sync group(s) (write-intent / prominence): a row this
-   * client holds an active claim on stays subscribed regardless of
-   * navigation. Same fire-and-forget, soft semantics as `enterScope`.
-   * Forwards to `BaseSyncedStore.pinScope`.
+   * Pins a scope's sync group(s) — write intent: a row this client holds an
+   * active claim on stays subscribed regardless of navigation. Same
+   * fire-and-forget, best-effort semantics as `enterScope`.
    */
   pinScope?(scope: Record<string, string>): void | Promise<void>;
   /**
-   * Open a presence/claim subscription on this model's sync group(s) and
-   * return the live participant handle. Backs `ablo.<model>.watch(ids)` —
-   * the relocation of the old `ablo.participants.join({ scope })`. WebSocket
-   * only (presence needs a socket); absent on non-ws constructions, in which
-   * case the proxy throws a clear error. Forwards to `participantManager.join`.
+   * Opens a presence and claim subscription on this model's sync group(s) and
+   * returns the live participant handle. Backs `ablo.<model>.watch(ids)`.
+   * WebSocket only, since presence needs a live socket; it is absent on other
+   * client constructions, where the proxy throws a clear error.
    */
   createWatch?(
     modelKey: string,
@@ -236,28 +236,50 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
   /** Crash-cleanup TTL — the claim auto-releases if the holder dies. */
   ttl?: Duration;
   /**
-   * On contention: `true` (default) queues behind the current holder and
-   * resolves once it's yours (claim-or-wait). `false` is fail-fast — if
-   * another participant already holds the row, reject immediately with
-   * `AbloClaimedError` instead of waiting (claim-or-skip). Use `false` for
-   * work-distribution dedup ("if someone else has this job, skip it") where
-   * waiting would mean double-processing.
+   * Behavior under contention. `true` (the default) queues behind the current
+   * holder and resolves once the row is yours. `false` is fail-fast: if another
+   * participant already holds the row, it rejects immediately with
+   * {@link AbloClaimedError} instead of waiting. Use `false` to deduplicate
+   * distributed work ("if someone else has this job, skip it"), where waiting
+   * would mean double-processing.
    *
-   * Named `queue` to match every other claim surface — `ablo.<model>.claim`
-   * on both the WS and HTTP clients (take-a-claim is the callable `claim({ id
-   * })` on both; the HTTP reads are just awaited) and the wire. The high-level
-   * typed claim defaults it ON because it serializes writers; the low-level
-   * lease and HTTP default it OFF — they return/resolve immediately and can't
-   * transparently wait for a grant.
+   * The high-level typed claim defaults this on because it serializes writers;
+   * the low-level lease and the HTTP client default it off, since they resolve
+   * immediately and cannot transparently wait for a grant.
    */
   queue?: boolean;
   /**
-   * Backpressure: willing to queue, but not behind too many. If the server
-   * reports `position >= maxQueueDepth` when we join the line, reject with
-   * `AbloClaimedError('queue_too_deep')` instead of waiting. Omit to wait
-   * however deep the queue is.
+   * Backpressure: queue, but not behind too many others. If the server reports a
+   * position at or beyond `maxQueueDepth` when the client joins the line, it
+   * rejects with {@link AbloClaimedError} (`queue_too_deep`) instead of waiting.
+   * Omit to wait however deep the queue is.
    */
   maxQueueDepth?: number;
+  /**
+   * Keep the lease alive for the duration of real work by beating on a
+   * cadence — the pattern for background workers whose task outlives the
+   * crash-cleanup TTL. `true` beats every third of the TTL (so two beats can
+   * fail before the lease is at risk, and a crashed worker's lease still
+   * lapses within one beat window); a duration such as `'2m'` sets the
+   * cadence explicitly. The loop stops on release. A beat answered with a
+   * definitive loss stops the loop and calls {@link onHeartbeatLost}; you can
+   * also beat manually with `held.heartbeat()`.
+   */
+  heartbeat?: true | Duration;
+  /**
+   * Called once if the auto-heartbeat learns the lease is no longer yours
+   * (expired and possibly granted onward). The loop has already stopped;
+   * abandon the work or re-claim. Any write attempted under the old lease is
+   * independently rejected by its `readAt` guard.
+   */
+  onHeartbeatLost?: (error: AbloClaimedError) => void;
+  /**
+   * Called after every successful beat (manual or auto) with the server's
+   * answer — chiefly `queueDepth`, the number of participants waiting in
+   * line behind this lease. A worker that can checkpoint may read pressure
+   * here and release early when others wait.
+   */
+  onHeartbeat?(beat: ClaimHeartbeat): void;
 }
 
 /** Options for `claim({ id, ... })`. */
@@ -277,7 +299,7 @@ export interface ClaimReorderParams<T = Record<string, unknown>>
 }
 
 /**
- * A claim handle: the held entity data plus an explicit release hook, so
+ * A claim handle: the held entity data plus an explicit release hook.
  *
  * ```ts
  * const claim = await ablo.weatherReports.claim({
@@ -298,11 +320,11 @@ export interface ClaimReorderParams<T = Record<string, unknown>>
  *
  * `data` is a snapshot taken after the lease is held. Write through the flat
  * `ablo.<model>.update({ id, data, claim })` verb — the handle carries the
- * lease id and snapshot watermark for attribution + stale protection.
+ * lease id and snapshot watermark for attribution and stale-write protection.
  */
-// THE one claim handle lives in `../types/streams` (canonical). Re-exported
-// here so existing `from '.../createModelProxy'` import paths keep working.
-export type { Claim, HeldClaim };
+// The canonical claim handle types live in `../types/streams`. They are
+// re-exported here so existing import paths keep working.
+export type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim };
 
 export type ClaimOptions<T = Record<string, unknown>> = ClaimTargetOptions<T>;
 
@@ -329,15 +351,15 @@ export type ClaimOptions<T = Record<string, unknown>> = ClaimTargetOptions<T>;
  * controls for UI and operators.
  */
 /**
- * Coordination reads + scheduler controls on a claim namespace, in their
- * REACTIVE (synchronous) form — `state`/`queue`/`reorder` resolve against the
- * local pool with no round-trip, which is what lets `useAblo((ablo) =>
- * ablo.x.claim.state({ id }))` read coordination state inside a React render.
+ * The coordination reads and scheduler controls on a claim namespace, in their
+ * reactive (synchronous) form: `state`, `queue`, and `reorder` resolve against
+ * the local pool with no round-trip, which is what lets a reactive selector read
+ * coordination state inside a React render.
  *
- * This is the single source of truth for the claim read surface: the stateless
- * HTTP client exposes the *awaited* projection of EXACTLY these methods
- * (`HttpClaimApi` in `Ablo.ts`, derived via {@link AwaitedClaimMethod}), so the
- * two transports can never drift — edit a signature here and HTTP follows.
+ * This is the single source of truth for the claim read surface. The stateless
+ * HTTP client exposes the awaited projection of exactly these methods (derived
+ * via {@link AwaitedClaimMethod}), so the two transports cannot drift — change a
+ * signature here and the HTTP surface follows.
  */
 export interface ClaimReadApi<T = Record<string, unknown>> {
   /**
@@ -374,10 +396,10 @@ export type AwaitedClaimMethod<F> = F extends (...args: infer A) => infer R
 
 export interface ClaimApi<T> extends ClaimReadApi<T> {
   /**
-   * Take a claim and get an explicit held-work handle back. Returns a
-   * {@link HeldClaim} — `data`, `release`, `revoke`, and the async disposer are
-   * guaranteed present (this door always re-reads the row under the lease), so
-   * callers use `handle.data` directly and `await using` works without a guard.
+   * Takes a claim and returns an explicit held-work handle — a {@link HeldClaim}.
+   * `data`, `release`, `revoke`, and the async disposer are always present (this
+   * call re-reads the row under the lease), so callers can use `handle.data`
+   * directly and `await using` works without a guard.
    */
   (params: ClaimParams<T>): Promise<HeldClaim<T>>;
 }
@@ -418,46 +440,41 @@ export interface WatchOptions {
 
 export interface ModelOperations<T, CreateInput> {
   /**
-   * Read a single entity by id from the **server** — async. Resolves through
-   * the 3-tier lookup (local pool → IndexedDB → network `POST /sync/query`)
-   * and lands the row in the local graph. Resolves to `undefined` when no
-   * such row exists.
+   * Reads a single entity by id from the server; asynchronous. Resolves through
+   * a three-tier lookup — local pool, then IndexedDB, then a network
+   * `POST /sync/query` — and lands the row in the local graph. Resolves to
+   * `undefined` when no such row exists.
    *
-   * This is the default "get me this entity" read and the one hosted /
-   * stateless callers want, since their local graph starts empty. For a
-   * synchronous read of an already-warm graph (a React selector) use
-   * `get(id)`.
-   *
-   * Mirrors `stripe.customers.retrieve({ id })` — network-backed.
+   * This is the default "get me this entity" read, and the one a stateless
+   * client wants, since its local graph starts empty. For a synchronous read of
+   * an already-warm graph (such as a React selector) use `get(id)`.
    */
   retrieve(params: ModelRetrieveParams): Promise<T | undefined>;
 
   /**
-   * List entities matching a filter from the **server** — async. Same 3-tier
-   * lookup + graph hydration as `retrieve`; single-flight deduped. Returns the
-   * matched rows.
-   *
-   * Mirrors `stripe.customers.list({...})` — network-backed. For a synchronous
-   * read of the local graph use `getAll(...)`.
+   * Lists entities matching a filter from the server; asynchronous. Uses the
+   * same three-tier lookup and graph hydration as `retrieve`, deduplicated so
+   * concurrent identical calls share one request. Returns the matched rows. For
+   * a synchronous read of the local graph use `getAll(...)`.
    */
   list(options?: ServerReadOptions<T>): Promise<T[]>;
 
   /**
-   * Synchronous snapshot of a single entity from the **local graph** — no
-   * network. Returns `undefined` when the row isn't resident (cold hosted
-   * client, or a `lazy` model not yet loaded). Pairs with reactive selectors:
-   * `useAblo((ablo) => ablo.<model>.get(id))`.
+   * Synchronous snapshot of a single entity from the local graph; no network.
+   * Returns `undefined` when the row is not resident (a client whose graph is
+   * still empty, or a `lazy` model not yet loaded). Pairs with reactive
+   * selectors: `useAblo((ablo) => ablo.<model>.get(id))`.
    */
   get(id: string): T | undefined;
 
   /**
-   * Synchronous snapshot of a filtered collection from the **local graph** —
-   * no network round-trip. Empty until `retrieve`/`list`/bootstrap has warmed
+   * Synchronous snapshot of a filtered collection from the local graph; no
+   * network round-trip. Empty until `retrieve`, `list`, or bootstrap has warmed
    * the graph.
    */
   getAll(options?: LocalReadOptions<T>): T[];
 
-  /** Count entities in the **local graph** (synchronous, no network). */
+  /** Count entities in the local graph; synchronous, no network. */
   getCount(options?: LocalCountOptions<T>): number;
 
   /**
@@ -470,14 +487,14 @@ export interface ModelOperations<T, CreateInput> {
   /** Update an entity by id — optimistic, offline-first (see `create`). */
   update(params: ModelUpdateParams<T>): Promise<T>;
   /**
-   * Update under contention with a function of the latest state —
-   * `update(id, current => next)`, the `setState(prev => next)` of the data
-   * layer. The SDK reads the freshest row, runs your updater, writes it as a
-   * compare-and-swap, and re-reads + re-runs on any concurrent write. Nothing
-   * about claims, identity, or conflict codes surfaces: the write either lands
-   * or throws {@link AbloContentionError} once its reconcile budget is spent.
-   * Return `null`/`undefined` from the updater to skip the write. Resolves to
-   * the reconciled row (or `undefined` when the updater opted out).
+   * Updates under contention with a function of the latest state —
+   * `update(id, current => next)`. The client reads the freshest row, runs your
+   * updater, writes the result as a compare-and-swap, and re-reads and re-runs
+   * on any concurrent write. Nothing about claims, identity, or conflict codes
+   * surfaces: the write either lands or throws {@link AbloContentionError} once
+   * its reconcile budget is spent. Return `null` or `undefined` from the updater
+   * to skip the write. Resolves to the reconciled row, or `undefined` when the
+   * updater opted out.
    */
   update(
     id: string,
@@ -518,13 +535,12 @@ export interface ModelOperations<T, CreateInput> {
   claim: ClaimApi<T>;
 
   /**
-   * Subscribe this client to the sync group(s) for one or more rows of this
-   * model and get a live participant handle back — presence (`.peers`), the
+   * Subscribes this client to the sync group(s) for one or more rows of this
+   * model and returns a live participant handle — presence (`.peers`), the
    * scoped claim stream (`.claims`), and `.leave()` / `await using` disposal.
    *
-   * The model-scoped relocation of the former `ablo.participants.join({
-   * scope: { <model>: ids } })`. WebSocket only — presence needs a socket, so
-   * this is absent on HTTP clients and throws on any non-ws construction.
+   * WebSocket only: presence needs a live socket, so this is absent on HTTP
+   * clients and throws on any non-WebSocket construction.
    *
    * ```ts
    * await using participant = await ablo.slides.watch(slideIds, { ttl: '5m' });
@@ -536,7 +552,7 @@ export interface ModelOperations<T, CreateInput> {
     options?: WatchOptions,
   ): Promise<JoinedParticipant>;
 
-  /** Listen for changes (callback called on every change). */
+  /** Subscribe to changes; the callback runs on every change. */
   onChange(
     callback: (entities: T[]) => void,
     options?: LocalReadOptions<T>,
@@ -547,10 +563,10 @@ export interface ModelOperations<T, CreateInput> {
 export function createModelProxy<T, C>(
   schemaKey: string,
   registeredModelName: string,
-  objectPool: ObjectPool,
+  objectPool: InstanceCache,
   syncClient: SyncClient,
   registry: ModelRegistry,
-  hydration: HydrationCoordinator,
+  hydration: OnDemandLoader,
   collaboration?: ModelCollaboration<T>,
 ): ModelOperations<T, C> {
   const ModelClass = registry.getModelByName(registeredModelName);
@@ -562,15 +578,15 @@ export function createModelProxy<T, C>(
     );
   }
 
-  // The coordination plane (claims/claims) must speak the SAME wire dialect
-  // as the commit plane: the lowercased TYPENAME (`task`), not the schema key
-  // (`tasks`). The server's commit-time claim guard probes the lease store
-  // with the commit op's model name; a lease recorded under the schema key
-  // never collides with it — which silently disarmed the guard for every
-  // model whose schema key differs from its typename (i.e. nearly all of
-  // them, plural key vs singular typename). Public surfaces (Claim.
-  // target.model) keep the schema key; only the wire/coordination targets
-  // use this.
+  // The coordination plane must speak the same wire dialect as the commit
+  // plane: the lowercased typename (`task`), not the schema key (`tasks`). The
+  // server's commit-time claim guard probes the lease store with the commit
+  // operation's model name, so a lease recorded under the schema key never
+  // matches — which would silently disarm the guard for every model whose
+  // schema key differs from its typename (a plural key against a singular
+  // typename, i.e. nearly all of them). Public surfaces such as
+  // `Claim.target.model` keep the schema key; only the wire and coordination
+  // targets use this.
   const wireModel = registeredModelName.toLowerCase();
 
   // Last-line guarantee for the public surface: any rejection from a lower
@@ -610,15 +626,16 @@ export function createModelProxy<T, C>(
   };
 
   // Claims this proxy currently holds, keyed by entity id. Lets the flat
-  // `release({ id })` and `update({ id, data })` find the lease + snapshot a `claim({ id })`
-  // took — no per-call handle. Released on dispose, explicit release, or TTL.
+  // `release({ id })` and `update({ id, data })` find the lease and snapshot a
+  // `claim({ id })` took, without a per-call handle. Released on dispose,
+  // explicit release, or TTL expiry.
   //
-  // `target` / `reason` / `expiresAt` are kept alongside the lease so
+  // `target`, `reason`, and `expiresAt` are kept alongside the lease so
   // `claim.state` can synthesize a self-claim: the server excludes a holder's
-  // own presence frames, so the local proxy is the ONLY place that knows "I
-  // hold this." `expiresAt` is the client's best estimate from the requested
-  // TTL (a genuine epoch-ms expiry, not a fabricated watermark), defaulting to
-  // the server's keepalive lease window when no TTL was requested.
+  // own presence frames, so this proxy is the only place that knows the client
+  // holds the row. `expiresAt` is the client's best estimate from the requested
+  // TTL (a real epoch-millisecond expiry, not a fabricated watermark), defaulting
+  // to the server's keepalive lease window when no TTL was requested.
   const activeClaims = new Map<
     string,
     {
@@ -630,10 +647,10 @@ export function createModelProxy<T, C>(
     }
   >();
 
-  // Server keepalive lease window (Hub `LEASE_RENEW_TTL_MS` — the same
-  // `LEASE_TTL_MS` from wire/protocol.ts, so client estimate and server
-  // lease can't drift). The fallback expiry estimate when a claim is
-  // taken without an explicit TTL.
+  // Server keepalive lease window — the same `LEASE_TTL_MS` the wire protocol
+  // declares, so the client's estimate and the server's lease cannot drift.
+  // This is the fallback expiry estimate when a claim is taken without an
+  // explicit TTL.
   const DEFAULT_LEASE_TTL_MS = LEASE_TTL_MS;
 
   const isClaimHandle = (value: unknown): value is Claim<T> =>
@@ -681,9 +698,9 @@ export function createModelProxy<T, C>(
   ): MutationOptions => {
     const { id: _id, data: _data, claim: _claim, ...rest } =
       params as unknown as Record<string, unknown>;
-    // THE write-options schema — runtime twin of the compile-time params.
-    // Catches plain-JS callers (`onStale: 'rejct'`) at the call site with
-    // a typed error instead of a silent no-op or a server 400.
+    // The write-options schema — the runtime twin of the compile-time params.
+    // Catches plain-JavaScript callers (for example `onStale: 'rejct'`) at the
+    // call site with a typed error instead of a silent no-op or a server 400.
     assertWriteOptions(rest, `${schemaKey} write`);
     return rest;
   };
@@ -705,12 +722,12 @@ export function createModelProxy<T, C>(
       );
     }
     const { id, ...options } = params;
-    // Is someone ELSE already on this target? Read the local coordination
-    // snapshot up front — it decides whether we'll need to re-read after the
-    // claim (a free / already-mine target can't have changed under us).
+    // Is someone else already on this target? Read the local coordination
+    // snapshot up front — it decides whether a re-read is needed after the
+    // claim (a free or already-held target cannot have changed underneath us).
     const held = collaboration.state({ model: wireModel, id });
     const contended = !!held && held.heldBy !== collaboration.selfParticipantId;
-    const failFast = options?.queue === false;
+    const failFast = options.queue === false;
 
     // Fail-fast (`queue: false`): if another participant already holds it,
     // reject now instead of queuing. Best-effort at the client (a racing
@@ -719,15 +736,15 @@ export function createModelProxy<T, C>(
     // the loser's first write. For work-distribution dedup that's exactly
     // right: don't wait (that would double-process), skip.
     if (failFast && contended) {
-      const claim = held ? claimContextFromClaim(held) : undefined;
+      const claim = claimContextFromClaim(held);
       throw new AbloClaimedError(
         formatClaimedErrorMessage({
           targetLabel: `${registeredModelName}/${id}`,
-          heldBy: held?.heldBy,
+          heldBy: held.heldBy,
           claim,
-          fallback: `${registeredModelName}/${id} is held by ${held?.heldBy ?? 'another participant'}.`,
+          fallback: `${registeredModelName}/${id} is held by ${held.heldBy ?? 'another participant'}.`,
         }),
-        { code: 'entity_claimed', claims: claim ? [claim] : undefined },
+        { code: 'entity_claimed', claims: [claim] },
       );
     }
 
@@ -744,69 +761,69 @@ export function createModelProxy<T, C>(
       );
     }
 
-    // Write-intent: enter the entity scope BEFORE acquiring the lease so the
-    // holder's claim presence broadcasts to whoever is in this entity group —
-    // including a peer that subscribed just before us. Pinning before the
-    // lease (rather than after) closes the subscribe-vs-broadcast race: the
-    // server fans `broadcastPresenceChange` out at claim time, so we must be
-    // in the group when `createClaim` lands. Awaited because the broadcast
-    // ordering depends on it; still soft (the store swallows reconcile errors).
+    // Write intent: enter the entity scope before acquiring the lease so the
+    // holder's claim presence broadcasts to everyone in this entity group,
+    // including a peer that subscribed just before us. Pinning before the lease
+    // rather than after closes the subscribe-versus-broadcast race: the server
+    // fans presence out at claim time, so this client must be in the group when
+    // the claim lands. Awaited because the broadcast ordering depends on it;
+    // still best-effort (the store swallows reconcile errors).
     await collaboration.pinScope?.({ [schemaKey]: id });
 
-    // Acquire the lease. Default (`queue` !== false) goes through the server's
-    // fair FIFO queue — `queue: true` resolves only once the lease is genuinely
-    // ours, blocking behind any current holder, with no TOCTOU gap (the server
-    // orders contenders). Fail-fast skips the queue: we already rejected an
-    // observed conflict above, so this just records our lease.
+    // Acquire the lease. By default (`queue` is not false) this goes through the
+    // server's fair FIFO queue: `queue: true` resolves only once the lease is
+    // genuinely ours, blocking behind any current holder, with no check-then-act
+    // gap because the server orders contenders. Fail-fast skips the queue: an
+    // observed conflict was already rejected above, so this just records the lease.
     const lease = await collaboration.createClaim({
       target: {
         model: wireModel,
         id,
-        ...(options?.field ? { field: options.field } : {}),
-        ...(options?.path ? { path: options.path } : {}),
-        ...(options?.range ? { range: options.range } : {}),
+        ...(options.field ? { field: options.field } : {}),
+        ...(options.path ? { path: options.path } : {}),
+        ...(options.range ? { range: options.range } : {}),
         ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
       },
-      reason: options?.reason ?? 'editing',
-      ttl: options?.ttl,
+      reason: options.reason ?? 'editing',
+      ttl: options.ttl,
       queue: !failFast,
-      maxQueueDepth: options?.maxQueueDepth,
+      maxQueueDepth: options.maxQueueDepth,
     });
 
-    // Only when we actually waited behind another holder can the row have
-    // changed underneath us — re-read so the claimed snapshot reflects what
-    // they committed before releasing. Two signals, either suffices:
-    //   - `lease.waited` — the server granted via `claim_granted`, i.e. we
-    //     provably queued behind a holder. Authoritative; works even when
-    //     the local snapshot is blind (claim fan-out is entity-scoped, so
-    //     org-wide-subscribed clients never observe peers' claims).
-    //   - `contended` — the local snapshot saw a holder up front. Kept for
-    //     the no-queue paths where no grant frame exists.
+    // Only when the claim actually waited behind another holder can the row have
+    // changed underneath us — re-read so the claimed snapshot reflects what that
+    // holder committed before releasing. Either of two signals suffices:
+    //   - `lease.waited` — the server granted the claim after the client
+    //     provably queued behind a holder. Authoritative; it works even when the
+    //     local snapshot is blind, since claim fan-out is entity-scoped and a
+    //     broadly-subscribed client never observes peers' claims.
+    //   - `contended` — the local snapshot saw a holder up front. Kept for the
+    //     no-queue paths, where no grant frame exists.
     if ((contended || lease.waited === true) && !failFast) {
-      // `type: 'complete'` forces the round-trip: the hydration ledger
-      // otherwise serves the LOCAL row for an already-hydrated id, and the
-      // holder's final write may not have fanned out to us yet — the exact
-      // stale-snapshot race this re-read exists to close.
+      // `type: 'complete'` forces the round-trip: the hydration ledger would
+      // otherwise serve the local row for an already-hydrated id, and the
+      // holder's final write may not have fanned out yet — the exact
+      // stale-snapshot race this re-read closes.
       await load({ where: [['id', id]], type: 'complete' });
       model = objectPool.get(id) ?? model;
     }
 
     const snapshot = collaboration.createSnapshot(schemaKey, id);
-    const reason = options?.reason ?? 'editing';
+    const reason = options.reason ?? 'editing';
     // The self-claim's `ClaimTarget` mirrors what a peer's `claim.state` would
-    // report (`state` maps `held.target.model` → `type`), so a holder and a
-    // peer see the SAME target.type for one row — the wire model token.
+    // report (`state` maps `held.target.model` to `type`), so a holder and a
+    // peer see the same `target.type` for one row — the wire model token.
     const selfTarget: ClaimTarget = {
       type: wireModel,
       id,
-      ...(options?.field ? { field: options.field } : {}),
-      ...(options?.path ? { path: options.path } : {}),
-      ...(options?.range ? { range: options.range } : {}),
+      ...(options.field ? { field: options.field } : {}),
+      ...(options.path ? { path: options.path } : {}),
+      ...(options.range ? { range: options.range } : {}),
       ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
     };
-    const expiresAt =
-      Date.now() +
-      (options?.ttl !== undefined ? toMs(options.ttl) : DEFAULT_LEASE_TTL_MS);
+    const ttlMs =
+      options.ttl !== undefined ? toMs(options.ttl) : DEFAULT_LEASE_TTL_MS;
+    const expiresAt = Date.now() + ttlMs;
     activeClaims.set(id, {
       lease,
       snapshot,
@@ -817,24 +834,63 @@ export function createModelProxy<T, C>(
     const target = {
       type: schemaKey,
       id,
-      ...(options?.field ? { field: options.field } : {}),
-      ...(options?.path ? { path: options.path } : {}),
-      ...(options?.range ? { range: options.range } : {}),
+      ...(options.field ? { field: options.field } : {}),
+      ...(options.path ? { path: options.path } : {}),
+      ...(options.range ? { range: options.range } : {}),
       ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
     };
-    const release = () => releaseClaim(id);
+    // A beat resolves with the server's extended expiry; keep the local
+    // self-claim estimate in step so `claim.state` renders the real window,
+    // and surface every answer through `onHeartbeat` (pressure signal).
+    const heartbeat = async (
+      beatOptions?: Duration | ClaimHeartbeatOptions,
+    ): Promise<ClaimHeartbeat> => {
+      if (!lease.heartbeat) {
+        throw new AbloValidationError(
+          'This claim handle has no heartbeat wiring, which the standard Ablo({ schema, apiKey }) client provides on every claim. This appears only when a claim is minted through an internal path that predates heartbeats.',
+          { code: 'claim_not_wired' },
+        );
+      }
+      const resolved = resolveHeartbeatOptions(beatOptions);
+      const beat = await lease.heartbeat({
+        ttl: resolved.ttl ?? options.ttl,
+        ...(resolved.details !== undefined ? { details: resolved.details } : {}),
+      });
+      const held = activeClaims.get(id);
+      if (held) held.expiresAt = beat.expiresAt;
+      options.onHeartbeat?.(beat);
+      return beat;
+    };
+
+    // Opt-in auto-heartbeat: the loop beats until release, and a definitive
+    // loss stops it and surfaces through `onHeartbeatLost`.
+    const stopHeartbeatLoop = options.heartbeat
+      ? startClaimHeartbeatLoop({
+          beat: () => heartbeat(),
+          intervalMs: heartbeatCadenceMs(ttlMs, options.heartbeat),
+          ...(options.onHeartbeatLost
+            ? { onLost: options.onHeartbeatLost }
+            : {}),
+        })
+      : undefined;
+
+    const release = () => {
+      stopHeartbeatLoop?.();
+      return releaseClaim(id);
+    };
     return {
       object: 'claim',
       id: lease.id,
       readAt: snapshot.stamp,
       target,
       reason,
-      ...(options?.description ? { description: options.description } : {}),
+      ...(options.description ? { description: options.description } : {}),
       data: modelAsRow<T>(model),
       release,
       revoke: () => {
         void release();
       },
+      heartbeat,
       [Symbol.asyncDispose]: release,
     };
   };
@@ -848,15 +904,15 @@ export function createModelProxy<T, C>(
   // are the same object.
   const claimApi: ClaimApi<T> = Object.assign(guard(claim), {
     state(params: ClaimLookupParams<T>): Claim | null {
-      // Read-interest: a passive observer subscribing to a row's claim state
-      // must enter that row's entity scope, or it sits on `org:`/`user:`
-      // groups only and never receives the holder's entity-scoped claim
-      // presence. Soft + fire-and-forget — never blocks or rejects the read.
+      // Read interest: a passive observer of a row's claim state must enter that
+      // row's entity scope, or it sits only on broader `org:`/`user:` groups and
+      // never receives the holder's entity-scoped claim presence. Best-effort
+      // and fire-and-forget — it never blocks or rejects the read.
       void collaboration?.enterScope?.({ [schemaKey]: params.id });
-      // Self-awareness: the server excludes a holder's OWN presence frames and
-      // the client skips them, so `state` returns null for a row WE hold.
-      // Synthesize the active claim for self from the stored lease so the
-      // holder sees its own claim (the JSDoc contract on `claim.state`).
+      // Self-awareness: the server excludes a holder's own presence frames and
+      // the client skips them, so `state` would return null for a row this client
+      // holds. Synthesize the active claim from the stored lease so the holder
+      // sees its own claim, honoring the documented contract on `claim.state`.
       const own = activeClaims.get(params.id);
       if (own) {
         return {
@@ -892,10 +948,10 @@ export function createModelProxy<T, C>(
   const operations: ModelOperations<T, C> = {
     retrieve: guard(
       async (params: ModelRetrieveParams): Promise<T | undefined> => {
-        // Read-interest enrolment: READ a row → enter its entity scope, so a
-        // Node/agent client lands in the same group the holder's claim presence
-        // fans out on and `claim.state`/`claim.queue` report peers. Soft +
-        // fire-and-forget — never make the read reject or slower.
+        // Read-interest enrolment: reading a row enters its entity scope, so a
+        // client lands in the same group the holder's claim presence fans out
+        // on and `claim.state`/`claim.queue` report peers. Best-effort and
+        // fire-and-forget — it never makes the read reject or run slower.
         void collaboration?.enterScope?.({ [schemaKey]: params.id });
         const rows = await load({
           ...params,
@@ -906,9 +962,8 @@ export function createModelProxy<T, C>(
       },
     ),
 
-    // NB: no auto scope enrolment on bulk `list`/`getAll` — that would
-    // subscribe to an unbounded set of rows' entity groups. Bulk-list scope
-    // enrolment is a deliberate follow-up (a bounded, opt-in policy).
+    // No automatic scope enrolment on bulk `list`/`getAll`: that would subscribe
+    // to an unbounded set of rows' entity groups.
     list: guard(load),
 
     get(id: string): T | undefined {
@@ -970,11 +1025,11 @@ export function createModelProxy<T, C>(
             { code: 'model_claim_not_configured' },
           );
         }
-        // Write-intent: enter the new row's entity scope BEFORE acquiring the
-        // create-claim so the holder's claim presence broadcasts to whoever is
-        // already in this entity group (closing the subscribe-vs-broadcast
+        // Write intent: enter the new row's entity scope before acquiring the
+        // create-claim so the holder's claim presence broadcasts to everyone
+        // already in this entity group (closing the subscribe-versus-broadcast
         // race — see `takeClaim`). Released with the lease in the `finally`
-        // below. Awaited for broadcast ordering; still soft.
+        // below. Awaited for broadcast ordering; still best-effort.
         await collaboration.pinScope?.({ [schemaKey]: id });
         autoLease = await collaboration.createClaim({
           target: {
@@ -992,10 +1047,10 @@ export function createModelProxy<T, C>(
         });
       }
 
-      // Default `organizationId` from the client's identity exactly like the
-      // mutator path (`buildModelForCreate`) — without this, a caller that
-      // omits it creates an org-unscoped row on one write door but not the
-      // other. An explicit value in `data` still wins via the spread.
+      // Default `organizationId` from the client's identity, matching the other
+      // write path — without this, a caller that omits it would create an
+      // org-unscoped row on one write path but not the other. An explicit value
+      // in `data` still wins via the spread.
       const orgDefault =
         (params.data as Record<string, unknown>).organizationId ??
         syncClient.getOrganizationId();
@@ -1096,7 +1151,7 @@ export function createModelProxy<T, C>(
           try {
             return await operations.update({ ...params, claim: handle });
           } finally {
-            await handle.release?.();
+            await handle.release();
           }
         }
         const { id } = params;
@@ -1133,10 +1188,10 @@ export function createModelProxy<T, C>(
               ...opts,
               ...(handle ? { claim: { id: handle.id } } : {}),
             };
-        // Local user update: `applyChanges` keeps change tracking ON so
-        // the edited fields land in `modifiedProperties` and actually get
-        // sent to the server. (`updateFromData` is the hydration path and
-        // would discard the tracking → empty `input: {}` no-op mutation.)
+        // Local user update: `applyChanges` keeps change tracking on so the
+        // edited fields land in `modifiedProperties` and are actually sent to
+        // the server. (`updateFromData` is the hydration path and would discard
+        // the tracking, producing an empty `input: {}` no-op mutation.)
         model.applyChanges(params.data);
         syncClient.update(model, effective);
         await waitForMutation(model, effective);
@@ -1167,17 +1222,17 @@ export function createModelProxy<T, C>(
         try {
           await operations.delete({ ...params, claim: handle });
         } finally {
-          await handle.release?.();
+          await handle.release();
         }
         return;
       }
       const { id } = params;
       const model = objectPool.get(id);
-      // Idempotent delete (AIP-135 for client-assigned ids): "ensure absent". A
-      // row that isn't in our replicated view is already gone from our
-      // perspective, so a delete is a no-op success — not an `entity_not_found`
-      // error. This matches the HTTP client (which never threw here) and makes
-      // delete safe to retry / race (two actors deleting the same row).
+      // Idempotent delete: "ensure absent". A row that isn't in this client's
+      // replicated view is already gone from its perspective, so a delete is a
+      // no-op success rather than an `entity_not_found` error. This matches the
+      // HTTP client and makes delete safe to retry or race (two actors deleting
+      // the same row).
       if (!model) return;
       const claimed = activeClaims.get(id);
       const opts = mutationOptions(params);

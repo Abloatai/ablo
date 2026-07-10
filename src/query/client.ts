@@ -1,15 +1,15 @@
 /**
- * HTTP client for the generic /sync/query endpoint.
+ * The HTTP client for the sync query endpoint.
  *
- * Thin wrapper over fetch() that:
- *   - POSTs a QueryBatch as JSON
- *   - Sends the bearer credential via withAuthHeaders (Authorization header)
- *   - Throws on non-2xx responses
- *   - Parses the response into a typed QueryBatchResult
+ * {@link postQuery} is a small wrapper over `fetch` that POSTs a
+ * {@link QueryBatch} as JSON to `/sync/query`, attaches the bearer credential
+ * as an `Authorization` header, and parses the response into a typed
+ * {@link QueryBatchResult}. An HTTP failure is not thrown: it is logged, and
+ * every query in the batch comes back with an empty result, so a
+ * fire-and-forget caller cannot crash on an unhandled rejection.
  *
- * The higher-level BootstrapHelper methods (fetchDeckSlideLayers,
- * fetchChatMessages, etc.) use this to issue structured queries
- * without duplicating the fetch boilerplate.
+ * Higher-level query helpers build on this to issue structured queries without
+ * repeating the fetch and error-handling boilerplate.
  */
 
 import { z } from 'zod';
@@ -21,12 +21,11 @@ import { getContext } from '../context.js';
 
 // ── Response validation ─────────────────────────────────────────────────
 //
-// Each result slot is an array of rows (or an object for bundled
-// responses). Server-side per-query failures surface here as `[]`, but
-// the server logs them via `console.error('[query.error] ...')` — alert
-// on that prefix, not on emptiness. Parsing through Zod normalizes
-// `null` slots into empty arrays so downstream callers never see raw
-// null.
+// Each result slot is an array of rows, or an object for a bundled response.
+// A per-query failure on the server surfaces here as an empty array rather
+// than an error, so emptiness alone does not distinguish "no rows" from
+// "the query failed." Parsing through Zod normalizes a `null` slot into an
+// empty array, so callers never receive a raw null.
 const QueryResultSchema = z
   .union([z.array(z.unknown()), z.record(z.string(), z.unknown()), z.null()])
   .transform((val): unknown[] | Record<string, unknown> => {
@@ -59,30 +58,35 @@ export interface PostQueryOptions {
   getAuthToken?: AuthTokenGetter;
 
   /**
-   * Compatibility fallback for callers that have only a copied token string.
-   * New SDK internals should pass `getAuthToken`.
+   * A fixed credential string, for callers that hold only a copied token.
+   * Prefer `getAuthToken`, which is re-read on each request so a refresh takes
+   * effect without rebuilding the client.
    */
   capabilityToken?: string;
 
   /**
-   * THE auth-recovery backbone (the store's single-flight re-mint with FSM
-   * outcome routing — see `CredentialLifecycle.recoverFromAuthRejection`).
-   * When a query is rejected with a 401, the failure's `RecoveryClass` is
-   * passed here; `'retry'` means a fresh credential landed in the credential
-   * source and the request is replayed ONCE (the PowerSync/axios-interceptor
-   * pattern: invalidate on 401, single-flight refresh, one-shot replay —
-   * never a retry loop). Absent ⇒ the pre-backbone behavior: log + empty.
+   * An optional hook that tries to recover from a rejected credential. When a
+   * query comes back with a 401, its {@link RecoveryClass} is passed here: a
+   * return of `'retry'` means a fresh credential has been obtained and the
+   * request is replayed exactly once, while `'stop'` ends the attempt. Because
+   * the replay happens at most once, a wedged credential cannot cause a retry
+   * loop. When this hook is absent, a 401 is logged and returns empty results
+   * like any other failure.
    */
   recoverCredential?: (recovery: RecoveryClass) => Promise<'retry' | 'stop'>;
 }
 
 /**
- * POST a batch of queries to /sync/query. Returns the parsed
- * QueryBatchResult. Throws a descriptive error on HTTP failure.
+ * Sends a batch of queries to `/sync/query` and returns the parsed
+ * {@link QueryBatchResult}. An HTTP failure is not thrown: it is logged, and
+ * every query in the batch comes back with an empty result, which keeps a
+ * fire-and-forget caller from crashing on an unhandled rejection. A 401 may
+ * first be handed to {@link PostQueryOptions.recoverCredential} for a single
+ * retry.
  *
- * The server guarantees results[i] corresponds to queries[i] in the
- * request — callers can rely on index alignment to extract typed
- * results from a multi-query batch.
+ * The response preserves order: `results[i]` corresponds to the query at
+ * `queries[i]`, so callers can rely on index alignment to pull typed results
+ * out of a multi-query batch.
  */
 export async function postQuery(
   options: PostQueryOptions,
@@ -91,10 +95,10 @@ export async function postQuery(
   const url = `${options.baseUrl}/sync/query`;
   const timeout = options.fetchTimeout ?? 30_000;
 
-  // At most TWO attempts: the original request, plus ONE replay after a
-  // successful credential recovery (see `recoverCredential`). Bounded by
-  // construction — a second auth rejection falls through to the log+empty
-  // path, so a wedged credential can never retry-loop.
+  // At most two attempts: the original request, plus one replay after a
+  // successful credential recovery (see `recoverCredential`). A second auth
+  // rejection falls through to the log-and-empty path, so a wedged credential
+  // can never retry-loop.
   for (let attempt = 0; ; attempt++) {
     // Race the fetch against a timeout so hung requests don't block
     // the calling helper indefinitely. Fresh controller per attempt.
@@ -117,13 +121,13 @@ export async function postQuery(
       });
 
       if (!response.ok) {
-        // Build the typed AbloError for this HTTP failure (same code→class
-        // map the throwing paths use) so the log is tagged + carries a
-        // registry `code` (e.g. AbloAuthenticationError/session_expired on a
-        // 401) instead of a bare status. We deliberately DON'T throw —
-        // fire-and-forget callers would kill the Next.js router on an
-        // unhandled rejection — and still return empty slots, but the failure
-        // is now legible as an Ablo error.
+        // Build the typed AbloError for this HTTP failure (the same
+        // code-to-class map the throwing paths use) so the log carries a
+        // registry `code` — for example an authentication error with
+        // `session_expired` on a 401 — rather than a bare status. This path
+        // deliberately does not throw, since a fire-and-forget caller could
+        // crash on an unhandled rejection. It returns empty slots while still
+        // logging a legible Ablo error.
         let body: unknown = null;
         try {
           body = await response.clone().json();
@@ -132,13 +136,12 @@ export async function postQuery(
         }
         const err = translateHttpError(response.status, body);
 
-        // 401 → hand the failure to the auth-recovery backbone, ONCE. The
-        // class routes the decision: `access_credential_expiry` re-mints
-        // silently and replays; `session_expiry` reports terminal session
-        // loss (sign-out is the FSM's call, not ours); everything else stops.
-        // A bare 401 with no readable code is classified as an expired access
-        // key — the NetworkProbe precedent: the only terminal path is the
-        // re-mint itself resolving null, never an ambiguous status.
+        // On a 401, hand the failure to the recovery hook once. The recovery
+        // class routes the outcome: an expired access credential is re-minted
+        // and the request replays; a lost session is terminal and stops here;
+        // anything else stops. A bare 401 with no readable code is treated as
+        // an expired access credential, so the only terminal path is the
+        // re-mint itself coming back empty, never an ambiguous status.
         if (attempt === 0 && response.status === 401 && options.recoverCredential) {
           const recovery: RecoveryClass =
             typeof err.code === 'string'
@@ -153,11 +156,11 @@ export async function postQuery(
           }
         }
 
-        // Routed through the gated logger so it obeys ABLO_LOG_LEVEL like
-        // everything else: a consumer-register `warn` (their models + the
-        // typed message + a wire `code`) with the forensics on a `debug`
-        // companion. Actionable and not self-healing — the read returns
-        // empty until the underlying cause (auth, network) is resolved.
+        // Logged through the level-gated logger, so it honors ABLO_LOG_LEVEL:
+        // a `warn` line the app developer can read (the models, the typed
+        // message, and a wire `code`), with the forensic detail on a companion
+        // `debug` line. The read stays empty until the underlying cause, such
+        // as auth or network, is resolved.
         const models = batch.queries.map((q) => q.model).join(', ');
         getContext().logger.warn(
           `Could not load ${models} — ${err.message} (code: ${err.code ?? response.status}). No results were returned.`,

@@ -1,18 +1,14 @@
 /**
- * Typed error hierarchy for `@abloatai/ablo`.
- *
- * Inlined directly so the publishable dist is self-contained. The public
- * package should never reference an unpublished internal package from emitted
- * JS; strict bundlers surface that immediately.
- *
- * ### Two patterns for consumers
+ * The typed error hierarchy for this package. Every error the SDK throws is an
+ * {@link AbloError} or one of its subclasses, so a consumer can catch broadly or
+ * narrowly. There are two equivalent ways to tell errors apart:
  *
  * ```ts
- * // Stripe-style instanceof
+ * // By class, with instanceof
  * if (err instanceof AbloRateLimitError) backoff(err.retryAfterSeconds);
  *
- * // Discriminator-string (for cross-boundary cases where the class
- * // identity gets lost, e.g. across a web worker postMessage)
+ * // By discriminator string, for cases where class identity is lost —
+ * // for example after an error crosses a web worker boundary
  * if (err.type === 'AbloRateLimitError') { ... }
  * ```
  *
@@ -44,37 +40,41 @@ export {
 
 // ── AbloError hierarchy — the typed error surface ────────────────────
 
-/** Common shape for all errors thrown by this SDK. */
+/**
+ * The base class for every error this SDK throws. It carries the fields common
+ * to all of them — a {@link type} discriminator, an optional stable {@link code},
+ * and optional HTTP and diagnostic metadata — and defines the shared JSON and
+ * string serialization. Every other error class extends it.
+ */
 export class AbloError extends Error {
-  /** Discriminator string — matches the class name. Lets consumers
-   *  switch on `e.type` without `instanceof` checks across package
-   *  boundaries (matches Stripe's `err.type` pattern). */
+  /** A discriminator string equal to the class name. Switch on `error.type` to
+   *  distinguish error kinds when `instanceof` is unreliable, such as after an
+   *  error has crossed a serialization boundary. */
   readonly type: string = 'AbloError';
-  /** Stable short identifier for logs + metrics, drawn from the closed
-   *  {@link ErrorCode} registry — e.g. `'apikey_invalid'`,
-   *  `'capability_scope_denied'`. Stored as a plain `string` (not
-   *  `ErrorCode`) so an older SDK still surfaces a newer server's code it
-   *  doesn't recognise yet; producers are constrained at the constructor
-   *  param instead. */
+  /** A stable, machine-readable identifier for the error, drawn from the
+   *  {@link ErrorCode} registry — for example `'apikey_invalid'` or
+   *  `'capability_scope_denied'` — suitable for logs, metrics, and `switch`
+   *  handling. It is typed as a plain `string` rather than {@link ErrorCode} so
+   *  this client can still surface a code from a newer server that it does not
+   *  yet recognize; code producers are constrained at the constructor instead. */
   readonly code?: string;
-  /** HTTP status code when the error originated from an HTTP response. */
+  /** HTTP status code, when the error originated from an HTTP response. */
   readonly httpStatus?: number;
-  /** Correlation id for ops — present when the server sent one on
-   *  `x-request-id`. Include in support tickets. */
+  /** A correlation id for tracing a request through the server, present when the
+   *  server returned one on the `x-request-id` header. Include it in support
+   *  requests. */
   readonly requestId?: string;
-  /** Which input caused the error — a model/field path like
-   *  `'dataroomMember.grants.subject'`. Mirrors Stripe's `error.param`;
-   *  lets tooling point at the exact offending declaration. */
+  /** The specific input that caused the error, as a model or field path such as
+   *  `'dataroomMember.grants.subject'`, so tooling can point at the exact
+   *  offending value. */
   readonly param?: string;
-  /** Link to the docs for this `code`. Mirrors Stripe's `error.doc_url`.
-   *  Defaults from `code` via {@link docUrlForCode} when omitted. */
+  /** A link to the documentation for this error's {@link code}. When not set
+   *  explicitly, it is derived from the code by {@link docUrlForCode}. */
   readonly docUrl?: string;
-  /** Domain-specific structured payload merged into the wire envelope —
-   *  e.g. a schema push's `{ warnings, unexecutable }`, a stale write's
-   *  conflicting rows. Mirrors how Stripe attaches type-specific fields
-   *  (`decline_code`, `payment_intent`) alongside the standard ones, so a
-   *  structured error keeps its detail through `toJSON` instead of being
-   *  flattened to a bare message. */
+  /** Extra structured data specific to this error, merged into the serialized
+   *  envelope — for example a schema push's `{ warnings, unexecutable }`, or the
+   *  conflicting rows of a stale write. This detail is preserved through
+   *  {@link toJSON} rather than flattened into the message. */
   readonly details?: Readonly<Record<string, unknown>>;
 
   constructor(
@@ -104,9 +104,10 @@ export class AbloError extends Error {
   }
 
   /**
-   * Serialize to Stripe's error-object shape: `{ type, code, param, message,
-   * doc_url, request_id }`. One JSON shape across HTTP bodies, WS frames, and
-   * logs — so consumers parse Ablo errors the way they already parse Stripe's.
+   * Serializes the error to its wire shape: `{ type, code, param, message,
+   * doc_url, request_id }`, with any {@link details} merged in. This is the same
+   * JSON shape the SDK uses across HTTP bodies, WebSocket frames, and logs, so a
+   * consumer parses every Ablo error the same way.
    */
   toJSON(): {
     type: string;
@@ -129,12 +130,13 @@ export class AbloError extends Error {
   }
 
   /**
-   * A single, leak-proof line for logs and `String(err)` / template
-   * interpolation: `AbloValidationError [code]: message (see docs) [request_id: …]`.
+   * Formats the error as a single line for logs and string interpolation:
+   * `AbloValidationError [code]: message (see docs) [request_id: …]`.
    *
-   * Deliberately does NOT dump `details`, `cause`, or the stack — the thing that
-   * makes `console.error(richError)` an unreadable wall of text. The structured
-   * payload stays available via {@link toJSON}; this is the human one-liner.
+   * It intentionally omits {@link details}, the cause, and the stack, which are
+   * what turn a logged rich error into an unreadable wall of text. The full
+   * structured payload remains available through {@link toJSON}; this is the
+   * concise human-readable form.
    */
   override toString(): string {
     const code = this.code ? ` [${this.code}]` : '';
@@ -145,9 +147,9 @@ export class AbloError extends Error {
 }
 
 /**
- * Map a stable error `code` to its docs URL — the one place the convention
- * lives, so every error carrying a code gets a `doc_url` for free (Stripe
- * ships a link on every error).
+ * Builds the documentation URL for a stable error {@link ErrorCode}. This is the
+ * single place the URL convention lives, so every error that carries a code gets
+ * a `doc_url` automatically.
  */
 export function docUrlForCode(code: ErrorCode): string {
   return `https://docs.abloatai.com/errors#${code}`;
@@ -203,11 +205,11 @@ export class AbloValidationError extends AbloError {
 }
 
 /**
- * 404 — an UPDATE/DELETE addressed a row that doesn't exist (or is outside the
- * caller's org). The engine reports such targets on `CommitReceipt.missingIds`;
- * the typed resource wrappers raise this instead of returning a success receipt
- * for a write that quietly matched zero rows. Carries the offending ids so a
- * caller can see exactly which targets were absent.
+ * An update or delete addressed a row that does not exist, or lies outside the
+ * caller's organization (HTTP 404). Such targets are reported on
+ * {@link CommitReceipt.missingIds}, and the typed resource methods raise this
+ * error rather than returning a successful receipt for a write that quietly
+ * matched zero rows. The absent ids are carried on {@link missingIds}.
  */
 export class AbloNotFoundError extends AbloError {
   override readonly type = 'AbloNotFoundError' as const;
@@ -230,15 +232,13 @@ export class AbloServerError extends AbloError {
 }
 
 /**
- * 409 — a write carried `readAt: N` but the target entity has received
- * deltas since `N`. The caller's reasoning snapshot is stale; the safe
- * response is to re-read (or re-capture a watermark) and regenerate.
+ * A write carried a `readAt` watermark, but the target row has changed since
+ * that point (HTTP 409). The snapshot the caller reasoned from is stale, so the
+ * safe response is to re-read the row and regenerate the write.
  *
- * Carries `conflicts` so callers can inspect which specific (model, id)
- * pairs moved during the generation window — useful for metrics
- * ("72% of stale rejects were on slide titles") and for selective
- * regeneration (only re-think the slides that changed, not the whole
- * deck).
+ * {@link conflicts} lists the specific model-and-id pairs that changed during
+ * the window between the read and the write, which lets a caller regenerate only
+ * the rows that actually moved rather than everything.
  */
 export class AbloStaleContextError extends AbloError {
   override readonly type = 'AbloStaleContextError' as const;
@@ -273,16 +273,15 @@ export class AbloStaleContextError extends AbloError {
 }
 
 /**
- * The functional `update(id, current => next)` form exhausted its reconcile
- * budget — the row stayed continuously contended (a hot row under sustained
- * concurrent writes), so no attempt could land a compare-and-swap.
+ * The functional `update(id, current => next)` form gave up after exhausting its
+ * reconcile budget, because the row stayed continuously contended under
+ * sustained concurrent writes and no attempt could land its compare-and-swap.
  *
- * This is the ONLY coordination concept the functional update ever surfaces, and
- * only at the extreme: the SDK has already read-fresh → recomputed → retried on
- * every stale/claim conflict on the caller's behalf. Catch it to back off and
- * retry later, raise the `retries` budget, or move that row to the WebSocket
- * transport (which parks writers in a fair FIFO queue instead of racing). The
- * last underlying conflict that drove the final retry is on `.cause`.
+ * The SDK reaches this only at the extreme: it has already re-read, recomputed,
+ * and retried on every intervening conflict on the caller's behalf. Catch it to
+ * back off and retry later, raise the `retries` budget, or move the row to the
+ * WebSocket transport, which queues writers fairly instead of racing them. The
+ * last underlying conflict is available on `cause`.
  */
 export class AbloContentionError extends AbloError {
   override readonly type = 'AbloContentionError' as const;
@@ -324,15 +323,14 @@ export interface ClaimContext {
   readonly field?: string;
   readonly status?: string;
   readonly position?: number;
-  /** Epoch-ms the claim expires. One timestamp encoding everywhere. */
+  /** The epoch-milliseconds timestamp at which the claim expires. */
   readonly expiresAt?: number;
   readonly declaredAt?: number;
   readonly entityType?: string;
   readonly entityId?: string;
-  // The claim target reuses the canonical {@link ModelTarget} (Partial: an
-  // error-context locator may be sparse) rather than re-declaring the
-  // model/id/path/range/field/meta shape inline — see
-  // docs/plans/ablo-claim-resource-canonicalization.md.
+  // The claim target reuses the canonical {@link ModelTarget} shape (as a
+  // Partial, since an error-context locator may be sparse) rather than
+  // re-declaring model, id, path, range, field, and meta inline.
   readonly target?: Partial<ModelTarget>;
   readonly meta?: Record<string, unknown>;
 }
@@ -427,9 +425,9 @@ export class AbloClaimedError extends AbloError {
 }
 
 /**
- * The `/`-joined human label for a claim target — `model/id/field`, dropping
- * absent parts, falling back to `'target'`. The one place this join lived in
- * three copies (client `Ablo`, HTTP `ApiClient`, `awaitClaimGrant`).
+ * Builds a human-readable label for a claim target by joining its `model`, `id`,
+ * and `field` with `/`, omitting any absent parts and falling back to `'target'`
+ * when none are present.
  */
 export function claimTargetLabel(target: {
   readonly model?: string;
@@ -440,10 +438,9 @@ export function claimTargetLabel(target: {
 }
 
 /**
- * Build the {@link AbloClaimedError} for a contended `ablo.<model>` write — the
- * single factory shared by the realtime client (`Ablo`) and the HTTP client
- * (`ApiClient`), which carried byte-identical copies. The first claim is the
- * holder whose metadata shapes the message.
+ * Builds the {@link AbloClaimedError} for a write that was rejected because the
+ * row is claimed. The first entry in `claims` is treated as the current holder,
+ * and its metadata shapes the error message.
  */
 export function claimedError(
   target: { readonly model?: string; readonly id?: string; readonly field?: string },
@@ -466,37 +463,36 @@ export function claimedError(
 // ── Domain-specific subclasses ───────────────────────────────────────
 
 /**
- * Structured description of the capability an agent would need to
- * satisfy a denied request. Mirrors the x402 `paymentRequirements`
- * shape: the server emits enough information for the client to
- * attenuate (or request) a capability that would pass on retry.
+ * A structured description of the capability that would be needed to satisfy a
+ * denied request. The server emits enough detail for the client to request, or
+ * narrow an existing capability into, one that would pass on retry.
  */
 export interface RequiredCapability {
-  /** Operation or capability scope identifier (e.g. `"slide.update"`,
-   *  `"subscribe"`). */
+  /** The operation or capability scope, for example `"slide.update"` or
+   *  `"subscribe"`. */
   readonly scope: string;
-  /** Concrete constraints the capability must satisfy. Keys map to
-   *  Datalog fact families — e.g. `{ syncGroup: ["org_abc"] }` for a
-   *  rejected subscription. Forward-compatible: ignore unknown keys. */
+  /** The concrete constraints the capability must satisfy — for example
+   *  `{ syncGroup: ["org_abc"] }` for a rejected subscription. Treat unknown
+   *  keys as forward-compatible additions and ignore them. */
   readonly constraints?: Readonly<Record<string, readonly string[] | string>>;
-  /** Issuer hint — public-key fingerprint or well-known URL fragment. */
+  /** A hint at the issuer — a public-key fingerprint or well-known URL
+   *  fragment. */
   readonly issuer?: string;
-  /** Server-suggested maximum TTL for the attenuated capability. */
+  /** The maximum lifetime, in seconds, the server suggests for the narrowed
+   *  capability. */
   readonly ttlSeconds?: number;
-  /** Single-use nonce to embed in the retry's capability facts; binds
-   *  retry → denial and prevents replay of a stale attenuation. */
+  /** A single-use value to embed in the retried request's capability, which
+   *  ties the retry to this specific denial and prevents replaying an old
+   *  capability. */
   readonly nonce?: string;
 }
 
 /**
- * Canonical receipt returned by every successful or rejected commit,
- * regardless of transport (WebSocket `mutation_result` payload, HTTP
- * `/v1/commits` response body, or `AgentJob.result.receipt`). One
- * shape across all three surfaces.
- *
- * Linear-style correlation receipt — no cryptographic signature
- * (single-tenant trust boundary). A Hub signature is a forward-
- * compatible extension when cross-org agent crossings arrive.
+ * The receipt returned for every commit, whether it succeeded or was rejected,
+ * and regardless of how it was sent — the WebSocket `mutation_result` payload,
+ * the HTTP `/v1/commits` response body, and an agent job's result all use this
+ * one shape. It is a correlation receipt, carrying the ids and outcome needed to
+ * reconcile a commit rather than a cryptographic proof.
  */
 export interface CommitReceipt {
   readonly object: 'commit_receipt';
@@ -504,7 +500,7 @@ export interface CommitReceipt {
   readonly clientTxId: string;
   /** Server-issued opaque commit id — typically `String(lastSyncId)`. */
   readonly serverTxId: string;
-  /** Convenience boolean. `status === 'confirmed'`. */
+  /** A convenience boolean, equal to `status === 'confirmed'`. */
   readonly success: boolean;
   /** `'confirmed'` on apply, `'rejected'` on any failure. */
   readonly status: 'confirmed' | 'rejected';
@@ -514,12 +510,12 @@ export interface CommitReceipt {
   /** Number of operations metered. Reported on both success and
    *  rejection so quota systems see attempted work. */
   readonly ops?: number;
-  /** Ids of UPDATE/DELETE targets that matched ZERO rows (loud 0-row writes).
-   *  Present (non-empty) only when a write missed; typed wrappers raise
-   *  `AbloNotFoundError` from it. */
+  /** Ids of update or delete targets that matched no row. Present and non-empty
+   *  only when a write missed; the typed resource methods raise
+   *  {@link AbloNotFoundError} from it. */
   readonly missingIds?: readonly string[];
-  /** Populated on rejection. `requiredCapability` (when present)
-   *  carries the x402-style structured retry hint. */
+  /** Present on rejection. When set, `requiredCapability` carries the structured
+   *  hint describing what would let the request succeed on retry. */
   readonly error?: {
     readonly code: string;
     readonly message: string;
@@ -529,18 +525,17 @@ export interface CommitReceipt {
 }
 
 /**
- * A scoped credential was denied — either the key is unknown / revoked /
- * expired (`capability_invalid`), or the connection's resolved scope
- * doesn't cover the attempted action (`capability_scope_denied`). With
- * opaque restricted (`rk_`) API keys this is a server-side check against
- * the key's `syncGroups` / `operations`, not a signed-caveat verification.
+ * A scoped credential was denied, either because the key is unknown, revoked, or
+ * expired (`capability_invalid`), or because the connection's scope does not
+ * cover the attempted action (`capability_scope_denied`). For restricted (`rk_`)
+ * API keys this is a server-side check against the key's granted sync groups and
+ * operations.
  *
- * Extends `AbloPermissionError` so existing `instanceof CapabilityError`
- * checks keep working AND broader `instanceof AbloPermissionError`
- * matches for consumers who don't care about the scope specifics.
- *
- * `requiredCapability` (when present) describes the scope a key must
- * carry for the request to succeed on retry.
+ * It extends {@link AbloPermissionError}, so it is caught both by code that
+ * specifically checks for `CapabilityError` and by code that only distinguishes
+ * the broader permission category. When present, {@link requiredCapability}
+ * describes the scope a key would need to carry for the request to succeed on
+ * retry.
  */
 export class CapabilityError extends AbloPermissionError {
   readonly requiredCapability?: RequiredCapability;
@@ -561,15 +556,12 @@ export class CapabilityError extends AbloPermissionError {
 // ── Legacy session error (now part of the typed hierarchy) ───────────
 
 /**
- * SyncSessionError — Thrown when authentication/session is invalid or expired.
- * Signals that the user should be redirected to sign in
- * rather than showing a generic retry option.
+ * Thrown when the login session itself is invalid or expired, signaling that the
+ * user should be sent to sign in again rather than offered a generic retry.
  *
- * Extends `AbloAuthenticationError` so existing
- * `SyncSessionError.isSessionError(...)` duck-type callers keep
- * working, AND downstream code that only catches the typed hierarchy
- * (`instanceof AbloAuthenticationError` / `e.type === 'AbloAuthenticationError'`)
- * now sees session failures too.
+ * It extends {@link AbloAuthenticationError}, so it is caught both by code using
+ * the {@link SyncSessionError.isSessionError} check and by code that catches the
+ * authentication category in general.
  */
 export class SyncSessionError extends AbloAuthenticationError {
   readonly isSessionError = true;
@@ -586,7 +578,9 @@ export class SyncSessionError extends AbloAuthenticationError {
   }
 
   /**
-   * Check if an error is a session error (duck-type check)
+   * Returns true when a value is a {@link SyncSessionError}, or any error-like
+   * object that reports itself as a session error through an `isSessionError`
+   * flag.
    */
   static isSessionError(error: unknown): error is SyncSessionError {
     if (error instanceof SyncSessionError) {
@@ -599,42 +593,42 @@ export class SyncSessionError extends AbloAuthenticationError {
   }
 
   /**
-   * Check if an HTTP response status indicates a session error
+   * Determines whether an HTTP response means the login session has expired and
+   * the user should sign in again. When the body carries a structured Ablo error
+   * code, the decision is made from that code's recovery class; otherwise a bare
+   * 401 is treated as an expiry and a 403 is not.
    */
   static isSessionErrorResponse(status: number, body?: string): boolean {
-    // "Should this response sign the user out?" — TRUE only for a genuine
-    // expiry of the LONG-LIVED login (`recovery: 'session_expiry'`). Decided
-    // via the closed recovery taxonomy rather than a hardcoded code list, so
-    // the access-vs-session split lives in one place (errorCodes.ts). This is
-    // behaviourally identical to the old `session_expired || jwt_expired` list.
+    // Sign the user out only for a genuine expiry of the long-lived login
+    // (`recovery: 'session_expiry'`). The decision runs through the recovery
+    // classification rather than a hardcoded list, so the access-versus-session
+    // split lives in one place.
     //
-    // Deliberately NOT true for `access_credential_expiry` (`apikey_expired` —
-    // the Stripe-style ephemeral key): an expired `ek_`/`rk_` is re-mintable
-    // from the still-valid login and must NOT log the user out — the connection
-    // layer silently re-mints instead. Likewise NOT true for `auth_blocked` /
-    // `permission` failures (api_key_required, jwt_issuer_untrusted, 403s):
-    // re-auth re-mints the same rejected credential and loops ("flash then
-    // bounce to /signin").
+    // It deliberately does not fire for `access_credential_expiry`
+    // (`apikey_expired`): an expired short-lived key is re-mintable from the
+    // still-valid login and must not sign the user out — the connection layer
+    // re-mints it instead. It also does not fire for `auth_blocked` or
+    // `permission` failures, where re-authenticating would present the same
+    // rejected credential and loop.
     const code = extractWireCode(body);
     if (code) {
       return classifyRecovery(code) === 'session_expiry';
     }
-    // No structured code (bare body, non-Ablo proxy response): a 401 is taken as
-    // expiry — the historical default that drives re-auth — while a 403 is a
-    // permission failure, not a session error.
+    // With no structured code (a bare body or a non-Ablo proxy response), treat
+    // a 401 as an expiry that drives re-authentication, and a 403 as a
+    // permission failure rather than a session error.
     return status === 401;
   }
 }
 
 /**
- * WS-close analog of {@link SyncSessionError.isSessionErrorResponse}'s
- * access-vs-session split: `true` for close reasons that mean the SHORT-LIVED
- * access credential (`ek_`/`rk_`) passed its expiry — the hub's keepalive
- * reaper closes such sockets with `4001 'credential_expired'`. Re-mintable
- * from the still-valid login, so the connection layer silently re-mints and
- * reconnects; never a sign-out, never a local-data clear. Every OTHER session
- * close reason (key revocation, genuine login loss) stays terminal — a
- * revoked credential must not be silently re-minted around.
+ * The WebSocket-close counterpart to {@link SyncSessionError.isSessionErrorResponse}:
+ * returns true for close reasons that mean the short-lived access credential
+ * (`ek_` or `rk_`) has expired. The server closes such sockets with code 4001
+ * and reason `'credential_expired'`. Because the credential is re-mintable from
+ * the still-valid login, the connection layer re-mints it and reconnects rather
+ * than signing the user out or clearing local data. Every other session close
+ * reason, such as a revoked key or a genuinely lost login, stays terminal.
  */
 export function isAccessCredentialExpiryCloseReason(reason: string): boolean {
   return reason === 'credential_expired' || classifyRecovery(reason) === 'access_credential_expiry';
@@ -685,8 +679,8 @@ const ErrorFieldSchema = z
 
 const ErrorBodyShapeSchema = z
   .object({
-    /** Legacy: `error` was a flat code string on older endpoints. Newer
-     *  endpoints (CommitReceipt) carry `error` as a nested object. */
+    /** The `error` field may be a flat code string, as some endpoints return,
+     *  or a nested error object, as a {@link CommitReceipt} carries. */
     error: ErrorFieldSchema,
     code: OptionalWireStringSchema,
     reason: OptionalWireStringSchema,
@@ -709,16 +703,16 @@ function parseErrorBodyShape(body: unknown): ErrorBodyShape {
 }
 
 /**
- * Coerce ANY thrown value into an {@link AbloError} — the last-line guarantee
- * that an SDK consumer never catches an untagged error. An already-typed
- * AbloError passes through untouched (so `code`/`httpStatus`/subclass survive);
- * a bare `Error` keeps its message and is preserved as `cause` (carrying any
- * `.code` someone attached); a non-Error is stringified.
+ * Coerces any thrown value into an {@link AbloError}, so a consumer never catches
+ * an untyped error from the SDK. An error that is already an {@link AbloError}
+ * passes through unchanged, preserving its subclass, `code`, and `httpStatus`; a
+ * plain `Error` keeps its message and is retained as the `cause` (carrying any
+ * `code` attached to it); anything else is stringified.
  *
- * This is the client mirror of the server's `normalizeError` — applied at the
- * SDK's public async boundaries so `instanceof AbloError` / `e.type` always
- * hold for whatever a consumer catches, regardless of which internal layer
- * (transport, IndexedDB, bootstrap, a third-party throw) produced it.
+ * The SDK applies this at its public async boundaries so that `instanceof
+ * AbloError` and `error.type` hold for whatever a consumer catches, no matter
+ * which internal layer — transport, local storage, bootstrap, or a third-party
+ * throw — produced the original error.
  */
 export function toAbloError(err: unknown): AbloError {
   if (err instanceof AbloError) return err;
@@ -731,16 +725,15 @@ export function toAbloError(err: unknown): AbloError {
 }
 
 /**
- * Build the appropriate typed {@link AbloError} from a wire error — the
- * single code→class mapping shared by every transport that can reject a
- * request (HTTP responses via {@link translateHttpError}, WebSocket
- * `mutation_result`/`claim_ack` frames, agent-job receipts).
+ * Builds the appropriate typed {@link AbloError} from a wire error. This is the
+ * single code-to-class mapping shared by every transport that can reject a
+ * request — HTTP responses through {@link translateHttpError}, WebSocket result
+ * frames, and agent-job receipts.
  *
- * Code-first, then status-driven. A known {@link ErrorCode} carries its own
- * canonical `httpStatus` in the registry, so frame transports that don't have
- * an HTTP status (the WebSocket commit path) still produce the right subclass
- * — instead of a hand-rolled `new Error(message)` that drops out of the typed
- * hierarchy and loses `code`/`httpStatus`/retryability.
+ * It decides by code first, then by status. Because a known {@link ErrorCode}
+ * carries its canonical HTTP status in the registry, a transport that has no
+ * status of its own (such as the WebSocket commit path) still produces the right
+ * subclass, with its `code`, status, and retryability intact.
  */
 export function errorFromWire(
   message: string,
@@ -774,9 +767,15 @@ export function errorFromWire(
     return new CapabilityError(code, message, requiredCapability);
   }
   // Claim enforcement (rides 409): the target entity is held by another
-  // participant. Discriminate on code BEFORE the generic 409→idempotency
-  // mapping so a claim rejection surfaces as AbloClaimedError.
-  if (code === 'claim_conflict' || code === 'claim_conflict' || code === 'entity_claimed') {
+  // participant, or a lease this participant held is gone (`claim_lost` —
+  // the answer a heartbeat gets after its lease lapsed). Discriminate on
+  // code BEFORE the generic 409→idempotency mapping so claim outcomes
+  // surface as AbloClaimedError on every transport.
+  if (
+    code === 'claim_conflict' ||
+    code === 'entity_claimed' ||
+    code === 'claim_lost'
+  ) {
     return new AbloClaimedError(message, { ...baseOpts, claims });
   }
   // A write whose `readAt` watermark went stale — callers re-read and retry.
@@ -795,13 +794,11 @@ export function errorFromWire(
 }
 
 /**
- * Translate an HTTP response into the appropriate typed error.
- *
- * Single source of truth for status-code → class mapping — every SDK
- * fetch path that sees a non-2xx response should route through here
- * so the customer-visible error is always the right subclass. Delegates
- * the actual class selection to {@link errorFromWire} (shared with the
- * frame transports) after extracting code/message from the HTTP body.
+ * Translates an HTTP response into the appropriate typed {@link AbloError}. This
+ * is the single mapping every request path routes a non-2xx response through, so
+ * the error a consumer sees is always the right subclass. After extracting the
+ * code and message from the response body, it delegates the class selection to
+ * {@link errorFromWire}, the same logic the frame transports use.
  */
 export function translateHttpError(
   status: number,
@@ -842,12 +839,12 @@ export function translateHttpError(
 }
 
 /**
- * Whether an HTTP error body carries a code {@link translateHttpError} can read
- * — a top-level `code`, a nested `error.code`, or a string `error`. Callers that
- * own a meaningful fallback code (e.g. `turn_open_failed`) use this to decide
- * between routing through `translateHttpError` (structured envelope present) and
- * throwing their own typed error with the fallback (bare/non-Ablo body), instead
- * of emitting a code-less error.
+ * Reports whether an HTTP error body carries a code that {@link translateHttpError}
+ * can read — a top-level `code`, a nested `error.code`, or a string `error`. A
+ * caller that has a meaningful fallback code uses this to choose between routing
+ * a structured body through {@link translateHttpError} and throwing its own typed
+ * error with the fallback when the body is bare, rather than producing an error
+ * with no code.
  */
 export function hasWireCode(body: unknown): boolean {
   const parsed = parseErrorBodyShape(body);
@@ -861,10 +858,10 @@ export function hasWireCode(body: unknown): boolean {
 }
 
 /**
- * Extract the canonical error `code` from a raw HTTP error body STRING — the
- * top-level `code` or a nested `error.code`. Returns undefined for non-JSON or
- * code-less bodies. Used by session-error detection to tell a genuine expiry
- * (`session_expired`/`jwt_expired`) apart from other auth failures.
+ * Extracts the canonical error `code` from a raw HTTP error body string — the
+ * top-level `code` or a nested `error.code` — returning `undefined` for a
+ * non-JSON or code-less body. Session-error detection uses it to tell a genuine
+ * session expiry apart from other authentication failures.
  */
 export function extractWireCode(body?: string): string | undefined {
   if (!body) return undefined;

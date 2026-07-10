@@ -1,24 +1,20 @@
 /**
- * Coordination context middleware — reads peer claims on the same
- * entity from the sync engine's presence stream and injects a brief
- * coordination note into the prompt before the LLM call.
+ * Language-model middleware that tells the model when other participants are
+ * editing the same entity. It reads peer claims on the target from the agent's
+ * live presence stream and, when it finds any, injects a short coordination note
+ * into the prompt before the model runs.
  *
- * The complement of `claim-broadcast.ts`: that one declares what
- * THIS agent is about to do; this one reads what OTHERS are doing
- * and tells the LLM about it. Together they make multiplayer-with-
- * AI structurally real — the AI knows when a human or another
- * agent is mid-edit and can defer / phrase its work as
- * "while you finish that, I'll …" / suggest waiting / coordinate
- * explicitly.
+ * This is the counterpart to the claim-broadcast middleware: that one announces
+ * what this agent is about to do, while this one reads what others are doing and
+ * passes it to the model. Together they let the model notice when a person or
+ * another agent is mid-edit and respond — deferring, framing its work as
+ * complementary, or suggesting it wait.
  *
- * Open-source-clean: depends only on `@ai-sdk/provider` types and
- * the package's own `SyncAgent`. Consumers compose via the AI
- * SDK's `wrapLanguageModel`.
- *
- * Cost: zero extra LLM calls (read happens locally from the agent's
- * cached presence stream — already in memory from the WS subscription).
- * Adds a few sentences to the system prompt (typically <100 tokens)
- * only when peers are actively editing.
+ * It depends only on the AI SDK's provider types and a connected agent from this
+ * package, and you compose it with the AI SDK's `wrapLanguageModel`. Reading
+ * peers costs no extra model calls: the presence stream is already in memory from
+ * the agent's subscription. It adds only a few sentences to the system prompt,
+ * and only while peers are actively editing.
  */
 
 import type {
@@ -35,26 +31,24 @@ export interface CoordinationContextMiddlewareOptions<R extends SchemaRecord = S
   readonly agent: Ablo<R> | null;
   readonly target: ClaimTarget | null;
   /**
-   * Optional claimId(s) to exclude from the read — typically this
-   * agent's own active claim so the coordination note doesn't tell
-   * the AI "you yourself are editing this." When middleware is
-   * composed with `claimBroadcastMiddleware` in the standard order,
-   * `transformParams` runs BEFORE the broadcast's `wrapStream`
-   * declares its claim, so the agent's own claim isn't yet in the
-   * cached presence and self-filtering isn't needed. The hook is
-   * here for callers that compose differently or for fleet
-   * coordination (filter sibling worker claims).
+   * Claim identifiers to leave out of the read, typically this agent's own active
+   * claim so the note doesn't report that the agent is editing against itself. In
+   * the usual composition with the claim-broadcast middleware, `transformParams`
+   * runs before that middleware declares its claim, so the agent's own claim
+   * isn't in the presence stream yet and no filtering is needed. This option is
+   * here for callers that compose the middleware differently, or that coordinate a
+   * fleet and want to exclude sibling workers' claims.
    */
   readonly excludeClaimIds?: readonly string[];
 }
 
 /**
- * Build the middleware. When `agent` or `target` is null, returns a
- * pass-through.
+ * Builds the coordination-context middleware. If `agent` or `target` is null, the
+ * middleware passes the prompt through unchanged.
  *
- * Generic over the schema record — see `claimBroadcastMiddleware`
- * for why `Ablo<S>` and `Ablo<SchemaRecord>` aren't structurally
- * assignable.
+ * The generic over the schema record matches the claim-broadcast middleware: a
+ * typed `Ablo<S>` and the widened `Ablo<SchemaRecord>` are not structurally
+ * assignable, so the parameter stays generic to spare callers a cast.
  */
 export function coordinationContextMiddleware<R extends SchemaRecord = SchemaRecord>(
   options: CoordinationContextMiddlewareOptions<R>,
@@ -67,13 +61,10 @@ export function coordinationContextMiddleware<R extends SchemaRecord = SchemaRec
     transformParams: async ({ params }) => {
       if (!agent || !target) return params;
 
-      // Read peer claims on the same target. Synchronous lookup
-      // against the engine's reactive claims.others array — no I/O.
-      // Type compares case-insensitively: observed claims carry the WIRE
-      // dialect (lowercased typename, `slidedeck`), while callers naturally
-      // write the schema typename (`SlideDeck`) — the same normalization the
-      // commit plane applies (`modelMap` lookups lowercase, and
-      // `targetsOverlap` below already lowercases field/path).
+      // Look up peer claims on the same target. This reads the agent's reactive
+      // `claims.others` array in memory, with no I/O. The type is compared
+      // case-insensitively: observed claims carry a lowercased type name (such as
+      // `slidedeck`) while callers write the schema's type name (`SlideDeck`).
       const wantedType = target.type.toLowerCase();
       const peerClaims = agent.claims.others.filter(
         (claim) =>
@@ -130,9 +121,9 @@ function targetsOverlap(
 }
 
 /**
- * Format a one-paragraph coordination note for the LLM. Includes
- * who's editing and what (when known). Kept short — the goal is
- * "AI knows," not "AI gets a wall of text."
+ * Formats a one-paragraph coordination note for the model. It names who is
+ * editing and, when known, what they are doing. The note stays short: the goal is
+ * to make the model aware, not to flood the prompt.
  */
 function formatCoordinationNote(
   claims: readonly Claim[],

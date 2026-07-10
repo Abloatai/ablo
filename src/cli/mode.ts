@@ -1,19 +1,22 @@
 /**
- * `ablo mode [sandbox|production]` — the Stripe-style environment toggle.
+ * `ablo mode [sandbox|production]` switches the active environment.
  *
- * Sets which stored key `ablo push` (and the SDK, via `ABLO_API_KEY`
- * resolution) uses. `ablo dev` is always sandbox by design. With no argument,
- * a clack `select` shows both environments, which is current, and whether a
- * key exists.
+ * The active environment decides which stored key other commands use — `ablo
+ * push`, and the SDK when it resolves `ABLO_API_KEY`. Sandbox holds disposable
+ * data; production is your live environment. `ablo dev` always runs against
+ * sandbox regardless of this setting. Called with no argument, the command shows
+ * an interactive picker listing both environments, which one is current, and
+ * whether each has a key stored.
  */
 
 import pc from 'picocolors';
 import { select, isCancel, cancel } from '@clack/prompts';
 import { getMode, setMode, getKeyEntry, normalizeMode, type Mode } from './config';
 
-/** The login-minted key prefix per environment. Sandbox gets a full secret
- *  key (disposable data); production gets a RESTRICTED key (observe-only —
- *  Stripe CLI model). Deliberate production acts use a dashboard `sk_live_`. */
+/** The key prefix that logging in mints for each environment. Sandbox gets a
+ *  full secret key, since its data is disposable; production gets a restricted,
+ *  observe-only key by default. A deliberate production write uses a secret
+ *  `sk_live_` key from the dashboard instead. */
 const PREFIX: Record<Mode, string> = { sandbox: 'sk_test_', production: 'rk_live_' };
 
 function hintFor(m: Mode, current: Mode): string | undefined {

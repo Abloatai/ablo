@@ -1,24 +1,18 @@
 /**
- * ConnectionManager — single source of truth for the sync engine's
- * connection lifecycle. Absorbs the FSM every SDK consumer used to
- * rebuild by hand (apps/web's `ConnectionStore` was the reference
- * implementation — 605 LOC of FSM + watchdog + backoff).
+ * Owns the sync engine's connection lifecycle: the state machine that carries a
+ * client from a healthy connection, through a dropout, and back to live. It
+ * watches the browser's online/offline and visibility events, probes real
+ * connectivity and session validity with {@link probeNetwork}, applies retry
+ * backoff with a ceiling and jitter, and runs a watchdog for the cases where
+ * the browser never fires an event (VPN flips, captive portals). When it
+ * decides to recover, it drives the reconnect sequence — bootstrap, then
+ * WebSocket connect — through the {@link ConnectionCallbacks.onReconnect}
+ * callback and reacts to the outcome.
  *
- * What it owns:
- *  - Browser online/offline + visibility events
- *  - Network probe orchestration (via `probeNetwork`)
- *  - Session-validity checks (HEAD /api/auth/check)
- *  - Retry backoff with ceiling, jitter, and offline-aware parking
- *  - Watchdog for browser events that never fire (VPN, captive portal)
- *  - The reconnect → bootstrap → WebSocket connect sequence
- *
- * What it DOES NOT own:
- *  - The actual bootstrap / IndexedDB / ObjectPool work — that lives in
- *    `BaseSyncedStore.performReconnect()`. This class calls it via the
- *    `onReconnect` callback and reacts to the outcome.
- *
- * Designed to be embedded by `BaseSyncedStore`: one instance per store,
- * started on first successful connect, disposed on teardown.
+ * It deliberately does not perform the bootstrap, local-storage, or object-pool
+ * work itself; that lives in the embedding store, which the manager reaches
+ * only through its callbacks. One manager is created per store, started on the
+ * first successful connect and disposed on teardown.
  *
  *   CONNECTED ──(socket drop)──► PROBING_NETWORK ──► RECONNECTING ──► CONNECTED
  *        │                              │                  │
@@ -29,20 +23,15 @@
  *        ▼
  *   WAITING_FOR_NETWORK
  *
- * Includes three fixes over the original app-side FSM:
- *   1. `backoff` accepts `NETWORK_ONLINE` / `TAB_VISIBLE` — jumps to
- *      probing immediately when the network comes back, without
- *      waiting for the backoff timer to elapse.
- *   2. `scheduleBackoff` parks in `waiting_for_network` (resetting
- *      `attempt`) when `navigator.onLine === false` at max retries,
- *      instead of hard-reloading an already-offline browser.
- *   3. A socket drop (`WS_DISCONNECTED`, typically code 1006) goes
- *      STRAIGHT to `probing_network`, not the passive `offline` state.
- *      1006 is browser-local and carries no connectivity signal, so on a
- *      healthy machine no `online`/`offline` event ever fires — parking in
- *      `offline` stranded recovery until the 30s watchdog, long enough for
- *      queued commits to roll back. Only a genuine OS-level `NETWORK_LOST`
- *      parks in `offline` and waits for the `online` event.
+ * Three behaviors are worth calling out. A network return or tab focus during a
+ * backoff delay jumps straight to probing instead of waiting out the full
+ * interval. Reaching the retry ceiling while the browser reports offline parks
+ * in `waiting_for_network` rather than hard-reloading a browser that has no
+ * network. And a socket drop (close code 1006) goes straight to probing rather
+ * than the passive `offline` state — 1006 is generated locally and carries no
+ * connectivity signal, so on a healthy machine no online/offline event ever
+ * fires; only a genuine operating-system network loss parks in `offline` to
+ * wait for the `online` event.
  */
 
 import { makeAutoObservable, runInAction } from 'mobx';
@@ -93,17 +82,18 @@ export interface ConnectionCallbacks {
   /** Run bootstrap + WebSocket reconnect. Returns the outcome. */
   onReconnect: () => Promise<'success' | 'session_error' | 'network_error'>;
   /**
-   * Re-mint the short-lived access credential (the Stripe-style `ek_`/`rk_`)
-   * and push it into the credential source, then report the outcome. Invoked
-   * on `refreshing_credential` — i.e. when a probe found the access key stale
-   * (`PROBE_CREDENTIAL_STALE`). Mirrors the `getToken` contract:
-   *   - `'refreshed'`     → a fresh credential is in place; re-probe & reconnect.
-   *   - `'session_error'` → the LONG-LIVED login is gone (mint returned null →
-   *                          401/403); terminal → sign out.
-   *   - `'network_error'` → couldn't reach the mint endpoint (offline/5xx/throw);
-   *                          transient → back off and retry, never sign out.
-   * Optional: a deployment with no re-mint path (e.g. a static `apiKey`) omits
-   * it, and the FSM falls back to a plain re-probe.
+   * Re-mints the short-lived access credential (the `ek_`/`rk_`) and pushes it
+   * into the credential source, then reports the outcome. Invoked in the
+   * `refreshing_credential` state — that is, when a probe found the access key
+   * stale (`PROBE_CREDENTIAL_STALE`). The three outcomes map onto recovery:
+   *   - `'refreshed'`     → a fresh credential is in place; re-probe and reconnect.
+   *   - `'session_error'` → the long-lived login itself is gone (the mint
+   *                          returned null, a 401/403); terminal, so sign out.
+   *   - `'network_error'` → the mint endpoint was unreachable (offline, 5xx, or
+   *                          a throw); transient, so back off and retry rather
+   *                          than sign out.
+   * Optional: a deployment with no re-mint path (for example a static `apiKey`)
+   * omits it, and the state machine falls back to a plain re-probe.
    */
   onRefreshCredential?: () => Promise<'refreshed' | 'session_error' | 'network_error'>;
   /** Called when the session is confirmed expired — route to signin. */
@@ -111,12 +101,11 @@ export interface ConnectionCallbacks {
   /** Called to tear down the WebSocket when entering a dead state. */
   onDisconnectWebSocket: () => void;
   /**
-   * Fired on every FSM state transition. Lets the embedding store
-   * mirror recovery progress into its visible `syncStatus` so the UI
-   * can show "Reconnecting…" instead of a sticky "offline" while the
-   * FSM cycles through `probing_network` → `reconnecting` → `backoff`.
-   * Optional — omitting it preserves the previous behavior where the
-   * FSM was opaque to the UI.
+   * Fires on every state transition. It lets the embedding store mirror
+   * recovery progress into its visible `syncStatus`, so the UI can show
+   * "Reconnecting…" instead of a sticky "offline" while the machine cycles
+   * through `probing_network` → `reconnecting` → `backoff`. Optional; when
+   * omitted, the state machine is simply opaque to the UI.
    */
   onStateChange?: (next: ConnectionState, prev: ConnectionState) => void;
 }
@@ -264,13 +253,13 @@ export class ConnectionManager {
             // work.
             return 'offline';
           case 'WS_DISCONNECTED':
-            // The socket died (typically code 1006) but the OS network is
-            // almost certainly fine — 1006 is generated locally when the TCP
-            // conn vanishes and carries NO connectivity signal, so the browser
-            // fires no online/offline event. Probe IMMEDIATELY rather than
-            // landing in the passive `offline` dead-end (which only escaped via
-            // the 30s watchdog, long after queued commits rolled back). The
-            // probe fast-fails if we genuinely ARE offline → waiting_for_network.
+            // The socket died (typically code 1006) but the operating-system
+            // network is almost certainly fine — 1006 is generated locally when
+            // the TCP connection vanishes and carries no connectivity signal, so
+            // the browser fires no online/offline event. Probe immediately rather
+            // than landing in the passive `offline` dead-end (which only escaped
+            // via the 30s watchdog, long after queued commits rolled back). The
+            // probe fast-fails if we genuinely are offline → waiting_for_network.
             return 'probing_network';
           case 'WS_SESSION_ERROR':
           case 'BOOTSTRAP_FAILED_SESSION':
@@ -344,15 +333,15 @@ export class ConnectionManager {
         }
 
       case 'refreshing_credential':
-        // Re-minting the short-lived access key (the Stripe-style `ek_`/`rk_`).
-        // The login is presumed valid; this is NOT a sign-out state.
+        // Re-minting the short-lived access key (the `ek_`/`rk_`). The login is
+        // presumed valid; this is not a sign-out state.
         switch (event.type) {
           case 'CREDENTIAL_REFRESHED':
             // Fresh key in hand — re-probe so we reconnect with it.
             return 'probing_network';
           case 'BOOTSTRAP_FAILED_SESSION':
             // The re-mint hit a genuine 401/403: the long-lived login itself is
-            // gone. THIS is the only path from here to sign-out.
+            // gone. This is the only path from here to sign-out.
             return 'session_expired';
           case 'RECONNECT_FAILED':
             // Couldn't reach the mint endpoint (offline/5xx/throw) — transient.
@@ -456,15 +445,15 @@ export class ConnectionManager {
         break;
 
       case 'probing_network':
-        // A socket drop (`WS_DISCONNECTED`) now lands here directly so recovery
-        // starts immediately. Tear the dead socket down FIRST — this is what
+        // A socket drop (`WS_DISCONNECTED`) lands here directly so recovery
+        // starts immediately. Tear the dead socket down first — that is what
         // sets SyncWebSocket's `isManualClose=true` and suppresses its own
-        // scheduleReconnect, keeping the FSM the single reconnect authority on
-        // the human path. The teardown runs synchronously inside the
-        // `disconnected` emit, before `SyncWebSocket.onclose` checks the flag,
-        // so the timing matches the previous `offline`-entry teardown. We gate
-        // on the drop event specifically: the other paths into `probing_network`
-        // (TAB_VISIBLE re-validation, handshake retry, backoff elapse) must NOT
+        // reconnect, keeping this machine the single reconnect authority on the
+        // human path. The teardown runs synchronously inside the `disconnected`
+        // emit, before `SyncWebSocket.onclose` checks the flag, so the timing
+        // matches the previous `offline`-entry teardown. We gate on the drop
+        // event specifically: the other paths into `probing_network`
+        // (tab-focus re-validation, handshake retry, backoff elapse) must not
         // tear down a socket that may still be live.
         if (event.type === 'WS_DISCONNECTED') {
           this.callbacks?.onDisconnectWebSocket();
@@ -489,11 +478,12 @@ export class ConnectionManager {
         break;
 
       case 'auth_blocked':
-        // Stop — reachable but the credential was rejected (e.g.
-        // api_key_required / jwt_issuer_untrusted from the data plane). Neither
-        // reconnecting nor re-auth fixes it. Drop the socket and wait for a
-        // manual retry / re-probe. Crucially NOT onSessionExpired (no sign-out)
-        // and NOT a reconnect — that's the whole point of this state.
+        // Stop here — the server is reachable but rejected the credential (for
+        // example api_key_required or jwt_issuer_untrusted from the data plane).
+        // Neither reconnecting nor re-authenticating fixes it. Drop the socket
+        // and wait for a manual retry or a re-probe. This deliberately does not
+        // call onSessionExpired (no sign-out) and does not reconnect — that is
+        // the whole point of the state.
         this.clearBackoffTimer();
         this.callbacks?.onDisconnectWebSocket();
         getContext().observability.breadcrumb(
@@ -767,16 +757,15 @@ export class ConnectionManager {
     this.watchdogTimer = setInterval(() => {
       if (this.disposed) return;
 
-      // "Stuck" = parked in a non-active recovery state (offline,
-      // waiting_for_network, backoff). We deliberately do NOT gate on
-      // `navigator.onLine === true` here: per MDN, `navigator.onLine`
-      // is only reliable when it returns false ("definitely offline"),
-      // and even that lies after laptop wake / VPN flips. Gating the
-      // watchdog on `onLine` was the actual "offline forever" bug —
-      // when the browser briefly reported offline and never re-fired
-      // the `online` event, the FSM had no escape from `'offline'`.
-      // The probe itself fast-fails when truly offline (NetworkProbe.ts),
-      // so an unconditional retry costs nothing in the genuine case.
+      // "Stuck" means parked in a non-active recovery state (offline,
+      // waiting_for_network, backoff). This deliberately does not gate on
+      // `navigator.onLine === true`: per MDN, `navigator.onLine` is only
+      // reliable when it returns false ("definitely offline"), and even that
+      // lies after laptop wake or VPN flips. Gating the watchdog on `onLine`
+      // was what stranded the machine in `offline` forever — when the browser
+      // briefly reported offline and never re-fired the `online` event, there
+      // was no escape. The probe itself fast-fails when truly offline, so an
+      // unconditional retry costs nothing in the genuine case.
       const isStuck =
         this.state !== 'connected' &&
         this.state !== 'session_expired' &&

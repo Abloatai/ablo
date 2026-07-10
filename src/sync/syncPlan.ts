@@ -1,64 +1,56 @@
 /**
- * syncPlan — schema → sync-plan derivation.
- *
- * Pure leaf extracted from BaseSyncedStore.ts: walks a `Schema` and derives
- * the two declarative arrays the store's constructor consumes (FK indexes,
- * enrichment plan). No class state, no side effects — `BaseSyncedStore`
- * re-exports everything here so importers are unchanged.
+ * Derives a client's sync plan from its {@link Schema}. Walking the schema's
+ * models and relations, it produces two declarative arrays consumed when the
+ * store is constructed: the foreign-key indexes to register on the in-memory
+ * object pool, and the enrichment rules that attach related parents to
+ * incoming rows. See {@link deriveSyncPlanFromSchema}.
  */
 
 import type { Schema } from '../schema/schema.js';
 
-/** A foreign-key index to register on the ObjectPool at construction time. */
+/** A foreign-key index to register on the in-memory object pool when the store is constructed. */
 export interface ForeignKeyIndexSpec {
   /**
-   * The child model name (where the FK field lives) — this is the type
-   * that will be passed to `pool.registerForeignKey(modelName, fieldName)`
-   * and later to `pool.getByForeignKey(modelName, fieldName, value)`.
-   *
-   * Use the wire `__typename` casing (e.g., `'SlideLayer'`, not
-   * `'slideLayer'`) — that's the value `createFromData` stamps onto
-   * models and the pool indexes by.
+   * The name of the child model, where the foreign-key field lives, and the
+   * name the object pool indexes by. Use the wire type-name casing (for
+   * example `'SlideLayer'`, not `'slideLayer'`), since that is the value
+   * stamped onto reconstructed models and the key the pool looks up.
    */
   readonly modelName: string;
-  /** The FK field name on the child model, e.g. `'slideId'`. */
+  /** The foreign-key field name on the child model, for example `'slideId'`. */
   readonly fieldName: string;
 }
 
 /**
- * A declarative enrichment rule for the delta-apply path.
+ * A declarative rule for enriching an incoming row with its related parent.
  *
- * When a delta for `modelName` arrives, after the model is constructed
- * the base store reads `data[foreignKey]` from the payload, looks up
- * the matching parent in the ObjectPool, and attaches it as
- * `data[relationKey]`. Best-effort: if the parent isn't yet in the
- * pool (e.g., arrived later in the same bootstrap batch), enrichment
- * silently no-ops.
- *
- * Replaces the previous pattern of overriding `enrichRelations` on a
- * subclass to hardcode per-model enrichment logic.
+ * When a delta for `modelName` arrives and its row has been constructed, the
+ * store reads the row's `foreignKey` value, looks up the matching parent in
+ * the object pool, and attaches it under `relationKey`. Enrichment is
+ * best-effort: if the parent is not in the pool yet — for example, it arrives
+ * later in the same bootstrap batch — the step is skipped without error.
  */
 export interface EnrichmentPlanEntry {
   /** The child model whose incoming deltas should be enriched. */
   readonly modelName: string;
-  /** The FK field on the child that points at the parent's id. */
+  /** The foreign-key field on the child that points at the parent's id. */
   readonly foreignKey: string;
   /** The property name under which to attach the parent model. */
   readonly relationKey: string;
 }
 
 /**
- * Walk a schema and derive the two sync-plan arrays consumed by
- * `BaseSyncedStore`'s constructor: FK indexes to register on the pool,
- * and the enrichment plan.
+ * Walks a schema and derives the two sync-plan arrays used when the store is
+ * constructed: the foreign-key indexes to register on the object pool and the
+ * enrichment plan. See {@link ForeignKeyIndexSpec} and
+ * {@link EnrichmentPlanEntry}.
  *
- * FK indexes and enrichment entries are pulled from each `belongsTo`
- * relation where `options.index` / `options.enrich` is set. Relations
- * without those options are skipped — this is an opt-in mechanism so
- * adding a `belongsTo` never silently changes delta or lookup semantics.
- *
- * Pure function: takes a Schema, returns two arrays. No side effects,
- * no class state. Called once at construction time from `BaseSyncedStore`.
+ * Both are drawn from each `belongsTo` relation that sets `options.index` or
+ * `options.enrich`; relations without those options are skipped. Enabling them
+ * is opt-in, so adding a `belongsTo` relation never silently changes how deltas
+ * apply or how lookups resolve. A `hasMany` or `hasOne` relation registers its
+ * index on the target model, since that is where the foreign key lives. The
+ * function has no side effects and is called once at construction.
  */
 export function deriveSyncPlanFromSchema(schema: Schema): {
   enrichmentPlan: EnrichmentPlanEntry[];
@@ -83,9 +75,9 @@ export function deriveSyncPlanFromSchema(schema: Schema): {
           });
         }
       } else if (rel.type === 'hasMany' || rel.type === 'hasOne') {
-        // hasMany/hasOne: the FK lives on the TARGET model, not the current model.
-        // Register the FK index on the target so getByForeignKey works.
-        // Target typename is resolved at registration time from the schema.
+        // For hasMany and hasOne, the foreign key lives on the target model,
+        // not the current one, so register the index on the target. Its wire
+        // type name is resolved from the schema here.
         const targetDef = schema.models[rel.target];
         const targetTypename = targetDef?.typename ?? rel.target;
         foreignKeyIndexes.push({ modelName: targetTypename, fieldName: rel.foreignKey });

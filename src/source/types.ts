@@ -1,21 +1,26 @@
 /**
- * Shared Data Source wire + handler types.
+ * The types that describe a data source — the shapes exchanged over the wire
+ * and the handler interfaces you implement.
  *
- * These are the cross-package shapes every source module speaks (operations,
- * events, list queries, handler contexts, the four wire request types). They
- * live in this leaf — not the `index.ts` barrel — so `contract.ts`,
- * `adapter.ts`, `pushQueue.ts` and the ORM adapters can import them directly
- * without routing a circular dependency through the barrel.
- *
- * `sourceEventForOperation` lives here too: it is the pure constructor for the
- * `SourceEvent` marker shape and has no dependency on the endpoint factory.
+ * A data source lets Ablo read from and write to your own database. These
+ * types cover the four request kinds Ablo can send ({@link SourceRequest}),
+ * the operations and change events they carry ({@link SourceOperation} and
+ * {@link SourceEvent}), the list-query and pagination shapes, and the handler
+ * and context types your source implements. {@link sourceEventForOperation}
+ * builds a change-event marker from an operation.
  */
 
 import { AbloValidationError } from '../errors.js';
 import type { Environment } from '../environment.js';
 
+/** A scalar value that can appear in a source filter. */
 export type SourcePrimitive = string | number | boolean | null;
 
+/**
+ * A single filter condition on a `list` query: a field paired with a value,
+ * or a field, comparison operator, and value. The two-element form is
+ * shorthand for equality.
+ */
 export type SourceWhere =
   | readonly [field: string, value: SourcePrimitive]
   | readonly [
@@ -38,6 +43,7 @@ export type SourceWhere =
       value: SourcePrimitive | readonly SourcePrimitive[],
     ];
 
+/** The query Ablo passes to your `list` handler: filters, ordering, a limit, and a pagination cursor. */
 export interface SourceListQuery {
   readonly where?: readonly SourceWhere[];
   readonly limit?: number;
@@ -45,38 +51,36 @@ export interface SourceListQuery {
   readonly order?: 'asc' | 'desc';
   readonly related?: readonly string[];
   /**
-   * Opaque cursor returned by a previous `list` call. The customer's
-   * `list` handler defines what this encodes (page index, last id,
-   * keyset). Ablo treats it as a black box — round-trips it back to
-   * fetch the next page until the handler returns no `nextCursor`.
+   * An opaque cursor returned by a previous `list` call. Your `list` handler
+   * decides what it encodes — a page index, a last id, a keyset. Ablo treats
+   * it as a black box and hands it back to fetch the next page until your
+   * handler stops returning a `nextCursor`.
    */
   readonly cursor?: string;
 }
 
 /**
- * Optional structured shape for a `list` handler that supports
- * pagination. Handlers may keep returning a plain `Row[]` (no
- * pagination, single-shot) or upgrade to this shape to expose a
- * cursor that Ablo will round-trip on the next request.
+ * The paginated return shape for a `list` handler. A handler may return a
+ * plain `Row[]` for a single, unpaginated page, or return this shape to expose
+ * a `nextCursor` that Ablo hands back on the following request.
  */
 export interface SourceListPage<Row> {
   readonly rows: readonly Row[];
   readonly nextCursor?: string;
 }
 
+/** What a `list` handler returns: either a plain array of rows or a {@link SourceListPage}. */
 export type SourceListResult<Row> =
   | readonly Row[]
   | SourceListPage<Row>;
 
 /**
- * Read-side scope context that Ablo attaches to source requests so
- * the customer's `authorize` / model handlers can refuse calls that
- * fall outside the participant's permitted syncGroups.
+ * The scope of a source request: who is asking and what they are allowed to
+ * see. Ablo attaches this so your `authorize` and model handlers can reject
+ * calls that fall outside the participant's permitted sync groups.
  *
- * This is informational — the customer is the only side that can
- * actually enforce, since the canonical data lives in their store.
- * Mirrors how Auth0 Custom DB scripts receive the requested scope and
- * trust the script to honor it.
+ * It is advisory. Because the canonical data lives in your database, your
+ * handlers are the only place that can actually enforce these limits.
  */
 export interface SourceRequestContext {
   readonly participantId?: string;
@@ -84,23 +88,23 @@ export interface SourceRequestContext {
   readonly organizationId?: string;
   readonly requiredSyncGroups?: readonly string[];
   /**
-   * Production/sandbox mode for this request. Customers branch their source
-   * handlers on this (`if (mode === 'sandbox') db = sandboxDb`) so sandbox
-   * traffic exercises the same code path against an isolated store.
+   * Whether this request runs in production or sandbox mode. Branch your
+   * handlers on it — for example, read and write a separate sandbox database
+   * when `mode === 'sandbox'` — so sandbox traffic exercises the same code
+   * against isolated data. Keeping the two apart is your handler's
+   * responsibility, since your database holds the canonical rows.
    *
-   * Mirrors Stripe's `sk_test_` / `sk_live_` prefixes: same wire
-   * shape, same handler code, different namespace. Ablo's server-side
-   * fan-out does not yet partition deltas by mode — that lands when
-   * `sync_deltas.mode` ships. Until then, isolation is enforced
-   * customer-side via this field, which is the right boundary anyway
-   * (the customer's database is where the canonical data lives).
-   *
-   * Defaults to `'production'` when omitted so callers that don't opt in
-   * keep the existing behavior.
+   * Defaults to `'production'` when omitted.
    */
   readonly mode?: Environment;
 }
 
+/**
+ * A single change Ablo asks your source to apply — a create, update, delete,
+ * archive, or unarchive of one row of `model`. Operations arrive in your
+ * `commit` handler through {@link SourceCommitParams}. `onStale` says what to
+ * do when the row changed since it was read at `readAt`.
+ */
 export interface SourceOperation {
   readonly type: 'CREATE' | 'UPDATE' | 'DELETE' | 'ARCHIVE' | 'UNARCHIVE';
   readonly model: string;
@@ -111,6 +115,11 @@ export interface SourceOperation {
   readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
 }
 
+/**
+ * A computed change to one row, ready to append to the change log. Your
+ * `commit` handler may return these directly, or return rows and let Ablo
+ * derive the deltas from them.
+ */
 export interface SourceDelta {
   readonly model: string;
   readonly id: string;
@@ -120,21 +129,20 @@ export interface SourceDelta {
 }
 
 /**
- * A change that happened in the customer's store. The source's
- * `events` handler returns these so Ablo can append them to
- * `sync_deltas` and fan them out to connected clients exactly like
- * SDK-originated commits.
+ * A change that already happened in your database. Your `events` handler
+ * returns these, and Ablo appends them to the `sync_deltas` change log and
+ * fans them out to connected clients, exactly as it would a change made
+ * through the SDK.
  *
- * The events handler can return everything from the outbox unfiltered. Ablo
- * dedupes stable `event.id` values and uses `clientTxId` to filter SDK-origin
- * echoes after the direct append has already succeeded. If the direct append
- * failed, the same outbox event repairs it on poll/push because no matching
- * `mutation_log` row exists yet.
+ * Your handler can return the whole outbox unfiltered. Ablo deduplicates on
+ * the stable `id` and uses `clientTxId` to drop echoes of changes the SDK
+ * already committed. If that earlier commit never landed, the same outbox
+ * event repairs the gap on the next poll or push.
  */
 export interface SourceEvent {
   /**
-   * Globally unique event id from the customer's outbox. Used by Ablo
-   * for replay protection — re-delivering the same id is a no-op.
+   * A globally unique event id from your outbox. Ablo uses it for replay
+   * protection, so re-delivering the same id is a no-op.
    */
   readonly id: string;
   readonly model: string;
@@ -142,51 +150,51 @@ export interface SourceEvent {
   readonly type: SourceOperation['type'];
   readonly data?: Record<string, unknown> | null;
   /**
-   * Tenant the event belongs to. Multi-tenant customers populate this
-   * from the row's organization column. Single-tenant deployments may
-   * omit it and let the poller fall back to its configured default.
-   * Drives the sync-group fan-out: clients in `org:${organizationId}`
-   * receive the resulting delta.
+   * The tenant this event belongs to. Populate it from the row's organization
+   * column for multi-tenant data; a single-tenant source may omit it and let
+   * the poller fall back to its configured default. It drives fan-out: clients
+   * in `org:${organizationId}` receive the resulting change.
    */
   readonly organizationId?: string;
   /**
-   * Originating Ablo SDK commit id, when known. If the customer's
-   * outbox stores the `clientTxId` Ablo passed into the matching
-   * `commit` handler, round-trip it here and Ablo will skip events
-   * whose commit already produced a delta. External-origin events
-   * (cron jobs, batch imports, manual edits) leave this unset.
+   * The originating SDK commit id, when you know it. If your outbox records the
+   * `clientTxId` that Ablo passed into the matching `commit` handler, echo it
+   * back here and Ablo will skip events whose commit already produced a change.
+   * Leave it unset for changes made outside the SDK, such as cron jobs, batch
+   * imports, or manual edits.
    */
   readonly clientTxId?: string;
   /**
-   * Wall-clock time the event occurred in the source. Optional; used
-   * only for ordering hints. Ablo trusts the customer's response order
-   * over this field.
+   * When the change occurred in your database. Optional and used only as an
+   * ordering hint; Ablo trusts the order of your handler's response over this
+   * field.
    */
   readonly occurredAt?: number;
 }
 
+/** Inputs to {@link sourceEventForOperation}. */
 export interface SourceEventForOperationOptions {
   /**
-   * Stable id from the customer's outbox table. This is Ablo's replay-
-   * protection key; retries must return the same id.
+   * The stable id from your outbox table. It is Ablo's replay-protection key,
+   * so retries must return the same id.
    */
   readonly eventId: string;
   readonly operation: SourceOperation;
   /**
-   * Committed row id. Defaults to `operation.id`; pass this for generated-id
-   * CREATEs where the database assigns the id inside the transaction.
+   * The committed row id. Defaults to `operation.id`; pass it explicitly for
+   * creates where the database assigns the id inside the transaction.
    */
   readonly entityId?: string;
   /**
-   * Canonical row payload after the write. Pass `null` for DELETE. When omitted
-   * the event carries no row payload, which is valid but less useful for
-   * realtime hydration.
+   * The row's payload after the write. Pass `null` for a delete. When omitted,
+   * the event carries no payload, which is valid but leaves less for clients to
+   * hydrate from in realtime.
    */
   readonly data?: Record<string, unknown> | null;
   /**
-   * Batch idempotency key from the Data Source commit request. Round-tripping it
-   * lets Ablo filter SDK-origin echoes after the direct append succeeds, while
-   * still using the outbox event to repair a failed direct append.
+   * The commit request's idempotency key. Echoing it lets Ablo drop echoes of
+   * a change the SDK already committed, while still letting the outbox event
+   * repair that change if it never landed.
    */
   readonly clientTxId?: string;
   readonly organizationId?: string;
@@ -194,12 +202,12 @@ export interface SourceEventForOperationOptions {
 }
 
 /**
- * Build the source-event marker customers should write to their outbox table in
- * the SAME transaction as their app-row mutation.
+ * Build the {@link SourceEvent} marker you should record in your outbox table,
+ * within the same transaction as the row change it describes.
  *
- * This helper does not persist anything. It only standardizes the marker shape
- * so Prisma/Drizzle/Kysely/raw-SQL adapters all emit the fields Ablo's
- * reconciler expects.
+ * This helper only shapes the marker; it does not persist anything. Writing the
+ * returned event through your ORM or raw SQL keeps every source emitting the
+ * fields Ablo expects when it reconciles the change.
  */
 export function sourceEventForOperation(
   options: SourceEventForOperationOptions,
@@ -232,19 +240,21 @@ function normalizeEventOccurredAt(
   return Number.isFinite(timestamp) ? timestamp : undefined;
 }
 
+/** What your `commit` handler returns after applying operations. */
 export interface SourceCommitResult<Row = Record<string, unknown>> {
   /**
-   * Canonical rows after the write. Ablo uses these to update hosted
-   * realtime projections and append deltas.
+   * The rows as they stand after the write. Ablo uses them to update its
+   * realtime projections and append the resulting changes.
    */
   readonly rows?: readonly Row[];
   /**
-   * Optional explicit deltas when the source already computes them.
-   * Most sources can return rows and let Ablo derive the delta payload.
+   * Explicit changes, for sources that already compute them. Most sources can
+   * return rows instead and let Ablo derive the change payload.
    */
   readonly deltas?: readonly SourceDelta[];
 }
 
+/** The arguments passed to a top-level {@link SourceCommitHandler}. */
 export interface SourceCommitParams<TAuth = unknown> {
   readonly operations: readonly SourceOperation[];
   readonly clientTxId?: string;
@@ -252,38 +262,43 @@ export interface SourceCommitParams<TAuth = unknown> {
 }
 
 /**
- * Operation-level permission tag used by `resolveScopes`. Mirrors the
- * four wire request types: an API key carries the set of operations
- * it's allowed to invoke. Stripe's restricted-key model at the
- * operation granularity — model-level scoping is a future addition.
+ * The operation an API key is permitted to invoke, one per request kind:
+ * `load` and `list` read, `commit` writes, and `events` reads the change feed.
+ * A key carries the set of scopes it is allowed to use.
  */
 export type SourceScope = 'load' | 'list' | 'commit' | 'events';
 
+/** What your `events` handler returns: a batch of changes and an optional next cursor. */
 export interface SourceEventsResult {
   readonly events: readonly SourceEvent[];
   /**
-   * Cursor for the next poll. When omitted Ablo treats the feed as
-   * fully drained for this round and uses the last event's cursor (or
-   * the initial cursor) for the next call.
+   * The cursor for the next poll. When omitted, Ablo treats the feed as fully
+   * drained for this round and reuses the last event's cursor, or the initial
+   * cursor, on the following call.
    */
   readonly nextCursor?: string;
 }
 
+/**
+ * Your handler for the `events` request. Return the changes since `cursor` so
+ * Ablo can append and fan them out. See {@link SourceEvent}.
+ */
 export type SourceEventsHandler<TAuth = unknown> = (params: {
   /**
-   * Cursor returned by a previous `events` call. Undefined on the
-   * first poll for a freshly-onboarded source. The customer decides
-   * what it encodes (last event id, timestamp, LSN, etc).
+   * The cursor from a previous `events` call, or undefined on the first poll of
+   * a newly connected source. You decide what it encodes — a last event id, a
+   * timestamp, a log sequence number.
    */
   readonly cursor?: string;
   /**
-   * Caller-suggested upper bound on returned events. Customers may
-   * return fewer; returning more risks tripping Ablo's per-poll cap.
+   * A suggested upper bound on how many events to return. You may return fewer;
+   * returning many more risks tripping Ablo's per-poll cap.
    */
   readonly limit?: number;
   readonly context: SourceHandlerContext<TAuth>;
 }) => Promise<SourceEventsResult> | SourceEventsResult;
 
+/** The request being authorized, passed to a function-form {@link SourceApiKey} or an `authorize` hook. */
 export interface SourceAuthorizeContext {
   readonly request: Request;
   readonly body: unknown;
@@ -294,22 +309,23 @@ export interface SourceHandlerContext<TAuth = unknown> {
   readonly auth: TAuth;
   readonly request: Request;
   /**
-   * `webhook-id` from the signed request — globally unique per the
-   * Standard Webhooks spec. Customers should dedupe by this id to
-   * defend against replay (Ablo doesn't dedupe at the source-handler
-   * boundary; commit idempotency is `clientTxId`, and event replay
-   * protection is the outbox event `id`).
+   * The `webhook-id` from the signed request, globally unique per the
+   * Standard Webhooks specification. Dedupe by this id to defend against
+   * replay: Ablo does not deduplicate at the source-handler boundary.
+   * Commit idempotency keys on `clientTxId`, and event replay protection
+   * keys on the outbox event `id`.
    */
   readonly messageId?: string;
   readonly signedAt?: number;
   /**
-   * Scope context Ablo attached to this request. Present when the
-   * caller (sync-server) opted into scope-aware source mode. Customers
-   * can use it in `authorize` (to reject out-of-scope calls) and in
-   * `list` / `load` (to filter rows the participant is allowed to see).
+   * The scope context Ablo attached to this request, naming the participant
+   * and the sync groups they are allowed to see. Present when the host
+   * opted into scope-aware requests. Use it in `authorize` to reject
+   * out-of-scope calls, and in `list` and `load` to filter rows down to
+   * what the participant may see.
    *
-   * Absent for calls made without scope context, such as tests or
-   * single-tenant deployments that do not need scoped fan-out yet.
+   * Absent for requests made without scope context, such as tests or
+   * single-tenant deployments that do not need scoped fan-out.
    */
   readonly scope?: SourceRequestContext;
 }
@@ -328,8 +344,9 @@ export interface SourceModelHandlers<Row, CreateInput, TAuth = unknown> {
     | SourceListResult<Row>;
 
   /**
-   * Apply one or more operations for this model in the customer's own
-   * transaction. The source must be idempotent by operation/clientTxId.
+   * Apply one or more operations for this model within your own database
+   * transaction. Your handler must be idempotent on the operation and its
+   * `clientTxId`, so that a retried commit does not apply the change twice.
    */
   commit?(params: {
     readonly operations: readonly SourceOperation[];
@@ -398,8 +415,7 @@ export type SourceResponse<Row = Record<string, unknown>> =
       readonly deltas?: readonly SourceDelta[];
     };
 
-// ── DataSource* naming aliases (kept 1:1 with the Source* names above; any
-// deprecation of one naming family is a separate decision) ──
+// DataSource* aliases, each one-to-one with the matching Source* name above.
 export type DataSourcePrimitive = SourcePrimitive;
 export type DataSourceWhere = SourceWhere;
 export type DataSourceListQuery = SourceListQuery;

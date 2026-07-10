@@ -1,9 +1,11 @@
 /**
- * `ablo logs` — tail your sandbox's commit activity (Stripe's `logs tail`).
+ * Tails your commit activity: the change events, or deltas, streaming by as
+ * rows are written.
  *
- * Scope is the API key's: a test key streams only its sandbox's deltas, a live
- * key the org's. The server enforces it from the key; the CLI just polls from a
- * cursor. Follows by default; `--no-follow` prints recent and exits.
+ * The API key sets the scope — a test key streams its sandbox's deltas, a live
+ * key the organization's — and the server enforces that scope from the key,
+ * while the command simply polls forward from a cursor. It follows new activity
+ * by default; `--no-follow` prints the recent entries and exits.
  *
  *   ablo logs                     # last 50, then stream
  *   ablo logs -n 100 --model task # backfill 100, filter to one model
@@ -149,9 +151,10 @@ export async function logs(argv: readonly string[]): Promise<void> {
       console.error(pc.red(`  logs failed (${res.status}): ${body.reason ?? body.message ?? ''}`));
       process.exit(1);
     }
-    // Canonical list envelope `{ object:'list', data, next_cursor }`; tolerate
-    // the legacy `{ events, cursor }` during rollout. Normalize to the CLI's
-    // internal { events, cursor } so the render + follow loop stays unchanged.
+    // The server returns a list envelope, `{ object:'list', data, next_cursor }`;
+    // this also accepts the older `{ events, cursor }` shape. Both normalize to
+    // the command's internal `{ events, cursor }` so the render and follow loop
+    // stay unchanged.
     const json = (await res.json()) as {
       data?: LogEvent[];
       events?: LogEvent[];

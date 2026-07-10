@@ -47,20 +47,19 @@ export function syncGroup(kind: string, id: string): SyncGroup {
 }
 
 /**
- * Caller-facing input form of a sync group. Accepts a constructor-minted
- * {@link SyncGroup}, a contextually-typed template literal of the right shape
- * (`` `org:${orgId}` `` checks without importing the constructor), or the
- * server-reserved `'default'` anchor. A bare colon-less string is a COMPILE
- * error — it would subscribe to nothing and fail silently (the `['default']`
- * zero-fan-out ghost made flesh).
+ * The caller-facing input form of a sync group. Accepts a {@link SyncGroup}
+ * from the constructor, a template literal of the right shape
+ * (`` `org:${orgId}` `` type-checks without importing the constructor), or the
+ * reserved `'default'` anchor. A plain string with no colon is a compile error,
+ * because it would match no group and silently subscribe to nothing.
  */
 export type SyncGroupInput = SyncGroup | `${string}:${string}` | 'default';
 
 /**
- * Runtime gate for {@link SyncGroupInput} at parse boundaries (capability
- * mint, ephemeral-key mint). One schema, every door — a malformed group is
- * rejected loudly (`invalid_sync_group`) instead of stored and silently
- * subscribed-to-nothing.
+ * Runtime validation for {@link SyncGroupInput}, used wherever a group crosses a
+ * trust boundary such as minting a capability or an ephemeral key. A malformed
+ * group is rejected with `invalid_sync_group` rather than stored and left
+ * silently subscribed to nothing.
  */
 export const syncGroupInputSchema = z.union([z.literal('default'), syncGroupSchema]);
 
@@ -72,16 +71,18 @@ export function isSyncGroupInput(value: unknown): value is SyncGroupInput {
 // ── Identity anchors (closed vocabulary) ────────────────────────────────────
 
 /**
- * The sync-group kinds the AUTH PROVIDER mints directly onto identities — a
- * CLOSED vocabulary: extend this list, never inline a new namespace string.
+ * The sync-group kinds the authentication provider mints directly onto an
+ * identity. This is a fixed vocabulary: add to this list rather than write a
+ * new namespace string inline.
  *
  *   - `org:<organizationId>`  — every member of the organization
  *   - `user:<participantId>`  — the participant itself
- *   - `project:<projectId>`   — every credential scoped to the project
- *     (project axis, 2026-06-11; the org-default project's id IS the org id)
+ *   - `project:<projectId>`   — every credential scoped to the project; the
+ *     organization's default project shares the organization's id
  *
- * Schema-declared roles ({@link identityRole} / {@link entityRole}) extend the
- * vocabulary per app; these are the engine-reserved anchors.
+ * Schema-declared roles ({@link identityRole} and {@link entityRole}) extend
+ * this vocabulary per application; the kinds here are the ones the engine
+ * reserves.
  */
 export const IDENTITY_ANCHOR_KINDS = ['org', 'user', 'project'] as const;
 export type IdentityAnchorKind = (typeof IDENTITY_ANCHOR_KINDS)[number];
@@ -179,20 +180,17 @@ export const grantsRefSchema = z.object({
 });
 
 /**
- * The AUTHORING form of a model's sync-group routing — the `groups: { ... }`
- * option. One namespaced object collects the three independent routing knobs
- * that used to be flat, collision-prone model options (`scope` / `grants` /
- * `entityRoles`). Distinct axis from `policy` (tenant isolation): the policy
- * decides who may *read* a row, `groups` decides which delta *channels* a row
+ * The authoring form of a model's sync-group routing — the `groups: { ... }`
+ * option. One object collects the three independent routing controls. This is a
+ * separate concern from `policy`, which governs tenant isolation: `policy`
+ * decides who may read a row, while `groups` decides which change channels a row
  * fans into.
  *
- * - `root`   — mark this model a scope root; its records form `<kind>:<id>`
- *   (kind defaults from typename). Was the flat `scope` option — renamed to
- *   `root` so it no longer collides with the (now removed) `scopedVia` tenancy
- *   sugar or the inner `grants.scope` relation name.
+ * - `root`   — marks this model a scope root, so its records form the group
+ *   `<kind>:<id>` (the kind defaults to the typename).
  * - `grants` — a membership edge granting an identity access to a scope root.
- * - `roles`  — explicit non-relational record→group roles (e.g. inbox fan-out
- *   keyed on a plain field). Was `entityRoles`. Accepts one role or an array.
+ * - `roles`  — record-to-group roles keyed on a plain field rather than a
+ *   relation, such as inbox fan-out. Accepts a single role or an array.
  */
 export const groupsInputSchema = z.object({
   root: scopeSchema.optional(),
@@ -294,24 +292,19 @@ export function composeEntitySyncGroups(
 }
 
 /**
- * Apply capability-style intersection to a client-requested sync-group
- * set. Mirrors the cap-bearer path where Biscuit caveats narrow the
- * client's requested set to what's actually authorized. Fully generic —
- * it never inspects the group strings — so it lives here beside the
- * composition helpers rather than in any product schema package
- * (`@ablo/schema` re-exports it for compat).
+ * Narrow a client's requested sync-group set to the groups it is actually
+ * allowed to subscribe to. This helper is fully generic — it never inspects the
+ * group strings — so it lives beside the composition helpers above.
  *
  * Behaviour:
- *   - If the client requested no groups, return the full identity-
- *     derived set (the default subscription scope for this participant).
- *   - If the client requested a non-empty subset, intersect against the
- *     identity-derived allowed set — drop any group the participant is
- *     not authorized to subscribe to. Logs the dropped groups via the
- *     optional `logDropped` callback for observability.
- *   - If the intersection is empty after filtering, fall back to the
- *     full allowed set rather than emit `[]` (which would degenerate to
- *     the server-side `['default']` fallback and produce silent zero-
- *     delta delivery).
+ *   - If the client requested no groups, return the full identity-derived set,
+ *     which is this participant's default subscription scope.
+ *   - If the client requested some groups, keep only those that appear in the
+ *     identity-derived allowed set and drop the rest, reporting the dropped
+ *     groups through the optional `logDropped` callback.
+ *   - If nothing survives the filter, fall back to the full allowed set rather
+ *     than return `[]`, which would otherwise collapse to the server-side
+ *     `'default'` fallback and deliver no changes at all.
  */
 export function intersectRequestedWithAllowed(args: {
   readonly requested: readonly string[];

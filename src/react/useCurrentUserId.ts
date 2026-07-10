@@ -5,15 +5,16 @@ import { AbloInternalContext } from './internalContext.js';
 import { AbloValidationError } from '../errors.js';
 
 /**
- * Returns the app user ID passed to the nearest `<AbloProvider>`, when
- * the app chose to provide one.
+ * Returns the application user id passed to the nearest `<AbloProvider>`, or
+ * `null` when your app did not provide one.
  *
- * Hosted Ablo identity is resolved server-side from the API key, session,
- * or capability token. This hook is only for app-owned fields like
- * `assigneeId`; it is not required for Ablo sync to connect.
+ * Sync identity is resolved on the server from the API key or session, so this
+ * value is not required for sync to connect. It is here for your app's own
+ * fields — an assignee id, a presence label, a permission check — where the
+ * current user matters to your data rather than to the sync layer. Reach for it
+ * in leaf components that need the id, for example to fill in a mutation
+ * payload.
  *
- * Use this in leaf components that need the current user ID for
- * mutation payloads, presence labels, permission checks, etc.
  * @example
  * function TaskRow({ id }) {
  *   const userId = useCurrentUserId();

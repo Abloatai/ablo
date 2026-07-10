@@ -1,18 +1,18 @@
 /**
- * RecordingTransaction — wraps a base `Transaction` and captures inverse ops
- * for the undo system. Each write is observed BEFORE it runs (to snapshot
- * pre-state) and AFTER (to capture the forward op for redo).
+ * Wraps a {@link Transaction} and records the inverse of every write so the
+ * change can be undone. Each write is observed just before it runs, to snapshot
+ * the previous state, and just after, to record the forward operation for redo.
  *
- * The wrapped mutator sees the exact same `Transaction<S>` shape; recording
- * is invisible. When the mutator returns, the caller reads `getEntry()` and
- * pushes it into the active `UndoScope`.
+ * The mutator sees an ordinary `Transaction<S>` and is unaware it is being
+ * recorded. When the mutator returns, the caller reads
+ * {@link RecordingTransaction.getEntry} and pushes the result onto the active
+ * {@link UndoScope}.
  *
- * Why snapshots live here (not in the UndoScope):
- *   - Update inverse requires `prev` field values — must be captured before
- *     the write lands in the pool.
- *   - Delete inverse requires the full model data — same reason.
- *   - Create inverse is simpler (delete by id) but the id must be known
- *     post-creation (schema generates UUIDs if caller omitted one).
+ * The snapshots are taken here rather than in the undo scope because they must
+ * exist before the write lands: the inverse of an update needs the field's
+ * previous values, and the inverse of a delete needs the full row. The inverse
+ * of a create is just a delete by id, but that id is known only after creation,
+ * since the schema generates one when the caller omits it.
  */
 
 import type { Schema, InferModel, InferCreate } from '../schema/schema.js';
@@ -33,10 +33,10 @@ export interface RecordingTransaction<S extends Schema> {
 }
 
 /**
- * Build a transaction that records inverses + forwards as it runs.
- * Consumers use this only when they want the invocation to be undoable;
- * read-only or side-effect-only mutators should use `createTransaction`
- * directly to avoid the bookkeeping overhead.
+ * Builds a transaction that records the forward and inverse of each write as it
+ * runs. Use this only when the mutator should be undoable; a read-only or
+ * side-effect-only mutator should call {@link createTransaction} directly to skip
+ * the bookkeeping.
  */
 export function createRecordingTransaction<S extends Schema>(
   schema: S,
@@ -64,8 +64,8 @@ export function createRecordingTransaction<S extends Schema>(
     tx: { mutations: mutateProxy, read: inner.read },
     getEntry: (label?: string) => {
       if (inverses.length === 0) return null;
-      // Undo applies inverses in REVERSE order of how the forward writes ran.
-      // Redo applies forwards in the ORIGINAL order.
+      // Undo applies the inverses in reverse order of the forward writes; redo
+      // applies the forwards in their original order.
       return { label, inverses: [...inverses].reverse(), forwards: [...forwards] };
     },
   };
@@ -83,31 +83,25 @@ function wrapMutateForKey<S extends Schema, K extends keyof S['models'] & string
   const snapshot = (id: string): Record<string, unknown> | null => {
     const model = store.pool.get(id);
     if (!model) return null;
-    // Model.toJSON produces a plain object suitable for re-create. We need
-    // ALL fields when generating a delete→create inverse, so toJSON's
-    // wider shape is exactly right.
+    // toJSON produces a plain object suitable for re-creating the row. The
+    // delete→create inverse needs every field, which is exactly what it returns.
     return model.toJSON();
   };
 
-  // Before-image for the undo inverse. Delegates to `Model.capturePreviousValues`
-  // — the SINGLE shared implementation (the stream path's
-  // `TransactionQueue.extractPreviousData` calls the same method). `fallbackToLive`
-  // is ON here: the manual-record path wants the live value as a last resort for
-  // a field that was neither pre-mutated nor in the original snapshot. (The
-  // stream path passes `false` so it can omit-and-drop instead — that flag is
-  // the one intentional difference between the two callers.)
+  // Captures the before-image for an undo inverse, delegating to the model's
+  // shared `capturePreviousValues`. `fallbackToLive` is enabled here so that a
+  // field that was neither pre-mutated nor present in the original snapshot falls
+  // back to its current value as a last resort.
   const snapshotFields = (id: string, fieldNames: string[]): Record<string, unknown> | null => {
     const model = store.pool.get(id);
     if (!model) return null;
     return model.capturePreviousValues(fieldNames, { fallbackToLive: true });
   };
 
-  // After a mutator's `base.update` succeeds, drop the `modifiedProperties`
-  // entries we snapshotted from so the next mutator call sees THIS update's
-  // result as its baseline, not the pre-session old value. The transaction
-  // queue already captured its frozen copy synchronously inside `store.save`,
-  // so this clear is safe for server rollback. Shared with the stream path via
-  // `Model.consumeModifiedFields`.
+  // After an update succeeds, clear the modified-field markers it was snapshotted
+  // from, so the next write to the same row sees this update's result as its
+  // baseline rather than the older pre-update value. The queue has already taken
+  // its own frozen copy, so clearing here is safe.
   const consumeModifiedFields = (id: string, fieldNames: string[]): void => {
     store.pool.get(id)?.consumeModifiedFields(fieldNames);
   };
@@ -146,9 +140,9 @@ function wrapMutateForKey<S extends Schema, K extends keyof S['models'] & string
 
     update: (async (patch: Patch | Patch[]) => {
       if (Array.isArray(patch)) {
-        // Snapshot all previous values BEFORE applying — later patches
-        // in the same list would corrupt the inverse state of earlier
-        // ones if we snapshotted lazily.
+        // Snapshot every row's previous values before applying any patch: later
+        // patches in the same list would corrupt an earlier one's inverse if the
+        // snapshots were taken lazily.
         const prevPatches: ({ id: string } & Record<string, unknown>)[] = [];
         for (const p of patch) {
           const fields = Object.keys(p).filter((k) => k !== 'id');

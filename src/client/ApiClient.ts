@@ -1,9 +1,8 @@
 /**
- * Stateless API client for `Ablo({ apiKey })`.
- *
- * This is the hosted-API product surface: no schema, no object pool, no
- * IndexedDB, no WebSocket. It maps the public Model / Claim / Commit
- * nouns directly to HTTP routes on sync-server.
+ * The stateless API client behind `Ablo({ apiKey })`. It carries no schema,
+ * object pool, local database, or WebSocket, and maps the public Model, Claim,
+ * and Commit nouns directly to HTTP routes on the server. This is the transport
+ * used for server-side agents, workers, and serverless code.
  */
 
 import {
@@ -35,7 +34,12 @@ import {
 } from './auth.js';
 import { registerDataSource } from './registerDataSource.js';
 import { PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER } from '../wire/protocolVersion.js';
-import { toSeconds } from '../utils/duration.js';
+import { toMs, toSeconds } from '../utils/duration.js';
+import {
+  heartbeatCadenceMs,
+  resolveHeartbeatOptions,
+  startClaimHeartbeatLoop,
+} from './claimHeartbeatLoop.js';
 import type { AbloOptions } from './options.js';
 import type {
   ClaimedOptions,
@@ -56,6 +60,36 @@ import type {
   AbloSession,
 } from './resourceTypes.js';
 import { mintSession } from './sessionMint.js';
+
+/** The heartbeat routes' reply body — status, expiry, queue pressure. */
+interface HeartbeatReply {
+  status?: 'held' | 'queued' | 'lost';
+  expiresAt?: number;
+  queueDepth?: number;
+}
+
+/**
+ * Interpret a heartbeat reply for a lease this handle HOLDS: anything other
+ * than `held` means the lease is no longer ours (a holder cannot be `queued`;
+ * `lost` rides a 409 that the wire error mapping already surfaces as
+ * AbloClaimedError before reaching here). The thrown loss is the definitive
+ * signal that stops the auto-heartbeat loop.
+ */
+function heldHeartbeatReply(
+  reply: HeartbeatReply,
+  label: string,
+): ClaimHeartbeat {
+  if (reply.status === 'held' && typeof reply.expiresAt === 'number') {
+    return {
+      expiresAt: reply.expiresAt,
+      ...(reply.queueDepth !== undefined ? { queueDepth: reply.queueDepth } : {}),
+    };
+  }
+  throw new AbloClaimedError(
+    `The lease behind ${label} is no longer held — it expired or was granted onward. Re-acquire the claim and retry; a write attempted under the old lease is rejected by its \`readAt\` guard.`,
+    { code: 'claim_lost' },
+  );
+}
 import type { SchemaRecord } from '../schema/schema.js';
 import type {
   ClaimLookupParams,
@@ -65,7 +99,12 @@ import type {
   ServerReadOptions,
 } from './createModelProxy.js';
 import type { Duration } from '../utils/duration.js';
-import type { Claim, HeldClaim } from '../types/streams.js';
+import type {
+  Claim,
+  ClaimHeartbeat,
+  ClaimHeartbeatOptions,
+  HeldClaim,
+} from '../types/streams.js';
 import type { SyncObservabilityProvider } from '../interfaces/index.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
 
@@ -73,9 +112,9 @@ export type AbloApiClientOptions = Omit<AbloOptions, 'schema'> & {
   readonly schema?: null | undefined;
   readonly bootstrapBaseUrl?: string | undefined;
   /**
-   * Observability provider forwarded from `Ablo({ observability })`. The HTTP
-   * transport emits the same claim/conflict seams as the WS transport so a
-   * `ClaimLog` works identically for headless (server-agent) evals.
+   * The observability provider forwarded from `Ablo({ observability })`. The HTTP
+   * transport emits the same claim and conflict events as the WebSocket transport,
+   * so a `ClaimLog` works identically for headless server-agent evaluations.
    */
   readonly observability?: SyncObservabilityProvider;
   /**
@@ -97,6 +136,16 @@ export interface AbloApiClaims {
   create(options: ClaimCreateOptions): Promise<Claim>;
   list(target?: Partial<ModelTarget>): Promise<readonly ModelClaim[]>;
   waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void>;
+  /**
+   * The batched beat — extend every lease this credential holds in one
+   * request (`POST /v1/claims/heartbeat`), the stateless twin of the
+   * WebSocket keepalive. One round trip per cadence for a worker holding
+   * many rows. Returns one {@link ClaimHeartbeat} per extended lease,
+   * tagged with its claim id — no separate result type to learn.
+   */
+  heartbeatAll(options?: {
+    ttl?: Duration;
+  }): Promise<readonly (ClaimHeartbeat & { readonly claimId: string })[]>;
 }
 
 export type CapabilityParticipantKind = 'agent' | 'system';
@@ -165,14 +214,14 @@ export interface CapabilityRevocation {
 
 export interface CapabilityRotateOptions {
   /**
-   * Overlap window — the OLD token keeps authenticating for this long after
-   * rotation, so you can deploy the replacement with zero downtime. Default
-   * 24h server-side.
+   * The overlap window — the old token keeps authenticating for this long after
+   * rotation, so you can deploy the replacement with zero downtime. Defaults to
+   * 24h on the server.
    */
   readonly grace?: Duration;
   readonly graceSeconds?: number;
   /**
-   * Lifetime of the REPLACEMENT capability. Omit to inherit the original's
+   * The lifetime of the replacement capability. Omit to inherit the original's
    * lifetime.
    */
   readonly lease?: Duration;
@@ -196,9 +245,9 @@ export interface CapabilityResource {
   retrieve(id: string): Promise<CapabilityRecord>;
   revoke(id: string): Promise<CapabilityRevocation>;
   /**
-   * Rotate with overlap (Stripe's "roll" model): mint a fresh capability
-   * carrying the SAME scope, and keep the old token working for a grace
-   * window so you can roll out the replacement without downtime.
+   * Rotate with overlap: mint a fresh capability that carries the same scope, and
+   * keep the old token working for a grace window so you can roll out the
+   * replacement without downtime.
    */
   rotate(id: string, options?: CapabilityRotateOptions): Promise<RotatedCapability>;
   /**
@@ -230,9 +279,9 @@ export interface AbloApi {
    */
   getAuthToken(): Promise<string | null>;
   /**
-   * Mint a short-lived scoped session — the Stripe `ephemeralKeys.create` shape.
-   * Minting is a control-plane HTTP call (no socket), so it lives on this stateless
-   * client too, not only the realtime one. `{ user }` → `ek_`, `{ agent, can }` → `rk_`.
+   * Mint a short-lived scoped session. Minting is a control-plane HTTP call (no
+   * socket), so it lives on this stateless client too, not only the realtime one.
+   * `{ user }` mints an `ek_`; `{ agent, can }` mints an `rk_`.
    */
   readonly sessions: {
     create(params: CreateSessionParams<SchemaRecord>): Promise<AbloSession>;
@@ -338,11 +387,12 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     dangerouslyAllowBrowser: options.dangerouslyAllowBrowser,
   });
 
-  // Observability seam for the STATELESS HTTP transport. The WS transport emits
-  // claim/conflict events from SyncWebSocket; the HTTP path (server-side agents,
+  // Observability hook for the stateless HTTP transport. The WebSocket transport
+  // emits claim and conflict events; the HTTP path (server-side agents,
   // `transport: 'http'`) emitted nothing, so a `ClaimLog` handed to a headless
-  // agent eval stayed empty. Mirror the two WS seams here: claim acquired +
-  // coordination-conflict rejection. No-op when no provider is configured.
+  // agent evaluation stayed empty. This mirrors the two WebSocket events here:
+  // claim acquired and coordination-conflict rejection. A no-op when no provider
+  // is configured.
   const observability = options.observability;
 
   // Shared by the two HTTP write doors (`commits.create` + per-model
@@ -467,7 +517,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     // is combined with the deadline via a shared controller — the portable
     // equivalent of `AbortSignal.any([caller, AbortSignal.timeout(t)])`,
     // which older runtimes (and the jsdom test env) don't implement. The
-    // same pattern already guards `query/client.ts` and `BootstrapHelper`.
+    // same pattern already guards `query/client.ts` and `BootstrapFetcher`.
     const callerSignal = requestInit.signal ?? undefined;
     const controller = new AbortController();
     const onCallerAbort = (): void => { controller.abort(callerSignal?.reason); };
@@ -907,11 +957,11 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           queue: claimOptions.queue,
         }),
       });
-      // The fair-queue grant is PUSHED over a WebSocket (`claim_granted`),
-      // which this stateless HTTP client doesn't hold. Returning a handle here
-      // would be a phantom holder — a lease we can't confirm is ours. So a
-      // queued response is surfaced as a typed claimed signal; callers that need
-      // to *wait* in line use the realtime (WS-backed) `ablo.<model>.claim`.
+      // The fair-queue grant is pushed over a WebSocket (`claim_granted`), which
+      // this stateless HTTP client doesn't hold. Returning a handle here would be
+      // a phantom holder — a lease we can't confirm is ours. So a queued response
+      // is surfaced as a typed claimed signal; callers that need to wait in line
+      // use the realtime (WebSocket-backed) `ablo.<model>.claim`.
       if (body.status === 'queued') {
         throw new AbloClaimedError(
           `Target ${claimOptions.target.model}/${claimOptions.target.id} is held; ` +
@@ -932,9 +982,30 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         );
       };
 
+      // The by-id twin of the model-scoped heartbeat — same reply contract.
+      const heartbeat = async (
+        beatOptions?: Duration | ClaimHeartbeatOptions,
+      ): Promise<ClaimHeartbeat> => {
+        const resolved = resolveHeartbeatOptions(beatOptions);
+        const reply = await requestJson<HeartbeatReply>(
+          `/v1/claims/${encodeURIComponent(id)}/heartbeat`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              ...(resolved.ttl !== undefined ? { ttl: resolved.ttl } : {}),
+              ...(resolved.details !== undefined
+                ? { details: resolved.details }
+                : {}),
+            }),
+          },
+        );
+        return heldHeartbeatReply(reply, `claim ${id}`);
+      };
+
       return {
         object: 'claim',
         id,
+        heartbeat,
         reason: claimOptions.reason,
         target: {
           type: claimOptions.target.model,
@@ -955,6 +1026,35 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     list: listClaims,
     waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void> {
       return waitForNoClaims(target, options);
+    },
+    async heartbeatAll(options?: {
+      ttl?: Duration;
+    }): Promise<readonly (ClaimHeartbeat & { readonly claimId: string })[]> {
+      const reply = await requestJson<{
+        results?: {
+          claimId?: string;
+          expiresAt?: number;
+          queueDepth?: number;
+        }[];
+      }>('/v1/claims/heartbeat', {
+        method: 'POST',
+        body: JSON.stringify(
+          options?.ttl !== undefined ? { ttl: options.ttl } : {},
+        ),
+      });
+      return (reply.results ?? []).flatMap((entry) =>
+        typeof entry.claimId === 'string' && typeof entry.expiresAt === 'number'
+          ? [
+              {
+                claimId: entry.claimId,
+                expiresAt: entry.expiresAt,
+                ...(entry.queueDepth !== undefined
+                  ? { queueDepth: entry.queueDepth }
+                  : {}),
+              },
+            ]
+          : [],
+      );
     },
   };
 
@@ -1000,11 +1100,11 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       },
     );
 
-    // Miss = `data: undefined`, NOT a thrown error. The WebSocket client's
+    // A miss is `data: undefined`, not a thrown error. The WebSocket client's
     // `retrieve` returns `T | undefined` for a missing row; throwing only here
     // made the obvious read ("does this row exist?") a hard edge that an agent
-    // had to wrap in try/catch. Both transports now agree: absent row → absent
-    // data. Callers branch on `.data` (already the documented `.data?.x` usage).
+    // had to wrap in try/catch. Both transports agree: an absent row means absent
+    // data. Callers branch on `.data` (the documented `.data?.x` usage).
     // Normalize a miss to `undefined` (the server may send `null` or omit it).
     const data = (query.data ?? undefined) as T | undefined;
 
@@ -1016,16 +1116,16 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   }
 
   /**
-   * Single-op mutation over the model-scoped routes — the canonical surface
-   * that mirrors `ablo.<model>.create/update/delete`:
+   * A single-operation mutation over the model-scoped routes — the canonical
+   * surface that mirrors `ablo.<model>.create/update/delete`:
    *
    *   POST   /v1/models/:model        create
    *   PATCH  /v1/models/:model/:id     update
    *   DELETE /v1/models/:model/:id     delete
    *
-   * This replaces the previous indirection through `POST /v1/commits`. The raw
-   * `commits.create(...)` resource is still the path for ATOMIC MULTI-OP
-   * envelopes — this helper is the one-op, one-record path only.
+   * The `commits.create(...)` resource remains the path for atomic
+   * multi-operation envelopes; this helper handles the one-operation,
+   * one-record case.
    */
   async function mutateModel(
     action: 'create' | 'update' | 'delete',
@@ -1080,9 +1180,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         body: JSON.stringify(requestBody),
       });
     } catch (error) {
-      // Per-model write door (`ablo.<model>.update/create/delete`) — the path
-      // the demo editor + server agents actually take. Capture coordination
-      // collisions here too; this single row IS the fallback target.
+      // The per-model write door (`ablo.<model>.update/create/delete`). Capture
+      // coordination collisions here too; this single row is the fallback target.
       recordCoordinationConflict(error, clientTxId, [{ model: modelName, id }]);
       throw error;
     }
@@ -1140,8 +1239,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           { code: 'claim_queued' },
         );
       }
-      // `claimId` is the queued-response field name (routes/claims.ts) — a
-      // pre-rename regression duplicated the `body.id` arm and dropped it.
+      // `claimId` is the field name the queued response uses; check it alongside
+      // the other id shapes the response may carry.
       return body.claim?.id ?? body.id ?? body.claimId ?? createClaimId();
     };
     const releaseClaim = (params: ClaimLookupParams<T> | Claim<T>): Promise<void> =>
@@ -1149,6 +1248,28 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         claimPath(isClaimHandle(params) ? params.target.id : params.id),
         { method: 'DELETE' },
       ).then(() => undefined);
+
+    // One beat on the held lease. A lapsed lease answers `claim_lost`
+    // (409), which the wire error mapping surfaces as AbloClaimedError —
+    // the definitive signal that stops the auto-heartbeat loop.
+    const heartbeatClaim = async (
+      id: string,
+      claimId: string,
+      options: ClaimHeartbeatOptions,
+    ): Promise<ClaimHeartbeat> => {
+      const reply = await requestJson<HeartbeatReply>(
+        `${claimPath(id)}/heartbeat`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            claimId,
+            ...(options.ttl !== undefined ? { ttl: options.ttl } : {}),
+            ...(options.details !== undefined ? { details: options.details } : {}),
+          }),
+        },
+      );
+      return heldHeartbeatReply(reply, `claim ${claimId} on ${name}/${id}`);
+    };
 
     async function claimImpl(params: ClaimParams<T>): Promise<HeldClaim<T>> {
       const claimId = await acquireClaim(params);
@@ -1170,7 +1291,40 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           [params.id],
         );
       }
-      const release = () => releaseClaim(params);
+      const heartbeat = async (
+        beatOptions?: Duration | ClaimHeartbeatOptions,
+      ): Promise<ClaimHeartbeat> => {
+        const resolved = resolveHeartbeatOptions(beatOptions);
+        const beat = await heartbeatClaim(params.id, claimId, {
+          ttl: resolved.ttl ?? params.ttl,
+          ...(resolved.details !== undefined
+            ? { details: resolved.details }
+            : {}),
+        });
+        params.onHeartbeat?.(beat);
+        return beat;
+      };
+
+      // Opt-in auto-heartbeat — the background-worker cadence. The stateless
+      // HTTP claim defaults to the server's 60s acquire window when no TTL
+      // was requested, so the default cadence lands at 20s beats.
+      const stopHeartbeatLoop = params.heartbeat
+        ? startClaimHeartbeatLoop({
+            beat: () => heartbeat(),
+            intervalMs: heartbeatCadenceMs(
+              params.ttl !== undefined ? toMs(params.ttl) : 60_000,
+              params.heartbeat,
+            ),
+            ...(params.onHeartbeatLost
+              ? { onLost: params.onHeartbeatLost }
+              : {}),
+          })
+        : undefined;
+
+      const release = () => {
+        stopHeartbeatLoop?.();
+        return releaseClaim(params);
+      };
       return {
         object: 'claim',
         id: claimId,
@@ -1190,6 +1344,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         revoke: () => {
           void release().catch(() => {});
         },
+        heartbeat,
         [Symbol.asyncDispose]: release,
       };
     }
@@ -1216,8 +1371,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       reorder: async (params: ClaimReorderParams<T>): Promise<void> => {
         await requestJson<unknown>(`${claimPath(params.id)}/reorder`, {
           method: 'POST',
-          // The reorder route's payload is `{ heldBy, claimId }[]` — Claim's id
-          // IS the claimId.
+          // The reorder route's payload is `{ heldBy, claimId }[]` — a Claim's id
+          // is the claimId.
           body: JSON.stringify({ order: params.order.map((i) => ({ heldBy: i.heldBy, claimId: i.id })) }),
         });
       },
@@ -1235,7 +1390,13 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         return run({ ...input, claimRef: { id: claimInput.id }, claim: undefined });
       }
 
-      const claimId = await acquireClaim({ id, ...claimInput });
+      // `isClaimHandle` ruled out the handle form above; the generic mismatch
+      // (the union carries `Claim`, the guard narrows `Claim<T>`) keeps the
+      // compiler from subtracting it, so narrow to the inline-options form.
+      const claimId = await acquireClaim({
+        id,
+        ...(claimInput as ClaimOptions<T>),
+      });
       try {
         return await run({ ...input, claimRef: { id: claimId }, claim: undefined });
       } finally {
@@ -1315,8 +1476,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           // Confirm the write, then return the row — the obvious expectation of
           // "create" (the WebSocket client already returns the row). The read-
           // back is the authoritative server row, so it carries the framework
-          // defaults (createdAt/createdBy/…) AND, for an idempotent re-create of
-          // an existing id, the EXISTING row rather than the caller's input.
+          // defaults (createdAt, createdBy, …) and, for an idempotent re-create of
+          // an existing id, the existing row rather than the caller's input.
           await mutateModel('create', name, id, params.data, {
             ...options,
             wait: options?.wait ?? 'confirmed',
@@ -1354,9 +1515,9 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     model,
     sessions: {
       async create(params: CreateSessionParams<SchemaRecord>): Promise<AbloSession> {
-        // Stateless mint: the configured key IS the control-plane credential here
-        // (no startup `rk_` exchange runs on this client). Reuse the resolved base
-        // URL + fetch; the shared `mintSession` owns the two server doors.
+        // Stateless mint: the configured key is the control-plane credential here
+        // (no startup `rk_` exchange runs on this client). It reuses the resolved
+        // base URL and fetch; the shared `mintSession` handles the two server routes.
         const apiKey = await resolveApiKeyValue(configuredApiKey);
         if (!apiKey) {
           throw new AbloAuthenticationError(

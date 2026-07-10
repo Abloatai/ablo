@@ -755,6 +755,12 @@ The query references a relation the model does not define. Check the relation na
 
 The query used an unsupported operator.
 
+### replication_publication_drift
+
+`HTTP 400` · not retryable
+
+Your schema maps to tables that are not members of the replication publication, so their changes silently never stream and the source looks frozen. The missing tables and the exact `ALTER PUBLICATION … ADD TABLE …` to add them are in the error details — Ablo never alters your database for you.
+
 ### request_too_large
 
 `HTTP 413` · not retryable

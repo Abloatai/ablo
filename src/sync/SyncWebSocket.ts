@@ -1,11 +1,10 @@
 /**
- * SyncWebSocket - Manages WebSocket connection to Go sync engine
- *
- * Handles:
- * - WebSocket lifecycle (connect, reconnect, disconnect)
- * - Delta reception and processing
- * - Multi-tab support
- * - Automatic reconnection with exponential backoff
+ * Manages the WebSocket connection to the sync server. It owns the socket
+ * lifecycle (connect, reconnect, disconnect), receives and validates the
+ * incoming delta stream, sends commits and claims over the same socket, and
+ * reconnects automatically with exponential backoff. Consumers subscribe to its
+ * typed events (see {@link CoreSyncEventMap}) to react to deltas, presence, and
+ * connection changes.
  */
 
 import { EventEmitter } from 'events';
@@ -17,7 +16,7 @@ import {
   toAbloError,
 } from '../errors.js';
 import type { MutationOperation } from '../interfaces/index.js';
-import { clientSyncDeltaSchema, type ClientSyncDelta } from '../schema/sync-delta-wire.js';
+import { clientSyncDeltaSchema, type ClientSyncDelta } from '../wire/delta.js';
 import type {
   ClaimError,
   ClaimRejection,
@@ -53,11 +52,11 @@ import {
 // SyncObservability replaced by getContext().observability
 
 /**
- * Periodic catch-up poll cadence — while connected, request any deltas
- * whose fire-and-forget pub/sub broadcast was lost in transit. Deliberately
- * LOCAL (not `wire/protocol.ts`): an SDK eventual-consistency knob, not a
- * cross-boundary contract the server derives anything from. That it equals
- * the 30s ping today is coincidence, not an invariant.
+ * How often, while connected, the client polls for any deltas whose best-effort
+ * broadcast was lost in transit. This is a client-side eventual-consistency
+ * setting, not part of the wire contract, so the server derives nothing from
+ * it. That it currently equals the 30-second ping is a coincidence, not a
+ * guarantee.
  */
 const CATCHUP_POLL_INTERVAL_MS = 30_000;
 
@@ -68,18 +67,18 @@ const CATCHUP_POLL_INTERVAL_MS = 30_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
 /**
- * The wire delta the client receives. Derived from the canonical
- * `clientSyncDeltaSchema` (`@abloatai/ablo/schema`) via `z.infer` so the
- * SDK and the sync-server share ONE contract instead of two hand-maintained
- * interfaces. The action vocabulary (`I`/`U`/`D`/`A`/`V`/`C`/`G`/`S`) and the
- * client-only extras (`metadata`, `clientMutationId`, deprecated flat
- * `createdBy`) live in that schema; see its doc for the full field reference.
+ * The wire delta the client receives. It is inferred from the canonical
+ * `clientSyncDeltaSchema` so the client and server share one contract rather
+ * than two hand-maintained definitions. The action vocabulary
+ * (`I`/`U`/`D`/`A`/`V`/`C`/`G`/`S`) and the client-only extras (`metadata`,
+ * `clientMutationId`, and the deprecated flat `createdBy`) live in that schema;
+ * see its own documentation for the full field reference.
  */
 export type SyncDelta = ClientSyncDelta;
 
 /**
- * Payload for legacy actionType 'G' deltas emitted by EmitGroupChange.
- * Carries both added and removed groups in one delta, forces full re-bootstrap.
+ * Payload for an older actionType `'G'` delta. It carries both the added and
+ * removed sync groups in one delta and forces a full re-bootstrap.
  */
 export interface SyncGroupChangePayload {
   removedGroups: string[];
@@ -87,10 +86,9 @@ export interface SyncGroupChangePayload {
 }
 
 /**
- * Payload for incremental actionType 'G' deltas emitted by EmitGroupAdded.
- * Signals that the recipient has joined a single sync group; subsequent
- * 'C' (Covering) deltas will deliver the newly-visible entities. No
- * re-bootstrap required.
+ * Payload for an incremental actionType `'G'` delta. It signals that the
+ * recipient has joined a single sync group; the following `'C'` (covering)
+ * deltas deliver the newly visible entities. No re-bootstrap is required.
  */
 export interface GroupAddedPayload {
   group: string;
@@ -98,9 +96,9 @@ export interface GroupAddedPayload {
 }
 
 /**
- * Payload for actionType 'S' deltas emitted by EmitGroupRemoved.
- * Signals that the recipient has lost access to a sync group. The client
- * purges affected local entities and updates its subscription metadata.
+ * Payload for an actionType `'S'` delta. It signals that the recipient has lost
+ * access to a sync group; the client purges the affected local entities and
+ * updates its subscription metadata.
  */
 export interface GroupRemovedPayload {
   group: string;
@@ -131,27 +129,25 @@ export interface SyncWebSocketOptions {
    */
   collaborationEvents?: string[];
   /**
-   * Participant kind to declare on the WS upgrade. Defaults to `'user'`
-   * (session-auth, web app). Agent runtimes (Node workers) pass
-   * `'agent'` so the server's `agentTokenProvider`
-   * routes them through capability-token verification instead of
-   * session auth. The server reads this as the `kind` query param.
+   * The participant kind declared on the WebSocket upgrade. Defaults to
+   * `'user'` (session auth, the web app). Agent runtimes pass `'agent'` so the
+   * server verifies them by capability token instead of session auth. The
+   * server reads this as the `kind` query parameter.
    */
   kind?: 'user' | 'agent' | 'system';
   /**
-   * The agent's bearer credential — a restricted (`rk_`) API key. When
-   * set, sent in the `ablo.bearer.<token>` WebSocket subprotocol so the
-   * credential stays out of URLs and proxy logs. Required for `kind: 'agent'`;
-   * ignored for `kind: 'user'`. (Field name predates the Biscuit→opaque-key
-   * migration.)
+   * The agent's bearer credential — a restricted (`rk_`) API key. When set, it
+   * is sent in the `ablo.bearer.<token>` WebSocket subprotocol so the credential
+   * stays out of URLs and proxy logs. Required for `kind: 'agent'` and ignored
+   * for `kind: 'user'`.
    */
   capabilityToken?: string;
   /**
-   * Shared credential getter. When provided, WebSocket URL auth reads this
-   * instead of a copied `capabilityToken`, so reconnects use refreshed tokens
-   * from the SDK's single auth source.
+   * Getter for the current credential. When provided, the WebSocket upgrade
+   * reads it instead of a copied `capabilityToken`, so reconnects always use
+   * the freshest token from the SDK's single credential source. Preferred over
+   * `getCapabilityToken`.
    */
-  /** Shared SDK auth getter. Preferred internal name. */
   getAuthToken?: AuthTokenGetter;
   /** @deprecated Use `getAuthToken`. Kept for direct low-level callers. */
   getCapabilityToken?: AuthTokenGetter;
@@ -177,14 +173,11 @@ export interface BootstrapDataEvent {
 }
 
 /**
- * Presence update event payload — mirrors the wire frame's `payload`
- * field (apps/sync-server/src/hub/types.ts PresenceUpdateMessage).
- *
- * Every consumer (web entity-presence cache, PresenceStream,
- * agent-runtime presence reducer) reads its own subset; this type is
- * the union of what the server actually sends. Stripping fields at
- * this layer (the prior bug) silently broke rich-presence consumers
- * that needed `kind`, `activity`, `isAgent` to dispatch correctly.
+ * Payload of a presence-update event, mirroring the `payload` field of the wire
+ * frame. This type is the union of everything the server may send; each
+ * consumer reads its own subset. Forwarding the full shape, rather than
+ * stripping fields here, is deliberate — presence consumers rely on `kind`,
+ * `activity`, and `isAgent` to dispatch correctly.
  */
 export interface PresenceUpdateEvent {
   /** Server-stamped transition: 'enter' on join + roster snapshot,
@@ -212,16 +205,15 @@ export interface PresenceUpdateEvent {
    *  not self-declare — server is the source of truth. */
   isAgent?: boolean;
   /**
-   * Server-stamped canonical kind (`'user' | 'agent' | 'system'`). Additive:
-   * older servers omit it and readers fall back to the lossy `isAgent`
-   * boolean (which cannot express `'system'`). Typed `string` because it is
-   * raw wire input — normalize via `participantKindFromWire`.
+   * The canonical participant kind (`'user' | 'agent' | 'system'`), stamped by
+   * the server. Some servers omit it, in which case readers fall back to the
+   * lossy `isAgent` boolean, which cannot express `'system'`. Typed as `string`
+   * because it is raw wire input — normalize it via `participantKindFromWire`.
    */
   participantKind?: string;
   timestamp?: number;
-  /** Server stamps every presence frame with this participant's open
-   *  claims so peers see them without a separate channel. Wire
-   *  shape mirrors `apps/sync-server/src/hub/types.ts Claim`. */
+  /** Every presence frame carries this participant's open claims, stamped by
+   *  the server, so peers see them without a separate channel. */
   activeClaims?: {
     claimId: string;
     entityType: string;
@@ -239,16 +231,15 @@ export interface PresenceUpdateEvent {
     declaredAt: number;
     expiresAt: number;
     /**
-     * Lifecycle state. Additive — older servers omit it and the reader
-     * treats absence as `'active'`. Terminal states (`committed` /
-     * `expired` / `canceled`) ride one frame as the claim ends so peers
-     * learn *how* it resolved before it drops from the active set.
+     * The claim's lifecycle state. When absent, the reader treats it as
+     * `'active'`. A terminal state (`committed`, `expired`, or `canceled`) rides
+     * one final frame as the claim ends, so peers learn how it resolved before
+     * it drops from the active set.
      */
     status?: 'active' | 'committed' | 'expired' | 'canceled';
     error?: ClaimError;
   }[];
-  // Legacy/optional fields kept for back-compat with the web's
-  // simpler online/offline cache.
+  // Optional fields retained for simpler online/offline presence consumers.
   localTime?: string;
   type?: string;
   timezone?: string;
@@ -313,14 +304,19 @@ export interface CoreSyncEventMap {
   claim_granted: [Record<string, unknown>];
   claim_lost: [Record<string, unknown>];
   /**
-   * Notify-instead-of-abort (non-coercion). A committed write guarded with
-   * `onStale: 'notify' collided with a concurrent change; rather than
-   * forcing an outcome, the engine returned the conflicting field's current
-   * value so the actor can solve it. The resolver is the intelligent actor —
-   * an agent reasoning over the change, or a human watching the row. The commit
-   * SUCCEEDED; held ops ('notify') weren't written and the actor re-issues once
-   * it has reconciled. (The claim is the prospective form of the same
-   * non-coercion; this is the in-flight form.)
+   * Reply to an outbound `claim_heartbeat` — the lease's fate: `held` with
+   * the extended `expiresAt`, `queued` with the current `position`, or
+   * `lost`. Correlated back to the awaiting caller by `claimId` in the
+   * claim stream.
+   */
+  claim_heartbeat_ack: [Record<string, unknown>];
+  /**
+   * A committed write guarded with `onStale: 'notify'` collided with a
+   * concurrent change. Rather than forcing an outcome, the engine returns the
+   * conflicting field's current value so the actor — an agent reasoning over the
+   * change, or a person watching the row — can reconcile it. The commit itself
+   * succeeded; the held operations were not written, and the actor re-issues
+   * them once it has reconciled.
    */
   'conflict:notified': [{ clientTxId: string; notifications: StaleNotification[] }];
 }
@@ -339,7 +335,7 @@ export type DefaultCollaborationEvents = Record<string, never>;
  * `Record<string, ...>` requires an implicit string index signature, which
  * TypeScript interfaces don't have. So a closed interface like Ablo's
  * `AbloCollaborationEvents` would fail to satisfy `Record<string, unknown[]>`,
- * even though every one of its values IS a tuple. This mapped form iterates
+ * even though every one of its values is a tuple. This mapped form iterates
  * over `keyof T` instead of demanding a string index, so it accepts both
  * closed interfaces and open Record types — while still enforcing
  * "every value is an array."
@@ -355,8 +351,7 @@ export type SyncWebSocketEventMap<
 > = CoreSyncEventMap & TCollaboration;
 
 // ---------------------------------------------------------------------------
-// Ablo-specific collaboration events moved to apps/web/src/lib/sync/collaboration-events.ts
-// Consumers pass their own event types as TCollaboration generic parameter.
+// Consumers pass their own event types as the TCollaboration generic parameter.
 
 export class SyncWebSocket<
   TCollaboration extends EventMap<TCollaboration> = DefaultCollaborationEvents
@@ -395,10 +390,10 @@ export class SyncWebSocket<
     >
   > & {
     baseUrl?: string;
-    // `kind`, `capabilityToken`, `getAuthToken`, and `getCapabilityToken` are genuinely
-    // optional: web sessions don't pass either token field, agents pass one.
-    // Excluded from the Required<>
-    // wrap so consumers don't have to supply placeholders.
+    // `kind`, `capabilityToken`, `getAuthToken`, and `getCapabilityToken` are
+    // genuinely optional: session connections pass no token field and agents
+    // pass one. They are excluded from the Required<> wrap so callers do not
+    // have to supply placeholders.
     kind?: SyncWebSocketOptions['kind'];
     capabilityToken?: SyncWebSocketOptions['capabilityToken'];
     getAuthToken?: SyncWebSocketOptions['getAuthToken'];
@@ -411,10 +406,10 @@ export class SyncWebSocket<
   /** Periodic catchup interval — polls for missed deltas every 30s while connected */
   private catchupInterval: NodeJS.Timeout | null = null;
   /**
-   * Application-level heartbeat — ping every 30s, force-close on a 10s
-   * silent watchdog. The full zombie-socket rationale lives with the
-   * timers in `sync/heartbeat.ts`; the transport closures below are the
-   * only socket access the controller gets.
+   * Application-level heartbeat: ping every 30 seconds and force-close after a
+   * 10-second silence. The {@link HeartbeatController} holds the timing and the
+   * zombie-socket rationale; the closures below are the only socket access it
+   * gets.
    */
   private readonly heartbeat = new HeartbeatController({
     isSocketOpen: () => this.ws?.readyState === WebSocket.OPEN,
@@ -453,20 +448,19 @@ export class SyncWebSocket<
   private lastForceCloseReason: string | null = null;
   private sessionErrorAt: number | null = null;
   /**
-   * Sync-position state (lastSyncId watermark, version vector, server
-   * cursor). The advance discipline stays documented at `sendAck` /
-   * `handleDelta`; the state itself lives in `sync/syncCursor.ts`.
+   * Sync-position state: the lastSyncId watermark, version vector, and server
+   * cursor. The advance discipline is documented at `sendAck` and `handleDelta`;
+   * the state itself lives in {@link SyncCursor}.
    */
   private readonly cursor: SyncCursor;
   /** Registered collaboration event keys (colon format) for dispatch in onmessage */
   private collaborationEventTypes: Set<string>;
   /**
-   * Minimal session adapter handed to the frame dispatch table
-   * (`sync/wsFrameHandlers.ts`). Exposes ONLY the members the handlers
-   * touch; the closure members read live state so host-side reassignment
-   * (e.g. the `pendingSubscriptions` reset on close) can't strand the
-   * handlers on a stale reference. Built in the constructor, after the
-   * state it captures exists.
+   * A minimal session adapter handed to the inbound frame dispatch table
+   * ({@link dispatchWsFrame}). It exposes only the members the handlers touch;
+   * the closure members read live state so a reassignment here (for example the
+   * `pendingSubscriptions` reset on close) cannot strand a handler on a stale
+   * reference. Built in the constructor, after the state it captures exists.
    */
   private readonly frameSession: WsSession;
 
@@ -479,10 +473,10 @@ export class SyncWebSocket<
   private pendingMutations = new Map<string, PendingCommit>();
 
   /**
-   * In-flight `claim` requests keyed by claimId. Resolved when the
-   * matching `claim_ack` arrives, or rejected on timeout/disconnect.
-   * Same shape as pendingMutations — Phoenix-style request/response
-   * over a multiplexed connection.
+   * In-flight `claim` requests keyed by claimId. Resolved when the matching
+   * `claim_ack` arrives, or rejected on timeout or disconnect — the same
+   * request/response pattern as `pendingMutations`, multiplexed over the one
+   * connection.
    */
   private pendingClaims = new Map<string, PendingClaim>();
 
@@ -499,7 +493,7 @@ export class SyncWebSocket<
   constructor(options: SyncWebSocketOptions) {
     super();
 
-    // Construct WebSocket URL from base Go server URL
+    // Construct the WebSocket URL from the base server URL.
     const baseUrl = options.baseUrl || options.url || "http://localhost:8080";
     const wsProtocol = baseUrl.startsWith('https') ? 'wss' : 'ws';
     const wsUrl = baseUrl.replace(/^https?/, wsProtocol) + '/api/sync/ws';
@@ -525,9 +519,9 @@ export class SyncWebSocket<
       options.collaborationEvents ?? ['sheet:selection', 'slide:selection', 'slide:cursor']
     );
 
-    // Session slice for the inbound frame dispatch table — see the field
-    // doc on `frameSession` for why members that the host reassigns are
-    // exposed through closures instead of captured references.
+    // Session slice for the inbound frame dispatch table — see the field doc on
+    // `frameSession` for why reassigned members are exposed through closures
+    // instead of captured references.
     this.frameSession = {
       emit: (event, ...args) => this.emit(event, ...args),
       pendingMutations: this.pendingMutations,
@@ -600,19 +594,19 @@ export class SyncWebSocket<
     this.isConnecting = true;
     this.isManualClose = false;
 
-    // Pattern: one credential, server-resolved identity. The bearer travels
-    // in a `Sec-WebSocket-Protocol` value (built below), NOT the URL. The
-    // server is bearer-only (`apiKeyProvider`) and resolves identity from the
-    // verified token — userId/organizationId are NEVER read from URL params.
+    // One credential, server-resolved identity. The bearer travels in a
+    // `Sec-WebSocket-Protocol` value (built below), not the URL. The server is
+    // bearer-only and resolves identity from the verified token; userId and
+    // organizationId are never read from URL parameters.
     const params = new URLSearchParams({
       // Intentionally omit lastSyncId, capabilities from URL; these are sent in sync_request
       // and ack messages to avoid stale baselines on reconnect.
       cursor: this.cursor.syncCursor || '',
     });
 
-    // Participant kind — defaults to `user` for backward compatibility
-    // with web sessions. Agent runtimes pass `'agent'` so the server's
-    // capability-token path activates instead of session auth.
+    // Participant kind — defaults to `user` for session connections. Agent
+    // runtimes pass `'agent'` so the server's capability-token path activates
+    // instead of session auth.
     if (this.options.kind && this.options.kind !== 'user') {
       params.set('kind', this.options.kind);
     }
@@ -624,13 +618,13 @@ export class SyncWebSocket<
 
     const wsUrl = `${this.options.url}?${params.toString()}`;
 
-    // Carry the bearer in a `Sec-WebSocket-Protocol` value, NOT the URL. A
-    // browser can't set an Authorization header on a WS, but it CAN offer
-    // subprotocols — and unlike the query string, those don't land in ALB
-    // access logs, proxies, or browser history. The server reads
-    // `ablo.bearer.<token>` and selects the real `ablo.sync.v1` protocol,
-    // never echoing the token-bearing value back. (Token is the raw ek_/rk_,
-    // which is subprotocol-token-safe — alphanumerics + `_`.)
+    // Carry the bearer in a `Sec-WebSocket-Protocol` value, not the URL. A
+    // browser cannot set an Authorization header on a WebSocket, but it can
+    // offer subprotocols — and unlike the query string, those do not land in
+    // load-balancer access logs, proxies, or browser history. The server reads
+    // `ablo.bearer.<token>` and selects the real `ablo.sync.v1` protocol, never
+    // echoing the token-bearing value back. The token is the raw `ek_`/`rk_`,
+    // which is safe as a subprotocol value (alphanumerics and `_`).
     const authToken = this.resolveAuthToken();
     const protocols = authToken
       ? [`${WS_BEARER_SUBPROTOCOL_PREFIX}${authToken}`, WS_SYNC_SUBPROTOCOL]
@@ -657,14 +651,14 @@ export class SyncWebSocket<
    * Setup WebSocket event handlers
    */
   private setupEventHandlers(): void {
-    // Capture the socket THIS call wires. Every handler below guards on
-    // `this.ws === socket` (onclose additionally tolerates a nulled host —
-    // see there) so a handler firing late, after `connect()` replaced the
-    // socket, can never clobber the NEW connection's shared state. Without
-    // this, an old socket's `onclose` ran `this.ws = null;
-    // stopCatchupInterval(); stopHeartbeat()` unconditionally — a reconnect
-    // during close teardown orphaned the fresh socket (zombie receiving
-    // deltas with no timers and broken send paths).
+    // Capture the socket this call wires. Every handler below guards on
+    // `this.ws === socket` (onclose additionally tolerates a nulled field —
+    // see there), so a handler firing late, after `connect()` has replaced the
+    // socket, can never clobber the new connection's shared state. Without this
+    // guard, an old socket's `onclose` would unconditionally run `this.ws =
+    // null; stopCatchupInterval(); stopHeartbeat()` — a reconnect during close
+    // teardown then orphaned the fresh socket (a zombie receiving deltas with
+    // no timers and broken send paths).
     const socket = this.ws;
     if (!socket) return;
 
@@ -710,10 +704,9 @@ export class SyncWebSocket<
       this.requestIncrementalSync().catch(reportSyncRequestFailure);
 
       // Start periodic catchup — polls for missed deltas every
-      // CATCHUP_POLL_INTERVAL_MS while connected. Real-time WebSocket
-      // delivery is best-effort (fire-and-forget Redis pub/sub). This
-      // interval guarantees eventual consistency by fetching any deltas
-      // that were committed to the DB but whose broadcast was lost in
+      // CATCHUP_POLL_INTERVAL_MS while connected. Real-time WebSocket delivery
+      // is best-effort, so this interval guarantees eventual consistency by
+      // fetching any deltas that were committed but whose broadcast was lost in
       // transit.
       this.stopCatchupInterval();
       this.catchupInterval = setInterval(() => {
@@ -734,7 +727,7 @@ export class SyncWebSocket<
         }
       }, CATCHUP_POLL_INTERVAL_MS);
 
-      // Start application-level heartbeat — see sync/heartbeat.ts for rationale.
+      // Start the application-level heartbeat (see HeartbeatController).
       this.heartbeat.start();
     };
 
@@ -746,7 +739,7 @@ export class SyncWebSocket<
         // validation (deltas etc.) happens per-frame downstream.
         const message: unknown = JSON.parse(event.data);
 
-        // ANY inbound frame proves the socket is alive — clear the
+        // Any inbound frame proves the socket is alive — clear the
         // heartbeat-timeout timer so we don't false-trip force-close
         // during normal traffic.
         this.heartbeat.clearHeartbeatTimeout();
@@ -758,10 +751,9 @@ export class SyncWebSocket<
           return;
         }
 
-        // Frame-type → handler dispatch (sync/wsFrameHandlers.ts). The
-        // session adapter exposes only the members the handlers touch;
-        // keepalives, the legacy bare-delta form, and collaboration
-        // events are all routed there too.
+        // Dispatch by frame type (see dispatchWsFrame). The session adapter
+        // exposes only the members the handlers touch; keepalives, the older
+        // bare-delta form, and collaboration events are all routed there too.
         dispatchWsFrame(this.frameSession, message);
       } catch (error) {
         getContext().observability.captureWebSocketError({
@@ -785,8 +777,8 @@ export class SyncWebSocket<
         return;
       }
 
-      // After session error, suppress Sentry capture — the root cause is already reported.
-      // Still emit so SyncedStore can update UI state.
+      // After a session error, suppress error capture — the root cause is
+      // already reported. Still emit so the store can update UI state.
       const error = new AbloConnectionError(`WebSocket connection failed`);
       if (!this._sessionErrorDetected) {
         getContext().observability.captureWebSocketError({
@@ -798,7 +790,7 @@ export class SyncWebSocket<
     };
 
     socket.onclose = (event) => {
-      // Stale-socket close: a NEWER socket already owns the connection
+      // Stale-socket close: a newer socket already owns the connection
       // state — don't null it, stop its timers, or schedule a duplicate
       // reconnect (the orphaning race this guard exists for). The one
       // deliberate asymmetry vs the other handlers: `this.ws === null`
@@ -887,9 +879,9 @@ export class SyncWebSocket<
         this.pendingSubscriptions = [];
       }
 
-      // Protocol-version rejection (4010): TERMINAL. Reconnecting cannot heal
-      // a version mismatch — only upgrading the SDK (or rolling the server
-      // forward) can — so a blind retry here would loop forever against the
+      // Protocol-version rejection (4010): terminal. Reconnecting cannot heal a
+      // version mismatch — only upgrading the SDK, or rolling the server
+      // forward, can — so a blind retry here would loop forever against the
       // same typed close. Surface it and stop.
       if (event.code === WS_CLOSE_PROTOCOL_VERSION) {
         getContext().observability.captureWebSocketError({
@@ -921,26 +913,25 @@ export class SyncWebSocket<
           reason: event.reason,
         });
         this.emit('session_error', new SyncSessionError(event.reason || 'Session expired', event.code));
-        // Don't reconnect from HERE. For a genuine session loss the user
-        // must re-authenticate; for an expired ACCESS credential
-        // (`credential_expired`) the store's session_error handler re-mints,
-        // clears the latch, and drives the reconnect — see
-        // BaseSyncedStore.setupWebSocketSync.
+        // Don't reconnect from here. For a genuine session loss the user must
+        // re-authenticate; for an expired access credential (`credential_expired`)
+        // the store's session-error handler re-mints, clears the latch, and
+        // drives the reconnect itself.
         this.emit('disconnected', event);
         return;
       }
 
       // Handshake failure: `onclose` fired before `onopen` ever did, so the
-      // server rejected the upgrade (typically 401/403 on a bad cookie, but
-      // could also be a CORS/origin reject or an LB 5xx). The browser hides
-      // the HTTP status behind code 1006, so we can't tell which from here.
+      // server rejected the upgrade (typically 401/403 on a bad cookie, but it
+      // could also be a CORS/origin reject or a load-balancer 5xx). The browser
+      // hides the HTTP status behind code 1006, so we cannot tell which from
+      // here.
       //
-      // Emit a dedicated event and SKIP the internal reconnect — the owner
-      // (SyncedStore / ConnectionStore) should run an auth-validating HTTP
-      // probe to distinguish session expiry from a transient network issue
-      // and transition the UI accordingly. Reconnecting blindly is what
-      // produced the infinite "offline → reconnecting → offline" loop on
-      // stale cookies.
+      // Emit a dedicated event and skip the internal reconnect — the owner
+      // should run an auth-validating HTTP probe to distinguish session expiry
+      // from a transient network issue and transition the UI accordingly.
+      // Reconnecting blindly is what produced the infinite
+      // "offline → reconnecting → offline" loop on stale cookies.
       if (!everOpened && !this.isManualClose) {
         getContext().observability.captureWebSocketError({
           context: 'handshake-failed-close',
@@ -962,28 +953,25 @@ export class SyncWebSocket<
   }
 
   /**
-   * Validate + normalize a wire delta at the receive boundary — the ONE
-   * seam every inbound delta (`delta` frame, batch element, `sync_response`
-   * replay, legacy bare frame) passes through before it is emitted,
-   * persisted to IDB, or allowed to advance any watermark.
+   * Validates and normalizes a wire delta at the receive boundary — the single
+   * seam every inbound delta (a `delta` frame, a batch element, a `sync_response`
+   * replay, or the older bare frame) passes through before it is emitted,
+   * persisted, or allowed to advance any watermark.
    *
-   * Normalization (older/deployed servers stay compatible):
-   *  - `id`: the contract says `number`, but deployed servers have sent the
-   *    raw Postgres BIGINT serialization — a STRING — and every downstream
-   *    watermark gate (`typeof syncId === 'number'` in
-   *    `Database.processDeltaBatch`, the metadata-cursor update, numeric
-   *    `>=` thresholds in TransactionQueue) silently breaks on strings:
-   *    acks are withheld, the resume cursor never advances, and every
-   *    reconnect replays from 0. Coerce ONCE here.
-   *  - `transactionId` / `createdBy`: the SERVER projection sends these as
-   *    nullable (and `createdBy` as a nested ParticipantRef); the client
-   *    contract types them as optional strings and never reads them.
-   *    Normalize to absent instead of rejecting every real server delta.
+   * Normalization keeps already-deployed servers compatible:
+   *  - `id`: the contract says `number`, but some servers have sent the raw
+   *    Postgres BIGINT serialization — a string — and every downstream watermark
+   *    gate treats a string as invalid, so acks are withheld, the resume cursor
+   *    never advances, and every reconnect replays from zero. Coerce it once here.
+   *  - `transactionId` / `createdBy`: the server projection sends these as
+   *    nullable (and `createdBy` as a nested reference); the client contract
+   *    types them as optional strings and never reads them, so normalize them to
+   *    absent rather than reject every real server delta.
    *
-   * Validation: `clientSyncDeltaSchema.safeParse` — the canonical Zod wire
-   * contract. A frame that fails is DROPPED (returns `null`) with a
-   * debug-level log + observability breadcrumb; it is never applied. One
-   * parse per delta — callers must not re-parse.
+   * Validation runs `clientSyncDeltaSchema.safeParse`, the canonical wire
+   * contract. A frame that fails is dropped (returns `null`) with a debug log
+   * and an observability breadcrumb; it is never applied. There is one parse per
+   * delta — callers must not re-parse.
    */
   private normalizeWireDelta(raw: unknown): SyncDelta | null {
     let candidate: unknown = raw;
@@ -1035,32 +1023,29 @@ export class SyncWebSocket<
       syncId: delta.id,
     });
 
-    // DO NOT advance `this.cursor.lastSyncId` on receipt. The runtime cursor
-    // must stay consistent with what's persisted in IDB — otherwise the
-    // next `requestIncrementalSync()` (and the connect-time handshake)
-    // sends an optimistic cursor and the server skips deltas that never
-    // landed in IDB. `this.cursor.lastSyncId` is advanced only in `sendAck()`,
-    // which is gated on `BaseSyncedStore.flushPendingDeltas`'s
-    // `persistedSyncId` watermark. See Replicache's "lastMutationID
-    // read in the same transaction as the client view" rule.
+    // Do not advance `this.cursor.lastSyncId` on receipt. The runtime cursor
+    // must stay consistent with what has been persisted locally; otherwise the
+    // next `requestIncrementalSync()` (and the connect-time handshake) would
+    // send an optimistic cursor and the server would skip deltas that never
+    // landed in local storage. `this.cursor.lastSyncId` advances only in
+    // `sendAck()`, which the store gates on its persisted-syncId watermark, so
+    // the cursor is never read ahead of the persisted client view.
     //
-    // Version vector is also intentionally NOT updated here for the
-    // same reason — left to the persistence-gated path.
+    // The version vector is intentionally not updated here for the same reason;
+    // it is left to the persistence-gated path.
 
     // Emit delta for processing. Ack will be sent by SyncedStore after persistence.
     this.emit('delta', delta);
   }
 
   /**
-   * Send acknowledgment for received delta with version vector.
-   *
-   * This is the SOLE forward-mover of `this.cursor.lastSyncId` for live
-   * deltas. Called by `BaseSyncedStore.flushPendingDeltas` with the
-   * `persistedSyncId` watermark — i.e. only after the deltas have
-   * actually committed to IDB. Keeping the cursor advance here (rather
-   * than at receipt in `handleDelta`/`handleSyncResponse`) means the
-   * cursor never gets ahead of the persisted view, so reconnect/
-   * catch-up requests can't accidentally skip un-persisted deltas.
+   * Acknowledges received deltas up to the given syncId. This is the only place
+   * `this.cursor.lastSyncId` moves forward for live deltas. The store calls it
+   * with its persisted-syncId watermark — that is, only after the deltas have
+   * committed to local storage. Advancing the cursor here, rather than at
+   * receipt in `handleDelta` or `handleSyncResponse`, keeps the cursor from
+   * getting ahead of the persisted view, so reconnect and catch-up requests
+   * cannot skip un-persisted deltas.
    */
   private sendAck(syncId: number): void {
     // Advance the local cursor *and* the version vector for this ack —
@@ -1119,23 +1104,15 @@ export class SyncWebSocket<
   }
 
   /**
-   * Send a `commit` mutation request over the existing WebSocket and
-   * resolve when the server's `mutation_result` frame comes back with
-   * the same `clientTxId`. The wire-level frame is `{ type: 'commit',
-   * payload: { operations, clientTxId } }` — matching the
-   * `handleCommit` path on `apps/sync-server/src/hub/Hub.ts` (see the
-   * dispatch at Hub.ts:737).
+   * Sends a `commit` mutation request over the existing WebSocket and resolves
+   * when the server's `mutation_result` frame comes back with the same
+   * `clientTxId`. The wire frame is `{ type: 'commit', payload: { operations,
+   * clientTxId } }`.
    *
-   * Historical naming note: this was originally `sendBatchAck` back when
-   * the Go sync-engine used a GraphQL `batchAck` mutation. The TS
-   * sync-server uses `type: 'commit'` over WebSocket exclusively. The
-   * method name now matches the wire protocol so the ack/commit naming
-   * confusion stops here.
-   *
-   * Times out after 15s of silence from the server. The socket may close
-   * during an in-flight mutation (network flap, server restart); we do
-   * NOT auto-retry here — the caller's TransactionQueue owns retry +
-   * offline replay semantics and the SDK shouldn't duplicate that logic.
+   * Times out after 15 seconds of silence from the server. The socket may close
+   * during an in-flight mutation (a network flap, a server restart); this does
+   * not auto-retry — the caller's transaction queue owns retry and offline
+   * replay, and the SDK does not duplicate that logic.
    */
   sendCommit(
     operations: readonly MutationOperation[],
@@ -1196,21 +1173,14 @@ export class SyncWebSocket<
   }
 
   /**
-   * Activate a participant claim on this connection. Multiplexed
-   * subscription pattern (Phoenix Channels / Pusher) — the same
-   * connection can hold N concurrent claims, each scoped to a
-   * different set of sync groups.
+   * Activates a participant claim on this connection. One connection can hold
+   * several concurrent claims at once, each scoped to a different set of sync
+   * groups, so the SDK reuses the existing connection instead of opening a
+   * separate socket per scope.
    *
-   * Returns a promise that resolves with the server-canonicalized
-   * `syncGroups` and effective `ttlSeconds` once `claim_ack` arrives,
-   * or rejects with a typed error on `success: false` ack /
-   * timeout / disconnect.
-   *
-   * Why this exists: the old scoped-participant path opened a separate
-   * WS per scope. With claims, the SDK reuses the existing session/agent
-   * connection — one TCP, N logical participants. See
-   * `apps/sync-server/docs/PARTICIPANT_CLAIMS.md` for the migration
-   * framing (Phase A.1).
+   * Returns a promise that resolves with the server-canonicalized `syncGroups`
+   * and effective `ttlSeconds` once `claim_ack` arrives, or rejects with a typed
+   * error on a failed ack, a timeout, or a disconnect.
    */
   sendClaim(
     claimId: string,
@@ -1290,22 +1260,21 @@ export class SyncWebSocket<
   }
 
   /**
-   * Move this connection's READ interest — replace the connection-level
-   * sync groups mid-session as the user opens/closes entities. This is the
-   * area-of-interest (AOI) navigation primitive: the server fans out
-   * deltas only for groups currently in view, instead of the frozen set
-   * chosen at connect.
+   * Moves this connection's read interest — replaces the connection-level sync
+   * groups mid-session as the user opens and closes entities. This is the
+   * area-of-interest navigation primitive: the server fans out deltas only for
+   * the groups currently in view, rather than the fixed set chosen at connect.
    *
-   * Full-set replace semantics — pass the complete new group list, not a
-   * delta. Resolves with the server's effective set once `subscription_ack`
-   * arrives; rejects (typed) on a scope denial (a restricted `rk_` key
-   * requesting a group outside its allowlist), timeout, or disconnect. On
-   * success the new set is recorded as `options.syncGroups` so a later
-   * reconnect re-subscribes to current interest, not the connect-time set.
+   * This is a full-set replace: pass the complete new group list, not a delta.
+   * Resolves with the server's effective set once `subscription_ack` arrives;
+   * rejects (with a typed error) on a scope denial (a restricted `rk_` key
+   * requesting a group outside its allowlist), a timeout, or a disconnect. On
+   * success the new set is recorded as `options.syncGroups`, so a later reconnect
+   * re-subscribes to the current interest rather than the connect-time set.
    *
-   * Distinct from {@link sendClaim} (write-claim, per-op, TTL'd) — this is
-   * the read side and carries no capability token of its own; it's bounded
-   * by the connection credential's grant.
+   * Distinct from {@link sendClaim} (a write claim, per operation, with a TTL):
+   * this is the read side, carries no capability token of its own, and is
+   * bounded by the connection credential's grant.
    */
   updateSubscription(
     syncGroups: readonly string[],
@@ -1348,9 +1317,9 @@ export class SyncWebSocket<
   }
 
   /**
-   * Compatibility setter for direct SyncWebSocket users. The SDK-owned
-   * `Ablo()` path passes `getAuthToken`, so reconnect URL auth reads the
-   * shared credential source instead of this copied value.
+   * Sets a fixed credential for callers that construct the socket directly. The
+   * SDK instead supplies `getAuthToken`, so reconnects read the shared
+   * credential source rather than this copied value.
    */
   setCapabilityToken(token: string): void {
     this.options.capabilityToken = token;
@@ -1462,18 +1431,18 @@ export class SyncWebSocket<
       return;
     }
 
-    // Don't attempt reconnection while offline.
-    // SyncedStore.handleNetworkOnline() owns the offline→online transition:
-    // it bootstraps first, then calls syncWebSocket.connect() explicitly.
-    // Self-reconnecting here would bypass the bootstrap gate and cause stale data.
+    // Don't attempt reconnection while offline. The owning store manages the
+    // offline→online transition: it bootstraps first, then calls `connect()`
+    // explicitly. Self-reconnecting here would bypass that bootstrap gate and
+    // surface stale data.
     if (!getContext().onlineStatus.isOnline()) {
       this.emit('reconnecting', { attempt: this.reconnectAttempts + 1, delay: 0 });
       return;
     }
 
-    // Give up after MAX_RECONNECT_ATTEMPTS consecutive failures.
-    // The user can recover by refreshing or when network comes back online
-    // (handleNetworkOnline resets attempts and reconnects).
+    // Give up after MAX_RECONNECT_ATTEMPTS consecutive failures. The user can
+    // recover by refreshing, or the store resets the attempt count and
+    // reconnects when the network returns.
     if (this.reconnectAttempts >= SyncWebSocket.MAX_RECONNECT_ATTEMPTS) {
       this.emit('reconnect_failed', { attempts: this.reconnectAttempts });
       return;
@@ -1619,12 +1588,12 @@ export class SyncWebSocket<
   } {
     const d = this.getConnectionDiagnostics();
 
-    // Session-latched is NOT a transient transport hiccup: reconnection is
-    // suppressed until re-auth (or the store's credential re-mint clears the
-    // latch), so retrying can never succeed. Reject with the PERMANENT
-    // session type — `isPermanentError` surfaces it to the caller as
-    // "re-authenticate" instead of parking the write for a reconnect that
-    // will never happen (the old `ws_not_ready` retry-forever hazard).
+    // A session-latched socket is not a transient transport hiccup: reconnection
+    // is suppressed until re-auth (or the store's credential re-mint clears the
+    // latch), so retrying can never succeed. Reject with the permanent session
+    // error type — `isPermanentError` surfaces it to the caller as
+    // "re-authenticate" instead of parking the write for a reconnect that will
+    // never happen.
     if (d.sessionErrorDetected) {
       return Object.assign(
         new SyncSessionError(
@@ -1656,10 +1625,10 @@ export class SyncWebSocket<
     } else {
       detail = 'never_connected';
     }
-    // Typed so it lands in the AbloError hierarchy AND `isPermanentError`
-    // sees a transient transport failure (retry on reconnect, don't roll
-    // back). `diagnostics` stays a property — the queue's failure log walks
-    // the cause chain for it.
+    // Typed so it lands in the AbloError hierarchy and `isPermanentError` sees a
+    // transient transport failure (retry on reconnect, don't roll back).
+    // `diagnostics` stays a property — the queue's failure log walks the cause
+    // chain for it.
     const err = Object.assign(
       new AbloConnectionError(
         `SyncWebSocket not connected — cannot send ${action} (${detail})`,
@@ -1675,8 +1644,8 @@ export class SyncWebSocket<
     return this.options.syncGroups;
   }
 
-  // Cursor accessors — thin delegates; the state + semantics live in
-  // sync/syncCursor.ts (SyncCursor).
+  // Cursor accessors — thin delegates; the state and semantics live in
+  // SyncCursor.
 
   /**
    * Update last sync ID (for persistence)
@@ -1707,7 +1676,7 @@ export class SyncWebSocket<
   }
 
   /**
-   * Linear-style incremental sync request
+   * Requests an incremental sync from the server, starting at the current cursor.
    */
   async requestIncrementalSync(): Promise<void> {
     if (this.ws?.readyState !== WebSocket.OPEN) {
@@ -1735,7 +1704,7 @@ export class SyncWebSocket<
         lastSyncId: this.cursor.lastSyncId,
         capabilities: capsArr,
         // Protocol handshake: the server rejects an out-of-range version with
-        // WS close 4010 before serving any deltas (wire/protocolVersion.ts).
+        // WebSocket close code 4010 before serving any deltas.
         protocolVersion: PROTOCOL_VERSION,
       },
     });
@@ -1776,25 +1745,22 @@ export class SyncWebSocket<
     const rawDeltas: unknown[] | null = Array.isArray(payload.deltas)
       ? payload.deltas
       : null;
-    // Cursor reconciliation — Linear-style handshake. The server stamps
-    // its authoritative `currentSyncId` on every sync_response. If our
-    // local cursor is AHEAD of the server, our local view has somehow
-    // diverged (corrupted metadata, future regression reintroducing an
-    // eager-advance, IDB lying about a successful commit). Trust the
-    // server, reset the cursor, and request another sync so any deltas
-    // we *should* have applied get re-delivered. Backward-compatible
-    // when the field is absent (older server build) — we just skip the
-    // reconciliation step.
+    // Cursor reconciliation. The server stamps its authoritative `currentSyncId`
+    // on every sync_response. If our local cursor is ahead of the server, our
+    // local view has somehow diverged (corrupted metadata, a regression that
+    // reintroduced an eager advance, or local storage lying about a successful
+    // commit). Trust the server, reset the cursor, and request another sync so
+    // any deltas we should have applied get re-delivered. When the field is
+    // absent (an older server build) we simply skip this step.
     //
-    // We only reconcile when the response carries NO deltas. If deltas
-    // are present, they'll advance our cursor through the normal
-    // persistence-gated path anyway — and the in-flight request/response
-    // round-trip means the snapshot's `currentSyncId` is naturally a
-    // few syncIds behind our locally-advanced cursor at receive time
-    // (live deltas may have landed in the meantime). Restricting to
-    // empty-delta responses eliminates this benign false positive while
-    // still catching the real corruption case (server head < local AND
-    // server has nothing new to send).
+    // We only reconcile when the response carries no deltas. If deltas are
+    // present they advance our cursor through the normal persistence-gated path
+    // anyway — and the in-flight round-trip means the snapshot's `currentSyncId`
+    // is naturally a few syncIds behind our locally-advanced cursor at receive
+    // time (live deltas may have landed in the meantime). Restricting to
+    // empty-delta responses eliminates that benign false positive while still
+    // catching the real corruption case (server head < local, and the server
+    // has nothing new to send).
     const hasDeltas = rawDeltas !== null && rawDeltas.length > 0;
     if (!hasDeltas && typeof payload.currentSyncId === 'number') {
       const serverHead: number = payload.currentSyncId;
@@ -1879,10 +1845,10 @@ export class SyncWebSocket<
    * Handle bootstrap response from server
    */
   private handleBootstrapResponse(payload: unknown): void {
-    // Emit bootstrap data for processing. (A `version` field from
-    // pre-cutover servers is ignored — version vector removed in W4a.)
-    // Field-wise typeof guards mirror the cursor handling above: the frame
-    // is server-produced, so coercion only bites on malformed frames.
+    // Emit the bootstrap data for processing. (A `version` field from older
+    // servers is ignored; the version vector is no longer used.) The typeof
+    // guards mirror the cursor handling above: the frame is server-produced, so
+    // coercion only bites on a malformed frame.
     const p = (payload && typeof payload === 'object' ? payload : {}) as {
       entityType?: unknown;
       data?: unknown;
@@ -1898,13 +1864,12 @@ export class SyncWebSocket<
   }
 
   /**
-   * Handle presence update from server. The wire frame's payload is
-   * forwarded as-is so every consumer (web entity cache,
-   * PresenceStream, agent runtime) reads from the same shape.
-   * Stripping fields here was a prior bug — it silently dropped
-   * `kind`, `activity`, `syncGroups`, `isAgent` for rich consumers.
+   * Handles a presence update from the server. The wire frame's payload is
+   * forwarded as-is, so every consumer reads the same shape; stripping fields
+   * here would drop `kind`, `activity`, `syncGroups`, and `isAgent` for
+   * consumers that need them.
    *
-   * Wire frame (apps/sync-server/src/hub/types.ts PresenceUpdateMessage):
+   * The wire frame is:
    *   { type: 'presence_update', payload: { kind, userId, status,
    *     syncGroups, activity, isAgent, timestamp, activeClaims } }
    */

@@ -1,27 +1,27 @@
 /**
- * `schemaToOpenApi(schema)` — generate an OpenAPI 3.1 spec FROM a pushed schema,
- * so the API Reference reflects the customer's OWN models, not Ablo's.
- *
- * The API surface *is* the schema: a `task` model is what makes `/v1/models/task`
- * exist. This walks `schema.models[*].fields` (the introspectable `FieldMeta`)
- * and emits, per model, the CRUD + coordination routes the hosted API serves:
+ * Generates an OpenAPI 3.1 specification from a pushed schema, so the API reference
+ * describes your own models rather than a fixed set. The API surface is the schema:
+ * defining a `task` model is what makes `/v1/models/task` exist. This walks each
+ * model's `fields` (the introspectable {@link FieldMeta}) and emits, per model, the
+ * CRUD and coordination routes the API serves:
  *   GET/POST   /v1/models/{model}
  *   GET/PATCH/DELETE /v1/models/{model}/{id}
  *   POST/DELETE      /v1/models/{model}/{id}/claim
+ *   POST            /v1/models/{model}/{id}/claim/heartbeat
  *   POST            /v1/models/{model}/{id}/claim/reorder
- * plus POST /v1/commits. Auth is a single Bearer scheme (the API key).
+ * plus POST /v1/commits. Authentication is a single Bearer scheme, your API key.
  *
- * Wire it into `ablo` codegen (e.g. `ablo openapi > openapi.json`) or serve it
- * per-org; the output is a plain JSON-able object.
+ * Feed it into codegen (for example `ablo openapi > openapi.json`) or serve it
+ * directly; the return value is a plain JSON-serializable object.
  */
 import type { Schema, SchemaRecord } from './schema.js';
 import type { ModelDef } from './model.js';
 import type { FieldMeta } from './field.js';
-// Dependency-free leaf (NOT client/auth.ts — that would pull the error
-// registry + credential policy into the schema subpath and close a
-// schema → client → errors → coordination → schema cycle).
+// Pulled from the endpoints module to keep this schema file free of the client's
+// error-handling and credential dependencies.
 import { ABLO_HOSTED_HTTP_BASE_URL } from '../client/hostedEndpoints.js';
 
+/** Options for {@link schemaToOpenApi} — the metadata stamped into the generated spec. */
 export interface SchemaToOpenApiOptions {
   /** Spec title. Default `"Ablo API"`. */
   readonly title?: string;
@@ -131,6 +131,9 @@ export function schemaToOpenApi<S extends SchemaRecord>(
     paths[`/v1/models/${key}/{id}/claim`] = {
       post: { tags: [key], summary: `Claim a ${key} (acquire lease)`, parameters: [idParam()], responses: { '200': jsonResp('Claim acquired', { type: 'object' }) } },
       delete: { tags: [key], summary: `Release a ${key} claim`, parameters: [idParam()], responses: { '200': jsonResp('Released', { type: 'object' }) } },
+    };
+    paths[`/v1/models/${key}/{id}/claim/heartbeat`] = {
+      post: { tags: [key], summary: `Heartbeat a held ${key} claim (extend the lease for long-running work)`, parameters: [idParam()], responses: { '200': jsonResp('Lease extended (or queued slot refreshed)', { type: 'object', properties: { object: { type: 'string', enum: ['claim_heartbeat'] }, claimId: { type: 'string' }, status: { type: 'string', enum: ['held', 'queued'] }, expiresAt: { type: 'integer' }, position: { type: 'integer' } } }) } },
     };
     paths[`/v1/models/${key}/{id}/claim/reorder`] = {
       post: { tags: [key], summary: `Reorder the ${key} wait-line (privileged)`, parameters: [idParam()], responses: { '200': jsonResp('Reordered', { type: 'object' }) } },

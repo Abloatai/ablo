@@ -15,9 +15,9 @@ import type {
 import type { AttachableClaimStream } from './createClaimStream.js';
 
 /**
- * Scope accepted by participant APIs. The normal SDK shape is an
- * entity target (`{ type, id }`). Raw sync-group strings remain an
- * advanced transport escape hatch.
+ * The scope a participant can be joined to. The usual form is an entity target
+ * (`{ type, id }`); raw sync-group strings are an advanced escape hatch for
+ * addressing a transport scope directly.
  */
 export type ParticipantScope =
   | ClaimTarget
@@ -42,26 +42,27 @@ export interface EngineParticipant {
 
 export interface ParticipantJoinOptions {
   /**
-   * Initial focus target: customer schema vocabulary, optionally
-   * narrowed to a path, field, or range. When `scope` is omitted,
-   * this also becomes the routing scope.
+   * The initial focus target, named in your schema's vocabulary and optionally
+   * narrowed to a path, field, or range. When `scope` is omitted, this target
+   * also becomes the routing scope.
    */
   readonly target?: PresenceTarget;
   /** Alias for `target` when the participant is joined to a broader scope. */
   readonly focus?: PresenceTarget;
   /**
-   * Routing scope. Can be one entity, many entities, or a raw
-   * sync-group escape hatch. Use this for "joined to folder, focused
-   * on file" shapes.
+   * The routing scope: one entity, many entities, or a raw sync-group escape
+   * hatch. Use it for "joined to the folder, focused on one file" shapes,
+   * where the participant listens more broadly than its focus target.
    */
   readonly scope?: ParticipantScope;
   /** Present a narrower capability for this logical participant. */
   readonly capabilityToken?: string;
-  /** Claim TTL, in seconds or a compact duration string (`30s`, `5m`). */
+  /** How long the claim lives, in seconds or a compact duration string (`30s`, `5m`). */
   readonly ttlSeconds?: number | string | null;
   /**
-   * Activity to announce immediately after the claim acks. Defaults to
-   * `reading` when `target` is present. Pass false to join silently.
+   * The activity to announce as soon as the claim is acknowledged. Defaults to
+   * `reading` when a `target` is present. Pass `false` to join without
+   * announcing anything.
    */
   readonly activity?: 'reading' | 'viewing' | 'editing' | false;
   readonly detail?: string;
@@ -88,7 +89,7 @@ export interface ScopedClaimOptions {
   /** Free-form reason. Defaults to `'editing'`. Common: `'editing'`,
    *  `'writing'`, `'reviewing'`, app-specific phases. */
   readonly reason?: string;
-  /** TTL — server auto-expires the claim after this. */
+  /** How long the claim lives; the server expires it automatically after this. */
   readonly ttl?: import('../types/streams.js').Duration;
 }
 
@@ -96,10 +97,9 @@ export interface ScopedClaims {
   readonly focus: ClaimTarget | null;
   readonly others: readonly Claim[];
   /**
-   * Claim an exclusive claim on the participant's focus target (or
-   * an explicit override via `opts.target`). Single verb — the old
-   * `editing / writing / announce / claim(reason, opts)` overloads
-   * collapsed into this one method.
+   * Takes an exclusive claim on the participant's focus target, or on an
+   * explicit target passed via `opts.target`. While the claim is held, other
+   * participants that request an overlapping target are rejected.
    */
   claim(opts?: ScopedClaimOptions): Claim;
   onRejected(listener: Parameters<ClaimStream['onRejected']>[0]): () => void;
@@ -112,10 +112,10 @@ export interface ParticipantFocusOptions {
 }
 
 export interface JoinedParticipant {
-  /** Current exact thing this participant is reading/editing. */
+  /** The exact entity this participant is currently reading or editing. */
   readonly target: ClaimTarget | null;
   readonly focusTarget: ClaimTarget | null;
-  /** Transport scopes this participant is joined to for visibility/fan-out. */
+  /** The transport scopes this participant is joined to, which govern what it sees and receives. */
   readonly syncGroups: readonly string[];
   readonly presence: ScopedPresence;
   readonly claims: ScopedClaims;

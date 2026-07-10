@@ -1,21 +1,18 @@
 /**
- * inverseOp.ts — the reversible-operation model for the undo system,
- * expressed as Zod schemas.
+ * The reversible-operation model for the undo system, expressed as Zod schemas.
  *
- * Why schemas (not bare TS types):
- *   - Single source of truth. The `InverseOp` / `UndoEntry` TypeScript types
- *     are *derived* from these schemas (`z.infer`), so the wire shape and the
- *     static type can't drift.
- *   - A real validation boundary. Inverse ops are stored as plain JSON-shaped
- *     records (model keys + row data) so the undo manager stays schema-agnostic
- *     — it replays them through a strongly-typed transaction it doesn't own.
- *     That JSON boundary is exactly where a runtime check belongs, and is the
- *     seam a future cross-session persistence layer (IndexedDB-backed history)
- *     would deserialize through. `parseUndoEntry` is that gate.
+ * These schemas serve two roles. First, the {@link InverseOp} and
+ * {@link UndoEntry} TypeScript types are derived from them with `z.infer`, so
+ * the runtime shape and the static type stay in step. Second, they form a
+ * validation boundary: an inverse operation is stored as a plain JSON record
+ * (a model key plus row data) so the undo manager can replay it without knowing
+ * your schema. {@link parseUndoEntry} validates an untrusted value at that
+ * boundary — for example, an entry restored from persisted history — before it
+ * re-enters the replay path.
  *
- * The op kinds mirror the mutator surface 1:1 — single (`create`/`update`/
- * `delete`) and batch (`createMany`/`updateMany`/`deleteMany`) — so a recorded
- * entry is symmetric with what was originally invoked.
+ * The operation kinds match the mutator surface one for one — single
+ * (`create`, `update`, `delete`) and batch (`createMany`, `updateMany`,
+ * `deleteMany`) — so a recorded entry mirrors the call that produced it.
  */
 
 import { z } from 'zod';

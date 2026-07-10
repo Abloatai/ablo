@@ -1,10 +1,9 @@
 /**
- * Test Model subclasses for @abloatai/ablo tests.
- *
- * Lightweight Model implementations with FK relationships matching
- * the MODEL_CREATE_PRIORITY map in TransactionQueue:
- *   TestProject (10) → TestTask (10, FK→Project) → TestComment (30, FK→Task)
- *   TestSlideDeck (10) → TestSlide (15, FK→SlideDeck) → TestSlideLayer (20, FK→Slide)
+ * A small set of {@link Model} subclasses used across the package's tests.
+ * They form two foreign-key chains and carry the creation priorities the
+ * transaction queue uses to order dependent writes:
+ *   TestProject (10) → TestTask (10, references Project) → TestComment (30, references Task)
+ *   TestSlideDeck (10) → TestSlide (15, references SlideDeck) → TestSlideLayer (20, references Slide)
  */
 
 import { Model } from '../../Model.js';
@@ -128,7 +127,8 @@ export class TestSlideLayer extends Model {
 // ─────────────────────────────────────────────
 
 /**
- * Model → priority mapping matching TransactionQueue's MODEL_CREATE_PRIORITY.
+ * Maps each test model to its creation priority, matching the order the
+ * transaction queue uses when writing dependent models.
  */
 export const TEST_MODEL_PRIORITIES = new Map<string, number>([
   ['Project', 10],
@@ -140,8 +140,8 @@ export const TEST_MODEL_PRIORITIES = new Map<string, number>([
 ]);
 
 /**
- * Register all test models with a ModelRegistry instance.
- * Sets up properties, references, and FK relationships.
+ * Registers every test model with a {@link ModelRegistry}, wiring up their
+ * properties, references, and foreign-key relationships.
  */
 export function registerTestModels(registry: ModelRegistry): void {
   registry.startBatch();
@@ -196,7 +196,8 @@ export function registerTestModels(registry: ModelRegistry): void {
 // ─────────────────────────────────────────────
 
 /**
- * Create a SyncEngineConfig pre-configured with test model priorities.
+ * Builds a sync engine configuration pre-loaded with the test models'
+ * creation priorities and related settings.
  */
 export function createTestConfig(): {
   modelCreatePriority: ReadonlyMap<string, number>;

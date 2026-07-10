@@ -4,7 +4,7 @@
  * Two entry points depending on agent lifetime:
  *
  * ─────────────────────────────────────────────────────────────────────────
- * LONG-LIVED AGENT (browser, daemon, persistent Node process)
+ * Long-lived agents (browser, daemon, persistent Node process)
  * ─────────────────────────────────────────────────────────────────────────
  * Use the unified `Ablo({...})` factory directly with `kind: 'agent'`.
  * The factory holds the WebSocket, reactive subscriptions, mutations, and
@@ -36,7 +36,7 @@
  * before expiry.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * SHORT-LIVED AGENT (SQS consumer, serverless, API route)
+ * Short-lived agents (queue consumer, serverless, API route)
  * ─────────────────────────────────────────────────────────────────────────
  * Use {@link Agent}. Stateless REST hooks that slot directly into
  * the Vercel AI SDK's `generateText` / `streamText`. No WebSocket. Ideal
@@ -69,7 +69,7 @@
  * ```
  *
  * ─────────────────────────────────────────────────────────────────────────
- * IDIOMATIC TOOL PATTERN (ported from vercel-labs/open-agents)
+ * Idiomatic tool pattern
  * ─────────────────────────────────────────────────────────────────────────
  * Tools are factory functions that pull ambient state from
  * `experimental_context`. The caller builds an {@link AgentContext} once
@@ -93,7 +93,7 @@
  * ```
  *
  * ─────────────────────────────────────────────────────────────────────────
- * COMPOSED (long-lived `Ablo({kind:'agent'})` + Agent together)
+ * Composed usage (a long-lived `Ablo({kind:'agent'})` plus an Agent)
  * ─────────────────────────────────────────────────────────────────────────
  * If you have a long-lived `Ablo` instance AND want AI SDK hooks, pass it
  * as the `announcer` to Agent — presence announcements route
@@ -115,7 +115,7 @@
 
 // ── The entire `/agent` surface — one symbol ────────────────────────────
 //
-// `Agent` is the class AND the namespace for its types. Reach for
+// `Agent` is both the class and the namespace for its types. Reach for
 // options, context, and session options via dot access:
 //
 //   import { Agent } from '@abloatai/ablo/agent';

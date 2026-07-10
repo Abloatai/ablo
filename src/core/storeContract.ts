@@ -1,17 +1,13 @@
 /**
- * storeContract — the framework-neutral store contract.
+ * The framework-neutral store contract. {@link SyncStoreContract} is the minimal
+ * store interface the SDK's hooks and mutators are written against, and
+ * {@link BaseSyncedStore} is the concrete class that implements it. Framework
+ * integrations, such as the React bindings, re-export these types, so a hook can
+ * accept any store that satisfies the contract without depending on a particular
+ * UI framework.
  *
- * `SyncStoreContract` is the minimal store interface the SDK's hooks and
- * mutators program against; `BaseSyncedStore` is the concrete engine class
- * that implements it. The contract used to live in `react/context.ts`, which
- * meant the CORE store layer imported its own contract from the React
- * adapter (a module that runtime-imports 'react') — an L2-core →
- * react-integration inversion and a module cycle. It now lives here, in a
- * dependency-free core leaf: `react/context.ts` re-exports these types so
- * React consumers are unchanged, and the core layer never touches 'react'.
- *
- * Everything in this module is type-only — no runtime imports, no runtime
- * exports beyond erased interfaces.
+ * This module is type-only: it has no runtime imports and contributes nothing to
+ * the runtime bundle beyond the erased interface declarations.
  */
 
 import type { Model } from '../Model.js';
@@ -20,7 +16,12 @@ import type { QueryView, QueryViewOptions } from './QueryView.js';
 import type { ViewRegistry } from './ViewRegistry.js';
 import type { ParticipantScope } from '../sync/participants.js';
 
-/** Sync status for UI binding */
+/**
+ * A snapshot of the client's synchronization state, shaped for binding to UI.
+ * {@link SyncStoreContract.syncStatus} exposes a reactive instance of this, and
+ * the `useSyncStatus()` hook reads its fields to render connection and progress
+ * indicators.
+ */
 export interface SyncStatus {
   state: 'idle' | 'syncing' | 'error' | 'offline' | 'reconnecting';
   progress: number;
@@ -33,40 +34,42 @@ export interface SyncStatus {
 }
 
 /**
- * A single LOCAL mutation as observed off the commit stream — the substrate
- * the undo system records from. One is emitted per local create/update/
- * delete/archive (remote/collaborator deltas never appear here: they apply
- * through a separate pool path that doesn't queue mutations). `previousData`
- * holds the pre-edit field values (captured from the model's
- * `modifiedProperties` first-old-wins baseline), so an inverse op is fully
- * derivable from the event alone — no separate snapshot pass.
- *
- * This mirrors how Yjs's `UndoManager` derives reverse-ops by observing the
- * doc and Liveblocks' `room.history` records room ops: undo listens to the
- * one place all local writes converge, rather than wrapping the write call.
+ * A single locally-originated mutation, observed as it flows through the commit
+ * stream. The undo system records these to build its inverse operations: one is
+ * emitted per local create, update, delete, or archive. Changes arriving from
+ * other participants do not appear here — they apply through a separate path
+ * that does not queue mutations. Because `previousData` captures the field
+ * values as they were before the edit, each event carries everything needed to
+ * derive its inverse, with no separate snapshot step. A store exposes this
+ * stream through {@link SyncStoreContract.subscribeLocalMutations}.
  */
 export interface LocalMutation {
   type: 'create' | 'update' | 'delete' | 'archive' | 'unarchive';
-  /** Registered model name (e.g. `'SlideLayer'`); resolved to a schema key by the recorder. */
+  /** The registered name of the mutated model, for example `'SlideLayer'`. */
   modelName: string;
   modelId: string;
-  /** New field values (create/update). */
+  /** The new field values, for a create or an update. */
   data?: Record<string, unknown> | null;
-  /** Pre-edit field values (update → inverse patch; delete → full re-create row). */
+  /** The field values as they were before the edit. For an update these form
+   *  the inverse patch; for a delete they hold the full row needed to recreate
+   *  it. */
   previousData?: Record<string, unknown> | null;
 }
 
 /**
- * Minimal store interface that the SDK hooks need.
- * Consumers provide their concrete store (e.g., SyncedStore) that implements this.
+ * The minimal store interface the SDK's hooks and mutators depend on. Provide a
+ * concrete store that implements it — {@link BaseSyncedStore} is the built-in
+ * implementation — and the hooks work against your store without knowing its
+ * exact type. Optional members exist so lightweight test doubles can implement
+ * only the parts they exercise.
  */
 export interface SyncStoreContract {
   /**
-   * Subscribe to the LOCAL mutation stream (optimistic, pre-ack) for undo
-   * recording. Optional so minimal test doubles can omit it — when absent,
-   * undo scopes simply record nothing. The concrete store
-   * (`BaseSyncedStore`) wires this to the TransactionQueue's
-   * `transaction:created` event. Returns an unsubscribe function.
+   * Subscribes to the stream of local mutations for undo recording, delivering
+   * each optimistic write before it is acknowledged by the server. See
+   * {@link LocalMutation}. Returns a function that removes the subscription.
+   * This is optional: when a store does not implement it, undo scopes simply
+   * record nothing.
    */
   subscribeLocalMutations?(handler: (mutation: LocalMutation) => void): () => void;
   retrieve(modelClass: abstract new (...args: never[]) => Model, id: string): Model | undefined;
@@ -82,23 +85,22 @@ export interface SyncStoreContract {
     }
   ): { data: Model[] };
   /**
-   * Save (create or update) one entity. Calling `save` in a tight loop
-   * produces a single wire commit with one `batchIndex`: the SyncClient
-   * debounces IDB persistence and the server push to one microtask, and
-   * TransactionQueue coalesces every transaction staged in the tick into
-   * one batch. There is intentionally no `saveMany` — Zero, Replicache,
-   * and the rest of the local-first lineage all expose one-row writes
-   * and rely on the implicit tick boundary.
+   * Saves one entity, creating it if new or updating it if it already exists.
+   * Calling `save` repeatedly within the same tick is efficient: the writes are
+   * coalesced and persisted, then sent to the server, as a single commit. There
+   * is deliberately no bulk method — issue one `save` per row and let the tick
+   * boundary batch them.
    *
-   * `skipValidation` exists for trusted bulk paths (AI sandbox layer
-   * generation, PPTX import, hydration) where the producer has already
-   * type-checked and per-row Zod is a measurable cost.
+   * Pass `skipValidation` on trusted, high-volume paths — bulk import or
+   * hydration, where the data has already been validated — to skip the per-row
+   * schema check, which is a measurable cost at that volume.
    */
   save(model: Model, options?: { skipValidation?: boolean }): Promise<void>;
   delete(model: Model): Promise<void>;
   archive(model: Model): Promise<void>;
   unarchive(model: Model): Promise<void>;
-  /** The ObjectPool — for entity/collection lookups by ID or typename. */
+  /** The in-memory object pool: look up individual entities or collections by
+   *  id or model name, create views, and resolve foreign-key relationships. */
   pool: {
     get(id: string): Model | undefined;
     getByTypeName(typename: string, scope?: ModelScope): Model[];
@@ -109,10 +111,11 @@ export interface SyncStoreContract {
     viewRegistry: ViewRegistry;
   };
   /**
-   * Reactive sync-status getters. Powered by MobX `computed` inside
-   * `BaseSyncedStore`, so they're safe to read in `observer` components
-   * and inside `reaction(() => store.isReady, ...)`. Consumers that
-   * don't want to touch MobX should prefer the `useSyncStatus()` hook.
+   * Reactive getters for the current sync state. In the built-in store these
+   * are backed by observable computeds, so reading them inside a reactive
+   * context — an observer component or a reaction — re-runs that context when
+   * the state changes. Code that prefers not to work with the reactivity system
+   * directly can read the same values through the `useSyncStatus()` hook.
    */
   readonly isReady: boolean;
   readonly isSyncing: boolean;
@@ -121,24 +124,23 @@ export interface SyncStoreContract {
   readonly isError: boolean;
   readonly hasUnsyncedChanges: boolean;
   /**
-   * Area-of-interest (dynamic read subscription). `enterScope`/`leaveScope`
-   * move the connection's read interest as the user navigates (open/close a
-   * deck, sheet, doc); `pinScope`/`unpinScope` express prominence (an active
-   * claim keeps a group subscribed). Each resolves the scope through the same
-   * resolver the claim path uses, so read interest and write claims agree on
-   * the sync-group string. Optional so minimal test doubles can omit them;
-   * no-ops before the socket exists. The concrete store (`BaseSyncedStore`)
-   * forwards to its `AreaOfInterestManager`.
+   * Manages the connection's area of interest — the dynamic set of data it
+   * subscribes to. Call `enterScope` and `leaveScope` to move that interest as
+   * the user navigates between documents, and `pinScope` and `unpinScope` to
+   * keep a scope subscribed while it stays important, such as while a claim is
+   * held. Every scope resolves through the same resolver the claim path uses, so
+   * read subscriptions and write claims always agree on which group they refer
+   * to. These are optional and do nothing until the connection is open.
    */
   enterScope?(scope: ParticipantScope, opts?: { hydrate?: boolean }): Promise<void>;
   leaveScope?(scope: ParticipantScope): Promise<void>;
   pinScope?(scope: ParticipantScope): Promise<void>;
   unpinScope?(scope: ParticipantScope): Promise<void>;
   /**
-   * Raw MobX-observable `SyncStatus` record. `useSyncStatus()` reads
-   * `state`, `progress`, `pendingChanges`, `isSessionError`, `error`
-   * from this to build its tagged union. Exposed on the contract so
-   * consumer-facing hooks and test doubles can manipulate it directly.
+   * The full reactive {@link SyncStatus} record. The `useSyncStatus()` hook
+   * reads its fields — `state`, `progress`, `pendingChanges`, `isSessionError`,
+   * and `error` — to present the current sync state. It is part of the contract
+   * so hooks and test doubles can read or set it directly.
    */
   readonly syncStatus: SyncStatus;
 }

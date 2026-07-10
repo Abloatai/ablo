@@ -1,10 +1,13 @@
 /**
- * Conflict policy — the engine detects, the policy decides.
+ * The conflict types a policy decides on. The engine detects a conflict and
+ * hands it to your {@link ConflictPolicy}, which returns a
+ * {@link ConflictDecision}.
  *
- * Two conflict shapes today: `stale_context` (a write whose `readAt`
- * is older than the latest delta on the target) and `claim_held`
- * (a participant claims a target someone else is already claiming).
- * Adding new shapes is additive on the discriminated union.
+ * There are two conflict shapes. A {@link StaleContextConflict} is a write
+ * whose `readAt` watermark is older than the latest delta on the target row. A
+ * {@link ClaimHeldConflict} is a participant trying to claim a target that
+ * someone else already holds. {@link Conflict} is the discriminated union of
+ * the two; switch on `kind` to narrow it.
  */
 
 import type { ParticipantRef } from '../types/participant.js';
@@ -37,19 +40,18 @@ export interface StaleContextConflict extends ConflictBase {
   readonly observedSyncId: number;
   /**
    * The fields whose concurrent change triggered this conflict — the
-   * intersection of the committer's written fields and the columns a
-   * newer delta touched. Empty array means the conflicting delta was a
-   * whole-entity change (CREATE/DELETE, or a pre-`changed_fields`
-   * legacy delta), which conflicts with any write. Lets a policy decide
-   * at field granularity, e.g. allow when the only collision is on a
-   * cosmetic field. See `docs/internal/per-field-conflict-detection.md`.
+   * intersection of the fields the committer wrote and the columns a newer
+   * delta touched. An empty array means the conflicting delta was a
+   * whole-entity change, such as a create or delete, which conflicts with any
+   * write. A policy can use this to decide at field granularity — for example,
+   * allowing the write when the only overlap is on a cosmetic field.
    */
   readonly conflictingFields?: readonly string[];
   /**
-   * The committer's declared `onStale` intent for this op. The default policy
-   * honors it: `'notify'` → notify+hold, anything else → reject. A custom policy
-   * may override (e.g. gate notify on claim ownership). Absent ⇒ treat as
-   * `'reject'` (the unguarded-write default).
+   * The committer's declared `onStale` intent for this operation. The default
+   * policy honors it: `'notify'` holds the write and notifies, and anything
+   * else rejects. A custom policy may override this. When absent, it is treated
+   * as `'reject'`, the default for an unguarded write.
    */
   readonly requestedMode?: 'reject' | 'overwrite' | 'notify';
 }
@@ -63,11 +65,12 @@ export interface ClaimHeldConflict extends ConflictBase {
   /** Holder's claim expiry (ms since epoch). */
   readonly expiresAt: number;
   /**
-   * The committer's granted capability operations (the key's allowlist). A
-   * policy is a pure function of the conflict value, so it can only authorize
-   * on what's carried here — this is what lets a policy express "preempt iff
-   * the committer holds `claim.preempt`" (see `capabilityPreemptPolicy`).
-   * Empty for a human session with no allowlist.
+   * The capability operations granted to the committer — the allowlist carried
+   * by its key. A policy decides purely from the conflict it is given, so this
+   * is the only place it can read the committer's privileges. It lets a policy
+   * express a rule such as "preempt only if the committer holds `claim.preempt`"
+   * (see {@link capabilityPreemptPolicy}). Empty for a human session that
+   * carries no allowlist.
    */
   readonly committerOperations: readonly string[];
 }
@@ -83,32 +86,35 @@ export type ConflictDecision =
   | { readonly action: 'reject'; readonly reason?: string }
   | { readonly action: 'allow'; readonly note?: string }
   /**
-   * Evict the current holder and grant the target to the committer. Only
-   * meaningful for an `claim_held` conflict at claim time (`claim_begin`):
-   * the holder receives an `claim_lost` (reason `'preempted'`) and the
-   * preemptor takes the lease, jumping ahead of any FIFO waiters. This is the
-   * authorization seam for preemption — a policy returns `preempt` only for a
-   * committer it deems higher-priority (e.g. a supervisor over its sub-agents,
-   * or an identity holding a preempt capability). At commit time there is no
-   * holder to evict, so a `preempt` decision there is treated as `allow`.
+   * Evict the current holder and grant the target to the committer. This is
+   * only meaningful for a `claim_held` conflict raised at claim time: the
+   * holder receives a `claim_lost` notification with reason `'preempted'`, and
+   * the committer takes the lease ahead of anyone already waiting in line for
+   * it. Return it only for a committer you consider higher priority — for
+   * example, a supervisor over its own sub-agents, or an identity that holds a
+   * preempt capability. At commit time there is no holder to evict, so a
+   * `preempt` decision is treated as `allow`.
    */
   | { readonly action: 'preempt'; readonly reason?: string }
   /**
-   * Notify-instead-of-abort (non-coercion). Only meaningful for a
-   * `stale_context` conflict, and the engine's aligned disposition: HOLD the
-   * conflicting op (don't write it) and return a `StaleNotification` with the
-   * current value so the actor (agent or human) resolves and re-commits. The
-   * rest of the batch still commits. Maps from `onStale: 'notify'`.
+   * Hold the write instead of aborting it. This is only meaningful for a
+   * `stale_context` conflict. The engine withholds the conflicting operation
+   * and returns a `StaleNotification` carrying the current value, so the actor
+   * — an agent or a human — can reconcile and re-commit. The rest of the batch
+   * still commits. It maps from `onStale: 'notify'`.
    *
-   * Serialization order is supplied by the monotonic `sync_id` landing order
-   * (the stale committer always yields/recomputes — an asymmetry that rules out
-   * a symmetric notify-rewrite livelock). Unbounded retry is bounded by the
-   * client's reconciliation retry cap.
+   * The monotonic `sync_id` landing order decides who yields: the stale
+   * committer always recomputes against the newer value, an asymmetry that
+   * prevents two notifying writers from looping against each other. Retries are
+   * bounded by the client's reconciliation retry cap.
    */
   | { readonly action: 'notify'; readonly reason?: string };
 
 /**
- * Pluggable decision function. Sync or async.
+ * The function that decides a conflict. It receives a {@link Conflict} and
+ * returns a {@link ConflictDecision}, either synchronously or as a promise.
+ * Register your implementation with the engine; the example below allows a
+ * cosmetic "linter" writer and defers everything else to {@link defaultPolicy}.
  *
  * ```ts
  * const policy: ConflictPolicy = (conflict) => {
@@ -124,53 +130,48 @@ export type ConflictPolicy = (
 ) => ConflictDecision | Promise<ConflictDecision>;
 
 /**
- * Default policy — **Law 7 (the human is the principal) is the engine-wide
- * default, not an opt-in.**
+ * The conflict policy the engine uses when you do not supply your own. It
+ * favors people: a human is never blocked, while agents and automated writers
+ * yield to a claim someone else holds.
  *
- * A `claim_held` conflict resolves by the COMMITTER's kind. This default is, by
- * construction, identical to `coordination(humansOverwrite())` applied to every
- * model — so a developer who wants different behaviour just declares the conflict
- * axis on that model (`humansReject()`, `humansNotify()`, `systemOverwrite()`, …)
- * and it wins. The default and the override speak the same vocabulary; the
- * default is the one you get for free.
+ * For a `claim_held` conflict, the decision follows the committer's kind:
  *
- *   • `user`   → `allow`  — a human is never blocked by a claim (a claim is a
- *                           coordination hint among agents, not a lock on people)
- *   • `agent`  → `reject` — an agent yields to a foreign claim (the no-bypass
- *                           invariant; the ONLY sanctioned agent override is the
- *                           privileged `claim.preempt` capability seam, see
- *                           {@link capabilityPreemptPolicy})
- *   • `system` → `reject` — automation / backend (`sk_`) writers SERIALIZE
- *                           through claims by default like agents do, so a server
- *                           job can't silently steamroll a held row. Opt a model
- *                           in with `systemOverwrite()` when that's wanted.
+ *   • `user`   → `allow`  — a human is never blocked by a claim. A claim is a
+ *                           coordination hint among agents, not a lock on
+ *                           people.
+ *   • `agent`  → `reject` — an agent yields to a claim held by someone else.
+ *                           The one sanctioned exception is the privileged
+ *                           `claim.preempt` capability; see
+ *                           {@link capabilityPreemptPolicy}.
+ *   • `system` → `reject` — automated and backend writers serialize through
+ *                           claims the same way agents do, so a server job
+ *                           cannot silently overwrite a held row. Declare the
+ *                           model's conflict axis to overwrite if you want that.
  *
- * Scope note: only `user` is allowed by default — that is the exact Law 7
- * decision ("a human is never blocked"). `system` is deliberately NOT a
- * free-bypass: `sk_` keys are full-access backend credentials, and a foundational
- * contract (claim serialization / the retry-storm guard) depends on them
- * respecting claims unless a model says otherwise.
+ * Allowing only `user` by default is deliberate: a backend key is a
+ * full-access credential, and claim serialization depends on those writers
+ * respecting claims unless a model opts out.
  *
- * `stale_context` conflicts honor the committer's declared `onStale` intent:
+ * For a `stale_context` conflict, the decision honors the committer's declared
+ * `onStale` intent: `'notify'` holds the write and notifies the actor to
+ * resolve it, and anything else (including `'reject'` or an absent value)
+ * rejects. An `onStale` of `'overwrite'` never reaches a policy — it is a hard
+ * opt-out resolved before the conflict is detected.
  *
- *   • `'notify'` → notify + hold (op withheld; the actor resolves)
- *   • anything else (incl. `'reject'`, absent) → reject
- *
- * `'overwrite'` never reaches a policy on the stale path — it's a hard opt-out
- * resolved before detection.
+ * To change this behavior for a model, declare its conflict axis in the schema;
+ * a declared axis overrides this default.
  */
-// Typed by its real SYNCHRONOUS shape (via `satisfies`) rather than the
-// async-permissive `ConflictPolicy` alias, so sync callers like
-// `interpretConflictAxis` and `capabilityPreemptPolicy` get a plain
-// `ConflictDecision` back (not `… | Promise<…>`). Still assignable to
-// `ConflictPolicy` everywhere it's used as a policy.
+// Typed by its real synchronous shape with `satisfies`, rather than the
+// async-permissive `ConflictPolicy` alias, so synchronous callers such as
+// `interpretConflictAxis` and `capabilityPreemptPolicy` receive a plain
+// `ConflictDecision` rather than `ConflictDecision | Promise<…>`. It remains
+// assignable to `ConflictPolicy` wherever it is used as one.
 export const defaultPolicy = ((conflict: Conflict): ConflictDecision => {
   if (conflict.kind === 'claim_held') {
-    // Law 7 universal default: a human (`user`) is never blocked; agents AND
-    // system actors yield. Keeping every non-`user` kind on `reject` here is
-    // what makes the no-bypass invariant hold even on the registry/default
-    // resolution path (which, unlike the declared-axis path, has no separate
-    // agent-degradation guard).
+    // A human (`user`) is never blocked; agents and system actors yield.
+    // Keeping every non-`user` kind on `reject` here ensures an agent cannot
+    // bypass a claim even on this default resolution path, which — unlike the
+    // declared-axis path — has no separate agent guard of its own.
     return conflict.committer.kind === 'user'
       ? { action: 'allow', note: 'principal:not-blocked' }
       : { action: 'reject', reason: 'claim_conflict' };
@@ -181,12 +182,14 @@ export const defaultPolicy = ((conflict: Conflict): ConflictDecision => {
 }) satisfies ConflictPolicy;
 
 /**
- * Capability-gated preemption. An `claim_held` conflict is PREEMPTED when the
- * committer holds the `claim.preempt` operation in its capability allowlist
- * (the holder is evicted, the committer takes the lease); everything else falls
- * back to `defaultPolicy` (reject). Opt-in — wire it as a `conflictPolicies`
- * global to let a privileged identity jump a held entity without a bespoke
- * policy. The authorization is the capability, not an identity string.
+ * A ready-made policy that grants capability-gated preemption. When the
+ * committer's capability allowlist includes the `claim.preempt` operation, a
+ * `claim_held` conflict is preempted: the current holder is evicted and the
+ * committer takes the lease. Every other conflict falls back to
+ * {@link defaultPolicy}, which rejects. Register it as your conflict policy to
+ * let a privileged identity take over a held entity without writing a bespoke
+ * policy. The authorization rests on holding the capability, not on any
+ * particular identity string.
  */
 export const capabilityPreemptPolicy: ConflictPolicy = (conflict) => {
   if (
@@ -199,18 +202,17 @@ export const capabilityPreemptPolicy: ConflictPolicy = (conflict) => {
 };
 
 /**
- * **Axis 3 — declared write-conflict disposition, per committer kind.**
+ * A model's declared conflict disposition, keyed by the kind of committer. You
+ * set it in the model's schema, for example
+ * `conflict: { user: 'overwrite', agent: 'reject' }`, and the engine applies it
+ * at commit time. It is plain data using the same `'reject' | 'overwrite' |
+ * 'notify'` vocabulary as the write guards, so it travels through the schema
+ * registry to the server without naming any application model.
  *
- * A model declares this in its schema (`conflict: { user: 'overwrite', agent:
- * 'reject' }`); the generic engine interprets it at the commit chokepoint. It's
- * pure data — the same `OnStaleMode` vocabulary used by write guards
- * (`'reject' | 'overwrite' | 'notify'`) — so it serializes through the schema
- * registry to the schema-agnostic server, which names no app model.
- *
- * Keys are the COMMITTER's participant kind (server-derived, forge-proof): an
- * omitted kind falls through to the engine default. So `{ user: 'overwrite',
- * agent: 'reject' }` reads "a human's write wins (never blocked); an agent's
- * write yields", and `system` (unlisted) takes the default.
+ * Each key is the committer's participant kind, which the server derives and a
+ * client cannot forge; an omitted kind falls back to the engine default. So
+ * `{ user: 'overwrite', agent: 'reject' }` reads as "a human's write wins, an
+ * agent's write yields," and `system`, being unlisted, takes the default.
  */
 export interface ConflictAxis {
   /** What happens when a human (`user` session) commits into a conflict. */
@@ -222,24 +224,25 @@ export interface ConflictAxis {
 }
 
 /**
- * Interpret a declared {@link ConflictAxis} for a concrete conflict — pure and
- * synchronous (no I/O), so it runs on either side of the schema-agnostic
- * boundary. Looks up the committer's kind and maps the declared `OnStaleMode`:
+ * Resolves a declared {@link ConflictAxis} into a {@link ConflictDecision} for
+ * one concrete conflict. It is pure and synchronous, doing no I/O, so it can
+ * run on either the client or the server. It reads the committer's kind from
+ * the conflict and maps the declared mode:
  *
- *   - undefined   → the engine default (`defaultPolicy`: Law 7 — a human (`user`)
- *                   committer is allowed (never blocked); `agent` and `system`
- *                   reject on a `claim_held`; on a stale write, honor
- *                   `onStale: 'notify'`)
- *   - `overwrite` → `allow` — the write wins / the committer is never blocked
- *   - `reject`    → `reject` — the committer yields
- *   - `notify`    → on `stale_context`: notify + hold (re-read & re-apply);
- *                   on `claim_held`: notify has no held op to reconcile against
- *                   (see {@link ConflictDecision} `notify`), so degrade to
- *                   `reject` rather than silently allowing a claimed-row write.
+ *   - undefined   → the engine default, {@link defaultPolicy}: a human is
+ *                   allowed, an agent or system committer is rejected on a
+ *                   `claim_held`, and a stale write honors `onStale: 'notify'`.
+ *   - `overwrite` → `allow`; the write wins and the committer is never blocked.
+ *   - `reject`    → `reject`; the committer yields.
+ *   - `notify`    → on a `stale_context` conflict, hold the write and notify so
+ *                   the committer re-reads and re-applies; on a `claim_held`
+ *                   conflict there is no held write to reconcile (see
+ *                   {@link ConflictDecision} `notify`), so it degrades to
+ *                   `reject` rather than silently writing to a claimed row.
  *
- * NOTE: this is a generic interpretation only. Server-side invariants (e.g. an
- * agent may never bypass a foreign claim) are enforced where the decision is
- * applied, not here.
+ * This is only the generic interpretation. Stronger server-side rules — such as
+ * an agent never bypassing a claim held by someone else — are enforced where
+ * the decision is applied, not here.
  */
 export function interpretConflictAxis(
   axis: ConflictAxis,

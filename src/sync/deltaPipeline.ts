@@ -1,26 +1,24 @@
 /**
- * deltaPipeline — the incoming-delta dedup/batch/flush pipeline.
- *
- * Extracted from BaseSyncedStore.ts as a cohesive leaf: state-signature
- * dedup, per-delta bookkeeping + enqueue, the live-traffic debounce, and
- * the IDB→pool flush. The store keeps thin protected delegates with
- * unchanged signatures, and the leaf routes every call to a protected
- * override point (getStateFields, isCustomEntity, deduplicateDeltas,
- * flushPendingDeltas, the G/S handlers, …) back through the minimal
- * {@link DeltaPipelineContext} so subclass dynamic dispatch is preserved.
- * `applyDeltaFrame` — the authoritative-apply correctness seam — stays in
- * BaseSyncedStore and drives this pipeline via `enqueueDelta` +
- * `flushPendingDeltas`.
+ * The pipeline that takes incoming deltas from the server and lands them in
+ * local state. It has four stages: deduplicating deltas by state signature,
+ * per-delta bookkeeping and enqueue, a debounce for live traffic, and a flush
+ * that writes to the local store and then the in-memory pool. Every call it
+ * makes back into the surrounding store — resolving state fields, identifying
+ * custom entities, deduplicating, flushing, handling sync-group changes —
+ * routes through the {@link DeltaPipelineContext} interface, so a subclass that
+ * overrides any of those hooks still takes effect. The atomic frame-apply entry
+ * point lives on the store and drives this pipeline through {@link enqueueDelta}
+ * and {@link flushPendingDeltas}.
  */
 
 import { runInAction } from 'mobx';
 import { getContext } from '../context.js';
-import { ModelScope } from '../ObjectPool.js';
+import { ModelScope } from '../InstanceCache.js';
 import type { Model } from '../Model.js';
 import type { ModelData } from '../types/modelData.js';
 import type { SyncDelta } from './SyncWebSocket.js';
 
-/** One applied-delta result out of `Database.processDeltaBatch`, forwarded to the pool. */
+/** One applied-delta result from the persistence layer's batch write, forwarded to the pool. */
 interface DeltaDbResult {
   action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
   modelName: string;
@@ -30,10 +28,10 @@ interface DeltaDbResult {
 }
 
 /**
- * What the pipeline needs back from its host store: the shared mutable
- * pipeline state (backed by host fields via get/set accessors), narrow
- * persistence/pool facades, and the host's own protected hooks so subclass
- * overrides keep taking effect.
+ * What the pipeline needs back from the surrounding store: the shared mutable
+ * pipeline state (backed by the store's own fields through accessors), narrow
+ * persistence and pool facades, and the store's overridable hooks, so a
+ * subclass's overrides continue to take effect.
  */
 export interface DeltaPipelineContext {
   // ── Shared pipeline state (host fields behind accessors) ──
@@ -63,12 +61,12 @@ export interface DeltaPipelineContext {
       transactionId?: string;
     }[],
   ): Promise<{ results: DeltaDbResult[]; persistedSyncId: number }>;
-  /** `SyncClient.applyDeltaBatchToPool` with the host's `enrichRelations` bound. */
+  /** Applies persisted delta results to the in-memory pool, with the host's relation enrichment bound. */
   applyDeltaBatchToPool(results: DeltaDbResult[]): void;
-  /** `syncWebSocket?.acknowledge?.(syncId)` — no-op when the socket is down. */
+  /** Acknowledges a sync id back to the server; a no-op when the socket is down. */
   acknowledge(syncId: number): void;
 
-  // ── Custom-entity pool ops (deltas that skip IDB) ──
+  // ── Custom-entity pool ops (deltas that skip the local store) ──
   readonly objectPool: {
     get(id: string): Model | undefined;
     add(model: Model, scope: ModelScope): void;
@@ -93,12 +91,12 @@ export interface DeltaPipelineContext {
 }
 
 /**
- * A 'G'/'S' handler rejected AFTER the applied watermark already advanced —
- * the delta will never be re-delivered, so a failed SECURITY clear (revoked
- * data must not persist) would otherwise be permanently silent. Fall back to
- * the bluntest safe response: drop the whole in-memory pool and force a full
- * re-bootstrap so local state is rebuilt from server truth. Never throws —
- * this runs inside the delta pipeline's fire-and-forget seam.
+ * Handles a sync-group ('G' or 'S') delta whose handler rejected after the
+ * applied watermark had already advanced. That delta will never be redelivered,
+ * so a failed security clear — revoked data that must not stay cached — would
+ * otherwise fail silently. The safe fallback is blunt: drop the whole in-memory
+ * pool and force a full re-bootstrap, rebuilding local state from the server.
+ * It never throws, because it runs inside the pipeline's fire-and-forget path.
  */
 export function handleGroupHandlerFailure(
   ctx: DeltaPipelineContext,
@@ -124,7 +122,7 @@ export function handleGroupHandlerFailure(
   }
 }
 
-/** State signature for delta deduplication */
+/** Builds a small signature of a delta's state fields, used to detect no-op duplicate deltas. */
 function extractStateSignature(
   ctx: DeltaPipelineContext,
   delta: SyncDelta,
@@ -195,12 +193,13 @@ export function deduplicateDeltas(ctx: DeltaPipelineContext, deltas: SyncDelta[]
 }
 
 /**
- * Per-delta bookkeeping + enqueue. Returns `true` when the delta was
- * pushed onto `pendingDeltas` (a regular batchable I/U/C/D delta that a
- * subsequent flush must drain), `false` when it was skipped (dedup),
- * deferred (bootstrap queue), or handled immediately out-of-band (G/S
- * sync-group mutations). Does NOT schedule a flush — callers decide
- * whether to debounce (live) or flush atomically (catch-up frame).
+ * Performs per-delta bookkeeping and enqueues the delta. Returns `true` when
+ * the delta was pushed onto `pendingDeltas` — a regular batchable insert,
+ * update, covering, or delete that a later flush must drain — and `false` when
+ * it was skipped as a duplicate, deferred into the bootstrap queue, or handled
+ * immediately (a 'G'/'S' sync-group change). It does not schedule the flush
+ * itself; the caller chooses whether to debounce live traffic or flush a
+ * catch-up frame atomically.
  */
 export function enqueueDelta(
   ctx: DeltaPipelineContext,
@@ -208,10 +207,9 @@ export function enqueueDelta(
   options: { authoritative?: boolean } = {},
 ): boolean {
   // Dedup guard — skip already-processed deltas. The `applied` watermark is a
-  // valid skip threshold ONLY for in-order live traffic; an authoritative
-  // catch-up frame bypasses it (see `applyDeltaFrame`) so an out-of-order
-  // live delta that advanced the watermark can't cause the frame's lower ids
-  // to be silently dropped.
+  // valid skip threshold only for in-order live traffic; an authoritative
+  // catch-up frame bypasses it, so an out-of-order live delta that advanced the
+  // watermark can't cause the frame's lower ids to be dropped silently.
   if (!options.authoritative && delta.id > 0 && delta.id <= ctx.highestProcessedSyncId) {
     return false;
   }
@@ -228,10 +226,11 @@ export function enqueueDelta(
   // Advance watermark
   ctx.advanceApplied(delta.id);
 
-  // Sync group added — handle immediately. Supports both legacy
-  // (addedGroups/removedGroups) and incremental (group/userId) payloads.
-  // NOT fire-and-forget: the watermark above already advanced, so a rejected
-  // handler (a failed security clear) must trigger the fallback, not vanish.
+  // Sync group added — handle immediately. Accepts both the batched
+  // (addedGroups/removedGroups) and incremental (group/userId) payloads. This
+  // is deliberately not fire-and-forget: the watermark has already advanced, so
+  // a rejected handler (a failed security clear) must trigger the fallback
+  // rather than vanish.
   if (delta.actionType === 'G') {
     void ctx.handleSyncGroupChange(delta).catch((error: unknown) => {
       handleGroupHandlerFailure(ctx, delta, error);
@@ -249,16 +248,16 @@ export function enqueueDelta(
     return false;
   }
 
-  // DELETE — fire the cascade cancel immediately (O(1) via FK index;
-  // must run BEFORE any subsequent update on the same model lands so
-  // pending update transactions for soon-deleted children don't race
-  // their parent's delete) but route the IDB+pool write through the
-  // same batched path as UPDATEs. The previous immediate-flush path
-  // produced N IDB writes + N pool mutations + N `models:changed`
-  // events when a peer deleted a chart with N layers; the batched
-  // path produces one of each per microtask flush. Dedup in
-  // `flushPendingDeltas` handles the U-then-D-on-same-model case
-  // correctly via arrival-order replay through `processDeltaBatch`.
+  // Delete — run the cascade cancel immediately (O(1) through the foreign-key
+  // index; it must run before any later update on the same model lands, so
+  // pending update transactions for soon-deleted children don't race their
+  // parent's delete). The persistence and pool write still goes through the
+  // same batched path as updates: flushing each delete on its own produced one
+  // store write, one pool mutation, and one `models:changed` event per row, so
+  // deleting a parent with many children fanned out into many of each, whereas
+  // the batched path collapses them into one per flush. Deduplication in
+  // `flushPendingDeltas` handles an update-then-delete on the same model by
+  // replaying in arrival order.
   if (delta.actionType === 'D') {
     ctx.cascadeCancelTransactionsForDeletedParent(delta.modelName, delta.modelId);
   }
@@ -280,14 +279,17 @@ export function scheduleDeltaFlush(ctx: DeltaPipelineContext): void {
   }
 }
 
-/** Flush pending deltas with deduplication and batched ObjectPool mutations */
-/** Flush pending deltas with deduplication. Delegates pool writes to SyncClient. */
+/**
+ * Flushes the queued deltas: deduplicates them, applies custom-entity deltas
+ * straight to the pool, writes the rest to the local store and then the pool,
+ * and advances the acknowledgement cursor once the store write has committed.
+ */
 export async function flushPendingDeltas(ctx: DeltaPipelineContext): Promise<void> {
   if (ctx.pendingDeltas.length === 0) return;
 
   const deduplicatedDeltas = ctx.deduplicateDeltas(ctx.pendingDeltas);
 
-  // Custom entities → apply directly to ObjectPool (skip IDB)
+  // Custom entities → apply straight to the pool, skipping the local store.
   const customDeltas = deduplicatedDeltas.filter((d) => ctx.isCustomEntity(d.modelName));
   if (customDeltas.length > 0) {
     runInAction(() => {
@@ -314,10 +316,10 @@ export async function flushPendingDeltas(ctx: DeltaPipelineContext): Promise<voi
     });
   }
 
-  // Regular deltas → IDB then ObjectPool via SyncClient.
-  // 'G' and 'S' deltas are routed upstream (handleSyncGroupChange,
-  // handleGroupRemoved) and never reach flushPendingDeltas, but the
-  // Database.processDelta signature accepts them defensively.
+  // Regular deltas → the local store, then the pool.
+  // 'G' and 'S' deltas are handled earlier (handleSyncGroupChange /
+  // handleGroupRemoved) and never reach here, though the persistence
+  // signature accepts them defensively.
   const regularDeltas = deduplicatedDeltas.filter((d) => !ctx.isCustomEntity(d.modelName));
   const batch = await ctx.processDeltaBatch(
     regularDeltas.map((d) => ({
@@ -326,34 +328,31 @@ export async function flushPendingDeltas(ctx: DeltaPipelineContext): Promise<voi
       modelName: d.modelName,
       modelId: d.modelId,
       data: typeof d.data === 'string' ? JSON.parse(d.data) : d.data,
-      // Thread `transactionId` through so the receive layer can
-      // recognize echoes of locally-applied transactions and skip
-      // the pool mutation. See `OPTIMISTIC_RECONCILIATION.md`.
+      // Thread `transactionId` through so the receive layer can recognize
+      // echoes of locally-applied transactions and skip the pool mutation.
       transactionId: d.transactionId,
     }))
   );
   const dbResults = batch.results;
 
-  // Delegate ObjectPool writes to SyncClient (owns pool operations)
+  // Apply the batch results to the in-memory pool.
   ctx.applyDeltaBatchToPool(dbResults);
 
-  // Acknowledge + advance sync cursor — gated on IDB persistence.
+  // Acknowledge and advance the sync cursor, gated on persistence.
   //
-  // We MUST ack `persistedSyncId` (the high-water mark of deltas whose
-  // store transaction actually committed), NOT the input batch's last
-  // delta id. Acking by input range advances the server's view past
-  // deltas that never wrote to IDB; the next catch-up request would
-  // then send the advanced cursor and the server replies "you're up
-  // to date" — losing the un-persisted delta forever. This is the
-  // Replicache "same-transaction" invariant: the cursor and the
-  // persisted view must be consistent.
+  // We must acknowledge `persistedSyncId` — the high-water mark of deltas whose
+  // store transaction actually committed — not the input batch's last delta id.
+  // Acknowledging the input range would advance the server's view past deltas
+  // that never persisted; the next catch-up would then send the advanced cursor,
+  // the server would answer "you're up to date", and the unpersisted delta would
+  // be lost. The cursor and the persisted state must move together.
   const persistedSyncId = batch.persistedSyncId;
   if (persistedSyncId > ctx.lastAckedId) {
     ctx.acknowledge(persistedSyncId);
     ctx.advancePersisted(persistedSyncId);
   }
 
-  // Cache invalidation is automatic via SyncClient 'models:changed' event
+  // Cache invalidation happens automatically via the 'models:changed' event.
 
   ctx.pendingDeltas = [];
   if (ctx.batchTimer) { clearTimeout(ctx.batchTimer); ctx.batchTimer = null; }

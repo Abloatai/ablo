@@ -5,14 +5,14 @@ import { AbloInternalContext } from './internalContext.js';
 import { AbloValidationError } from '../errors.js';
 
 /**
- * Register an imperative callback that fires whenever the provider
- * surfaces an error. Covers engine errors (bootstrap failures,
- * mutation rejections), WebSocket errors, and uncaught exceptions
- * inside `postBootstrap` hooks.
+ * Registers a callback that runs whenever the provider surfaces an error. This
+ * covers engine errors such as bootstrap failures and mutation rejections,
+ * WebSocket errors, and uncaught exceptions thrown inside `postBootstrap`
+ * hooks.
  *
- * Use this for telemetry (Sentry, Datadog), user-facing toasts, or
- * any side effect that should NOT trigger a re-render. The listener
- * is stored in a ref, so re-renders don't thrash the subscription.
+ * Use it for side effects that should not cause a re-render — telemetry,
+ * logging, or a toast. The callback is held in a ref, so a re-render does not
+ * resubscribe.
  *
  * @example
  * function ErrorToaster() {
@@ -33,10 +33,9 @@ export function useErrorListener(listener: (error: Error) => void): void {
     );
   }
 
-  // Stash the latest callback in a ref so the effect subscription
-  // stays stable across renders. Matches the `useEventCallback`
-  // pattern: late-bind the listener so callers can pass inline
-  // arrows without thrashing the subscription.
+  // Hold the latest callback in a ref so the subscription stays stable across
+  // renders. Late-binding the listener this way lets callers pass an inline
+  // arrow without resubscribing on every render.
   const ref = useRef(listener);
   ref.current = listener;
 
