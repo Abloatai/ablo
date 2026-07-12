@@ -5,6 +5,7 @@
  */
 
 import type { SyncActionType } from '../../types/index.js';
+import type { BootstrapReason } from '../../wire/bootstrapReason.js';
 
 /** The shape of a single delta — one change the server pushes to the client. */
 export interface MockDelta {
@@ -20,7 +21,7 @@ export interface MockDelta {
  * rebuild its data from scratch rather than catch up one delta at a time.
  */
 export interface MockBootstrapHint {
-  reason: 'too_far_behind' | 'too_many_deltas' | 'missing_entities';
+  reason: BootstrapReason;
   tables?: string[];
   staleTables?: string[];
 }

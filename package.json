@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "description": "The Collaboration Layer For AI Agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -30,6 +30,12 @@
       "types": "./dist/coordination/index.d.ts",
       "import": "./dist/coordination/index.js",
       "default": "./dist/coordination/index.js"
+    },
+    "./commit": {
+      "@ablo/source": "./src/commit/index.ts",
+      "types": "./dist/commit/index.d.ts",
+      "import": "./dist/commit/index.js",
+      "default": "./dist/commit/index.js"
     },
     "./react": {
       "@ablo/source": "./src/react/index.ts",
@@ -227,7 +233,7 @@
     "mobx": "^6.13.7",
     "mobx-react-lite": "^4.0.0",
     "uuid": "^11.1.0",
-    "zod": "^4.0.17"
+    "zod": "^4.1.11"
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.0",

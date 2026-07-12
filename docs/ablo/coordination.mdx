@@ -469,13 +469,13 @@ Each beat's answer carries two more things:
 
 Works identically on both transports: the realtime client sends a
 `claim_heartbeat` frame; the HTTP client posts
-`POST /v1/models/{model}/{id}/claim/heartbeat` (`{ ttl?, claimId?, details? }`).
+`POST /api/v1/models/{model}/{id}/claim/heartbeat` (`{ ttl?, claimId?, details? }`).
 Over HTTP, a **queued** claim can heartbeat too — it refreshes the waiter's
 slot in the line (a queued slot is TTL'd like a lease) and reports
 `{ status: 'queued', position }`.
 
 A stateless worker holding **many** rows beats them all in one round trip:
-`ablo.claims.heartbeatAll({ ttl: '5m' })` → `POST /v1/claims/heartbeat`, one
+`ablo.claims.heartbeatAll({ ttl: '5m' })` → `POST /api/v1/claims/heartbeat`, one
 entry per extended lease. This is the socketless twin of the realtime
 keepalive, which already renews every held lease on each ping.
 

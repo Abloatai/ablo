@@ -2,7 +2,7 @@
 
 import { useContext, useEffect, useState } from 'react';
 import { AbloInternalContext } from './internalContext.js';
-import type { Ablo, ModelClaim } from '../client/Ablo.js';
+import type { Ablo, AbloReads, ModelClaim } from '../client/Ablo.js';
 import type { ModelOperations } from '../client/createModelProxy.js';
 import { getModelClientMeta } from '../client/createModelProxy.js';
 import { Model } from '../Model.js';
@@ -24,9 +24,34 @@ type DefaultModels = ResolveSchema extends { models: infer M }
 
 const EMPTY_CLAIMS: readonly ModelClaim[] = Object.freeze([]);
 
+/**
+ * Restore the caller's schema generics on the context-held engine. React
+ * context erases generics (see `AbloInternalContextValue.engine`), so this is
+ * the one deliberate rebind point: the runtime value is the fully typed
+ * client, and `R` is the compile-time view the calling hook declared.
+ */
+function rebindEngine<R extends SchemaRecord>(engine: Ablo<SchemaRecord>): Ablo<R> {
+  return engine as Ablo<R>;
+}
+
+/**
+ * The same rebind viewed through the reactive-read surface — the identical
+ * runtime object, with model reads typed as snapshot rows, because everything
+ * a selector returns is converted through `snapshotValue` before the hook
+ * hands it back.
+ */
+function reactiveReads<R extends SchemaRecord>(engine: Ablo<SchemaRecord>): AbloReads<R> {
+  return rebindEngine<R>(engine) as AbloReads<R>;
+}
+
+// Selectors receive the reactive-read client: model reads are typed as
+// snapshot rows (data fields + computeds, no relation accessors), which is the
+// shape the hook actually returns after `toReactiveSnapshot()`. This makes the
+// selector's inferred result type honest — `row.layers` fails to compile here
+// instead of reading `undefined` at runtime.
 type ModelClientSelector<R extends SchemaRecord, T, C> =
-  (ablo: Ablo<R>) => ModelOperations<T, C>;
-type AbloSelector<R extends SchemaRecord, T> = (ablo: Ablo<R>) => T;
+  (ablo: AbloReads<R>) => ModelOperations<T, C>;
+type AbloSelector<R extends SchemaRecord, T> = (ablo: AbloReads<R>) => T;
 
 export interface UseAbloModelOptions<T> {
   /**
@@ -105,7 +130,9 @@ function snapshotValue<T>(value: T): T {
  * if (!ablo) return <Loading />;
  * const doc = await ablo.documents.retrieve({ id }); // async server read
  *
- * // Reactive selector (a synchronous local snapshot):
+ * // Reactive selector (a synchronous local snapshot). The selector's reads
+ * // are typed as snapshot rows — data fields + computeds, no relation
+ * // accessors — matching what the hook actually returns:
  * const doc = useAblo((ablo) => ablo.documents.get(id)) ?? serverDoc;
  * const active = useAblo((ablo) => ablo.documents.claim.state({ id }));
  *
@@ -168,7 +195,7 @@ export function useAblo<
   const modelClient: ModelOperations<T, C> | undefined =
     typeof modelOrSelect === 'function' && id !== undefined
       ? engine
-        ? (modelOrSelect(engine as unknown as Ablo<R>) as ModelOperations<T, C>)
+        ? (modelOrSelect(reactiveReads<R>(engine)) as ModelOperations<T, C>)
         : undefined
       : typeof modelOrSelect === 'function'
         ? undefined
@@ -193,7 +220,11 @@ export function useAblo<
       if (!engine || !isSelectorOnly || typeof modelOrSelect !== 'function') {
         return undefined;
       }
-      return snapshotValue(modelOrSelect(engine as unknown as Ablo<R>) as T);
+      // The selector runs against the real engine — reads inside it return the
+      // pool's model instances. `snapshotValue` then converts the RESULT to
+      // plain snapshot rows, which is what the selector's `AbloReads`
+      // parameter type already promised.
+      return snapshotValue(modelOrSelect(reactiveReads<R>(engine)) as T);
     },
   );
 
@@ -206,5 +237,5 @@ export function useAblo<
 
   if (isSelectorOnly) return selected;
   if (modelOrSelect) return modelResult;
-  return engine as unknown as Ablo<R> | null;
+  return engine === null ? null : rebindEngine<R>(engine);
 }

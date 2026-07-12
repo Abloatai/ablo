@@ -206,27 +206,27 @@ The SDK is a convenience wrapper over a model-scoped HTTP surface — the same
 noun (`model`) and verbs as `ablo.<model>.…`. Non-JS callers (or curl) use it
 directly. The table below shows the shape with `{model}` as a placeholder; the
 [OpenAPI spec](./openapi.json) expands it into one **typed** path per model
-(`/v1/models/task`, `/v1/models/deck`, …, generated from your schema) so each
+(`/api/v1/models/task`, `/api/v1/models/deck`, …, generated from your schema) so each
 endpoint documents that model's real field contract instead of a generic blob.
 
 | SDK call | HTTP |
 |---|---|
-| `ablo.<model>.create({ data })` | `POST /v1/models/{model}` |
-| `ablo.<model>.list({ where })` | `GET /v1/models/{model}` |
-| `ablo.<model>.retrieve({ id })` | `GET /v1/models/{model}/{id}` |
-| `ablo.<model>.update({ id, data })` | `PATCH /v1/models/{model}/{id}` |
-| `ablo.<model>.delete({ id })` | `DELETE /v1/models/{model}/{id}` |
-| `ablo.<model>.claim({ id })` | `POST /v1/models/{model}/{id}/claim` |
-| (release a claim) | `DELETE /v1/models/{model}/{id}/claim` |
+| `ablo.<model>.create({ data })` | `POST /api/v1/models/{model}` |
+| `ablo.<model>.list({ where })` | `GET /api/v1/models/{model}` |
+| `ablo.<model>.retrieve({ id })` | `GET /api/v1/models/{model}/{id}` |
+| `ablo.<model>.update({ id, data })` | `PATCH /api/v1/models/{model}/{id}` |
+| `ablo.<model>.delete({ id })` | `DELETE /api/v1/models/{model}/{id}` |
+| `ablo.<model>.claim({ id })` | `POST /api/v1/models/{model}/{id}/claim` |
+| (release a claim) | `DELETE /api/v1/models/{model}/{id}/claim` |
 
 Auth is a bearer API key: `Authorization: Bearer sk_…`. Mutations take an
 `Idempotency-Key` header — derive it from the business event, not a random
 value, so a retry never double-writes. Writes return a `CommitReceipt`; a
 rejected write carries an error `code` (e.g. `stale_context`, `intent_conflict`)
-to act on. `GET /v1/models/{model}` is cursor-paginated (`limit`, `order`,
+to act on. `GET /api/v1/models/{model}` is cursor-paginated (`limit`, `order`,
 `order_by`, `starting_after`) and returns `{ data, has_more, next_cursor }`.
 
-`POST /v1/commits` remains the path for **atomic multi-op** writes (several
+`POST /api/v1/commits` remains the path for **atomic multi-op** writes (several
 operations across rows/models that must commit together) — the per-model routes
 above are the one-record path. Both run the identical guarded-write engine.
 

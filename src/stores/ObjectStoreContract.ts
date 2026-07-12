@@ -15,6 +15,9 @@
  * a silent failure in a caller.
  */
 export interface ObjectStoreContract {
+  /** Insert a record only when its key is absent. */
+  add(data: Record<string, unknown>): Promise<void>;
+
   /** Insert or update a record. The record must carry an `id` field. */
   put(data: Record<string, unknown>): Promise<void>;
 

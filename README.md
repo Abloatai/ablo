@@ -442,7 +442,7 @@ HTTP endpoint when a server-to-server caller needs to write without opening a
 WebSocket:
 
 ```bash
-curl https://api.abloatai.com/v1/commits \
+curl https://api.abloatai.com/api/v1/commits \
   -H "Authorization: Bearer sk_test_..." \
   -H "Content-Type: application/json" \
   -d '{ "operations": [

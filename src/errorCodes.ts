@@ -177,7 +177,7 @@ export const ERROR_CODES = {
   jwt_invalid: wire('auth', 401, false, "The bearer JWT failed validation for a reason the server could not classify further. Check the token's issuer, signature, audience, and expiry."),
   jwt_malformed: wire('auth', 401, false, 'The bearer token is not a well-formed JWT and could not be decoded. Check that the full, unmodified token was sent.'),
   jwt_missing_issuer: wire('auth', 401, false, 'The bearer JWT has no `iss` (issuer) claim, so it cannot be routed to a trusted issuer.'),
-  jwt_issuer_untrusted: wire('auth', 401, false, "The bearer JWT's `iss` is not a registered trusted issuer. Register it via POST /v1/trusted-issuers, or check the token's issuer claim."),
+  jwt_issuer_untrusted: wire('auth', 401, false, "The bearer JWT's `iss` is not a registered trusted issuer. Check the token's issuer claim, or register the issuer with your deployment before retrying."),
   jwt_signature_invalid: wire('auth', 401, false, "The bearer JWT's signature could not be verified against the issuer's JWKS (wrong key, rotated key, or forged token)."),
   jwt_audience_mismatch: wire('auth', 401, false, "The bearer JWT's `aud` (audience) claim does not match the audience this issuer is registered with."),
   jwt_missing_subject: wire('auth', 401, false, 'The bearer JWT has no `sub` (subject) claim to identify the user.'),
@@ -229,7 +229,11 @@ export const ERROR_CODES = {
   model_watch_not_configured: client('claim', 'watch() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo({ schema, apiKey }) client (default WebSocket transport).'),
 
   // ── stale context / idempotency (409) ──────────────────────────────
-  stale_context: wire('conflict', 409, true, "The row changed after you read it — the write's `readAt` watermark is older than the current row version. Re-read the row and retry."),
+  // Not retryable at the transport: the rejected request carries its frozen
+  // `readAt`, so resending the identical payload can never succeed. Recovery
+  // is a caller-level re-read that produces a NEW request with a fresh
+  // watermark — the same shape as `claim_conflict`.
+  stale_context: wire('conflict', 409, false, "The row changed after you read it — the write's `readAt` watermark is older than the current row version. Re-read the row and retry."),
   // Raised by the functional `update(id, current => next)` form once its
   // internal reconcile budget is exhausted, because the row stayed continuously
   // contended. The SDK has already retried; the caller decides whether to back

@@ -18,6 +18,7 @@ import type { AuthCredentialSource } from '../auth/credentialSource.js';
 import type { Schema, SchemaRecord } from '../schema/schema.js';
 import { resolveBootstrapBaseUrl } from './auth.js';
 import { shouldUseInMemoryPersistence, type AbloPersistence } from './persistence.js';
+import type { CommitOutboxStore } from '../transactions/commitOutboxStore.js';
 
 export interface InternalComponentsInput<S extends SchemaRecord> {
   readonly schema: Schema<S>;
@@ -31,6 +32,7 @@ export interface InternalComponentsInput<S extends SchemaRecord> {
     readonly persistence?: AbloPersistence;
     readonly offline?: boolean;
     readonly inMemory?: boolean;
+    readonly commitOutbox?: CommitOutboxStore;
   };
   readonly auth?: AuthCredentialSource;
 }
@@ -79,7 +81,12 @@ export function createInternalComponents<S extends SchemaRecord>(
     // IndexedDB is unavailable there.
     inMemory: shouldUseInMemoryPersistence(options),
   });
-  const syncClient = new SyncClient(objectPool, database);
+  const syncClient = new SyncClient(
+    objectPool,
+    database,
+    options.commitOutbox,
+    url,
+  );
 
   // Lazy-load lane: hydrates the object pool and IndexedDB on demand for
   // entities not in scope at bootstrap (`load: 'lazy'` models, or an entity

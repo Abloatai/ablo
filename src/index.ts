@@ -68,6 +68,10 @@ export { DEFAULT_CONTENTION_RETRIES } from './client/functionalUpdate.js';
 // to build a client and hand it to `<AbloProvider client={...}>`. `AbloOptions`
 // is the trimmed shape most callers pass to `Ablo({...})`.
 export type { HttpClaimApi, InternalAbloOptions } from './client/Ablo.js';
+// The reactive-read view of the client: model reads typed as reactive rows
+// (data fields + computeds, no relation accessors) — what `useAblo` selectors
+// receive.
+export type { AbloReads } from './client/Ablo.js';
 // The stateless HTTP client is constructed through `Ablo({ transport: 'http' })`.
 // There is no separate constructor to import; annotate values with the
 // `AbloHttpClient` type, which is the return type of that call.
@@ -108,6 +112,23 @@ export type {
   ModelOperations,
 } from './client/Ablo.js';
 export type { AbloPersistence } from './client/persistence.js';
+export type {
+  CommitOutboxRecord,
+  CommitOutboxStore,
+} from './transactions/commitOutboxStore.js';
+export {
+  durableCommitEnvelopeSchema,
+} from './transactions/commitEnvelope.js';
+export type {
+  CommitOutboxScope,
+  DurableCommitEnvelope,
+} from './transactions/commitEnvelope.js';
+export {
+  durableHttpCommitEnvelopeSchema,
+} from './transactions/httpCommitEnvelope.js';
+export type {
+  DurableHttpCommitEnvelope,
+} from './transactions/httpCommitEnvelope.js';
 // Participant types live under `Ablo.Participant.*` —
 // `Ablo.Participant.Joined`, `Ablo.Participant.Manager`,
 // `Ablo.Participant.JoinOptions`, etc. Same dot-access shape as

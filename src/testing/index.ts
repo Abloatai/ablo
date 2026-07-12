@@ -17,6 +17,9 @@ export { MockNetworkMonitor } from './mocks/MockNetworkMonitor.js';
 export { MockWebSocket } from './mocks/MockWebSocket.js';
 export type { MockDelta, MockBootstrapHint } from './mocks/MockWebSocket.js';
 
+export { fakeDatabase } from './mocks/FakeDatabase.js';
+export type { FakeDatabaseOverrides } from './mocks/FakeDatabase.js';
+
 export {
   createTestContext,
 } from './mocks/MockSyncContext.js';

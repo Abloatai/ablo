@@ -139,7 +139,7 @@ The bearer JWT failed validation for a reason the server could not classify furt
 
 `HTTP 401` · not retryable
 
-The bearer JWT's `iss` is not a registered trusted issuer. Register it via POST /v1/trusted-issuers, or check the token's issuer claim.
+The bearer JWT's `iss` is not a registered trusted issuer. Check the token's issuer claim, or register the issuer with your deployment before retrying.
 
 ### jwt_malformed
 
@@ -441,7 +441,7 @@ The schema change is incompatible with the schema currently deployed and cannot 
 
 ### stale_context
 
-`HTTP 409` · retryable
+`HTTP 409` · not retryable
 
 The row changed after you read it — the write's `readAt` watermark is older than the current row version. Re-read the row and retry.
 

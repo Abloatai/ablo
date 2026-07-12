@@ -27,6 +27,18 @@ export class InMemoryObjectStore implements ObjectStoreContract {
     }
   }
 
+  async add(record: Record<string, unknown>): Promise<void> {
+    const id = record.id as string;
+    if (!id) throw new TypeError('In-memory record must carry an id');
+    if (this.data.has(id)) {
+      const error = new Error(`Record already exists: ${id}`);
+      error.name = 'ConstraintError';
+      throw error;
+    }
+    this.data.set(id, { ...record });
+    this.addToIndexes(id, record);
+  }
+
   async put(record: Record<string, unknown>): Promise<void> {
     const id = record.id as string;
     if (!id) return;

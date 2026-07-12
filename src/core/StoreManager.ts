@@ -24,6 +24,8 @@ import { AbloValidationError } from '../errors.js';
  */
 export class StoreManager {
   private stores = new Map<string, ObjectStore>();
+  /** Strict-durability wrapper for the client write journal and commit outbox. */
+  private transactionStore: ObjectStore | null = null;
   private syncactionStore: SyncActionStore | null = null;
   private db: IDBDatabase | null = null;
   private isInitialized = false;
@@ -54,6 +56,19 @@ export class StoreManager {
     for (const modelName of allModels) {
       await this.createStoreForModel(modelName);
     }
+
+    // Special stores are created during the IDB upgrade, but unlike model
+    // stores they have no registry metadata and therefore need an explicit
+    // runtime wrapper. Outbox acknowledgement must mean disk-backed, so this
+    // store opts into strict durability rather than the cache stores' relaxed
+    // mode.
+    this.transactionStore = new ObjectStore(
+      this.db,
+      '__transactions',
+      '__transactions',
+      { loadStrategy: LoadStrategy.instant },
+      'strict',
+    );
 
     // Initialize SyncactionStore
     this.syncactionStore = new SyncActionStore(this.db);
@@ -171,6 +186,9 @@ export class StoreManager {
    * Get ObjectStore for a model
    */
   getStore(modelName: string): ObjectStore | undefined {
+    if (modelName === '__transactions') {
+      return this.transactionStore ?? undefined;
+    }
     return this.stores.get(modelName);
   }
 
@@ -357,6 +375,7 @@ export class StoreManager {
     for (const store of this.stores.values()) {
       store.markAsClosing();
     }
+    this.transactionStore?.markAsClosing();
 
     // SyncActionStore is a standalone store that does not extend ObjectStore
     // and has no markAsClosing equivalent, so it is intentionally skipped here.

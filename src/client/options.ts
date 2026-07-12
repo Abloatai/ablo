@@ -15,6 +15,8 @@ import type {
   OnlineStatusProvider,
 } from '../interfaces/index.js';
 import type { AbloPersistence } from './persistence.js';
+import type { CommitOutboxStore } from '../transactions/commitOutboxStore.js';
+import type { CommitOutboxScope } from '../transactions/commitEnvelope.js';
 
 // ── Options ───────────────────────────────────────────────────────────────
 
@@ -125,6 +127,25 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * @default 'memory'
    */
   persistence?: AbloPersistence;
+
+  /**
+   * Durable commit-envelope storage for server-side agents and workers.
+   * The stateful browser client uses its strict IndexedDB transaction store;
+   * the stateless HTTP client has no implicit filesystem and therefore needs a
+   * workflow-, SQLite-, or filesystem-backed implementation to survive a
+   * process restart. One store may serve several actors because every record
+   * is checked against its authenticated scope before replay.
+   */
+  commitOutbox?: CommitOutboxStore;
+
+  /**
+   * Stable actor/server scope for an injected HTTP {@link commitOutbox}.
+   * Omit it to resolve `organizationId` and `participantId` from the authenticated
+   * `/auth/identity` endpoint. Supplying it avoids that one setup request in
+   * trusted worker environments; `namespace` distinguishes deployments or
+   * workflow lanes that share the same actor identity.
+   */
+  commitOutboxScope?: CommitOutboxScope;
 
   /**
    * Selects the transport. `'websocket'` (the default) is the live client: a
@@ -333,6 +354,12 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    * reload-surviving local cache in a browser.
    */
   persistence?: AbloPersistence;
+
+  /** Internal mirror of {@link AbloOptions.commitOutbox}. */
+  commitOutbox?: CommitOutboxStore;
+
+  /** Internal mirror of {@link AbloOptions.commitOutboxScope}. */
+  commitOutboxScope?: CommitOutboxScope;
 
   /** @deprecated Use `persistence: 'indexeddb'` for durable browser storage. */
   offline?: boolean;

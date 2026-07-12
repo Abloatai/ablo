@@ -35,8 +35,32 @@ export class ObjectStore implements ObjectStoreContract {
     protected db: IDBDatabase,
     protected modelName: string,
     protected storeName: string,
-    protected metadata: ModelMetadata
+    protected metadata: ModelMetadata,
+    private readonly writeDurability: NonNullable<IDBTransactionOptionsWithDurability['durability']> = 'relaxed',
   ) {}
+
+  /** Insert without replacing an existing key (used by the commit outbox). */
+  async add(data: Record<string, unknown>): Promise<void> {
+    if (!this.checkDatabaseAvailable()) {
+      return Promise.reject(new Error('IndexedDB not available (closing or invalid)'));
+    }
+
+    return new Promise((resolve, reject) => {
+      try {
+        const tx = this.db.transaction([this.storeName], 'readwrite', {
+          durability: this.writeDurability,
+        });
+        const store = tx.objectStore(this.storeName);
+        const request = store.add(data);
+
+        tx.oncomplete = () => { resolve(); };
+        tx.onerror = () => { reject(tx.error || new Error('IndexedDB transaction error')); };
+        request.onerror = () => { reject(request.error || new Error('IndexedDB request error')); };
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
 
   /**
    * Mark this store as closing to prevent new operations
@@ -80,7 +104,7 @@ export class ObjectStore implements ObjectStoreContract {
       try {
         // Use relaxed durability for ~16x write performance (safe with optimistic sync)
         const tx = this.db.transaction([this.storeName], 'readwrite', {
-          durability: 'relaxed',
+          durability: this.writeDurability,
         });
         const store = tx.objectStore(this.storeName);
         const request = store.put(data);
@@ -193,7 +217,7 @@ export class ObjectStore implements ObjectStoreContract {
       try {
         // Use relaxed durability for ~16x write performance (safe with optimistic sync)
         const tx = this.db.transaction([this.storeName], 'readwrite', {
-          durability: 'relaxed',
+          durability: this.writeDurability,
         });
         const store = tx.objectStore(this.storeName);
         const request = store.delete(id);
@@ -231,7 +255,7 @@ export class ObjectStore implements ObjectStoreContract {
       try {
         // Use relaxed durability for ~16x write performance (safe with optimistic sync)
         const tx = this.db.transaction([this.storeName], 'readwrite', {
-          durability: 'relaxed',
+          durability: this.writeDurability,
         });
         const store = tx.objectStore(this.storeName);
         const request = store.clear();

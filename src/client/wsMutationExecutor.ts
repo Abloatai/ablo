@@ -26,8 +26,9 @@ import { AbloError, AbloConnectionError } from '../errors.js';
  * the ready socket.
  *
  * When set, `options.idempotencyKey` is sent as the wire-level `clientTxId`, so
- * retrying a call with the same key is safe; otherwise the executor generates
- * one.
+ * retrying a call with the same key is safe. TransactionQueue always supplies
+ * this key before its first attempt and owns reuse across retries. The fallback
+ * generation below exists only for direct, one-shot executor consumers.
  */
 	export function createDefaultMutationExecutor(
 	  getWs: () => {

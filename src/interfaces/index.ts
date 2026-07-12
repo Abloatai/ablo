@@ -294,8 +294,8 @@ export interface CommitResult {
  * - `idempotencyKey` — when set, the server caches the response for 24 hours and
  *   returns the cached result on any retry using the same key. When omitted, the
  *   SDK generates a fresh UUID per mutation, so every call is retry-safe by
- *   default. Pass `{ idempotencyKey: null }` for the rare case where you want a
- *   write that is not retry-safe.
+ *   default. `null` is retained for source compatibility and is treated like
+ *   omission; write retries never opt out of request identity.
  * - `label` — a human-readable tag recorded with the mutation for debugging, such
  *   as "nightly cleanup" or "user click".
  */

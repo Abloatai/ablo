@@ -9,11 +9,14 @@ import {
   AbloClaimedError,
   AbloAuthenticationError,
   AbloConnectionError,
+  AbloIdempotencyError,
   AbloValidationError,
   AbloNotFoundError,
   claimedError,
   translateHttpError,
 } from '../errors.js';
+import { z } from 'zod';
+import { v5 as uuidv5 } from 'uuid';
 import {
   reconcileFunctionalUpdate,
   type ModelUpdater,
@@ -60,6 +63,7 @@ import type {
   AbloSession,
 } from './resourceTypes.js';
 import { mintSession } from './sessionMint.js';
+import { parseIdentityResolveResponse } from '../auth/schemas.js';
 
 /** The heartbeat routes' reply body — status, expiry, queue pressure. */
 interface HeartbeatReply {
@@ -107,6 +111,15 @@ import type {
 } from '../types/streams.js';
 import type { SyncObservabilityProvider } from '../interfaces/index.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
+import {
+  createDurableHttpCommitEnvelope,
+  canonicalHttpCommitBody,
+  durableHttpCommitEnvelopeSchema,
+  httpCommitEnvelopeRecordId,
+  isHttpCommitReplayExpired,
+  type DurableHttpCommitEnvelope,
+} from '../transactions/httpCommitEnvelope.js';
+import type { CommitOutboxScope } from '../transactions/commitEnvelope.js';
 
 export type AbloApiClientOptions = Omit<AbloOptions, 'schema'> & {
   readonly schema?: null | undefined;
@@ -294,17 +307,40 @@ interface QueryResponse {
   readonly claims?: readonly ModelClaim[];
 }
 
-interface CommitResponse {
-  readonly object?: 'commit_receipt';
-  readonly id?: string;
-  readonly clientTxId?: string;
-  readonly serverTxId?: string;
-  readonly status?: 'queued' | 'confirmed' | 'rejected';
-  readonly success?: boolean;
-  readonly lastSyncId?: number;
-  readonly ops?: number;
-  /** Ids of UPDATE/DELETE targets that matched zero rows (loud 0-row writes). */
-  readonly missingIds?: readonly string[];
+const successfulCommitResponseSchema = z
+  .object({
+    object: z.literal('commit_receipt'),
+    id: z.string().min(1).optional(),
+    clientTxId: z.string().min(1),
+    serverTxId: z.string().min(1),
+    status: z.enum(['queued', 'confirmed']),
+    success: z.literal(true),
+    lastSyncId: z.number().int().nonnegative().optional(),
+    ops: z.number().int().positive(),
+    /** Ids of UPDATE/DELETE targets that matched zero rows (loud 0-row writes). */
+    missingIds: z.array(z.string().min(1)).optional(),
+  })
+  .loose();
+
+type CommitResponse = z.output<typeof successfulCommitResponseSchema>;
+
+function parseSuccessfulCommitResponse(
+  value: unknown,
+  idempotencyKey: string,
+): CommitResponse {
+  const parsed = successfulCommitResponseSchema.safeParse(value);
+  if (!parsed.success || parsed.data.clientTxId !== idempotencyKey) {
+    throw new AbloConnectionError(
+      'The commit endpoint returned an invalid success receipt; its outcome remains pending and is safe to retry.',
+      {
+        code: 'commit_no_result',
+        cause: parsed.success
+          ? new Error('Commit receipt clientTxId did not match its idempotency key')
+          : parsed.error,
+      },
+    );
+  }
+  return parsed.data;
 }
 
 interface ClaimListResponse {
@@ -407,14 +443,18 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     fallbackRows: readonly { model: string; id: string }[],
   ): void => {
     if (!observability) return;
-    const code = (error as { code?: unknown })?.code;
+    const errorRecord =
+      typeof error === 'object' && error !== null
+        ? (error as { code?: unknown; conflicts?: unknown })
+        : undefined;
+    const code = errorRecord?.code;
     const isConflict =
       code === 'stale_context' ||
       code === 'claim_conflict' ||
       code === 'entity_claimed' ||
       (typeof code === 'string' && code.startsWith('policy:'));
     if (!isConflict) return;
-    const rawConflicts = (error as { conflicts?: unknown })?.conflicts;
+    const rawConflicts = errorRecord?.conflicts;
     const rows =
       Array.isArray(rawConflicts) && rawConflicts.length > 0
         ? (rawConflicts as readonly { model?: unknown; id?: unknown }[]).map((r) => ({
@@ -439,20 +479,66 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     url,
     bootstrapBaseUrl: options.bootstrapBaseUrl,
   }).replace(/\/+$/, '');
+  const commitOutbox = options.commitOutbox;
+  const httpOutboxPlaneNamespace = canonicalHttpCommitBody({
+    apiBaseUrl,
+    defaultQuery: Object.entries(options.defaultQuery ?? {}).sort(([a], [b]) =>
+      a.localeCompare(b),
+    ),
+  });
+  let httpOutboxScopeNamespace: string | null = null;
 
   let readyPromise: Promise<void> | null = null;
+  let httpCommitLane: Promise<void> = Promise.resolve();
+
+  function runInHttpCommitLane<T>(work: () => Promise<T>): Promise<T> {
+    const result = httpCommitLane.then(work);
+    httpCommitLane = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async function resolveHttpOutboxScope(): Promise<string | null> {
+    if (!commitOutbox) return null;
+    if (httpOutboxScopeNamespace) return httpOutboxScopeNamespace;
+
+    let scope: CommitOutboxScope | undefined = options.commitOutboxScope;
+    if (!scope) {
+      const rawIdentity = await requestJson<unknown>(
+        '/auth/identity',
+        { method: 'GET' },
+        true,
+      );
+      const identity = parseIdentityResolveResponse(rawIdentity);
+      scope = {
+        organizationId: identity.accountScope,
+        participantId: identity.participantId,
+        namespace: 'http',
+      };
+    }
+    httpOutboxScopeNamespace = canonicalHttpCommitBody({
+      ...scope,
+      plane: httpOutboxPlaneNamespace,
+    });
+    return httpOutboxScopeNamespace;
+  }
 
   async function ready(): Promise<void> {
     if (readyPromise) return readyPromise;
 
     readyPromise = (async () => {
-      if (!configuredDatabaseUrl) return;
-      await registerDataSource({
-        baseUrl: apiBaseUrl,
-        apiKey: await resolveApiKeyValue(configuredApiKey),
-        databaseUrl: configuredDatabaseUrl,
-        ...(options.fetch ? { fetchImpl: options.fetch } : {}),
-      });
+      if (configuredDatabaseUrl) {
+        await registerDataSource({
+          baseUrl: apiBaseUrl,
+          apiKey: await resolveApiKeyValue(configuredApiKey),
+          databaseUrl: configuredDatabaseUrl,
+          ...(options.fetch ? { fetchImpl: options.fetch } : {}),
+        });
+      }
+      await resolveHttpOutboxScope();
+      await replayHttpCommitOutbox();
     })();
 
     try {
@@ -505,8 +591,9 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   async function requestJson<T>(
     path: string,
     init: RequestInit & { readonly idempotencyKey?: string | null },
+    skipReady = false,
   ): Promise<T> {
-    await ready();
+    if (!skipReady) await ready();
     const { idempotencyKey, ...requestInit } = init;
     const headers = await authHeaders();
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
@@ -549,6 +636,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       // headers then stalls the body is the same hang with better manners.
       bodyText = await res.text();
     } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- assigned asynchronously by the deadline callback
       if (timedOut) {
         // Retryable by contract: `wait_for_timeout` is a registered transient
         // transport code, so `isRetryableCode` steers callers to retry.
@@ -577,6 +665,231 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     return body as T;
   }
 
+  function isDefinitiveHttpRejection(error: unknown): boolean {
+    if (typeof error !== 'object' || error === null) return false;
+    const candidate = error as { httpStatus?: unknown; status?: unknown };
+    const status =
+      typeof candidate.httpStatus === 'number'
+        ? candidate.httpStatus
+        : typeof candidate.status === 'number'
+          ? candidate.status
+          : undefined;
+    return (
+      status !== undefined &&
+      status >= 400 &&
+      status < 500 &&
+      status !== 408 &&
+      status !== 425 &&
+      status !== 429
+    );
+  }
+
+  async function settleHttpEnvelope(recordId: string): Promise<void> {
+    if (!commitOutbox) return;
+    try {
+      await commitOutbox.remove(recordId);
+    } catch (cause) {
+      // Do not report the remote outcome until local settlement is durable.
+      // The retained record can still be replayed inside the safe window.
+      throw new AbloConnectionError(
+        'The server settled the commit, but its local outbox record could not be cleared.',
+        { code: 'db_not_opened', cause },
+      );
+    }
+  }
+
+  interface ReplayedHttpCommit {
+    readonly envelope: DurableHttpCommitEnvelope;
+    readonly response: CommitResponse;
+  }
+
+  async function replayHttpCommitOutbox(): Promise<Map<string, ReplayedHttpCommit>> {
+    const replayed = new Map<string, ReplayedHttpCommit>();
+    if (!commitOutbox) return replayed;
+    const scopeNamespace = await resolveHttpOutboxScope();
+    if (!scopeNamespace) return replayed;
+    const rows = await commitOutbox.list();
+    const envelopes: DurableHttpCommitEnvelope[] = [];
+    for (const row of rows) {
+      if (
+        typeof row !== 'object' ||
+        row === null ||
+        (row as { type?: unknown }).type !== 'http_commit_envelope'
+      ) continue;
+      const parsed = durableHttpCommitEnvelopeSchema.safeParse(row);
+      if (!parsed.success) {
+        throw new AbloValidationError(
+          'A saved HTTP write is unreadable; replay stopped before any newer write was sent.',
+          { code: 'write_options_invalid', cause: parsed.error },
+        );
+      }
+      if (parsed.data.scopeNamespace !== scopeNamespace) continue;
+      if (isHttpCommitReplayExpired(parsed.data)) {
+        throw new AbloIdempotencyError(
+          'A saved HTTP write is older than the server idempotency window and cannot be replayed safely.',
+          { code: 'idempotency_conflict' },
+        );
+      }
+      envelopes.push(parsed.data);
+    }
+    envelopes.sort(
+      (a, b) =>
+        (a.sequence ?? a.sealedAt * 1_000) -
+          (b.sequence ?? b.sealedAt * 1_000) ||
+        a.id.localeCompare(b.id),
+    );
+    for (const envelope of envelopes) {
+      try {
+        const raw = await requestJson<unknown>(
+          envelope.request.path,
+          {
+            method: envelope.request.method,
+            idempotencyKey: envelope.idempotencyKey,
+            body: envelope.request.body,
+          },
+          true,
+        );
+        const response = parseSuccessfulCommitResponse(raw, envelope.idempotencyKey);
+        await settleHttpEnvelope(envelope.id);
+        replayed.set(envelope.idempotencyKey, { envelope, response });
+      } catch (error) {
+        if (isDefinitiveHttpRejection(error)) {
+          await settleHttpEnvelope(envelope.id);
+        }
+        throw error;
+      }
+    }
+    return replayed;
+  }
+
+  let lastHttpCommitSequence = 0;
+  function nextHttpCommitSequence(): number {
+    const wallSequence = Date.now() * 1_000;
+    lastHttpCommitSequence = Math.max(
+      wallSequence,
+      lastHttpCommitSequence + 1,
+    );
+    return lastHttpCommitSequence;
+  }
+
+  async function sealHttpCommit(input: {
+    idempotencyKey: string;
+    method: 'POST' | 'PATCH' | 'DELETE';
+    path: string;
+    body: unknown;
+  }): Promise<DurableHttpCommitEnvelope | null> {
+    if (!commitOutbox) return null;
+    const scopeNamespace = await resolveHttpOutboxScope();
+    if (!scopeNamespace) {
+      throw new AbloValidationError('HTTP commit outbox scope was not resolved', {
+        code: 'write_options_invalid',
+      });
+    }
+    const recordId = httpCommitEnvelopeRecordId(
+      input.idempotencyKey,
+      scopeNamespace,
+    );
+    const legacyRecordId = httpCommitEnvelopeRecordId(input.idempotencyKey);
+    const existingRows = await commitOutbox.list();
+    const existingRaw = existingRows.find(
+      (row) =>
+        typeof row === 'object' &&
+        row !== null &&
+        ((row as { id?: unknown }).id === recordId ||
+          (row as { id?: unknown }).id === legacyRecordId),
+    );
+    const serializedBody = canonicalHttpCommitBody(input.body);
+    if (existingRaw !== undefined) {
+      const existing = durableHttpCommitEnvelopeSchema.parse(existingRaw);
+      if (isHttpCommitReplayExpired(existing)) {
+        throw new AbloIdempotencyError(
+          'This saved HTTP write is older than the server idempotency window and cannot be retried safely.',
+          { code: 'idempotency_conflict' },
+        );
+      }
+      if (
+        existing.scopeNamespace !== scopeNamespace ||
+        existing.request.method !== input.method ||
+        existing.request.path !== input.path ||
+        existing.request.body !== serializedBody
+      ) {
+        throw new AbloIdempotencyError(
+          'Idempotency key reused with a different HTTP commit request',
+          { code: 'idempotency_conflict' },
+        );
+      }
+      return existing;
+    }
+    const envelope = createDurableHttpCommitEnvelope({
+      idempotencyKey: input.idempotencyKey,
+      request: { method: input.method, path: input.path, body: input.body },
+      scopeNamespace,
+      sequence: nextHttpCommitSequence(),
+    });
+    await commitOutbox.seal(envelope, []);
+    return envelope;
+  }
+
+  async function dispatchHttpCommit(
+    input: {
+      idempotencyKey: string;
+      method: 'POST' | 'PATCH' | 'DELETE';
+      path: string;
+      body: unknown;
+    },
+    beforeSettlement?: (response: CommitResponse) => Promise<void>,
+  ): Promise<CommitResponse> {
+    return runInHttpCommitLane(async () => {
+      await ready();
+      // `ready()` covers startup. Re-draining here makes every later write wait
+      // behind an ambiguous predecessor from this same process.
+      const replayed = await replayHttpCommitOutbox();
+      const prior = replayed.get(input.idempotencyKey);
+      if (prior) {
+        const serializedBody = canonicalHttpCommitBody(input.body);
+        if (
+          prior.envelope.request.method !== input.method ||
+          prior.envelope.request.path !== input.path ||
+          prior.envelope.request.body !== serializedBody
+        ) {
+          throw new AbloIdempotencyError(
+            'Idempotency key reused with a different HTTP commit request',
+            { code: 'idempotency_conflict' },
+          );
+        }
+        await beforeSettlement?.(prior.response);
+        return prior.response;
+      }
+      const durableEnvelope = await sealHttpCommit(input);
+      const requestBody = durableEnvelope?.request.body ?? canonicalHttpCommitBody(input.body);
+
+      let response: CommitResponse;
+      try {
+        const raw = await requestJson<unknown>(
+          input.path,
+          {
+            method: input.method,
+            idempotencyKey: input.idempotencyKey,
+            body: requestBody,
+          },
+          true,
+        );
+        response = parseSuccessfulCommitResponse(raw, input.idempotencyKey);
+      } catch (error) {
+        if (durableEnvelope && isDefinitiveHttpRejection(error)) {
+          await settleHttpEnvelope(durableEnvelope.id);
+        }
+        throw error;
+      }
+
+      // A model-create readback can participate in settlement: if it fails,
+      // retain the exact write so a same-key retry recovers the generated id.
+      await beforeSettlement?.(response);
+      if (durableEnvelope) await settleHttpEnvelope(durableEnvelope.id);
+      return response;
+    });
+  }
+
   function createClientTxId(idempotencyKey?: string | null): string {
     if (idempotencyKey && idempotencyKey.length > 0) return idempotencyKey;
     return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -590,18 +903,35 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       : `int_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  function createModelId(): string {
+  function createModelId(modelName: string, idempotencyKey?: string | null): string {
+    if (idempotencyKey) {
+      return uuidv5(
+        `${modelName}:${idempotencyKey}`,
+        'aa4ba6d4-bf0b-5b38-9c45-116f79a6e548',
+      );
+    }
     return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
       : `id_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  function childClient(authToken: string): AbloApi {
+  function childClient(
+    authToken: string,
+    scope?: Pick<CommitOutboxScope, 'organizationId' | 'participantId'>,
+  ): AbloApi {
     return createProtocolClient({
       ...options,
       apiKey: null,
       authToken,
       schema: null,
+      ...(scope
+        ? {
+            commitOutboxScope: {
+              ...scope,
+              namespace: options.commitOutboxScope?.namespace ?? 'http',
+            },
+          }
+        : { commitOutboxScope: undefined }),
     });
   }
 
@@ -782,17 +1112,20 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         onStale:
           commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
       });
+      const requestBody = {
+        clientTxId,
+        idempotencyKey: clientTxId,
+        claim: normalizeClaimId(commitOptions.claimRef) ?? claim?.id,
+        operations,
+        reads: commitOptions.reads,
+      };
       let body: CommitResponse;
       try {
-        body = await requestJson<CommitResponse>('/v1/commits', {
+        body = await dispatchHttpCommit({
+          path: '/v1/commits',
           method: 'POST',
           idempotencyKey: clientTxId,
-          body: JSON.stringify({
-            clientTxId,
-            idempotencyKey: clientTxId,
-            claim: normalizeClaimId(commitOptions.claimRef) ?? claim?.id,
-            operations,
-          }),
+          body: requestBody,
         });
       } catch (error) {
         // Coordination collision over HTTP — surface it to observability on the
@@ -816,7 +1149,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       const status: 'queued' | 'confirmed' =
         body.status === 'queued' ? 'queued' : 'confirmed';
       return {
-        id: body.id ?? body.clientTxId ?? clientTxId,
+        id: body.id ?? body.clientTxId,
         status,
         lastSyncId: body.lastSyncId,
         ...(body.missingIds && body.missingIds.length > 0
@@ -829,9 +1162,9 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   const capabilities: CapabilityResource = {
     async create(capabilityOptions: CapabilityCreateOptions): Promise<Capability> {
       const ttlSeconds =
-        capabilityOptions.ttlSeconds ??
+        capabilityOptions.ttlSeconds ?? // eslint-disable-line @typescript-eslint/no-deprecated -- compatibility alias
         capabilityOptions.leaseSeconds ??
-        toSeconds(capabilityOptions.ttl ?? capabilityOptions.lease ?? DEFAULT_AGENT_LEASE);
+        toSeconds(capabilityOptions.ttl ?? capabilityOptions.lease ?? DEFAULT_AGENT_LEASE); // eslint-disable-line @typescript-eslint/no-deprecated -- compatibility alias
       const body = await requestJson<CapabilityCreateResponse>('/v1/capabilities', {
         method: 'POST',
         body: JSON.stringify({
@@ -860,7 +1193,11 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         organizationId: body.organizationId,
         scope: body.scope,
         userMeta: body.userMeta,
-        client: () => childClient(body.token),
+        client: () =>
+          childClient(body.token, {
+            organizationId: body.organizationId,
+            participantId: body.scope.participantId,
+          }),
       };
     },
 
@@ -934,7 +1271,11 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           id: body.rotatedFrom.capabilityId ?? body.rotatedFrom.id ?? id,
           expiresAt: body.rotatedFrom.expiresAt,
         },
-        client: () => childClient(body.token),
+        client: () =>
+          childClient(body.token, {
+            organizationId: body.organizationId,
+            participantId: body.scope.participantId,
+          }),
       };
     },
 
@@ -1133,6 +1474,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     id: string,
     data: Record<string, unknown> | undefined,
     options: ModelMutationOptions | undefined,
+    beforeSettlement?: (response: CommitResponse) => Promise<void>,
   ): Promise<CommitReceipt> {
     assertWriteOptions(
       options && {
@@ -1154,12 +1496,13 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
 
     // A carried claim handle supplies the stale-guard defaults — one claim
     // vocabulary across the WS proxy, `commits.create`, and these routes.
+    const rawClaim = options?.claim;
     const claimHandle =
-      typeof options?.claim === 'object' &&
-      options?.claim !== null &&
-      (options.claim as { object?: unknown }).object === 'claim' &&
-      typeof (options.claim as { id?: unknown }).id === 'string'
-        ? (options.claim as Claim)
+      typeof rawClaim === 'object' &&
+      rawClaim !== null &&
+      (rawClaim as { object?: unknown }).object === 'claim' &&
+      typeof (rawClaim as { id?: unknown }).id === 'string'
+        ? (rawClaim as Claim)
         : undefined;
     const readAt = options?.readAt ?? claimHandle?.readAt;
     const requestBody: Record<string, unknown> = {
@@ -1174,11 +1517,12 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
 
     let body: CommitResponse;
     try {
-      body = await requestJson<CommitResponse>(path, {
+      body = await dispatchHttpCommit({
+        path,
         method,
         idempotencyKey: clientTxId,
-        body: JSON.stringify(requestBody),
-      });
+        body: requestBody,
+      }, beforeSettlement);
     } catch (error) {
       // The per-model write door (`ablo.<model>.update/create/delete`). Capture
       // coordination collisions here too; this single row is the fallback target.
@@ -1191,7 +1535,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     // subset; `'rejected'` only appears on a thrown rejection body.
     const status: 'queued' | 'confirmed' = body.status === 'queued' ? 'queued' : 'confirmed';
     return {
-      id: body.serverTxId ?? body.id ?? body.clientTxId ?? clientTxId,
+      id: body.serverTxId,
       status,
       lastSyncId: body.lastSyncId,
     };
@@ -1470,7 +1814,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       async create(
         params: ModelMutationOptions & { readonly data: Record<string, unknown>; readonly id?: string | null },
       ): Promise<T> {
-        const id = params.id ?? createModelId();
+        const id = params.id ?? createModelId(name, params.idempotencyKey);
         return withMutationClaim(id, params, async (options) => {
           await applyClaimedPolicy({ model: name, id }, options);
           // Confirm the write, then return the row — the obvious expectation of
@@ -1478,18 +1822,33 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           // back is the authoritative server row, so it carries the framework
           // defaults (createdAt, createdBy, …) and, for an idempotent re-create of
           // an existing id, the existing row rather than the caller's input.
-          await mutateModel('create', name, id, params.data, {
-            ...options,
-            wait: options?.wait ?? 'confirmed',
-          });
-          const { data } = await retrieveModel<T>(name, { id });
-          if (data === undefined) {
-            throw new AbloNotFoundError(
-              `create ${name}/${id} did not yield a readable row (the write did not confirm).`,
-              [id],
-            );
+          let created: T | undefined;
+          await mutateModel(
+            'create',
+            name,
+            id,
+            params.data,
+            {
+              ...options,
+              wait: options?.wait ?? 'confirmed',
+            },
+            async () => {
+              const read = await retrieveModel<T>(name, { id });
+              if (read.data === undefined) {
+                throw new AbloNotFoundError(
+                  `create ${name}/${id} did not yield a readable row (the write did not confirm).`,
+                  [id],
+                );
+              }
+              created = read.data;
+            },
+          );
+          if (created === undefined) {
+            throw new AbloConnectionError('Create settlement did not return its row.', {
+              code: 'commit_no_result',
+            });
           }
-          return data;
+          return created;
         });
       },
       update: updateModel,
@@ -1506,7 +1865,11 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
 
   return {
     ready,
-    async waitForFlush() {},
+    waitForFlush: () =>
+      runInHttpCommitLane(async () => {
+        await ready();
+        await replayHttpCommitOutbox();
+      }),
     async dispose() {},
     async purge() {},
     capabilities,

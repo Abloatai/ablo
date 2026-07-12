@@ -1561,9 +1561,6 @@
     },
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 1
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 3
     }
   },
   "src/schema/select.ts": {

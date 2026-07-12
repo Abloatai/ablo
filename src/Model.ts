@@ -79,6 +79,9 @@ export interface ModelChanges {
   timestamp: Date;
 }
 
+/** Shared frozen default for {@link Model.getDerivedGetterNames}. */
+const EMPTY_DERIVED_GETTERS: readonly string[] = Object.freeze([]);
+
 /**
  * The abstract base class every domain model extends. It holds the model's id
  * and timestamps, tracks in-place property changes for change detection and
@@ -883,6 +886,16 @@ export abstract class Model {
    * the schema's `T` describes. Computed relations (`referenceModel`/
    * `referenceCollection`) and ephemeral fields are skipped, matching `toJSON`'s
    * row projection; they're lazy/recursive and not part of the row's data.
+   *
+   * Schema-derived getters (`computed:` entries and `${field}Json` getters) ARE
+   * materialized, as non-enumerable own values. The schema's inferred row type
+   * includes them, so omitting them would make every snapshot read of a computed
+   * silently `undefined` — a type-level lie. They're evaluated here, inside the
+   * caller's tracked function, so the reaction subscribes to whatever fields the
+   * getter reads. Non-enumerable keeps write-path parity with model instances:
+   * an instance's getters sit on the prototype and never enter `{...model}`
+   * spreads or `JSON.stringify`, and materialized values must not either — a
+   * spread-into-update would otherwise send computed keys to the server.
    */
   toReactiveSnapshot<T = ModelData>(): T {
     const snapshot: ModelData = {
@@ -893,8 +906,8 @@ export abstract class Model {
     if (this.archivedAt !== undefined) snapshot.archivedAt = this.archivedAt;
 
     const properties = getActiveRegistry().getProperties(this.getModelName());
+    const self = this as Record<string, unknown>;
     if (properties) {
-      const self = this as Record<string, unknown>;
       for (const [propName, metadata] of properties) {
         if (
           metadata.type === 'ephemeralProperty' ||
@@ -909,7 +922,28 @@ export abstract class Model {
       }
     }
 
+    for (const name of this.getDerivedGetterNames()) {
+      Object.defineProperty(snapshot, name, {
+        // Evaluated on the model instance so `${field}Json` caches stay on it
+        // and the enclosing reaction tracks the fields the getter reads.
+        value: self[name],
+        enumerable: false,
+        configurable: true,
+        writable: false,
+      });
+    }
+
     return snapshot as T;
+  }
+
+  /**
+   * Names of schema-derived getters — `computed:` entries and `${field}Json`
+   * getters — that {@link toReactiveSnapshot} materializes onto snapshots.
+   * The dynamic model class built by `registerModelsFromSchema` overrides this;
+   * hand-written Model subclasses default to none.
+   */
+  getDerivedGetterNames(): readonly string[] {
+    return EMPTY_DERIVED_GETTERS;
   }
 
   /**

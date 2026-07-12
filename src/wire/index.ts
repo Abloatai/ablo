@@ -19,12 +19,21 @@ export { errorEnvelope, statusForType } from './errorEnvelope.js';
 export type { ErrorEnvelope } from './errorEnvelope.js';
 export { listEnvelope } from './listEnvelope.js';
 export type { ListEnvelope } from './listEnvelope.js';
+export { bootstrapReasonSchema } from './bootstrapReason.js';
+export type { BootstrapReason } from './bootstrapReason.js';
 
 // The write-path frame contract: the message shapes shared by the client and
 // the server. The runtime Zod validators sit beside the interfaces and are
 // pinned to them, and they gate every operation and payload on both commit
 // transports.
-export { commitOperationSchema, commitPayloadSchema } from './frames.js';
+export {
+  commitOperationSchema,
+  commitPayloadSchema,
+  commitRequestMessageSchema,
+  commitResultMessageSchema,
+  legacyCommitOperationSchema,
+  legacyCommitPayloadSchema,
+} from './frames.js';
 
 // Protocol versioning: the single integer the client and server compare to
 // confirm they can speak to each other, plus the WebSocket close code used to
@@ -41,6 +50,11 @@ export type {
   MutationMessage,
   CommitMessage,
   MutationResultMessage,
+  CommitRequestMessage,
+  CommitResultMessage,
+  LegacyCommitOperation,
+  LegacyCommitMessage,
+  LegacyMutationResultMessage,
 } from './frames.js';
 
 // The read-path delta contract: the shape the server broadcasts to clients as the

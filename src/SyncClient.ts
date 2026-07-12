@@ -9,6 +9,7 @@
  */
 
 import { runInAction } from 'mobx';
+import { v4 as uuid } from 'uuid';
 import { InstanceCache, ModelScope } from './InstanceCache.js';
 import { Model } from './Model.js';
 import type { ModelData } from './types/modelData.js';
@@ -19,7 +20,13 @@ import { AbloAuthenticationError, AbloError, AbloValidationError } from './error
 import { EventEmitter } from 'events';
 import { NetworkMonitor } from './NetworkMonitor.js';
 import { TransactionQueue } from './transactions/TransactionQueue.js';
-import { persistedMutationSchema } from './transactions/replayValidation.js';
+import {
+  legacyPendingMutationRecordSchema,
+  PENDING_MUTATION_REPLAY_WINDOW_MS,
+  pendingMutationRecordId,
+  pendingMutationRecordSchema,
+  persistedMutationSchema,
+} from './transactions/replayValidation.js';
 import {
   UnconfirmedWrites,
   type UnconfirmedWritesMetrics,
@@ -27,6 +34,10 @@ import {
 import type { Database } from './Database.js';
 import type { WriteOptions } from './interfaces/index.js';
 import { SyncPosition } from './sync/syncPosition.js';
+import {
+  DatabaseCommitOutboxStore,
+  type CommitOutboxStore,
+} from './transactions/commitOutboxStore.js';
 
 interface SyncObserver {
   onSync?: (event: SyncEvent) => void;
@@ -57,6 +68,29 @@ export interface RehydrationStats {
 }
 
 type EventHandler = () => void;
+
+interface PendingMutation {
+  mutationId: string;
+  type: 'create' | 'update' | 'delete' | 'archive';
+  model: Model;
+  modelData: Record<string, unknown>;
+  timestamp: Date;
+  capturedChanges?: Record<string, unknown>;
+  writeOptions?: WriteOptions;
+  journaled: Promise<void>;
+  resolveJournal?: () => void;
+  rejectJournal?: (error: unknown) => void;
+  /**
+   * Settles once this mutation has a real transaction in the queue (or has
+   * been definitively dropped). `syncNow()` awaits it so a `wait: 'confirmed'`
+   * caller can never reach `confirmationFor` while its write is still
+   * queued-but-unstaged — that gap resolves to "never staged" and would
+   * confirm a write that has not touched the wire.
+   */
+  staged: Promise<void>;
+  resolveStaged?: () => void;
+  rejectStaged?: (error: unknown) => void;
+}
 
 /**
  * Reports whether an incoming snapshot record is strictly newer than the
@@ -104,7 +138,11 @@ export class SyncClient extends EventEmitter {
   private database: Database;
   private get mutationExecutor() { return getContext().mutationExecutor; }
   private networkMonitor: NetworkMonitor;
-  private transactionQueue: TransactionQueue;
+  /**
+   * @internal — test seam, stripped from the published declarations by
+   * `stripInternal`. Unit suites deliver queue lifecycle events directly.
+   */
+  readonly transactionQueue: TransactionQueue;
   private observers = new Set<SyncObserver>();
 
   // Authentication context
@@ -112,13 +150,11 @@ export class SyncClient extends EventEmitter {
   private organizationId: string | null = null;
 
   // Pending mutations queue
-  private pendingMutations: {
-    type: 'create' | 'update' | 'delete' | 'archive';
-    model: Model;
-    timestamp: Date;
-    capturedChanges?: Record<string, unknown>;
-    writeOptions?: WriteOptions;
-  }[] = [];
+  private pendingMutations: PendingMutation[] = [];
+  private readonly stagedMutationIds = new Set<string>();
+  private pendingJournalBatch: PendingMutation[] = [];
+  private journalFlushScheduled = false;
+  private readonly commitOutboxNamespace: string;
 
   /**
    * Tracks the ids of transactions the client has applied optimistically but
@@ -149,10 +185,16 @@ export class SyncClient extends EventEmitter {
    */
   readonly position = new SyncPosition();
 
-  constructor(objectPool: InstanceCache, database: Database) {
+  constructor(
+    objectPool: InstanceCache,
+    database: Database,
+    commitOutbox: CommitOutboxStore = new DatabaseCommitOutboxStore(database),
+    commitOutboxNamespace = 'default',
+  ) {
     super();
     this.objectPool = objectPool;
     this.database = database;
+    this.commitOutboxNamespace = commitOutboxNamespace;
     this.networkMonitor = new NetworkMonitor();
 
     // Initialize TransactionQueue with proper configuration
@@ -168,6 +210,65 @@ export class SyncClient extends EventEmitter {
         strategy: 'last-write-wins',
       },
     });
+    this.transactionQueue.setCommitOutbox(commitOutbox);
+    this.transactionQueue.on(
+      'commit:envelope_persisted',
+      (event: { sourceMutationIds: string[] }) => {
+        if (event.sourceMutationIds.length === 0) return;
+        const consumed = new Set(event.sourceMutationIds);
+        this.pendingMutations = this.pendingMutations.filter(
+          (mutation) => !consumed.has(mutation.mutationId),
+        );
+        for (const mutationId of consumed) this.stagedMutationIds.delete(mutationId);
+        if (this.stagedMutationIds.size === 0 && this.pendingMutations.length > 0) {
+          this.scheduleSync();
+        }
+      },
+    );
+    this.transactionQueue.on(
+      'transaction:completed',
+      (transaction: { sourceMutationIds?: string[] }) => {
+        const completed = new Set(transaction.sourceMutationIds ?? []);
+        if (completed.size > 0) {
+          this.pendingMutations = this.pendingMutations.filter(
+            (mutation) => !completed.has(mutation.mutationId),
+          );
+        }
+        for (const mutationId of transaction.sourceMutationIds ?? []) {
+          this.stagedMutationIds.delete(mutationId);
+          void this.database
+            .removeTransaction(pendingMutationRecordId(mutationId))
+            .catch(() => undefined);
+        }
+        if (this.stagedMutationIds.size === 0 && this.pendingMutations.length > 0) {
+          this.scheduleSync();
+        }
+      },
+    );
+    this.transactionQueue.on(
+      'transaction:failed',
+      ({ transaction }: { transaction: { sourceMutationIds?: string[] } }) => {
+        const failed = transaction.sourceMutationIds ?? [];
+        if (failed.length === 0) return;
+        const failedSet = new Set(failed);
+        this.pendingMutations = this.pendingMutations.filter(
+          (mutation) => !failedSet.has(mutation.mutationId),
+        );
+        for (const mutationId of failed) {
+          this.stagedMutationIds.delete(mutationId);
+          // The queue has already rolled the model back, so replaying the
+          // journal row on the next boot would resurrect a rejected write.
+          void this.database
+            .removeTransaction(pendingMutationRecordId(mutationId))
+            .catch(() => undefined);
+        }
+        // Without this drain, terminally failed ids stayed claimed forever and
+        // the size guard in processPendingMutations stalled every later write.
+        if (this.stagedMutationIds.size === 0 && this.pendingMutations.length > 0) {
+          this.scheduleSync();
+        }
+      },
+    );
 
     // Provide connection state to TransactionQueue - prevents rollbacks during disconnection
     this.transactionQueue.setConnectionChecker(() => this.connectionState === 'connected');
@@ -509,8 +610,25 @@ export class SyncClient extends EventEmitter {
 
     getContext().observability.setContext(userId, organizationId);
 
-    // Restore queued mutations from previous session
-    await this.restoreMutationQueue();
+    this.transactionQueue.setCommitOutboxScope({
+      organizationId,
+      participantId: userId,
+      namespace: this.commitOutboxNamespace,
+    });
+
+    // Calls made during startup are allowed to queue before identity arrives,
+    // but they cannot be serialized with a trustworthy scope until now. Flush
+    // those already-created journal promises before any write can be staged.
+    if (this.pendingJournalBatch.length > 0) {
+      this.scheduleJournalFlush();
+      await Promise.all(this.pendingMutations.map((mutation) => mutation.journaled));
+    }
+
+    // Restore exact, already-sealed requests first. The returned source ids
+    // suppress any legacy queue entry left behind by an older non-atomic
+    // handoff.
+    const sealedMutationIds = await this.transactionQueue.restoreDurableCommits();
+    await this.restoreMutationQueue(sealedMutationIds);
 
     // Read the initial network status from the injected OnlineStatusProvider.
     // In the browser this reflects the host's connectivity signal; in Node it
@@ -524,6 +642,7 @@ export class SyncClient extends EventEmitter {
       this.setConnectionState('disconnected');
       this.emit('sync:offline');
     }
+    if (this.pendingMutations.length > 0) this.scheduleSync();
   }
 
   /**
@@ -1044,6 +1163,7 @@ export class SyncClient extends EventEmitter {
    */
   private clearPendingMutationsForModel(modelId: string): void {
     const beforeCount = this.pendingMutations.length;
+    const removed = this.pendingMutations.filter((mutation) => mutation.model.id === modelId);
     this.pendingMutations = this.pendingMutations.filter((m) => m.model.id !== modelId);
     const afterCount = this.pendingMutations.length;
 
@@ -1054,8 +1174,21 @@ export class SyncClient extends EventEmitter {
         remainingCount: afterCount,
       });
 
-      // Persist updated queue immediately
-      void this.persistMutationQueue();
+      for (const mutation of removed) {
+        // Once staged, TransactionQueue owns cancellation and transfers this
+        // source id into the superseding delete envelope. Deleting the journal
+        // row here would make that valid atomic promotion look like a
+        // multi-tab loser. Truly unstaged work can be canceled locally.
+        if (this.stagedMutationIds.has(mutation.mutationId)) continue;
+        this.stagedMutationIds.delete(mutation.mutationId);
+        void mutation.journaled
+          .then(() =>
+            this.database.removeTransaction(
+              pendingMutationRecordId(mutation.mutationId),
+            ),
+          )
+          .catch(() => undefined);
+      }
     }
   }
 
@@ -1203,8 +1336,86 @@ export class SyncClient extends EventEmitter {
     capturedChanges?: Record<string, unknown>;
     writeOptions?: WriteOptions;
   }): void {
-    this.pendingMutations.push(mutation);
+    const mutationId = `mutation_${uuid()}`;
+    const modelData = mutation.model.toJSON
+      ? mutation.model.toJSON()
+      : { ...mutation.model };
+    let resolveJournal!: () => void;
+    let rejectJournal!: (error: unknown) => void;
+    const journaled = new Promise<void>((resolve, reject) => {
+      resolveJournal = resolve;
+      rejectJournal = reject;
+    });
+    let resolveStaged!: () => void;
+    let rejectStaged!: (error: unknown) => void;
+    const staged = new Promise<void>((resolve, reject) => {
+      resolveStaged = resolve;
+      rejectStaged = reject;
+    });
+    const pending: PendingMutation = {
+      ...mutation,
+      mutationId,
+      modelData,
+      journaled,
+      resolveJournal,
+      rejectJournal,
+      staged,
+      resolveStaged,
+      rejectStaged,
+    };
+    this.pendingJournalBatch.push(pending);
+    this.scheduleJournalFlush();
+    // Offline drains may not await this until much later. Observe rejection
+    // immediately to avoid an unhandled-promise report while retaining the
+    // original rejecting promise for fail-closed dispatch.
+    void pending.journaled.catch(() => undefined);
+    void pending.staged.catch(() => undefined);
+    this.pendingMutations.push(pending);
     this.scheduleSync();
+  }
+
+  private scheduleJournalFlush(): void {
+    if (this.journalFlushScheduled) return;
+    this.journalFlushScheduled = true;
+    const schedule =
+      typeof queueMicrotask === 'function'
+        ? queueMicrotask
+        : (callback: () => void) => { void Promise.resolve().then(callback); };
+    schedule(() => {
+      this.journalFlushScheduled = false;
+      const batch = this.pendingJournalBatch;
+      this.pendingJournalBatch = [];
+      void this.flushPendingMutationJournal(batch);
+    });
+  }
+
+  private async flushPendingMutationJournal(batch: PendingMutation[]): Promise<void> {
+    if (batch.length === 0) return;
+    if (!this.userId || !this.organizationId) {
+      // Startup writes remain behind their unresolved journal promise. Identity
+      // initialization re-kicks this batch once its durable scope is known.
+      this.pendingJournalBatch = [...batch, ...this.pendingJournalBatch];
+      return;
+    }
+    try {
+      const records = batch.map((mutation) => this.pendingMutationRecord(mutation));
+      const database = this.database as Database & {
+        saveTransactions?: (rows: typeof records) => Promise<void>;
+      };
+      if (database.saveTransactions) {
+        await database.saveTransactions(records);
+      } else {
+        await Promise.all(records.map((record) => database.saveTransaction(record)));
+      }
+      for (const mutation of batch) mutation.resolveJournal?.();
+    } catch (error) {
+      for (const mutation of batch) mutation.rejectJournal?.(error);
+    } finally {
+      for (const mutation of batch) {
+        mutation.resolveJournal = undefined;
+        mutation.rejectJournal = undefined;
+      }
+    }
   }
 
   private syncScheduled = false;
@@ -1218,7 +1429,6 @@ export class SyncClient extends EventEmitter {
         : (cb: () => void) => Promise.resolve().then(cb);
     schedule(() => {
       this.syncScheduled = false;
-      void this.persistMutationQueue();
       if (getContext().onlineStatus.isOnline()) {
         this.processPendingMutations().catch((err) => {
           getContext().observability.breadcrumb(
@@ -1232,34 +1442,41 @@ export class SyncClient extends EventEmitter {
     });
   }
 
-  /**
-   * Persist mutation queue to IndexedDB
-   */
-  private async persistMutationQueue(): Promise<void> {
-    if (!this.database || !this.userId) return;
-
-    try {
-      const serializedMutations = this.pendingMutations.map((m) => ({
-        type: m.type,
-        modelData: m.model.toJSON ? m.model.toJSON() : { ...m.model },
-        modelName: m.model.getModelName(),
-        timestamp: m.timestamp.toISOString(),
-        writeOptions: m.writeOptions,
-      }));
-
-      await this.database.saveTransaction({
-        id: 'mutation-queue',
-        type: 'queue',
-        mutations: serializedMutations,
-        timestamp: Date.now(),
-      });
-    } catch (error) {
-      // Best-effort persistence — the in-memory queue still processes; only
-      // a tab close before reconnect loses these. Forensic → debug.
-      getContext().logger.debug('[SyncClient] Failed to persist offline mutation queue', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+  private pendingMutationRecord(mutation: PendingMutation) {
+    if (!this.userId || !this.organizationId) {
+      throw new AbloValidationError(
+        'Cannot persist a mutation before participant scope is initialized',
+        { code: 'write_options_invalid' },
+      );
     }
+    return pendingMutationRecordSchema.parse({
+      id: pendingMutationRecordId(mutation.mutationId),
+      type: 'pending_mutation',
+      storageVersion: 2,
+      mutation: {
+        mutationId: mutation.mutationId,
+        type: mutation.type,
+        modelData: mutation.modelData,
+        modelName: mutation.model.getModelName(),
+        timestamp: mutation.timestamp.toISOString(),
+        ...(mutation.capturedChanges !== undefined
+          ? { capturedChanges: mutation.capturedChanges }
+          : {}),
+        ...(mutation.writeOptions !== undefined
+          ? { writeOptions: mutation.writeOptions }
+          : {}),
+      },
+      scope: {
+        organizationId: this.organizationId,
+        participantId: this.userId,
+        namespace: this.commitOutboxNamespace,
+      },
+      timestamp: mutation.timestamp.getTime(),
+    });
+  }
+
+  private async persistPendingMutation(mutation: PendingMutation): Promise<void> {
+    await this.database.saveTransaction(this.pendingMutationRecord(mutation));
   }
 
   /**
@@ -1271,33 +1488,110 @@ export class SyncClient extends EventEmitter {
    * never swallowed silently, because the survival of offline writes must be
    * observable.
    */
-  private async restoreMutationQueue(): Promise<void> {
+  private async restoreMutationQueue(
+    sealedMutationIds: ReadonlySet<string> = new Set(),
+  ): Promise<void> {
     if (!this.database || !this.userId) return;
 
     try {
       const stored = await this.database.getPersistedTransactions();
-      const queue = stored.find((t) => t.id === 'mutation-queue');
-
-      if (queue?.mutations) {
-        for (const mutation of queue.mutations) {
+      const restoredMutationIds = new Set<string>();
+      let heldForReview = 0;
+      const restore = async (
+        mutation: unknown,
+        migrateLegacy: boolean,
+        legacyMutationId?: string,
+      ): Promise<void> => {
           const parsed = persistedMutationSchema.safeParse(mutation);
           if (!parsed.success) {
             getContext().logger.debug('[SyncClient] Dropping malformed persisted mutation', {
               issues: parsed.error.issues.map((i) => i.path.join('.')).join(', '),
             });
-            continue;
+            return;
           }
+          // The window is anchored to when the write was made, because a
+          // record re-sealed on restore would otherwise reset its own expiry
+          // clock. An unparseable timestamp is held rather than replayed.
+          const writtenAt = Date.parse(parsed.data.timestamp);
+          const age = Date.now() - writtenAt;
+          if (!(age < PENDING_MUTATION_REPLAY_WINDOW_MS)) {
+            heldForReview += 1;
+            getContext().logger.warn(
+              'A saved local write is older than the server idempotency window and was held for review.',
+            );
+            return;
+          }
+          const mutationId =
+            parsed.data.mutationId ?? legacyMutationId ?? `mutation_${uuid()}`;
+          if (
+            sealedMutationIds.has(mutationId) ||
+            restoredMutationIds.has(mutationId)
+          ) return;
           const model = this.objectPool.createFromData(parsed.data.modelData);
           if (model) {
-            this.pendingMutations.push({
+            const pending: PendingMutation = {
+              mutationId,
               type: parsed.data.type,
               model,
+              modelData: parsed.data.modelData,
               timestamp: new Date(parsed.data.timestamp),
+              ...(parsed.data.capturedChanges !== undefined
+                ? { capturedChanges: parsed.data.capturedChanges }
+                : {}),
               ...(parsed.data.writeOptions !== undefined
                 ? { writeOptions: parsed.data.writeOptions }
                 : {}),
-            });
+              journaled: Promise.resolve(),
+              // Restored mutations have no live `wait: 'confirmed'` caller, so
+              // their staging needs no waiter handshake.
+              staged: Promise.resolve(),
+            };
+            if (migrateLegacy) {
+              pending.journaled = this.persistPendingMutation(pending);
+              await pending.journaled;
+            }
+            this.pendingMutations.push(pending);
+            restoredMutationIds.add(mutationId);
           }
+      };
+
+      for (const row of stored) {
+        if (row.type !== 'pending_mutation') continue;
+        const parsed = pendingMutationRecordSchema.safeParse(row);
+        if (!parsed.success) {
+          const legacy = legacyPendingMutationRecordSchema.safeParse(row);
+          if (legacy.success) {
+            await restore(legacy.data.mutation, true);
+            continue;
+          }
+          getContext().logger.debug('[SyncClient] Dropping malformed pending mutation record', {
+            rowId: row.id,
+          });
+          continue;
+        }
+        if (
+          parsed.data.scope.organizationId !== this.organizationId ||
+          parsed.data.scope.participantId !== this.userId ||
+          parsed.data.scope.namespace !== this.commitOutboxNamespace
+        ) {
+          getContext().logger.warn(
+            'A saved local write belongs to a different account or server and was held for review.',
+          );
+          continue;
+        }
+        await restore(parsed.data.mutation, false);
+      }
+
+      const legacyQueue = stored.find((row) => row.id === 'mutation-queue');
+      if (legacyQueue?.mutations) {
+        const heldBefore = heldForReview;
+        for (const [index, mutation] of legacyQueue.mutations.entries()) {
+          await restore(mutation, true, `legacy_mutation_${index}`);
+        }
+        // Deleting the legacy row would discard any entry held for review, so
+        // it is only removed once every entry has migrated.
+        if (heldForReview === heldBefore) {
+          await this.database.removeTransaction('mutation-queue');
         }
       }
     } catch (error) {
@@ -1350,19 +1644,53 @@ export class SyncClient extends EventEmitter {
     if (!getContext().onlineStatus.isOnline()) return; // Skip if offline
     if (this.isDisposed) return; // Skip if disposed
 
-    const mutations = this.pendingMutations;
-    this.pendingMutations = [];
+    if (this.stagedMutationIds.size > 0) return;
+    const mutations = this.pendingMutations.filter(
+      (mutation) => !this.stagedMutationIds.has(mutation.mutationId),
+    ).slice(0, 500);
+    if (mutations.length === 0) return;
 
-    // Clear persisted queue before processing
-    await this.persistMutationQueue();
+    // Claim the batch BEFORE awaiting the journal. This method runs
+    // concurrently — the scheduleSync microtask and a direct syncNow() caller
+    // land in the same tick — and both would otherwise capture this same
+    // batch, suspend on the identical `journaled` promises, and stage every
+    // mutation twice (two transactions on the wire for one write). Claiming
+    // synchronously makes the second caller hit the guard above and return.
+    for (const mutation of mutations) {
+      this.stagedMutationIds.add(mutation.mutationId);
+    }
+
+    // A journal rejection is permanent for that mutation (fail-closed: it can
+    // never dispatch without its durable record), so drop it rather than
+    // leaving it queued to poison every later pass. Healthy batch members
+    // still stage.
+    const journalResults = await Promise.allSettled(
+      mutations.map((mutation) => mutation.journaled),
+    );
+    const journaledMutations: PendingMutation[] = [];
+    journalResults.forEach((result, index) => {
+      const mutation = mutations[index]!;
+      if (result.status === 'fulfilled') {
+        journaledMutations.push(mutation);
+        return;
+      }
+      this.stagedMutationIds.delete(mutation.mutationId);
+      this.pendingMutations = this.pendingMutations.filter(
+        (pending) => pending.mutationId !== mutation.mutationId,
+      );
+      mutation.rejectStaged?.(result.reason);
+      getContext().observability.captureTransactionFailure({
+        context: 'persist-pending-mutation',
+        error:
+          result.reason instanceof Error
+            ? result.reason
+            : new Error(String(result.reason)),
+      });
+    });
 
     // Stage every mutation synchronously within the same event-loop tick;
     // the transaction queue's microtask batches and sends them together.
-    for (const mutation of mutations) {
-      // Skip mutations for deleted models (prevents "not found" errors)
-      if (mutation.type !== 'delete' && !this.objectPool.get(mutation.model.id)) {
-        continue;
-      }
+    for (const mutation of journaledMutations) {
       // Stage synchronously - TransactionQueue handles batching, retry, and errors
       this.stageMutation(mutation);
     }
@@ -1373,14 +1701,13 @@ export class SyncClient extends EventEmitter {
    *
    * @param mutation.capturedChanges - Pre-captured changes to use instead of re-reading from model
    */
-  private stageMutation(mutation: {
-    type: 'create' | 'update' | 'delete' | 'archive';
-    model: Model;
-    timestamp: Date;
-    capturedChanges?: Record<string, unknown>;
-    writeOptions?: WriteOptions;
-  }): void {
-    if (!this.userId || !this.organizationId) return;
+  private stageMutation(mutation: PendingMutation): void {
+    if (!this.userId || !this.organizationId) {
+      // Nothing will stage this call; settle the waiter with the legacy
+      // "silently dropped" semantics rather than hanging a `wait: 'confirmed'`.
+      mutation.resolveStaged?.();
+      return;
+    }
 
     const ctx = { userId: this.userId, organizationId: this.organizationId };
 
@@ -1395,16 +1722,30 @@ export class SyncClient extends EventEmitter {
         modelId: mutation.model.id,
         error: error instanceof Error ? error : new Error(String(error)),
       });
+      this.stagedMutationIds.delete(mutation.mutationId);
     };
 
-    if (mutation.type === 'update') {
-      this.transactionQueue
-        .update(mutation.model, ctx, mutation.capturedChanges, mutation.writeOptions)
-        .catch(captureStagingFailure);
-    } else {
-      const handler = this.transactionQueue[mutation.type].bind(this.transactionQueue);
-      handler(mutation.model, ctx, mutation.writeOptions).catch(captureStagingFailure);
-    }
+    const staging =
+      mutation.type === 'update'
+        ? this.transactionQueue.update(
+            mutation.model,
+            ctx,
+            mutation.capturedChanges,
+            mutation.writeOptions,
+            mutation.mutationId,
+          )
+        : this.transactionQueue[mutation.type].bind(this.transactionQueue)(
+            mutation.model,
+            ctx,
+            mutation.writeOptions,
+            mutation.mutationId,
+          );
+    staging
+      .then(() => mutation.resolveStaged?.())
+      .catch((error: unknown) => {
+        captureStagingFailure(error);
+        mutation.rejectStaged?.(error);
+      });
   }
 
   /**
@@ -1650,6 +1991,16 @@ export class SyncClient extends EventEmitter {
    */
   markConnected(): void {
     this.setConnectionState('connected');
+    // Browser online state may have marked the client connected before the
+    // WebSocket itself was ready. Always kick both durable lanes on the real
+    // socket event, even when the high-level state did not change.
+    void this.transactionQueue.flushOfflineQueue().catch((error: unknown) => {
+      getContext().observability.captureTransactionFailure({
+        context: 'restore-commit-outbox',
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    });
+    void this.processPendingMutations();
   }
 
   /**
@@ -1719,7 +2070,14 @@ export class SyncClient extends EventEmitter {
    * Force sync now - process pending mutations
    */
   async syncNow(): Promise<void> {
+    // Snapshot before draining: a concurrent drain may already have claimed
+    // this caller's write, in which case processPendingMutations returns
+    // without staging anything. `wait: 'confirmed'` resolves on finding no
+    // in-flight work, so it must not run until every write queued before this
+    // call has a real transaction in the queue or was definitively dropped.
+    const queuedBeforeCall = this.pendingMutations.map((mutation) => mutation.staged);
     await this.processPendingMutations();
+    await Promise.allSettled(queuedBeforeCall);
   }
 
   /**
@@ -1799,6 +2157,32 @@ export class SyncClient extends EventEmitter {
     listener: (tx: import('./transactions/TransactionQueue.js').Transaction) => void,
   ): () => void {
     this.transactionQueue.on('transaction:created', listener);
+    interface CommitEventOperation {
+      type: string;
+      model: string;
+      id: string;
+      input?: Record<string, unknown>;
+    }
+    const snapshotsByCommit = new Map<
+      string,
+      readonly (Record<string, unknown> | undefined)[]
+    >();
+    const onCommitStaging = (payload: {
+      clientTxId: string;
+      operations: readonly CommitEventOperation[];
+    }): void => {
+      snapshotsByCommit.set(
+        payload.clientTxId,
+        payload.operations.map((operation) => {
+          if (operation.type === 'CREATE') return undefined;
+          const resident = this.objectPool.get(operation.id);
+          return resident?.toJSON() as Record<string, unknown> | undefined;
+        }),
+      );
+    };
+    const onCommitSealFailed = (payload: { clientTxId: string }): void => {
+      snapshotsByCommit.delete(payload.clientTxId);
+    };
     // Commit-lane writes (`ablo.commits.create` — the agent/atomic door) ride
     // their own `commit:created` event: they have no optimistic pool apply,
     // so they must not feed the echo tracker's `transaction:created` path.
@@ -1807,13 +2191,10 @@ export class SyncClient extends EventEmitter {
     // same listener, so undo observes every write door — one stream.
     const onCommitCreated = (payload: {
       clientTxId: string;
-      operations: readonly {
-        type: string;
-        model: string;
-        id: string;
-        input?: Record<string, unknown>;
-      }[];
+      operations: readonly CommitEventOperation[];
     }): void => {
+      const stagedSnapshots = snapshotsByCommit.get(payload.clientTxId);
+      snapshotsByCommit.delete(payload.clientTxId);
       const TYPE_BY_WIRE: Record<
         string,
         import('./transactions/TransactionQueue.js').Transaction['type']
@@ -1827,9 +2208,14 @@ export class SyncClient extends EventEmitter {
       payload.operations.forEach((op, index) => {
         const type = TYPE_BY_WIRE[op.type];
         if (!type || !op.id) return;
-        const resident = this.objectPool.get(op.id);
         const snapshot =
-          type === 'create' ? undefined : (resident?.toJSON() as Record<string, unknown> | undefined);
+          type === 'create'
+            ? undefined
+            : stagedSnapshots
+              ? stagedSnapshots[index]
+              : (this.objectPool.get(op.id)?.toJSON() as
+                  | Record<string, unknown>
+                  | undefined);
         // A DELETE of a row the local graph never saw is not invertible —
         // recording it would make undo "restore" an empty husk. Skip it.
         if (type === 'delete' && !snapshot) return;
@@ -1862,10 +2248,15 @@ export class SyncClient extends EventEmitter {
         });
       });
     };
+    this.transactionQueue.on('commit:staging', onCommitStaging);
+    this.transactionQueue.on('commit:seal_failed', onCommitSealFailed);
     this.transactionQueue.on('commit:created', onCommitCreated);
     return () => {
       this.transactionQueue.off('transaction:created', listener);
+      this.transactionQueue.off('commit:staging', onCommitStaging);
+      this.transactionQueue.off('commit:seal_failed', onCommitSealFailed);
       this.transactionQueue.off('commit:created', onCommitCreated);
+      snapshotsByCommit.clear();
     };
   }
 

@@ -19,13 +19,16 @@
  *   await sync.reports.delete({ id: reportId });
  */
 
-import type { Schema, SchemaRecord, InferModel, InferCreate, InferModelNames } from '../schema/schema.js';
+import type { Schema, SchemaRecord, InferModel, InferCreate, InferRow, InferModelNames } from '../schema/schema.js';
 import type { ModelDef } from '../schema/model.js';
 import type {
   SyncEngineConfig,
   MutationExecutor,
-  MutationOperation,
 } from '../interfaces/index.js';
+import {
+  durableCommitOperationSchema,
+  type DurableCommitOperation,
+} from '../transactions/commitEnvelope.js';
 import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, AbloNotFoundError, translateHttpError, toAbloError, claimedError } from '../errors.js';
 import { descriptionFromMeta } from '../coordination/schema.js';
 // `ModelTarget` (the model/id locator) and `ModelClaim` (the resolved claim
@@ -177,6 +180,22 @@ export { computeFKDepthPriority } from './schemaConfig.js';
 import type { ModelOperations } from './createModelProxy.js';
 import { createModelProxy } from './createModelProxy.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
+
+/**
+ * The reactive-read client a `useAblo` selector receives. The same surface as
+ * {@link Ablo}, except model reads are typed as reactive rows
+ * ({@link InferRow}: data fields + computeds, no relation accessors, no model
+ * methods) — the shape a reactive read actually delivers after
+ * `toReactiveSnapshot()`. Reading `row.layers` off a reactive read is a
+ * compile error here instead of a silent runtime `undefined`; compose
+ * relations through selectors or hooks that resolve the pool's instance.
+ */
+export type AbloReads<S extends SchemaRecord> = Omit<Ablo<S>, keyof S & string> & {
+  readonly [K in keyof S & string]: ModelOperations<
+    InferRow<Schema<S>, K>,
+    InferCreate<Schema<S>, K>
+  >;
+};
 
 /** The typed sync engine client — one property per model in the schema */
 export type Ablo<S extends SchemaRecord> = {
@@ -1066,7 +1085,7 @@ export function Ablo<const S extends SchemaRecord>(
 	  function normalizeCommitOperation(
 	    op: CommitOperationInput,
 	    defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
-	  ): MutationOperation {
+	  ): DurableCommitOperation {
 	    const model = op.model ?? op.target?.model;
 	    if (!model) {
 	      throw new AbloValidationError(
@@ -1076,7 +1095,7 @@ export function Ablo<const S extends SchemaRecord>(
 	    }
 	    const type = op.action.toUpperCase();
 	    const id = op.id ?? op.target?.id ?? '';
-	    return {
+	    return durableCommitOperationSchema.parse({
 	      type,
 	      model: model.toLowerCase(),
 	      id,
@@ -1084,12 +1103,12 @@ export function Ablo<const S extends SchemaRecord>(
 	      transactionId: op.transactionId ?? undefined,
 	      readAt: op.readAt ?? defaults.readAt ?? undefined,
 	      onStale: op.onStale ?? defaults.onStale ?? undefined,
-	    };
+	    });
 	  }
 
 	  function normalizeCommitOperations(
 	    commitOptions: CommitCreateOptions,
-	  ): MutationOperation[] {
+	  ): DurableCommitOperation[] {
 	    if (commitOptions.operation && commitOptions.operations) {
 	      throw new AbloValidationError(
 	        'Pass either `operation` or `operations`, not both.',
@@ -1433,7 +1452,7 @@ export function Ablo<const S extends SchemaRecord>(
 	      // SyncClient we already hold from createInternalComponents —
 	      // no need to leak an accessor through BaseSyncedStore.
 	      const queue = syncClient.getTransactionQueue();
-	      queue.enqueueCommit(clientTxId, operations, {
+	      await queue.enqueueCommit(clientTxId, operations, {
 	        ...(commitOptions.reads ? { reads: [...commitOptions.reads] } : {}),
 	      });
 
@@ -1942,6 +1961,11 @@ import type * as _Global from '../types/global.js';
 export namespace Ablo {
   // ── Factory options ────────────────────────────────────────────────
   export type Options<S extends SchemaRecord = SchemaRecord> = AbloOptions<S>;
+  /**
+   * The read view of the client that `useAblo` selectors receive: model reads
+   * typed as reactive rows (data fields + computeds, no relation accessors).
+   */
+  export type Reads<S extends SchemaRecord = SchemaRecord> = AbloReads<S>;
   export type Api = AbloApi;
   export type ApiClaims = AbloApiClaims;
   export type Capability = import('./ApiClient.js').Capability;
@@ -2014,6 +2038,15 @@ export namespace Ablo {
       S extends _SchemaTypes.Schema,
       K extends keyof S['models'],
     > = _SchemaTypes.InferCreate<S, K>;
+    /**
+     * The reactive-row companion to {@link InferModel}: data fields + computed
+     * getters, no relation accessors, no model methods — the shape `useAblo`
+     * reads return.
+     */
+    export type InferRow<
+      S extends _SchemaTypes.Schema,
+      K extends keyof S['models'],
+    > = _SchemaTypes.InferRow<S, K>;
     export type InferModelNames<S extends _SchemaTypes.Schema> = _SchemaTypes.InferModelNames<S>;
   }
 

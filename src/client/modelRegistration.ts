@@ -219,8 +219,21 @@ function createDynamicModelClass(
   computed?: Record<string, (self: Record<string, unknown>) => unknown>,
   lazyObservable = false,
 ) {
+  // Names `toReactiveSnapshot` materializes onto plain snapshots: every
+  // `${field}Json` getter plus every schema-declared computed. Without this,
+  // snapshot rows silently drop getters that the schema's inferred row type
+  // declares — reads like `snapshot.settingsObject` would be `undefined`.
+  const derivedGetterNames: readonly string[] = Object.freeze([
+    ...jsonSubFields.map(({ fieldName }) => `${fieldName}Json`),
+    ...Object.keys(computed ?? {}),
+  ]);
+
   const ModelClass = class extends Model {
     private _modelName = modelName;
+
+    override getDerivedGetterNames(): readonly string[] {
+      return derivedGetterNames;
+    }
 
     constructor(data?: Record<string, unknown>) {
       super(data);

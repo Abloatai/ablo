@@ -15,6 +15,7 @@ import { AbloConnectionError, AbloValidationError } from './errors.js';
 import type { BootstrapFetcher, BootstrapData } from './sync/BootstrapFetcher.js';
 import { InMemoryObjectStore } from './adapters/inMemoryStorage.js';
 import { syncPositionSchema } from './sync/syncPosition.js';
+import { highestPersistedPrefixSyncId } from './sync/persistedPrefix.js';
 
 /** Generic record type for model data */
 type ModelData = Record<string, unknown>;
@@ -63,6 +64,50 @@ interface PersistedTransaction {
     operationType: string;
   };
   [key: string]: unknown;
+}
+
+/**
+ * Request identity excludes local timing metadata for re-entrant seals: a
+ * retry rebuilds its envelope with a fresh `sequence`/seal clock, so comparing
+ * those volatile fields would reject every legitimate same-request re-seal as
+ * an idempotency conflict. Only the fields that define the wire request count.
+ */
+function isSameOutboxRecord(
+  existing: PersistedTransaction,
+  candidate: PersistedTransaction,
+): boolean {
+  if (
+    existing.type === 'http_commit_envelope' &&
+    candidate.type === 'http_commit_envelope'
+  ) {
+    const identity = (record: PersistedTransaction): unknown => ({
+      id: record.id,
+      type: record.type,
+      storageVersion: record.storageVersion,
+      idempotencyKey: record.idempotencyKey,
+      request: record.request,
+      scopeNamespace: record.scopeNamespace,
+    });
+    return JSON.stringify(identity(existing)) === JSON.stringify(identity(candidate));
+  }
+  if (
+    existing.type === 'commit_envelope' &&
+    candidate.type === 'commit_envelope'
+  ) {
+    const identity = (record: PersistedTransaction): unknown => ({
+      id: record.id,
+      type: record.type,
+      storageVersion: record.storageVersion,
+      origin: record.origin,
+      idempotencyKey: record.idempotencyKey,
+      operations: record.operations,
+      sourceMutationIds: record.sourceMutationIds,
+      commitOptions: record.commitOptions,
+      scope: record.scope,
+    });
+    return JSON.stringify(identity(existing)) === JSON.stringify(identity(candidate));
+  }
+  return JSON.stringify(existing) === JSON.stringify(candidate);
 }
 
 /**
@@ -1087,10 +1132,10 @@ export class Database {
 
     // Group deltas by store for efficient transaction management.
     //
-    // The method tracks two high-water marks: `highestSyncId` for the total
-    // range seen, and `highestPersistedSyncId`, accumulated only from deltas
-    // whose store transaction actually committed. The cursor advance (at
-    // `updateWorkspaceMetadata`) uses only the persisted one.
+    // The method tracks the total range seen plus the exact input indexes whose
+    // store transaction committed. The cursor is derived from their ordered
+    // prefix after every store finishes; a maximum alone is unsafe because a
+    // later store can succeed after an earlier store failed.
     //
     // Without this split, a single store-level failure (a compacted record
     // missing a required field, a validation abort) would advance the cursor
@@ -1100,7 +1145,7 @@ export class Database {
     // permanently behind the server with no way to recover on reload.
     const deltasByStore = new Map<string, { idx: number; delta: (typeof deltas)[number] }[]>();
     let highestSyncId = 0;
-    let highestPersistedSyncId = 0;
+    const persistedIndexes = new Set<number>();
     let skippedDueToConflict = 0;
 
     deltas.forEach((delta, idx) => {
@@ -1137,6 +1182,9 @@ export class Database {
               deleteSyncId,
             });
             results[idx] = { action: 'verify', modelName: delta.modelName, modelId: delta.modelId };
+            // The later delete in this same ordered frame supersedes this
+            // value, so the stale predecessor requires no separate write.
+            persistedIndexes.add(idx);
             skippedDueToConflict++;
             return; // Skip this delta
           }
@@ -1388,14 +1436,14 @@ export class Database {
           tx.oncomplete = () => { resolve(); };
           tx.onerror = () => { reject(tx.error); };
         });
-        // Only commit staged results to the global results if the transaction succeeded.
-        // Advance `highestPersistedSyncId` only for deltas in this successful
-        // transaction, so the cursor can't advance past rows that never wrote to IDB.
+        // Only commit staged results to the global results if the transaction
+        // succeeded. Record input indexes rather than a maximum sync id; the
+        // durable cursor is the prefix through these indexes.
         for (const r of stagedResults) {
           // Resolve the originating delta so we can carry its
           // transactionId through to the result. Echo detection in
           // `SyncClient.applyDeltaBatchToPool` reads it.
-          const sourceDelta = storeDeltas.find(({ idx }) => idx === r.idx)?.delta;
+          const sourceDelta = deltas[r.idx];
           results[r.idx] = {
             action: r.action,
             modelName: r.modelName,
@@ -1403,15 +1451,7 @@ export class Database {
             data: r.data,
             transactionId: sourceDelta?.transactionId,
           };
-          const rawSyncId = storeDeltas[
-            storeDeltas.findIndex(({ idx }) => idx === r.idx)
-          ]?.delta.syncId;
-          // SyncDelta.syncId is typed as number but postgres serializes
-          // bigint to string on the wire — coerce before compare.
-          const syncId = typeof rawSyncId === 'string' ? Number(rawSyncId) : rawSyncId;
-          if (typeof syncId === 'number' && !isNaN(syncId) && syncId > highestPersistedSyncId) {
-            highestPersistedSyncId = syncId;
-          }
+          persistedIndexes.add(r.idx);
         }
       } catch (err) {
         // Surface the IDB error directly — `captureTransactionFailure`
@@ -1445,11 +1485,16 @@ export class Database {
       }
     }
 
-    // Update metadata only to the highest syncId whose store transaction
-    // actually committed. Using `highestSyncId` (the range-seen max) would
-    // advance the cursor past deltas that failed to persist — the "cursor
-    // ahead of IDB" divergence that makes subsequent partial bootstraps
-    // skip the missing rows forever.
+    // Advance only through the durable INPUT PREFIX. IDs need not be
+    // numerically contiguous because other tenants and filtered sync groups
+    // occupy gaps; the server-delivered order is the relevant sequence.
+    const highestPersistedSyncId = highestPersistedPrefixSyncId(
+      deltas,
+      persistedIndexes,
+    );
+
+    // Using `highestSyncId` (the range-seen max) would advance past an earlier
+    // failed store transaction and permanently skip its delta.
     //
     // If `highestPersistedSyncId === 0` (every store tx failed), we leave
     // the metadata alone. Next partial bootstrap will re-deliver the
@@ -1583,19 +1628,52 @@ export class Database {
    *  delete/getAll/getAllFromIndex surface, so callers don't need to
    *  branch on which one they got back. */
   private get transactionStore() {
-    return this.getStore('__transactions');
+    return this.getRequiredStore('__transactions');
   }
 
   async saveTransaction(transaction: PersistedTransaction): Promise<void> {
-    await this.transactionStore?.put(transaction);
+    await this.transactionStore.put(transaction);
+  }
+
+  /** Persist one burst of journal rows in a single strict durability group. */
+  async saveTransactions(transactions: readonly PersistedTransaction[]): Promise<void> {
+    if (transactions.length === 0) return;
+    if (this.inMemory) {
+      await Promise.all(transactions.map((transaction) => this.transactionStore.put(transaction)));
+      return;
+    }
+    const db = this.workspaceDb;
+    if (!db || this.isClosing) {
+      throw new AbloConnectionError('Database not opened for mutation journal', {
+        code: 'db_not_opened',
+      });
+    }
+    await new Promise<void>((resolve, reject) => {
+      try {
+        const tx = db.transaction(['__transactions'], 'readwrite', {
+          durability: 'strict',
+        });
+        const store = tx.objectStore('__transactions');
+        for (const transaction of transactions) store.put(transaction);
+        tx.oncomplete = () => { resolve(); };
+        tx.onabort = () => {
+          reject(tx.error ?? new Error('Mutation journal transaction aborted'));
+        };
+        tx.onerror = () => {
+          // onabort owns rejection.
+        };
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   }
 
   async removeTransaction(id: string): Promise<void> {
-    await this.transactionStore?.delete(id);
+    await this.transactionStore.delete(id);
   }
 
   async getPersistedTransactions(): Promise<PersistedTransaction[]> {
-    const rows = (await this.transactionStore?.getAll()) ?? [];
+    const rows = await this.transactionStore.getAll();
     // Storage layer returns the centralized `Record<string, unknown>`
     // shape from `ObjectStoreContract`. PersistedTransaction adds an
     // index signature so each row already structurally satisfies the
@@ -1604,15 +1682,162 @@ export class Database {
     return rows as PersistedTransaction[];
   }
 
+  async getPersistedTransaction(id: string): Promise<PersistedTransaction | undefined> {
+    return (await this.transactionStore.get(id)) as PersistedTransaction | undefined;
+  }
+
+  /**
+   * Atomically seal one exact commit request and consume the staged mutation
+   * records it replaces. The read, optional add, and deletes share one strict
+   * IndexedDB transaction, so a crash can expose the staged records or the
+   * sealed envelope, never a missing handoff. Returns the pre-existing record
+   * when the envelope id was already sealed (retry/re-entrant call).
+   */
+  async sealTransactionRecord(
+    record: PersistedTransaction,
+    consumedRecordIds: readonly string[],
+  ): Promise<PersistedTransaction | undefined> {
+    const recordId = record.id;
+    if (!recordId) {
+      throw new AbloValidationError('A sealed transaction record must carry an id', {
+        code: 'invalid_body',
+      });
+    }
+
+    if (this.inMemory) {
+      const store = this.transactionStore;
+      const existing = (await store.get(recordId)) as PersistedTransaction | undefined;
+      if (existing && !isSameOutboxRecord(existing, record)) {
+        throw new AbloValidationError('Commit outbox key already identifies a different request', {
+          code: 'idempotency_conflict',
+        });
+      }
+      if (!existing) {
+        const sources = await Promise.all(
+          consumedRecordIds.map((id) => store.get(id)),
+        );
+        if (sources.some((source) => source === undefined)) {
+          throw new AbloValidationError(
+            'Commit outbox source mutations were already claimed by another envelope',
+            { code: 'idempotency_conflict' },
+          );
+        }
+        await store.add(record);
+      }
+      for (const id of consumedRecordIds) {
+        if (id !== recordId) await store.delete(id);
+      }
+      return existing;
+    }
+
+    const db = this.workspaceDb;
+    if (!db || this.isClosing) {
+      throw new AbloConnectionError('Database not opened for commit outbox', {
+        code: 'db_not_opened',
+      });
+    }
+
+    return new Promise((resolve, reject) => {
+      try {
+        const tx = db.transaction(['__transactions'], 'readwrite', {
+          durability: 'strict',
+        });
+        const store = tx.objectStore('__transactions');
+        const getRequest = store.get(recordId);
+        const sourceIds = [...new Set(consumedRecordIds)].filter(
+          (id) => id !== recordId,
+        );
+        const sourceRequests = sourceIds.map((id) => store.get(id));
+        const sourceExists = new Array<boolean>(sourceRequests.length).fill(false);
+        let existing: PersistedTransaction | undefined;
+        let collisionError: Error | undefined;
+        let envelopeRead = false;
+        let sourcesRead = 0;
+        let promotionStarted = false;
+
+        const promote = (): void => {
+          if (
+            promotionStarted ||
+            !envelopeRead ||
+            sourcesRead !== sourceRequests.length
+          ) return;
+          promotionStarted = true;
+          if (existing && !isSameOutboxRecord(existing, record)) {
+            collisionError = new AbloValidationError(
+              'Commit outbox key already identifies a different request',
+              { code: 'idempotency_conflict' },
+            );
+            tx.abort();
+            return;
+          }
+          // A new envelope owns promotion only while every source row still
+          // exists. This is the fleet/tab execution claim: a second tab that
+          // restored the same journal entries under another key loses here and
+          // cannot dispatch. An identical existing envelope is an idempotent
+          // retry, so its already-consumed sources may be absent.
+          if (!existing && sourceExists.some((exists) => !exists)) {
+            collisionError = new AbloValidationError(
+              'Commit outbox source mutations were already claimed by another envelope',
+              { code: 'idempotency_conflict' },
+            );
+            tx.abort();
+            return;
+          }
+          if (!existing) store.add(record);
+          for (const id of sourceIds) store.delete(id);
+        };
+
+        getRequest.onsuccess = () => {
+          existing = getRequest.result as PersistedTransaction | undefined;
+          envelopeRead = true;
+          promote();
+        };
+        getRequest.onerror = () => {
+          tx.abort();
+        };
+        sourceRequests.forEach((request, index) => {
+          request.onsuccess = () => {
+            sourceExists[index] = request.result !== undefined;
+            sourcesRead += 1;
+            promote();
+          };
+          request.onerror = () => {
+            tx.abort();
+          };
+        });
+        tx.oncomplete = () => { resolve(existing); };
+        tx.onabort = () => {
+          reject(
+            collisionError ??
+            tx.error ??
+            getRequest.error ??
+            new Error('Commit outbox transaction aborted'),
+          );
+        };
+        tx.onerror = () => {
+          // onabort owns rejection so the promise settles exactly once.
+        };
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
   async cleanupOldTransactions(maxAge: number): Promise<number> {
     const store = this.transactionStore;
-    if (!store) return 0;
 
     const rows = (await store.getAll()) as PersistedTransaction[];
     const cutoff = Date.now() - maxAge;
     let cleaned = 0;
 
     for (const tx of rows) {
+      // Live write intent has no safe age-based expiry. In particular, server
+      // idempotency retention may already have elapsed, so silently deleting or
+      // blindly replaying an old envelope would both be unsafe. Restoration
+      // owns quarantine/reconciliation for these records.
+      if (tx.type === 'commit_envelope' || tx.type === 'pending_mutation') {
+        continue;
+      }
       if (typeof tx.timestamp === 'number' && tx.timestamp < cutoff) {
         await store.delete(tx.id);
         cleaned++;
@@ -1700,8 +1925,11 @@ export class Database {
     getContext().logger.debug('Database closed');
   }
 
-  async clear(): Promise<void> {
+  async clear(options: { includeWriteJournal?: boolean } = {}): Promise<void> {
     await this.storeManager.clearAllStores();
+    if (options.includeWriteJournal) {
+      await this.transactionStore.clear();
+    }
     getContext().logger.info('All stores cleared');
   }
 }

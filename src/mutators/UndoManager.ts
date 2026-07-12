@@ -629,6 +629,8 @@ function buildUndoOps(
  */
 export class UndoManager<S extends Schema> {
   private readonly scopes = new Map<string, UndoScope<S>>();
+  /** The options each scope was constructed with, for the mismatch warning below. */
+  private readonly creationOptions = new Map<string, UndoScopeOptions | undefined>();
 
   constructor(
     private readonly schema: S,
@@ -641,6 +643,42 @@ export class UndoManager<S extends Schema> {
     if (!scope) {
       scope = new UndoScope(this.schema, this.store, this.organizationId, options);
       this.scopes.set(name, scope);
+      this.creationOptions.set(name, options);
+      return scope;
+    }
+    // A scope keeps the options it was created with; later calls cannot change
+    // them. Requesting the shared scope with no options is the normal pattern
+    // and stays silent — but passing options that conflict with the creation
+    // values means one caller believes it configured a scope that another
+    // caller already configured differently, which is how a surface silently
+    // ends up with, say, no stream recording. Surface that instead of letting
+    // it pass.
+    if (options) {
+      const created = this.creationOptions.get(name);
+      const conflicts: string[] = [];
+      if (
+        options.recordFromStream !== undefined &&
+        options.recordFromStream !== (created?.recordFromStream ?? false)
+      ) {
+        conflicts.push('recordFromStream');
+      }
+      if (options.maxHistory !== undefined && options.maxHistory !== (created?.maxHistory ?? 100)) {
+        conflicts.push('maxHistory');
+      }
+      if (
+        options.conflictPolicy !== undefined &&
+        options.conflictPolicy !== (created?.conflictPolicy ?? DEFAULT_UNDO_CONFLICT_POLICY)
+      ) {
+        conflicts.push('conflictPolicy');
+      }
+      if (conflicts.length > 0) {
+        getContext().logger.warn(
+          `The undo scope "${name}" already exists with different options — ` +
+            `${conflicts.join(', ')} cannot be changed after creation and the requested ` +
+            `values are ignored. Create the scope with its full options before any ` +
+            `caller requests it without them, or use a differently named scope.`,
+        );
+      }
     }
     return scope;
   }

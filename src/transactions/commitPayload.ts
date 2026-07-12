@@ -13,6 +13,7 @@ import { getContext } from '../context.js';
 import { getActiveRegistry } from '../ModelRegistry.js';
 import { MutationOperationType } from '../types/index.js';
 import type { MutationOptions, WriteOptions } from '../interfaces/index.js';
+import type { CommitEnvelopeMember } from './commitEnvelope.js';
 
 export interface UserContext {
   userId: string;
@@ -108,6 +109,18 @@ export interface Transaction {
   priorityScore: number; // foreign-key-aware priority, derived, used for sorting
   writeOptions?: WriteOptions;
   batchId?: string;
+  /**
+   * Stable identity of the wire commit that currently owns this operation.
+   *
+   * A transport failure is ambiguous: the server may have committed the
+   * batch even though the acknowledgement never reached this client. Keeping
+   * this envelope on every member lets the queue replay the exact same ordered
+   * batch with the exact same idempotency key instead of accidentally
+   * re-batching its operations under a fresh key.
+   */
+  commitEnvelope?: CommitEnvelopeMember;
+  /** Pending-mutation journal entries atomically consumed by this envelope. */
+  sourceMutationIds?: string[];
   /** Completed locally without a server operation; no sync echo will arrive. */
   localOnly?: boolean;
   /** Sync-id threshold: the transaction confirms once a delta with an id at least this value arrives. */
@@ -162,6 +175,15 @@ export function hasStaleWriteOptions(options?: WriteOptions): boolean {
   return (
     options?.readAt !== undefined ||
     options?.onStale !== undefined
+  );
+}
+
+/** Options whose identity/audit semantics forbid merging two caller writes. */
+export function hasCommitCoalescingBarrier(options?: WriteOptions): boolean {
+  return (
+    hasStaleWriteOptions(options) ||
+    typeof options?.idempotencyKey === 'string' ||
+    typeof options?.label === 'string'
   );
 }
 

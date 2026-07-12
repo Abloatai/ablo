@@ -13,11 +13,18 @@
  */
 
 import { EventEmitter } from 'events';
+import { v4 as uuid } from 'uuid';
 import type { Database } from '../Database.js';
 import { Model } from '../Model.js';
 import { getContext } from '../context.js';
 import type { MutationOperationType } from '../types/index.js';
-import { AbloError, AbloConnectionError, errorCodeSpec } from '../errors.js';
+import {
+  AbloError,
+  AbloConnectionError,
+  AbloIdempotencyError,
+  AbloValidationError,
+  errorCodeSpec,
+} from '../errors.js';
 import { SyncPosition } from '../sync/syncPosition.js';
 import type { WriteOptions } from '../interfaces/index.js';
 import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
@@ -25,7 +32,8 @@ import {
   projectCommitPayload,
   computePriorityScore,
   normalizeModelKey,
-  hasStaleWriteOptions,
+  // Includes stale guards as well as request identity/audit barriers.
+  hasCommitCoalescingBarrier,
   applyWriteOptions,
   asTransportError,
   extractStatusCode,
@@ -48,7 +56,20 @@ import { DeltaConfirmationTracker } from './deltaConfirmation.js';
 import {
   deserializePersistedTransaction,
   isNonReplayablePersistedRow,
+  pendingMutationRecordId,
 } from './replayValidation.js';
+import {
+  createCommitEnvelopeMember,
+  createDurableCommitEnvelope,
+  commitEnvelopeRecordId,
+  durableCommitEnvelopeSchema,
+  type DurableCommitEnvelope,
+  type DurableCommitOperation,
+  type DurableCommitOperationInput,
+  type CommitOutboxScope,
+} from './commitEnvelope.js';
+import type { CommitOutboxStore } from './commitOutboxStore.js';
+import { stableStringify } from '../utils/json.js';
 import {
   applyOptimisticCreate,
   applyOptimisticUpdate,
@@ -76,7 +97,7 @@ interface CommitTransaction {
   id: string;
   kind: 'commit';
   operations: {
-    type: string;
+    type: DurableCommitOperation['type'];
     model: string;
     id: string;
     input?: Record<string, unknown>;
@@ -92,6 +113,12 @@ interface CommitTransaction {
   attempts: number;
   lastSyncId?: number;
   error?: Error;
+  sealedAt: number;
+  sequence: number;
+  sealPromise?: Promise<void>;
+  durableEnvelope?: DurableCommitEnvelope;
+  /** Journal entries atomically consumed when this request was sealed. */
+  sourceMutationIds?: string[];
 }
 
 interface ConflictResolution {
@@ -141,6 +168,8 @@ interface TransactionQueueConfig {
 }
 
 export class TransactionQueue extends EventEmitter {
+  // Keep one hour of clock/network margin inside the server's 24-hour ledger.
+  private static readonly DURABLE_REPLAY_WINDOW_MS = 23 * 60 * 60 * 1000;
   private store = new TransactionStore();
   // Signature of the last permanent-error we logged at `warn`. A `create`
   // whose id already exists (`unique_violation`) is a permanent rejection
@@ -176,7 +205,10 @@ export class TransactionQueue extends EventEmitter {
 
   // Per-model in-flight tracking and merge buffer
   private inFlightByModel = new Set<string>();
-  private pendingMergeByModel = new Map<string, any>();
+  private pendingMergeByModel = new Map<
+    string,
+    { data: MutationInput; sourceMutationIds: string[] }
+  >();
   private deferredDeletesByCreate = new Map<string, Transaction[]>();
 
   // Commit lane: pre-built atomic multi-op envelopes from `ablo.commits.create()`.
@@ -185,6 +217,48 @@ export class TransactionQueue extends EventEmitter {
   private commitLane: CommitTransaction[] = [];
   private commitStore = new Map<string, CommitTransaction>();
   private commitProcessing = false;
+  private lastCommitSequence = 0;
+  private durableReplayBlock: AbloIdempotencyError | null = null;
+  /** Browser-backed strict outbox; absent for standalone/in-memory consumers. */
+  private commitOutbox: CommitOutboxStore | null = null;
+  private commitOutboxScope: CommitOutboxScope | null = null;
+
+  private nextCommitSequence(): number {
+    const wallSequence = Date.now() * 1_000;
+    this.lastCommitSequence = Math.max(wallSequence, this.lastCommitSequence + 1);
+    return this.lastCommitSequence;
+  }
+
+  private emitCommitLifecycle(event: string, payload: unknown): void {
+    try {
+      this.emit(event, payload);
+    } catch (error) {
+      getContext().observability.captureTransactionFailure({
+        context: `commit-lifecycle-listener:${event}`,
+        error: error instanceof Error ? error : String(error),
+      });
+    }
+  }
+
+  private assertDurableReplayOpen(): void {
+    if (this.durableReplayBlock) throw this.durableReplayBlock;
+  }
+
+  private assertEnvelopeInsideReplayWindow(
+    envelope: Pick<DurableCommitEnvelope, 'sealedAt'>,
+  ): void {
+    this.assertDurableReplayOpen();
+    if (
+      Date.now() - envelope.sealedAt >=
+      TransactionQueue.DURABLE_REPLAY_WINDOW_MS
+    ) {
+      this.durableReplayBlock = new AbloIdempotencyError(
+        'A pending commit is older than the server idempotency window; newer writes are blocked until it is reviewed.',
+        { code: 'idempotency_conflict' },
+      );
+      throw this.durableReplayBlock;
+    }
+  }
 
   private computePriorityScore(type: Transaction['type'], modelName: string): number {
     return computePriorityScore(type, modelName);
@@ -239,6 +313,7 @@ export class TransactionQueue extends EventEmitter {
     model: Model,
     context: UserContext,
     writeOptions: WriteOptions | undefined,
+    sourceMutationIds: readonly string[] = [],
   ): Transaction {
     const actualModelName = model.getModelName();
     const modelKey = normalizeModelKey(actualModelName);
@@ -256,6 +331,9 @@ export class TransactionQueue extends EventEmitter {
       attempts: 0,
       priority: 'high',
       writeOptions,
+      ...(sourceMutationIds.length > 0
+        ? { sourceMutationIds: [...new Set(sourceMutationIds)] }
+        : {}),
       localOnly: true,
     };
 
@@ -356,6 +434,277 @@ export class TransactionQueue extends EventEmitter {
 
   // Batch management
   private batchIndex = 0;
+
+  /** Mints the request identity once; retry paths only read the stored value. */
+  private generateCommitIdempotencyKey(): string {
+    return `commit_${uuid()}`;
+  }
+
+  /**
+   * Binds an ordered transaction batch to one wire-level idempotency key.
+   * Existing envelopes are validated and restored to their original order;
+   * they are never extended with newly queued work.
+   */
+  private ensureCommitEnvelope(batch: Transaction[]): string {
+    const firstTransaction = batch[0];
+    if (!firstTransaction) {
+      throw new Error('Cannot create an idempotency envelope for an empty commit');
+    }
+
+    const existingKeys = new Set(
+      batch
+        .map((tx) => tx.commitEnvelope?.idempotencyKey)
+        .filter((key) => key !== undefined),
+    );
+    if (existingKeys.size > 1) {
+      throw new Error('Cannot combine transactions from different commit envelopes');
+    }
+
+    const existingKey = existingKeys.values().next().value;
+    if (existingKey) {
+      const expectedCount = firstTransaction.commitEnvelope?.operationCount;
+      const indexes = new Set(batch.map((tx) => tx.commitEnvelope?.operationIndex));
+      const isCompleteEnvelope =
+        expectedCount === batch.length &&
+        indexes.size === batch.length &&
+        batch.every(
+          (tx) =>
+            tx.commitEnvelope?.idempotencyKey === existingKey &&
+            tx.commitEnvelope.operationCount === expectedCount &&
+            tx.commitEnvelope.operationIndex < expectedCount,
+        );
+      if (!isCompleteEnvelope) {
+        throw new Error('Cannot replay a partial or malformed commit envelope');
+      }
+      const persistedSealTimes = new Set(
+        batch
+          .map((transaction) => transaction.commitEnvelope?.sealedAt)
+          .filter((sealedAt) => sealedAt !== undefined),
+      );
+      if (persistedSealTimes.size > 1) {
+        throw new Error('Cannot replay a commit envelope with inconsistent seal times');
+      }
+      const sealedAt = persistedSealTimes.values().next().value ?? Date.now();
+      for (const transaction of batch) {
+        if (transaction.commitEnvelope) transaction.commitEnvelope.sealedAt = sealedAt;
+      }
+      batch.sort(
+        (a, b) =>
+          (a.commitEnvelope?.operationIndex ?? 0) -
+          (b.commitEnvelope?.operationIndex ?? 0),
+      );
+      return existingKey;
+    }
+
+    // An explicit public key owns its request. Transactions carrying one are
+    // selected as solo batches by takeNextExecutionBatch().
+    const explicitKey =
+      batch.length === 1
+        ? firstTransaction.writeOptions?.idempotencyKey
+        : undefined;
+    const idempotencyKey =
+      typeof explicitKey === 'string' && explicitKey.length > 0
+        ? explicitKey
+        : this.generateCommitIdempotencyKey();
+    const sealedAt = Date.now();
+    const sequence = this.nextCommitSequence();
+
+    batch.forEach((tx, operationIndex) => {
+      tx.commitEnvelope = createCommitEnvelopeMember({
+        idempotencyKey,
+        operationIndex,
+        operationCount: batch.length,
+        sealedAt,
+        sequence,
+      });
+    });
+    return idempotencyKey;
+  }
+
+  /** Bind the strict local outbox used before any mutation reaches the wire. */
+  setCommitOutbox(outbox: CommitOutboxStore): void {
+    this.commitOutbox = outbox;
+  }
+
+  setCommitOutboxScope(scope: CommitOutboxScope): void {
+    this.commitOutboxScope = scope;
+  }
+
+  private sourceMutationIdsFor(batch: readonly Transaction[]): string[] {
+    return [...new Set(batch.flatMap((transaction) => transaction.sourceMutationIds ?? []))];
+  }
+
+  /**
+   * Atomically replaces staged mutation journal rows with one exact request.
+   * The returned operations are the JSON-normalized values that must be sent;
+   * callers never send a separately reconstructed payload after sealing.
+   */
+  private async sealDurableCommit(input: {
+    idempotencyKey: string;
+    origin: 'model_batch' | 'atomic_commit';
+    operations: readonly DurableCommitOperationInput[];
+    sourceMutationIds?: readonly string[];
+    commitOptions?: {
+      causedByTaskId?: string | null;
+      reads?: readonly ReadDependency[] | null;
+    };
+    createdAt: number;
+    sealedAt: number;
+    sequence?: number;
+  }): Promise<DurableCommitEnvelope> {
+    const sourceMutationIds = [...new Set(input.sourceMutationIds ?? [])];
+    const envelope = createDurableCommitEnvelope({
+      idempotencyKey: input.idempotencyKey,
+      origin: input.origin,
+      operations: [...input.operations],
+      sourceMutationIds,
+      commitOptions: {
+        ...(input.commitOptions?.causedByTaskId !== undefined
+          ? { causedByTaskId: input.commitOptions.causedByTaskId }
+          : {}),
+        ...(input.commitOptions?.reads !== undefined
+          ? {
+              reads:
+                input.commitOptions.reads === null
+                  ? null
+                  : [...input.commitOptions.reads],
+            }
+          : {}),
+      },
+      ...(this.commitOutboxScope ? { scope: this.commitOutboxScope } : {}),
+      createdAt: input.createdAt,
+      sealedAt: input.sealedAt,
+      sequence: input.sequence ?? input.sealedAt * 1_000,
+    });
+
+    if (this.config.enablePersistence && this.commitOutbox) {
+      try {
+        await this.commitOutbox.seal(
+          envelope,
+          sourceMutationIds.map(pendingMutationRecordId),
+        );
+      } catch (cause) {
+        if (cause instanceof AbloError) throw cause;
+        throw new AbloConnectionError('Could not seal the commit outbox before dispatch', {
+          code: 'db_not_opened',
+          cause,
+        });
+      }
+      this.emitCommitLifecycle('commit:envelope_persisted', {
+        idempotencyKey: envelope.idempotencyKey,
+        sourceMutationIds: envelope.sourceMutationIds,
+      });
+    }
+
+    return envelope;
+  }
+
+  /** Best-effort cleanup after a definitive result; replay is safe if it fails. */
+  private async removeDurableCommit(idempotencyKey: string): Promise<void> {
+    if (!this.config.enablePersistence || !this.commitOutbox) return;
+    try {
+      await this.commitOutbox.remove(commitEnvelopeRecordId(idempotencyKey));
+    } catch (error) {
+      getContext().logger.debug('[TransactionQueue] Commit outbox cleanup deferred', {
+        idempotencyKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Takes either one complete retry envelope or a fresh batch. A retry waits
+   * until every original member has re-entered the queue, preventing an
+   * ambiguous A+B commit from being replayed later as A and B separately.
+   */
+  private takeNextExecutionBatch(): Transaction[] {
+    const retryGroups = new Map<string, Map<string, Transaction>>();
+    for (const tx of this.executionQueue) {
+      const envelope = tx.commitEnvelope;
+      if (!envelope) continue;
+      const group =
+        retryGroups.get(envelope.idempotencyKey) ??
+        new Map<string, Transaction>();
+      group.set(tx.id, tx);
+      retryGroups.set(envelope.idempotencyKey, group);
+    }
+
+    for (const [idempotencyKey, byId] of retryGroups) {
+      const members = [...byId.values()];
+      const expectedCount = members[0]?.commitEnvelope?.operationCount;
+      if (expectedCount === undefined || members.length !== expectedCount) continue;
+
+      this.executionQueue = this.executionQueue.filter(
+        (tx) => tx.commitEnvelope?.idempotencyKey !== idempotencyKey,
+      );
+      members.sort(
+        (a, b) =>
+          (a.commitEnvelope?.operationIndex ?? 0) -
+          (b.commitEnvelope?.operationIndex ?? 0),
+      );
+      return members;
+    }
+
+    const fresh = this.executionQueue.filter((tx) => !tx.commitEnvelope);
+    const firstFresh = fresh[0];
+    if (!firstFresh) return [];
+
+    // A caller-supplied key describes exactly one public mutation call. Keep
+    // that transaction out of an SDK-created aggregate batch so the key maps
+    // to the request its caller intended.
+    const explicitIndex = fresh.findIndex(
+      (tx) => typeof tx.writeOptions?.idempotencyKey === 'string',
+    );
+    const selected =
+      explicitIndex === 0
+        ? [firstFresh]
+        : fresh.slice(
+            0,
+            Math.min(
+              this.config.maxBatchSize,
+              explicitIndex > 0 ? explicitIndex : fresh.length,
+            ),
+          );
+    const selectedIds = new Set(selected.map((tx) => tx.id));
+    this.executionQueue = this.executionQueue.filter(
+      (tx) => !selectedIds.has(tx.id),
+    );
+    return selected;
+  }
+
+  /**
+   * Selects one reconnect batch without changing the request identity of work
+   * that was already attempted. Explicit caller keys remain one-call batches;
+   * an existing envelope is replayed only with all of its original members.
+   */
+  private takeOfflineFlushBatch(pending: Transaction[]): Transaction[] {
+    const first = pending[0];
+    if (!first) return [];
+
+    const envelope = first.commitEnvelope;
+    if (envelope) {
+      return pending.filter(
+        (tx) => tx.commitEnvelope?.idempotencyKey === envelope.idempotencyKey,
+      );
+    }
+
+    if (typeof first.writeOptions?.idempotencyKey === 'string') {
+      return [first];
+    }
+
+    const boundary = pending.findIndex(
+      (tx) =>
+        tx.commitEnvelope !== undefined ||
+        typeof tx.writeOptions?.idempotencyKey === 'string',
+    );
+    return pending.slice(
+      0,
+      Math.min(
+        this.config.maxBatchSize,
+        boundary > 0 ? boundary : pending.length,
+      ),
+    );
+  }
 
   /**
    * Resolvers for per-transaction `confirmation` promises. Populated in
@@ -628,10 +977,11 @@ export class TransactionQueue extends EventEmitter {
 
   /**
    * Flushes every pending transaction in one commit, the fast path taken on
-   * reconnect. If the batch fails, each transaction falls back to normal,
-   * one-by-one processing.
+   * reconnect. If transport fails, the transactions retain this exact commit
+   * envelope when they fall back to normal queue processing.
    */
   async flushOfflineQueue(): Promise<void> {
+    this.assertDurableReplayOpen();
     // Kick the commit lane too: atomic envelopes from `commits.create()` may
     // have been left at the head of the lane while the connection was down.
     // Fire-and-forget; processCommitLane serializes itself.
@@ -640,51 +990,82 @@ export class TransactionQueue extends EventEmitter {
     // Collect pending transactions in created order
     const pending = this.store.getByStatus('pending').sort((a, b) => a.createdAt - b.createdAt);
     if (pending.length === 0) return;
+    const pendingIds = new Set(pending.map((tx) => tx.id));
+    // These rows may already be waiting behind the normal batch timer. The
+    // reconnect fast path takes ownership of them for this attempt so the same
+    // transaction cannot dispatch concurrently through both paths.
+    this.executionQueue = this.executionQueue.filter(
+      (tx) => !pendingIds.has(tx.id),
+    );
 
-    // Build operations list
-    const operations = pending.map((tx) => {
-      this.ensureDerivedFields(tx);
-      return applyWriteOptions({
-        type: TX_TYPE_TO_MUTATION_OP[tx.type],
-        model: tx.modelKey,
-        id: tx.modelId,
-        input: tx.type === 'create' || tx.type === 'update' ? tx.data || {} : undefined,
-      }, tx);
-    });
+    const remaining = [...pending];
+    while (remaining.length > 0) {
+      const batch = this.takeOfflineFlushBatch(remaining);
+      if (batch.length === 0) break;
+      const batchIds = new Set(batch.map((tx) => tx.id));
+      const nextRemaining = remaining.filter((tx) => !batchIds.has(tx.id));
 
-    try {
-      const res: any = await this.mutationExecutor.commit(operations);
-      // Mark all as completed
-      for (const tx of pending) {
-        this.store.updateStatus(tx.id, 'completed');
-        this.emit('transaction:completed', tx);
-        this.emit(`transaction:completed:${tx.id}`, tx);
-        this.optimisticUpdates.delete(tx.id);
-      }
-      // Simple perf note
-      getContext().logger.debug('txn:commit', 0, {
-        count: pending.length,
-        lastSyncId: res?.lastSyncId,
-      });
-    } catch (err) {
-      // If batch fails, fall back to normal processing
-      // Only log if we're online (if we're offline, this is expected)
-      const isOffline = !getContext().onlineStatus.isOnline();
-      const isNetworkError =
-        err instanceof Error &&
-        (err.message.includes('Failed to fetch') ||
-          err.message.includes('Network request failed') ||
-          err.message.includes('NetworkError'));
-
-      if (!isOffline || !isNetworkError) {
-        getContext().observability.breadcrumb('Batch flush fallback failed', 'sync.transaction', 'warning', {
-          error: err instanceof Error ? err.message : String(err),
+      try {
+        const idempotencyKey = this.ensureCommitEnvelope(batch);
+        const projectedOperations = batch.map((tx) => {
+          this.ensureDerivedFields(tx);
+          return applyWriteOptions(
+            {
+              type: TX_TYPE_TO_MUTATION_OP[tx.type],
+              model: tx.modelKey,
+              id: tx.modelId,
+              input: tx.type === 'create' || tx.type === 'update' ? tx.data || {} : undefined,
+              transactionId: tx.id,
+            },
+            tx,
+          );
         });
-      }
+        const durableEnvelope = await this.sealDurableCommit({
+          idempotencyKey,
+          origin: 'model_batch',
+          operations: projectedOperations,
+          sourceMutationIds: this.sourceMutationIdsFor(batch),
+          createdAt: Math.min(...batch.map((transaction) => transaction.createdAt)),
+          sealedAt: batch[0]?.commitEnvelope?.sealedAt ?? Date.now(),
+          sequence: batch[0]?.commitEnvelope?.sequence,
+        });
+        this.assertEnvelopeInsideReplayWindow(durableEnvelope);
+        const result = await this.mutationExecutor.commit(durableEnvelope.operations, {
+          idempotencyKey,
+        });
+        await this.removeDurableCommit(idempotencyKey);
+        // Mark this request envelope as completed before moving to the next.
+        for (const tx of batch) {
+          this.store.updateStatus(tx.id, 'completed');
+          this.emit('transaction:completed', tx);
+          this.emit(`transaction:completed:${tx.id}`, tx);
+          this.optimisticUpdates.delete(tx.id);
+        }
+        getContext().logger.debug('txn:commit', 0, {
+          count: batch.length,
+          lastSyncId: result.lastSyncId,
+        });
+        remaining.splice(0, remaining.length, ...nextRemaining);
+      } catch (err) {
+        // If one request fails, hand it and every later request back to the
+        // normal lane. Their envelopes stay attached for safe retry.
+        const isOffline = !getContext().onlineStatus.isOnline();
+        const isNetworkError =
+          err instanceof Error &&
+          (err.message.includes('Failed to fetch') ||
+            err.message.includes('Network request failed') ||
+            err.message.includes('NetworkError'));
 
-      // Enqueue pending ones to executionQueue
-      for (const tx of pending) {
-        this.enqueue(tx);
+        if (!isOffline || !isNetworkError) {
+          getContext().observability.breadcrumb('Batch flush fallback failed', 'sync.transaction', 'warning', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+
+        for (const tx of [...batch, ...nextRemaining]) {
+          this.enqueue(tx);
+        }
+        return;
       }
     }
   }
@@ -698,7 +1079,9 @@ export class TransactionQueue extends EventEmitter {
     model: Model,
     context: UserContext,
     writeOptions?: WriteOptions,
+    sourceMutationId?: string,
   ): Promise<Transaction> {
+    this.assertDurableReplayOpen();
     const actualModelName = model.getModelName();
 
     const transaction: Transaction = {
@@ -718,6 +1101,7 @@ export class TransactionQueue extends EventEmitter {
       attempts: 0,
       priority: 'normal',
       writeOptions,
+      ...(sourceMutationId ? { sourceMutationIds: [sourceMutationId] } : {}),
     };
 
     this.attachConfirmation(transaction);
@@ -746,7 +1130,9 @@ export class TransactionQueue extends EventEmitter {
     context: UserContext,
     precomputedChanges?: Record<string, unknown>,
     writeOptions?: WriteOptions,
+    sourceMutationId?: string,
   ): Promise<Transaction> {
+    this.assertDurableReplayOpen();
     const actualModelName = model.getModelName();
 
     // Use pre-computed changes if provided, otherwise extract from model
@@ -780,6 +1166,7 @@ export class TransactionQueue extends EventEmitter {
       attempts: 0,
       priority: this.isReorderPayload(updateInput) ? 'high' : 'normal',
       writeOptions,
+      ...(sourceMutationId ? { sourceMutationIds: [sourceMutationId] } : {}),
     };
 
     this.attachConfirmation(transaction);
@@ -809,7 +1196,9 @@ export class TransactionQueue extends EventEmitter {
     model: Model,
     context: UserContext,
     writeOptions?: WriteOptions,
+    sourceMutationId?: string,
   ): Promise<Transaction> {
+    this.assertDurableReplayOpen();
     // Use getModelName() rather than constructor.name, which is unreliable once
     // class names are minified.
     const actualModelName = model.getModelName();
@@ -837,6 +1226,7 @@ export class TransactionQueue extends EventEmitter {
         attempts: 0,
         priority: 'high',
         writeOptions,
+        ...(sourceMutationId ? { sourceMutationIds: [sourceMutationId] } : {}),
         localOnly: true,
         // Activity deletes complete synchronously (audit-record skip path).
         // Pre-resolved so consumers can still `await tx.confirmation` uniformly.
@@ -859,7 +1249,10 @@ export class TransactionQueue extends EventEmitter {
     const unsentCreate = this.takeUnsentCreateForModel(actualModelName, model.id);
     if (unsentCreate) {
       await this.cancelUnsentCreateForDelete(unsentCreate);
-      return this.completeLocalDelete(model, context, writeOptions);
+      return this.completeLocalDelete(model, context, writeOptions, [
+        ...(unsentCreate.sourceMutationIds ?? []),
+        ...(sourceMutationId ? [sourceMutationId] : []),
+      ]);
     }
 
     const transaction: Transaction = {
@@ -876,6 +1269,7 @@ export class TransactionQueue extends EventEmitter {
       attempts: 0,
       priority: 'high', // Deletes are high priority
       writeOptions,
+      ...(sourceMutationId ? { sourceMutationIds: [sourceMutationId] } : {}),
     };
 
     this.attachConfirmation(transaction);
@@ -883,8 +1277,16 @@ export class TransactionQueue extends EventEmitter {
 
     // Cancel any pending/in-flight updates for this model to prevent "no rows" errors
     // when the delete executes before the update (race condition fix)
-    this.cancelTransactionsForModel(model.id, 'update');
+    const canceledUpdates = this.cancelTransactionsForModel(model.id, 'update');
     const entityKey = this.entityKey(actualModelName, model.id);
+    const pendingMerge = this.pendingMergeByModel.get(entityKey);
+    transaction.sourceMutationIds = [
+      ...new Set([
+        ...(transaction.sourceMutationIds ?? []),
+        ...canceledUpdates.flatMap((candidate) => candidate.sourceMutationIds ?? []),
+        ...(pendingMerge?.sourceMutationIds ?? []),
+      ]),
+    ];
     this.pendingMergeByModel.delete(entityKey);
     this.inFlightByModel.delete(entityKey);
 
@@ -912,7 +1314,7 @@ export class TransactionQueue extends EventEmitter {
   async uploadAttachment(
     _file: File,
     options: { id: string; [key: string]: unknown },
-    _context: UserContext
+    _context: UserContext // eslint-disable-line @typescript-eslint/no-unused-vars -- reserved executor context
   ): Promise<{ url: string } | null> {
     return this.mutationExecutor.uploadAttachment?.(options.id, options) ?? null;
   }
@@ -923,7 +1325,7 @@ export class TransactionQueue extends EventEmitter {
   async batchUploadAttachments(
     _files: File[],
     items: { id: string; [key: string]: unknown }[],
-    _context: UserContext
+    _context: UserContext // eslint-disable-line @typescript-eslint/no-unused-vars -- reserved executor context
   ): Promise<{ id: string; url: string }[]> {
     return this.mutationExecutor.batchUploadAttachments?.(items.map(i => ({ id: i.id, input: i }))) ?? [];
   }
@@ -936,7 +1338,9 @@ export class TransactionQueue extends EventEmitter {
     model: Model,
     context: UserContext,
     writeOptions?: WriteOptions,
+    sourceMutationId?: string,
   ): Promise<Transaction> {
+    this.assertDurableReplayOpen();
     // Use getModelName() rather than constructor.name, which is unreliable once
     // class names are minified.
     const actualModelName = model.getModelName();
@@ -957,6 +1361,7 @@ export class TransactionQueue extends EventEmitter {
       attempts: 0,
       priority: 'normal',
       writeOptions,
+      ...(sourceMutationId ? { sourceMutationIds: [sourceMutationId] } : {}),
     };
 
     this.attachConfirmation(transaction);
@@ -974,6 +1379,7 @@ export class TransactionQueue extends EventEmitter {
    * next batched commit.
    */
   async unarchive(model: Model, context: UserContext): Promise<Transaction> {
+    this.assertDurableReplayOpen();
     // Use getModelName() rather than constructor.name, which is unreliable once
     // class names are minified.
     const actualModelName = model.getModelName();
@@ -1017,20 +1423,34 @@ export class TransactionQueue extends EventEmitter {
     // event-loop tick, so only two cases remain here: merging into an in-flight
     // update, and merging into a pending same-entity update.
     //
-    // Retries (attempts > 0) must not take either merge path. A retry is
-    // re-enqueued from `handleFailure` while its own model key is still marked
-    // in `inFlightByModel`, so treating it as a concurrent edit would move its
-    // data into `pendingMergeByModel`, remove the transaction, and then mint a
-    // fresh follow-up with the attempt counter reset to zero. The counter would
-    // never accumulate, `maxRetries` would never trip, and the write would
-    // resend in an endless loop.
-    if (transaction.type === 'update' && transaction.attempts === 0) {
-      const preserveWatermark = hasStaleWriteOptions(transaction.writeOptions);
+    // Retries (attempts > 0 or an already assigned commit envelope) must not
+    // take either merge path. A retry is re-enqueued while its own model key may
+    // still be marked in `inFlightByModel`; treating it as a concurrent edit
+    // would change the already-attempted request, discard its stable envelope,
+    // and either defeat maxRetries or duplicate an ambiguously committed write.
+    if (
+      transaction.type === 'update' &&
+      transaction.attempts === 0 &&
+      !transaction.commitEnvelope
+    ) {
+      const preserveWatermark = hasCommitCoalescingBarrier(transaction.writeOptions);
       // If there is an in-flight update for this model, merge into post-flight buffer
       if (!preserveWatermark && this.inFlightByModel.has(modelKey)) {
-        const prev = this.pendingMergeByModel.get(modelKey) || {};
-        const merged = mergeUpdateData(prev, transaction.data || {}, transaction.modelName);
-        this.pendingMergeByModel.set(modelKey, merged);
+        const previous = this.pendingMergeByModel.get(modelKey);
+        const merged = mergeUpdateData(
+          previous?.data ?? {},
+          transaction.data || {},
+          transaction.modelName,
+        );
+        this.pendingMergeByModel.set(modelKey, {
+          data: merged,
+          sourceMutationIds: [
+            ...new Set([
+              ...(previous?.sourceMutationIds ?? []),
+              ...(transaction.sourceMutationIds ?? []),
+            ]),
+          ],
+        });
         this.store.remove(transaction.id);
         return;
       }
@@ -1042,7 +1462,7 @@ export class TransactionQueue extends EventEmitter {
           t.type === 'update' &&
           t.modelId === transaction.modelId &&
           t.modelName === transaction.modelName &&
-          !hasStaleWriteOptions(t.writeOptions)
+          !hasCommitCoalescingBarrier(t.writeOptions)
       );
       if (!preserveWatermark && pendingInQueue) {
         pendingInQueue.data = mergeUpdateData(
@@ -1050,6 +1470,12 @@ export class TransactionQueue extends EventEmitter {
           transaction.data || {},
           transaction.modelName
         );
+        pendingInQueue.sourceMutationIds = [
+          ...new Set([
+            ...(pendingInQueue.sourceMutationIds ?? []),
+            ...(transaction.sourceMutationIds ?? []),
+          ]),
+        ];
         this.store.remove(transaction.id);
         return;
       }
@@ -1109,6 +1535,7 @@ export class TransactionQueue extends EventEmitter {
    * greatly reduces batch latency.
    */
   private async processBatch(): Promise<void> {
+    if (this.durableReplayBlock) return;
     const batchStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
     if (this.isProcessing || this.executionQueue.length === 0) {
@@ -1139,8 +1566,11 @@ export class TransactionQueue extends EventEmitter {
             return a.priorityScore - b.priorityScore;
           });
 
-          // Get batch (now guaranteed to have parent entities before children)
-          batch = this.executionQueue.splice(0, this.config.maxBatchSize);
+          // Take a fresh batch or one complete retry envelope. Retry envelopes
+          // retain both their original membership and operation order.
+          batch = this.takeNextExecutionBatch();
+          if (batch.length === 0) return;
+          const commitIdempotencyKey = this.ensureCommitEnvelope(batch);
 
           // Track executing count for backpressure
           this.executingCount += batch.length;
@@ -1183,18 +1613,31 @@ export class TransactionQueue extends EventEmitter {
 
           // Execute the unified commit for every operation in one round trip.
           if (batchOps.length > 0) {
-            const operations = batchOps.map(({ op }) => op);
-
+            let dispatchStarted = false;
             try {
+              const durableEnvelope = await this.sealDurableCommit({
+                idempotencyKey: commitIdempotencyKey,
+                origin: 'model_batch',
+                operations: batchOps.map(({ op }) => op),
+                sourceMutationIds: this.sourceMutationIdsFor(batch),
+                createdAt: Math.min(...batch.map((transaction) => transaction.createdAt)),
+                sealedAt: batch[0]?.commitEnvelope?.sealedAt ?? Date.now(),
+                sequence: batch[0]?.commitEnvelope?.sequence,
+              });
+              const operations = durableEnvelope.operations;
+
               // Capture lastSyncId from the server response for threshold-based
               // confirmation.
               //
-              // Idempotency: the default HTTP executor derives a stable
-              // idempotency key from the operations array itself (a sorted
-              // SHA-256), so retrying the same batch reaches the server's
-              // `mutation_log` replay path without threading a key through the
-              // microtask boundary here.
-              const result = await this.mutationExecutor.commit(operations);
+              // The queue owns request identity. A lost acknowledgement may be
+              // retried after a backoff or reconnect, so every retry must send
+              // the exact key assigned before the first transport attempt.
+              this.assertEnvelopeInsideReplayWindow(durableEnvelope);
+              dispatchStarted = true;
+              const result = await this.mutationExecutor.commit(operations, {
+                idempotencyKey: commitIdempotencyKey,
+              });
+              await this.removeDurableCommit(commitIdempotencyKey);
               const lastSyncId: number = result?.lastSyncId ?? 0;
               this.noteAck(lastSyncId);
 
@@ -1301,6 +1744,9 @@ export class TransactionQueue extends EventEmitter {
               }
             } catch (error) {
               const errorMessage = (error as Error).message || '';
+              if (dispatchStarted && this.isDefinitiveRejection(error as Error)) {
+                await this.removeDurableCommit(commitIdempotencyKey);
+              }
               // Surface the raw server rejection for the whole batch so a
               // cascaded failure — for example a foreign-key violation that
               // rolls back a multi-operation transaction — is attributable to a
@@ -1347,6 +1793,9 @@ export class TransactionQueue extends EventEmitter {
               // success — the intended end state already holds — and the
               // transaction is treated as completed.
               if (errorMessage.includes('no rows in result set')) {
+                if (dispatchStarted) {
+                  await this.removeDurableCommit(commitIdempotencyKey);
+                }
                 getContext().logger.info('[TransactionQueue] Graceful handling: entity already deleted', {
                   batchSize: batchOps.length,
                 });
@@ -1382,7 +1831,7 @@ export class TransactionQueue extends EventEmitter {
             if (tx.type === 'update') {
               this.inFlightByModel.delete(key);
               const pending = this.pendingMergeByModel.get(key);
-              if (pending && Object.keys(pending).length > 0) {
+              if (pending && Object.keys(pending.data).length > 0) {
                 // Create a single merged follow-up transaction
                 const followUp: Transaction = {
                   id: this.generateId(),
@@ -1390,7 +1839,7 @@ export class TransactionQueue extends EventEmitter {
                   modelName: tx.modelName,
                   modelId: tx.modelId,
                   modelKey: tx.modelKey ?? normalizeModelKey(tx.modelName),
-                  data: pending,
+                  data: pending.data,
                   previousData: undefined,
                   context: tx.context,
                   status: 'pending',
@@ -1398,6 +1847,7 @@ export class TransactionQueue extends EventEmitter {
                   attempts: 0,
                   priority: 'normal',
                   priorityScore: this.computePriorityScore('update', tx.modelName),
+                  sourceMutationIds: pending.sourceMutationIds,
                 };
                 this.pendingMergeByModel.delete(key);
                 this.store.add(followUp);
@@ -1412,7 +1862,7 @@ export class TransactionQueue extends EventEmitter {
           this.executingCount -= batch.length;
 
           // Process next batch if needed
-          if (this.executionQueue.length > 0) {
+          if (this.executionQueue.length > 0 && batch.length > 0) {
             this.scheduleProcessing(true);
           }
 
@@ -1493,12 +1943,38 @@ export class TransactionQueue extends EventEmitter {
    * already in flight is ignored: the server's `mutation_log` de-duplicates
    * across sessions, and this guard covers a double-enqueue within one session.
    */
-  enqueueCommit(
+  async enqueueCommit(
     clientTxId: string,
     operations: CommitTransaction['operations'],
     options: { causedByTaskId?: string | null; reads?: ReadDependency[] | null } = {},
-  ): void {
-    if (this.commitStore.has(clientTxId)) return;
+  ): Promise<void> {
+    this.assertDurableReplayOpen();
+    const existing = this.commitStore.get(clientTxId);
+    if (existing) {
+      await existing.sealPromise;
+      const existingIntent = stableStringify({
+        operations: existing.operations,
+        causedByTaskId: existing.causedByTaskId ?? null,
+        reads: existing.reads ?? null,
+      });
+      const incomingIntent = stableStringify({
+        operations,
+        causedByTaskId: options.causedByTaskId ?? null,
+        reads: options.reads ?? null,
+      });
+      if (existingIntent !== incomingIntent) {
+        throw new AbloIdempotencyError(
+          'Idempotency key reused with a different atomic commit request',
+          { code: 'idempotency_conflict' },
+        );
+      }
+      if (existing.status === 'pending') void this.processCommitLane();
+      return;
+    }
+    this.emitCommitLifecycle('commit:staging', {
+      clientTxId,
+      operations,
+    });
     const tx: CommitTransaction = {
       id: clientTxId,
       kind: 'commit',
@@ -1508,14 +1984,43 @@ export class TransactionQueue extends EventEmitter {
       status: 'pending',
       createdAt: Date.now(),
       attempts: 0,
+      sealedAt: Date.now(),
+      sequence: this.nextCommitSequence(),
     };
     this.commitStore.set(clientTxId, tx);
+    tx.sealPromise = this.sealDurableCommit({
+      idempotencyKey: tx.id,
+      origin: 'atomic_commit',
+      operations: tx.operations,
+      commitOptions: {
+        causedByTaskId: tx.causedByTaskId ?? null,
+        ...(tx.reads ? { reads: tx.reads } : {}),
+      },
+      createdAt: tx.createdAt,
+      sealedAt: tx.sealedAt,
+      sequence: tx.sequence,
+    }).then((envelope) => {
+      tx.durableEnvelope = envelope;
+      tx.operations = envelope.operations.map((operation) => ({ ...operation }));
+    });
+    try {
+      await tx.sealPromise;
+    } catch (error) {
+      this.commitStore.delete(clientTxId);
+      this.emitCommitLifecycle('commit:seal_failed', { clientTxId });
+      throw error;
+    } finally {
+      tx.sealPromise = undefined;
+    }
     this.commitLane.push(tx);
     // Emit the envelope on its own event so the undo stream can record
     // commit-lane writes as well. This deliberately avoids `transaction:created`,
     // which also feeds the optimistic-echo tracker: commit-lane operations apply
     // nothing optimistically and so have no echo to suppress.
-    this.emit('commit:created', { clientTxId, operations: tx.operations });
+    this.emitCommitLifecycle('commit:created', {
+      clientTxId,
+      operations: tx.operations,
+    });
     void this.processCommitLane();
   }
 
@@ -1527,7 +2032,7 @@ export class TransactionQueue extends EventEmitter {
    * `transaction:failed:<id>` and drops the envelope.
    */
   private async processCommitLane(): Promise<void> {
-    if (this.commitProcessing) return;
+    if (this.commitProcessing || this.durableReplayBlock) return;
     this.commitProcessing = true;
     try {
       while (this.commitLane.length > 0) {
@@ -1539,20 +2044,48 @@ export class TransactionQueue extends EventEmitter {
         }
         tx.status = 'executing';
         tx.attempts += 1;
+        let dispatchStarted = false;
         try {
-          const result = await this.mutationExecutor.commit(tx.operations, {
+          const durableEnvelope =
+            tx.durableEnvelope ??
+            (await this.sealDurableCommit({
+              idempotencyKey: tx.id,
+              origin: 'atomic_commit',
+              operations: tx.operations,
+              sourceMutationIds: tx.sourceMutationIds,
+              commitOptions: {
+                causedByTaskId: tx.causedByTaskId ?? null,
+                ...(tx.reads ? { reads: tx.reads } : {}),
+              },
+              createdAt: tx.createdAt,
+              sealedAt: tx.sealedAt,
+              sequence: tx.sequence,
+            }));
+          tx.durableEnvelope = durableEnvelope;
+          this.assertEnvelopeInsideReplayWindow(durableEnvelope);
+          dispatchStarted = true;
+          const result = await this.mutationExecutor.commit(durableEnvelope.operations, {
             idempotencyKey: tx.id,
-            causedByTaskId: tx.causedByTaskId ?? undefined,
-            ...(tx.reads ? { reads: tx.reads } : {}),
+            causedByTaskId: durableEnvelope.commitOptions.causedByTaskId ?? undefined,
+            ...(durableEnvelope.commitOptions.reads
+              ? { reads: durableEnvelope.commitOptions.reads }
+              : {}),
           });
+          await this.removeDurableCommit(tx.id);
           tx.lastSyncId = result?.lastSyncId ?? 0;
           this.noteAck(tx.lastSyncId);
           tx.status = 'completed';
           this.commitLane.shift();
-          this.emit('transaction:completed', tx);
-          this.emit(`transaction:completed:${tx.id}`, tx);
+          // Guarded: a throwing observer here would land in the catch below,
+          // whose permanent branch shifts the lane a second time and rejects a
+          // commit the server has already durably applied.
+          this.emitCommitLifecycle('transaction:completed', tx);
+          this.emitCommitLifecycle(`transaction:completed:${tx.id}`, tx);
         } catch (err) {
           const error = err instanceof Error ? err : new Error(String(err));
+          if (dispatchStarted && this.isDefinitiveRejection(error)) {
+            await this.removeDurableCommit(tx.id);
+          }
           if (!this.isPermanentError(error)) {
             // Transient: leave it at the head and retry on the next kick
             // (reconnect or the next enqueueCommit) rather than tight-looping
@@ -1576,8 +2109,8 @@ export class TransactionQueue extends EventEmitter {
             attempts: tx.attempts,
             message: error.message,
           });
-          this.emit('transaction:failed', { transaction: tx, error, permanent: true });
-          this.emit(`transaction:failed:${tx.id}`, { error });
+          this.emitCommitLifecycle('transaction:failed', { transaction: tx, error, permanent: true });
+          this.emitCommitLifecycle(`transaction:failed:${tx.id}`, { error });
         }
       }
     } finally {
@@ -1711,6 +2244,16 @@ export class TransactionQueue extends EventEmitter {
     // Default: treat unknown errors as permanent to prevent infinite loops
     // This is the safe default - better to fail fast than retry forever
     return true;
+  }
+
+  /** True only when the server definitively rejected before applying. */
+  private isDefinitiveRejection(error: Error): boolean {
+    if (error instanceof AbloError && error.code) {
+      const spec = errorCodeSpec(error.code);
+      if (spec) return !spec.retryable;
+    }
+    const status = extractStatusCode(error);
+    return status !== undefined && status >= 400 && status < 500 && status !== 429;
   }
 
   /**
@@ -1928,6 +2471,116 @@ export class TransactionQueue extends EventEmitter {
         error: error instanceof Error ? error : String(error),
       });
     }
+  }
+
+  /**
+   * Restore exact sealed requests after the local database is open. Sealed
+   * envelopes replay through the atomic commit lane and are never re-projected
+   * through model/schema state from the new process.
+   */
+  async restoreDurableCommits(): Promise<Set<string>> {
+    if (!this.config.enablePersistence) return new Set();
+
+    const sourceMutationIds = new Set<string>();
+    try {
+      if (!this.commitOutbox) return sourceMutationIds;
+      const rows = await this.commitOutbox.list();
+      const envelopes: DurableCommitEnvelope[] = [];
+      for (const row of rows) {
+        if (
+          typeof row !== 'object' ||
+          row === null ||
+          (row as { type?: unknown }).type !== 'commit_envelope'
+        ) continue;
+        const parsed = durableCommitEnvelopeSchema.safeParse(row);
+        if (parsed.success) {
+          envelopes.push(parsed.data);
+        } else {
+          getContext().logger.warn('A saved local write is unreadable and was held for review.');
+          getContext().observability.captureTransactionFailure({
+            context: 'restore-commit-envelope',
+            error: parsed.error,
+          });
+          throw new AbloValidationError(
+            'A saved commit envelope is unreadable; replay stopped before newer writes were sent.',
+            { code: 'write_options_invalid', cause: parsed.error },
+          );
+        }
+      }
+      envelopes.sort(
+        (a, b) =>
+          (a.sequence ?? a.sealedAt * 1_000) -
+            (b.sequence ?? b.sealedAt * 1_000) ||
+          a.id.localeCompare(b.id),
+      );
+
+      for (const envelope of envelopes) {
+        for (const mutationId of envelope.sourceMutationIds) {
+          sourceMutationIds.add(mutationId);
+        }
+        if (
+          Date.now() - envelope.sealedAt >=
+          TransactionQueue.DURABLE_REPLAY_WINDOW_MS
+        ) {
+          getContext().logger.warn(
+            'A saved local write is too old to retry safely and was held for review.',
+          );
+          getContext().observability.captureTransactionFailure({
+            context: 'quarantine-expired-commit-envelope',
+            error: `Envelope ${envelope.idempotencyKey} is too old to replay safely`,
+          });
+          throw new AbloIdempotencyError(
+            'A saved commit is older than the server idempotency window and cannot be replayed safely.',
+            { code: 'idempotency_conflict' },
+          );
+        }
+        if (
+          this.commitOutboxScope &&
+          (
+            !envelope.scope || // eslint-disable-line @typescript-eslint/prefer-optional-chain -- missing scope must quarantine
+            envelope.scope.organizationId !== this.commitOutboxScope.organizationId ||
+            envelope.scope.participantId !== this.commitOutboxScope.participantId ||
+            envelope.scope.namespace !== this.commitOutboxScope.namespace
+          )
+        ) {
+          getContext().logger.warn(
+            'A saved local write belongs to a different account or server and was held for review.',
+          );
+          continue;
+        }
+        if (this.commitStore.has(envelope.idempotencyKey)) continue;
+        const transaction: CommitTransaction = {
+          id: envelope.idempotencyKey,
+          kind: 'commit',
+          operations: envelope.operations.map((operation) => ({ ...operation })),
+          causedByTaskId: envelope.commitOptions.causedByTaskId ?? null,
+          ...(envelope.commitOptions.reads
+            ? { reads: [...envelope.commitOptions.reads] }
+            : {}),
+          status: 'pending',
+          createdAt: envelope.createdAt,
+          sealedAt: envelope.sealedAt,
+          sequence: envelope.sequence ?? envelope.sealedAt * 1_000,
+          attempts: 0,
+          sourceMutationIds: [...envelope.sourceMutationIds],
+          durableEnvelope: envelope,
+        };
+        this.commitStore.set(transaction.id, transaction);
+        this.commitLane.push(transaction);
+      }
+
+      if (this.commitLane.length > 0) void this.processCommitLane();
+    } catch (error) {
+      getContext().logger.debug('[TransactionQueue] Failed to restore commit outbox', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      getContext().observability.captureTransactionFailure({
+        context: 'restore-commit-envelopes',
+        error: error instanceof Error ? error : String(error),
+      });
+      throw error;
+    }
+    return sourceMutationIds;
   }
 
   /**

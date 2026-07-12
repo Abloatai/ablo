@@ -3,15 +3,15 @@
   "info": {
     "title": "Ablo Sync Engine HTTP API",
     "version": "0.16.1",
-    "description": "The HTTP surface of the Ablo sync engine. Most production traffic flows over WebSocket via `@abloatai/ablo`; this HTTP API is the Vercel-safe transport for environments that cannot hold long-lived sockets, plus the control plane for capabilities and usage.\n\nThe per-model resource routes (`/v1/models/{model}`) are **generated from your own pushed schema** — they are documented here generically over `{model}`, with `tasks` as the running example. Authenticate every request with a `Bearer` API key or scoped token."
+    "description": "The HTTP surface of the Ablo sync engine. Most production traffic flows over WebSocket via `@abloatai/ablo`; this HTTP API is the Vercel-safe transport for environments that cannot hold long-lived sockets, plus the control plane for capabilities and usage.\n\nThe per-model resource routes (`/v1/models/{model}`) are **generated from your own pushed schema** \u2014 they are documented here generically over `{model}`, with `tasks` as the running example. Authenticate every request with a `Bearer` API key or scoped token."
   },
   "servers": [
     {
-      "url": "https://api.abloatai.com",
+      "url": "https://api.abloatai.com/api",
       "description": "Production"
     },
     {
-      "url": "http://localhost:8787",
+      "url": "http://localhost:8787/api",
       "description": "Local development"
     }
   ],
@@ -27,7 +27,7 @@
     },
     {
       "name": "Coordination",
-      "description": "Claims — pessimistic row reservation for human+agent coordination."
+      "description": "Claims \u2014 pessimistic row reservation for human+agent coordination."
     },
     {
       "name": "State",
@@ -48,7 +48,7 @@
           "schema": {
             "type": "string"
           },
-          "description": "The model name from your pushed schema (e.g. `tasks`). The HTTP model API is generated from your own schema — these paths are generic over every model you define."
+          "description": "The model name from your pushed schema (e.g. `tasks`). The HTTP model API is generated from your own schema \u2014 these paths are generic over every model you define."
         }
       ],
       "get": {
@@ -57,7 +57,7 @@
         "tags": [
           "Records"
         ],
-        "description": "A cursor-paginated page of records for a model, scoped to the caller’s organization.",
+        "description": "A cursor-paginated page of records for a model, scoped to the caller\u2019s organization.",
         "parameters": [
           {
             "name": "limit",
@@ -193,7 +193,7 @@
                       "string",
                       "null"
                     ],
-                    "description": "Claim id this write is bound to (held across a slow read→write gap)."
+                    "description": "Claim id this write is bound to (held across a slow read\u2192write gap)."
                   },
                   "idempotencyKey": {
                     "type": "string",
@@ -257,7 +257,7 @@
           "schema": {
             "type": "string"
           },
-          "description": "The model name from your pushed schema (e.g. `tasks`). The HTTP model API is generated from your own schema — these paths are generic over every model you define."
+          "description": "The model name from your pushed schema (e.g. `tasks`). The HTTP model API is generated from your own schema \u2014 these paths are generic over every model you define."
         },
         {
           "name": "id",
@@ -352,7 +352,7 @@
                       "string",
                       "null"
                     ],
-                    "description": "Claim id this write is bound to (held across a slow read→write gap)."
+                    "description": "Claim id this write is bound to (held across a slow read\u2192write gap)."
                   },
                   "idempotencyKey": {
                     "type": "string",
@@ -465,7 +465,7 @@
           "schema": {
             "type": "string"
           },
-          "description": "The model name from your pushed schema (e.g. `tasks`). The HTTP model API is generated from your own schema — these paths are generic over every model you define."
+          "description": "The model name from your pushed schema (e.g. `tasks`). The HTTP model API is generated from your own schema \u2014 these paths are generic over every model you define."
         },
         {
           "name": "id",
@@ -483,7 +483,7 @@
         "tags": [
           "Coordination"
         ],
-        "description": "Reserve a row for one participant. Foreign writers are rejected; contenders join a fair FIFO queue. Hold a claim across a slow read→LLM→write gap.",
+        "description": "Reserve a row for one participant. Foreign writers are rejected; contenders join a fair FIFO queue. Hold a claim across a slow read\u2192LLM\u2192write gap.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -592,7 +592,7 @@
                     "items": {
                       "$ref": "#/components/schemas/ReadDependency"
                     },
-                    "description": "Batch-level read dependencies — \"did anything I looked at change?\" A moved premise fires that entry’s `onStale` over the whole batch."
+                    "description": "Batch-level read dependencies \u2014 \"did anything I looked at change?\" A moved premise fires that entry\u2019s `onStale` over the whole batch."
                   },
                   "clientTxId": {
                     "type": "string"
@@ -624,7 +624,7 @@
             }
           },
           "403": {
-            "description": "Capability denied — body carries `requiredCapability`.",
+            "description": "Capability denied \u2014 body carries `requiredCapability`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -819,14 +819,14 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "API key (`sk_live_…`) or a scoped capability/ephemeral token. The same header carries both — the server discriminates by token shape."
+        "description": "API key (`sk_live_\u2026`) or a scoped capability/ephemeral token. The same header carries both \u2014 the server discriminates by token shape."
       }
     },
     "schemas": {
       "RecordData": {
         "type": "object",
         "additionalProperties": true,
-        "description": "The model’s fields, as defined in your schema. Shape varies per model; system fields (`id`, `createdAt`, `updatedAt`, `organizationId`, `createdBy`) are server-managed."
+        "description": "The model\u2019s fields, as defined in your schema. Shape varies per model; system fields (`id`, `createdAt`, `updatedAt`, `organizationId`, `createdBy`) are server-managed."
       },
       "Record": {
         "type": "object",
@@ -885,7 +885,7 @@
       },
       "CommitOperation": {
         "type": "object",
-        "description": "A single typed mutation. `model` names a model in your schema; `data` is that model’s field shape.",
+        "description": "A single typed mutation. `model` names a model in your schema; `data` is that model\u2019s field shape.",
         "required": [
           "action",
           "model"
@@ -935,7 +935,7 @@
               "string",
               "null"
             ],
-            "description": "Claim id this write is bound to (held across a slow read→write gap)."
+            "description": "Claim id this write is bound to (held across a slow read\u2192write gap)."
           },
           "idempotencyKey": {
             "type": "string",
@@ -1038,7 +1038,7 @@
       },
       "StaleNotification": {
         "type": "object",
-        "description": "Returned when a write was held under `onStale: \"notify\"`. Carries the field’s current value so the actor reconciles and re-commits.",
+        "description": "Returned when a write was held under `onStale: \"notify\"`. Carries the field\u2019s current value so the actor reconciles and re-commits.",
         "properties": {
           "object": {
             "type": "string",

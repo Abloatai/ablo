@@ -113,6 +113,8 @@ export type AbloHttpClient<S extends SchemaRecord> = {
 } & {
   /** Runs one-time setup, such as registering a configured `databaseUrl` data source, before the client is used. It also runs lazily ahead of the first request, so calling it yourself is optional. */
   ready(): Promise<void>;
+  /** Replays every pending durable HTTP write in seal order and waits for settlement. */
+  waitForFlush(): Promise<void>;
   readonly commits: CommitResource;
   dispose(): Promise<void>;
   /** Resolves the bearer credential this client authenticates with, or `null` if none is set. */

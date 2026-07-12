@@ -870,7 +870,7 @@ export class BaseSyncedStore<
         this.updateSyncStatus({ state: 'error', error: error });
 
         // SECURITY: Clear locally cached data when session is invalid
-        this.database.clear().catch(() => {});
+        this.database.clear({ includeWriteJournal: true }).catch(() => {});
         this.objectPool.clear();
 
         return 'session_error';
@@ -1083,21 +1083,20 @@ export class BaseSyncedStore<
 
     this.userContext = context;
 
-    // Propagate identity to the SyncClient. Without this, every mutation
-    // silently drops in the mutation-staging path with a null userId and
-    // organizationId, because those guards early-return rather than throw.
-    // Setting it here, where the store receives the context, keeps identity
-    // in a single place.
-    yield this.syncClient.initialize(
-      context.userId,
-      context.organizationId,
-    );
-
     try {
       this.updateSyncStatus({ state: 'syncing', progress: 0 });
 
-      // Open database
+      // The commit outbox and offline mutation journal live in IndexedDB.
+      // Open it before SyncClient restores either one; reading first used to
+      // make persistence silently look empty on every cold start.
       yield this.database.open(context.userId, context.organizationId);
+
+      // Propagate identity only after storage is ready, then restore sealed
+      // requests before accepting fresh mutations.
+      yield this.syncClient.initialize(
+        context.userId,
+        context.organizationId,
+      );
 
       // Hydrate from IndexedDB (fast, cached data)
       let hasLocalData = false;
@@ -1552,7 +1551,7 @@ export class BaseSyncedStore<
 
       // SECURITY: Clear IndexedDB data on session expiry.
       // When auth is revoked, locally cached data must not persist on disk.
-      this.database.clear().catch((clearErr) => {
+      this.database.clear({ includeWriteJournal: true }).catch((clearErr) => {
         // consumer register: session ended, but cached data may remain on disk
         getContext().logger.error(
           'Your session ended, but some locally cached data could not be cleared from this device.',

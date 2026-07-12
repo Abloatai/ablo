@@ -292,7 +292,7 @@ export type InferRelations<S extends Schema, R extends RelationRecord> =
   string extends keyof R
     ? unknown
     : {
-        readonly [K in keyof R]: R[K] extends RelationDef<infer Type, infer Target, infer _F, infer _O>
+        readonly [K in keyof R]: R[K] extends RelationDef<infer Type, infer Target>
           ? Target extends keyof S['models']
             ? Type extends 'hasMany'
               ? InferModel<S, Target>[]
@@ -302,6 +302,51 @@ export type InferRelations<S extends Schema, R extends RelationRecord> =
             : never
           : never;
       };
+
+// ── Reactive rows ──────────────────────────────────────────────────────────
+
+/**
+ * The row shape a reactive read returns: the model's data fields, base fields,
+ * and schema computed getters — WITHOUT relation accessors and WITHOUT model
+ * methods. Derived from the model definition, exactly like {@link InferModel},
+ * mirroring what `toReactiveSnapshot()` produces at runtime.
+ *
+ * Relations (`hasMany` / `belongsTo`) are store-backed getters that exist only
+ * on the pool's model instances, so a reactive row honestly omits them —
+ * reading `row.layers` is a compile error instead of a silent `undefined`.
+ * Compose relations through a selector or hook instead.
+ *
+ * The same pairing other data layers converged on: Zero's data-only `Row<...>`
+ * with relations added per-query, Prisma's scalar-only model types with
+ * `GetPayload<{ include }>`, mobx-state-tree's `Instance<T>` / `SnapshotOut<T>`.
+ */
+export type InferRow<S extends Schema, ModelName extends keyof S['models']> =
+  S['models'][ModelName] extends ModelDef<infer Shape, RelationRecord, infer C>
+    ? // Same reserved-field guard as InferModel — see the comment there.
+      Omit<z.infer<z.ZodObject<Shape>>, keyof BaseModelFields>
+        & BaseModelFields
+        & InferComputed<C>
+    : never;
+
+/**
+ * The reactive-row companion to {@link Model}. Once your project's
+ * `ablo/register.ts` registers the schema, a single argument is all it takes:
+ *
+ * ```ts
+ * type SlideRow = Row<'slides'>;    // data fields + computeds, no relations
+ * type Slide    = Model<'slides'>;  // the pool's model instance
+ * ```
+ *
+ * Without that registration, or for a second schema, pass the schema
+ * explicitly: `Row<typeof schema, 'slides'>`.
+ */
+export type Row<A, B = never> = [B] extends [never]
+  ? A extends keyof RegisteredSchema['models']
+    ? InferRow<RegisteredSchema, A>
+    : never
+  : A extends Schema
+    ? InferRow<A, B extends keyof A['models'] ? B : never>
+    : never;
 
 /**
  * Infer the return types of computed getters.
@@ -382,6 +427,10 @@ export type UpdateValue<S extends Schema, ModelName extends keyof S['models']> =
 /**
  * The value type for deleting a row. Just the primary key.
  */
+// `ModelName` completes the two-arg signature that mirrors InsertValue /
+// UpsertValue / UpdateValue — apps/sync-server calls `DeleteId<S, Model>`. A
+// delete payload is only the primary key, so the name isn't read in the body.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export interface DeleteId<S extends Schema, ModelName extends keyof S['models']> { id: string }
 
 // ── Factory ───────────────────────────────────────────────────────────────

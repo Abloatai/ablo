@@ -924,7 +924,7 @@
       "surface": "wire",
       "httpStatus": 401,
       "retryable": false,
-      "message": "The bearer JWT's `iss` is not a registered trusted issuer. Register it via POST /v1/trusted-issuers, or check the token's issuer claim.",
+      "message": "The bearer JWT's `iss` is not a registered trusted issuer. Check the token's issuer claim, or register the issuer with your deployment before retrying.",
       "docUrl": "https://docs.abloatai.com/errors#jwt_issuer_untrusted"
     },
     {
@@ -1808,7 +1808,7 @@
       "category": "conflict",
       "surface": "wire",
       "httpStatus": 409,
-      "retryable": true,
+      "retryable": false,
       "message": "The row changed after you read it — the write's `readAt` watermark is older than the current row version. Re-read the row and retry.",
       "docUrl": "https://docs.abloatai.com/errors#stale_context"
     },

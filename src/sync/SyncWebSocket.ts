@@ -17,6 +17,7 @@ import {
 } from '../errors.js';
 import type { MutationOperation } from '../interfaces/index.js';
 import { clientSyncDeltaSchema, type ClientSyncDelta } from '../wire/delta.js';
+import type { BootstrapReason } from '../wire/bootstrapReason.js';
 import type {
   ClaimError,
   ClaimRejection,
@@ -159,7 +160,7 @@ export interface SyncWebSocketOptions {
  */
 export interface BootstrapHint {
   tables?: string[];
-  reason?: 'too_far_behind' | 'too_many_deltas' | 'missing_entities';
+  reason?: BootstrapReason;
   staleTables?: string[];
   totalDeltaCount?: number;
 }

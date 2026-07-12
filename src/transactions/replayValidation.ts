@@ -18,6 +18,10 @@
 import { z } from 'zod';
 import type { Transaction } from './commitPayload.js';
 import { computePriorityScore, normalizeModelKey } from './commitPayload.js';
+import {
+  commitEnvelopeMemberSchema,
+  commitOutboxScopeSchema,
+} from './commitEnvelope.js';
 
 /** The subset of a write's options that is stored with each transaction or queued mutation. */
 const persistedWriteOptionsSchema = z
@@ -53,6 +57,8 @@ export const persistedTransactionSchema = z
     }),
     createdAt: z.number().optional(),
     batchId: z.string().optional(),
+    commitEnvelope: commitEnvelopeMemberSchema.optional(),
+    sourceMutationIds: z.array(z.string().min(1)).optional(),
     writeOptions: persistedWriteOptionsSchema.optional(),
     localOnly: z.boolean().optional(),
   })
@@ -61,7 +67,13 @@ export const persistedTransactionSchema = z
 export type PersistedReplayableTransaction = z.infer<typeof persistedTransactionSchema>;
 
 /** The `type` values of stored rows that belong to other parts of the client and are not replayable transactions. */
-const NON_REPLAYABLE_TYPES = new Set(['queue', 'awaiting_delta']);
+const NON_REPLAYABLE_TYPES = new Set([
+  'queue',
+  'awaiting_delta',
+  'pending_mutation',
+  'commit_envelope',
+  'http_commit_envelope',
+]);
 
 /**
  * Reports whether a stored row is one of the non-transaction kinds, so callers
@@ -101,6 +113,12 @@ export function deserializePersistedTransaction(row: unknown): Transaction | nul
     priority: 'normal',
     priorityScore: computePriorityScore(tx.type, tx.modelName),
     ...(tx.batchId !== undefined ? { batchId: tx.batchId } : {}),
+    ...(tx.commitEnvelope !== undefined
+      ? { commitEnvelope: tx.commitEnvelope }
+      : {}),
+    ...(tx.sourceMutationIds !== undefined
+      ? { sourceMutationIds: tx.sourceMutationIds }
+      : {}),
     ...(tx.writeOptions !== undefined ? { writeOptions: tx.writeOptions } : {}),
     ...(tx.localOnly !== undefined ? { localOnly: tx.localOnly } : {}),
   };
@@ -113,12 +131,50 @@ export function deserializePersistedTransaction(row: unknown): Transaction | nul
  */
 export const persistedMutationSchema = z
   .object({
+    mutationId: z.string().min(1).optional(),
     type: z.enum(['create', 'update', 'delete', 'archive']),
     modelData: z.record(z.string(), z.unknown()),
     modelName: z.string().min(1),
     timestamp: z.string(),
+    capturedChanges: z.record(z.string(), z.unknown()).optional(),
     writeOptions: persistedWriteOptionsSchema.optional(),
   })
   .loose();
 
 export type PersistedQueuedMutation = z.infer<typeof persistedMutationSchema>;
+
+export const PENDING_MUTATION_RECORD_PREFIX = 'pending-mutation:';
+
+/**
+ * Stay one hour inside the server's 24-hour idempotency retention window.
+ * A journaled write older than this can no longer be deduplicated by the
+ * server, so restore holds it for review instead of replaying it.
+ */
+export const PENDING_MUTATION_REPLAY_WINDOW_MS = 23 * 60 * 60 * 1000;
+
+const pendingMutationRecordBaseShape = {
+  id: z.string().startsWith(PENDING_MUTATION_RECORD_PREFIX),
+  type: z.literal('pending_mutation'),
+  mutation: persistedMutationSchema.extend({
+    mutationId: z.string().min(1),
+  }),
+  timestamp: z.number().int().nonnegative(),
+} as const;
+
+/** Scope-less records written by the first aggregate-journal release. */
+export const legacyPendingMutationRecordSchema = z.strictObject({
+  ...pendingMutationRecordBaseShape,
+  storageVersion: z.literal(1),
+});
+
+export const pendingMutationRecordSchema = z.strictObject({
+  ...pendingMutationRecordBaseShape,
+  storageVersion: z.literal(2),
+  scope: commitOutboxScopeSchema,
+});
+
+export type PendingMutationRecord = z.infer<typeof pendingMutationRecordSchema>;
+
+export function pendingMutationRecordId(mutationId: string): string {
+  return `${PENDING_MUTATION_RECORD_PREFIX}${mutationId}`;
+}

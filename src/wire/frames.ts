@@ -19,6 +19,10 @@ import {
   commitOperationSchema as coordinationCommitOperationSchema,
   readDependencySchema,
 } from '../coordination/schema.js';
+import {
+  commitReceiptSchema as commitReceiptV2Schema,
+  commitRequestSchema as commitRequestV2Schema,
+} from '../commit/contract.js';
 import type { OnStaleMode, StaleNotification, ReadDependency } from '../coordination/index.js';
 import type { ErrorCode, RequiredCapability } from '../errors.js';
 
@@ -201,3 +205,40 @@ export interface MutationResultMessage {
     };
   };
 }
+
+// ── Commit contract v2 ───────────────────────────────────────────────────
+
+/**
+ * A transport frame carrying the Zod-first v2 commit request. The payload's
+ * `schemaVersion` distinguishes it from the legacy `commit` payload during the
+ * migration window; the transport does not duplicate the commit contract.
+ */
+export const commitRequestMessageSchema = z.strictObject({
+  type: z.literal('commit'),
+  payload: commitRequestV2Schema,
+});
+export type CommitRequestMessage = z.output<typeof commitRequestMessageSchema>;
+
+/** A transport frame carrying one terminal, status-discriminated v2 receipt. */
+export const commitResultMessageSchema = z.strictObject({
+  type: z.literal('commit_result'),
+  payload: commitReceiptV2Schema,
+});
+export type CommitResultMessage = z.output<typeof commitResultMessageSchema>;
+
+// ── Explicit v1 compatibility names ─────────────────────────────────────
+
+/** Explicit compatibility name for the v1 uppercase operation schema. */
+export const legacyCommitOperationSchema = commitOperationSchema;
+
+/** Explicit compatibility name for the v1 `clientTxId` payload schema. */
+export const legacyCommitPayloadSchema = commitPayloadSchema;
+
+/** Explicit compatibility alias for the v1 uppercase operation shape. */
+export type LegacyCommitOperation = CommitOperation;
+
+/** Explicit compatibility alias for the v1 `clientTxId` commit frame. */
+export type LegacyCommitMessage = CommitMessage;
+
+/** Explicit compatibility alias for the v1 boolean-style mutation receipt. */
+export type LegacyMutationResultMessage = MutationResultMessage;
