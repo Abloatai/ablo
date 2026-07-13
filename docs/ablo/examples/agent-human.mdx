@@ -31,19 +31,23 @@ const schema = defineSchema({
   }),
 });
 
-const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+  transport: 'http',
+});
 
 export async function markDone(taskId: string) {
   await ablo.ready();
 
   // Acquire the claim; anyone editing the same task queues behind us.
-  await using claim = await ablo.tasks.claim({ id: taskId, action: 'update' });
-  if (!claim.data) return { status: 'not_found' };
+  await using claim = await ablo.tasks.claim({ id: taskId });
   if (claim.data.status === 'done') return { status: 'noop' };
 
   const updated = await ablo.tasks.update({
     id: taskId,
     data: { status: 'done' },
+    claim,
     wait: 'confirmed',
   });
 
@@ -51,9 +55,6 @@ export async function markDone(taskId: string) {
   // claim auto-releases as this function returns
 }
 ```
-
-Advanced schema-less workers can use the protocol client
-(`Ablo({ apiKey }).commits.create(...)`), but that is not the first integration path.
 
 ## UI
 

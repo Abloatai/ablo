@@ -322,6 +322,9 @@ export interface MutationOptions {
    * checks that none of them moved since their `readAt` and applies the entry's
    * `onStale` behavior to the whole batch. This is distinct from the per-operation
    * `readAt`, which guards only the row being written.
+   *
+   * See `packages/sync-engine/docs/concurrency-convention.md` (§3 the two
+   * footprints, §4 the read-set) for the governing convention.
    */
   reads?: ReadDependency[] | null;
 }

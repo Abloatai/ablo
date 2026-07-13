@@ -42,7 +42,7 @@ export { postQuery, type PostQueryOptions } from '../query/client.js';
 // Computes a dependency-safe ordering for a set of models by walking their
 // foreign-key relationships, so writes commit parents before children. Used by
 // schema-aware test fixtures and scaffolding tools.
-export { computeFKDepthPriority, type InternalAbloOptions } from '../client/Ablo.js';
+export { computeFKDepthPriority } from '../client/Ablo.js';
 
 // ── Provider-facing dependency-injection types ──
 // The interfaces you implement to plug your own services into the provider

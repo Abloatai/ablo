@@ -68,7 +68,7 @@ import {
   type DurableCommitOperationInput,
   type CommitOutboxScope,
 } from './commitEnvelope.js';
-import type { CommitOutboxStore } from './commitOutboxStore.js';
+import type { DurableWriteStore } from './durableWriteStore.js';
 import { stableStringify } from '../utils/json.js';
 import {
   applyOptimisticCreate,
@@ -220,7 +220,7 @@ export class TransactionQueue extends EventEmitter {
   private lastCommitSequence = 0;
   private durableReplayBlock: AbloIdempotencyError | null = null;
   /** Browser-backed strict outbox; absent for standalone/in-memory consumers. */
-  private commitOutbox: CommitOutboxStore | null = null;
+  private commitOutbox: DurableWriteStore | null = null;
   private commitOutboxScope: CommitOutboxScope | null = null;
 
   private nextCommitSequence(): number {
@@ -522,7 +522,7 @@ export class TransactionQueue extends EventEmitter {
   }
 
   /** Bind the strict local outbox used before any mutation reaches the wire. */
-  setCommitOutbox(outbox: CommitOutboxStore): void {
+  setCommitOutbox(outbox: DurableWriteStore): void {
     this.commitOutbox = outbox;
   }
 
@@ -585,7 +585,7 @@ export class TransactionQueue extends EventEmitter {
         );
       } catch (cause) {
         if (cause instanceof AbloError) throw cause;
-        throw new AbloConnectionError('Could not seal the commit outbox before dispatch', {
+        throw new AbloConnectionError('Could not persist the durable write before dispatch', {
           code: 'db_not_opened',
           cause,
         });
@@ -605,7 +605,7 @@ export class TransactionQueue extends EventEmitter {
     try {
       await this.commitOutbox.remove(commitEnvelopeRecordId(idempotencyKey));
     } catch (error) {
-      getContext().logger.debug('[TransactionQueue] Commit outbox cleanup deferred', {
+      getContext().logger.debug('[TransactionQueue] Durable-write cleanup deferred', {
         idempotencyKey,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -2571,7 +2571,7 @@ export class TransactionQueue extends EventEmitter {
 
       if (this.commitLane.length > 0) void this.processCommitLane();
     } catch (error) {
-      getContext().logger.debug('[TransactionQueue] Failed to restore commit outbox', {
+      getContext().logger.debug('[TransactionQueue] Failed to restore durable writes', {
         error: error instanceof Error ? error.message : String(error),
       });
       getContext().observability.captureTransactionFailure({

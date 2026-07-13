@@ -6,37 +6,39 @@
  * coupling TransactionQueue to the browser database/cache implementation.
  */
 
-import type { Database } from '../Database.js';
-import type { DurableCommitEnvelope } from './commitEnvelope.js';
-import type { DurableHttpCommitEnvelope } from './httpCommitEnvelope.js';
+import type {
+  DurableWriteStore,
+  PendingWrite,
+} from './durableWriteStore.js';
 
-export type CommitOutboxRecord =
-  | DurableCommitEnvelope
-  | DurableHttpCommitEnvelope;
+/** @deprecated Use {@link PendingWrite}. */
+export type CommitOutboxRecord = PendingWrite;
 
-export interface CommitOutboxStore {
-  /**
-   * Atomically reserve an envelope and consume the staged records it owns.
-   * Implementations must be scoped to one logical participant + server plane,
-   * reject same-id/different-request seals, and let only one envelope claim a
-   * staged record.
-   */
-  seal(
-    envelope: CommitOutboxRecord,
+/** @deprecated Use {@link DurableWriteStore}. */
+export type CommitOutboxStore = DurableWriteStore;
+
+/**
+ * The exact subset of the browser `Database` that {@link DatabaseCommitOutboxStore}
+ * drives. Typing the adapter to this narrow port instead of importing the
+ * concrete `Database` class keeps the outbox store off the
+ * `Database → DatabaseManager → ModelRegistry → BaseSyncedStore` import cycle;
+ * the real `Database` still satisfies it structurally, so callers are unchanged.
+ */
+export interface CommitOutboxDatabase {
+  sealTransactionRecord(
+    record: PendingWrite,
     consumedRecordIds: readonly string[],
-  ): Promise<void>;
-  /** Load unacknowledged records. Implementations may return untrusted data. */
-  list(): Promise<readonly unknown[]>;
-  /** Remove one definitively settled envelope. */
-  remove(envelopeRecordId: string): Promise<void>;
+  ): Promise<unknown>;
+  getPersistedTransactions(): Promise<readonly unknown[]>;
+  removeTransaction(id: string): Promise<void>;
 }
 
 /** Strict IndexedDB adapter backed by Database's `__transactions` store. */
-export class DatabaseCommitOutboxStore implements CommitOutboxStore {
-  constructor(private readonly database: Database) {}
+export class DatabaseCommitOutboxStore implements DurableWriteStore {
+  constructor(private readonly database: CommitOutboxDatabase) {}
 
   async seal(
-    envelope: CommitOutboxRecord,
+    envelope: PendingWrite,
     consumedRecordIds: readonly string[],
   ): Promise<void> {
     // This adapter deliberately has no duck-typed fallback. Reporting a

@@ -206,10 +206,10 @@ export class AbloValidationError extends AbloError {
 
 /**
  * An update or delete addressed a row that does not exist, or lies outside the
- * caller's organization (HTTP 404). Such targets are reported on
- * {@link CommitReceipt.missingIds}, and the typed resource methods raise this
- * error rather than returning a successful receipt for a write that quietly
- * matched zero rows. The absent ids are carried on {@link missingIds}.
+ * caller's organization (HTTP 404). Raw commit responses may report those
+ * targets as `missingIds`; typed model methods raise this error instead of
+ * returning a successful result for a write that quietly matched zero rows.
+ * The absent ids are carried on {@link missingIds}.
  */
 export class AbloNotFoundError extends AbloError {
   override readonly type = 'AbloNotFoundError' as const;
@@ -488,43 +488,6 @@ export interface RequiredCapability {
 }
 
 /**
- * The receipt returned for every commit, whether it succeeded or was rejected,
- * and regardless of how it was sent — the WebSocket `mutation_result` payload,
- * the HTTP `/v1/commits` response body, and an agent job's result all use this
- * one shape. It is a correlation receipt, carrying the ids and outcome needed to
- * reconcile a commit rather than a cryptographic proof.
- */
-export interface CommitReceipt {
-  readonly object: 'commit_receipt';
-  /** Client-issued idempotency handle. Echoed verbatim. */
-  readonly clientTxId: string;
-  /** Server-issued opaque commit id — typically `String(lastSyncId)`. */
-  readonly serverTxId: string;
-  /** A convenience boolean, equal to `status === 'confirmed'`. */
-  readonly success: boolean;
-  /** `'confirmed'` on apply, `'rejected'` on any failure. */
-  readonly status: 'confirmed' | 'rejected';
-  /** Last syncId visible after this commit (or high-water mark on
-   *  rejection). */
-  readonly lastSyncId?: number;
-  /** Number of operations metered. Reported on both success and
-   *  rejection so quota systems see attempted work. */
-  readonly ops?: number;
-  /** Ids of update or delete targets that matched no row. Present and non-empty
-   *  only when a write missed; the typed resource methods raise
-   *  {@link AbloNotFoundError} from it. */
-  readonly missingIds?: readonly string[];
-  /** Present on rejection. When set, `requiredCapability` carries the structured
-   *  hint describing what would let the request succeed on retry. */
-  readonly error?: {
-    readonly code: string;
-    readonly message: string;
-    readonly field?: string;
-    readonly requiredCapability?: RequiredCapability;
-  };
-}
-
-/**
  * A scoped credential was denied, either because the key is unknown, revoked, or
  * expired (`capability_invalid`), or because the connection's scope does not
  * cover the attempted action (`capability_scope_denied`). For restricted (`rk_`)
@@ -680,7 +643,7 @@ const ErrorFieldSchema = z
 const ErrorBodyShapeSchema = z
   .object({
     /** The `error` field may be a flat code string, as some endpoints return,
-     *  or a nested error object, as a {@link CommitReceipt} carries. */
+     *  or a nested error object, as commit endpoints return on rejection. */
     error: ErrorFieldSchema,
     code: OptionalWireStringSchema,
     reason: OptionalWireStringSchema,

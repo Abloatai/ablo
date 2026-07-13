@@ -107,22 +107,45 @@ export class BootstrapFetcher {
    * means the app's schema and the deployed schema have diverged — reads/writes
    * relying on undeployed changes will later fail with an opaque DB constraint
    * error. Warn once, actionably; never throws or blocks the bootstrap.
+   *
+   * The message names the SERVER it connected to, and spans all three real
+   * causes rather than assuming "you forgot to push". Drift most often means the
+   * schema was pushed to a different server, project, or environment than this
+   * client points at (a bare `ablo push` targets the hosted default; a local app
+   * usually reads a local server) — so the first, load-bearing pointer is `ablo
+   * status`, which names the exact org/project/environment the key resolves to
+   * and the deployed hash, turning "which of these is it?" into one glance. The
+   * older "Run `ablo push`" copy sent everyone down one path and confused the
+   * common wrong-target and version-skew cases.
    */
   private warnOnSchemaDrift(serverHash: string | undefined): void {
     if (this.schemaDriftWarned || !serverHash) return;
     const clientHash = getContext().config.expectedSchemaHash;
     if (!clientHash || clientHash === serverHash) return;
     this.schemaDriftWarned = true;
+    const org = this.options.organizationId;
+    const where = org ? `${this.baseUrl} (org ${org})` : this.baseUrl;
     // Self-brand the message ("Ablo:") rather than rely on the default logger's
     // `[Ablo]` namespace — consumers wiring their own logger (pino, etc.) lose
     // that prefix, and a drift warning that reads like the app's own log is
     // worse than none. The brand tells them at a glance who is talking.
     getContext().logger.warn(
-      `Ablo: Schema drift detected — this app was built against schema ${clientHash}, ` +
-        `but the deployed schema is ${serverHash}. Operations that depend on schema ` +
-        `changes not yet deployed will fail later with an opaque database error. Run ` +
-        `\`ablo push\` to deploy your schema (or update this app to match the deployed one).`,
-      { clientSchemaHash: clientHash, serverSchemaHash: serverHash },
+      `Ablo: Schema drift — the schema this client was built with (${clientHash}) is not the ` +
+        `one active on the server it connected to (${serverHash} at ${where}). Until they match, ` +
+        `operations that depend on the difference will fail later with an opaque database error. ` +
+        `This is usually one of three things. The schema may have been pushed to a different ` +
+        `server, project, or environment than this client points at — run \`ablo status\` to see ` +
+        `the exact org, project, and environment your key resolves to, alongside the deployed ` +
+        `hash, and confirm they match here. Your local schema may simply not be pushed to this ` +
+        `server yet — run \`ablo push\` against it. Or this client and the server may have been ` +
+        `built with different Ablo versions, which can hash an identical schema differently — ` +
+        `align the versions. This check is advisory and never blocks the connection.`,
+      {
+        clientSchemaHash: clientHash,
+        serverSchemaHash: serverHash,
+        serverUrl: this.baseUrl,
+        ...(org ? { organizationId: org } : {}),
+      },
     );
   }
 

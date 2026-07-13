@@ -29,10 +29,6 @@ export type { BootstrapReason } from './bootstrapReason.js';
 export {
   commitOperationSchema,
   commitPayloadSchema,
-  commitRequestMessageSchema,
-  commitResultMessageSchema,
-  legacyCommitOperationSchema,
-  legacyCommitPayloadSchema,
 } from './frames.js';
 
 // Protocol versioning: the single integer the client and server compare to
@@ -41,20 +37,21 @@ export {
 export {
   PROTOCOL_VERSION,
   MIN_SUPPORTED_PROTOCOL_VERSION,
+  DEFAULT_PROTOCOL_VERSION,
+  SUPPORTED_PROTOCOL_VERSIONS,
   WS_CLOSE_PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
   protocolVersionProblem,
+  resolveProtocolVersion,
+} from './protocolVersion.js';
+export type {
+  SupportedProtocolVersion,
+  ProtocolVersionProblem,
 } from './protocolVersion.js';
 export type {
   CommitOperation,
-  MutationMessage,
   CommitMessage,
   MutationResultMessage,
-  CommitRequestMessage,
-  CommitResultMessage,
-  LegacyCommitOperation,
-  LegacyCommitMessage,
-  LegacyMutationResultMessage,
 } from './frames.js';
 
 // The read-path delta contract: the shape the server broadcasts to clients as the

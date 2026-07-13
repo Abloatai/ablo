@@ -631,9 +631,8 @@ guarantee can't drift): read the freshest row + its watermark → run your updat
 comes from the watermark, **not** from participant identity — so it's immune to
 the shared-credential clobber footgun and needs no `claim` and no per-agent `rk_`.
 
-Nothing about claims, identity, or conflict codes surfaces. The call either
-returns the reconciled row (a `CommitReceipt` on the HTTP client; the row on the
-WebSocket client) or, at the extreme, throws **one** error:
+Nothing about claims, identity, or conflict codes surfaces. On both transports,
+the call returns the reconciled row or, at the extreme, throws **one** error:
 
 ```ts
 import { AbloContentionError } from '@abloatai/ablo';

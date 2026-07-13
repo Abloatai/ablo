@@ -14,6 +14,15 @@
 
 import type { Schema } from '../schema/schema.js';
 import type { Transaction } from './Transaction.js';
+import type { ResolveSchema } from '../types/global.js';
+
+/**
+ * `ResolveSchema` narrowed to satisfy the `Schema` bound — mirrors
+ * {@link Ablo.RegisteredSchema}. When nothing is registered, `ResolveSchema`
+ * is a loose `{ models }` shape that doesn't extend `Schema`, so we fall back
+ * to `Schema` to keep the mutator tree typed rather than collapsing.
+ */
+type RegisteredSchema = ResolveSchema extends Schema ? ResolveSchema : Schema;
 
 /**
  * The signature of a single custom mutator. The engine supplies `tx`; you control
@@ -45,6 +54,23 @@ export type MutatorDefs<S extends Schema> = {
 export function defineMutators<
   S extends Schema,
   const M extends MutatorDefs<S>,
->(_schema: S, mutators: M): M {
-  return mutators;
+>(_schema: S, mutators: M): M;
+/**
+ * Register-anchored overload: omit the schema value and the tree is typed
+ * against `ResolveSchema` (this app's registered schema). Shared product code
+ * used across apps that bind different schemas should use this form — it moves
+ * with each app's `Register` instead of pinning one concrete schema, so the
+ * mutator tree stays assignable at every consumer (which reads the same
+ * `Register`). See docs/plans/per-product-schema-projections.md.
+ */
+export function defineMutators<const M extends MutatorDefs<RegisteredSchema>>(
+  mutators: M,
+): M;
+export function defineMutators(
+  schemaOrMutators: Schema | MutatorDefs<Schema>,
+  maybeMutators?: MutatorDefs<Schema>,
+): MutatorDefs<Schema> {
+  // The schema argument is a type anchor only — never read at runtime. With one
+  // argument the mutator tree is in the first slot; with two it's in the second.
+  return (maybeMutators ?? schemaOrMutators) as MutatorDefs<Schema>;
 }

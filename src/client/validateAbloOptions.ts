@@ -50,9 +50,12 @@ export function validateAbloOptions(input: ValidateAbloOptionsInput): AbloError 
     );
   }
 
-  // Schema is optional for the model-first API:
-  //   Ablo({ apiKey }).model('clauses').retrieve(...)
-  // Passing a schema only enables typed model sugar (`ablo.weatherReports.update(...)`).
+  if (!options.schema?.models) {
+    return new AbloValidationError(
+      'Ablo: `schema` is required. Define it once and access models as `ablo.<model>`.',
+      { code: 'invalid_options', param: 'schema' },
+    );
+  }
 
   if (
     !configuredApiKey &&

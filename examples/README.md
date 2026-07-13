@@ -21,13 +21,14 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 Then:
 
 - create with `ablo.weatherReports.create`
-- read with `ablo.weatherReports.load`
-- mark long-running AI work with `ablo.weatherReports.edit`
+- read with `ablo.weatherReports.retrieve` or `ablo.weatherReports.list`
+- coordinate long-running work with `ablo.weatherReports.claim`
 - write with `ablo.weatherReports.update`
-- wait for confirmation when the write must be durable before continuing
+- dispose the client when the worker finishes
 
-Use schema-less resources and `commits.create` only for advanced runtimes that
-intentionally cannot import the app schema.
+Import the same schema in every runtime. Use `commits.create` only when several
+typed row operations must land atomically; ordinary writes stay on
+`ablo.<model>.create/update/delete`.
 
 ## Running
 

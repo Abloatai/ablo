@@ -1,7 +1,8 @@
 /**
  * The option types for the {@link Ablo} client: the public {@link AbloOptions}
- * bag callers pass, and the fuller {@link InternalAbloOptions} construction
- * surface. This module holds only types and has no runtime imports.
+ * bag callers pass, and the fuller monorepo-only {@link InternalAbloOptions}
+ * construction surface exposed through `@abloatai/ablo/core`.
+ * This module holds only types and has no runtime imports.
  */
 
 import type { Schema, SchemaRecord } from '../schema/schema.js';
@@ -15,7 +16,10 @@ import type {
   OnlineStatusProvider,
 } from '../interfaces/index.js';
 import type { AbloPersistence } from './persistence.js';
-import type { CommitOutboxStore } from '../transactions/commitOutboxStore.js';
+import type {
+  DurableWriteStore,
+  DurableWritesConfig,
+} from '../transactions/durableWriteStore.js';
 import type { CommitOutboxScope } from '../transactions/commitEnvelope.js';
 
 // ── Options ───────────────────────────────────────────────────────────────
@@ -129,17 +133,40 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
   persistence?: AbloPersistence;
 
   /**
-   * Durable commit-envelope storage for server-side agents and workers.
-   * The stateful browser client uses its strict IndexedDB transaction store;
-   * the stateless HTTP client has no implicit filesystem and therefore needs a
-   * workflow-, SQLite-, or filesystem-backed implementation to survive a
-   * process restart. One store may serve several actors because every record
-   * is checked against its authenticated scope before replay.
+   * Makes `create`, `update`, and `delete` survive process restarts and
+   * ambiguous network responses. Server-side agents and workers inject a
+   * workflow-, SQLite-, or filesystem-backed store; authenticated identity is
+   * used to fence replay to the actor that originally made the write.
+   *
+   * Most clients leave this unset and use Ablo's default in-memory cache.
+   * `durableWrites` is independent of that cache: it is the optional outbound
+   * write journal for workers that must recover automatically after a crash.
+   * Browsers only use IndexedDB when `persistence: 'indexeddb'` is explicitly
+   * enabled for offline/reload behavior.
+   *
+   * @example
+   * ```ts
+   * Ablo({
+   *   schema,
+   *   apiKey,
+   *   durableWrites: { store, namespace: 'agent-worker' },
+   * })
+   * ```
    */
-  commitOutbox?: CommitOutboxStore;
+  durableWrites?: DurableWritesConfig;
 
   /**
-   * Stable actor/server scope for an injected HTTP {@link commitOutbox}.
+   * @deprecated Use `durableWrites: { store, namespace }`.
+   * Retained as a compatibility alias through the next major release.
+   */
+  commitOutbox?: DurableWriteStore;
+
+  /**
+   * @deprecated Actor identity is resolved from authentication. Use
+   * `durableWrites.namespace` only when shared storage needs separate workflow
+   * or deployment lanes.
+   *
+   * Stable actor/server scope for an injected HTTP `commitOutbox`.
    * Omit it to resolve `organizationId` and `participantId` from the authenticated
    * `/auth/identity` endpoint. Supplying it avoids that one setup request in
    * trusted worker environments; `namespace` distinguishes deployments or
@@ -157,8 +184,7 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * {@link AbloHttpClient}, so stateful-only capabilities such as `get`, `getAll`,
    * and `onChange` become compile errors instead of runtime gaps.
    *
-   * Note: session minting through `sessions.create` runs on the default WebSocket
-   * client, not the HTTP client.
+   * Session minting through `sessions.create` is available on both transports.
    *
    * @default 'websocket'
    */
@@ -282,9 +308,9 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
   /**
    * TypeScript schema defined with `defineSchema()`.
    *
-   * The root `Ablo(...)` client is schema-first so consumers get typed
-   * model clients such as `ablo.weatherReports.update(...)`. Omit `schema`
-   * only for the advanced Model / Claim / Commit client.
+   * Required on every public `Ablo(...)` construction. It produces typed model
+   * clients such as `ablo.weatherReports.update(...)`; schema-agnostic routing
+   * exists only inside the private HTTP transport.
    */
   schema: Schema<S>;
 
@@ -355,10 +381,13 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    */
   persistence?: AbloPersistence;
 
-  /** Internal mirror of {@link AbloOptions.commitOutbox}. */
-  commitOutbox?: CommitOutboxStore;
+  /** Internal mirror of {@link AbloOptions.durableWrites}. */
+  durableWrites?: DurableWritesConfig;
 
-  /** Internal mirror of {@link AbloOptions.commitOutboxScope}. */
+  /** @deprecated Internal mirror of {@link AbloOptions.commitOutbox}. */
+  commitOutbox?: DurableWriteStore;
+
+  /** @deprecated Internal mirror of {@link AbloOptions.commitOutboxScope}. */
   commitOutboxScope?: CommitOutboxScope;
 
   /** @deprecated Use `persistence: 'indexeddb'` for durable browser storage. */

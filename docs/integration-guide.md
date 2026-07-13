@@ -492,6 +492,7 @@ Keep agent writes on the same schema client surface as the app.
 | `/testing`                                | Test harnesses and deterministic mocks.                           |
 | `Data Source`                             | Keep your app database canonical.                                 |
 | `persistence: 'indexeddb'`                | Durable browser cache that survives reloads, for apps that need it. |
+| `durableWrites: { store, namespace? }`     | Recover unacknowledged worker writes after a process restart.      |
 | `claim` / `claim.state` / `claim.queue`          | Show active work and coordinate before a write.                   |
 | `snapshot` + `readAt`                     | Reject writes based on stale state.                               |
 | `mutable`, `readOnly`, `field`, `indexed` | Advanced schema and read tuning.                                  |

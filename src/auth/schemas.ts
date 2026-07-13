@@ -31,6 +31,13 @@ export const IdentityResolveResponseSchema = z
     participantKind: AuthParticipantKindSchema,
     participantId: z.string().min(1),
     accountScope: z.string().min(1),
+    // The rest of the plane this credential resolves to. `nullish` (optional +
+    // nullable) so a server too old to send them still parses, and a human
+    // session — which carries no such scope — validates with them absent.
+    // `projectId` equals the org id for the org-default project.
+    projectId: z.string().min(1).nullish(),
+    environment: z.enum(['sandbox', 'production']).nullish(),
+    sandboxId: z.string().min(1).nullish(),
     syncGroups: z.array(z.string()),
     userMeta: z.record(z.string(), z.unknown()),
   })

@@ -61,7 +61,13 @@
 import { tool } from 'ai';
 import type { z } from 'zod';
 import { AbloClaimedError, AbloNotFoundError } from '../errors.js';
-import type { ModelOperations } from '../client/createModelProxy.js';
+import type {
+  ClaimParams,
+  ModelRetrieveParams,
+  ModelUpdateParams,
+} from '../client/createModelProxy.js';
+import type { ModelUpdater, ContentionOptions } from '../client/functionalUpdate.js';
+import type { HeldClaim } from '../types/streams.js';
 
 export type CoordinationStrategy = 'merge' | 'claim' | 'queue';
 
@@ -108,11 +114,26 @@ export interface CoordinatedToolOptions<TInput, T> {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The small model port this helper needs. Both typed transports implement this
+ * exact contract; local-cache methods, wire receipts, and transport lifecycle
+ * deliberately stay out of an AI tool's dependency surface.
+ */
+export interface CoordinatedModel<T> {
+  retrieve(params: ModelRetrieveParams): Promise<T | undefined>;
+  update(params: ModelUpdateParams<T>): Promise<T>;
+  update(
+    id: string,
+    updater: ModelUpdater<T>,
+    options?: ContentionOptions,
+  ): Promise<T | undefined>;
+  claim(params: ClaimParams<T>): Promise<HeldClaim<T>>;
+}
+
 export function coordinatedTool<
   TInput,
   T = Record<string, unknown>,
-  CreateInput = Partial<T>,
->(model: ModelOperations<T, CreateInput>, options: CoordinatedToolOptions<TInput, T>) {
+>(model: CoordinatedModel<T>, options: CoordinatedToolOptions<TInput, T>) {
   const strategy = options.strategy ?? 'merge';
 
   return tool<TInput, CoordinatedWriteResult<T>>({

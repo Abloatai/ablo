@@ -19,8 +19,7 @@
  *   await sync.reports.delete({ id: reportId });
  */
 
-import type { Schema, SchemaRecord, InferModel, InferCreate, InferRow, InferModelNames } from '../schema/schema.js';
-import type { ModelDef } from '../schema/model.js';
+import type { Schema, SchemaRecord, InferModel, InferCreate, InferRow } from '../schema/schema.js';
 import type {
   SyncEngineConfig,
   MutationExecutor,
@@ -29,7 +28,7 @@ import {
   durableCommitOperationSchema,
   type DurableCommitOperation,
 } from '../transactions/commitEnvelope.js';
-import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, AbloNotFoundError, translateHttpError, toAbloError, claimedError } from '../errors.js';
+import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, toAbloError, claimedError } from '../errors.js';
 import { descriptionFromMeta } from '../coordination/schema.js';
 // `ModelTarget` (the model/id locator) and `ModelClaim` (the resolved claim
 // view) are defined once in `../coordination/schema`, derived from a single zod
@@ -53,7 +52,6 @@ import type { SyncWebSocket } from '../sync/SyncWebSocket.js';
 import { type RefreshScheduler } from '../auth/index.js';
 import { mintSession } from './sessionMint.js';
 import type { MintSessionContext } from './sessionMint.js';
-import type { SyncGroupInput } from '../schema/roles.js';
 import { createAuthCredentialSource } from '../auth/credentialSource.js';
 import { createInternalComponents } from './createInternalComponents.js';
 import { resolveParticipantIdentity } from './identity.js';
@@ -63,8 +61,6 @@ import { createPresenceStream } from '../sync/createPresenceStream.js';
 import { createClaimStream } from '../sync/createClaimStream.js';
 import { awaitClaimGrant } from '../sync/awaitClaimGrant.js';
 import { createSnapshot } from '../sync/createSnapshot.js';
-import { reconcileFunctionalUpdate } from './functionalUpdate.js';
-import type { ModelUpdater, ContentionOptions } from './functionalUpdate.js';
 import { createParticipantManager } from '../sync/participants.js';
 import type {
   ClaimWaitOptions,
@@ -72,13 +68,7 @@ import type {
   Snapshot,
 } from '../types/streams.js';
 import type { Claim } from '../types/streams.js';
-import {
-  createProtocolClient,
-  type AbloApi,
-  type AbloApiClientOptions,
-  type AbloApiClaims,
-} from './ApiClient.js';
-// Value import is cycle-safe: httpClient.js and ApiClient.js take the client
+// Value import is cycle-safe: httpClient.js and httpTransport.js take the client
 // types from the `options`/`resourceTypes` leaves, never from this module.
 import {
   createAbloHttpClient,
@@ -123,10 +113,6 @@ import type {
   CreateAgentClientParams,
   CreateAgentSessionParams,
   CreateSessionParams,
-  ModelClient,
-  ModelMutationOptions,
-  ModelRead,
-  ModelReadOptions,
 } from './resourceTypes.js';
 import { deriveConfigFromSchema } from './schemaConfig.js';
 import { registerModelsFromSchema } from './modelRegistration.js';
@@ -154,7 +140,6 @@ export type {
   ModelOperations,
   ModelOperationAction,
   CommitWait,
-  ModelRead,
   IfClaimedPolicy,
   ClaimedOptions,
   ClaimWaitOptions,
@@ -167,7 +152,6 @@ export type {
   ClaimResource,
   ModelMutationOptions,
   HttpClaimApi,
-  ModelClient,
   SessionOperation,
   CreateUserSessionParams,
   CreateAgentSessionParams,
@@ -458,13 +442,6 @@ export type Ablo<S extends SchemaRecord> = {
   readonly commits: CommitResource;
 
   /**
-   * Canonical untyped model API. This is the portable API shape that maps
-   * cleanly to HTTP/Python/Ruby/Go clients. Typed `ablo.<model>` properties
-   * are schema-powered sugar over the same model write/read path.
-   */
-  model<T = Record<string, unknown>>(name: string): ModelClient<T>;
-
-  /**
    * Capture a context-staleness watermark over a set of entities.
    * Returns a flat snapshot with `stamp` (thread into writes as
    * `readAt`), `signal` (aborts on any captured-entity delta), and
@@ -561,17 +538,9 @@ export function Ablo<const S extends SchemaRecord>(
 export function Ablo<const S extends SchemaRecord>(
   options: AbloOptions<S>,
 ): Ablo<S>;
-export function Ablo(
-  options: AbloApiClientOptions,
-): AbloApi;
 export function Ablo<const S extends SchemaRecord>(
-  options: AbloOptions<S> | AbloApiClientOptions,
-): Ablo<S> | AbloApi | AbloHttpClient<S> {
-  if (options.schema == null) {
-    // The protocol client IS the stateless HTTP plane (string-keyed models),
-    // so `transport: 'http'` needs no special-casing here.
-    return createProtocolClient(options);
-  }
+  options: AbloOptions<S>,
+): Ablo<S> | AbloHttpClient<S> {
   if (options.transport === 'http') {
     return createAbloHttpClient(options as AbloHttpClientOptions<S>);
   }
@@ -1045,12 +1014,6 @@ export function Ablo<const S extends SchemaRecord>(
 	    }
 	  }
 
-	  const fetchImpl = options.fetch ?? globalThis.fetch;
-
-	  function authHeaders(): Record<string, string> {
-	    return authCredentials.withAuthHeaders({ 'Content-Type': 'application/json' });
-	  }
-
 	  function createClientTxId(idempotencyKey?: string | null): string {
 	    if (idempotencyKey && idempotencyKey.length > 0) return idempotencyKey;
 	    return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -1058,46 +1021,15 @@ export function Ablo<const S extends SchemaRecord>(
 	      : `tx_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 	  }
 
-	  function createModelId(): string {
-	    return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-	      ? crypto.randomUUID()
-	      : `id_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-	  }
-
-	  function normalizeClaimId(
-	    claim: string | { readonly id: string } | null | undefined,
-	  ): string | undefined {
-	    if (typeof claim === 'string') return claim;
-	    return claim?.id;
-	  }
-
-	  function isClaimHandleValue(
-	    value: unknown,
-	  ): value is Claim {
-	    return (
-	      typeof value === 'object' &&
-	      value !== null &&
-	      (value as { object?: unknown }).object === 'claim' &&
-	      typeof (value as { id?: unknown }).id === 'string'
-	    );
-	  }
-
 	  function normalizeCommitOperation(
 	    op: CommitOperationInput,
 	    defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
 	  ): DurableCommitOperation {
-	    const model = op.model ?? op.target?.model;
-	    if (!model) {
-	      throw new AbloValidationError(
-	        'Commit operation requires `model` or `target.model`.',
-	        { code: 'commit_operation_model_required' },
-	      );
-	    }
 	    const type = op.action.toUpperCase();
-	    const id = op.id ?? op.target?.id ?? '';
+	    const id = op.id ?? '';
 	    return durableCommitOperationSchema.parse({
 	      type,
-	      model: model.toLowerCase(),
+	      model: op.model.toLowerCase(),
 	      id,
 	      input: op.data ?? undefined,
 	      transactionId: op.transactionId ?? undefined,
@@ -1109,22 +1041,13 @@ export function Ablo<const S extends SchemaRecord>(
 	  function normalizeCommitOperations(
 	    commitOptions: CommitCreateOptions,
 	  ): DurableCommitOperation[] {
-	    if (commitOptions.operation && commitOptions.operations) {
+	    if (commitOptions.operations.length === 0) {
 	      throw new AbloValidationError(
-	        'Pass either `operation` or `operations`, not both.',
-	        { code: 'commit_operations_ambiguous' },
-	      );
-	    }
-	    const inputOperations = commitOptions.operation
-	      ? [commitOptions.operation]
-	      : commitOptions.operations ?? [];
-	    if (inputOperations.length === 0) {
-	      throw new AbloValidationError(
-	        'Commit requires at least one operation.',
+	        'Commit requires a non-empty `operations` array.',
 	        { code: 'commit_operation_required' },
 	      );
 	    }
-	    return inputOperations.map((op) =>
+	    return commitOptions.operations.map((op) =>
 	      normalizeCommitOperation(op, commitOptions),
 	    );
 	  }
@@ -1235,19 +1158,6 @@ export function Ablo<const S extends SchemaRecord>(
 	        }, options.timeout);
 	      }
 	    });
-	  }
-
-	  async function applyClaimedPolicy(
-	    target: Partial<ModelTarget>,
-	    options?: ClaimedOptions,
-	  ): Promise<void> {
-	    const policy = options?.ifClaimed ?? 'return';
-	    if (policy === 'return') return;
-
-	    const current = listModelClaims(target);
-	    if (current.length === 0) return;
-	    // policy === 'fail' — gate the read only when the caller opts in.
-	    throw claimedError(target, current, 'model_claimed');
 	  }
 
 	  function wrapClaimHandle(claim: Claim, waited = false): Claim {
@@ -1438,10 +1348,6 @@ export function Ablo<const S extends SchemaRecord>(
 	          commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
 	      });
 	      const wait = commitOptions.wait ?? 'confirmed';
-	      const claimId =
-	        normalizeClaimId(commitOptions.claimRef) ?? claim?.id;
-	      void claimId; // The current wire clears claims by entity after commit.
-
 	      // Route through the TransactionQueue's commit lane so the call
 	      // tolerates WS disconnects: the envelope stays in memory until
 	      // reconnect, mutationExecutor.commit() owns transport-level
@@ -1469,185 +1375,6 @@ export function Ablo<const S extends SchemaRecord>(
 	      };
 	    },
 	  };
-
-	  async function retrieveModel<T>(
-	    modelName: string,
-	    id: string,
-	    options?: ModelReadOptions,
-	  ): Promise<ModelRead<T>> {
-	    await applyClaimedPolicy({ model: modelName, id }, options);
-	    await ready();
-	    const res = await fetchImpl(`${bootstrapHelper.baseUrl}/sync/query`, {
-	      method: 'POST',
-	      headers: authHeaders(),
-	      body: JSON.stringify({
-	        queries: [
-	          {
-	            model: modelName,
-	            where: [['id', '=', id]],
-	            limit: 1,
-	          },
-	        ],
-	      }),
-	    });
-	    const bodyText = await res.text();
-	    let body: unknown = bodyText;
-	    if (bodyText.length > 0) {
-	      try {
-	        body = JSON.parse(bodyText);
-	      } catch {
-	        // Keep raw body text.
-	      }
-	    }
-	    if (!res.ok) {
-	      throw translateHttpError(
-	        res.status,
-	        body || `Model retrieve failed: ${res.status} ${res.statusText}`,
-	        res.headers.get('x-request-id') ?? undefined,
-	      );
-	    }
-	    const parsed = body as { results?: unknown[]; lastSyncId?: number };
-	    const slot = parsed.results?.[0];
-	    const rows = Array.isArray(slot) ? slot : [];
-	    const data = rows[0] as T | undefined;
-	    if (!data) {
-	      throw new AbloValidationError(
-	        `Model row not found: ${modelName}/${id}`,
-	        { code: 'model_not_found' },
-	      );
-	    }
-	    const stamp =
-	      typeof parsed.lastSyncId === 'number'
-	        ? parsed.lastSyncId
-	        : store.getSyncWebSocket()?.getLastSyncId() ?? store.lastSyncId ?? 0;
-	    return {
-	      data,
-	      stamp,
-	      claims: listModelClaims({ model: modelName, id }),
-	    };
-	  }
-
-	  function model<T = Record<string, unknown>>(name: string): ModelClient<T> {
-	    // Overloaded `update`: classic `update({ id, data })` + functional
-	    // `update(id, current => next)` — the SDK-owned read-fresh → compare-and-
-	    // swap → reconcile loop (correctness via the row watermark, no clobber).
-	    function updateModel(
-	      params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> },
-	    ): Promise<CommitReceipt>;
-	    function updateModel(
-	      id: string,
-	      updater: ModelUpdater<T>,
-	      options?: ContentionOptions,
-	    ): Promise<CommitReceipt | undefined>;
-	    function updateModel(
-	      arg:
-	        | (ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> })
-	        | string,
-	      updater?: ModelUpdater<T>,
-	      contention?: ContentionOptions,
-	    ): Promise<CommitReceipt | undefined> {
-	      if (typeof arg === 'string') {
-	        const id = arg;
-	        if (typeof updater !== 'function') {
-	          throw new AbloValidationError(
-	            `${name}.update('${id}', updater): the second argument must be an updater ` +
-	              `function (current) => next. To write a fixed value, use update({ id, data }).`,
-	            { code: 'write_options_invalid' },
-	          );
-	        }
-	        return reconcileFunctionalUpdate<T, CommitReceipt>(updater, contention, {
-	          model: name,
-	          id,
-	          readFresh: async () => {
-	            const read = await retrieveModel<T>(name, id, {});
-	            return { data: read.data, stamp: read.stamp };
-	          },
-	          writeNext: (patch, readAt) =>
-	            commits.create({
-	              readAt,
-	              onStale: 'reject',
-	              wait: 'confirmed',
-	              operations: [
-	                { action: 'update', model: name, id, data: patch },
-	              ],
-	            }),
-	        });
-	      }
-	      const params = arg;
-	      return (async () => {
-	        await applyClaimedPolicy({ model: name, id: params.id }, params);
-	        return commits.create({
-	          claimRef: params.claimRef,
-	          idempotencyKey: params.idempotencyKey,
-	          readAt: params.readAt,
-	          onStale: params.onStale,
-	          ...(isClaimHandleValue(params.claim) ? { claim: params.claim } : {}),
-	          wait: params.wait,
-	          operations: [
-	            { action: 'update', model: name, id: params.id, data: params.data },
-	          ],
-	        });
-	      })();
-	    }
-	    return {
-	      retrieve(params: ModelReadOptions & { readonly id: string }): Promise<ModelRead<T>> {
-	        return retrieveModel<T>(name, params.id, params);
-	      },
-	      async create(
-	        params: ModelMutationOptions & { readonly data: Record<string, unknown>; readonly id?: string | null },
-	      ): Promise<T> {
-	        const id = params.id ?? createModelId();
-	        await applyClaimedPolicy({ model: name, id }, params);
-	        // Confirm, then return the authoritative row (with framework defaults;
-	        // the existing row on an idempotent re-create) — mirrors the WebSocket client.
-	        await commits.create({
-	          claimRef: params.claimRef,
-	          idempotencyKey: params.idempotencyKey,
-	          readAt: params.readAt,
-	          onStale: params.onStale,
-	          ...(isClaimHandleValue(params.claim) ? { claim: params.claim } : {}),
-	          wait: params.wait ?? 'confirmed',
-	          operations: [
-	            {
-	              action: 'create',
-	              model: name,
-	              id,
-	              data: params.data,
-	            },
-	          ],
-	        });
-	        const { data } = await retrieveModel<T>(name, id, {});
-	        if (data === undefined) {
-	          throw new AbloNotFoundError(
-	            `create ${name}/${id} did not yield a readable row (the write did not confirm).`,
-	            [id],
-	          );
-	        }
-	        return data;
-	      },
-	      update: updateModel,
-	      async delete(
-	        params: ModelMutationOptions & { readonly id: string },
-	      ): Promise<CommitReceipt> {
-	        await applyClaimedPolicy({ model: name, id: params.id }, params);
-	        return commits.create({
-	          claimRef: params.claimRef,
-	          idempotencyKey: params.idempotencyKey,
-	          readAt: params.readAt,
-	          onStale: params.onStale,
-	          ...(isClaimHandleValue(params.claim) ? { claim: params.claim } : {}),
-	          wait: params.wait,
-	          operations: [
-	            {
-	              action: 'delete',
-	              model: name,
-	              id: params.id,
-	            },
-	          ],
-	        });
-	      },
-	    };
-	  }
 
 	  /**
 	   * The control-plane credential: always the original configured secret key.
@@ -1767,7 +1494,7 @@ export function Ablo<const S extends SchemaRecord>(
     },
 
     // Mint a scoped agent identity and hand back a connected client bound to it —
-    // `sessions.create({ agent })` plus `Ablo({ apiKey })` fused into one call,
+    // `sessions.create({ agent })` plus a typed `Ablo({ schema, apiKey })` client,
     // for agents that run in this (secret-key-holding) process. Omitting `id`
     // yields a fresh uuid per call, so concurrent agents are distinct participants
     // that queue behind each other (even when they share a `name`). Humans don't
@@ -1895,8 +1622,6 @@ export function Ablo<const S extends SchemaRecord>(
 
 	    commits,
 
-	    model,
-
     /** Context-staleness snapshot — see `engine.snapshot(...)` JSDoc. */
     snapshot<ModelName extends keyof S & string>(
       entities: Readonly<Record<ModelName, string | readonly string[]>>,
@@ -1933,12 +1658,7 @@ import type * as _Policy from '../policy/types.js';
 import type * as _Mutators from '../mutators/defineMutators.js';
 import type * as _Tx from '../mutators/Transaction.js';
 import type * as _Undo from '../mutators/UndoManager.js';
-import type * as _Query from '../query/types.js';
 import type * as _SchemaTypes from '../schema/schema.js';
-import type * as _Base from '../BaseSyncedStore.js';
-import type * as _Lazy from '../LazyReferenceCollection.js';
-import type * as _Probe from '../sync/NetworkProbe.js';
-import type * as _Conn from '../sync/ConnectionManager.js';
 import type * as _Global from '../types/global.js';
 
 /**
@@ -1966,15 +1686,6 @@ export namespace Ablo {
    * typed as reactive rows (data fields + computeds, no relation accessors).
    */
   export type Reads<S extends SchemaRecord = SchemaRecord> = AbloReads<S>;
-  export type Api = AbloApi;
-  export type ApiClaims = AbloApiClaims;
-  export type Capability = import('./ApiClient.js').Capability;
-  export type CapabilityCreateOptions = import('./ApiClient.js').CapabilityCreateOptions;
-  export type CapabilityRecord = import('./ApiClient.js').CapabilityRecord;
-  export type CapabilityResource = import('./ApiClient.js').CapabilityResource;
-  export type CapabilityRevocation = import('./ApiClient.js').CapabilityRevocation;
-  export type CapabilityRotateOptions = import('./ApiClient.js').CapabilityRotateOptions;
-  export type RotatedCapability = import('./ApiClient.js').RotatedCapability;
   // Claimed-state options stay flat — same concept reused by claims and models.
   export type IfClaimedPolicy = import('./resourceTypes.js').IfClaimedPolicy;
   export type ClaimedOptions = import('./resourceTypes.js').ClaimedOptions;
@@ -2027,6 +1738,27 @@ export namespace Ablo {
 
   // ── Schema (type + sub-namespace via declaration merge) ───────────
   export type Schema<S extends _SchemaTypes.SchemaRecord = _SchemaTypes.SchemaRecord> = _SchemaTypes.Schema<S>;
+  /**
+   * The schema this program has registered via `interface Register { Schema }`
+   * (falls back to a loose shape when unregistered). Use it where shared code
+   * needs "this app's schema" without importing a specific one —
+   * `Ablo<Ablo.ResolveSchema['models']>` resolves to whatever the consuming
+   * app registered, so one component types correctly across apps that bind
+   * different schemas.
+   */
+  export type ResolveSchema = _Global.ResolveSchema;
+  /**
+   * `ResolveSchema` guaranteed to satisfy the `Schema` bound. `ResolveSchema`
+   * falls back to a loose `{ models }` shape when nothing is registered, which
+   * doesn't extend the branded `Schema` type — so generics bounded by `Schema`
+   * (mutator anchors, `Transaction<S>`) can't take `ResolveSchema` directly.
+   * `RegisteredSchema` collapses that fallback to `Schema`, so shared mutator
+   * code can anchor "this app's schema" and stay assignable at the consumer,
+   * which reads the same `Register`. Both resolve in lockstep per app.
+   */
+  export type RegisteredSchema = _Global.ResolveSchema extends _SchemaTypes.Schema
+    ? _Global.ResolveSchema
+    : _SchemaTypes.Schema;
   // eslint-disable-next-line @typescript-eslint/no-namespace
   export namespace Schema {
     export type InferModel<
@@ -2076,6 +1808,7 @@ export namespace Ablo {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   export namespace Claim {
     export type Handle = import('./resourceTypes.js').Claim;
+    export type Held<T = Record<string, unknown>> = import('../types/streams.js').HeldClaim<T>;
     export type CreateOptions = import('./resourceTypes.js').ClaimCreateOptions;
     export type WaitOptions = import('./resourceTypes.js').ClaimWaitOptions;
     export type Client = import('./resourceTypes.js').ClaimResource;
@@ -2086,9 +1819,18 @@ export namespace Ablo {
   export namespace Model {
     export type Target = import('./resourceTypes.js').ModelTarget;
     export type Claim = import('./resourceTypes.js').ModelClaim;
-    export type Read<T = Record<string, unknown>> = import('./resourceTypes.js').ModelRead<T>;
-    export type Client<T = Record<string, unknown>> = import('./resourceTypes.js').ModelClient<T>;
-    export type ReadOptions = import('./resourceTypes.js').ModelReadOptions;
+    export type Operations<T, CreateInput = T> = import('./createModelProxy.js').ModelOperations<
+      T,
+      CreateInput
+    >;
+    export type ClaimOptions<T = Record<string, unknown>> =
+      import('./createModelProxy.js').ClaimOptions<T>;
+    export type ClaimParams<T = Record<string, unknown>> =
+      import('./createModelProxy.js').ClaimParams<T>;
+    export type ClaimLookupParams<T = Record<string, unknown>> =
+      import('./createModelProxy.js').ClaimLookupParams<T>;
+    export type ClaimReorderParams<T = Record<string, unknown>> =
+      import('./createModelProxy.js').ClaimReorderParams<T>;
     export type MutationOptions = import('./resourceTypes.js').ModelMutationOptions;
   }
 
@@ -2105,7 +1847,7 @@ export namespace Ablo {
     export type Options<
       S extends _SchemaTypes.SchemaRecord = _SchemaTypes.SchemaRecord,
       TAuth = unknown,
-    > = import('../source/index.js').AbloSourceOptions<S, TAuth>;
+    > = import('../source/index.js').DataSourceOptions<S, TAuth>;
     export type ModelHandlers<
       Row,
       CreateInput,

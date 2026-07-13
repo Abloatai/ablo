@@ -1,11 +1,10 @@
 /**
  * The single place where you tell the SDK about your application's types.
  *
- * You register your Schema, Presence, Claims, and UserMeta once by augmenting
- * the {@link Register} interface. From then on every SDK hook — `useAblo`,
- * `useQuery`, `useOne`, `usePresence`, `useClaim` — reads its types from that
- * registration, so you never pass a generic or a `schema` argument at a call
- * site.
+ * You register your Schema and UserMeta once by augmenting the
+ * {@link Register} interface. From then on the typed SDK surface reads its
+ * types from that registration, so you never pass a generic or a `schema`
+ * argument at a call site.
  *
  * Registration uses TypeScript module augmentation: any file in your project
  * can add an `interface Register` to a `declare module '@abloatai/ablo'`
@@ -27,8 +26,6 @@
  * declare module '@abloatai/ablo' {
  *   interface Register {
  *     Schema: typeof schema;
- *     Presence: { cursor: { x: number; y: number } | null };
- *     Claims: { editLayer: { layerId: string } };
  *     UserMeta: { id: string; email: string };
  *   }
  * }
@@ -40,23 +37,31 @@
  * without typed results until you opt in.
  */
 
+import type { SchemaRecord } from '../schema/schema.js';
+
 /**
  * The fallback shapes the resolvers use when {@link Register} has not been
  * augmented. `DefaultSyncShape.Schema` is deliberately structural — it carries
- * `{ models: Record<string, unknown> }` so hooks can still check a model-key
- * argument against something, just without a typed entity shape behind it.
+ * `{ models: SchemaRecord }` so hooks can still check a model-key argument
+ * against something (and satisfy the `SchemaRecord` bound), just without a
+ * typed entity shape behind it.
  */
 export interface DefaultSyncShape {
-  readonly Schema: { readonly models: Record<string, unknown> };
-  readonly Presence: Record<string, unknown>;
-  readonly Claims: Record<string, unknown>;
+  // `models` is a `SchemaRecord` (not `Record<string, unknown>`) so that
+  // `ResolveSchema['models']` still satisfies the `R extends SchemaRecord`
+  // bound on the SDK hooks when no `Register` is present — e.g. a shared
+  // package (`@ablo/documents`, `@ablo/teams`) typechecked standalone, with no
+  // app registration in scope. Without this the fallback wouldn't type-check
+  // against `useAblo<R>()`/`AbloProvider<R>` and every such package would need
+  // its own ambient registration.
+  readonly Schema: { readonly models: SchemaRecord };
   readonly UserMeta: { readonly id: string };
 }
 
 /**
  * The registration interface you augment to declare your application's types.
  * Add keys inside a `declare module '@abloatai/ablo'` block — for example
- * `interface Register { Schema: ...; Presence: ...; }`. It is empty by default,
+ * `interface Register { Schema: ...; UserMeta: ...; }`. It is empty by default,
  * so any key you omit falls back to {@link DefaultSyncShape}. It is exported
  * from the package root so your augmentation merges into this declaration.
  *
@@ -76,24 +81,6 @@ export type ResolveSchema = Register extends { Schema: infer S }
     ? S
     : DefaultSyncShape['Schema']
   : DefaultSyncShape['Schema'];
-
-/**
- * Your registered presence shape, or the default when none is registered.
- * `usePresence` reads it. The shape is free-form — any JSON-serializable value
- * you broadcast per session.
- */
-export type ResolvePresence = Register extends { Presence: infer P }
-  ? P
-  : DefaultSyncShape['Presence'];
-
-/**
- * Your registered claim vocabulary, or the default when none is registered.
- * Each key is a claim name and its value is that claim's payload.
- * `useClaim(claimName)` reads it.
- */
-export type ResolveClaims = Register extends { Claims: infer I }
-  ? I
-  : DefaultSyncShape['Claims'];
 
 /**
  * Your registered user-metadata shape, or the default when none is registered.

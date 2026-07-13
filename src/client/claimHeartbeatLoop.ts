@@ -1,7 +1,7 @@
 /**
  * The auto-heartbeat loop behind `claim({ id, heartbeat: true })` — one
  * implementation shared by both transports (the WebSocket claim stream and the
- * HTTP `ApiClient`), so the cadence and failure semantics cannot drift.
+ * private HTTP transport), so the cadence and failure semantics cannot drift.
  *
  * A beat is the "still working" signal that keeps a lease alive for the
  * duration of real work. The loop's failure handling follows the lease-system

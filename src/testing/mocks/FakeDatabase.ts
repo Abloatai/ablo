@@ -3,7 +3,7 @@ import type { Database } from '../../Database.js';
 /**
  * Overrides for {@link fakeDatabase}. Everything is typechecked against
  * Database's public surface except `getPersistedTransactions`, which widens to
- * `unknown[]`: persisted rows are untrusted input (the CommitOutboxStore port
+ * `unknown[]`: persisted rows are untrusted input (the DurableWriteStore port
  * documents this), and restore-path tests feed deliberately corrupt rows.
  */
 export type FakeDatabaseOverrides = Omit<

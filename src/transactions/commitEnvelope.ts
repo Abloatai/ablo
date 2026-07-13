@@ -8,9 +8,9 @@
  */
 
 import { z } from 'zod';
-import { idempotencyKeySchema } from '../commit/contract.js';
 import { readDependencySchema } from '../coordination/schema.js';
 import { commitOperationSchema } from '../wire/frames.js';
+import { idempotencyKeySchema } from './idempotencyKey.js';
 
 export const COMMIT_ENVELOPE_VERSION = 1 as const;
 export const COMMIT_ENVELOPE_RECORD_PREFIX = 'commit-envelope:';
@@ -31,7 +31,7 @@ export const commitEnvelopeMemberSchema = z
 
 export type CommitEnvelopeMember = z.infer<typeof commitEnvelopeMemberSchema>;
 
-/** The legacy mutation operation shape sent by the current commit transport. */
+/** One operation stored exactly as the current commit transport sends it. */
 export const durableCommitOperationSchema = commitOperationSchema
   .pick({
     type: true,

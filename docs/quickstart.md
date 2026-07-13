@@ -191,6 +191,17 @@ const updated = await ablo.weatherReports.update({
 console.log({ id: updated.id, status: updated.status }); // { id: '...', status: 'ready' }
 ```
 
+Read a single row back with `retrieve({ id })`. It resolves to the row, or to
+`undefined` when no row has that id — so narrow it once, then the fields are
+fully typed:
+
+```ts
+const report = await ablo.weatherReports.retrieve({ id: created.id });
+if (!report) throw new Error(`weatherReports ${created.id} not found`);
+
+console.log(report.status); // 'ready'
+```
+
 ## Add coordination for slow work
 
 When AI or background work will touch an existing row for more than a quick

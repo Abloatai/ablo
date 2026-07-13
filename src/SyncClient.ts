@@ -36,8 +36,8 @@ import type { WriteOptions } from './interfaces/index.js';
 import { SyncPosition } from './sync/syncPosition.js';
 import {
   DatabaseCommitOutboxStore,
-  type CommitOutboxStore,
 } from './transactions/commitOutboxStore.js';
+import type { DurableWriteStore } from './transactions/durableWriteStore.js';
 
 interface SyncObserver {
   onSync?: (event: SyncEvent) => void;
@@ -188,7 +188,7 @@ export class SyncClient extends EventEmitter {
   constructor(
     objectPool: InstanceCache,
     database: Database,
-    commitOutbox: CommitOutboxStore = new DatabaseCommitOutboxStore(database),
+    commitOutbox: DurableWriteStore = new DatabaseCommitOutboxStore(database),
     commitOutboxNamespace = 'default',
   ) {
     super();
@@ -1664,29 +1664,40 @@ export class SyncClient extends EventEmitter {
     // never dispatch without its durable record), so drop it rather than
     // leaving it queued to poison every later pass. Healthy batch members
     // still stage.
-    const journalResults = await Promise.allSettled(
-      mutations.map((mutation) => mutation.journaled),
+    // Settle each mutation into an object that keeps the mutation bound to its
+    // own outcome. Correlating by array index would force a `mutations[index]!`
+    // non-null assertion (the lookup is `T | undefined` under
+    // noUncheckedIndexedAccess); carrying the reference makes it unnecessary.
+    const journalOutcomes = await Promise.all(
+      mutations.map(async (mutation) => {
+        try {
+          await mutation.journaled;
+          return { mutation, ok: true as const };
+        } catch (reason) {
+          return { mutation, ok: false as const, reason };
+        }
+      }),
     );
     const journaledMutations: PendingMutation[] = [];
-    journalResults.forEach((result, index) => {
-      const mutation = mutations[index]!;
-      if (result.status === 'fulfilled') {
+    for (const outcome of journalOutcomes) {
+      const { mutation } = outcome;
+      if (outcome.ok) {
         journaledMutations.push(mutation);
-        return;
+        continue;
       }
       this.stagedMutationIds.delete(mutation.mutationId);
       this.pendingMutations = this.pendingMutations.filter(
         (pending) => pending.mutationId !== mutation.mutationId,
       );
-      mutation.rejectStaged?.(result.reason);
+      mutation.rejectStaged?.(outcome.reason);
       getContext().observability.captureTransactionFailure({
         context: 'persist-pending-mutation',
         error:
-          result.reason instanceof Error
-            ? result.reason
-            : new Error(String(result.reason)),
+          outcome.reason instanceof Error
+            ? outcome.reason
+            : new Error(String(outcome.reason)),
       });
-    });
+    }
 
     // Stage every mutation synchronously within the same event-loop tick;
     // the transaction queue's microtask batches and sends them together.

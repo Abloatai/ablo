@@ -195,7 +195,7 @@ export {
 } from './serialize.js';
 
 // Schema projection — derive an app's subset from one canonical schema.
-export { selectModels } from './select.js';
+export { selectModels, omitModels } from './select.js';
 
 // Schema → Postgres DDL — shared by the host implementation and the command-line tools.
 export {

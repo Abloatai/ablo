@@ -12,33 +12,26 @@
  * where the credential itself carries identity and the server resolves it on
  * every request.
  *
- * Under the hood this wraps the schema-agnostic protocol client that
- * {@link createProtocolClient} returns in a typed proxy. The protocol client
- * commits over `POST /v1/commits` and reads over HTTP, authenticating with the
- * bearer token each time; its model access is string-keyed (`api.model('slides')`).
- * The proxy gives server code the same typed `client.<model>` surface the
- * stateful client offers, over stateless transport.
+ * Under the hood this wraps one schema-agnostic protocol client in a typed
+ * proxy. That protocol layer keeps transport envelopes and string-keyed model
+ * routing private; application code gets the same `client.<model>` surface the
+ * stateful client offers.
  */
 import {
-  createProtocolClient,
-  type AbloApi,
-  type AbloApiClientOptions,
-} from './ApiClient.js';
+  createHttpTransport,
+  type HttpTransport,
+} from './httpTransport.js';
+import type { AbloOptions } from './options.js';
 import type {
-  CommitReceipt,
   CommitResource,
   HttpClaimApi,
-  ModelRead,
+  HttpTransportModel,
   ModelReadOptions,
   ModelMutationOptions,
   CreateSessionParams,
   AbloSession,
 } from './resourceTypes.js';
 import type {
-  Claim,
-  ClaimLookupParams,
-  ClaimParams,
-  ClaimReorderParams,
   ModelCreateParams,
   ModelDeleteParams,
   ServerReadOptions,
@@ -47,11 +40,16 @@ import type {
 } from './createModelProxy.js';
 import type { Schema, SchemaRecord, InferModel, InferCreate } from '../schema/schema.js';
 import type { ModelUpdater, ContentionOptions } from './functionalUpdate.js';
+import { AbloConnectionError, AbloValidationError } from '../errors.js';
 
 export interface AbloHttpClientOptions<S extends SchemaRecord>
-  extends Omit<AbloApiClientOptions, 'schema'> {
-  /** The schema. Used only to type the model proxies; it is never sent over the wire or read at runtime. */
-  readonly schema: Schema<S>;
+  extends AbloOptions<S> {
+  /**
+   * Per-request deadline. A black-holed HTTP request otherwise has no platform
+   * timeout and can stall a headless worker forever. Pass `0` to disable it.
+   * @default 30_000
+   */
+  readonly timeoutMs?: number;
 }
 
 /**
@@ -63,14 +61,14 @@ export interface AbloHttpClientOptions<S extends SchemaRecord>
  * need a persistent socket; those are absent from the type, so reaching for one
  * is a compile error rather than a runtime gap.
  *
- * The read shapes differ on purpose. `retrieve` returns a {@link ModelRead}
- * envelope of `{ data, stamp, claims }`, because a stateless client keeps no local
- * copy of the data: the watermark (`stamp`) and any active claims must travel
- * inline on the read so a caller can follow it with a stale-guarded write. `list`
- * returns a plain array.
+ * The typed model contract is transport-independent: `retrieve` returns one row,
+ * `list` returns rows, `create`/`update` return the resulting row, and `delete`
+ * returns nothing. The low-level protocol client keeps its read watermark and
+ * commit receipt envelopes internally; callers should not have to change data
+ * access syntax when they switch transport.
  */
 export interface HttpModelClient<T, C = T> {
-  retrieve(params: ModelRetrieveParams & ModelReadOptions): Promise<ModelRead<T>>;
+  retrieve(params: ModelRetrieveParams & ModelReadOptions): Promise<T | undefined>;
   list(options?: ServerReadOptions<T>): Promise<T[]>;
   /**
    * Creates a row and returns the confirmed server row, including any
@@ -78,7 +76,7 @@ export interface HttpModelClient<T, C = T> {
    * id that already exists is idempotent: the existing row is returned unchanged.
    */
   create(params: ModelCreateParams<T, C>): Promise<T>;
-  update(params: ModelUpdateParams<C>): Promise<CommitReceipt>;
+  update(params: ModelUpdateParams<T>): Promise<T>;
   /**
    * Updates a row with a function of its latest value — `update(id, current =>
    * next)`, the data-layer equivalent of a `setState(prev => next)` reducer. The
@@ -92,8 +90,8 @@ export interface HttpModelClient<T, C = T> {
     id: string,
     updater: ModelUpdater<T>,
     options?: ContentionOptions,
-  ): Promise<CommitReceipt | undefined>;
-  delete(params: ModelDeleteParams<T>): Promise<CommitReceipt>;
+  ): Promise<T | undefined>;
+  delete(params: ModelDeleteParams<T>): Promise<void>;
   claim: HttpClaimApi<T>;
 }
 
@@ -124,29 +122,116 @@ export type AbloHttpClient<S extends SchemaRecord> = {
    * request, so it is available here even though the local-cache reads are not.
    * Pass `{ user }` to mint an end-user key (`ek_`) or `{ agent, can }` to mint a
    * scoped agent key (`rk_`). See {@link CreateSessionParams}.
-   */
+  */
   readonly sessions: { create(params: CreateSessionParams<S>): Promise<AbloSession> };
-  /** Looks up a model client by name, for when the model name is only known at runtime. */
-  model<T = Record<string, unknown>>(name: string): HttpModelClient<T>;
 };
 
 /**
- * Names on the underlying protocol client that pass straight through the proxy.
- * This set intentionally leaves out names that collide with common schema models —
- * `tasks`, `claims`, `capabilities`, `agent` — so that `client.tasks` resolves to
- * the schema model named `tasks` rather than a protocol resource. Only lifecycle
- * methods and the genuinely protocol-level members belong here.
+ * Private transport members that pass straight through the facade. Everything
+ * else must be a declared schema model; there is no dynamic fallback namespace.
  */
 const PROTOCOL_MEMBERS = new Set<string>([
   'ready',
   'waitForFlush',
   'dispose',
-  'purge',
   'commits',
-  'model',
   'getAuthToken',
   'sessions',
 ]);
+
+/** Narrows a bare property name to a transport key so the facade can index it typed. */
+function isProtocolMember(prop: string): prop is keyof HttpTransport {
+  return PROTOCOL_MEMBERS.has(prop);
+}
+
+/**
+ * Adapts one low-level protocol model to the public typed model contract. The
+ * protocol deliberately retains `{ data, stamp, claims }` reads and commit
+ * receipts because functional updates need them. This is the single boundary
+ * that unwraps those transport details for application code.
+ */
+function createHttpModelClient<T, C = T>(
+  protocol: HttpTransportModel<T>,
+): HttpModelClient<T, C> {
+  async function readRow(id: string): Promise<T | undefined> {
+    const read = await protocol.retrieve({ id });
+    return read.data;
+  }
+
+  async function requireUpdatedRow(id: string): Promise<T> {
+    const row = await readRow(id);
+    if (row === undefined) {
+      throw new AbloConnectionError(
+        `update settled but ${id} could not be read back from the server.`,
+        { code: 'commit_no_result' },
+      );
+    }
+    return row;
+  }
+
+  // The protocol resource is schema-agnostic and types claim handles as records.
+  // The typed facade carries the same handle with its row type attached; runtime
+  // mutation code only reads the handle identity. Normalize that one generic
+  // boundary here instead of leaking casts into every model method.
+  function mutationOptions<P extends { readonly claim?: unknown }>(
+    params: P,
+  ): Omit<P, 'claim'> & Pick<ModelMutationOptions, 'claim'> {
+    const { claim, ...rest } = params;
+    return {
+      ...rest,
+      ...(claim !== undefined ? { claim } : {}),
+    };
+  }
+
+  function update(params: ModelUpdateParams<T>): Promise<T>;
+  function update(
+    id: string,
+    updater: ModelUpdater<T>,
+    options?: ContentionOptions,
+  ): Promise<T | undefined>;
+  async function update(
+    arg: ModelUpdateParams<T> | string,
+    updater?: ModelUpdater<T>,
+    options?: ContentionOptions,
+  ): Promise<T | undefined> {
+    if (typeof arg === 'string') {
+      if (!updater) {
+        throw new AbloValidationError(
+          'Functional update requires an updater function.',
+          { code: 'write_options_invalid' },
+        );
+      }
+      const receipt = await protocol.update(arg, updater, options);
+      return receipt === undefined ? undefined : requireUpdatedRow(arg);
+    }
+
+    await protocol.update({
+      ...mutationOptions(arg),
+      data: arg.data,
+    });
+    return requireUpdatedRow(arg.id);
+  }
+
+  return {
+    async retrieve(params): Promise<T | undefined> {
+      const read = await protocol.retrieve(params);
+      return read.data;
+    },
+    list: (options) => protocol.list(options),
+    async create(params): Promise<T> {
+      const row = await protocol.create({
+        ...mutationOptions(params),
+        data: params.data as Record<string, unknown>,
+      });
+      return row;
+    },
+    update,
+    async delete(params): Promise<void> {
+      await protocol.delete(mutationOptions(params));
+    },
+    claim: protocol.claim,
+  };
+}
 
 /**
  * Builds the stateless, typed HTTP client. Each `client.<model>` resolves to the
@@ -154,27 +239,52 @@ const PROTOCOL_MEMBERS = new Set<string>([
  * protocol members pass through unchanged. No socket is ever opened; the bearer
  * credential is the identity.
  */
+/** @internal Constructed only through the public `Ablo({ transport: 'http' })` factory. */
 export function createAbloHttpClient<S extends SchemaRecord>(
   options: AbloHttpClientOptions<S>,
 ): AbloHttpClient<S> {
-  // The schema is type-level only; the protocol client is schema-agnostic.
-  const { schema: _schema, ...rest } = options;
-  const api: AbloApi = createProtocolClient({ ...rest, schema: null });
+  const { schema, ...rest } = options;
+  const modelTypenames = Object.fromEntries(
+    Object.entries(schema.models).map(([key, definition]) => [
+      key,
+      definition.typename ?? key,
+    ]),
+  );
+  const transport: HttpTransport = createHttpTransport({
+    ...rest,
+    modelTypenames,
+  });
+  const schemaModels = new Set(Object.keys(schema.models));
+  const models = new Map<
+    string,
+    HttpModelClient<Record<string, unknown>, Record<string, unknown>>
+  >();
 
-  const facade = new Proxy(api as unknown as Record<string | symbol, unknown>, {
-    get(target, prop) {
-      if (typeof prop !== 'string') return Reflect.get(target, prop);
+  const model = (
+    name: string,
+  ): HttpModelClient<Record<string, unknown>, Record<string, unknown>> => {
+    const cached = models.get(name);
+    if (cached) return cached;
+    const created = createHttpModelClient(transport.model(name));
+    models.set(name, created);
+    return created;
+  };
+
+  const facade = new Proxy<Partial<AbloHttpClient<S>>>({}, {
+    get(_target, prop) {
+      if (typeof prop !== 'string') return undefined;
       // Real protocol members pass through unchanged.
-      if (PROTOCOL_MEMBERS.has(prop) && prop in target) return Reflect.get(target, prop);
-      // Anything else is a typed model accessor → the string-keyed protocol model
-      // (which implements retrieve/list/create/update/delete/claim — every method
-      // `HttpModelClient` declares).
-      return api.model(prop);
+      if (isProtocolMember(prop)) {
+        return transport[prop];
+      }
+      // Only schema models become model accessors. A typo or retired top-level
+      // member resolves to undefined instead of manufacturing a plausible client.
+      return schemaModels.has(prop) ? model(prop) : undefined;
     },
   });
 
   // A single boundary cast. `AbloHttpClient<S>` declares only what the model
   // accessor and the passed-through protocol members actually implement, so no
   // method on this type is missing at runtime.
-  return facade as unknown as AbloHttpClient<S>;
+  return facade as AbloHttpClient<S>;
 }

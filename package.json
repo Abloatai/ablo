@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "The Collaboration Layer For AI Agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -30,12 +30,6 @@
       "types": "./dist/coordination/index.d.ts",
       "import": "./dist/coordination/index.js",
       "default": "./dist/coordination/index.js"
-    },
-    "./commit": {
-      "@ablo/source": "./src/commit/index.ts",
-      "types": "./dist/commit/index.d.ts",
-      "import": "./dist/commit/index.js",
-      "default": "./dist/commit/index.js"
     },
     "./react": {
       "@ablo/source": "./src/react/index.ts",
@@ -184,7 +178,7 @@
     "test:e2e": "E2E_TEST=true jest --config jest.e2e.config.ts",
     "test:e2e:up": "docker compose -f docker-compose.test.yml up -d --wait",
     "test:e2e:down": "docker compose -f docker-compose.test.yml down -v",
-    "test:e2e:run": "npm run test:e2e:up && npm run test:e2e; npm run test:e2e:down"
+    "test:e2e:run": "node scripts/run-e2e.mjs"
   },
   "publishConfig": {
     "access": "public",

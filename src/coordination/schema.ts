@@ -191,6 +191,9 @@ export type StaleNotification = z.infer<typeof staleNotificationSchema>;
  *   • Group — `{ group, readAt }`: did anything in this sync group change?
  *             `group` is a sync-group key such as `deck:abc` or `slide:s1`, the
  *             same unit a participant watches and claims.
+ *
+ * See `packages/sync-engine/docs/concurrency-convention.md` (§4) for the
+ * governing convention and the receive → reconcile loop.
  */
 export const readDependencySchema = z.union([
   z.object({
@@ -288,6 +291,19 @@ export const claimRejectionSchema = z.object({
   policyReason: z.string().optional(),
 });
 export type ClaimRejection = z.infer<typeof claimRejectionSchema>;
+
+/**
+ * The point-to-point notification sent to a holder whose lease ended without
+ * a successful commit. This remains a wire-shaped target because it arrives
+ * directly from the WebSocket; the schema is the single validation boundary
+ * before the event reaches public `claims.onLost` listeners.
+ */
+export const claimLostSchema = z.object({
+  claimId: z.string(),
+  reason: z.enum(['expired', 'preempted']),
+  target: targetRefSchema,
+});
+export type ClaimLost = z.infer<typeof claimLostSchema>;
 
 /**
  * What a {@link ModelClaim} points at — the target locator as SDK callers see

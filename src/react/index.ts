@@ -48,8 +48,6 @@
 export type {
   DefaultSyncShape,
   ResolveSchema,
-  ResolvePresence,
-  ResolveClaims,
   ResolveUserMeta,
   ResolveModelKey,
 } from '../types/global.js';

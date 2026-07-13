@@ -1,7 +1,7 @@
 /**
  * Mints a session token. This is the single implementation behind
- * `sessions.create`, shared by the schema-aware client and the schemaless HTTP
- * client so the two never disagree on how a token is produced.
+ * `sessions.create`, shared by the WebSocket and HTTP clients so the two never
+ * disagree on how a token is produced.
  *
  * Minting is a plain control-plane HTTP call — no socket, no synced data. A
  * backend holding a secret key (`sk_`) exchanges it for a short-lived, scoped
@@ -36,14 +36,13 @@ export interface MintSessionContext {
   readonly baseUrl: string;
   readonly fetch?: typeof fetch;
   /**
-   * Maps each schema key to its wire type name. Only the schema-aware client
-   * supplies this. A capability is scoped by the lowercased type name the
-   * server checks, but `can` is keyed by schema key — so
+   * Maps each schema key to its wire type name. Every public client supplies
+   * this; it stays optional only for isolated private-transport use. A
+   * capability is scoped by the lowercased type name the server checks, but
+   * `can` is keyed by schema key — so
    * `can: { documents: ['update'] }` on a model whose type name is overridden
    * to `Document` must mint `document.update`, not `documents.update`, or the
-   * server denies the write with `capability_scope_denied`. The schemaless
-   * client omits this map, because there the `can` key is already the wire
-   * token and needs no translation.
+   * server denies the write with `capability_scope_denied`.
    */
   readonly modelTypenames?: Readonly<Record<string, string>>;
 }
@@ -90,9 +89,8 @@ export async function mintSession<S extends SchemaRecord>(
 
   const operations = Object.entries(params.can).flatMap(([model, ops]) => {
     // Translate the schema key the developer used in `can` into the wire type
-    // name the server checks — see `modelTypenames` above. Falls back to the
-    // key itself when no map is supplied (the schemaless client) or the key is
-    // absent from it.
+    // name the server checks — see `modelTypenames` above. The key fallback is
+    // private transport tolerance; every public client supplies the schema map.
     const ns = ctx.modelTypenames?.[model] ?? model;
     return (ops ?? []).map((op) => `${ns.toLowerCase()}.${op}`);
   });

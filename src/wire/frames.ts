@@ -1,9 +1,9 @@
 /**
  * The write-path message shapes for the sync protocol. These cover the frames
- * a client sends to commit work — {@link CommitMessage} (a batch of raw
- * operations) and {@link MutationMessage} (a single named mutation) — and the
- * server's {@link MutationResultMessage} acknowledgement. The same frames flow
- * over a WebSocket connection and over the HTTP commit endpoint.
+ * a client sends to commit work — {@link CommitMessage}, a batch of raw
+ * operations — and the server's {@link MutationResultMessage}
+ * acknowledgement. The same frames flow over a WebSocket connection and over
+ * the HTTP commit endpoint.
  *
  * Both the client and the server import these definitions from here, so the two
  * sides cannot drift. Each interface is paired with a Zod validator
@@ -19,10 +19,6 @@ import {
   commitOperationSchema as coordinationCommitOperationSchema,
   readDependencySchema,
 } from '../coordination/schema.js';
-import {
-  commitReceiptSchema as commitReceiptV2Schema,
-  commitRequestSchema as commitRequestV2Schema,
-} from '../commit/contract.js';
 import type { OnStaleMode, StaleNotification, ReadDependency } from '../coordination/index.js';
 import type { ErrorCode, RequiredCapability } from '../errors.js';
 
@@ -95,25 +91,9 @@ const _commitOperationContract: _AssertExact<
 void _commitOperationContract;
 
 /**
- * A client-to-server frame that invokes a single named mutation by name and
- * arguments, as opposed to the raw operation batch in {@link CommitMessage}.
- * The server resolves `mutatorName` against the set of mutations registered on
- * it and runs the matching one.
- */
-export interface MutationMessage {
-  type: 'mutation';
-  payload: {
-    mutatorName: string;
-    input: unknown;
-    clientTxId: string;
-  };
-}
-
-/**
  * A client-to-server frame that asks the server to commit a batch of operations
- * atomically. This is the raw-operation counterpart to {@link MutationMessage};
- * it carries a list of {@link CommitOperation} entries plus the batch metadata
- * below.
+ * atomically. It carries a list of {@link CommitOperation} entries plus the
+ * batch metadata below.
  */
 export interface CommitMessage {
   type: 'commit';
@@ -205,40 +185,3 @@ export interface MutationResultMessage {
     };
   };
 }
-
-// ── Commit contract v2 ───────────────────────────────────────────────────
-
-/**
- * A transport frame carrying the Zod-first v2 commit request. The payload's
- * `schemaVersion` distinguishes it from the legacy `commit` payload during the
- * migration window; the transport does not duplicate the commit contract.
- */
-export const commitRequestMessageSchema = z.strictObject({
-  type: z.literal('commit'),
-  payload: commitRequestV2Schema,
-});
-export type CommitRequestMessage = z.output<typeof commitRequestMessageSchema>;
-
-/** A transport frame carrying one terminal, status-discriminated v2 receipt. */
-export const commitResultMessageSchema = z.strictObject({
-  type: z.literal('commit_result'),
-  payload: commitReceiptV2Schema,
-});
-export type CommitResultMessage = z.output<typeof commitResultMessageSchema>;
-
-// ── Explicit v1 compatibility names ─────────────────────────────────────
-
-/** Explicit compatibility name for the v1 uppercase operation schema. */
-export const legacyCommitOperationSchema = commitOperationSchema;
-
-/** Explicit compatibility name for the v1 `clientTxId` payload schema. */
-export const legacyCommitPayloadSchema = commitPayloadSchema;
-
-/** Explicit compatibility alias for the v1 uppercase operation shape. */
-export type LegacyCommitOperation = CommitOperation;
-
-/** Explicit compatibility alias for the v1 `clientTxId` commit frame. */
-export type LegacyCommitMessage = CommitMessage;
-
-/** Explicit compatibility alias for the v1 boolean-style mutation receipt. */
-export type LegacyMutationResultMessage = MutationResultMessage;

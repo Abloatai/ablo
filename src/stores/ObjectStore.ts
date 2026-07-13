@@ -54,8 +54,8 @@ export class ObjectStore implements ObjectStoreContract {
         const request = store.add(data);
 
         tx.oncomplete = () => { resolve(); };
-        tx.onerror = () => { reject(tx.error || new Error('IndexedDB transaction error')); };
-        request.onerror = () => { reject(request.error || new Error('IndexedDB request error')); };
+        tx.onerror = () => { reject(tx.error ?? new Error('IndexedDB transaction error')); };
+        request.onerror = () => { reject(request.error ?? new Error('IndexedDB request error')); };
       } catch (error) {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -110,8 +110,8 @@ export class ObjectStore implements ObjectStoreContract {
         const request = store.put(data);
 
         tx.oncomplete = () => { resolve(); };
-        tx.onerror = () => { reject(tx.error || new Error('IndexedDB transaction error')); };
-        request.onerror = () => { reject(request.error || new Error('IndexedDB request error')); };
+        tx.onerror = () => { reject(tx.error ?? new Error('IndexedDB transaction error')); };
+        request.onerror = () => { reject(request.error ?? new Error('IndexedDB request error')); };
       } catch (error) {
         // Propagate failure so callers do not continue with inconsistent state
         reject(error instanceof Error ? error : new Error(String(error)));
@@ -223,8 +223,8 @@ export class ObjectStore implements ObjectStoreContract {
         const request = store.delete(id);
 
         tx.oncomplete = () => { resolve(); };
-        tx.onerror = () => { reject(tx.error || new Error('IndexedDB transaction error')); };
-        request.onerror = () => { reject(request.error || new Error('IndexedDB request error')); };
+        tx.onerror = () => { reject(tx.error ?? new Error('IndexedDB transaction error')); };
+        request.onerror = () => { reject(request.error ?? new Error('IndexedDB request error')); };
       } catch (error) {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -261,8 +261,8 @@ export class ObjectStore implements ObjectStoreContract {
         const request = store.clear();
 
         tx.oncomplete = () => { resolve(); };
-        tx.onerror = () => { reject(tx.error || new Error('IndexedDB transaction error')); };
-        request.onerror = () => { reject(request.error || new Error('IndexedDB request error')); };
+        tx.onerror = () => { reject(tx.error ?? new Error('IndexedDB transaction error')); };
+        request.onerror = () => { reject(request.error ?? new Error('IndexedDB request error')); };
       } catch (error) {
         reject(error instanceof Error ? error : new Error(String(error)));
       }

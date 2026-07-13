@@ -98,9 +98,9 @@ export interface SourceConnectorOptions {
    */
   readonly apiKey: string;
   /**
-   * The Data Source handler to serve, as returned by `dataSource(options)` or
-   * `abloSource(options)`. The connector feeds it each request and relays the
-   * response back untouched; it never inspects or alters either one.
+   * The Data Source handler to serve, as returned by `dataSource(options)`.
+   * The connector feeds it each request and relays the response back untouched;
+   * it never inspects or alters either one.
    */
   readonly handler: (request: Request) => Promise<Response>;
   /** The Ablo base URL to dial. Defaults to `https://api.abloatai.com`. */

@@ -27,10 +27,15 @@ import { schema } from "./schema";
 
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: "http" });
 
-// Reads + writes, fully typed off your schema — each is one HTTP round-trip:
+// Reads + writes, fully typed off your schema.
+// `retrieve` resolves to the row, or `undefined` when none matches.
 const open = await ablo.tasks.list({ where: { status: "todo" } });
-const { data } = await ablo.tasks.retrieve({ id: open[0].id });
-await ablo.tasks.update({ id: open[0].id, data: { status: "done" } });
+
+const task = await ablo.tasks.retrieve({ id: open[0].id });
+if (!task) throw new Error("task not found");
+
+console.log(task.title);
+await ablo.tasks.update({ id: task.id, data: { status: "done" } });
 ```
 
 It exposes `retrieve` / `list` / `create` / `update` / `delete`, plus `commits`

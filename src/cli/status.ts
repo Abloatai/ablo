@@ -16,7 +16,9 @@ import {
   getActiveProject,
   describeEffectiveKey,
   type Mode,
+  type ActiveProject,
 } from './config';
+import { resolveTarget, describeMismatch, type ResolvedTarget } from './target';
 import { brand } from './theme';
 import { DEFAULT_URL } from './push';
 
@@ -51,6 +53,10 @@ interface PushedModel {
 interface PushedSchema {
   active: boolean;
   version?: number;
+  /** The deployed schema's content hash — the same value a running client
+   *  compares against when it warns about schema drift, so it can be matched
+   *  directly here. */
+  hash?: string;
   pushedAt?: string | null;
   models: PushedModel[];
 }
@@ -164,10 +170,72 @@ function formatConflict(conflict: PushedModel['conflict']): string {
   return parts.length ? `{${parts.join(',')}}` : '';
 }
 
+/**
+ * The "where does a push land" block: the server-confirmed org, project, and
+ * environment the key resolves to, plus any divergence from the local
+ * preferences. When the server couldn't confirm — offline, an older server, or
+ * a credential with no such scope — it shows the local `ablo projects use`
+ * selection marked `unconfirmed`, so the uncertainty is visible rather than
+ * presented as fact. This is the line that makes "what project am I in?" a
+ * glance instead of a guess.
+ */
+function printTargetLines(
+  target: ResolvedTarget | null,
+  localProject: ActiveProject | undefined,
+): void {
+  const confirmed = target?.confirmed ?? null;
+
+  if (confirmed?.organizationId) {
+    console.log(`  ${pc.dim('org')}     ${pc.dim(confirmed.organizationId)}`);
+  }
+
+  let projectLine: string;
+  if (confirmed?.project) {
+    const p = confirmed.project;
+    projectLine = p.isDefault
+      ? `${pc.bold('default')} ${pc.dim('(org-default)')}`
+      : `${pc.bold(p.slug)} ${pc.dim(`(${p.id})`)}`;
+  } else if (confirmed) {
+    // Identity resolved but carried no project (human session / older server).
+    projectLine = `${pc.bold('default')} ${pc.dim('(org-default)')}`;
+  } else if (localProject) {
+    projectLine = `${pc.bold(localProject.slug)} ${pc.dim(`(${localProject.id})`)} ${pc.yellow('(unconfirmed)')}`;
+  } else {
+    projectLine = `${pc.bold('default')} ${target ? pc.yellow('(unconfirmed)') : pc.dim('(org-default)')}`;
+  }
+  console.log(`  ${pc.dim('project')} ${projectLine}`);
+
+  // The environment the key actually deploys to (from the server, else the key
+  // prefix) — which can differ from the CLI `mode` shown above.
+  const env = confirmed?.environment ?? target?.keyEnv ?? null;
+  if (env) {
+    const suffix = confirmed ? '' : ` ${pc.yellow('(unconfirmed)')}`;
+    console.log(`  ${pc.dim('env')}     ${pc.bold(env)}${suffix}`);
+  }
+
+  // Divergences between local intent and the confirmed plane — the "you selected
+  // one project but this key targets another" heads-up, in prose.
+  for (const m of target?.mismatches ?? []) {
+    console.log(`  ${pc.yellow('⚠')} ${pc.yellow(describeMismatch(m))}`);
+  }
+}
+
 export async function status(args: string[] = []): Promise<void> {
   const apiUrl = (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
   const cfg = readConfig();
   const mode = getMode();
+
+  // The shared credential chain (env → .env.local → .env → stored), the same key
+  // `ablo push` and `ablo dev` present — so status never reports a different
+  // credential than a deploy would use.
+  const effective = resolveEffectiveApiKey();
+  // The server-confirmed plane this key acts on (org, project, environment),
+  // reconciled against the local `ablo projects use` / `ablo mode` preferences.
+  // Resolved once, shared by both the human and JSON views. Null when there's no
+  // key to resolve; `.confirmed` is null when the server couldn't answer.
+  const target: ResolvedTarget | null = effective.key
+    ? await resolveTarget({ url: apiUrl, apiKey: effective.key, keySource: effective.source ?? 'stored' })
+    : null;
 
   // Machine-readable output — `ablo status --json`. This is the supported way
   // for scripts and agents to read status, rather than parsing the human output.
@@ -178,10 +246,6 @@ export async function status(args: string[] = []): Promise<void> {
     const key = describeEffectiveKey(mode, process.env.ABLO_API_KEY, entry);
     const plan = resolvePushPlan();
     const activeProject = getActiveProject();
-    // The shared credential chain (env → .env.local → .env → stored), the same
-    // key `ablo push` would present — so this diagnostic can never report a
-    // different credential than a deploy uses.
-    const effective = resolveEffectiveApiKey();
     const pushed = await fetchPushedSchema(apiUrl, effective.key);
     const out = {
       mode,
@@ -202,6 +266,21 @@ export async function status(args: string[] = []): Promise<void> {
       keyMatchesStoredActiveKey: key.keyMatchesStoredActiveKey,
       keyMismatch: key.keyMismatch,
       organizationId: entry?.organizationId ?? null,
+      // The SERVER-CONFIRMED plane this key resolves to — the authoritative
+      // answer to "where does a push land", independent of the local
+      // `project`/`mode` preferences above. Null when the server didn't answer.
+      confirmedTarget: target?.confirmed
+        ? {
+            organizationId: target.confirmed.organizationId,
+            environment: target.confirmed.environment,
+            project: target.confirmed.project,
+            projectId: target.confirmed.projectId,
+            sandboxId: target.confirmed.sandboxId,
+          }
+        : null,
+      // Divergences between local intent and the confirmed plane (project not
+      // selected, mode not the key's environment). Empty when aligned.
+      mismatches: target?.mismatches ?? [],
       // What `ablo push` would do right now — the answer to "why did push
       // demand a different key".
       push: {
@@ -216,6 +295,7 @@ export async function status(args: string[] = []): Promise<void> {
         ? {
             active: pushed.active,
             version: pushed.version ?? null,
+            hash: pushed.hash ?? null,
             pushedAt: pushed.pushedAt ?? null,
             models: pushed.models,
           }
@@ -229,11 +309,8 @@ export async function status(args: string[] = []): Promise<void> {
 
   console.log(`\n  ${brand('ablo')} ${pc.dim('status')}\n`);
 
-  // The shared credential chain (env → .env.local → .env → stored), the same key
-  // `push` and `dev` resolve — so status never reports a different credential than
-  // a deploy would present. An explicit key (an env var or a project env file)
-  // overrides the stored login key; when that happens, say so, with its source.
-  const effective = resolveEffectiveApiKey();
+  // An explicit key (an env var or a project env file) overrides the stored
+  // login key; when that happens, say so, with its source.
   if (effective.key && effective.source && effective.source !== 'stored') {
     const label = effective.source === 'env' ? 'ABLO_API_KEY env' : effective.source;
     console.log(
@@ -249,10 +326,12 @@ export async function status(args: string[] = []): Promise<void> {
   if (key.keyMismatch) {
     console.log(`  ${pc.yellow('!')} ${pc.yellow(key.keyMismatch.message)}`);
   }
+
+  // Where a push actually lands — the server-confirmed org, project, and
+  // environment the key resolves to. Falls back to the local `ablo projects
+  // use` preference (marked unconfirmed) only when the server didn't answer.
   const activeProject = getActiveProject();
-  console.log(
-    `  ${pc.dim('project')} ${activeProject ? `${pc.bold(activeProject.slug)} ${pc.dim(`(${activeProject.id})`)}` : pc.bold('default')}`,
-  );
+  printTargetLines(target, activeProject);
 
   for (const m of ['sandbox', 'production'] as Mode[]) {
     const entry = getKeyEntry(m);
@@ -265,8 +344,9 @@ export async function status(args: string[] = []): Promise<void> {
     }
   }
 
-  const org = activeEntry?.organizationId;
-  if (org) console.log(`  ${pc.dim('org')}     ${org}`);
+  // The org for the data-probe caption below: server-confirmed when available,
+  // else the locally-stored one. (`printTargetLines` already displayed it.)
+  const org = target?.confirmed?.organizationId ?? activeEntry?.organizationId;
 
   // Which credential `ablo push` would present, and to which environment —
   // the diagnostic for "push demanded sk_test_ but I have a live key".
@@ -290,7 +370,10 @@ export async function status(args: string[] = []): Promise<void> {
     if (pushed?.active) {
       const when = pushed.pushedAt ? ` ${pc.dim(`@ ${pushed.pushedAt.slice(0, 10)}`)}` : '';
       const ver = pushed.version != null ? ` ${pc.dim(`(rev ${pushed.version})`)}` : '';
-      console.log(`  ${pc.dim('schema')}  ${pc.bold(`${pushed.models.length} models pushed`)}${ver}${when}`);
+      // The deployed hash — the exact value a running client's drift warning
+      // reports as `serverSchemaHash`, so the two can be matched at a glance.
+      const hashLabel = pushed.hash ? ` ${pc.dim(`hash ${pushed.hash}`)}` : '';
+      console.log(`  ${pc.dim('schema')}  ${pc.bold(`${pushed.models.length} models pushed`)}${ver}${hashLabel}${when}`);
       for (const m of pushed.models) {
         // Flag the divergence that bites: schema key ≠ wire typename.
         const tn =

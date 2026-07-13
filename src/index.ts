@@ -14,9 +14,9 @@
  * type Entry = Ablo.Peer;
  * ```
  *
- * `Ablo({ schema, apiKey })` returns typed model clients. `Ablo({ apiKey })`
- * returns the stateless HTTP model and commit client, which suits agents, MCP
- * route handlers, and custom runtimes.
+ * `Ablo({ schema, apiKey })` returns typed model clients. Server-side agents,
+ * MCP route handlers, and workers select `transport: 'http'`; both transports
+ * keep the same `ablo.<model>` application surface.
  *
  * The whole package reaches you through one name: `Ablo` is at once a factory
  * function, a type, and a namespace. You call model clients with dot access on
@@ -45,7 +45,7 @@
  *
  * A handful of exports are for advanced use and are marked "Advanced" at their
  * declaration below, each with the one situation it is for:
- *   • `dataSource` / `abloSource`  — when your own database stays canonical.
+ *   • `dataSource`                 — when your own database stays canonical.
  *   • `defaultPolicy`              — when you customize conflict resolution.
  *   • `defineMutators` / `createTransaction` — when you write custom mutators.
  * If you don't recognize one of these, you don't need it.
@@ -63,11 +63,6 @@ export type { MutationExecutor } from './interfaces/index.js';
 // The functional-update surface: `ablo.<model>.update(id, current => next)`.
 export type { ModelUpdater, ContentionOptions } from './client/functionalUpdate.js';
 export { DEFAULT_CONTENTION_RETRIES } from './client/functionalUpdate.js';
-// `InternalAbloOptions` is the full construction surface — authentication,
-// transport, injected dependencies, and sync groups — that an application uses
-// to build a client and hand it to `<AbloProvider client={...}>`. `AbloOptions`
-// is the trimmed shape most callers pass to `Ablo({...})`.
-export type { HttpClaimApi, InternalAbloOptions } from './client/Ablo.js';
 // The reactive-read view of the client: model reads typed as reactive rows
 // (data fields + computeds, no relation accessors) — what `useAblo` selectors
 // receive.
@@ -101,21 +96,29 @@ export type {
   ModelCreateParams,
   ModelUpdateParams,
   ModelDeleteParams,
-  ClaimOptions,
-  ClaimParams,
-  ClaimLookupParams,
-  ClaimReorderParams,
-  Claim,
-  ClaimHeartbeat,
-  ClaimHeartbeatOptions,
-  HeldClaim,
-  ModelOperations,
 } from './client/Ablo.js';
+/**
+ * @deprecated Use `Ablo.Claim.Held`. This compatibility export remains until
+ * the next major release because it was explicitly documented in 0.20.1.
+ */
+export type { HeldClaim } from './client/Ablo.js';
 export type { AbloPersistence } from './client/persistence.js';
+export {
+  durableWritesConfigSchema,
+  durableWriteStoreSchema,
+  pendingWriteSchema,
+} from './transactions/durableWriteStore.js';
+export type {
+  DurableWritesConfig,
+  DurableWriteStore,
+  PendingWrite,
+} from './transactions/durableWriteStore.js';
+/* eslint-disable @typescript-eslint/no-deprecated -- public compatibility aliases through the next major release */
 export type {
   CommitOutboxRecord,
   CommitOutboxStore,
 } from './transactions/commitOutboxStore.js';
+/* eslint-enable @typescript-eslint/no-deprecated */
 export {
   durableCommitEnvelopeSchema,
 } from './transactions/commitEnvelope.js';
@@ -144,7 +147,6 @@ export default Ablo;
 // live under `Ablo.Source.*` (`Ablo.Source.Operation`, `Ablo.Source.Commit.Params`).
 export {
   dataSource,
-  abloSource,
   sourceEventForOperation,
   signAbloSourceRequest,
   verifyAbloSourceRequest,
@@ -201,7 +203,7 @@ export {
   recoveryClassSchema,
   RECOVERY_CLASSES,
 } from './errors.js';
-export type { CommitReceipt, RequiredCapability } from './errors.js';
+export type { RequiredCapability } from './errors.js';
 export type { ErrorCode, WireErrorCode, ErrorCategory, ErrorCodeSpec, RecoveryClass } from './errors.js';
 // The wire contract for errors, with no dependencies: the JSON envelope shape
 // plus the table mapping each AbloError subclass to an HTTP status. A server
@@ -269,8 +271,8 @@ export {
 } from './surface.js';
 export type { ModelVerb, ListOptionKey, AbloOptionKey } from './surface.js';
 
-// The type-registration point. Register your Schema, Presence, Claims, and
-// UserMeta types once through module augmentation:
+// The type-registration point. Register your Schema and UserMeta once through
+// module augmentation:
 //   declare module '@abloatai/ablo' { interface Register { Schema: ... } }
 // The augmentation merges into this declaration, and the resolved types are
 // then available under the `Ablo` namespace (`Ablo.ResolveSchema`, and so on).

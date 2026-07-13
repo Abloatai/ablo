@@ -1,18 +1,4 @@
 {
-  "__tests__/contract/retrieve-envelope.contract.test.ts": {
-    "@typescript-eslint/no-base-to-string": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-type-parameters": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 1
-    },
-    "@typescript-eslint/require-await": {
-      "count": 3
-    }
-  },
   "__tests__/contract/schema-validation.test.ts": {
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 3
@@ -37,7 +23,7 @@
       "count": 2
     },
     "jest/unbound-method": {
-      "count": 7
+      "count": 4
     }
   },
   "__tests__/e2e/bootstrap-integrity.test.ts": {
@@ -97,9 +83,6 @@
     }
   },
   "__tests__/e2e/full-stack-sync.test.ts": {
-    "@typescript-eslint/no-redundant-type-constituents": {
-      "count": 1
-    },
     "@typescript-eslint/no-unsafe-argument": {
       "count": 2
     },
@@ -176,7 +159,7 @@
       "count": 6
     },
     "@typescript-eslint/no-unused-vars": {
-      "count": 9
+      "count": 6
     },
     "@typescript-eslint/restrict-template-expressions": {
       "count": 1
@@ -589,11 +572,6 @@
       "count": 1
     }
   },
-  "__tests__/unit/wire-tx-id.bug.test.ts": {
-    "@typescript-eslint/require-await": {
-      "count": 3
-    }
-  },
   "scripts/build-mintlify-docs.mjs": {
     "no-control-regex": {
       "count": 1
@@ -800,9 +778,6 @@
     },
     "@typescript-eslint/no-non-null-assertion": {
       "count": 1
-    },
-    "@typescript-eslint/require-await": {
-      "count": 6
     }
   },
   "src/agent/Agent.ts": {
@@ -825,9 +800,6 @@
   "src/ai-sdk/__tests__/coordinated-tool.test.ts": {
     "@typescript-eslint/no-empty-function": {
       "count": 2
-    },
-    "@typescript-eslint/require-await": {
-      "count": 6
     }
   },
   "src/ai-sdk/coordinationContext.ts": {
@@ -1012,36 +984,16 @@
   },
   "src/client/Ablo.ts": {
     "@typescript-eslint/no-unnecessary-condition": {
-      "count": 2
+      "count": 1
     },
     "@typescript-eslint/no-unused-vars": {
-      "count": 9
-    },
-    "@typescript-eslint/prefer-nullish-coalescing": {
       "count": 1
     },
     "@typescript-eslint/require-await": {
-      "count": 2
+      "count": 1
     },
     "prefer-const": {
       "count": 1
-    }
-  },
-  "src/client/ApiClient.ts": {
-    "@typescript-eslint/no-base-to-string": {
-      "count": 1
-    },
-    "@typescript-eslint/no-deprecated": {
-      "count": 2
-    },
-    "@typescript-eslint/no-dynamic-delete": {
-      "count": 1
-    },
-    "@typescript-eslint/no-empty-function": {
-      "count": 6
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 4
     }
   },
   "src/client/__tests__/acquire-or-await.test.ts": {
@@ -1072,14 +1024,6 @@
     },
     "@typescript-eslint/require-await": {
       "count": 4
-    }
-  },
-  "src/client/__tests__/capability-rotate.test.ts": {
-    "@typescript-eslint/no-base-to-string": {
-      "count": 1
-    },
-    "@typescript-eslint/require-await": {
-      "count": 2
     }
   },
   "src/client/__tests__/computeFKDepthPriority.test.ts": {
@@ -1113,17 +1057,11 @@
     "@typescript-eslint/no-base-to-string": {
       "count": 1
     },
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 1
-    },
     "@typescript-eslint/require-await": {
       "count": 2
     }
   },
   "src/client/__tests__/httpClient.test.ts": {
-    "@typescript-eslint/no-base-to-string": {
-      "count": 1
-    },
     "@typescript-eslint/require-await": {
       "count": 2
     }
@@ -1192,9 +1130,6 @@
     "@typescript-eslint/no-base-to-string": {
       "count": 1
     },
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 1
-    },
     "@typescript-eslint/require-await": {
       "count": 2
     }
@@ -1208,11 +1143,6 @@
     },
     "@typescript-eslint/require-await": {
       "count": 2
-    }
-  },
-  "src/client/__tests__/validateAbloOptions.test.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 9
     }
   },
   "src/client/auth.ts": {
@@ -1233,15 +1163,23 @@
       "count": 1
     },
     "@typescript-eslint/no-unused-vars": {
-      "count": 7
+      "count": 4
     }
   },
   "src/client/httpClient.ts": {
     "@typescript-eslint/no-deprecated": {
       "count": 1
+    }
+  },
+  "src/client/httpTransport.ts": {
+    "@typescript-eslint/no-base-to-string": {
+      "count": 1
     },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 6
+    "@typescript-eslint/no-dynamic-delete": {
+      "count": 1
+    },
+    "@typescript-eslint/no-empty-function": {
+      "count": 4
     }
   },
   "src/client/identity.ts": {
@@ -1566,9 +1504,6 @@
   "src/schema/select.ts": {
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-type-conversion": {
-      "count": 4
     }
   },
   "src/schema/serialize.ts": {
@@ -1701,10 +1636,7 @@
       "count": 1
     },
     "@typescript-eslint/no-unused-vars": {
-      "count": 10
-    },
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 6
+      "count": 9
     },
     "@typescript-eslint/prefer-promise-reject-errors": {
       "count": 8
@@ -1942,7 +1874,7 @@
   },
   "src/transactions/TransactionQueue.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 3
+      "count": 1
     },
     "@typescript-eslint/no-misused-spread": {
       "count": 5
@@ -1950,23 +1882,14 @@
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 22
     },
-    "@typescript-eslint/no-unsafe-argument": {
-      "count": 2
-    },
     "@typescript-eslint/no-unsafe-assignment": {
-      "count": 5
+      "count": 1
     },
     "@typescript-eslint/no-unsafe-enum-comparison": {
       "count": 2
     },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 2
-    },
     "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 9
+      "count": 8
     },
     "@typescript-eslint/require-await": {
       "count": 4
@@ -1993,9 +1916,6 @@
   },
   "src/transactions/__tests__/commitLaneUndoStream.test.ts": {
     "@typescript-eslint/no-empty-function": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
       "count": 1
     }
   },

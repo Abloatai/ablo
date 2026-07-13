@@ -4,7 +4,7 @@
  *
  *   - `types.ts`   — the shared wire and handler types, plus `sourceEventForOperation`
  *   - `signing.ts` — request signing and verification
- *   - `factory.ts` — the `abloSource()` / `dataSource()` endpoint factory
+ *   - `factory.ts` — the `dataSource()` endpoint factory
  *
  * Import from here; the sibling modules import one another directly.
  */
@@ -37,32 +37,6 @@ export {
   type SourceEventsRequest,
   type SourceRequest,
   type SourceResponse,
-  type DataSourcePrimitive,
-  type DataSourceWhere,
-  type DataSourceListQuery,
-  type DataSourceListPage,
-  type DataSourceListResult,
-  type DataSourceRequestContext,
-  type DataSourceOperation,
-  type DataSourceDelta,
-  type DataSourceEvent,
-  type DataSourceEventForOperationOptions,
-  type DataSourceCommitResult,
-  type DataSourceCommitParams,
-  type DataSourceScope,
-  type DataSourceEventsResult,
-  type DataSourceEventsHandler,
-  type DataSourceAuthorizeContext,
-  type DataSourceHandlerContext,
-  type DataSourceModelHandlers,
-  type DataSourceCommitHandler,
-  type DataSourceApiKey,
-  type DataSourceLoadRequest,
-  type DataSourceListRequest,
-  type DataSourceCommitRequest,
-  type DataSourceEventsRequest,
-  type DataSourceRequest,
-  type DataSourceResponse,
 } from './types.js';
 
 export {
@@ -73,15 +47,10 @@ export {
   type SourceSignatureOptions,
   type SourceSignatureVerificationOptions,
   type SourceSignatureVerificationResult,
-  type DataSourceSignatureOptions,
-  type DataSourceSignatureVerificationOptions,
-  type DataSourceSignatureVerificationResult,
 } from './signing.js';
 
 export {
-  abloSource,
   dataSource,
-  type AbloSourceOptions,
   type DataSourceOptions,
 } from './factory.js';
 

@@ -1,5 +1,5 @@
 /**
- * The shared resource types of the client: {@link ModelRead}, {@link ModelClient},
+ * Shared resource types for the typed clients and private HTTP transport.
  * the commit and claim shapes, the session-mint params and resource, and the
  * {@link HttpClaimApi} derivation. This module holds only types and has no runtime
  * imports.
@@ -73,12 +73,13 @@ export type ModelOperationAction =
 
 export type CommitWait = 'queued' | 'confirmed';
 
-export interface ModelRead<T = Record<string, unknown>> {
+/** @internal Transport envelope; the public typed client returns the row. */
+export interface HttpTransportRead<T = Record<string, unknown>> {
   /**
    * The row, or `undefined` when no row matched the id (or it's outside the
    * caller's scope). A miss is data-absence, not an error — `retrieve` never
-   * throws "not found", mirroring the WebSocket client's `T | undefined`.
-   * Branch on it: `const deal = (await ablo.deals.retrieve({ id })).data; if (!deal) …`.
+   * throws "not found". This envelope stays inside the HTTP transport; the
+   * public typed client unwraps it to the WebSocket client's `T | undefined`.
    */
   readonly data: T | undefined;
   readonly stamp: number;
@@ -89,10 +90,10 @@ export type IfClaimedPolicy = 'return' | 'fail';
 
 export interface ClaimedOptions {
   /**
-   * What to do when another participant has claimed the target: `return`
-   * includes active claim metadata in the response; `fail` throws
-   * `AbloClaimedError`. Waiting for a claim to clear is a claim-side concern —
-   * take `ablo.<model>.claim({ id })` (it queues fairly); reads never block.
+   * What to do when another participant has claimed the target: `return` lets
+   * the read proceed; `fail` throws `AbloClaimedError`. Inspect claim state via
+   * `ablo.<model>.claim.state({ id })`. Waiting is a claim-side concern — take
+   * `ablo.<model>.claim({ id })` (it queues fairly); reads never block.
    */
   readonly ifClaimed?: IfClaimedPolicy;
 }
@@ -128,8 +129,7 @@ export interface ClaimCreateOptions {
 export interface CommitOperationInput {
   readonly action: ModelOperationAction;
   /** The model name — matches `ablo.<model>` and the schema's `model()`. */
-  readonly model?: string;
-  readonly target?: ModelTarget;
+  readonly model: string;
   readonly id?: string | null;
   readonly data?: Record<string, unknown> | null;
   readonly transactionId?: string | null;
@@ -138,7 +138,6 @@ export interface CommitOperationInput {
 }
 
 export interface CommitCreateOptions {
-  readonly claimRef?: string | { readonly id: string } | null;
   readonly idempotencyKey?: string | null;
   readonly readAt?: number | null;
   readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
@@ -151,8 +150,8 @@ export interface CommitCreateOptions {
    * Explicit `readAt`/`onStale` on the options win.
    */
   readonly claim?: Claim | null;
-  readonly operation?: CommitOperationInput;
-  readonly operations?: readonly CommitOperationInput[];
+  /** One atomic batch. Use a one-element array for a single operation. */
+  readonly operations: readonly CommitOperationInput[];
   readonly wait?: CommitWait;
   /**
    * Batch-level read dependencies — the "did anything I looked at change?" guard.
@@ -226,28 +225,24 @@ export type HttpClaimApi<T = Record<string, unknown>> =
     [K in keyof ClaimReadApi<T>]: AwaitedClaimMethod<ClaimReadApi<T>[K]>;
   };
 
-export interface ModelClient<T = Record<string, unknown>> {
+/** @internal String-keyed model routing owned by the private HTTP transport. */
+export interface HttpTransportModel<T = Record<string, unknown>> {
   /**
    * Single-row read over HTTP. **Returns an envelope, not the bare row** — the
    * row is on `.data`, alongside the `.stamp` watermark (for stale-context
-   * guards on the following write) and any active `.claims`. A stateless HTTP
-   * client can't synthesize the watermark from a local snapshot, so the
-   * envelope is load-bearing here (the WebSocket client's `retrieve` returns
-   * `T | undefined` because it reads from its local cache).
+   * guards on the following write) and any active `.claims`. This is the
+   * schema-agnostic protocol surface; the typed HTTP facade unwraps it to the
+   * same `T | undefined` shape as the WebSocket client.
    *
-   * ```ts
-   * const deal = await ablo.deals.retrieve({ id });
-   * deal.data?.recommendation;   // ← the row is on .data
-   * deal.stamp;                  // watermark — pass to the next write's readAt
-   * ```
+   * Public callers never see this shape; `createAbloHttpClient` unwraps it.
    */
-  retrieve(params: ModelReadOptions & { readonly id: string }): Promise<ModelRead<T>>;
+  retrieve(params: ModelReadOptions & { readonly id: string }): Promise<HttpTransportRead<T>>;
   /**
    * Collection read over HTTP (server round-trip). Equality `where`, `orderBy`,
-   * `limit`. Present on the stateless protocol client; the store-backed
-   * `.model(name)` accessor omits it (use the typed `ablo.<model>.list` there).
+   * and `limit`. The typed public client always exposes `ablo.<model>.list`;
+   * this protocol shape is private transport machinery.
    */
-  list?(options?: ServerReadOptions<T>): Promise<T[]>;
+  list(options?: ServerReadOptions<T>): Promise<T[]>;
   /**
    * Creates a row and returns the confirmed server row, including framework
    * defaults such as `createdAt` and `createdBy`. Matches the stateful client's
@@ -274,11 +269,10 @@ export interface ModelClient<T = Record<string, unknown>> {
   delete(params: ModelMutationOptions & { readonly id: string }): Promise<CommitReceipt>;
   /**
    * Durable lease + FIFO wait-line over HTTP — coordination without a socket.
-   * Present on the stateless protocol client (`Ablo({ schema: null })` /
-   * `createAbloHttpClient`); the store-backed `.model(name)` accessor omits it
-   * (the typed `ablo.<model>.claim` proxy is the full reactive namespace there).
+   * The typed public clients expose this through `ablo.<model>.claim`. This
+   * schema-agnostic shape stays inside the HTTP transport.
    */
-  claim?: HttpClaimApi<T>;
+  claim: HttpClaimApi<T>;
 }
 
 /** A single data operation a scoped **agent** session may perform on a model. */

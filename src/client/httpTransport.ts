@@ -1,8 +1,9 @@
 /**
- * The stateless API client behind `Ablo({ apiKey })`. It carries no schema,
- * object pool, local database, or WebSocket, and maps the public Model, Claim,
- * and Commit nouns directly to HTTP routes on the server. This is the transport
- * used for server-side agents, workers, and serverless code.
+ * Private HTTP protocol client behind `Ablo({ schema, transport: 'http' })`.
+ * It carries no object pool, local database, or WebSocket and maps Model,
+ * Claim, and Commit protocol shapes directly to server routes. The typed
+ * facade in `httpClient.ts` is the application boundary; this module owns
+ * transport envelopes, watermarks, replay, and route details.
  */
 
 import {
@@ -37,7 +38,7 @@ import {
 } from './auth.js';
 import { registerDataSource } from './registerDataSource.js';
 import { PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER } from '../wire/protocolVersion.js';
-import { toMs, toSeconds } from '../utils/duration.js';
+import { toMs } from '../utils/duration.js';
 import {
   heartbeatCadenceMs,
   resolveHeartbeatOptions,
@@ -50,20 +51,19 @@ import type {
   CommitOperationInput,
   CommitReceipt,
   CommitResource,
-  ClaimCreateOptions,
-  ClaimWaitOptions,
   HttpClaimApi,
-  ModelClient,
+  HttpTransportModel,
   ModelClaim,
   ModelMutationOptions,
   ModelReadOptions,
-  ModelRead,
+  HttpTransportRead,
   ModelTarget,
   CreateSessionParams,
   AbloSession,
 } from './resourceTypes.js';
 import { mintSession } from './sessionMint.js';
 import { parseIdentityResolveResponse } from '../auth/schemas.js';
+import { staleNotificationSchema } from '../coordination/schema.js';
 
 /** The heartbeat routes' reply body — status, expiry, queue pressure. */
 interface HeartbeatReply {
@@ -120,10 +120,13 @@ import {
   type DurableHttpCommitEnvelope,
 } from '../transactions/httpCommitEnvelope.js';
 import type { CommitOutboxScope } from '../transactions/commitEnvelope.js';
+import { resolveDurableWrites } from './durableWrites.js';
 
-export type AbloApiClientOptions = Omit<AbloOptions, 'schema'> & {
-  readonly schema?: null | undefined;
+/** @internal Private options for the schema-agnostic HTTP protocol transport. */
+export type HttpTransportOptions = Omit<AbloOptions, 'schema'> & {
   readonly bootstrapBaseUrl?: string | undefined;
+  /** Schema-key to wire-typename mapping used only when minting agent sessions. */
+  readonly modelTypenames?: Readonly<Record<string, string>> | undefined;
   /**
    * The observability provider forwarded from `Ablo({ observability })`. The HTTP
    * transport emits the same claim and conflict events as the WebSocket transport,
@@ -142,147 +145,21 @@ export type AbloApiClientOptions = Omit<AbloOptions, 'schema'> & {
   readonly timeoutMs?: number;
 };
 
-/** Default per-request deadline for the stateless HTTP transport. */
+/** @internal Default per-request deadline for the private HTTP transport. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-
-export interface AbloApiClaims {
-  create(options: ClaimCreateOptions): Promise<Claim>;
-  list(target?: Partial<ModelTarget>): Promise<readonly ModelClaim[]>;
-  waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void>;
-  /**
-   * The batched beat — extend every lease this credential holds in one
-   * request (`POST /v1/claims/heartbeat`), the stateless twin of the
-   * WebSocket keepalive. One round trip per cadence for a worker holding
-   * many rows. Returns one {@link ClaimHeartbeat} per extended lease,
-   * tagged with its claim id — no separate result type to learn.
-   */
-  heartbeatAll(options?: {
-    ttl?: Duration;
-  }): Promise<readonly (ClaimHeartbeat & { readonly claimId: string })[]>;
-}
-
-export type CapabilityParticipantKind = 'agent' | 'system';
-
-export interface CapabilityCreateBaseOptions {
-  readonly participantKind?: CapabilityParticipantKind;
-  readonly participantId?: string;
-  readonly syncGroups: readonly string[];
-  readonly operations: readonly string[];
-  readonly label?: string;
-  readonly wideScope?: boolean;
-  readonly userMeta?: Record<string, unknown>;
-}
-
-export interface CapabilityCreateOptions extends CapabilityCreateBaseOptions {
-  /**
-   * Preferred public name. A capability is a lease; the SDK and server
-   * clean it up when the run finishes or when the lease expires.
-   */
-  readonly lease?: Duration;
-  readonly leaseSeconds?: number;
-  /** @deprecated Use `lease`. */
-  readonly ttl?: Duration;
-  /** @deprecated Use `leaseSeconds`. */
-  readonly ttlSeconds?: number;
-}
-
-export interface CapabilityScope {
-  readonly organizationId: string;
-  readonly syncGroups: readonly string[];
-  readonly operations: readonly string[];
-  readonly participantKind: CapabilityParticipantKind;
-  readonly participantId: string;
-}
-
-export interface Capability {
-  readonly id: string;
-  readonly token: string;
-  readonly expiresAt: string;
-  readonly organizationId: string;
-  readonly scope: CapabilityScope;
-  readonly userMeta?: Record<string, unknown>;
-  client(): AbloApi;
-}
-
-export interface CapabilityRecord {
-  readonly id: string;
-  readonly organizationId: string;
-  readonly participantKind: CapabilityParticipantKind;
-  readonly participantId: string;
-  readonly label: string | null;
-  readonly status: 'active' | 'expired' | 'revoked';
-  readonly issuedAt: string;
-  readonly expiresAt: string;
-  readonly revokedAt: string | null;
-  readonly lastUsedAt: string | null;
-  readonly operations: readonly string[];
-  readonly syncGroups: readonly string[];
-}
-
-export interface CapabilityRevocation {
-  readonly id: string;
-  readonly deleted: boolean;
-  readonly activeSessionsClosed?: number;
-}
-
-export interface CapabilityRotateOptions {
-  /**
-   * The overlap window — the old token keeps authenticating for this long after
-   * rotation, so you can deploy the replacement with zero downtime. Defaults to
-   * 24h on the server.
-   */
-  readonly grace?: Duration;
-  readonly graceSeconds?: number;
-  /**
-   * The lifetime of the replacement capability. Omit to inherit the original's
-   * lifetime.
-   */
-  readonly lease?: Duration;
-  readonly leaseSeconds?: number;
-}
-
-/** The fresh capability returned by `rotate`, plus a pointer to the old one. */
-export interface RotatedCapability extends Capability {
-  /**
-   * The capability that was rotated out. Its token keeps working until
-   * `expiresAt` (the end of the grace window), then expires.
-   */
-  readonly rotatedFrom: {
-    readonly id: string;
-    readonly expiresAt: string;
-  };
-}
-
-export interface CapabilityResource {
-  create(options: CapabilityCreateOptions): Promise<Capability>;
-  retrieve(id: string): Promise<CapabilityRecord>;
-  revoke(id: string): Promise<CapabilityRevocation>;
-  /**
-   * Rotate with overlap: mint a fresh capability that carries the same scope, and
-   * keep the old token working for a grace window so you can roll out the
-   * replacement without downtime.
-   */
-  rotate(id: string, options?: CapabilityRotateOptions): Promise<RotatedCapability>;
-  /**
-   * Alias for `create`. Kept because "mint" is common capability-token
-   * language, but `create` is the canonical SDK verb.
-   */
-  mint(options: CapabilityCreateOptions): Promise<Capability>;
-}
 
 // NOTE: end-user / agent session minting is `ablo.sessions.create(...)` (typed
 // against the schema, see Ablo.ts `CreateSessionParams`). There is no separate
 // `ephemeralKeys` resource — `sessions` is the one front door for both.
 
-export interface AbloApi {
+/** @internal Private protocol surface wrapped by `AbloHttpClient`. */
+export interface HttpTransport {
   ready(): Promise<void>;
   waitForFlush(): Promise<void>;
   dispose(): Promise<void>;
   purge(): Promise<void>;
-  readonly capabilities: CapabilityResource;
-  readonly claims: AbloApiClaims;
   readonly commits: CommitResource;
-  model<T = Record<string, unknown>>(name: string): ModelClient<T>;
+  model<T = Record<string, unknown>>(name: string): HttpTransportModel<T>;
   /**
    * Resolve the active bearer credential this client authenticates with — the
    * same token its own requests carry in `Authorization`. Returns `null` when
@@ -317,6 +194,7 @@ const successfulCommitResponseSchema = z
     success: z.literal(true),
     lastSyncId: z.number().int().nonnegative().optional(),
     ops: z.number().int().positive(),
+    notifications: z.array(staleNotificationSchema).optional(),
     /** Ids of UPDATE/DELETE targets that matched zero rows (loud 0-row writes). */
     missingIds: z.array(z.string().min(1)).optional(),
   })
@@ -348,65 +226,31 @@ interface ClaimListResponse {
   readonly queue?: readonly ModelClaim[];
 }
 
-interface ClaimCreateResponse {
-  readonly claim?: ModelClaim;
-  /** Present (with HTTP 202) when `queue` was set and the target was held. */
-  readonly status?: 'queued';
-  readonly claimId?: string;
-  readonly position?: number;
-}
-
-interface CapabilityCreateResponse {
-  readonly capabilityId?: string;
-  readonly id?: string;
-  readonly token: string;
-  readonly expiresAt: string;
-  readonly organizationId: string;
-  readonly scope: CapabilityScope;
-  readonly userMeta?: Record<string, unknown>;
-}
-
-interface CapabilityRotateResponse {
-  readonly capabilityId?: string;
-  readonly id?: string;
-  readonly token: string;
-  /** Restricted keys (the only kind this route rotates) always carry an expiry. */
-  readonly expiresAt: string;
-  readonly organizationId: string;
-  readonly scope: CapabilityScope;
-  readonly rotatedFrom: {
-    readonly capabilityId?: string;
-    readonly id?: string;
-    readonly expiresAt: string;
+/** Decode the HTTP claim DTO into the one public Claim shape. */
+function claimFromModelClaim(claim: ModelClaim): Claim {
+  return {
+    object: 'claim',
+    id: claim.id,
+    ...(claim.status ? { status: claim.status } : {}),
+    reason: claim.reason,
+    ...(claim.description ? { description: claim.description } : {}),
+    heldBy: claim.actor,
+    participantKind: claim.participantKind,
+    expiresAt: claim.expiresAt,
+    ...(claim.position !== undefined ? { position: claim.position } : {}),
+    target: {
+      type: claim.target.model,
+      id: claim.target.id,
+      ...(claim.target.path ? { path: claim.target.path } : {}),
+      ...(claim.target.range ? { range: claim.target.range } : {}),
+      ...(claim.target.field ? { field: claim.target.field } : {}),
+      ...(claim.target.meta ? { meta: claim.target.meta } : {}),
+    },
   };
 }
 
-interface CapabilityRetrieveResponse {
-  readonly capabilityId?: string;
-  readonly id?: string;
-  readonly organizationId: string;
-  readonly participantKind: CapabilityParticipantKind;
-  readonly participantId: string;
-  readonly label: string | null;
-  readonly status: 'active' | 'expired' | 'revoked';
-  readonly issuedAt: string;
-  readonly expiresAt: string;
-  readonly revokedAt: string | null;
-  readonly lastUsedAt: string | null;
-  readonly operations?: readonly string[];
-  readonly syncGroups?: readonly string[];
-}
-
-interface CapabilityRevokeResponse {
-  readonly id?: string;
-  readonly capabilityId?: string;
-  readonly deleted?: boolean;
-  readonly activeSessionsClosed?: number;
-}
-
-const DEFAULT_AGENT_LEASE: Duration = '10m';
-
-export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
+/** @internal Constructed only by the typed HTTP facade. */
+export function createHttpTransport(options: HttpTransportOptions): HttpTransport {
   const env = readProcessEnv();
   const authInput = { options, env };
   const configuredApiKey = resolveApiKey(authInput);
@@ -479,7 +323,14 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     url,
     bootstrapBaseUrl: options.bootstrapBaseUrl,
   }).replace(/\/+$/, '');
-  const commitOutbox = options.commitOutbox;
+  const durableWrites = resolveDurableWrites(options);
+  // Internal replay code retains transactional-outbox terminology. The public
+  // constructor exposes the behavior as `durableWrites`.
+  const commitOutbox = durableWrites.store;
+  const durableWriteNamespace = durableWrites.namespace ?? 'http';
+  const legacyCommitOutboxScope = (
+    options as { readonly commitOutboxScope?: CommitOutboxScope }
+  ).commitOutboxScope;
   const httpOutboxPlaneNamespace = canonicalHttpCommitBody({
     apiBaseUrl,
     defaultQuery: Object.entries(options.defaultQuery ?? {}).sort(([a], [b]) =>
@@ -504,7 +355,12 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     if (!commitOutbox) return null;
     if (httpOutboxScopeNamespace) return httpOutboxScopeNamespace;
 
-    let scope: CommitOutboxScope | undefined = options.commitOutboxScope;
+    let scope: CommitOutboxScope | undefined = legacyCommitOutboxScope
+      ? {
+          ...legacyCommitOutboxScope,
+          namespace: durableWriteNamespace,
+        }
+      : undefined;
     if (!scope) {
       const rawIdentity = await requestJson<unknown>(
         '/auth/identity',
@@ -515,7 +371,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       scope = {
         organizationId: identity.accountScope,
         participantId: identity.participantId,
-        namespace: 'http',
+        namespace: durableWriteNamespace,
       };
     }
     httpOutboxScopeNamespace = canonicalHttpCommitBody({
@@ -549,12 +405,14 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     }
   }
 
-  async function authHeaders(): Promise<Record<string, string>> {
+  async function authHeaders(
+    sealedProtocolVersion?: number,
+  ): Promise<Record<string, string>> {
     const apiKey = await resolveApiKeyValue(configuredApiKey);
     const token = apiKey ?? configuredAuthToken;
     if (!token) {
       throw new AbloAuthenticationError(
-        'Ablo({ apiKey }) requires an API key. Pass `apiKey` or set ABLO_API_KEY.',
+        'The HTTP client requires an API key. Pass `apiKey` or set ABLO_API_KEY.',
         { code: 'api_key_required' },
       );
     }
@@ -575,6 +433,13 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       }
     }
 
+    // A durable write owns its wire version. Force the sealed value after
+    // caller defaults so a restarted (or rolled-back) SDK cannot rewrite the
+    // protocol identity of a request that may already have reached the server.
+    if (sealedProtocolVersion !== undefined) {
+      headers[PROTOCOL_VERSION_HEADER] = String(sealedProtocolVersion);
+    }
+
     return headers;
   }
 
@@ -590,12 +455,15 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
 
   async function requestJson<T>(
     path: string,
-    init: RequestInit & { readonly idempotencyKey?: string | null },
+    init: RequestInit & {
+      readonly idempotencyKey?: string | null;
+      readonly sealedProtocolVersion?: number;
+    },
     skipReady = false,
   ): Promise<T> {
     if (!skipReady) await ready();
-    const { idempotencyKey, ...requestInit } = init;
-    const headers = await authHeaders();
+    const { idempotencyKey, sealedProtocolVersion, ...requestInit } = init;
+    const headers = await authHeaders(sealedProtocolVersion);
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
 
     // Deadline: abort the request after `timeoutMs` so a black-holed server
@@ -745,6 +613,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           {
             method: envelope.request.method,
             idempotencyKey: envelope.idempotencyKey,
+            sealedProtocolVersion: envelope.protocolVersion,
             body: envelope.request.body,
           },
           true,
@@ -781,7 +650,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     if (!commitOutbox) return null;
     const scopeNamespace = await resolveHttpOutboxScope();
     if (!scopeNamespace) {
-      throw new AbloValidationError('HTTP commit outbox scope was not resolved', {
+      throw new AbloValidationError('HTTP durable-write scope was not resolved', {
         code: 'write_options_invalid',
       });
     }
@@ -870,6 +739,9 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           {
             method: input.method,
             idempotencyKey: input.idempotencyKey,
+            ...(durableEnvelope
+              ? { sealedProtocolVersion: durableEnvelope.protocolVersion }
+              : {}),
             body: requestBody,
           },
           true,
@@ -915,43 +787,14 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       : `id_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  function childClient(
-    authToken: string,
-    scope?: Pick<CommitOutboxScope, 'organizationId' | 'participantId'>,
-  ): AbloApi {
-    return createProtocolClient({
-      ...options,
-      apiKey: null,
-      authToken,
-      schema: null,
-      ...(scope
-        ? {
-            commitOutboxScope: {
-              ...scope,
-              namespace: options.commitOutboxScope?.namespace ?? 'http',
-            },
-          }
-        : { commitOutboxScope: undefined }),
-    });
-  }
-
   function normalizeCommitOperation(
     op: CommitOperationInput,
     defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
   ): CommitOperationInput {
-    const model = op.model ?? op.target?.model;
-    if (!model) {
-      throw new AbloValidationError(
-        'Commit operation requires `model` or `target.model`.',
-        { code: 'commit_operation_model_required' },
-      );
-    }
-
-    const id = op.id ?? op.target?.id ?? null;
     return {
       action: op.action,
-      model,
-      id,
+      model: op.model,
+      id: op.id ?? null,
       data: op.data ?? null,
       transactionId: op.transactionId ?? null,
       readAt: op.readAt ?? defaults.readAt ?? null,
@@ -962,29 +805,15 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   function normalizeCommitOperations(
     commitOptions: CommitCreateOptions,
   ): readonly CommitOperationInput[] {
-    if (commitOptions.operation && commitOptions.operations) {
+    if (commitOptions.operations.length === 0) {
       throw new AbloValidationError(
-        'Pass either `operation` or `operations`, not both.',
-        { code: 'commit_operations_ambiguous' },
-      );
-    }
-    const inputOperations = commitOptions.operation
-      ? [commitOptions.operation]
-      : commitOptions.operations ?? [];
-    if (inputOperations.length === 0) {
-      throw new AbloValidationError(
-        'Commit requires at least one operation.',
+        'Commit requires a non-empty `operations` array.',
         { code: 'commit_operation_required' },
       );
     }
-    return inputOperations.map((op) => normalizeCommitOperation(op, commitOptions));
-  }
-
-  async function listClaims(
-    target?: Partial<ModelTarget>,
-  ): Promise<readonly ModelClaim[]> {
-    const state = await listClaimState(target);
-    return state.active;
+    return commitOptions.operations.map((op) =>
+      normalizeCommitOperation(op, commitOptions),
+    );
   }
 
   async function listClaimState(
@@ -1004,75 +833,6 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       active: body.claims ?? [],
       queue: body.queue ?? [],
     };
-  }
-
-  function delay(ms: number, signal?: AbortSignal): Promise<void> {
-    if (signal?.aborted) {
-      return Promise.reject(
-        new AbloConnectionError('Claim wait aborted.', {
-          code: 'claim_wait_aborted',
-          cause: signal.reason,
-        }),
-      );
-    }
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(done, ms);
-
-      function cleanup(): void {
-        clearTimeout(timeout);
-        signal?.removeEventListener('abort', onAbort);
-      }
-
-      function done(): void {
-        cleanup();
-        resolve();
-      }
-
-      function onAbort(): void {
-        cleanup();
-        reject(
-          new AbloConnectionError('Claim wait aborted.', {
-            code: 'claim_wait_aborted',
-            cause: signal?.reason,
-          }),
-        );
-      }
-
-      signal?.addEventListener('abort', onAbort, { once: true });
-    });
-  }
-
-  async function waitForNoClaims(
-    target: Partial<ModelTarget>,
-    options?: ClaimWaitOptions,
-  ): Promise<void> {
-    const startedAt = Date.now();
-    const pollInterval = options?.pollInterval;
-
-    for (;;) {
-      const claims = await listClaims(target);
-      if (claims.length === 0) return;
-
-      if (pollInterval == null) {
-        throw new AbloValidationError(
-          'Cannot wait for claims over the HTTP client without `pollInterval`. ' +
-            'Use the schema client for event-driven claim waits, pass `ifClaimed: "return"`, ' +
-            'or provide an explicit poll interval for this runtime.',
-          { code: 'claim_wait_poll_interval_required' },
-        );
-      }
-
-      if (options?.timeout != null && Date.now() - startedAt >= options.timeout) {
-        throw claimedError(target, claims, 'model_claimed_timeout');
-      }
-
-      const remaining =
-        options?.timeout == null
-          ? pollInterval
-          : Math.max(0, Math.min(pollInterval, options.timeout - (Date.now() - startedAt)));
-      await delay(remaining, options?.signal);
-    }
   }
 
   async function applyClaimedPolicy(
@@ -1113,9 +873,6 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
       });
       const requestBody = {
-        clientTxId,
-        idempotencyKey: clientTxId,
-        claim: normalizeClaimId(commitOptions.claimRef) ?? claim?.id,
         operations,
         reads: commitOptions.reads,
       };
@@ -1152,250 +909,13 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         id: body.id ?? body.clientTxId,
         status,
         lastSyncId: body.lastSyncId,
+        ...(body.notifications && body.notifications.length > 0
+          ? { notifications: body.notifications }
+          : {}),
         ...(body.missingIds && body.missingIds.length > 0
           ? { missingIds: body.missingIds }
           : {}),
       };
-    },
-  };
-
-  const capabilities: CapabilityResource = {
-    async create(capabilityOptions: CapabilityCreateOptions): Promise<Capability> {
-      const ttlSeconds =
-        capabilityOptions.ttlSeconds ?? // eslint-disable-line @typescript-eslint/no-deprecated -- compatibility alias
-        capabilityOptions.leaseSeconds ??
-        toSeconds(capabilityOptions.ttl ?? capabilityOptions.lease ?? DEFAULT_AGENT_LEASE); // eslint-disable-line @typescript-eslint/no-deprecated -- compatibility alias
-      const body = await requestJson<CapabilityCreateResponse>('/v1/capabilities', {
-        method: 'POST',
-        body: JSON.stringify({
-          participantKind: capabilityOptions.participantKind ?? 'agent',
-          participantId: capabilityOptions.participantId,
-          syncGroups: capabilityOptions.syncGroups,
-          operations: capabilityOptions.operations,
-          ttlSeconds,
-          label: capabilityOptions.label,
-          wideScope: capabilityOptions.wideScope,
-          userMeta: capabilityOptions.userMeta,
-        }),
-      });
-      const id = body.capabilityId ?? body.id;
-      if (!id) {
-        throw new AbloValidationError(
-          'Capability create response did not include an id.',
-          { code: 'capability_id_missing' },
-        );
-      }
-
-      return {
-        id,
-        token: body.token,
-        expiresAt: body.expiresAt,
-        organizationId: body.organizationId,
-        scope: body.scope,
-        userMeta: body.userMeta,
-        client: () =>
-          childClient(body.token, {
-            organizationId: body.organizationId,
-            participantId: body.scope.participantId,
-          }),
-      };
-    },
-
-    async retrieve(id: string): Promise<CapabilityRecord> {
-      const body = await requestJson<CapabilityRetrieveResponse>(
-        `/v1/capabilities/${encodeURIComponent(id)}`,
-        { method: 'GET' },
-      );
-      return {
-        id: body.capabilityId ?? body.id ?? id,
-        organizationId: body.organizationId,
-        participantKind: body.participantKind,
-        participantId: body.participantId,
-        label: body.label,
-        status: body.status,
-        issuedAt: body.issuedAt,
-        expiresAt: body.expiresAt,
-        revokedAt: body.revokedAt,
-        lastUsedAt: body.lastUsedAt,
-        operations: body.operations ?? [],
-        syncGroups: body.syncGroups ?? [],
-      };
-    },
-
-    async revoke(id: string): Promise<CapabilityRevocation> {
-      const body = await requestJson<CapabilityRevokeResponse>(
-        `/v1/capabilities/${encodeURIComponent(id)}`,
-        { method: 'DELETE' },
-      );
-      return {
-        id: body.capabilityId ?? body.id ?? id,
-        deleted: body.deleted ?? true,
-        activeSessionsClosed: body.activeSessionsClosed,
-      };
-    },
-
-    async rotate(
-      id: string,
-      rotateOptions: CapabilityRotateOptions = {},
-    ): Promise<RotatedCapability> {
-      const graceSeconds =
-        rotateOptions.graceSeconds ??
-        (rotateOptions.grace !== undefined ? toSeconds(rotateOptions.grace) : undefined);
-      const leaseSeconds =
-        rotateOptions.leaseSeconds ??
-        (rotateOptions.lease !== undefined ? toSeconds(rotateOptions.lease) : undefined);
-      const body = await requestJson<CapabilityRotateResponse>(
-        `/v1/capabilities/${encodeURIComponent(id)}/rotate`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            ...(graceSeconds !== undefined ? { graceSeconds } : {}),
-            ...(leaseSeconds !== undefined ? { ttlSeconds: leaseSeconds } : {}),
-          }),
-        },
-      );
-      const newId = body.capabilityId ?? body.id;
-      if (!newId) {
-        throw new AbloValidationError(
-          'Capability rotate response did not include an id.',
-          { code: 'capability_id_missing' },
-        );
-      }
-      return {
-        id: newId,
-        token: body.token,
-        expiresAt: body.expiresAt,
-        organizationId: body.organizationId,
-        scope: body.scope,
-        rotatedFrom: {
-          id: body.rotatedFrom.capabilityId ?? body.rotatedFrom.id ?? id,
-          expiresAt: body.rotatedFrom.expiresAt,
-        },
-        client: () =>
-          childClient(body.token, {
-            organizationId: body.organizationId,
-            participantId: body.scope.participantId,
-          }),
-      };
-    },
-
-    mint(options: CapabilityCreateOptions): Promise<Capability> {
-      return capabilities.create(options);
-    },
-  };
-
-
-  const claims: AbloApiClaims = {
-    async create(claimOptions: ClaimCreateOptions): Promise<Claim> {
-      const claimId = createClaimId();
-      const body = await requestJson<ClaimCreateResponse>('/v1/claims', {
-        method: 'POST',
-        body: JSON.stringify({
-          claimId,
-          target: claimOptions.target,
-          reason: claimOptions.reason,
-          ttl: claimOptions.ttl,
-          queue: claimOptions.queue,
-        }),
-      });
-      // The fair-queue grant is pushed over a WebSocket (`claim_granted`), which
-      // this stateless HTTP client doesn't hold. Returning a handle here would be
-      // a phantom holder — a lease we can't confirm is ours. So a queued response
-      // is surfaced as a typed claimed signal; callers that need to wait in line
-      // use the realtime (WebSocket-backed) `ablo.<model>.claim`.
-      if (body.status === 'queued') {
-        throw new AbloClaimedError(
-          `Target ${claimOptions.target.model}/${claimOptions.target.id} is held; ` +
-            `queued at position ${body.position ?? 0}. The HTTP client can't await ` +
-            `the grant (no socket) — use the realtime client to wait in line.`,
-          { code: 'claim_queued' },
-        );
-      }
-      const id = body.claim?.id ?? claimId;
-      let released = false;
-
-      const release = async (): Promise<void> => {
-        if (released) return;
-        released = true;
-        await requestJson<{ ok: true }>(
-          `/v1/claims/${encodeURIComponent(id)}`,
-          { method: 'DELETE' },
-        );
-      };
-
-      // The by-id twin of the model-scoped heartbeat — same reply contract.
-      const heartbeat = async (
-        beatOptions?: Duration | ClaimHeartbeatOptions,
-      ): Promise<ClaimHeartbeat> => {
-        const resolved = resolveHeartbeatOptions(beatOptions);
-        const reply = await requestJson<HeartbeatReply>(
-          `/v1/claims/${encodeURIComponent(id)}/heartbeat`,
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              ...(resolved.ttl !== undefined ? { ttl: resolved.ttl } : {}),
-              ...(resolved.details !== undefined
-                ? { details: resolved.details }
-                : {}),
-            }),
-          },
-        );
-        return heldHeartbeatReply(reply, `claim ${id}`);
-      };
-
-      return {
-        object: 'claim',
-        id,
-        heartbeat,
-        reason: claimOptions.reason,
-        target: {
-          type: claimOptions.target.model,
-          id: claimOptions.target.id,
-          ...(claimOptions.target.field ? { field: claimOptions.target.field } : {}),
-          ...(claimOptions.target.path ? { path: claimOptions.target.path } : {}),
-          ...(claimOptions.target.range ? { range: claimOptions.target.range } : {}),
-          ...(claimOptions.target.meta ? { meta: claimOptions.target.meta } : {}),
-        },
-        release,
-        revoke: () => {
-          void release().catch(() => {});
-        },
-        [Symbol.asyncDispose]: release,
-      };
-    },
-
-    list: listClaims,
-    waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void> {
-      return waitForNoClaims(target, options);
-    },
-    async heartbeatAll(options?: {
-      ttl?: Duration;
-    }): Promise<readonly (ClaimHeartbeat & { readonly claimId: string })[]> {
-      const reply = await requestJson<{
-        results?: {
-          claimId?: string;
-          expiresAt?: number;
-          queueDepth?: number;
-        }[];
-      }>('/v1/claims/heartbeat', {
-        method: 'POST',
-        body: JSON.stringify(
-          options?.ttl !== undefined ? { ttl: options.ttl } : {},
-        ),
-      });
-      return (reply.results ?? []).flatMap((entry) =>
-        typeof entry.claimId === 'string' && typeof entry.expiresAt === 'number'
-          ? [
-              {
-                claimId: entry.claimId,
-                expiresAt: entry.expiresAt,
-                ...(entry.queueDepth !== undefined
-                  ? { queueDepth: entry.queueDepth }
-                  : {}),
-              },
-            ]
-          : [],
-      );
     },
   };
 
@@ -1431,7 +951,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
   async function retrieveModel<T>(
     modelName: string,
     params: ModelReadOptions & { readonly id: string },
-  ): Promise<ModelRead<T>> {
+  ): Promise<HttpTransportRead<T>> {
     await applyClaimedPolicy({ model: modelName, id: params.id }, params);
 
     const query = await requestJson<QueryResponse>(
@@ -1506,7 +1026,6 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         : undefined;
     const readAt = options?.readAt ?? claimHandle?.readAt;
     const requestBody: Record<string, unknown> = {
-      idempotencyKey: clientTxId,
       claim: normalizeClaimId(options?.claimRef) ?? claimHandle?.id,
       onStale:
         options?.onStale ?? (claimHandle?.readAt !== undefined ? 'reject' : undefined),
@@ -1541,7 +1060,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
     };
   }
 
-  function model<T = Record<string, unknown>>(name: string): ModelClient<T> {
+  function model<T = Record<string, unknown>>(name: string): HttpTransportModel<T> {
     // Durable lease + FIFO wait-line over HTTP (the existing claim routes). A
     // claim is server state, not a subscription — acquire/hold/release are plain
     // request/response, so a stateless agent participates in coordination too.
@@ -1692,8 +1211,8 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
         [Symbol.asyncDispose]: release,
       };
     }
-    const claimsForEntity = async (params: ClaimLookupParams<T>): Promise<{ claims?: Claim[]; queue?: Claim[] }> =>
-      requestJson<{ claims?: Claim[]; queue?: Claim[] }>(
+    const claimsForEntity = async (params: ClaimLookupParams<T>): Promise<{ claims?: ModelClaim[]; queue?: ModelClaim[] }> =>
+      requestJson<{ claims?: ModelClaim[]; queue?: ModelClaim[] }>(
         `/v1/claims?model=${encodeURIComponent(name)}&id=${encodeURIComponent(params.id)}${
           params.field ? `&field=${encodeURIComponent(params.field)}` : ''
         }`,
@@ -1704,13 +1223,16 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       state: async (params: ClaimLookupParams<T>): Promise<Claim | null> => {
         const res = await claimsForEntity(params);
         const first = res.claims?.[0];
-        return first ?? null;
+        return first ? claimFromModelClaim(first) : null;
       },
       queue: async (
         params: ClaimLookupParams<T>,
       ): Promise<{ readonly object: 'list'; readonly data: readonly Claim[] }> => {
         const res = await claimsForEntity(params);
-        return { object: 'list', data: res.queue ?? [] };
+        return {
+          object: 'list',
+          data: (res.queue ?? []).map(claimFromModelClaim),
+        };
       },
       reorder: async (params: ClaimReorderParams<T>): Promise<void> => {
         await requestJson<unknown>(`${claimPath(params.id)}/reorder`, {
@@ -1805,7 +1327,7 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
 
     return {
       claim,
-      retrieve(params: ModelReadOptions & { readonly id: string }): Promise<ModelRead<T>> {
+      retrieve(params: ModelReadOptions & { readonly id: string }): Promise<HttpTransportRead<T>> {
         return retrieveModel<T>(name, params);
       },
       list(options?: ServerReadOptions<T>): Promise<T[]> {
@@ -1872,8 +1394,6 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
       }),
     async dispose() {},
     async purge() {},
-    capabilities,
-    claims,
     commits,
     model,
     sessions: {
@@ -1892,6 +1412,9 @@ export function createProtocolClient(options: AbloApiClientOptions): AbloApi {
           apiKey,
           baseUrl: apiBaseUrl,
           ...(options.fetch ? { fetch: options.fetch } : {}),
+          ...(options.modelTypenames
+            ? { modelTypenames: options.modelTypenames }
+            : {}),
         });
       },
     },

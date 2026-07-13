@@ -39,8 +39,8 @@ export function selectModels<S extends SchemaRecord, K extends keyof S & string>
     const def = schema.models[key];
     if (!def) {
       throw new AbloValidationError(
-        `selectModels: "${String(key)}" is not a model in the source schema`,
-        { code: 'invalid_schema', param: String(key) },
+        `selectModels: "${key}" is not a model in the source schema`,
+        { code: 'invalid_schema', param: key },
       );
     }
 
@@ -54,9 +54,9 @@ export function selectModels<S extends SchemaRecord, K extends keyof S & string>
       }
       if (rel.options?.parent) {
         throw new AbloValidationError(
-          `selectModels: model "${String(key)}" has a parent relation "${relName}" → "${rel.target}", ` +
+          `selectModels: model "${key}" has a parent relation "${relName}" → "${rel.target}", ` +
             `which is not in the selected set. Include "${rel.target}" so scope inheritance still routes.`,
-          { code: 'invalid_schema', param: `${String(key)}.${relName}` },
+          { code: 'invalid_schema', param: `${key}.${relName}` },
         );
       }
     }
@@ -70,4 +70,35 @@ export function selectModels<S extends SchemaRecord, K extends keyof S & string>
     validators: validators as Schema<Pick<S, K>>['validators'],
     identityRoles: schema.identityRoles,
   };
+}
+
+/**
+ * `omitModels` is `selectModels` from the other side: keep every model EXCEPT
+ * the named ones. Use it when an app is the general case and another product
+ * owns the omitted models — e.g. the product suite shell drops the standalone
+ * Mail store, which `@ablo/mail-schema` selects for the mail app:
+ *
+ * ```ts
+ * export const schema = omitModels(full, ['mailMailboxes', 'mailThreads']);
+ * ```
+ *
+ * Same validation as `selectModels`: relations into the omitted set are
+ * dropped, and a dropped `parent` edge throws — so a model whose scope routes
+ * through an omitted parent cannot be silently kept.
+ */
+export function omitModels<S extends SchemaRecord, K extends keyof S & string>(
+  schema: Schema<S>,
+  keys: readonly K[],
+): Schema<Omit<S, K>> {
+  const drop = new Set<string>(keys as readonly string[]);
+  for (const key of keys) {
+    if (!schema.models[key]) {
+      throw new AbloValidationError(
+        `omitModels: "${key}" is not a model in the source schema`,
+        { code: 'invalid_schema', param: key },
+      );
+    }
+  }
+  const kept = Object.keys(schema.models).filter((k) => !drop.has(k));
+  return selectModels(schema, kept as (keyof S & string)[]) as Schema<Omit<S, K>>;
 }

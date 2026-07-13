@@ -26,7 +26,8 @@ import { execFileSync } from 'child_process';
 import { confirm, text, isCancel, cancel } from '@clack/prompts';
 import { serializeSchema, schemaHash, type Schema } from '@abloatai/ablo/schema';
 import { ABLO_DEFAULT_BASE_URL } from '../client/hostedEndpoints.js';
-import { resolveEffectiveApiKey, getMode, getActiveProject, modeFromKey, type EffectiveKeySource } from './config';
+import { resolveEffectiveApiKey, getMode, type EffectiveKeySource } from './config';
+import { resolveTarget, describeMismatch, type ResolvedTarget } from './target';
 import { brand } from './theme';
 
 export interface PushArgs {
@@ -343,10 +344,8 @@ function printPlan(local: Map<string, string>, remote: RemoteSchema | null): voi
  * requires a typed confirmation (TTY) or an explicit `--yes` (CI). Calls
  * `process.exit(1)` on refusal/cancel; returns when clear to apply.
  */
-async function confirmPush(
-  args: PushArgs,
-  env: 'production' | 'sandbox' | null | undefined,
-): Promise<void> {
+async function confirmPush(args: PushArgs, target: ResolvedTarget): Promise<void> {
+  const env = target.confirmed?.environment ?? target.keyEnv;
   const isProd = env === 'production';
   const tty = Boolean(process.stdout.isTTY && process.stdin.isTTY);
 
@@ -362,10 +361,18 @@ async function confirmPush(
       console.error(pc.dim(`    Re-run with ${pc.bold('--yes')} to confirm in CI/scripts.`));
       process.exit(1);
     }
-    const project = getActiveProject();
-    const expected = project?.slug ?? 'production';
+    // Type the SERVER-CONFIRMED project, so confirming a production push means
+    // acknowledging the real destination by name. This is what makes a
+    // wrong-project deploy impossible to do by reflex: when the key targets a
+    // project other than the one selected locally, the operator must type the
+    // key's actual project to proceed. Falls back to the local slug, then
+    // `production`, only when the server couldn't confirm a project.
+    const confirmedProject = target.confirmed?.project;
+    const expected = confirmedProject
+      ? (confirmedProject.isDefault ? 'default' : confirmedProject.slug)
+      : target.localProject?.slug ?? 'production';
     const typed = await text({
-      message: `This deploys to ${pc.bold('production')}. Type ${pc.bold(expected)} to confirm:`,
+      message: `This deploys to ${pc.bold('production')} project ${pc.bold(expected)}. Type ${pc.bold(expected)} to confirm:`,
       placeholder: expected,
     });
     if (isCancel(typed) || String(typed).trim() !== expected) {
@@ -390,45 +397,67 @@ async function confirmPush(
  * Prints a target banner before every push so the deploy destination is never a
  * guess. It's easy to build an app against one schema and deploy to a different
  * project or environment without noticing; the banner names exactly where the
- * push will land. The environment comes from the key, not the CLI mode: the
- * resolved key's environment is the real target, so a key whose environment
- * disagrees with the active mode is flagged rather than silently trusted.
+ * push will land — the SERVER-CONFIRMED org, project, and environment the key
+ * resolves to ({@link resolveTarget}), not a local preference that can silently
+ * disagree with the key. When the server can't confirm (offline, or an older
+ * server), it falls back to the local view and marks it unconfirmed so the
+ * uncertainty is visible rather than assumed away.
  */
-function printPushTarget(opts: {
-  schemaPath: string;
-  url: string;
-  apiKey: string;
-  keySource: EffectiveKeySource;
-  modelCount: number;
-  hash: string;
-}): void {
-  const env = modeFromKey(opts.apiKey);
+function printPushTarget(
+  target: ResolvedTarget,
+  schema: { path: string; modelCount: number; hash: string },
+): void {
+  const confirmed = target.confirmed;
+  // Environment: the server's, else the key prefix. This is the real target,
+  // so a key whose environment disagrees with the CLI mode is flagged below.
+  const env = confirmed?.environment ?? target.keyEnv;
   const envLabel =
     env === 'production'
       ? pc.bold('production')
       : env === 'sandbox'
         ? pc.bold('sandbox')
         : pc.yellow('unknown env');
-  const project = getActiveProject();
-  const projectLabel = project
-    ? `${pc.bold(project.slug)} ${pc.dim(`(${project.id})`)}`
-    : `${pc.bold('default')} ${pc.dim('(org-default)')}`;
-  // Flag the case where the CLI mode and the key's environment disagree: the
-  // push may land somewhere other than what `ablo status` implies. The label
-  // above already names the real target, so this note only marks the mismatch.
   const cliMode = getMode();
-  const modeNote =
-    env && env !== cliMode ? ` ${pc.yellow(`(cli mode: ${cliMode})`)}` : '';
+  const modeNote = env && env !== cliMode ? ` ${pc.yellow(`(cli mode: ${cliMode})`)}` : '';
+
+  // Project + org: server-confirmed when available, otherwise the local
+  // preference with an explicit "unconfirmed" marker.
+  let projectLabel: string;
+  if (confirmed?.project) {
+    const p = confirmed.project;
+    const name = p.isDefault ? `${pc.bold('default')} ${pc.dim('(org-default)')}` : pc.bold(p.slug);
+    projectLabel = `${name} ${pc.dim(`(${p.id})`)}`;
+  } else if (confirmed) {
+    // Identity resolved but carried no project (human session / older server).
+    projectLabel = `${pc.bold('default')} ${pc.dim('(org-default)')}`;
+  } else {
+    const local = target.localProject;
+    const shown = local ? `${pc.bold(local.slug)} ${pc.dim(`(${local.id})`)}` : `${pc.bold('default')} ${pc.dim('(org-default)')}`;
+    projectLabel = `${shown} ${pc.yellow('(unconfirmed — server did not answer)')}`;
+  }
 
   console.log(`\n  ${brand('ablo')} ${pc.dim('push')} ${pc.dim('→')} ${envLabel}${modeNote}`);
+  if (confirmed?.organizationId) console.log(`  ${pc.dim('org')}      ${pc.dim(confirmed.organizationId)}`);
   console.log(`  ${pc.dim('project')}  ${projectLabel}`);
-  console.log(`  ${pc.dim('target')}   ${pc.dim(opts.url)}`);
+  console.log(`  ${pc.dim('target')}   ${pc.dim(target.url)}`);
   console.log(
-    `  ${pc.dim('key')}      ${maskKey(opts.apiKey)} ${pc.dim(`(${describeKeySource(opts.keySource)})`)}`,
+    `  ${pc.dim('key')}      ${target.keyPrefix} ${pc.dim(`(${describeKeySource(target.keySource)})`)}`,
   );
   console.log(
-    `  ${pc.dim('schema')}   ${pc.bold(opts.schemaPath)} ${pc.dim(`${opts.modelCount} models, hash ${opts.hash}`)}\n`,
+    `  ${pc.dim('schema')}   ${pc.bold(schema.path)} ${pc.dim(`${schema.modelCount} models, hash ${schema.hash}`)}\n`,
   );
+}
+
+/** Prints each local-intent-vs-key divergence as a prose warning. Returns
+ *  whether any project-level drift was found — the kind a production push must
+ *  make the operator acknowledge by name. */
+function warnMismatches(target: ResolvedTarget): { projectDrift: boolean } {
+  let projectDrift = false;
+  for (const m of target.mismatches) {
+    if (m.kind === 'project') projectDrift = true;
+    console.log(`  ${pc.yellow('⚠')}  ${pc.yellow(describeMismatch(m))}\n`);
+  }
+  return { projectDrift };
 }
 
 /** Human label for where the resolved key came from. */
@@ -484,18 +513,27 @@ export async function push(argv: readonly string[]): Promise<void> {
   const schema = await loadSchema(args.schemaPath, args.exportName);
   const hash = schemaHash(schema);
 
-  printPushTarget({
-    schemaPath: args.schemaPath,
-    url: args.url,
-    apiKey: args.apiKey,
-    keySource,
-    modelCount: Object.keys((schema).models).length,
+  // Resolve the true target from the key: the server-confirmed org, project, and
+  // environment it acts on, reconciled against the local `ablo projects use` /
+  // `ablo mode` preferences. Everything shown and confirmed below reads from
+  // this one resolution, so the banner can't say one thing while the push does
+  // another.
+  const target = await resolveTarget({ url: args.url, apiKey: args.apiKey, keySource });
+
+  printPushTarget(target, {
+    path: args.schemaPath,
+    modelCount: Object.keys(schema.models).length,
     hash,
   });
 
   // Plan preview — the model-level diff against the deployed schema.
   const remote = await fetchActiveSchema(args.url, args.apiKey);
   printPlan(localModels(schema), remote);
+
+  // Local-intent-vs-key divergences: the selected project isn't the key's
+  // project, or the CLI mode isn't the key's environment. Named in prose so the
+  // "wrong project" surprise happens here, before the write, not after.
+  warnMismatches(target);
 
   // Git state — warn about a deploy that won't match a commit (a warning on sandbox, not a block).
   const git = schemaGitState(args.schemaPath);
@@ -509,8 +547,9 @@ export async function push(argv: readonly string[]): Promise<void> {
     return;
   }
 
-  // Sandbox/production separation + confirmation (exits on refusal).
-  await confirmPush(args, modeFromKey(args.apiKey));
+  // Sandbox/production separation + confirmation (exits on refusal). On
+  // production this now requires typing the key's real project name.
+  await confirmPush(args, target);
 
   const { ok: resOk, status, body, bodyText } = await pushSchema(schema, args);
 

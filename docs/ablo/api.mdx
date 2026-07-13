@@ -225,10 +225,12 @@ endpoint documents that model's real field contract instead of a generic blob.
 
 Auth is a bearer API key: `Authorization: Bearer sk_…`. Mutations take an
 `Idempotency-Key` header — derive it from the business event, not a random
-value, so a retry never double-writes. Writes return a `CommitReceipt`; a
-rejected write carries an error `code` (e.g. `stale_context`, `intent_conflict`)
-to act on. `GET /api/v1/models/{model}` is cursor-paginated (`limit`, `order`,
-`order_by`, `starting_after`) and returns `{ data, has_more, next_cursor }`.
+value, so a retry never double-writes. Direct HTTP writes return a protocol
+receipt; the typed SDK turns single-model writes into their application result
+(the created or updated row, or nothing for delete). A rejected write carries an
+error `code` (e.g. `stale_context`, `intent_conflict`) to act on.
+`GET /api/v1/models/{model}` is cursor-paginated (`limit`, `order`, `order_by`,
+`starting_after`) and returns `{ data, has_more, next_cursor }`.
 
 `POST /api/v1/commits` remains the path for **atomic multi-op** writes (several
 operations across rows/models that must commit together) — the per-model routes

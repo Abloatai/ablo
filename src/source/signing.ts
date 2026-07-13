@@ -267,11 +267,3 @@ export async function verifyAbloSourceRequest(
 
   return { messageId, signedAt };
 }
-
-// The `DataSource*` names below are aliases, one-to-one with the `Source*`
-// names above.
-export type DataSourceSignatureOptions = SourceSignatureOptions;
-export type DataSourceSignatureVerificationOptions =
-  SourceSignatureVerificationOptions;
-export type DataSourceSignatureVerificationResult =
-  SourceSignatureVerificationResult;

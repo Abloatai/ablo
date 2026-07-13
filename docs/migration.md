@@ -11,7 +11,8 @@ change when you upgrade.
 
 | Version | What changed | What to do |
 |---|---|---|
-| **0.11.0** | `intent` → `claim` rename completed across the React hook, type namespace, and wire frames | `useIntent` → `useClaim`; `Register.Intents` → `Register.Claims`; `Ablo.Intent.*` → `Ablo.Claim.*`. Upgrade client **and** server together (wire frames moved `intent_*` → `claim_*`) |
+| **0.28.0** | Removed React placeholders that had no working runtime | `usePresence` → `usePeers` or `useWatch`; `useClaim` → `ablo.<model>.claim`; `SyncGroupProvider` / `useSyncGroup` → `useWatch({ scope })` |
+| **0.11.0** | Historical `intent` → `claim` rename | The hook renamed in that release was later removed in 0.28.0. Current code uses `ablo.<model>.claim` or `useWatch` |
 | **0.10.0** | Environment enum renamed `test`/`live` → `sandbox`/`production` | Update code that branches on the environment (e.g. source `mode`): `'test'`→`'sandbox'`, `'live'`→`'production'`. Key prefixes `sk_test_`/`sk_live_` are unchanged |
 | **0.9.2** | `turn` primitive + agent-work `tasks` resource removed | Coordinate with `claim`; mint a scoped session instead of `agent().run()` |
 | **0.9.2** | `intents` deprecated in favor of `claim` | Use `ablo.<model>.claim`; `ablo.intents` is now `@internal` |
@@ -25,7 +26,26 @@ change when you upgrade.
 
 ---
 
+## 0.28.0 — dead React multiplayer placeholders removed
+
+Four React exports looked usable but had no live implementation:
+
+- `usePresence` returned no provider-backed presence value. Use `usePeers` for
+  read-only presence or `useWatch` to join a scoped participant.
+- `useClaim` depended on a callback the provider never supplied and always
+  threw. Use `ablo.<model>.claim({ id, ... })` for row claims or
+  `useWatch({ scope, claim: true })` for a scoped participant claim.
+- `SyncGroupProvider` and `useSyncGroup` had no repository consumers. Pass the
+  scope directly to `useWatch({ scope })`.
+
+There is no compatibility alias: the replacement APIs were already the only
+working paths.
+
 ## 0.11.0 — `intent` → `claim` rename completed
+
+> **Historical note:** this section documents the 0.11.0 transition.
+> `useClaim` was subsequently removed in 0.28.0 because its provider callback
+> was never wired. Do not migrate new code to it; use the replacements above.
 
 The coordination primitive has been `claim` since 0.9.2, but a few `intent`-named
 surfaces lingered. 0.11.0 finishes the rename. There are three edits, all

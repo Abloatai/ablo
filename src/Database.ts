@@ -85,6 +85,9 @@ function isSameOutboxRecord(
       type: record.type,
       storageVersion: record.storageVersion,
       idempotencyKey: record.idempotencyKey,
+      // HTTP outbox rows written before protocol versioning are v1. Normalize
+      // them so a same-request re-seal remains idempotent after an upgrade.
+      protocolVersion: record.protocolVersion ?? 1,
       request: record.request,
       scopeNamespace: record.scopeNamespace,
     });
@@ -1708,7 +1711,7 @@ export class Database {
       const store = this.transactionStore;
       const existing = (await store.get(recordId)) as PersistedTransaction | undefined;
       if (existing && !isSameOutboxRecord(existing, record)) {
-        throw new AbloValidationError('Commit outbox key already identifies a different request', {
+        throw new AbloValidationError('Pending-write key already identifies a different request', {
           code: 'idempotency_conflict',
         });
       }
@@ -1718,7 +1721,7 @@ export class Database {
         );
         if (sources.some((source) => source === undefined)) {
           throw new AbloValidationError(
-            'Commit outbox source mutations were already claimed by another envelope',
+            'Pending-write source mutations were already claimed by another write',
             { code: 'idempotency_conflict' },
           );
         }
@@ -1732,7 +1735,7 @@ export class Database {
 
     const db = this.workspaceDb;
     if (!db || this.isClosing) {
-      throw new AbloConnectionError('Database not opened for commit outbox', {
+      throw new AbloConnectionError('Database not opened for durable writes', {
         code: 'db_not_opened',
       });
     }
@@ -1764,7 +1767,7 @@ export class Database {
           promotionStarted = true;
           if (existing && !isSameOutboxRecord(existing, record)) {
             collisionError = new AbloValidationError(
-              'Commit outbox key already identifies a different request',
+              'Pending-write key already identifies a different request',
               { code: 'idempotency_conflict' },
             );
             tx.abort();
@@ -1777,7 +1780,7 @@ export class Database {
           // retry, so its already-consumed sources may be absent.
           if (!existing && sourceExists.some((exists) => !exists)) {
             collisionError = new AbloValidationError(
-              'Commit outbox source mutations were already claimed by another envelope',
+              'Pending-write source mutations were already claimed by another write',
               { code: 'idempotency_conflict' },
             );
             tx.abort();
@@ -1811,7 +1814,7 @@ export class Database {
             collisionError ??
             tx.error ??
             getRequest.error ??
-            new Error('Commit outbox transaction aborted'),
+            new Error('Durable-write transaction aborted'),
           );
         };
         tx.onerror = () => {

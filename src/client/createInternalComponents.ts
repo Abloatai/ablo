@@ -18,7 +18,11 @@ import type { AuthCredentialSource } from '../auth/credentialSource.js';
 import type { Schema, SchemaRecord } from '../schema/schema.js';
 import { resolveBootstrapBaseUrl } from './auth.js';
 import { shouldUseInMemoryPersistence, type AbloPersistence } from './persistence.js';
-import type { CommitOutboxStore } from '../transactions/commitOutboxStore.js';
+import type {
+  DurableWriteStore,
+  DurableWritesConfig,
+} from '../transactions/durableWriteStore.js';
+import { resolveDurableWrites } from './durableWrites.js';
 
 export interface InternalComponentsInput<S extends SchemaRecord> {
   readonly schema: Schema<S>;
@@ -32,7 +36,9 @@ export interface InternalComponentsInput<S extends SchemaRecord> {
     readonly persistence?: AbloPersistence;
     readonly offline?: boolean;
     readonly inMemory?: boolean;
-    readonly commitOutbox?: CommitOutboxStore;
+    readonly durableWrites?: DurableWritesConfig;
+    /** @deprecated Use `durableWrites`. */
+    readonly commitOutbox?: DurableWriteStore;
   };
   readonly auth?: AuthCredentialSource;
 }
@@ -81,11 +87,12 @@ export function createInternalComponents<S extends SchemaRecord>(
     // IndexedDB is unavailable there.
     inMemory: shouldUseInMemoryPersistence(options),
   });
+  const durableWrites = resolveDurableWrites(options);
   const syncClient = new SyncClient(
     objectPool,
     database,
-    options.commitOutbox,
-    url,
+    durableWrites.store,
+    durableWrites.namespace ?? url,
   );
 
   // Lazy-load lane: hydrates the object pool and IndexedDB on demand for

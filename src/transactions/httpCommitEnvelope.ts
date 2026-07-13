@@ -2,8 +2,9 @@
 
 import { z } from 'zod';
 import { v5 as uuidv5 } from 'uuid';
-import { idempotencyKeySchema } from '../commit/contract.js';
 import { stableStringify } from '../utils/json.js';
+import { PROTOCOL_VERSION } from '../wire/protocolVersion.js';
+import { idempotencyKeySchema } from './idempotencyKey.js';
 
 export const HTTP_COMMIT_ENVELOPE_VERSION = 1 as const;
 export const HTTP_COMMIT_ENVELOPE_PREFIX = 'http-commit-envelope:';
@@ -51,6 +52,11 @@ export const durableHttpCommitEnvelopeSchema = z
     type: z.literal('http_commit_envelope'),
     storageVersion: z.literal(HTTP_COMMIT_ENVELOPE_VERSION),
     idempotencyKey: idempotencyKeySchema,
+    /**
+     * The wire contract used when this exact request was sealed. Entries from
+     * before protocol versioning omitted the field and are v1 by definition.
+     */
+    protocolVersion: z.number().int().positive().default(1),
     request: z.strictObject({
       method: z.enum(['POST', 'PATCH', 'DELETE']),
       path: z.string().startsWith('/'),
@@ -121,23 +127,16 @@ export const durableHttpCommitEnvelopeSchema = z
       return;
     }
     const record = body as Record<string, unknown>;
-    if (record.idempotencyKey !== envelope.idempotencyKey) {
-      context.addIssue({
-        code: 'custom',
-        path: ['request', 'body', 'idempotencyKey'],
-        message: 'HTTP body idempotency key must match its envelope',
-      });
-    }
+    // `envelope.idempotencyKey` is replayed as the `Idempotency-Key` header.
+    // Older sealed bodies may also carry `idempotencyKey`/`clientTxId`; accept
+    // and replay them byte-for-byte, but current requests do not duplicate the
+    // key in JSON.
     if (path === '/v1/commits') {
-      if (
-        record.clientTxId !== envelope.idempotencyKey ||
-        !Array.isArray(record.operations) ||
-        record.operations.length === 0
-      ) {
+      if (!Array.isArray(record.operations) || record.operations.length === 0) {
         context.addIssue({
           code: 'custom',
           path: ['request', 'body'],
-          message: 'Commit-route body must carry the same clientTxId and operations',
+          message: 'Commit-route body must carry operations',
         });
       }
     } else if (method === 'POST' && typeof record.id !== 'string') {
@@ -194,6 +193,7 @@ export function createDurableHttpCommitEnvelope(input: {
     type: 'http_commit_envelope',
     storageVersion: HTTP_COMMIT_ENVELOPE_VERSION,
     idempotencyKey: input.idempotencyKey,
+    protocolVersion: PROTOCOL_VERSION,
     request: {
       method: input.request.method,
       path: input.request.path,

@@ -53,6 +53,10 @@ export default defineConfig(
       // strictTypeChecked forbids numbers in template literals by default;
       // log lines interpolate counts/syncIds constantly and that's fine.
       '@typescript-eslint/restrict-template-expressions': ['error', { allowNumber: true }],
+      // `const { drop: _x, ...rest } = obj` is our idiom for building a
+      // projection minus a field; the discarded sibling is the mechanism, not
+      // dead code. Everything else stays at the preset's defaults.
+      '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
     },
   },
   // The SDK's shipped hooks (useAblo & co). Only the two classic rules —

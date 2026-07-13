@@ -1,6 +1,6 @@
 /**
- * Builds the Data Source request handler returned by `abloSource()` and its alias
- * `dataSource()`. Given your options — the schema, the API key, and either
+ * Builds the request handler returned by `dataSource()`. Given your options —
+ * the schema, the API key, and either
  * per-model handlers or an ORM adapter — the handler verifies each signed request,
  * enforces the per-key scopes, and routes the four wire operations (`load`,
  * `list`, `commit`, and `events`) to whichever handlers you configured.
@@ -41,7 +41,7 @@ type SourceModels<S extends SchemaRecord, TAuth> = Partial<{
   >;
 }>;
 
-export type AbloSourceOptions<S extends SchemaRecord, TAuth = unknown> = {
+export type DataSourceOptions<S extends SchemaRecord, TAuth = unknown> = {
   readonly schema: Schema<S>;
   /**
    * Your Ablo project credential. Ablo signs each Data Source call with the same
@@ -97,7 +97,7 @@ export type AbloSourceOptions<S extends SchemaRecord, TAuth = unknown> = {
   readonly events?: SourceEventsHandler<TAuth>;
   /**
    * Groups per-model handlers under a `models` key. The spread form below is
-   * usually shorter — `abloSource({ schema, files: { load, list, commit } })` —
+   * usually shorter — `dataSource({ schema, files: { load, list, commit } })` —
    * but this explicit form is available when you prefer it.
    */
   readonly models?: SourceModels<S, TAuth>;
@@ -241,7 +241,7 @@ function normalizeListResult<Row>(
 }
 
 function getModelHandlers<S extends SchemaRecord, TAuth>(
-  options: AbloSourceOptions<S, TAuth>,
+  options: DataSourceOptions<S, TAuth>,
   model: string,
 ): SourceModelHandlers<unknown, unknown, TAuth> | undefined {
   const grouped = options.models?.[model as keyof S & string];
@@ -264,10 +264,10 @@ function sameModel(operations: readonly SourceOperation[]): string | null {
  * canonical rows in your database: Ablo calls a narrow, signed endpoint you
  * control rather than holding your database credentials.
  */
-export function abloSource<const S extends SchemaRecord, TAuth = unknown>(
-  options: AbloSourceOptions<S, TAuth>,
+export function dataSource<const S extends SchemaRecord, TAuth = unknown>(
+  options: DataSourceOptions<S, TAuth>,
 ): (request: Request) => Promise<Response> {
-  return async function handleAbloSource(request: Request): Promise<Response> {
+  return async function handleDataSource(request: Request): Promise<Response> {
     if (request.method !== 'POST') {
       return json({ error: 'method_not_allowed' }, 405);
     }
@@ -414,17 +414,4 @@ export function abloSource<const S extends SchemaRecord, TAuth = unknown>(
 
     return json({ error: 'unknown_source_request' }, 400);
   };
-}
-
-// The `DataSource*` names below alias the `Source*` names above one-to-one, so
-// either naming family may be used.
-export type DataSourceOptions<
-  S extends SchemaRecord,
-  TAuth = unknown,
-> = AbloSourceOptions<S, TAuth>;
-
-export function dataSource<const S extends SchemaRecord, TAuth = unknown>(
-  options: DataSourceOptions<S, TAuth>,
-): (request: Request) => Promise<Response> {
-  return abloSource(options);
 }

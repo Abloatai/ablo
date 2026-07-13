@@ -31,6 +31,7 @@ const schema = defineSchema({
 const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
+  transport: 'http',
 });
 
 const updateTask = tool({
@@ -44,8 +45,7 @@ const updateTask = tool({
     await ablo.ready();
 
     // Claim grants exclusive, ordered access and hands back the fresh row.
-    await using claim = await ablo.tasks.claim({ id: taskId, action: 'update' });
-    if (!claim.data) return { ok: false, reason: 'not_found' };
+    await using claim = await ablo.tasks.claim({ id: taskId });
 
     const updated = await ablo.tasks.update({
       id: taskId,
@@ -53,6 +53,7 @@ const updateTask = tool({
         status: status ?? claim.data.status,
         summary: summary ?? claim.data.summary,
       },
+      claim,
       wait: 'confirmed',
     });
 

@@ -27,7 +27,7 @@ export class InMemoryObjectStore implements ObjectStoreContract {
     }
   }
 
-  async add(record: Record<string, unknown>): Promise<void> {
+  add(record: Record<string, unknown>): Promise<void> {
     const id = record.id as string;
     if (!id) throw new TypeError('In-memory record must carry an id');
     if (this.data.has(id)) {
@@ -37,11 +37,12 @@ export class InMemoryObjectStore implements ObjectStoreContract {
     }
     this.data.set(id, { ...record });
     this.addToIndexes(id, record);
+    return Promise.resolve();
   }
 
-  async put(record: Record<string, unknown>): Promise<void> {
+  put(record: Record<string, unknown>): Promise<void> {
     const id = record.id as string;
-    if (!id) return;
+    if (!id) return Promise.resolve();
 
     // Remove from old index entries if updating
     const existing = this.data.get(id);
@@ -51,47 +52,52 @@ export class InMemoryObjectStore implements ObjectStoreContract {
 
     this.data.set(id, { ...record });
     this.addToIndexes(id, record);
+    return Promise.resolve();
   }
 
-  async get(id: string): Promise<Record<string, unknown> | undefined> {
-    return this.data.get(id);
+  get(id: string): Promise<Record<string, unknown> | undefined> {
+    return Promise.resolve(this.data.get(id));
   }
 
-  async getAll(): Promise<Record<string, unknown>[]> {
-    return [...this.data.values()];
+  getAll(): Promise<Record<string, unknown>[]> {
+    return Promise.resolve([...this.data.values()]);
   }
 
-  async delete(id: string): Promise<void> {
+  delete(id: string): Promise<void> {
     const existing = this.data.get(id);
     if (existing) {
       this.removeFromIndexes(id, existing);
       this.data.delete(id);
     }
+    return Promise.resolve();
   }
 
-  async getAllFromIndex(
+  getAllFromIndex(
     indexName: string,
     value: IDBValidKey,
   ): Promise<Record<string, unknown>[]> {
     const index = this.indexes.get(indexName);
-    if (!index) return [];
+    if (!index) return Promise.resolve([]);
     // The in-memory index stores values as strings (it doesn't support
     // the full IDB key range — Date / BufferSource / arrays). For the
     // overwhelmingly-common case of string FK ids, coercing through
     // String() preserves the existing behavior while satisfying the
     // shared `ObjectStoreContract` signature.
     const ids = index.get(String(value));
-    if (!ids) return [];
-    return [...ids]
-      .map((id) => this.data.get(id))
-      .filter((r): r is Record<string, unknown> => r != null);
+    if (!ids) return Promise.resolve([]);
+    return Promise.resolve(
+      [...ids]
+        .map((id) => this.data.get(id))
+        .filter((r): r is Record<string, unknown> => r != null),
+    );
   }
 
-  async clear(): Promise<void> {
+  clear(): Promise<void> {
     this.data.clear();
     for (const index of this.indexes.values()) {
       index.clear();
     }
+    return Promise.resolve();
   }
 
   /** No-op — in-memory stores don't need closing. */

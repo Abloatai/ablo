@@ -42,12 +42,23 @@ import { asyncIteratorFrom } from '../utils/asyncIterator.js';
 import { toMs } from '../utils/duration.js';
 import {
   claimHeartbeatAckPayloadSchema,
+  claimLostSchema,
   descriptionFromMeta,
   participantKindFromWire,
 } from '../coordination/schema.js';
 import { AbloClaimedError, AbloConnectionError } from '../errors.js';
 import { resolveHeartbeatOptions } from '../client/claimHeartbeatLoop.js';
 import { getContext } from '../context.js';
+
+/**
+ * The wire capability the claim stream actually uses: subscribe to typed
+ * inbound frames, check liveness, and send outbound frames. `SyncWebSocket`
+ * satisfies it, so production wiring is unchanged — but depending on the port
+ * rather than the whole socket class lets a test drive it with a plain object,
+ * no cast. `Pick` carries the exact (generic, typed-payload) `subscribe`
+ * signature, so every handler stays fully typed.
+ */
+export type ClaimTransport = Pick<SyncWebSocket, 'subscribe' | 'isConnected' | 'send'>;
 
 /** Readable target for the coordination trace: `documents:abc` / `documents:abc.title`. */
 function claimLabel(type: string, id: string, field?: string): string {
@@ -75,7 +86,7 @@ export interface AttachableClaimStream extends ClaimStream {
    * `ablo.<model>.claim({ id })`, which is built on this.
    */
   claim(target: PresenceTarget, opts?: ClaimOptions): Claim;
-  attach(transport: SyncWebSocket): void;
+  attach(transport: ClaimTransport): void;
   dispose(): void;
 }
 
@@ -96,7 +107,7 @@ interface OwnClaim {
 
 export function createClaimStream(
   config: ClaimStreamConfig,
-  transport: SyncWebSocket | null = null,
+  transport: ClaimTransport | null = null,
 ): AttachableClaimStream {
   const { participantId } = config;
 
@@ -158,10 +169,10 @@ export function createClaimStream(
   };
 
   // ── Wire wiring ──────────────────────────────────────────────────
-  let attached: SyncWebSocket | null = null;
+  let attached: ClaimTransport | null = null;
   const unsubs: (() => void)[] = [];
 
-  function attach(t: SyncWebSocket): void {
+  function attach(t: ClaimTransport): void {
     if (attached) return;
     attached = t;
 
@@ -265,8 +276,9 @@ export function createClaimStream(
     //      the server refused.
     unsubs.push(
       t.subscribe('claim_lost', (payload) => {
-        const lost = payload as unknown as ClaimLost;
-        if (!lost.claimId) return;
+        const parsed = claimLostSchema.safeParse(payload);
+        if (!parsed.success) return;
+        const lost = parsed.data;
         if (ownClaims.has(lost.claimId)) {
           const c = ownClaims.get(lost.claimId);
           getContext().logger.info(

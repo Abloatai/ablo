@@ -20,18 +20,19 @@ const schema = defineSchema({
 const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
+  transport: 'http',
 });
 
 export async function completeTask(taskId: string) {
   await ablo.ready();
 
   // Claim grants exclusive, ordered access and hands back the fresh row.
-  await using claim = await ablo.tasks.claim({ id: taskId, action: 'update' });
-  if (!claim.data) return { status: 'not_found' };
+  await using claim = await ablo.tasks.claim({ id: taskId });
 
   const updated = await ablo.tasks.update({
     id: taskId,
     data: { status: 'done' },
+    claim,
     wait: 'confirmed',
   });
 
@@ -40,16 +41,12 @@ export async function completeTask(taskId: string) {
 }
 ```
 
-## Schema-less writes
+## Atomic batches
 
-When a worker intentionally cannot import the app schema, use the protocol
-client (`Ablo({ apiKey })`, no schema) and commit operations directly. There
-is no separate "run" envelope — a write is just a commit, and attribution is
-stamped server-side from the capability.
+When several rows must change together, use the same schema-backed client and
+submit one atomic commit:
 
 ```ts
-const ablo = Ablo({ apiKey: process.env.ABLO_API_KEY }); // protocol client
-
 await ablo.commits.create({
   operations: [
     { action: 'update', model: 'tasks', id: 'task_123', data: { status: 'done' } },
@@ -58,15 +55,18 @@ await ablo.commits.create({
 });
 ```
 
-When two writers may touch the same row, reach for the typed client's
-`claim` — it serializes writers, re-reads the fresh row on promotion, and is
-the causal link recorded on every write it guards:
+When two writers may touch the same row, `claim` serializes them and re-reads
+the fresh row before the waiting writer continues:
 
 ```ts
-await using claim = await ablo.tasks.claim({ id: 'task_123', action: 'update' });
-await ablo.tasks.update({ id: 'task_123', data: { status: 'done' }, wait: 'confirmed' });
+await using claim = await ablo.tasks.claim({ id: 'task_123' });
+await ablo.tasks.update({
+  id: 'task_123',
+  data: { status: 'done' },
+  claim,
+  wait: 'confirmed',
+});
 ```
 
-Use the schema-backed version first. The schema-less commit path is for generic
-agent infrastructure, MCP routes, and platform code.
-
+Keep the schema beside the worker. It gives reads and model writes one typed,
+shared contract.

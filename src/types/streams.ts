@@ -19,10 +19,19 @@ import type {
   OnStaleMode,
   WireClaim,
   ClaimRejection,
+  ClaimLost,
   PresenceKind,
   ParticipantKind,
 } from '../coordination/schema.js';
-export type { TargetRange, OnStaleMode, WireClaim, ClaimRejection, PresenceKind, ParticipantKind };
+export type {
+  TargetRange,
+  OnStaleMode,
+  WireClaim,
+  ClaimRejection,
+  ClaimLost,
+  PresenceKind,
+  ParticipantKind,
+};
 
 /**
  * Any JSON-serializable value. Used where the SDK accepts free-form metadata
@@ -491,33 +500,6 @@ export interface ClaimStream {
    * ```
    */
   [Symbol.asyncIterator](): AsyncIterableIterator<readonly Claim[]>;
-}
-
-/**
- * A notification that you lost a claim you were holding — distinct from
- * {@link ClaimRejection}, which is a claim the server refused to grant.
- * Delivered through `onLost`.
- */
-export interface ClaimLost {
-  /** The id of the claim you just lost. */
-  readonly claimId: string;
-  /**
-   * How you lost it. `'preempted'`: a privileged participant (one holding the
-   * `claim.preempt` capability) evicted you and took the lease — its work now
-   * supersedes yours, so re-plan against the new holder rather than blindly
-   * re-claiming. `'expired'`: your TTL lapsed without finishing — re-claim if
-   * you still need it.
-   */
-  readonly reason: 'expired' | 'preempted';
-  /** The target you no longer hold. */
-  readonly target: {
-    readonly entityType: string;
-    readonly entityId: string;
-    readonly path?: string;
-    readonly range?: TargetRange;
-    readonly field?: string;
-    readonly meta?: Record<string, unknown>;
-  };
 }
 
 /**

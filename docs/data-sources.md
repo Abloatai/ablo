@@ -180,14 +180,11 @@ database, schema — the connection string itself is sealed and never echoed bac
 the replication slot position, and the commit log that drives sync. Never your
 rows.
 
-> **Logical-replication runtime status: Preview.** The setup path above
-> (`ablo connect` and `ablo connect --check`) is real and shipping. The
-> server-side component that consumes your WAL and turns it into sync deltas is in
-> **Preview** — it is implemented and tested but **not yet GA / boot-wired in the
-> hosted runtime**. Treat WAL consumption as not-yet-deployed until this note is
-> removed. Maintainers: see
-> [internal/byo-wal-consumer.md](./internal/byo-wal-consumer.md) for the
-> architecture and remaining slices.
+> **Postgres replication status: Preview.** Registration, readiness checks, and
+> the server replication fleet are implemented and boot-wired. Preview describes
+> product rollout and support, not an inactive code path. Maintainers: see
+> [internal/postgres-replication.md](./internal/postgres-replication.md) for the
+> architecture and operational invariants.
 
 ## Next steps
 

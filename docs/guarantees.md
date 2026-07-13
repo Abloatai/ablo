@@ -125,6 +125,27 @@ const ablo = Ablo({
 
 Node, SSR, tests, and agents use in-memory persistence ('memory') automatically.
 
+Cache persistence and outbound-write recovery are separate concerns. Most
+clients need only the default memory cache: once the server confirms a write,
+the server is durable and the idempotency key makes a retry safe. A long-running
+worker that must also recover an unacknowledged write after its own process dies
+can opt into a durable write journal:
+
+```ts
+const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+  durableWrites: {
+    store: workerWriteStore,
+    namespace: 'report-worker',
+  },
+});
+```
+
+The store can be backed by the worker's workflow state, SQLite, or another
+durable system. Actor identity is derived from authentication; `namespace` only
+separates workflow or deployment lanes sharing the same store.
+
 ## Storage Boundary
 
 Ablo does not need a customer database URL. When your own database is canonical,

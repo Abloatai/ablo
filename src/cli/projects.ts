@@ -23,10 +23,10 @@ import {
   guardActiveProjectKey,
   DEFAULT_PROFILE,
 } from './config';
-import { DEFAULT_URL } from './push';
+import { ABLO_DEFAULT_BASE_URL } from '../client/hostedEndpoints.js';
 import { brand } from './theme';
 
-interface ProjectObject {
+export interface ProjectObject {
   id: string;
   slug: string;
   name: string | null;
@@ -35,7 +35,7 @@ interface ProjectObject {
 }
 
 function apiUrl(): string {
-  return (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
+  return (process.env.ABLO_API_URL ?? ABLO_DEFAULT_BASE_URL).replace(/\/+$/, '');
 }
 
 function requireKey(): string {
@@ -57,8 +57,9 @@ async function request(
   path: string,
   apiKey: string,
   init: { method?: string; body?: unknown } = {},
+  baseUrl?: string,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  const res = await fetch(`${apiUrl()}${path}`, {
+  const res = await fetch(`${baseUrl ?? apiUrl()}${path}`, {
     method: init.method ?? 'GET',
     headers: {
       'content-type': 'application/json',
@@ -75,9 +76,16 @@ async function request(
   return { status: res.status, body };
 }
 
-async function listProjects(apiKey: string): Promise<ProjectObject[] | null> {
+/**
+ * Lists the projects the key can see (`GET /api/v1/projects`). Returns null on
+ * any failure — no key, an unreachable server, or a denial — so callers such as
+ * `ablo status` degrade to a shorter output rather than erroring. `baseUrl`
+ * overrides the default host so a command with `--url` names projects against
+ * the same server it targets.
+ */
+export async function listProjects(apiKey: string, baseUrl?: string): Promise<ProjectObject[] | null> {
   try {
-    const { status, body } = await request('/api/v1/projects', apiKey);
+    const { status, body } = await request('/api/v1/projects', apiKey, {}, baseUrl);
     if (status !== 200 || !Array.isArray(body.data)) return null;
     return body.data as ProjectObject[];
   } catch {

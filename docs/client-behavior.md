@@ -32,6 +32,7 @@ Common options:
 | `databaseUrl` | Optional, server-only. Registers your Postgres directly (the connection-string path). Pass it explicitly — it is **not** auto-read from the environment. Omit it for a signed Data Source endpoint or the hosted sandbox. The SDK throws if it sees this in a browser. |
 | `baseURL` | Override the hosted sync endpoint for staging or private deployments. |
 | `persistence` | `memory` by default. Use `indexeddb` for a durable browser cache that survives reloads. |
+| `durableWrites` | Optional crash recovery for unacknowledged agent/worker writes. Independent of the default memory cache; accepts `{ store, namespace? }`. |
 | `transport` | `'websocket'` (default) is the live, stateful client — a persistent socket, a local synced pool, and `onChange` subscriptions. `'http'` returns the **stateless** client for server-side actors (agents, workers, serverless): the same `ablo.<model>` read/write/claim surface, but each call is one HTTP round-trip with no socket. Under `'http'` the return type narrows to `AbloHttpClient`, so stateful-only methods (`get`/`getAll`, `onChange`, `watch`) are compile errors rather than runtime gaps. |
 | `fetch` | Custom fetch implementation for tests or non-standard runtimes. |
 | `defaultHeaders` | Extra headers attached to every HTTP request. |
@@ -109,7 +110,6 @@ await ablo.weatherReports.update({
   readAt: snap.stamp,
   onStale: 'reject',
   idempotencyKey: 'report_stockholm:mark-ready:v1',
-  timeout: 20_000,
 });
 ```
 
@@ -119,7 +119,6 @@ await ablo.weatherReports.update({
 | `readAt` | State cursor the write was based on. |
 | `onStale` | Policy when the target changed after `readAt`. Prefer `reject`. |
 | `idempotencyKey` | Stable key for retry-safe writes. The SDK generates one when omitted. |
-| `timeout` | Maximum time for the write call. |
 
 ## Claimed Behavior
 
@@ -136,7 +135,11 @@ if (active) {
 }
 
 const handle = await ablo.weatherReports.claim({ id: 'report_stockholm' });
-await ablo.weatherReports.update({ id: handle.data.id, data: { status: 'ready' } });
+await ablo.weatherReports.update({
+  id: handle.data.id,
+  data: { status: 'ready' },
+  claim: handle,
+});
 await handle.release();
 ```
 
