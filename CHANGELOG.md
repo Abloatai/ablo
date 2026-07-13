@@ -1,10 +1,16 @@
 # Changelog
 
+## 0.29.1
+
+### Patch Changes
+
+- **The `omitModels` doc example uses generic model names.** The schema-projection example in the `omitModels` JSDoc and the API docs now reads `omitModels(full, ['reports', 'reportSections'])` — an illustrative parent/child pair rather than application-specific model names. Documentation only; no API or behavior change.
+
 ## 0.29.0
 
 ### Minor Changes
 
-- **`omitModels()` projects a schema by exclusion — the companion to `selectModels`.** Keep every model except the named ones, so one product can be the general case while another product owns the models it drops. The suite shell narrows with `omitModels(full, ['mailMailboxes', 'mailThreads'])` while the mail app selects those same models. Validation matches `selectModels`: relations into the omitted set are dropped, and a dropped `parent` edge throws, so a model whose scope routes through an omitted parent can't be silently kept. Each app now binds its own schema projection rather than sharing one global registration.
+- **`omitModels()` projects a schema by exclusion — the companion to `selectModels`.** Keep every model except the named ones, so one app can be the general case while a separate app owns the models it drops. The suite shell narrows with `omitModels(full, ['reports', 'reportSections'])` while the standalone app selects those same models. Validation matches `selectModels`: relations into the omitted set are dropped, and a dropped `parent` edge throws, so a model whose scope routes through an omitted parent can't be silently kept. Each app now binds its own schema projection rather than sharing one global registration.
 
 - **Every application model has one typed access path: `ablo.<model>`.** Both the WebSocket and stateless HTTP clients return bare rows from `retrieve` and accept the same typed create/update/delete forms. The schema-less `Ablo({ schema: null })` overload, the public `.model(name)` accessors, the transport-envelope types, and the hidden capability CRUD client are removed. Select `transport: 'http'` for workers without changing model syntax, use `commits.create` only for atomic multi-row writes, and `sessions.create` to mint a scoped user or agent credential.
 

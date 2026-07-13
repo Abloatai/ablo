@@ -74,12 +74,12 @@ export function selectModels<S extends SchemaRecord, K extends keyof S & string>
 
 /**
  * `omitModels` is `selectModels` from the other side: keep every model EXCEPT
- * the named ones. Use it when an app is the general case and another product
- * owns the omitted models — e.g. the product suite shell drops the standalone
- * Mail store, which `@ablo/mail-schema` selects for the mail app:
+ * the named ones. Use it when an app is the general case and a separate app
+ * owns the omitted models — the suite shell drops a specialized store that the
+ * standalone app selects for itself:
  *
  * ```ts
- * export const schema = omitModels(full, ['mailMailboxes', 'mailThreads']);
+ * export const schema = omitModels(full, ['reports', 'reportSections']);
  * ```
  *
  * Same validation as `selectModels`: relations into the omitted set are
