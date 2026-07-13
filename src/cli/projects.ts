@@ -18,6 +18,7 @@
 import pc from 'picocolors';
 import {
   resolveApiKey,
+  resolveOrgKey,
   getActiveProject,
   setActiveProject,
   guardActiveProjectKey,
@@ -39,7 +40,11 @@ function apiUrl(): string {
 }
 
 function requireKey(): string {
-  const apiKey = resolveApiKey();
+  // Managing projects (list/create/rename/use) is an org-level operation, so it
+  // accepts any of the org's keys — not just the active project's. This is what
+  // keeps `ablo projects use default` reachable after switching to a project you
+  // never minted a key for; the strict resolver would leave you locked in.
+  const apiKey = resolveOrgKey();
   if (!apiKey) {
     console.error(
       pc.red('  No API key.') +

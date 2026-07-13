@@ -415,6 +415,37 @@ export function resolveApiKey(modeOverride?: Mode): string | undefined {
 }
 
 /**
+ * Resolves a key for an *organization-level* CLI operation — listing, creating,
+ * renaming, or switching the active project — where any valid key for the
+ * organization returns the same answer, and which project the key is scoped to
+ * doesn't change the result. Unlike {@link resolveApiKey}, which reads only the
+ * active project's profile so a data-touching command can never silently act
+ * through the wrong project, this prefers the active profile but falls back to
+ * the `default` profile and then any profile that still holds an unexpired key.
+ *
+ * This is what lets `ablo projects use` switch *away* from a project you never
+ * minted a key for: selecting a keyless project must not lock you out of the
+ * one command that undoes the selection. Data commands keep the strict resolver,
+ * so this permissive fallback never routes a write to an unintended project.
+ */
+export function resolveOrgKey(modeOverride?: Mode): string | undefined {
+  if (process.env.ABLO_API_KEY) return process.env.ABLO_API_KEY;
+  const cfg = readConfig();
+  if (!cfg) return undefined;
+  const mode = modeOverride ?? cfg.mode;
+  // Active profile first (so a scoped key is preferred when it exists), then the
+  // org-default, then any remaining profile — deduplicated, order-preserving.
+  const order = [...new Set([activeProfileName(cfg), DEFAULT_PROFILE, ...Object.keys(cfg.profiles)])];
+  for (const name of order) {
+    const entry = cfg.profiles[name]?.[mode];
+    if (!entry) continue;
+    if (entry.expiresAt && Date.parse(entry.expiresAt) <= Date.now()) continue;
+    return entry.apiKey;
+  }
+  return undefined;
+}
+
+/**
  * Reports whether the active project has a stored key. This guard turns
  * "you switched projects but never minted a key for this one" into a precise
  * error instead of a silent push to the wrong project, or to none.

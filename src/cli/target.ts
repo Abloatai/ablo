@@ -127,7 +127,7 @@ export async function resolveTarget(opts: ResolveTargetOptions): Promise<Resolve
     keyEnv,
     confirmed,
     localProject,
-    mismatches: reconcile({ confirmed, keyEnv, localProject }),
+    mismatches: reconcile({ confirmed, keyEnv, localProject, cliMode: getMode() }),
   };
 }
 
@@ -197,20 +197,23 @@ function confirmedProjectSlug(project: TargetProject): string {
 /**
  * Compares local intent against the confirmed plane and returns each real
  * divergence. Matching is by id where possible (the org-default project's id is
- * the org id), so a slug rename never reads as a false mismatch.
+ * the org id), so a slug rename never reads as a false mismatch. Pure: the CLI
+ * mode is passed in (not read from disk) so the reconciliation can be tested on
+ * its inputs alone.
  */
-function reconcile(input: {
+export function reconcile(input: {
   confirmed: ConfirmedTarget | null;
   keyEnv: Mode | null;
   localProject: ActiveProject | undefined;
+  /** The CLI's active `ablo mode` — the local environment preference. */
+  cliMode: Mode;
 }): TargetMismatch[] {
-  const { confirmed, keyEnv, localProject } = input;
+  const { confirmed, keyEnv, localProject, cliMode } = input;
   const mismatches: TargetMismatch[] = [];
 
   // Environment: the key's real environment vs the CLI's active mode. Prefer
   // the server's environment; fall back to the key prefix when it's all we have.
   const realEnv = confirmed?.environment ?? keyEnv;
-  const cliMode = getMode();
   if (realEnv && realEnv !== cliMode) {
     mismatches.push({ kind: 'environment', keyEnv: realEnv, cliMode });
   }

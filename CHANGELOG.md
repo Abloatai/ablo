@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.29.2
+
+### Patch Changes
+
+- **Switching to a project you never minted a key for no longer locks you out.** Project-management commands — `ablo projects list`, `create`, `rename`, and `use` — are organization-level operations, so they now accept any of the organization's stored keys (the active project's key first, then the `default` profile, then any profile still holding an unexpired key) instead of strictly the active project's key. Selecting a keyless project could previously leave `ablo projects use default` unauthorized — the one command that would undo the switch. Data commands keep the strict resolver, so this permissive fallback never routes a read or write through an unintended project.
+
 ## 0.29.1
 
 ### Patch Changes

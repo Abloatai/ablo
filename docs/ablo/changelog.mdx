@@ -5,7 +5,13 @@ description: "Product updates and releases for Ablo"
 
 {/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
 
-<Update label="v0.29.1" description="v0.29.1">
+<Update label="v0.29.2" description="v0.29.2">
+### Patch Changes
+
+- **Switching to a project you never minted a key for no longer locks you out.** Project-management commands — `ablo projects list`, `create`, `rename`, and `use` — are organization-level operations, so they now accept any of the organization's stored keys (the active project's key first, then the `default` profile, then any profile still holding an unexpired key) instead of strictly the active project's key. Selecting a keyless project could previously leave `ablo projects use default` unauthorized — the one command that would undo the switch. Data commands keep the strict resolver, so this permissive fallback never routes a read or write through an unintended project.
+</Update>
+
+<Update label="July 13, 2026" description="v0.29.1">
 ### Patch Changes
 
 - **The `omitModels` doc example uses generic model names.** The schema-projection example in the `omitModels` JSDoc and the API docs now reads `omitModels(full, ['reports', 'reportSections'])` — an illustrative parent/child pair rather than application-specific model names. Documentation only; no API or behavior change.
