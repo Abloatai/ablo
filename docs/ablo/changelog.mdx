@@ -5,7 +5,13 @@ description: "Product updates and releases for Ablo"
 
 {/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
 
-<Update label="v0.29.2" description="v0.29.2">
+<Update label="v0.29.3" description="v0.29.3">
+### Patch Changes
+
+- **`ablo connect` validates from Ablo's network when your machine can't reach the database.** Replication runs from Ablo's infrastructure, not from your laptop, so a database that is IPv6-only (Supabase direct hosts), IP-allowlisted, or behind a VPN can be perfectly replicable even when every local dial fails. When `--check` can't connect at all, it now asks the engine to run the same readiness checklist from its own network instead of reporting a false failure; `--register` no longer blocks on local unreachability and lets the registration preflight decide. A host that _was_ reached and rejected the connection — bad credentials, a TLS error, a Postgres error — still fails locally, because the engine would see exactly the same thing.
+</Update>
+
+<Update label="July 13, 2026" description="v0.29.2">
 ### Patch Changes
 
 - **Switching to a project you never minted a key for no longer locks you out.** Project-management commands — `ablo projects list`, `create`, `rename`, and `use` — are organization-level operations, so they now accept any of the organization's stored keys (the active project's key first, then the `default` profile, then any profile still holding an unexpired key) instead of strictly the active project's key. Selecting a keyless project could previously leave `ablo projects use default` unauthorized — the one command that would undo the switch. Data commands keep the strict resolver, so this permissive fallback never routes a read or write through an unintended project.

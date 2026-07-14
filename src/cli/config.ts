@@ -405,13 +405,8 @@ export function clearCredential(): boolean {
  * as absent, so the caller prompts for a fresh `ablo login`.
  */
 export function resolveApiKey(modeOverride?: Mode): string | undefined {
-  if (process.env.ABLO_API_KEY) return process.env.ABLO_API_KEY;
-  const cfg = readConfig();
-  if (!cfg) return undefined;
-  const entry = cfg.profiles[activeProfileName(cfg)]?.[modeOverride ?? cfg.mode];
-  if (!entry) return undefined;
-  if (entry.expiresAt && Date.parse(entry.expiresAt) <= Date.now()) return undefined;
-  return entry.apiKey;
+  // Strict data-path preset: the active project's key only, no env-file scan.
+  return resolveKey({ purpose: 'data', mode: modeOverride }).key;
 }
 
 /**
@@ -429,20 +424,7 @@ export function resolveApiKey(modeOverride?: Mode): string | undefined {
  * so this permissive fallback never routes a write to an unintended project.
  */
 export function resolveOrgKey(modeOverride?: Mode): string | undefined {
-  if (process.env.ABLO_API_KEY) return process.env.ABLO_API_KEY;
-  const cfg = readConfig();
-  if (!cfg) return undefined;
-  const mode = modeOverride ?? cfg.mode;
-  // Active profile first (so a scoped key is preferred when it exists), then the
-  // org-default, then any remaining profile — deduplicated, order-preserving.
-  const order = [...new Set([activeProfileName(cfg), DEFAULT_PROFILE, ...Object.keys(cfg.profiles)])];
-  for (const name of order) {
-    const entry = cfg.profiles[name]?.[mode];
-    if (!entry) continue;
-    if (entry.expiresAt && Date.parse(entry.expiresAt) <= Date.now()) continue;
-    return entry.apiKey;
-  }
-  return undefined;
+  return resolveKey({ purpose: 'org-read', mode: modeOverride }).key;
 }
 
 /**
@@ -491,22 +473,82 @@ export interface EffectiveApiKey {
 }
 
 /**
- * The single credential-resolution chain every CLI command shares:
+ * How to resolve a credential. Two axes, both orthogonal, so every resolution
+ * the CLI needs is one preset of this policy rather than a separate function:
  *
- *   `ABLO_API_KEY` in the environment → `.env.local` → `.env` → the stored
- *   `ablo login` key for the active mode, or for `modeOverride` when given.
+ *  - `purpose` decides the STORED-key profile search. `'data'` reads only the
+ *    active project's profile, so a command that touches rows can never silently
+ *    act through a different project's key. `'org-read'` is for org-level
+ *    operations (list/switch projects) where any of the org's keys returns the
+ *    same answer: it prefers the active profile, then `default`, then any
+ *    profile with an unexpired key — which is what keeps `ablo projects use`
+ *    from stranding you on a project you never minted a key for.
+ *  - `scanEnvFiles` decides whether an explicit key may come from the project
+ *    env files a framework loads (`.env.local`, then `.env`), not just
+ *    `ABLO_API_KEY` in the process. The push/dev/status chain sets it so the CLI
+ *    presents the same key the app would; management commands leave it off.
+ */
+export interface KeyPolicy {
+  purpose: 'data' | 'org-read';
+  /** Environment slot to read; defaults to the active CLI mode. */
+  mode?: Mode;
+  /** Consult `.env.local`/`.env` for an explicit key (default: false). */
+  scanEnvFiles?: boolean;
+  /** cwd seam for the env-file lookup; commands use the process directory. */
+  cwd?: string;
+}
+
+/**
+ * The one credential resolver every CLI command routes through. It resolves in
+ * two phases — an explicit key first, then the stored `ablo login` credential:
  *
- * `push`, `dev`, `status`, and {@link resolvePushPlan} all resolve through this
- * function, so the diagnostic commands report exactly the credential a deploy
- * would present.
+ *   `ABLO_API_KEY` in the environment
+ *     → `.env.local` → `.env`            (only when `scanEnvFiles`)
+ *     → the stored key for the mode, searched by the `purpose` profile policy.
  *
- * `cwd` is a seam for tests; commands use the process working directory.
+ * Centralizing the env-check, expiry, and profile search here is deliberate: the
+ * three preset entry points ({@link resolveApiKey}, {@link resolveOrgKey},
+ * {@link resolveEffectiveApiKey}) are one-liners over this, so they can't drift
+ * apart the way three hand-written copies did.
+ */
+export function resolveKey(policy: KeyPolicy): EffectiveApiKey {
+  // Phase 1 — an explicit key. With env-file scanning on, `readProjectApiKey`
+  // already checks `process.env` before the files, so the two branches don't
+  // double-read; without it, only the process environment is consulted.
+  if (policy.scanEnvFiles) {
+    const fromProject = readProjectApiKey(policy.cwd);
+    if (fromProject) return { key: fromProject.key, source: fromProject.source };
+  } else if (process.env.ABLO_API_KEY) {
+    return { key: process.env.ABLO_API_KEY, source: 'env' };
+  }
+
+  // Phase 2 — the stored login credential, searched per the purpose policy.
+  const cfg = readConfig();
+  if (!cfg) return { key: undefined, source: null };
+  const mode = policy.mode ?? cfg.mode;
+  const profiles =
+    policy.purpose === 'org-read'
+      ? // Active first (a scoped key is preferred when present), then the
+        // org-default, then any remaining profile — deduplicated, order-preserving.
+        [...new Set([activeProfileName(cfg), DEFAULT_PROFILE, ...Object.keys(cfg.profiles)])]
+      : [activeProfileName(cfg)];
+  for (const name of profiles) {
+    const entry = cfg.profiles[name]?.[mode];
+    if (!entry) continue;
+    if (entry.expiresAt && Date.parse(entry.expiresAt) <= Date.now()) continue;
+    return { key: entry.apiKey, source: 'stored' };
+  }
+  return { key: undefined, source: null };
+}
+
+/**
+ * The credential-resolution chain `push`, `dev`, `status`, and
+ * {@link resolvePushPlan} share — the `'data'` preset of {@link resolveKey} with
+ * env-file scanning on, so the key a diagnostic reports is the key a deploy
+ * would present. `cwd` is a test seam; commands use the process directory.
  */
 export function resolveEffectiveApiKey(modeOverride?: Mode, cwd?: string): EffectiveApiKey {
-  const fromProject = readProjectApiKey(cwd);
-  if (fromProject) return { key: fromProject.key, source: fromProject.source };
-  const key = resolveApiKey(modeOverride);
-  return key ? { key, source: 'stored' } : { key: undefined, source: null };
+  return resolveKey({ purpose: 'data', mode: modeOverride, scanEnvFiles: true, cwd });
 }
 
 /** What `ablo push` would do right now: which environment it deploys to and

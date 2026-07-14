@@ -19,9 +19,14 @@
  *                           exists, the current role can stream replication, and
  *                           every published table has a usable replica identity.
  *                           It prints a checklist, with the precise fix for any
- *                           item that fails.
+ *                           item that fails. When this machine can't reach the
+ *                           host at all (IPv6-only hosts, IP allowlists, VPNs),
+ *                           the check runs from Ablo's infrastructure instead —
+ *                           the network replication actually uses.
  *   ablo connect --register Verifies readiness, then registers the database so
- *                           Ablo begins replicating it on the next sync.
+ *                           Ablo begins replicating it on the next sync. Local
+ *                           unreachability doesn't block it: the server
+ *                           validates from its own network at registration.
  */
 
 import { AbloValidationError } from '../errors.js';
@@ -31,6 +36,11 @@ import { readProjectDatabaseUrl } from './dbRole';
 import { resolveApiKey } from './config';
 import { DEFAULT_URL } from './push';
 import { brand } from './theme';
+import {
+  describeRemoteFailure,
+  dialFailureReason,
+  requestRemoteValidation,
+} from './remoteValidation';
 
 /**
  * The canonical Postgres publication name that Ablo's replication reads from.
@@ -424,32 +434,121 @@ function requireDatabaseUrl(verb: string): string {
 }
 
 /**
- * Probe readiness against `dbUrl`, print each item, return the failure count.
- * Exits the process if the database can't be read at all (a connection error,
- * not a fixable readiness item).
+ * What the local dial-and-probe found. `no-dial` means this MACHINE couldn't
+ * reach the host at all — which says nothing about whether Ablo's
+ * infrastructure can (IPv6-only hosts, IP allowlists, VPNs), so callers treat
+ * it as "ask the engine" rather than a verdict.
  */
-async function probeAndReport(dbUrl: string): Promise<number> {
-  const sql = postgres(dbUrl, { max: 1, prepare: false, onnotice: () => {} });
+type LocalProbeOutcome =
+  | { readonly kind: 'probed'; readonly failures: number }
+  | { readonly kind: 'no-dial'; readonly reason: string };
+
+/**
+ * Probe readiness against `dbUrl`, print each item, return the failure count —
+ * or report that this machine couldn't dial the host. Exits the process only
+ * for errors where the host WAS reached (bad credentials, TLS, a Postgres
+ * error): those would fail identically from anywhere, so there is nothing to
+ * escalate to the engine.
+ */
+async function probeAndReport(dbUrl: string): Promise<LocalProbeOutcome> {
+  // Bounded dial, mirroring the engine's own preflight: a black-holed host
+  // must surface as a dial failure, not pin the command forever.
+  const sql = postgres(dbUrl, { max: 1, prepare: false, connect_timeout: 10, onnotice: () => {} });
   let items: readonly CheckItem[];
   try {
     items = await probeReadiness(sql);
   } catch (err) {
+    await sql.end({ timeout: 2 }).catch(() => undefined);
+    const dial = dialFailureReason(err);
+    if (dial) return { kind: 'no-dial', reason: dial };
     const pg = (err ?? {}) as PgErrorLike;
     console.error(pc.red(`  Couldn't read the database: ${pg.message ?? String(err)}`));
-    await sql.end({ timeout: 2 });
     process.exit(1);
   }
   await sql.end({ timeout: 2 });
 
   for (const item of items) printCheckItem(item);
-  return items.filter((i) => !i.ok).length;
+  return { kind: 'probed', failures: items.filter((i) => !i.ok).length };
+}
+
+/**
+ * The engine-side fallback for `--check`: this machine couldn't dial the host,
+ * so ask Ablo to dial from its own infrastructure — the network replication
+ * actually runs from — and render the same checklist from its answer.
+ */
+async function runRemoteCheck(dbUrl: string, localReason: string): Promise<never> {
+  console.log(
+    `  This machine can't reach the database (${pc.dim(localReason)}).\n` +
+      `  That is not the verdict: replication runs from Ablo's infrastructure, not from here.\n` +
+      `  Asking Ablo to check the database from its side…\n`,
+  );
+
+  const apiKey = resolveApiKey();
+  if (!apiKey) {
+    console.error(
+      pc.red(`  The engine-side check needs an API key, and none was found.`) +
+        pc.dim(
+          ` Run ${pc.bold('ablo login')} (or set ${pc.bold('ABLO_API_KEY')}), then re-run ${pc.bold('ablo connect --check')}.`,
+        ),
+    );
+    process.exit(1);
+  }
+
+  const apiUrl = (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
+  const result = await requestRemoteValidation({ apiUrl, apiKey, connectionString: dbUrl });
+
+  if (!result.ok) {
+    console.error(pc.red(`  The engine-side check failed: ${result.message}`));
+    if (result.code === 'forbidden') {
+      console.error(
+        pc.dim(`  Checking a database from Ablo's side needs a ${pc.bold('secret')} key (sk_…). Run ${pc.bold('ablo login')} for one.`),
+      );
+    }
+    console.error();
+    process.exit(1);
+  }
+
+  if (!result.reachable) {
+    console.error(
+      `  ${pc.red('✗')} Ablo's infrastructure can't reach it either${result.reason ? ` ${pc.dim(`(${result.reason})`)}` : ''}.`,
+    );
+    console.error(
+      pc.dim(
+        `  Replication needs a host Ablo's servers can dial — a localhost or private-network\n` +
+          `  Postgres can't be replicated by the hosted service. Use a reachable host (or a tunnel),\n` +
+          `  or the signed ${pc.bold('dataSource()')} endpoint fallback.\n`,
+      ),
+    );
+    process.exit(1);
+  }
+
+  for (const failure of result.failures) {
+    const { label, fix } = describeRemoteFailure(failure);
+    printCheckItem({ ok: false, label, fix });
+  }
+  console.log();
+  if (result.ready) {
+    console.log(
+      `  ${pc.green('✓')} Ready — checked from Ablo's infrastructure. Ablo can connect and tail this database's WAL.\n`,
+    );
+    process.exit(0);
+  }
+  const count = result.failures.length;
+  console.log(
+    `  ${pc.red(`${count} item${count === 1 ? '' : 's'} to fix`)} ${pc.dim(`— found by Ablo's infrastructure. Apply the fixes above, then re-run ${pc.bold('ablo connect --check')}.`)}\n`,
+  );
+  process.exit(1);
 }
 
 /** Run the readiness check against DATABASE_URL and report. */
 async function runCheck(): Promise<void> {
   const dbUrl = requireDatabaseUrl('--check');
   console.log(`\n  ${brand('ablo')} ${pc.dim('connect --check')}  ${pc.dim('logical-replication readiness')}\n`);
-  const failures = await probeAndReport(dbUrl);
+  const outcome = await probeAndReport(dbUrl);
+  if (outcome.kind === 'no-dial') {
+    return runRemoteCheck(dbUrl, outcome.reason);
+  }
+  const failures = outcome.failures;
   console.log();
   if (failures === 0) {
     console.log(`  ${pc.green('✓')} Ready — Ablo can connect and tail this database's WAL.\n`);
@@ -491,10 +590,21 @@ async function runRegister(): Promise<void> {
 
   console.log(`\n  ${brand('ablo')} ${pc.dim('connect --register')}  ${pc.dim('register this database for replication')}\n`);
 
-  const failures = await probeAndReport(dbUrl);
-  if (failures > 0) {
+  // The local probe is a fast pre-flight, not the gate. When this machine
+  // can't dial the host at all, registration proceeds anyway: the server runs
+  // the same readiness checks from Ablo's own network — the one replication
+  // actually uses — and refuses with the full checklist if the database isn't
+  // ready. Only a probe that CONNECTED and found failures stops us here.
+  const outcome = await probeAndReport(dbUrl);
+  if (outcome.kind === 'no-dial') {
     console.log(
-      `\n  ${pc.red(`${failures} item${failures === 1 ? '' : 's'} to fix`)} ${pc.dim('— a database that isn’t replication-ready can’t stream. Fix the above, then re-run.')}\n`,
+      `  This machine can't reach the database (${pc.dim(outcome.reason)}) — continuing anyway.\n` +
+        `  Replication runs from Ablo's infrastructure, which validates the database during\n` +
+        `  registration and refuses with the full checklist if it isn't ready.\n`,
+    );
+  } else if (outcome.failures > 0) {
+    console.log(
+      `\n  ${pc.red(`${outcome.failures} item${outcome.failures === 1 ? '' : 's'} to fix`)} ${pc.dim('— a database that isn’t replication-ready can’t stream. Fix the above, then re-run.')}\n`,
     );
     process.exit(1);
   }
@@ -635,6 +745,7 @@ export const CONNECT_USAGE = `  ablo connect — connect your database for the r
     npx ablo connect                      Print the exact setup SQL for your Postgres
     npx ablo connect --tables a,b,c       Publish only these tables (default: all tables)
     npx ablo connect --role <name>        Name the replication role (default: ablo_replicator)
-    npx ablo connect --check              Validate DATABASE_URL is replication-ready
+    npx ablo connect --check              Validate DATABASE_URL is replication-ready (runs from Ablo's
+                                          infrastructure when this machine can't reach the host)
     npx ablo connect --register           Register DATABASE_URL so Ablo replicates it (one self-service step)
     npx ablo connect --audit-infra        Read-only Stage 5 audit for deprecated Ablo sync tables/types`;

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.29.3
+
+### Patch Changes
+
+- **`ablo connect` validates from Ablo's network when your machine can't reach the database.** Replication runs from Ablo's infrastructure, not from your laptop, so a database that is IPv6-only (Supabase direct hosts), IP-allowlisted, or behind a VPN can be perfectly replicable even when every local dial fails. When `--check` can't connect at all, it now asks the engine to run the same readiness checklist from its own network instead of reporting a false failure; `--register` no longer blocks on local unreachability and lets the registration preflight decide. A host that _was_ reached and rejected the connection — bad credentials, a TLS error, a Postgres error — still fails locally, because the engine would see exactly the same thing.
+
 ## 0.29.2
 
 ### Patch Changes
