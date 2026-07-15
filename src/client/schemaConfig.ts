@@ -179,5 +179,10 @@ export function deriveConfigFromSchema(schema: Schema): SyncEngineConfig {
     // schema the server currently has active. The server and the `ablo push`
     // command compute this same hash.
     expectedSchemaHash: schemaHash(schema),
+    // For a projection (`selectModels`/`omitModels`), also carry the full source
+    // schema's hash. The drift check accepts a server match on either hash, so a
+    // subset client stays quiet against a server running its full source schema.
+    // Undefined for a directly-authored schema — plain equality applies there.
+    expectedSourceSchemaHash: schema.sourceSchemaHash,
   };
 }

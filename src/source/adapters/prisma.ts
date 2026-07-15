@@ -24,8 +24,17 @@ import type {
 import type { ChangeSet, EventsPage, Migration, Operation, OutboxEvent } from '../contract.js';
 import { outboxEventSchema } from '../contract.js';
 import { adapterTableMigrations } from '../migrations.js';
+import {
+  assertSourceIdempotencyIntent,
+  assertSourceIdempotencyRetention,
+  sourceChangeIntentHash,
+} from '../idempotency.js';
 import type { SchemaRecord, Schema } from '../../schema/schema.js';
-import type { SourceListQuery, SourceWhere } from '../types.js';
+import {
+  ABLO_POSTGRES_COMMIT_ECHO_PREFIX,
+  type SourceListQuery,
+  type SourceWhere,
+} from '../types.js';
 
 /** A Prisma model delegate — the subset of its methods the adapter calls. */
 export interface PrismaDelegate {
@@ -149,7 +158,13 @@ export function prismaDataSource<S extends SchemaRecord>(
   };
 
   return {
-    capabilities: { transactions: true, propose: false, schemaIntrospection: true },
+    capabilities: {
+      transactions: true,
+      propose: false,
+      schemaIntrospection: true,
+      postgresWalEcho: true,
+      outboxEvents: true,
+    },
 
     migrations(): readonly Migration[] {
       return adapterTableMigrations();
@@ -165,14 +180,22 @@ export function prismaDataSource<S extends SchemaRecord>(
     },
 
     async commit(change: ChangeSet): Promise<AdapterCommitResult> {
+      const requestHash = sourceChangeIntentHash(change);
       return prisma.$transaction(async (tx) => {
-        // Idempotency: a duplicate clientTxId returns the original rows, no re-apply.
-        const cached = await tx.$queryRawUnsafe<{ response: Row[] }[]>(
-          `SELECT response FROM ablo_idempotency WHERE client_tx_id = $1 LIMIT 1`,
-          change.clientTxId,
+        // Idempotency: a duplicate scoped correlation returns the original rows.
+        const cached = await tx.$queryRawUnsafe<
+          { response: Row[]; requestHash: string | null; expiresAt?: unknown }[]
+        >(
+          `SELECT response, request_hash AS "requestHash", expires_at AS "expiresAt"
+             FROM ablo_idempotency WHERE client_tx_id = $1 LIMIT 1`,
+          change.correlationId,
         );
         const cachedRow = cached[0];
-        if (cachedRow) return { rows: cachedRow.response };
+        if (cachedRow) {
+          assertSourceIdempotencyIntent(cachedRow.requestHash, requestHash);
+          assertSourceIdempotencyRetention(cachedRow.expiresAt);
+          return { rows: cachedRow.response };
+        }
 
         const rows: Row[] = [];
         for (const [index, op] of change.operations.entries()) {
@@ -181,23 +204,40 @@ export function prismaDataSource<S extends SchemaRecord>(
           const entityId = String(row.id ?? rowId(op));
           // Transactional outbox: one event per operation, written in this same transaction.
           await tx.$executeRawUnsafe(
-            `INSERT INTO ablo_outbox (id, model, entity_id, type, data, client_tx_id, occurred_at)
-             VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)`,
-            `${change.clientTxId}:${index}`,
+            `INSERT INTO ablo_outbox (
+               id, model, entity_id, type, data,
+               correlation_id, transaction_id, occurred_at
+             ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
+            `${change.correlationId}:${index}`,
             op.model,
             entityId,
             op.type,
             JSON.stringify(op.type === 'DELETE' ? null : row),
-            change.clientTxId,
+            change.correlationId,
+            op.transactionId ?? null,
             Date.now(),
           );
         }
 
         await tx.$executeRawUnsafe(
-          `INSERT INTO ablo_idempotency (client_tx_id, response) VALUES ($1, $2::jsonb)`,
-          change.clientTxId,
+          `INSERT INTO ablo_idempotency (client_tx_id, response, request_hash)
+           VALUES ($1, $2::jsonb, $3)`,
+          change.correlationId,
           JSON.stringify(rows),
+          requestHash,
         );
+        if (change.echo?.kind === 'postgres-wal') {
+          // Cast the returned LSN to text. `pg_logical_emit_message` yields a
+          // `pg_lsn`, and Prisma's driver adapter can't deserialize that OID
+          // ("Failed to deserialize column of type 'pg_lsn'"); the value is
+          // discarded anyway, so text is the safe carrier. (postgres.js-backed
+          // adapters read pg_lsn as a string and don't need this.)
+          await tx.$queryRawUnsafe(
+            `SELECT pg_logical_emit_message(true, $1::text, $2::text)::text`,
+            ABLO_POSTGRES_COMMIT_ECHO_PREFIX,
+            change.echo.payload,
+          );
+        }
         return { rows };
       });
     },
@@ -205,7 +245,8 @@ export function prismaDataSource<S extends SchemaRecord>(
     async events(cursor: string | null, limit: number): Promise<EventsPage> {
       const after = cursor ? cursor : '0';
       const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
-        `SELECT cursor, id, model, entity_id, type, data, organization_id, client_tx_id, occurred_at
+        `SELECT cursor, id, model, entity_id, type, data, organization_id,
+                client_tx_id, correlation_id, transaction_id, occurred_at
          FROM ablo_outbox WHERE cursor > $1 ORDER BY cursor ASC LIMIT $2`,
         after,
         limit,
@@ -219,6 +260,8 @@ export function prismaDataSource<S extends SchemaRecord>(
           data: r.data ?? null,
           organizationId: r.organization_id ?? null,
           clientTxId: r.client_tx_id ?? null,
+          correlationId: r.correlation_id ?? null,
+          transactionId: r.transaction_id ?? null,
           occurredAt: r.occurred_at != null ? Number(r.occurred_at) : null,
           cursor: String(r.cursor),
         }),

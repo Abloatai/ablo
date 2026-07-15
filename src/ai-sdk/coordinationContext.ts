@@ -132,25 +132,21 @@ function formatCoordinationNote(
   const entityLabel = target.type.toLowerCase();
   const c = claims.length === 1 ? claims[0] : undefined;
   if (c) {
-    const details = c.description ? `Declared work: ${c.description}. ` : '';
     return (
       `<multiplayer_context>\n` +
       `Another participant is currently editing this ${entityLabel}. ` +
-      `Action declared: ${c.reason}. ` +
-      details +
+      `Declared work: ${c.description}. ` +
       `Defer to their concurrent changes when reasonable, or note your work as complementary to theirs. ` +
       `Avoid stomping their in-flight edits.\n` +
       `</multiplayer_context>`
     );
   }
-  const actions = Array.from(new Set(claims.map((c) => c.reason))).join(', ');
   const descriptions = Array.from(
     new Set(claims.map((c) => c.description).filter(Boolean)),
   ).join('; ');
   return (
     `<multiplayer_context>\n` +
     `${claims.length} other participants are currently editing this ${entityLabel}. ` +
-    `Active actions: ${actions}. ` +
     (descriptions ? `Declared work: ${descriptions}. ` : '') +
     `Coordinate with their in-flight work — defer where reasonable, ` +
     `or describe your work as complementary.\n` +

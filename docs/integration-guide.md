@@ -48,14 +48,12 @@ Every schema model is backed by **your own database**. The SDK call shape is the
 same everywhere.
 
 In this guide — an app that already owns its backend and database — keep
-`DATABASE_URL` inside your app and expose a signed Data Source endpoint: Ablo
-coordinates each write and your app commits it to your Postgres. Do not pass
-`databaseUrl` to `Ablo(...)` here; application and agent code use `ABLO_API_KEY`.
-
-If instead you want Ablo to connect to your Postgres directly, pass `databaseUrl`
-(a live, server-only option) to `Ablo(...)`. That and the sandbox-only `apiKey`
-shape are the other two start states — [Connect Your Database](./data-sources.md)
-is the single source of truth for all three.
+`DATABASE_URL` inside your app and connect it out of band: run `npx ablo connect`
+for logical replication (Ablo tails your WAL), or expose a signed Data Source
+endpoint where Ablo coordinates each write and your app commits it to your
+Postgres. Either way, application and agent code hold only `ABLO_API_KEY` — the
+client never sees a connection string. [Connect Your Database](./data-sources.md)
+is the single source of truth for both paths.
 
 ## Test With Sandboxes
 

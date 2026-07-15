@@ -30,6 +30,12 @@ const persistedWriteOptionsSchema = z
     onStale: z.enum(['reject', 'overwrite', 'notify']).nullable().optional(),
     idempotencyKey: z.string().optional(),
     label: z.string().optional(),
+    // Aligned with the `WriteOptions` type: a claimed write persisted offline
+    // must replay carrying its fencing token (Option B), or a queued write that
+    // survives a reload would lose its fence and could land as a stale blind
+    // write. Declared (not just loose-passthrough) so it is validated as a
+    // number on rehydration.
+    fenceToken: z.number().nullable().optional(),
   })
   .loose();
 

@@ -13,7 +13,7 @@
  *
  * Wire frames:
  *   • Outbound `claim_begin` — announce a claim: `{ claimId, entityType,
- *       entityId, reason, field?, estimatedMs? }`.
+ *       entityId, description, field?, estimatedMs? }`.
  *   • Outbound `claim_abandon` — release it: `{ claimId, entityType?,
  *       entityId? }`.
  *   • Inbound, via presence — `event.activeClaims`, each stamped with
@@ -97,8 +97,8 @@ interface OwnClaim {
   readonly range?: ClaimTarget['range'];
   readonly field?: string;
   readonly meta?: ClaimTarget['meta'];
-  /** Human-readable reason for the claim, shown to other participants. */
-  readonly reason: string;
+  /** Peer-visible description of the work, shown to other participants. */
+  readonly description: string;
   readonly estimatedMs: number | undefined;
   /** When set, wait in the server's fair first-come-first-served queue if the
    *  entity is already claimed, instead of being rejected. */
@@ -211,7 +211,12 @@ export function createClaimStream(
           // drops it from `others`, which is what resolves a contender's
           // `settled()`. Absent status means active (wire back-compat).
           if (claim.status && claim.status !== 'active') continue;
-          const description = descriptionFromMeta(claim.meta);
+          // Resolve the always-present public field, tolerating a frame that
+          // carries the value in `meta` rather than as an explicit description.
+          const description =
+            claim.description ??
+            descriptionFromMeta(claim.meta) ??
+            'editing';
           activeByClaimId.set(claim.claimId, {
             object: 'claim',
             id: claim.claimId,
@@ -229,8 +234,7 @@ export function createClaimStream(
               field: claim.field,
               meta: claim.meta,
             },
-            reason: claim.reason,
-            ...(description ? { description } : {}),
+            description,
             ttlSeconds: Math.max(
               0,
               Math.floor((claim.expiresAt - Date.now()) / 1000),
@@ -388,7 +392,7 @@ export function createClaimStream(
         entityId: claim.entityId,
         path: claim.path,
         range: claim.range,
-        reason: claim.reason,
+        description: claim.description,
         field: claim.field,
         meta: claim.meta,
         estimatedMs: claim.estimatedMs,
@@ -480,14 +484,6 @@ export function createClaimStream(
     });
   }
 
-  function withDescription(
-    meta: ClaimTarget['meta'],
-    description: string | undefined,
-  ): ClaimTarget['meta'] {
-    if (!description) return meta;
-    return { ...(meta ?? {}), description };
-  }
-
   function mintHandle(args: {
     entityType: string;
     entityId: string;
@@ -495,7 +491,7 @@ export function createClaimStream(
     range?: ClaimTarget['range'];
     field?: string;
     meta?: ClaimTarget['meta'];
-    reason: string;
+    description: string;
     ttl?: ClaimLeaseOptions['ttl'];
     queue?: boolean;
   }): Claim {
@@ -508,7 +504,7 @@ export function createClaimStream(
       range: args.range,
       field: args.field,
       meta: args.meta,
-      reason: args.reason,
+      description: args.description,
       estimatedMs,
       queue: args.queue,
     };
@@ -516,7 +512,7 @@ export function createClaimStream(
     sendBegin(claimId, claim);
     // Coordination trace (info): the creator can see their human/agent claims.
     getContext().logger.info(
-      `claim: requesting ${claimLabel(claim.entityType, claim.entityId, claim.field)} for "${claim.reason}"` +
+      `claim: requesting ${claimLabel(claim.entityType, claim.entityId, claim.field)} for "${claim.description}"` +
         (claim.queue ? ' (will queue if contended)' : ''),
       { claimId },
     );
@@ -537,7 +533,7 @@ export function createClaimStream(
       object: 'claim',
       id: claimId,
       status: 'active',
-      reason: args.reason,
+      description: args.description,
       target: {
         type: args.entityType,
         id: args.entityId,
@@ -575,8 +571,8 @@ export function createClaimStream(
         path: resolved.path,
         range: resolved.range,
         field: resolved.field,
-        meta: withDescription(resolved.meta, opts?.description),
-        reason: opts?.reason ?? 'editing',
+        meta: resolved.meta,
+        description: opts?.description ?? 'editing',
         ttl: opts?.ttl,
         queue: opts?.queue,
       });

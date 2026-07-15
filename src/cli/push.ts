@@ -563,6 +563,23 @@ export async function push(argv: readonly string[]): Promise<void> {
         console.log(pc.yellow(`  Applied ${body.warnings.length} destructive change(s):`));
         for (const w of body.warnings) console.log(pc.yellow(fmtSignal(w)));
       }
+      // The schema is recorded, but this plane's engine role is intentionally not
+      // allowed to run DDL, so its tables were not created here. New models exist
+      // as metadata only until they are provisioned out-of-band.
+      if (body.provisioningDeferred === true) {
+        console.log(
+          pc.yellow(
+            `  Your schema is registered, but its tables were not created on this plane — ` +
+              `the engine's runtime role does not run DDL here.`,
+          ),
+        );
+        console.log(
+          pc.dim(
+            `  New models are recorded as metadata; provision their tables out-of-band ` +
+              `before you read or write them.`,
+          ),
+        );
+      }
     }
     return;
   }

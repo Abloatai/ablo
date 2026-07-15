@@ -29,7 +29,6 @@ import {
   type DurableCommitOperation,
 } from '../transactions/commitEnvelope.js';
 import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, toAbloError, claimedError } from '../errors.js';
-import { descriptionFromMeta } from '../coordination/schema.js';
 // `ModelTarget` (the model/id locator) and `ModelClaim` (the resolved claim
 // view) are defined once in `../coordination/schema`, derived from a single zod
 // schema so the typed client, the HTTP client, and the server share one
@@ -84,12 +83,9 @@ import {
   resolveAuthToken,
   resolveBaseURL,
   resolveBootstrapBaseUrl,
-  resolveDatabaseUrl,
+  rejectRemovedDatabaseUrlOption,
   warnIfCliKeyMismatch,
-  warnIfDatabaseUrlEnvIgnored,
-  warnIfDatabaseUrlDeprecated,
 } from './auth.js';
-import { registerDataSource } from './registerDataSource.js';
 import { shouldUseInMemoryPersistence } from './persistence.js';
 
 // ── Supporting modules ────────────────────────────────────────────────────
@@ -137,6 +133,7 @@ export type {
   ClaimHeartbeat,
   ClaimHeartbeatOptions,
   HeldClaim,
+  HeldLease,
   ModelOperations,
   ModelOperationAction,
   CommitWait,
@@ -559,10 +556,9 @@ export function Ablo<const S extends SchemaRecord>(
     // eslint-disable-next-line @typescript-eslint/no-deprecated -- load-bearing on the self-hosted path; server-internal cap-mint (Phase 3) not shipped
     internalOptions.capabilityToken ?? configuredAuthToken,
   );
-  const configuredDatabaseUrl = resolveDatabaseUrl(authInput);
+  rejectRemovedDatabaseUrlOption(options);
   assertBrowserSafety({
     apiKey: configuredApiKey,
-    databaseUrl: configuredDatabaseUrl,
     dangerouslyAllowBrowser: options.dangerouslyAllowBrowser,
   });
 
@@ -571,10 +567,6 @@ export function Ablo<const S extends SchemaRecord>(
   const logger =
     internalOptions.logger ??
     createConsoleLogger(resolveLogLevel({ debug: options.debug, logLevel: options.logLevel }));
-  // Nudge (once) if a stray DATABASE_URL is in the env but `databaseUrl` wasn't
-  // passed — the env value is no longer auto-adopted (see resolveDatabaseUrl).
-  warnIfDatabaseUrlEnvIgnored(authInput, (m) => { logger.warn(m); });
-  warnIfDatabaseUrlDeprecated(authInput, (m) => { logger.warn(m); });
   void warnIfCliKeyMismatch(authInput, (m) => { logger.warn(m); });
   const schema = options.schema;
   const url = resolveBaseURL(authInput);
@@ -821,20 +813,6 @@ export function Ablo<const S extends SchemaRecord>(
           authCredentials.setAuthToken(token);
         }
 
-        // Register the caller's own database for write-back before bootstrap, so
-        // the server resolves this org's data plane to the customer's DB rather
-        // than serving an empty/wrong store. The org is derived server-side from
-        // the API key. Idempotent server-side (register-or-update). Skipped when
-        // no `databaseUrl` was configured (Ablo-managed storage).
-        if (configuredDatabaseUrl) {
-          await registerDataSource({
-            baseUrl: resolveBootstrapBaseUrl({ url }),
-            apiKey: await resolveApiKeyValue(configuredApiKey),
-            databaseUrl: configuredDatabaseUrl,
-            ...(internalOptions.fetch ? { fetchImpl: internalOptions.fetch } : {}),
-          });
-        }
-
         // Resolve participant identity + scope. Three branches —
         // hosted-cloud apiKey exchange, self-derived from capability
         // token, or legacy explicit options. See `./identity.ts`.
@@ -1024,6 +1002,7 @@ export function Ablo<const S extends SchemaRecord>(
 	  function normalizeCommitOperation(
 	    op: CommitOperationInput,
 	    defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
+	    fenceToken?: number | null,
 	  ): DurableCommitOperation {
 	    const type = op.action.toUpperCase();
 	    const id = op.id ?? '';
@@ -1035,11 +1014,15 @@ export function Ablo<const S extends SchemaRecord>(
 	      transactionId: op.transactionId ?? undefined,
 	      readAt: op.readAt ?? defaults.readAt ?? undefined,
 	      onStale: op.onStale ?? defaults.onStale ?? undefined,
+	      // The batch's claim (if any) supplies one token for every op, mirroring
+	      // how it supplies the batch `readAt`.
+	      fenceToken: op.fenceToken ?? fenceToken ?? undefined,
 	    });
 	  }
 
 	  function normalizeCommitOperations(
 	    commitOptions: CommitCreateOptions,
+	    fenceToken?: number | null,
 	  ): DurableCommitOperation[] {
 	    if (commitOptions.operations.length === 0) {
 	      throw new AbloValidationError(
@@ -1048,18 +1031,16 @@ export function Ablo<const S extends SchemaRecord>(
 	      );
 	    }
 	    return commitOptions.operations.map((op) =>
-	      normalizeCommitOperation(op, commitOptions),
+	      normalizeCommitOperation(op, commitOptions, fenceToken),
 	    );
 	  }
 
 	  function modelClaimFromActive(claim: Claim): ModelClaim {
-	    const description = descriptionFromMeta(claim.target.meta);
 	    return {
 	      id: claim.id,
 	      actor: claim.heldBy ?? "",
 	      participantKind: claim.participantKind ?? "user",
-	      reason: claim.reason,
-	      ...(description ? { description } : {}),
+	      description: claim.description,
 	      field: claim.target.field,
 	      status: 'active',
 	      expiresAt: claim.expiresAt ?? 0,
@@ -1160,16 +1141,25 @@ export function Ablo<const S extends SchemaRecord>(
 	    });
 	  }
 
-	  function wrapClaimHandle(claim: Claim, waited = false): Claim {
+	  function wrapClaimHandle(
+	    claim: Claim,
+	    waited = false,
+	    fenceToken?: number,
+	  ): Claim {
 	    const release = async (): Promise<void> => {
 	      claim.revoke?.();
 	    };
+	    // The token is server-stamped and arrives on the grant frame, so prefer
+	    // the one `awaitClaimGrant` read there; fall back to any the local handle
+	    // already carried (immediate, non-queued grants).
+	    const resolvedFenceToken = fenceToken ?? claim.fenceToken;
 	    return {
 	      object: 'claim',
 	      id: claim.id,
-	      reason: claim.reason,
+	      description: claim.description,
 	      target: claim.target,
 	      waited,
+	      ...(resolvedFenceToken !== undefined ? { fenceToken: resolvedFenceToken } : {}),
 	      release,
 	      revoke: claim.revoke,
 	      // The lease-control members are forwarded explicitly — this wrapper
@@ -1193,7 +1183,7 @@ export function Ablo<const S extends SchemaRecord>(
 	          meta: claimOptions.target.meta,
 	        },
 	        {
-	          reason: claimOptions.reason,
+	          description: claimOptions.description,
 	          ttl: claimOptions.ttl,
 	          queue: claimOptions.queue,
 	        },
@@ -1204,11 +1194,12 @@ export function Ablo<const S extends SchemaRecord>(
 	      // callers — chiefly `ablo.<model>.claim` — get a handle that already
 	      // holds the lease, never a half-claimed one racing the queue.
 	      let waited = false;
+	      let fenceToken: number | undefined;
 	      if (claimOptions.queue) {
 	        const ws = store.getSyncWebSocket();
 	        if (ws) {
 	          try {
-	            ({ waited } = await awaitClaimGrant(ws, claim.id, {
+	            ({ waited, fenceToken } = await awaitClaimGrant(ws, claim.id, {
 	              timeoutMs: claimOptions.waitTimeoutMs,
 	              maxQueueDepth: claimOptions.maxQueueDepth,
 	            }));
@@ -1221,7 +1212,7 @@ export function Ablo<const S extends SchemaRecord>(
 	          }
 	        }
 	      }
-	      return wrapClaimHandle(claim, waited);
+	      return wrapClaimHandle(claim, waited, fenceToken);
 	    },
 	    list(target?: Partial<ModelTarget>): readonly ModelClaim[] {
 	      return listModelClaims(target);
@@ -1286,7 +1277,7 @@ export function Ablo<const S extends SchemaRecord>(
               ...(held.target.field ? { field: held.target.field } : {}),
               ...(held.target.meta ? { meta: held.target.meta } : {}),
             },
-            reason: held.reason,
+            description: held.description ?? 'editing',
             heldBy: held.actor,
             participantKind: held.participantKind,
             expiresAt: held.expiresAt,
@@ -1341,12 +1332,15 @@ export function Ablo<const S extends SchemaRecord>(
 	      // semantics as `ablo.<model>.update({ id, data, claim })`, so the
 	      // two write doors speak one claim vocabulary. Explicit options win.
 	      const claim = commitOptions.claim ?? null;
-	      const operations = normalizeCommitOperations({
-	        ...commitOptions,
-	        readAt: commitOptions.readAt ?? claim?.readAt ?? null,
-	        onStale:
-	          commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
-	      });
+	      const operations = normalizeCommitOperations(
+	        {
+	          ...commitOptions,
+	          readAt: commitOptions.readAt ?? claim?.readAt ?? null,
+	          onStale:
+	            commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
+	        },
+	        claim?.fenceToken ?? null,
+	      );
 	      const wait = commitOptions.wait ?? 'confirmed';
 	      // Route through the TransactionQueue's commit lane so the call
 	      // tolerates WS disconnects: the envelope stays in memory until
@@ -1366,12 +1360,14 @@ export function Ablo<const S extends SchemaRecord>(
 	        return { id: clientTxId, status: 'queued' };
 	      }
 
-	      const { lastSyncId, notifications } = await queue.waitForCommitReceipt(clientTxId);
+	      const { lastSyncId, notifications, missingIds } =
+	        await queue.waitForCommitReceipt(clientTxId);
 	      return {
 	        id: clientTxId,
 	        status: 'confirmed',
 	        lastSyncId,
 	        ...(notifications && notifications.length > 0 ? { notifications } : {}),
+	        ...(missingIds && missingIds.length > 0 ? { missingIds } : {}),
 	      };
 	    },
 	  };

@@ -25,6 +25,7 @@
  */
 
 import { z } from 'zod';
+import { correlationIdSchema } from './commit.js';
 
 // ── Shared participant vocabulary (mirrors the corresponding Postgres enums) ──
 
@@ -92,6 +93,8 @@ export const syncDeltaWireCoreSchema = z.object({
   previousData: wireDeltaDataSchema.optional(),
   syncGroups: z.array(z.string()),
   transactionId: z.string().optional(),
+  /** Opaque source-batch identity present only on decoded customer-WAL echoes. */
+  correlationId: correlationIdSchema.optional(),
   createdAt: z.string(),
 });
 export type SyncDeltaWireCore = z.infer<typeof syncDeltaWireCoreSchema>;
@@ -117,6 +120,12 @@ export type ClientSyncDelta = z.infer<typeof clientSyncDeltaSchema>;
  * projection also narrows `transactionId` to nullable, matching the stored column.
  */
 export const serverSyncDeltaSchema = syncDeltaWireCoreSchema.extend({
+  /** The plane project the delta was committed on (`''` = the org's default
+   *  project). Server-only: the broadcaster uses it to fan a mixed-project batch
+   *  out ONLY to same-project subscribers. It rides on the frame but the client's
+   *  `clientSyncDeltaSchema` (a non-strict object) strips it — a client only ever
+   *  receives its own project's deltas, so the value is redundant to it. */
+  projectId: z.string(),
   transactionId: z.string().nullable(),
   /** @deprecated Duplicates `actor`; read `actor` instead. */
   createdBy: participantRefSchema.nullable(),

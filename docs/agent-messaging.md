@@ -61,22 +61,21 @@ npx ablo push
 
 ## Server-side agent
 
-Most server-side agents use the direct database path. Pass the schema, API key,
-database URL, and transport selector:
+Most server-side agents use the stateless HTTP transport. Pass the schema, API
+key, and transport selector:
 
 ```ts
 const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
-  databaseUrl: process.env.DATABASE_URL,
   transport: "http",
 });
 
 await ablo.ready();
 ```
 
-`databaseUrl` is server-only. Browser clients must not receive it; live UIs use
-the default WebSocket transport with a minted user/session token.
+The secret `apiKey` is server-only. Browser clients must not receive it; live UIs
+use the default WebSocket transport with a minted user/session token.
 
 If your backend mints restricted agent tokens, register the database once from a
 secret-key server process as above. Workers using the restricted token can then

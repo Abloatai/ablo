@@ -20,7 +20,6 @@ import {
   toAbloError,
   type ClaimErrorClaim,
 } from '../errors.js';
-import { descriptionFromMeta } from '../coordination/schema.js';
 import {
   reconcileFunctionalUpdate,
   type ModelUpdater,
@@ -49,6 +48,7 @@ import type {
   ClaimHeartbeat,
   ClaimHeartbeatOptions,
   HeldClaim,
+  HeldLease,
   ClaimWaitOptions,
   ClaimTarget,
   Snapshot,
@@ -133,8 +133,8 @@ export interface ModelCollaboration<T> {
       range?: TargetRange;
       meta?: Record<string, unknown>;
     };
-    /** Human-readable phase (`'editing'`). */
-    reason: string;
+    /** Peer-visible description of the work (`'rewriting the risk section'`). */
+    description?: string;
     ttl?: Duration;
     /**
      * Block on the server's fair FIFO queue when the target is held, rather
@@ -220,10 +220,9 @@ export interface ModelCollaboration<T> {
 }
 
 export interface ClaimTargetOptions<T = Record<string, unknown>> {
-  /** Human-readable phase shown to observers while held. Defaults to
-   *  `'editing'`. The same word on every claim surface. */
-  reason?: string;
-  /** Peer-visible explanation of the work being performed. */
+  /** Peer-visible description of the work being performed — the sentence a
+   *  contending participant reads to decide whether to wait, work elsewhere, or
+   *  move on. Defaults to `'editing'`. The same field on every claim surface. */
   description?: string;
   /** Field-level target, for fine-grained claimed-state badges. */
   field?: string;
@@ -304,7 +303,6 @@ export interface ClaimReorderParams<T = Record<string, unknown>>
  * ```ts
  * const claim = await ablo.weatherReports.claim({
  *   id: 'report_stockholm',
- *   reason: 'forecasting',
  *   description: 'Fetching current weather before writing the forecast.',
  * });
  * try {
@@ -324,7 +322,7 @@ export interface ClaimReorderParams<T = Record<string, unknown>>
  */
 // The canonical claim handle types live in `../types/streams`. They are
 // re-exported here so existing import paths keep working.
-export type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim };
+export type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim, HeldLease };
 
 export type ClaimOptions<T = Record<string, unknown>> = ClaimTargetOptions<T>;
 
@@ -340,7 +338,6 @@ export type ClaimOptions<T = Record<string, unknown>> = ClaimTargetOptions<T>;
  *   data: { title },
  *   claim: {
  *     field: 'title',
- *     reason: 'renaming',
  *     description: 'Renaming the task to match the project brief.',
  *   },
  * });
@@ -402,6 +399,15 @@ export interface ClaimApi<T> extends ClaimReadApi<T> {
    * directly and `await using` works without a guard.
    */
   (params: ClaimParams<T>): Promise<HeldClaim<T>>;
+  /**
+   * Takes a claim by id alone, for a row that lives only in the customer's own
+   * database — Ablo has never seen it, so there is nothing to re-read. Returns a
+   * {@link HeldLease}: the same lease controls as {@link HeldClaim}
+   * (`release`, `revoke`, `heartbeat`, `await using`) but no `.data`. Locking a
+   * key you know by id is exactly this — serialize writers without first
+   * syncing the row into Ablo.
+   */
+  (id: string, opts?: ClaimOptions<T>): Promise<HeldLease>;
 }
 
 export interface ModelRetrieveParams extends ServerRetrieveOptions {
@@ -518,7 +524,6 @@ export interface ModelOperations<T, CreateInput> {
    * ```ts
    * const claim = await ablo.weatherReports.claim({
    *   id: 'report_stockholm',
-   *   reason: 'forecasting',
    *   description: 'Fetching fresh weather before updating the report.',
    * });
    * const weather = await getWeather(claim.data.location);
@@ -630,7 +635,7 @@ export function createModelProxy<T, C>(
   // `claim({ id })` took, without a per-call handle. Released on dispose,
   // explicit release, or TTL expiry.
   //
-  // `target`, `reason`, and `expiresAt` are kept alongside the lease so
+  // `target`, `description`, and `expiresAt` are kept alongside the lease so
   // `claim.state` can synthesize a self-claim: the server excludes a holder's
   // own presence frames, so this proxy is the only place that knows the client
   // holds the row. `expiresAt` is the client's best estimate from the requested
@@ -642,7 +647,7 @@ export function createModelProxy<T, C>(
       lease: Claim;
       snapshot: Snapshot;
       target: ClaimTarget;
-      reason: string;
+      description: string;
       expiresAt: number;
     }
   >();
@@ -662,20 +667,14 @@ export function createModelProxy<T, C>(
 
   const claimMeta = (
     options: ClaimTargetOptions<T> | undefined,
-  ): Record<string, unknown> | undefined => {
-    if (!options?.description) return options?.meta;
-    return { ...(options.meta ?? {}), description: options.description };
-  };
+  ): Record<string, unknown> | undefined => options?.meta;
 
   const claimContextFromClaim = (claim: Claim): ClaimErrorClaim => {
-    const description =
-      claim.description ?? descriptionFromMeta(claim.target.meta);
     return {
       id: claim.id,
       actor: claim.heldBy,
       participantKind: claim.participantKind,
-      reason: claim.reason,
-      ...(description ? { description } : {}),
+      description: claim.description,
       field: claim.target.field,
       status: claim.status,
       expiresAt: claim.expiresAt,
@@ -784,7 +783,7 @@ export function createModelProxy<T, C>(
         ...(options.range ? { range: options.range } : {}),
         ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
       },
-      reason: options.reason ?? 'editing',
+      description: options.description ?? 'editing',
       ttl: options.ttl,
       queue: !failFast,
       maxQueueDepth: options.maxQueueDepth,
@@ -809,7 +808,7 @@ export function createModelProxy<T, C>(
     }
 
     const snapshot = collaboration.createSnapshot(schemaKey, id);
-    const reason = options.reason ?? 'editing';
+    const description = options.description ?? 'editing';
     // The self-claim's `ClaimTarget` mirrors what a peer's `claim.state` would
     // report (`state` maps `held.target.model` to `type`), so a holder and a
     // peer see the same `target.type` for one row — the wire model token.
@@ -828,7 +827,7 @@ export function createModelProxy<T, C>(
       lease,
       snapshot,
       target: selfTarget,
-      reason,
+      description,
       expiresAt,
     });
     const target = {
@@ -882,9 +881,11 @@ export function createModelProxy<T, C>(
       object: 'claim',
       id: lease.id,
       readAt: snapshot.stamp,
+      // The fencing token the server minted for this grant, forwarded from the
+      // lease so writes taken under this handle carry it (Option B).
+      ...(lease.fenceToken !== undefined ? { fenceToken: lease.fenceToken } : {}),
       target,
-      reason,
-      ...(options.description ? { description: options.description } : {}),
+      description,
       data: modelAsRow<T>(model),
       release,
       revoke: () => {
@@ -895,14 +896,180 @@ export function createModelProxy<T, C>(
     };
   };
 
-  const claim = (params: ClaimParams<T>): Promise<HeldClaim<T>> =>
-    takeClaim(params);
+  // The row-free sibling of `takeClaim`: locks a key by id alone, for a row that
+  // lives only in the customer's own database and was never synced into Ablo.
+  // Everything about the lease — the fail-fast contention check, the scope pin,
+  // the `createClaim` grant, the heartbeat wiring, and the `activeClaims`
+  // bookkeeping — is identical; what's dropped is the object-pool `load` (and its
+  // `entity_not_found` throw), the post-grant re-read, and the `.data` field,
+  // since there is no local row to hydrate or return.
+  const takeRowFreeClaim = async (
+    id: string,
+    options: ClaimOptions<T>,
+  ): Promise<HeldLease> => {
+    if (!collaboration) {
+      throw new AbloValidationError(
+        `Model "${schemaKey}" was built without the collaboration runtime, so claim() is unavailable here. Claiming needs no per-model config — use the standard Ablo({ schema, apiKey }) client and every model is claimable.`,
+        { code: 'model_claim_not_configured' },
+      );
+    }
+    // Is someone else already on this target? Read the local coordination
+    // snapshot up front so a `queue: false` caller can reject before announcing
+    // a claim the server would refuse.
+    const held = collaboration.state({ model: wireModel, id });
+    const contended = !!held && held.heldBy !== collaboration.selfParticipantId;
+    const failFast = options.queue === false;
+
+    // Fail-fast (`queue: false`): reject now if a holder is already visible.
+    // Best-effort at the client — a row this participant never synced usually
+    // carries no local claim state either, so a peer gets the deterministic
+    // rejection only once it has observed the holder (entered the row's entity
+    // scope). The server's queue is the backstop for the queuing path.
+    if (failFast && contended) {
+      const claim = claimContextFromClaim(held);
+      throw new AbloClaimedError(
+        formatClaimedErrorMessage({
+          targetLabel: `${registeredModelName}/${id}`,
+          heldBy: held.heldBy,
+          claim,
+          fallback: `${registeredModelName}/${id} is held by ${held.heldBy ?? 'another participant'}.`,
+        }),
+        { code: 'entity_claimed', claims: [claim] },
+      );
+    }
+
+    // Enter the entity scope before acquiring the lease so the holder's claim
+    // presence broadcasts to everyone in this entity group — the same ordering
+    // the row-bearing path relies on. No pool `load` and no `entity_not_found`
+    // throw: the row lives only in the customer's database, so there is nothing
+    // to hydrate here and nothing to re-read after the grant.
+    await collaboration.pinScope?.({ [schemaKey]: id });
+
+    const lease = await collaboration.createClaim({
+      target: {
+        model: wireModel,
+        id,
+        ...(options.field ? { field: options.field } : {}),
+        ...(options.path ? { path: options.path } : {}),
+        ...(options.range ? { range: options.range } : {}),
+        ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
+      },
+      description: options.description ?? 'editing',
+      ttl: options.ttl,
+      queue: !failFast,
+      maxQueueDepth: options.maxQueueDepth,
+    });
+
+    // A watermark-only snapshot: `createSnapshot` still reads the engine's
+    // current `lastSyncId` even though the pool holds no row (the bucket is
+    // empty). It costs nothing extra and gives a write taken under this lease a
+    // real `readAt` to guard against changes since the lease was acquired.
+    const snapshot = collaboration.createSnapshot(schemaKey, id);
+    const description = options.description ?? 'editing';
+    const selfTarget: ClaimTarget = {
+      type: wireModel,
+      id,
+      ...(options.field ? { field: options.field } : {}),
+      ...(options.path ? { path: options.path } : {}),
+      ...(options.range ? { range: options.range } : {}),
+      ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
+    };
+    const ttlMs =
+      options.ttl !== undefined ? toMs(options.ttl) : DEFAULT_LEASE_TTL_MS;
+    const expiresAt = Date.now() + ttlMs;
+    activeClaims.set(id, {
+      lease,
+      snapshot,
+      target: selfTarget,
+      description,
+      expiresAt,
+    });
+    const target = {
+      type: schemaKey,
+      id,
+      ...(options.field ? { field: options.field } : {}),
+      ...(options.path ? { path: options.path } : {}),
+      ...(options.range ? { range: options.range } : {}),
+      ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
+    };
+    // A beat resolves with the server's extended expiry; keep the local
+    // self-claim estimate in step so `claim.state` renders the real window.
+    const heartbeat = async (
+      beatOptions?: Duration | ClaimHeartbeatOptions,
+    ): Promise<ClaimHeartbeat> => {
+      if (!lease.heartbeat) {
+        throw new AbloValidationError(
+          'This claim handle has no heartbeat wiring, which the standard Ablo({ schema, apiKey }) client provides on every claim. This appears only when a claim is minted through an internal path that predates heartbeats.',
+          { code: 'claim_not_wired' },
+        );
+      }
+      const resolved = resolveHeartbeatOptions(beatOptions);
+      const beat = await lease.heartbeat({
+        ttl: resolved.ttl ?? options.ttl,
+        ...(resolved.details !== undefined ? { details: resolved.details } : {}),
+      });
+      const held = activeClaims.get(id);
+      if (held) held.expiresAt = beat.expiresAt;
+      options.onHeartbeat?.(beat);
+      return beat;
+    };
+
+    const stopHeartbeatLoop = options.heartbeat
+      ? startClaimHeartbeatLoop({
+          beat: () => heartbeat(),
+          intervalMs: heartbeatCadenceMs(ttlMs, options.heartbeat),
+          ...(options.onHeartbeatLost
+            ? { onLost: options.onHeartbeatLost }
+            : {}),
+        })
+      : undefined;
+
+    const release = () => {
+      stopHeartbeatLoop?.();
+      return releaseClaim(id);
+    };
+    return {
+      object: 'claim',
+      id: lease.id,
+      readAt: snapshot.stamp,
+      // Forward the grant's fencing token so writes under this row-free lease
+      // carry it (Option B), exactly as the row-bearing claim does.
+      ...(lease.fenceToken !== undefined ? { fenceToken: lease.fenceToken } : {}),
+      target,
+      description,
+      release,
+      revoke: () => {
+        void release();
+      },
+      heartbeat,
+      [Symbol.asyncDispose]: release,
+    };
+  };
+
+  // `claim` overloads on its first argument: an options object claims a synced
+  // row and resolves to a HeldClaim (carrying `.data`); a bare id claims a key
+  // whose row Ablo doesn't hold and resolves to a HeldLease (no `.data`). Both
+  // route their throws through `toAbloError` via the guarded takers, so the
+  // two-signature shape survives — wrapping the dispatcher itself in `guard`
+  // would collapse the overloads to one.
+  const guardedTakeClaim = guard(takeClaim);
+  const guardedTakeRowFreeClaim = guard(takeRowFreeClaim);
+  function claim(params: ClaimParams<T>): Promise<HeldClaim<T>>;
+  function claim(id: string, opts?: ClaimOptions<T>): Promise<HeldLease>;
+  function claim(
+    arg: ClaimParams<T> | string,
+    opts?: ClaimOptions<T>,
+  ): Promise<HeldClaim<T> | HeldLease> {
+    return typeof arg === 'string'
+      ? guardedTakeRowFreeClaim(arg, opts ?? {})
+      : guardedTakeClaim(arg);
+  }
 
   // `claim` is a callable namespace: invoke it to take a claim, reach its
   // members to read/steer the coordination plane. Attach the readers to the
-  // guarded callable so `ablo.<model>.claim(...)` and `ablo.<model>.claim.state(...)`
+  // callable so `ablo.<model>.claim(...)` and `ablo.<model>.claim.state(...)`
   // are the same object.
-  const claimApi: ClaimApi<T> = Object.assign(guard(claim), {
+  const claimApi: ClaimApi<T> = Object.assign(claim, {
     state(params: ClaimLookupParams<T>): Claim | null {
       // Read interest: a passive observer of a row's claim state must enter that
       // row's entity scope, or it sits only on broader `org:`/`user:` groups and
@@ -920,7 +1087,7 @@ export function createModelProxy<T, C>(
           id: own.lease.id,
           status: 'active',
           target: own.target,
-          reason: own.reason,
+          description: own.description,
           heldBy: collaboration?.selfParticipantId ?? '',
           participantKind: collaboration?.selfParticipantKind ?? 'user',
           expiresAt: own.expiresAt,
@@ -1040,7 +1207,7 @@ export function createModelProxy<T, C>(
             ...(claim.range ? { range: claim.range } : {}),
             ...(claimMeta(claim) ? { meta: claimMeta(claim) } : {}),
           },
-          reason: claim.reason ?? 'creating',
+          description: claim.description ?? 'creating',
           ttl: claim.ttl,
           queue: claim.queue !== false,
           maxQueueDepth: claim.maxQueueDepth,
@@ -1183,6 +1350,9 @@ export function createModelProxy<T, C>(
                     wait: 'confirmed' as const,
                     readAt: handle.readAt,
                     onStale: 'reject' as const,
+                    ...(handle.fenceToken !== undefined
+                      ? { fenceToken: handle.fenceToken }
+                      : {}),
                   }
                 : {}),
               ...opts,
@@ -1243,6 +1413,9 @@ export function createModelProxy<T, C>(
             readAt: claimed.snapshot.stamp,
             onStale: 'reject',
             claimRef: { id: claimed.lease.id },
+            ...(claimed.lease.fenceToken !== undefined
+              ? { fenceToken: claimed.lease.fenceToken }
+              : {}),
             ...opts,
           }
         : {

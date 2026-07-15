@@ -197,7 +197,7 @@ a model row. It's what `claim.state()` returns and what observers render.
 | `id` | `string` | The claim id (distinct from the target row id). |
 | `status` | `ClaimStatus` | `'active' \| 'queued' \| 'committed' \| 'expired' \| 'canceled'`. `active` = the holder; `queued` = waiting in line behind it. The other three are terminal states you only see on a claim you just finished — `committed` (released after a successful write), `expired` (TTL lapsed), `canceled` (released early). |
 | `target` | `EntityRef` | What is being coordinated (`{ model, id, field? }`). |
-| `reason` | `string` | Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. Serialized on the wire as `action`. |
+| `description` | `string` | Peer-visible description of the work — the sentence another participant reads to decide whether to wait or move on (`'rewriting the risk section'`). Defaults to `'editing'`. |
 | `heldBy` | `string` | Participant holding (or waiting on) it (e.g. `'agent:forecaster'`). |
 | `participantKind` | `'user' \| 'agent' \| 'system'` | Who's behind it — a human (`user`), an AI (`agent`), or automated infrastructure (`system`). |
 | `position` | `number?` | 0-based place in the FIFO line — present only when `status: 'queued'` (`0` = next behind the holder). |
@@ -209,7 +209,7 @@ a model row. It's what `claim.state()` returns and what observers render.
   "id": "claim_8fJ2",
   "status": "active",
   "target": { "model": "weatherReports", "id": "report_stockholm" },
-  "reason": "editing",
+  "description": "editing",
   "heldBy": "agent:forecaster",
   "participantKind": "agent",
   "createdAt": 1748160000000,
@@ -254,7 +254,7 @@ so two claimers can't both think they won.
 | name | type | required | description |
 |---|---|---|---|
 | `id` | `string` | yes | The row id — same id as `retrieve` / `update`. |
-| `options.reason` | `string` | no | Phase shown to observers (default `'editing'`). Serialized on the wire as `action`. |
+| `options.description` | `string` | no | Peer-visible description of the work, shown to observers (default `'editing'`). |
 | `options.field` | `string` | no | Field-level target, for fine-grained claimed-state badges. |
 | `options.queue` | `boolean` | no | `true` (default) queues and waits for the lease. `false` is fail-fast — if another participant holds the row, reject immediately with `AbloClaimedError('entity_claimed')` instead of queuing (claim-or-skip, for work dedup where waiting would double-process). |
 | `options.maxQueueDepth` | `number` | no | Backpressure: reject with `AbloClaimedError('queue_too_deep')` instead of joining a line already `>= maxQueueDepth` deep. Omit to wait however deep the queue is. |
@@ -278,7 +278,17 @@ const weather = await weatherAgent.getWeather(report.location);
 await ablo.weatherReports.update({ id: report.id, data: { forecast: weather } });
 ```
 
-The claim releases when the `await using` scope exits — on return or throw.
+The claim releases when the `await using` scope exits — **on return and on
+throw.** The "on throw" is the whole reason to bind it with `await using`: if the
+work between the claim and the write fails — the agent call errors, validation
+rejects, you decide not to write — the scope unwinds, the lease is released, and
+the next waiter is promoted, with no `finally` to remember. And nothing reaches
+the server until `update`, so a failure *before* the write leaves the row exactly
+as it was: claiming and committing are separate steps, so a failure between them
+has nothing to roll back. (A failure *after* a successful write leaves that write
+committed — pass an idempotency key on the write if you replay the block.) The
+lower-level [`claim.release`](#claimrelease) shows the manual `try/finally`
+equivalent for when you hold a claim without `await using`.
 
 ### Claim-gated reads
 
@@ -334,7 +344,7 @@ is free.
 
 ```ts
 const who = ablo.weatherReports.claim.state({ id: 'report_stockholm' });
-if (who) console.log(`${who.heldBy} is ${who.reason}`);
+if (who) console.log(`${who.heldBy} is ${who.description}`);
 ```
 
 Returns the active claim state when the row is held, or `null` when it's free:
@@ -344,7 +354,7 @@ Returns the active claim state when the row is held, or `null` when it's free:
   "id": "claim_8fJ2",
   "status": "active",
   "target": { "model": "weatherReports", "id": "report_stockholm" },
-  "reason": "editing",
+  "description": "editing",
   "heldBy": "agent:forecaster",
   "participantKind": "agent",
   "expiresAt": 1748160030000
@@ -405,7 +415,7 @@ Releasing **promotes the head of the queue**: the next waiter receives the claim
 **Example**
 
 ```ts
-const claim = await ablo.weatherReports.claim({ id: 'report_stockholm', reason: 'reviewing' });
+const claim = await ablo.weatherReports.claim({ id: 'report_stockholm', description: 'reviewing' });
 const report = claim.data;
 try {
   const ok = await reviewExternally(report);
@@ -435,7 +445,7 @@ third of the TTL until release:
 ```ts
 await using claim = await ablo.reports.claim({
   id: 'report_q3',
-  reason: 'generating',
+  description: 'generating',
   ttl: '5m',
   heartbeat: true,               // or an explicit cadence: heartbeat: '2m'
   onHeartbeatLost: () => abortWork(),
@@ -474,6 +484,51 @@ A stateless worker holding **many** rows beats them all in one round trip:
 `ablo.claims.heartbeatAll({ ttl: '5m' })` → `POST /api/v1/claims/heartbeat`, one
 entry per extended lease. This is the socketless twin of the realtime
 keepalive, which already renews every held lease on each ping.
+
+### durability — what a claim survives
+
+A lease belongs to your **identity** — the participant behind the credential —
+not to the socket it was claimed on; the server keys each lease by participant
+and `claimId`. That one fact decides what a claim lives through.
+
+**A brief blip is transparent.** The realtime client reconnects on its own
+(exponential backoff), and on each reconnect it re-announces every claim it
+still holds, so the server renews those leases and peers never see them flicker.
+A heartbeat that would land while the socket is momentarily down is skipped
+rather than failed — the next tick retries once the connection is back. Nothing
+to write: hold the claim and keep working.
+
+**A crashed holder frees the claim quickly — and it is the keepalive, not the
+TTL, that does it.** A dead holder is caught whichever way fires first: a clean
+socket close releases immediately, and a silent socket that never sent a close
+frame (a crashed tab, a dropped NAT) is reaped on the keepalive cycle (a ~30s
+ping / 10s pong window) and released then. Either way the next waiter is
+promoted within tens of seconds. This reclaim is **per-connection**, and it runs
+whether or not the TTL is anywhere near lapsing. Release fires only when your
+**last** connection goes, so a second connection under the same identity keeps
+the claim held.
+
+**The TTL is the deeper floor — for when the server itself restarts.** The live
+claim roster is held in memory, so a server restart would lose it; the durable
+lease in the coordination store carries the TTL, and a reconnecting client
+re-announces its claims before that TTL lapses. So size `ttl` to cover a
+deploy or restart window, not your work duration — beating covers the work
+duration.
+
+**To hold a claim across a holder crash, give it a durable identity.** A claim
+that must outlive a single failure belongs to a process that stays up — a
+backend worker or agent with its own credential — rather than one ephemeral
+browser tab. On reconnect the SDK re-announces it; if the row was granted onward
+while you were gone, that re-announce comes back as `AbloClaimedError`
+(`claim_lost`) — re-claim (you rejoin the line fairly) and retry from the fresh
+snapshot.
+
+| the holder… | what happens to the claim |
+| --- | --- |
+| blips, then reconnects within the window | renewed automatically on reconnect — no interruption |
+| crashes or drops for good | released within one keepalive cycle; the queue advances |
+| still has a second live connection | survives — release fires only on the last connection |
+| loses the server to a restart | rides the TTL in the coordination store; re-announced on reconnect |
 
 ### `watch` — presence for a set of rows
 
@@ -548,7 +603,7 @@ inspect the `code`.
 
 | error | `code` | thrown when | carries |
 |---|---|---|---|
-| `AbloClaimedError` | `claim_lost` | A held/queued claim was taken away (holder TTL lapse on disconnect, or revoke) while you were holding or waiting. | `claims?` |
+| `AbloClaimedError` | `claim_lost` | A held/queued claim was taken away — the holder disconnected (reaped on the keepalive cycle), went silent past its TTL, or was revoked — while you were holding or waiting. | `claims?` |
 | `AbloClaimedError` | `claim_queued` | **HTTP transport only.** A contended `claim` (default `queue: true`) could not block-wait for the lease (no socket), so it rejected immediately instead of queueing. Retryable — re-attempt the claim. | `claims?` |
 | `AbloClaimedError` | `grant_timeout` | The optional `timeoutMs` elapsed while you were still queued for a grant. | `claims?` |
 | `AbloClaimedError` | `queue_too_deep` | `claim` was passed `maxQueueDepth` and the wait line was already that deep when you tried to join — fail-fast instead of waiting. | `claims?` |

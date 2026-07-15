@@ -16,7 +16,6 @@ import {
   claimedError,
   translateHttpError,
 } from '../errors.js';
-import { z } from 'zod';
 import { v5 as uuidv5 } from 'uuid';
 import {
   reconcileFunctionalUpdate,
@@ -31,13 +30,11 @@ import {
   resolveAuthToken,
   resolveBaseURL,
   resolveBootstrapBaseUrl,
-  resolveDatabaseUrl,
+  rejectRemovedDatabaseUrlOption,
   warnIfCliKeyMismatch,
-  warnIfDatabaseUrlEnvIgnored,
-  warnIfDatabaseUrlDeprecated,
 } from './auth.js';
-import { registerDataSource } from './registerDataSource.js';
 import { PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER } from '../wire/protocolVersion.js';
+import { commitReceiptSchema, type CommitReceiptWire } from '../wire/commit.js';
 import { toMs } from '../utils/duration.js';
 import {
   heartbeatCadenceMs,
@@ -51,6 +48,7 @@ import type {
   CommitOperationInput,
   CommitReceipt,
   CommitResource,
+  CommitWait,
   HttpClaimApi,
   HttpTransportModel,
   ModelClaim,
@@ -63,7 +61,6 @@ import type {
 } from './resourceTypes.js';
 import { mintSession } from './sessionMint.js';
 import { parseIdentityResolveResponse } from '../auth/schemas.js';
-import { staleNotificationSchema } from '../coordination/schema.js';
 
 /** The heartbeat routes' reply body — status, expiry, queue pressure. */
 interface HeartbeatReply {
@@ -79,10 +76,7 @@ interface HeartbeatReply {
  * AbloClaimedError before reaching here). The thrown loss is the definitive
  * signal that stops the auto-heartbeat loop.
  */
-function heldHeartbeatReply(
-  reply: HeartbeatReply,
-  label: string,
-): ClaimHeartbeat {
+function heldHeartbeatReply(reply: HeartbeatReply, label: string): ClaimHeartbeat {
   if (reply.status === 'held' && typeof reply.expiresAt === 'number') {
     return {
       expiresAt: reply.expiresAt,
@@ -91,7 +85,7 @@ function heldHeartbeatReply(
   }
   throw new AbloClaimedError(
     `The lease behind ${label} is no longer held — it expired or was granted onward. Re-acquire the claim and retry; a write attempted under the old lease is rejected by its \`readAt\` guard.`,
-    { code: 'claim_lost' },
+    { code: 'claim_lost' }
   );
 }
 import type { SchemaRecord } from '../schema/schema.js';
@@ -103,12 +97,7 @@ import type {
   ServerReadOptions,
 } from './createModelProxy.js';
 import type { Duration } from '../utils/duration.js';
-import type {
-  Claim,
-  ClaimHeartbeat,
-  ClaimHeartbeatOptions,
-  HeldClaim,
-} from '../types/streams.js';
+import type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim } from '../types/streams.js';
 import type { SyncObservabilityProvider } from '../interfaces/index.js';
 import { assertWriteOptions } from './writeOptionsSchema.js';
 import {
@@ -147,6 +136,7 @@ export type HttpTransportOptions = Omit<AbloOptions, 'schema'> & {
 
 /** @internal Default per-request deadline for the private HTTP transport. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const HTTP_CONFIRMATION_POLL_INTERVAL_MS = 250;
 
 // NOTE: end-user / agent session minting is `ablo.sessions.create(...)` (typed
 // against the schema, see Ablo.ts `CreateSessionParams`). There is no separate
@@ -184,29 +174,10 @@ interface QueryResponse {
   readonly claims?: readonly ModelClaim[];
 }
 
-const successfulCommitResponseSchema = z
-  .object({
-    object: z.literal('commit_receipt'),
-    id: z.string().min(1).optional(),
-    clientTxId: z.string().min(1),
-    serverTxId: z.string().min(1),
-    status: z.enum(['queued', 'confirmed']),
-    success: z.literal(true),
-    lastSyncId: z.number().int().nonnegative().optional(),
-    ops: z.number().int().positive(),
-    notifications: z.array(staleNotificationSchema).optional(),
-    /** Ids of UPDATE/DELETE targets that matched zero rows (loud 0-row writes). */
-    missingIds: z.array(z.string().min(1)).optional(),
-  })
-  .loose();
+type CommitResponse = CommitReceiptWire;
 
-type CommitResponse = z.output<typeof successfulCommitResponseSchema>;
-
-function parseSuccessfulCommitResponse(
-  value: unknown,
-  idempotencyKey: string,
-): CommitResponse {
-  const parsed = successfulCommitResponseSchema.safeParse(value);
+function parseSuccessfulCommitResponse(value: unknown, idempotencyKey: string): CommitResponse {
+  const parsed = commitReceiptSchema.safeParse(value);
   if (!parsed.success || parsed.data.clientTxId !== idempotencyKey) {
     throw new AbloConnectionError(
       'The commit endpoint returned an invalid success receipt; its outcome remains pending and is safe to retry.',
@@ -215,7 +186,7 @@ function parseSuccessfulCommitResponse(
         cause: parsed.success
           ? new Error('Commit receipt clientTxId did not match its idempotency key')
           : parsed.error,
-      },
+      }
     );
   }
   return parsed.data;
@@ -232,8 +203,8 @@ function claimFromModelClaim(claim: ModelClaim): Claim {
     object: 'claim',
     id: claim.id,
     ...(claim.status ? { status: claim.status } : {}),
-    reason: claim.reason,
-    ...(claim.description ? { description: claim.description } : {}),
+    // The server always stamps a description; default only for total safety.
+    description: claim.description ?? 'editing',
     heldBy: claim.actor,
     participantKind: claim.participantKind,
     expiresAt: claim.expiresAt,
@@ -255,15 +226,10 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   const authInput = { options, env };
   const configuredApiKey = resolveApiKey(authInput);
   const configuredAuthToken = resolveAuthToken(authInput);
-  const configuredDatabaseUrl = resolveDatabaseUrl(authInput);
-  // Nudge (once) if a stray DATABASE_URL is in the env but `databaseUrl` wasn't
-  // passed — no logger on this path, so the helper falls back to console.warn.
-  warnIfDatabaseUrlEnvIgnored(authInput);
-  warnIfDatabaseUrlDeprecated(authInput);
   void warnIfCliKeyMismatch(authInput);
+  rejectRemovedDatabaseUrlOption(options);
   assertBrowserSafety({
     apiKey: configuredApiKey,
-    databaseUrl: configuredDatabaseUrl,
     dangerouslyAllowBrowser: options.dangerouslyAllowBrowser,
   });
 
@@ -284,7 +250,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   const recordCoordinationConflict = (
     error: unknown,
     clientTxId: string,
-    fallbackRows: readonly { model: string; id: string }[],
+    fallbackRows: readonly { model: string; id: string }[]
   ): void => {
     if (!observability) return;
     const errorRecord =
@@ -314,7 +280,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   if (typeof fetchImpl !== 'function') {
     throw new AbloConnectionError(
       'Ablo API client requires a fetch implementation. Pass `fetch` in Ablo({ ... }) for this runtime.',
-      { code: 'fetch_unavailable' },
+      { code: 'fetch_unavailable' }
     );
   }
 
@@ -328,14 +294,11 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   // constructor exposes the behavior as `durableWrites`.
   const commitOutbox = durableWrites.store;
   const durableWriteNamespace = durableWrites.namespace ?? 'http';
-  const legacyCommitOutboxScope = (
-    options as { readonly commitOutboxScope?: CommitOutboxScope }
-  ).commitOutboxScope;
+  const legacyCommitOutboxScope = (options as { readonly commitOutboxScope?: CommitOutboxScope })
+    .commitOutboxScope;
   const httpOutboxPlaneNamespace = canonicalHttpCommitBody({
     apiBaseUrl,
-    defaultQuery: Object.entries(options.defaultQuery ?? {}).sort(([a], [b]) =>
-      a.localeCompare(b),
-    ),
+    defaultQuery: Object.entries(options.defaultQuery ?? {}).sort(([a], [b]) => a.localeCompare(b)),
   });
   let httpOutboxScopeNamespace: string | null = null;
 
@@ -346,7 +309,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     const result = httpCommitLane.then(work);
     httpCommitLane = result.then(
       () => undefined,
-      () => undefined,
+      () => undefined
     );
     return result;
   }
@@ -362,11 +325,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         }
       : undefined;
     if (!scope) {
-      const rawIdentity = await requestJson<unknown>(
-        '/auth/identity',
-        { method: 'GET' },
-        true,
-      );
+      const rawIdentity = await requestJson<unknown>('/auth/identity', { method: 'GET' }, true);
       const identity = parseIdentityResolveResponse(rawIdentity);
       scope = {
         organizationId: identity.accountScope,
@@ -385,14 +344,6 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     if (readyPromise) return readyPromise;
 
     readyPromise = (async () => {
-      if (configuredDatabaseUrl) {
-        await registerDataSource({
-          baseUrl: apiBaseUrl,
-          apiKey: await resolveApiKeyValue(configuredApiKey),
-          databaseUrl: configuredDatabaseUrl,
-          ...(options.fetch ? { fetchImpl: options.fetch } : {}),
-        });
-      }
       await resolveHttpOutboxScope();
       await replayHttpCommitOutbox();
     })();
@@ -405,15 +356,13 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     }
   }
 
-  async function authHeaders(
-    sealedProtocolVersion?: number,
-  ): Promise<Record<string, string>> {
+  async function authHeaders(sealedProtocolVersion?: number): Promise<Record<string, string>> {
     const apiKey = await resolveApiKeyValue(configuredApiKey);
     const token = apiKey ?? configuredAuthToken;
     if (!token) {
       throw new AbloAuthenticationError(
         'The HTTP client requires an API key. Pass `apiKey` or set ABLO_API_KEY.',
-        { code: 'api_key_required' },
+        { code: 'api_key_required' }
       );
     }
 
@@ -459,7 +408,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       readonly idempotencyKey?: string | null;
       readonly sealedProtocolVersion?: number;
     },
-    skipReady = false,
+    skipReady = false
   ): Promise<T> {
     if (!skipReady) await ready();
     const { idempotencyKey, sealedProtocolVersion, ...requestInit } = init;
@@ -475,7 +424,9 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     // same pattern already guards `query/client.ts` and `BootstrapFetcher`.
     const callerSignal = requestInit.signal ?? undefined;
     const controller = new AbortController();
-    const onCallerAbort = (): void => { controller.abort(callerSignal?.reason); };
+    const onCallerAbort = (): void => {
+      controller.abort(callerSignal?.reason);
+    };
     if (callerSignal) {
       if (callerSignal.aborted) onCallerAbort();
       else callerSignal.addEventListener('abort', onCallerAbort, { once: true });
@@ -512,7 +463,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           `The Ablo API did not respond within ${requestTimeoutMs}ms ` +
             `(${requestInit.method ?? 'GET'} ${path}). The request was aborted; ` +
             'it is safe to retry.',
-          { code: 'wait_for_timeout', cause: error },
+          { code: 'wait_for_timeout', cause: error }
         );
       }
       throw error;
@@ -526,7 +477,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       throw translateHttpError(
         res.status,
         body ?? `Ablo API request failed: ${res.status} ${res.statusText}`,
-        res.headers.get('x-request-id') ?? undefined,
+        res.headers.get('x-request-id') ?? undefined
       );
     }
 
@@ -561,14 +512,157 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       // The retained record can still be replayed inside the safe window.
       throw new AbloConnectionError(
         'The server settled the commit, but its local outbox record could not be cleared.',
-        { code: 'db_not_opened', cause },
+        { code: 'db_not_opened', cause }
       );
     }
+  }
+
+  /**
+   * Persist the first queued source receipt before exposing acceptance to the
+   * caller. This is a monotonic upgrade of the same sealed request: connected
+   * source keys are permanent, so the envelope may safely remain replayable
+   * after the hosted 24-hour idempotency window while it awaits its WAL echo.
+   */
+  async function persistHttpAcceptance(
+    envelope: DurableHttpCommitEnvelope,
+    response: CommitResponse
+  ): Promise<DurableHttpCommitEnvelope> {
+    if (!commitOutbox || response.status !== 'queued') return envelope;
+    const correlationId = response.correlationId;
+    if (!correlationId) {
+      throw new AbloConnectionError(
+        'The source accepted the commit without durable correlation evidence.',
+        { code: 'commit_no_result' }
+      );
+    }
+    if (envelope.correlationId !== undefined && envelope.correlationId !== correlationId) {
+      throw new AbloIdempotencyError(
+        'The same HTTP commit replay returned a different source correlation.',
+        { code: 'idempotency_conflict' }
+      );
+    }
+    if (envelope.acceptedAt !== undefined) return envelope;
+    const accepted = durableHttpCommitEnvelopeSchema.parse({
+      ...envelope,
+      acceptedAt: Date.now(),
+      correlationId,
+    });
+    try {
+      await commitOutbox.seal(accepted, []);
+    } catch (cause) {
+      throw new AbloConnectionError(
+        'The source accepted the commit, but that acceptance could not be persisted locally.',
+        { code: 'db_not_opened', cause }
+      );
+    }
+    return accepted;
   }
 
   interface ReplayedHttpCommit {
     readonly envelope: DurableHttpCommitEnvelope;
     readonly response: CommitResponse;
+  }
+
+  interface ExactHttpCommitRequest {
+    readonly idempotencyKey: string;
+    readonly method: 'POST' | 'PATCH' | 'DELETE';
+    readonly path: string;
+    readonly body: string;
+    readonly sealedProtocolVersion?: number;
+  }
+
+  function replicationLagTimeout(
+    request: ExactHttpCommitRequest,
+    response: CommitResponse
+  ): AbloConnectionError {
+    return new AbloConnectionError(
+      `The source accepted commit ${request.idempotencyKey}, but its replication echo did not arrive within ${requestTimeoutMs}ms.`,
+      {
+        code: 'replication_lag_timeout',
+        httpStatus: 504,
+        details: {
+          clientTxId: request.idempotencyKey,
+          ...(response.correlationId ? { correlationId: response.correlationId } : {}),
+          timeoutMs: requestTimeoutMs,
+          accepted: true,
+        },
+      }
+    );
+  }
+
+  /**
+   * Replays one byte-identical, idempotent HTTP commit until mutation-log
+   * replay reports the source echo as confirmed. `queued` is acceptance only:
+   * this loop never clears the durable envelope and never converts it into a
+   * successful `wait: 'confirmed'` result.
+   */
+  async function pollHttpCommitConfirmation(
+    request: ExactHttpCommitRequest,
+    initial: CommitResponse
+  ): Promise<CommitResponse> {
+    let current = initial;
+    const correlationId = initial.correlationId;
+    const deadlineAt = requestTimeoutMs > 0 ? Date.now() + requestTimeoutMs : null;
+
+    while (current.status === 'queued') {
+      const remaining = deadlineAt === null ? null : deadlineAt - Date.now();
+      if (remaining !== null && remaining <= 0) {
+        throw replicationLagTimeout(request, current);
+      }
+
+      const confirmationController = new AbortController();
+      const confirmationDeadline =
+        remaining !== null
+          ? setTimeout(() => {
+              confirmationController.abort();
+            }, remaining)
+          : null;
+      try {
+        const raw = await requestJson<unknown>(
+          request.path,
+          {
+            method: request.method,
+            idempotencyKey: request.idempotencyKey,
+            ...(request.sealedProtocolVersion !== undefined
+              ? { sealedProtocolVersion: request.sealedProtocolVersion }
+              : {}),
+            body: request.body,
+            signal: confirmationController.signal,
+          },
+          true
+        );
+        const next = parseSuccessfulCommitResponse(raw, request.idempotencyKey);
+        if (next.correlationId !== correlationId) {
+          throw new AbloIdempotencyError(
+            'The same HTTP commit replay returned different source correlation evidence.',
+            { code: 'idempotency_conflict' }
+          );
+        }
+        current = next;
+      } catch (error) {
+        if (
+          confirmationController.signal.aborted ||
+          (deadlineAt !== null && Date.now() >= deadlineAt)
+        ) {
+          throw replicationLagTimeout(request, current);
+        }
+        throw error;
+      } finally {
+        if (confirmationDeadline) clearTimeout(confirmationDeadline);
+      }
+
+      if (current.status === 'confirmed') return current;
+      const delayMs =
+        deadlineAt === null
+          ? HTTP_CONFIRMATION_POLL_INTERVAL_MS
+          : Math.min(HTTP_CONFIRMATION_POLL_INTERVAL_MS, Math.max(0, deadlineAt - Date.now()));
+      if (delayMs > 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, delayMs);
+        });
+      }
+    }
+    return current;
   }
 
   async function replayHttpCommitOutbox(): Promise<Map<string, ReplayedHttpCommit>> {
@@ -583,28 +677,28 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         typeof row !== 'object' ||
         row === null ||
         (row as { type?: unknown }).type !== 'http_commit_envelope'
-      ) continue;
+      )
+        continue;
       const parsed = durableHttpCommitEnvelopeSchema.safeParse(row);
       if (!parsed.success) {
         throw new AbloValidationError(
           'A saved HTTP write is unreadable; replay stopped before any newer write was sent.',
-          { code: 'write_options_invalid', cause: parsed.error },
+          { code: 'write_options_invalid', cause: parsed.error }
         );
       }
       if (parsed.data.scopeNamespace !== scopeNamespace) continue;
       if (isHttpCommitReplayExpired(parsed.data)) {
         throw new AbloIdempotencyError(
           'A saved HTTP write is older than the server idempotency window and cannot be replayed safely.',
-          { code: 'idempotency_conflict' },
+          { code: 'idempotency_conflict' }
         );
       }
       envelopes.push(parsed.data);
     }
     envelopes.sort(
       (a, b) =>
-        (a.sequence ?? a.sealedAt * 1_000) -
-          (b.sequence ?? b.sealedAt * 1_000) ||
-        a.id.localeCompare(b.id),
+        (a.sequence ?? a.sealedAt * 1_000) - (b.sequence ?? b.sealedAt * 1_000) ||
+        a.id.localeCompare(b.id)
     );
     for (const envelope of envelopes) {
       try {
@@ -616,11 +710,29 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
             sealedProtocolVersion: envelope.protocolVersion,
             body: envelope.request.body,
           },
-          true,
+          true
         );
         const response = parseSuccessfulCommitResponse(raw, envelope.idempotencyKey);
-        await settleHttpEnvelope(envelope.id);
-        replayed.set(envelope.idempotencyKey, { envelope, response });
+        if (
+          envelope.correlationId !== undefined &&
+          response.correlationId !== envelope.correlationId
+        ) {
+          throw new AbloIdempotencyError(
+            'The saved HTTP commit replay returned different source correlation evidence.',
+            { code: 'idempotency_conflict' }
+          );
+        }
+        const replayEnvelope = await persistHttpAcceptance(envelope, response);
+        // A queued source receipt is only acceptance. Keep the exact request
+        // durable so startup/retry can ask mutation-log replay whether its WAL
+        // echo has materialized; only confirmed is a definitive success.
+        if (response.status === 'confirmed') {
+          await settleHttpEnvelope(envelope.id);
+        }
+        replayed.set(envelope.idempotencyKey, {
+          envelope: replayEnvelope,
+          response,
+        });
       } catch (error) {
         if (isDefinitiveHttpRejection(error)) {
           await settleHttpEnvelope(envelope.id);
@@ -631,13 +743,45 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     return replayed;
   }
 
+  /**
+   * A flush is stronger than startup replay: it promises that every retained
+   * envelope has reached a definitive outcome, not merely that the server
+   * accepted it for forwarding. Poll queued receipts through mutation-log
+   * replay and leave their envelopes intact if the confirmation deadline
+   * expires.
+   */
+  async function confirmReplayedHttpCommits(
+    replayed: ReadonlyMap<string, ReplayedHttpCommit>
+  ): Promise<void> {
+    for (const { envelope, response } of replayed.values()) {
+      if (response.status !== 'queued') continue;
+      try {
+        const confirmed = await pollHttpCommitConfirmation(
+          {
+            idempotencyKey: envelope.idempotencyKey,
+            method: envelope.request.method,
+            path: envelope.request.path,
+            body: envelope.request.body,
+            sealedProtocolVersion: envelope.protocolVersion,
+          },
+          response
+        );
+        if (confirmed.status === 'confirmed') {
+          await settleHttpEnvelope(envelope.id);
+        }
+      } catch (error) {
+        if (isDefinitiveHttpRejection(error)) {
+          await settleHttpEnvelope(envelope.id);
+        }
+        throw error;
+      }
+    }
+  }
+
   let lastHttpCommitSequence = 0;
   function nextHttpCommitSequence(): number {
     const wallSequence = Date.now() * 1_000;
-    lastHttpCommitSequence = Math.max(
-      wallSequence,
-      lastHttpCommitSequence + 1,
-    );
+    lastHttpCommitSequence = Math.max(wallSequence, lastHttpCommitSequence + 1);
     return lastHttpCommitSequence;
   }
 
@@ -654,10 +798,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         code: 'write_options_invalid',
       });
     }
-    const recordId = httpCommitEnvelopeRecordId(
-      input.idempotencyKey,
-      scopeNamespace,
-    );
+    const recordId = httpCommitEnvelopeRecordId(input.idempotencyKey, scopeNamespace);
     const legacyRecordId = httpCommitEnvelopeRecordId(input.idempotencyKey);
     const existingRows = await commitOutbox.list();
     const existingRaw = existingRows.find(
@@ -665,7 +806,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         typeof row === 'object' &&
         row !== null &&
         ((row as { id?: unknown }).id === recordId ||
-          (row as { id?: unknown }).id === legacyRecordId),
+          (row as { id?: unknown }).id === legacyRecordId)
     );
     const serializedBody = canonicalHttpCommitBody(input.body);
     if (existingRaw !== undefined) {
@@ -673,7 +814,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       if (isHttpCommitReplayExpired(existing)) {
         throw new AbloIdempotencyError(
           'This saved HTTP write is older than the server idempotency window and cannot be retried safely.',
-          { code: 'idempotency_conflict' },
+          { code: 'idempotency_conflict' }
         );
       }
       if (
@@ -684,7 +825,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       ) {
         throw new AbloIdempotencyError(
           'Idempotency key reused with a different HTTP commit request',
-          { code: 'idempotency_conflict' },
+          { code: 'idempotency_conflict' }
         );
       }
       return existing;
@@ -705,8 +846,9 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       method: 'POST' | 'PATCH' | 'DELETE';
       path: string;
       body: unknown;
+      wait: CommitWait;
     },
-    beforeSettlement?: (response: CommitResponse) => Promise<void>,
+    beforeSettlement?: (response: CommitResponse) => Promise<void>
   ): Promise<CommitResponse> {
     return runInHttpCommitLane(async () => {
       await ready();
@@ -723,30 +865,66 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         ) {
           throw new AbloIdempotencyError(
             'Idempotency key reused with a different HTTP commit request',
-            { code: 'idempotency_conflict' },
+            { code: 'idempotency_conflict' }
           );
         }
-        await beforeSettlement?.(prior.response);
-        return prior.response;
+        let priorResponse = prior.response;
+        if (priorResponse.status === 'queued' && input.wait === 'confirmed') {
+          try {
+            priorResponse = await pollHttpCommitConfirmation(
+              {
+                idempotencyKey: prior.envelope.idempotencyKey,
+                method: prior.envelope.request.method,
+                path: prior.envelope.request.path,
+                body: prior.envelope.request.body,
+                sealedProtocolVersion: prior.envelope.protocolVersion,
+              },
+              priorResponse
+            );
+          } catch (error) {
+            if (isDefinitiveHttpRejection(error)) {
+              await settleHttpEnvelope(prior.envelope.id);
+            }
+            throw error;
+          }
+        }
+        if (priorResponse.status === 'confirmed') {
+          await beforeSettlement?.(priorResponse);
+          await settleHttpEnvelope(prior.envelope.id);
+        }
+        return priorResponse;
       }
       const durableEnvelope = await sealHttpCommit(input);
       const requestBody = durableEnvelope?.request.body ?? canonicalHttpCommitBody(input.body);
+      const exactRequest: ExactHttpCommitRequest = {
+        idempotencyKey: input.idempotencyKey,
+        method: input.method,
+        path: input.path,
+        body: requestBody,
+        ...(durableEnvelope ? { sealedProtocolVersion: durableEnvelope.protocolVersion } : {}),
+      };
 
       let response: CommitResponse;
       try {
         const raw = await requestJson<unknown>(
-          input.path,
+          exactRequest.path,
           {
-            method: input.method,
-            idempotencyKey: input.idempotencyKey,
-            ...(durableEnvelope
-              ? { sealedProtocolVersion: durableEnvelope.protocolVersion }
+            method: exactRequest.method,
+            idempotencyKey: exactRequest.idempotencyKey,
+            ...(exactRequest.sealedProtocolVersion !== undefined
+              ? { sealedProtocolVersion: exactRequest.sealedProtocolVersion }
               : {}),
-            body: requestBody,
+            body: exactRequest.body,
           },
-          true,
+          true
         );
         response = parseSuccessfulCommitResponse(raw, input.idempotencyKey);
+        if (durableEnvelope && response.status === 'queued') {
+          await persistHttpAcceptance(durableEnvelope, response);
+        }
+        if (response.status === 'queued' && input.wait === 'confirmed') {
+          response = await pollHttpCommitConfirmation(exactRequest, response);
+        }
       } catch (error) {
         if (durableEnvelope && isDefinitiveHttpRejection(error)) {
           await settleHttpEnvelope(durableEnvelope.id);
@@ -756,8 +934,12 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
 
       // A model-create readback can participate in settlement: if it fails,
       // retain the exact write so a same-key retry recovers the generated id.
-      await beforeSettlement?.(response);
-      if (durableEnvelope) await settleHttpEnvelope(durableEnvelope.id);
+      // A queued source receipt cannot be read back from the log yet and stays
+      // durable until a later confirmed replay.
+      if (response.status === 'confirmed') {
+        await beforeSettlement?.(response);
+        if (durableEnvelope) await settleHttpEnvelope(durableEnvelope.id);
+      }
       return response;
     });
   }
@@ -777,10 +959,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
 
   function createModelId(modelName: string, idempotencyKey?: string | null): string {
     if (idempotencyKey) {
-      return uuidv5(
-        `${modelName}:${idempotencyKey}`,
-        'aa4ba6d4-bf0b-5b38-9c45-116f79a6e548',
-      );
+      return uuidv5(`${modelName}:${idempotencyKey}`, 'aa4ba6d4-bf0b-5b38-9c45-116f79a6e548');
     }
     return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
@@ -790,6 +969,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   function normalizeCommitOperation(
     op: CommitOperationInput,
     defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
+    fenceToken?: number | null
   ): CommitOperationInput {
     return {
       action: op.action,
@@ -799,25 +979,28 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       transactionId: op.transactionId ?? null,
       readAt: op.readAt ?? defaults.readAt ?? null,
       onStale: op.onStale ?? defaults.onStale ?? null,
+      // The batch's claim (if any) supplies one token for every op, mirroring
+      // how it supplies the batch `readAt`.
+      fenceToken: op.fenceToken ?? fenceToken ?? null,
     };
   }
 
   function normalizeCommitOperations(
     commitOptions: CommitCreateOptions,
+    fenceToken?: number | null
   ): readonly CommitOperationInput[] {
     if (commitOptions.operations.length === 0) {
-      throw new AbloValidationError(
-        'Commit requires a non-empty `operations` array.',
-        { code: 'commit_operation_required' },
-      );
+      throw new AbloValidationError('Commit requires a non-empty `operations` array.', {
+        code: 'commit_operation_required',
+      });
     }
     return commitOptions.operations.map((op) =>
-      normalizeCommitOperation(op, commitOptions),
+      normalizeCommitOperation(op, commitOptions, fenceToken)
     );
   }
 
   async function listClaimState(
-    target?: Partial<ModelTarget>,
+    target?: Partial<ModelTarget>
   ): Promise<{ active: readonly ModelClaim[]; queue: readonly ModelClaim[] }> {
     const params = new URLSearchParams();
     if (target?.model) params.set('model', target.model);
@@ -825,10 +1008,9 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     if (target?.field) params.set('field', target.field);
 
     const suffix = params.toString();
-    const body = await requestJson<ClaimListResponse>(
-      `/v1/claims${suffix ? `?${suffix}` : ''}`,
-      { method: 'GET' },
-    );
+    const body = await requestJson<ClaimListResponse>(`/v1/claims${suffix ? `?${suffix}` : ''}`, {
+      method: 'GET',
+    });
     return {
       active: body.claims ?? [],
       queue: body.queue ?? [],
@@ -838,7 +1020,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   async function applyClaimedPolicy(
     target: Partial<ModelTarget>,
     options?: ClaimedOptions,
-    defaultPolicy: ClaimedOptions['ifClaimed'] = 'return',
+    defaultPolicy: ClaimedOptions['ifClaimed'] = 'return'
   ): Promise<void> {
     const policy = options?.ifClaimed ?? defaultPolicy;
     if (policy === 'return') return;
@@ -860,22 +1042,25 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           wait: commitOptions.wait,
           claim: commitOptions.claim,
         },
-        'commits.create',
+        'commits.create'
       );
       const clientTxId = createClientTxId(commitOptions.idempotencyKey);
       // Same claim vocabulary as the WS client's `commits.create`: a handle
       // supplies the batch stale-guard defaults; explicit options win.
       const claim = commitOptions.claim ?? null;
-      const operations = normalizeCommitOperations({
-        ...commitOptions,
-        readAt: commitOptions.readAt ?? claim?.readAt ?? null,
-        onStale:
-          commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
-      });
+      const operations = normalizeCommitOperations(
+        {
+          ...commitOptions,
+          readAt: commitOptions.readAt ?? claim?.readAt ?? null,
+          onStale: commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
+        },
+        claim?.fenceToken ?? null
+      );
       const requestBody = {
         operations,
         reads: commitOptions.reads,
       };
+      const wait = commitOptions.wait ?? 'confirmed';
       let body: CommitResponse;
       try {
         body = await dispatchHttpCommit({
@@ -883,6 +1068,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           method: 'POST',
           idempotencyKey: clientTxId,
           body: requestBody,
+          wait,
         });
       } catch (error) {
         // Coordination collision over HTTP — surface it to observability on the
@@ -894,7 +1080,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           operations.map((o) => ({
             model: typeof o.model === 'string' ? o.model : 'unknown',
             id: typeof o.id === 'string' ? o.id : 'unknown',
-          })),
+          }))
         );
         throw error;
       }
@@ -903,8 +1089,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       // so reaching here implies success. Narrow `status` to the
       // `CommitWait`-compatible subset; `'rejected'` only appears on
       // the rejection body (already thrown).
-      const status: 'queued' | 'confirmed' =
-        body.status === 'queued' ? 'queued' : 'confirmed';
+      const status: CommitWait = body.status === 'queued' ? 'queued' : 'confirmed';
       return {
         id: body.id ?? body.clientTxId,
         status,
@@ -912,17 +1097,12 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         ...(body.notifications && body.notifications.length > 0
           ? { notifications: body.notifications }
           : {}),
-        ...(body.missingIds && body.missingIds.length > 0
-          ? { missingIds: body.missingIds }
-          : {}),
+        ...(body.missingIds && body.missingIds.length > 0 ? { missingIds: body.missingIds } : {}),
       };
     },
   };
 
-  async function listModel<T>(
-    modelName: string,
-    options?: ServerReadOptions<T>,
-  ): Promise<T[]> {
+  async function listModel<T>(modelName: string, options?: ServerReadOptions<T>): Promise<T[]> {
     const params = new URLSearchParams();
     if (options?.limit !== undefined) params.set('limit', String(options.limit));
     if (options?.orderBy) {
@@ -943,14 +1123,14 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     const qs = params.toString();
     const res = await requestJson<{ data?: T[] }>(
       `/v1/models/${encodeURIComponent(modelName)}${qs ? `?${qs}` : ''}`,
-      { method: 'GET' },
+      { method: 'GET' }
     );
     return res.data ?? [];
   }
 
   async function retrieveModel<T>(
     modelName: string,
-    params: ModelReadOptions & { readonly id: string },
+    params: ModelReadOptions & { readonly id: string }
   ): Promise<HttpTransportRead<T>> {
     await applyClaimedPolicy({ model: modelName, id: params.id }, params);
 
@@ -958,7 +1138,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       `/v1/models/${encodeURIComponent(modelName)}/${encodeURIComponent(params.id)}`,
       {
         method: 'GET',
-      },
+      }
     );
 
     // A miss is `data: undefined`, not a thrown error. The WebSocket client's
@@ -994,7 +1174,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     id: string,
     data: Record<string, unknown> | undefined,
     options: ModelMutationOptions | undefined,
-    beforeSettlement?: (response: CommitResponse) => Promise<void>,
+    beforeSettlement?: (response: CommitResponse) => Promise<void>
   ): Promise<CommitReceipt> {
     assertWriteOptions(
       options && {
@@ -1004,7 +1184,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         wait: options.wait,
         claim: options.claim,
       },
-      `${modelName} ${action}`,
+      `${modelName} ${action}`
     );
     const clientTxId = createClientTxId(options?.idempotencyKey);
     const encModel = encodeURIComponent(modelName);
@@ -1027,21 +1207,27 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     const readAt = options?.readAt ?? claimHandle?.readAt;
     const requestBody: Record<string, unknown> = {
       claim: normalizeClaimId(options?.claimRef) ?? claimHandle?.id,
-      onStale:
-        options?.onStale ?? (claimHandle?.readAt !== undefined ? 'reject' : undefined),
+      onStale: options?.onStale ?? (claimHandle?.readAt !== undefined ? 'reject' : undefined),
       readAt,
+      // The claim's fencing token (Option B), so the per-model HTTP write door
+      // fences the same as the WS proxy and `commits.create`.
+      fenceToken: options?.fenceToken ?? claimHandle?.fenceToken,
     };
     if (action === 'create') requestBody.id = id;
     if (data !== undefined) requestBody.data = data;
 
     let body: CommitResponse;
     try {
-      body = await dispatchHttpCommit({
-        path,
-        method,
-        idempotencyKey: clientTxId,
-        body: requestBody,
-      }, beforeSettlement);
+      body = await dispatchHttpCommit(
+        {
+          path,
+          method,
+          idempotencyKey: clientTxId,
+          body: requestBody,
+          wait: options?.wait ?? 'confirmed',
+        },
+        beforeSettlement
+      );
     } catch (error) {
       // The per-model write door (`ablo.<model>.update/create/delete`). Capture
       // coordination collisions here too; this single row is the fallback target.
@@ -1052,7 +1238,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     // `requestJson` throws via `translateHttpError` on any non-2xx, so reaching
     // here implies success. Narrow `status` to the `CommitWait`-compatible
     // subset; `'rejected'` only appears on a thrown rejection body.
-    const status: 'queued' | 'confirmed' = body.status === 'queued' ? 'queued' : 'confirmed';
+    const status: CommitWait = body.status === 'queued' ? 'queued' : 'confirmed';
     return {
       id: body.serverTxId,
       status,
@@ -1072,23 +1258,23 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       (value as { object?: unknown }).object === 'claim' &&
       typeof (value as { id?: unknown }).id === 'string' &&
       typeof (value as { release?: unknown }).release === 'function';
-    const claimMeta = (options: ClaimOptions<T> | undefined): Record<string, unknown> | undefined => {
-      if (!options?.description) return options?.meta;
-      return { ...(options.meta ?? {}), description: options.description };
-    };
-    const acquireClaim = async (params: ClaimParams<T>): Promise<string> => {
+    const claimMeta = (
+      options: ClaimOptions<T> | undefined
+    ): Record<string, unknown> | undefined => options?.meta;
+    const acquireClaim = async (
+      params: ClaimParams<T>
+    ): Promise<{ id: string; fenceToken?: number }> => {
       const body = await requestJson<{
         id?: string;
-        claim?: { id?: string };
+        claim?: { id?: string; fenceToken?: number };
         claimId?: string;
         status?: 'queued';
         position?: number;
       }>(claimPath(params.id), {
         method: 'POST',
         body: JSON.stringify({
-          reason: params.reason ?? 'editing',
+          description: params.description ?? 'editing',
           ...(params.ttl !== undefined ? { ttl: params.ttl } : {}),
-          ...(params.description !== undefined ? { description: params.description } : {}),
           ...(claimMeta(params) ? { meta: claimMeta(params) } : {}),
           // `queue` (default true) → queue behind the holder; false → fail-fast
           // with AbloClaimedError (work-distribution dedup).
@@ -1099,18 +1285,19 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         throw new AbloClaimedError(
           `Target ${name}/${params.id} is held; queued at position ${body.position ?? 0}. ` +
             `The HTTP client cannot await the grant without a WebSocket.`,
-          { code: 'claim_queued' },
+          { code: 'claim_queued' }
         );
       }
       // `claimId` is the field name the queued response uses; check it alongside
       // the other id shapes the response may carry.
-      return body.claim?.id ?? body.id ?? body.claimId ?? createClaimId();
+      const id = body.claim?.id ?? body.id ?? body.claimId ?? createClaimId();
+      const fenceToken = body.claim?.fenceToken;
+      return fenceToken !== undefined ? { id, fenceToken } : { id };
     };
     const releaseClaim = (params: ClaimLookupParams<T> | Claim<T>): Promise<void> =>
-      requestJson<unknown>(
-        claimPath(isClaimHandle(params) ? params.target.id : params.id),
-        { method: 'DELETE' },
-      ).then(() => undefined);
+      requestJson<unknown>(claimPath(isClaimHandle(params) ? params.target.id : params.id), {
+        method: 'DELETE',
+      }).then(() => undefined);
 
     // One beat on the held lease. A lapsed lease answers `claim_lost`
     // (409), which the wire error mapping surfaces as AbloClaimedError —
@@ -1118,31 +1305,28 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     const heartbeatClaim = async (
       id: string,
       claimId: string,
-      options: ClaimHeartbeatOptions,
+      options: ClaimHeartbeatOptions
     ): Promise<ClaimHeartbeat> => {
-      const reply = await requestJson<HeartbeatReply>(
-        `${claimPath(id)}/heartbeat`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            claimId,
-            ...(options.ttl !== undefined ? { ttl: options.ttl } : {}),
-            ...(options.details !== undefined ? { details: options.details } : {}),
-          }),
-        },
-      );
+      const reply = await requestJson<HeartbeatReply>(`${claimPath(id)}/heartbeat`, {
+        method: 'POST',
+        body: JSON.stringify({
+          claimId,
+          ...(options.ttl !== undefined ? { ttl: options.ttl } : {}),
+          ...(options.details !== undefined ? { details: options.details } : {}),
+        }),
+      });
       return heldHeartbeatReply(reply, `claim ${claimId} on ${name}/${id}`);
     };
 
     async function claimImpl(params: ClaimParams<T>): Promise<HeldClaim<T>> {
-      const claimId = await acquireClaim(params);
+      const { id: claimId, fenceToken } = await acquireClaim(params);
       observability?.captureClaim({
         phase: 'acquired',
         claimId,
         model: name,
         id: params.id,
         ...(params.field ? { field: params.field } : {}),
-        reason: params.reason ?? 'editing',
+        reason: params.description ?? 'editing',
       });
       const { data, stamp } = await retrieveModel<T>(name, { id: params.id });
       // A held claim hands back a snapshot; the typed `HeldClaim.data` is `T`.
@@ -1151,18 +1335,16 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       if (data === undefined) {
         throw new AbloNotFoundError(
           `Cannot claim ${name}/${params.id}: it does not exist (or is outside this credential's scope).`,
-          [params.id],
+          [params.id]
         );
       }
       const heartbeat = async (
-        beatOptions?: Duration | ClaimHeartbeatOptions,
+        beatOptions?: Duration | ClaimHeartbeatOptions
       ): Promise<ClaimHeartbeat> => {
         const resolved = resolveHeartbeatOptions(beatOptions);
         const beat = await heartbeatClaim(params.id, claimId, {
           ttl: resolved.ttl ?? params.ttl,
-          ...(resolved.details !== undefined
-            ? { details: resolved.details }
-            : {}),
+          ...(resolved.details !== undefined ? { details: resolved.details } : {}),
         });
         params.onHeartbeat?.(beat);
         return beat;
@@ -1176,11 +1358,9 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
             beat: () => heartbeat(),
             intervalMs: heartbeatCadenceMs(
               params.ttl !== undefined ? toMs(params.ttl) : 60_000,
-              params.heartbeat,
+              params.heartbeat
             ),
-            ...(params.onHeartbeatLost
-              ? { onLost: params.onHeartbeatLost }
-              : {}),
+            ...(params.onHeartbeatLost ? { onLost: params.onHeartbeatLost } : {}),
           })
         : undefined;
 
@@ -1192,6 +1372,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         object: 'claim',
         id: claimId,
         readAt: stamp,
+        ...(fenceToken !== undefined ? { fenceToken } : {}),
         target: {
           type: name,
           id: params.id,
@@ -1200,8 +1381,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           ...(params.range ? { range: params.range } : {}),
           ...(claimMeta(params) ? { meta: claimMeta(params) } : {}),
         },
-        reason: params.reason ?? 'editing',
-        ...(params.description ? { description: params.description } : {}),
+        description: params.description ?? 'editing',
         data,
         release,
         revoke: () => {
@@ -1211,12 +1391,14 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         [Symbol.asyncDispose]: release,
       };
     }
-    const claimsForEntity = async (params: ClaimLookupParams<T>): Promise<{ claims?: ModelClaim[]; queue?: ModelClaim[] }> =>
+    const claimsForEntity = async (
+      params: ClaimLookupParams<T>
+    ): Promise<{ claims?: ModelClaim[]; queue?: ModelClaim[] }> =>
       requestJson<{ claims?: ModelClaim[]; queue?: ModelClaim[] }>(
         `/v1/claims?model=${encodeURIComponent(name)}&id=${encodeURIComponent(params.id)}${
           params.field ? `&field=${encodeURIComponent(params.field)}` : ''
         }`,
-        { method: 'GET' },
+        { method: 'GET' }
       );
     const claim = Object.assign(claimImpl, {
       release: releaseClaim,
@@ -1226,7 +1408,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         return first ? claimFromModelClaim(first) : null;
       },
       queue: async (
-        params: ClaimLookupParams<T>,
+        params: ClaimLookupParams<T>
       ): Promise<{ readonly object: 'list'; readonly data: readonly Claim[] }> => {
         const res = await claimsForEntity(params);
         return {
@@ -1239,7 +1421,9 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           method: 'POST',
           // The reorder route's payload is `{ heldBy, claimId }[]` — a Claim's id
           // is the claimId.
-          body: JSON.stringify({ order: params.order.map((i) => ({ heldBy: i.heldBy, claimId: i.id })) }),
+          body: JSON.stringify({
+            order: params.order.map((i) => ({ heldBy: i.heldBy, claimId: i.id })),
+          }),
         });
       },
     }) as HttpClaimApi<T>;
@@ -1247,7 +1431,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     const withMutationClaim = async <R>(
       id: string,
       input: ModelMutationOptions | undefined,
-      run: (options: ModelMutationOptions | undefined) => Promise<R>,
+      run: (options: ModelMutationOptions | undefined) => Promise<R>
     ): Promise<R> => {
       const claimInput = input?.claim;
       if (!claimInput) return run(input);
@@ -1259,12 +1443,17 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       // `isClaimHandle` ruled out the handle form above; the generic mismatch
       // (the union carries `Claim`, the guard narrows `Claim<T>`) keeps the
       // compiler from subtracting it, so narrow to the inline-options form.
-      const claimId = await acquireClaim({
+      const { id: claimId, fenceToken } = await acquireClaim({
         id,
         ...(claimInput as ClaimOptions<T>),
       });
       try {
-        return await run({ ...input, claimRef: { id: claimId }, claim: undefined });
+        return await run({
+          ...input,
+          claimRef: { id: claimId },
+          ...(fenceToken !== undefined ? { fenceToken } : {}),
+          claim: undefined,
+        });
       } finally {
         await releaseClaim({ id }).catch(() => {});
       }
@@ -1276,19 +1465,19 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     // signatures survive — the implementation's `| undefined` return is for the
     // updater's opt-out, hidden from the fixed-value form's callers.
     function updateModel(
-      params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> },
+      params: ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> }
     ): Promise<CommitReceipt>;
     function updateModel(
       id: string,
       updater: ModelUpdater<T>,
-      options?: ContentionOptions,
+      options?: ContentionOptions
     ): Promise<CommitReceipt | undefined>;
     function updateModel(
       arg:
         | (ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> })
         | string,
       updater?: ModelUpdater<T>,
-      contention?: ContentionOptions,
+      contention?: ContentionOptions
     ): Promise<CommitReceipt | undefined> {
       // Functional form: update(id, current => next). The SDK owns the
       // read-fresh → compute → compare-and-swap → reconcile loop; correctness
@@ -1300,7 +1489,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           throw new AbloValidationError(
             `${name}.update('${id}', updater): the second argument must be an updater ` +
               `function (current) => next. To write a fixed value, use update({ id, data }).`,
-            { code: 'write_options_invalid' },
+            { code: 'write_options_invalid' }
           );
         }
         return reconcileFunctionalUpdate<T, CommitReceipt>(updater, contention, {
@@ -1334,7 +1523,10 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         return listModel<T>(name, options);
       },
       async create(
-        params: ModelMutationOptions & { readonly data: Record<string, unknown>; readonly id?: string | null },
+        params: ModelMutationOptions & {
+          readonly data: Record<string, unknown>;
+          readonly id?: string | null;
+        }
       ): Promise<T> {
         const id = params.id ?? createModelId(name, params.idempotencyKey);
         return withMutationClaim(id, params, async (options) => {
@@ -1352,18 +1544,21 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
             params.data,
             {
               ...options,
-              wait: options?.wait ?? 'confirmed',
+              // This method returns the authoritative row, not a receipt. A
+              // queued source acceptance cannot satisfy that return contract,
+              // even when the caller supplied `wait: 'queued'`.
+              wait: 'confirmed',
             },
             async () => {
               const read = await retrieveModel<T>(name, { id });
               if (read.data === undefined) {
                 throw new AbloNotFoundError(
                   `create ${name}/${id} did not yield a readable row (the write did not confirm).`,
-                  [id],
+                  [id]
                 );
               }
               created = read.data;
-            },
+            }
           );
           if (created === undefined) {
             throw new AbloConnectionError('Create settlement did not return its row.', {
@@ -1374,9 +1569,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         });
       },
       update: updateModel,
-      async delete(
-        params: ModelMutationOptions & { readonly id: string },
-      ): Promise<CommitReceipt> {
+      async delete(params: ModelMutationOptions & { readonly id: string }): Promise<CommitReceipt> {
         return withMutationClaim(params.id, params, async (options) => {
           await applyClaimedPolicy({ model: name, id: params.id }, options);
           return mutateModel('delete', name, params.id, undefined, options);
@@ -1390,7 +1583,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     waitForFlush: () =>
       runInHttpCommitLane(async () => {
         await ready();
-        await replayHttpCommitOutbox();
+        const replayed = await replayHttpCommitOutbox();
+        await confirmReplayedHttpCommits(replayed);
       }),
     async dispose() {},
     async purge() {},
@@ -1405,16 +1599,14 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         if (!apiKey) {
           throw new AbloAuthenticationError(
             'sessions.create requires a secret (sk_) API key — call it from your backend, not the browser.',
-            { code: 'apikey_missing' },
+            { code: 'apikey_missing' }
           );
         }
         return mintSession(params, {
           apiKey,
           baseUrl: apiBaseUrl,
           ...(options.fetch ? { fetch: options.fetch } : {}),
-          ...(options.modelTypenames
-            ? { modelTypenames: options.modelTypenames }
-            : {}),
+          ...(options.modelTypenames ? { modelTypenames: options.modelTypenames } : {}),
         });
       },
     },
@@ -1427,12 +1619,11 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
 }
 
 function normalizeClaimId(
-  claim: string | { readonly id: string } | null | undefined,
+  claim: string | { readonly id: string } | null | undefined
 ): string | undefined {
   if (typeof claim === 'string') return claim;
   return claim?.id;
 }
-
 
 function parseBody(bodyText: string): unknown {
   if (bodyText.length === 0) return null;

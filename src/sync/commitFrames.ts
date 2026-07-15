@@ -9,6 +9,7 @@ import { getContext } from '../context.js';
 // The wire types for the outgoing commit frame. Importing them lets the
 // compiler enforce the frame shape, so the client and server can't drift apart.
 import type { CommitMessage, CommitOperation } from '../wire/index.js';
+import type { CommitAck as CanonicalCommitAck } from '../wire/commit.js';
 import type { MutationOperation, ClaimEvent } from '../interfaces/index.js';
 import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
 import {
@@ -23,10 +24,7 @@ import { formatClaim } from '../coordination/trace.js';
  * carries the advisory signal that lets the writer self-heal, and the same
  * signal also arrives on the `conflict:notified` event.
  */
-export interface CommitAck {
-  lastSyncId: number;
-  notifications?: StaleNotification[];
-}
+export type CommitAck = CanonicalCommitAck;
 
 /**
  * Converts the client's list of {@link MutationOperation} values into the wire
@@ -52,6 +50,7 @@ export function buildCommitFrame(
       transactionId: op.transactionId,
       readAt: op.readAt,
       onStale: op.onStale,
+      fenceToken: op.fenceToken,
     })),
     clientTxId,
   };

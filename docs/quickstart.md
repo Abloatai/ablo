@@ -215,11 +215,13 @@ of clobbering. Normal reads still work while the claim is held. If a server read
 should not return a row while someone else is mid-edit, pass `ifClaimed: 'fail'`
 to error out instead. Reads never block on a claim — to wait for a row to free
 up, `claim({ id })` it (the claim queues fairly behind the holder).
-Call `handle.release()` when your work is done.
+Bind the handle with `await using` and the claim releases itself when the scope
+exits — on success or on a throw, so a failing agent call never leaves the row
+locked.
 
 ```ts
 // Claim the row so other participants serialize behind us while we work.
-const handle = await ablo.weatherReports.claim({
+await using handle = await ablo.weatherReports.claim({
   id: 'weather_stockholm',
   reason: 'checking_weather',
   ttl: '2m',
@@ -236,15 +238,13 @@ await ablo.weatherReports.update({
     forecast: weather.summary,
   },
 });
-
-await handle.release();
+// scope exit releases the claim — no manual release, even if the work threw
 ```
 
 Ablo does not fetch the weather. If another participant already holds the row,
 `claim` waits for them to finish, re-reads, and then hands you the fresh row.
 While you hold the claim, `update({ id, data })` rejects with `AbloStaleContextError`
-if someone else changed the row first — so you never overwrite work you didn't
-see. Call `handle.release()` once your work is done.
+if someone else changed the row first — so you never overwrite work you didn't see.
 
 ## Multiplayer and claimed work
 
@@ -262,9 +262,8 @@ if (active) {
   console.log(`${active.heldBy} is ${active.reason}`);
 }
 
-const handle = await ablo.weatherReports.claim({ id: 'weather_stockholm' });
+await using handle = await ablo.weatherReports.claim({ id: 'weather_stockholm' });
 await ablo.weatherReports.update({ id: handle.data.id, data: { status: 'ready' } });
-await handle.release();
 ```
 
 Use `{ queue: false }` on `claim` when work should be skipped instead of queued

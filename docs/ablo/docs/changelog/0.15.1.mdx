@@ -1,0 +1,21 @@
+---
+title: "v0.15.1"
+type: changelog
+date: 2026-06-23
+changelog:
+  version: "0.15.1"
+  category: "Fixes"
+---
+
+{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
+
+### Patch Changes
+
+- Loud 0-row writes: surface unmatched UPDATE/DELETE ids and add `AbloNotFoundError`
+
+  A commit now reports the ids of any UPDATE/DELETE that matched zero rows on
+  `CommitReceipt.missingIds`, and the new exported `AbloNotFoundError` lets typed
+  write wrappers throw instead of silently treating a missed write as success.
+  Additive and back-compatible (the field is omitted when nothing missed). This
+  unblocks the slides-sdk name-addressing / own-your-id work, which relies on a
+  loud failure when a stale id is written.

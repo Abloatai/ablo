@@ -1,0 +1,31 @@
+---
+title: "v0.29.0"
+type: changelog
+changelog:
+  version: "0.29.0"
+  category: "Features"
+---
+
+{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
+
+### Minor Changes
+
+- **`omitModels()` projects a schema by exclusion — the companion to `selectModels`.** Keep every model except the named ones, so one app can be the general case while a separate app owns the models it drops. The suite shell narrows with `omitModels(full, ['reports', 'reportSections'])` while the standalone app selects those same models. Validation matches `selectModels`: relations into the omitted set are dropped, and a dropped `parent` edge throws, so a model whose scope routes through an omitted parent can't be silently kept. Each app now binds its own schema projection rather than sharing one global registration.
+
+- **Every application model has one typed access path: `ablo.<model>`.** Both the WebSocket and stateless HTTP clients return bare rows from `retrieve` and accept the same typed create/update/delete forms. The schema-less `Ablo({ schema: null })` overload, the public `.model(name)` accessors, the transport-envelope types, and the hidden capability CRUD client are removed. Select `transport: 'http'` for workers without changing model syntax, use `commits.create` only for atomic multi-row writes, and `sessions.create` to mint a scoped user or agent credential.
+
+- **The commit wire names only the protocol that actually runs.** `@abloatai/ablo/wire` exports `CommitMessage`, `MutationResultMessage`, `commitOperationSchema`, and `commitPayloadSchema` directly. The prospective v2 commit contract published under `@abloatai/ablo/commit` in 0.28.0 — its `CommitReceipt` type, the `legacyCommit*` wire aliases, and the unsent named-mutation frame — is removed, so there is one contract to implement and test. Idempotency-key sealing and fencing move to `transactions/idempotencyKey.ts` (ADR 0006: the v1/v2 boundary lives at ingress, not in the client). Local `useMutators` calls still compose normal transactions; this removes only the dead server wire path.
+
+- **Protocol support is backed by codecs, not a numeric claim (ADR 0005).** The wire package publishes an explicit supported-version manifest; the server must provide a decoder for every entry. Durable HTTP writes seal their original protocol version and replay with it after an upgrade. Application-schema hashes are an advisory bootstrap warning rather than an exact WebSocket gate, so additive schema versions can overlap through an expand/contract rollout.
+
+- **The injected write-storage option is `durableWrites`, and `DurableWriteStore` is its interface.** The `commitOutbox` client option and `CommitOutboxStore` interface introduced in 0.28.0 are renamed. `durableWritesConfigSchema`, `durableWriteStoreSchema`, `pendingWriteSchema`, and the `DurableWritesConfig` / `DurableWriteStore` / `PendingWrite` types are exported from the package root, so a workflow-, SQLite-, or filesystem-backed adapter validates against the shipped schema instead of an interface you re-declare. The old `commitOutbox` / `CommitOutboxStore` names remain as deprecated aliases through the next major release.
+
+- **`Register` registers your `Schema` and `UserMeta` — those are the two keys.** The `Presence` and `Claims` registration keys and their `ResolvePresence` / `ResolveClaims` resolver types are gone, matching the removed presence and claim React placeholders. Read presence through `usePeers` or `useWatch`, and row claims through `ablo.<model>.claim`. The default resolver now carries a `SchemaRecord` fallback, so a shared package typechecks standalone with no app registration in scope.
+
+- **One signed adapter export: `dataSource`.** The `abloSource` alias is removed, and the parallel `DataSource*` type names (`DataSourceOptions`, `DataSourceCommitParams`, `DataSourceHandlerContext`, and the rest) collapse into the canonical `Source*` types — one name per shape. Endpoints already built with `dataSource()` are unchanged; only the duplicate names are gone.
+
+- **The claim type surface is reached through `Ablo.Claim.*`.** `ClaimOptions`, `ClaimParams`, `ClaimLookupParams`, `ClaimReorderParams`, `Claim`, `ClaimHeartbeat`, `ClaimHeartbeatOptions`, and `ModelOperations` are namespace members rather than top-level exports; `HeldClaim` stays as a deprecated top-level alias because 0.20.1 documented it. The internal construction types `InternalAbloOptions` and `HttpClaimApi` are no longer exported — the public surface names only what an application builds against.
+
+### Patch Changes
+
+- **Removed React placeholders that had no working runtime.** `usePresence`, `useClaim`, `SyncGroupProvider`, and `useSyncGroup` are no longer exported. Use `usePeers` or `useWatch` for presence and scoped participation, and `ablo.<model>.claim` for row claims. The unused `Register.Presence` / `Register.Claims` resolver types are gone with them.

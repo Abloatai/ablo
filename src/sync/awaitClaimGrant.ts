@@ -46,6 +46,17 @@ export interface ClaimGrantInfo {
    * The grant frame itself is the authoritative signal.
    */
   readonly waited: boolean;
+  /**
+   * The fencing token the server minted for this grant (Option B), read off the
+   * grant frame — the authoritative source, since the token is server-stamped.
+   * `undefined` when the server does not fence (no minter wired).
+   */
+  readonly fenceToken?: number;
+}
+
+/** Read the server-stamped fencing token off a grant frame, if present. */
+function readFenceToken(p: Record<string, unknown>): number | undefined {
+  return typeof p.fenceToken === 'number' ? p.fenceToken : undefined;
 }
 
 export function awaitClaimGrant(
@@ -77,7 +88,10 @@ export function awaitClaimGrant(
       transport.subscribe('claim_acquired', (p) => {
         if (p?.claimId === claimId) {
           getContext().logger.debug(`claim: acquired ${claimId} (target was free)`);
-          settle(() => { resolve({ waited: false }); });
+          const fenceToken = readFenceToken(p);
+          settle(() => {
+            resolve({ waited: false, ...(fenceToken !== undefined ? { fenceToken } : {}) });
+          });
         }
       }),
     );
@@ -87,7 +101,10 @@ export function awaitClaimGrant(
           // Promoted to the head of the line — the creator's "it's the agent's
           // turn now" moment after waiting behind a holder.
           getContext().logger.info(`claim: granted ${claimId} — your turn (waited in queue)`);
-          settle(() => { resolve({ waited: true }); });
+          const fenceToken = readFenceToken(p);
+          settle(() => {
+            resolve({ waited: true, ...(fenceToken !== undefined ? { fenceToken } : {}) });
+          });
         }
       }),
     );

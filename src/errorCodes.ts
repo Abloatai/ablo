@@ -39,7 +39,7 @@ import { z } from 'zod';
  * error documentation and returned on the `Ablo-Version` response header, so a
  * consumer can detect when its expected contract has drifted from the server's.
  */
-export const ERROR_CONTRACT_VERSION = '2026-07-03';
+export const ERROR_CONTRACT_VERSION = '2026-07-15';
 
 /** A coarse grouping of error codes, used to organize metrics and documentation. */
 export type ErrorCategory =
@@ -190,16 +190,13 @@ export const ERROR_CODES = {
   jwt_org_membership_denied: wire('auth', 403, false, "The bearer JWT's subject is not an active member of the organization in its `org_id` claim (removed, suspended, or the claim does not match a membership)."),
   file_upload_auth_required: wire('auth', 401, false, 'File uploads require an authenticated session. Sign in and retry.'),
   browser_apikey_blocked: client('auth', 'A raw API key was used from a browser, where anyone can read it. Keep secret keys server-side and hand the browser a short-lived ephemeral key instead.'),
-  browser_database_url_blocked: client('auth', 'A database connection string was used from a browser context. It carries database credentials, so it must stay server-side.'),
-  datasource_registration_failed: client('auth', 'The provided `databaseUrl` could not be registered as a data source. Check that the connection string is valid and the database is reachable.'),
   datasource_connection_unsupported: wire('validation', 400, false, 'This deployment does not accept direct connection-string data sources. Register a signed Data Source endpoint instead.'),
-  datasource_direct_deprecated: wire('validation', 410, false, 'The direct (connection string) datasource is deprecated. Register a signed Data Source endpoint instead — your app owns the write and your credentials never leave it.'),
 
   // ── permission / capability (403) ──────────────────────────────────
   capability_scope_denied: wire('capability', 403, false, 'This action falls outside the scope granted to the connection, so it was denied.'),
   issuer_register_forbidden: wire('permission', 403, false, 'Registering a trusted issuer requires a secret (`sk_`) API key. The key presented is not a secret key.'),
   capability_invalid: wire('capability', 403, false, 'This capability cannot be used — it is unknown, revoked, or expired. Request a fresh grant.'),
-  test_database_not_registered: wire('permission', 403, false, 'Test mode requires a registered dev database for this org — run `npx ablo init`, or construct the client with `databaseUrl` using your test key.'),
+  test_database_not_registered: wire('permission', 403, false, 'Test mode requires a registered dev database for this org — run `npx ablo init` to register one for your test key.'),
   tenant_routing_failed: wire('server', 500, true, "The org's registered database could not be resolved or dialed. Ablo never falls back to shared storage for a dedicated tenant — retry, and check the datasource status if it persists."),
   database_role_cannot_enforce_rls: wire('permission', 403, false, 'The database role Ablo connects with is a superuser or has `BYPASSRLS`, so Postgres will not enforce row-level security for it. Connect with a role that is subject to RLS.'),
   database_role_unreadable: wire('permission', 403, false, 'Ablo could not introspect the database role it connects with, so it cannot verify that row-level security is enforced.'),
@@ -220,6 +217,7 @@ export const ERROR_CODES = {
   // behind the holder (`ablo.<model>.claim`), or re-read and rebase.
   claim_conflict: wire('claim', 409, false, 'Another participant holds a claim on this row, so the write was rejected. Take a claim with `ablo.<model>.claim` to queue fairly behind the holder, or re-read and rebase.'),
   claim_lost: wire('claim', 409, false, 'The claim held on this row was lost before the write could apply. Re-acquire the claim and retry.'),
+  fence_token_stale: wire('claim', 409, false, 'This write carried a fencing token below the row’s current high-water: a later holder claimed the row, wrote, and moved on while this claim was lapsed, so applying the write would silently overwrite their work. The claim is gone — re-claim the row and retry from the current state.'),
   entity_claimed: wire('claim', 409, false, 'This row is currently claimed by another participant, so the write was blocked. Queue behind the holder with `ablo.<model>.claim`, or wait for the claim to clear.'),
   malformed_claim: wire('claim', 400, false, 'The claim payload could not be parsed. A claim must name the model and the entity it targets; check the payload shape and resend.'),
   malformed_subscription: wire('validation', 400, false, 'The `update_subscription` payload was malformed; expected `{ syncGroups: string[] }`.'),
@@ -241,6 +239,8 @@ export const ERROR_CODES = {
   contention_exhausted: client('conflict', 'A functional update kept losing to concurrent writes and exhausted its reconcile budget. Back off and retry, raise `retries`, or move the row to the WebSocket transport.'),
   update_aborted: client('conflict', 'The functional update was aborted via its `AbortSignal` before the write landed; nothing was written.'),
   idempotency_conflict: wire('conflict', 409, false, 'This `Idempotency-Key` was already used with a different request body. Reuse a key only to retry an identical request; otherwise generate a new one.'),
+  idempotency_key_expired: wire('conflict', 409, false, 'This idempotency key belongs to an expired retained source intent and cannot be executed again safely. Use a new key only for a genuinely new write.'),
+  source_transport_pinned: wire('conflict', 409, false, 'An earlier attempt under this idempotency key was pinned to a different source transport. Restore that route and retry the same key; Ablo will not switch a possibly committed write.'),
   idempotency_key_too_long: wire('validation', 400, false, 'The supplied `Idempotency-Key` exceeds the maximum length. Use a shorter key — a UUID works well.'),
 
   // ── validation (400 / 422) ─────────────────────────────────────────
@@ -338,9 +338,12 @@ export const ERROR_CODES = {
   exchange_malformed_response: wire('transport', 502, true, 'The credential exchange returned a response that could not be parsed. Retrying may succeed.'),
   exchange_network_error: wire('transport', 503, true, 'A network error interrupted the credential exchange. Check connectivity and retry.'),
   source_network_error: wire('transport', 503, true, 'A network error occurred while talking to the data source. Check connectivity and retry.'),
+  source_unreachable: wire('transport', 503, true, 'Ablo could not safely reach the registered direct data source before completing the write. The write remains pinned to direct; retry the same idempotency key after connectivity recovers.'),
+  data_source_blocked: wire('transport', 503, false, 'The plane\'s data source is not in a verified, resolvable state. Fix its registration, secret, or configuration; Ablo will not fall through to hosted storage.'),
   identity_network_error: wire('transport', 503, true, 'A network error occurred while resolving your identity. Check connectivity and retry.'),
   commit_no_result: wire('transport', 504, true, 'The commit was sent, but no result frame arrived, so its outcome is unknown. It is safe to retry.'),
   commit_failed: wire('transport', 500, true, 'The commit reached the server but failed to apply. Retrying may succeed.'),
+  replication_lag_timeout: wire('transport', 504, true, "The data source accepted the write, but its correlated authoritative source delta did not arrive before the confirmation deadline. The write may still materialize; retry with the same idempotency key or wait for source ingestion to recover."),
   commit_offline_grace_expired: wire('transport', 503, false, 'The offline grace window expired before this commit could be sent, so it was not applied. Re-apply the change once the connection returns.'),
   queue_too_deep: wire('transport', 503, true, 'The transaction queue is over its depth limit, so new writes are being rejected until it drains. Retry shortly.'),
   flush_timeout: wire('transport', 504, true, 'Flushing the transaction queue timed out before every pending write was sent. Retry once connectivity stabilizes.'),
@@ -426,6 +429,8 @@ export const ERROR_CODES = {
   invalid_id: wire('validation', 400, false, 'The id in the request is not a valid identifier.'),
   unknown_model: wire('tenant', 400, false, 'Named a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` — the server keeps its own copy of the schema.'),
   model_not_tenant_scoped: wire('tenant', 400, false, 'This model is not tenant-scoped, so it cannot be queried through the tenant-scoped read path.'),
+  source_tenancy_not_enforced: wire('tenant', 400, false, "This model is scoped by its connected data source (`policy: { by: 'source' }`), so its tenant is resolved from the source registration rather than a row column. Enforcing that resolution requires the write-through connect path, which is not enabled on this plane yet — so the model cannot be served through the tenant-scoped read or bootstrap path without risking a cross-tenant read. If this model lives on a log plane, scope it with `by: 'column'` or `by: 'parent'` instead."),
+  model_not_provisioned: wire('tenant', 409, false, "This model is in the plane's registered schema, but its table has not been provisioned yet. Registering a schema with `ablo push` records the model; a plane's physical tables are created separately, out of band, so a model can appear in the schema before its table exists. Provision the plane's tables, then retry the read."),
   schema_table_invalid: wire('schema', 500, false, "The model's table identifier is invalid."),
   schema_scope_invalid: wire('schema', 500, false, "The model's scope predicate could not be built."),
   entity_fetch_failed: wire('server', 500, true, 'The server failed to fetch the requested entity. It is safe to retry.'),

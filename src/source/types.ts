@@ -86,6 +86,10 @@ export interface SourceRequestContext {
   readonly participantId?: string;
   readonly participantKind?: 'user' | 'agent' | 'system';
   readonly organizationId?: string;
+  /** Trusted project plane selected by the authenticating credential. */
+  readonly projectId?: string;
+  /** Trusted sandbox plane selected by the authenticating credential. */
+  readonly sandboxId?: string;
   readonly requiredSyncGroups?: readonly string[];
   /**
    * Whether this request runs in production or sandbox mode. Branch your
@@ -135,9 +139,9 @@ export interface SourceDelta {
  * through the SDK.
  *
  * Your handler can return the whole outbox unfiltered. Ablo deduplicates on
- * the stable `id` and uses `clientTxId` to drop echoes of changes the SDK
- * already committed. If that earlier commit never landed, the same outbox
- * event repairs the gap on the next poll or push.
+ * the stable `id`. A mediated endpoint write carries `correlationId` plus the
+ * operation's `transactionId`; those fields promote its queued receipt after
+ * the event is durably appended. External writes omit them.
  */
 export interface SourceEvent {
   /**
@@ -157,13 +161,14 @@ export interface SourceEvent {
    */
   readonly organizationId?: string;
   /**
-   * The originating SDK commit id, when you know it. If your outbox records the
-   * `clientTxId` that Ablo passed into the matching `commit` handler, echo it
-   * back here and Ablo will skip events whose commit already produced a change.
-   * Leave it unset for changes made outside the SDK, such as cron jobs, batch
-   * imports, or manual edits.
+   * @deprecated Legacy echo identity. It is not trusted for queued settlement;
+   * use `correlationId` and `transactionId` for mediated endpoint writes.
    */
   readonly clientTxId?: string;
+  /** Scoped server-authored identity of the queued mediated commit. */
+  readonly correlationId?: string;
+  /** Stable per-operation identity within the correlated commit. */
+  readonly transactionId?: string;
   /**
    * When the change occurred in your database. Optional and used only as an
    * ordering hint; Ablo trusts the order of your handler's response over this
@@ -192,11 +197,12 @@ export interface SourceEventForOperationOptions {
    */
   readonly data?: Record<string, unknown> | null;
   /**
-   * The commit request's idempotency key. Echoing it lets Ablo drop echoes of
-   * a change the SDK already committed, while still letting the outbox event
-   * repair that change if it never landed.
+   * @deprecated Legacy echo identity. Prefer the explicit correlation fields.
    */
   readonly clientTxId?: string;
+  readonly correlationId?: string;
+  /** Defaults to `operation.transactionId` when present. */
+  readonly transactionId?: string;
   readonly organizationId?: string;
   readonly occurredAt?: number | Date;
 }
@@ -220,6 +226,7 @@ export function sourceEventForOperation(
     );
   }
   const occurredAt = normalizeEventOccurredAt(options.occurredAt);
+  const transactionId = options.transactionId ?? options.operation.transactionId ?? undefined;
   return {
     id: options.eventId,
     model: options.operation.model,
@@ -228,6 +235,8 @@ export function sourceEventForOperation(
     ...(options.data !== undefined ? { data: options.data } : {}),
     ...(options.organizationId ? { organizationId: options.organizationId } : {}),
     ...(options.clientTxId ? { clientTxId: options.clientTxId } : {}),
+    ...(options.correlationId ? { correlationId: options.correlationId } : {}),
+    ...(transactionId ? { transactionId } : {}),
     ...(occurredAt !== undefined ? { occurredAt } : {}),
   };
 }
@@ -254,10 +263,71 @@ export interface SourceCommitResult<Row = Record<string, unknown>> {
   readonly deltas?: readonly SourceDelta[];
 }
 
+/**
+ * Requests a commit-correlated marker in the customer's Postgres WAL.
+ *
+ * This is opt-in because ordinary Data Source endpoints can be backed by
+ * stores other than Postgres. Connected Postgres planes request it for
+ * `wait: 'confirmed'`: the row changes and the logical message must be written
+ * by the same customer-side transaction, so a rollback publishes neither.
+ */
+export interface SourceCommitEcho {
+  readonly kind: 'postgres-wal';
+  /**
+   * Opaque, versioned marker payload authored by Ablo. A source handler must
+   * pass these exact bytes to `pg_logical_emit_message` inside the write
+   * transaction; it must not reconstruct or normalize the JSON.
+   */
+  readonly payload: string;
+}
+
+/** Prefix reserved for Ablo commit-correlation messages in pgoutput. */
+export const ABLO_POSTGRES_COMMIT_ECHO_PREFIX = 'ablo';
+
+/**
+ * Maximum source commit-correlation key length. This matches the server's
+ * idempotency-key contract: a WAL marker longer than this can never name an
+ * accepted Ablo commit and must not be appended as an apparently correlatable
+ * echo.
+ */
+export const ABLO_SOURCE_CLIENT_TX_ID_MAX_LENGTH = 255;
+
+/** Connected-source batches are deliberately smaller than the generic wire cap. */
+export const ABLO_SOURCE_ECHO_MAX_OPERATIONS = 500;
+
+/** Maximum UTF-8 bytes accepted for one transactional WAL marker payload. */
+export const ABLO_SOURCE_ECHO_MAX_PAYLOAD_BYTES = 256 * 1024;
+
+export interface SourceCommitEchoOperation {
+  readonly model: string;
+  readonly id: string;
+  readonly action: 'I' | 'U' | 'D';
+  readonly transactionId: string;
+}
+
+/** Strict payload encoded into {@link SourceCommitEcho.payload}. */
+export interface SourceCommitEchoMarker {
+  readonly version: 1;
+  readonly correlationId: string;
+  readonly operations: readonly SourceCommitEchoOperation[];
+}
+
 /** The arguments passed to a top-level {@link SourceCommitHandler}. */
 export interface SourceCommitParams<TAuth = unknown> {
   readonly operations: readonly SourceOperation[];
+  /** Scoped, server-authored customer-ledger identity. */
+  readonly correlationId?: string;
+  /** @deprecated Legacy wire name for `correlationId`. */
   readonly clientTxId?: string;
+  /**
+   * Canonical hash of the complete caller intent (operations plus guarded
+   * context), authored and signed by Ablo. Persist it beside `correlationId` and
+   * reject a replay whose hash differs; this protects an ambiguous retry even
+   * if Ablo's local execution row rolled back after your commit succeeded.
+   */
+  readonly intentHash?: string;
+  /** Present when the caller requires a transaction-correlated WAL echo. */
+  readonly echo?: SourceCommitEcho;
   readonly context: SourceHandlerContext<TAuth>;
 }
 
@@ -312,7 +382,7 @@ export interface SourceHandlerContext<TAuth = unknown> {
    * The `webhook-id` from the signed request, globally unique per the
    * Standard Webhooks specification. Dedupe by this id to defend against
    * replay: Ablo does not deduplicate at the source-handler boundary.
-   * Commit idempotency keys on `clientTxId`, and event replay protection
+   * Commit idempotency keys on the scoped `correlationId`, and event replay protection
    * keys on the outbox event `id`.
    */
   readonly messageId?: string;
@@ -345,12 +415,19 @@ export interface SourceModelHandlers<Row, CreateInput, TAuth = unknown> {
 
   /**
    * Apply one or more operations for this model within your own database
-   * transaction. Your handler must be idempotent on the operation and its
-   * `clientTxId`, so that a retried commit does not apply the change twice.
+   * transaction. Your handler must be idempotent on the scoped server
+   * `correlationId`, so that a retried commit does not apply the change twice.
    */
   commit?(params: {
     readonly operations: readonly SourceOperation[];
+    /** Scoped, server-authored customer-ledger identity. */
+    readonly correlationId?: string;
+    /** @deprecated Legacy wire name for `correlationId`. */
     readonly clientTxId?: string;
+    /** Persist and compare this hash as part of the idempotency ledger. */
+    readonly intentHash?: string;
+    /** Emit this marker inside the same transaction as the operations. */
+    readonly echo?: SourceCommitEcho;
     readonly context: SourceHandlerContext<TAuth>;
   }): Promise<SourceCommitResult<Row>> | SourceCommitResult<Row>;
 }
@@ -385,7 +462,14 @@ export interface SourceCommitRequest {
    */
   readonly model?: string;
   readonly operations: readonly SourceOperation[];
+  /** Scoped, server-authored customer-ledger identity. */
+  readonly correlationId?: string;
+  /** @deprecated Legacy wire name for `correlationId`. */
   readonly clientTxId?: string;
+  /** Signed canonical hash of the complete server-side commit intent. */
+  readonly intentHash?: string;
+  /** Commit-confirmation marker requested by a connected Postgres plane. */
+  readonly echo?: SourceCommitEcho;
   readonly scope?: SourceRequestContext;
 }
 

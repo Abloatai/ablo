@@ -105,7 +105,7 @@ export interface CoordinatedToolOptions<TInput, T> {
   /** How concurrent writers relate. Defaults to `'merge'`. */
   strategy?: CoordinationStrategy;
   /** Human-readable coordination metadata attached to the claim, used by the `'claim'` and `'queue'` strategies. */
-  claim?: { reason?: string; description?: string };
+  claim?: { description?: string };
   /** How many reconcile rounds `'merge'` may take before it gives up with `AbloContentionError`. */
   retries?: number;
   /** Poll interval and overall timeout for `'queue'`. Defaults to 250ms and 30s. */
@@ -160,7 +160,6 @@ export function coordinatedTool<
         const claim = await model.claim({
           id,
           queue: false,
-          reason: options.claim?.reason,
           description: options.claim?.description,
         });
         try {

@@ -113,6 +113,21 @@ export function describeRemoteFailure(failure: RemoteReadinessFailure): {
         label: `published tables cannot replicate UPDATE/DELETE${failure.actual ? ` (${failure.actual})` : ''}`,
         fix: failure.fix,
       };
+    case 'write_role':
+      return { label: 'ABLO_WRITE_DATABASE_URL is not a scoped DML role', fix: failure.fix };
+    case 'row_security':
+      return { label: 'the direct-write role does not enforce row_security', fix: failure.fix };
+    case 'schema_privileges':
+      return { label: 'the direct-write role has unsafe schema privileges', fix: failure.fix };
+    case 'idempotency_ledger':
+      return { label: 'ablo_idempotency is missing or has unsafe grants', fix: failure.fix };
+    case 'table_privileges':
+      return {
+        label: `the direct-write role lacks application DML${failure.actual ? ` (${failure.actual})` : ''}`,
+        fix: failure.fix,
+      };
+    case 'logical_marker':
+      return { label: 'the direct-write role cannot emit the correlation marker', fix: failure.fix };
     default:
       return { label: failure.item, fix: failure.fix };
   }
@@ -172,6 +187,8 @@ export async function requestRemoteValidation(input: {
   readonly apiUrl: string;
   readonly apiKey: string;
   readonly connectionString: string;
+  /** Separate scoped DML credential; when present the engine validates both legs. */
+  readonly writeConnectionString?: string;
   /** Injectable for tests; defaults to global fetch. */
   readonly fetchImpl?: ValidationFetch;
 }): Promise<RemoteValidation> {
@@ -181,7 +198,12 @@ export async function requestRemoteValidation(input: {
     res = await doFetch(validateEndpoint(input.apiUrl), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${input.apiKey}` },
-      body: JSON.stringify({ connectionString: input.connectionString }),
+      body: JSON.stringify({
+        connectionString: input.connectionString,
+        ...(input.writeConnectionString
+          ? { writeConnectionString: input.writeConnectionString }
+          : {}),
+      }),
     });
   } catch (err) {
     return {

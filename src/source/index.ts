@@ -11,6 +11,10 @@
 
 export {
   sourceEventForOperation,
+  ABLO_POSTGRES_COMMIT_ECHO_PREFIX,
+  ABLO_SOURCE_CLIENT_TX_ID_MAX_LENGTH,
+  ABLO_SOURCE_ECHO_MAX_OPERATIONS,
+  ABLO_SOURCE_ECHO_MAX_PAYLOAD_BYTES,
   type SourcePrimitive,
   type SourceWhere,
   type SourceListQuery,
@@ -22,6 +26,9 @@ export {
   type SourceEvent,
   type SourceEventForOperationOptions,
   type SourceCommitResult,
+  type SourceCommitEcho,
+  type SourceCommitEchoOperation,
+  type SourceCommitEchoMarker,
   type SourceCommitParams,
   type SourceScope,
   type SourceEventsResult,
@@ -97,6 +104,7 @@ export {
 // The Data Source adapter interface and its Zod contract, with per-ORM implementations.
 export {
   type DataSourceAdapter,
+  type MutationAdapter,
   type AdapterReadRequest,
   type AdapterCommitResult,
   type Row as AdapterRow,
@@ -104,6 +112,9 @@ export {
 export {
   operationSchema,
   operationTypeSchema,
+  sourceCommitEchoSchema,
+  sourceCommitEchoOperationSchema,
+  sourceCommitEchoMarkerSchema,
   changeSetSchema,
   outboxEventSchema,
   eventsPageSchema,
@@ -115,6 +126,39 @@ export {
   type EventsPage,
   type Migration,
   type AdapterCapabilities,
+  type SourceCommitEchoMarkerWire,
 } from './contract.js';
 export { prismaDataSource, type PrismaLike, type PrismaDataSourceOptions } from './adapters/prisma.js';
-export { adapterTableMigrations } from './migrations.js';
+export {
+  adapterTableMigrations,
+  endpointOutboxMigrations,
+  idempotencyLedgerMigrations,
+} from './migrations.js';
+export {
+  createKyselyMutationAdapter,
+  createKyselyMutationCore,
+  kyselyDataSource,
+  kyselyDirectMutation,
+  kyselyOperationRowId,
+  type KyselyCompiledQuery,
+  type KyselyDeleteBuilder,
+  type KyselyInsertBuilder,
+  type KyselyInsertValuesBuilder,
+  type KyselyLike,
+  type KyselyMutationCore,
+  type KyselyReturningExecutable,
+  type KyselySelectBuilder,
+  type KyselyTransactionBuilder,
+  type KyselyUpdateBuilder,
+  type KyselyUpdateSetBuilder,
+} from './adapters/kysely.js';
+export {
+  sourceOperationsIntentHash,
+  sourceChangeIntentHash,
+  assertSourceIdempotencyIntent,
+  assertSourceIdempotencyRetention,
+  sourceEchoTransactionIdSchema,
+  encodeSourceEchoTransactionId,
+  decodeSourceEchoTransactionId,
+  type SourceEchoTransactionId,
+} from './idempotency.js';

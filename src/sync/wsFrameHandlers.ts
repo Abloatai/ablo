@@ -9,10 +9,15 @@
 
 import { getContext } from '../context.js';
 import {
+  AbloConnectionError,
   CapabilityError,
   errorFromWire,
   type RequiredCapability,
 } from '../errors.js';
+import {
+  commitAckSchema,
+  legacyCompatibleCommitReceiptSchema,
+} from '../wire/commit.js';
 import { subscriptionAckPayloadSchema } from '../coordination/schema.js';
 import { formatConflict } from '../coordination/trace.js';
 import { parseNotifications, recordClaim, type CommitAck } from './commitFrames.js';
@@ -122,12 +127,21 @@ export type WsFrameHandler = (session: WsSession, message: WsInboundFrame) => vo
  */
 const handleMutationResult: WsFrameHandler = (session, message) => {
   const p = (message.payload ?? message) as Record<string, unknown>;
-  const { clientTxId, success, lastSyncId, error } = p ?? {};
+  const { clientTxId, success, error } = p;
   // Defensive: validate notifications against the canonical schema —
   // untrusted wire data from a possibly-older/newer server.
   const notifications = parseNotifications(
     (p as { notifications?: unknown } | undefined)?.notifications,
   );
+  const missingIds = Array.isArray(p.missingIds)
+    ? [
+        ...new Set(
+          p.missingIds.filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+          ),
+        ),
+      ]
+    : undefined;
   const pending =
     typeof clientTxId === 'string'
       ? session.pendingMutations.get(clientTxId)
@@ -137,21 +151,33 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
   // `pending` exists ⇒ clientTxId was a string key (the guard above).
   session.pendingMutations.delete(clientTxId as string);
   if (success) {
-    // Coerce defensively — bigint columns serialize as strings
-    // from older servers (see normalizeWireDelta).
-    const ackedSyncId = Number(lastSyncId);
+    const parsedReceipt = legacyCompatibleCommitReceiptSchema.safeParse({
+      ...p,
+      notifications,
+      missingIds,
+    });
+    if (!parsedReceipt.success) {
+      pending.reject(
+        new AbloConnectionError(
+          'The sync server returned an invalid commit receipt; its outcome remains pending and is safe to retry.',
+          { code: 'commit_no_result', cause: parsedReceipt.error },
+        ),
+      );
+      return;
+    }
+    const receipt = parsedReceipt.data;
     // The write succeeded, but a guarded premise shifted underneath it.
     // Emit the advisory signal so a caller can react, and still resolve
     // the receipt, since the commit itself went through.
-    if (notifications && notifications.length > 0) {
-      const txId = typeof clientTxId === 'string' ? clientTxId : '';
+    if (receipt.notifications && receipt.notifications.length > 0) {
+      const txId = receipt.clientTxId;
       const event = {
         clientTxId: txId,
-        rows: notifications.map((n) => ({
+        rows: receipt.notifications.map((n) => ({
           model: n.model,
           id: n.id,
           fields: n.conflictingFields,
-          writtenBy: n.writtenBy?.kind,
+          writtenBy: n.writtenBy.kind,
         })),
       };
       const message = formatConflict(event);
@@ -161,15 +187,24 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
       ctx.observability.captureConflict(event);
       session.emit('conflict:notified', {
         clientTxId: txId,
-        notifications,
+        notifications: receipt.notifications,
       });
     }
-    pending.resolve({
-      lastSyncId: Number.isFinite(ackedSyncId) ? ackedSyncId : 0,
-      ...(notifications && notifications.length > 0
-        ? { notifications }
-        : {}),
-    });
+    pending.resolve(
+      commitAckSchema.parse({
+        status: receipt.status,
+        ...(receipt.correlationId
+          ? { correlationId: receipt.correlationId }
+          : {}),
+        lastSyncId: receipt.lastSyncId,
+        ...(receipt.notifications && receipt.notifications.length > 0
+          ? { notifications: receipt.notifications }
+          : {}),
+        ...(receipt.missingIds && receipt.missingIds.length > 0
+          ? { missingIds: receipt.missingIds }
+          : {}),
+      }),
+    );
   } else {
     // Capture the full server error so the caller can see what actually
     // rejected the mutation, rather than a generic "mutation failed on

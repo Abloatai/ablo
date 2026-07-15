@@ -1,0 +1,22 @@
+---
+title: "v0.27.0"
+type: changelog
+date: 2026-07-10
+changelog:
+  version: "0.27.0"
+  category: "Features"
+---
+
+{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
+
+### Minor Changes
+
+- **Claims can now be held for long-running work by heartbeating — on both transports.** A claim's TTL is crash cleanup, not a work estimate; work that outlives it (a 30-minute report, a long agent run) keeps its lease by beating. `claim({ heartbeat: true })` beats automatically until release; `held.heartbeat()` beats by hand. A lapsed lease answers the next beat with `AbloClaimedError` (`claim_lost`) — for a socketless worker, the failed beat _is_ the loss notification, and any write attempted under the old lease is independently rejected by its `readAt` guard.
+
+- **Beats carry progress and pressure.** `heartbeat({ details })` stores lightweight progress as the claim's peer-visible `meta.progress` (last beat wins, via `claim.state`); every beat's answer reports `queueDepth` — how many participants wait in line behind the lease — observable per auto-beat with the new `onHeartbeat` claim option.
+
+- **`ablo.claims.heartbeatAll({ ttl })`** extends every lease the credential holds in one request (`POST /api/v1/claims/heartbeat`) — the stateless twin of the WebSocket keepalive, for workers holding many rows.
+
+- **Keepalive renewals extend but never shorten a lease**, so an explicit work-duration `ttl` now survives pings and brief reconnects instead of collapsing to the liveness window.
+
+- **README.** The quick start leads with a runnable example, and a new _Background workers_ section shows the enqueue-on-your-own-queue / heartbeat-the-claim pattern end to end.

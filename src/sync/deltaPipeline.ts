@@ -46,7 +46,11 @@ export interface DeltaPipelineContext {
   readonly lastAckedId: number;
 
   // ── SyncClient position/transaction bookkeeping ──
-  onDeltaReceived(syncId: number): void;
+  onDeltaReceived(
+    syncId: number,
+    transactionId?: string,
+    correlationId?: string,
+  ): void;
   advanceApplied(syncId: number): void;
   advancePersisted(syncId: number): void;
 
@@ -215,7 +219,7 @@ export function enqueueDelta(
   }
 
   // Confirm awaiting transactions via sync ID threshold (before batching)
-  ctx.onDeltaReceived(delta.id);
+  ctx.onDeltaReceived(delta.id, delta.transactionId, delta.correlationId);
 
   // Queue during active bootstrap
   if (ctx.bootstrapDeltaQueue !== null) {

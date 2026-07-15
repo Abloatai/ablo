@@ -15,8 +15,9 @@
  */
 import type { ParticipantKind, ConfirmationState } from '../schema/syncDeltaRow.js';
 import type { ParticipantRef } from '../wire/delta.js';
+import type { CommitExecutionResultInput } from '../wire/commit.js';
 import type { Environment } from '../environment.js';
-import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
+import type { ReadDependency } from '../coordination/schema.js';
 
 export interface CommitContext {
   participantId: string;
@@ -31,6 +32,8 @@ export interface CommitContext {
    * targets the organization's default project.
    */
   projectId?: string;
+  /** Exact sandbox plane derived from the authenticated key, when present. */
+  sandboxId?: string;
   /** Optional external account scope forwarded to storage resolvers. */
   accountScope?: string;
   /**
@@ -98,27 +101,8 @@ export interface CommitContext {
 }
 
 /**
- * The receipt returned when a commit finishes. It pins the exact range of
- * `sync_deltas` ids the batch produced, so a caller can broadcast just this batch's
- * deltas without racing concurrent commits that hold adjacent ids. `firstSyncId` is
- * 0 when the batch produced no deltas (no operations, or all of them were no-ops).
+ * The server execution receipt persisted in `mutation_log`. Its runtime schema
+ * lives with the HTTP/WS settlement contract so queued correlation cannot drift
+ * between cache, transport, and client.
  */
-export interface CommitResult {
-  lastSyncId: number;
-  firstSyncId: number;
-  /**
-   * Stale-context notifications for operations the committer guarded with
-   * `onStale: 'notify'`. Non-empty only when a guarded write collided with a
-   * concurrent change; the committer heals from these instead of receiving an
-   * `AbloStaleContextError`. See {@link StaleNotification}.
-   */
-  notifications?: StaleNotification[];
-  /**
-   * Ids of update or delete targets that matched no rows — the row does not exist, or
-   * lies outside the caller's organization. Surfacing them here lets a client turn a
-   * silent no-op into an `AbloNotFoundError`. Non-empty only when at least one
-   * operation missed. The ids are globally unique, so a caller can match its own
-   * target id against this set without ambiguity.
-   */
-  missingIds?: string[];
-}
+export type CommitResult = CommitExecutionResultInput;

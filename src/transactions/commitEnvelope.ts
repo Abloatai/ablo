@@ -10,6 +10,7 @@
 import { z } from 'zod';
 import { readDependencySchema } from '../coordination/schema.js';
 import { commitOperationSchema } from '../wire/frames.js';
+import { correlationIdSchema } from '../wire/commit.js';
 import { idempotencyKeySchema } from './idempotencyKey.js';
 
 export const COMMIT_ENVELOPE_VERSION = 1 as const;
@@ -41,6 +42,7 @@ export const durableCommitOperationSchema = commitOperationSchema
     transactionId: true,
     readAt: true,
     onStale: true,
+    fenceToken: true,
   })
   .extend({
     model: z.string().min(1),
@@ -90,6 +92,14 @@ export const durableCommitEnvelopeSchema = z
     scope: commitOutboxScopeSchema.optional(),
     createdAt: z.number().int().nonnegative(),
     sealedAt: z.number().int().nonnegative(),
+    /**
+     * Monotonic evidence that a connected source accepted this exact request.
+     * Its server and customer idempotency keys are permanent, so an accepted
+     * envelope remains replayable until the WAL echo confirms it.
+     */
+    acceptedAt: z.number().int().nonnegative().optional(),
+    /** Opaque server-derived source-batch identity paired with `acceptedAt`. */
+    correlationId: correlationIdSchema.optional(),
     /** Monotonic within one client; disambiguates writes sealed in the same ms. */
     sequence: z.number().int().nonnegative().optional(),
     timestamp: z.number().int().nonnegative(),
@@ -107,6 +117,23 @@ export const durableCommitEnvelopeSchema = z
         code: 'custom',
         path: ['sourceMutationIds'],
         message: 'Source mutation ids must be unique',
+      });
+    }
+    if ((envelope.acceptedAt === undefined) !== (envelope.correlationId === undefined)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['acceptedAt'],
+        message: 'Accepted commit envelopes require both acceptedAt and correlationId',
+      });
+    }
+    if (
+      envelope.acceptedAt !== undefined &&
+      envelope.acceptedAt < envelope.sealedAt
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['acceptedAt'],
+        message: 'Commit envelope cannot be accepted before it is sealed',
       });
     }
     if (envelope.origin === 'model_batch') {

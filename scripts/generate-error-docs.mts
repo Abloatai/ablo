@@ -3,10 +3,11 @@
  *
  *   npx tsx scripts/generate-error-docs.mts
  *
- * Emits into the Mintlify docs project:
- *   - docs/ablo/errors.mdx   human reference (one anchor per code; the target
- *                            of every error's `doc_url`)
- *   - docs/ablo/errors.json  machine spec consumed by tooling / SDKs
+ * Emits into the Blume docs project at `docs/ablo/`:
+ *   - docs/ablo/docs/errors.mdx     human reference (one anchor per code; the
+ *                                   target of every error's `doc_url`)
+ *   - docs/ablo/public/errors.json  machine spec consumed by tooling / SDKs,
+ *                                   served as a static asset at `/errors.json`
  *
  * The registry is the single source of truth — never hand-edit errors.mdx.
  * `check-error-docs.mts` fails CI if these outputs drift from the registry.
@@ -16,13 +17,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { renderErrorsJson, renderErrorsMdx, totalCodeCount, wireCodeCount } from './error-docs-lib.mts';
 
-const docsDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../../docs/ablo');
+const siteRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../docs/ablo');
 
-writeFileSync(resolve(docsDir, 'errors.mdx'), renderErrorsMdx());
-writeFileSync(resolve(docsDir, 'errors.json'), renderErrorsJson());
+writeFileSync(resolve(siteRoot, 'docs', 'errors.mdx'), renderErrorsMdx());
+writeFileSync(resolve(siteRoot, 'public', 'errors.json'), renderErrorsJson());
 
 const total = totalCodeCount();
 const wire = wireCodeCount();
 console.log(
-  `[errors] generated docs/ablo/errors.mdx + errors.json — ${total} codes (${wire} wire, ${total - wire} client)`,
+  `[errors] generated docs/ablo/docs/errors.mdx + docs/ablo/public/errors.json — ${total} codes (${wire} wire, ${total - wire} client)`,
 );

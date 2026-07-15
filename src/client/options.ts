@@ -109,22 +109,6 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
   authEndpoint?: string | ApiKeySetter | null | undefined;
 
   /**
-   * @deprecated The direct connector lets Ablo dial into your Postgres and write to
-   * it directly. Prefer the signed data-source endpoint: keep your `DATABASE_URL`
-   * in your own app, expose `dataSource(...)`, and let your server own the write
-   * while Ablo coordinates the sync stream. Ablo hosts only the ordered
-   * `sync_deltas` log and coordination, never your rows. To keep the log in your own
-   * infrastructure as well, self-host the engine.
-   *
-   * Still honored at runtime for backward compatibility. It is server-only: because
-   * it carries credentials it is never sent from the browser, and constructing a
-   * client with both `databaseUrl` and `dangerouslyAllowBrowser` throws. If you do
-   * use it, supply a role that is neither a superuser nor `BYPASSRLS`; the connector
-   * rejects privileged roles that cannot enforce row-level security.
-   */
-  databaseUrl?: string | null | undefined;
-
-  /**
    * Local persistence mode. Pass `indexeddb` only when you want offline
    * queueing and a reload-surviving browser cache.
    *

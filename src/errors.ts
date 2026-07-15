@@ -337,17 +337,14 @@ export interface ClaimContext {
 
 export type ClaimErrorClaim = WireClaimSummary | ClaimContext;
 
-function claimReason(claim: ClaimErrorClaim | undefined): string | undefined {
-  if (!claim) return undefined;
-  return claim.reason;
-}
-
 function claimDescription(claim: ClaimErrorClaim | undefined): string | undefined {
   if (!claim) return undefined;
   if ('description' in claim && typeof claim.description === 'string') {
     return claim.description;
   }
   const meta = 'target' in claim ? claim.target?.meta ?? claim.meta : claim.meta;
+  // Fall back through the meta carrier so a frame that stashed its description
+  // there still renders its holder's work.
   return descriptionFromMeta(meta);
 }
 
@@ -378,23 +375,21 @@ export function formatClaimedErrorMessage(args: {
   readonly fallback?: string;
 }): string {
   const holder = claimActor(args.claim, args.heldBy);
-  const reason = claimReason(args.claim);
   const description = claimDescription(args.claim);
   const expiresIn = secondsUntil(claimExpiresAt(args.claim));
 
-  if (!holder && !reason && !description) {
+  if (!holder && !description) {
     return args.fallback ?? `Model row is claimed: ${args.targetLabel}.`;
   }
 
   const actor = holder ?? 'another participant';
-  const reasonPart = reason ? ` (${reason})` : '';
   const descriptionPart = description ? `: ${description}` : '';
   const expiresPart =
     expiresIn !== undefined ? ` - expires in ${expiresIn}s` : '';
   const policyPart = args.policyReason
     ? ` Policy reason: ${args.policyReason}.`
     : '';
-  return `Claimed by ${actor}${reasonPart}${descriptionPart}${expiresPart} on ${args.targetLabel}.${policyPart}`;
+  return `Claimed by ${actor}${descriptionPart}${expiresPart} on ${args.targetLabel}.${policyPart}`;
 }
 
 /**

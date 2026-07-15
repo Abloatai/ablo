@@ -2028,13 +2028,23 @@ export class SyncClient extends EventEmitter {
 
   /**
    * Notify the {@link TransactionQueue} of an incoming delta so it can confirm
-   * transactions by sync-id threshold. A transaction is confirmed once any
-   * delta with an id at or beyond its `lastSyncId` threshold arrives.
+   * hosted writes by sync-id threshold and queued forwards by their echoed
+   * source-batch correlation id.
    * @param syncId - The sync id of the received delta.
+   * @param transactionId - Optional server echo of the originating local write.
+   * @param correlationId - Opaque batch identity decoded from a source WAL echo.
    */
-  onDeltaReceived(syncId: number): void {
+  onDeltaReceived(
+    syncId: number,
+    transactionId?: string,
+    correlationId?: string,
+  ): void {
     try {
-      this.transactionQueue.onDeltaReceived(syncId);
+      this.transactionQueue.onDeltaReceived(
+        syncId,
+        transactionId,
+        correlationId,
+      );
     } catch (e) {
       getContext().observability.breadcrumb(
         'Failed to notify delta received',
@@ -2042,6 +2052,8 @@ export class SyncClient extends EventEmitter {
         'warning',
         {
           syncId,
+          transactionId,
+          correlationId,
         }
       );
     }

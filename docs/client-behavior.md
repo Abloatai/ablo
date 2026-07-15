@@ -29,7 +29,6 @@ Common options:
 |---|---|
 | `schema` | Required for typed model clients. |
 | `apiKey` | Bearer credential for trusted server runtimes. Defaults to `ABLO_API_KEY` when available. |
-| `databaseUrl` | Optional, server-only. Registers your Postgres directly (the connection-string path). Pass it explicitly — it is **not** auto-read from the environment. Omit it for a signed Data Source endpoint or the hosted sandbox. The SDK throws if it sees this in a browser. |
 | `baseURL` | Override the hosted sync endpoint for staging or private deployments. |
 | `persistence` | `memory` by default. Use `indexeddb` for a durable browser cache that survives reloads. |
 | `durableWrites` | Optional crash recovery for unacknowledged agent/worker writes. Independent of the default memory cache; accepts `{ store, namespace? }`. |
@@ -39,11 +38,10 @@ Common options:
 | `defaultQuery` | Extra query parameters attached to every HTTP request. |
 | `dangerouslyAllowBrowser` | Required before sending an API key from browser code. Prefer a server route instead. |
 
-`databaseUrl` is an optional, server-only constructor option. It is **not**
-auto-read from the environment — pass it explicitly to register your Postgres
-directly (the connection-string path). Omit it when you expose a signed
-[Data Source](./data-sources.md) endpoint, or when trying Ablo against the hosted
-sandbox.
+Your database connects out of band — through logical replication (`npx ablo
+connect`) or a signed [Data Source](./data-sources.md) endpoint — so the client
+holds only `apiKey`, never a connection string. See
+[Connect Your Database](./data-sources.md) for the full setup.
 
 ## Model Methods
 

@@ -12,6 +12,7 @@ import type {
   MutationOptions,
   CommitResult,
 } from '../../interfaces/index.js';
+import type { StaleNotification } from '../../coordination/schema.js';
 import { AbloError } from '../../errors.js';
 
 export interface CapturedMutation {
@@ -32,6 +33,14 @@ export interface MockMutationExecutorOptions {
   shouldSucceed?: boolean;
   /** A delay applied before each call resolves, in milliseconds, to simulate a slow network. */
   latencyMs?: number;
+  /** Optional explicit receipt status. Omission preserves legacy confirmed semantics. */
+  status?: CommitResult['status'];
+  /** Optional server-issued source/WAL correlation returned with queued receipts. */
+  correlationId?: string;
+  /** Optional stale-context notifications returned with each commit. */
+  notifications?: StaleNotification[];
+  /** Optional zero-row target ids returned with each commit. */
+  missingIds?: string[];
 }
 
 export class MockMutationExecutor implements MutationExecutor {
@@ -42,6 +51,10 @@ export class MockMutationExecutor implements MutationExecutor {
   private _syncId: number;
   private _shouldSucceed: boolean;
   private _latencyMs: number;
+  private _status: CommitResult['status'];
+  private _correlationId: string | undefined;
+  private _notifications: StaleNotification[] | undefined;
+  private _missingIds: string[] | undefined;
 
   /** Per-method failure overrides: method name → error */
   private _failureOverrides = new Map<string, Error>();
@@ -53,6 +66,10 @@ export class MockMutationExecutor implements MutationExecutor {
     this._syncId = options.initialSyncId ?? 1;
     this._shouldSucceed = options.shouldSucceed ?? true;
     this._latencyMs = options.latencyMs ?? 0;
+    this._status = options.status;
+    this._correlationId = options.correlationId;
+    this._notifications = options.notifications;
+    this._missingIds = options.missingIds;
   }
 
   // ─────────────────────────────────────────────
@@ -67,6 +84,26 @@ export class MockMutationExecutor implements MutationExecutor {
   /** Sets the next sync id the executor will return. */
   setSyncId(id: number): void {
     this._syncId = id;
+  }
+
+  /** Sets the settlement status returned by subsequent commit calls. */
+  setStatus(status: CommitResult['status']): void {
+    this._status = status;
+  }
+
+  /** Sets the opaque source/WAL correlation returned by subsequent commits. */
+  setCorrelationId(correlationId: string | undefined): void {
+    this._correlationId = correlationId;
+  }
+
+  /** Sets stale-context notifications returned by subsequent commit calls. */
+  setNotifications(notifications: StaleNotification[] | undefined): void {
+    this._notifications = notifications;
+  }
+
+  /** Sets zero-row target ids returned by subsequent commit calls. */
+  setMissingIds(missingIds: string[] | undefined): void {
+    this._missingIds = missingIds;
   }
 
   /** Makes every mutation reject. Pass an error to control what is thrown. */
@@ -109,6 +146,10 @@ export class MockMutationExecutor implements MutationExecutor {
     this._syncId = options?.initialSyncId ?? 1;
     this._shouldSucceed = options?.shouldSucceed ?? true;
     this._latencyMs = options?.latencyMs ?? 0;
+    this._status = options?.status;
+    this._correlationId = options?.correlationId;
+    this._notifications = options?.notifications;
+    this._missingIds = options?.missingIds;
     this._failureOverrides.clear();
     this._responseOverrides.clear();
   }
@@ -127,7 +168,31 @@ export class MockMutationExecutor implements MutationExecutor {
     this._maybeThrow('commit');
 
     const syncId = this._syncId++;
-    return { lastSyncId: syncId };
+    if (this._status === 'queued') {
+      if (!this._correlationId) {
+        throw new Error('Mock queued commits require a correlationId');
+      }
+      return {
+        lastSyncId: 0,
+        status: 'queued',
+        correlationId: this._correlationId,
+        ...(this._notifications ? { notifications: this._notifications } : {}),
+        ...(this._missingIds ? { missingIds: this._missingIds } : {}),
+      };
+    }
+    const evidence = {
+      ...(this._notifications ? { notifications: this._notifications } : {}),
+      ...(this._missingIds ? { missingIds: this._missingIds } : {}),
+    };
+    if (this._status === 'confirmed') {
+      return {
+        lastSyncId: syncId,
+        status: 'confirmed',
+        ...(this._correlationId ? { correlationId: this._correlationId } : {}),
+        ...evidence,
+      };
+    }
+    return { lastSyncId: syncId, ...evidence };
   }
 
   async executeCreate(

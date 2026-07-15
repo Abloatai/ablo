@@ -19,6 +19,7 @@
 import { z } from 'zod';
 import type { MutationOptions } from '../interfaces/index.js';
 import { AbloValidationError } from '../errors.js';
+import { commitStatusSchema } from '../wire/commit.js';
 
 export const onStaleModeSchema = z.enum(['reject', 'overwrite', 'notify']);
 
@@ -29,11 +30,16 @@ export const writeOptionsSchema = z.object({
   /** Human-readable audit tag, persisted to `mutation_log.label`. */
   label: z.string().max(255).optional(),
   /** Resolve when queued locally (default) or once the server confirms. */
-  wait: z.enum(['queued', 'confirmed']).optional(),
+  wait: commitStatusSchema.optional(),
   /** Stale guard: the sync watermark the caller's reasoning was based on. */
   readAt: z.number().int().nonnegative().nullish(),
   /** What the server does when the target moved past `readAt`. */
   onStale: onStaleModeSchema.nullish(),
+  /** The held claim's fencing token (Option B), sourced from the claim handle
+   *  rather than set by hand; the server validates it against the entity's
+   *  high-water. Kept in the schema so it stays aligned with `MutationOptions`
+   *  (the drift guard below) and a malformed token is rejected at the boundary. */
+  fenceToken: z.number().nullish(),
   /** The claim this write belongs to — either a claim id, or a live claim
    *  handle whose `release`/`revoke` functions are preserved untouched. */
   claim: z.union([z.string(), z.looseObject({ id: z.string() })]).nullish(),
@@ -50,10 +56,7 @@ export type WriteOptionsInput = z.infer<typeof writeOptionsSchema>;
  * field — and on success returns nothing, leaving the caller's original object
  * untouched. A `null` or `undefined` value passes.
  */
-export function assertWriteOptions(
-  value: unknown,
-  context?: string,
-): void {
+export function assertWriteOptions(value: unknown, context?: string): void {
   if (value == null) return;
   const result = writeOptionsSchema.safeParse(value);
   if (result.success) return;
@@ -66,7 +69,7 @@ export function assertWriteOptions(
     {
       code: 'write_options_invalid',
       ...(path ? { param: path } : {}),
-    },
+    }
   );
 }
 
@@ -75,14 +78,10 @@ export function assertWriteOptions(
 // with the canonical `MutationOptions` interface. If either side changes
 // shape, this stops compiling — the schema and the interface can never
 // silently diverge.
-type _AssertOptionsMatchSchema = MutationOptions extends WriteOptionsInput
-  ? true
-  : never;
-type _AssertSchemaMatchesOptions = WriteOptionsInput extends MutationOptions
-  ? true
-  : never;
-const _writeOptionsContractInSync: [
-  _AssertOptionsMatchSchema,
-  _AssertSchemaMatchesOptions,
-] = [true, true];
+type _AssertOptionsMatchSchema = MutationOptions extends WriteOptionsInput ? true : never;
+type _AssertSchemaMatchesOptions = WriteOptionsInput extends MutationOptions ? true : never;
+const _writeOptionsContractInSync: [_AssertOptionsMatchSchema, _AssertSchemaMatchesOptions] = [
+  true,
+  true,
+];
 void _writeOptionsContractInSync;

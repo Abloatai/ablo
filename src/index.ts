@@ -102,6 +102,10 @@ export type {
  * the next major release because it was explicitly documented in 0.20.1.
  */
 export type { HeldClaim } from './client/Ablo.js';
+/** The resolved value of the row-free `ablo.<model>.claim(id)` overload — a
+ *  held lease on a key whose row Ablo does not hold (a {@link HeldClaim} with
+ *  no `.data`). */
+export type { HeldLease } from './client/Ablo.js';
 export type { AbloPersistence } from './client/persistence.js';
 export {
   durableWritesConfigSchema,

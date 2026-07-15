@@ -3,6 +3,7 @@
 import { z } from 'zod';
 import { v5 as uuidv5 } from 'uuid';
 import { stableStringify } from '../utils/json.js';
+import { correlationIdSchema } from '../wire/commit.js';
 import { PROTOCOL_VERSION } from '../wire/protocolVersion.js';
 import { idempotencyKeySchema } from './idempotencyKey.js';
 
@@ -72,6 +73,15 @@ export const durableHttpCommitEnvelopeSchema = z
     scopeNamespace: z.string().min(1),
     createdAt: z.number().int().nonnegative(),
     sealedAt: z.number().int().nonnegative(),
+    /**
+     * Monotonic evidence that the server accepted this exact request for a
+     * connected source. Such server keys are permanent, so this envelope must
+     * remain replayable past the ordinary hosted 24-hour window until its WAL
+     * echo confirms.
+     */
+    acceptedAt: z.number().int().nonnegative().optional(),
+    /** Opaque server-derived source-batch identity paired with `acceptedAt`. */
+    correlationId: correlationIdSchema.optional(),
     /** Monotonic within one client; disambiguates writes sealed in the same ms. */
     sequence: z.number().int().nonnegative().optional(),
     timestamp: z.number().int().nonnegative(),
@@ -94,6 +104,23 @@ export const durableHttpCommitEnvelopeSchema = z
         code: 'custom',
         path: ['sealedAt'],
         message: 'HTTP envelope cannot be sealed before it is created',
+      });
+    }
+    if ((envelope.acceptedAt === undefined) !== (envelope.correlationId === undefined)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['acceptedAt'],
+        message: 'Accepted HTTP envelopes require both acceptedAt and correlationId',
+      });
+    }
+    if (
+      envelope.acceptedAt !== undefined &&
+      envelope.acceptedAt < envelope.sealedAt
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['acceptedAt'],
+        message: 'HTTP envelope cannot be accepted before it is sealed',
       });
     }
 
@@ -208,8 +235,12 @@ export function createDurableHttpCommitEnvelope(input: {
 }
 
 export function isHttpCommitReplayExpired(
-  envelope: Pick<DurableHttpCommitEnvelope, 'sealedAt'>,
+  envelope: Pick<DurableHttpCommitEnvelope, 'sealedAt' | 'acceptedAt'>,
   now = Date.now(),
 ): boolean {
+  // Connected-source mutation-log and customer idempotency keys are
+  // permanent. Once acceptance is durable, age can no longer make replay
+  // ambiguous; only the matching WAL echo may settle the envelope.
+  if (envelope.acceptedAt !== undefined) return false;
   return now - envelope.sealedAt >= HTTP_COMMIT_REPLAY_WINDOW_MS;
 }

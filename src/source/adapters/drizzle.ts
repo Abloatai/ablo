@@ -45,10 +45,16 @@ import type {
 import type { ChangeSet, EventsPage, Migration, Operation } from '../contract.js';
 import { outboxEventSchema } from '../contract.js';
 import { adapterTableMigrations } from '../migrations.js';
+import {
+  assertSourceIdempotencyIntent,
+  assertSourceIdempotencyRetention,
+  sourceChangeIntentHash,
+} from '../idempotency.js';
 import type { Schema, SchemaRecord } from '../../schema/schema.js';
 import { toSchemaJSON } from '../../schema/serialize.js';
 import { camelToSnake, snakeToCamel } from '../../schema/ddl.js';
 import { tenancyColumn } from '../../schema/tenancy.js';
+import { ABLO_POSTGRES_COMMIT_ECHO_PREFIX } from '../types.js';
 
 /** The subset of a Drizzle database/transaction handle the adapter calls. */
 export interface DrizzleLike {
@@ -182,7 +188,13 @@ export function drizzleDataSource<S extends SchemaRecord>(
   };
 
   return {
-    capabilities: { transactions: true, propose: false, schemaIntrospection: true },
+    capabilities: {
+      transactions: true,
+      propose: false,
+      schemaIntrospection: true,
+      postgresWalEcho: true,
+      outboxEvents: true,
+    },
 
     migrations(): readonly Migration[] {
       return adapterTableMigrations();
@@ -201,14 +213,21 @@ export function drizzleDataSource<S extends SchemaRecord>(
     },
 
     async commit(change: ChangeSet): Promise<AdapterCommitResult> {
+      const requestHash = sourceChangeIntentHash(change);
       return db.transaction(async (tx) => {
         const cached = rowsOf(
           await tx.execute(
-            sql`SELECT response FROM ablo_idempotency WHERE client_tx_id = ${change.clientTxId} LIMIT 1`,
+            sql`SELECT response, request_hash AS "requestHash", expires_at AS "expiresAt"
+                FROM ablo_idempotency
+                WHERE client_tx_id = ${change.correlationId} LIMIT 1`,
           ),
         );
         const cachedRow = cached[0];
-        if (cachedRow) return { rows: cachedRow.response as Row[] };
+        if (cachedRow) {
+          assertSourceIdempotencyIntent(cachedRow.requestHash, requestHash);
+          assertSourceIdempotencyRetention(cachedRow.expiresAt);
+          return { rows: cachedRow.response as Row[] };
+        }
 
         const rows: Row[] = [];
         for (const [index, op] of change.operations.entries()) {
@@ -216,16 +235,27 @@ export function drizzleDataSource<S extends SchemaRecord>(
           rows.push(row);
           const entityId = String(row.id ?? rowId(op));
           await tx.execute(sql`
-            INSERT INTO ablo_outbox (id, model, entity_id, type, data, client_tx_id, occurred_at)
+            INSERT INTO ablo_outbox (
+              id, model, entity_id, type, data,
+              correlation_id, transaction_id, occurred_at
+            )
             VALUES (
-              ${`${change.clientTxId}:${index}`}, ${op.model}, ${entityId}, ${op.type},
-              ${op.type === 'DELETE' ? null : JSON.stringify(row)}::jsonb, ${change.clientTxId}, ${Date.now()}
+              ${`${change.correlationId}:${index}`}, ${op.model}, ${entityId}, ${op.type},
+              ${op.type === 'DELETE' ? null : JSON.stringify(row)}::jsonb,
+              ${change.correlationId}, ${op.transactionId ?? null}, ${Date.now()}
             )`);
         }
 
         await tx.execute(sql`
-          INSERT INTO ablo_idempotency (client_tx_id, response)
-          VALUES (${change.clientTxId}, ${JSON.stringify(rows)}::jsonb)`);
+          INSERT INTO ablo_idempotency (client_tx_id, response, request_hash)
+          VALUES (
+            ${change.correlationId}, ${JSON.stringify(rows)}::jsonb, ${requestHash}
+          )`);
+        if (change.echo?.kind === 'postgres-wal') {
+          await tx.execute(
+            sql`SELECT pg_logical_emit_message(true, ${ABLO_POSTGRES_COMMIT_ECHO_PREFIX}, ${change.echo.payload})`,
+          );
+        }
         return { rows };
       });
     },
@@ -234,7 +264,8 @@ export function drizzleDataSource<S extends SchemaRecord>(
       const after = cursor ?? '0';
       const rows = rowsOf(
         await db.execute(sql`
-          SELECT cursor, id, model, entity_id, type, data, organization_id, client_tx_id, occurred_at
+          SELECT cursor, id, model, entity_id, type, data, organization_id,
+                 client_tx_id, correlation_id, transaction_id, occurred_at
           FROM ablo_outbox WHERE cursor > ${after} ORDER BY cursor ASC LIMIT ${limit}`),
       );
       const events = rows.map((r) =>
@@ -246,6 +277,8 @@ export function drizzleDataSource<S extends SchemaRecord>(
           data: r.data ?? null,
           organizationId: r.organization_id ?? null,
           clientTxId: r.client_tx_id ?? null,
+          correlationId: r.correlation_id ?? null,
+          transactionId: r.transaction_id ?? null,
           occurredAt: r.occurred_at != null ? Number(r.occurred_at) : null,
           cursor: String(r.cursor),
         }),

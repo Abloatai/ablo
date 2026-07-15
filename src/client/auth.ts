@@ -37,7 +37,6 @@ export interface AuthResolveInput {
     readonly authEndpoint?: string | ApiKeySetter | null;
     readonly authToken?: string | null;
     readonly baseURL?: string | null;
-    readonly databaseUrl?: string | null;
     readonly dangerouslyAllowBrowser?: boolean;
   };
   readonly env: Record<string, string | undefined>;
@@ -307,94 +306,6 @@ export function describeCliKeyMismatch(
   return null;
 }
 
-/**
- * Resolves the Postgres connection string for the direct-connection option, or
- * `null` when none was given.
- *
- * `databaseUrl` is opt-in: the client registers a dedicated database only when
- * the caller passes it explicitly. It is never read from
- * `process.env.DATABASE_URL`, because this module treats `ABLO_API_KEY` as the
- * one environment fallback — an app's `DATABASE_URL`, commonly set for other
- * tools, must not silently switch the client into connection-string mode. The
- * default path leaves `DATABASE_URL` untouched and reads through `dataSource(...)`
- * instead, so this returns `null`. {@link warnIfDatabaseUrlEnvIgnored} nudges a
- * caller who set the environment variable but omitted the option.
- */
-export function resolveDatabaseUrl(input: AuthResolveInput): string | null {
-  return input.options.databaseUrl ?? null;
-}
-
-/**
- * Warns once when `DATABASE_URL` is set in the environment but `databaseUrl` was
- * not passed as an option.
- *
- * The client does not adopt `process.env.DATABASE_URL` on its own, because that
- * value is commonly set for other tools and switching the client into
- * connection-string mode behind the caller's back is surprising — and on
- * localhost it would try to register a database the hosted service cannot reach.
- * This warning points the developer at the explicit option instead. It fires at
- * most once per process and falls back to `console.warn` when no logger is
- * supplied.
- *
- * The warning is skipped entirely when an `apiKey` resolves (from the option or
- * `ABLO_API_KEY`): that caller has chosen the hosted, token-based transport,
- * which is separate from the direct `databaseUrl` connection. A `DATABASE_URL`
- * present in that environment belongs to unrelated infrastructure, not an omitted
- * option, so warning would be a false positive.
- */
-let warnedDatabaseUrlEnvIgnored = false;
-export function warnIfDatabaseUrlEnvIgnored(
-  input: AuthResolveInput,
-  warn?: (message: string) => void,
-): void {
-  if (warnedDatabaseUrlEnvIgnored) return;
-  if (input.options.databaseUrl != null) return;
-  // Hosted/token path → DATABASE_URL is unrelated infra, not an omitted option.
-  if (resolveApiKey(input) != null) return;
-  const envUrl = input.env.DATABASE_URL;
-  if (typeof envUrl !== 'string' || envUrl.length === 0) return;
-  warnedDatabaseUrlEnvIgnored = true;
-  const message =
-    'Found DATABASE_URL in the environment but `databaseUrl` was not passed to Ablo(...). ' +
-    'Ablo no longer auto-adopts DATABASE_URL — the environment value is ignored. ' +
-    'To register your Postgres directly, pass `databaseUrl: process.env.DATABASE_URL` explicitly; ' +
-    'otherwise ignore this (the hosted sandbox and signed Data Source endpoints need no databaseUrl).';
-  if (warn) warn(message);
-  else if (typeof console !== 'undefined') console.warn('[Ablo]', message);
-}
-
-/**
- * Warns once when the deprecated `databaseUrl` option is used.
- *
- * Passing `databaseUrl` opens a connection pool directly into your Postgres and
- * writes to it. That option is deprecated. Ablo is designed to host only the
- * ordered transaction log (the `sync_deltas` table) and coordination state,
- * never your rows — your data stays in your own database. The supported path is
- * a signed data-source endpoint (`dataSource(...)`), where your app owns the
- * write and your database credentials never leave it.
- *
- * The option still works at runtime so existing integrations keep running. This
- * warning fires at most once per process and falls back to `console.warn` when
- * no logger is supplied.
- */
-let warnedDatabaseUrlDeprecated = false;
-export function warnIfDatabaseUrlDeprecated(
-  input: AuthResolveInput,
-  warn?: (message: string) => void,
-): void {
-  if (warnedDatabaseUrlDeprecated) return;
-  if (input.options.databaseUrl == null) return;
-  warnedDatabaseUrlDeprecated = true;
-  const message =
-    '`databaseUrl` (the direct connector) is deprecated and will be removed from ' +
-    'the supported path. It lets Ablo dial into your database; we are moving off ' +
-    'that. Ablo hosts only the transaction log — your data stays in your DB. Expose ' +
-    'a signed Data Source endpoint (`dataSource(...)`) so your app owns the write, ' +
-    'or self-host the engine to keep the log in your infra too. ' +
-    'See docs/plans/stripe-shaped-storage-posture.md.';
-  if (warn) warn(message);
-  else if (typeof console !== 'undefined') console.warn('[Ablo]', message);
-}
 
 let warnedCliKeyMismatch = false;
 export async function warnIfCliKeyMismatch(
@@ -477,9 +388,27 @@ export function resolveBaseURL(input: AuthResolveInput): string {
  * server proxy. Throws {@link AbloAuthenticationError} when a secret key is
  * detected in a browser without opt-in.
  */
+/**
+ * Rejects the REMOVED `databaseUrl` dial-in option loudly. The option is gone
+ * from the types, but an untyped or stale caller could still pass it — and
+ * silently ignoring it would reroute their writes to Ablo-hosted storage,
+ * the opposite of what that option used to promise. A construction-time throw
+ * turns a wrong-storage surprise into a clear migration instruction.
+ */
+export function rejectRemovedDatabaseUrlOption(options: object): void {
+  const legacyValue: unknown = Reflect.get(options, 'databaseUrl');
+  if (legacyValue == null) return;
+  throw new AbloValidationError(
+    'The `databaseUrl` option was removed. Your database connects through ' +
+      '`ablo connect` now: Ablo writes it directly with a scoped DML role and ' +
+      'confirms through its replication stream. Run `npx ablo connect` to ' +
+      'register it, then construct the client with your API key only.',
+    { code: 'invalid_body' },
+  );
+}
+
 export function assertBrowserSafety(input: {
   apiKey: string | ApiKeySetter | null;
-  databaseUrl?: string | null;
   dangerouslyAllowBrowser: boolean | undefined;
 }): void {
   const inBrowser = typeof window !== 'undefined';
@@ -497,17 +426,6 @@ export function assertBrowserSafety(input: {
         '`dangerouslyAllowBrowser` option to `true`, e.g.,\n\n' +
         '    Ablo({ schema, apiKey, dangerouslyAllowBrowser: true });\n',
       { code: 'browser_apikey_blocked' },
-    );
-  }
-  // `databaseUrl` carries database credentials and is never browser-safe, so
-  // `dangerouslyAllowBrowser` does not override this check. Register your
-  // database from a server-side runtime.
-  if (inBrowser && typeof input.databaseUrl === 'string' && input.databaseUrl.length > 0) {
-    throw new AbloAuthenticationError(
-      'Ablo `databaseUrl` cannot be used in a browser-like environment — it ' +
-        'carries your database credentials. Initialize the client with ' +
-        '`databaseUrl` from a server-side runtime only.',
-      { code: 'browser_database_url_blocked' },
     );
   }
 }

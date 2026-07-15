@@ -37,6 +37,16 @@ export interface BootstrapModel {
   orderBy?: string;
   /** Whether the table has organization_id. Default: true. */
   orgScoped?: boolean;
+  /**
+   * The model derives its tenant from the connected data source (`policy:
+   * { by: 'source' }`) rather than a row column. It carries no tenant predicate on a
+   * log plane, so it is excluded from the bootstrap set entirely until the
+   * write-through connect path can resolve the org from the source registration —
+   * serving it now would return every row to every tenant. Kept on the type as a
+   * defense-in-depth marker so a source-scoped model that reaches `getBootstrapData`
+   * fails closed rather than bootstrapping unscoped.
+   */
+  sourceScoped?: boolean;
   /** Physical tenancy column (default `organization_id`, configurable per model). */
   orgColumn?: string;
   /**

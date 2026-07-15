@@ -6,7 +6,7 @@
  * mapper is complete when it passes the same suite this one passes.
  *
  * It models the semantics minimally but faithfully: one row store per model, an
- * idempotency ledger keyed by `clientTxId`, and an append-only outbox with a
+ * idempotency ledger keyed by scoped correlation, and an append-only outbox with a
  * monotonic cursor.
  */
 
@@ -18,6 +18,10 @@ import type {
   Row,
 } from '../adapter.js';
 import type { ChangeSet, EventsPage, Migration, Operation, OutboxEvent } from '../contract.js';
+import {
+  assertSourceIdempotencyIntent,
+  sourceChangeIntentHash,
+} from '../idempotency.js';
 
 function rowId(op: Operation): string {
   const id = op.id ?? (op.input?.id as string | undefined);
@@ -30,8 +34,11 @@ function rowId(op: Operation): string {
 export function memoryDataSource(): DataSourceAdapter {
   /** model → (id → row). */
   const store = new Map<string, Map<string, Row>>();
-  /** clientTxId → the rows that commit returned (idempotency ledger). */
-  const idempotency = new Map<string, Row[]>();
+  /** Permanent correlationId → intent hash + original response ledger. */
+  const idempotency = new Map<
+    string,
+    { readonly requestHash: string; readonly rows: Row[] }
+  >();
   /** Append-only outbox; `cursor` is the 1-based index as a string. */
   const outbox: OutboxEvent[] = [];
 
@@ -75,7 +82,13 @@ export function memoryDataSource(): DataSourceAdapter {
   };
 
   return {
-    capabilities: { transactions: true, propose: false, schemaIntrospection: false },
+    capabilities: {
+      transactions: true,
+      propose: false,
+      schemaIntrospection: false,
+      postgresWalEcho: false,
+      outboxEvents: true,
+    },
 
     migrations(): readonly Migration[] {
       // Nothing to create in memory. A database-backed adapter returns the SQL for its ablo_idempotency and ablo_outbox tables here.
@@ -96,9 +109,18 @@ export function memoryDataSource(): DataSourceAdapter {
     },
 
     async commit(change: ChangeSet): Promise<AdapterCommitResult> {
-      // Idempotency: a duplicate clientTxId returns the original rows, no re-apply.
-      const cached = idempotency.get(change.clientTxId);
-      if (cached) return { rows: cached };
+      if (change.echo) {
+        throw new AbloValidationError(
+          'memoryDataSource cannot emit a Postgres WAL commit echo',
+        );
+      }
+      // Idempotency: a duplicate scoped correlation returns the original rows.
+      const requestHash = sourceChangeIntentHash(change);
+      const cached = idempotency.get(change.correlationId);
+      if (cached) {
+        assertSourceIdempotencyIntent(cached.requestHash, requestHash);
+        return { rows: cached.rows };
+      }
 
       const rows: Row[] = [];
       for (const [index, op] of change.operations.entries()) {
@@ -106,16 +128,17 @@ export function memoryDataSource(): DataSourceAdapter {
         rows.push(row);
         // Transactional outbox: one event per op, monotonic cursor.
         outbox.push({
-          id: `${change.clientTxId}:${index}`,
+          id: `${change.correlationId}:${index}`,
           model: op.model,
           entityId: String(row.id ?? rowId(op)),
           type: op.type,
           data: op.type === 'DELETE' ? null : row,
-          clientTxId: change.clientTxId,
+          correlationId: change.correlationId,
+          ...(op.transactionId ? { transactionId: op.transactionId } : {}),
           cursor: String(outbox.length + 1),
         });
       }
-      idempotency.set(change.clientTxId, rows);
+      idempotency.set(change.correlationId, { requestHash, rows });
       return { rows };
     },
 

@@ -126,15 +126,32 @@ export interface Transaction {
   /** Sync-id threshold: the transaction confirms once a delta with an id at least this value arrives. */
   syncIdNeededForCompletion?: number;
   /**
+   * Opaque customer-side batch identity returned with a queued source receipt.
+   * It is retained durably and is the only identity a live WAL delta may use
+   * to settle this pending commit. Server-side replay additionally proves the
+   * complete stored operation-id set before returning `confirmed`.
+   */
+  correlationId?: string;
+  /**
+   * A queued forward has no authoritative sync-id watermark yet. It may only
+   * confirm when a WAL delta carries its opaque server-derived correlation;
+   * unrelated deltas must never satisfy it by advancing the global watermark.
+   */
+  requiresCorrelatedDelta?: boolean;
+  /**
    * Resolves once the server has confirmed this transaction, whether by a delta
-   * or an HTTP acknowledgement, and rejects with the originating error if the
-   * transaction is permanently rolled back. It gives a caller one place to await
-   * the answer to "did my write land?", matching the
+   * or an HTTP acknowledgement. It rejects with the originating error if the
+   * transaction is permanently rolled back; for a source-forwarded write it
+   * also rejects with `replication_lag_timeout` when the accepted write's WAL
+   * echo misses the confirmation deadline. That timeout does not roll back or
+   * fail the transaction: it remains pending and may confirm when replication
+   * recovers. This gives a caller one place to await the answer to "did my write
+   * land?", matching the
    * `commits.create({ wait: 'confirmed' })` and
    * {@link TransactionQueue.waitForConfirmation} vocabulary, so a failure
    * surfaces at the call site instead of only as a silent local rollback. The
-   * rejection value is the same {@link AbloError} carried on the queue's
-   * `transaction:failed` event.
+   * permanent-rejection value is the same {@link AbloError} carried on the
+   * queue's `transaction:failed` event.
    */
   confirmation?: Promise<void>;
 }
@@ -190,6 +207,7 @@ export function hasCommitCoalescingBarrier(options?: WriteOptions): boolean {
 export interface WriteOperationFields {
   readAt?: number | null;
   onStale?: 'reject' | 'overwrite' | 'notify' | null;
+  fenceToken?: number | null;
   options?: Pick<MutationOptions, 'idempotencyKey' | 'label'>;
 }
 
@@ -212,6 +230,9 @@ export function applyWriteOptions<T extends object>(
   }
   if (writeOptions.onStale !== undefined) {
     operation.onStale = writeOptions.onStale;
+  }
+  if (writeOptions.fenceToken !== undefined) {
+    operation.fenceToken = writeOptions.fenceToken;
   }
   if (writeOptions.idempotencyKey != null || writeOptions.label !== undefined) {
     operation.options = {

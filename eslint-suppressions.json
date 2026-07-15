@@ -572,17 +572,6 @@
       "count": 1
     }
   },
-  "scripts/build-mintlify-docs.mjs": {
-    "no-control-regex": {
-      "count": 1
-    },
-    "no-unused-vars": {
-      "count": 2
-    },
-    "no-useless-assignment": {
-      "count": 1
-    }
-  },
   "scripts/test-quickstart.mjs": {
     "no-unused-vars": {
       "count": 1
@@ -880,6 +869,9 @@
   "src/cli/connect.ts": {
     "@typescript-eslint/no-empty-function": {
       "count": 2
+    },
+    "@typescript-eslint/no-unnecessary-type-conversion": {
+      "count": 1
     }
   },
   "src/cli/dbRole.ts": {
@@ -1020,7 +1012,7 @@
   },
   "src/client/__tests__/auth.test.ts": {
     "@typescript-eslint/no-unsafe-member-access": {
-      "count": 6
+      "count": 5
     },
     "@typescript-eslint/require-await": {
       "count": 4
@@ -1063,7 +1055,7 @@
   },
   "src/client/__tests__/httpClient.test.ts": {
     "@typescript-eslint/require-await": {
-      "count": 2
+      "count": 1
     }
   },
   "src/client/__tests__/hydration-chain.test.ts": {
@@ -1105,11 +1097,6 @@
     },
     "@typescript-eslint/require-await": {
       "count": 2
-    }
-  },
-  "src/client/__tests__/registerDataSource.test.ts": {
-    "@typescript-eslint/require-await": {
-      "count": 4
     }
   },
   "src/client/__tests__/request-timeout.test.ts": {
@@ -1520,11 +1507,24 @@
       "count": 2
     }
   },
+  "src/schema/tenancy.ts": {
+    "@typescript-eslint/no-deprecated": {
+      "count": 4
+    }
+  },
   "src/source/__tests__/drizzle-adapter.test.ts": {
     "@typescript-eslint/no-unused-vars": {
       "count": 1
     },
     "@typescript-eslint/require-await": {
+      "count": 1
+    }
+  },
+  "src/source/__tests__/idempotency.test.ts": {
+    "@typescript-eslint/no-confusing-void-expression": {
+      "count": 3
+    },
+    "@typescript-eslint/no-unsafe-argument": {
       "count": 1
     }
   },
@@ -1547,6 +1547,9 @@
     "@typescript-eslint/no-base-to-string": {
       "count": 1
     },
+    "@typescript-eslint/no-deprecated": {
+      "count": 2
+    },
     "@typescript-eslint/no-unsafe-assignment": {
       "count": 2
     },
@@ -1564,6 +1567,9 @@
       "count": 1
     },
     "@typescript-eslint/no-unsafe-assignment": {
+      "count": 1
+    },
+    "@typescript-eslint/prefer-optional-chain": {
       "count": 1
     }
   },
@@ -1584,11 +1590,8 @@
     }
   },
   "src/source/conformance.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
     "@typescript-eslint/unbound-method": {
-      "count": 1
+      "count": 3
     }
   },
   "src/source/connector.ts": {
@@ -1597,6 +1600,9 @@
     }
   },
   "src/source/factory.ts": {
+    "@typescript-eslint/no-deprecated": {
+      "count": 5
+    },
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 4
     },
@@ -1618,6 +1624,9 @@
     }
   },
   "src/source/types.ts": {
+    "@typescript-eslint/no-deprecated": {
+      "count": 2
+    },
     "@typescript-eslint/no-unused-vars": {
       "count": 1
     }
@@ -1728,11 +1737,6 @@
       "count": 5
     }
   },
-  "src/sync/__tests__/SyncWebSocket.wireDeltaValidation.test.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 11
-    }
-  },
   "src/sync/__tests__/credentialPreroll.test.ts": {
     "@typescript-eslint/require-await": {
       "count": 3
@@ -1744,11 +1748,6 @@
     },
     "@typescript-eslint/require-await": {
       "count": 10
-    }
-  },
-  "src/sync/__tests__/ws-observability-wiring.test.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 3
     }
   },
   "src/sync/awaitClaimGrant.ts": {
@@ -1828,7 +1827,7 @@
       "count": 1
     },
     "@typescript-eslint/no-unnecessary-condition": {
-      "count": 3
+      "count": 1
     },
     "@typescript-eslint/no-unsafe-assignment": {
       "count": 1
@@ -1880,7 +1879,7 @@
       "count": 5
     },
     "@typescript-eslint/no-unnecessary-condition": {
-      "count": 22
+      "count": 17
     },
     "@typescript-eslint/no-unsafe-assignment": {
       "count": 1

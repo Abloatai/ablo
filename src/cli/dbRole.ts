@@ -276,10 +276,27 @@ export function persistDatabaseUrl(databaseUrl: string, cwd: string = process.cw
 export function readProjectDatabaseUrl(cwd: string = process.cwd()): string | null {
   const fromEnv = process.env.DATABASE_URL ?? process.env.ABLO_DATABASE_URL;
   if (fromEnv) return fromEnv;
-  for (const name of ['.env.local', '.env']) {
-    const path = resolve(cwd, name);
+  return readProjectEnvValue('DATABASE_URL', cwd);
+}
+
+/**
+ * Resolve the separately scoped direct-write role URL used by `ablo connect`.
+ * Keeping it distinct from `DATABASE_URL` prevents the REPLICATION role from
+ * accidentally becoming Ablo's DML credential (or the writer from gaining
+ * REPLICATION). Like the rest of the CLI, this reads framework env files when
+ * invoked through `npx`.
+ */
+export function readProjectWriteDatabaseUrl(cwd: string = process.cwd()): string | null {
+  const fromEnv = process.env.ABLO_WRITE_DATABASE_URL;
+  if (fromEnv) return fromEnv;
+  return readProjectEnvValue('ABLO_WRITE_DATABASE_URL', cwd);
+}
+
+function readProjectEnvValue(variable: string, cwd: string): string | null {
+  for (const filename of ['.env.local', '.env']) {
+    const path = resolve(cwd, filename);
     if (!existsSync(path)) continue;
-    const match = /^DATABASE_URL=(.+)$/m.exec(readFileSync(path, 'utf8'));
+    const match = new RegExp(`^${variable}=(.+)$`, 'm').exec(readFileSync(path, 'utf8'));
     if (match?.[1]) return match[1].trim().replace(/^["']|["']$/g, '');
   }
   return null;

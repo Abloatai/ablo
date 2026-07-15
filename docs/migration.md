@@ -234,9 +234,6 @@ The flat coordination methods are gone; everything lives under `claim`.
 + await ablo.task.claim.release(id)
 ```
 
-This release also added the `databaseUrl` option for the direct Postgres
-connector — additive, no migration required.
-
 ---
 
 ## 0.7.0 — legacy React hooks removed

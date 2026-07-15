@@ -1,54 +1,72 @@
 /**
- * The conformance suite for data-source adapters: a shared set of tests that checks
- * whether an adapter is correct. Every adapter in this package (Prisma, Drizzle,
- * Kysely) and any adapter you write yourself runs this suite to confirm it upholds
- * the guarantees {@link DataSourceAdapter} promises. An adapter is complete when it
- * passes, not merely when it compiles.
+ * Capability-split conformance for customer-database mutation wrappers.
  *
- * The suite is runner-agnostic: each check is a plain async function that throws,
- * via `node:assert`, on failure. {@link runDataSourceTests} registers the checks
- * with whichever `it` or `test` function you pass, so it runs under vitest, jest,
- * or `node:test`:
- *
- *   import { it } from 'vitest';
- *   runDataSourceTests(memoryDataSource, it);
- *
- * The checks cover the adapter contract: commit idempotency, read-after-write, and
- * the transactional outbox with its cursor. They do not cover request-signature or
- * scope rejection, which the HTTP handler enforces before the adapter is ever
- * called and which is tested separately.
+ * `mutationConformanceChecks` covers only guarantees shared by direct and
+ * endpoint: schema-mapped DML, reads, permanent scoped idempotency, canonical
+ * request-hash conflicts, and concurrent replay. `endpointConformanceChecks`
+ * covers the endpoint-only transactional outbox and events cursor. Direct
+ * wrappers must not run (or claim) those outbox guarantees because WAL is their
+ * sole source feed.
  */
 
 import assert from 'node:assert/strict';
-import type { DataSourceAdapter, Row } from './adapter.js';
+import type {
+  DataSourceAdapter,
+  MutationAdapter,
+} from './adapter.js';
 import type { ChangeSet } from './contract.js';
 
-/** A factory that returns a fresh adapter. Each check calls it to start from clean state. */
-export type MakeAdapter = () => DataSourceAdapter | Promise<DataSourceAdapter>;
+export type MakeMutationAdapter =
+  () => MutationAdapter | Promise<MutationAdapter>;
+export type MakeAdapter =
+  () => DataSourceAdapter | Promise<DataSourceAdapter>;
 
-/** A single conformance check. `run` throws on failure. */
 export interface ConformanceCheck {
   readonly name: string;
   run(): Promise<void>;
 }
 
-const change = (clientTxId: string, ops: ChangeSet['operations']): ChangeSet => ({
-  clientTxId,
-  operations: ops,
+export interface MutationConformanceOptions {
+  /**
+   * Add transport-required evidence without changing the shared checks. Direct
+   * wrappers use this to attach their logical marker; endpoint wrappers need no
+   * decoration.
+   */
+  readonly prepareChange?: (change: ChangeSet) => ChangeSet;
+}
+
+const change = (
+  correlationId: string,
+  operations: ChangeSet['operations'],
+  intentHash?: string,
+): ChangeSet => ({
+  correlationId,
+  operations,
+  ...(intentHash ? { intentHash } : {}),
 });
 
-/**
- * Builds the list of conformance checks for an adapter. Call this to run the checks
- * yourself, or use {@link runDataSourceTests} to register them with a test runner.
- */
-export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck[] {
+/** Guarantees shared by direct and endpoint mutation wrappers. */
+export function mutationConformanceChecks(
+  make: MakeMutationAdapter,
+  options: MutationConformanceOptions = {},
+): ConformanceCheck[] {
+  const request = (
+    correlationId: string,
+    operations: ChangeSet['operations'],
+    intentHash?: string,
+  ): ChangeSet => {
+    const value = change(correlationId, operations, intentHash);
+    return options.prepareChange?.(value) ?? value;
+  };
   return [
     {
       name: 'commit applies a CREATE and returns the canonical row',
       run: async () => {
         const adapter = await make();
         const result = await adapter.commit(
-          change('tx_create', [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }]),
+          request('corr_create', [
+            { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+          ]),
         );
         assert.equal(result.rows.length, 1, 'one row returned');
         const created = result.rows[0];
@@ -61,7 +79,9 @@ export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck
       name: 'read load returns a committed row, and null-equivalent for an unknown id',
       run: async () => {
         const adapter = await make();
-        await adapter.commit(change('tx1', [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }]));
+        await adapter.commit(request('corr_load', [
+          { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+        ]));
         const found = await adapter.read({ kind: 'load', model: 'task', id: 't1' });
         assert.equal(found.length, 1);
         assert.equal(found[0]?.title, 'A');
@@ -73,76 +93,77 @@ export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck
       name: 'read list returns committed rows',
       run: async () => {
         const adapter = await make();
-        await adapter.commit(
-          change('tx_list', [
-            { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
-            { type: 'CREATE', model: 'task', id: 't2', input: { title: 'B' } },
-          ]),
-        );
+        await adapter.commit(request('corr_list', [
+          { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+          { type: 'CREATE', model: 'task', id: 't2', input: { title: 'B' } },
+        ]));
         const rows = await adapter.read({ kind: 'list', model: 'task' });
-        const ids = rows.map((r) => (r).id).sort();
-        assert.deepEqual(ids, ['t1', 't2']);
+        assert.deepEqual(rows.map((row) => row.id).sort(), ['t1', 't2']);
       },
     },
     {
-      name: 'duplicate clientTxId is idempotent — same rows, applied once',
+      name: 'same scoped correlation and intent replays the original response without DML',
       run: async () => {
         const adapter = await make();
-        const cs = change('tx_dup', [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A', n: 1 } }]);
-        const first = await adapter.commit(cs);
-        const second = await adapter.commit(cs);
+        const commitRequest = request('corr_replay', [
+          { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A', n: 1 } },
+        ]);
+        const first = await adapter.commit(commitRequest);
+        const second = await adapter.commit(commitRequest);
         assert.deepEqual(second.rows, first.rows, 'replay returns the original rows');
-        // Applied once: still exactly one row, and the outbox did not double up.
         const rows = await adapter.read({ kind: 'list', model: 'task' });
         assert.equal(rows.length, 1, 'no duplicate row');
-        const page = await adapter.events(null, 100);
-        const forTx = page.events.filter((e) => e.clientTxId === 'tx_dup');
-        assert.equal(forTx.length, 1, 'outbox not double-appended on replay');
       },
     },
     {
-      name: 'commit appends outbox events with the originating clientTxId',
+      name: 'same scoped correlation with a different canonical intent rejects',
       run: async () => {
         const adapter = await make();
-        await adapter.commit(change('tx_evt', [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }]));
-        const page = await adapter.events(null, 100);
-        assert.ok(page.events.length >= 1, 'at least one event');
-        const evt = page.events.find((e) => e.entityId === 't1');
-        assert.ok(evt, 'event for the committed row');
-        assert.equal(evt.model, 'task');
-        assert.equal(evt.type, 'CREATE');
-        assert.equal(evt.clientTxId, 'tx_evt');
+        await adapter.commit(request(
+          'corr_conflict',
+          [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }],
+          'a'.repeat(64),
+        ));
+        await assert.rejects(
+          adapter.commit(request(
+            'corr_conflict',
+            [{ type: 'UPDATE', model: 'task', id: 't1', input: { title: 'B' } }],
+            'b'.repeat(64),
+          )),
+          (error: unknown) =>
+            typeof error === 'object' &&
+            error !== null &&
+            'code' in error &&
+            error.code === 'idempotency_conflict',
+        );
       },
     },
     {
-      name: 'events cursor advances and never re-delivers a page',
+      name: 'concurrent identical requests apply once and replay one response',
       run: async () => {
         const adapter = await make();
-        await adapter.commit(change('tx_a', [{ type: 'CREATE', model: 'task', id: 't1', input: {} }]));
-        await adapter.commit(change('tx_b', [{ type: 'CREATE', model: 'task', id: 't2', input: {} }]));
-
-        const first = await adapter.events(null, 1);
-        assert.equal(first.events.length, 1, 'respects limit');
-        assert.ok(first.nextCursor, 'returns a cursor');
-
-        const second = await adapter.events(first.nextCursor, 100);
-        // No overlap: the second page starts strictly after the first cursor.
-        const firstIds = new Set(first.events.map((e) => e.id));
-        for (const e of second.events) {
-          assert.ok(!firstIds.has(e.id), `event ${e.id} re-delivered across cursor`);
-        }
-
-        // Draining to the end yields a stable terminal cursor.
-        const drained = await adapter.events(second.nextCursor ?? first.nextCursor, 100);
-        assert.equal(drained.events.length, 0, 'fully drained');
+        const commitRequest = request('corr_concurrent', [
+          { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+        ]);
+        const [first, second] = await Promise.all([
+          adapter.commit(commitRequest),
+          adapter.commit(commitRequest),
+        ]);
+        assert.deepEqual(second.rows, first.rows);
+        const rows = await adapter.read({ kind: 'list', model: 'task' });
+        assert.equal(rows.length, 1, 'concurrent retries produced one row');
       },
     },
     {
-      name: 'a later UPDATE under a new clientTxId is applied (idempotency is per-transaction)',
+      name: 'a later mutation under a new scoped correlation is applied',
       run: async () => {
         const adapter = await make();
-        await adapter.commit(change('tx_c1', [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }]));
-        await adapter.commit(change('tx_u1', [{ type: 'UPDATE', model: 'task', id: 't1', input: { title: 'B' } }]));
+        await adapter.commit(request('corr_create_2', [
+          { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+        ]));
+        await adapter.commit(request('corr_update_2', [
+          { type: 'UPDATE', model: 'task', id: 't1', input: { title: 'B' } },
+        ]));
         const found = await adapter.read({ kind: 'load', model: 'task', id: 't1' });
         assert.equal(found[0]?.title, 'B', 'update applied');
       },
@@ -150,10 +171,110 @@ export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck
   ];
 }
 
-/**
- * Register the conformance checks with a test runner's `it`/`test` function.
- * `register(name, fn)` — pass vitest/jest `it` or `node:test` `test`.
- */
+/** Guarantees that apply only to endpoint wrappers with an outbox/events feed. */
+export function endpointConformanceChecks(make: MakeAdapter): ConformanceCheck[] {
+  return [
+    {
+      name: 'endpoint replay does not append its correlated outbox event twice',
+      run: async () => {
+        const adapter = await make();
+        assert.equal(adapter.capabilities.outboxEvents, true);
+        const request = change('corr_outbox_replay', [
+          {
+            type: 'CREATE',
+            model: 'task',
+            id: 't1',
+            input: { title: 'A' },
+            transactionId: 'op_outbox_replay',
+          },
+        ]);
+        await adapter.commit(request);
+        await adapter.commit(request);
+        const page = await adapter.events(null, 100);
+        assert.equal(
+          page.events.filter((event) => event.correlationId === 'corr_outbox_replay').length,
+          1,
+        );
+      },
+    },
+    {
+      name: 'endpoint outbox exposes explicit correlation and operation identity',
+      run: async () => {
+        const adapter = await make();
+        assert.equal(adapter.capabilities.outboxEvents, true);
+        await adapter.commit(change('corr_event', [
+          {
+            type: 'CREATE',
+            model: 'task',
+            id: 't1',
+            input: { title: 'A' },
+            transactionId: 'op_event',
+          },
+        ]));
+        const page = await adapter.events(null, 100);
+        const event = page.events.find((candidate) => candidate.entityId === 't1');
+        assert.ok(event, 'event for the committed row');
+        assert.equal(event.model, 'task');
+        assert.equal(event.type, 'CREATE');
+        assert.equal(event.correlationId, 'corr_event');
+        assert.equal(event.transactionId, 'op_event');
+        assert.equal(event.clientTxId ?? null, null, 'legacy echo identity stays empty');
+      },
+    },
+    {
+      name: 'endpoint events cursor advances and never re-delivers a page',
+      run: async () => {
+        const adapter = await make();
+        await adapter.commit(change('corr_page_a', [
+          { type: 'CREATE', model: 'task', id: 't1', input: {} },
+        ]));
+        await adapter.commit(change('corr_page_b', [
+          { type: 'CREATE', model: 'task', id: 't2', input: {} },
+        ]));
+
+        const first = await adapter.events(null, 1);
+        assert.equal(first.events.length, 1, 'respects limit');
+        assert.ok(first.nextCursor, 'returns a cursor');
+        const second = await adapter.events(first.nextCursor, 100);
+        const firstIds = new Set(first.events.map((event) => event.id));
+        for (const event of second.events) {
+          assert.ok(!firstIds.has(event.id), `event ${event.id} re-delivered across cursor`);
+        }
+        const drained = await adapter.events(second.nextCursor ?? first.nextCursor, 100);
+        assert.equal(drained.events.length, 0, 'fully drained');
+      },
+    },
+  ];
+}
+
+/** Compatibility name for the complete endpoint adapter suite. */
+export function dataSourceConformanceChecks(make: MakeAdapter): ConformanceCheck[] {
+  return [
+    ...mutationConformanceChecks(make),
+    ...endpointConformanceChecks(make),
+  ];
+}
+
+export function runMutationTests(
+  make: MakeMutationAdapter,
+  register: (name: string, fn: () => Promise<void>) => void,
+  options: MutationConformanceOptions = {},
+): void {
+  for (const check of mutationConformanceChecks(make, options)) {
+    register(check.name, check.run);
+  }
+}
+
+export function runEndpointDataSourceTests(
+  make: MakeAdapter,
+  register: (name: string, fn: () => Promise<void>) => void,
+): void {
+  for (const check of endpointConformanceChecks(make)) {
+    register(check.name, check.run);
+  }
+}
+
+/** Backward-compatible complete endpoint suite. */
 export function runDataSourceTests(
   make: MakeAdapter,
   register: (name: string, fn: () => Promise<void>) => void,
@@ -163,6 +284,4 @@ export function runDataSourceTests(
   }
 }
 
-// Re-export the reference adapter so `@abloatai/ablo/source/conformance`
-// exposes both the suite and the in-memory double in one import.
 export { memoryDataSource } from './adapters/memory.js';

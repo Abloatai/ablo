@@ -21,5 +21,6 @@ export type {
   AdapterResolver,
 } from './adapter.js';
 export type { CommitContext, CommitResult } from './commit.js';
+export { commitExecutionResultSchema } from '../wire/commit.js';
 export { storageModeSchema, type StorageMode } from './storageMode.js';
 export type { ColumnOverride, BootstrapModel } from './readConfig.js';

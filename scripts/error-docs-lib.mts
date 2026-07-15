@@ -14,6 +14,27 @@ import {
 
 const docUrlForCode = (code: string): string => `https://docs.abloatai.com/errors#${code}`;
 
+/**
+ * Escape MDX-hostile chars in a prose string, protecting inline-code spans.
+ * The reference is `.mdx`, so Blume compiles it through MDX/Astro: a bare
+ * `{ schema, apiKey }` reads as a JS expression and a bare `<model>` as a JSX
+ * tag. Registry messages carry both outside backticks, so escape everything
+ * that isn't a fenced-safe `code` span. (`&#123;`/`&#125;` are `{`/`}`.)
+ */
+function mdxProse(text: string): string {
+  return text
+    .split(/(`[^`]*`)/)
+    .map((seg) =>
+      seg.startsWith('`') && seg.endsWith('`')
+        ? seg
+        : seg
+            .replace(/<(?![A-Z]|\/[A-Z])/g, '&lt;')
+            .replace(/\{/g, '&#123;')
+            .replace(/\}/g, '&#125;'),
+    )
+    .join('');
+}
+
 const CATEGORY_ORDER: ReadonlyArray<{ key: ErrorCategory; title: string; blurb: string }> = [
   { key: 'auth', title: 'Authentication', blurb: 'Missing, invalid, revoked, or expired credentials. Re-authenticate.' },
   { key: 'permission', title: 'Permission', blurb: 'Credentials were valid but the action is forbidden for this caller.' },
@@ -71,7 +92,9 @@ export function renderErrorsMdx(): string {
   lines.push('');
   lines.push('`type` is the coarse class (catch with `instanceof`, or switch on it); `code` is the stable machine identifier documented below; `request_id` correlates to your server logs. Some errors carry extra structured fields (e.g. a schema push adds `warnings`).');
   lines.push('');
-  lines.push('<Info>`retryable` indicates whether the *same* request can succeed on a later attempt without changing anything — transient transport/lease failures are retryable; validation and permission errors are not.</Info>');
+  lines.push(':::info');
+  lines.push('`retryable` indicates whether the *same* request can succeed on a later attempt without changing anything — transient transport/lease failures are retryable; validation and permission errors are not.');
+  lines.push(':::');
   lines.push('');
 
   for (const { key, title, blurb } of CATEGORY_ORDER) {
@@ -79,7 +102,7 @@ export function renderErrorsMdx(): string {
     if (!entries || entries.length === 0) continue;
     lines.push(`## ${title}`);
     lines.push('');
-    lines.push(blurb);
+    lines.push(mdxProse(blurb));
     lines.push('');
     for (const { code, spec } of entries) {
       lines.push(`### ${code}`);
@@ -90,7 +113,7 @@ export function renderErrorsMdx(): string {
           : '`client-only` · not sent over the network',
       );
       lines.push('');
-      lines.push(spec.message);
+      lines.push(mdxProse(spec.message));
       lines.push('');
     }
   }

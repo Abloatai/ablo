@@ -26,6 +26,7 @@ import type { Schema, SchemaRecord } from './schema.js';
 import type { ModelDef } from './model.js';
 import type { RelationDef } from './relation.js';
 import { AbloValidationError } from '../errors.js';
+import { schemaHash } from './serialize.js';
 
 export function selectModels<S extends SchemaRecord, K extends keyof S & string>(
   schema: Schema<S>,
@@ -69,6 +70,12 @@ export function selectModels<S extends SchemaRecord, K extends keyof S & string>
     models: models as unknown as Pick<S, K>,
     validators: validators as Schema<Pick<S, K>>['validators'],
     identityRoles: schema.identityRoles,
+    // Record the full source's hash so the drift check can recognize this subset
+    // as current against a server running that full schema. Prefer the source's
+    // OWN `sourceSchemaHash` when it is itself a projection, so a subset-of-a-
+    // subset still points at the original full schema rather than an intermediate
+    // one. `schemaHash` ignores this field, so re-projecting stays deterministic.
+    sourceSchemaHash: schema.sourceSchemaHash ?? schemaHash(schema),
   };
 }
 

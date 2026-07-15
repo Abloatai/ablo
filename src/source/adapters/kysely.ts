@@ -1,292 +1,345 @@
 /**
- * The Kysely adapter for the data-source interface. It implements the same
- * {@link DataSourceAdapter} contract as {@link prismaDataSource} and
- * {@link drizzleDataSource} and passes the same conformance suite, built against
- * Kysely's query builder:
- *   - `db.transaction().execute(async (trx) => …)` runs an interactive transaction.
- *   - `insertInto` / `updateTable` / `deleteFrom` / `selectFrom` with
- *     `returningAll()` form the fluent query. Table and column names are plain
- *     strings, so the adapter needs no raw-SQL tag and imports nothing from
- *     `kysely`; it depends only on the structural {@link KyselyLike} shape, the
- *     same approach the Prisma adapter takes with {@link PrismaLike}.
+ * Kysely wrappers for Ablo's two customer-database write transports.
  *
- * Table and column names come from your schema. Kysely passes the column names you
- * give it straight through to SQL, so, like the Drizzle adapter, this one derives
- * every name from the same rule the table provisioner uses:
- *   table  = `model.tableName ?? key`
- *   column = `fieldMeta.column ?? camelToSnake(field)`  (plus the tenancy column)
- * This keeps the tables `ablo migrate` creates (for example `operator_id`) and the
- * columns this adapter uses in agreement. The adapter is the translation boundary:
- * the rows it accepts and returns are keyed by field name, while the physical
- * columns are snake_case.
+ * Both wrappers compose the same exported {@link createKyselyMutationCore}:
  *
- * A note on JSON columns: the outbox `data` and idempotency `response` values are
- * passed as JSON strings. Postgres infers the parameter type from the target
- * `jsonb` column, so the conversion happens on the server and works across drivers,
- * without the `::jsonb` cast that only raw SQL allows.
+ * - {@link kyselyDataSource} is the endpoint adapter. Its transaction contains
+ *   row DML, the permanent idempotency ledger, and correlated outbox events. A
+ *   Postgres logical marker remains optional for compatibility.
+ * - {@link kyselyDirectMutation} is the engine-side direct wrapper. Its
+ *   transaction contains row DML, the same ledger, and a required logical
+ *   marker. It never creates, writes, or serves `ablo_outbox`.
+ *
+ * The ledger reservation happens before DML via `INSERT ... ON CONFLICT DO
+ * NOTHING`. Postgres waits on a concurrent uncommitted owner of the same key;
+ * after that owner commits, the loser reads and hash-checks its durable response.
+ * If the owner rolls back, the waiter acquires the reservation and performs the
+ * mutation. This gives same-key concurrency one database arbiter and one effect.
  */
 
 import { AbloValidationError } from '../../errors.js';
+import type { Schema, SchemaRecord } from '../../schema/schema.js';
 import type {
   AdapterCommitResult,
-  AdapterReadRequest,
   DataSourceAdapter,
+  MutationAdapter,
   Row,
 } from '../adapter.js';
-import type { ChangeSet, EventsPage, Migration, Operation } from '../contract.js';
-import { outboxEventSchema } from '../contract.js';
-import { adapterTableMigrations } from '../migrations.js';
-import type { Schema, SchemaRecord } from '../../schema/schema.js';
-import { toSchemaJSON } from '../../schema/serialize.js';
-import { camelToSnake, snakeToCamel } from '../../schema/ddl.js';
-import { tenancyColumn } from '../../schema/tenancy.js';
+import type { ChangeSet, EventsPage, Migration } from '../contract.js';
+import {
+  changeSetSchema,
+  outboxEventSchema,
+  sourceCommitEchoMarkerSchema,
+} from '../contract.js';
+import {
+  assertSourceIdempotencyIntent,
+  assertSourceIdempotencyRetention,
+  sourceChangeIntentHash,
+} from '../idempotency.js';
+import {
+  adapterTableMigrations,
+  idempotencyLedgerMigrations,
+} from '../migrations.js';
+import { ABLO_POSTGRES_COMMIT_ECHO_PREFIX } from '../types.js';
+import {
+  createKyselyMutationCore,
+  kyselyOperationRowId,
+  type KyselyCompiledQuery,
+  type KyselyLike,
+  type KyselyMutationCore,
+} from './kyselyMutationCore.js';
+
+export {
+  createKyselyMutationCore,
+  kyselyOperationRowId,
+  type KyselyCompiledQuery,
+  type KyselyDeleteBuilder,
+  type KyselyInsertBuilder,
+  type KyselyInsertValuesBuilder,
+  type KyselyLike,
+  type KyselyMutationCore,
+  type KyselyReturningExecutable,
+  type KyselySelectBuilder,
+  type KyselyTransactionBuilder,
+  type KyselyUpdateBuilder,
+  type KyselyUpdateSetBuilder,
+} from './kyselyMutationCore.js';
+
+type KyselyMutationMode = 'endpoint' | 'direct';
+
+function rawQuery(
+  queryId: string,
+  sql: string,
+  parameters: readonly unknown[],
+): KyselyCompiledQuery {
+  return {
+    query: { kind: 'RawNode', sqlFragments: [sql], parameters: [] },
+    queryId: { queryId },
+    sql,
+    parameters,
+  };
+}
+
+function reserveLedgerQuery(
+  correlationId: string,
+  requestHash: string,
+): KyselyCompiledQuery {
+  return rawQuery(
+    'ablo-idempotency-reserve',
+    `INSERT INTO ablo_idempotency (client_tx_id, response, request_hash)
+     VALUES ($1, $2::jsonb, $3)
+     ON CONFLICT (client_tx_id) DO NOTHING
+     RETURNING client_tx_id`,
+    [correlationId, '[]', requestHash],
+  );
+}
+
+function completeLedgerQuery(
+  correlationId: string,
+  rows: readonly Row[],
+): KyselyCompiledQuery {
+  return rawQuery(
+    'ablo-idempotency-complete',
+    `UPDATE ablo_idempotency
+        SET response = $2::jsonb
+      WHERE client_tx_id = $1`,
+    [correlationId, JSON.stringify(rows)],
+  );
+}
+
+function postgresLogicalMarkerQuery(payload: string): KyselyCompiledQuery {
+  return rawQuery(
+    'ablo-postgres-logical-marker',
+    'SELECT pg_logical_emit_message(true, $1::text, $2::text)',
+    [ABLO_POSTGRES_COMMIT_ECHO_PREFIX, payload],
+  );
+}
+
+function parseCachedRows(response: unknown): Row[] {
+  const parsed = typeof response === 'string' ? (JSON.parse(response) as unknown) : response;
+  if (!Array.isArray(parsed)) {
+    throw new AbloValidationError(
+      'The source idempotency response is corrupt and cannot be replayed safely',
+      { code: 'idempotency_conflict' },
+    );
+  }
+  return parsed as Row[];
+}
+
+function markerAction(type: ChangeSet['operations'][number]['type']): 'I' | 'U' | 'D' {
+  if (type === 'CREATE') return 'I';
+  if (type === 'DELETE') return 'D';
+  return 'U';
+}
+
+function assertDirectLogicalMarker(
+  change: ChangeSet,
+  markerModelFor: (operationModel: string) => string,
+): void {
+  const payload = change.echo?.payload;
+  if (!payload) {
+    throw new AbloValidationError(
+      'A direct Kysely mutation requires a transactional Postgres logical marker',
+      { code: 'source_adapter_misconfigured' },
+    );
+  }
+  try {
+    const marker = sourceCommitEchoMarkerSchema.parse(JSON.parse(payload) as unknown);
+    if (marker.correlationId !== change.correlationId) {
+      throw new Error('marker correlation does not match the ledger key');
+    }
+    if (marker.operations.length !== change.operations.length) {
+      throw new Error('marker operation count does not match the mutation');
+    }
+    for (const [index, operation] of change.operations.entries()) {
+      const markerOperation = marker.operations[index];
+      // The marker speaks the canonical schema TYPENAME (the vocabulary the
+      // WAL consumer validates deltas against), while the mutation operation
+      // carries the authoring wire key. `markerModelFor` translates the wire
+      // key through the schema so the two vocabularies compare correctly.
+      if (
+        !markerOperation ||
+        markerOperation.model !== markerModelFor(operation.model) ||
+        markerOperation.id !== kyselyOperationRowId(operation) ||
+        markerOperation.action !== markerAction(operation.type) ||
+        markerOperation.transactionId !== operation.transactionId
+      ) {
+        throw new Error(`marker operation ${index} does not match the mutation`);
+      }
+    }
+  } catch (error) {
+    if (error instanceof AbloValidationError) throw error;
+    throw new AbloValidationError(
+      `The direct Postgres logical marker is invalid: ${error instanceof Error ? error.message : 'unknown marker error'}`,
+      { code: 'source_adapter_misconfigured' },
+    );
+  }
+}
 
 /**
- * The subset of a Kysely instance, or transaction handle, that the adapter calls.
- * It is structural by design: declaring the members with method shorthand lets a
- * real `Kysely<DB>` — whose parameters are narrowed to `keyof DB` — stay assignable
- * under TypeScript's method-parameter bivariance, the same way {@link PrismaLike}
- * accepts a real `PrismaClient`.
+ * Build the shared transaction policy around one Kysely mutation core. Exported
+ * for engine integrations that need to inject a prebuilt core while retaining
+ * the exact same ledger and mapping semantics as the endpoint adapter.
  */
-export interface KyselyLike {
-  selectFrom(table: string): KyselySelectBuilder;
-  insertInto(table: string): KyselyInsertBuilder;
-  updateTable(table: string): KyselyUpdateBuilder;
-  deleteFrom(table: string): KyselyDeleteBuilder;
-  transaction(): KyselyTransactionBuilder;
+export interface KyselyMutationAdapterOptions {
+  /**
+   * Translate a mutation operation's authoring model key into the canonical
+   * marker vocabulary (the schema typename). Direct wrappers must supply the
+   * schema-backed translation; identity is only correct when a schema's
+   * typenames equal its keys.
+   */
+  readonly markerModelFor?: (operationModel: string) => string;
 }
 
-export interface KyselyTransactionBuilder {
-  execute<T>(fn: (trx: KyselyLike) => Promise<T>): Promise<T>;
+export function createKyselyMutationAdapter(
+  db: KyselyLike,
+  core: KyselyMutationCore,
+  mode: KyselyMutationMode,
+  options: KyselyMutationAdapterOptions = {},
+): MutationAdapter {
+  const markerModelFor = options.markerModelFor ?? ((model: string) => model);
+  return {
+    capabilities: {
+      transactions: true,
+      propose: false,
+      schemaIntrospection: true,
+      postgresWalEcho: true,
+      outboxEvents: mode === 'endpoint',
+    },
+
+    migrations(): readonly Migration[] {
+      return mode === 'endpoint'
+        ? adapterTableMigrations()
+        : idempotencyLedgerMigrations();
+    },
+
+    read(request) {
+      return core.read(request);
+    },
+
+    async commit(change: ChangeSet): Promise<AdapterCommitResult> {
+      const request = changeSetSchema.parse(change);
+      if (mode === 'direct') assertDirectLogicalMarker(request, markerModelFor);
+
+      const requestHash = sourceChangeIntentHash(request);
+      return db.transaction().execute(async (transaction) => {
+        const reservation = await transaction.executeQuery(
+          reserveLedgerQuery(request.correlationId, requestHash),
+        );
+
+        if (reservation.rows.length === 0) {
+          const cached = await transaction
+            .selectFrom('ablo_idempotency')
+            .selectAll()
+            .where('client_tx_id', '=', request.correlationId)
+            .limit(1)
+            .execute();
+          const cachedRow = cached[0];
+          if (!cachedRow) {
+            throw new AbloValidationError(
+              'The source idempotency reservation disappeared during replay',
+              { code: 'idempotency_conflict' },
+            );
+          }
+          assertSourceIdempotencyIntent(cachedRow.request_hash, requestHash);
+          assertSourceIdempotencyRetention(cachedRow.expires_at);
+          return { rows: parseCachedRows(cachedRow.response) };
+        }
+
+        const rows: Row[] = [];
+        for (const [index, operation] of request.operations.entries()) {
+          const row = await core.applyOperation(transaction, operation);
+          rows.push(row);
+
+          if (mode === 'endpoint') {
+            const entityId = String(row.id ?? kyselyOperationRowId(operation));
+            await transaction
+              .insertInto('ablo_outbox')
+              .values({
+                id: `${request.correlationId}:${index}`,
+                model: operation.model,
+                entity_id: entityId,
+                type: operation.type,
+                data: operation.type === 'DELETE' ? null : JSON.stringify(row),
+                correlation_id: request.correlationId,
+                transaction_id: operation.transactionId ?? null,
+                occurred_at: Date.now(),
+              })
+              .execute();
+          }
+        }
+
+        await transaction.executeQuery(
+          completeLedgerQuery(request.correlationId, rows),
+        );
+        if (request.echo?.kind === 'postgres-wal') {
+          await transaction.executeQuery(
+            postgresLogicalMarkerQuery(request.echo.payload),
+          );
+        }
+        return { rows };
+      });
+    },
+  };
 }
 
-export interface KyselySelectBuilder {
-  selectAll(): KyselySelectBuilder;
-  where(column: string, operator: string, value: unknown): KyselySelectBuilder;
-  orderBy(column: string, direction: 'asc' | 'desc'): KyselySelectBuilder;
-  limit(limit: number): KyselySelectBuilder;
-  execute(): Promise<readonly Row[]>;
-}
-
-export interface KyselyInsertBuilder {
-  values(row: Row): KyselyInsertBuilder;
-  returningAll(): KyselyInsertBuilder;
-  execute(): Promise<readonly Row[]>;
-}
-
-export interface KyselyUpdateBuilder {
-  set(patch: Row): KyselyUpdateBuilder;
-  where(column: string, operator: string, value: unknown): KyselyUpdateBuilder;
-  returningAll(): KyselyUpdateBuilder;
-  execute(): Promise<readonly Row[]>;
-}
-
-export interface KyselyDeleteBuilder {
-  where(column: string, operator: string, value: unknown): KyselyDeleteBuilder;
-  returningAll(): KyselyDeleteBuilder;
-  execute(): Promise<readonly Row[]>;
-}
-
-function rowId(op: Operation): string {
-  const id = op.id ?? (op.input?.id as string | undefined);
-  if (typeof id !== 'string' || id.length === 0) {
-    throw new AbloValidationError(`operation on "${op.model}" requires an id`, {
-      code: 'source_operation_id_required',
-    });
-  }
-  return id;
-}
-
-/** Per-model name resolution, computed once from the schema (the Drizzle adapter documents the same shape). */
-interface ModelColumns {
-  readonly table: string;
-  readonly fieldToColumn: ReadonlyMap<string, string>;
-  readonly columnToField: ReadonlyMap<string, string>;
-}
-
-function buildColumnMaps(schema: Schema): ReadonlyMap<string, ModelColumns> {
-  const json = toSchemaJSON(schema);
-  const out = new Map<string, ModelColumns>();
-  for (const [key, model] of Object.entries(json.models)) {
-    const fieldToColumn = new Map<string, string>();
-    const columnToField = new Map<string, string>();
-    const register = (field: string, column: string): void => {
-      if (column === camelToSnake(field)) return;
-      fieldToColumn.set(field, column);
-      columnToField.set(column, field);
-    };
-    for (const [field, meta] of Object.entries(model.fields)) {
-      if (meta.column) register(field, meta.column);
-    }
-    const orgColumn = tenancyColumn(model.tenancy);
-    if (orgColumn) register('organizationId', orgColumn);
-    out.set(key, { table: model.tableName ?? key, fieldToColumn, columnToField });
-  }
-  return out;
-}
-
+/** Endpoint wrapper: mutation + ledger + outbox, with an optional marker. */
 export function kyselyDataSource<S extends SchemaRecord>(
   db: KyselyLike,
   schema: Schema<S>,
 ): DataSourceAdapter {
-  const maps = buildColumnMaps(schema);
-  const modelColumns = (model: string): ModelColumns => {
-    const mc = maps.get(model);
-    if (!mc) {
-      throw new AbloValidationError(`kyselyDataSource: no model "${model}" in schema`, {
-        code: 'source_adapter_misconfigured',
-      });
-    }
-    return mc;
-  };
-
-  const columnFor = (mc: ModelColumns, field: string): string =>
-    mc.fieldToColumn.get(field) ?? camelToSnake(field);
-  const fieldFor = (mc: ModelColumns, column: string): string =>
-    mc.columnToField.get(column) ?? snakeToCamel(column);
-
-  /** Field-keyed row to column-keyed row, for INSERT and UPDATE values. */
-  const toColumns = (mc: ModelColumns, row: Row): Row => {
-    const out: Row = {};
-    for (const k of Object.keys(row)) out[columnFor(mc, k)] = row[k];
-    return out;
-  };
-  /** Column-keyed row (from `RETURNING *` or `SELECT *`) back to a field-keyed row. */
-  const toFields = (mc: ModelColumns, row: Row): Row => {
-    const out: Row = {};
-    for (const k of Object.keys(row)) out[fieldFor(mc, k)] = row[k];
-    return out;
-  };
-
-  const applyOperation = async (trx: KyselyLike, op: Operation): Promise<Row> => {
-    const mc = modelColumns(op.model);
-    const id = rowId(op);
-    const input = op.input ?? {};
-
-    if (op.type === 'DELETE') {
-      const deleted = await trx
-        .deleteFrom(mc.table)
-        .where('id', '=', id)
-        .returningAll()
-        .execute();
-      return deleted[0] ? toFields(mc, deleted[0]) : { id };
-    }
-
-    if (op.type === 'CREATE') {
-      const inserted = await trx
-        .insertInto(mc.table)
-        .values(toColumns(mc, { id, ...input }))
-        .returningAll()
-        .execute();
-      return inserted[0] ? toFields(mc, inserted[0]) : { id, ...input };
-    }
-
-    // UPDATE / ARCHIVE / UNARCHIVE — the lifecycle field is `archivedAt`
-    // (camelCase) and goes through `toColumns` like any other, so it lands in
-    // `archived_at` — the same column the provisioner emits.
-    const patch = toColumns(mc, {
-      ...input,
-      ...(op.type === 'ARCHIVE' ? { archivedAt: new Date() } : {}),
-      ...(op.type === 'UNARCHIVE' ? { archivedAt: null } : {}),
-    });
-    const updated = await trx
-      .updateTable(mc.table)
-      .set(patch)
-      .where('id', '=', id)
-      .returningAll()
-      .execute();
-    return updated[0] ? toFields(mc, updated[0]) : { id, ...input };
-  };
+  const mutation = createKyselyMutationAdapter(
+    db,
+    createKyselyMutationCore(db, schema),
+    'endpoint',
+  );
 
   return {
-    capabilities: { transactions: true, propose: false, schemaIntrospection: true },
-
-    migrations(): readonly Migration[] {
-      return adapterTableMigrations();
-    },
-
-    async read(req: AdapterReadRequest): Promise<readonly Row[]> {
-      const mc = modelColumns(req.model);
-      if (req.kind === 'load') {
-        const rows = await db
-          .selectFrom(mc.table)
-          .selectAll()
-          .where('id', '=', req.id)
-          .limit(1)
-          .execute();
-        return rows.map((r) => toFields(mc, r));
-      }
-      const limit = req.query?.limit ?? 1000;
-      const rows = await db.selectFrom(mc.table).selectAll().limit(limit).execute();
-      return rows.map((r) => toFields(mc, r));
-    },
-
-    async commit(change: ChangeSet): Promise<AdapterCommitResult> {
-      return db.transaction().execute(async (trx) => {
-        const cached = await trx
-          .selectFrom('ablo_idempotency')
-          .selectAll()
-          .where('client_tx_id', '=', change.clientTxId)
-          .limit(1)
-          .execute();
-        const cachedRow = cached[0];
-        if (cachedRow) {
-          const response = cachedRow.response;
-          return {
-            rows: (typeof response === 'string' ? JSON.parse(response) : response) as Row[],
-          };
-        }
-
-        const rows: Row[] = [];
-        for (const [index, op] of change.operations.entries()) {
-          const row = await applyOperation(trx, op);
-          rows.push(row);
-          const entityId = String(row.id ?? rowId(op));
-          await trx
-            .insertInto('ablo_outbox')
-            .values({
-              id: `${change.clientTxId}:${index}`,
-              model: op.model,
-              entity_id: entityId,
-              type: op.type,
-              data: op.type === 'DELETE' ? null : JSON.stringify(row),
-              client_tx_id: change.clientTxId,
-              occurred_at: Date.now(),
-            })
-            .execute();
-        }
-
-        await trx
-          .insertInto('ablo_idempotency')
-          .values({ client_tx_id: change.clientTxId, response: JSON.stringify(rows) })
-          .execute();
-        return { rows };
-      });
-    },
+    ...mutation,
+    capabilities: { ...mutation.capabilities, outboxEvents: true },
 
     async events(cursor: string | null, limit: number): Promise<EventsPage> {
-      const after = cursor ?? '0';
       const rows = await db
         .selectFrom('ablo_outbox')
         .selectAll()
-        .where('cursor', '>', after)
+        .where('cursor', '>', cursor ?? '0')
         .orderBy('cursor', 'asc')
         .limit(limit)
         .execute();
-      const events = rows.map((r) =>
+      const events = rows.map((row) =>
         outboxEventSchema.parse({
-          id: r.id,
-          model: r.model,
-          entityId: r.entity_id,
-          type: r.type,
-          data: typeof r.data === 'string' ? JSON.parse(r.data) : r.data ?? null,
-          organizationId: r.organization_id ?? null,
-          clientTxId: r.client_tx_id ?? null,
-          occurredAt: r.occurred_at != null ? Number(r.occurred_at) : null,
-          cursor: String(r.cursor),
+          id: row.id,
+          model: row.model,
+          entityId: row.entity_id,
+          type: row.type,
+          data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data ?? null,
+          organizationId: row.organization_id ?? null,
+          clientTxId: row.client_tx_id ?? null,
+          correlationId: row.correlation_id ?? null,
+          transactionId: row.transaction_id ?? null,
+          occurredAt: row.occurred_at != null ? Number(row.occurred_at) : null,
+          cursor: String(row.cursor),
         }),
       );
       return { events, nextCursor: events.at(-1)?.cursor ?? null };
     },
   };
+}
+
+/** Direct wrapper: mutation + ledger + required logical marker, never outbox. */
+export function kyselyDirectMutation<S extends SchemaRecord>(
+  db: KyselyLike,
+  schema: Schema<S>,
+): MutationAdapter {
+  return createKyselyMutationAdapter(
+    db,
+    createKyselyMutationCore(db, schema),
+    'direct',
+    {
+      markerModelFor: (operationModel) => {
+        const typename = schema.models[operationModel]?.typename;
+        return typename && typename.length > 0 ? typename : operationModel;
+      },
+    },
+  );
 }

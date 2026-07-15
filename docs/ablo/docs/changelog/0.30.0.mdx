@@ -1,0 +1,28 @@
+---
+title: "v0.30.0"
+type: changelog
+changelog:
+  version: "0.30.0"
+  category: "Features"
+---
+
+{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
+
+### Minor Changes
+
+- **Removed the deprecated `databaseUrl` client option — your database connects to Ablo out of band, not through the client.** Ablo is Stripe-shaped: the client only ever talks to the engine. You construct it with `Ablo({ schema, apiKey })` (add `transport: 'http'` for a stateless server worker), and it reaches Ablo over WebSocket or HTTP — it never opens a Postgres connection itself. How your data connects is a separate step, set up once, in one of two shapes:
+
+  - **Logical replication — the default.** `ablo connect` registers your database and Ablo tails its write-ahead log. Your rows stay in your database; Ablo reads the change stream and keeps its own transaction log. Nothing in the client holds a connection string.
+  - **Signed data-source endpoint — the fallback.** For a database that cannot grant a `REPLICATION` role, your app exposes a signed HTTP endpoint that Ablo calls. Same out-of-band principle: the credentials live with your app, not in the Ablo client.
+
+  Because the client no longer carries a connection string, `ablo init` no longer scaffolds the `--storage direct` connector — the last surface that emitted `databaseUrl: process.env.DATABASE_URL` into a generated client. Run `ablo init --storage replication` (the default) or `--storage endpoint` instead.
+
+- **The claim work label is `description`, not `reason`.** A claim is an advisory coordination lock: you take it on a row before editing so other participants — agents or people — see the row is held and back off. The free-text label that says _what_ you are doing is now `description`, the text a peer reads when it hits a row you hold: `ablo.<model>.claim({ id, description: 'Renaming the task to match the brief' })`. The former `reason` option is removed with no alias, so a call still passing `reason` no longer type-checks — rename it to `description`. This is a different field from the `reason` on a claim _rejection_ or _lost_ event (`'conflict'`, `'expired'`, `'preempted'`), which says _why_ coordination denied or ended a claim and is unchanged.
+
+- **Claim a key Ablo hasn't synced: `ablo.<model>.claim(id)`.** Claims now come in two shapes that mirror whether Ablo holds the row. The object form `claim({ id })` loads the row from Ablo's synced pool and returns a `HeldClaim<T>` carrying `.data`. The new string overload `claim(id)` locks a row that lives _only_ in your own database — Ablo has never synced it — so it skips the pool load and the `entity_not_found` throw and returns a `HeldLease`: a `HeldClaim` without `.data`. This is Rung 0 of the connect ladder — advisory coordination with no replication grant, no schema change, and no `organization_id` column, so you can coordinate agents against your database before wiring any sync. `await using` auto-releases either shape at end of scope, and the object form is unchanged, so no existing caller shifts.
+
+### Patch Changes
+
+- **`ablo push` defers provisioning instead of failing when the plane's role cannot run DDL.** When the engine role bound to a plane lacks the privilege to create or alter tables, `push` no longer aborts the whole command. It records the schema and defers the provisioning step, so your models still register and the table changes are applied later by a role that can run them — rather than blocking the push on a privilege the plane may never grant the engine directly.
+
+- **Schema-drift no longer false-alarms for `selectModels` / `omitModels` projection clients.** A projected client deliberately carries a subset of the full schema, so its schema hash legitimately differs from the unprojected one. The drift check now compares against the projection's own source hash, so a correctly-projected app no longer sees a spurious drift warning at bootstrap.

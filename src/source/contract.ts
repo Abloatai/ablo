@@ -14,7 +14,15 @@
  */
 
 import { z } from 'zod';
-import type { SourceOperation } from './types.js';
+import { correlationIdSchema } from '../wire/commit.js';
+import {
+  ABLO_SOURCE_CLIENT_TX_ID_MAX_LENGTH,
+  ABLO_SOURCE_ECHO_MAX_OPERATIONS,
+  ABLO_SOURCE_ECHO_MAX_PAYLOAD_BYTES,
+  type SourceCommitEcho,
+  type SourceCommitEchoMarker,
+  type SourceOperation,
+} from './types.js';
 
 const jsonObject = z.record(z.string(), z.unknown());
 
@@ -44,14 +52,61 @@ export const operationSchema = z.object({
 });
 export type Operation = z.infer<typeof operationSchema>;
 
+/** The supported customer-transaction echo mechanism. */
+export const sourceCommitEchoSchema = z.object({
+  kind: z.literal('postgres-wal'),
+  payload: z
+    .string()
+    .min(1)
+    .refine(
+      (value) => new TextEncoder().encode(value).byteLength <= ABLO_SOURCE_ECHO_MAX_PAYLOAD_BYTES,
+      `WAL echo payload exceeds ${ABLO_SOURCE_ECHO_MAX_PAYLOAD_BYTES} UTF-8 bytes`,
+    ),
+});
+
+export const sourceCommitEchoOperationSchema = z.strictObject({
+  model: z.string().min(1),
+  id: z.string().min(1),
+  action: z.enum(['I', 'U', 'D']),
+  transactionId: z.string().min(1).max(ABLO_SOURCE_CLIENT_TX_ID_MAX_LENGTH),
+});
+
+export const sourceCommitEchoMarkerSchema = z
+  .strictObject({
+    version: z.literal(1),
+    correlationId: correlationIdSchema,
+    operations: z
+      .array(sourceCommitEchoOperationSchema)
+      .min(1)
+      .max(ABLO_SOURCE_ECHO_MAX_OPERATIONS)
+      .readonly(),
+  })
+  .superRefine(({ operations }, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, operation] of operations.entries()) {
+      if (seen.has(operation.transactionId)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['operations', index, 'transactionId'],
+          message: 'WAL echo operation transactionIds must be unique',
+        });
+      }
+      seen.add(operation.transactionId);
+    }
+  });
+export type SourceCommitEchoMarkerWire = z.infer<typeof sourceCommitEchoMarkerSchema>;
+
 /**
- * The unit an adapter commits atomically: one or more operations grouped under a
- * single `clientTxId`. That `clientTxId` is the idempotency key, so committing the
- * same change set twice applies it once and returns the same result.
+ * The unit a mutation wrapper commits atomically. `correlationId` is derived by
+ * Ablo from the authenticated plane, participant, and public idempotency key; it
+ * is the customer-ledger identity. It is intentionally not a raw caller-authored
+ * `clientTxId` or an operation transaction id.
  */
 export const changeSetSchema = z.object({
   operations: z.array(operationSchema).min(1),
-  clientTxId: z.string().min(1),
+  correlationId: correlationIdSchema,
+  intentHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  echo: sourceCommitEchoSchema.optional(),
 });
 export type ChangeSet = z.infer<typeof changeSetSchema>;
 
@@ -70,8 +125,16 @@ export const outboxEventSchema = z.object({
   type: operationTypeSchema,
   data: jsonObject.nullish(),
   organizationId: z.string().nullish(),
-  /** The originating transaction id, carried so Ablo can drop echoes of changes the SDK itself wrote. */
+  /** Legacy source transaction id. Never use this field to settle a queued commit. */
   clientTxId: z.string().nullish(),
+  /** Scoped server-authored identity that correlates this event to a queued commit. */
+  correlationId: correlationIdSchema.nullish(),
+  /** Stable identity of this operation within the correlated source commit. */
+  transactionId: z
+    .string()
+    .min(1)
+    .max(ABLO_SOURCE_CLIENT_TX_ID_MAX_LENGTH)
+    .nullish(),
   occurredAt: z.number().nullish(),
   /** Monotonic ordering key (bigint as string). `events()` pages by `cursor > ?`. */
   cursor: z.string().min(1),
@@ -106,6 +169,10 @@ export const adapterCapabilitiesSchema = z.object({
   propose: z.boolean(),
   /** The backend can be introspected for its schema. */
   schemaIntrospection: z.boolean(),
+  /** The adapter can atomically emit the requested Postgres WAL marker. */
+  postgresWalEcho: z.boolean().optional(),
+  /** The wrapper atomically writes and serves an endpoint transactional outbox. */
+  outboxEvents: z.boolean(),
 });
 export type AdapterCapabilities = z.infer<typeof adapterCapabilitiesSchema>;
 
@@ -120,3 +187,27 @@ const _operationContractInSync: [_AssertOperationMatchesWire, _AssertWireMatches
   true,
 ];
 void _operationContractInSync;
+
+type _AssertEchoMatchesWire = z.infer<typeof sourceCommitEchoSchema> extends SourceCommitEcho
+  ? true
+  : never;
+type _AssertWireMatchesEcho = SourceCommitEcho extends z.infer<typeof sourceCommitEchoSchema>
+  ? true
+  : never;
+const _echoContractInSync: [_AssertEchoMatchesWire, _AssertWireMatchesEcho] = [
+  true,
+  true,
+];
+void _echoContractInSync;
+
+type _AssertEchoMarkerMatchesWire = SourceCommitEchoMarkerWire extends SourceCommitEchoMarker
+  ? true
+  : never;
+type _AssertWireMatchesEchoMarker = SourceCommitEchoMarker extends SourceCommitEchoMarkerWire
+  ? true
+  : never;
+const _echoMarkerContractInSync: [
+  _AssertEchoMarkerMatchesWire,
+  _AssertWireMatchesEchoMarker,
+] = [true, true];
+void _echoMarkerContractInSync;

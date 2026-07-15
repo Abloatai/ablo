@@ -393,16 +393,11 @@ export type Duration = import('../utils/duration.js').Duration;
 
 export interface ClaimOptions extends ClaimLeaseOptions {
   /**
-   * Free-form reason describing why you're claiming. Surfaces in conflict
-   * messages and the activity overlay. Defaults to `'editing'`. Common
-   * values: `'editing'`, `'writing'`, `'reviewing'`, custom strings for
-   * app-specific phases.
-   */
-  readonly reason?: string;
-  /**
-   * Peer-visible explanation of the exact work being performed. This is more
-   * specific than `reason`: `reason` is the phase (`'renaming'`), while
-   * `description` is the instruction other agents should see.
+   * Peer-visible description of the work you're doing — the sentence another
+   * participant reads to decide whether to wait, work elsewhere, or move on
+   * (`'rewriting the risk section to match Q3'`). Surfaces in conflict
+   * messages and the activity overlay, and rides back in the rejection a
+   * blocked writer receives. Defaults to `'editing'`.
    */
   readonly description?: string;
   /**
@@ -430,7 +425,7 @@ export interface ClaimStream {
 
   /**
    * A reactive view of the wait queue on one target — the ordered line of
-   * queued claims behind the current holder, each carrying its `reason`,
+   * queued claims behind the current holder, each carrying its `description`,
    * `heldBy`, and `position`. Empty when no one is waiting. Pair it with
    * `onChange(...)` for change notifications.
    */
@@ -555,13 +550,11 @@ export interface Claim<T = Record<string, unknown>> {
   /** What is being coordinated. */
   readonly target: ClaimTarget;
   /**
-   * Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. The same
-   * field on every claim surface; distinct from the CRUD operation. Defaults to
-   * `'editing'`.
+   * Peer-visible description of the work being done — the same field on every
+   * claim surface. Always present: the SDK resolves it as it decodes the frame,
+   * defaulting to `'editing'` when a claim carries no description.
    */
-  readonly reason: string;
-  /** Peer-visible explanation of the work being performed. */
-  readonly description?: string;
+  readonly description: string;
   /** Participant holding it. Absent on a handle you hold for yourself. */
   readonly heldBy?: string;
   /**
@@ -596,6 +589,15 @@ export interface Claim<T = Record<string, unknown>> {
    * uses it as the `readAt` staleness guard. Present on a claim you hold.
    */
   readonly readAt?: number;
+  /**
+   * The monotonic fencing token the server minted for this grant (Option B). A
+   * write made under this claim carries it, and the server rejects the write if
+   * a later holder already advanced this entity past the token — closing the
+   * "my claim lapsed and its successor came and went" lost-update window that
+   * `readAt` alone cannot (a blind write with no read basis has nothing to
+   * compare). Present on a claim you hold that was granted a token.
+   */
+  readonly fenceToken?: number;
   /** Row snapshot under the lease — present on a claim you hold. */
   readonly data?: T;
   /**
@@ -664,3 +666,14 @@ export type HeldClaim<T = Record<string, unknown>> = Claim<T> &
       'data' | 'release' | 'revoke' | 'heartbeat' | typeof Symbol.asyncDispose
     >
   >;
+
+/**
+ * A held advisory lease you took on a key whose row Ablo does not hold — the
+ * resolved value of the row-free `ablo.<model>.claim(id)` overload. It is a
+ * {@link HeldClaim} minus `.data`: the same lease controls (`release`, `revoke`,
+ * `heartbeat`, and the `await using` disposer are all required and behave
+ * identically), only without a snapshot, because the row lives solely in the
+ * customer's own database and was never replicated into the local pool. Use it
+ * to serialize work against a key you know by id alone.
+ */
+export type HeldLease = Omit<HeldClaim, 'data'>;

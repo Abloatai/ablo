@@ -7,8 +7,8 @@
  * mutations to your backend. The SDK ships sensible no-op defaults where it can.
  */
 
-import type { StaleNotification, ReadDependency, ParticipantKind } from '../coordination/schema.js';
-
+import type { ReadDependency, ParticipantKind } from '../coordination/schema.js';
+import type { CommitStatus, MutationCommitResultInput } from '../wire/commit.js';
 
 // ─────────────────────────────────────────────
 // Logger
@@ -259,33 +259,19 @@ export interface ModelDebugLoggerContract {
   logDebug(message: string): void;
   logError(modelName: string, operation: string, message: string, data?: unknown): void;
   logCreation(modelName: string, data: unknown, constructor: unknown): void;
-  logObservableSetup(
-    modelName: string,
-    observableProps: string[],
-    computedProps: string[]
-  ): void;
+  logObservableSetup(modelName: string, observableProps: string[], computedProps: string[]): void;
 }
 
 // ─────────────────────────────────────────────
 // Mutation Execution (replaces GraphQLClient coupling)
 // ─────────────────────────────────────────────
 
-/** Result of a successful `commit()` — server's sync cursor after the batch landed. */
-export interface CommitResult {
-  lastSyncId: number;
-  /**
-   * Stale-context notifications. Present only when a write guarded with
-   * `onStale: 'notify'` collided with a concurrent change: rather than throwing
-   * an `AbloStaleContextError`, the commit succeeds and reports the collision
-   * here so the caller can reconcile. See {@link StaleNotification}.
-   */
-  notifications?: StaleNotification[];
-  /**
-   * Ids of update or delete targets that matched no rows. Present, and non-empty,
-   * only when a write missed the row it addressed.
-   */
-  missingIds?: string[];
-}
+/**
+ * Result returned by an injected mutation executor. The input type is inferred
+ * from the runtime compatibility schema: legacy `{lastSyncId}` remains valid,
+ * while every explicit queued result requires a WAL correlation.
+ */
+export type CommitResult = MutationCommitResultInput;
 
 /**
  * Per-call options accepted by any mutation, passed as the last argument.
@@ -302,9 +288,15 @@ export interface CommitResult {
 export interface MutationOptions {
   idempotencyKey?: string | null;
   label?: string;
-  wait?: 'queued' | 'confirmed';
+  wait?: CommitStatus;
   readAt?: number | null;
   onStale?: 'reject' | 'overwrite' | 'notify' | null;
+  /**
+   * The fencing token (Option B) of the held claim this write belongs to. The
+   * server validates it against the entity's persisted high-water and rejects a
+   * stale token. Sourced from the claim handle, never set by hand.
+   */
+  fenceToken?: number | null;
   /** The id (or `{ id }`) of the claim this write belongs to. This is the
    *  low-level reference the commit carries so the write is attributed to a claim
    *  and can pass the holder's own lock. It is distinct from the `claim` handle on
@@ -338,7 +330,7 @@ export interface MutationOptions {
  */
 export type WriteOptions = Pick<
   MutationOptions,
-  'readAt' | 'onStale' | 'idempotencyKey' | 'label'
+  'readAt' | 'onStale' | 'idempotencyKey' | 'label' | 'fenceToken'
 >;
 
 /** A single mutation within a batch. Its `options` travel with it so the server
@@ -363,6 +355,11 @@ export interface MutationOperation {
   readAt?: number | null;
   onStale?: 'reject' | 'overwrite' | 'notify' | null;
   /**
+   * The fencing token (Option B) carried on the wire for this op — the held
+   * claim's token, validated against the entity's high-water at commit.
+   */
+  fenceToken?: number | null;
+  /**
    * Per-operation idempotency and audit metadata. `idempotencyKey` is also the
    * cache key the server uses to de-duplicate retries; `label` is stored for
    * debugging. These are the only {@link MutationOptions} fields sent on the wire.
@@ -383,10 +380,7 @@ export interface MutationExecutor {
    * {@link MutationOperation}. The method name matches the `{ type: 'commit' }`
    * frame on the wire.
    */
-  commit(
-    operations: MutationOperation[],
-    options?: MutationOptions,
-  ): Promise<CommitResult>;
+  commit(operations: MutationOperation[], options?: MutationOptions): Promise<CommitResult>;
 
   /** Execute a create mutation for a specific model */
   executeCreate(
@@ -394,7 +388,7 @@ export interface MutationExecutor {
     id: string,
     input: Record<string, unknown>,
     clientMutationId?: string,
-    options?: MutationOptions,
+    options?: MutationOptions
   ): Promise<void>;
 
   /** Execute an update mutation for a specific model */
@@ -403,7 +397,7 @@ export interface MutationExecutor {
     modelId: string,
     data: Record<string, unknown>,
     clientMutationId?: string,
-    options?: MutationOptions,
+    options?: MutationOptions
   ): Promise<CommitResult | null>;
 
   /** Execute a delete mutation for a specific model */
@@ -411,7 +405,7 @@ export interface MutationExecutor {
     modelName: string,
     modelId: string,
     clientMutationId?: string,
-    options?: MutationOptions,
+    options?: MutationOptions
   ): Promise<void>;
 
   /** Execute an archive mutation for a specific model */
@@ -419,7 +413,7 @@ export interface MutationExecutor {
     modelName: string,
     modelId: string,
     clientMutationId?: string,
-    options?: MutationOptions,
+    options?: MutationOptions
   ): Promise<void>;
 
   /** Execute an unarchive mutation for a specific model */
@@ -427,14 +421,11 @@ export interface MutationExecutor {
     modelName: string,
     modelId: string,
     clientMutationId?: string,
-    options?: MutationOptions,
+    options?: MutationOptions
   ): Promise<void>;
 
   /** Upload an attachment (optional, not all consumers need this) */
-  uploadAttachment?(
-    id: string,
-    input: Record<string, unknown>
-  ): Promise<{ url: string }>;
+  uploadAttachment?(id: string, input: Record<string, unknown>): Promise<{ url: string }>;
 
   /** Batch upload attachments (optional) */
   batchUploadAttachments?(
@@ -510,6 +501,17 @@ export interface SyncEngineConfig {
    * enforced.
    */
   expectedSchemaHash?: string;
+
+  /**
+   * Set only when the bound schema is a projection (`selectModels`/`omitModels`):
+   * the content hash of the full source schema the subset was cut from. A subset
+   * hashes differently from its full schema, so without this a projection-bound
+   * client always reports drift against a server running the full schema. The
+   * drift check treats the client as in-sync when the server's active hash
+   * matches either `expectedSchemaHash` or this source hash. Advisory, like the
+   * hash above.
+   */
+  expectedSourceSchemaHash?: string;
 }
 
 // ─────────────────────────────────────────────

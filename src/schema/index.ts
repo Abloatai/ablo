@@ -69,6 +69,10 @@ export {
   participantKindSchema,
   confirmationStateSchema,
   backfillProvenanceSchema,
+  DELTA_DATA_CLASSIFICATION,
+  DELTA_PHYSICAL_STORAGE,
+  // Deliberate back-compat re-export; physical storage is the precise name.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
   DELTA_RESIDENCY,
   type SyncDeltaCore,
   type DeltaAttribution,

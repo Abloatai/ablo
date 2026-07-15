@@ -86,9 +86,8 @@ export interface ScopedPresence {
 export interface ScopedClaimOptions {
   /** Override the participant's focus target for this one claim. */
   readonly target?: PresenceTarget;
-  /** Free-form reason. Defaults to `'editing'`. Common: `'editing'`,
-   *  `'writing'`, `'reviewing'`, app-specific phases. */
-  readonly reason?: string;
+  /** Peer-visible description of the work. Defaults to `'editing'`. */
+  readonly description?: string;
   /** How long the claim lives; the server expires it automatically after this. */
   readonly ttl?: import('../types/streams.js').Duration;
 }
@@ -411,7 +410,7 @@ function createJoinedParticipant(args: {
     return {
       object: 'claim',
       id: handle.id,
-      reason: handle.reason,
+      description: handle.description,
       target: handle.target,
       async release(): Promise<void> {
         ownHandles.delete(handle);
@@ -440,7 +439,7 @@ function createJoinedParticipant(args: {
     claim(opts?: ScopedClaimOptions): Claim {
       return track(
         args.claims.claim(requireTarget(opts?.target), {
-          reason: opts?.reason,
+          description: opts?.description,
           ttl: opts?.ttl,
         }),
       );

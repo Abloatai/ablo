@@ -231,18 +231,31 @@ export type ClaimStatus = z.infer<typeof claimStatusSchema>;
 
 const wireClaimBaseSchema = targetRefSchema.extend({
   claimId: z.string(),
-  /** Human-readable phase: 'editing' | 'reviewing' | 'forecasting' … */
-  reason: z.string(),
+  /**
+   * Peer-visible description of the work being done (`'rewriting the risk
+   * section to match Q3'`). The server stamps a default when a frame carries
+   * none.
+   */
+  description: z.string().optional(),
   /** Server-stamped declaration time (epoch ms). */
   declaredAt: z.number(),
   /** Server-computed TTL deadline (epoch ms). Readers treat as advisory. */
   expiresAt: z.number(),
   status: claimStatusSchema.optional(),
+  /**
+   * The monotonic fencing token the server minted for this grant (Option B).
+   * Strictly increasing per entity across successive grants, so a write that
+   * carries it can be rejected at commit if a later holder already advanced the
+   * entity's high-water. Server-stamped on grant and never client-supplied;
+   * optional so every existing frame stays valid and a token-less write is
+   * simply not fence-checked.
+   */
+  fenceToken: z.number().optional(),
 });
 
 export const wireClaimSummarySchema = wireClaimBaseSchema.pick({
   claimId: true,
-  reason: true,
+  description: true,
   declaredAt: true,
   expiresAt: true,
   entityType: true,
@@ -270,7 +283,7 @@ export type ClaimError = z.infer<typeof claimErrorSchema>;
 /**
  * A declared, pending-mutation claim — the unit broadcast inside a presence
  * frame's `activeClaims`. The client supplies the descriptive `targetRef`
- * fields, an explanatory `reason`, and a chosen `claimId`; the server stamps
+ * fields, a `description` of the work, and a chosen `claimId`; the server stamps
  * `declaredAt` and `expiresAt` and may set `status` and `error`. Those last
  * two are optional, so one shape serves both the server, which sets them, and
  * the leaner SDK view, which reads a claim without them.
@@ -339,13 +352,15 @@ export const modelClaimSchema = z
     id: z.string(),
     actor: z.string(),
     participantKind: wireParticipantKindSchema,
-    /** Human-readable phase (`'editing'`). */
-    reason: z.string(),
+    /** Peer-visible description of the work (`'rewriting the risk section'`).
+     *  Optional: a claim may be declared without one. */
     description: z.string().optional(),
     field: z.string().optional(),
     status: z.enum(['active', 'queued']).optional(),
     position: z.number().optional(),
     expiresAt: z.number(),
+    /** The grant's fencing token (Option B), present on a claim you hold. */
+    fenceToken: z.number().optional(),
     target: modelTargetSchema,
   })
   .readonly();
@@ -353,13 +368,16 @@ export type ModelClaim = z.infer<typeof modelClaimSchema>;
 
 /**
  * The `claim_begin` payload a client sends. It carries the descriptive target
- * and reason, an optional duration hint, and the opt-in fair-queue flag. The
- * server stamps the lifecycle and timestamp fields, so they are not part of
- * this inbound shape — this is exactly what the server validates on ingest.
+ * and a `description` of the work, an optional duration hint, and the opt-in
+ * fair-queue flag. The server stamps the lifecycle and timestamp fields, so they
+ * are not part of this inbound shape — this is exactly what the server validates
+ * on ingest.
  */
 export const claimBeginPayloadSchema = targetRefSchema.extend({
   claimId: z.string(),
-  reason: z.string(),
+  /** Peer-visible description of the work. The server stamps `'editing'` when a
+   *  frame carries none. */
+  description: z.string().optional(),
   /** Hint for `expiresAt`; the server caps it. */
   estimatedMs: z.number().optional(),
   /**
@@ -566,6 +584,14 @@ export const commitOperationSchema = writeGuardSchema.extend({
   input: z.record(z.string(), z.unknown()).nullish(),
   /** Per-op client tx id, echoed on the broadcast delta. */
   transactionId: z.string().nullish(),
+  /**
+   * The fencing token from the held claim this write belongs to (Option B).
+   * Present only on a write issued under a claim that was granted one; the
+   * server checks it against the entity's persisted high-water and rejects a
+   * stale token. Absent (nullish) on every unclaimed write — those are governed
+   * by version-CAS and the Option A blind-write guard, unchanged.
+   */
+  fenceToken: z.number().nullish(),
 });
 export type CommitOperation = z.infer<typeof commitOperationSchema>;
 

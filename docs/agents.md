@@ -75,8 +75,7 @@ reconnects or be readable by HTTP agents. The recipe is a `messages` model
 scoped by the same syncGroup field as the work row, with `aboutIntentId` linking
 a message back to the claim it discusses.
 
-See [Agent Messaging](/agent-messaging) for the schema and direct
-`databaseUrl` setup.
+See [Agent Messaging](/agent-messaging) for the schema and setup details.
 
 ## Humans + agents on one state
 

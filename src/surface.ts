@@ -77,7 +77,6 @@ export const PUBLIC_ABLO_OPTION_KEYS = [
   'schema',
   'apiKey',
   'authEndpoint',
-  'databaseUrl',
   'persistence',
   'durableWrites',
   'commitOutbox',

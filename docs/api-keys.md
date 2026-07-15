@@ -47,7 +47,7 @@ tab-focus / network-online / device-wake). This is the Stripe ephemeral-key / Su
 session model. For a read-only app you don't need any of this — just the `pk_` above.
 
 Server-side, because `apiKey` defaults to `process.env.ABLO_API_KEY`, most backend and agent
-code passes nothing. The secret `sk_` (and `databaseUrl`) are **server-only** — never in a
+code passes nothing. The secret `sk_` is **server-only** — never in a
 browser bundle. There is no `getToken` or `as` option — `apiKey` (the key a server holds)
 and `authEndpoint` (the mint route a browser points at) are the two credential
 knobs, and you set exactly one.
@@ -58,7 +58,6 @@ knobs, and you set exactly one.
 |---|---|---|
 | Human end-user session | `await server.sessions.create({ user: { id } })` | `ek_` (full user authority) |
 | Scoped delegated agent | `await server.sessions.create({ agent: { id }, can: { Task: ['update'] } })` | `rk_` (scoped to `can`) |
-| Connect Ablo to your own Postgres | `Ablo({ schema, apiKey, databaseUrl })` (server-only) | dedicated tenant |
 
 The principal kind comes from *which* shape you pass — `{ user }` → `user`, `{ agent, can }` → `agent`.
 

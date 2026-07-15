@@ -90,9 +90,9 @@ export type DataSourceOptions<S extends SchemaRecord, TAuth = unknown> = {
    * Reports changes that happened outside the SDK — cron jobs, dashboard edits,
    * batch imports — which Ablo polls for. Each event you return becomes a delta and
    * fans out to connected clients. You can return your outbox rows directly: Ablo
-   * dedupes on the stable `event.id` and drops echoes of the SDK's own writes when a
-   * row carries the originating `clientTxId`, so store both fields in your outbox
-   * table.
+   * dedupes on stable `event.id`, appends the authoritative event, and uses a
+   * server-authored `correlationId` plus per-operation `transactionId` to settle
+   * the matching queued write. Store both fields for mediated endpoint commits.
    */
   readonly events?: SourceEventsHandler<TAuth>;
   /**
@@ -150,18 +150,37 @@ async function handleViaAdapter(
   }
 
   if (body.type === 'commit') {
-    if (!body.clientTxId) {
+    const correlationId = body.correlationId ?? body.clientTxId;
+    if (!correlationId) {
       return json(
-        { error: 'source_commit_requires_client_tx_id', message: 'commit requires a clientTxId for idempotency' },
+        {
+          error: 'source_commit_requires_correlation_id',
+          message: 'commit requires a scoped correlationId for idempotency',
+        },
         400,
       );
     }
     const parsed = changeSetSchema.safeParse({
       operations: body.operations,
-      clientTxId: body.clientTxId,
+      correlationId,
+      intentHash: body.intentHash,
+      echo: body.echo,
     });
     if (!parsed.success) {
       return json({ error: 'source_commit_invalid', message: parsed.error.message }, 400);
+    }
+    if (
+      parsed.data.echo?.kind === 'postgres-wal' &&
+      adapter.capabilities.postgresWalEcho !== true
+    ) {
+      return json(
+        {
+          error: 'source_commit_echo_not_supported',
+          message:
+            'This adapter cannot emit the required Postgres WAL commit echo',
+        },
+        409,
+      );
     }
     const result = await adapter.commit(parsed.data);
     return json({ rows: result.rows });
@@ -178,6 +197,8 @@ async function handleViaAdapter(
         ...(event.data !== undefined && event.data !== null ? { data: event.data } : {}),
         ...(event.organizationId ? { organizationId: event.organizationId } : {}),
         ...(event.clientTxId ? { clientTxId: event.clientTxId } : {}),
+        ...(event.correlationId ? { correlationId: event.correlationId } : {}),
+        ...(event.transactionId ? { transactionId: event.transactionId } : {}),
         ...(event.occurredAt !== undefined && event.occurredAt !== null
           ? { occurredAt: event.occurredAt }
           : {}),
@@ -373,7 +394,10 @@ export function dataSource<const S extends SchemaRecord, TAuth = unknown>(
       if (options.commit) {
         const result = await options.commit({
           operations: body.operations,
+          correlationId: body.correlationId ?? body.clientTxId,
           clientTxId: body.clientTxId,
+          intentHash: body.intentHash,
+          echo: body.echo,
           context,
         });
         return json(result);
@@ -389,7 +413,10 @@ export function dataSource<const S extends SchemaRecord, TAuth = unknown>(
       }
       const result = await handlers.commit({
         operations: body.operations,
+        correlationId: body.correlationId ?? body.clientTxId,
         clientTxId: body.clientTxId,
+        intentHash: body.intentHash,
+        echo: body.echo,
         context,
       });
       return json(result);

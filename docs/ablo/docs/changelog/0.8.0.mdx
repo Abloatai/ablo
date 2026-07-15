@@ -1,0 +1,39 @@
+---
+title: "v0.8.0"
+type: changelog
+changelog:
+  version: "0.8.0"
+  category: "Features"
+---
+
+{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
+
+A callable `claim` coordination namespace and bring-your-own-database support
+via a new `databaseUrl` option.
+
+### Minor Changes
+
+- **Callable `claim` coordination namespace.** Taking a claim and inspecting its
+  state now live under one accessor: `claim(id, work)` acquires a claim and runs
+  `work` while it's held, and `claim.state(id)`, `claim.queue(id)`,
+  `claim.release(id)`, and `claim.reorder(id, order)` cover the surrounding
+  lifecycle. The README leads with the problem (who is allowed to act, and in
+  what order) and the Quick Start now demonstrates `claim` directly.
+
+- **Bring-your-own-database via `databaseUrl`.** Point a project at your own
+  Postgres with `Ablo({ schema, apiKey, databaseUrl })`. Ablo writes synced rows
+  back into your database, so your data stays canonical. Server-side only;
+  defaults to `process.env.DATABASE_URL`. See the data-sources guide for setup
+  and role requirements.
+
+### Breaking
+
+- The flat coordination methods `claimState`, `queue`, `release`, and `reorder`
+  are removed in favor of the `claim` namespace above.
+
+  ```diff
+  - await ablo.task.claimState(id)
+  - await ablo.task.release(id)
+  + await ablo.task.claim.state(id)
+  + await ablo.task.claim.release(id)
+  ```

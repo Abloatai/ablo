@@ -109,7 +109,7 @@ export type AbloHttpClient<S extends SchemaRecord> = {
     InferCreate<Schema<S>, K>
   >;
 } & {
-  /** Runs one-time setup, such as registering a configured `databaseUrl` data source, before the client is used. It also runs lazily ahead of the first request, so calling it yourself is optional. */
+  /** Runs one-time setup (durable-outbox scope resolution and replay) before the client is used. It also runs lazily ahead of the first request, so calling it yourself is optional. */
   ready(): Promise<void>;
   /** Replays every pending durable HTTP write in seal order and waits for settlement. */
   waitForFlush(): Promise<void>;

@@ -19,10 +19,10 @@ import type { MutationOperation } from '../interfaces/index.js';
 import { clientSyncDeltaSchema, type ClientSyncDelta } from '../wire/delta.js';
 import type { BootstrapReason } from '../wire/bootstrapReason.js';
 import type {
-  ClaimError,
   ClaimRejection,
   StaleNotification,
   ReadDependency,
+  WireClaim,
 } from '../coordination/schema.js';
 // Commit-path frame builders (pure) — extracted leaf; the host re-exports
 // `CommitAck` below so importers keep this module as their path.
@@ -214,32 +214,10 @@ export interface PresenceUpdateEvent {
   participantKind?: string;
   timestamp?: number;
   /** Every presence frame carries this participant's open claims, stamped by
-   *  the server, so peers see them without a separate channel. */
-  activeClaims?: {
-    claimId: string;
-    entityType: string;
-    entityId: string;
-    path?: string;
-    range?: {
-      startLine: number;
-      endLine: number;
-      startColumn?: number;
-      endColumn?: number;
-    };
-    reason: string;
-    field?: string;
-    meta?: Record<string, unknown>;
-    declaredAt: number;
-    expiresAt: number;
-    /**
-     * The claim's lifecycle state. When absent, the reader treats it as
-     * `'active'`. A terminal state (`committed`, `expired`, or `canceled`) rides
-     * one final frame as the claim ends, so peers learn how it resolved before
-     * it drops from the active set.
-     */
-    status?: 'active' | 'committed' | 'expired' | 'canceled';
-    error?: ClaimError;
-  }[];
+   *  the server, so peers see them without a separate channel. The claim shape
+   *  is the canonical {@link WireClaim} — one declaration in
+   *  `coordination/schema.ts`, not a hand-kept copy. */
+  activeClaims?: WireClaim[];
   // Optional fields retained for simpler online/offline presence consumers.
   localTime?: string;
   type?: string;

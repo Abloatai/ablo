@@ -54,6 +54,35 @@ export type {
   MutationResultMessage,
 } from './frames.js';
 
+// Commit settlement backbone. The transport receipt, server execution cache,
+// and normalized client acknowledgement are different envelopes composed from
+// this one discriminated settlement vocabulary.
+export {
+  COMMIT_CORRELATION_ID_MAX_LENGTH,
+  correlationIdSchema,
+  commitStatusSchema,
+  commitSettlementSchema,
+  commitReceiptSchema,
+  legacyCompatibleCommitReceiptSchema,
+  rejectedCommitReceiptSchema,
+  mutationResultPayloadSchema,
+  mutationResultMessageSchema,
+  commitAckSchema,
+  mutationCommitResultSchema,
+} from './commit.js';
+export type {
+  CorrelationId,
+  CommitStatus,
+  CommitSettlement,
+  CommitReceiptWire,
+  RejectedCommitReceiptWire,
+  MutationResultPayload,
+  MutationResultMessageWire,
+  CommitAck,
+  MutationCommitResultInput,
+  MutationCommitResult,
+} from './commit.js';
+
 // The read-path delta contract: the shape the server broadcasts to clients as the
 // payload of a `delta` or `sync_response` frame, together with the shared
 // participant vocabulary it carries. Both ends derive their delta type from these

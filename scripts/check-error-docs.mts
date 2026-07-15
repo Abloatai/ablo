@@ -13,18 +13,18 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { renderErrorsJson, renderErrorsMdx } from './error-docs-lib.mts';
 
-const docsDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../../docs/ablo');
+const siteRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../docs/ablo');
 
 const checks: { file: string; expected: string }[] = [
-  { file: 'errors.mdx', expected: renderErrorsMdx() },
-  { file: 'errors.json', expected: renderErrorsJson() },
+  { file: 'docs/errors.mdx', expected: renderErrorsMdx() },
+  { file: 'public/errors.json', expected: renderErrorsJson() },
 ];
 
 let stale = false;
 for (const { file, expected } of checks) {
   let actual: string;
   try {
-    actual = readFileSync(resolve(docsDir, file), 'utf8');
+    actual = readFileSync(resolve(siteRoot, file), 'utf8');
   } catch {
     console.error(`[errors] MISSING docs/ablo/${file} — run \`npm run generate:errors\``);
     stale = true;
@@ -37,4 +37,4 @@ for (const { file, expected } of checks) {
 }
 
 if (stale) process.exit(1);
-console.log('[errors] docs/ablo/errors.{mdx,json} are in sync with the registry');
+console.log('[errors] docs/ablo/docs/errors.mdx + docs/ablo/public/errors.json are in sync with the registry');

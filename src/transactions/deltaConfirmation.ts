@@ -54,6 +54,17 @@ export class DeltaConfirmationTracker {
     return this.ctx.position.applied;
   }
 
+  private matchesSourceEcho(
+    tx: Transaction,
+    correlationId: string | undefined,
+  ): boolean {
+    return (
+      correlationId !== undefined &&
+      tx.correlationId !== undefined &&
+      correlationId === tx.correlationId
+    );
+  }
+
   noteAck(lastSyncId: number | undefined): void {
     this.ctx.position.noteAck(lastSyncId);
   }
@@ -63,7 +74,7 @@ export class DeltaConfirmationTracker {
    * meets or exceeds.
    * @param syncId - The sync id of the received delta.
    */
-  onDeltaReceived(syncId: number): void {
+  onDeltaReceived(syncId: number, correlationId?: string): void {
     // The cursor advances where the delta is applied (the store calls
     // position.advanceApplied / advancePersisted); this hook only resolves
     // confirmation thresholds against the incoming id.
@@ -82,8 +93,12 @@ export class DeltaConfirmationTracker {
           txId: tx.id.slice(0, 8),
           model: tx.modelName,
           needed: tx.syncIdNeededForCompletion,
+          requiresCorrelatedDelta: tx.requiresCorrelatedDelta === true,
           willConfirm:
-            tx.syncIdNeededForCompletion !== undefined && syncId >= tx.syncIdNeededForCompletion,
+            tx.requiresCorrelatedDelta === true
+              ? this.matchesSourceEcho(tx, correlationId)
+              : tx.syncIdNeededForCompletion !== undefined &&
+                syncId >= tx.syncIdNeededForCompletion,
         })),
       });
     }
@@ -94,8 +109,18 @@ export class DeltaConfirmationTracker {
     let confirmedCount = 0;
 
     for (const tx of awaitingTxs) {
-      // Confirm if this delta's ID meets or exceeds the threshold
-      if (tx.syncIdNeededForCompletion !== undefined && syncId >= tx.syncIdNeededForCompletion) {
+      // Queued forward receipts deliberately have no watermark. They confirm
+      // only when the authoritative source echoes the receipt's opaque,
+      // authenticated-scope batch identity; the legacy anomaly path continues
+      // to use its sync-id threshold.
+      const confirmedByCorrelation =
+        tx.requiresCorrelatedDelta === true &&
+        this.matchesSourceEcho(tx, correlationId);
+      const confirmedByThreshold =
+        tx.requiresCorrelatedDelta !== true &&
+        tx.syncIdNeededForCompletion !== undefined &&
+        syncId >= tx.syncIdNeededForCompletion;
+      if (confirmedByCorrelation || confirmedByThreshold) {
         this.cancelDeltaConfirmationTimeout(tx.id);
         this.ctx.store.updateStatus(tx.id, 'completed');
         this.ctx.emit('transaction:completed', tx);
@@ -108,6 +133,7 @@ export class DeltaConfirmationTracker {
           model: tx.modelName,
           neededSyncId: tx.syncIdNeededForCompletion,
           receivedSyncId: syncId,
+          confirmation: confirmedByCorrelation ? 'source_correlation' : 'sync_id',
         });
       }
     }

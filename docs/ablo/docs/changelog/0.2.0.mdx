@@ -1,0 +1,51 @@
+---
+title: "v0.2.0"
+type: changelog
+changelog:
+  version: "0.2.0"
+  category: "Fixes"
+---
+
+{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
+
+Mesh SDK — the canonical agent-multiplayer surface. Locked at this release; further work is consolidation, not expansion.
+
+### What's frozen
+
+The SDK covers exactly three integration shapes. Each has a canonical example in [`examples/`](./examples/):
+
+1. **Server agent** — `new Ablo({ schema })` reads `ABLO_API_KEY`, joins and works. ([`examples/server-agent.ts`](./examples/server-agent.ts))
+2. **Browser app** — server mints a scoped capability, browser holds it via `new Ablo({ schema, capabilityToken })`. No API key in bundle, no session cookies, no allowed-origins registration required. Stripe `client_secret` shape. ([`examples/browser-app.ts`](./examples/browser-app.ts))
+3. **Sub-agent** — `parent.join(child, opts)` attenuates from the parent's capability. ([`examples/sub-agent.ts`](./examples/sub-agent.ts))
+
+### Ergonomics (package-wide)
+
+- **`Ablo` class** — `import Ablo from '@abloatai/ablo'` / `new Ablo({ schema })`. Matches `new Stripe()` / `new OpenAI()` / `new Anthropic()` pattern. `createMesh(opts)` stays available as the functional alias.
+- **Model-scoped joins** — `ablo.matters.join(id, { label })` desugars to the generic `join`. Proxy-based so the namespace adapts to any schema. Collisions with reserved admin fields (`roles`, `members`, `audit`, `capabilities`) throw at construction time.
+- **Flat scope form** — `scope: { matters: id }` alongside the array form.
+- **`as` alias** — `{ as: session({...}) }` replaces the security-jargon `onBehalfOf`; both still accepted.
+- **Auto-connect** — `join()` returns a connected participant. `autoConnect: false` to opt out.
+- **Duration strings** — `ttl: '3m'`, `ttlSeconds: '24h'` accepted alongside numbers.
+- **Descriptive generics** — every public type uses `TSchema` / `TAgent` / `ModelName` instead of `S` / `A` / `K`. Zero `unknown` in public types.
+
+### Coordination primitives
+
+- **Presence verbs** — `participant.presence.editing(target)` / `viewing(target)` / `idle()`. Plus `update({...})` escape hatch for custom actions.
+- **Intent verbs** — `participant.intents.editing(target, opts)` / `writing(target, opts)`. Returns an `IntentHandle` with `Symbol.asyncDispose` so `await using work = ...` auto-revokes.
+- **Snapshots** — `const snap = await participant.snapshot({ clauses: [id] })`. Flat shape: `snap.clauses[id]` (typed from schema via `InferModel`, not `unknown`), `snap.stamp`, `snap.signal` (AbortSignal).
+- **Async iterables** — `for await (const peers of participant.presence)`, `for await (const openIntents of participant.intents)`, `for await (const delta of participant.deltas)`.
+
+### Env / config
+
+- `ABLO_API_KEY` — required for server-side use.
+- `baseURL` — optional override for private deployments / local-dev (defaults to `wss://api.abloatai.com`).
+- `organizationId` — **no longer required** in `createMesh`. The API key or session binds the caller to one org; the capability mint response echoes it back.
+- `createMeshFromEnv` — removed. `new Ablo({ schema })` auto-reads env.
+
+### Test coverage
+
+- 53 mesh unit tests across 8 suites (`__tests__/unit/mesh/`)
+- New E2E test `e2e-browser-capability-token.ts` proves the server-mints / browser-holds flow end-to-end
+- Existing 12 mesh E2E tests (token refresh, watermark, chinese wall, etc.) still pass
+
+---

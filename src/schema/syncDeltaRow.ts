@@ -4,14 +4,17 @@
  * serves:
  *
  *   - {@link syncDeltaCoreSchema} — the sync-protocol slice: everything a client
- *     needs to reconstruct the change, plus the tenant key. This is the portable
- *     part, and the only part written atomically with the application row.
+ *     needs to reconstruct the change, plus the tenant key. This is a portable
+ *     payload shape; it is not a statement that the row is physically stored in
+ *     the customer's database.
  *   - {@link deltaAttributionSchema} — who made the change, and on whose authority.
  *   - {@link deltaProvenanceSchema} — which AI task, if any, produced it.
  *
  * {@link syncDeltaRowSchema} composes all three into the full stored row.
- * {@link DELTA_RESIDENCY} records which database each slice lives in, so
- * provisioning can derive that boundary from the schema instead of hand-coding it.
+ * {@link DELTA_DATA_CLASSIFICATION} states which slices contain customer data,
+ * while {@link DELTA_PHYSICAL_STORAGE} states where the runtime persists them.
+ * Keeping those axes separate prevents a portable schema slice from being cited
+ * incorrectly as a physical-residency guarantee.
  *
  * This is the stored shape. The delta broadcast to clients is a narrower projection
  * of it — see {@link import('../wire/delta.js').syncDeltaWireCoreSchema} — and
@@ -41,10 +44,11 @@ const deltaDataSchema = z.record(z.string(), z.unknown()).nullable();
 
 /**
  * Everything a client needs to materialize the change, plus the tenant key. This
- * is the portable slice: the only part written atomically with the application
- * row, and the shape an outbox marker in a customer's own database carries. `id`,
- * `createdAt`, and `syncGroups` are assigned by the server when the delta is
- * appended, so they are optional here — an outbox marker does not have them yet.
+ * is the portable shape an authoritative WAL change or endpoint event carries.
+ * The runtime persists the resulting full row in Ablo's tenant-scoped ordered
+ * sync log; it is not written atomically with a direct application-row mutation.
+ * `id`, `createdAt`, and `syncGroups` are assigned when the source change is
+ * appended, so they are optional at the ingestion boundary.
  */
 export const syncDeltaCoreSchema = z.object({
   /** Monotonically increasing sync id, assigned by the server when the delta is appended; absent on an outbox marker. */
@@ -62,6 +66,12 @@ export const syncDeltaCoreSchema = z.object({
   /** ISO 8601 timestamp, assigned by the server when the delta is appended. */
   createdAt: z.string().optional(),
   transactionId: z.string().nullable(),
+  /**
+   * Stable identity of the authoritative WAL row or endpoint event. It is
+   * nullable for hosted/legacy rows and is never exposed as the optimistic
+   * client transaction id.
+   */
+  sourceChangeId: z.string().min(1).nullable().optional(),
 });
 export type SyncDeltaCore = z.infer<typeof syncDeltaCoreSchema>;
 
@@ -89,7 +99,7 @@ export const deltaProvenanceSchema = z.object({
 });
 export type DeltaProvenance = z.infer<typeof deltaProvenanceSchema>;
 
-// ── Full stored row and its residency map ─────────────────────────────────────
+// ── Full stored row, classification, and physical storage ─────────────────────
 
 /** The complete `sync_deltas` row: core, attribution, and provenance combined. */
 export const syncDeltaRowSchema = syncDeltaCoreSchema
@@ -97,14 +107,24 @@ export const syncDeltaRowSchema = syncDeltaCoreSchema
   .extend(deltaProvenanceSchema.shape);
 export type SyncDeltaRow = z.infer<typeof syncDeltaRowSchema>;
 
+/** Which slices contain retained customer row data versus control metadata. */
+export const DELTA_DATA_CLASSIFICATION = {
+  core: 'customer-data',
+  attribution: 'control-metadata',
+  provenance: 'control-metadata',
+} as const;
+
 /**
- * Maps each slice to the database it belongs in. A customer's own database holds
- * only the `tenant` slice; the `control` slices are enriched and stored in the
- * host's own database. Provisioning reads this map to decide which columns a given
- * database receives, rather than hand-coding the boundary.
+ * Where the current runtime physically persists each slice. All three live in
+ * Ablo's tenant-scoped `sync_deltas` log. `core` contains full post-change row
+ * payloads (and optional previous payloads), so `control` here must not be read
+ * as "metadata only."
  */
-export const DELTA_RESIDENCY = {
-  core: 'tenant',
+export const DELTA_PHYSICAL_STORAGE = {
+  core: 'control',
   attribution: 'control',
   provenance: 'control',
 } as const satisfies Record<string, ModelResidency>;
+
+/** @deprecated Use `DELTA_PHYSICAL_STORAGE`; classification is a separate axis. */
+export const DELTA_RESIDENCY = DELTA_PHYSICAL_STORAGE;

@@ -250,7 +250,9 @@ await ablo.weatherReports.update({
 If someone else holds the row, `claim()` waits in a fair queue, then re-reads —
 so `report` is the current row, never a stale snapshot. Reads stay open by
 default; only acting on the row serializes. The claim releases when the `await
-using` scope exits.
+using` scope exits — on return, and on a throw. That "on throw" is why `await
+using` earns its keep: if the agent call fails before the write, the row frees
+for the next in line and stays exactly as it was, with no cleanup of your own.
 
 See who's mid-edit before you act — decide to wait, or skip:
 
@@ -482,7 +484,6 @@ Every other option has correct defaults:
 | --- | --- | --- | --- |
 | `schema` | `Schema` | — (required) | Typed model proxies (`ablo.<model>.*`) |
 | `apiKey` | `string \| ApiKeySetter \| null` | `process.env.ABLO_API_KEY` | Server key — a string, or an async function for rotation |
-| `databaseUrl` | `string \| null` | `—` | Deprecated. Connect via `npx ablo connect` instead — see [Connect Your Database](./docs/data-sources.md). |
 
 Keep `apiKey` in trusted server runtimes. In the browser, `<AbloProvider>`
 authenticates with the signed-in user's session; the raw-key path is gated

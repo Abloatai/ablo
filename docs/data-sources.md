@@ -205,12 +205,9 @@ rows.
 > connecting a new database. They are the seams that caused painful onboarding,
 > and `ablo connect` exists precisely to replace them.
 
-These older shapes connected Ablo to a database two other ways: by handing Ablo a
-**connection string** to operate directly (`databaseUrl` on the client, committing
-writes itself behind row-level security), or by exposing a **signed Data Source
+This older shape connected Ablo to a database by exposing a **signed Data Source
 endpoint** built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`,
 with `ablo_outbox` / `ablo_idempotency` bookkeeping and a reverse-channel
-connector for VPCs). Both required Ablo to either operate your database or proxy
-every write, and both have been superseded by logical replication, where Ablo only
-reads your WAL. If you are maintaining one of these integrations, migrate it to
-`ablo connect` at the next opportunity.
+connector for VPCs). It required Ablo to proxy every write, and has been superseded
+by logical replication, where Ablo only reads your WAL. If you are maintaining one
+of these integrations, migrate it to `ablo connect` at the next opportunity.

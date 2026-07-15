@@ -19,8 +19,8 @@ import {
   commitOperationSchema as coordinationCommitOperationSchema,
   readDependencySchema,
 } from '../coordination/schema.js';
-import type { OnStaleMode, StaleNotification, ReadDependency } from '../coordination/index.js';
-import type { ErrorCode, RequiredCapability } from '../errors.js';
+import type { OnStaleMode, ReadDependency } from '../coordination/index.js';
+import type { MutationResultMessageWire } from './commit.js';
 
 /** Asserts two types are exactly equal in both directions. Used to pin each
  *  Zod schema to its interface: the assignment fails to compile the moment
@@ -69,6 +69,15 @@ export interface CommitOperation {
    * framework identities; a bypass requested by an agent is ignored.
    */
   bypass?: boolean | null;
+  /**
+   * The monotonic fencing token of the held claim this write was issued under
+   * ({@link https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html Kleppmann fencing}).
+   * The server rejects the write if a later holder already advanced this
+   * entity's persisted high-water past the token — closing the "lapsed holder
+   * resumes after its successor came and went" residual that the live-lease
+   * claim guard cannot see. Absent on every unclaimed write.
+   */
+  fenceToken?: number | null;
 }
 
 /**
@@ -141,47 +150,8 @@ void _commitPayloadContract;
 // ── Server → Client ──────────────────────────────────────────────────────
 
 /**
- * The server's acknowledgement of a {@link CommitMessage}. Its payload mirrors
- * the commit-receipt shape, so a commit acknowledged over a WebSocket, over the
- * HTTP `/v1/commits` endpoint, or read back from a persisted job result all
- * carry the same fields.
- *
- * `object`, `status`, and `ops` are optional in the type but the server always
- * populates them, so a current client can rely on them being present.
+ * The server's acknowledgement of a {@link CommitMessage}. Runtime shape and
+ * TypeScript type are both owned by `wire/commit.ts`; HTTP, WebSocket, and
+ * cached replay no longer maintain parallel receipt declarations.
  */
-export interface MutationResultMessage {
-  type: 'mutation_result';
-  payload: {
-    object?: 'commit_receipt';
-    clientTxId: string;
-    serverTxId: string;
-    success: boolean;
-    status?: 'confirmed' | 'rejected';
-    lastSyncId?: number;
-    ops?: number;
-    /**
-     * Notifications for operations that used `onStale: 'notify'` and whose
-     * premise changed while the batch was being applied. Present only on a
-     * successful acknowledgement that resolved such a conflict; the client
-     * surfaces each one through its `conflict:notified` event and the commit
-     * receipt rather than failing the write.
-     */
-    notifications?: StaleNotification[];
-    /**
-     * Ids of update or delete targets that matched no rows — because they do
-     * not exist or fall outside the caller's organization. Present and
-     * non-empty only when a write missed. The client raises a not-found error
-     * for the affected caller rather than treating the no-op as a success.
-     */
-    missingIds?: string[];
-    error?: {
-      code: ErrorCode;
-      message: string;
-      field?: string;
-      /** The capability the commit required but the caller lacked. Present when
-       *  the commit was denied for want of a capability, so the client can tell
-       *  the caller exactly what to obtain. */
-      requiredCapability?: RequiredCapability;
-    };
-  };
-}
+export type MutationResultMessage = MutationResultMessageWire;

@@ -3,10 +3,12 @@
  * that wires an implementation into the `dataSource()` HTTP handler. This package
  * defines the contract and ships adapters for three object-relational mappers —
  * {@link prismaDataSource}, {@link drizzleDataSource}, and {@link kyselyDataSource} —
- * each verified by the shared conformance suite. You can also write your own.
+ * each verified by shared mutation checks plus endpoint-only outbox checks. The
+ * direct Kysely wrapper runs only the shared mutation contract. You can also
+ * write your own.
  *
- * An adapter reads and writes your database, and it owns the transactional outbox
- * and idempotency bookkeeping as well, so you never write those by hand:
+ * An endpoint adapter reads and writes your database, and it owns the transactional
+ * outbox and idempotency bookkeeping as well, so you never write those by hand:
  *
  *   export const POST = dataSource({
  *     schema, apiKey: process.env.ABLO_API_KEY!,
@@ -40,32 +42,40 @@ export type AdapterReadRequest =
   | { readonly kind: 'load'; readonly model: string; readonly id: string; readonly scope?: SourceRequestContext }
   | { readonly kind: 'list'; readonly model: string; readonly query?: SourceListQuery; readonly scope?: SourceRequestContext };
 
-/** What {@link DataSourceAdapter.commit} returns: the rows as they stand after the write. */
+/** What {@link MutationAdapter.commit} returns: the rows as they stand after the write. */
 export interface AdapterCommitResult {
   /** The affected rows after the write. The change log is derived from these. */
   readonly rows: readonly Row[];
 }
 
 /**
- * The interface an adapter implements to serve one data source. `read` and
- * `commit` read from and write to your database, `events` reads the outbox that
- * `commit` appends to, and `migrations` supplies the SQL that creates the adapter's
- * own two tables. `capabilities` advertises which optional features the adapter
- * supports.
+ * Guarantees shared by direct and endpoint mutation wrappers. Both apply row DML
+ * and write the permanent idempotency ledger in one transaction. The scoped,
+ * server-authored `correlationId` is the ledger key; a caller-authored operation
+ * transaction id is never used as that namespace.
  */
-export interface DataSourceAdapter {
+export interface MutationAdapter {
   readonly capabilities: AdapterCapabilities;
-  /** The table-creation SQL the adapter needs for its own tables, `ablo_idempotency` and `ablo_outbox`. */
+  /** Infrastructure migrations required by this wrapper's advertised capabilities. */
   migrations(): readonly Migration[];
   /** The rows matching a load or list request. */
   read(req: AdapterReadRequest): Promise<readonly Row[]>;
   /**
-   * Applies a change set in one transaction, keyed for idempotency by `clientTxId`.
-   * Replaying the same `clientTxId` returns the original rows without applying the
-   * change again. The matching `ablo_outbox` rows are written in the same
-   * transaction as the data rows, so the outbox can never drift from the data.
+   * Applies a change set in one transaction, keyed by its scoped `correlationId`.
+   * Replaying the same correlation and canonical request hash returns the original
+   * rows without applying DML again; a different hash fails closed.
    */
   commit(change: ChangeSet): Promise<AdapterCommitResult>;
+}
+
+/**
+ * Endpoint-only extension of {@link MutationAdapter}. Its commit writes one
+ * correlated outbox event per operation in the same transaction as the DML and
+ * ledger. Direct wrappers deliberately do not implement this interface: WAL is
+ * their authoritative source feed and they must never write `ablo_outbox`.
+ */
+export interface DataSourceAdapter extends MutationAdapter {
+  readonly capabilities: AdapterCapabilities & { readonly outboxEvents: true };
   /** Reads outbox events after `cursor` (`null` starts from the beginning), up to `limit` events. */
   events(cursor: string | null, limit: number): Promise<EventsPage>;
 }

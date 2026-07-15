@@ -91,6 +91,13 @@ function isSameOutboxRecord(
       request: record.request,
       scopeNamespace: record.scopeNamespace,
     });
+    if (
+      existing.correlationId !== undefined &&
+      candidate.correlationId !== undefined &&
+      existing.correlationId !== candidate.correlationId
+    ) {
+      return false;
+    }
     return JSON.stringify(identity(existing)) === JSON.stringify(identity(candidate));
   }
   if (
@@ -108,9 +115,30 @@ function isSameOutboxRecord(
       commitOptions: record.commitOptions,
       scope: record.scope,
     });
+    if (
+      existing.correlationId !== undefined &&
+      candidate.correlationId !== undefined &&
+      existing.correlationId !== candidate.correlationId
+    ) {
+      return false;
+    }
     return JSON.stringify(identity(existing)) === JSON.stringify(identity(candidate));
   }
   return JSON.stringify(existing) === JSON.stringify(candidate);
+}
+
+function isAcceptedOutboxPromotion(
+  existing: PersistedTransaction | undefined,
+  candidate: PersistedTransaction,
+): boolean {
+  return (
+    existing !== undefined &&
+    (existing.type === 'commit_envelope' ||
+      existing.type === 'http_commit_envelope') &&
+    existing.type === candidate.type &&
+    existing.acceptedAt === undefined &&
+    candidate.acceptedAt !== undefined
+  );
 }
 
 /**
@@ -1715,6 +1743,9 @@ export class Database {
           code: 'idempotency_conflict',
         });
       }
+      if (isAcceptedOutboxPromotion(existing, record)) {
+        await store.put(record);
+      }
       if (!existing) {
         const sources = await Promise.all(
           consumedRecordIds.map((id) => store.get(id)),
@@ -1786,7 +1817,11 @@ export class Database {
             tx.abort();
             return;
           }
-          if (!existing) store.add(record);
+          if (!existing) {
+            store.add(record);
+          } else if (isAcceptedOutboxPromotion(existing, record)) {
+            store.put(record);
+          }
           for (const id of sourceIds) store.delete(id);
         };
 
@@ -1838,7 +1873,11 @@ export class Database {
       // idempotency retention may already have elapsed, so silently deleting or
       // blindly replaying an old envelope would both be unsafe. Restoration
       // owns quarantine/reconciliation for these records.
-      if (tx.type === 'commit_envelope' || tx.type === 'pending_mutation') {
+      if (
+        tx.type === 'commit_envelope' ||
+        tx.type === 'http_commit_envelope' ||
+        tx.type === 'pending_mutation'
+      ) {
         continue;
       }
       if (typeof tx.timestamp === 'number' && tx.timestamp < cutoff) {

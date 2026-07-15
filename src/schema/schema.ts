@@ -202,6 +202,20 @@ export interface Schema<S extends SchemaRecord = SchemaRecord> {
    * to derive a participant's allowed sync-group set.
    */
   readonly identityRoles: readonly IdentityRole[];
+
+  /**
+   * Set only on a projection produced by `selectModels`/`omitModels`: the
+   * content hash of the FULL source schema the subset was cut from. A subset
+   * hashes differently from the full schema it belongs to, so a projection-bound
+   * client would otherwise always report drift against a server running the full
+   * schema. The drift check treats the client as in-sync when the server's active
+   * hash matches EITHER this client's own (subset) hash or this source hash — so
+   * a current projection stays quiet while a genuinely behind server still warns.
+   * Absent on a schema authored directly, where the client's own hash is the
+   * deployed hash and plain equality is correct. Excluded from `toSchemaJSON`, so
+   * stamping it never perturbs `schemaHash`.
+   */
+  readonly sourceSchemaHash?: string;
 }
 
 // ── Type inference (powered by Zod) ───────────────────────────────────────

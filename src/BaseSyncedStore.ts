@@ -1774,7 +1774,9 @@ export class BaseSyncedStore<
       get highestProcessedSyncId() { return store.highestProcessedSyncId; },
       get lastAckedId() { return store.lastAckedId; },
       // SyncClient position/transaction bookkeeping.
-      onDeltaReceived: (syncId) => { this.syncClient.onDeltaReceived(syncId); },
+      onDeltaReceived: (syncId, transactionId, correlationId) => {
+        this.syncClient.onDeltaReceived(syncId, transactionId, correlationId);
+      },
       advanceApplied: (syncId) => { this.syncClient.position.advanceApplied(syncId); },
       advancePersisted: (syncId) => { this.syncClient.position.advancePersisted(syncId); },
       // Persistence + pool writes.

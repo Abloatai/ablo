@@ -164,7 +164,7 @@ async function main() {
     console.log(`  ${pc.bold('Usage:')}`);
     console.log(`    npx ablo init                          Scaffold ablo/ directory + starter schema`);
     console.log(`    npx ablo init --yes [--framework nextjs] Non-interactive (agents/CI): no prompts, flag-driven`);
-    console.log(`                  [--auth apikey] [--storage direct|endpoint] [--project <slug>] [--no-project]`);
+    console.log(`                  [--auth apikey] [--storage replication|endpoint] [--project <slug>] [--no-project]`);
     console.log(`                  [--no-agent] [--no-pull] [--no-install] [--no-login]`);
     console.log(`    npx ablo login                         Authorize in your browser (provisions sandbox + production keys)`);
     console.log(`    npx ablo login --project <slug>        Same, scoped to a project (mints its keys, makes it active)`);
@@ -227,11 +227,9 @@ const INIT_AUTHS = ['apikey', 'firebase', 'auth0', 'clerk', 'supabase', 'bettera
 // the primary path and the default: Ablo consumes your write-ahead log while
 // your app keeps the write path. 'endpoint' (a signed data-source endpoint) is
 // the fallback for databases that cannot grant a REPLICATION role, and
-// 'datasource' is an alias for it. 'direct' (the `databaseUrl` connector that
-// lets Ablo dial into your database) is deprecated and accepted only for
-// existing projects.
-const INIT_STORAGES = ['replication', 'endpoint', 'direct', 'datasource'];
-type InitStorage = 'endpoint' | 'direct' | 'replication';
+// 'datasource' is an alias for it.
+const INIT_STORAGES = ['replication', 'endpoint', 'datasource'];
+type InitStorage = 'endpoint' | 'replication';
 
 interface InitOptions {
   readonly yes: boolean;
@@ -425,19 +423,11 @@ async function init(args: readonly string[] = []) {
   // Logical replication is the one path: Ablo consumes your Postgres WAL and your
   // app owns the write path. The database is connected out of band via `ablo connect`,
   // so the scaffold needs no DB wiring — nothing to ask. 'endpoint' (a signed Data
-  // Source endpoint) is the fallback for DBs that can't grant a REPLICATION role;
-  // '--storage direct' (databaseUrl dial-in) is deprecated, honored for existing projects.
+  // Source endpoint) is the fallback for DBs that can't grant a REPLICATION role.
   const storageChoice = await chooseOption('storage', opts.storage, 'replication', INIT_STORAGES, false, () =>
     Promise.resolve('replication'),
   );
   const storage: InitStorage = storageChoice === 'datasource' ? 'endpoint' : (storageChoice as InitStorage);
-  if (storage === 'direct') {
-    note(
-      '`--storage direct` uses the deprecated databaseUrl connector. Logical replication\n' +
-        '(`npx ablo connect`) is the supported path; a signed Data Source endpoint is the fallback.',
-      pc.yellow('Deprecated'),
-    );
-  }
 
   // The agent teammate is the headline example — defaults to yes.
   const agent = await chooseBool(opts.agent, true, interactive, () =>
@@ -499,7 +489,7 @@ async function init(args: readonly string[] = []) {
   writeFileSync(join(abloDir, 'schema.ts'), schemaSource);
   created.push(`${abloDir}/schema.ts${schemaNote}`);
 
-  writeFileSync(join(abloDir, 'index.ts'), generateSyncConfig(auth, storage));
+  writeFileSync(join(abloDir, 'index.ts'), generateSyncConfig(auth));
   created.push(`${abloDir}/index.ts`);
 
   writeFileSync(join(abloDir, 'register.ts'), generateRegister());
@@ -602,10 +592,6 @@ async function init(args: readonly string[] = []) {
           `Verify it — ${pc.bold('npx ablo connect --check')} walks wal_level, the publication, the role, and replica identity, with the exact fix for anything missing`,
           `Register it — ${pc.bold('npx ablo connect --register')} tells Ablo to start replicating; your app keeps writing through your own backend while Ablo tails the WAL`,
         ]
-      : storage === 'direct'
-      ? [
-          `Provision your DB: ${pc.bold('npx ablo migrate')} (creates your synced-model tables with row-level security; keep your own migrations for everything else)`,
-        ]
       : [
           `Provision your DB: ${pc.bold('npx ablo migrate')} (creates your Ablo-model tables + the adapter tables; keep your own migrations for everything else), then mount ${pc.bold(`${abloDir}/data-source.ts`)} at ${pc.bold('/api/ablo/source')}`,
         ]),
@@ -677,12 +663,9 @@ export const schema = defineSchema({
 `;
 }
 
-function generateSyncConfig(auth: string, storage: InitStorage): string {
+function generateSyncConfig(auth: string): string {
   // Your DB lives behind a signed Data Source route, so the client holds no
   // connection string.
-  const databaseLine = storage === 'direct'
-    ? `\n  databaseUrl: process.env.DATABASE_URL, // deprecated direct connector`
-    : '';
   const authLine = auth === 'apikey'
     ? ''
     : auth === 'firebase'
@@ -705,7 +688,7 @@ import { schema } from './schema';
 // ('use client') component; the browser uses app/providers.tsx, which authenticates
 // via the session route and never touches the key.
 export const sync = Ablo({
-  apiKey: process.env.ABLO_API_KEY,${databaseLine}${authLine}
+  apiKey: process.env.ABLO_API_KEY,${authLine}
   schema,
 });
 
@@ -738,13 +721,7 @@ export {};
 
 function generateEnv(storage: InitStorage, opts: { includeApiKey?: boolean } = {}): string {
   const { includeApiKey = true } = opts;
-  const databaseBlock = storage === 'direct'
-    ? '# DEPRECATED direct connector. The client registers this connection (sent once\n' +
-      '# over TLS, stored sealed) so Ablo dials into your Postgres. Prefer logical\n' +
-      '# replication (`npx ablo connect`); to keep the transaction log in your infra too,\n' +
-      '# self-host the engine. Use a dedicated non-superuser role; the browser never sees this.\n' +
-      'DATABASE_URL=postgres://user:password@host:5432/db\n'
-    : storage === 'replication'
+  const databaseBlock = storage === 'replication'
     ? '# Used by `npx ablo connect` to set up + register logical replication — the\n' +
       '# DIRECT (un-pooled) endpoint. Ablo TAILS your WAL from here; it never writes.\n' +
       '# The client never sees it; the browser never sees it. Your DB stays yours.\n' +

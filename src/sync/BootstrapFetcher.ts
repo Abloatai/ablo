@@ -122,6 +122,12 @@ export class BootstrapFetcher {
     if (this.schemaDriftWarned || !serverHash) return;
     const clientHash = getContext().config.expectedSchemaHash;
     if (!clientHash || clientHash === serverHash) return;
+    // A projection (`selectModels`/`omitModels`) hashes its subset, which never
+    // equals the full schema a server runs — so it also carries the source
+    // schema's hash. Matching that means the client is a faithful subset of the
+    // deployed schema: current, not drifted. Only warn when neither matches.
+    const sourceHash = getContext().config.expectedSourceSchemaHash;
+    if (sourceHash && sourceHash === serverHash) return;
     this.schemaDriftWarned = true;
     const org = this.options.organizationId;
     const where = org ? `${this.baseUrl} (org ${org})` : this.baseUrl;

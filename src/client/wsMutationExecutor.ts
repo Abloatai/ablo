@@ -5,12 +5,13 @@
  * client wires this up automatically unless you supply your own executor.
  */
 
-import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
+import type { ReadDependency } from '../coordination/schema.js';
 import type {
   MutationExecutor,
   MutationOperation,
   MutationOptions,
 } from '../interfaces/index.js';
+import type { CommitAck } from '../sync/commitFrames.js';
 import { AbloError, AbloConnectionError } from '../errors.js';
 
 // ── Default mutation executor (wire: `commit` frame over WebSocket) ──────
@@ -38,7 +39,7 @@ import { AbloError, AbloConnectionError } from '../errors.js';
 	      timeoutMs?: number,
 	      causedByTaskId?: string | null,
 	      reads?: readonly ReadDependency[] | null,
-	    ) => Promise<{ lastSyncId: number; notifications?: StaleNotification[] }>;
+	    ) => Promise<CommitAck>;
 	  } | null,
 	): MutationExecutor {
 	  async function commit(

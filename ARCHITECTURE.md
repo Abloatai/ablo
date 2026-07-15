@@ -131,7 +131,7 @@ current `package.json` scripts.
 | Packed quickstart | `npm run test:quickstart` | `node scripts/test-quickstart.mjs` |
 | Docker E2E lifecycle | `npm run test:e2e:run` | `node scripts/run-e2e.mjs` |
 | E2E setup / test / teardown | `npm run test:e2e:up`; `npm run test:e2e`; `npm run test:e2e:down` | `docker compose -f docker-compose.test.yml up -d --wait`; `E2E_TEST=true jest --config jest.e2e.config.ts`; `docker compose -f docker-compose.test.yml down -v` |
-| Source, contract, and generated-doc lint | `npm run lint` | `npm run lint:imports && npm run lint:errors && npm run lint:docs && npm run lint:mintlify` |
+| Source, contract, and generated-doc lint | `npm run lint` | `npm run lint:imports && npm run lint:errors && npm run lint:docs && npm run lint:docs-site` |
 
 A contract change is complete only when its boundary fixtures exist and both
 current and previous deployed shapes stay green through the support window.

@@ -1,0 +1,46 @@
+---
+title: "v0.9.0"
+type: changelog
+changelog:
+  version: "0.9.0"
+  category: "Fixes"
+---
+
+{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
+
+A single options object for every model verb, and a disposable `claim` handle.
+
+### Breaking Changes
+
+- **One options object per verb.** `create`, `update`, `delete`, and the async
+  server `retrieve` each take a single options object instead of positional
+  arguments, so the id, the data, and every modifier live as named siblings:
+  `create({ data, id? })`, `update({ id, data, ...options })`,
+  `delete({ id, ...options })`, `retrieve({ id, ...options })`. Reactive local
+  reads stay on `get(id)` (synchronous) —
+  `useAblo((ablo) => ablo.tasks.get(id))`.
+
+  ```diff
+  - await ablo.tasks.update(id, { status: 'done' }, { wait: 'confirmed' })
+  + await ablo.tasks.update({ id, data: { status: 'done' }, wait: 'confirmed' })
+
+  - await ablo.tasks.retrieve(id)
+  + await ablo.tasks.retrieve({ id })
+
+  - useAblo((ablo) => ablo.tasks.retrieve(id)) ?? serverTask
+  + useAblo((ablo) => ablo.tasks.get(id)) ?? serverTask
+  ```
+
+- **`claim` returns a disposable handle** instead of taking a callback. The
+  handle exposes the fresh row on `.data` and is released on scope exit
+  (`await using`) or explicitly via `.release()`. `claim.state`, `claim.queue`,
+  `claim.release`, and `claim.reorder` also take the options object.
+
+  ```diff
+  - await ablo.tasks.claim(id, async (task) => {
+  -   await ablo.tasks.update(task.id, { status: 'in_review' })
+  - })
+  + await using claim = await ablo.tasks.claim({ id })
+  + const task = claim.data
+  + await ablo.tasks.update({ id: task.id, data: { status: 'in_review' } })
+  ```

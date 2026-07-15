@@ -30,7 +30,9 @@ export interface DurableWriteStore {
   /**
    * Atomically reserve a pending write and consume the staged records it owns.
    * The same id + same request is idempotent; the same id + a different request
-   * must be rejected.
+   * must be rejected. For a source-accepted envelope, a re-seal may add the
+   * monotonic `acceptedAt`/`correlationId` evidence and the store must preserve
+   * that upgrade atomically rather than ignoring it.
    */
   seal(
     write: PendingWrite,

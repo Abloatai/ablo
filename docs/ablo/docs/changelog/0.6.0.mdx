@@ -1,0 +1,23 @@
+---
+title: "v0.6.0"
+type: changelog
+changelog:
+  version: "0.6.0"
+  category: "Features"
+---
+
+{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
+
+### Minor Changes
+
+- 0f663e7: Coordination surface: fair queue, reactive wait-line, and lease renewal.
+  - **Claims acquire through a server FIFO queue.** On contention a claim waits its turn and re-reads before proceeding; reads are never blocked. Writes blocked by another participant's claim throw a typed `AbloBusyError`.
+  - **`ablo.<model>.queue(id)`** — reactive read of the wait-line behind a row: who's queued, their action, and FIFO position. Synced to peers like `activity(id)`.
+  - **Backpressure on `claim`** — `{ wait: false }` skips instead of waiting if the row is already held (claim-or-skip dedup); `{ maxQueueDepth: n }` bails with `AbloBusyError('queue_too_deep')` rather than joining a line already that deep.
+  - **Lease renewal** — a held claim renews automatically while the holder's connection is alive, so you never size a TTL; it lapses only after the holder goes silent. A queued claim that's abandoned is dequeued (no ghost waiters).
+  - **Reads are never gated by a claim**, including for agents.
+  - Intent vocabulary cleanup: a waiting claim is an `Intent` with `status: 'queued'` (`position` carries its place in line). Removed the unbuilt `whenFree`.
+
+- **BREAKING — API renames** (apply when upgrading from 0.5.1):
+  - Change-listeners renamed to `.onChange(...)`: `ablo.<model>.subscribe(cb)`, `presence.subscribe()`, `intents.subscribe()` → `.onChange(...)`. (`subscribe` is reserved for an upcoming scope-grant verb.)
+  - Row-access API renamed Resource → Model: `Ablo.Resource.*` → `Ablo.Model.*`, `ablo.resource(name)` → `ablo.model(name)`, `ModelTarget.resource` → `ModelTarget.model`, error code `resource_not_found` → `model_not_found`.

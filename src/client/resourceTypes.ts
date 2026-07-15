@@ -5,7 +5,11 @@
  * imports.
  */
 
-import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
+import type { ReadDependency } from '../coordination/schema.js';
+import type {
+  ClientCommitReceipt,
+  CommitStatus,
+} from '../wire/commit.js';
 // `ModelTarget` (the `model` and `id` locator) and `ModelClaim` (the resolved
 // claim view) are defined in `../coordination/schema`, derived from a single
 // schema so the client, the HTTP client, and the server share one definition.
@@ -61,6 +65,7 @@ export type {
   ClaimHeartbeat,
   ClaimHeartbeatOptions,
   HeldClaim,
+  HeldLease,
   ModelOperations,
 } from './createModelProxy.js';
 
@@ -71,7 +76,7 @@ export type ModelOperationAction =
   | 'archive'
   | 'unarchive';
 
-export type CommitWait = 'queued' | 'confirmed';
+export type CommitWait = CommitStatus;
 
 /** @internal Transport envelope; the public typed client returns the row. */
 export interface HttpTransportRead<T = Record<string, unknown>> {
@@ -104,9 +109,9 @@ export interface ModelReadOptions extends ClaimedOptions {}
 
 export interface ClaimCreateOptions {
   readonly target: ModelTarget;
-  /** Human-readable phase shown to peers — `'editing'`, `'writing'`. The same
-   *  word on every claim surface. */
-  readonly reason: string;
+  /** Peer-visible description of the work — the same field on every claim
+   *  surface. Defaults to `'editing'` when omitted. */
+  readonly description?: string;
   readonly ttl?: Duration;
   /**
    * Join the server's fair FIFO queue when the target is already claimed,
@@ -135,6 +140,8 @@ export interface CommitOperationInput {
   readonly transactionId?: string | null;
   readonly readAt?: number | null;
   readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
+  /** Fencing token (Option B) from the batch's claim handle; server-validated. */
+  readonly fenceToken?: number | null;
 }
 
 export interface CommitCreateOptions {
@@ -164,26 +171,8 @@ export interface CommitCreateOptions {
   readonly reads?: readonly ReadDependency[] | null;
 }
 
-export interface CommitReceipt {
-  readonly id: string;
-  readonly status: CommitWait;
-  readonly lastSyncId?: number;
-  /**
-   * Stale-context notifications: present only when this commit guarded a write with
-   * `onStale: 'notify'` and the premise moved concurrently. Each carries the
-   * conflicting field's current value, handed back as data rather than raising an
-   * `AbloStaleContextError`, so the caller — an agent or a human — decides how to
-   * resolve it.
-   */
-  readonly notifications?: readonly StaleNotification[];
-  /**
-   * Ids of update or delete targets in this commit that matched no rows, because
-   * the row does not exist or is outside the caller's organization. Present and
-   * non-empty only when a write missed. The typed resource wrappers turn this into
-   * an `AbloNotFoundError`; a raw `commits.create` caller can inspect it directly.
-   */
-  readonly missingIds?: readonly string[];
-}
+/** Public projection inferred from the canonical runtime schema. */
+export type CommitReceipt = ClientCommitReceipt;
 
 export interface CommitResource {
   create(options: CommitCreateOptions): Promise<CommitReceipt>;
@@ -202,6 +191,8 @@ export interface ModelMutationOptions extends ClaimedOptions {
   readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
   readonly wait?: CommitWait;
   readonly claim?: Claim | ClaimOptions | null;
+  /** Fencing token (Option B) from the claim; server-validated at commit. */
+  readonly fenceToken?: number | null;
 }
 
 /**

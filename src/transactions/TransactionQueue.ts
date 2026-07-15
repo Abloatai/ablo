@@ -22,12 +22,17 @@ import {
   AbloError,
   AbloConnectionError,
   AbloIdempotencyError,
+  AbloNotFoundError,
   AbloValidationError,
   errorCodeSpec,
 } from '../errors.js';
 import { SyncPosition } from '../sync/syncPosition.js';
 import type { WriteOptions } from '../interfaces/index.js';
 import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
+import {
+  mutationCommitResultSchema,
+  type MutationCommitResult,
+} from '../wire/commit.js';
 import {
   projectCommitPayload,
   computePriorityScore,
@@ -108,10 +113,12 @@ interface CommitTransaction {
   causedByTaskId?: string | null;
   /** Read dependencies for the whole batch, forwarded to the executor so the server can detect stale-context writes. */
   reads?: ReadDependency[] | null;
-  status: 'pending' | 'executing' | 'completed' | 'failed';
+  status: 'pending' | 'executing' | 'awaiting_delta' | 'completed' | 'failed';
   createdAt: number;
   attempts: number;
   lastSyncId?: number;
+  /** Opaque customer-side batch ledger key returned by a queued receipt. */
+  correlationId?: string;
   error?: Error;
   sealedAt: number;
   sequence: number;
@@ -139,8 +146,10 @@ interface TransactionQueueConfig {
   // server is not overwhelmed.
   maxExecutingTransactions: number;
   // How long to wait, in milliseconds, for a change's confirming sync delta
-  // before the retry-and-reconciliation cycle begins. Defaults to 30000 (30
-  // seconds); raise it for slow networks.
+  // before the retry-and-reconciliation cycle begins. For a source-forwarded
+  // write this is also the public `wait: 'confirmed'` deadline: expiry rejects
+  // the waiter with `replication_lag_timeout` while the accepted write remains
+  // pending. Defaults to 30000 (30 seconds); raise it for slow networks.
   deltaConfirmationTimeout: number;
   /**
    * Exponential backoff for retryable server responses (HTTP 429/503).
@@ -216,6 +225,20 @@ export class TransactionQueue extends EventEmitter {
   // coalescing with model-proxy transactions.
   private commitLane: CommitTransaction[] = [];
   private commitStore = new Map<string, CommitTransaction>();
+  /**
+   * Small race buffer for authoritative echoes that arrive before the queued
+   * mutation receipt. The forward and WAL stream are independent channels, so
+   * either can win without changing the settlement result.
+   */
+  private recentDeltaCorrelations = new Map<string, number>();
+  /**
+   * Client-facing confirmation deadlines for source-forwarded writes. These
+   * timers settle only the caller waiting for `confirmed`; the accepted write
+   * remains in `awaiting_delta`, with its durable envelope intact, until the
+   * authoritative WAL echo arrives.
+   */
+  private replicationLagTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  private replicationLagErrors = new Map<string, AbloConnectionError>();
   private commitProcessing = false;
   private lastCommitSequence = 0;
   private durableReplayBlock: AbloIdempotencyError | null = null;
@@ -245,10 +268,11 @@ export class TransactionQueue extends EventEmitter {
   }
 
   private assertEnvelopeInsideReplayWindow(
-    envelope: Pick<DurableCommitEnvelope, 'sealedAt'>,
+    envelope: Pick<DurableCommitEnvelope, 'sealedAt' | 'acceptedAt'>,
   ): void {
     this.assertDurableReplayOpen();
     if (
+      envelope.acceptedAt === undefined &&
       Date.now() - envelope.sealedAt >=
       TransactionQueue.DURABLE_REPLAY_WINDOW_MS
     ) {
@@ -278,6 +302,71 @@ export class TransactionQueue extends EventEmitter {
 
   private entityKey(modelName: string, modelId: string): string {
     return entityKey(modelName, modelId);
+  }
+
+  /** Collision-safe receipt target identity across models sharing a row id. */
+  private receiptTargetKey(modelName: string, modelId: string): string {
+    return stableStringify([normalizeModelKey(modelName), modelId]);
+  }
+
+  /**
+   * Relates stale notifications back to write targets without assuming the
+   * server's canonical model name uses the same spelling as the public schema
+   * key (`Task` versus `tasks`). Exact `(model,id)` wins; a globally unique id
+   * is the compatibility fallback. An ambiguous same-id cross-model mismatch
+   * is deliberately left unclassified, so it cannot falsely settle a queued
+   * write. A notification with no write-target id (or an explicit group) is a
+   * declared-read conflict and holds the whole batch.
+   */
+  private classifyReceiptNotifications(
+    operations: readonly { model: string; id: string }[],
+    notifications: readonly StaleNotification[],
+  ): {
+    holdsEntireBatch: boolean;
+    heldTargets: Set<string>;
+    notificationsByTarget: Map<string, StaleNotification[]>;
+  } {
+    const targets = operations.map((operation) => ({
+      id: operation.id,
+      key: this.receiptTargetKey(operation.model, operation.id),
+    }));
+    const heldTargets = new Set<string>();
+    const notificationsByTarget = new Map<string, StaleNotification[]>();
+    let holdsEntireBatch = false;
+
+    for (const notification of notifications) {
+      const candidates = targets.filter((target) => target.id === notification.id);
+      const notificationKey = this.receiptTargetKey(
+        notification.model,
+        notification.id,
+      );
+      const exactTargets = candidates.filter(
+        (target) => target.key === notificationKey,
+      );
+      const candidateKeys = new Set(
+        (exactTargets.length > 0 ? exactTargets : candidates).map(
+          (target) => target.key,
+        ),
+      );
+
+      if (notification.group || candidates.length === 0) {
+        holdsEntireBatch = true;
+        continue;
+      }
+      if (candidateKeys.size !== 1) {
+        // Same id across multiple differently named models with no exact match:
+        // the id-only compatibility fallback is ambiguous. Await the echo.
+        continue;
+      }
+      const [targetKey] = candidateKeys;
+      if (!targetKey) continue;
+      heldTargets.add(targetKey);
+      const targetNotifications = notificationsByTarget.get(targetKey) ?? [];
+      targetNotifications.push(notification);
+      notificationsByTarget.set(targetKey, targetNotifications);
+    }
+
+    return { holdsEntireBatch, heldTargets, notificationsByTarget };
   }
 
   private resolveConfirmation(transaction: Transaction): void {
@@ -398,6 +487,8 @@ export class TransactionQueue extends EventEmitter {
   // the notification lands here from the commit acknowledgement and is drained
   // by `waitForCommitReceipt`, so the receipt can carry it back to the caller.
   private commitNotifications = new Map<string, StaleNotification[]>();
+  /** Zero-row targets returned on a successful atomic commit receipt. */
+  private commitMissingIds = new Map<string, string[]>();
 
   // Delta-confirmation tracking (ack watermark advance + the awaiting_delta
   // timeout/retry maps) lives in `./deltaConfirmation.js`. Constructed in the
@@ -599,7 +690,7 @@ export class TransactionQueue extends EventEmitter {
     return envelope;
   }
 
-  /** Best-effort cleanup after a definitive result; replay is safe if it fails. */
+  /** Best-effort cleanup after a definitive rejection, confirmed ack, or echo. */
   private async removeDurableCommit(idempotencyKey: string): Promise<void> {
     if (!this.config.enablePersistence || !this.commitOutbox) return;
     try {
@@ -610,6 +701,142 @@ export class TransactionQueue extends EventEmitter {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * Upgrade a sealed request with permanent connected-source acceptance before
+   * exposing the queued receipt. This is not completion: the envelope remains
+   * until the matching WAL correlation arrives. The upgrade only makes a
+   * crash/restart safe after the hosted 24-hour replay window has elapsed.
+   */
+  private async persistDurableCommitAcceptance(
+    envelope: DurableCommitEnvelope,
+    result: MutationCommitResult,
+  ): Promise<DurableCommitEnvelope> {
+    if (result.status !== 'queued') return envelope;
+    const correlationId = result.correlationId;
+    if (!correlationId) {
+      throw new AbloConnectionError(
+        'The source accepted the commit without durable correlation evidence.',
+        { code: 'commit_no_result' },
+      );
+    }
+    if (
+      envelope.correlationId !== undefined &&
+      envelope.correlationId !== correlationId
+    ) {
+      throw new AbloIdempotencyError(
+        'The same commit replay returned a different source correlation.',
+        { code: 'idempotency_conflict' },
+      );
+    }
+    if (envelope.acceptedAt !== undefined) return envelope;
+
+    const accepted = durableCommitEnvelopeSchema.parse({
+      ...envelope,
+      acceptedAt: Math.max(Date.now(), envelope.sealedAt),
+      correlationId,
+    });
+    if (this.config.enablePersistence && this.commitOutbox) {
+      try {
+        await this.commitOutbox.seal(accepted, []);
+      } catch (cause) {
+        if (cause instanceof AbloError) throw cause;
+        throw new AbloConnectionError(
+          'The source accepted the commit, but that acceptance could not be persisted locally.',
+          { code: 'db_not_opened', cause },
+        );
+      }
+    }
+    return accepted;
+  }
+
+  /** Parse an untrusted/custom executor receipt without making ambiguity fatal. */
+  private parseMutationCommitResult(value: unknown): MutationCommitResult {
+    const parsed = mutationCommitResultSchema.safeParse(value);
+    if (parsed.success) return parsed.data;
+    throw new AbloConnectionError(
+      'The mutation transport returned an invalid commit receipt; its outcome remains pending and is safe to retry.',
+      { code: 'commit_no_result', cause: parsed.error },
+    );
+  }
+
+  private clearReplicationLagState(transactionId: string): void {
+    const timeout = this.replicationLagTimeouts.get(transactionId);
+    if (timeout) clearTimeout(timeout);
+    this.replicationLagTimeouts.delete(transactionId);
+    this.replicationLagErrors.delete(transactionId);
+  }
+
+  /**
+   * Bounds the public `wait: 'confirmed'` promise without changing the
+   * accepted write's lifecycle. A lag timeout is not a rejection from the
+   * source database, so it must never emit `transaction:failed`, roll back
+   * optimistic state, or remove the durable replay envelope.
+   */
+  private scheduleReplicationLagTimeout(
+    transactionId: string,
+    clientTxId = transactionId,
+    correlationId?: string,
+  ): void {
+    const previous = this.replicationLagTimeouts.get(transactionId);
+    if (previous) clearTimeout(previous);
+    this.replicationLagErrors.delete(transactionId);
+
+    const timeoutMs = this.config.deltaConfirmationTimeout;
+    const timeout = setTimeout(() => {
+      this.replicationLagTimeouts.delete(transactionId);
+      const modelTx = this.store.get(transactionId);
+      const commitTx = this.commitStore.get(transactionId);
+      if (
+        modelTx?.status !== 'awaiting_delta' &&
+        commitTx?.status !== 'awaiting_delta'
+      ) return;
+
+      const error = new AbloConnectionError(
+        `The source accepted commit ${clientTxId}, but its replication echo did not arrive within ${timeoutMs}ms.`,
+        {
+          code: 'replication_lag_timeout',
+          httpStatus: 504,
+          details: {
+            clientTxId,
+            ...(correlationId ? { correlationId } : {}),
+            timeoutMs,
+            accepted: true,
+          },
+        },
+      );
+      this.replicationLagErrors.set(transactionId, error);
+
+      // Model-proxy writes expose their waiter through the resolver table.
+      // Reject that promise without moving the transaction out of
+      // `awaiting_delta`; the eventual echo still completes it normally.
+      const resolver = this.confirmationResolvers.get(transactionId);
+      if (resolver) {
+        this.confirmationResolvers.delete(transactionId);
+        resolver.reject(error);
+      }
+
+      this.emitCommitLifecycle('transaction:confirmation_lagged', {
+        transactionId,
+        error,
+      });
+      this.emitCommitLifecycle(`transaction:confirmation_lagged:${transactionId}`, {
+        error,
+      });
+      if (commitTx) {
+        const firstOperation = commitTx.operations[0];
+        this.emitCommitLifecycle('reconciliation:needed', {
+          reason: 'replication_lag_timeout',
+          txId: transactionId,
+          model: firstOperation?.model ?? 'commit',
+          modelId: firstOperation?.id ?? transactionId,
+          lastSeenSyncId: this.lastSeenSyncId,
+          retryCount: 1,
+        });
+      }
+    }, timeoutMs);
+    this.replicationLagTimeouts.set(transactionId, timeout);
   }
 
   /**
@@ -748,6 +975,7 @@ export class TransactionQueue extends EventEmitter {
       // Any successful write clears the permanent-error dedup, so a genuine
       // recurrence after recovery warns again instead of staying demoted.
       this.lastPermanentErrorSig = undefined;
+      this.clearReplicationLagState(tx.id);
       const r = this.confirmationResolvers.get(tx.id);
       if (r) {
         this.confirmationResolvers.delete(tx.id);
@@ -1030,16 +1258,54 @@ export class TransactionQueue extends EventEmitter {
           sequence: batch[0]?.commitEnvelope?.sequence,
         });
         this.assertEnvelopeInsideReplayWindow(durableEnvelope);
-        const result = await this.mutationExecutor.commit(durableEnvelope.operations, {
-          idempotencyKey,
-        });
-        await this.removeDurableCommit(idempotencyKey);
-        // Mark this request envelope as completed before moving to the next.
-        for (const tx of batch) {
-          this.store.updateStatus(tx.id, 'completed');
-          this.emit('transaction:completed', tx);
-          this.emit(`transaction:completed:${tx.id}`, tx);
-          this.optimisticUpdates.delete(tx.id);
+        const result = this.parseMutationCommitResult(
+          await this.mutationExecutor.commit(durableEnvelope.operations, {
+            idempotencyKey,
+          }),
+        );
+        await this.persistDurableCommitAcceptance(durableEnvelope, result);
+        if (result.status === 'queued') {
+          // Reconnect flushes use the same accepted-vs-confirmed contract as
+          // the normal lane. A queued source receipt retains the envelope and
+          // waits for exact correlation; it is never promoted by the reconnect
+          // shortcut itself.
+          for (const tx of batch) {
+            tx.requiresCorrelatedDelta = true;
+            tx.syncIdNeededForCompletion = undefined;
+            tx.correlationId = result.correlationId;
+            const echoSyncId = result.correlationId
+              ? this.recentDeltaCorrelations.get(result.correlationId)
+              : undefined;
+            if (echoSyncId !== undefined) {
+              this.store.updateStatus(tx.id, 'completed');
+              this.emit('transaction:completed', tx);
+              this.emit(`transaction:completed:${tx.id}`, tx);
+              this.optimisticUpdates.delete(tx.id);
+              continue;
+            }
+            this.store.updateStatus(tx.id, 'awaiting_delta');
+            this.scheduleReplicationLagTimeout(
+              tx.id,
+              idempotencyKey,
+              result.correlationId,
+            );
+            this.scheduleDeltaConfirmationTimeout(
+              tx,
+              this.config.deltaConfirmationTimeout,
+            );
+          }
+          if (batch.every((tx) => tx.status === 'completed')) {
+            await this.removeDurableCommit(idempotencyKey);
+          }
+        } else {
+          await this.removeDurableCommit(idempotencyKey);
+          // Mark this request envelope as completed before moving to the next.
+          for (const tx of batch) {
+            this.store.updateStatus(tx.id, 'completed');
+            this.emit('transaction:completed', tx);
+            this.emit(`transaction:completed:${tx.id}`, tx);
+            this.optimisticUpdates.delete(tx.id);
+          }
         }
         getContext().logger.debug('txn:commit', 0, {
           count: batch.length,
@@ -1634,48 +1900,53 @@ export class TransactionQueue extends EventEmitter {
               // the exact key assigned before the first transport attempt.
               this.assertEnvelopeInsideReplayWindow(durableEnvelope);
               dispatchStarted = true;
-              const result = await this.mutationExecutor.commit(operations, {
-                idempotencyKey: commitIdempotencyKey,
-              });
-              await this.removeDurableCommit(commitIdempotencyKey);
-              const lastSyncId: number = result?.lastSyncId ?? 0;
-              this.noteAck(lastSyncId);
+              const result = this.parseMutationCommitResult(
+                await this.mutationExecutor.commit(operations, {
+                  idempotencyKey: commitIdempotencyKey,
+                }),
+              );
+              await this.persistDurableCommitAcceptance(
+                durableEnvelope,
+                result,
+              );
+              const lastSyncId = result.lastSyncId;
 
-              // The server returned stale-context notifications for operations
-              // marked `onStale: 'notify'` whose read premise had moved. Each
-              // notified operation was held rather than written, so its
-              // optimistic state must be rolled back here — no delta will ever
-              // confirm it — and the signal is stamped so
-              // {@link waitForCommitReceipt} can carry it onto the receipt.
-              const notifications = result?.notifications;
-              const heldIds = new Set((notifications ?? []).map((n) => n.id));
+              const notifications = result.notifications;
+              const {
+                holdsEntireBatch,
+                heldTargets,
+                notificationsByTarget,
+              } = this.classifyReceiptNotifications(
+                batchOps.map(({ op }) => ({ model: op.model, id: op.id })),
+                notifications ?? [],
+              );
               for (const { tx } of batchOps) {
-                const txNotifs = notifications?.filter((n) => n.id === tx.modelId);
+                const txTarget = this.receiptTargetKey(tx.modelKey, tx.modelId);
+                const txNotifs = holdsEntireBatch
+                  ? notifications
+                  : notificationsByTarget.get(txTarget);
                 if (txNotifs && txNotifs.length > 0) {
                   this.commitNotifications.set(tx.id, txNotifs);
                 }
               }
-
-              // A lastSyncId of 0 means the mutation succeeded but the server
-              // emitted no sync delta; record that anomaly for observability.
-              if (lastSyncId === 0) {
-                getContext().observability.captureCommitZeroSyncId({
-                  operationCount: operations.length,
-                  operations: operations.map(
-                    (op) => `${op.type}:${op.model}:${op.id?.slice(0, 8) ?? '?'}`
-                  ),
-                });
-              }
-
-              // Mark each transaction with the sync-id threshold that will
-              // confirm it: any delta whose id is at least lastSyncId.
-              for (const { tx } of batchOps) {
-                // Held op ('notify'): the server withheld the write, so no delta
-                // will confirm it. Roll back the optimistic update (server
-                // wins) and complete the transaction now — the agent self-heals
-                // from the notification rather than waiting out the delta
-                // timeout. The receipt still resolves (commit succeeded).
-                if (heldIds.has(tx.modelId)) {
+              const missingIds = new Set(result.missingIds ?? []);
+              const settlingBatchOps: typeof batchOps = [];
+              for (const entry of batchOps) {
+                const { tx } = entry;
+                if (missingIds.has(tx.modelId)) {
+                  await this.handleFailure(
+                    tx,
+                    new AbloNotFoundError(
+                      `${tx.modelName}/${tx.modelId} was not found or is outside this credential's scope.`,
+                      [tx.modelId],
+                    ),
+                  );
+                  continue;
+                }
+                if (
+                  holdsEntireBatch ||
+                  heldTargets.has(this.receiptTargetKey(tx.modelKey, tx.modelId))
+                ) {
                   await this.rollbackOptimistic(tx, 'conflict_server_wins');
                   this.store.updateStatus(tx.id, 'completed');
                   this.emit('transaction:completed', tx);
@@ -1683,63 +1954,123 @@ export class TransactionQueue extends EventEmitter {
                   this.optimisticUpdates.delete(tx.id);
                   continue;
                 }
+                settlingBatchOps.push(entry);
+              }
 
-                tx.syncIdNeededForCompletion = lastSyncId;
-
-                // Safety net: when lastSyncId is 0, DELETE transactions should be confirmed
-                // immediately. DELETEs are idempotent — if no delta was emitted, the entity
-                // is already gone and the claim was achieved. Parking DELETEs in awaiting_delta
-                // with threshold 0 causes 30s reconciliation delays.
-                if (lastSyncId === 0 && tx.type === 'delete') {
-                  this.store.updateStatus(tx.id, 'completed');
-                  this.emit('transaction:completed', tx);
-                  this.emit(`transaction:completed:${tx.id}`, tx);
-                  this.optimisticUpdates.delete(tx.id);
-                  getContext().logger.debug('tx:confirm_delete_zero_syncid', {
-                    txId: tx.id.slice(0, 8),
-                    model: tx.modelName,
-                    reason: 'delete_idempotent_no_delta',
-                  });
-                  continue;
+              // A forwarded write has been accepted, but the source database
+              // remains authoritative. It must not enter any of the confirmed
+              // paths below: in particular, a queued DELETE with sync id 0 is
+              // not the hosted-path idempotent-delete shortcut, and a later
+              // unrelated delta cannot stand in for the source echo.
+              if (result.status === 'queued') {
+                // Keep the exact envelope crash-durable while any forwarded
+                // member is awaiting its WAL echo. If coordination/missing-row
+                // handling consumed the whole request, there is no echo left
+                // to await and the durable intent is definitive.
+                if (settlingBatchOps.length === 0) {
+                  await this.removeDurableCommit(commitIdempotencyKey);
                 }
-
-                // Acknowledgement-based confirmation. A successful commit
-                // response carrying a real watermark means the server durably
-                // applied the write, and that is the confirmation the
-                // `wait: 'confirmed'` contract promises. The delta echo is not
-                // an acknowledgement channel: it exists to replicate the change
-                // to other clients, and this client's own echo is suppressed by
-                // the {@link UnconfirmedWrites} regardless. Waiting on the
-                // echo would tie "did my write land?" to the health of the
-                // subscription stream, so a client with no live delta stream
-                // would wait forever in `awaiting_delta` for a write the server
-                // had already applied.
-                if (lastSyncId > 0) {
-                  this.store.updateStatus(tx.id, 'completed');
-                  this.emit('transaction:completed', tx);
-                  this.emit(`transaction:completed:${tx.id}`, tx);
-                  this.optimisticUpdates.delete(tx.id);
-                  getContext().logger.debug('tx:confirm_ack', {
-                    txId: tx.id.slice(0, 8),
-                    model: tx.modelName,
-                    serverSyncId: lastSyncId,
-                    lastSeenSyncId: this.lastSeenSyncId,
-                  });
-                } else {
-                  // A lastSyncId of 0 on a non-delete: the server accepted the
-                  // commit but emitted no delta, which is an anomaly (already
-                  // captured above). Keep the delta wait and reconciliation
-                  // timeout only for this case, so the anomaly surfaces instead
-                  // of silently confirming a write that carries no watermark.
+                for (const { tx } of settlingBatchOps) {
+                  tx.requiresCorrelatedDelta = true;
+                  tx.syncIdNeededForCompletion = undefined;
+                  tx.correlationId = result.correlationId;
+                  const echoSyncId = result.correlationId
+                    ? this.recentDeltaCorrelations.get(result.correlationId)
+                    : undefined;
+                  if (echoSyncId !== undefined) {
+                    this.store.updateStatus(tx.id, 'completed');
+                    this.emit('transaction:completed', tx);
+                    this.emit(`transaction:completed:${tx.id}`, tx);
+                    this.optimisticUpdates.delete(tx.id);
+                    continue;
+                  }
                   this.store.updateStatus(tx.id, 'awaiting_delta');
+                  this.scheduleReplicationLagTimeout(
+                    tx.id,
+                    commitIdempotencyKey,
+                    result.correlationId,
+                  );
                   getContext().logger.debug('tx:awaiting_delta', {
                     txId: tx.id.slice(0, 8),
                     model: tx.modelName,
-                    neededSyncId: lastSyncId,
-                    lastSeenSyncId: this.lastSeenSyncId,
-                    reason: 'zero_sync_id_anomaly',
+                    reason: 'queued_forward_waiting_for_correlated_echo',
                   });
-                  this.scheduleDeltaConfirmationTimeout(tx, this.config.deltaConfirmationTimeout);
+                  this.scheduleDeltaConfirmationTimeout(
+                    tx,
+                    this.config.deltaConfirmationTimeout,
+                  );
+                }
+                if (
+                  settlingBatchOps.length > 0 &&
+                  settlingBatchOps.every(({ tx }) => tx.status === 'completed')
+                ) {
+                  await this.removeDurableCommit(commitIdempotencyKey);
+                }
+              } else {
+                await this.removeDurableCommit(commitIdempotencyKey);
+                this.noteAck(lastSyncId);
+
+                // A lastSyncId of 0 means the mutation succeeded but the server
+                // emitted no sync delta; record that anomaly for observability.
+                if (lastSyncId === 0) {
+                  getContext().observability.captureCommitZeroSyncId({
+                    operationCount: operations.length,
+                    operations: operations.map(
+                      (op) => `${op.type}:${op.model}:${op.id?.slice(0, 8) ?? '?'}`
+                    ),
+                  });
+                }
+
+                // Mark each remaining transaction with the sync-id threshold
+                // that will confirm it: any delta whose id is at least
+                // lastSyncId.
+                for (const { tx } of settlingBatchOps) {
+                  tx.syncIdNeededForCompletion = lastSyncId;
+
+                  // Safety net: a confirmed zero-sync DELETE is idempotent.
+                  // This shortcut is intentionally unreachable for queued
+                  // forwards, which must wait for their correlated echo.
+                  if (lastSyncId === 0 && tx.type === 'delete') {
+                    this.store.updateStatus(tx.id, 'completed');
+                    this.emit('transaction:completed', tx);
+                    this.emit(`transaction:completed:${tx.id}`, tx);
+                    this.optimisticUpdates.delete(tx.id);
+                    getContext().logger.debug('tx:confirm_delete_zero_syncid', {
+                      txId: tx.id.slice(0, 8),
+                      model: tx.modelName,
+                      reason: 'delete_idempotent_no_delta',
+                    });
+                    continue;
+                  }
+
+                  // A real watermark is the established hosted-path
+                  // confirmation. A zero watermark on a non-delete stays on
+                  // the anomaly/reconciliation path.
+                  if (lastSyncId > 0) {
+                    this.store.updateStatus(tx.id, 'completed');
+                    this.emit('transaction:completed', tx);
+                    this.emit(`transaction:completed:${tx.id}`, tx);
+                    this.optimisticUpdates.delete(tx.id);
+                    getContext().logger.debug('tx:confirm_ack', {
+                      txId: tx.id.slice(0, 8),
+                      model: tx.modelName,
+                      serverSyncId: lastSyncId,
+                      lastSeenSyncId: this.lastSeenSyncId,
+                    });
+                  } else {
+                    this.store.updateStatus(tx.id, 'awaiting_delta');
+                    getContext().logger.debug('tx:awaiting_delta', {
+                      txId: tx.id.slice(0, 8),
+                      model: tx.modelName,
+                      neededSyncId: lastSyncId,
+                      lastSeenSyncId: this.lastSeenSyncId,
+                      reason: 'zero_sync_id_anomaly',
+                    });
+                    this.scheduleDeltaConfirmationTimeout(
+                      tx,
+                      this.config.deltaConfirmationTimeout,
+                    );
+                  }
                 }
               }
             } catch (error) {
@@ -1878,14 +2209,82 @@ export class TransactionQueue extends EventEmitter {
     );
   }
 
+  private rememberDeltaCorrelation(correlationId: string, syncId: number): void {
+    // Refresh insertion order when a replay repeats the same correlation id.
+    this.recentDeltaCorrelations.delete(correlationId);
+    this.recentDeltaCorrelations.set(correlationId, syncId);
+    if (this.recentDeltaCorrelations.size <= 2_048) return;
+    const oldest = this.recentDeltaCorrelations.keys().next().value;
+    if (typeof oldest === 'string') this.recentDeltaCorrelations.delete(oldest);
+  }
+
+  private queuedCommitEchoSyncId(tx: CommitTransaction): number | undefined {
+    return tx.correlationId
+      ? this.recentDeltaCorrelations.get(tx.correlationId)
+      : undefined;
+  }
+
+  private queuedCommitMatchesCorrelation(
+    tx: CommitTransaction,
+    correlationId: string,
+  ): boolean {
+    return tx.correlationId !== undefined && tx.correlationId === correlationId;
+  }
+
+  private completeQueuedCommit(tx: CommitTransaction, syncId: number): void {
+    if (tx.status !== 'awaiting_delta') return;
+    this.clearReplicationLagState(tx.id);
+    tx.lastSyncId = syncId;
+    tx.status = 'completed';
+    // The queued receipt was only acceptance. The correlated source echo is
+    // the first definitive success and therefore the point where the durable
+    // replay envelope may be removed.
+    void this.removeDurableCommit(tx.id);
+    this.emitCommitLifecycle('transaction:completed', tx);
+    this.emitCommitLifecycle(`transaction:completed:${tx.id}`, tx);
+  }
+
   /**
-   * Confirms every awaiting transaction whose sync-id threshold this delta meets
-   * or exceeds. The confirmation policy and timeout tracking live in
-   * {@link DeltaConfirmationTracker} (`./deltaConfirmation.js`).
-   * @param syncId - The sync id of the received delta.
+   * Confirms awaiting writes. Hosted/anomaly receipts keep their sync-id
+   * threshold semantics; queued forwards require the exact server correlation.
    */
-  onDeltaReceived(syncId: number): void {
-    this.deltaConfirmation.onDeltaReceived(syncId);
+  onDeltaReceived(
+    syncId: number,
+    _transactionId?: string,
+    correlationId?: string,
+  ): void {
+    if (correlationId) this.rememberDeltaCorrelation(correlationId, syncId);
+    const correlatedModelTransactions = correlationId
+      ? this.store.getByStatus('awaiting_delta').filter(
+          (tx) =>
+            tx.requiresCorrelatedDelta === true &&
+            tx.correlationId !== undefined &&
+            tx.correlationId === correlationId,
+        )
+      : [];
+    this.deltaConfirmation.onDeltaReceived(syncId, correlationId);
+    if (correlatedModelTransactions.length > 0) {
+      const envelopeIds = new Set<string>();
+      for (const tx of correlatedModelTransactions) {
+        this.clearReplicationLagState(tx.id);
+        if (tx.commitEnvelope) envelopeIds.add(tx.commitEnvelope.idempotencyKey);
+      }
+      for (const envelopeId of envelopeIds) {
+        const envelopeStillAwaiting = this.store
+          .getByStatus('awaiting_delta')
+          .some(
+            (tx) => tx.commitEnvelope?.idempotencyKey === envelopeId,
+          );
+        if (!envelopeStillAwaiting) void this.removeDurableCommit(envelopeId);
+      }
+    }
+    if (!correlationId) return;
+    for (const tx of this.commitStore.values()) {
+      if (tx.status !== 'awaiting_delta') continue;
+      if (this.queuedCommitMatchesCorrelation(tx, correlationId)) {
+        this.completeQueuedCommit(tx, syncId);
+      }
+    }
   }
 
   // Schedule the retry-and-reconciliation wait for a transaction's confirming
@@ -1907,6 +2306,11 @@ export class TransactionQueue extends EventEmitter {
         resolve();
         return;
       }
+      const lagError = this.replicationLagErrors.get(transactionId);
+      if (lagError) {
+        reject(lagError);
+        return;
+      }
 
       const onCompleted = () => {
         cleanup();
@@ -1918,14 +2322,21 @@ export class TransactionQueue extends EventEmitter {
         reject(error);
       };
 
+      const onLagged = ({ error }: { error: Error }) => {
+        cleanup();
+        reject(error);
+      };
+
       const cleanup = () => {
         this.off(`transaction:completed:${transactionId}`, onCompleted);
         this.off(`transaction:failed:${transactionId}`, onFailed);
+        this.off(`transaction:confirmation_lagged:${transactionId}`, onLagged);
       };
 
       // Listen to existing events (timeout already handled by scheduleDeltaConfirmationTimeout)
       this.on(`transaction:completed:${transactionId}`, onCompleted);
       this.on(`transaction:failed:${transactionId}`, onFailed);
+      this.on(`transaction:confirmation_lagged:${transactionId}`, onLagged);
     });
   }
 
@@ -1940,8 +2351,10 @@ export class TransactionQueue extends EventEmitter {
    * `ablo.commits.create()` path. The caller supplies the operations; the queue
    * only retries on reconnect and de-duplicates, and does not apply the change
    * optimistically or reorder for foreign keys. A duplicate `clientTxId`
-   * already in flight is ignored: the server's `mutation_log` de-duplicates
-   * across sessions, and this guard covers a double-enqueue within one session.
+   * already in flight is ignored. After an accepted write exceeds its
+   * replication-confirmation deadline, an explicit same-key retry reuses the
+   * exact sealed envelope as an idempotent status probe; the server's
+   * `mutation_log` still prevents a second logical write.
    */
   async enqueueCommit(
     clientTxId: string,
@@ -1967,6 +2380,20 @@ export class TransactionQueue extends EventEmitter {
           'Idempotency key reused with a different atomic commit request',
           { code: 'idempotency_conflict' },
         );
+      }
+      if (
+        existing.status === 'awaiting_delta' &&
+        this.replicationLagErrors.has(existing.id)
+      ) {
+        // An explicit same-key retry after the confirmation deadline is an
+        // idempotent status probe, not a second logical write. Reuse the exact
+        // durable envelope and ask the server again: once the WAL echo has
+        // materialized, mutation-log replay upgrades the old queued receipt to
+        // confirmed. Passive awaiting remains untouched before the deadline,
+        // so duplicate callers cannot cause eager re-dispatch.
+        this.clearReplicationLagState(existing.id);
+        existing.status = 'pending';
+        this.commitLane.push(existing);
       }
       if (existing.status === 'pending') void this.processCommitLane();
       return;
@@ -2064,23 +2491,55 @@ export class TransactionQueue extends EventEmitter {
           tx.durableEnvelope = durableEnvelope;
           this.assertEnvelopeInsideReplayWindow(durableEnvelope);
           dispatchStarted = true;
-          const result = await this.mutationExecutor.commit(durableEnvelope.operations, {
-            idempotencyKey: tx.id,
-            causedByTaskId: durableEnvelope.commitOptions.causedByTaskId ?? undefined,
-            ...(durableEnvelope.commitOptions.reads
-              ? { reads: durableEnvelope.commitOptions.reads }
-              : {}),
-          });
-          await this.removeDurableCommit(tx.id);
-          tx.lastSyncId = result?.lastSyncId ?? 0;
-          this.noteAck(tx.lastSyncId);
-          tx.status = 'completed';
+          const result = this.parseMutationCommitResult(
+            await this.mutationExecutor.commit(durableEnvelope.operations, {
+              idempotencyKey: tx.id,
+              causedByTaskId: durableEnvelope.commitOptions.causedByTaskId ?? undefined,
+              ...(durableEnvelope.commitOptions.reads
+                ? { reads: durableEnvelope.commitOptions.reads }
+                : {}),
+            }),
+          );
+          tx.durableEnvelope = await this.persistDurableCommitAcceptance(
+            durableEnvelope,
+            result,
+          );
+          tx.lastSyncId = result.lastSyncId;
+          const notifications = result.notifications;
+          if (notifications && notifications.length > 0) {
+            this.commitNotifications.set(tx.id, notifications);
+          }
+          const missingIds = result.missingIds;
+          if (missingIds && missingIds.length > 0) {
+            this.commitMissingIds.set(tx.id, missingIds);
+          }
           this.commitLane.shift();
-          // Guarded: a throwing observer here would land in the catch below,
-          // whose permanent branch shifts the lane a second time and rejects a
-          // commit the server has already durably applied.
-          this.emitCommitLifecycle('transaction:completed', tx);
-          this.emitCommitLifecycle(`transaction:completed:${tx.id}`, tx);
+          if (result.status === 'queued') {
+            tx.correlationId = result.correlationId;
+            tx.status = 'awaiting_delta';
+            const echoSyncId = this.queuedCommitEchoSyncId(tx);
+            if (echoSyncId !== undefined) {
+              this.completeQueuedCommit(tx, echoSyncId);
+            } else {
+              this.scheduleReplicationLagTimeout(
+                tx.id,
+                tx.id,
+                result.correlationId,
+              );
+              getContext().logger.debug('[TransactionQueue] commit lane awaiting source echo', {
+                txId: tx.id.slice(0, 12),
+              });
+            }
+          } else {
+            await this.removeDurableCommit(tx.id);
+            this.noteAck(tx.lastSyncId);
+            tx.status = 'completed';
+            // Guarded: a throwing observer here would land in the catch below,
+            // whose permanent branch shifts the lane a second time and rejects a
+            // commit the server has already durably applied.
+            this.emitCommitLifecycle('transaction:completed', tx);
+            this.emitCommitLifecycle(`transaction:completed:${tx.id}`, tx);
+          }
         } catch (err) {
           const error = err instanceof Error ? err : new Error(String(err));
           if (dispatchStarted && this.isDefinitiveRejection(error)) {
@@ -2126,7 +2585,11 @@ export class TransactionQueue extends EventEmitter {
    */
   waitForCommitReceipt(
     clientTxId: string,
-  ): Promise<{ lastSyncId: number; notifications?: StaleNotification[] }> {
+  ): Promise<{
+    lastSyncId: number;
+    notifications?: StaleNotification[];
+    missingIds?: string[];
+  }> {
     // Drain any stale-context notifications stamped for this tx on the ack.
     const drainNotifications = (): StaleNotification[] | undefined => {
       const n = this.commitNotifications.get(clientTxId);
@@ -2134,30 +2597,56 @@ export class TransactionQueue extends EventEmitter {
       this.commitNotifications.delete(clientTxId);
       return n.length > 0 ? n : undefined;
     };
+    const drainMissingIds = (): string[] | undefined => {
+      const ids = this.commitMissingIds.get(clientTxId);
+      if (!ids) return undefined;
+      this.commitMissingIds.delete(clientTxId);
+      return ids.length > 0 ? ids : undefined;
+    };
+    const receipt = (lastSyncId: number) => {
+      const notifications = drainNotifications();
+      const missingIds = drainMissingIds();
+      return {
+        lastSyncId,
+        notifications,
+        ...(missingIds ? { missingIds } : {}),
+      };
+    };
     return new Promise((resolve, reject) => {
       const existing = this.commitStore.get(clientTxId);
       if (existing?.status === 'completed') {
-        resolve({ lastSyncId: existing.lastSyncId ?? 0, notifications: drainNotifications() });
+        resolve(receipt(existing.lastSyncId ?? 0));
         return;
       }
       if (existing?.status === 'failed' && existing.error) {
         reject(existing.error);
         return;
       }
+      const lagError = this.replicationLagErrors.get(clientTxId);
+      if (lagError) {
+        reject(lagError);
+        return;
+      }
       const onCompleted = (tx: CommitTransaction) => {
         cleanup();
-        resolve({ lastSyncId: tx.lastSyncId ?? 0, notifications: drainNotifications() });
+        resolve(receipt(tx.lastSyncId ?? 0));
       };
       const onFailed = ({ error }: { error: Error }) => {
+        cleanup();
+        reject(error);
+      };
+      const onLagged = ({ error }: { error: Error }) => {
         cleanup();
         reject(error);
       };
       const cleanup = () => {
         this.off(`transaction:completed:${clientTxId}`, onCompleted);
         this.off(`transaction:failed:${clientTxId}`, onFailed);
+        this.off(`transaction:confirmation_lagged:${clientTxId}`, onLagged);
       };
       this.on(`transaction:completed:${clientTxId}`, onCompleted);
       this.on(`transaction:failed:${clientTxId}`, onFailed);
+      this.on(`transaction:confirmation_lagged:${clientTxId}`, onLagged);
     });
   }
 
@@ -2519,6 +3008,7 @@ export class TransactionQueue extends EventEmitter {
           sourceMutationIds.add(mutationId);
         }
         if (
+          envelope.acceptedAt === undefined &&
           Date.now() - envelope.sealedAt >=
           TransactionQueue.DURABLE_REPLAY_WINDOW_MS
         ) {
@@ -2562,6 +3052,9 @@ export class TransactionQueue extends EventEmitter {
           sealedAt: envelope.sealedAt,
           sequence: envelope.sequence ?? envelope.sealedAt * 1_000,
           attempts: 0,
+          ...(envelope.correlationId
+            ? { correlationId: envelope.correlationId }
+            : {}),
           sourceMutationIds: [...envelope.sourceMutationIds],
           durableEnvelope: envelope,
         };
@@ -2840,6 +3333,11 @@ export class TransactionQueue extends EventEmitter {
     // 30–120s each) — a disposed queue must not keep the process alive or
     // fire confirmation callbacks against the cleared store below.
     this.deltaConfirmation.dispose();
+    for (const timeout of this.replicationLagTimeouts.values()) {
+      clearTimeout(timeout);
+    }
+    this.replicationLagTimeouts.clear();
+    this.replicationLagErrors.clear();
 
     // Clear the offline-grace timer armed by setConnectionState('disconnected').
     if (this.commitOfflineGraceTimer !== null) {
@@ -2853,6 +3351,11 @@ export class TransactionQueue extends EventEmitter {
     this.executionQueue = [];
     this.createdTransactions = [];
     this.deferredDeletesByCreate.clear();
+    this.recentDeltaCorrelations.clear();
+    this.commitLane = [];
+    this.commitStore.clear();
+    this.commitNotifications.clear();
+    this.commitMissingIds.clear();
 
     // Clear event listeners
     this.removeAllListeners();
