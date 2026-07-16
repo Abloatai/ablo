@@ -1059,6 +1059,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       const requestBody = {
         operations,
         reads: commitOptions.reads,
+        track: commitOptions.track,
       };
       const wait = commitOptions.wait ?? 'confirmed';
       let body: CommitResponse;

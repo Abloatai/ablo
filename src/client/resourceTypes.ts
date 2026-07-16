@@ -5,7 +5,7 @@
  * imports.
  */
 
-import type { ReadDependency } from '../coordination/schema.js';
+import type { ReadDependency, TrackDependency } from '../coordination/schema.js';
 import type {
   ClientCommitReceipt,
   CommitStatus,
@@ -169,6 +169,15 @@ export interface CommitCreateOptions {
    * you read, not what you write.
    */
   readonly reads?: readonly ReadDependency[] | null;
+  /**
+   * Durable read-dependencies to register as part of this batch — the persisted
+   * sibling of `reads`. Where `reads` guards only this commit, a `track` entry
+   * (`{ model, id, readAt? }` for a row or `{ group, readAt? }` for a sync group)
+   * lives on past it: a later matching change rides back on a future receipt's
+   * `notifications`. A track-only batch (just `track`, an empty `operations`) is
+   * the batch form of `ablo.<model>.track()`.
+   */
+  readonly track?: readonly TrackDependency[] | null;
 }
 
 /** Public projection inferred from the canonical runtime schema. */

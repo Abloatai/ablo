@@ -324,6 +324,69 @@ async function unmanageableLedgerOwner(sql: postgres.Sql): Promise<string | null
   return ledgerBlockedBy(rows[0]);
 }
 
+/** A published table's ownership as seen from the connected admin. */
+export interface TableOwnershipRow {
+  /** Schema-qualified, quoted relation, e.g. `public.documents`. */
+  readonly relation: string;
+  readonly owner: string;
+  /**
+   * Whether the admin can act as the owner for grants — true when it owns the
+   * table OR is an INHERITing member of the owning role (`pg_has_role(…,
+   * 'USAGE')`). A plain NOINHERIT membership is false: the admin would have to
+   * `SET ROLE` first, which the plan doesn't, so the grant fails.
+   */
+  readonly can_manage: boolean;
+  readonly is_superuser: boolean;
+}
+
+/**
+ * The published tables the connected admin can't grant on — the `{relation,
+ * owner}` list, empty when the admin can manage them all (or is a superuser).
+ * Split from the query so it is testable without a live connection.
+ */
+export function tableOwnershipBlockers(
+  rows: readonly TableOwnershipRow[]
+): readonly { relation: string; owner: string }[] {
+  return rows
+    .filter((row) => !row.can_manage && !row.is_superuser)
+    .map((row) => ({ relation: row.relation, owner: row.owner }));
+}
+
+/**
+ * Published tables the connected admin can neither grant on nor take over. The
+ * setup grants the writer role DML on every published table, which Postgres
+ * reserves for the table's owner — so a table left owned by an earlier
+ * integration's role the admin can't act as (a legacy `app` role reached only
+ * through a NOINHERIT membership, say) stops the plan partway through the grants
+ * with a bare `must be owner of table …`. Detect it first so the CLI can name
+ * the tables and the one-line reassignment fix. "Can act as owner" is
+ * `pg_has_role(current_user, owner, 'USAGE')`, so an admin that INHERITs the
+ * owning role — the common managed-Postgres case — is correctly left to proceed.
+ * Scoped to `--tables` when given; otherwise every public base table the "all
+ * tables" grant reaches.
+ */
+async function unmanageablePublishedTableOwners(
+  sql: postgres.Sql,
+  tables: readonly string[]
+): Promise<readonly { relation: string; owner: string }[]> {
+  const scoped = tables.length > 0;
+  const rows = await sql.unsafe<TableOwnershipRow[]>(
+    `SELECT format('%I.%I', n.nspname, c.relname) AS relation,
+            pg_get_userbyid(c.relowner) AS owner,
+            pg_has_role(current_user, c.relowner, 'USAGE') AS can_manage,
+            r.rolsuper AS is_superuser
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       JOIN pg_roles r ON r.rolname = current_user
+      WHERE c.relkind = 'r'
+        AND n.nspname = 'public'
+        AND c.relname <> 'ablo_idempotency'
+        ${scoped ? 'AND c.relname = ANY($1)' : ''}`,
+    (scoped ? [tables] : []) as never[]
+  );
+  return tableOwnershipBlockers(rows);
+}
+
 export type DbProvider = 'neon' | 'supabase' | 'rds' | 'generic';
 
 /**
@@ -515,6 +578,34 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
         `  or drop the existing ledger so Ablo recreates it under this admin — it holds only\n` +
         `  idempotency replay records, safe to drop when no commit is in flight:\n` +
         `      ${pc.cyan('DROP TABLE ablo_idempotency;')}\n`
+    );
+    process.exit(1);
+  }
+
+  // 1b-2. The setup grants the writer role DML on each published table, which
+  // Postgres reserves for the table's owner. A table left owned by an earlier
+  // integration's role (not this admin) would otherwise stop the plan partway
+  // through the grants with a bare `must be owner of table …`, so surface it now
+  // with the one-line reassignment fix instead.
+  const foreignTables = await unmanageablePublishedTableOwners(admin, args.tables).catch(() => []);
+  if (foreignTables.length > 0) {
+    await admin.end({ timeout: 2 });
+    const list = foreignTables.map((t) => `${t.relation} (owned by ${t.owner})`).join('\n      ');
+    const alters = foreignTables
+      .map((t) => `ALTER TABLE ${t.relation} OWNER TO ${quoteIdent(capability.rolname)};`)
+      .join(' ');
+    const plural = foreignTables.length === 1;
+    console.error(
+      pc.red(
+        `\n  ${pc.bold(String(foreignTables.length))} published table${plural ? '' : 's'} ` +
+          `${plural ? 'is' : 'are'} owned by another role, but you connected as ${pc.bold(capability.rolname)}:`
+      ) +
+        `\n      ${list}\n` +
+        `\n  Ablo grants the writer role access to your published tables, and Postgres reserves that\n` +
+        `  for the table's owner. Reassign them to your admin — metadata only, your rows and RLS\n` +
+        `  policies are untouched, and it works when your admin is a member of the owning role:\n` +
+        `      ${pc.cyan(alters)}\n` +
+        `  Or re-run pointing ${pc.bold('--url')} at the owning role's connection.\n`
     );
     process.exit(1);
   }

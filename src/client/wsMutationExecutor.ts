@@ -5,7 +5,7 @@
  * client wires this up automatically unless you supply your own executor.
  */
 
-import type { ReadDependency } from '../coordination/schema.js';
+import type { ReadDependency, TrackDependency } from '../coordination/schema.js';
 import type {
   MutationExecutor,
   MutationOperation,
@@ -39,6 +39,7 @@ import { AbloError, AbloConnectionError } from '../errors.js';
 	      timeoutMs?: number,
 	      causedByTaskId?: string | null,
 	      reads?: readonly ReadDependency[] | null,
+	      track?: readonly TrackDependency[] | null,
 	    ) => Promise<CommitAck>;
 	  } | null,
 	): MutationExecutor {
@@ -66,6 +67,7 @@ import { AbloError, AbloConnectionError } from '../errors.js';
 	        undefined, // use sendCommit's built-in 15s default; no per-call override
 	        options?.causedByTaskId,
 	        options?.reads,
+	        options?.track,
 	      );
     } catch (err) {
       // Wrap transport-level failures as connection errors so the transaction

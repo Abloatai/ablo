@@ -1145,6 +1145,14 @@
       "docUrl": "https://docs.abloatai.com/errors#model_identifier_missing"
     },
     {
+      "code": "model_join_not_configured",
+      "category": "claim",
+      "surface": "client",
+      "retryable": false,
+      "message": "join() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo({ schema, apiKey }) client (default WebSocket transport).",
+      "docUrl": "https://docs.abloatai.com/errors#model_join_not_configured"
+    },
+    {
       "code": "model_not_found",
       "category": "not_found",
       "surface": "wire",
@@ -1196,14 +1204,6 @@
       "retryable": false,
       "message": "The write is missing a field the model marks as required. Include the field and retry.",
       "docUrl": "https://docs.abloatai.com/errors#model_required_field_missing"
-    },
-    {
-      "code": "model_watch_not_configured",
-      "category": "claim",
-      "surface": "client",
-      "retryable": false,
-      "message": "watch() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo({ schema, apiKey }) client (default WebSocket transport).",
-      "docUrl": "https://docs.abloatai.com/errors#model_watch_not_configured"
     },
     {
       "code": "mutate_create_unknown_model",

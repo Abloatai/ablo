@@ -544,23 +544,23 @@ snapshot.
 | still has a second live connection | survives — release fires only on the last connection |
 | loses the server to a restart | rides the TTL in the coordination store; re-announced on reconnect |
 
-### `watch` — presence for a set of rows
+### `join` — presence for a set of rows
 
 Reading or claiming a row auto-enrolls you in its sync group, which is enough for
 `claim.state`/`claim.queue` to observe co-participants. When you want to *hold*
 presence on a known set of rows — a deck's slides, a board's cards — and react to
-who joins or leaves, use `watch`:
+who joins or leaves, use `join`:
 
 ```ts
-await using room = await ablo.slides.watch(slideIds, { ttl: '5m' });
+await using room = await ablo.slides.join(slideIds, { ttl: '5m' });
 room.peers; // who else is here, live
 ```
 
-`watch(ids, { ttl? })` opens a model-scoped presence/claim subscription and returns
+`join(ids, { ttl? })` opens a model-scoped presence/claim subscription and returns
 a participant handle (`.peers`, the scoped claim stream, `.leave()` / `await using`
 disposal). It is the model-scoped successor to the old top-level
 `ablo.participants.join({ scope })`. **WebSocket only** — presence needs a live
-socket, so `watch` is absent on the HTTP client (`Ablo({ transport: 'http' })`) and
+socket, so `join` is absent on the HTTP client (`Ablo({ transport: 'http' })`) and
 throws on any non-ws construction.
 
 ### Writing under a claim

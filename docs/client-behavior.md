@@ -32,7 +32,7 @@ Common options:
 | `baseURL` | Override the hosted sync endpoint for staging or private deployments. |
 | `persistence` | `memory` by default. Use `indexeddb` for a durable browser cache that survives reloads. |
 | `durableWrites` | Optional crash recovery for unacknowledged agent/worker writes. Independent of the default memory cache; accepts `{ store, namespace? }`. |
-| `transport` | `'websocket'` (default) is the live, stateful client — a persistent socket, a local synced pool, and `onChange` subscriptions. `'http'` returns the **stateless** client for server-side actors (agents, workers, serverless): the same `ablo.<model>` read/write/claim surface, but each call is one HTTP round-trip with no socket. Under `'http'` the return type narrows to `AbloHttpClient`, so stateful-only methods (`get`/`getAll`, `onChange`, `watch`) are compile errors rather than runtime gaps. |
+| `transport` | `'websocket'` (default) is the live, stateful client — a persistent socket, a local synced pool, and `onChange` subscriptions. `'http'` returns the **stateless** client for server-side actors (agents, workers, serverless): the same `ablo.<model>` read/write/claim surface, but each call is one HTTP round-trip with no socket. Under `'http'` the return type narrows to `AbloHttpClient`, so stateful-only methods (`get`/`getAll`, `onChange`, `join`) are compile errors rather than runtime gaps. |
 | `fetch` | Custom fetch implementation for tests or non-standard runtimes. |
 | `defaultHeaders` | Extra headers attached to every HTTP request. |
 | `defaultQuery` | Extra query parameters attached to every HTTP request. |

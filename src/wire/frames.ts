@@ -18,8 +18,9 @@ import { z } from 'zod';
 import {
   commitOperationSchema as coordinationCommitOperationSchema,
   readDependencySchema,
+  trackDependencySchema,
 } from '../coordination/schema.js';
-import type { OnStaleMode, ReadDependency } from '../coordination/index.js';
+import type { OnStaleMode, ReadDependency, TrackDependency } from '../coordination/index.js';
 import type { MutationResultMessageWire } from './commit.js';
 
 /** Asserts two types are exactly equal in both directions. Used to pin each
@@ -125,6 +126,14 @@ export interface CommitMessage {
      * being written are checked for staleness.
      */
     reads?: ReadDependency[] | null;
+    /**
+     * Durable read-dependencies to register for this batch's participant. Each
+     * entry — a row (`{ model, id }`) or a sync group (`{ group }`) — is persisted
+     * and re-checked against every future delta; a later match surfaces a
+     * `StaleNotification` on the participant's next commit. Distinct from `reads`,
+     * which is checked once here and discarded.
+     */
+    track?: TrackDependency[] | null;
   };
 }
 
@@ -139,6 +148,7 @@ export const commitPayloadSchema = z.object({
   clientTxId: z.string(),
   causedByTaskId: z.string().nullish(),
   reads: z.array(readDependencySchema).nullish(),
+  track: z.array(trackDependencySchema).nullish(),
 });
 // Pins the schema to the payload type: fails to compile if either side drifts.
 const _commitPayloadContract: _AssertExact<

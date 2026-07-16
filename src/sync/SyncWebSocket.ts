@@ -22,6 +22,7 @@ import type {
   ClaimRejection,
   StaleNotification,
   ReadDependency,
+  TrackDependency,
   WireClaim,
 } from '../coordination/schema.js';
 // Commit-path frame builders (pure) — extracted leaf; the host re-exports
@@ -1099,6 +1100,7 @@ export class SyncWebSocket<
     timeoutMs = 15_000,
     causedByTaskId?: string | null,
     reads?: readonly ReadDependency[] | null,
+    track?: readonly TrackDependency[] | null,
   ): Promise<CommitAck> {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       return Promise.reject(this.notConnectedError('commit'));
@@ -1120,7 +1122,7 @@ export class SyncWebSocket<
         // an open turn — keeps the wire shape stable for sessions
         // that don't use turns. Servers that don't know the field
         // ignore it; newer servers stamp it onto every delta.
-        const frame = buildCommitFrame(operations, clientTxId, causedByTaskId, reads);
+        const frame = buildCommitFrame(operations, clientTxId, causedByTaskId, reads, track);
         this.ws!.send(JSON.stringify(frame));
       } catch (error) {
         clearTimeout(timeout);
@@ -1143,11 +1145,12 @@ export class SyncWebSocket<
     clientTxId: string,
     causedByTaskId?: string | null,
     reads?: readonly ReadDependency[] | null,
+    track?: readonly TrackDependency[] | null,
   ): void {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       throw this.notConnectedError('commit');
     }
-    const frame = buildCommitFrame(operations, clientTxId, causedByTaskId, reads);
+    const frame = buildCommitFrame(operations, clientTxId, causedByTaskId, reads, track);
     this.ws.send(JSON.stringify(frame));
   }
 

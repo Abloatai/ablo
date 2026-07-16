@@ -11,7 +11,11 @@ import { getContext } from '../context.js';
 import type { CommitMessage, CommitOperation } from '../wire/index.js';
 import type { CommitAck as CanonicalCommitAck } from '../wire/commit.js';
 import type { MutationOperation, ClaimEvent } from '../interfaces/index.js';
-import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
+import type {
+  StaleNotification,
+  ReadDependency,
+  TrackDependency,
+} from '../coordination/schema.js';
 import {
   staleNotificationSchema,
   wireParticipantKindSchema,
@@ -40,6 +44,7 @@ export function buildCommitFrame(
   clientTxId: string,
   causedByTaskId?: string | null,
   reads?: readonly ReadDependency[] | null,
+  track?: readonly TrackDependency[] | null,
 ): CommitMessage {
   const payload: CommitMessage['payload'] = {
     operations: operations.map((op) => ({
@@ -57,6 +62,9 @@ export function buildCommitFrame(
   if (causedByTaskId) payload.causedByTaskId = causedByTaskId;
   // The read set the batch was premised on: the rows or groups the writer read before committing.
   if (reads && reads.length > 0) payload.reads = [...reads];
+  // Durable read-dependencies the writer is registering: the rows or groups it
+  // wants to keep hearing about after this commit, delivered on a future receipt.
+  if (track && track.length > 0) payload.track = [...track];
   return { type: 'commit', payload };
 }
 

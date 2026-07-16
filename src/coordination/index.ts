@@ -24,6 +24,7 @@ export {
   writeGuardSchema,
   staleNotificationSchema,
   readDependencySchema,
+  trackDependencySchema,
   // Layer 2 — pessimistic claim / claim-lease
   claimStatusSchema,
   wireClaimSummarySchema,
@@ -79,6 +80,7 @@ export type {
   WriteGuard,
   StaleNotification,
   ReadDependency,
+  TrackDependency,
   // Layer 2 — pessimistic claim / claim-lease
   ClaimStatus,
   WireClaimSummary,

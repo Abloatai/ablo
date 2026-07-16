@@ -43,7 +43,7 @@ import { DefaultFallback } from './DefaultFallback.js';
  *   - **One component, one import.** Consumers write the provider
  *     once at the root; nothing else needs to plumb the engine.
  *   - **Multiplayer is default.** React consumers are always browsers doing
- *     multiplayer UI, so `useWatch()` / `useAblo()` are always
+ *     multiplayer UI, so `useJoin()` / `useAblo()` are always
  *     available. No opt-in prop.
  *   - **Declarative props for app glue.** `preventUnsavedChanges`,
  *     `onSessionExpired`, `postBootstrap`, `resolveUsers` — each
@@ -400,11 +400,11 @@ function BootstrapGate({
 export type { EngineParticipant, ParticipantScope, ParticipantStatus };
 
 /**
- * Options for `useWatch`. The hook reuses the engine's single
+ * Options for `useJoin`. The hook reuses the engine's single
  * WebSocket and opens a scoped claim on it when `scope` is provided:
  * one TCP connection, N logical sub-syncgroup participants.
  */
-export interface UseWatchOptions {
+export interface UseJoinOptions {
   readonly scope?: ParticipantScope;
   readonly ttlSeconds?: number | string | null;
   /** Tear down + don't re-join while true. */
@@ -437,7 +437,7 @@ export interface UseWatchOptions {
 /** @deprecated Use `ParticipantStatus`. */
 export type MeshParticipantStatus = ParticipantStatus;
 
-export interface UseWatchReturn {
+export interface UseJoinReturn {
   readonly participant: EngineParticipant | null;
   /** Everyone else on the engine's sync groups (`participant.presence.others`), bridged to React. */
   readonly peers: readonly Peer[];
@@ -455,7 +455,7 @@ const EMPTY_INTENTS: readonly Claim[] = Object.freeze([]);
  * lifecycle status. Auto-cleans up on unmount or when `paused`
  * flips to true.
  *
- * `useWatch` is the React form of `ablo.<model>.watch` — scope-level
+ * `useJoin` is the React form of `ablo.<model>.join` — scope-level
  * read-interest + presence; returns the reactive participant facade
  * (peers/claims/status).
  *
@@ -464,7 +464,7 @@ const EMPTY_INTENTS: readonly Claim[] = Object.freeze([]);
  * headless-bot patterns (a separate identity in the same browser
  * tab), construct a second `Ablo({ kind: 'agent', ... })` directly.
  */
-export function useWatch(opts: UseWatchOptions): UseWatchReturn {
+export function useJoin(opts: UseJoinOptions): UseJoinReturn {
   const ctx = useContext(AbloInternalContext);
   const engine = ctx?.engine ?? null;
   const { paused = false } = opts;
@@ -606,7 +606,7 @@ export function useWatch(opts: UseWatchOptions): UseWatchReturn {
 
 /**
  * Read-only presence: the OTHER participants currently visible to this
- * connection, bridged to React. Unlike {@link useWatch}, this does
+ * connection, bridged to React. Unlike {@link useJoin}, this does
  * NOT enter/leave a scope (no `update_subscription`, no warm-TTL churn) —
  * it is a pure reader of the engine's already-flowing presence stream.
  *
@@ -619,7 +619,7 @@ export function useWatch(opts: UseWatchOptions): UseWatchReturn {
  * Use this to answer "is anyone else here?" — e.g. suppressing live-cursor
  * broadcasts while alone — when some OTHER mount already owns the scope's
  * read interest (scope `leave` is not reference-counted, so a second
- * `useWatch` on the same scope would warm-drop the owner's
+ * `useJoin` on the same scope would warm-drop the owner's
  * subscription on unmount).
  *
  * ```ts
@@ -631,7 +631,7 @@ export function usePeers(scope?: ParticipantScope): readonly Peer[] {
   const ctx = useContext(AbloInternalContext);
   const engine = ctx?.engine ?? null;
 
-  // Resolve scope → groups through the schema (same idiom as useWatch).
+  // Resolve scope → groups through the schema (same idiom as useJoin).
   // The stringified, sorted key is the stable effect dependency.
   const scopeKey = JSON.stringify(
     resolveParticipantSyncGroups(scope, engine?.schema).sort(),
@@ -655,7 +655,7 @@ export function usePeers(scope?: ParticipantScope): readonly Peer[] {
     // Plain useState + onChange — presence changes on join/leave/activity
     // only (never on cursor traffic, a separate channel), so this fires
     // rarely; a frame of stale presence is harmless (same rationale as
-    // useWatch's peers bridge).
+    // useJoin's peers bridge).
     setPeers(compute());
     return presence.onChange(() => { setPeers(compute()); });
   }, [engine, scopeKey]);

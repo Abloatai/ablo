@@ -180,9 +180,9 @@ imperative work after an event or effect.
 
 See [API reference](/api) for the full options surface.
 
-## useWatch — scoped presence + read interest
+## useJoin — scoped presence + read interest
 
-`useWatch` is the React form of `ablo.<model>.watch`. It joins multiplayer for a
+`useJoin` is the React form of `ablo.<model>.join`. It joins multiplayer for a
 scope on the engine's existing socket (one TCP connection, N logical
 sub-syncgroup participants) and returns the reactive participant facade. Use it
 when a mount should both *see* who else is on an entity and, optionally, declare
@@ -191,10 +191,10 @@ write interest in it.
 ```tsx
 'use client';
 
-import { useWatch } from '@abloatai/ablo/react';
+import { useJoin } from '@abloatai/ablo/react';
 
 export function DeckPresence({ deckId }: { deckId: string }) {
-  const { peers, claims, status } = useWatch({
+  const { peers, claims, status } = useJoin({
     scope: { slideDecks: deckId },
     claim: true,   // I intend to write — pin the scope + let peers observe the claim
     hydrate: true, // backfill the deck's current rows if not already loaded
@@ -205,7 +205,7 @@ export function DeckPresence({ deckId }: { deckId: string }) {
 }
 ```
 
-Options (`UseWatchOptions`):
+Options (`UseJoinOptions`):
 
 | Option | Default | Effect |
 | --- | --- | --- |
@@ -215,7 +215,7 @@ Options (`UseWatchOptions`):
 | `ttlSeconds` | — | Lease TTL for the scope claim. |
 | `paused` | `false` | Tear down and don't re-join while true. |
 
-Returns (`UseWatchReturn`): `{ participant, peers, claims, status, error }`.
+Returns (`UseJoinReturn`): `{ participant, peers, claims, status, error }`.
 `peers` is everyone else on the scope's sync groups; `claims` is their active
 write-claims; `status` is the join lifecycle. Auto-cleans up on unmount or when
 `paused` flips true.
@@ -223,7 +223,7 @@ write-claims; `status` is the join lifecycle. Auto-cleans up on unmount or when
 ## usePeers — read-only presence
 
 `usePeers` is a *pure reader* of the presence stream already flowing on the
-connection. Unlike `useWatch`, it does **not** enter/leave a scope (no
+connection. Unlike `useJoin`, it does **not** enter/leave a scope (no
 `update_subscription`, no warm-TTL churn) — so reading it never changes what the
 connection is subscribed to.
 
@@ -244,9 +244,9 @@ engine's groups. Returns `ReadonlyArray<Peer>`, where each `Peer` carries
 `participantKind` (`'user' | 'agent' | 'system'`), `participantId`, optional
 `label`, `syncGroups`, `activity`, `lastActive`, and optional `activeClaims`.
 
-Reach for `usePeers` (not a second `useWatch`) when some **other** mount already
+Reach for `usePeers` (not a second `useJoin`) when some **other** mount already
 owns the scope's read interest — scope `leave` is not reference-counted, so a
-second `useWatch` on the same scope would warm-drop the owner's subscription on
+second `useJoin` on the same scope would warm-drop the owner's subscription on
 unmount.
 
 ## Next.js

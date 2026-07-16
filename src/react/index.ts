@@ -41,7 +41,7 @@
  * client:
  *
  *   useAblo((ablo) => ablo.<model>.claim.state(...))  — reactive coordination reads
- *   useWatch({ scope })                               — join a scope to get its peers and claims
+ *   useJoin({ scope })                                — join a scope to get its peers and claims
  */
 
 // ── Typed-global resolvers ─────────────────────────────────────────
@@ -55,15 +55,15 @@ export type {
 // ── Umbrella provider + lifecycle hooks ────────────────────────────
 export {
   AbloProvider,
-  useWatch,
+  useJoin,
   usePeers,
   useSync,
   useSyncStore,
   type AbloProviderProps,
   type ParticipantScope,
   type ParticipantStatus,
-  type UseWatchOptions,
-  type UseWatchReturn,
+  type UseJoinOptions,
+  type UseJoinReturn,
   type MeshParticipantStatus,
 } from './AbloProvider.js';
 

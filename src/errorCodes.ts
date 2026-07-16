@@ -224,7 +224,7 @@ export const ERROR_CODES = {
   model_claimed: wire('claim', 409, false, 'Another participant holds a claim on this row. Read `claim.state` to see who holds it, or queue behind them with a claim of your own.'),
   model_claimed_timeout: wire('claim', 409, false, 'Another participant held a claim on this row and did not release it in time. Retry, or read `claim.state` to see who holds it.'),
   model_claim_not_configured: client('claim', 'Claiming requires the collaboration runtime, which the standard Ablo({ schema, apiKey }) client wires up for every model automatically — there is no per-model claim configuration to add. This appears only when a model proxy is constructed directly without that runtime (an internal/advanced path).'),
-  model_watch_not_configured: client('claim', 'watch() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo({ schema, apiKey }) client (default WebSocket transport).'),
+  model_join_not_configured: client('claim', 'join() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo({ schema, apiKey }) client (default WebSocket transport).'),
 
   // ── stale context / idempotency (409) ──────────────────────────────
   // Not retryable at the transport: the rejected request carries its frozen

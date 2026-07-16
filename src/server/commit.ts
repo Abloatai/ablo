@@ -17,7 +17,7 @@ import type { ParticipantKind, ConfirmationState } from '../schema/syncDeltaRow.
 import type { ParticipantRef } from '../wire/delta.js';
 import type { CommitExecutionResultInput } from '../wire/commit.js';
 import type { Environment } from '../environment.js';
-import type { ReadDependency } from '../coordination/schema.js';
+import type { ReadDependency, TrackDependency } from '../coordination/schema.js';
 
 export interface CommitContext {
   participantId: string;
@@ -98,6 +98,13 @@ export interface CommitContext {
    * validates only the rows being written. Omit it to check the write targets alone.
    */
   reads?: ReadDependency[] | null;
+  /**
+   * Durable read-dependencies to persist for this commit's participant. Each entry
+   * is kept in `track_dependencies` and re-checked against every future delta; a
+   * later match opens a `StaleNotification` delivered out of band. Distinct from
+   * `reads`, which is checked once here and discarded.
+   */
+  track?: TrackDependency[] | null;
 }
 
 /**

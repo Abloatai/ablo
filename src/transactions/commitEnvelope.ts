@@ -8,7 +8,7 @@
  */
 
 import { z } from 'zod';
-import { readDependencySchema } from '../coordination/schema.js';
+import { readDependencySchema, trackDependencySchema } from '../coordination/schema.js';
 import { commitOperationSchema } from '../wire/frames.js';
 import { correlationIdSchema } from '../wire/commit.js';
 import { idempotencyKeySchema } from './idempotencyKey.js';
@@ -63,6 +63,7 @@ export type DurableCommitOperationInput = z.input<typeof durableCommitOperationS
 const durableCommitOptionsSchema = z.strictObject({
   causedByTaskId: z.string().min(1).nullable().optional(),
   reads: z.array(readDependencySchema).nullable().optional(),
+  track: z.array(trackDependencySchema).nullable().optional(),
 });
 
 export const commitOutboxScopeSchema = z.strictObject({

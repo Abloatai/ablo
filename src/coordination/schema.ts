@@ -211,6 +211,30 @@ export const readDependencySchema = z.union([
 ]);
 export type ReadDependency = z.infer<typeof readDependencySchema>;
 
+/**
+ * A durable read-dependency — what a participant is watching so that a later
+ * change to it opens a {@link StaleNotification}. It is the persisted sibling of
+ * a {@link ReadDependency}: the same reference shape, minus the disposition (a
+ * track always notifies — that is what tracking is), with an optional `readAt`
+ * that defaults to the watermark of the commit that registered it. The row form
+ * watches one object; the group form watches a whole sync group ("anything in
+ * `deck:abc`"). Where a `ReadDependency` is checked once at commit and discarded,
+ * a `TrackDependency` is kept and re-checked against every future delta. See
+ * `packages/sync-engine/docs/groups.md` for how it drives change propagation.
+ */
+export const trackDependencySchema = z.union([
+  z.object({
+    model: z.string(),
+    id: z.string(),
+    readAt: z.number().optional(),
+  }),
+  z.object({
+    group: z.string(),
+    readAt: z.number().optional(),
+  }),
+]);
+export type TrackDependency = z.infer<typeof trackDependencySchema>;
+
 // ─────────────────────────────────────────────────────────────────────────
 //  Layer 2 — pessimistic claims and leases
 // ─────────────────────────────────────────────────────────────────────────

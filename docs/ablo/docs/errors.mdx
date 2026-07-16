@@ -387,11 +387,11 @@ Another participant holds a claim on this row. Read `claim.state` to see who hol
 
 Another participant held a claim on this row and did not release it in time. Retry, or read `claim.state` to see who holds it.
 
-### model_watch_not_configured
+### model_join_not_configured
 
 `client-only` · not sent over the network
 
-watch() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo(&#123; schema, apiKey &#125;) client (default WebSocket transport).
+join() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo(&#123; schema, apiKey &#125;) client (default WebSocket transport).
 
 ### slide_intent_missing_deck_id
 

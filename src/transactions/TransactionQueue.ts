@@ -28,7 +28,7 @@ import {
 } from '../errors.js';
 import { SyncPosition } from '../sync/syncPosition.js';
 import type { WriteOptions } from '../interfaces/index.js';
-import type { StaleNotification, ReadDependency } from '../coordination/schema.js';
+import type { StaleNotification, ReadDependency, TrackDependency } from '../coordination/schema.js';
 import {
   mutationCommitResultSchema,
   type MutationCommitResult,
@@ -113,6 +113,8 @@ interface CommitTransaction {
   causedByTaskId?: string | null;
   /** Read dependencies for the whole batch, forwarded to the executor so the server can detect stale-context writes. */
   reads?: ReadDependency[] | null;
+  /** Durable read-dependencies (`track`) to register for the batch's participant, forwarded to the executor. */
+  track?: TrackDependency[] | null;
   status: 'pending' | 'executing' | 'awaiting_delta' | 'completed' | 'failed';
   createdAt: number;
   attempts: number;
@@ -638,6 +640,7 @@ export class TransactionQueue extends EventEmitter {
     commitOptions?: {
       causedByTaskId?: string | null;
       reads?: readonly ReadDependency[] | null;
+      track?: readonly TrackDependency[] | null;
     };
     createdAt: number;
     sealedAt: number;
@@ -659,6 +662,14 @@ export class TransactionQueue extends EventEmitter {
                 input.commitOptions.reads === null
                   ? null
                   : [...input.commitOptions.reads],
+            }
+          : {}),
+        ...(input.commitOptions?.track !== undefined
+          ? {
+              track:
+                input.commitOptions.track === null
+                  ? null
+                  : [...input.commitOptions.track],
             }
           : {}),
       },
@@ -2359,7 +2370,7 @@ export class TransactionQueue extends EventEmitter {
   async enqueueCommit(
     clientTxId: string,
     operations: CommitTransaction['operations'],
-    options: { causedByTaskId?: string | null; reads?: ReadDependency[] | null } = {},
+    options: { causedByTaskId?: string | null; reads?: ReadDependency[] | null; track?: TrackDependency[] | null } = {},
   ): Promise<void> {
     this.assertDurableReplayOpen();
     const existing = this.commitStore.get(clientTxId);
@@ -2369,11 +2380,13 @@ export class TransactionQueue extends EventEmitter {
         operations: existing.operations,
         causedByTaskId: existing.causedByTaskId ?? null,
         reads: existing.reads ?? null,
+        track: existing.track ?? null,
       });
       const incomingIntent = stableStringify({
         operations,
         causedByTaskId: options.causedByTaskId ?? null,
         reads: options.reads ?? null,
+        track: options.track ?? null,
       });
       if (existingIntent !== incomingIntent) {
         throw new AbloIdempotencyError(
@@ -2408,6 +2421,7 @@ export class TransactionQueue extends EventEmitter {
       operations: [...operations],
       causedByTaskId: options.causedByTaskId ?? null,
       ...(options.reads ? { reads: options.reads } : {}),
+      ...(options.track ? { track: options.track } : {}),
       status: 'pending',
       createdAt: Date.now(),
       attempts: 0,
@@ -2422,6 +2436,7 @@ export class TransactionQueue extends EventEmitter {
       commitOptions: {
         causedByTaskId: tx.causedByTaskId ?? null,
         ...(tx.reads ? { reads: tx.reads } : {}),
+        ...(tx.track ? { track: tx.track } : {}),
       },
       createdAt: tx.createdAt,
       sealedAt: tx.sealedAt,
@@ -2483,6 +2498,7 @@ export class TransactionQueue extends EventEmitter {
               commitOptions: {
                 causedByTaskId: tx.causedByTaskId ?? null,
                 ...(tx.reads ? { reads: tx.reads } : {}),
+                ...(tx.track ? { track: tx.track } : {}),
               },
               createdAt: tx.createdAt,
               sealedAt: tx.sealedAt,
@@ -2497,6 +2513,9 @@ export class TransactionQueue extends EventEmitter {
               causedByTaskId: durableEnvelope.commitOptions.causedByTaskId ?? undefined,
               ...(durableEnvelope.commitOptions.reads
                 ? { reads: durableEnvelope.commitOptions.reads }
+                : {}),
+              ...(durableEnvelope.commitOptions.track
+                ? { track: durableEnvelope.commitOptions.track }
                 : {}),
             }),
           );
@@ -3046,6 +3065,9 @@ export class TransactionQueue extends EventEmitter {
           causedByTaskId: envelope.commitOptions.causedByTaskId ?? null,
           ...(envelope.commitOptions.reads
             ? { reads: [...envelope.commitOptions.reads] }
+            : {}),
+          ...(envelope.commitOptions.track
+            ? { track: [...envelope.commitOptions.track] }
             : {}),
           status: 'pending',
           createdAt: envelope.createdAt,

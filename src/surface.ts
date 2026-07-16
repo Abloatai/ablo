@@ -41,7 +41,8 @@ export const PUBLIC_MODEL_VERBS = [
   'update',
   'delete',
   'claim',
-  'watch',
+  'track',
+  'join',
   'onChange',
 ] as const;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

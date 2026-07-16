@@ -7,7 +7,7 @@
  * mutations to your backend. The SDK ships sensible no-op defaults where it can.
  */
 
-import type { ReadDependency, ParticipantKind } from '../coordination/schema.js';
+import type { ReadDependency, TrackDependency, ParticipantKind } from '../coordination/schema.js';
 import type { CommitStatus, MutationCommitResultInput } from '../wire/commit.js';
 
 // ─────────────────────────────────────────────
@@ -319,6 +319,18 @@ export interface MutationOptions {
    * footprints, §4 the read-set) for the governing convention.
    */
   reads?: ReadDependency[] | null;
+  /**
+   * Durable read-dependencies — what this write (or the record it produces) should
+   * keep watching. Unlike `reads`, which is checked once at commit and discarded,
+   * each `track` entry is persisted and re-checked against every future delta; a
+   * later matching change opens a `StaleNotification` for the tracking participant,
+   * delivered at their next commit or live to a held claim. Each entry is a row
+   * (`{ model, id }`) or a sync group (`{ group }`), optionally pinned to a `readAt`
+   * baseline (defaults to this commit's watermark).
+   *
+   * See `packages/sync-engine/docs/groups.md` for how `track` drives propagation.
+   */
+  track?: TrackDependency[] | null;
 }
 
 /**

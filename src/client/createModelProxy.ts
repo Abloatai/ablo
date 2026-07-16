@@ -6,7 +6,7 @@
  * `retrieve` and `list`, the synchronous local-graph snapshots `get`, `getAll`,
  * and `getCount`, the writes `create`, `update`, and `delete`, the coordination
  * namespace `claim` (callable as `claim({ id })`, plus `claim.state`,
- * `claim.queue`, `claim.release`, and `claim.reorder`), `watch`, and `onChange`.
+ * `claim.queue`, `claim.release`, and `claim.reorder`), `join`, and `onChange`.
  * The factory returns a plain object; the client assembles the `ablo.<model>`
  * lookup table from one of these per model.
  */
@@ -26,6 +26,10 @@ import {
   type ContentionOptions,
 } from './functionalUpdate.js';
 import type { MutationOptions } from '../interfaces/index.js';
+import type {
+  TrackDependency,
+  StaleNotification,
+} from '../coordination/schema.js';
 import { Model, modelAsRow } from '../Model.js';
 import { toMs } from '../utils/duration.js';
 import { LEASE_TTL_MS } from '../wire/protocol.js';
@@ -68,6 +72,29 @@ export function getModelClientMeta(modelClient: unknown): ModelClientMeta | unde
 }
 
 export type ModelListScope = ModelScope | 'live' | 'archived' | 'all';
+
+/** Options for `track({ id })` — register a durable read-dependency on a row. */
+export interface ModelTrackParams {
+  /** The row to keep hearing about, by id. */
+  id: string;
+  /**
+   * The sync watermark this track is premised on. Omit to baseline at the
+   * current head — "tell me about anything from here on". Pass a known
+   * `lastSyncId` (e.g. the one you read the row at) to also catch a change that
+   * already landed between that read and this call.
+   */
+  readAt?: number;
+}
+
+/** The result of `track({ id })`. */
+export interface ModelTrackResult {
+  /**
+   * Tracks that had ALREADY fired at registration time — a change matching an
+   * open track that landed before this call. Present only when something was
+   * already stale; the ongoing signal arrives on the receipts of later commits.
+   */
+  notifications?: StaleNotification[];
+}
 
 /** Options for the synchronous local-pool reads `get`, `getAll`, and
  *  `onChange` — a JavaScript `filter`, an equality `where`, and a lifecycle
@@ -208,14 +235,14 @@ export interface ModelCollaboration<T> {
   pinScope?(scope: Record<string, string>): void | Promise<void>;
   /**
    * Opens a presence and claim subscription on this model's sync group(s) and
-   * returns the live participant handle. Backs `ablo.<model>.watch(ids)`.
+   * returns the live participant handle. Backs `ablo.<model>.join(ids)`.
    * WebSocket only, since presence needs a live socket; it is absent on other
    * client constructions, where the proxy throws a clear error.
    */
-  createWatch?(
+  createJoin?(
     modelKey: string,
     ids: string | readonly string[],
-    options?: WatchOptions,
+    options?: JoinOptions,
   ): Promise<JoinedParticipant>;
 }
 
@@ -434,8 +461,8 @@ export interface ModelDeleteParams<T>
   readonly claim?: Claim<T> | ClaimTargetOptions<T> | null;
 }
 
-/** Options for the WebSocket-only `ablo.<model>.watch(ids, options?)`. */
-export interface WatchOptions {
+/** Options for the WebSocket-only `ablo.<model>.join(ids, options?)`. */
+export interface JoinOptions {
   /**
    * Lease TTL for the underlying presence claim — the participant
    * auto-releases after this if the holder dies. Compact duration string
@@ -540,21 +567,43 @@ export interface ModelOperations<T, CreateInput> {
   claim: ClaimApi<T>;
 
   /**
-   * Subscribes this client to the sync group(s) for one or more rows of this
-   * model and returns a live participant handle — presence (`.peers`), the
-   * scoped claim stream (`.claims`), and `.leave()` / `await using` disposal.
+   * Register a durable read-dependency on a row of this model — keep hearing
+   * about it after this call returns. Where the per-write `reads` gate lives for
+   * exactly one commit, a track persists on the server: any change that lands on
+   * the tracked row rides back on the `notifications` of your next commit, so a
+   * long-running actor learns its context went stale without re-reading. A track
+   * you already have is refreshed, not duplicated (it is an idempotent upsert).
+   *
+   * ```ts
+   * await ablo.tasks.track({ id: 'task_42' });
+   * // …minutes of other work later, on your next write…
+   * const res = await ablo.tasks.update({ id: 'task_42', data: { done: true } });
+   * res.notifications; // populated if task_42 changed under you in the meantime
+   * ```
+   *
+   * The returned `notifications` are only the tracks that had ALREADY fired at
+   * registration time; the ongoing signal arrives on later receipts.
+   */
+  track(params: ModelTrackParams): Promise<ModelTrackResult>;
+
+  /**
+   * Joins the sync group(s) for one or more rows of this model and returns a
+   * live participant handle — presence (`.peers`), the scoped claim stream
+   * (`.claims`), and `.leave()` / `await using` disposal. This is a presence
+   * subscription: it reports who else is here and what they hold, not row
+   * values changing — for the latter, use `onChange`.
    *
    * WebSocket only: presence needs a live socket, so this is absent on HTTP
    * clients and throws on any non-WebSocket construction.
    *
    * ```ts
-   * await using participant = await ablo.slides.watch(slideIds, { ttl: '5m' });
+   * await using participant = await ablo.slides.join(slideIds, { ttl: '5m' });
    * participant.peers; // who else is here
    * ```
    */
-  watch(
+  join(
     ids: string | readonly string[],
-    options?: WatchOptions,
+    options?: JoinOptions,
   ): Promise<JoinedParticipant>;
 
   /** Subscribe to changes; the callback runs on every change. */
@@ -1437,18 +1486,39 @@ export function createModelProxy<T, C>(
     // readers (`claim.state` / `claim.queue` / `claim.release` / `claim.reorder`).
     claim: claimApi,
 
-    watch: guard(
+    track: guard(async (params: ModelTrackParams): Promise<ModelTrackResult> => {
+      const dep: TrackDependency = {
+        model: wireModel,
+        id: params.id,
+        ...(params.readAt !== undefined ? { readAt: params.readAt } : {}),
+      };
+      // A track carries no write, so it rides the commit lane as a zero-operation
+      // commit: the queue tolerates disconnects and de-dupes replays, and the
+      // server's track-only path registers the dependency and reports anything
+      // that already fired. Reuse the same lane the batch `commits.create` door
+      // uses rather than opening a bespoke transport.
+      const clientTxId =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `tx_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const queue = syncClient.getTransactionQueue();
+      await queue.enqueueCommit(clientTxId, [], { track: [dep] });
+      const { notifications } = await queue.waitForCommitReceipt(clientTxId);
+      return notifications && notifications.length > 0 ? { notifications } : {};
+    }),
+
+    join: guard(
       (
         ids: string | readonly string[],
-        options?: WatchOptions,
+        options?: JoinOptions,
       ): Promise<JoinedParticipant> => {
-        if (!collaboration?.createWatch) {
+        if (!collaboration?.createJoin) {
           throw new AbloValidationError(
-            `Model "${schemaKey}" was built without a WebSocket runtime, so watch() is unavailable here. Presence needs a live socket — use the standard Ablo({ schema, apiKey }) client (not the HTTP transport).`,
-            { code: 'model_watch_not_configured' },
+            `Model "${schemaKey}" was built without a WebSocket runtime, so join() is unavailable here. Presence needs a live socket — use the standard Ablo({ schema, apiKey }) client (not the HTTP transport).`,
+            { code: 'model_join_not_configured' },
           );
         }
-        return collaboration.createWatch(schemaKey, ids, options);
+        return collaboration.createJoin(schemaKey, ids, options);
       },
     ),
 

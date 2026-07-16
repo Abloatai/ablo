@@ -521,8 +521,8 @@ an agent pointed at the entities it's working on. You **never hand-write**
    (**read-interest**), and `claim`-ing it pins a **write-intent** subscription.
    So an agent's reachable set **accretes** as it works — no extra subscribe call.
 
-3. **Explicitly, for presence — `watch`.** To hold presence on a known set of rows
-   and react to peers, use the WebSocket-only `ablo.<model>.watch(ids, { ttl })`
+3. **Explicitly, for presence — `join`.** To hold presence on a known set of rows
+   and react to peers, use the WebSocket-only `ablo.<model>.join(ids, { ttl })`
    (it returns a participant handle with `.peers`). See
    [Coordination](/coordination).
 

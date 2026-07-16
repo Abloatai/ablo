@@ -135,6 +135,56 @@ the same row don't collide.
 
 ---
 
+## Staying subscribed across commits: `track`
+
+A read premise guards a single commit: you state what you read, the engine
+checks it, the premise is gone. That fits an actor that reads and writes in one
+breath. It does not fit a long-running one — an agent that reads a row now,
+works for a few minutes, and writes much later. By the time it commits, the
+premise it would have declared is stale, and there was no commit in between on
+which to hear that the ground had shifted.
+
+`track` is the durable half of the same idea. Register what you are watching and
+it persists on the server; the next time you commit anything, a change that
+landed on the tracked target since you registered rides back on your receipt —
+the same `StaleNotification` an `onStale: 'notify'` premise would have handed
+you, arriving on the write you were going to make anyway.
+
+```ts
+// Register interest and walk away — no write required.
+await ablo.slides.track({ id: 's-1' });
+
+// …minutes of other work later, on your next commit…
+const res = await ablo.layers.update({ id: 'layer-C', data: { text: revised } });
+res.notifications; // populated if s-1 moved under you in the meantime
+```
+
+The target is a row (`{ id }` on the model verb) or a sync group (as a write
+option, below). A track is an idempotent registration: calling it again refreshes
+the same subscription rather than stacking duplicates, and once a change fires the
+track re-baselines, so the same change notifies once. Your own writes to a target
+you track never notify you — the signal is about what *others* did.
+
+You can also register a track as part of a write you are already making, the
+persisted companion to `reads`:
+
+```ts
+await ablo.slides.update({
+  id: 's-1',
+  data: { title: revised },
+  reads: [{ group: 'deck:abc', readAt: N, onStale: 'notify' }], // guards THIS commit
+  track: [{ group: 'deck:abc' }],                               // and keeps watching after it
+});
+```
+
+So `reads` is the premise for the commit in hand; `track` is a standing
+subscription that outlives it. Both speak the same notification vocabulary, and
+both leave the resolution to you — the engine reports that the target moved and
+lets the actor decide what that means. Delivery is on your next commit's receipt;
+a track does not yet push out of band between commits.
+
+---
+
 ## Sizing groups
 
 A group is the unit of both delivery and staleness, so its size is a real

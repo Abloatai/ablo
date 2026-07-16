@@ -1301,10 +1301,10 @@ export function Ablo<const S extends SchemaRecord>(
         // reconcile errors so read interest never makes a read reject or stall.
         enterScope: (scope) => store.enterScope(scope),
         pinScope: (scope) => store.pinScope(scope),
-        // `ablo.<model>.watch(ids, { ttl })` performs a scoped participant join
+        // `ablo.<model>.join(ids, { ttl })` performs a scoped participant join
         // on this model's sync group(s). WebSocket only — `join` throws
         // `AbloConnectionError` if the socket isn't ready.
-        createWatch: (modelKey, ids, options) =>
+        createJoin: (modelKey, ids, options) =>
           participantManager.join({
             scope: { [modelKey]: ids },
             ...(options?.ttl !== undefined ? { ttlSeconds: options.ttl } : {}),
@@ -1354,6 +1354,7 @@ export function Ablo<const S extends SchemaRecord>(
 	      const queue = syncClient.getTransactionQueue();
 	      await queue.enqueueCommit(clientTxId, operations, {
 	        ...(commitOptions.reads ? { reads: [...commitOptions.reads] } : {}),
+	        ...(commitOptions.track ? { track: [...commitOptions.track] } : {}),
 	      });
 
 	      if (wait === 'queued') {
