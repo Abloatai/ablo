@@ -1,0 +1,17 @@
+---
+title: "v0.30.1"
+type: changelog
+changelog:
+  version: "0.30.1"
+  category: "Fixes"
+---
+
+{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
+
+### Patch Changes
+
+- **Writes land in your own database on a connected source.** Once you register a database with `ablo connect`, the models you already read from its replication stream become writable: `ablo.<model>.create`, `.update`, and `.delete` route through Ablo's commit chokepoint and into your database, with no connection string in the client. Coordination travels with the write — a claim you hold is checked at the chokepoint before the change is applied, so agents and people serialize on a row whether they reach it by reading from Ablo or by writing back to your own database.
+
+  A write resolves as soon as it is durably accepted, which the receipt reports as `queued`. Ask for the authoritative outcome with `wait: 'confirmed'` — Ablo watches the change actually land in your database (the write-ahead-log echo for a replicated source, or the event feed for a signed data-source endpoint) and promotes the receipt to `confirmed` before the call returns. The client call is identical across both connection shapes; only the feed Ablo watches for the confirmation differs.
+
+- **A clear readiness error when a model's table isn't provisioned yet.** Registering a schema with `ablo push` records your models, but a plane's physical tables are created separately, out of band — so a model can exist in the registered schema before its table does. Reading or writing such a model now returns a typed `model_not_provisioned` error (HTTP 409) that names the gap and points you at provisioning the plane's tables, rather than surfacing as an opaque failure.
