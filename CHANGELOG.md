@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.30.2
+
+### Patch Changes
+
+- **`ablo connect --apply` sets up your database for you instead of printing SQL to run.** It creates the scoped replication and writer roles, publishes your tables, enables logical replication where your provider allows it, and repoints `DATABASE_URL` and `ABLO_WRITE_DATABASE_URL` at the new least-privilege roles — then verifies by reconnecting as the replication role and running the readiness checklist. It uses the admin credential already in `DATABASE_URL`, on your machine only, after a plain-language confirmation; the generated role passwords are written to your environment file, never printed. Every step is idempotent, so it is safe to re-run, and on a managed provider that needs a restart to finish enabling logical replication (RDS, Neon) it applies everything else and leaves that one step with the exact fix. `ablo connect` with no flag still prints the recipe to run by hand; add `--show-sql` to preview the exact statements before applying.
+
 ## 0.30.1
 
 ### Patch Changes

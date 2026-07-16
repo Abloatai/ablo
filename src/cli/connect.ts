@@ -75,6 +75,17 @@ export interface ConnectArgs {
    */
   register: boolean;
   /**
+   * `--apply`: run the setup for the developer instead of printing SQL — create
+   * the scoped roles and publication, enable logical decoding where allowed, and
+   * repoint the scoped connection URLs. Uses the admin credential in
+   * `DATABASE_URL`, on this machine only, after a plain-language confirmation.
+   */
+  apply: boolean;
+  /** `--yes`: skip the `--apply` confirmation (for non-interactive use). */
+  yes: boolean;
+  /** `--show-sql`: include the exact statements in the `--apply` plan. */
+  showSql: boolean;
+  /**
    * `--audit-infra`: a read-only audit that reports leftover Ablo sync tables and
    * types in the database — infrastructure a previous integration may have
    * created. It only reports what it finds and never drops anything.
@@ -97,6 +108,9 @@ export interface ConnectArgs {
 export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
   let check = false;
   let register = false;
+  let apply = false;
+  let yes = false;
+  let showSql = false;
   let auditInfra = false;
   let tables: readonly string[] = [];
   let role = ABLO_REPLICATION_ROLE;
@@ -111,6 +125,16 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
         break;
       case '--register':
         register = true;
+        break;
+      case '--apply':
+        apply = true;
+        break;
+      case '--yes':
+      case '-y':
+        yes = true;
+        break;
+      case '--show-sql':
+        showSql = true;
         break;
       case '--audit-infra':
         auditInfra = true;
@@ -149,11 +173,11 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
       code: 'cli_invalid_arguments',
     });
   }
-  return { check, register, auditInfra, tables, role, writeRole, route };
+  return { check, register, apply, yes, showSql, auditInfra, tables, role, writeRole, route };
 }
 
 /** Safely quotes a Postgres identifier by doubling any embedded quote marks. */
-function quoteIdent(id: string): string {
+export function quoteIdent(id: string): string {
   return `"${id.replace(/"/g, '""')}"`;
 }
 
@@ -993,6 +1017,11 @@ export async function connect(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
+  if (args.apply) {
+    const { runConnectApply } = await import('./connectApply');
+    await runConnectApply(args);
+    return;
+  }
   if (args.check) {
     await runCheck();
     return;
@@ -1018,11 +1047,14 @@ export const CONNECT_USAGE = `  ablo connect — direct writes, settled by logic
   orders it with external changes, and confirms it. Your Postgres remains authoritative.
 
   Usage:
-    npx ablo connect                      Print the exact setup SQL for your Postgres
+    npx ablo connect --apply              Set it up for you: create the roles, publish, verify
+    npx ablo connect                      Print the exact setup SQL instead of running it
     npx ablo connect --tables a,b,c       Publish only these tables (default: all tables)
     npx ablo connect --role <name>        Name the replication role (default: ablo_replicator)
     npx ablo connect --write-role <name>  Name the DML role (default: ablo_writer)
     npx ablo connect --route <route>      public-allowlist | privatelink | peering | vpn
     npx ablo connect --check              Validate DATABASE_URL + ABLO_WRITE_DATABASE_URL
     npx ablo connect --register           Register both scoped credentials as one direct DataSource
-    npx ablo connect --audit-infra        Read-only Stage 5 audit for deprecated Ablo sync tables/types`;
+    npx ablo connect --audit-infra        Read-only Stage 5 audit for deprecated Ablo sync tables/types
+
+  --apply also takes --yes (skip the confirm) and --show-sql (show the exact statements).`;
