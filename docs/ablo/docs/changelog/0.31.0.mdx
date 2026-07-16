@@ -1,0 +1,19 @@
+---
+title: "v0.31.0"
+type: changelog
+changelog:
+  version: "0.31.0"
+  category: "Features"
+---
+
+{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
+
+### Minor Changes
+
+Ablo's relationship with your database is unusual, and this release is about making the setup match it. You write through Ablo — `ablo.<model>.create`, `.update`, `.delete` — and Ablo lands each change in your own Postgres through a scoped role, then reads it back off your write-ahead log to confirm it landed. Your rows never leave your database; Ablo keeps only the ordered log that lets everyone writing to that database take turns. So "connecting a database" really means handing Ablo two narrow keys: one role that can stream and read, and one that can write rows and nothing else.
+
+Handing over those keys used to be a chore — paste some SQL, wire two connection strings into your environment, then run a second command to register them. This release folds it into one step. Point `ablo connect --apply` at an admin connection — pass it with `--url`, or let it use the `DATABASE_URL` you already have — and it runs the whole ceremony: creates the two scoped roles, publishes your tables, turns on logical decoding where the provider allows, and registers both roles with Ablo. The admin credential is used once and discarded. Nothing is written to your `.env`; Ablo generates and holds the scoped passwords itself, and your app keeps only its `ABLO_API_KEY`. When a password needs replacing, `ablo connect --rotate` mints a new pair and re-registers them in the same step.
+
+The shape is deliberate, and it follows one rule: a credential can only have one owner. The admin connection is yours — it's the key to your whole database, so Ablo uses it once and never stores it. The two scoped roles are Ablo's, which is why Ablo, not you, generates their passwords: a credential Ablo owns is one it can rotate, revoke, and audit, and one you can read as plain SQL before you grant it. The same rule is why the scoped strings moved out of the generic `DATABASE_URL` into names of their own — `ABLO_REPLICATION_DATABASE_URL` for the reader, `ABLO_WRITE_DATABASE_URL` for the writer. Nearly every app already sets `DATABASE_URL` to reach its own database, so a replication-only credential left there breaks the app's writes, and a `--check` that quietly falls through to it can report success against the wrong database entirely. `--check` still reads the old name, with a warning, through 0.31.x, and stops in 0.32.0; `--register` refuses it today. The one job `DATABASE_URL` keeps is the honest one: the one-time admin input to `--apply`.
+
+Where this is heading: connecting should eventually be a single sentence to an agent — "connect my Postgres" — with the CLI recognizing your provider, doing everything your credentials allow, and asking once for the single privileged step it can't do for you (a reboot to enable logical replication, an OAuth grant). `--rotate` is the first piece of the credential lifecycle that vision needs, and the `ABLO_`-prefixed names clear away the last fossils of the old dial-in era. The direction is steady: fewer keys, held more briefly, with the one irreversible act always surfaced for a human to approve.

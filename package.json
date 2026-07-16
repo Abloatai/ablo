@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.30.2",
+  "version": "0.31.0",
   "description": "The Collaboration Layer For AI Agents",
   "license": "Apache-2.0",
   "type": "module",

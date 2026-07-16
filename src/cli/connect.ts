@@ -32,7 +32,11 @@
 import { AbloValidationError } from '../errors.js';
 import pc from 'picocolors';
 import postgres from 'postgres';
-import { readProjectDatabaseUrl, readProjectWriteDatabaseUrl } from './dbRole';
+import {
+  readProjectWriteDatabaseUrl,
+  readProjectReplicationUrlWithSource,
+  DATABASE_URL_REMOVAL_VERSION,
+} from './dbRole';
 import { resolveApiKey } from './config';
 import { DEFAULT_URL } from './push';
 import { brand } from './theme';
@@ -77,10 +81,25 @@ export interface ConnectArgs {
   /**
    * `--apply`: run the setup for the developer instead of printing SQL — create
    * the scoped roles and publication, enable logical decoding where allowed, and
-   * repoint the scoped connection URLs. Uses the admin credential in
-   * `DATABASE_URL`, on this machine only, after a plain-language confirmation.
+   * register both scoped roles with Ablo directly. The admin credential is used
+   * on this machine only (from `--url`, or `DATABASE_URL` as a fallback) and is
+   * never persisted or sent anywhere; nothing is written to your `.env` — your
+   * app keeps holding only `ABLO_API_KEY`.
    */
   apply: boolean;
+  /**
+   * `--rotate`: generate fresh passwords for the two scoped roles, `ALTER ROLE`
+   * them in place (using the admin credential from `--url` / `DATABASE_URL`), and
+   * re-register the new connection strings with Ablo. The revoke-and-replace
+   * answer to "what if a role credential leaks?"
+   */
+  rotate: boolean;
+  /**
+   * `--url <conn>`: the admin connection string `--apply` / `--rotate` provision
+   * through, passed transiently rather than left in the environment. Falls back
+   * to `DATABASE_URL` when omitted. Used on this machine only; never persisted.
+   */
+  url?: string;
   /** `--yes`: skip the `--apply` confirmation (for non-interactive use). */
   yes: boolean;
   /** `--show-sql`: include the exact statements in the `--apply` plan. */
@@ -109,6 +128,8 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
   let check = false;
   let register = false;
   let apply = false;
+  let rotate = false;
+  let url: string | undefined;
   let yes = false;
   let showSql = false;
   let auditInfra = false;
@@ -128,6 +149,12 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
         break;
       case '--apply':
         apply = true;
+        break;
+      case '--rotate':
+        rotate = true;
+        break;
+      case '--url':
+        url = argv[++i] ?? url;
         break;
       case '--yes':
       case '-y':
@@ -173,7 +200,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
       code: 'cli_invalid_arguments',
     });
   }
-  return { check, register, apply, yes, showSql, auditInfra, tables, role, writeRole, route };
+  return { check, register, apply, rotate, url, yes, showSql, auditInfra, tables, role, writeRole, route };
 }
 
 /** Safely quotes a Postgres identifier by doubling any embedded quote marks. */
@@ -660,16 +687,45 @@ export async function auditTenantSyncInfra(
  * Resolve DATABASE_URL or exit with a clear message. Shared by `--check` and
  * `--register` — both act on the database the developer points us at.
  */
-function requireDatabaseUrl(verb: string): string {
-  const dbUrl = readProjectDatabaseUrl();
-  if (!dbUrl) {
+function requireDatabaseUrl(verb: string, opts?: { allowDeprecatedFallback?: boolean }): string {
+  const resolved = readProjectReplicationUrlWithSource();
+  if (!resolved) {
     console.error(
-      pc.red('  No DATABASE_URL found (checked process env, .env.local, .env).') +
-        pc.dim(` Set it to the Postgres you want Ablo to read, then re-run ${pc.bold(`ablo connect ${verb}`)}.`),
+      pc.red('  No replication connection found (checked process env, .env.local, .env).') +
+        pc.dim(
+          ` Set ${pc.bold('ABLO_REPLICATION_DATABASE_URL')} to the ${ABLO_REPLICATION_ROLE} connection ` +
+            `printed by ${pc.bold('ablo connect')}, then re-run ${pc.bold(`ablo connect ${verb}`)}.`,
+        ),
     );
     process.exit(1);
   }
-  return dbUrl;
+  if (resolved.variable === 'DATABASE_URL') {
+    // The dangerous fallback: nearly every app already has DATABASE_URL set,
+    // pointing at its own database with its own (often admin) credentials. A
+    // check that resolves here can pass green against the WRONG credential. Say
+    // so loudly, and refuse to register on it — validating is recoverable, but
+    // registering the wrong connection is not.
+    console.warn(
+      pc.yellow(`  ! Falling back to ${pc.bold('DATABASE_URL')} for the replication role — deprecated,`) +
+        pc.dim(
+          ` removed in ${DATABASE_URL_REMOVAL_VERSION}.\n` +
+            `    If this is your app's own connection string, this is NOT validating the ` +
+            `${pc.bold(ABLO_REPLICATION_ROLE)} role.\n` +
+            `    Set ${pc.bold('ABLO_REPLICATION_DATABASE_URL')} to the connection ${pc.bold('ablo connect')} printed.\n`,
+        ),
+    );
+    if (!(opts?.allowDeprecatedFallback ?? false)) {
+      console.error(
+        pc.red(`  Refusing to ${verb.replace(/^--/, '')} against a ${pc.bold('DATABASE_URL')} fallback.`) +
+          pc.dim(
+            ` Set ${pc.bold('ABLO_REPLICATION_DATABASE_URL')} explicitly and re-run.` +
+              ` (${pc.bold('ablo connect --check')} still accepts the fallback so you can inspect it.)\n`,
+          ),
+      );
+      process.exit(1);
+    }
+  }
+  return resolved.url;
 }
 
 /** Resolve the separately scoped writer URL; never substitute the replication URL. */
@@ -811,7 +867,7 @@ async function runRemoteCheck(
 
 /** Run the readiness check against DATABASE_URL and report. */
 async function runCheck(): Promise<void> {
-  const dbUrl = requireDatabaseUrl('--check');
+  const dbUrl = requireDatabaseUrl('--check', { allowDeprecatedFallback: true });
   const writeDbUrl = requireWriteDatabaseUrl('--check');
   console.log(`\n  ${brand('ablo')} ${pc.dim('connect --check')}  ${pc.dim('direct-write + WAL readiness')}\n`);
   console.log(`  ${pc.bold('Replication role')}\n`);
@@ -899,21 +955,46 @@ async function runRegister(args: ConnectArgs): Promise<void> {
   }
 
   const apiUrl = (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
+  const registered = await registerDirectDataSource({
+    apiUrl,
+    apiKey,
+    replicationUrl: dbUrl,
+    writeUrl: writeDbUrl,
+    route: args.route,
+  });
+  process.exit(registered ? 0 : 1);
+}
+
+/**
+ * Hand both scoped connection strings to Ablo's control plane
+ * (`POST /api/v1/datasources`), authed by the project key — the org is derived
+ * server-side from the key, never sent in the body. Ablo stores the credentials
+ * encrypted and its infrastructure is the only thing that opens either
+ * connection from then on. Prints the outcome and returns whether it registered,
+ * so both `--register` and `--apply` can call it and decide their own exit.
+ */
+export async function registerDirectDataSource(opts: {
+  readonly apiUrl: string;
+  readonly apiKey: string;
+  readonly replicationUrl: string;
+  readonly writeUrl: string;
+  readonly route: DirectDataSourceRoute;
+}): Promise<boolean> {
   let res: Response;
   try {
-    res = await fetch(registerEndpoint(apiUrl), {
+    res = await fetch(registerEndpoint(opts.apiUrl), {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${opts.apiKey}` },
       body: JSON.stringify({
         connection: 'direct',
-        connectionString: dbUrl,
-        writeConnectionString: writeDbUrl,
-        route: args.route,
+        connectionString: opts.replicationUrl,
+        writeConnectionString: opts.writeUrl,
+        route: opts.route,
       }),
     });
   } catch (err) {
-    console.error(pc.red(`\n  Couldn't reach ${apiUrl}: ${err instanceof Error ? err.message : String(err)}\n`));
-    process.exit(1);
+    console.error(pc.red(`\n  Couldn't reach ${opts.apiUrl}: ${err instanceof Error ? err.message : String(err)}\n`));
+    return false;
   }
 
   if (res.ok) {
@@ -922,12 +1003,12 @@ async function runRegister(args: ConnectArgs): Promise<void> {
       host?: string;
       status?: string;
     };
-    const statusNote = body.status === 'active' ? `${args.route}, active` : args.route;
+    const statusNote = body.status === 'active' ? `${opts.route}, active` : opts.route;
     console.log(
       `\n  ${pc.green('✓')} Registered${body.host ? ` ${pc.dim(body.host)}` : ''}${body.id ? ` ${pc.dim(`(${body.id})`)}` : ''} as a direct DataSource (${statusNote}).\n` +
         `  Customer COMMIT is durable acceptance; correlated WAL promotes queued writes to confirmed.\n`,
     );
-    process.exit(0);
+    return true;
   }
 
   // The server's error envelope is flat: `{ type, code, message, details }`. The
@@ -971,11 +1052,11 @@ async function runRegister(args: ConnectArgs): Promise<void> {
     );
   }
   console.error();
-  process.exit(1);
+  return false;
 }
 
 async function runAuditInfra(): Promise<void> {
-  const dbUrl = requireDatabaseUrl('--audit-infra');
+  const dbUrl = requireDatabaseUrl('--audit-infra', { allowDeprecatedFallback: true });
   const sql = postgres(dbUrl, { max: 1, prepare: false, onnotice: () => {} });
   let artifacts: readonly SyncInfraArtifact[];
   try {
@@ -1017,7 +1098,7 @@ export async function connect(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  if (args.apply) {
+  if (args.apply || args.rotate) {
     const { runConnectApply } = await import('./connectApply');
     await runConnectApply(args);
     return;
@@ -1047,14 +1128,19 @@ export const CONNECT_USAGE = `  ablo connect — direct writes, settled by logic
   orders it with external changes, and confirms it. Your Postgres remains authoritative.
 
   Usage:
-    npx ablo connect --apply              Set it up for you: create the roles, publish, verify
+    npx ablo connect --apply              Set it up end to end: create the roles, publish, register
+    npx ablo connect --url <admin-conn>   Admin connection for --apply/--rotate (else DATABASE_URL)
+    npx ablo connect --rotate             New passwords for both scoped roles, then re-register
     npx ablo connect                      Print the exact setup SQL instead of running it
     npx ablo connect --tables a,b,c       Publish only these tables (default: all tables)
     npx ablo connect --role <name>        Name the replication role (default: ablo_replicator)
     npx ablo connect --write-role <name>  Name the DML role (default: ablo_writer)
     npx ablo connect --route <route>      public-allowlist | privatelink | peering | vpn
-    npx ablo connect --check              Validate DATABASE_URL + ABLO_WRITE_DATABASE_URL
+    npx ablo connect --check              Validate the scoped roles (ABLO_REPLICATION_DATABASE_URL + ABLO_WRITE_DATABASE_URL)
     npx ablo connect --register           Register both scoped credentials as one direct DataSource
     npx ablo connect --audit-infra        Read-only Stage 5 audit for deprecated Ablo sync tables/types
+
+  --apply registers with Ablo directly; the admin credential is used only on this
+  machine and never persisted. Your app holds only ABLO_API_KEY.
 
   --apply also takes --yes (skip the confirm) and --show-sql (show the exact statements).`;

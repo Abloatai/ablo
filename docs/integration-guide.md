@@ -47,11 +47,12 @@ objects by hand.
 Every schema model is backed by **your own database**. The SDK call shape is the
 same everywhere.
 
-In this guide — an app that already owns its backend and database — keep
-`DATABASE_URL` inside your app and connect it out of band: run `npx ablo connect`
-for logical replication (Ablo tails your WAL), or expose a signed Data Source
-endpoint where Ablo coordinates each write and your app commits it to your
-Postgres. Either way, application and agent code hold only `ABLO_API_KEY` — the
+In this guide — an app that already owns its backend and database — keep the
+database credentials inside your server runtime and connect out of band: run `npx
+ablo connect` to set up logical replication and a scoped writer role, or expose a
+signed Data Source endpoint when your database can't grant replication. Either way,
+you write through `ablo.<model>`; Ablo lands each change in your Postgres and
+confirms it over the WAL. Application and agent code hold only `ABLO_API_KEY` — the
 client never sees a connection string. [Connect Your Database](./data-sources.md)
 is the single source of truth for both paths.
 

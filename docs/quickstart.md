@@ -2,15 +2,16 @@
 
 Build with Ablo on **the Postgres you already have**. You declare a small Ablo
 schema for the models humans and agents edit together, connect Ablo to your
-database with **logical replication** (`ablo connect`), and coordinate every read
-and claim through `ablo.<model>`. Your database stays the system of record: your
-app keeps writing through its own backend, Ablo tails your write-ahead log (WAL),
-and the confirmed rows fan out to every connected client. Ablo **never runs DDL,
-owns, or migrates your schema**.
+database (`ablo connect`), and read and write every one of those models through
+`ablo.<model>`. You write through Ablo; it lands the change in your Postgres and
+confirms it by tailing your write-ahead log (WAL). Your rows live in your database,
+which stays the system of record. Ablo writes rows but **runs no DDL and owns no
+schema** — your migration tool stays in charge of the shape of your database.
 
-> No database yet? The hosted **sandbox** can host rows in Ablo's test plane —
-> pass an `apiKey` only and skip the database setup, like Stripe test mode — so
-> you can try Ablo before connecting your Postgres.
+> No database yet? Pass an `apiKey` only and Ablo keeps your rows in its own log,
+> so you can build the whole app today — like Stripe test mode. Point it at a
+> separate or local Postgres for a throwaway sandbox, or at your production
+> database when you're ready.
 
 ## 1. Install and initialize
 
@@ -97,32 +98,38 @@ collapses to the untyped client.
 
 ## 3. Connect your database with `ablo connect`
 
-Connecting a real database = Postgres logical replication, and `ablo connect` is
-the one way to set it up. Ablo **reads** your WAL and never runs DDL, owns, or
-migrates your schema — your app keeps writing through its own backend.
+`ablo connect` sets your database up so Ablo can write your rows (a scoped DML
+role) and read them back to confirm (logical replication). It writes rows through
+that role but runs no DDL and owns no schema — your migration tool stays in charge.
+
+You run `ablo connect` once, out of band — it provisions the roles and hands them
+to Ablo. From then on Ablo does the connecting; your app never opens a database
+connection.
 
 ```bash
-# 1. Enable logical decoding (then RESTART Postgres — wal_level is not reloadable)
-#    ALTER SYSTEM SET wal_level = 'logical';
-#    On RDS/Aurora: set rds.logical_replication = 1 in the parameter group, reboot.
+# Point it at an admin connection once — it does the whole ceremony: creates the
+# roles + publication, turns on logical decoding where it can, registers both
+# scoped roles with Ablo, and proves it by reading back. Nothing lands in your .env.
+npx ablo connect --apply --url postgres://admin:...@host:5432/db
 
-# 2. Print the exact publication + replication-role SQL for YOUR Postgres, run it:
-npx ablo connect
-
-# 3. Put the replication role's connection string in DATABASE_URL, then validate:
-npx ablo connect --check
+# ...or print the SQL and run it yourself, then register:
+#   npx ablo connect            # prints the publication + two scoped roles
+#   npx ablo connect --check    # validates the database is ready
+#   npx ablo connect --register # hands the two scoped roles to Ablo
 ```
 
-`ablo connect` prints the copy-pasteable SQL (a publication named
-`ablo_publication` and a least-privilege `ablo_replicator` role with
-`REPLICATION` + `SELECT`, password you choose). `ablo connect --check` connects to
-`DATABASE_URL` and verifies `wal_level=logical`, the publication, the role's
-`REPLICATION` attribute, and that every published table has a usable
-`REPLICA IDENTITY` — a green checklist or the precise fix per item.
+`ablo connect --apply` generates two roles and their passwords — an
+`ablo_replicator` role (`REPLICATION` + `SELECT`, for reads and confirmation) and
+an `ablo_writer` role (scoped row DML, for writes) — and registers both connection
+strings with Ablo's control plane, encrypted. Ablo's runtime uses them to read and
+write your database. The admin credential you pass to `--url` is used on this
+machine only and never persisted. The role passwords are generated for you and
+never printed — rotate them any time with `ablo connect --rotate`.
+
+Your **app** holds only the API key — never a connection string:
 
 ```bash
 # .env — server runtime only, never the browser
-DATABASE_URL=postgres://ablo_replicator:<password>@host:5432/db?sslmode=require
 ABLO_API_KEY=sk_test_...
 ```
 
@@ -137,9 +144,9 @@ export const ablo = Ablo({
 });
 ```
 
-The full setup, the honest footprint (publication + slot + `REPLICATION` role +
-the `wal_level` restart + slot/WAL retention Ablo monitors), and the Preview
-status of the WAL runtime are in [Connect Your Database](./data-sources.md).
+The full setup, the honest footprint (publication + slot + the `REPLICATION` and
+writer roles + the `wal_level` restart + slot/WAL retention Ablo monitors), and the
+Preview status are in [Connect Your Database](./data-sources.md).
 
 ## 4. Push the schema, then map it to tables
 

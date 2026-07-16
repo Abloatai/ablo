@@ -273,10 +273,52 @@ export function persistDatabaseUrl(databaseUrl: string, cwd: string = process.cw
  * first, then the env files frameworks load (`.env.local`, `.env`). The CLI
  * runs via `npx` without the app's env loader, so it reads the files itself.
  */
+/**
+ * The variables the replication credential is read from, in precedence order —
+ * exactly two: the canonical `ABLO_REPLICATION_DATABASE_URL`, and `DATABASE_URL`
+ * as a single deprecated back-compat alias (see
+ * {@link readProjectReplicationUrlWithSource}). No speculative middle: one
+ * canonical name, at most one deprecated alias, never more. The alias is read
+ * only for `--check` and refused for `--register` — reading a scoped string from
+ * the generic `DATABASE_URL` risks validating against the app's own database.
+ */
+export const REPLICATION_URL_VARS = ['ABLO_REPLICATION_DATABASE_URL', 'DATABASE_URL'] as const;
+
+/** The variable name `DATABASE_URL` support is scheduled to be removed in. */
+export const DATABASE_URL_REMOVAL_VERSION = '0.32.0';
+
+/**
+ * Resolve the replication credential and report which variable it came from —
+ * `process.env` first, then the framework env files — so a caller can warn when
+ * it resolved from the deprecated generic `DATABASE_URL`.
+ */
+export function readProjectReplicationUrlWithSource(
+  cwd: string = process.cwd(),
+): { url: string; variable: (typeof REPLICATION_URL_VARS)[number] } | null {
+  for (const variable of REPLICATION_URL_VARS) {
+    const value = process.env[variable];
+    if (value) return { url: value, variable };
+  }
+  for (const variable of REPLICATION_URL_VARS) {
+    const value = readProjectEnvValue(variable, cwd);
+    if (value) return { url: value, variable };
+  }
+  return null;
+}
+
 export function readProjectDatabaseUrl(cwd: string = process.cwd()): string | null {
-  const fromEnv = process.env.DATABASE_URL ?? process.env.ABLO_DATABASE_URL;
-  if (fromEnv) return fromEnv;
-  return readProjectEnvValue('DATABASE_URL', cwd);
+  return readProjectReplicationUrlWithSource(cwd)?.url ?? null;
+}
+
+/**
+ * The admin credential `--apply` / `--rotate` provision through when `--url`
+ * isn't given: the app's own `DATABASE_URL` (job 1 — used once, transiently,
+ * never persisted or registered). Deliberately NOT the replication chain: the
+ * scoped replicator role is SELECT-only and cannot `CREATE ROLE`, so reading it
+ * here would only fail the capability check with a confusing message.
+ */
+export function readProjectAdminDatabaseUrl(cwd: string = process.cwd()): string | null {
+  return process.env.DATABASE_URL ?? readProjectEnvValue('DATABASE_URL', cwd);
 }
 
 /**

@@ -430,12 +430,11 @@ each other's changes in real time — that's the default, not a feature you turn
 - `useAblo(...)` gives React clients the live row, kept current automatically.
 - `ablo.<model>.claim({ id })` / `claim.state({ id })` / `claim.queue({ id })` let humans and agents coordinate (and observe) active work on a row — and the line waiting behind it — before a write lands.
 
-Your application owns the write path: writes that land in your database — through
-your own backend, your existing API, any path — are tailed off the WAL and fanned
-out to connected clients automatically (the Electric model). The SDK model
-methods (`ablo.<model>.create/update/delete`) and the HTTP write endpoint are the
-*JavaScript/agent* ergonomic surface — they participate in claims and confirmation
-— but they are not a requirement for your normal writes to show up.
+Writes go through Ablo. `ablo.<model>.create/update/delete` and the HTTP write
+endpoint enter Ablo's commit chokepoint — where claims, ordering, and idempotency
+are enforced — and Ablo lands the change in your database. It then tails the WAL to
+confirm the row landed and fans the confirmed change out to every connected client.
+One surface for humans, servers, and agents; one place coordination happens.
 
 ## HTTP Writes
 
@@ -458,19 +457,18 @@ curl https://api.abloatai.com/api/v1/commits \
 
 ## Your Database
 
-In production, every schema model is backed by **your own database** — Ablo
-**consumes** it, never owns it. The model is Electric's (and PowerSync's, and
-Zero's): Ablo consumes your Postgres' logical-replication stream and fans the
-changes out; **your application continues to own the write path.** Two ways Ablo
+In production, every schema model is backed by **your own database**, and that's
+where your rows live. You write through Ablo; it lands each change in your Postgres
+through a scoped role, then tails the WAL to confirm it and fan it out. Ablo holds
+the ordered transaction log and coordination — never your rows. Two ways it
 connects:
 
 | | How Ablo connects to your Postgres | Use when |
 | --- | --- | --- |
-| **Logical replication** (primary) | `npx ablo connect` prints the setup SQL (`wal_level=logical`, a publication, a `REPLICATION` role); `npx ablo connect --register` tells Ablo to replicate it. Ablo tails the WAL — it never runs DDL on, writes to, owns, or migrates your database. | Your database can grant a `REPLICATION` role (most can). |
-| **Signed endpoint** (fallback) | Your app exposes one route built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`); Ablo sends signed requests and your app touches its own database. Needs no database configuration. | Your database **can't** grant a replication role (a locked-down managed DB). |
+| **`ablo connect`** (primary) | Sets up logical replication and a scoped writer role (`npx ablo connect --apply` does it end to end). Ablo writes your rows through the writer role and reads them back over the WAL to confirm — it writes rows but runs no DDL and owns no schema. | Your database can grant a `REPLICATION` role (most can). |
+| **Signed endpoint** (fallback) | Your app exposes one route built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`); Ablo writes and confirms through it. Needs no replication setup. | Your database **can't** grant a replication role (a locked-down managed DB). |
 
-Your database is the system of record — Ablo holds the transaction log and
-coordination, never your rows. See
+Your database is the system of record. See
 [Connect Your Database](./docs/data-sources.md).
 
 ## Configuration
