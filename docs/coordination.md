@@ -473,6 +473,18 @@ Each beat's answer carries two more things:
   the lease. Durable progress belongs in the data itself — write a row, and
   every subscriber already sees it.
 
+Cooperative yield has a server-side backstop your deployment can turn on: a
+**cumulative-hold ceiling**. Left unset — the default — a holder that keeps
+beating holds the row as long as it likes, and the line behind it depends on
+that holder reading `queueDepth` and releasing of its own accord. With a ceiling
+configured for a model, a holder that runs past its fair share *while contenders
+are queued* is preempted at the server: its next beat comes back `claim_lost`
+(reason `preempted`) — the same loss you already handle, so abandon or re-claim,
+and any write attempted under the old lease is fenced regardless. A holder with
+no one waiting is never preempted, however long it runs. It is the same idea as
+an SQS message that cannot stay invisible past a hard cap however often its lock
+is refreshed, narrowed here to bite only under real contention.
+
 Works identically on both transports: the realtime client sends a
 `claim_heartbeat` frame; the HTTP client posts
 `POST /api/v1/models/{model}/{id}/claim/heartbeat` (`{ ttl?, claimId?, details? }`).
@@ -603,7 +615,7 @@ inspect the `code`.
 
 | error | `code` | thrown when | carries |
 |---|---|---|---|
-| `AbloClaimedError` | `claim_lost` | A held/queued claim was taken away — the holder disconnected (reaped on the keepalive cycle), went silent past its TTL, or was revoked — while you were holding or waiting. | `claims?` |
+| `AbloClaimedError` | `claim_lost` | A held/queued claim was taken away — the holder disconnected (reaped on the keepalive cycle), went silent past its TTL, was revoked, or was preempted (a privileged reorder, or a configured cumulative-hold ceiling reached while contenders waited) — while you were holding or waiting. | `claims?` |
 | `AbloClaimedError` | `claim_queued` | **HTTP transport only.** A contended `claim` (default `queue: true`) could not block-wait for the lease (no socket), so it rejected immediately instead of queueing. Retryable — re-attempt the claim. | `claims?` |
 | `AbloClaimedError` | `grant_timeout` | The optional `timeoutMs` elapsed while you were still queued for a grant. | `claims?` |
 | `AbloClaimedError` | `queue_too_deep` | `claim` was passed `maxQueueDepth` and the wait line was already that deep when you tried to join — fail-fast instead of waiting. | `claims?` |

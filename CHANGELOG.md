@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.33.0
+
+### Minor Changes
+
+The declarative seam introduced in 0.32.0 for carrying tenant identity into your row-level-security policies has a clearer name and a simpler shape. `tenantContext` is now `sessionSettings`, and instead of a list of `{ guc, from }` pairs it is a plain map from the Postgres session setting your policies read to the Ablo identity that fills it:
+
+```ts
+defineSchema({
+  models: { document: { /* … */ } },
+  sessionSettings: { 'app.current_org': 'orgId' },
+})
+```
+
+The setting name is the key, so a setting takes exactly one source and a duplicate is unrepresentable rather than something to validate away. If you adopted `tenantContext` in 0.32.0, rename it to `sessionSettings` and turn each `{ guc: 'app.current_org', from: 'orgId' }` into `'app.current_org': 'orgId'`; the exported names followed the rename — `TenantContextMapping` and `TenantContextSource` became `SessionSettings` and `SessionSettingSource`, and `RESERVED_TENANT_CONTEXT_GUCS` became `RESERVED_SESSION_SETTINGS`. The meaning is unchanged: Ablo fills only settings it resolves from your authenticated identity, never from client-supplied data, so a mapping can forward the tenant Ablo already trusts but can never widen a writer's scope, and settings the engine reserves for itself — `row_security`, the timeouts — are still refused at definition time. Schemas pushed before the rename keep parsing.
+
+Claims gain a fairness backstop, off by default. Claims coordinate long work by waiting rather than locking: when another participant holds a row, your `claim` joins a fair FIFO line behind it, and the holder keeps its lease alive for as long as the work runs by beating on a cadence. Nothing bounded a hold, so a holder that kept beating — and never read the `queueDepth` pressure signal each beat returns, the cue to checkpoint and release when others are waiting — could keep a contended row indefinitely, and the line behind it had no recourse but that holder's goodwill. A deployment can now configure, per model, how long a single holding may last while contenders are actually queued; a holder that runs past that fair share is preempted at the server on its next beat, which arrives as the `claim_lost` you already handle — abandon or re-claim, exactly as when a lease lapses. The guarantee is deliberately narrow: a holder with no one waiting is never preempted however long it runs, so open-ended solo work is untouched, and preemption is a fairness decision, never a correctness one — a preempted holder's next write is still checked at commit against the row's version and fencing token, so the worst it can cause is a clean re-read, never a lost update.
+
+### Patch Changes
+
+Connecting a database a second time now behaves the way you'd expect. `ablo connect --apply` publishes exactly the tables you name with `--tables`, and until now it assumed that publication didn't exist yet — so on a database that had already been connected, the step to publish your tables quietly did nothing, and the writer role ended up granted on one set of tables while Ablo was still reading a different, older set. Registration then refused the writer as "not ready," which was correct but baffling: the two halves disagreed and nothing said so. Apply now reconciles the publication to match your `--tables` on every run — adding what's newly named, dropping what's no longer there, the same declarative model a CDC tool like Debezium uses — and prints what it's about to add or drop before it touches anything, so narrowing the set is a decision you see rather than a surprise.
+
+When a readiness check does fail, the reason is finally visible. The direct-write preflight has always returned a precise checklist — which privilege is missing, on which table, and the exact grant to fix it — but the CLI was reading it from the wrong place in the error and rendered a blank message that sent you in circles. The checklist now prints under the failure, one line per unmet requirement, with the fix.
+
 ## 0.32.0
 
 ### Minor Changes

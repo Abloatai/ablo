@@ -48,7 +48,7 @@ import {
   type SchemaRecord,
   type IdentityRole,
   type EntityRole,
-  type TenantContextMapping,
+  type SessionSettings,
 } from './schema.js';
 
 /** Current schema-JSON envelope version. Bump this on a breaking change to the
@@ -99,8 +99,8 @@ export interface SchemaJSON {
   readonly v: typeof SCHEMA_JSON_VERSION;
   readonly models: Record<string, ModelJSON>;
   readonly identityRoles: readonly IdentityRole[];
-  /** Optional so schemas pushed before ADR 0011 still parse (defaults to `[]`). */
-  readonly tenantContext?: readonly TenantContextMapping[];
+  /** Optional so schemas pushed before ADR 0011 still parse (defaults to `{}`). */
+  readonly sessionSettings?: SessionSettings;
 }
 
 // ── Serialize ────────────────────────────────────────────────────────────────
@@ -166,7 +166,9 @@ export function toSchemaJSON(schema: Schema): SchemaJSON {
     v: SCHEMA_JSON_VERSION,
     models,
     identityRoles: schema.identityRoles,
-    ...(schema.tenantContext.length > 0 ? { tenantContext: schema.tenantContext } : {}),
+    ...(Object.keys(schema.sessionSettings).length > 0
+      ? { sessionSettings: schema.sessionSettings }
+      : {}),
   };
 }
 
@@ -284,7 +286,7 @@ export function fromSchemaJSON(json: SchemaJSON): Schema {
     models: models,
     validators: validators as Schema['validators'],
     identityRoles: json.identityRoles,
-    tenantContext: json.tenantContext ?? [],
+    sessionSettings: json.sessionSettings ?? {},
   };
 }
 

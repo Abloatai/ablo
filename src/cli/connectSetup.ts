@@ -176,6 +176,101 @@ END $$;`,
   ];
 }
 
+/** The current membership of `ablo_publication`, read from the catalog. */
+export interface PublicationState {
+  readonly exists: boolean;
+  /** A `FOR ALL TABLES` publication — its membership can't be narrowed with SET TABLE. */
+  readonly allTables: boolean;
+  /** Public-schema tables currently published (empty for a FOR ALL TABLES publication). */
+  readonly tables: readonly string[];
+}
+
+/** The statements plus the human-readable diff to bring the publication in line with `--tables`. */
+export interface PublicationReconcile {
+  readonly sql: readonly string[];
+  readonly added: readonly string[];
+  readonly removed: readonly string[];
+  /** True when the change flips publication mode (all-tables ⇄ scoped), so it's a drop+recreate. */
+  readonly recreated: boolean;
+}
+
+/**
+ * Bring `ablo_publication` in line with the declared `--tables` — the same
+ * declarative model Debezium's `publication.autocreate.mode = filtered` uses: the
+ * publication is kept equal to the capture set instead of accreting a stale table
+ * list from an earlier connect.
+ *
+ * A scoped→scoped change is one transactional `ALTER PUBLICATION … SET TABLE`. SET
+ * replaces the whole membership, and because we always pass the complete desired
+ * list — never a hand-picked subset — the "SET forgot a table" footgun can't apply.
+ * A mode flip (`FOR ALL TABLES` ⇄ scoped) can't be ALTERed, so it's a drop+recreate.
+ * Newly published tables only stream once the engine snapshots them on
+ * (re)registration; this customer-side statement is the whole of the CLI's job.
+ */
+export function reconcilePublicationPlan(
+  current: PublicationState,
+  desiredTables: readonly string[]
+): PublicationReconcile {
+  const pub = quoteIdent(ABLO_PUBLICATION);
+  const desiredAll = desiredTables.length === 0;
+  const target = desiredAll
+    ? 'FOR ALL TABLES'
+    : `FOR TABLE ${desiredTables.map(quoteIdent).join(', ')}`;
+
+  if (!current.exists) {
+    return {
+      sql: [`CREATE PUBLICATION ${pub} ${target};`],
+      added: desiredAll ? [] : [...desiredTables],
+      removed: [],
+      recreated: false,
+    };
+  }
+
+  // A mode flip can't be ALTERed: SET TABLE is rejected on a FOR ALL TABLES
+  // publication, and a scoped one can't be widened to all-tables. Drop + recreate.
+  if (current.allTables !== desiredAll) {
+    return {
+      sql: [`DROP PUBLICATION IF EXISTS ${pub};`, `CREATE PUBLICATION ${pub} ${target};`],
+      added: desiredAll ? [] : desiredTables.filter((t) => !current.tables.includes(t)),
+      removed: current.allTables ? [] : current.tables.filter((t) => !desiredTables.includes(t)),
+      recreated: true,
+    };
+  }
+
+  if (desiredAll) {
+    // Already FOR ALL TABLES and still want all — nothing to reconcile.
+    return { sql: [], added: [], removed: [], recreated: false };
+  }
+
+  const added = desiredTables.filter((t) => !current.tables.includes(t));
+  const removed = current.tables.filter((t) => !desiredTables.includes(t));
+  if (added.length === 0 && removed.length === 0) {
+    return { sql: [], added: [], removed: [], recreated: false };
+  }
+  return {
+    sql: [`ALTER PUBLICATION ${pub} SET TABLE ${desiredTables.map(quoteIdent).join(', ')};`],
+    added,
+    removed,
+    recreated: false,
+  };
+}
+
+/** Read the current membership of `ablo_publication` so a re-run can reconcile it. */
+export async function readPublicationState(sql: postgres.Sql): Promise<PublicationState> {
+  const pubRows = await sql.unsafe<{ puballtables: boolean }[]>(
+    `SELECT puballtables FROM pg_publication WHERE pubname = $1`,
+    [ABLO_PUBLICATION] as never[]
+  );
+  const pubRow = pubRows[0];
+  if (!pubRow) return { exists: false, allTables: false, tables: [] };
+  if (pubRow.puballtables) return { exists: true, allTables: true, tables: [] };
+  const tableRows = await sql.unsafe<{ tablename: string }[]>(
+    `SELECT tablename FROM pg_publication_tables WHERE pubname = $1 AND schemaname = 'public' ORDER BY tablename`,
+    [ABLO_PUBLICATION] as never[]
+  );
+  return { exists: true, allTables: false, tables: tableRows.map((r) => r.tablename) };
+}
+
 interface WalLevelRow {
   setting: string;
 }
@@ -344,27 +439,32 @@ const DataSourceRegisterSuccess = z.object({
   status: z.string().optional(),
 });
 
+/** One entry in the server-side readiness checklist. */
+const ReadinessFailure = z.object({
+  item: z.string().optional(),
+  actual: z.string().optional(),
+  fix: z.string().optional(),
+});
+
 /**
- * The failure envelope. Flat `{ code, message, details }` on current servers;
- * the nested `error` is kept for older or wrapped deployments. `details.failures`
- * carries the server-side readiness checklist when it re-ran the probes and found
- * gaps. All optional — a non-JSON or partial body degrades to the HTTP-status
- * message rather than throwing.
+ * The failure envelope. The engine's canonical error object (`AbloError.toJSON`,
+ * the shape `app.onError` emits) spreads its domain `details` at the TOP level, so
+ * a readiness rejection arrives as `{ code, message, failures: [...] }` — `failures`
+ * and `reason` sit beside `code`, not nested under a `details` key. We read them
+ * from the top level and keep `details.failures` / `error.code` as fallbacks for a
+ * wrapping proxy or an older deployment that nested them. All optional — a non-JSON
+ * or partial body degrades to the HTTP-status message rather than throwing.
  */
 const DataSourceRegisterError = z.object({
   code: z.string().optional(),
   message: z.string().optional(),
+  // Canonical: top-level, spread from the engine's `details`.
+  failures: z.array(ReadinessFailure).optional(),
+  reason: z.string().optional(),
+  // Fallback: a wrapping proxy or older engine that nested the same payload.
   details: z
     .object({
-      failures: z
-        .array(
-          z.object({
-            item: z.string().optional(),
-            actual: z.string().optional(),
-            fix: z.string().optional(),
-          })
-        )
-        .optional(),
+      failures: z.array(ReadinessFailure).optional(),
       reason: z.string().optional(),
     })
     .optional(),
@@ -446,8 +546,9 @@ export async function registerDirectDataSource(opts: {
     // The server re-ran the readiness probes from its own side and found failures.
     // It can see a different picture than the local --check — for example a
     // publication added since, or probes running as the replication role rather
-    // than yours.
-    for (const f of body.details?.failures ?? []) {
+    // than yours. The engine spreads these at the top level; `details.failures` is
+    // the fallback for a wrapping proxy or an older nested envelope.
+    for (const f of body.failures ?? body.details?.failures ?? []) {
       console.error(
         `  ${pc.red('✗')} ${pc.bold(f.item ?? 'item')}${f.actual ? pc.dim(` (${f.actual})`) : ''}`
       );
@@ -458,7 +559,8 @@ export async function registerDirectDataSource(opts: {
       pc.dim(`\n  Apply the fixes, verify with ${pc.bold('ablo connect check')}, then re-run.`)
     );
   } else if (code === 'database_unreachable' || code === 'source_unreachable') {
-    if (body.details?.reason) console.error(pc.dim(`  ${body.details.reason}`));
+    const reason = body.reason ?? body.details?.reason;
+    if (reason) console.error(pc.dim(`  ${reason}`));
     console.error(
       pc.dim(
         `  Ablo's servers must be able to reach this database — a localhost or private-network\n` +

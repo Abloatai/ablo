@@ -33,8 +33,11 @@ import {
   connectSetupSql,
   probeReadiness,
   quoteIdent,
+  reconcilePublicationPlan,
+  readPublicationState,
   registerDirectDataSource,
   type CheckItem,
+  type PublicationState,
 } from './connectSetup';
 import type { ConnectArgs } from './connect';
 import {
@@ -134,6 +137,9 @@ export function connectApplyPlan(input: {
   /** Shapes the write-ahead-log step's guidance; managed providers show a
    *  console/setting action instead of an `ALTER SYSTEM` that can't run. */
   readonly provider?: DbProvider;
+  /** The publication's live membership. When given, the publish step reconciles it
+   *  to `--tables` (declarative); when omitted, it falls back to create-if-absent. */
+  readonly existingPublication?: PublicationState;
 }): readonly ApplyStep[] {
   const role = input.role && input.role.length > 0 ? input.role : ABLO_REPLICATION_ROLE;
   const writeRole =
@@ -174,21 +180,34 @@ export function connectApplyPlan(input: {
             },
       ];
 
+  // With live state, reconcile the publication to exactly `--tables` (declarative,
+  // Debezium-"filtered" style). Without it — the pure/fresh-DB path — create it if
+  // absent; a re-run against a matching publication is then a no-op.
+  const reconcile = input.existingPublication
+    ? reconcilePublicationPlan(input.existingPublication, tables)
+    : null;
+  const publicationSql = reconcile
+    ? reconcile.sql
+    : [
+        `DO $$ BEGIN
+  CREATE PUBLICATION ${quoteIdent(ABLO_PUBLICATION)} ${publicationTarget};
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;`,
+      ];
+  const publicationDetail =
+    reconcile?.sql.length === 0
+      ? 'already publishing exactly these tables — nothing to change'
+      : tables.length > 0
+        ? `a read stream of the ${tables.length} table${tables.length === 1 ? '' : 's'} you chose`
+        : 'a read stream of your tables';
+
   return [
     ...walStep,
     {
       key: 'publication',
       title: 'Publish your tables to Ablo',
-      detail:
-        tables.length > 0
-          ? `a read stream of the ${tables.length} table${tables.length === 1 ? '' : 's'} you chose`
-          : 'a read stream of your tables',
-      sql: [
-        `DO $$ BEGIN
-  CREATE PUBLICATION ${quoteIdent(ABLO_PUBLICATION)} ${publicationTarget};
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;`,
-      ],
+      detail: publicationDetail,
+      sql: publicationSql,
     },
     {
       key: 'replication-role',
@@ -508,6 +527,16 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   const provider = detectProvider(target);
   const walReady = (await currentWalLevel(admin)) === 'logical';
 
+  // 1d. Read the publication's live membership so the plan can reconcile it to
+  // exactly `--tables`. A pre-existing publication from an earlier connect with a
+  // different table set is the common cause of a "writer not ready" rejection: the
+  // writer gets granted on the new tables while the publication still points at the
+  // old ones. Reconciling keeps the two in step (see reconcilePublicationPlan).
+  const existingPublication = await readPublicationState(admin).catch(
+    (): PublicationState => ({ exists: false, allTables: false, tables: [] })
+  );
+  const pubReconcile = reconcilePublicationPlan(existingPublication, args.tables);
+
   // 2. Generate fresh role passwords and build the plan. Every stage is
   // idempotent, so `rotate` runs the same plan: an existing role has only its
   // password re-keyed.
@@ -524,10 +553,24 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
       },
       walAlreadyLogical: walReady,
       provider,
+      existingPublication,
     });
   const steps = buildPlan('scram-verifier');
 
-  // 3. Show the plan in plain language and confirm.
+  // 3. Show the plan in plain language and confirm. When reconciling narrows the
+  // publication, surface the removals first — they stop replicating to Ablo, so the
+  // operator sees the destructive part before confirming, not after.
+  if (pubReconcile.removed.length > 0 || pubReconcile.recreated) {
+    console.log(
+      `  ${pc.yellow('!')} ${pc.bold(ABLO_PUBLICATION)} already publishes a different set; reconciling to your ${pc.bold('--tables')}:`
+    );
+    for (const t of pubReconcile.added) console.log(`      ${pc.green('+')} ${t}`);
+    for (const t of pubReconcile.removed)
+      console.log(`      ${pc.red('-')} ${t} ${pc.dim('(stops replicating to Ablo)')}`);
+    if (pubReconcile.recreated && existingPublication.allTables)
+      console.log(`      ${pc.red('-')} ${pc.dim('every other table (was FOR ALL TABLES)')}`);
+    console.log();
+  }
   printPlan(steps, args.showSql);
   if (!args.yes) {
     if (!process.stdout.isTTY) {

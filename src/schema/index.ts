@@ -184,9 +184,9 @@ export {
   grantsRefSchema,
   groupsInputSchema,
   type GroupsInput,
-  type TenantContextMapping,
-  type TenantContextSource,
-  RESERVED_TENANT_CONTEXT_GUCS,
+  type SessionSettings,
+  type SessionSettingSource,
+  RESERVED_SESSION_SETTINGS,
 } from './schema.js';
 
 // Schema ⇄ JSON — serialize a schema for transport and rebuild it on the far side.

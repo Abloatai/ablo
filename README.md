@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Let people and AI agents work on the same data without overwriting each other.</strong>
+  <strong>The coordination infrastructure for fleets of AI agents.</strong>
 </p>
 
 <p align="center">
@@ -23,17 +23,28 @@
 
 ---
 
-When an agent and a person change the same thing at once, work gets lost: one
-edit silently clobbers another, or the agent acts on data that already moved.
-Ablo gives them one shared, typed write path so people, server actions, and
-agents can all work on the same rows without working blind.
+Development stopped being the bottleneck; coordination is. The moment a *fleet*
+of agents — not one, and not just people — edits the same rows, work gets lost:
+one agent clobbers another, or acts on data that already moved. Ablo is the
+infrastructure that lets the fleet work as one — the load-bearing coordination
+layer the way operational-transform and presence sit invisibly under a shared
+document. You build the agents; Ablo is the substrate that lets them run together
+on shared state without stepping on each other, with the people and server
+actions alongside them on the exact same path.
 
 The core idea is a **claim**. An agent's work is rarely one instant write; it
-reads something, thinks, calls an LLM or tool, then writes back. While that is
-happening, the row can change underneath it. So before slow work starts, the
-agent claims the row. If someone else is already working on it, `claim` waits,
-re-reads the fresh row, then hands it over. No stale overwrite, no separate
-agent mutation path.
+reads something, thinks, calls an LLM or a tool, then writes back — and in that
+gap the row can move under it. So before the slow work starts, the agent claims
+the row. If another agent is already on it, `claim` waits its turn in a fair
+line, re-reads the fresh row, then hands it over. No stale overwrite, no separate
+agent mutation path. People are exempt by policy: a human edit is never made to
+queue behind an agent, and by declared conflict rules always wins.
+
+When the row moves anyway — say a record an agent generated against gets bumped
+the moment before it commits — the commit is rejected and the agent is handed
+back exactly the records that changed, so it re-reads only those, not the world.
+The pattern we kept measuring: with real agents contending on shared state, the
+win comes from the coordination layer, not a bigger model. Org beats intelligence.
 
 Under the hood, you define your data once with a Zod schema and get the same
 typed model client for every actor — people, server actions, and agents:
@@ -63,8 +74,9 @@ yet? A **sandbox** `sk_test` key holds throwaway **test data** — like Stripe t
 mode — so you can explore before pointing it at your Postgres. Test-mode only; in
 production every row lives in your database.)
 
-**Built for** collaborative editors, AI agent workflows, background workers on
-your own infrastructure, and internal tools — anywhere people and agents change
+**Built for** fleets of agents working a shared backlog, AI agent workflows on
+your own infrastructure, collaborative editors where agents and people co-edit,
+and internal tools — anywhere agents (and the people alongside them) change
 shared state and everyone has to see it live.
 
 ## Set up
