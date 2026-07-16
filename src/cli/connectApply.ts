@@ -39,6 +39,12 @@ import {
   type CheckItem,
   type PublicationState,
 } from './connectSetup';
+import {
+  ledgerBlocker,
+  publishedTableBlockers,
+  ownershipRemediation,
+  formatUnresolvedOwnership,
+} from './connectOwnership';
 import type { ConnectArgs } from './connect';
 import {
   generateRolePassword,
@@ -60,7 +66,7 @@ export type PasswordMode = 'scram-verifier' | 'plaintext';
  * provider may refuse, and the only one that can need a restart.
  */
 export interface ApplyStep {
-  readonly key: 'wal' | 'publication' | 'replication-role' | 'write-role' | 'grants';
+  readonly key: 'own' | 'wal' | 'publication' | 'replication-role' | 'write-role' | 'grants';
   readonly title: string;
   readonly detail: string;
   readonly sql: readonly string[];
@@ -140,6 +146,9 @@ export function connectApplyPlan(input: {
   /** The publication's live membership. When given, the publish step reconciles it
    *  to `--tables` (declarative); when omitted, it falls back to create-if-absent. */
   readonly existingPublication?: PublicationState;
+  /** Inherit-grants that let this admin manage tables an earlier integration's role
+   *  owns, run first so the publish and grant steps apply cleanly. See connectOwnership. */
+  readonly inheritGrants?: readonly string[];
 }): readonly ApplyStep[] {
   const role = input.role && input.role.length > 0 ? input.role : ABLO_REPLICATION_ROLE;
   const writeRole =
@@ -201,7 +210,24 @@ END $$;`,
         ? `a read stream of the ${tables.length} table${tables.length === 1 ? '' : 's'} you chose`
         : 'a read stream of your tables';
 
+  // When an earlier integration's role owns your tables, grant this admin
+  // inheritance of that role first — so the publish and grant steps, which
+  // Postgres reserves for the owner, apply cleanly. Runs before everything else.
+  const ownStep: readonly ApplyStep[] =
+    input.inheritGrants && input.inheritGrants.length > 0
+      ? [
+          {
+            key: 'own',
+            title: 'Let this admin manage tables owned by another role',
+            detail:
+              'your admin inherits the owning role so the steps below apply — reversible, no ownership change',
+            sql: input.inheritGrants,
+          },
+        ]
+      : [];
+
   return [
+    ...ownStep,
     ...walStep,
     {
       key: 'publication',
@@ -278,113 +304,6 @@ async function adminCanCreateRoles(sql: postgres.Sql): Promise<AdminCapabilityRo
     `SELECT rolname, rolsuper, rolcreaterole FROM pg_roles WHERE rolname = current_user`
   );
   return rows[0] ?? null;
-}
-
-export interface LedgerOwnershipRow {
-  readonly owner: string;
-  readonly is_owner: boolean;
-  readonly is_superuser: boolean;
-}
-
-/**
- * The decision behind {@link unmanageableLedgerOwner}, split from the query so
- * it is testable without a live connection: the blocking owner when a
- * pre-existing ledger row is owned by another role and the admin is not a
- * superuser, otherwise null (no ledger, already the owner, or superuser — all
- * cases the plan can proceed through).
- */
-export function ledgerBlockedBy(row: LedgerOwnershipRow | undefined): string | null {
-  if (!row || row.is_owner || row.is_superuser) return null;
-  return row.owner;
-}
-
-/**
- * The owner of a pre-existing `ablo_idempotency` the connected admin can neither
- * manage nor take over — or null when there is no such obstacle.
- *
- * A ledger carried over from an earlier Ablo integration may be owned by a
- * different role. The setup grants the writer access to it and (on an upgrade)
- * alters it, both of which Postgres reserves for the table's owner; and only the
- * owner or a superuser can reassign ownership. So when the ledger exists and the
- * admin is neither its owner nor a superuser, the plan cannot succeed — better
- * to stop with the fix than to fail partway through role creation.
- */
-async function unmanageableLedgerOwner(sql: postgres.Sql): Promise<string | null> {
-  const rows = await sql.unsafe<LedgerOwnershipRow[]>(
-    `SELECT pg_get_userbyid(c.relowner) AS owner,
-            c.relowner = r.oid AS is_owner,
-            r.rolsuper AS is_superuser
-       FROM pg_class c
-       JOIN pg_namespace n ON n.oid = c.relnamespace
-       JOIN pg_roles r ON r.rolname = current_user
-      WHERE c.relkind = 'r'
-        AND c.relname = 'ablo_idempotency'
-        AND n.nspname = 'public'`
-  );
-  return ledgerBlockedBy(rows[0]);
-}
-
-/** A published table's ownership as seen from the connected admin. */
-export interface TableOwnershipRow {
-  /** Schema-qualified, quoted relation, e.g. `public.documents`. */
-  readonly relation: string;
-  readonly owner: string;
-  /**
-   * Whether the admin can act as the owner for grants — true when it owns the
-   * table OR is an INHERITing member of the owning role (`pg_has_role(…,
-   * 'USAGE')`). A plain NOINHERIT membership is false: the admin would have to
-   * `SET ROLE` first, which the plan doesn't, so the grant fails.
-   */
-  readonly can_manage: boolean;
-  readonly is_superuser: boolean;
-}
-
-/**
- * The published tables the connected admin can't grant on — the `{relation,
- * owner}` list, empty when the admin can manage them all (or is a superuser).
- * Split from the query so it is testable without a live connection.
- */
-export function tableOwnershipBlockers(
-  rows: readonly TableOwnershipRow[]
-): readonly { relation: string; owner: string }[] {
-  return rows
-    .filter((row) => !row.can_manage && !row.is_superuser)
-    .map((row) => ({ relation: row.relation, owner: row.owner }));
-}
-
-/**
- * Published tables the connected admin can neither grant on nor take over. The
- * setup grants the writer role DML on every published table, which Postgres
- * reserves for the table's owner — so a table left owned by an earlier
- * integration's role the admin can't act as (a legacy `app` role reached only
- * through a NOINHERIT membership, say) stops the plan partway through the grants
- * with a bare `must be owner of table …`. Detect it first so the CLI can name
- * the tables and the one-line reassignment fix. "Can act as owner" is
- * `pg_has_role(current_user, owner, 'USAGE')`, so an admin that INHERITs the
- * owning role — the common managed-Postgres case — is correctly left to proceed.
- * Scoped to `--tables` when given; otherwise every public base table the "all
- * tables" grant reaches.
- */
-async function unmanageablePublishedTableOwners(
-  sql: postgres.Sql,
-  tables: readonly string[]
-): Promise<readonly { relation: string; owner: string }[]> {
-  const scoped = tables.length > 0;
-  const rows = await sql.unsafe<TableOwnershipRow[]>(
-    `SELECT format('%I.%I', n.nspname, c.relname) AS relation,
-            pg_get_userbyid(c.relowner) AS owner,
-            pg_has_role(current_user, c.relowner, 'USAGE') AS can_manage,
-            r.rolsuper AS is_superuser
-       FROM pg_class c
-       JOIN pg_namespace n ON n.oid = c.relnamespace
-       JOIN pg_roles r ON r.rolname = current_user
-      WHERE c.relkind = 'r'
-        AND n.nspname = 'public'
-        AND c.relname <> 'ablo_idempotency'
-        ${scoped ? 'AND c.relname = ANY($1)' : ''}`,
-    (scoped ? [tables] : []) as never[]
-  );
-  return tableOwnershipBlockers(rows);
 }
 
 export type DbProvider = 'neon' | 'supabase' | 'rds' | 'generic';
@@ -562,51 +481,21 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     process.exit(1);
   }
 
-  // 1b. A ledger left by an earlier Ablo integration may be owned by another
-  // role. The plan grants the writer access to it — which Postgres reserves for
-  // the owner — so stop now with the fix rather than fail partway through.
-  const blockingOwner = await unmanageableLedgerOwner(admin).catch(() => null);
-  if (blockingOwner) {
+  // 1b. Ownership preflight. The plan publishes and grants on your tables and the
+  // idempotency ledger — operations Postgres reserves for each object's owner. When
+  // a relation is owned by a role this admin reaches only through a non-inheriting
+  // membership (the common managed-Postgres shape), apply grants the admin that
+  // inheritance itself, as the first stage of the plan, so the run proceeds with no
+  // manual step. Only ownership it genuinely can't take over stops the run.
+  const ledger = await ledgerBlocker(admin).catch(() => null);
+  const foreignTables = await publishedTableBlockers(admin, args.tables).catch(() => []);
+  const { inheritGrants, unresolved } = ownershipRemediation(
+    [...(ledger ? [ledger] : []), ...foreignTables],
+    capability.rolname
+  );
+  if (unresolved.length > 0) {
     await admin.end({ timeout: 2 });
-    console.error(
-      pc.red(
-        `\n  ${pc.bold('ablo_idempotency')} already exists on ${target}, owned by ${pc.bold(blockingOwner)}, ` +
-          `but you connected as ${pc.bold(capability.rolname)}.`
-      ) +
-        `\n  Ablo's setup grants the writer role access to this ledger, and Postgres reserves that\n` +
-        `  for the table's owner. Either re-run pointing ${pc.bold('--url')} at ${pc.bold(blockingOwner)}'s connection,\n` +
-        `  or drop the existing ledger so Ablo recreates it under this admin — it holds only\n` +
-        `  idempotency replay records, safe to drop when no commit is in flight:\n` +
-        `      ${pc.cyan('DROP TABLE ablo_idempotency;')}\n`
-    );
-    process.exit(1);
-  }
-
-  // 1b-2. The setup grants the writer role DML on each published table, which
-  // Postgres reserves for the table's owner. A table left owned by an earlier
-  // integration's role (not this admin) would otherwise stop the plan partway
-  // through the grants with a bare `must be owner of table …`, so surface it now
-  // with the one-line reassignment fix instead.
-  const foreignTables = await unmanageablePublishedTableOwners(admin, args.tables).catch(() => []);
-  if (foreignTables.length > 0) {
-    await admin.end({ timeout: 2 });
-    const list = foreignTables.map((t) => `${t.relation} (owned by ${t.owner})`).join('\n      ');
-    const alters = foreignTables
-      .map((t) => `ALTER TABLE ${t.relation} OWNER TO ${quoteIdent(capability.rolname)};`)
-      .join(' ');
-    const plural = foreignTables.length === 1;
-    console.error(
-      pc.red(
-        `\n  ${pc.bold(String(foreignTables.length))} published table${plural ? '' : 's'} ` +
-          `${plural ? 'is' : 'are'} owned by another role, but you connected as ${pc.bold(capability.rolname)}:`
-      ) +
-        `\n      ${list}\n` +
-        `\n  Ablo grants the writer role access to your published tables, and Postgres reserves that\n` +
-        `  for the table's owner. Reassign them to your admin — metadata only, your rows and RLS\n` +
-        `  policies are untouched, and it works when your admin is a member of the owning role:\n` +
-        `      ${pc.cyan(alters)}\n` +
-        `  Or re-run pointing ${pc.bold('--url')} at the owning role's connection.\n`
-    );
+    console.error(formatUnresolvedOwnership(unresolved, capability.rolname, target));
     process.exit(1);
   }
 
@@ -645,6 +534,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
       walAlreadyLogical: walReady,
       provider,
       existingPublication,
+      inheritGrants,
     });
   const steps = buildPlan('scram-verifier');
 

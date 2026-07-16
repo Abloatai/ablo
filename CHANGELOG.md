@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.34.1
+
+### Patch Changes
+
+Connecting a database whose tables are owned by an earlier integration's role now just works, with no manual step. When `ablo connect --apply` publishes your tables and grants the writer role access to them, Postgres reserves both operations for each table's owner — so if you reach that owner only through a membership that doesn't inherit its privileges, which is the ordinary shape on managed Postgres where a top role administers everything else without holding superuser, the run would otherwise stop partway through. Apply now clears that itself. It grants your admin inheritance of the owning role as the first step of the plan — shown in the preview and covered by the same confirmation you already give, `GRANT <owner> TO <your-admin> WITH INHERIT TRUE`, the per-membership inheritance Postgres 16 introduced — so the admin acts with the owner's authority for the rest of the setup, with no ownership change and reversible by `WITH INHERIT FALSE`. You approve the plan; you never run a line of SQL. The previous release had only detected the situation and suggested reassigning the table's ownership, which is itself reserved for the current owner and so couldn't run from where you stood; apply now does the one thing that can, and does it for you. Only when your admin genuinely can't take that authority — when it isn't a member with admin option of the owning role — does apply stop, and then it names the exact grant an authorized role must run, or the drop for the idempotency ledger. The same handling covers that ledger, which had kept an older, stricter ownership test that could turn away an admin who in fact inherited the owner.
+
+The line printed once a database registers has been rewritten to say what happened and what comes next — that your database is connected, that reads follow its replication stream while writes go through Ablo and land in your own tables, and that `ablo connect check` verifies the connection at any time — in place of the internal shorthand it printed before.
+
+A new page, **Operating on Your Database**, sets out the safety model for working on a live database through Ablo: which actions run freely because they are read-only or reversible, which to verify against the database first, and which change the database itself and belong to a human — written so a person or an agent can sort any action into the right one and stop guessing which move is the dangerous one.
+
 ## 0.34.0
 
 ### Minor Changes

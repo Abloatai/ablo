@@ -50,6 +50,7 @@ Three things stay true no matter how you use Ablo:
 - [Client Behavior](./client-behavior.md) — Options, errors, retries, timeouts, and imports.
 - [Debugging & Logs](./debugging.md) — Turn on the `[Ablo]` coordination trace (`debug` / `logLevel`) to watch claims, queueing, and grants while you build — or read the same activity in code via `ClaimLog` to render an activity feed.
 - [Connect Your Database](./data-sources.md) — Keep canonical rows in your app database without giving Ablo database credentials.
+- [Operating on Your Database](./operating-on-your-database.md) — Which actions run freely, which to verify first, and which belong to a human — and how to tell.
 - [React](./react.md) — Provider, hooks, and reactive reads for React apps.
 - [API Keys](./api-keys.md) — Bearer tokens for the public API.
 
@@ -77,6 +78,7 @@ Three things stay true no matter how you use Ablo:
 - [Guarantees](./guarantees.md) — Confirmed writes, optimistic state, stale-write protection, and agent lifecycle.
 - [Coordination](./coordination.md) — `claim`, `claim.state`, and `claim.queue` for active work.
 - [Connect Your Database](./data-sources.md) — Where data lands when your app database is canonical.
+- [Operating on Your Database](./operating-on-your-database.md) — The safety model for working on a live database: reversible model writes vs. human-gated DDL, and the read-only checks that resolve the doubt.
 - [Receipt](./api.md#receipt) — Confirm what landed.
 - [Usage](./api.md#usage) — Metering and audit dimensions.
 - [Audit Log](./audit.md) — Trace any confirmed write back to the human behind it.

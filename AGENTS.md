@@ -19,6 +19,8 @@ Don't hand-write the integration. Run the CLI; it generates the current-API sche
 
 When you use the signed-endpoint fallback, the generated `ablo/data-source.ts` is the whole endpoint and needs no hand-editing: `dataSourceNext({ schema, apiKey, adapter: prismaDataSource(prisma, schema) })` (or `drizzleDataSource(db, schema)`). The adapter owns commit / idempotency / outbox.
 
+**Working on a real database?** Ablo never runs DDL, migrates, or drops on your database, and every model write is claim-checked and reversible in the log — so reads and `ablo.<model>.update(...)` are yours to run freely, while raw DDL (`ALTER TABLE …`) and a `--yes` cutover belong to a human. When you're unsure whether a write fits, `npx ablo check` reports the live column-by-column fit read-only, before anything runs. Full sorting rule: [Operating on Your Database](./docs/operating-on-your-database.md).
+
 ## Rule
 
 Edit the generated files; teach this API only:

@@ -50,6 +50,7 @@ const TITLES = {
   cli: 'CLI',
   audit: 'Audit log',
   'data-sources': 'Connect Your Database',
+  'operating-on-your-database': 'Operating on Your Database',
   'integration-guide': 'Integration Guide',
   index: 'Ablo Docs',
   'api-keys': 'API Keys',

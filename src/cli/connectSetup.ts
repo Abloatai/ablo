@@ -519,7 +519,8 @@ export async function registerDirectDataSource(opts: {
     const statusNote = body.status === 'active' ? `${opts.route}, active` : opts.route;
     console.log(
       `\n  ${pc.green('✓')} Registered${body.host ? ` ${pc.dim(body.host)}` : ''}${body.id ? ` ${pc.dim(`(${body.id})`)}` : ''} as a direct DataSource (${statusNote}).\n` +
-        `  Customer COMMIT is durable acceptance; correlated WAL promotes queued writes to confirmed.\n`
+        `  Your database is connected. Reads follow its replication stream; writes go through Ablo\n` +
+        `  and land in your own tables. Check the connection anytime with ${pc.cyan('ablo connect check')}.\n`
     );
     return true;
   }

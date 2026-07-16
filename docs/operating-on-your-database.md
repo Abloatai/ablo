@@ -1,0 +1,109 @@
+# Operating on Your Database
+
+Ablo sits over your database as a coordination layer, not an owner. It reads
+your Postgres replication stream and routes each write through a claim-checked
+commit that lands in your own tables. It never runs DDL, never migrates, never
+drops. That single boundary is why almost everything you do through Ablo is
+either read-only or reversible — and why the few actions that aren't are easy to
+name. This page is how to tell them apart, so you can work on a real database
+without guessing which move is the dangerous one.
+
+The habit that makes it easy is to look before you act. One command shows you
+the real shape of your database measured against your schema, and changes
+nothing:
+
+```bash
+npx ablo check   # read-only — reports which columns fit your models and which don't
+```
+
+When a question is about the live database — does this column exist, is it
+nullable, will this write fit — you can usually answer it by observing rather
+than reasoning in the dark.
+
+## The floor: what Ablo never does
+
+These hold on every database Ablo connects to, and they are what bound the blast
+radius of anything you do through the model API:
+
+- It **never runs DDL or migrations** on your database, and never drops a table
+  or column. Schema changes to your own tables are always your application's
+  action, run with your admin credential — never Ablo's.
+- It **never owns your rows.** Canonical data stays in your tables; Ablo hosts
+  only the transaction log and the coordination state.
+- Every model write is **claim-checked and recorded.** A write based on a row
+  that moved under you is rejected rather than applied, and the prior value is
+  retained in the log, so a confirmed change is attributable and
+  reconstructable.
+
+So a normal `ablo.<model>.update(...)` cannot silently corrupt your database:
+the worst case is a clean rejection and a re-read, not a lost row.
+
+## Three kinds of action
+
+Sort any action you're about to take into one of these, and the right move
+follows.
+
+**Run freely — read-only or reversible.**
+Reads (`retrieve`, `list`, `get`), `ablo check`, and `ablo pull` observe and
+never change anything. Previews — `--show-sql`, `--dry-run` — print the exact
+SQL a command would run without executing it. Model writes through
+`ablo.<model>.create` / `update` are claim-checked, optimistic, rolled back if
+the server rejects them, and recorded in the log with the prior value. All of
+these are safe to run on your own initiative.
+
+**Verify first — needs one look at the live database.**
+Routing an existing table's writes through a model requires the model to match
+the table's real columns. Run `ablo check`: it names the columns that fit and
+the ones that don't, so a `NOT NULL` column your model doesn't set shows up as a
+line in the report rather than a surprise at commit time. Decide the model shape
+from what `check` tells you, then proceed. Nothing here is risky — it just reads
+better after you've seen the ground truth.
+
+**Hand to a human — irreversible, outside the log's protection.**
+Raw DDL on the live database — `ALTER TABLE … OWNER TO`, adding or dropping a
+column, changing a constraint — changes the database itself and is not covered
+by the reversible log, so it belongs to a person with their hand on it. So does
+a `connect` cutover run with its confirmation skipped (`--yes`): the prompt
+exists because the step provisions real roles and reconciles publication on a
+live database, and on a shared or production database that confirmation is the
+human's to give. Removing a model from your schema belongs here too — for the
+reason below.
+
+## The one action that isn't what it looks like
+
+Deleting a model from `ablo/schema.ts` reads like a code cleanup, but it is a
+schema change. Your schema is a desired-state declaration: `ablo push` diffs it
+against the server's copy, and a model that has vanished from the schema can be
+read as a table that should no longer exist. "Nothing imports it" answers a
+code question. The question that governs safety is *does removing this drop a
+real table on the next push* — and that one is answered against the database,
+not the codebase. Before removing a model that maps a live table, confirm the
+table is gone or empty and that your push path is additive; otherwise keep the
+model until the data is dealt with. A `load: 'manual'` mapping is often present
+precisely to hold a table in place, so treat its comment as load-bearing.
+
+## The verification loop
+
+Most of the uncertainty in working on a live database dissolves into a few
+read-only checks:
+
+- `ablo check` — does the live database match the schema? Reports the exact
+  column-by-column fit. Read-only.
+- `ablo pull` — what is actually in the database, expressed as a schema.
+  Read-only, like `prisma db pull`.
+- `--show-sql` / `--dry-run` on `connect` and `migrate` — the exact statements,
+  printed and unexecuted, so you approve the SQL before it runs.
+- Read the row and its claim state before you write — `retrieve` / `list`, and
+  `ablo.<model>.claim.state({ id })` for who is already working on it.
+
+The pattern underneath all of it is steady: reads and model writes flow freely
+because the boundary and the log make them safe, DDL and cutovers pause for a
+human because they change the database itself, and the space between the two is
+one `ablo check` away from certain.
+
+## See also
+
+- [Connect Your Database](./data-sources.md) — the one path a database joins Ablo.
+- [Guarantees](./guarantees.md) — what a confirmed write, a stale check, and a claim promise.
+- [CLI & Migrations](./cli.md) — `check`, `pull`, `migrate`, and their read-only / preview flags.
+- [Schema Contract](./schema-contract.md) — how the schema drives push, and why it is a desired-state declaration.
