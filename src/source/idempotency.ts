@@ -134,10 +134,26 @@ export function assertSourceIdempotencyIntent(
 }
 
 /**
- * Enforce the initial permanent-retention contract. New rows use Postgres
- * `infinity`; this check also fails explicitly if a future bounded-retention
- * policy leaves an expired tombstone. Missing expiry evidence is accepted only
- * for adapters reading rows written before the column existed.
+ * How long a ledger row stays replayable, as a Postgres interval. New rows are
+ * written with `expires_at = now() + this`, so the customer can prune anything
+ * past it — the writer can't (it holds no DELETE, by design), so pruning is a
+ * job for their own admin/cron: `DELETE FROM ablo_idempotency WHERE expires_at <
+ * now()`.
+ *
+ * This is an ops/UX window, not a safety one: {@link assertSourceIdempotencyRetention}
+ * already refuses to replay an expired key (fail-closed), so an expired row can
+ * never be safely re-applied whether or not it has been pruned. The window only
+ * governs how late a retry can still collect its cached response before it's
+ * told to start over. 30 days comfortably covers an offline client's queued
+ * commits while keeping the table bounded.
+ */
+export const SOURCE_IDEMPOTENCY_RETENTION = '30 days';
+
+/**
+ * Enforce the retention contract on replay. A row past its `expires_at` is
+ * refused (fail-closed) rather than re-applied, so pruning expired rows is
+ * always safe. Rows written before the column existed (`infinity`/null) are
+ * accepted — they predate bounded retention and never expire.
  */
 export function assertSourceIdempotencyRetention(
   expiresAt: unknown,

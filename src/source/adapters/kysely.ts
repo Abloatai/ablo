@@ -35,6 +35,7 @@ import {
   assertSourceIdempotencyIntent,
   assertSourceIdempotencyRetention,
   sourceChangeIntentHash,
+  SOURCE_IDEMPOTENCY_RETENTION,
 } from '../idempotency.js';
 import {
   adapterTableMigrations,
@@ -86,11 +87,11 @@ function reserveLedgerQuery(
 ): KyselyCompiledQuery {
   return rawQuery(
     'ablo-idempotency-reserve',
-    `INSERT INTO ablo_idempotency (client_tx_id, response, request_hash)
-     VALUES ($1, $2::jsonb, $3)
+    `INSERT INTO ablo_idempotency (client_tx_id, response, request_hash, expires_at)
+     VALUES ($1, $2::jsonb, $3, now() + $4::interval)
      ON CONFLICT (client_tx_id) DO NOTHING
      RETURNING client_tx_id`,
-    [correlationId, '[]', requestHash],
+    [correlationId, '[]', requestHash, SOURCE_IDEMPOTENCY_RETENTION],
   );
 }
 

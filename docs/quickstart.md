@@ -110,21 +110,21 @@ connection.
 # Point it at an admin connection once — it does the whole ceremony: creates the
 # roles + publication, turns on logical decoding where it can, registers both
 # scoped roles with Ablo, and proves it by reading back. Nothing lands in your .env.
-npx ablo connect --apply --url postgres://admin:...@host:5432/db
+npx ablo connect apply --url postgres://admin:...@host:5432/db
 
 # ...or print the SQL and run it yourself, then register:
 #   npx ablo connect            # prints the publication + two scoped roles
-#   npx ablo connect --check    # validates the database is ready
-#   npx ablo connect --register # hands the two scoped roles to Ablo
+#   npx ablo connect check    # validates the database is ready
+#   npx ablo connect register # hands the two scoped roles to Ablo
 ```
 
-`ablo connect --apply` generates two roles and their passwords — an
+`ablo connect apply` generates two roles and their passwords — an
 `ablo_replicator` role (`REPLICATION` + `SELECT`, for reads and confirmation) and
 an `ablo_writer` role (scoped row DML, for writes) — and registers both connection
 strings with Ablo's control plane, encrypted. Ablo's runtime uses them to read and
 write your database. The admin credential you pass to `--url` is used on this
 machine only and never persisted. The role passwords are generated for you and
-never printed — rotate them any time with `ablo connect --rotate`.
+never printed — rotate them any time with `ablo connect rotate`.
 
 Your **app** holds only the API key — never a connection string:
 
@@ -230,7 +230,7 @@ locked.
 // Claim the row so other participants serialize behind us while we work.
 await using handle = await ablo.weatherReports.claim({
   id: 'weather_stockholm',
-  reason: 'checking_weather',
+  description: 'checking_weather',
   ttl: '2m',
 });
 

@@ -6,8 +6,6 @@ changelog:
   category: "Features"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
-
 ### Minor Changes
 
 - **`omitModels()` projects a schema by exclusion — the companion to `selectModels`.** Keep every model except the named ones, so one app can be the general case while a separate app owns the models it drops. The suite shell narrows with `omitModels(full, ['reports', 'reportSections'])` while the standalone app selects those same models. Validation matches `selectModels`: relations into the omitted set are dropped, and a dropped `parent` edge throws, so a model whose scope routes through an omitted parent can't be silently kept. Each app now binds its own schema projection rather than sharing one global registration.

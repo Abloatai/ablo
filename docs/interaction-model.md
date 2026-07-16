@@ -70,7 +70,7 @@ automatically when the scope exits:
 ```ts
 await using claim = await ablo.weatherReports.claim({
   id: 'report_stockholm',
-  reason: 'editing',
+  description: 'editing',
 });
 await ablo.weatherReports.update({ id: claim.data.id, data: { status: 'ready' } }); // rejected if the row changed under the claim
 ```
@@ -87,8 +87,8 @@ Schema updates can carry `readAt` and `onStale`. If the state advanced past
 `readAt`, Ablo applies the `onStale` policy:
 
 - `reject` — fail the commit (first writer wins).
-- `merge` — apply the write if it does not overlap with concurrent changes.
-- `force` — apply the write unconditionally.
+- `notify` — accept the write, but flag it for product review.
+- `overwrite` — apply the write unconditionally.
 
 The choice is per-commit. No CRDT default; the policy is explicit.
 

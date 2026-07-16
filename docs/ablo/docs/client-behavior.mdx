@@ -2,8 +2,6 @@
 title: "Client Behavior"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/docs/client-behavior.md -- edit there, then run `npm run build:docs`. */}
-
 When several writers touch the same data at once — a person in the browser, a Server Action, an agent worker — the SDK decides whose write lands and how the others find out. This page is the reference for that: per-write options like `wait` and `onStale`, claiming a record so your slow work runs uninterrupted, and which errors are safe to retry.
 
 Claims don't lock. If another writer holds the row, `claim` waits for them, re-reads the fresh row, then hands it to you — so two writers serialize instead of clobbering.
@@ -43,8 +41,9 @@ Common options:
 | `dangerouslyAllowBrowser` | Required before sending an API key from browser code. Prefer a server route instead. |
 
 Your database connects out of band — through logical replication (`npx ablo
-connect`) or a signed [Data Source](/data-sources) endpoint — so the client
-holds only `apiKey`, never a connection string. See
+connect`), or the signed [Data Source](/data-sources) endpoint as the
+fallback for databases that can't grant replication — so the client holds only
+`apiKey`, never a connection string. See
 [Connect Your Database](/data-sources) for the full setup.
 
 ## Model Methods
@@ -99,8 +98,10 @@ such as `useAblo((ablo) => ablo.weatherReports.claim.state({ id }))`
 receive active claim state. There is
 no extra multiplayer setup beyond routing shared state through Ablo.
 
-If an app writes directly to its database, Ablo cannot coordinate that write
-until the app reports it through Data Source events.
+Writes flow through Ablo's commit chokepoint and land in your database, so every
+actor routing through Ablo is coordinated. The one write it can't coordinate is
+one made directly against your database, around Ablo — the WAL echo still catches
+it for reads, but it bypasses claims and ordering.
 
 ## Per-Write Options
 

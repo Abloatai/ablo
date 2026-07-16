@@ -2,8 +2,6 @@
 title: "Connect Your Database"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/docs/data-sources.md -- edit there, then run `npm run build:docs`. */}
-
 You write through Ablo, and Ablo writes to your Postgres. A call to
 `ablo.<model>.create / update / delete` enters Ablo's commit chokepoint — where
 claims, ordering, and idempotency are enforced — and Ablo applies the change to
@@ -24,12 +22,12 @@ exactly that.
 
 Connecting sets up two capabilities on your Postgres: **logical replication**, so
 Ablo can read and confirm, and a **scoped DML role**, so Ablo can write. `ablo
-connect` prints the exact SQL. `ablo connect --apply` runs it for you.
+connect` prints the exact SQL. `ablo connect apply` runs it for you.
 
 ## Connect in one command
 
 ```bash
-npx ablo connect --apply --url postgres://admin:...@host:5432/db
+npx ablo connect apply --url postgres://admin:...@host:5432/db
 ```
 
 Pass an admin connection string with `--url` and it creates the publication, the
@@ -38,7 +36,7 @@ both scoped roles with Ablo, and proves the setup by reconnecting and reading ba
 The admin credential is used on this machine only and never persisted — nothing is
 written to your `.env`, which keeps holding only `ABLO_API_KEY`. Pass `--show-sql`
 to see every statement first, or drop `--apply` to print the SQL and run it
-yourself. Rotate the scoped passwords any time with `ablo connect --rotate`.
+yourself. Rotate the scoped passwords any time with `ablo connect rotate`.
 
 The rest of this page is what that command sets up, step by step, for when you want
 to run it by hand or review exactly what changes.
@@ -56,7 +54,7 @@ ALTER SYSTEM SET wal_level = 'logical';
 `wal_level` is **not reloadable** — you must **restart Postgres** for it to take
 effect. On Amazon RDS / Aurora you can't `ALTER SYSTEM`; set
 `rds.logical_replication = 1` in the instance's parameter group instead, then
-reboot. (`ablo connect --apply` attempts this for you and, where a managed
+reboot. (`ablo connect apply` attempts this for you and, where a managed
 provider refuses, hands you the one remaining step.)
 
 ### 2. Run `ablo connect` for the publication and roles
@@ -105,44 +103,46 @@ Run it against your database as a superuser or the DB owner. It creates:
 The **replication slot** is created and owned by Ablo's runtime when it first
 subscribes — you don't pre-create it.
 
-### 3. Validate with `ablo connect --check`
+### 3. Register the database with Ablo
 
-Put the replication role's connection string in `DATABASE_URL`, then verify the
-database is replication-ready:
+`ablo connect apply` already did this. If you ran the SQL by hand instead, hand
+Ablo both scoped connection strings once — the replication role it reads and
+confirms through, and the writer role it lands your rows through. Set them just
+long enough to register:
 
 ```bash
-npx ablo connect --check
+export ABLO_REPLICATION_DATABASE_URL=...   # the replication role
+export ABLO_WRITE_DATABASE_URL=...         # the writer role
+npx ablo connect register
 ```
 
-It checks the four invariants and prints a green checklist or the precise per-item
-fix:
+`--register` posts them to Ablo, which holds them encrypted and uses them to read
+and write your database. Ablo holds them from here, so you can drop both from your
+environment — your app keeps only `ABLO_API_KEY`. The role passwords are generated
+for you and never printed; rotate them any time with `ablo connect rotate`. After
+this, Ablo does all the connecting.
+
+### 4. Verify readiness with `ablo connect check`
+
+```bash
+npx ablo connect check
+```
+
+`--check` needs only `ABLO_API_KEY`. It asks Ablo to check the database it now
+holds, from the same infrastructure replication runs on, and prints a green
+checklist or the precise per-item fix:
 
 - `wal_level` is `logical`
 - the `ablo_publication` publication exists
 - the replication role has the `REPLICATION` attribute
 - every published table has a usable `REPLICA IDENTITY` (a primary key, or
   `REPLICA IDENTITY FULL`) so `UPDATE`/`DELETE` can replicate
+- the writer role is DML-ready — scoped, non-superuser, with the idempotency
+  ledger in place
 
-`--check` reads the two scoped roles from `ABLO_REPLICATION_DATABASE_URL` and
-`ABLO_WRITE_DATABASE_URL` (the `ABLO_`-namespaced names keep a replication-only
-credential from ever landing in the generic `DATABASE_URL` your ORM reads).
-Re-run it until every item is green.
-
-### 4. Register the two roles with Ablo
-
-`ablo connect --apply` already did this. If you ran the SQL by hand instead, hand
-Ablo both connection strings — the replication role it reads and confirms through,
-and the writer role it lands your rows through:
-
-```bash
-npx ablo connect --register
-```
-
-This is out of band and happens once. `--register` reads the two scoped connection
-strings from `ABLO_REPLICATION_DATABASE_URL` and `ABLO_WRITE_DATABASE_URL` and
-posts them to Ablo, which holds them encrypted and uses them to read and write your
-database. The role passwords are generated for you and never printed — rotate them
-any time with `ablo connect --rotate`. After this, Ablo does all the connecting.
+Because Ablo checks from its own network, a database your own machine can't reach —
+IPv6-only, IP-allowlisted, behind a VPN — still verifies. Re-run it until every
+item is green.
 
 Your **app** holds only the API key — never a connection string:
 
@@ -176,10 +176,10 @@ landed:
 
 ```ts
 // Enters the chokepoint (claims, ordering, idempotency), lands in your Postgres.
-await ablo.weatherReports.update('report_stockholm', { high: 21 });
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 } });
 
 // Block until your database has it and the WAL echo confirms.
-await ablo.weatherReports.update('report_stockholm', { high: 21 }, { wait: 'confirmed' });
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 }, wait: 'confirmed' });
 
 // Reads are live off the same stream.
 const report = ablo.weatherReports.get('report_stockholm');

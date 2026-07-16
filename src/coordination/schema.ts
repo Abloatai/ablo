@@ -229,6 +229,29 @@ export const claimStatusSchema = z.enum([
 ]);
 export type ClaimStatus = z.infer<typeof claimStatusSchema>;
 
+/**
+ * Server-owned grant stamps — minted once when a claim is first granted and
+ * preserved verbatim across a re-announce of the same `claimId`, so neither a
+ * reconnect nor a client-supplied value can move them (unlike `declaredAt`,
+ * which the client sends afresh each announce). Both optional: a frame without
+ * them stays valid, and the feature each backs simply does not engage.
+ */
+const grantStampFields = {
+  /**
+   * The monotonic fencing token minted for this grant (Option B). Strictly
+   * increasing per entity across successive grants, so a write that carries it
+   * is rejected at commit if a later holder already advanced the entity's
+   * high-water. A token-less write is simply not fence-checked.
+   */
+  fenceToken: z.number().optional(),
+  /**
+   * Lease origin (epoch ms): when THIS holding was acquired. The cumulative-
+   * hold ceiling measures a holder's fair share from here — and because it
+   * survives a re-announce, a reconnect cannot rewind the clock.
+   */
+  acquiredAt: z.number().optional(),
+} as const;
+
 const wireClaimBaseSchema = targetRefSchema.extend({
   claimId: z.string(),
   /**
@@ -242,15 +265,7 @@ const wireClaimBaseSchema = targetRefSchema.extend({
   /** Server-computed TTL deadline (epoch ms). Readers treat as advisory. */
   expiresAt: z.number(),
   status: claimStatusSchema.optional(),
-  /**
-   * The monotonic fencing token the server minted for this grant (Option B).
-   * Strictly increasing per entity across successive grants, so a write that
-   * carries it can be rejected at commit if a later holder already advanced the
-   * entity's high-water. Server-stamped on grant and never client-supplied;
-   * optional so every existing frame stays valid and a token-less write is
-   * simply not fence-checked.
-   */
-  fenceToken: z.number().optional(),
+  ...grantStampFields,
 });
 
 export const wireClaimSummarySchema = wireClaimBaseSchema.pick({

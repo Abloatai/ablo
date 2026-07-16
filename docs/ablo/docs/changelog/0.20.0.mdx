@@ -7,8 +7,6 @@ changelog:
   category: "Features"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
-
 ### Minor Changes
 
 - Reactive reads now work out of the box. A read like `useAblo((a) => a.documents.get(id))` re-renders when a live delta updates the row — including in-place field updates (the common collaborative case), which previously fired no reaction and left the UI silently stale.

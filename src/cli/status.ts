@@ -20,7 +20,7 @@ import {
 } from './config';
 import { resolveTarget, describeMismatch, type ResolvedTarget } from './target';
 import { brand } from './theme';
-import { DEFAULT_URL } from './push';
+import { apiBaseUrl } from './push';
 
 function expiryLabel(iso: string): string {
   const ms = Date.parse(iso) - Date.now();
@@ -221,7 +221,7 @@ function printTargetLines(
 }
 
 export async function status(args: string[] = []): Promise<void> {
-  const apiUrl = (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
+  const apiUrl = apiBaseUrl();
   const cfg = readConfig();
   const mode = getMode();
 

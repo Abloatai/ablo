@@ -27,6 +27,7 @@ import { adapterTableMigrations } from '../migrations.js';
 import {
   assertSourceIdempotencyIntent,
   assertSourceIdempotencyRetention,
+  SOURCE_IDEMPOTENCY_RETENTION,
   sourceChangeIntentHash,
 } from '../idempotency.js';
 import type { SchemaRecord, Schema } from '../../schema/schema.js';
@@ -220,11 +221,12 @@ export function prismaDataSource<S extends SchemaRecord>(
         }
 
         await tx.$executeRawUnsafe(
-          `INSERT INTO ablo_idempotency (client_tx_id, response, request_hash)
-           VALUES ($1, $2::jsonb, $3)`,
+          `INSERT INTO ablo_idempotency (client_tx_id, response, request_hash, expires_at)
+           VALUES ($1, $2::jsonb, $3, now() + $4::interval)`,
           change.correlationId,
           JSON.stringify(rows),
           requestHash,
+          SOURCE_IDEMPOTENCY_RETENTION,
         );
         if (change.echo?.kind === 'postgres-wal') {
           // Cast the returned LSN to text. `pg_logical_emit_message` yields a

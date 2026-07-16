@@ -12,7 +12,33 @@
 
 import type { Migration } from './contract.js';
 
-/** The permanent ledger shared by direct and endpoint mutation wrappers. */
+/**
+ * Add a column to `ablo_idempotency` only when it is genuinely missing.
+ *
+ * `ADD COLUMN IF NOT EXISTS` performs its ownership check before the existence
+ * short-circuit, so on a ledger owned by another role the no-op re-run still
+ * errors "must be owner of table ablo_idempotency" — the setup's re-run promise
+ * breaks. `pg_attribute` is readable regardless of table ownership, so this DO
+ * block resolves the ledger through the search path and runs the `ALTER` only
+ * when the column is absent — a true no-op on a table that already has it.
+ */
+function addColumnIfAbsent(column: string, definition: string): string {
+  return `DO $$
+DECLARE ledger regclass := to_regclass('ablo_idempotency');
+BEGIN
+  IF ledger IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = ledger AND attname = '${column}' AND attnum > 0 AND NOT attisdropped
+  ) THEN
+    ALTER TABLE ablo_idempotency ADD COLUMN ${column} ${definition};
+  END IF;
+END $$;`;
+}
+
+/** The idempotency ledger shared by direct and endpoint mutation wrappers. New
+ *  rows carry a bounded `expires_at` (set by the adapter at write time) so the
+ *  customer can prune them; the `infinity` column default is only a fallback for
+ *  a row inserted without one. */
 export function idempotencyLedgerMigrations(): readonly Migration[] {
   return [
     {
@@ -30,13 +56,19 @@ export function idempotencyLedgerMigrations(): readonly Migration[] {
       // Nullable only for rows created by older adapter versions. New writes
       // always populate it; replaying a legacy NULL row fails closed because
       // the adapter cannot prove that the intent matches.
-      up: `ALTER TABLE ablo_idempotency
-  ADD COLUMN IF NOT EXISTS request_hash TEXT;`,
+      //
+      // The column already exists on any current table (the CREATE above
+      // includes it), so this only matters when upgrading a pre-existing
+      // ledger. `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` checks ownership
+      // BEFORE it evaluates IF NOT EXISTS, so on a ledger that predates the
+      // setup — owned by another role — the no-op still errors "must be owner".
+      // Guard on the catalog (readable regardless of ownership) so the ALTER
+      // runs only when the column is genuinely absent, keeping re-runs safe.
+      up: addColumnIfAbsent('request_hash', 'TEXT'),
     },
     {
       name: 'ablo_idempotency_permanent_retention',
-      up: `ALTER TABLE ablo_idempotency
-  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NOT NULL DEFAULT 'infinity';`,
+      up: addColumnIfAbsent('expires_at', `TIMESTAMPTZ NOT NULL DEFAULT 'infinity'`),
     },
   ];
 }

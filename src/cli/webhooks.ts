@@ -18,7 +18,7 @@ import pc from 'picocolors';
 import { classifyCredentialKind } from '../auth/credentialPolicy.js';
 import { resolveApiKey, normalizeMode, type Mode } from './config';
 import { brand } from './theme';
-import { DEFAULT_URL } from './push';
+import { apiBaseUrl } from './push';
 
 interface WebhookEndpointObject {
   object: 'webhook_endpoint';
@@ -83,7 +83,7 @@ function requireKey(mode: Mode | undefined): string {
   return apiKey;
 }
 
-const baseUrl = (): string => (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
+const baseUrl = (): string => apiBaseUrl();
 
 async function api<T>(
   apiKey: string,

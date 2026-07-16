@@ -2,8 +2,6 @@
 title: "API"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/docs/api.md -- edit there, then run `npm run build:docs`. */}
-
 > **Upgrading?** Every breaking change and its migration is on the
 > [Version History & Migration Guide](/migration).
 
@@ -128,7 +126,7 @@ coordination surface is `claim.state({ id })` / `claim.queue({ id })` /
 | `id` | string | Unique identifier for the claim. |
 | `status` | `'active' \| 'queued' \| 'committed' \| 'expired' \| 'canceled'` | The whole lifecycle, in one field. `active` is the holder; `queued` is a waiter in the FIFO line behind it. |
 | `target` | `{ type, id, field? }` | What is being coordinated. |
-| `reason` | string | Human-readable phase — `'editing'`, `'writing'`, `'reviewing'`. Serialized on the wire as `action`. |
+| `description` | string | Peer-visible phrase for the work in progress — `'editing'`, `'writing'`, `'reviewing the risk section'`. Defaults to `'editing'`, and rides back in the rejection a blocked writer receives. |
 | `heldBy` | string | Participant id holding the claim. |
 | `participantKind` | `'user' \| 'agent' \| 'system'` | Who's behind it — a human (`user`), an AI (`agent`), or automated infrastructure (`system`). |
 | `createdAt` | number? | Ms-epoch the holder opened it. Optional — derived shapes may omit it. |
@@ -140,7 +138,7 @@ coordination surface is `claim.state({ id })` / `claim.queue({ id })` /
   "id": "claim_3MtwBwLkdIwHu7ix",
   "status": "active",
   "target": { "type": "weatherReports", "id": "report_stockholm", "field": "status" },
-  "reason": "editing",
+  "description": "editing",
   "heldBy": "agent:report-writer",
   "participantKind": "agent",
   "expiresAt": 1716580000000
@@ -180,12 +178,12 @@ Reads never block on a claim — to wait for a row to free up, `claim({ id })` i
 const claim = ablo.weatherReports.claim.state({ id: 'report_stockholm' });
 if (claim) {
   claim.heldBy;
-  claim.reason;
+  claim.description;
 }
 
 const handle = await ablo.weatherReports.claim({
   id: 'report_stockholm',
-  reason: 'editing',
+  description: 'editing',
   ttl: '2m',
 });
 await ablo.weatherReports.update({ id: handle.data.id, data: { status: 'ready' } });

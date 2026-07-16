@@ -2,36 +2,41 @@
 title: "Audit log"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/docs/audit.md -- edit there, then run `npm run build:docs`. */}
-
 The audit log records who changed what in your org, and when — including
 changes an AI agent made on a person's behalf. Every change is one row, and the
-rows are signed in a chain so you can later prove the history wasn't altered.
-You can filter it, page through it, and export it.
-
-Every commit becomes one row.
+rows are chained with a keyed hash (HMAC-SHA256) so you can later prove the
+history wasn't altered. You can filter it, page through it, and export it.
 
 ## Row shape
 
+Each stored row carries both the attribution fields — who acted, on whose behalf,
+with which key — and the chain columns that make the log tamper-evident:
+
 ```ts
 {
-  occurredAt:           '2026-05-14T14:22:01.034Z',
-  actorKind:            'user' | 'agent' | 'system',
-  actorId:              string,
-  onBehalfOfKind:       'user' | 'agent' | 'system' | null,
-  onBehalfOfId:         string | null,
-  capabilityId:         string | null,    // the API key/capability used for the write
-  capabilityLabel:      string | null,    // its human-readable name, for scanning the log
-  delegationChainRoot:  string | null,    // always points at a human
-  actionType:           string,           // e.g. 'weatherReport.update'
-  modelName:            string | null,    // e.g. 'claude-opus-4-7'
-  diffSummary:          unknown,
-  // tamper-evident
-  chainSeq:             number,
-  prevHash:             string,
-  rowHash:              string,
+  id:                        string,
+  occurredAt:                '2026-05-14T14:22:01.034Z',
+  actorKind:                 'user' | 'agent' | 'system',
+  actorId:                   string,
+  onBehalfOfKind:            'user' | 'agent' | 'system' | null,
+  onBehalfOfId:              string | null,
+  capabilityId:              string | null,    // the API key/capability used for the write
+  capabilityLabel:           string | null,    // its human-readable name, for scanning the log
+  delegationChainRootUserId: string | null,    // always points at a human
+  actionType:                string,           // e.g. 'weatherReport.update'
+  modelName:                 string,            // e.g. 'claude-opus-4-8'
+  confirmationState:         'auto' | 'previewed' | 'approved' | 'required_human_approval' | 'auto_historical',
+  diffSummary:               unknown,
+  // chain columns — carried on every stored row, checked by verify (below)
+  chainSeq:                  number,
+  prevHash:                  string,
+  rowHash:                   string,
 }
 ```
+
+`confirmationState` records whether an agent's write ran on its own (`auto`), was
+shown first (`previewed`), was signed off (`approved`), or is still waiting on a
+person (`required_human_approval`) — it's also a filter on the list endpoint.
 
 ## Delegation chain
 
@@ -57,8 +62,13 @@ or, on tamper:
 
 ```json
 { "ok": false, "brokenAtSeq": 8419, "reason": "hash_mismatch",
-  "expectedHash": "sha256:…", "foundHash": "sha256:…" }
+  "expectedHash": "a3f1c9…", "foundHash": "b7e04d…" }
 ```
+
+Hashes come back as plain hex. `expectedHash`/`foundHash` accompany a
+`hash_mismatch` or `prev_hash_mismatch`; the other reasons (`sequence_gap`,
+`missing_root`, `no_rows`) stand on their own. Recomputing a row's hash needs the
+org's HMAC key, so verification runs where that secret is available.
 
 ## Filter and paginate
 
@@ -86,6 +96,6 @@ JSON `GET` endpoint above using `nextCursor`.
 ## Compliance posture
 
 The [audit log landing page](/audit-log) is the marketing-side description.
-The verifier's hash algorithm and chain semantics live in the
-`@ablo/audit-chain` package — embeddable if you need to verify chains in a
-detached service.
+The HMAC-SHA256 chain algorithm and its semantics live in the
+`@ablo/audit-chain` package — the reference implementation, embeddable if you
+need to verify chains in a detached service (given the org's HMAC key).

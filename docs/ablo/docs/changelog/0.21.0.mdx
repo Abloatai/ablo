@@ -7,8 +7,6 @@ changelog:
   category: "Features"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
-
 ### Minor Changes
 
 - Coordination observability now fires on BOTH transports. Previously `captureClaim`/`captureConflict` were emitted only by the WebSocket transport, so a `ClaimLog` (or any `observability` provider) handed to a stateless HTTP client — the transport server-side agents use via `Ablo({ transport: 'http' })` — stayed empty, and even on WebSocket a hard commit rejection went unrecorded. Fixed:

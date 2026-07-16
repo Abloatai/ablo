@@ -16,7 +16,7 @@ import { AbloValidationError } from '../errors.js';
 import pc from 'picocolors';
 import { resolveApiKey, normalizeMode, type Mode } from './config';
 import { brand } from './theme';
-import { DEFAULT_URL } from './push';
+import { apiBaseUrl } from './push';
 
 interface LogEvent {
   id: number;
@@ -137,7 +137,7 @@ export async function logs(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  const baseUrl = (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
+  const baseUrl = apiBaseUrl();
   const since = resolveSince(args.since);
 
   async function fetchPage(params: Record<string, string>): Promise<{ events: LogEvent[]; cursor: number } | null> {

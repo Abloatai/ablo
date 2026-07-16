@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380" width="900" height="380" font-family="Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#a1a1aa"/>
+    </marker>
+  </defs>
+
+  <!-- edge label helper style: white halo so labels sit cleanly over the lines -->
+  <style>
+    .lbl { fill:#52525b; font-size:12px; paint-order:stroke; stroke:#ffffff; stroke-width:4px; stroke-linejoin:round; }
+    .title { fill:#18181b; font-size:15px; font-weight:600; }
+    .sub { fill:#71717a; font-size:12px; }
+    .mono { font-family:'SF Mono','JetBrains Mono',ui-monospace,Menlo,monospace; }
+  </style>
+
+  <!-- ===== connectors (drawn first, under the cards) ===== -->
+  <!-- app -> ablo -->
+  <line x1="196" y1="191" x2="289" y2="191" stroke="#a1a1aa" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <!-- ablo -> live clients -->
+  <path d="M551,168 C600,150 610,135 644,127" fill="none" stroke="#a1a1aa" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <!-- ablo -> webhook route -->
+  <path d="M551,216 C600,224 610,230 644,232" fill="none" stroke="#a1a1aa" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <!-- webhook route -> your database -->
+  <line x1="740" y1="266" x2="740" y2="289" stroke="#a1a1aa" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- ===== your app ===== -->
+  <rect x="46" y="155" width="150" height="72" rx="12" fill="#ffffff" stroke="#e4e4e7" stroke-width="1.3"/>
+  <text x="121" y="189" text-anchor="middle" class="title">Your app</text>
+  <text x="121" y="208" text-anchor="middle" class="sub">the client</text>
+
+  <!-- ===== ablo panel ===== -->
+  <rect x="289" y="70" width="262" height="240" rx="16" fill="#fafafa" stroke="#e4e4e7" stroke-width="1.3"/>
+  <text x="311" y="100" class="sub" font-size="11" letter-spacing="1.5" style="text-transform:uppercase;">Ablo</text>
+
+  <!-- the log card -->
+  <rect x="319" y="150" width="202" height="86" rx="12" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1.5"/>
+  <text x="420" y="188" text-anchor="middle" class="title">Ordered log</text>
+  <text x="420" y="209" text-anchor="middle" class="sub" font-style="italic">source of truth</text>
+
+  <!-- stripe-shaped footnote -->
+  <text x="420" y="272" text-anchor="middle" class="sub" font-size="11">log + coordination only —</text>
+  <text x="420" y="288" text-anchor="middle" class="sub" font-size="11">never your rows</text>
+
+  <!-- ===== live clients ===== -->
+  <rect x="644" y="91" width="192" height="72" rx="12" fill="#ffffff" stroke="#e4e4e7" stroke-width="1.3"/>
+  <text x="740" y="125" text-anchor="middle" class="title">Live clients</text>
+  <text x="740" y="144" text-anchor="middle" class="sub">instant, optimistic UI</text>
+
+  <!-- ===== webhook route ===== -->
+  <rect x="644" y="200" width="192" height="66" rx="12" fill="#ffffff" stroke="#e4e4e7" stroke-width="1.3"/>
+  <text x="740" y="228" text-anchor="middle" class="title mono" font-size="13">/api/ablo/[...all]</text>
+  <text x="740" y="247" text-anchor="middle" class="sub">your webhook route</text>
+
+  <!-- ===== your database ===== -->
+  <rect x="644" y="289" width="192" height="64" rx="12" fill="#ffffff" stroke="#e4e4e7" stroke-width="1.3"/>
+  <text x="740" y="316" text-anchor="middle" class="title">Your database</text>
+  <text x="740" y="335" text-anchor="middle" class="sub">the durable copy you own</text>
+
+  <!-- ===== edge labels ===== -->
+  <text x="242" y="184" text-anchor="middle" class="lbl">write</text>
+  <text x="590" y="124" text-anchor="middle" class="lbl">realtime sync</text>
+  <text x="590" y="242" text-anchor="middle" class="lbl">signed event</text>
+  <text x="757" y="282" text-anchor="start" class="lbl">write</text>
+</svg>

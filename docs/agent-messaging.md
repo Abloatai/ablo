@@ -9,7 +9,7 @@ HTTP, or be replayed from the sync cursor.
 
 | Need | Use | Why |
 | --- | --- | --- |
-| "I am holding this row because..." | `claim({ reason, description, meta })` | Live and low-latency. Peers see it through presence while the claim exists. |
+| "I am holding this row because..." | `claim({ description, meta })` | Live and low-latency. Peers see it through presence while the claim exists. |
 | "Remember this handoff/status/request" | A `messages` model | Durable row. Ordered in `sync_deltas`, replayed after reconnect, readable by HTTP agents. |
 
 Claim context is ephemeral. If a participant was offline, reconnected later, or
@@ -90,7 +90,6 @@ about work currently protected by a claim.
 ```ts
 const claim = await ablo.workItems.claim({
   id: workItemId,
-  reason: "reformatting",
   description: "normalizing the pricing table",
   meta: { estimateSeconds: 120 },
   queue: false,

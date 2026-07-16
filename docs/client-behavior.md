@@ -39,8 +39,9 @@ Common options:
 | `dangerouslyAllowBrowser` | Required before sending an API key from browser code. Prefer a server route instead. |
 
 Your database connects out of band — through logical replication (`npx ablo
-connect`) or a signed [Data Source](./data-sources.md) endpoint — so the client
-holds only `apiKey`, never a connection string. See
+connect`), or the signed [Data Source](./data-sources.md) endpoint as the
+fallback for databases that can't grant replication — so the client holds only
+`apiKey`, never a connection string. See
 [Connect Your Database](./data-sources.md) for the full setup.
 
 ## Model Methods
@@ -95,8 +96,10 @@ such as `useAblo((ablo) => ablo.weatherReports.claim.state({ id }))`
 receive active claim state. There is
 no extra multiplayer setup beyond routing shared state through Ablo.
 
-If an app writes directly to its database, Ablo cannot coordinate that write
-until the app reports it through Data Source events.
+Writes flow through Ablo's commit chokepoint and land in your database, so every
+actor routing through Ablo is coordinated. The one write it can't coordinate is
+one made directly against your database, around Ablo — the WAL echo still catches
+it for reads, but it bypasses claims and ordering.
 
 ## Per-Write Options
 

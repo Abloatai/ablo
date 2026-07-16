@@ -50,11 +50,11 @@ export async function markReady(reportId: string) {
     // queue: false → don't queue behind a current holder. If a human already
     // holds the row, claim rejects with AbloClaimedError (caught below), so the
     // agent yields instead of waiting. Omit it, or pass queue: true, to queue
-    // behind them. reason → the label observers see while we work.
+    // behind them. description → the label observers see while we work.
     await using claim = await ablo.weatherReports.claim({
       id: reportId,
       queue: false,
-      reason: 'marking_ready',
+      description: 'marking_ready',
     });
     const claimed = claim.data;
 

@@ -468,7 +468,7 @@
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
-      "message": "This database is not set up for logical replication yet. Every failing item — wal_level, the publication, the replication grant, a replica identity — is listed in the error details with its exact fix. `ablo connect` prints the one-time setup; `ablo connect --check` verifies it.",
+      "message": "This database is not set up for logical replication yet. Every failing item — wal_level, the publication, the replication grant, a replica identity — is listed in the error details with its exact fix. `ablo connect` prints the one-time setup; `ablo connect check` verifies it.",
       "docUrl": "https://docs.abloatai.com/errors#database_not_replication_ready"
     },
     {
@@ -1263,6 +1263,15 @@
       "retryable": false,
       "message": "An Ablo hook was used outside of an Ablo provider.",
       "docUrl": "https://docs.abloatai.com/errors#no_ablo_provider"
+    },
+    {
+      "code": "no_data_source_registered",
+      "category": "not_found",
+      "surface": "wire",
+      "httpStatus": 404,
+      "retryable": false,
+      "message": "No database is connected to this plane yet, so there is nothing to check. Connect one with `ablo connect apply`, then run the check again.",
+      "docUrl": "https://docs.abloatai.com/errors#no_data_source_registered"
     },
     {
       "code": "no_sync_group_provider",

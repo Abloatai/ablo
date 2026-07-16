@@ -179,14 +179,18 @@ export type ValidationFetch = (
 ) => Promise<ValidationHttpResponse>;
 
 /**
- * Ask the engine to dial `connectionString` from its own network and report
- * replication readiness. Never throws: network and HTTP failures come back as
+ * Ask the engine to report replication readiness from its own network — the
+ * network replication actually runs from. With no `connectionString`, the engine
+ * validates the source it already holds for the caller's plane, so the check
+ * needs only the API key; with one, it dials that specific string (the
+ * pre-registration probe). Never throws: network and HTTP failures come back as
  * `{ ok: false }` so the caller renders one consistent message.
  */
 export async function requestRemoteValidation(input: {
   readonly apiUrl: string;
   readonly apiKey: string;
-  readonly connectionString: string;
+  /** Omit to validate the registered source; supply to dial a specific string. */
+  readonly connectionString?: string;
   /** Separate scoped DML credential; when present the engine validates both legs. */
   readonly writeConnectionString?: string;
   /** Injectable for tests; defaults to global fetch. */
@@ -199,7 +203,7 @@ export async function requestRemoteValidation(input: {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${input.apiKey}` },
       body: JSON.stringify({
-        connectionString: input.connectionString,
+        ...(input.connectionString ? { connectionString: input.connectionString } : {}),
         ...(input.writeConnectionString
           ? { writeConnectionString: input.writeConnectionString }
           : {}),

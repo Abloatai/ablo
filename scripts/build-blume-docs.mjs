@@ -41,6 +41,7 @@ const TITLES = {
   api: 'API',
   coordination: 'Coordination',
   quickstart: 'Quickstart',
+  'how-it-works': 'How Ablo Works',
   react: 'React',
   guarantees: 'Guarantees',
   migration: 'Version History & Migration Guide',
@@ -54,6 +55,7 @@ const TITLES = {
   'api-keys': 'API Keys',
   mcp: 'Model Context Protocol',
   identity: 'Identity & Sync Groups',
+  groups: 'Change Propagation',
   'concurrency-convention': 'Concurrency Convention',
   'schema-contract': 'Schema Contract',
   sessions: 'Sessions',
@@ -70,9 +72,6 @@ const DESCRIPTIONS = {
   projects:
     'One organization, many apps -- each project has its own schema, its own data planes, and its own keys.',
 };
-
-const BANNER =
-  '{/* AUTO-GENERATED from packages/sync-engine/docs/<name>.md -- edit there, then run `npm run build:docs`. */}';
 
 // Mintlify callout components -> Blume block directives. The source docs author
 // callouts as block-level tags on their own lines (`<Note>` ... `</Note>`), so a
@@ -150,7 +149,7 @@ function transform(md, slug) {
 
   const title = TITLES[slug];
   const descLine = DESCRIPTIONS[slug] ? `description: ${JSON.stringify(DESCRIPTIONS[slug])}\n` : '';
-  const frontmatter = `---\ntitle: ${JSON.stringify(title)}\n${descLine}---\n\n${BANNER.replace('<name>', slug)}\n\n`;
+  const frontmatter = `---\ntitle: ${JSON.stringify(title)}\n${descLine}---\n\n`;
   return frontmatter + body.replace(/^\n+/, '').replace(/\s+$/, '') + '\n';
 }
 
@@ -224,8 +223,6 @@ function changelogCategory(body) {
 function buildChangelogPages() {
   const raw = readFileSync(resolve(packageRoot, 'CHANGELOG.md'), 'utf8');
   const dates = releaseDates();
-  const banner =
-    '{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}';
   return raw
     .split(/^## (?=\d+\.\d+\.\d+)/m)
     .slice(1)
@@ -245,7 +242,7 @@ function buildChangelogPages() {
         `type: changelog\n` +
         dateLine +
         `changelog:\n  version: "${version}"\n  category: "${category}"\n` +
-        `---\n\n${banner}\n\n`;
+        `---\n\n`;
       return { version, content: `${frontmatter}${sectionBody}\n` };
     });
 }

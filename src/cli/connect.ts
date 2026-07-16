@@ -9,77 +9,74 @@
  * transaction also writes `ablo_idempotency` and emits a logical correlation
  * marker. WAL supplies post-commit truth and confirmation.
  *
- * The command has three modes:
+ * The mode is a subcommand — `ablo connect <verb>`:
  *
- *   ablo connect            Prints the exact, copy-pasteable setup SQL for your
- *                           Postgres: the WAL level, the publication, and the
- *                           replication role.
- *   ablo connect --check    Connects to `DATABASE_URL` and verifies readiness —
- *                           that `wal_level` is `logical`, the publication
- *                           exists, the current role can stream replication, and
- *                           every published table has a usable replica identity.
- *                           It prints a checklist, with the precise fix for any
- *                           item that fails. When this machine can't reach the
- *                           host at all (IPv6-only hosts, IP allowlists, VPNs),
- *                           the check runs from Ablo's infrastructure instead —
- *                           the network replication actually uses.
- *   ablo connect --register Verifies readiness, then registers the database so
- *                           Ablo begins replicating it on the next sync. Local
- *                           unreachability doesn't block it: the server
- *                           validates from its own network at registration.
+ *   ablo connect             Prints the exact, copy-pasteable setup SQL for your
+ *                            Postgres: the WAL level, the publication, and the
+ *                            replication role.
+ *   ablo connect apply       Runs that setup for you from a one-time admin
+ *                            connection, then registers the DataSource.
+ *   ablo connect register    Verifies readiness, then registers the database so
+ *                            Ablo begins replicating it on the next sync. Local
+ *                            unreachability doesn't block it: the server validates
+ *                            from its own network at registration.
+ *   ablo connect deregister  Removes the DataSource registration — Ablo stops
+ *                            reading and writing it (the inverse of register).
+ *   ablo connect check       Verifies readiness for the registered database from
+ *                            Ablo's own infrastructure — the network replication
+ *                            and direct writes actually run from. Needs only
+ *                            `ABLO_API_KEY`: Ablo holds the scoped credentials, so
+ *                            there is nothing to wire. Prints a checklist (that
+ *                            `wal_level` is `logical`, the publication exists, the
+ *                            replication role can stream, every published table has
+ *                            a usable replica identity, and the writer role is
+ *                            DML-ready) with the precise fix for any failing item.
+ *   ablo connect rotate      Re-keys both scoped roles and re-registers.
+ *   ablo connect scan        Read-only audit for leftover Ablo sync tables/types
+ *                            from a prior integration; reports, never drops.
  */
 
 import { AbloValidationError } from '../errors.js';
 import pc from 'picocolors';
 import postgres from 'postgres';
-import {
-  readProjectWriteDatabaseUrl,
-  readProjectReplicationUrlWithSource,
-  DATABASE_URL_REMOVAL_VERSION,
-} from './dbRole';
+import { readProjectWriteDatabaseUrl, readProjectReplicationUrlWithSource } from './dbRole';
 import { resolveApiKey } from './config';
-import { DEFAULT_URL } from './push';
+import { apiBaseUrl } from './push';
 import { brand } from './theme';
 import {
   describeRemoteFailure,
   dialFailureReason,
   requestRemoteValidation,
 } from './remoteValidation';
-import { idempotencyLedgerMigrations } from '../source/migrations';
-
-/**
- * The canonical Postgres publication name that Ablo's replication reads from.
- * The setup SQL and the replication consumer both use exactly this name, so the
- * recipe you run and the runtime that connects can never disagree.
- */
-export const ABLO_PUBLICATION = 'ablo_publication';
-
-/** The least-privilege replication role the recipe prescribes. */
-export const ABLO_REPLICATION_ROLE = 'ablo_replicator';
-
-/** The separate least-privilege role used only for direct application DML. */
-export const ABLO_WRITE_ROLE = 'ablo_writer';
-
-export const DIRECT_DATA_SOURCE_ROUTES = [
-  'public-allowlist',
-  'privatelink',
-  'peering',
-  'vpn',
-] as const;
-export type DirectDataSourceRoute = (typeof DIRECT_DATA_SOURCE_ROUTES)[number];
+// `ablo connect`'s setup primitives (role names, the SQL recipe, the readiness
+// probe, DataSource registration) live in ./connectSetup so the `--apply` path
+// (./connectApply) shares them without importing this command module back — a
+// runtime edge in that direction would close an import cycle.
+import {
+  ABLO_PUBLICATION,
+  ABLO_REPLICATION_ROLE,
+  ABLO_WRITE_ROLE,
+  connectSetupSql,
+  DIRECT_DATA_SOURCE_ROUTES,
+  probeReadiness,
+  quoteIdent,
+  registerDirectDataSource,
+  type CheckItem,
+  type DirectDataSourceRoute,
+} from './connectSetup';
 
 export interface ConnectArgs {
-  /** `--check`: connect to DATABASE_URL and validate readiness (no printing of SQL). */
+  /** `check`: verify the registered database's readiness from Ablo's side (needs only `ABLO_API_KEY`; no printing of SQL). */
   check: boolean;
   /**
-   * `--register`: validate readiness, then register this database with Ablo so it
+   * `register`: validate readiness, then register this database with Ablo so it
    * begins replicating (`POST /v1/datasources { connectionString }`, authorized
    * by your project key). Registering the database is what enables the read
    * path — there is no separate tier or flag to turn on.
    */
   register: boolean;
   /**
-   * `--apply`: run the setup for the developer instead of printing SQL — create
+   * `apply`: run the setup for the developer instead of printing SQL — create
    * the scoped roles and publication, enable logical decoding where allowed, and
    * register both scoped roles with Ablo directly. The admin credential is used
    * on this machine only (from `--url`, or `DATABASE_URL` as a fallback) and is
@@ -88,28 +85,28 @@ export interface ConnectArgs {
    */
   apply: boolean;
   /**
-   * `--rotate`: generate fresh passwords for the two scoped roles, `ALTER ROLE`
+   * `rotate`: generate fresh passwords for the two scoped roles, `ALTER ROLE`
    * them in place (using the admin credential from `--url` / `DATABASE_URL`), and
    * re-register the new connection strings with Ablo. The revoke-and-replace
    * answer to "what if a role credential leaks?"
    */
   rotate: boolean;
   /**
-   * `--url <conn>`: the admin connection string `--apply` / `--rotate` provision
+   * `--url <conn>`: the admin connection string `apply` / `rotate` provision
    * through, passed transiently rather than left in the environment. Falls back
    * to `DATABASE_URL` when omitted. Used on this machine only; never persisted.
    */
   url?: string;
-  /** `--yes`: skip the `--apply` confirmation (for non-interactive use). */
+  /** `--yes`: skip the `apply` confirmation (for non-interactive use). */
   yes: boolean;
-  /** `--show-sql`: include the exact statements in the `--apply` plan. */
+  /** `--show-sql`: include the exact statements in the `apply` plan. */
   showSql: boolean;
   /**
-   * `--audit-infra`: a read-only audit that reports leftover Ablo sync tables and
-   * types in the database — infrastructure a previous integration may have
-   * created. It only reports what it finds and never drops anything.
+   * `scan`: a read-only audit that reports leftover Ablo sync tables and types in
+   * the database — infrastructure a previous integration may have created. It only
+   * reports what it finds and never drops anything.
    */
-  auditInfra: boolean;
+  scan: boolean;
   /**
    * `--tables a,b,c`: publish only these tables instead of every table. When
    * empty (the default), the publication covers all tables.
@@ -123,7 +120,15 @@ export interface ConnectArgs {
   route: DirectDataSourceRoute;
 }
 
-/** Parse `connect` flags. Pure — unit-tested without touching a database. */
+/**
+ * Parse `connect` arguments. Pure — unit-tested without touching a database.
+ *
+ * The mode is a leading subcommand — `ablo connect register|check|apply|rotate|
+ * scan` — matching the `<noun> <verb>` grammar of aws/gcloud/stripe. Modifiers
+ * (`--url`, `--tables`, `--yes`, …) follow as flags. (`deregister`, the inverse of
+ * `register`, is handled one level up in {@link connect} — it forwards to the
+ * disconnect implementation.)
+ */
 export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
   let check = false;
   let register = false;
@@ -132,27 +137,44 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
   let url: string | undefined;
   let yes = false;
   let showSql = false;
-  let auditInfra = false;
+  let scan = false;
   let tables: readonly string[] = [];
   let role = ABLO_REPLICATION_ROLE;
   let writeRole = ABLO_WRITE_ROLE;
   let route: DirectDataSourceRoute = 'public-allowlist';
 
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    switch (arg) {
-      case '--check':
-        check = true;
-        break;
-      case '--register':
+  // A leading non-flag token is the subcommand — the mode selector.
+  let start = 0;
+  const lead = argv[0];
+  if (lead !== undefined && !lead.startsWith('-')) {
+    switch (lead) {
+      case 'register':
         register = true;
         break;
-      case '--apply':
+      case 'check':
+        check = true;
+        break;
+      case 'apply':
         apply = true;
         break;
-      case '--rotate':
+      case 'rotate':
         rotate = true;
         break;
+      case 'scan':
+        scan = true;
+        break;
+      default:
+        throw new AbloValidationError(
+          `unknown connect subcommand: ${lead} (expected register, deregister, check, apply, rotate, scan)`,
+          { code: 'cli_invalid_arguments' }
+        );
+    }
+    start = 1;
+  }
+
+  for (let i = start; i < argv.length; i++) {
+    const arg = argv[i];
+    switch (arg) {
       case '--url':
         url = argv[++i] ?? url;
         break;
@@ -162,9 +184,6 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
         break;
       case '--show-sql':
         showSql = true;
-        break;
-      case '--audit-infra':
-        auditInfra = true;
         break;
       case '--tables': {
         const value = argv[++i] ?? '';
@@ -185,7 +204,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
         if (!DIRECT_DATA_SOURCE_ROUTES.includes(value as DirectDataSourceRoute)) {
           throw new AbloValidationError(
             `invalid direct route: ${value || '(missing)'} (expected ${DIRECT_DATA_SOURCE_ROUTES.join(', ')})`,
-            { code: 'cli_invalid_arguments' },
+            { code: 'cli_invalid_arguments' }
           );
         }
         route = value as DirectDataSourceRoute;
@@ -200,91 +219,20 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
       code: 'cli_invalid_arguments',
     });
   }
-  return { check, register, apply, rotate, url, yes, showSql, auditInfra, tables, role, writeRole, route };
-}
-
-/** Safely quotes a Postgres identifier by doubling any embedded quote marks. */
-export function quoteIdent(id: string): string {
-  return `"${id.replace(/"/g, '""')}"`;
-}
-
-/**
- * Returns the setup SQL for the read path as an array of statements, so it can be
- * both printed as a recipe and asserted in tests. The statements grant Ablo
- * read-only access to your write-ahead log and nothing more: Ablo does not run
- * DDL, own your schema, or migrate it, and your app keeps writing through its own
- * backend.
- *
- * The `<password>` placeholder is deliberate. You choose the secret and put the
- * resulting connection string in `DATABASE_URL`; the password never passes
- * through Ablo's CLI or servers.
- */
-export function connectSetupSql(input: {
-  readonly tables?: readonly string[];
-  readonly role?: string;
-  readonly writeRole?: string;
-}): readonly string[] {
-  const role = input.role && input.role.length > 0 ? input.role : ABLO_REPLICATION_ROLE;
-  const writeRole =
-    input.writeRole && input.writeRole.length > 0 ? input.writeRole : ABLO_WRITE_ROLE;
-  const tables = input.tables ?? [];
-  const publicationTarget =
-    tables.length > 0 ? `FOR TABLE ${tables.map(quoteIdent).join(', ')}` : 'FOR ALL TABLES';
-
-  const applicationGrant =
-    tables.length > 0
-      ? `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE ${tables.map(quoteIdent).join(', ')} TO ${quoteIdent(writeRole)};`
-      : `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${quoteIdent(writeRole)};`;
-  const ledger = idempotencyLedgerMigrations().map((migration) => migration.up);
-
-  return [
-    // 1. Turn on logical decoding. Requires a restart (it's not reloadable).
-    `ALTER SYSTEM SET wal_level = 'logical';`,
-    // 2. Publish the tables Ablo should read.
-    `CREATE PUBLICATION ${quoteIdent(ABLO_PUBLICATION)} ${publicationTarget};`,
-    // 3. A least-privilege role: it can stream replication and SELECT, nothing more.
-    `CREATE ROLE ${quoteIdent(role)} WITH REPLICATION LOGIN PASSWORD '<password>';`,
-    `GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${quoteIdent(role)};`,
-    // Future tables get SELECT automatically, so the publication doesn't outgrow the grant.
-    `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO ${quoteIdent(role)};`,
-    // 4. A distinct DML role: no replication, role administration, ownership,
-    // schema creation, or DDL. It is subject to RLS on every transaction.
-    `CREATE ROLE ${quoteIdent(writeRole)} WITH LOGIN PASSWORD '<write-password>' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;`,
-    `ALTER ROLE ${quoteIdent(writeRole)} SET row_security = on;`,
-    // PUBLIC can carry CREATE on older Postgres clusters. A role-level REVOKE
-    // cannot override that inherited grant, so harden the schema explicitly.
-    `REVOKE CREATE ON SCHEMA public FROM PUBLIC;`,
-    `GRANT USAGE ON SCHEMA public TO ${quoteIdent(writeRole)};`,
-    applicationGrant,
-    `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${quoteIdent(writeRole)};`,
-    ...(tables.length === 0
-      ? [
-          `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${quoteIdent(writeRole)};`,
-          `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${quoteIdent(writeRole)};`,
-        ]
-      : []),
-    // 5. Direct uses the durable replay ledger but deliberately no outbox.
-    ...ledger,
-    `REVOKE ALL ON TABLE public.ablo_idempotency FROM PUBLIC;`,
-    `GRANT SELECT, INSERT, UPDATE ON TABLE public.ablo_idempotency TO ${quoteIdent(writeRole)};`,
-    `REVOKE DELETE ON TABLE public.ablo_idempotency FROM ${quoteIdent(writeRole)};`,
-    // Grant every pg_logical_emit_message variant by lookup instead of one
-    // literal signature: PostgreSQL 17 adds an optional fourth `flush`
-    // parameter, so the historical three-argument form no longer exists there
-    // and a signature-pinned GRANT fails on an otherwise healthy database.
-    `DO $$
-DECLARE fn regprocedure;
-BEGIN
-  FOR fn IN
-    SELECT p.oid::regprocedure
-    FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'pg_catalog' AND p.proname = 'pg_logical_emit_message'
-  LOOP
-    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO ${quoteIdent(writeRole)}', fn);
-  END LOOP;
-END $$;`,
-  ];
+  return {
+    check,
+    register,
+    apply,
+    rotate,
+    url,
+    yes,
+    showSql,
+    scan,
+    tables,
+    role,
+    writeRole,
+    route,
+  };
 }
 
 /**
@@ -299,80 +247,103 @@ export function printConnectRecipe(args: ConnectArgs): void {
     writeRole: args.writeRole,
   });
 
-  console.log(`\n  ${brand('ablo')} ${pc.dim('connect')}  ${pc.dim('direct writes + WAL-settled sync')}\n`);
+  console.log(
+    `\n  ${brand('ablo')} ${pc.dim('connect')}  ${pc.dim('direct writes + WAL-settled sync')}\n`
+  );
   console.log(
     `  Ablo applies coordinated writes directly to your Postgres with a scoped DML role. WAL\n` +
       `  observes what committed, orders it with external writes, and confirms it in the sync log.\n` +
-      `  Your database stays authoritative; Ablo never owns or migrates your application tables.\n` +
-      `  Run this once against your Postgres ${pc.dim('(as a superuser / DB owner)')}:\n`,
+      `  Your database stays authoritative; Ablo never owns or migrates your application tables.\n\n` +
+      `  ${pc.bold('ablo connect apply')} runs every step below for you from a one-time admin\n` +
+      `  connection and leaves your app holding only ${pc.bold('ABLO_API_KEY')}. To do it by hand,\n` +
+      `  run this once against your Postgres ${pc.dim('(as a superuser / DB owner)')}:\n`
   );
 
-  console.log(`  ${pc.bold('1.')} Enable logical decoding ${pc.dim('(then RESTART Postgres — wal_level is not reloadable)')}`);
+  console.log(
+    `  ${pc.bold('1.')} Enable logical decoding ${pc.dim('(then RESTART Postgres — wal_level is not reloadable)')}`
+  );
   console.log(`       ${pc.cyan(sql[0])}`);
   console.log(
     pc.dim(
-      `       On Amazon RDS / Aurora you can't ALTER SYSTEM: set ${pc.bold('rds.logical_replication = 1')} in the\n` +
-        `       instance's parameter group instead, then reboot.`,
-    ),
+      `       Managed hosts don't take ALTER SYSTEM: on Amazon RDS / Aurora set ${pc.bold('rds.logical_replication = 1')}\n` +
+        `       in the parameter group and reboot; on Neon or Supabase enable logical replication in the\n` +
+        `       project settings. ${pc.bold('ablo connect apply')} detects the host and does the right thing.`
+    )
   );
 
   console.log(`\n  ${pc.bold('2.')} Publish the tables Ablo should read`);
   console.log(`       ${pc.cyan(sql[1])}`);
   if (args.tables.length === 0) {
-    console.log(pc.dim(`       (Scope it with ${pc.bold('ablo connect --tables a,b,c')} to publish a subset.)`));
+    console.log(
+      pc.dim(
+        `       (Scope it with ${pc.bold('ablo connect --tables a,b,c')} to publish a subset.)`
+      )
+    );
   }
 
-  console.log(`\n  ${pc.bold('3.')} Create the scoped replication role ${pc.dim('(pick your own replication password)')}`);
-  console.log(`       ${pc.cyan(sql[2])}`);
-  console.log(`       ${pc.cyan(sql[3])}`);
-  console.log(`       ${pc.cyan(sql[4])}`);
+  // Split on the writer role so the two halves stay correct whether the
+  // replication grant is one scoped statement (--tables) or the schema-wide
+  // pair (all-tables mode), rather than assuming fixed array positions.
+  const writerStart = sql.findIndex((s) => s.includes('NOSUPERUSER NOBYPASSRLS'));
+  const replicationStatements = sql.slice(2, writerStart);
+  const writerStatements = sql.slice(writerStart);
+
+  console.log(
+    `\n  ${pc.bold('3.')} Create the scoped replication role ${pc.dim('(pick your own replication password)')}`
+  );
+  for (const statement of replicationStatements) {
+    for (const line of statement.split('\n')) console.log(`       ${pc.cyan(line)}`);
+  }
   console.log(
     pc.dim(
       `       On Amazon RDS, the REPLICATION attribute is granted, not set directly:\n` +
-        `       ${pc.bold(`GRANT rds_replication TO ${quoteIdent(args.role)};`)}`,
-    ),
+        `       ${pc.bold(`GRANT rds_replication TO ${quoteIdent(args.role)};`)}`
+    )
   );
 
   console.log(
-    `\n  ${pc.bold('4.')} Create the separate DML role and permanent idempotency ledger ` +
-      pc.dim('(pick your own write password)'),
+    `\n  ${pc.bold('4.')} Create the separate DML role and the idempotency ledger ` +
+      pc.dim('(pick your own write password)')
   );
-  for (const statement of sql.slice(5)) {
+  for (const statement of writerStatements) {
     for (const line of statement.split('\n')) console.log(`       ${pc.cyan(line)}`);
   }
   console.log(
     pc.dim(
       `       The writer gets row DML + ledger access only. It has no REPLICATION, schema CREATE,\n` +
         `       role administration, database creation, ownership, or customer-table DDL. Direct uses\n` +
-        `       ${pc.bold('ablo_idempotency')} but no outbox; WAL carries the committed row changes.`,
-    ),
+        `       ${pc.bold('ablo_idempotency')} but no outbox; WAL carries the committed row changes.\n` +
+        `       Each ledger row carries an ${pc.bold('expires_at')}; the writer can't DELETE (tamper-\n` +
+        `       resistance), so prune it from your own admin/cron when convenient:\n` +
+        `       ${pc.bold('DELETE FROM ablo_idempotency WHERE expires_at < now();')}`
+    )
   );
 
   console.log(
-    `\n  ${pc.bold('5.')} Configure both scoped connections, then verify:\n` +
-      `       ${pc.bold('DATABASE_URL')}              ${pc.dim(`→ ${args.role} (replication only)`)}\n` +
-      `       ${pc.bold('ABLO_WRITE_DATABASE_URL')}   ${pc.dim(`→ ${args.writeRole} (DML only)`)}\n` +
-      `       ${pc.cyan('npx ablo connect --check')}\n`,
+    `\n  ${pc.bold('5.')} Register the two roles with Ablo. Set them just long enough to register —\n` +
+      `     Ablo holds them from here, so your app keeps only ${pc.bold('ABLO_API_KEY')}:\n` +
+      `       ${pc.bold('ABLO_REPLICATION_DATABASE_URL')}   ${pc.dim(`→ ${args.role} (replication only)`)}\n` +
+      `       ${pc.bold('ABLO_WRITE_DATABASE_URL')}         ${pc.dim(`→ ${args.writeRole} (DML only)`)}\n` +
+      `       ${pc.cyan('npx ablo connect register')}\n`
+  );
+  console.log(
+    `  ${pc.bold('6.')} Verify readiness ${pc.dim('(checked from Ablo’s side — needs only ABLO_API_KEY):')}\n` +
+      `       ${pc.cyan('npx ablo connect check')}\n`
   );
   console.log(
     pc.dim(
       `  Reachable databases use this direct path. If no inbound route can be established, use the\n` +
         `  signed ${pc.bold('dataSource()')} endpoint fallback; its correlated events confirm writes\n` +
-        `  without an Ablo-side customer database socket.`,
-    ),
+        `  without an Ablo-side customer database socket.`
+    )
   );
   console.log();
 }
 
-// ── `--check`: validate readiness against DATABASE_URL ──────────────────────
+// ── readiness checks: `check` (engine-side, registered source) + the local
+//    pre-registration probe `register` / `scan` run before handing a
+//    connection to Ablo ─────────────────────────────────────────────────────
 
-interface WalLevelRow {
-  setting: string;
-}
-interface RoleReplRow {
-  rolreplication: boolean;
-  rolsuper: boolean;
-}
 interface DirectWriteRoleRow {
   rolname: string;
   rolsuper: boolean;
@@ -381,31 +352,10 @@ interface DirectWriteRoleRow {
   rolcreaterole: boolean;
   rolreplication: boolean;
 }
-interface PublicationRow {
-  puballtables: boolean;
-}
-/**
- * A published table whose REPLICA IDENTITY can't carry a stable key for
- * UPDATE/DELETE (`relreplident = 'n'` NOTHING, or `'d'` DEFAULT on a table
- * with no primary key). `'f'` (FULL) and `'i'` (USING INDEX) are usable, as is
- * `'d'` when a primary key exists — the SQL below already excludes those.
- */
-interface BadReplicaIdentityRow {
-  table_name: string;
-  relreplident: string;
-}
 
 /** A query error from the `postgres` client — the one field worth surfacing. */
 interface PgErrorLike {
   message?: string;
-}
-
-/** One validated readiness item, ready to render as a checklist line. */
-export interface CheckItem {
-  readonly ok: boolean;
-  readonly label: string;
-  /** Shown indented under a failed item — the precise fix. */
-  readonly fix?: string;
 }
 
 export type SyncInfraArtifactKind = 'relation' | 'type';
@@ -423,11 +373,7 @@ const SYNC_INFRA_RELATIONS = [
   'mutation_log',
 ] as const;
 
-const SYNC_INFRA_TYPES = [
-  'participant_kind',
-  'backfill_provenance',
-  'confirmation_state',
-] as const;
+const SYNC_INFRA_TYPES = ['participant_kind', 'backfill_provenance', 'confirmation_state'] as const;
 
 /** Render a checklist item the way `ablo check` renders model rows. */
 function printCheckItem(item: CheckItem): void {
@@ -442,126 +388,13 @@ function printCheckItem(item: CheckItem): void {
 }
 
 /**
- * Probes the connected database for the four readiness invariants and returns one
- * {@link CheckItem} per check. It takes an already-open `sql` handle rather than a
- * connection URL, so callers control connection handling and the checks can run
- * against a real Postgres in tests.
- */
-export async function probeReadiness(
-  sql: postgres.Sql,
-  opts: { readonly publication?: string } = {},
-): Promise<readonly CheckItem[]> {
-  const publication = opts.publication ?? ABLO_PUBLICATION;
-  const items: CheckItem[] = [];
-
-  // 1. wal_level must be 'logical'.
-  // `SHOW wal_level` returns a column named `wal_level`, not `setting`, so reading
-  // `.setting` off it is always undefined and every database looks like "unknown".
-  // `pg_settings` exposes the value in a `setting` column, matching {@link WalLevelRow}.
-  const walRows = await sql.unsafe<WalLevelRow[]>(
-    `SELECT setting FROM pg_settings WHERE name = 'wal_level'`,
-  );
-  const walLevel = walRows[0]?.setting ?? 'unknown';
-  items.push(
-    walLevel === 'logical'
-      ? { ok: true, label: `wal_level is ${pc.bold('logical')}` }
-      : {
-          ok: false,
-          label: `wal_level is ${pc.bold(walLevel)} (need ${pc.bold('logical')})`,
-          fix:
-            `ALTER SYSTEM SET wal_level = 'logical'; then RESTART Postgres.\n` +
-            `On RDS/Aurora set rds.logical_replication = 1 in the parameter group, then reboot.\n` +
-            `On Neon enable Logical Replication in the project (Console → Settings → Logical Replication, ` +
-            `or the API) — Neon forbids ALTER SYSTEM; the toggle sets wal_level=logical.`,
-        },
-  );
-
-  // 2. The Ablo publication must exist.
-  const pubRows = await sql.unsafe<PublicationRow[]>(
-    `SELECT puballtables FROM pg_publication WHERE pubname = $1`,
-    [publication] as never[],
-  );
-  const pubRow = pubRows[0];
-  items.push(
-    pubRow
-      ? {
-          ok: true,
-          label: `publication ${pc.bold(publication)} exists ${pc.dim(pubRow.puballtables ? '(all tables)' : '(table subset)')}`,
-        }
-      : {
-          ok: false,
-          label: `publication ${pc.bold(publication)} not found`,
-          fix: `CREATE PUBLICATION ${quoteIdent(publication)} FOR ALL TABLES;`,
-        },
-  );
-
-  // 3. The connected role must have REPLICATION (superuser implies it).
-  const roleRows = await sql.unsafe<RoleReplRow[]>(
-    `SELECT rolreplication, rolsuper FROM pg_roles WHERE rolname = current_user`,
-  );
-  const role = roleRows[0];
-  const hasReplication = Boolean(role && (role.rolreplication || role.rolsuper));
-  items.push(
-    hasReplication
-      ? { ok: true, label: `DATABASE_URL role can stream replication ${pc.dim('(REPLICATION)')}` }
-      : {
-          ok: false,
-          label: `DATABASE_URL role lacks the ${pc.bold('REPLICATION')} attribute`,
-          fix:
-            `ALTER ROLE current_user WITH REPLICATION;\n` +
-            `On RDS: GRANT rds_replication TO <your_role>;`,
-        },
-  );
-
-  // 4. Every published table needs a usable REPLICA IDENTITY for UPDATE/DELETE.
-  //    'd' (DEFAULT) is usable only when the table has a primary key; 'n'
-  //    (NOTHING) is never usable; 'f' (FULL) and 'i' (USING INDEX) are always fine.
-  if (pubRows.length > 0) {
-    const badRows = await sql.unsafe<BadReplicaIdentityRow[]>(
-      `SELECT c.relname AS table_name, c.relreplident
-         FROM pg_publication_tables pt
-         JOIN pg_class c ON c.relname = pt.tablename
-         JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = pt.schemaname
-        WHERE pt.pubname = $1
-          AND (
-            c.relreplident = 'n'
-            OR (
-              c.relreplident = 'd'
-              AND NOT EXISTS (
-                SELECT 1 FROM pg_index i
-                 WHERE i.indrelid = c.oid AND i.indisprimary
-              )
-            )
-          )`,
-      [publication] as never[],
-    );
-    items.push(
-      badRows.length === 0
-        ? { ok: true, label: `all published tables have a usable REPLICA IDENTITY` }
-        : {
-            ok: false,
-            label: `${badRows.length} published table${badRows.length === 1 ? '' : 's'} cannot replicate UPDATE/DELETE`,
-            fix: badRows
-              .map(
-                (r) =>
-                  `${r.table_name}: add a PRIMARY KEY, or ALTER TABLE ${quoteIdent(r.table_name)} REPLICA IDENTITY FULL;`,
-              )
-              .join('\n'),
-          },
-    );
-  }
-
-  return items;
-}
-
-/**
  * Validate the direct DML credential independently from the replication role.
  * Keeping this a separate probe is load-bearing: one broad role that happens to
  * pass both checklists is exactly the privilege collapse the setup avoids.
  */
 export async function probeDirectWriteReadiness(
   sql: postgres.Sql,
-  opts: { readonly schema?: string; readonly publication?: string } = {},
+  opts: { readonly schema?: string; readonly publication?: string } = {}
 ): Promise<readonly CheckItem[]> {
   const schema = opts.schema ?? 'public';
   const publication = opts.publication ?? ABLO_PUBLICATION;
@@ -569,16 +402,16 @@ export async function probeDirectWriteReadiness(
 
   const roleRows = await sql.unsafe<DirectWriteRoleRow[]>(
     `SELECT rolname, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication
-       FROM pg_roles WHERE rolname = current_user`,
+       FROM pg_roles WHERE rolname = current_user`
   );
   const role = roleRows[0];
   const dangerous = Boolean(
     !role ||
-      role.rolsuper ||
-      role.rolbypassrls ||
-      role.rolcreatedb ||
-      role.rolcreaterole ||
-      role.rolreplication,
+    role.rolsuper ||
+    role.rolbypassrls ||
+    role.rolcreatedb ||
+    role.rolcreaterole ||
+    role.rolreplication
   );
   items.push(
     dangerous
@@ -589,7 +422,7 @@ export async function probeDirectWriteReadiness(
             `Use ${ABLO_WRITE_ROLE} from the setup recipe: NOSUPERUSER, NOBYPASSRLS, ` +
             `NOCREATEDB, NOCREATEROLE, NOREPLICATION.`,
         }
-      : { ok: true, label: `write role ${pc.bold(role?.rolname ?? ABLO_WRITE_ROLE)} is DML-only` },
+      : { ok: true, label: `write role ${pc.bold(role?.rolname ?? ABLO_WRITE_ROLE)} is DML-only` }
   );
 
   const schemaRows = await sql.unsafe<{ usage: boolean; create: boolean; row_security: string }[]>(
@@ -597,12 +430,12 @@ export async function probeDirectWriteReadiness(
        has_schema_privilege(current_user, $1, 'USAGE') AS usage,
        has_schema_privilege(current_user, $1, 'CREATE') AS create,
        current_setting('row_security') AS row_security`,
-    [schema] as never[],
+    [schema] as never[]
   );
   const schemaRow = schemaRows[0];
   items.push(
     schemaRow?.usage && !schemaRow.create && schemaRow.row_security === 'on'
-      ? { ok: true, label: `writer uses ${schema} with RLS on and no schema CREATE` }
+      ? { ok: true, label: `writer uses ${schema} with row_security on and no schema CREATE` }
       : {
           ok: false,
           label: `writer schema/RLS privileges are not least-privilege`,
@@ -610,7 +443,7 @@ export async function probeDirectWriteReadiness(
             `REVOKE CREATE ON SCHEMA ${quoteIdent(schema)} FROM PUBLIC; ` +
             `GRANT USAGE ON SCHEMA ${quoteIdent(schema)} TO ${quoteIdent(role?.rolname ?? ABLO_WRITE_ROLE)}; ` +
             `ALTER ROLE ${quoteIdent(role?.rolname ?? ABLO_WRITE_ROLE)} SET row_security = on;`,
-        },
+        }
   );
 
   const ledgerName = `${quoteIdent(schema)}.${quoteIdent('ablo_idempotency')}`;
@@ -619,7 +452,7 @@ export async function probeDirectWriteReadiness(
        to_regclass($1) IS NOT NULL AS present,
        CASE WHEN to_regclass($1) IS NULL THEN false ELSE has_table_privilege(current_user, $1, 'SELECT,INSERT,UPDATE') END AS writes,
        CASE WHEN to_regclass($1) IS NULL THEN false ELSE has_table_privilege(current_user, $1, 'DELETE') END AS deletes`,
-    [ledgerName] as never[],
+    [ledgerName] as never[]
   );
   const ledger = ledgerRows[0];
   items.push(
@@ -629,7 +462,7 @@ export async function probeDirectWriteReadiness(
           ok: false,
           label: `${pc.bold('ablo_idempotency')} is missing or has unsafe grants`,
           fix: `Apply the DML-role and idempotency-ledger statements printed by ${pc.bold('ablo connect')}.`,
-        },
+        }
   );
 
   const tableRows = await sql.unsafe<{ relation: string }[]>(
@@ -641,7 +474,7 @@ export async function probeDirectWriteReadiness(
           format('%I.%I', schemaname, tablename),
           'SELECT,INSERT,UPDATE,DELETE'
         )`,
-    [publication, schema] as never[],
+    [publication, schema] as never[]
   );
   items.push(
     tableRows.length === 0
@@ -650,7 +483,72 @@ export async function probeDirectWriteReadiness(
           ok: false,
           label: `writer lacks DML on ${tableRows.length} published table${tableRows.length === 1 ? '' : 's'}`,
           fix: `Grant SELECT, INSERT, UPDATE, DELETE on: ${tableRows.map((row) => row.relation).join(', ')}`,
-        },
+        }
+  );
+
+  // Honest coverage report: row_security = on only does something on a table
+  // that HAS policies. Tell the operator exactly how many of their published
+  // tables actually govern the writer, rather than implying RLS protects a
+  // schema that may have none. This is information, not a failure — RLS is the
+  // customer's choice — so it never flips the check red.
+  const rlsCoverageRows = await sql.unsafe<{ total: number; with_rls: number }[]>(
+    `SELECT
+       count(*)::int AS total,
+       (count(*) FILTER (WHERE c.relrowsecurity))::int AS with_rls
+       FROM pg_publication_tables pt
+       JOIN pg_class c ON c.relname = pt.tablename
+       JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = pt.schemaname
+      WHERE pt.pubname = $1 AND pt.schemaname = $2 AND pt.tablename <> 'ablo_idempotency'`,
+    [publication, schema] as never[]
+  );
+  const coverage = rlsCoverageRows[0];
+  if (coverage && coverage.total > 0) {
+    const { total, with_rls: withRls } = coverage;
+    const plural = total === 1 ? '' : 's';
+    items.push(
+      withRls === total
+        ? {
+            ok: true,
+            label: `row-level security governs the writer on all ${total} published table${plural}`,
+          }
+        : {
+            ok: true,
+            label:
+              `row-level security governs the writer on ${withRls} of ${total} published tables — ` +
+              `the other ${total - withRls} have no policies, so the writer's table grants alone bound it`,
+          }
+    );
+  }
+
+  // Enforcement canary: a table owner bypasses row-level security unless the
+  // table forces it (NO FORCE is the default). If the writer role owns a
+  // published table whose RLS is enabled but not forced, its policies are
+  // silently skipped for that role — a green DML check would mask a tenant-
+  // isolation hole. Non-owner writers (the recipe's default) never hit this.
+  const ownerBypassRows = await sql.unsafe<{ relation: string }[]>(
+    `SELECT format('%I.%I', n.nspname, c.relname) AS relation
+       FROM pg_publication_tables pt
+       JOIN pg_class c ON c.relname = pt.tablename
+       JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = pt.schemaname
+      WHERE pt.pubname = $1 AND pt.schemaname = $2 AND pt.tablename <> 'ablo_idempotency'
+        AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+        AND c.relrowsecurity = true
+        AND c.relforcerowsecurity = false`,
+    [publication, schema] as never[]
+  );
+  items.push(
+    ownerBypassRows.length === 0
+      ? {
+          ok: true,
+          label: `row-level security is enforced on the writer — it owns no published table that could bypass its own policies`,
+        }
+      : {
+          ok: false,
+          label: `writer owns ${ownerBypassRows.length} published table${ownerBypassRows.length === 1 ? '' : 's'} whose RLS is enabled but not forced — its policies are silently skipped`,
+          fix:
+            `A table owner bypasses row-level security unless the table forces it. Reassign these tables to another owner, ` +
+            `or force it: ${ownerBypassRows.map((r) => `ALTER TABLE ${r.relation} FORCE ROW LEVEL SECURITY;`).join(' ')}`,
+        }
   );
 
   return items;
@@ -663,85 +561,62 @@ export async function probeDirectWriteReadiness(
  * something the CLI does on its own.
  */
 export async function auditTenantSyncInfra(
-  sql: postgres.Sql,
+  sql: postgres.Sql
 ): Promise<readonly SyncInfraArtifact[]> {
   const artifacts: SyncInfraArtifact[] = [];
   for (const name of SYNC_INFRA_RELATIONS) {
-    const rows = await sql.unsafe<{ reg: string | null }[]>(
-      `SELECT to_regclass($1)::text AS reg`,
-      [`public.${name}`] as never[],
-    );
+    const rows = await sql.unsafe<{ reg: string | null }[]>(`SELECT to_regclass($1)::text AS reg`, [
+      `public.${name}`,
+    ] as never[]);
     artifacts.push({ kind: 'relation', name, present: rows[0]?.reg != null });
   }
   for (const name of SYNC_INFRA_TYPES) {
-    const rows = await sql.unsafe<{ reg: string | null }[]>(
-      `SELECT to_regtype($1)::text AS reg`,
-      [`public.${name}`] as never[],
-    );
+    const rows = await sql.unsafe<{ reg: string | null }[]>(`SELECT to_regtype($1)::text AS reg`, [
+      `public.${name}`,
+    ] as never[]);
     artifacts.push({ kind: 'type', name, present: rows[0]?.reg != null });
   }
   return artifacts;
 }
 
 /**
- * Resolve DATABASE_URL or exit with a clear message. Shared by `--check` and
- * `--register` — both act on the database the developer points us at.
+ * Resolve one of the two scoped connection strings from the environment, or exit
+ * with the precise fix. `register` needs both; `scan` needs the
+ * replication one. They are separate secrets that must never substitute for each
+ * other, so the lookup and its remediation live together, one branch per
+ * credential.
  */
-function requireDatabaseUrl(verb: string, opts?: { allowDeprecatedFallback?: boolean }): string {
-  const resolved = readProjectReplicationUrlWithSource();
-  if (!resolved) {
+function requireScopedUrl(kind: 'replication' | 'write', verb: string): string {
+  if (kind === 'replication') {
+    // As of 0.32.0 the replication credential comes only from
+    // ABLO_REPLICATION_DATABASE_URL. The deprecated `DATABASE_URL` fallback was
+    // removed: reading a scoped string from the generic `DATABASE_URL` risked
+    // validating against the app's own database. (`--apply` still uses
+    // `DATABASE_URL` for its one-time admin input — a separate, honest job.)
+    const resolved = readProjectReplicationUrlWithSource();
+    if (resolved) return resolved.url;
     console.error(
       pc.red('  No replication connection found (checked process env, .env.local, .env).') +
         pc.dim(
           ` Set ${pc.bold('ABLO_REPLICATION_DATABASE_URL')} to the ${ABLO_REPLICATION_ROLE} connection ` +
-            `printed by ${pc.bold('ablo connect')}, then re-run ${pc.bold(`ablo connect ${verb}`)}.`,
-        ),
+            `printed by ${pc.bold('ablo connect')}, then re-run ${pc.bold(`ablo connect ${verb}`)}.`
+        )
     );
     process.exit(1);
   }
-  if (resolved.variable === 'DATABASE_URL') {
-    // The dangerous fallback: nearly every app already has DATABASE_URL set,
-    // pointing at its own database with its own (often admin) credentials. A
-    // check that resolves here can pass green against the WRONG credential. Say
-    // so loudly, and refuse to register on it — validating is recoverable, but
-    // registering the wrong connection is not.
-    console.warn(
-      pc.yellow(`  ! Falling back to ${pc.bold('DATABASE_URL')} for the replication role — deprecated,`) +
-        pc.dim(
-          ` removed in ${DATABASE_URL_REMOVAL_VERSION}.\n` +
-            `    If this is your app's own connection string, this is NOT validating the ` +
-            `${pc.bold(ABLO_REPLICATION_ROLE)} role.\n` +
-            `    Set ${pc.bold('ABLO_REPLICATION_DATABASE_URL')} to the connection ${pc.bold('ablo connect')} printed.\n`,
-        ),
-    );
-    if (!(opts?.allowDeprecatedFallback ?? false)) {
-      console.error(
-        pc.red(`  Refusing to ${verb.replace(/^--/, '')} against a ${pc.bold('DATABASE_URL')} fallback.`) +
-          pc.dim(
-            ` Set ${pc.bold('ABLO_REPLICATION_DATABASE_URL')} explicitly and re-run.` +
-              ` (${pc.bold('ablo connect --check')} still accepts the fallback so you can inspect it.)\n`,
-          ),
-      );
-      process.exit(1);
-    }
-  }
-  return resolved.url;
-}
 
-/** Resolve the separately scoped writer URL; never substitute the replication URL. */
-function requireWriteDatabaseUrl(verb: string): string {
+  // The writer URL is a separately scoped secret — never substitute the
+  // replication URL for it.
   const dbUrl = readProjectWriteDatabaseUrl();
-  if (!dbUrl) {
-    console.error(
-      pc.red('  No ABLO_WRITE_DATABASE_URL found (checked process env, .env.local, .env).') +
-        pc.dim(
-          ` Set it to the ${ABLO_WRITE_ROLE} connection printed by ${pc.bold('ablo connect')}, ` +
-            `then re-run ${pc.bold(`ablo connect ${verb}`)}. The replication credential is never reused for DML.`,
-        ),
-    );
-    process.exit(1);
-  }
-  return dbUrl;
+  if (dbUrl) return dbUrl;
+  console.error(
+    pc.red('  No ABLO_WRITE_DATABASE_URL found (checked process env, .env.local, .env).') +
+      pc.dim(
+        ` Set it to the ${ABLO_WRITE_ROLE} connection printed by ${pc.bold('ablo connect')}, ` +
+          `then re-run ${pc.bold(`ablo connect ${verb}`)}. The replication credential is never reused for DML.`
+      )
+  );
+  process.exit(1);
 }
 
 /**
@@ -763,7 +638,7 @@ type LocalProbeOutcome =
  */
 async function probeAndReport(
   dbUrl: string,
-  kind: 'replication' | 'write' = 'replication',
+  kind: 'replication' | 'write' = 'replication'
 ): Promise<LocalProbeOutcome> {
   // Bounded dial, mirroring the engine's own preflight: a black-holed host
   // must surface as a dial failure, not pin the command forever.
@@ -771,9 +646,7 @@ async function probeAndReport(
   let items: readonly CheckItem[];
   try {
     items =
-      kind === 'replication'
-        ? await probeReadiness(sql)
-        : await probeDirectWriteReadiness(sql);
+      kind === 'replication' ? await probeReadiness(sql) : await probeDirectWriteReadiness(sql);
   } catch (err) {
     await sql.end({ timeout: 2 }).catch(() => undefined);
     const dial = dialFailureReason(err);
@@ -789,45 +662,48 @@ async function probeAndReport(
 }
 
 /**
- * The engine-side fallback for `--check`: this machine couldn't dial the host,
- * so ask Ablo to dial from its own infrastructure — the network replication
- * actually runs from — and render the same checklist from its answer.
+ * `--check`: report readiness for the database Ablo has registered for this
+ * plane, checked from Ablo's own infrastructure — the network replication and
+ * direct writes actually run from. It needs only `ABLO_API_KEY`: Ablo holds the
+ * scoped credentials, so there is no connection string to wire or keep. A
+ * database that isn't connected yet has nothing to check — run
+ * `ablo connect apply` first.
  */
-async function runRemoteCheck(
-  dbUrl: string,
-  writeDbUrl: string,
-  localReason: string,
-): Promise<never> {
+async function runCheck(): Promise<void> {
   console.log(
-    `  This machine can't reach one or both scoped connections (${pc.dim(localReason)}).\n` +
-      `  That is not the verdict: direct writes and replication run from Ablo's infrastructure.\n` +
-      `  Asking Ablo to check both roles from its side…\n`,
+    `\n  ${brand('ablo')} ${pc.dim('connect check')}  ${pc.dim('direct-write + WAL readiness')}\n`
   );
 
   const apiKey = resolveApiKey();
   if (!apiKey) {
     console.error(
-      pc.red(`  The engine-side check needs an API key, and none was found.`) +
+      pc.red('  No API key found.') +
         pc.dim(
-          ` Run ${pc.bold('ablo login')} (or set ${pc.bold('ABLO_API_KEY')}), then re-run ${pc.bold('ablo connect --check')}.`,
-        ),
+          ` Run ${pc.bold('ablo login')} (or set ${pc.bold('ABLO_API_KEY')}), then re-run ${pc.bold('ablo connect check')}.`
+        )
     );
     process.exit(1);
   }
 
-  const apiUrl = (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
-  const result = await requestRemoteValidation({
-    apiUrl,
-    apiKey,
-    connectionString: dbUrl,
-    writeConnectionString: writeDbUrl,
-  });
+  const apiUrl = apiBaseUrl();
+  const result = await requestRemoteValidation({ apiUrl, apiKey });
 
   if (!result.ok) {
-    console.error(pc.red(`  The engine-side check failed: ${result.message}`));
+    if (result.code === 'no_data_source_registered') {
+      console.error(
+        `  ${pc.yellow('—')} No database is connected to this plane yet, so there's nothing to check.\n` +
+          pc.dim(
+            `  Connect one with ${pc.bold('ablo connect apply')}, then re-run ${pc.bold('ablo connect check')}.\n`
+          )
+      );
+      process.exit(1);
+    }
+    console.error(pc.red(`  The check failed: ${result.message}`));
     if (result.code === 'forbidden') {
       console.error(
-        pc.dim(`  Checking a database from Ablo's side needs a ${pc.bold('secret')} key (sk_…). Run ${pc.bold('ablo login')} for one.`),
+        pc.dim(
+          `  Checking a connected database needs a ${pc.bold('secret')} key (sk_…). Run ${pc.bold('ablo login')} for one.`
+        )
       );
     }
     console.error();
@@ -836,13 +712,13 @@ async function runRemoteCheck(
 
   if (!result.reachable) {
     console.error(
-      `  ${pc.red('✗')} Ablo's infrastructure can't reach both direct connections${result.reason ? ` ${pc.dim(`(${result.reason})`)}` : ''}.`,
+      `  ${pc.red('✗')} Ablo's infrastructure can't reach your database${result.reason ? ` ${pc.dim(`(${result.reason})`)}` : ''}.`
     );
     console.error(
       pc.dim(
         `  Direct needs a route Ablo's servers can dial — public allowlist, PrivateLink, peering,\n` +
-          `  or VPN. Only when no inbound route can exist, use the signed ${pc.bold('dataSource()')} endpoint fallback.\n`,
-      ),
+          `  or VPN. Only when no inbound route can exist, use the signed ${pc.bold('dataSource()')} endpoint fallback.\n`
+      )
     );
     process.exit(1);
   }
@@ -854,75 +730,42 @@ async function runRemoteCheck(
   console.log();
   if (result.ready) {
     console.log(
-      `  ${pc.green('✓')} Ready — checked from Ablo's infrastructure. Both direct DML and WAL settlement are available.\n`,
+      `  ${pc.green('✓')} Ready — checked from Ablo's infrastructure. Ablo can apply scoped DML and settle it from WAL.\n`
     );
     process.exit(0);
   }
   const count = result.failures.length;
   console.log(
-    `  ${pc.red(`${count} item${count === 1 ? '' : 's'} to fix`)} ${pc.dim(`— found by Ablo's infrastructure. Apply the fixes above, then re-run ${pc.bold('ablo connect --check')}.`)}\n`,
-  );
-  process.exit(1);
-}
-
-/** Run the readiness check against DATABASE_URL and report. */
-async function runCheck(): Promise<void> {
-  const dbUrl = requireDatabaseUrl('--check', { allowDeprecatedFallback: true });
-  const writeDbUrl = requireWriteDatabaseUrl('--check');
-  console.log(`\n  ${brand('ablo')} ${pc.dim('connect --check')}  ${pc.dim('direct-write + WAL readiness')}\n`);
-  console.log(`  ${pc.bold('Replication role')}\n`);
-  const replication = await probeAndReport(dbUrl, 'replication');
-  console.log(`\n  ${pc.bold('Direct-write role')}\n`);
-  const write = await probeAndReport(writeDbUrl, 'write');
-  if (replication.kind === 'no-dial' || write.kind === 'no-dial') {
-    const reasons = [
-      replication.kind === 'no-dial' ? `replication: ${replication.reason}` : null,
-      write.kind === 'no-dial' ? `write: ${write.reason}` : null,
-    ].filter((reason): reason is string => reason !== null);
-    return runRemoteCheck(dbUrl, writeDbUrl, reasons.join('; '));
-  }
-  const failures = replication.failures + write.failures;
-  console.log();
-  if (failures === 0) {
-    console.log(`  ${pc.green('✓')} Ready — Ablo can apply scoped DML and settle it from WAL.\n`);
-    process.exit(0);
-  }
-  console.log(
-    `  ${pc.red(`${failures} item${failures === 1 ? '' : 's'} to fix`)} ${pc.dim(`— apply the fixes above, then re-run ${pc.bold('ablo connect --check')}.`)}\n`,
+    `  ${pc.red(`${count} item${count === 1 ? '' : 's'} to fix`)} ${pc.dim(`— apply the fixes above, then re-run ${pc.bold('ablo connect check')}.`)}\n`
   );
   process.exit(1);
 }
 
 /**
- * The registration endpoint for a given API base URL. The server mounts every
- * route under `/api`, so the full path is `/api/v1/datasources` — the same path
- * `ablo connect --register` posts to. A bare `/v1/datasources` matches no
- * route and comes back as the server's global "Not found".
- */
-export function registerEndpoint(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, '')}/api/v1/datasources`;
-}
-
-/**
- * Register DATABASE_URL as this project's data source: the engine replicates it
+ * Register the replication connection (`ABLO_REPLICATION_DATABASE_URL`) as this
+ * project's data source: the engine replicates it
  * on the next sync. Validates readiness first (registering a database that can't
  * stream is a silent dead end), then `POST /api/v1/datasources { connectionString }`
  * authed by the project key — the org is derived server-side from the key, never
  * sent in the body.
  */
 async function runRegister(args: ConnectArgs): Promise<void> {
-  const dbUrl = requireDatabaseUrl('--register');
-  const writeDbUrl = requireWriteDatabaseUrl('--register');
+  const dbUrl = requireScopedUrl('replication', 'register');
+  const writeDbUrl = requireScopedUrl('write', 'register');
   const apiKey = resolveApiKey();
   if (!apiKey) {
     console.error(
       pc.red('  Not logged in.') +
-        pc.dim(` Run ${pc.bold('ablo login')} (or set ${pc.bold('ABLO_API_KEY')}) so Ablo knows which project to register this database for.`),
+        pc.dim(
+          ` Run ${pc.bold('ablo login')} (or set ${pc.bold('ABLO_API_KEY')}) so Ablo knows which project to register this database for.`
+        )
     );
     process.exit(1);
   }
 
-  console.log(`\n  ${brand('ablo')} ${pc.dim('connect --register')}  ${pc.dim('register a direct DataSource')}\n`);
+  console.log(
+    `\n  ${brand('ablo')} ${pc.dim('connect register')}  ${pc.dim('register a direct DataSource')}\n`
+  );
 
   // The local probe is a fast pre-flight, not the gate. When this machine
   // can't dial the host at all, registration proceeds anyway: the server runs
@@ -944,17 +787,17 @@ async function runRegister(args: ConnectArgs): Promise<void> {
     console.log(
       `  This machine can't reach one or both scoped connections (${pc.dim(noDial.join('; '))}) — continuing anyway.\n` +
         `  Ablo validates both credentials from the infrastructure that will use them and refuses\n` +
-        `  registration unless replication and direct DML are both ready.\n`,
+        `  registration unless replication and direct DML are both ready.\n`
     );
   }
   if (failures > 0) {
     console.log(
-      `\n  ${pc.red(`${failures} item${failures === 1 ? '' : 's'} to fix`)} ${pc.dim('— direct registration requires both scoped roles. Fix the above, then re-run.')}\n`,
+      `\n  ${pc.red(`${failures} item${failures === 1 ? '' : 's'} to fix`)} ${pc.dim('— direct registration requires both scoped roles. Fix the above, then re-run.')}\n`
     );
     process.exit(1);
   }
 
-  const apiUrl = (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
+  const apiUrl = apiBaseUrl();
   const registered = await registerDirectDataSource({
     apiUrl,
     apiKey,
@@ -965,98 +808,8 @@ async function runRegister(args: ConnectArgs): Promise<void> {
   process.exit(registered ? 0 : 1);
 }
 
-/**
- * Hand both scoped connection strings to Ablo's control plane
- * (`POST /api/v1/datasources`), authed by the project key — the org is derived
- * server-side from the key, never sent in the body. Ablo stores the credentials
- * encrypted and its infrastructure is the only thing that opens either
- * connection from then on. Prints the outcome and returns whether it registered,
- * so both `--register` and `--apply` can call it and decide their own exit.
- */
-export async function registerDirectDataSource(opts: {
-  readonly apiUrl: string;
-  readonly apiKey: string;
-  readonly replicationUrl: string;
-  readonly writeUrl: string;
-  readonly route: DirectDataSourceRoute;
-}): Promise<boolean> {
-  let res: Response;
-  try {
-    res = await fetch(registerEndpoint(opts.apiUrl), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${opts.apiKey}` },
-      body: JSON.stringify({
-        connection: 'direct',
-        connectionString: opts.replicationUrl,
-        writeConnectionString: opts.writeUrl,
-        route: opts.route,
-      }),
-    });
-  } catch (err) {
-    console.error(pc.red(`\n  Couldn't reach ${opts.apiUrl}: ${err instanceof Error ? err.message : String(err)}\n`));
-    return false;
-  }
-
-  if (res.ok) {
-    const body = (await res.json().catch(() => ({}))) as {
-      id?: string;
-      host?: string;
-      status?: string;
-    };
-    const statusNote = body.status === 'active' ? `${opts.route}, active` : opts.route;
-    console.log(
-      `\n  ${pc.green('✓')} Registered${body.host ? ` ${pc.dim(body.host)}` : ''}${body.id ? ` ${pc.dim(`(${body.id})`)}` : ''} as a direct DataSource (${statusNote}).\n` +
-        `  Customer COMMIT is durable acceptance; correlated WAL promotes queued writes to confirmed.\n`,
-    );
-    return true;
-  }
-
-  // The server's error envelope is flat: `{ type, code, message, details }`. The
-  // nested `error.code` fallback is kept for older or wrapped deployments.
-  const body = (await res.json().catch(() => ({}))) as {
-    code?: string;
-    message?: string;
-    details?: {
-      failures?: readonly { item?: string; actual?: string; fix?: string }[];
-      reason?: string;
-    };
-    error?: { code?: string; message?: string };
-  };
-  const code = body.code ?? body.error?.code;
-  const message = body.message ?? body.error?.message ?? `HTTP ${res.status}`;
-  console.error(pc.red(`\n  Registration failed: ${message}`));
-  if (code === 'forbidden') {
-    console.error(pc.dim(`  Registering a database needs a ${pc.bold('secret')} key (sk_…). Run ${pc.bold('ablo login')} for one.`));
-  } else if (code === 'datasource_connection_unsupported') {
-    console.error(
-      pc.dim(`  This deployment can’t accept connection strings — use a self-hosted/hosted engine, or the signed endpoint fallback.`),
-    );
-  } else if (code === 'database_not_replication_ready' || code === 'data_source_blocked') {
-    // The server re-ran the readiness probes from its own side and found failures.
-    // It can see a different picture than the local --check — for example a
-    // publication added since, or probes running as the replication role rather
-    // than yours.
-    for (const f of body.details?.failures ?? []) {
-      console.error(`  ${pc.red('✗')} ${pc.bold(f.item ?? 'item')}${f.actual ? pc.dim(` (${f.actual})`) : ''}`);
-      if (f.fix) for (const line of f.fix.split('\n')) console.error(`      ${pc.red('•')} ${line}`);
-    }
-    console.error(pc.dim(`\n  Apply the fixes, verify with ${pc.bold('ablo connect --check')}, then re-run.`));
-  } else if (code === 'database_unreachable' || code === 'source_unreachable') {
-    if (body.details?.reason) console.error(pc.dim(`  ${body.details.reason}`));
-    console.error(
-      pc.dim(
-        `  Ablo's servers must be able to reach this database — a localhost or private-network\n` +
-          `  Postgres can't use the direct path. Establish an allowlist, PrivateLink, peering, or VPN.\n` +
-          `  Only when no inbound route is possible, register the signed ${pc.bold('dataSource()')} endpoint fallback.`,
-      ),
-    );
-  }
-  console.error();
-  return false;
-}
-
-async function runAuditInfra(): Promise<void> {
-  const dbUrl = requireDatabaseUrl('--audit-infra', { allowDeprecatedFallback: true });
+async function runScan(): Promise<void> {
+  const dbUrl = requireScopedUrl('replication', 'scan');
   const sql = postgres(dbUrl, { max: 1, prepare: false, onnotice: () => {} });
   let artifacts: readonly SyncInfraArtifact[];
   try {
@@ -1069,7 +822,9 @@ async function runAuditInfra(): Promise<void> {
   }
   await sql.end({ timeout: 2 });
 
-  console.log(`\n  ${brand('ablo')} ${pc.dim('connect --audit-infra')}  ${pc.dim('Stage 5 tenant DB sync-infra audit')}\n`);
+  console.log(
+    `\n  ${brand('ablo')} ${pc.dim('connect scan')}  ${pc.dim('audit for leftover Ablo sync infrastructure')}\n`
+  );
   const present = artifacts.filter((a) => a.present);
   if (present.length === 0) {
     console.log(`  ${pc.green('✓')} No deprecated Ablo sync infrastructure found in public.\n`);
@@ -1082,14 +837,25 @@ async function runAuditInfra(): Promise<void> {
   }
   console.log(
     `\n  ${pc.yellow(`${present.length} artifact${present.length === 1 ? '' : 's'} found`)} ` +
-      pc.dim('— do not drop automatically. Confirm the org/environment is log-authoritative, then follow ') +
+      pc.dim(
+        '— do not drop automatically. Confirm the org/environment is log-authoritative, then follow '
+      ) +
       pc.bold('docs/runbooks/wal-stage5-customer-db-infra-cleanup.md') +
-      pc.dim('.\n'),
+      pc.dim('.\n')
   );
   process.exit(1);
 }
 
 export async function connect(argv: readonly string[]): Promise<void> {
+  // `deregister` is the inverse of `register`; it forwards to the disconnect
+  // implementation (lazy-imported, mirroring how `apply` reaches connectApply)
+  // rather than duplicating it.
+  if (argv[0] === 'deregister') {
+    const { disconnect } = await import('./disconnect');
+    await disconnect(argv.slice(1));
+    return;
+  }
+
   let args: ConnectArgs;
   try {
     args = parseConnectArgs(argv);
@@ -1111,8 +877,8 @@ export async function connect(argv: readonly string[]): Promise<void> {
     await runRegister(args);
     return;
   }
-  if (args.auditInfra) {
-    await runAuditInfra();
+  if (args.scan) {
+    await runScan();
     return;
   }
   printConnectRecipe(args);
@@ -1128,19 +894,22 @@ export const CONNECT_USAGE = `  ablo connect — direct writes, settled by logic
   orders it with external changes, and confirms it. Your Postgres remains authoritative.
 
   Usage:
-    npx ablo connect --apply              Set it up end to end: create the roles, publish, register
-    npx ablo connect --url <admin-conn>   Admin connection for --apply/--rotate (else DATABASE_URL)
-    npx ablo connect --rotate             New passwords for both scoped roles, then re-register
     npx ablo connect                      Print the exact setup SQL instead of running it
-    npx ablo connect --tables a,b,c       Publish only these tables (default: all tables)
-    npx ablo connect --role <name>        Name the replication role (default: ablo_replicator)
-    npx ablo connect --write-role <name>  Name the DML role (default: ablo_writer)
-    npx ablo connect --route <route>      public-allowlist | privatelink | peering | vpn
-    npx ablo connect --check              Validate the scoped roles (ABLO_REPLICATION_DATABASE_URL + ABLO_WRITE_DATABASE_URL)
-    npx ablo connect --register           Register both scoped credentials as one direct DataSource
-    npx ablo connect --audit-infra        Read-only Stage 5 audit for deprecated Ablo sync tables/types
+    npx ablo connect apply                Set it up end to end: create the roles, publish, register
+    npx ablo connect register             Register both scoped credentials as one direct DataSource (hand-run-SQL path)
+    npx ablo connect deregister           Remove this project's data source — Ablo stops reading/writing it
+    npx ablo connect check                Verify the connected database from Ablo's side (needs only ABLO_API_KEY)
+    npx ablo connect rotate               New passwords for both scoped roles, then re-register
+    npx ablo connect scan                 Read-only audit for leftover Ablo sync tables/types (never drops)
 
-  --apply registers with Ablo directly; the admin credential is used only on this
-  machine and never persisted. Your app holds only ABLO_API_KEY.
+  Modifiers:
+    --url <admin-conn>   Admin connection for apply/rotate (else DATABASE_URL)
+    --tables a,b,c       Publish only these tables (default: all tables)
+    --role <name>        Name the replication role (default: ablo_replicator)
+    --write-role <name>  Name the DML role (default: ablo_writer)
+    --route <route>      public-allowlist | privatelink | peering | vpn
+    --yes                Skip the apply confirmation (non-interactive)
+    --show-sql           Show the exact statements in the apply plan
 
-  --apply also takes --yes (skip the confirm) and --show-sql (show the exact statements).`;
+  apply registers with Ablo directly; the admin credential is used only on this
+  machine and never persisted. Your app holds only ABLO_API_KEY.`;

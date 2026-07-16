@@ -39,7 +39,7 @@ export async function completeReport(reportId: string) {
   await using claim = await ablo.weatherReports.claim({
     id: reportId,
     queue: false,
-    reason: 'completing',
+    description: 'completing',
   });
   const claimed = claim.data;
 
@@ -62,7 +62,7 @@ The two options on the claim:
 
 - `queue: false` — skip this record if another claim is already in progress,
   rather than queueing behind it. (The default queues.)
-- `reason: 'completing'` — a human-readable label for what your worker is doing,
+- `description: 'completing'` — a human-readable label for what your worker is doing,
   visible to anyone reading `claim.state({ id })`.
 
 Because the worker uses the same schema and `claim()` as the UI, its writes sync

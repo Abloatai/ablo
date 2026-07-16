@@ -1,10 +1,12 @@
 /**
- * `ablo connect --apply` runs the read-path setup for you instead of printing
- * SQL to copy. It connects with the admin credential already in `DATABASE_URL`,
- * creates the two scoped roles and the publication, turns on logical decoding
- * where it can, and repoints `DATABASE_URL` / `ABLO_WRITE_DATABASE_URL` at the
- * new least-privilege roles — then proves it worked by reconnecting as the
- * replication role and running the same readiness checklist `--check` runs.
+ * `ablo connect apply` runs the read-path setup for you instead of printing
+ * SQL to copy. It connects with the admin credential (from `--url`, or
+ * `DATABASE_URL`), creates the two scoped roles and the publication, turns on
+ * logical decoding where it can, and registers both scoped connection strings
+ * with Ablo directly — then proves it worked by reconnecting as the replication
+ * role and running the readiness checklist. The admin credential is used once
+ * and discarded; nothing is written to your `.env`, so your app keeps only
+ * `ABLO_API_KEY`.
  *
  * Two principles shape it:
  *
@@ -15,7 +17,7 @@
  *   2. The grants come from one source. The privilege statements are taken
  *      verbatim from {@link connectSetupSql} — the same recipe `ablo connect`
  *      prints and tests assert — so the applied grants can never quietly drift
- *      from the documented ones. `--apply` only swaps the three statements that
+ *      from the documented ones. `apply` only swaps the three statements that
  *      must differ to run unattended: it makes the role and publication creation
  *      idempotent (safe to re-run) and substitutes a real, generated password
  *      for the recipe's `<password>` placeholder.
@@ -33,8 +35,8 @@ import {
   quoteIdent,
   registerDirectDataSource,
   type CheckItem,
-  type ConnectArgs,
-} from './connect';
+} from './connectSetup';
+import type { ConnectArgs } from './connect';
 import {
   generateRolePassword,
   scramSha256Verifier,
@@ -42,7 +44,7 @@ import {
   readProjectAdminDatabaseUrl,
 } from './dbRole';
 import { resolveApiKey } from './config';
-import { DEFAULT_URL } from './push';
+import { apiBaseUrl } from './push';
 import { brand } from './theme';
 
 /** How a role's password is written into the SQL — mirrors {@link scopedRoleStatements}. */
@@ -68,15 +70,15 @@ export interface ApplyCredentials {
 }
 
 /**
- * The exit code and, for `--rotate`, the recovery notice after the registration
+ * The exit code and, for `rotate`, the recovery notice after the registration
  * attempt. Rotation is the one flow where a registration failure *after* the
  * `ALTER ROLE` is dangerous: the database already holds the new password Ablo
  * doesn't have yet, so writes break until it's reconciled. We can't roll the
  * password back (the CLI connects as admin and never held the role's old one),
  * and we can't register-then-swap (Ablo validates a credential by connecting with
  * it, so it must exist in the database first). So the safe shape is to refuse a
- * success exit and tell the operator to re-run `--rotate` — itself idempotent,
- * generating a fresh password each run. `--apply` needs no such notice: a failed
+ * success exit and tell the operator to re-run `rotate` — itself idempotent,
+ * generating a fresh password each run. `apply` needs no such notice: a failed
  * first registration leaves nothing that was working broken.
  */
 export function postRegistrationOutcome(input: {
@@ -90,15 +92,13 @@ export function postRegistrationOutcome(input: {
     notice:
       'The new passwords are set in your database, but Ablo could not be updated with them.\n' +
       'Ablo still holds the previous password, which no longer works — writes will fail until\n' +
-      'you re-run `ablo connect --rotate` (each run is idempotent and rotates a fresh password).',
+      'you re-run `ablo connect rotate` (each run is idempotent and rotates a fresh password).',
   };
 }
 
 /** Build the password clause for a role, either the SCRAM verifier or an escaped plaintext literal. */
 export function passwordClause(password: string, mode: PasswordMode): string {
-  return mode === 'scram-verifier'
-    ? scramSha256Verifier(password)
-    : password.replace(/'/g, "''");
+  return mode === 'scram-verifier' ? scramSha256Verifier(password) : password.replace(/'/g, "''");
 }
 
 /**
@@ -129,11 +129,17 @@ export function connectApplyPlan(input: {
   readonly role?: string;
   readonly writeRole?: string;
   readonly credentials: ApplyCredentials;
+  /** Omit the write-ahead-log step when the cluster is already `wal_level = logical`. */
+  readonly walAlreadyLogical?: boolean;
+  /** Shapes the write-ahead-log step's guidance; managed providers show a
+   *  console/setting action instead of an `ALTER SYSTEM` that can't run. */
+  readonly provider?: DbProvider;
 }): readonly ApplyStep[] {
   const role = input.role && input.role.length > 0 ? input.role : ABLO_REPLICATION_ROLE;
   const writeRole =
     input.writeRole && input.writeRole.length > 0 ? input.writeRole : ABLO_WRITE_ROLE;
   const tables = input.tables ?? [];
+  const provider = input.provider ?? 'generic';
 
   // The canonical recipe. We keep every statement except the three we must
   // replace to run unattended, identified by their leading verb so a change to
@@ -141,21 +147,35 @@ export function connectApplyPlan(input: {
   const recipe = connectSetupSql({ tables, role, writeRole });
   const isWal = (s: string): boolean => s.startsWith('ALTER SYSTEM SET wal_level');
   const isPublication = (s: string): boolean => s.startsWith('CREATE PUBLICATION');
-  const isRoleCreate = (s: string): boolean => /^CREATE ROLE /.test(s);
+  const isRoleCreate = (s: string): boolean => s.startsWith('CREATE ROLE ');
   const grants = recipe.filter((s) => !isWal(s) && !isPublication(s) && !isRoleCreate(s));
 
   const publicationTarget =
-    tables.length > 0
-      ? `FOR TABLE ${tables.map(quoteIdent).join(', ')}`
-      : 'FOR ALL TABLES';
+    tables.length > 0 ? `FOR TABLE ${tables.map(quoteIdent).join(', ')}` : 'FOR ALL TABLES';
+
+  // The write-ahead-log step: nothing to do when the cluster is already
+  // logical; a plain SQL statement on self-hosted; a console/setting action
+  // (no SQL) on managed providers that reject ALTER SYSTEM.
+  const walStep: readonly ApplyStep[] = input.walAlreadyLogical
+    ? []
+    : [
+        provider === 'generic'
+          ? {
+              key: 'wal',
+              title: 'Turn on logical replication',
+              detail: 'lets Ablo read your changes as they happen (needs a restart to take effect)',
+              sql: [`ALTER SYSTEM SET wal_level = 'logical';`],
+            }
+          : {
+              key: 'wal',
+              title: 'Turn on logical replication',
+              detail: logicalReplicationGuidance(provider),
+              sql: [],
+            },
+      ];
 
   return [
-    {
-      key: 'wal',
-      title: 'Turn on logical replication',
-      detail: 'lets Ablo read your changes as they happen',
-      sql: [`ALTER SYSTEM SET wal_level = 'logical';`],
-    },
+    ...walStep,
     {
       key: 'publication',
       title: 'Publish your tables to Ablo',
@@ -179,19 +199,20 @@ END $$;`,
     {
       key: 'write-role',
       title: 'Create a scoped writer role',
-      detail: `${writeRole} — writes rows through Ablo, and is subject to your row-level security`,
+      detail: `${writeRole} — writes rows through Ablo; where a table has row-level-security policies, they govern its writes too (it can't bypass them)`,
       sql: [
         idempotentRole(
           writeRole,
           'NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT',
-          input.credentials.writeClause,
+          input.credentials.writeClause
         ),
       ],
     },
     {
       key: 'grants',
       title: 'Grant each role exactly what it needs',
-      detail: 'read access for the reader, row writes for the writer — no ownership, no schema changes',
+      detail:
+        'read access for the reader, row writes for the writer — no ownership, no schema changes',
       sql: grants,
     },
   ];
@@ -226,31 +247,124 @@ function printPlan(steps: readonly ApplyStep[], showSql: boolean): void {
     }
   }
   console.log(
-    pc.dim(`\n  Your admin password stays on this machine.${showSql ? '' : ' (--show-sql for the exact statements)'}\n`),
+    pc.dim(
+      `\n  Your admin password stays on this machine.${showSql ? '' : ' (--show-sql for the exact statements)'}\n`
+    )
   );
 }
 
 /** Look up whether the connected admin role can create the scoped roles. */
 async function adminCanCreateRoles(sql: postgres.Sql): Promise<AdminCapabilityRow | null> {
   const rows = await sql.unsafe<AdminCapabilityRow[]>(
-    `SELECT rolname, rolsuper, rolcreaterole FROM pg_roles WHERE rolname = current_user`,
+    `SELECT rolname, rolsuper, rolcreaterole FROM pg_roles WHERE rolname = current_user`
   );
   return rows[0] ?? null;
 }
 
+export interface LedgerOwnershipRow {
+  readonly owner: string;
+  readonly is_owner: boolean;
+  readonly is_superuser: boolean;
+}
+
 /**
- * Run every step against the admin connection. The write-ahead-log step is the
- * one a managed provider (RDS, Neon) refuses — that is expected, not fatal: we
- * collect it as the single manual follow-up and keep going, because the roles
- * and publication still apply. A verifier the provider rejects is retried once
- * as plaintext over TLS, matching {@link createScopedRole}.
+ * The decision behind {@link unmanageableLedgerOwner}, split from the query so
+ * it is testable without a live connection: the blocking owner when a
+ * pre-existing ledger row is owned by another role and the admin is not a
+ * superuser, otherwise null (no ledger, already the owner, or superuser — all
+ * cases the plan can proceed through).
+ */
+export function ledgerBlockedBy(row: LedgerOwnershipRow | undefined): string | null {
+  if (!row || row.is_owner || row.is_superuser) return null;
+  return row.owner;
+}
+
+/**
+ * The owner of a pre-existing `ablo_idempotency` the connected admin can neither
+ * manage nor take over — or null when there is no such obstacle.
+ *
+ * A ledger carried over from an earlier Ablo integration may be owned by a
+ * different role. The setup grants the writer access to it and (on an upgrade)
+ * alters it, both of which Postgres reserves for the table's owner; and only the
+ * owner or a superuser can reassign ownership. So when the ledger exists and the
+ * admin is neither its owner nor a superuser, the plan cannot succeed — better
+ * to stop with the fix than to fail partway through role creation.
+ */
+async function unmanageableLedgerOwner(sql: postgres.Sql): Promise<string | null> {
+  const rows = await sql.unsafe<LedgerOwnershipRow[]>(
+    `SELECT pg_get_userbyid(c.relowner) AS owner,
+            c.relowner = r.oid AS is_owner,
+            r.rolsuper AS is_superuser
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       JOIN pg_roles r ON r.rolname = current_user
+      WHERE c.relkind = 'r'
+        AND c.relname = 'ablo_idempotency'
+        AND n.nspname = 'public'`
+  );
+  return ledgerBlockedBy(rows[0]);
+}
+
+export type DbProvider = 'neon' | 'supabase' | 'rds' | 'generic';
+
+/**
+ * Best-effort provider identification from the admin host. Enough to give the
+ * right logical-replication instructions: the managed providers don't accept
+ * `ALTER SYSTEM SET wal_level`, so printing it for them — as the recipe did for
+ * a `neon.tech` host — is a statement that can't work.
+ */
+export function detectProvider(hostOrTarget: string): DbProvider {
+  const host = hostOrTarget.toLowerCase();
+  if (host.includes('neon.tech')) return 'neon';
+  if (
+    host.includes('supabase.co') ||
+    host.includes('supabase.com') ||
+    host.includes('pooler.supabase')
+  ) {
+    return 'supabase';
+  }
+  if (host.includes('rds.amazonaws.com') || host.includes('.rds.')) return 'rds';
+  return 'generic';
+}
+
+/** How to reach `wal_level = logical` on each provider, in one plain sentence. */
+export function logicalReplicationGuidance(provider: DbProvider): string {
+  switch (provider) {
+    case 'neon':
+      return `enable logical replication in your Neon project settings — it can't be set over SQL`;
+    case 'supabase':
+      return `raise wal_level to logical in your Supabase project's database settings`;
+    case 'rds':
+      return `set rds.logical_replication = 1 in the instance's parameter group, then reboot`;
+    case 'generic':
+      return `run the ALTER SYSTEM above, then restart Postgres — wal_level is not reloadable`;
+  }
+}
+
+/** The cluster's current `wal_level`, or '' when it can't be read. `SHOW` is
+ *  permitted for every role, so this works even where `ALTER SYSTEM` does not. */
+async function currentWalLevel(sql: postgres.Sql): Promise<string> {
+  try {
+    const rows = await sql.unsafe<{ wal_level: string }[]>(`SHOW wal_level`);
+    return rows[0]?.wal_level ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Run every step against the admin connection. On self-hosted Postgres the
+ * write-ahead-log step's `ALTER SYSTEM` is best-effort — a managed provider that
+ * refuses it is not fatal here, because whether replication is actually ready is
+ * decided by reading `wal_level`, not by whether this statement ran. A verifier
+ * the provider rejects is retried once as plaintext over TLS, matching
+ * {@link createScopedRole}.
  */
 async function executePlan(
   sql: postgres.Sql,
   steps: readonly ApplyStep[],
-  rebuildPlaintext: () => readonly ApplyStep[],
-): Promise<{ readonly walDeferred: boolean }> {
-  let walDeferred = false;
+  rebuildPlaintext: () => readonly ApplyStep[]
+): Promise<void> {
   let plaintextSteps: readonly ApplyStep[] | null = null;
   for (const step of steps) {
     for (const statement of step.sql) {
@@ -258,9 +372,8 @@ async function executePlan(
         await sql.unsafe(statement);
       } catch (err) {
         if (step.key === 'wal') {
-          // Managed providers reject ALTER SYSTEM; that is the expected path, and
-          // the readiness re-check afterward reports it as the one thing to do.
-          walDeferred = true;
+          // Best-effort: a provider that rejects ALTER SYSTEM changes nothing
+          // here — readiness is judged by the wal_level read, not this statement.
           continue;
         }
         if (
@@ -278,11 +391,10 @@ async function executePlan(
       }
     }
   }
-  return { walDeferred };
 }
 
 /**
- * `ablo connect --apply` (and `--rotate`): create — or, for `--rotate`, re-key —
+ * `ablo connect apply` (and `rotate`): create — or, for `rotate`, re-key —
  * the two scoped roles, the publication, and (where allowed) the logical-decoding
  * setting, then register both scoped connection strings with Ablo directly.
  *
@@ -296,13 +408,15 @@ async function executePlan(
  */
 export async function runConnectApply(args: ConnectArgs): Promise<void> {
   const rotating = args.rotate;
-  const verb = rotating ? 'connect --rotate' : 'connect --apply';
+  const verb = rotating ? 'connect rotate' : 'connect apply';
 
   const adminUrl = args.url ?? readProjectAdminDatabaseUrl();
   if (!adminUrl) {
     console.error(
       pc.red('  No admin connection string.') +
-        pc.dim(` Pass ${pc.bold('--url <admin-conn>')} (or set ${pc.bold('DATABASE_URL')}) and re-run.`),
+        pc.dim(
+          ` Pass ${pc.bold('--url <admin-conn>')} (or set ${pc.bold('DATABASE_URL')}) and re-run.`
+        )
     );
     process.exit(1);
   }
@@ -326,21 +440,28 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     console.error(
       pc.red('  Not logged in.') +
         pc.dim(
-          ` Run ${pc.bold('ablo login')} (or set ${pc.bold('ABLO_API_KEY')}) so Ablo knows which project to register this database for.`,
-        ),
+          ` Run ${pc.bold('ablo login')} (or set ${pc.bold('ABLO_API_KEY')}) so Ablo knows which project to register this database for.`
+        )
     );
     process.exit(1);
   }
 
   console.log(
-    `\n  ${brand('ablo')} ${pc.dim(verb)}  ${pc.dim(rotating ? 're-key the scoped roles' : 'set up your database for Ablo')}\n`,
+    `\n  ${brand('ablo')} ${pc.dim(verb)}  ${pc.dim(rotating ? 're-key the scoped roles' : 'set up your database for Ablo')}\n`
   );
   console.log(
-    `  ${pc.dim('→')} ${pc.bold(target)}${adminSource === 'DATABASE_URL' ? pc.dim('  (admin via DATABASE_URL)') : ''}\n`,
+    `  ${pc.dim('→')} ${pc.bold(target)}${adminSource === 'DATABASE_URL' ? pc.dim('  (admin via DATABASE_URL)') : ''}\n`
   );
 
   // 1. Confirm the admin credential can actually create/alter roles.
-  const admin = postgres(adminUrl, { max: 1, prepare: false, connect_timeout: 10, onnotice: () => {} });
+  const admin = postgres(adminUrl, {
+    max: 1,
+    prepare: false,
+    connect_timeout: 10,
+    onnotice: () => {
+      // Swallow postgres NOTICE chatter (role already exists, etc.) — the plan narrates its own steps.
+    },
+  });
   let capability: AdminCapabilityRow | null;
   try {
     capability = await adminCanCreateRoles(admin);
@@ -354,13 +475,41 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     await admin.end({ timeout: 2 });
     console.error(
       pc.red(`  ${capability?.rolname ?? 'This role'} can't create roles.`) +
-        pc.dim(` Point ${pc.bold('--url')} at your owner/admin connection and re-run.`),
+        pc.dim(` Point ${pc.bold('--url')} at your owner/admin connection and re-run.`)
     );
     process.exit(1);
   }
 
+  // 1b. A ledger left by an earlier Ablo integration may be owned by another
+  // role. The plan grants the writer access to it — which Postgres reserves for
+  // the owner — so stop now with the fix rather than fail partway through.
+  const blockingOwner = await unmanageableLedgerOwner(admin).catch(() => null);
+  if (blockingOwner) {
+    await admin.end({ timeout: 2 });
+    console.error(
+      pc.red(
+        `\n  ${pc.bold('ablo_idempotency')} already exists on ${target}, owned by ${pc.bold(blockingOwner)}, ` +
+          `but you connected as ${pc.bold(capability.rolname)}.`
+      ) +
+        `\n  Ablo's setup grants the writer role access to this ledger, and Postgres reserves that\n` +
+        `  for the table's owner. Either re-run pointing ${pc.bold('--url')} at ${pc.bold(blockingOwner)}'s connection,\n` +
+        `  or drop the existing ledger so Ablo recreates it under this admin — it holds only\n` +
+        `  idempotency replay records, safe to drop when no commit is in flight:\n` +
+        `      ${pc.cyan('DROP TABLE ablo_idempotency;')}\n`
+    );
+    process.exit(1);
+  }
+
+  // 1c. Decide the write-ahead-log step from reality, not hope: read the current
+  // wal_level (a SHOW every role can run) and identify the provider. When it is
+  // already logical, the step drops out entirely; when it isn't, the plan and the
+  // follow-up both speak the provider's language instead of printing an
+  // ALTER SYSTEM that a managed host can't run.
+  const provider = detectProvider(target);
+  const walReady = (await currentWalLevel(admin)) === 'logical';
+
   // 2. Generate fresh role passwords and build the plan. Every stage is
-  // idempotent, so `--rotate` runs the same plan: an existing role has only its
+  // idempotent, so `rotate` runs the same plan: an existing role has only its
   // password re-keyed.
   const replicationPassword = generateRolePassword();
   const writePassword = generateRolePassword();
@@ -373,6 +522,8 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
         replicationClause: passwordClause(replicationPassword, mode),
         writeClause: passwordClause(writePassword, mode),
       },
+      walAlreadyLogical: walReady,
+      provider,
     });
   const steps = buildPlan('scram-verifier');
 
@@ -382,7 +533,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     if (!process.stdout.isTTY) {
       await admin.end({ timeout: 2 });
       console.error(
-        pc.dim(`  Re-run with ${pc.bold('--yes')} to apply this in a non-interactive session.\n`),
+        pc.dim(`  Re-run with ${pc.bold('--yes')} to apply this in a non-interactive session.\n`)
       );
       process.exit(1);
     }
@@ -392,21 +543,22 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     });
     if (isCancel(proceed) || !proceed) {
       await admin.end({ timeout: 2 });
-      console.log(pc.dim(`  Nothing applied. Run ${pc.bold('ablo connect')} to see the manual recipe.\n`));
+      console.log(
+        pc.dim(`  Nothing applied. Run ${pc.bold('ablo connect')} to see the manual recipe.\n`)
+      );
       process.exit(0);
     }
   }
 
   // 4. Apply.
-  let walDeferred = false;
   try {
-    ({ walDeferred } = await executePlan(admin, steps, () => buildPlan('plaintext')));
+    await executePlan(admin, steps, () => buildPlan('plaintext'));
   } catch (err) {
     await admin.end({ timeout: 2 }).catch(() => undefined);
     const pg = (err ?? {}) as PgErrorLike;
     console.error(
       pc.red(`\n  Setup stopped: ${pg.message ?? String(err)}`) +
-        pc.dim(`  Every step is safe to re-run.\n`),
+        pc.dim(`  Every step is safe to re-run.\n`)
     );
     process.exit(1);
   }
@@ -419,22 +571,31 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   const writeUrl = rewriteDatabaseUrl(adminUrl, writeRole, writePassword);
   console.log(`\n  ${pc.green('✓')} Roles ${rotating ? 're-keyed' : 'created'}.\n`);
 
-  // 6. If logical decoding still needs a restart, replication isn't ready, so
-  // registration would be refused. Name the one manual step and stop; re-running
-  // rotates the passwords, so nothing is left stranded.
-  if (walDeferred) {
-    console.log(
-      `  ${pc.yellow('!')} One step left — logical replication needs a restart.\n` +
-        pc.dim(`    RDS/Aurora: set rds.logical_replication=1, reboot.  Neon: enable it in settings.\n`) +
-        `\n  Then re-run:  ${pc.cyan(`npx ablo ${verb}`)}\n`,
+  // 6. If logical replication isn't on yet, registration would be refused, so the
+  // roles are ready but the source is not. This is an INCOMPLETE setup — exit
+  // non-zero so an unattended run can't read it as success — with the one
+  // provider-specific step left. Re-running rotates the passwords, so nothing is
+  // left stranded.
+  if (!walReady) {
+    console.error(
+      `  ${pc.yellow('!')} One step left — logical replication isn't on yet.\n` +
+        `    ${logicalReplicationGuidance(provider)}.\n` +
+        `\n  Then re-run:  ${pc.cyan(`npx ablo ${verb}`)}\n`
     );
-    process.exit(0);
+    process.exit(1);
   }
 
   // 7. Prove it locally where we can. A machine that can't dial the host says
   // nothing about whether Ablo can — the server re-checks from its own network at
   // registration — so a local dial failure is a note, not a stop.
-  const verifier = postgres(replicationUrl, { max: 1, prepare: false, connect_timeout: 10, onnotice: () => {} });
+  const verifier = postgres(replicationUrl, {
+    max: 1,
+    prepare: false,
+    connect_timeout: 10,
+    onnotice: () => {
+      // Swallow postgres NOTICE chatter — the readiness checklist reports its own findings.
+    },
+  });
   let items: readonly CheckItem[] | null;
   try {
     items = await probeReadiness(verifier);
@@ -454,7 +615,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // 8. Hand both scoped roles to Ablo directly. Nothing is left in your .env.
   // Registration includes Ablo's server-side read-back, so a success return is
   // proof the new credential works — and on failure we never exit success.
-  const apiUrl = (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
+  const apiUrl = apiBaseUrl();
   const registered = await registerDirectDataSource({
     apiUrl,
     apiKey,

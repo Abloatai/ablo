@@ -277,6 +277,7 @@ export const ERROR_CODES = {
   entity_not_found: wire('not_found', 404, false, 'No row exists with the requested id. It may have been deleted, or the id may belong to a different environment.'),
   model_not_found: wire('not_found', 404, false, 'No row of this model exists with the requested id. It may have been deleted, or the id may belong to a different environment.'),
   mutate_update_entity_not_found: wire('not_found', 404, false, 'The row targeted by this update does not exist — it may have been deleted since you read it. Re-read before retrying.'),
+  no_data_source_registered: wire('not_found', 404, false, 'No database is connected to this plane yet, so there is nothing to check. Connect one with `ablo connect apply`, then run the check again.'),
   task_id_missing: wire('server', 502, true, 'The task-create response arrived without a task id, so the result cannot be used. Retry the request.'),
 
   // ── data integrity / database constraints ──────────────────────────
@@ -450,7 +451,7 @@ export const ERROR_CODES = {
   query_invalid_boolean: wire('validation', 400, false, 'The query compared a boolean column against an invalid boolean literal.'),
   protocol_version_unsupported: wire('transport', 426, false, 'The client sync-protocol version is outside the range this server supports — upgrade the SDK (or the server was rolled back mid-fleet).'),
   database_unreachable: wire('validation', 400, false, "Ablo could not reach this database to check that it can stream replication. The connection string may be wrong, the host may not be reachable from Ablo's servers, or the credentials may not be accepted."),
-  database_not_replication_ready: wire('validation', 400, false, 'This database is not set up for logical replication yet. Every failing item — wal_level, the publication, the replication grant, a replica identity — is listed in the error details with its exact fix. `ablo connect` prints the one-time setup; `ablo connect --check` verifies it.'),
+  database_not_replication_ready: wire('validation', 400, false, 'This database is not set up for logical replication yet. Every failing item — wal_level, the publication, the replication grant, a replica identity — is listed in the error details with its exact fix. `ablo connect` prints the one-time setup; `ablo connect check` verifies it.'),
   replication_publication_drift: wire('validation', 400, false, 'Your schema maps to tables that are not members of the replication publication, so their changes silently never stream and the source looks frozen. The missing tables and the exact `ALTER PUBLICATION … ADD TABLE …` to add them are in the error details — Ablo never alters your database for you.'),
   query_unknown_relation: wire('validation', 400, false, 'The query references a relation the model does not define. Check the relation name against the schema.'),
   query_relation_target_unknown: wire('schema', 500, false, 'A relation in the query targets a model the schema does not define.'),

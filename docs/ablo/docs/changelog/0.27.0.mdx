@@ -7,8 +7,6 @@ changelog:
   category: "Features"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
-
 ### Minor Changes
 
 - **Claims can now be held for long-running work by heartbeating — on both transports.** A claim's TTL is crash cleanup, not a work estimate; work that outlives it (a 30-minute report, a long agent run) keeps its lease by beating. `claim({ heartbeat: true })` beats automatically until release; `held.heartbeat()` beats by hand. A lapsed lease answers the next beat with `AbloClaimedError` (`claim_lost`) — for a socketless worker, the failed beat _is_ the loss notification, and any write attempted under the old lease is independently rejected by its `readAt` guard.

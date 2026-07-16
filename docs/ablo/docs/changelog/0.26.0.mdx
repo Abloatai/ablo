@@ -7,8 +7,6 @@ changelog:
   category: "Features"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
-
 ### Minor Changes
 
 - **`ablo connect --register` works against any deployment.** Registering your database as an Ablo data source over logical replication is now a first-class path everywhere — the gate that could refuse a new connection-string registration is gone. Point `ablo connect --register` at your Postgres and Ablo begins consuming its replication stream while your application keeps owning the write path; registering the source _is_ the enable, with no tier or flag to choose. The signed `dataSource()` endpoint remains the explicit fallback for databases that can't grant replication.

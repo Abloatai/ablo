@@ -7,8 +7,6 @@ changelog:
   category: "Features"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
-
 ### Minor Changes
 
 - **Commits are now crash-durable — a sealed envelope replays the exact request after a restart, on both transports.** Before a batch reaches the wire, the WebSocket client seals it into one atomic outbox record: the stable idempotency key, the exact JSON-normalized ordered operations, and the source mutations it supersedes. Recovery replays the sealed request as it was sent — never re-projected from model state in the new process — and a multi-operation commit is only ever replayed whole, so an atomic A+B can't come back later as A and B separately.

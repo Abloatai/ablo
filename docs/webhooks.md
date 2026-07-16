@@ -1,30 +1,22 @@
 # Webhooks
 
-Ablo owns the ordered transaction log — the source of truth. **Webhooks are how
-that log reaches your database.** Ablo streams every committed change to an
-endpoint in your app as a signed event; your handler writes your own database.
+Ablo keeps an ordered transaction log of every committed change and coordinates
+the writers — people and agents — that produce it. Your rows live in your own
+database; Ablo holds only the log. **Webhooks stream that log to your systems as
+signed events:** every committed change is POSTed to an endpoint in your app, and
+your handler decides what to do with it.
 
 It's the same two-sided shape as Stripe: you call Ablo to make changes (the
-client), and Ablo calls you to persist them (this webhook). Ablo never holds your
-database credentials.
+client), and Ablo calls you with each change (this webhook). Webhooks are the
+*push* way to keep a store in step with the log — your own database, a warehouse,
+a search index, a background job. The *direct* alternative is `ablo connect`,
+where Ablo reads your write-ahead log and writes back through a scoped role. Either
+way your handler owns the write: the webhook path gives Ablo no database
+credentials at all.
 
 ## The loop
 
-```mermaid
-flowchart LR
-    App["Your app<br/>(the client)"]
-    subgraph Ablo["Ablo (hosted)"]
-        Log["Transaction log<br/><i>source of truth</i>"]
-    end
-    Clients["Other clients<br/>(live, optimistic)"]
-    Route["/api/ablo/[...all]<br/>(your webhook route)"]
-    DB[("Your database")]
-
-    App -->|write| Log
-    Log -->|realtime sync| Clients
-    Log -->|signed event| Route
-    Route -->|write| DB
-```
+![Your app writes to Ablo's ordered log — the source of truth, which holds the log and coordination only, never your rows. The log fans out two ways: realtime sync to live clients for an instant, optimistic UI, and a signed event to your webhook route, which writes the durable copy into your own database.](/the-loop.svg)
 
 There are two ways data flows out of Ablo, and they're for different jobs:
 
@@ -55,8 +47,8 @@ Every delivery is a batch of events. Each event:
 
 | field | meaning |
 |---|---|
-| `type` | `"<model>.<verb>"`, e.g. `task.updated` |
-| `model` | the model name (`task`) — the table to write |
+| `type` | `"<model>.<verb>"` with the model name lowercased, e.g. `task.updated` |
+| `model` | the model name exactly as declared in your schema — the table to write |
 | `objectId` | the changed row's id |
 | `data` | the post-change row, or `null` on delete (like Stripe's `event.data.object`) |
 | `syncId` | monotonic log position — **dedupe and order by this** |
@@ -138,12 +130,21 @@ npx ablo webhooks create https://yourapp.com/api/ablo/[...all]
 # ✓ Wrote ABLO_WEBHOOK_SECRET to .env.local (shown once)
 ```
 
+Scope which models fire and label the endpoint at creation with `--events` and
+`--description` (both optional; events default to `*` = every model):
+
+```bash
+npx ablo webhooks create https://yourapp.com/api/ablo/[...all] \
+  --events task,project --description "prod mirror"
+```
+
 Manage and inspect endpoints:
 
 ```bash
 npx ablo webhooks list          # endpoints + delivery health (status, cursor, last error)
 npx ablo webhooks roll <id>     # mint a fresh signing secret
 npx ablo webhooks enable <id>   # re-enable a disabled endpoint
+npx ablo webhooks rm <id>       # remove an endpoint
 ```
 
 Or call the API directly — the org is derived from your secret key:

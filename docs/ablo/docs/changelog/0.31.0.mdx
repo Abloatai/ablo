@@ -6,8 +6,6 @@ changelog:
   category: "Features"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
-
 ### Minor Changes
 
 Ablo's relationship with your database is unusual, and this release is about making the setup match it. You write through Ablo — `ablo.<model>.create`, `.update`, `.delete` — and Ablo lands each change in your own Postgres through a scoped role, then reads it back off your write-ahead log to confirm it landed. Your rows never leave your database; Ablo keeps only the ordered log that lets everyone writing to that database take turns. So "connecting a database" really means handing Ablo two narrow keys: one role that can stream and read, and one that can write rows and nothing else.

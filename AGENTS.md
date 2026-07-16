@@ -10,7 +10,7 @@ Don't hand-write the integration. Run the CLI; it generates the current-API sche
 
 - **Scaffold:** `npx ablo init --yes` — flag-driven, never prompts. Override defaults with `--framework <nextjs|vite|remix|vanilla>`, `--auth <apikey|…>`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login`. (Plain `ablo init` needs a TTY and will **HANG** in an agent/CI run — always pass `--yes`.)
 - **Auth:** set `ABLO_API_KEY` in the environment. Do **NOT** run `ablo login` — it opens a browser device flow and blocks an agent.
-- **Connect your database — logical replication (the primary path):** `npx ablo connect` prints the setup SQL (`wal_level=logical`, a publication, a `REPLICATION` role); `npx ablo connect --register` registers the source with Ablo in one step. Ablo **consumes your Postgres' logical-replication stream** — it never runs DDL on, writes to, owns, or migrates your database, and your application keeps the write path. Registration **is** the enable; there is no tier or flag to pick. (Ablo hosts only the transaction log + coordination, never your rows.)
+- **Connect your database — logical replication (the primary path):** `npx ablo connect` prints the setup SQL (`wal_level=logical`, a publication, a `REPLICATION` role); `npx ablo connect register` registers the source with Ablo in one step. Ablo **consumes your Postgres' logical-replication stream** — it never runs DDL on, writes to, owns, or migrates your database, and your application keeps the write path. Registration **is** the enable; there is no tier or flag to pick. (Ablo hosts only the transaction log + coordination, never your rows.)
 - **Fallback — signed Data Source endpoint** (DB can't grant a `REPLICATION` role): the generated `ablo/data-source.ts` exposes one route; Ablo sends signed requests and your app touches its own DB. **Only in this mode** does `npx ablo migrate` provision the adapter's bookkeeping tables (`ablo_outbox`, `ablo_idempotency`) plus your Ablo models — it does **not** touch your other tables. Keep your own migrations (drizzle-kit / prisma migrate) for auth and anything outside the Ablo schema.
 - **No database yet?** A sandbox `sk_test` key holds throwaway **test data** (Stripe-test-mode style) so you can try Ablo before connecting your own Postgres. Test-mode only — in production every row lives in your database.
 - **Adopt an existing DB schema:** `npx ablo pull prisma [path]` / `pull drizzle <module>` (lossless) or `pull` (live DB, lossy). Writes `ablo/schema.ts`.
@@ -33,7 +33,7 @@ Every model verb takes ONE options object. The common loop:
 
 1. **Read** the row — `await ablo.<model>.retrieve({ id })` (async; from the server) or `await ablo.<model>.list({ where })` for many. In React render, read synchronously with `useAblo((a) => a.<model>.get(id))`.
 2. **See who's active** (optional) — `ablo.<model>.claim.state({ id })` (synchronous; never blocks).
-3. **Claim** the row before changing it — `await using claim = await ablo.<model>.claim({ id, reason?, ttl? })`. If someone else holds it, this waits for them, then gives you the fresh row on `claim.data`. The claim auto-releases when it goes out of scope (`await using`).
+3. **Claim** the row before changing it — `await using claim = await ablo.<model>.claim({ id, description?, ttl? })`. If someone else holds it, this waits for them, then gives you the fresh row on `claim.data`. The claim auto-releases when it goes out of scope (`await using`).
 4. **Write** — `await ablo.<model>.update({ id: claim.data.id, data })`. Because you hold the claim, the write is rejected if the row changed underneath you.
 
 Keep coding assistants on this schema-backed path.
@@ -61,7 +61,7 @@ if (!report) throw new Error('Report not found');
 // row before resolving. Auto-released at the end of this scope (`await using`).
 await using claim = await ablo.weatherReports.claim({
   id: 'report_stockholm',
-  reason: 'forecasting',
+  description: 'forecasting',
   ttl: '2m',
 });
 const claimed = claim.data;

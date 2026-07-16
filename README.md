@@ -465,7 +465,7 @@ connects:
 
 | | How Ablo connects to your Postgres | Use when |
 | --- | --- | --- |
-| **`ablo connect`** (primary) | Sets up logical replication and a scoped writer role (`npx ablo connect --apply` does it end to end). Ablo writes your rows through the writer role and reads them back over the WAL to confirm — it writes rows but runs no DDL and owns no schema. | Your database can grant a `REPLICATION` role (most can). |
+| **`ablo connect`** (primary) | Sets up logical replication and a scoped writer role (`npx ablo connect apply` does it end to end). Ablo writes your rows through the writer role and reads them back over the WAL to confirm — it writes rows but runs no DDL and owns no schema. | Your database can grant a `REPLICATION` role (most can). |
 | **Signed endpoint** (fallback) | Your app exposes one route built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`); Ablo writes and confirms through it. Needs no replication setup. | Your database **can't** grant a replication role (a locked-down managed DB). |
 
 Your database is the system of record. See

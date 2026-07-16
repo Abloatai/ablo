@@ -48,6 +48,7 @@ import {
   type SchemaRecord,
   type IdentityRole,
   type EntityRole,
+  type TenantContextMapping,
 } from './schema.js';
 
 /** Current schema-JSON envelope version. Bump this on a breaking change to the
@@ -98,6 +99,8 @@ export interface SchemaJSON {
   readonly v: typeof SCHEMA_JSON_VERSION;
   readonly models: Record<string, ModelJSON>;
   readonly identityRoles: readonly IdentityRole[];
+  /** Optional so schemas pushed before ADR 0011 still parse (defaults to `[]`). */
+  readonly tenantContext?: readonly TenantContextMapping[];
 }
 
 // ── Serialize ────────────────────────────────────────────────────────────────
@@ -159,7 +162,12 @@ export function toSchemaJSON(schema: Schema): SchemaJSON {
       models[key] = modelToJSON(def);
     }
   }
-  return { v: SCHEMA_JSON_VERSION, models, identityRoles: schema.identityRoles };
+  return {
+    v: SCHEMA_JSON_VERSION,
+    models,
+    identityRoles: schema.identityRoles,
+    ...(schema.tenantContext.length > 0 ? { tenantContext: schema.tenantContext } : {}),
+  };
 }
 
 /** Serialize a `Schema` to a JSON string (the `ablo push` payload). */
@@ -276,6 +284,7 @@ export function fromSchemaJSON(json: SchemaJSON): Schema {
     models: models,
     validators: validators as Schema['validators'],
     identityRoles: json.identityRoles,
+    tenantContext: json.tenantContext ?? [],
   };
 }
 

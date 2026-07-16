@@ -62,6 +62,16 @@ export const DEFAULT_EXPORT = 'schema';
  *  the other CLI commands import. */
 export const DEFAULT_URL = ABLO_DEFAULT_BASE_URL;
 
+/**
+ * The Ablo control-plane origin the CLI calls, with any trailing slashes
+ * trimmed: `ABLO_API_URL` when set, otherwise {@link DEFAULT_URL}. Defined once
+ * so the connect commands — `check`, `register`, and `apply` — resolve the
+ * same origin instead of each re-deriving it and risking a subtle drift.
+ */
+export function apiBaseUrl(): string {
+  return (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
+}
+
 /** Formats a single migration signal — `{ model, field?, detail, shadowed? }` —
  *  for display. When `shadowed` is present, meaning a removal was diffed against
  *  an existing schema, a second line names the baseline it compares against: the
@@ -665,7 +675,7 @@ export async function push(argv: readonly string[]): Promise<void> {
         pc.dim(
           `  This is not a key problem — the push was authorized, but the target database refused ` +
             `to let the engine create tables (Postgres 42501). On the replication read path Ablo ` +
-            `never runs DDL: register your database as a data source with ${pc.bold('npx ablo connect --register')}, ` +
+            `never runs DDL: register your database as a data source with ${pc.bold('npx ablo connect register')}, ` +
             `and pushes to that environment record the schema as metadata only — no tables are created anywhere.`,
         ),
       );

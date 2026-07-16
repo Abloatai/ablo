@@ -269,28 +269,20 @@ export function persistDatabaseUrl(databaseUrl: string, cwd: string = process.cw
 }
 
 /**
- * Resolve the project's DATABASE_URL the way the app will: process env
- * first, then the env files frameworks load (`.env.local`, `.env`). The CLI
- * runs via `npx` without the app's env loader, so it reads the files itself.
+ * The variables the replication credential is read from — exactly one: the
+ * canonical `ABLO_REPLICATION_DATABASE_URL`. The deprecated `DATABASE_URL` alias
+ * was read here through 0.31.x and removed in 0.32.0 — reading a scoped string
+ * from the generic `DATABASE_URL` risked validating against the app's own
+ * database. `DATABASE_URL` keeps only its one honest job: the one-time admin
+ * input to `--apply` (see {@link readProjectAdminDatabaseUrl}).
  */
-/**
- * The variables the replication credential is read from, in precedence order —
- * exactly two: the canonical `ABLO_REPLICATION_DATABASE_URL`, and `DATABASE_URL`
- * as a single deprecated back-compat alias (see
- * {@link readProjectReplicationUrlWithSource}). No speculative middle: one
- * canonical name, at most one deprecated alias, never more. The alias is read
- * only for `--check` and refused for `--register` — reading a scoped string from
- * the generic `DATABASE_URL` risks validating against the app's own database.
- */
-export const REPLICATION_URL_VARS = ['ABLO_REPLICATION_DATABASE_URL', 'DATABASE_URL'] as const;
-
-/** The variable name `DATABASE_URL` support is scheduled to be removed in. */
-export const DATABASE_URL_REMOVAL_VERSION = '0.32.0';
+export const REPLICATION_URL_VARS = ['ABLO_REPLICATION_DATABASE_URL'] as const;
 
 /**
  * Resolve the replication credential and report which variable it came from —
- * `process.env` first, then the framework env files — so a caller can warn when
- * it resolved from the deprecated generic `DATABASE_URL`.
+ * `process.env` first, then the framework env files the app would load
+ * (`.env.local`, `.env`), since the CLI runs via `npx` without the app's env
+ * loader and must read those files itself.
  */
 export function readProjectReplicationUrlWithSource(
   cwd: string = process.cwd(),

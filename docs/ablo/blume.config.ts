@@ -66,6 +66,7 @@ export default defineConfig({
         label: "Concepts",
         items: [
           "/identity",
+          "/groups",
           "/coordination",
           "/concurrency-convention",
           "/interaction-model",

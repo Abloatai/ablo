@@ -6,8 +6,6 @@ changelog:
   category: "Fixes"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
-
 ### Patch Changes
 
 - **Writes land in your own database.** Connect a database with `ablo connect` and the models you already read become writable. `ablo.<model>.create`, `.update`, and `.delete` route through Ablo's commit chokepoint and into your database — no connection string in the client. A claim you hold is checked at the chokepoint before the write applies, so agents and people take turns on a row whether they reach it by reading from Ablo or by writing back to your own database.

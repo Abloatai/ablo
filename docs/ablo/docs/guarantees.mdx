@@ -2,8 +2,6 @@
 title: "Guarantees"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/docs/guarantees.md -- edit there, then run `npm run build:docs`. */}
-
 When an Ablo write succeeds, the server has accepted it — and when two people or
 agents touch the same row, Ablo coordinates them instead of letting one silently
 overwrite the other. This page is the precise list of what you can count on:
@@ -70,10 +68,8 @@ snapshot, the server rejects the write instead of applying stale reasoning.
 Advanced policies exist for controlled product flows:
 
 - `reject` fails the write when state moved.
-- `force` applies the write without stale protection.
-- `flag` accepts the write and marks it for product review.
-
-`merge` is not yet available.
+- `overwrite` applies the write without stale protection.
+- `notify` accepts the write and marks it for product review.
 
 ## Claim Coordination
 
@@ -152,9 +148,13 @@ separates workflow or deployment lanes sharing the same store.
 
 ## Storage Boundary
 
-Ablo does not need a customer database URL. When your own database is canonical,
-Ablo calls a signed Data Source endpoint and records the coordination result for
-receipts, realtime fanout, and audit. See [Connect Your Database](/data-sources).
+Your rows live in your database; Ablo holds only the transaction log and the
+coordination state. Writes enter Ablo's commit chokepoint and land in your
+Postgres through a scoped writer role, and the WAL echo confirms them
+(`queued` → `confirmed`). For a database that can't grant replication, Ablo
+forwards the write to a signed Data Source endpoint instead — the marked
+fallback. Either way Ablo never holds a database connection string. See
+[Connect Your Database](/data-sources).
 
 ## Writes
 

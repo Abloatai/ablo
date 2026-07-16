@@ -31,7 +31,7 @@ Point the CLI at it with `ABLO_API_URL=<baseURL> ABLO_API_KEY=<minted>`.
 
 ## Customer database for `connect` flows
 
-`connect --check/--register` locally probes `DATABASE_URL`, which needs
+`connect check/--register` locally probes `DATABASE_URL`, which needs
 `wal_level=logical`. Don't touch the user's main Postgres — init a throwaway
 cluster in the scratchpad:
 

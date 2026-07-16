@@ -48,6 +48,7 @@ import { adapterTableMigrations } from '../migrations.js';
 import {
   assertSourceIdempotencyIntent,
   assertSourceIdempotencyRetention,
+  SOURCE_IDEMPOTENCY_RETENTION,
   sourceChangeIntentHash,
 } from '../idempotency.js';
 import type { Schema, SchemaRecord } from '../../schema/schema.js';
@@ -247,9 +248,10 @@ export function drizzleDataSource<S extends SchemaRecord>(
         }
 
         await tx.execute(sql`
-          INSERT INTO ablo_idempotency (client_tx_id, response, request_hash)
+          INSERT INTO ablo_idempotency (client_tx_id, response, request_hash, expires_at)
           VALUES (
-            ${change.correlationId}, ${JSON.stringify(rows)}::jsonb, ${requestHash}
+            ${change.correlationId}, ${JSON.stringify(rows)}::jsonb, ${requestHash},
+            now() + ${SOURCE_IDEMPOTENCY_RETENTION}::interval
           )`);
         if (change.echo?.kind === 'postgres-wal') {
           await tx.execute(

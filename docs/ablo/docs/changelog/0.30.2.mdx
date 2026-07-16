@@ -6,8 +6,6 @@ changelog:
   category: "Fixes"
 ---
 
-{/* AUTO-GENERATED from packages/sync-engine/CHANGELOG.md -- edit there, then run `npm run build:docs`. */}
-
 ### Patch Changes
 
 - **`ablo connect --apply` sets up your database for you.** Connecting a database used to mean pasting a block of SQL into a psql prompt. Now one command does it. `--apply` creates the two scoped roles, publishes your tables, turns on logical replication where your provider allows, and points `DATABASE_URL` and `ABLO_WRITE_DATABASE_URL` at the new least-privilege roles. Then it checks its own work, reconnecting as the replication role to confirm the database is ready.

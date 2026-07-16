@@ -100,6 +100,55 @@ function camelToSnake(identifier: string): string {
 }
 
 /** Options for `defineSchema`. */
+/**
+ * A server-authored context value that can fill a customer's row-level-security
+ * GUC. Deliberately a closed set — every member is resolved by Ablo from the
+ * authenticated `ek_` and the plane, never from client-supplied data — so a
+ * mapping can forward the tenant identity Ablo already trusts but can never
+ * widen a writer's scope. Mirrors the fields the engine sets on the direct-write
+ * connection (`app.current_org_id`, `app.current_project_id`, …).
+ */
+export type TenantContextSource =
+  | 'orgId'
+  | 'projectId'
+  | 'environment'
+  | 'sandboxId'
+  | 'participantId'
+  | 'participantKind';
+
+/**
+ * Maps a Postgres session GUC the customer's RLS policies read to the Ablo
+ * context value that fills it. See {@link DefineSchemaOptions.tenantContext} and
+ * ADR 0011.
+ */
+export interface TenantContextMapping {
+  /** The GUC name the customer's policies read, e.g. `app.current_app_org_id`. */
+  readonly guc: string;
+  /** Which server-authored context value fills it. */
+  readonly from: TenantContextSource;
+}
+
+/**
+ * GUCs Ablo already sets on its direct-write connection. A `tenantContext`
+ * mapping FORWARDS Ablo's trusted context into a customer's own policy GUC — it
+ * may never reassign one of these, which would let a schema push relax the
+ * engine's own scoping, timeouts, or `row_security`. Shared with the engine's
+ * direct-write seam so authoring-time validation and the runtime guard read one
+ * list. See ADR 0011.
+ */
+export const RESERVED_TENANT_CONTEXT_GUCS: readonly string[] = [
+  'statement_timeout',
+  'lock_timeout',
+  'row_security',
+  'search_path',
+  'app.current_org_id',
+  'app.current_project_id',
+  'app.current_environment',
+  'app.current_sandbox_id',
+  'app.current_participant_id',
+  'app.current_participant_kind',
+];
+
 export interface DefineSchemaOptions {
   /**
    * How to translate camelCase JS field names into database column
@@ -130,6 +179,28 @@ export interface DefineSchemaOptions {
    * authentication provider attached to the identity.
    */
   readonly identityRoles?: readonly IdentityRole[];
+
+  /**
+   * Declares how Ablo's direct-write connection carries tenant context into the
+   * GUCs your row-level-security policies read (ADR 0011). Before every direct
+   * write, Ablo already sets a fixed bundle (`app.current_org_id`,
+   * `app.current_project_id`, …) with `SET LOCAL`. If your policies read a
+   * differently-named GUC that your own app sets per-connection — e.g. a
+   * restrictive policy on `current_setting('app.current_app_org_id')` — declare
+   * the mapping here so Ablo forwards its trusted context into that GUC too, and
+   * your RLS governs Ablo's writes:
+   *
+   * ```ts
+   * defineSchema({ ... }, {
+   *   tenantContext: [{ guc: 'app.current_app_org_id', from: 'orgId' }],
+   * })
+   * ```
+   *
+   * Do NOT carve a policy exception for the writer role — that exempts exactly
+   * the writes you want governed. Leave unset when your policies read the GUCs
+   * Ablo already sets (or when a table has no RLS). Empty array when unset.
+   */
+  readonly tenantContext?: readonly TenantContextMapping[];
 }
 
 // ── Schema definition ─────────────────────────────────────────────────────
@@ -202,6 +273,14 @@ export interface Schema<S extends SchemaRecord = SchemaRecord> {
    * to derive a participant's allowed sync-group set.
    */
   readonly identityRoles: readonly IdentityRole[];
+
+  /**
+   * Tenant-context GUC mappings registered via `defineSchema({...},
+   * { tenantContext })` (ADR 0011). The engine's direct-write path reads this to
+   * `SET LOCAL` each declared GUC from server-authored context before applying
+   * DML, so the customer's RLS governs Ablo's writes. Empty array when unset.
+   */
+  readonly tenantContext: readonly TenantContextMapping[];
 
   /**
    * Set only on a projection produced by `selectModels`/`omitModels`: the
@@ -594,6 +673,7 @@ export function defineSchema<const S extends SchemaRecord>(
   }
 
   validateSyncGroupSchema(resolvedModels);
+  validateTenantContext(options?.tenantContext ?? []);
 
   return {
     // Cast back to S: we only added values to optional fields that were
@@ -601,7 +681,49 @@ export function defineSchema<const S extends SchemaRecord>(
     models: resolvedModels as unknown as S,
     validators: validators as Schema<S>['validators'],
     identityRoles: options?.identityRoles ?? [],
+    tenantContext: options?.tenantContext ?? [],
   };
+}
+
+/**
+ * Reject tenant-context mappings that couldn't do what the author intends —
+ * caught here at definition time rather than silently dropped on the write path.
+ * A mapping must name a non-empty customer GUC, must not reassign one of the
+ * engine's reserved GUCs, and each GUC may be mapped at most once.
+ */
+function validateTenantContext(mappings: readonly TenantContextMapping[]): void {
+  const seen = new Set<string>();
+  for (const { guc } of mappings) {
+    const name = guc.trim();
+    if (name === '') {
+      throw new AbloValidationError(
+        `[defineSchema] tenantContext: a mapping has an empty \`guc\`. Name the ` +
+          `Postgres setting your row-level-security policies read, e.g. ` +
+          `\`{ guc: 'app.current_app_org_id', from: 'orgId' }\`.`,
+        { code: 'schema_definition_invalid', param: 'tenantContext' },
+      );
+    }
+    if (RESERVED_TENANT_CONTEXT_GUCS.includes(name)) {
+      throw new AbloValidationError(
+        `[defineSchema] tenantContext: \`${name}\` is a setting Ablo already ` +
+          `manages on its write connection, so a mapping can't reassign it — ` +
+          `that would let a schema relax the engine's own scoping. Point your ` +
+          `policies at a GUC your app owns (e.g. \`app.current_app_org_id\`) and ` +
+          `map Ablo's trusted context into that instead. Reserved: ` +
+          `${RESERVED_TENANT_CONTEXT_GUCS.join(', ')}.`,
+        { code: 'schema_definition_invalid', param: `tenantContext.${name}` },
+      );
+    }
+    if (seen.has(name)) {
+      throw new AbloValidationError(
+        `[defineSchema] tenantContext: \`${name}\` is mapped more than once. ` +
+          `A GUC takes exactly one source — keep the mapping you mean and drop ` +
+          `the duplicate.`,
+        { code: 'schema_definition_invalid', param: `tenantContext.${name}` },
+      );
+    }
+    seen.add(name);
+  }
 }
 
 /**

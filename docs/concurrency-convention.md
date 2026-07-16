@@ -161,7 +161,7 @@ and `currentValues` is empty (re-read the group).
 
 What the convention **guarantees**, and where it **stops**:
 
-1. **Engine surfaces, actor decides.** For `flag`/`merge` the engine never
+1. **Engine surfaces, actor decides.** Under `notify` the engine never
    repairs, merges, or re-plans. It reports `currentValues` and the actor (agent
    or human) owns the resolution. The engine does not distinguish them — it is
    actor-neutral by design.
@@ -179,7 +179,7 @@ What the convention **guarantees**, and where it **stops**:
    shared database, which are inherently reversible (prior value in
    `sync_deltas`). **Irreversible external side-effects** (emails, payments,
    third-party calls) are *out of scope* — the engine cannot hold or undo them,
-   so they must not be gated by `flag`/`merge`.
+   so they must not be gated by `notify`.
 
 5. **Defaults.** A plain write (no `readAt`) is last-writer-wins with **no**
    check. A guarded write with `readAt` but no `onStale` defaults to `reject`
@@ -202,7 +202,7 @@ What the convention **guarantees**, and where it **stops**:
 These are deliberately left open; they change behavior and are the user's call.
 
 - **Default disposition for agents.** Should an agent-participant guarded write
-  default to `flag` (philosophy-aligned: surface, don't force) instead of
+  default to `notify` (philosophy-aligned: surface, don't overwrite) instead of
   `reject` (back-compat)? Trade-off: alignment vs. a behavior change for existing
   agent callers.
 - **Read-deps through the policy seam.** Should read-set conflicts also pass

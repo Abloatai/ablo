@@ -446,7 +446,7 @@ scope.
 ```ts
 await using claim = await ablo.weatherReports.claim({
   id: reportId,
-  reason: 'forecasting',
+  description: 'forecasting',
 });
 const claimed = claim.data;
 if (!claimed) return;
@@ -513,7 +513,7 @@ them.
 | `update({ id, data, ...opts })`        | Update through the model client.                                                 |
 | `delete({ id, ...opts })`              | Delete through the model client.                                                 |
 | `claim.state({ id })`                  | See who is currently working on a row (synchronous).                             |
-| `claim({ id, reason?, ttl? })`         | Acquire a disposable handle: wait for your turn, re-read, and hold the row.       |
+| `claim({ id, description?, ttl? })`    | Acquire a disposable handle: wait for your turn, re-read, and hold the row.       |
 
 Keep first integrations on the model methods above. Every mutation and
 server-read verb takes one options object; only the synchronous `get(id)` stays

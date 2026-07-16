@@ -185,8 +185,9 @@ async function main() {
     console.log(`    npx ablo pull drizzle <module>         Generate schema.ts from a Drizzle schema (keeps enums + relations)`);
     console.log(`    npx ablo check                         Check your existing database fits the schema (read-only, creates no tables)`);
     console.log(`    npx ablo connect                       Connect a real database — prints the logical-replication setup SQL (the one way)`);
-    console.log(`    npx ablo connect --check               Validate DATABASE_URL is replication-ready (wal_level, publication, role, replica identity)`);
-    console.log(`    npx ablo connect --audit-infra         Read-only audit for deprecated Ablo sync infra in a customer DB`);
+    console.log(`    npx ablo connect check                 Validate DATABASE_URL is replication-ready (wal_level, publication, role, replica identity)`);
+    console.log(`    npx ablo connect scan                  Read-only audit for leftover Ablo sync infra in a customer DB`);
+    console.log(`    npx ablo connect deregister            Remove this project's data source — Ablo stops reading/writing it`);
     console.log(`    npx ablo migrate                       Provision your synced-model tables in your own Postgres (optional escape hatch — \`connect\` is the way)`);
     console.log(`    npx ablo migrate --dry-run             Print the SQL without executing (preview)`);
     console.log(`    npx ablo push                          Upload your schema definition to Ablo (metadata only — rows stay in your DB)`);
@@ -589,8 +590,8 @@ async function init(args: readonly string[] = []) {
     ...(storage === 'replication'
       ? [
           `Connect your database — ${pc.bold('npx ablo connect')} prints the one-time logical-replication setup SQL to run on your Postgres`,
-          `Verify it — ${pc.bold('npx ablo connect --check')} walks wal_level, the publication, the role, and replica identity, with the exact fix for anything missing`,
-          `Register it — ${pc.bold('npx ablo connect --register')} tells Ablo to start replicating; your app keeps writing through your own backend while Ablo tails the WAL`,
+          `Verify it — ${pc.bold('npx ablo connect check')} walks wal_level, the publication, the role, and replica identity, with the exact fix for anything missing`,
+          `Register it — ${pc.bold('npx ablo connect register')} tells Ablo to start replicating; your app keeps writing through your own backend while Ablo tails the WAL`,
         ]
       : [
           `Provision your DB: ${pc.bold('npx ablo migrate')} (creates your Ablo-model tables + the adapter tables; keep your own migrations for everything else), then mount ${pc.bold(`${abloDir}/data-source.ts`)} at ${pc.bold('/api/ablo/source')}`,
