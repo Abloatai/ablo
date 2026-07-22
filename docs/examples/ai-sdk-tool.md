@@ -1,87 +1,112 @@
 # AI SDK Tool
 
-When an AI agent updates a shared record from inside a tool call, you have a concurrency problem: another agent or a user might be editing the same row, and a naive write silently overwrites their change. This example shows the safe pattern — read the record, claim the row so anyone else waits their turn, write through a version-checked update, and release the claim automatically.
+> Put a claim-and-commit loop inside an AI SDK tool call.
 
-Claims don't lock. If another writer holds the row, `claim` waits for them, re-reads the fresh row, then hands it to you — so two writers serialize instead of clobbering.
+Use AI SDK for the agent loop and Ablo for the state boundary inside the tool.
+When an agent updates a shared record from inside a tool call you have a
+concurrency problem: another agent may be editing the same row, and a naive write
+silently overwrites it. This is the safe pattern — read the record, claim the row
+so anyone else waits their turn, write through a checked update, and release the
+claim automatically.
+
+Claims don't lock. If another writer holds the row, `claim` waits for them,
+re-reads the fresh row, then hands it to you — so two writers serialize instead
+of clobbering.
 
 ```ts
+// app/api/chat/route.ts
 import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z as schemaZ } from '@abloatai/ablo/schema';
 import { anthropic } from '@ai-sdk/anthropic';
-import { convertToModelMessages, streamText, tool, type UIMessage } from 'ai';
+import {
+  streamText,
+  tool,
+  convertToModelMessages,
+  stepCountIs,
+  type UIMessage,
+} from 'ai';
 import { z } from 'zod';
 
+export const runtime = 'nodejs';
+
 const schema = defineSchema({
-  weatherReports: model({
-    location: schemaZ.string(),
-    status: schemaZ.enum(['pending', 'ready']),
-    forecast: schemaZ.string().optional(),
+  tasks: model({
+    title: schemaZ.string(),
+    status: schemaZ.enum(['todo', 'doing', 'done']),
+    summary: schemaZ.string().optional(),
   }),
 });
 
 const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
+  transport: 'http',
 });
 
-const updateReport = tool({
-  description: 'Update a weather report in the product database.',
+const updateTask = tool({
+  description: 'Update a task in the product database.',
   inputSchema: z.object({
-    reportId: z.string(),
-    status: z.enum(['pending', 'ready']).optional(),
-    forecast: z.string().optional(),
+    taskId: z.string(),
+    status: z.enum(['todo', 'doing', 'done']).optional(),
+    summary: z.string().optional(),
   }),
-  execute: async ({ reportId, status, forecast }) => {
+  execute: async ({ taskId, status, summary }) => {
     await ablo.ready();
 
     // retrieve hits the server for the latest row (async — await it).
-    const report = await ablo.weatherReports.retrieve({ id: reportId });
-    if (!report) return { ok: false, reason: 'not_found' };
+    const task = await ablo.tasks.retrieve({ id: taskId });
+    if (!task) return { ok: false, reason: 'not_found' };
 
-    // If another agent or user already holds this row, claim waits for them
-    // to finish, re-reads the fresh row, then hands it back on `claim.data`.
-    // The claim is released automatically when it goes out of scope.
-    await using claim = await ablo.weatherReports.claim({
-      id: reportId,
+    // If another agent already holds this row, claim waits for them to finish,
+    // re-reads the fresh row, then hands it back on `claim.data`. The claim is
+    // released automatically when it goes out of scope.
+    await using claim = await ablo.tasks.claim({
+      id: taskId,
       description: 'editing',
       ttl: '2m',
     });
-    const claimed = claim.data;
 
-    // Because you hold the claim, this update is rejected if the row
-    // changed underneath you, instead of silently overwriting it.
-    const updated = await ablo.weatherReports.update({
-      id: claimed.id,
+    // Because you hold the claim, this update is rejected if the row changed
+    // underneath you, instead of silently overwriting it.
+    const updated = await ablo.tasks.update({
+      id: claim.data.id,
       data: {
-        status: status ?? claimed.status,
-        forecast: forecast ?? claimed.forecast,
+        status: status ?? claim.data.status,
+        summary: summary ?? claim.data.summary,
       },
+      wait: 'confirmed',
     });
 
-    return { ok: true, report: updated };
+    return { ok: true, task: updated };
   },
 });
 
 export async function POST(req: Request) {
-  // `useChat` posts UIMessage[]; the model is a server-bound provider instance,
-  // never read off the request body.
+  // useChat sends UIMessage[]; convert before handing to the model.
   const { messages }: { messages: UIMessage[] } = await req.json();
 
-  return streamText({
-    model: anthropic('claude-sonnet-4-6'),
+  const result = streamText({
+    // The model is a SERVER-bound provider instance — never sent from the client.
+    model: anthropic('claude-sonnet-5'),
     messages: await convertToModelMessages(messages),
-    tools: { updateReport },
-  }).toUIMessageStreamResponse();
+    tools: { updateTask },
+    stopWhen: stepCountIs(5),
+    maxOutputTokens: 2048,
+  });
+
+  return result.toUIMessageStreamResponse();
 }
 ```
 
 The model provider is interchangeable — swap `anthropic(...)` for any
-server-bound provider instance. What matters is that the route binds the model
-on the server (never trusting one sent in the request body), converts the
-incoming `UIMessage[]` with `convertToModelMessages`, and that the tool:
+server-bound provider instance. What matters is that the route binds the model on
+the server (never trusting one sent in the request body), converts the incoming
+`UIMessage[]` with `convertToModelMessages`, and that the tool:
 
-- reads the latest weather report with `retrieve` (a server read),
-- claims the row — if someone else holds it, the claim waits for them, then re-reads,
-- writes through `update`, which is rejected if the row changed underneath you,
-- releases the claim automatically when the handle goes out of scope,
-- waits for server confirmation.
+- reads the latest row with `retrieve` (a server read),
+- claims it for exclusive, ordered access — if someone else holds it, the claim
+  waits for them, then re-reads,
+- writes through the model resource, which is rejected if the row changed
+  underneath you,
+- waits for confirmation with `wait: 'confirmed'`,
+- and auto-releases the claim when the tool returns.

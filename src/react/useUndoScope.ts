@@ -1,16 +1,16 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { Schema } from '../schema/schema.js';
+import type { Schema } from '../transaction/schema/schema.js';
 import type { UndoScope, UndoScopeOptions } from '../mutators/UndoManager.js';
 import { UndoManager } from '../mutators/UndoManager.js';
-import type { ResolveSchema } from '../types/global.js';
+import type { ResolveSchema } from '../transaction/types/global.js';
 import { useSyncContext } from './context.js';
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 
 /**
  * Provides per-surface undo and redo for mutator invocations. Each named scope
- * owns an independent undo/redo stack, so different parts of your app — a deck
+ * owns an independent undo/redo stack, so different parts of your app — a main
  * editor, a sidebar form — can undo separately without stepping on each other.
  *
  * Wire the returned `scope` into `useMutators(schema, mutators, { undoScope:
@@ -19,8 +19,8 @@ import { AbloValidationError } from '../errors.js';
  * themselves; the manager moves the entry between the two stacks explicitly.
  *
  * @example
- * const { undo, redo, canUndo, canRedo, scope } = useUndoScope('deck-editor');
- * const mutate = useMutators(schema, deckMutators, { undoScope: scope });
+ * const { undo, redo, canUndo, canRedo, scope } = useUndoScope('report-editor');
+ * const mutate = useMutators(schema, reportMutators, { undoScope: scope });
  *
  * // Cmd+Z handler
  * useHotkey('mod+z', () => { if (canUndo) void undo(); });

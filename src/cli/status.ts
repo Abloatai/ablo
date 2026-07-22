@@ -18,9 +18,20 @@ import {
   type Mode,
   type ActiveProject,
 } from './config';
-import { resolveTarget, describeMismatch, type ResolvedTarget } from './target';
+import { resolveTarget, describeMismatches, type ResolvedTarget } from './target';
+import { credentialCapability } from './credentialCapability';
 import { brand } from './theme';
 import { apiBaseUrl } from './push';
+import { participantKindSchema } from '../transaction/coordination/schema.js';
+import {
+  fetchRoutingState,
+  fetchPushedSchema,
+  detectPoolerIn,
+  readLocalSchemaHash,
+  schemaDrift,
+  blockers,
+  type PushedModel,
+} from './readiness';
 
 function expiryLabel(iso: string): string {
   const ms = Date.parse(iso) - Date.now();
@@ -43,129 +54,10 @@ async function ping(apiUrl: string): Promise<boolean> {
   }
 }
 
-/** A model as the server reports it active for this key — pairing the schema key
- *  your local code addresses with the wire typename the engine routes on. */
-interface PushedModel {
-  key: string;
-  typename: string;
-  conflict: { user?: string; agent?: string; system?: string } | null;
-}
-interface PushedSchema {
-  active: boolean;
-  version?: number;
-  /** The deployed schema's content hash — the same value a running client
-   *  compares against when it warns about schema drift, so it can be matched
-   *  directly here. */
-  hash?: string;
-  pushedAt?: string | null;
-  models: PushedModel[];
-}
-
-/**
- * Fetch the schema currently active for this key's environment (`GET /api/schema`).
- * Best-effort: any failure — unreachable server, unauthorized key, or a server
- * too old to serve the route — returns null, so `status` falls back to its
- * shorter output rather than erroring. The key's scope determines which
- * environment is read; there is no environment argument to pass.
- */
-async function fetchPushedSchema(apiUrl: string, apiKey: string | undefined): Promise<PushedSchema | null> {
-  if (!apiKey) return null;
-  const ctrl = new AbortController();
-  const t = setTimeout(() => { ctrl.abort(); }, 3000);
-  try {
-    const res = await fetch(`${apiUrl}/api/schema`, {
-      headers: { authorization: `Bearer ${apiKey}` },
-      signal: ctrl.signal,
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as PushedSchema;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-/** The outcome of the data-plane probe. See {@link probeDataPlane}. */
-type DataPlaneProbe =
-  | { status: 'ok' }
-  | { status: 'no_database' }
-  | { status: 'intermittent'; ok: number; failed: number }
-  | { status: 'forbidden'; detail?: string }
-  | { status: 'unknown'; detail: string }
-  | { status: 'skipped' };
-
-/** One sample's outcome. `routed` means the request reached the customer's
- *  database (a missing row still counts); `no_route` means routing failed with
- *  `tenant_routing_failed` before any query ran. */
-type Sample = 'routed' | 'no_route' | { forbidden: string | undefined } | { other: string };
-
-async function sampleRead(apiUrl: string, apiKey: string, modelTypename: string, n: number): Promise<Sample> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => { ctrl.abort(); }, 4000);
-  try {
-    // A read by id for an id that does not exist. Routing to the customer's
-    // database happens before the query runs, so `entity_not_found` (404) is
-    // only reachable once routing has succeeded — a clean "the database
-    // answered" signal — while `tenant_routing_failed` means routing itself
-    // failed.
-    const res = await fetch(
-      `${apiUrl}/v1/models/${encodeURIComponent(modelTypename)}/__ablo_health_probe_${n}__`,
-      { headers: { authorization: `Bearer ${apiKey}` }, signal: ctrl.signal },
-    );
-    if (res.ok) return 'routed';
-    let code: string | undefined;
-    try {
-      const body = (await res.json()) as { code?: string; error?: { code?: string } };
-      code = body.code ?? body.error?.code;
-    } catch {
-      /* non-JSON */
-    }
-    if (code === 'entity_not_found') return 'routed';
-    if (code === 'tenant_routing_failed') return 'no_route';
-    if (res.status === 401 || res.status === 403) return { forbidden: code };
-    return { other: `${res.status}${code ? ` ${code}` : ''}` };
-  } catch {
-    return { other: 'unreachable' };
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-/**
- * Probe the data plane, not just the control plane. On its own, `ablo status`
- * reports that the API is reachable and a schema is pushed — both control-plane
- * facts — and can look healthy while reads and writes fail because the
- * organization's database isn't routable (a redeploy dropped the registration,
- * or the key targets an organization that never registered one). The
- * registration can also be intermittent, which a single read can't detect, so
- * this samples a few times and reports the worst case. The gap then surfaces
- * here, with a fix, rather than as an opaque failure mid-operation.
- */
-async function probeDataPlane(
-  apiUrl: string,
-  apiKey: string | undefined,
-  modelTypename: string,
-): Promise<DataPlaneProbe> {
-  if (!apiKey) return { status: 'skipped' };
-  const samples: Sample[] = [];
-  for (let i = 0; i < 3; i++) samples.push(await sampleRead(apiUrl, apiKey, modelTypename, i));
-
-  const forbidden = samples.find((s): s is { forbidden: string | undefined } => typeof s === 'object' && 'forbidden' in s);
-  if (forbidden) return { status: 'forbidden', detail: forbidden.forbidden };
-  const routed = samples.filter((s) => s === 'routed').length;
-  const noRoute = samples.filter((s) => s === 'no_route').length;
-  if (routed === samples.length) return { status: 'ok' };
-  if (noRoute === samples.length) return { status: 'no_database' };
-  if (routed > 0 && noRoute > 0) return { status: 'intermittent', ok: routed, failed: noRoute };
-  const other = samples.find((s): s is { other: string } => typeof s === 'object' && 'other' in s);
-  return { status: 'unknown', detail: other?.other ?? 'inconclusive' };
-}
-
 /** Compact `{user:overwrite,agent:reject}` (or '' when default). */
 function formatConflict(conflict: PushedModel['conflict']): string {
   if (!conflict) return '';
-  const parts = (['user', 'agent', 'system'] as const)
+  const parts = participantKindSchema.options
     .flatMap((k) => (conflict[k] ? [`${k}:${conflict[k]}`] : []));
   return parts.length ? `{${parts.join(',')}}` : '';
 }
@@ -182,11 +74,25 @@ function formatConflict(conflict: PushedModel['conflict']): string {
 function printTargetLines(
   target: ResolvedTarget | null,
   localProject: ActiveProject | undefined,
+  /** The org the stored key was minted for — the fallback when the server did
+   *  not confirm one. */
+  storedOrganizationId: string | undefined,
 ): void {
   const confirmed = target?.confirmed ?? null;
 
-  if (confirmed?.organizationId) {
-    console.log(`  ${pc.dim('org')}     ${pc.dim(confirmed.organizationId)}`);
+  // Always name the organization. `default` exists in every org, so a project
+  // line alone cannot tell two orgs apart — which is exactly how a key from
+  // one org reads as a familiar setup from another. Printing it only when the
+  // server confirmed one hid it precisely when an env key overrode the stored
+  // login, the case where it matters most.
+  const org = confirmed?.organizationId ?? storedOrganizationId;
+  if (org) {
+    const suffix = confirmed?.organizationId ? '' : ` ${pc.yellow('(unconfirmed)')}`;
+    console.log(`  ${pc.dim('org')}     ${pc.dim(org)}${suffix}`);
+  } else {
+    console.log(
+      `  ${pc.dim('org')}     ${pc.yellow('unknown')} ${pc.dim('(the server did not confirm one for this key)')}`,
+    );
   }
 
   let projectLine: string;
@@ -206,18 +112,20 @@ function printTargetLines(
   console.log(`  ${pc.dim('project')} ${projectLine}`);
 
   // The environment the key actually deploys to (from the server, else the key
-  // prefix) — which can differ from the CLI `mode` shown above.
+  // prefix) — which can differ from the CLI `mode` shown above. Labelled `acts
+  // on` rather than `env`: `mode` and `env` read as peers and are not, one being
+  // the setting you chose and the other what your credential actually reaches,
+  // and nothing in the two words said which was which.
   const env = confirmed?.environment ?? target?.keyEnv ?? null;
   if (env) {
     const suffix = confirmed ? '' : ` ${pc.yellow('(unconfirmed)')}`;
-    console.log(`  ${pc.dim('env')}     ${pc.bold(env)}${suffix}`);
+    console.log(`  ${pc.dim('acts on')} ${pc.bold(env)}${suffix}`);
   }
 
-  // Divergences between local intent and the confirmed plane — the "you selected
-  // one project but this key targets another" heads-up, in prose.
-  for (const m of target?.mismatches ?? []) {
-    console.log(`  ${pc.yellow('⚠')} ${pc.yellow(describeMismatch(m))}`);
-  }
+  // Divergence between local selection and the confirmed plane — one calm
+  // note; the target table above already states what this key acts on.
+  const divergence = describeMismatches(target?.mismatches ?? []);
+  if (divergence) console.log(`  ${pc.yellow('⚠')} ${pc.yellow(divergence)}`);
 }
 
 export async function status(args: string[] = []): Promise<void> {
@@ -247,6 +155,11 @@ export async function status(args: string[] = []): Promise<void> {
     const plan = resolvePushPlan();
     const activeProject = getActiveProject();
     const pushed = await fetchPushedSchema(apiUrl, effective.key);
+    const reachableForJson = await ping(apiUrl);
+    const dataSource = reachableForJson
+      ? (await fetchRoutingState(apiUrl, effective.key)).source
+      : ({ kind: 'unknown', detail: 'unreachable' } as const);
+    const driftForJson = schemaDrift(await readLocalSchemaHash(), pushed?.hash);
     const out = {
       mode,
       // The locally-active project (`ablo projects use`); null = org-default.
@@ -257,6 +170,10 @@ export async function status(args: string[] = []): Promise<void> {
       effectiveKey: {
         prefix: effective.key ? effective.key.slice(0, 12) : null,
         source: effective.source,
+        // What this credential can do. A pipeline that pushes can read it before
+        // running the push, rather than learning from the 403 — the same fact
+        // the human output prints, from the same place.
+        kind: credentialCapability(effective.key).kind,
       },
       keyPrefix: key.keyPrefix,
       keySource: key.keySource,
@@ -301,7 +218,20 @@ export async function status(args: string[] = []): Promise<void> {
           }
         : null,
       apiUrl,
-      reachable: await ping(apiUrl),
+      reachable: reachableForJson,
+      // What this plane has connected, and whether anything stands between this
+      // setup and a successful write. `blockers` empty is the machine-readable
+      // form of the human verdict: a caller can gate on it in CI rather than
+      // discovering the same facts from a failed request later.
+      dataSource,
+      drift: driftForJson,
+      blockers: blockers({
+        reachable: reachableForJson,
+        hasKey: Boolean(effective.key),
+        dataSource,
+        schemaPushed: Boolean(pushed?.active),
+        drift: driftForJson,
+      }),
     };
     console.log(JSON.stringify(out, null, 2));
     return;
@@ -331,22 +261,29 @@ export async function status(args: string[] = []): Promise<void> {
   // environment the key resolves to. Falls back to the local `ablo projects
   // use` preference (marked unconfirmed) only when the server didn't answer.
   const activeProject = getActiveProject();
-  printTargetLines(target, activeProject);
+  printTargetLines(target, activeProject, activeEntry?.organizationId);
 
+  // The stored pair. Each row carries what its key can DO, not just its prefix:
+  // `ablo login` stores an observe-only production key on purpose, and a reader
+  // who cannot see that from the inventory discovers it from a failed deploy.
   for (const m of ['sandbox', 'production'] as Mode[]) {
     const entry = getKeyEntry(m);
     const marker = m === mode ? pc.green('●') : pc.dim('○');
     if (entry) {
-      const exp = entry.expiresAt ? ` ${expiryLabel(entry.expiresAt)}` : '';
-      console.log(`  ${marker} ${m.padEnd(10)}  ${pc.dim(`${entry.apiKey.slice(0, 12)}…`)}${exp}`);
+      // Capability first, then expiry, joined the way `ablo logs` joins a line's
+      // fields — what the key can do outranks how long it lasts.
+      const facts = [
+        credentialCapability(entry.apiKey).label,
+        entry.expiresAt ? expiryLabel(entry.expiresAt) : '',
+      ].filter(Boolean);
+      const trail = facts.length ? ` ${pc.dim('·')} ${facts.join(pc.dim(' · '))}` : '';
+      console.log(
+        `  ${marker} ${m.padEnd(10)}  ${pc.dim(`${entry.apiKey.slice(0, 12)}…`)}${trail}`,
+      );
     } else {
       console.log(`  ${marker} ${m.padEnd(10)}  ${pc.dim('— no key')}`);
     }
   }
-
-  // The org for the data-probe caption below: server-confirmed when available,
-  // else the locally-stored one. (`printTargetLines` already displayed it.)
-  const org = target?.confirmed?.organizationId ?? activeEntry?.organizationId;
 
   // Which credential `ablo push` would present, and to which environment —
   // the diagnostic for "push demanded sk_test_ but I have a live key".
@@ -355,18 +292,56 @@ export async function status(args: string[] = []): Promise<void> {
     `  ${pc.dim('push')}    ${plan.apiKey ? `${pc.bold(plan.flow)} ${pc.dim(`with ${plan.apiKey.slice(0, 12)}… (${plan.source})`)}` : `${pc.bold(plan.flow)} ${pc.yellow('— no credential')} ${pc.dim(`(run ${pc.bold('ablo login')} or set ${pc.bold('ABLO_API_KEY')})`)}`}`,
   );
 
+  // Directly under the push line, because that is the line it qualifies: this
+  // is the state where the push returns 403, and the 403 used to be the first
+  // notice of it.
+  const capability = credentialCapability(effective.key);
+  if (capability.note) console.log(`    ${pc.dim(capability.note)}`);
+
   process.stdout.write(`  ${pc.dim('api')}     ${apiUrl}  `);
   const reachable = await ping(apiUrl);
   console.log(reachable ? pc.green('reachable') : pc.red('unreachable'));
+
+  // What the plane has connected. Asked directly rather than inferred from a
+  // read: reads can route while writes are held, so a read probe stays silent
+  // in exactly the state that refuses every write.
+  const introspectKey = effective.key;
+  const { source: dataSource, validation } = reachable
+    ? await fetchRoutingState(apiUrl, introspectKey)
+    : { source: { kind: 'unknown', detail: 'unreachable' } as const, validation: null };
+  if (dataSource.kind === 'connected') {
+    const how = [...new Set(dataSource.connections)].join(' + ');
+    const pooled = detectPoolerIn(dataSource.hosts);
+    const unreachable = validation && !validation.ok ? validation.message : undefined;
+    console.log(`  ${pc.dim('data')}    ${pc.green('✓')} ${pc.dim(`database connected to this plane (${how})`)}`);
+    // A pooled host is registered but cannot carry replication, and refuses in
+    // the words of a wrong password — worth naming before it is blamed on one.
+    if (pooled) {
+      console.log(
+        `          ${pc.yellow('⚠')} ${pc.dim(
+          `${pooled.host} is a connection pooler` +
+            (pooled.direct ? `; register the direct host instead: ${pooled.direct}` : '; register the direct host instead'),
+        )}`,
+      );
+    }
+    if (unreachable) {
+      console.log(`          ${pc.red('✗')} ${pc.dim(`Ablo could not reach it — ${unreachable}`)}`);
+    }
+  } else if (dataSource.kind === 'none') {
+    console.log(
+      `  ${pc.dim('data')}    ${pc.red('✗ no database connected to this plane')} ${pc.dim('— writes are held')}`,
+    );
+  } else if (reachable) {
+    console.log(`  ${pc.dim('data')}    ${pc.yellow('?')} ${pc.dim(`could not read the plane's databases (${dataSource.detail})`)}`);
+  }
 
   // The pushed schema is the one fact that explains most write failures: a
   // model's wire typename (what the engine routes on) can diverge from the
   // schema key the local code addresses. Surface it so a collision is obvious
   // before debugging a single write. Best-effort — silent if the server can't
   // be reached or is too old to answer.
+  const pushed = reachable ? await fetchPushedSchema(apiUrl, introspectKey) : null;
   if (reachable) {
-    const introspectKey = effective.key;
-    const pushed = await fetchPushedSchema(apiUrl, introspectKey);
     if (pushed?.active) {
       const when = pushed.pushedAt ? ` ${pc.dim(`@ ${pushed.pushedAt.slice(0, 10)}`)}` : '';
       const ver = pushed.version != null ? ` ${pc.dim(`(rev ${pushed.version})`)}` : '';
@@ -388,37 +363,43 @@ export async function status(args: string[] = []): Promise<void> {
       console.log(`  ${pc.dim('schema')}  ${pc.yellow('none pushed')} ${pc.dim(`(run ${pc.bold('ablo push')} or ${pc.bold('ablo dev')})`)}`);
     }
 
-    // Data-plane health — the check that catches a green status that is actually broken.
-    const firstPushedModel = pushed?.active ? pushed.models[0] : undefined;
-    if (firstPushedModel !== undefined) {
-      const probe = await probeDataPlane(apiUrl, introspectKey, firstPushedModel.typename);
-      // Deliberately no green "healthy" line. This probe carries only the API
-      // key, so it can resolve a different tenant than the typed SDK does (the
-      // SDK's identity also carries project and sandbox), which makes an apparent
-      // "ok" here not trustworthy enough to reassure. The probe only warns: it
-      // speaks when it catches a definite failure and stays silent otherwise.
-      if (probe.status === 'no_database') {
-        console.log(`  ${pc.dim('data')}    ${pc.red('✗ no database registered')}${org ? pc.dim(` for org ${org}`) : ''}`);
-        console.log(
-          `          ${pc.dim(
-            `reads/writes will fail with ${pc.bold('tenant_routing_failed')}. Connect one with ` +
-              `${pc.bold('ablo connect')}, or point ${pc.bold('ABLO_API_KEY')} at an org that has a database.`,
-          )}`,
-        );
-      } else if (probe.status === 'intermittent') {
-        console.log(`  ${pc.dim('data')}    ${pc.red(`✗ database routing is intermittent`)} ${pc.dim(`(${probe.ok} ok / ${probe.failed} failed of ${probe.ok + probe.failed})`)}${org ? pc.dim(` for org ${org}`) : ''}`);
-        console.log(
-          `          ${pc.dim(
-            `some reads/writes fail with ${pc.bold('tenant_routing_failed')} — the registration is unstable. ` +
-              `Re-establish it with ${pc.bold('ablo connect')} (or check for a recent server redeploy).`,
-          )}`,
-        );
-      } else if (probe.status === 'forbidden') {
-        console.log(`  ${pc.dim('data')}    ${pc.yellow('? key not authorized to read')}${probe.detail ? pc.dim(` (${probe.detail})`) : ''}`);
-      } else if (probe.status === 'unknown') {
-        console.log(`  ${pc.dim('data')}    ${pc.yellow(`? data-plane check inconclusive (${probe.detail})`)}`);
-      }
+  }
+
+  // Drift: the schema this tree would push against the one the server runs. A
+  // client built on the local one is rejected at connect time, which used to
+  // surface only as a paragraph in a browser console at runtime.
+  const drift = schemaDrift(await readLocalSchemaHash(), pushed?.hash);
+  if (drift) {
+    console.log(
+      `  ${pc.dim('drift')}   ${pc.red('✗ local schema differs from the server')} ` +
+        pc.dim(`(local ${drift.local}, server ${drift.server})`),
+    );
+  }
+
+  // The bottom line. `status` previously reported each fact and left the reader
+  // to conclude; every fact could read as fine while nothing could be written.
+  // It now states whether a write would succeed, because that is the question
+  // being asked.
+  const found = blockers({
+    reachable,
+    hasKey: Boolean(effective.key),
+    dataSource,
+    schemaPushed: Boolean(pushed?.active),
+    drift,
+  });
+  console.log();
+  if (found.length > 0) {
+    console.log(`  ${pc.red('✗')} ${pc.bold('writes would fail right now')}`);
+    for (const b of found) {
+      console.log(`    ${pc.dim('·')} ${b.problem}`);
+      console.log(`      ${pc.dim(b.fix)}`);
     }
+  } else if (dataSource.kind === 'unknown') {
+    console.log(
+      `  ${pc.yellow('?')} ${pc.dim("nothing is blocking a write, but this key could not read the plane's databases — some checks were skipped")}`,
+    );
+  } else {
+    console.log(`  ${pc.green('✓')} ${pc.dim('ready — a write should succeed')}`);
   }
 
   console.log();

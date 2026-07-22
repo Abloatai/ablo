@@ -36,7 +36,7 @@ import {
   type ResponseFrame,
   type ReadyFrame,
 } from './connectorProtocol.js';
-import { ABLO_HOSTED_HTTP_BASE_URL } from '../client/hostedEndpoints.js';
+import { ABLO_HOSTED_HTTP_BASE_URL } from '../transaction/auth/hostedEndpoints.js';
 
 /**
  * The default Ablo base URL the connector dials, to which it appends

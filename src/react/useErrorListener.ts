@@ -2,7 +2,7 @@
 
 import { useContext, useEffect, useRef } from 'react';
 import { AbloInternalContext } from './internalContext.js';
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 
 /**
  * Registers a callback that runs whenever the provider surfaces an error. This

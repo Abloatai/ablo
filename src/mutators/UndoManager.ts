@@ -4,8 +4,8 @@
  * operations; `undo()` pops the most recent group and replays those inverses
  * without recording them, then moves the entry onto the redo stack.
  *
- * History is divided into named scopes, one per surface — a deck editor, a
- * spreadsheet, and so on — reached through {@link UndoManager.getScope}. Undo in
+ * History is divided into named scopes, one per surface — a report editor, a
+ * ledger grid, and so on — reached through {@link UndoManager.getScope}. Undo in
  * one surface never affects another.
  *
  * Two things to know about its reach. History lives in memory and does not
@@ -14,7 +14,7 @@
  * {@link UndoScope.clear} on a sync error if you need strict correctness.
  */
 
-import type { Schema } from '../schema/schema.js';
+import type { Schema } from '../transaction/schema/schema.js';
 import { getContext } from '../context.js';
 import type { SyncStoreContract, LocalMutation } from '../react/context.js';
 import { createTransaction, type Transaction } from './Transaction.js';
@@ -53,8 +53,8 @@ export interface UndoScopeOptions {
   conflictPolicy?: UndoConflictPolicy;
   /**
    * A predicate selecting which models this surface owns. The scope records only
-   * mutations whose resolved schema key passes it, so, for example, a spreadsheet
-   * edit never lands on a deck editor's undo stack. Omit it to track every model,
+   * mutations whose resolved schema key passes it, so, for example, a ledger
+   * edit never lands on a report editor's undo stack. Omit it to track every model,
    * which is fine for a single-surface app but wrong when two surfaces with
    * independent undo share one store.
    */
@@ -177,9 +177,9 @@ export class UndoScope<S extends Schema> {
     this.tracksModel = options.tracksModel;
 
     // Build the map from registered name to schema key. The mutation stream
-    // reports a model's registered name (for example `'SlideLayer'`), but inverse
+    // reports a model's registered name (for example `'Block'`), but inverse
     // operations and the replay transaction are keyed by the schema key (for
-    // example `'slideLayers'`), so map every reasonable spelling to the schema key.
+    // example `'blocks'`), so map every reasonable spelling to the schema key.
     for (const schemaKey of Object.keys(this.schema.models)) {
       const def = (this.schema.models as Record<string, { typename?: string }>)[schemaKey];
       const typename = def?.typename ?? schemaKey;
@@ -307,7 +307,7 @@ export class UndoScope<S extends Schema> {
    * The stream listener, and the only place stream-recorded entries originate. It
    * skips replay echoes and out-of-scope models, derives the forward and inverse
    * operations from the mutation's `data` and `previousData`, and defers the stack
-   * push to a per-tick flush, so a burst of writes — aligning five layers at once,
+   * push to a per-tick flush, so a burst of writes — aligning five blocks at once,
    * say — becomes a single undo step.
    */
   private onLocalMutation(m: LocalMutation): void {

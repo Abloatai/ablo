@@ -20,7 +20,7 @@
  * directly and export its result however that framework expects.
  */
 
-import type { SchemaRecord } from '../schema/schema.js';
+import type { SchemaRecord } from '../transaction/schema/schema.js';
 import { dataSource, type DataSourceOptions } from './factory.js';
 
 /**

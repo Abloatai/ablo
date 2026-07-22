@@ -1,7 +1,9 @@
 # Webhooks
 
+> Stream the committed transaction log to your own systems as signed events.
+
 Ablo keeps an ordered transaction log of every committed change and coordinates
-the writers — people and agents — that produce it. Your rows live in your own
+the writers — agents, and the people alongside them — that produce it. Your rows live in your own
 database; Ablo holds only the log. **Webhooks stream that log to your systems as
 signed events:** every committed change is POSTed to an endpoint in your app, and
 your handler decides what to do with it.

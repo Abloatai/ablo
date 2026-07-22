@@ -1,7 +1,7 @@
 import type { SyncWebSocket } from './SyncWebSocket.js';
-import type { Schema, SchemaRecord } from '../schema/schema.js';
-import { scopeKindOf, type ModelDef } from '../schema/model.js';
-import { AbloConnectionError, AbloValidationError } from '../errors.js';
+import type { Schema, SchemaRecord } from '../transaction/schema/schema.js';
+import { scopeKindOf, type ModelDef } from '../transaction/schema/model.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import type {
   Claim,
   Activity,
@@ -11,7 +11,12 @@ import type {
   Peer,
   PresenceStream,
   PresenceTarget,
-} from '../types/streams.js';
+} from '../transaction/types/streams.js';
+import {
+  subTarget,
+  streamTarget,
+  wireTarget,
+} from '../transaction/coordination/index.js';
 import type { AttachableClaimStream } from './createClaimStream.js';
 
 /**
@@ -89,7 +94,7 @@ export interface ScopedClaimOptions {
   /** Peer-visible description of the work. Defaults to `'editing'`. */
   readonly description?: string;
   /** How long the claim lives; the server expires it automatically after this. */
-  readonly ttl?: import('../types/streams.js').Duration;
+  readonly ttl?: import('../transaction/types/streams.js').Duration;
 }
 
 export interface ScopedClaims {
@@ -132,7 +137,8 @@ export interface ParticipantManager {
 
 export interface ParticipantManagerConfig {
   readonly ready: () => Promise<void>;
-  readonly getTransport: () => SyncWebSocket | null;
+  /** The connection, host-built and stable for the client's lifetime. */
+  readonly transport: SyncWebSocket;
   readonly presence: PresenceStream;
   readonly claims: AttachableClaimStream;
   readonly schema?: Schema;
@@ -155,13 +161,9 @@ export function createParticipantManager(
       );
 
       await config.ready();
-      const transport = config.getTransport();
-      if (!transport) {
-        throw new AbloConnectionError(
-          'Ablo participant join failed: WebSocket is not connected',
-          { code: 'ws_not_ready' },
-        );
-      }
+      // Not-connected joins surface through `sendClaim`'s diagnosed
+      // rejection below; a scopeless join needs no wire send at all.
+      const transport = config.transport;
 
       const claimId = createParticipantClaimId();
       if (syncGroups.length > 0) {
@@ -225,13 +227,29 @@ export function resolveParticipantSyncGroups(
   return out;
 }
 
+/**
+ * The group kind for a model, in the wire dialect every plane shares: a
+ * declared scope root wins; otherwise the lowercased typename — the same
+ * token the commit plane and claim targets use (`wireModel`). Never the
+ * camelCase schema key: the server validates inbound subscription groups
+ * against a lowercase-only grammar, so a key like `reportBlocks` would be
+ * rejected as malformed on subscribe — and even a lowercase key would put
+ * this client in a different group than a peer who resolved the same row
+ * through an entity ref, so the two would never see each other's claims.
+ */
+function groupKindForModel(def: ModelDef, key: string): string {
+  return scopeKindOf(def, key) ?? (def.typename ?? key).toLowerCase();
+}
+
 export function syncGroupFromEntityRef(
   ref: ClaimTarget,
   schema?: Schema,
 ): string {
   const match = findModelForEntityRef(ref, schema);
-  const kind = match ? scopeKindOf(match.def, match.key) : undefined;
-  return `${kind ?? ref.type.toLowerCase()}:${ref.id}`;
+  const kind = match
+    ? groupKindForModel(match.def, match.key)
+    : ref.type.toLowerCase();
+  return `${kind}:${ref.id}`;
 }
 
 function syncGroupFromSchemaKey(
@@ -240,8 +258,8 @@ function syncGroupFromSchemaKey(
   schema?: Schema,
 ): string {
   const def = schema?.models?.[schemaKey];
-  const kind = def ? scopeKindOf(def, schemaKey) : undefined;
-  return `${kind ?? schemaKey}:${id}`;
+  const kind = def ? groupKindForModel(def, schemaKey) : schemaKey.toLowerCase();
+  return `${kind}:${id}`;
 }
 
 function findModelForEntityRef(
@@ -492,12 +510,8 @@ function createJoinedParticipant(args: {
 
 function activityFromTarget(target: ClaimTarget): Omit<Activity, 'action'> {
   return {
-    entityType: target.type,
-    entityId: target.id,
-    path: target.path,
-    range: target.range,
-    field: target.field,
-    meta: target.meta,
+    ...wireTarget(target),
+    ...subTarget(target),
   };
 }
 
@@ -510,12 +524,8 @@ function presenceMatchesParticipant(
   if (!target) return true;
   return targetsOverlap(
     {
-      type: entry.activity.entityType,
-      id: entry.activity.entityId,
-      path: entry.activity.path,
-      range: entry.activity.range,
-      field: entry.activity.field,
-      meta: entry.activity.meta,
+      ...streamTarget(entry.activity),
+      ...subTarget(entry.activity),
     },
     target,
   );

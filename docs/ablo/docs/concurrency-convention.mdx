@@ -1,5 +1,8 @@
 ---
 title: "Concurrency Convention"
+description: "The governing rule for how Ablo resolves concurrent writes to shared state."
+sidebar:
+  icon: git-merge
 ---
 
 > The governing convention for how Ablo resolves concurrent writes to shared
@@ -37,8 +40,8 @@ notification when you didn't, and the premise moved under you.
 
 ## 2. The dispositions (`onStale`)
 
-Every guarded write (and every read dependency, §4) declares how a stale premise
-should be handled. Three modes, split by whether they **force** an outcome:
+Every guarded write (and every premise declared in §4) says what should happen
+when it goes stale. Three modes, split by whether they **force** an outcome:
 
 | mode | coercive? | what the engine does | who resolves | use when |
 |---|---|---|---|---|
@@ -52,43 +55,44 @@ should be handled. Three modes, split by whether they **force** an outcome:
 
 ---
 
-## 3. What is checked: two footprints
+## 3. What is checked: two premises
 
-A conflict is a **footprint intersection** — your operation's footprint overlaps
-a concurrent delta. Ablo checks two footprints, and they are independent:
+A conflict is a **premise intersection** — what your operation was based on
+overlaps a concurrent delta. Ablo checks two premises, and they are independent.
+They differ only in what declared them:
 
-| footprint | declared by | question | scope |
+| premise | declared by | question | scope |
 |---|---|---|---|
 | **Write-target** | per-op `readAt` | "did a row I'm **writing** change since I read it?" | the rows in `operations[]` |
-| **Read-set** | batch-level `reads[]` | "did anything I **looked at** change since I read it?" | rows/groups in `reads[]`, even if not written |
+| **Batch** | batch-level `reads[]` | "did anything I **looked at** change since I read it?" | rows/groups in `reads[]`, even if not written |
 
 The write-target check alone is the narrow case the canary anomaly defeats: an
 agent reads `deal.stage`, writes `task.status`, and a peer moves `deal.stage` —
-`task` never changed, so a write-target-only check waves it through. The read-set
-closes that gap.
+`task` never changed, so a write-target-only check waves it through. The batch
+premise closes that gap.
 
 ---
 
-## 4. The read-set (`reads[]`)
+## 4. The batch premise (`reads[]`)
 
-A commit may declare, at the batch level, the premises its writes depended on.
+A commit may declare, at the batch level, what its writes were based on.
 Two granularities, developer's choice per entry:
 
 ```ts
 reads: [
-  { model: 'Slide', id: 's-1', readAt: N, fields?: ['title'] }, // ROW premise
-  { group: 'deck:abc', readAt: N, onStale: 'notify' },          // GROUP premise
+  { model: 'Document', id: 's-1', readAt: N, fields?: ['title'] }, // ROW premise
+  { group: 'workspace:abc', readAt: N, onStale: 'notify' },          // GROUP premise
 ]
 ```
 
 - **Row** — did this specific row (optionally these fields) change? The literal
   per-object premise.
 - **Group** — did *anything* in this sync group change? `group` is a sync-group
-  key (`deck:abc`, `slide:s1`, `org:X`) — the same unit a participant **watches
+  key (`workspace:abc`, `document:s1`, `org:X`) — the same unit a participant **watches
   and claims**. This is the more Ablo-native granularity.
 
-**Boundary — a stale read fires over the whole batch.** A read dependency is a
-premise for *all* the writes in the commit, so its disposition governs the batch:
+**Boundary — a stale premise fires over the whole batch.** Each entry covers
+*all* the writes in the commit, so its disposition governs the batch:
 `reject` aborts it, `notify` holds **every** write and notifies, `overwrite`
 lets them land. Per-entry `onStale` defaults to `reject`.
 
@@ -154,7 +158,7 @@ function reconcile(n: StaleNotification) {
 
 The loop **terminates** because each retry advances `readAt` to `observedSyncId`;
 a peer that keeps writing only ever notifies you against a *newer* baseline, never
-the same one twice. A group read-dep reconciles identically, except `group` is set
+the same one twice. A group premise reconciles identically, except `group` is set
 and `currentValues` is empty (re-read the group).
 
 ---
@@ -188,7 +192,7 @@ What the convention **guarantees**, and where it **stops**:
    (back-compat). *Open decision (§7).*
 
 6. **Policy seam.** Custom `ConflictPolicy` functions see **write-target**
-   conflicts (`stale_context` / `claim_held`). **Read-set** conflicts are
+   conflicts (`stale_context` / `claim_held`). **Batch-premise** conflicts are
    currently resolved directly via each entry's `onStale`, not through the policy
    seam. *Open decision (§7).*
 
@@ -207,18 +211,21 @@ These are deliberately left open; they change behavior and are the user's call.
   default to `notify` (philosophy-aligned: surface, don't overwrite) instead of
   `reject` (back-compat)? Trade-off: alignment vs. a behavior change for existing
   agent callers.
-- **Read-deps through the policy seam.** Should read-set conflicts also pass
-  through `ConflictPolicy` (requires a group-aware conflict shape), or stay on
-  the direct `onStale` mapping?
+- **Batch premises through the policy seam.** Should premise conflicts also
+  pass through `ConflictPolicy` (requires a group-aware conflict shape), or stay
+  on the direct `onStale` mapping?
 
 ---
 
 ## 8. Out of scope
 
 - Irreversible external side-effects (§6.4) — not gated by this convention.
-- Cross-object *serializability proof*. The read-set is a sound premise check,
-  not a full precedence-graph guarantee; it needs declared reads to catch a
-  premise, and a caller that declares none gets only write-target checking.
+- Cross-object *serializability proof*. A batch premise is a sound check, not
+  a full precedence-graph guarantee; it catches only what the caller declared.
+  A caller that declares nothing gets **no check at all** — not write-target
+  checking, which needs a `readAt` to check against. A plain write is
+  last-writer-wins, as §6.5 says. The floor is zero, and closing that gap is the
+  subject of ADR 0018.
 - Identity → participant-kind mapping. `writtenBy.kind` reports whatever
   authenticated (an `sk_` key resolves to `system`, not `agent`); how identities
   map to kinds is a separate concern.

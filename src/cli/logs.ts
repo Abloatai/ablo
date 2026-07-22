@@ -12,7 +12,13 @@
  *   ablo logs --since 15m --json  # last 15m as NDJSON, then stream
  */
 
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
+import {
+  parseFeedCursor,
+  formatFeedCursor,
+  feedCursorAdvanced,
+  FEED_CURSOR_START,
+} from '../transaction/wire/index.js';
 import pc from 'picocolors';
 import { resolveApiKey, normalizeMode, type Mode } from './config';
 import { brand } from './theme';
@@ -140,7 +146,7 @@ export async function logs(argv: readonly string[]): Promise<void> {
   const baseUrl = apiBaseUrl();
   const since = resolveSince(args.since);
 
-  async function fetchPage(params: Record<string, string>): Promise<{ events: LogEvent[]; cursor: number } | null> {
+  async function fetchPage(params: Record<string, string>): Promise<{ events: LogEvent[]; cursor: string } | null> {
     const qs = new URLSearchParams(params).toString();
     const res = await fetch(`${baseUrl}/api/v1/logs?${qs}`, {
       headers: { authorization: `Bearer ${apiKey}` },
@@ -155,6 +161,12 @@ export async function logs(argv: readonly string[]): Promise<void> {
     // this also accepts the older `{ events, cursor }` shape. Both normalize to
     // the command's internal `{ events, cursor }` so the render and follow loop
     // stay unchanged.
+    //
+    // The cursor stays a STRING the whole way through. It used to be read with
+    // `Number()`, which worked only while a cursor was a bare delta id: the feed
+    // now carries a position per source, and `Number('42.10')` is `42.1` — a
+    // value that re-serializes as `'42.1'` and resumes eight claim positions
+    // late without any error. Holders pass it back verbatim.
     const json = (await res.json()) as {
       data?: LogEvent[];
       events?: LogEvent[];
@@ -163,7 +175,11 @@ export async function logs(argv: readonly string[]): Promise<void> {
     };
     return {
       events: json.data ?? json.events ?? [],
-      cursor: json.next_cursor != null ? Number(json.next_cursor) : (json.cursor ?? 0),
+      cursor:
+        json.next_cursor ??
+        (json.cursor != null
+          ? formatFeedCursor({ log: json.cursor, claims: 0 })
+          : formatFeedCursor(FEED_CURSOR_START)),
     };
   }
 
@@ -193,12 +209,16 @@ export async function logs(argv: readonly string[]): Promise<void> {
   for (;;) {
     await sleep(1500);
     const page = await fetchPage({
-      after: String(cursor),
+      after: cursor,
       ...(args.model ? { model: args.model } : {}),
       ...(args.op ? { op: args.op } : {}),
     });
     if (!page) continue; // transient network blip — keep polling
     for (const e of page.events) render(e, args.json);
-    if (page.cursor > cursor) cursor = page.cursor;
+    // Only ever move forward. The comparison is the wire module's, because
+    // deciding "is this cursor ahead" means taking the cursor apart.
+    const prev = parseFeedCursor(cursor);
+    const next = parseFeedCursor(page.cursor);
+    if (prev && next && feedCursorAdvanced(prev, next)) cursor = page.cursor;
   }
 }

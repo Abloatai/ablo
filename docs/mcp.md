@@ -1,38 +1,64 @@
 # Model Context Protocol
 
+> Two MCP servers for two different jobs — one of them is a data plane, one is not.
+
 Ablo publishes **two** MCP servers for two different jobs. Don't confuse them:
 
 | Server | Purpose | Auth | Tools |
 |---|---|---|---|
-| **Coordination** (`@ablo/mcp`) | Let an agent safely read & mutate your application data | API key (`sk_…` / `rk_…`) | per-model `get` / `list` / `create` / `update` / `delete` / `claim` / `release` |
+| **Coordination** (`@abloatai/mcp`) | Manage your Ablo the way the CLI does, and let an agent safely read & mutate application data | API key (`sk_…` / `rk_…`) | projects, schema, logs, usage — plus `get` / `list` / `create` / `update` / `delete` / `claim` / `release` over your rows |
 | **Integration-helper** (hosted `/api/mcp`) | Help an AI coding assistant write SDK integration code that compiles | none (public docs) | doc search, export surface, schema lint, scaffold |
 
-The coordination server **is the data plane** — it is how an agent changes
-state. The integration-helper server only serves docs, schema lint, and
-scaffolds; it does **not** read or write application data (there are no
+The coordination server manages your account **and is the data plane** — it is
+how an agent changes state. The integration-helper server only serves docs,
+schema lint, and scaffolds; it does **not** read or write application data (there are no
 per-model data tools on it). Pick by what you're doing: shipping an agent that
 edits rows → coordination; teaching your IDE assistant the SDK → helper.
 
-## Coordination server (`@ablo/mcp`)
+## Coordination server (`@abloatai/mcp`)
 
-The coordination server is the MCP projection of the model-scoped API
-(`/api/v1/models/...`) — the same surface as `ablo.<model>.create/update/claim` and
-the REST routes, rendered as tools. An agent connects with your API key and
-gets one safe loop: **claim → read → commit → release.**
+The coordination server does two jobs: it manages your Ablo the way the `ablo`
+CLI does, and it renders the model-scoped API (`/api/v1/models/...`) as tools —
+the same surface as `ablo.<model>.create/update/claim`. An agent connects with
+your API key and gets one safe loop: **claim → read → commit → release.**
 
 Install over stdio; set your key in the host's MCP env:
 
 ```bash
-claude mcp add ablo -- npx -y @ablo/mcp
+claude mcp add ablo -- npx -y @abloatai/mcp
 # env:  ABLO_API_KEY=sk_…   (ABLO_API_URL optional; defaults to the hosted API)
 ```
 
-Each tool mirrors an SDK verb, scoped to a model + id:
+### Managing your Ablo
 
 | Tool | Mirrors | Does |
 |---|---|---|
-| `get_model` | `ablo.<model>.get(id)` | read latest state + active claims |
-| `list_models` | `ablo.<model>.list({…})` | cursor-paginated list with filters |
+| `get_schema` | `ablo status` | the models this key can address, and its environment + project |
+| `list_projects` | `ablo projects list` | the org's projects (needs `sk_`) |
+| `create_project` | `ablo projects create` | create one (needs `sk_`) |
+| `tail_logs` | `ablo logs` | recent commits and the actor behind each |
+| `get_usage` | — | usage in daily buckets |
+
+There are no key-management tools. A mint returns the plaintext once — only a
+hash is kept — so no tool can hand it back later, and returning it at mint time
+would write a live secret into the agent's context and the conversation
+transcript, where it outlives any revocation. Listing and revoking will arrive
+once a grant identifies the caller as a person rather than a key. Manage keys
+with `ablo login` or the dashboard.
+
+`ablo init`, `push`, `pull`, and `generate` have no tools: they read and write
+files in your repo, which the server cannot see. Run those in a shell — then
+call `get_schema` to see the result.
+
+### Reading and changing rows
+
+Each tool mirrors an SDK verb, scoped to a model + id. Model names come from
+`get_schema`:
+
+| Tool | Mirrors | Does |
+|---|---|---|
+| `get_model` | `ablo.<model>.local.retrieve(id)` | read latest state + active claims |
+| `list_records` | `ablo.<model>.list({…})` | cursor-paginated list with filters |
 | `create_model` | `ablo.<model>.create({ data })` | guarded create |
 | `update_model` | `ablo.<model>.update({ id, … })` | guarded update |
 | `delete_model` | `ablo.<model>.delete({ id })` | guarded delete |
@@ -41,8 +67,7 @@ Each tool mirrors an SDK verb, scoped to a model + id:
 
 The agent-facing contract — the safe loop, the "derive idempotency keys from
 the business event" rule, and the error-code playbook — ships as a loadable
-skill at `@ablo/mcp/skill.md`. Lives in `packages/mcp/`
-(`createCoordinationMcpServer`, `src/tools.ts`).
+skill at `@abloatai/mcp/skill.md`.
 
 ## Integration-helper server
 
@@ -57,7 +82,7 @@ server above, never here.
 > The `@abloatai/ablo` npm package itself bundles neither server — it has
 > no `@modelcontextprotocol/sdk` dependency. The helper is a feature of Ablo's
 > hosted app, mounted at `/api/mcp`; the coordination server is the separate
-> `@ablo/mcp` package.
+> `@abloatai/mcp` package.
 
 ### Install
 

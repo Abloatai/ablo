@@ -14,10 +14,10 @@
  * rather than being kept in step by hand.
  */
 import type { ParticipantKind, ConfirmationState } from '../schema/syncDeltaRow.js';
-import type { ParticipantRef } from '../wire/delta.js';
-import type { CommitExecutionResultInput } from '../wire/commit.js';
-import type { Environment } from '../environment.js';
-import type { ReadDependency, TrackDependency } from '../coordination/schema.js';
+import type { ParticipantRef } from '../transaction/wire/delta.js';
+import type { CommitExecutionResultInput } from '../transaction/wire/commit.js';
+import type { Environment } from '../transaction/environment.js';
+import type { ReadDependency, TrackDependency } from '../transaction/coordination/schema.js';
 
 export interface CommitContext {
   participantId: string;
@@ -46,7 +46,7 @@ export interface CommitContext {
    * The sync groups this participant subscribes to, taken from the connection
    * upgrade or the capability token. Each is appended to every delta's `sync_groups`
    * so that writes fan out to subscribers of entity-level groups (such as
-   * `deck:abc`), not only the default `org:X` and `user:Y` groups. When omitted, the
+   * `report:abc`), not only the default `org:X` and `user:Y` groups. When omitted, the
    * commit fans out to just the organization and user groups.
    */
   syncGroups?: readonly string[];
@@ -85,13 +85,7 @@ export interface CommitContext {
    */
   confirmationState?: ConfirmationState;
   /**
-   * Optional foreign key to the task that caused the change, written to the
-   * `caused_by_task_id` column when present. Validated when set; clients typically
-   * leave it null and let attribution ride on the actor and capability instead.
-   */
-  causedByTaskId?: string | null;
-  /**
-   * Read dependencies for the whole batch. The committer declares the rows or groups
+   * The premise for the whole batch. The committer declares the rows or groups
    * it read to form this batch; the engine checks that none of them changed since
    * each entry's `readAt` timestamp and applies that entry's `onStale` disposition
    * across the batch. This differs from the per-operation `readAt` guard, which
@@ -99,10 +93,10 @@ export interface CommitContext {
    */
   reads?: ReadDependency[] | null;
   /**
-   * Durable read-dependencies to persist for this commit's participant. Each entry
-   * is kept in `track_dependencies` and re-checked against every future delta; a
-   * later match opens a `StaleNotification` delivered out of band. Distinct from
-   * `reads`, which is checked once here and discarded.
+   * Durable premises to persist for this commit's participant. Each entry is
+   * kept in `track_dependencies` and re-checked against every future delta; a
+   * later match opens a `StaleNotification` delivered out of band. Distinct
+   * from `reads`, which is checked once here and discarded.
    */
   track?: TrackDependency[] | null;
 }

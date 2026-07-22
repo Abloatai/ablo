@@ -79,6 +79,18 @@ export interface ApplyCredentials {
 }
 
 /**
+ * The recovery instruction for a rotation that re-keyed the database but never
+ * completed registration — whatever ended it (a registration refusal, a network
+ * failure, or the operator cancelling mid-run). One constant so the failure
+ * path and the interrupt path can never tell the operator two different
+ * stories.
+ */
+export const ROTATE_STRANDED_CREDENTIALS_NOTICE =
+  'The new passwords are set in your database, but Ablo could not be updated with them.\n' +
+  'Ablo still holds the previous password, which no longer works — writes will fail until\n' +
+  'you re-run `ablo connect rotate` (each run is idempotent and rotates a fresh password).';
+
+/**
  * The exit code and, for `rotate`, the recovery notice after the registration
  * attempt. Rotation is the one flow where a registration failure *after* the
  * `ALTER ROLE` is dangerous: the database already holds the new password Ablo
@@ -98,10 +110,7 @@ export function postRegistrationOutcome(input: {
   if (!input.rotating) return { exitCode: 1, notice: null };
   return {
     exitCode: 1,
-    notice:
-      'The new passwords are set in your database, but Ablo could not be updated with them.\n' +
-      'Ablo still holds the previous password, which no longer works — writes will fail until\n' +
-      'you re-run `ablo connect rotate` (each run is idempotent and rotates a fresh password).',
+    notice: ROTATE_STRANDED_CREDENTIALS_NOTICE,
   };
 }
 
@@ -111,16 +120,39 @@ export function passwordClause(password: string, mode: PasswordMode): string {
 }
 
 /**
- * An idempotent role creation: create it, or — on a re-run — rotate only the
- * password. Re-asserting attributes on an existing role trips managed-Postgres
- * permission walls, and the server-side probe audits the live attributes anyway.
+ * Create a role, or — only when re-keying is the point — set its password.
+ *
+ * The distinction is load-bearing and used not to be. This once recovered from
+ * `duplicate_object` by running `ALTER ROLE … PASSWORD` unconditionally, which
+ * is idempotent in the sense of not erroring and destructive in the sense that
+ * matters: any second `apply` against a database silently re-keyed a role
+ * another connection was still authenticating with. Because the secret store is
+ * per-plane, each plane then held its own now-wrong copy of one role's password,
+ * and the failure surfaced later and elsewhere as a rejected credential.
+ *
+ * So `apply` creates and otherwise leaves the role alone, and `rotate` — the
+ * verb whose whole purpose is a new password — is the only thing that re-keys.
+ * Postgres has no `CREATE ROLE IF NOT EXISTS`, so the guard is an explicit
+ * `pg_roles` check rather than an exception handler. Attributes are never
+ * re-asserted on an existing role: that trips managed-Postgres permission walls,
+ * and the server-side probe audits the live attributes anyway.
  */
-function idempotentRole(role: string, attributes: string, clause: string): string {
-  return `DO $$ BEGIN
-  CREATE ROLE ${quoteIdent(role)} WITH ${attributes} LOGIN PASSWORD '${clause}';
-EXCEPTION WHEN duplicate_object THEN
-  ALTER ROLE ${quoteIdent(role)} WITH LOGIN PASSWORD '${clause}';
-END $$;`;
+function idempotentRole(
+  role: string,
+  attributes: string,
+  clause: string,
+  rotate: boolean,
+): string {
+  const lines = [
+    'DO $$ BEGIN',
+    `  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role.replace(/'/g, "''")}') THEN`,
+    `    CREATE ROLE ${quoteIdent(role)} WITH ${attributes} LOGIN PASSWORD '${clause}';`,
+  ];
+  if (rotate) {
+    lines.push('  ELSE', `    ALTER ROLE ${quoteIdent(role)} WITH LOGIN PASSWORD '${clause}';`);
+  }
+  lines.push('  END IF;', 'END $$;');
+  return lines.join('\n');
 }
 
 /**
@@ -137,6 +169,12 @@ export function connectApplyPlan(input: {
   readonly tables?: readonly string[];
   readonly role?: string;
   readonly writeRole?: string;
+  /**
+   * Re-key roles that already exist. `apply` leaves an existing role's password
+   * alone — another connection may be authenticating with it — so only `rotate`,
+   * whose whole purpose is a new password, passes this.
+   */
+  readonly rotate?: boolean;
   readonly credentials: ApplyCredentials;
   /** Omit the write-ahead-log step when the cluster is already `wal_level = logical`. */
   readonly walAlreadyLogical?: boolean;
@@ -177,13 +215,13 @@ export function connectApplyPlan(input: {
         provider === 'generic'
           ? {
               key: 'wal',
-              title: 'Turn on logical replication',
+              title: 'Let Ablo see your changes as they happen',
               detail: 'lets Ablo read your changes as they happen (needs a restart to take effect)',
               sql: [`ALTER SYSTEM SET wal_level = 'logical';`],
             }
           : {
               key: 'wal',
-              title: 'Turn on logical replication',
+              title: 'Let Ablo see your changes as they happen',
               detail: logicalReplicationGuidance(provider),
               sql: [],
             },
@@ -205,10 +243,10 @@ END $$;`,
       ];
   const publicationDetail =
     reconcile?.sql.length === 0
-      ? 'already publishing exactly these tables — nothing to change'
+      ? 'already sharing exactly these tables — nothing to change'
       : tables.length > 0
-        ? `a read stream of the ${tables.length} table${tables.length === 1 ? '' : 's'} you chose`
-        : 'a read stream of your tables';
+        ? `a live feed of the ${tables.length} table${tables.length === 1 ? '' : 's'} you chose`
+        : 'a live feed of your tables';
 
   // When an earlier integration's role owns your tables, grant this admin
   // inheritance of that role first — so the publish and grant steps, which
@@ -237,19 +275,27 @@ END $$;`,
     },
     {
       key: 'replication-role',
-      title: 'Create a read-only replication role',
-      detail: `${role} — it can stream changes and read, nothing more`,
-      sql: [idempotentRole(role, 'REPLICATION', input.credentials.replicationClause)],
+      title: 'Create the read-only login Ablo reads with',
+      detail: `${role} — it can follow your changes and read, nothing else`,
+      sql: [
+        idempotentRole(
+          role,
+          'REPLICATION',
+          input.credentials.replicationClause,
+          input.rotate === true,
+        ),
+      ],
     },
     {
       key: 'write-role',
-      title: 'Create a scoped writer role',
+      title: 'Create the login Ablo writes with',
       detail: `${writeRole} — writes rows through Ablo; where a table has row-level-security policies, they govern its writes too (it can't bypass them)`,
       sql: [
         idempotentRole(
           writeRole,
           'NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT',
-          input.credentials.writeClause
+          input.credentials.writeClause,
+          input.rotate === true,
         ),
       ],
     },
@@ -326,6 +372,39 @@ export function detectProvider(hostOrTarget: string): DbProvider {
   }
   if (host.includes('rds.amazonaws.com') || host.includes('.rds.')) return 'rds';
   return 'generic';
+}
+
+/** A host that fronts the database through a connection pooler. */
+export interface PooledHost {
+  readonly provider: DbProvider;
+  /** The direct host, when it can be derived from the pooled one. */
+  readonly direct?: string;
+}
+
+/**
+ * Whether a host reaches the database through a CONNECTION POOLER rather than
+ * the database itself. This matters because a pooler is not a smaller version
+ * of the database — it terminates the session, so logical replication and the
+ * setup that establishes it cannot run over it at all.
+ *
+ * The failure is worth naming because of how it presents: a pooler commonly
+ * refuses the connection as `password authentication failed`, which sends a
+ * reader to check credentials that are perfectly correct.
+ */
+export function detectPooler(hostOrTarget: string): PooledHost | null {
+  const host = hostOrTarget.toLowerCase();
+  const provider = detectProvider(host);
+  // Neon encodes it in the endpoint id, so the direct host is the same name
+  // with the marker removed — a fix the reader can apply without a lookup.
+  if (provider === 'neon' && host.includes('-pooler')) {
+    return { provider, direct: hostOrTarget.replace(/-pooler/i, '') };
+  }
+  // Supabase's pooler is a separate host entirely (`aws-0-<region>.pooler.…`),
+  // so there is no direct host to derive from it.
+  if (host.includes('pooler.supabase')) return { provider: 'supabase' };
+  // RDS Proxy fronts the instance under a `.proxy-` subdomain.
+  if (host.includes('.proxy-') && provider === 'rds') return { provider };
+  return null;
 }
 
 /** How to reach `wal_level = logical` on each provider, in one plain sentence. */
@@ -507,6 +586,23 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   const provider = detectProvider(target);
   const walReady = (await currentWalLevel(admin)) === 'logical';
 
+  // Rotation guards a LIVE source, so nothing may be re-keyed unless the run
+  // can plausibly reach registration: a database that isn't sharing changes
+  // would be re-keyed and then stopped at the readiness gate, stranding
+  // credentials Ablo doesn't hold while the current ones still work. Refuse
+  // up front instead — the database is untouched and writes keep flowing on
+  // the existing password until this is fixed.
+  if (rotating && !walReady) {
+    await admin.end({ timeout: 2 });
+    console.error(
+      `  ${pc.yellow('!')} Your database isn't sharing changes with Ablo right now, so the roles were ${pc.bold('not')} re-keyed\n` +
+        `    (re-keying here would break the working credentials before Ablo could take the new ones).\n` +
+        `    ${logicalReplicationGuidance(provider)}.\n` +
+        `\n  Then re-run:  ${pc.cyan(`npx ablo ${verb}`)}\n`
+    );
+    process.exit(1);
+  }
+
   // 1d. Read the publication's live membership so the plan can reconcile it to
   // exactly `--tables`. A pre-existing publication from an earlier connect with a
   // different table set is the common cause of a "writer not ready" rejection: the
@@ -527,6 +623,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
       tables: args.tables,
       role: args.role,
       writeRole: args.writeRole,
+      rotate: rotating,
       credentials: {
         replicationClause: passwordClause(replicationPassword, mode),
         writeClause: passwordClause(writePassword, mode),
@@ -568,13 +665,25 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     if (isCancel(proceed) || !proceed) {
       await admin.end({ timeout: 2 });
       console.log(
-        pc.dim(`  Nothing applied. Run ${pc.bold('ablo connect')} to see the manual recipe.\n`)
+        pc.dim(`  Nothing applied. Run ${pc.bold('ablo connect --manual')} to see the setup SQL.\n`)
       );
       process.exit(0);
     }
   }
 
-  // 4. Apply.
+  // 4. Apply. From the first ALTER ROLE until registration lands, a rotate has
+  // the database on passwords Ablo doesn't hold yet — a cancel in that window
+  // (Ctrl-C, a closed terminal sending SIGTERM) strands a live source on dead
+  // credentials with no explanation. The handler makes even that exit tell the
+  // operator exactly how to recover; `apply` has no live source to strand.
+  const onRotateInterrupt = (): void => {
+    console.error(`\n\n  ${pc.red(ROTATE_STRANDED_CREDENTIALS_NOTICE.split('\n').join('\n  '))}\n`);
+    process.exit(130);
+  };
+  if (rotating) {
+    process.once('SIGINT', onRotateInterrupt);
+    process.once('SIGTERM', onRotateInterrupt);
+  }
   try {
     await executePlan(admin, steps, () => buildPlan('plaintext'));
   } catch (err) {
@@ -584,6 +693,10 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
       pc.red(`\n  Setup stopped: ${pg.message ?? String(err)}`) +
         pc.dim(`  Every step is safe to re-run.\n`)
     );
+    if (rotating) {
+      // The plan may have re-keyed a role before stopping — same recovery.
+      console.error(`  ${pc.red(ROTATE_STRANDED_CREDENTIALS_NOTICE.split('\n').join('\n  '))}\n`);
+    }
     process.exit(1);
   }
   await admin.end({ timeout: 2 });
@@ -602,7 +715,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // left stranded.
   if (!walReady) {
     console.error(
-      `  ${pc.yellow('!')} One step left — logical replication isn't on yet.\n` +
+      `  ${pc.yellow('!')} One step left — your database isn't sharing changes with Ablo yet.\n` +
         `    ${logicalReplicationGuidance(provider)}.\n` +
         `\n  Then re-run:  ${pc.cyan(`npx ablo ${verb}`)}\n`
     );
@@ -632,8 +745,18 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   const failed = items?.filter((i) => !i.ok) ?? [];
   if (failed.length > 0) {
     for (const item of failed) console.log(`  ${pc.yellow('!')} ${item.label}`);
-    console.log(`\n  ${pc.dim('Resolve, then re-run')}  ${pc.cyan(`npx ablo ${verb}`)}\n`);
-    process.exit(1);
+    if (!rotating) {
+      console.log(`\n  ${pc.dim('Resolve, then re-run')}  ${pc.cyan(`npx ablo ${verb}`)}\n`);
+      process.exit(1);
+    }
+    // A rotate has already re-keyed the roles, so stopping here would strand a
+    // live source on credentials Ablo doesn't hold — over findings this machine
+    // may simply be unable to judge. Registration is the authority (the engine
+    // re-validates from its own network); let it decide, and its failure path
+    // already carries the recovery notice.
+    console.log(
+      `\n  ${pc.dim('Continuing to registration — Ablo re-checks these from its own network.')}\n`
+    );
   }
 
   // 8. Hand both scoped roles to Ablo directly. Nothing is left in your .env.
@@ -647,6 +770,10 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     writeUrl,
     route: args.route,
   });
+  // The stranded-credential window is over: from here the outcome itself says
+  // whether recovery is needed, so the interrupt handler must not speak again.
+  process.off('SIGINT', onRotateInterrupt);
+  process.off('SIGTERM', onRotateInterrupt);
   const outcome = postRegistrationOutcome({ rotating, registered });
   if (outcome.notice) {
     console.error(`\n  ${pc.red(outcome.notice.split('\n').join('\n  '))}\n`);

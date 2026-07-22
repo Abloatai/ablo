@@ -12,11 +12,12 @@
 import pc from 'picocolors';
 import { select, isCancel, cancel } from '@clack/prompts';
 import { getMode, setMode, getKeyEntry, normalizeMode, type Mode } from './config';
+import { credentialCapability } from './credentialCapability';
 
-/** The key prefix that logging in mints for each environment. Sandbox gets a
- *  full secret key, since its data is disposable; production gets a restricted,
- *  observe-only key by default. A deliberate production write uses a secret
- *  `sk_live_` key from the dashboard instead. */
+/** The key prefix that logging in mints for each environment: a full secret key
+ *  for the sandbox, whose data is disposable, and a restricted one for
+ *  production. What each can do is `credentialCapability`'s to say, and `apply`
+ *  below prints its answer rather than restating it here. */
 const PREFIX: Record<Mode, string> = { sandbox: 'sk_test_', production: 'rk_live_' };
 
 function hintFor(m: Mode, current: Mode): string | undefined {
@@ -29,11 +30,19 @@ function hintFor(m: Mode, current: Mode): string | undefined {
 function apply(m: Mode): void {
   setMode(m);
   console.log(`  ${pc.green('✓')} now in ${pc.bold(m)}`);
-  if (!getKeyEntry(m)) {
+  const entry = getKeyEntry(m);
+  if (!entry) {
     console.log(
       pc.dim(`  No ${m} key stored — run ${pc.bold('ablo login')} or ${pc.bold(`ablo login --api-key ${PREFIX[m]}…`)}.`),
     );
+    return;
   }
+  // Switching into an environment hands the reader its stored key, so this is
+  // the moment to say what that key does. The production key `login` stores is
+  // observe-only by design, and confirming the switch without saying so is what
+  // made the limit arrive as a 403 mid-deploy instead.
+  const { note } = credentialCapability(entry.apiKey);
+  if (note) console.log(pc.dim(`  ${note}`));
 }
 
 export async function mode(argv: readonly string[]): Promise<void> {

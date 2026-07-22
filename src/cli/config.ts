@@ -35,12 +35,13 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { readProjectApiKey, type ApiKeySource } from './dbRole';
-import type { Environment } from '../environment.js';
+import type { KeyEnvironment } from '../transaction/environment.js';
 
-// The same type as the engine's canonical `Environment`. The CLI keeps the name
-// `Mode` for its user-facing surface (`ablo mode`, key profiles), but the two are
-// one type and cannot drift apart.
-export type Mode = Environment;
+// The CLI's `mode` selects which STORED KEY to present, so it is the engine's
+// credential axis rather than its plane axis — `ProfileKeys` holds one slot per
+// key prefix, and there are exactly two of those. The plane a command acts on
+// follows from the key it presents; it is not chosen here.
+export type Mode = KeyEnvironment;
 
 /** The reserved profile name for the organization-default project, used when no
  *  active project is set. */
@@ -448,7 +449,15 @@ export interface ProjectKeyGuard {
 }
 
 export function guardActiveProjectKey(): ProjectKeyGuard {
-  if (process.env.ABLO_API_KEY) {
+  // An explicit key decides the target, so there is nothing for this guard to
+  // protect: the push lands wherever that key is scoped, and `push` prints the
+  // server-confirmed project it landed on. Reading `process.env` alone missed
+  // the commonest case — a key in `.env.local`, which every other part of the
+  // CLI resolves and reports as overriding the stored login. The guard then
+  // refused a push that the key it could not see would have routed correctly,
+  // and the only way through was to select a project the push would not use.
+  const { key, source } = resolveEffectiveApiKey();
+  if (key != null && source != null && source !== 'stored') {
     return { ok: true, activeProfile: DEFAULT_PROFILE, available: [] };
   }
   const cfg = readConfig();

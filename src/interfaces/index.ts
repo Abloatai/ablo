@@ -7,37 +7,42 @@
  * mutations to your backend. The SDK ships sensible no-op defaults where it can.
  */
 
-import type { ReadDependency, TrackDependency, ParticipantKind } from '../coordination/schema.js';
-import type { CommitStatus, MutationCommitResultInput } from '../wire/commit.js';
+import type { MutationCommitResultInput } from '../transaction/wire/commit.js';
+import type { OnStaleMode } from '../transaction/coordination/schema.js';
+export type { ClaimEvent, ConflictEvent } from '../transaction/coordination/events.js';
+import type { CoordinationObservability } from '../transaction/observability.js';
+export type { CoordinationObservability } from '../transaction/observability.js';
 
 // ─────────────────────────────────────────────
 // Logger
 // ─────────────────────────────────────────────
 
-export interface SyncLogger {
-  debug(message: string, ...args: unknown[]): void;
-  info(message: string, ...args: unknown[]): void;
-  warn(message: string, ...args: unknown[]): void;
-  error(message: string, ...args: unknown[]): void;
-}
+// The logging port carries no framework and no local state, so it lives in the
+// settlement core (ADR 0016). Re-exported here so `interfaces` stays the single
+// place a consumer looks for the contracts it implements. The `import type` is
+// load-bearing: `SyncLogger = Logger` below needs the name bound in this module.
+export type { Logger } from '../transaction/logger.js';
+import type { Logger } from '../transaction/logger.js';
 
 // ─────────────────────────────────────────────
 // Observability
 // ─────────────────────────────────────────────
 
-/** Breadcrumb severity levels */
-export type BreadcrumbLevel = 'debug' | 'info' | 'warning' | 'error';
-
-/** Breadcrumb categories for sync engine lifecycle events */
-export type SyncBreadcrumbCategory =
-  | 'sync.bootstrap'
-  | 'sync.transaction'
-  | 'sync.websocket'
-  | 'sync.offline'
-  | 'sync.database'
-  | 'sync.conflict'
-  | 'sync.coordination'
-  | 'sync.groups';
+// The transport-facing slice — breadcrumbs and socket errors — moved to the
+// settlement core with the duplex transport (ADR 0016): a socket held for
+// claim push must report its lifecycle with no store present. Re-exported
+// here so `interfaces` stays the single place a consumer looks; the `import
+// type` is load-bearing for `ObservabilityProvider extends` below.
+export type {
+  BreadcrumbLevel,
+  BreadcrumbCategory,
+  WebSocketErrorDetails,
+  TransportObservability,
+} from '../transaction/observability.js';
+import type {
+  BreadcrumbCategory,
+  TransportObservability,
+} from '../transaction/observability.js';
 
 export interface RollbackDetails {
   transactionType: string;
@@ -80,13 +85,6 @@ export interface DeltaRetryExhaustedDetails {
   syncIdNeeded?: number;
 }
 
-export interface WebSocketErrorDetails {
-  context: string;
-  error?: string;
-  code?: number;
-  reason?: string;
-}
-
 export interface SelfHealingDetails {
   modelName: string;
   modelId: string;
@@ -99,54 +97,6 @@ export interface CommitZeroSyncIdDetails {
   operations: string[];
 }
 
-/**
- * A single event in the life of a claim. `phase` is the state the claim has just
- * entered, and the sequence of phases is the trail you follow to see how two
- * participants collided on a row — who asked for it, who waited behind whom, who
- * was turned away, and whose lease lapsed. Each phase corresponds to a `claim_*`
- * frame on the wire.
- */
-export interface ClaimEvent {
-  phase:
-    | 'acquired' // target was free — lease granted immediately
-    | 'queued' // contended — joined the FIFO line behind the holder
-    | 'granted' // reached the head of the line — lease now ours
-    | 'lost' // held lease taken away (TTL lapse on disconnect, revoke)
-    | 'rejected' // server denied the claim — another participant holds the target
-    | 'expired'; // TTL lapsed server-side
-  /** Server claim id, when the frame carries one. */
-  claimId?: string;
-  /** The claimed row + optional field scope. */
-  model?: string;
-  id?: string;
-  field?: string;
-  /** Participant that owns or blocks the lease (on `rejected`, the holder). */
-  actor?: string;
-  participantKind?: ParticipantKind;
-  /** FIFO position when `queued`. */
-  position?: number;
-  /** Rejection or policy reason, when the server supplied one. */
-  reason?: string;
-}
-
-/**
- * A committed `onStale: 'notify'` write whose premise had moved. The commit
- * succeeded, but the guarded operations were not written because the row had
- * changed since the caller's `readAt`, and the engine returned the current value
- * so the caller can reconcile. Records which rows and fields collided.
- */
-export interface ConflictEvent {
-  /** The client idempotency key whose write was notified. */
-  clientTxId: string;
-  /** The conflicted rows + the fields that collided. */
-  rows: readonly {
-    model: string;
-    id: string;
-    fields: readonly string[];
-    writtenBy?: ParticipantKind;
-  }[];
-}
-
 /** Span attributes for performance monitoring */
 export type SpanAttributes = Record<string, string | number | boolean | undefined>;
 
@@ -155,26 +105,30 @@ export type SpanAttributes = Record<string, string | number | boolean | undefine
  * ships a no-op default; provide your own to forward these events to a monitoring
  * tool such as Sentry, Datadog, or OpenTelemetry.
  */
-export interface SyncObservabilityProvider {
+export interface ObservabilityProvider
+  extends CoordinationObservability,
+    TransportObservability {
   /** Set user/org context for error grouping */
   setContext(userId: string, organizationId: string): void;
 
   /** Update connection state tag */
   setConnectionState(state: 'connected' | 'disconnected' | 'connecting'): void;
 
-  /** Add a breadcrumb for sync lifecycle events */
-  breadcrumb(
-    message: string,
-    category: SyncBreadcrumbCategory,
-    level?: BreadcrumbLevel,
-    data?: Record<string, string | number | boolean | undefined>
-  ): void;
+  // `breadcrumb` and `captureWebSocketError` are inherited from
+  // `TransportObservability` in the core — the duplex transport reports its
+  // own lifecycle, with no store present.
 
   /** Capture optimistic rollback (data reverted) */
   captureRollback(details: RollbackDetails): void;
 
-  /** Capture permanent transaction failure */
-  captureTransactionFailure(details: TransactionFailureDetails): void;
+  /**
+   * Capture permanent mutation failure. Named `captureTransactionFailure`
+   * before 0.35.0; the rename is announced in that release note rather than
+   * aliased, because this member is required — a provider still carrying the
+   * old spelling fails to satisfy the interface and the compiler names the
+   * member, which an optional alias would only have hidden.
+   */
+  captureMutationFailure(details: TransactionFailureDetails): void;
 
   /** Capture bootstrap failure */
   captureBootstrapFailure(error: Error | unknown, details?: BootstrapFailureDetails): void;
@@ -185,17 +139,12 @@ export interface SyncObservabilityProvider {
   /** Capture delta retry exhausted */
   captureDeltaRetryExhausted(details: DeltaRetryExhaustedDetails): void;
 
-  /** Capture WebSocket error */
-  captureWebSocketError(details: WebSocketErrorDetails): void;
-
   /** Capture self-healing event */
   captureSelfHealing(details: SelfHealingDetails): void;
 
-  /** Capture a claim state change (acquired / queued / granted / lost / rejected / expired) */
-  captureClaim(event: ClaimEvent): void;
-
-  /** Capture a notify-instead-of-abort stale-write collision */
-  captureConflict(event: ConflictEvent): void;
+  // `captureClaim` and `captureConflict` are inherited from
+  // `CoordinationObservability` in the core — the settlement layer reports those
+  // two on its own behalf, with no store present.
 
   /** Capture commit returning lastSyncId: 0 */
   captureCommitZeroSyncId(details: CommitZeroSyncIdDetails): void;
@@ -216,7 +165,7 @@ export interface SyncObservabilityProvider {
 // Analytics
 // ─────────────────────────────────────────────
 
-export interface SyncAnalytics {
+export interface Analytics {
   capture(event: string, properties?: Record<string, unknown>): void;
 }
 
@@ -273,65 +222,17 @@ export interface ModelDebugLoggerContract {
  */
 export type CommitResult = MutationCommitResultInput;
 
-/**
- * Per-call options accepted by any mutation, passed as the last argument.
- * Every field is optional; omitted fields fall back to sensible defaults.
- *
- * - `idempotencyKey` — when set, the server caches the response for 24 hours and
- *   returns the cached result on any retry using the same key. When omitted, the
- *   SDK generates a fresh UUID per mutation, so every call is retry-safe by
- *   default. `null` is retained for source compatibility and is treated like
- *   omission; write retries never opt out of request identity.
- * - `label` — a human-readable tag recorded with the mutation for debugging, such
- *   as "nightly cleanup" or "user click".
- */
-export interface MutationOptions {
-  idempotencyKey?: string | null;
-  label?: string;
-  wait?: CommitStatus;
-  readAt?: number | null;
-  onStale?: 'reject' | 'overwrite' | 'notify' | null;
-  /**
-   * The fencing token (Option B) of the held claim this write belongs to. The
-   * server validates it against the entity's persisted high-water and rejects a
-   * stale token. Sourced from the claim handle, never set by hand.
-   */
-  fenceToken?: number | null;
-  /** The id (or `{ id }`) of the claim this write belongs to. This is the
-   *  low-level reference the commit carries so the write is attributed to a claim
-   *  and can pass the holder's own lock. It is distinct from the `claim` handle on
-   *  the model write parameters, which is the higher-level object you usually pass. */
-  claimRef?: string | { readonly id: string } | null;
-  /**
-   * Reserved lineage field, forwarded on the wire as `causedByTaskId`. The client
-   * always sends `null`; write attribution now travels on the claim id instead.
-   */
-  causedByTaskId?: string | null;
-  /**
-   * Batch-level read dependencies — the answer to "did anything I looked at
-   * change?" Each entry is a row (`{ model, id, readAt, fields? }`) or a sync
-   * group (`{ group, readAt }`) that this write was premised on. The server
-   * checks that none of them moved since their `readAt` and applies the entry's
-   * `onStale` behavior to the whole batch. This is distinct from the per-operation
-   * `readAt`, which guards only the row being written.
-   *
-   * See `packages/sync-engine/docs/concurrency-convention.md` (§3 the two
-   * footprints, §4 the read-set) for the governing convention.
-   */
-  reads?: ReadDependency[] | null;
-  /**
-   * Durable read-dependencies — what this write (or the record it produces) should
-   * keep watching. Unlike `reads`, which is checked once at commit and discarded,
-   * each `track` entry is persisted and re-checked against every future delta; a
-   * later matching change opens a `StaleNotification` for the tracking participant,
-   * delivered at their next commit or live to a held claim. Each entry is a row
-   * (`{ model, id }`) or a sync group (`{ group }`), optionally pinned to a `readAt`
-   * baseline (defaults to this commit's watermark).
-   *
-   * See `packages/sync-engine/docs/groups.md` for how `track` drives propagation.
-   */
-  track?: TrackDependency[] | null;
-}
+// `MutationOptions` describes how a write is issued — request identity, commit
+// disposition, and the premise it rests on (optimistic via `readAt`/`reads`, or
+// claim-protected via `claimRef`/`fenceToken`) — and holds no local row state,
+// so it lives in the settlement core (ADR 0016). Re-exported here so the
+// existing `interfaces` import path keeps resolving.
+// The `import type` is load-bearing, not redundant: `export type { X } from`
+// re-exports without binding X in this module's scope, and `Pick<X, K>` on an
+// unbound X silently yields all-required properties rather than a missing-name
+// error at the Pick site.
+export type { MutationOptions } from '../transaction/resources/mutationOptions.js';
+import type { MutationOptions } from '../transaction/resources/mutationOptions.js';
 
 /**
  * The subset of {@link MutationOptions} that travels with each write as it is
@@ -365,7 +266,7 @@ export interface MutationOperation {
    */
   transactionId?: string;
   readAt?: number | null;
-  onStale?: 'reject' | 'overwrite' | 'notify' | null;
+  onStale?: OnStaleMode | null;
   /**
    * The fencing token (Option B) carried on the wire for this op — the held
    * claim's token, validated against the entity's high-water at commit.
@@ -462,7 +363,7 @@ export interface MutationExecutor {
  * Application-specific configuration for the sync engine, describing how your
  * models relate so the engine can order and merge writes correctly.
  */
-export interface SyncEngineConfig {
+export interface RuntimeConfig {
   /**
    * The order in which to create models, so a row is never inserted before the
    * parent row its foreign key points at. Keyed by each model's type name, with
@@ -493,7 +394,7 @@ export interface SyncEngineConfig {
    * Fields to preserve when merging a partial update into the local store. A
    * change usually carries only the fields that changed; listing a model's
    * essential fields here keeps them from being dropped during that merge.
-   * For example: `{ Task: ['title', 'projectId'], Slide: ['deckId', 'order'] }`.
+   * For example: `{ Task: ['title', 'projectId'], Section: ['reportId', 'order'] }`.
    */
   essentialFields: Readonly<Record<string, readonly string[]>>;
 
@@ -524,6 +425,17 @@ export interface SyncEngineConfig {
    * hash above.
    */
   expectedSourceSchemaHash?: string;
+
+  /**
+   * Per-model content hashes of the schema this client was built against,
+   * keyed by schema key (`tasks` → hash of that model's serialized JSON). The
+   * semantic layer of the drift check: on a whole-schema mismatch the client
+   * compares only the models IT declares against the server's per-model
+   * surface, so a purely additive server-side change (new models this build
+   * never references) is silence, and real divergence names the exact models.
+   * Advisory, like the hashes above.
+   */
+  expectedModelHashes?: Readonly<Record<string, string>>;
 }
 
 // ─────────────────────────────────────────────
@@ -539,3 +451,18 @@ export interface WebSocketEventConfig {
   /** Additional event type names beyond the core delta/presence/bootstrap events */
   customEventTypes?: readonly string[];
 }
+
+// ── Deprecated aliases (the Sync* prefix family, renamed 2026-07-17) ────────
+// The core's plumbing interfaces no longer stamp the consumer's identity.
+// One alias each; removed in 0.36.0.
+
+/** @deprecated Renamed to {@link Logger}. Removed in 0.36.0. */
+export type SyncLogger = Logger;
+/** @deprecated Renamed to {@link ObservabilityProvider}. Removed in 0.36.0. */
+export type SyncObservabilityProvider = ObservabilityProvider;
+/** @deprecated Renamed to {@link Analytics}. Removed in 0.36.0. */
+export type SyncAnalytics = Analytics;
+/** @deprecated Renamed to {@link RuntimeConfig}. Removed in 0.36.0. */
+export type SyncEngineConfig = RuntimeConfig;
+/** @deprecated Renamed to {@link BreadcrumbCategory}. Removed in 0.36.0. */
+export type SyncBreadcrumbCategory = BreadcrumbCategory;

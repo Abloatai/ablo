@@ -10,7 +10,8 @@
  * mislead if the URL were the thing actually missing.
  */
 
-import { AbloError, AbloValidationError } from '../errors.js';
+import { AbloError, AbloValidationError } from '../transaction/errors.js';
+import type { ParticipantKind } from '../transaction/types/participant.js';
 
 /**
  * The subset of client options this validator reads. It is declared as its own
@@ -20,7 +21,7 @@ import { AbloError, AbloValidationError } from '../errors.js';
  */
 export interface ValidatableAbloOptions {
   readonly schema?: { readonly models?: Record<string, unknown> } | null;
-  readonly kind?: 'user' | 'agent' | 'system';
+  readonly kind?: ParticipantKind;
   readonly user?: { readonly id?: string } | undefined;
   readonly agentId?: string | undefined;
   readonly capabilityToken?: string | undefined;

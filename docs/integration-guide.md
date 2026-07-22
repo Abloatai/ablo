@@ -1,11 +1,13 @@
 # Integration Guide
 
-If humans and AI agents both edit the same records in your app, they overwrite
-each other and there's no good place to coordinate. Ablo gives them one shared,
-typed write path — the same `ablo.<model>.update(...)` call for a React
-component, a server action, a background worker, or an agent — and reconciles the
-edits. This guide adds it to a product that already has a backend and database,
-one model at a time.
+> The canonical end-to-end integration, added to an existing product one model at a time.
+
+When several AI agents edit the same records in your app — alongside any people
+watching them work — they overwrite each other, and there is no good place to
+coordinate. Ablo gives them one shared, typed write path: the same
+`ablo.<model>.update(...)` call from an agent, a background worker, a server
+action, or a React component. This guide adds it to a product that already has a
+backend and a database, one model at a time.
 
 Three things hold no matter which actor is writing:
 
@@ -79,7 +81,7 @@ and write path are ready for production.
 When handing this to a coding agent, give it a concrete target:
 
 ```txt
-Add Ablo to this app for one model that humans and agents both edit.
+Add Ablo to this app for one model your agents edit.
 Use the org sandbox sk_test_* key. Declare schema, add the Ablo client, replace
 one write with ablo.<model>.update(..., { readAt, onStale: 'reject',
 wait: 'confirmed' }), and add a smoke test for two concurrent writers.
@@ -139,7 +141,6 @@ model(
   {
     /* fields */
   },
-  /* relations */ {},
   {
     // Axis 1 — `policy`: who may READ a row (tenant isolation / RLS). A
     // row-local `organization_id` column is the default, so you omit this for
@@ -256,7 +257,7 @@ refreshes before expiry.
 Reads come in two flavors, and you pick based on whether you can wait.
 `retrieve({ id })` and `list({ where })` hit the server (and hydrate the local
 store) — they're async, so you `await` them. `get(id)` (positional),
-`getAll({ where })`, and `getCount({ where })` read the already-synced local
+`local.list({ where })`, and `local.count({ where })` read the already-synced local
 graph synchronously, so they're the ones you call in render — and the ones you
 use inside a `useAblo` selector, never the async `retrieve`/`list`.
 
@@ -270,12 +271,12 @@ const report = await ablo.weatherReports.retrieve({ id: 'report_stockholm' });
 if (!report) throw new Error('report not found');
 ```
 
-Use `get`, `getAll`, and `getCount` for synchronous local-graph reads after
+Use `local.retrieve`, `local.list`, and `local.count` for synchronous local-graph reads after
 data has synced.
 
 ```ts
-const report = ablo.weatherReports.get('report_stockholm');
-const activeReports = ablo.weatherReports.getAll({
+const report = ablo.weatherReports.local.retrieve('report_stockholm');
+const activeReports = ablo.weatherReports.local.list({
   where: { projectId: 'proj_123' },
   filter: (report) => report.status !== 'ready',
   orderBy: { updatedAt: 'desc' },
@@ -295,7 +296,7 @@ export function ReportRow({
 }: {
   report: { id: string; location: string; status: string };
 }) {
-  const report = useAblo((ablo) => ablo.weatherReports.get(serverReport.id)) ?? serverReport;
+  const report = useAblo((ablo) => ablo.weatherReports.local.retrieve(serverReport.id)) ?? serverReport;
   const active = useAblo((ablo) => ablo.weatherReports.claim.state({ id: serverReport.id }));
 
   return <button disabled={Boolean(active) || report.status === 'ready'}>{report.location}</button>;
@@ -375,7 +376,7 @@ The migration can be gradual:
 
 1. Declare schema for one model, such as `reports`.
 2. Keep existing server loads for first paint.
-3. Add `useAblo((ablo) => ablo.weatherReports.get(id)) ?? serverReport` for live rows.
+3. Add `useAblo((ablo) => ablo.weatherReports.local.retrieve(id)) ?? serverReport` for live rows.
 4. Add one Data Source endpoint that calls the existing service layer.
 5. Move one mutation button from `fetch('/api/reports/...')` to `ablo.weatherReports.update(...)`.
 6. Add an outbox/events path for writes that still happen outside Ablo.
@@ -507,8 +508,8 @@ them.
 | `retrieve({ id })`                     | Async read of one row from the server (await it).                                |
 | `list({ where })`                      | Async read of many rows from the server (await it).                              |
 | `get(id)`                              | Synchronous local read of one synced row (positional id; use in render).         |
-| `getAll({ where })`                    | Synchronous local read of many synced rows.                                      |
-| `getCount({ where })`                  | Synchronous local count of synced rows.                                          |
+| `local.list({ where })`                | Synchronous local read of many synced rows.                                      |
+| `local.count({ where })`               | Synchronous local count of synced rows.                                          |
 | `create({ data, id? })`                | Create through the model client.                                                 |
 | `update({ id, data, ...opts })`        | Update through the model client.                                                 |
 | `delete({ id, ...opts })`              | Delete through the model client.                                                 |

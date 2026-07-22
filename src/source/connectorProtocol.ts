@@ -22,7 +22,8 @@
 
 import { z } from 'zod';
 
-import { WS_BEARER_SUBPROTOCOL_PREFIX } from '../auth/credentialSource.js';
+import { environmentSchema } from '../transaction/environment.js';
+import { WS_BEARER_SUBPROTOCOL_PREFIX } from '../transaction/auth/credentialSource.js';
 
 /**
  * The wire-protocol version. It increases on any breaking change to a frame's
@@ -81,7 +82,7 @@ export const readyFrameSchema = z.object({
   protocolVersion: z.number().int(),
   sourceId: z.string().optional(),
   organizationId: z.string().optional(),
-  environment: z.enum(['production', 'sandbox']).optional(),
+  environment: environmentSchema.optional(),
 });
 export type ReadyFrame = z.infer<typeof readyFrameSchema>;
 

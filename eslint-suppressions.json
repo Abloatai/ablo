@@ -23,7 +23,7 @@
       "count": 2
     },
     "jest/unbound-method": {
-      "count": 4
+      "count": 2
     }
   },
   "__tests__/e2e/bootstrap-integrity.test.ts": {
@@ -274,14 +274,6 @@
       "count": 1
     }
   },
-  "__tests__/unit/BaseSyncedStore.areaOfInterest.test.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 1
-    },
-    "@typescript-eslint/require-await": {
-      "count": 1
-    }
-  },
   "__tests__/unit/BaseSyncedStore.hydrateGroups.test.ts": {
     "@typescript-eslint/require-await": {
       "count": 2
@@ -318,6 +310,46 @@
       "count": 4
     },
     "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    }
+  },
+  "__tests__/unit/MutationQueue.coalescing.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unsafe-assignment": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unsafe-member-access": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 2
+    }
+  },
+  "__tests__/unit/MutationQueue.executor-binding.test.ts": {
+    "@typescript-eslint/no-empty-function": {
+      "count": 4
+    },
+    "@typescript-eslint/require-await": {
+      "count": 6
+    }
+  },
+  "__tests__/unit/MutationQueue.rejection-settlement.test.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    }
+  },
+  "__tests__/unit/MutationQueue.rollback.test.ts": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    }
+  },
+  "__tests__/unit/MutationQueue.test.ts": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 6
+    },
+    "@typescript-eslint/prefer-optional-chain": {
       "count": 1
     }
   },
@@ -384,51 +416,6 @@
   "__tests__/unit/SyncWebSocket.test.ts": {
     "@typescript-eslint/no-empty-function": {
       "count": 4
-    }
-  },
-  "__tests__/unit/TransactionQueue.coalescing.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 2
-    }
-  },
-  "__tests__/unit/TransactionQueue.executor-binding.test.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 4
-    },
-    "@typescript-eslint/require-await": {
-      "count": 6
-    }
-  },
-  "__tests__/unit/TransactionQueue.rejection-settlement.test.ts": {
-    "@typescript-eslint/no-floating-promises": {
-      "count": 1
-    }
-  },
-  "__tests__/unit/TransactionQueue.rollback.test.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
-  },
-  "__tests__/unit/TransactionQueue.test.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 6
-    },
-    "@typescript-eslint/prefer-optional-chain": {
-      "count": 1
-    }
-  },
-  "__tests__/unit/agent-default-logger.test.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 7
     }
   },
   "__tests__/unit/architecture/abloNamespace.test.ts": {
@@ -581,9 +568,6 @@
     }
   },
   "src/BaseSyncedStore.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 2
-    },
     "@typescript-eslint/no-empty-function": {
       "count": 4
     },
@@ -594,7 +578,7 @@
       "count": 2
     },
     "@typescript-eslint/no-unnecessary-condition": {
-      "count": 6
+      "count": 1
     },
     "@typescript-eslint/no-unnecessary-type-parameters": {
       "count": 4
@@ -606,15 +590,12 @@
       "count": 13
     },
     "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 3
+      "count": 2
     },
     "@typescript-eslint/require-await": {
       "count": 4
     },
     "@typescript-eslint/switch-exhaustiveness-check": {
-      "count": 1
-    },
-    "@typescript-eslint/unbound-method": {
       "count": 1
     },
     "@typescript-eslint/use-unknown-in-catch-callback-variable": {
@@ -639,9 +620,6 @@
     },
     "@typescript-eslint/no-unsafe-assignment": {
       "count": 1
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 2
     },
     "@typescript-eslint/prefer-optional-chain": {
       "count": 1
@@ -721,6 +699,17 @@
       "count": 1
     }
   },
+  "src/RuntimeContext.ts": {
+    "@typescript-eslint/no-empty-function": {
+      "count": 14
+    },
+    "@typescript-eslint/no-unnecessary-boolean-literal-compare": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 4
+    }
+  },
   "src/SyncClient.ts": {
     "@typescript-eslint/no-misused-spread": {
       "count": 1
@@ -740,22 +729,8 @@
     "@typescript-eslint/require-await": {
       "count": 1
     },
-    "@typescript-eslint/use-unknown-in-catch-callback-variable": {
-      "count": 1
-    },
     "no-empty": {
       "count": 2
-    }
-  },
-  "src/SyncEngineContext.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 18
-    },
-    "@typescript-eslint/no-unnecessary-boolean-literal-compare": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 4
     }
   },
   "src/adapters/inMemoryStorage.ts": {
@@ -766,23 +741,6 @@
       "count": 1
     },
     "@typescript-eslint/no-non-null-assertion": {
-      "count": 1
-    }
-  },
-  "src/agent/Agent.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 1
-    },
-    "@typescript-eslint/no-this-alias": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 1
-    },
-    "@typescript-eslint/use-unknown-in-catch-callback-variable": {
       "count": 1
     }
   },
@@ -797,16 +755,6 @@
     },
     "@typescript-eslint/require-await": {
       "count": 1
-    }
-  },
-  "src/auth/index.ts": {
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 2
-    }
-  },
-  "src/auth/schemas.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 4
     }
   },
   "src/batching/__tests__/batch-scheduler.test.ts": {
@@ -977,15 +925,6 @@
   "src/client/Ablo.ts": {
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 1
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
-    "@typescript-eslint/require-await": {
-      "count": 1
-    },
-    "prefer-const": {
-      "count": 1
     }
   },
   "src/client/__tests__/acquire-or-await.test.ts": {
@@ -1132,61 +1071,13 @@
       "count": 2
     }
   },
-  "src/client/auth.ts": {
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 4
-    },
-    "@typescript-eslint/unbound-method": {
-      "count": 1
-    }
-  },
-  "src/client/createInternalComponents.ts": {
-    "@typescript-eslint/unbound-method": {
-      "count": 2
-    }
-  },
   "src/client/createModelProxy.ts": {
     "@typescript-eslint/no-empty-function": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 4
-    }
-  },
-  "src/client/httpClient.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 1
-    }
-  },
-  "src/client/httpTransport.ts": {
-    "@typescript-eslint/no-base-to-string": {
-      "count": 1
-    },
-    "@typescript-eslint/no-dynamic-delete": {
-      "count": 1
-    },
-    "@typescript-eslint/no-empty-function": {
-      "count": 4
-    }
-  },
-  "src/client/identity.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 3
-    },
-    "@typescript-eslint/require-await": {
       "count": 1
     }
   },
   "src/client/modelRegistration.ts": {
     "@typescript-eslint/no-deprecated": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 4
-    }
-  },
-  "src/client/resourceTypes.ts": {
-    "@typescript-eslint/no-empty-object-type": {
       "count": 1
     }
   },
@@ -1204,11 +1095,6 @@
     },
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 1
-    }
-  },
-  "src/coordination/trace.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 11
     }
   },
   "src/core/DatabaseManager.ts": {
@@ -1263,14 +1149,8 @@
     "@typescript-eslint/no-non-null-assertion": {
       "count": 2
     },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
     "@typescript-eslint/require-await": {
       "count": 2
-    },
-    "@typescript-eslint/switch-exhaustiveness-check": {
-      "count": 1
     }
   },
   "src/core/__tests__/openIDBWithTimeout.test.ts": {
@@ -1292,20 +1172,12 @@
       "count": 4
     }
   },
-  "src/errors.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 3
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 3
-    }
-  },
   "src/interfaces/index.ts": {
     "@typescript-eslint/no-redundant-type-constituents": {
       "count": 1
     }
   },
-  "src/mutators/RecordingTransaction.ts": {
+  "src/mutators/RecordingMutation.ts": {
     "@typescript-eslint/no-deprecated": {
       "count": 1
     }
@@ -1346,11 +1218,6 @@
       "count": 2
     },
     "@typescript-eslint/require-await": {
-      "count": 1
-    }
-  },
-  "src/query/client.ts": {
-    "@typescript-eslint/no-deprecated": {
       "count": 1
     }
   },
@@ -1441,14 +1308,6 @@
       "count": 1
     }
   },
-  "src/schema/field.ts": {
-    "@typescript-eslint/no-unnecessary-type-parameters": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-return": {
-      "count": 1
-    }
-  },
   "src/schema/generate.ts": {
     "@typescript-eslint/no-non-null-assertion": {
       "count": 2
@@ -1462,29 +1321,8 @@
       "count": 1
     }
   },
-  "src/schema/model.ts": {
-    "@typescript-eslint/no-unsafe-return": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
-  },
   "src/schema/queries.ts": {
     "@typescript-eslint/no-deprecated": {
-      "count": 1
-    }
-  },
-  "src/schema/roles.ts": {
-    "@typescript-eslint/no-base-to-string": {
-      "count": 1
-    }
-  },
-  "src/schema/schema.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 5
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
       "count": 1
     }
   },
@@ -1505,11 +1343,6 @@
     },
     "@typescript-eslint/restrict-template-expressions": {
       "count": 2
-    }
-  },
-  "src/schema/tenancy.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 4
     }
   },
   "src/source/__tests__/drizzle-adapter.test.ts": {
@@ -1688,37 +1521,12 @@
       "count": 2
     }
   },
-  "src/sync/ConnectionManager.ts": {
-    "@typescript-eslint/no-unnecessary-boolean-literal-compare": {
-      "count": 1
-    },
-    "@typescript-eslint/switch-exhaustiveness-check": {
-      "count": 1
-    }
-  },
-  "src/sync/NetworkProbe.ts": {
-    "@typescript-eslint/no-unnecessary-boolean-literal-compare": {
-      "count": 1
-    }
-  },
   "src/sync/SyncWebSocket.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    },
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 3
-    },
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 1
     },
-    "@typescript-eslint/no-unsafe-argument": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
     "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 4
+      "count": 2
     },
     "@typescript-eslint/require-await": {
       "count": 2
@@ -1748,29 +1556,6 @@
     },
     "@typescript-eslint/require-await": {
       "count": 10
-    }
-  },
-  "src/sync/awaitClaimGrant.ts": {
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 4
-    }
-  },
-  "src/sync/createClaimStream.ts": {
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 2
-    },
-    "@typescript-eslint/require-await": {
-      "count": 2
-    }
-  },
-  "src/sync/createPresenceStream.ts": {
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 2
-    }
-  },
-  "src/sync/credentialLifecycle.ts": {
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 2
     }
   },
   "src/sync/deltaPipeline.ts": {
@@ -1810,9 +1595,6 @@
     }
   },
   "src/sync/schemas.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 2
-    },
     "@typescript-eslint/no-unsafe-return": {
       "count": 1
     }
@@ -1820,17 +1602,6 @@
   "src/sync/syncPlan.ts": {
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 3
-    }
-  },
-  "src/sync/wsFrameHandlers.ts": {
-    "@typescript-eslint/no-base-to-string": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 1
     }
   },
   "src/testing/mocks/MockSyncContext.ts": {
@@ -1864,48 +1635,8 @@
     "@typescript-eslint/no-unsafe-assignment": {
       "count": 2
     },
-    "@typescript-eslint/no-unsafe-return": {
-      "count": 1
-    },
     "@typescript-eslint/no-unused-vars": {
       "count": 8
-    }
-  },
-  "src/transactions/TransactionQueue.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    },
-    "@typescript-eslint/no-misused-spread": {
-      "count": 5
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 17
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unsafe-enum-comparison": {
-      "count": 2
-    },
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 8
-    },
-    "@typescript-eslint/require-await": {
-      "count": 4
-    },
-    "no-case-declarations": {
-      "count": 1
-    },
-    "no-empty": {
-      "count": 2
-    }
-  },
-  "src/transactions/TransactionStore.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 3
-    },
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 1
     }
   },
   "src/transactions/__tests__/ackConfirmation.test.ts": {
@@ -1953,7 +1684,44 @@
       "count": 1
     }
   },
-  "src/transactions/coalesceRules.ts": {
+  "src/transactions/mutations/MutationQueue.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
+    "@typescript-eslint/no-misused-spread": {
+      "count": 5
+    },
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 17
+    },
+    "@typescript-eslint/no-unsafe-assignment": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unsafe-enum-comparison": {
+      "count": 2
+    },
+    "@typescript-eslint/prefer-nullish-coalescing": {
+      "count": 8
+    },
+    "@typescript-eslint/require-await": {
+      "count": 4
+    },
+    "no-case-declarations": {
+      "count": 1
+    },
+    "no-empty": {
+      "count": 2
+    }
+  },
+  "src/transactions/mutations/MutationStore.ts": {
+    "@typescript-eslint/no-non-null-assertion": {
+      "count": 3
+    },
+    "@typescript-eslint/prefer-nullish-coalescing": {
+      "count": 1
+    }
+  },
+  "src/transactions/mutations/coalesceRules.ts": {
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 1
     },
@@ -1965,24 +1733,6 @@
     },
     "@typescript-eslint/prefer-nullish-coalescing": {
       "count": 2
-    }
-  },
-  "src/transactions/deltaConfirmation.ts": {
-    "@typescript-eslint/prefer-optional-chain": {
-      "count": 1
-    }
-  },
-  "src/types/streams.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 1
-    }
-  },
-  "src/utils/asyncIterator.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 2
-    },
-    "@typescript-eslint/require-await": {
-      "count": 4
     }
   },
   "src/utils/mobxSetup.ts": {

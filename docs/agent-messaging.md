@@ -1,5 +1,7 @@
 # Agent Messaging
 
+> Durable handoffs between agents, linked to the claim they are about.
+
 Use a normal model when agents or humans need durable communication inside a
 syncGroup. Use claim `description` and `meta` for live coordination context.
 Use a `messages` row when the information must survive reconnects, work over
@@ -32,7 +34,6 @@ export const schema = defineSchema({
       status: z.string(),
       teamId: z.string(),
     },
-    {},
     { entityRoles: [entityRole({ kind: "team", source: "teamId" })] },
   ),
 
@@ -47,7 +48,6 @@ export const schema = defineSchema({
       aboutEntityId: z.string().optional(),
       aboutIntentId: z.string().optional(),
     },
-    {},
     { entityRoles: [entityRole({ kind: "team", source: "teamId" })] },
   ),
 });
@@ -121,7 +121,7 @@ Peers outside that syncGroup do not.
 Live clients read locally and update when deltas arrive:
 
 ```ts
-const rows = ablo.messages.getAll({
+const rows = ablo.messages.local.list({
   where: { teamId },
   orderBy: { createdAt: "asc" },
 });

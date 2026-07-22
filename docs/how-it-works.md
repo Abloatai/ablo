@@ -1,5 +1,7 @@
 # How Ablo Works
 
+> You write through Ablo, Ablo writes to your Postgres, and the write-ahead log confirms it.
+
 You write through Ablo, and Ablo writes to your Postgres. That one sentence is the
 whole model — everything below explains what it means and how to use it.
 
@@ -8,14 +10,14 @@ whole model — everything below explains what it means and how to use it.
 await ablo.tasks.update({ id: 'task_42', data: { status: 'done' }, wait: 'confirmed' });
 
 // Reads come back live, kept current from your database.
-const task = ablo.tasks.get('task_42');
+const task = ablo.tasks.local.retrieve('task_42');
 ```
 
 ## The mental model — read this once
 
-Ablo is a **coordination layer in front of your Postgres**. Humans, agents, and
-background jobs all change the same application data through one API, and Ablo
-makes sure their writes don't clobber each other.
+Ablo is a **coordination layer in front of your Postgres**. Agents, background
+jobs, and the people alongside them all change the same application data through
+one API, and Ablo makes sure their writes don't clobber each other.
 
 - **Writes go through Ablo.** `ablo.<model>.create / update / delete` enter Ablo's
   commit chokepoint — where claims, ordering, and idempotency are enforced — and
@@ -57,7 +59,7 @@ Registering the database is the whole switch. There is no tier or flag to choose
 npm install @abloatai/ablo
 npx ablo init
 
-# 2. Push your schema (the models humans and agents edit together).
+# 2. Push your schema (the models your agents edit together).
 npx ablo push
 
 # 3. Connect your database — one command, admin credential used once and discarded.
@@ -80,13 +82,13 @@ export const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 await ablo.tasks.update({ id: 'task_42', data: { status: 'done' }, wait: 'confirmed' });
 
 // 6. Read — live, no fetch loop.
-const task = ablo.tasks.get('task_42');
+const task = ablo.tasks.local.retrieve('task_42');
 
 // 7. Coordinate when more than one actor can touch a row. Hold a claim and Ablo
 //    serializes writes on that key against everyone else; read after claiming,
 //    then write. The lease releases automatically at the end of the scope.
 await using _hold = await ablo.tasks.claim('task_42');
-const latest = ablo.tasks.get('task_42'); // read after claiming, not from memory
+const latest = ablo.tasks.local.retrieve('task_42'); // read after claiming, not from memory
 await ablo.tasks.update({ id: 'task_42', data: { status: 'done' } });
 ```
 

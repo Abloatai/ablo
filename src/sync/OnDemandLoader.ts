@@ -23,14 +23,14 @@
 
 import type { InstanceCache } from '../InstanceCache.js';
 import { ModelScope } from '../InstanceCache.js';
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import type { Database } from '../Database.js';
 import type { Model } from '../Model.js';
 import type { ModelRegistry, RegisteredModelClass } from '../ModelRegistry.js';
 import { postQuery } from '../query/client.js';
-import type { RecoveryClass } from '../errorCodes.js';
+import type { RecoveryClass } from '../transaction/errorCodes.js';
 import type { LoadWhere, Query, WhereClause, WhereOp, WherePrimitive } from '../query/types.js';
-import type { Schema } from '../schema/schema.js';
+import type { Schema } from '../transaction/schema/schema.js';
 
 export interface OnDemandLoaderOptions {
   readonly objectPool: InstanceCache;
@@ -91,6 +91,30 @@ interface SchemaModelDef {
     string,
     { readonly type?: string; readonly target?: string; readonly foreignKey?: string }
   >;
+}
+
+function timestampMs(value: unknown): number | undefined {
+  if (value instanceof Date) {
+    const timestamp = value.getTime();
+    return Number.isFinite(timestamp) ? timestamp : undefined;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return undefined;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+/**
+ * A query response is a snapshot, not an ordered delta. It may have started
+ * before a local optimistic write and completed after it. Only treat the row
+ * as authoritative over an existing model when its server timestamp is newer;
+ * missing timestamps retain the legacy merge behavior for custom sources that
+ * do not expose `updatedAt`.
+ */
+function snapshotDoesNotAdvanceModel(data: Record<string, unknown>, model: Model): boolean {
+  const incoming = timestampMs(data.updatedAt);
+  const resident = timestampMs(model.updatedAt);
+  return incoming !== undefined && resident !== undefined && incoming <= resident;
 }
 
 export class OnDemandLoader {
@@ -459,19 +483,29 @@ export class OnDemandLoader {
     const obj = raw as Record<string, unknown>;
     if (typeof obj.id !== 'string') return null;
     if (this.opts.objectPool.has(obj.id)) {
-      // Pool already has this entity, but the row coming from the
-      // network is the freshest server-confirmed state. Apply the new
-      // fields onto the existing instance instead of returning the
-      // stale model verbatim — otherwise a `load()` that re-fetches
-      // after a missed delta (WS dropped, tab slept, redeploy) silently
-      // discards the fresh state and the consumer keeps seeing the
-      // birth-time snapshot forever. `updateFromData` is the same
-      // primitive `InstanceCache.upsert()` uses for delta application,
-      // so the behaviour matches "delta-applied" semantics exactly.
+      // Keep the existing instance alive when a query refreshes it. A query
+      // can carry fresher server state after a missed delta, but unlike the
+      // ordered delta stream it can also finish late with an older snapshot;
+      // the reconciliation below distinguishes those cases before applying.
       const existing = this.opts.objectPool.get(obj.id);
       if (existing) {
         const stamped = this.stampTypename(obj, typename) as Record<string, unknown>;
-        existing.updateFromData(stamped);
+        // Network queries are unordered snapshots. A request that began before
+        // an optimistic resize can return afterward with the old row; applying
+        // it here would visibly snap the live model back, and the matching
+        // authoritative delta cannot repair it because own echoes are
+        // intentionally suppressed. Keep a newer resident row intact.
+        if (snapshotDoesNotAdvanceModel(stamped, existing)) return existing;
+
+        // If the source has no comparable timestamp, retain pending local
+        // fields while accepting unrelated server fields. This is the same
+        // local-first merge contract used by SyncClient's delta resolver.
+        const localChanges = existing.getChanges();
+        existing.updateFromData(
+          Object.keys(localChanges).length > 0
+            ? { ...stamped, ...localChanges, updatedAt: existing.updatedAt }
+            : stamped,
+        );
         return existing;
       }
       return null;
@@ -483,7 +517,7 @@ export class OnDemandLoader {
     // "InstanceCache.createFromData: No model identifier found" warning,
     // failing to hydrate the entity from cache (network path then has to
     // re-populate it). The typename comes from the schema relation
-    // (`'SlideLayer'`, `'SlideLayoutLayer'`, etc.) so no guessing involved.
+    // (`'Block'`, `'Section'`, etc.) so no guessing involved.
     const stamped = this.stampTypename(obj, typename) as Record<string, unknown>;
     return this.opts.objectPool.createFromData(stamped, undefined, opts);
   }
@@ -502,8 +536,18 @@ export class OnDemandLoader {
     if (!item || typeof item !== 'object' || !typename) return item;
     const obj = item as Record<string, unknown>;
     if (obj.__typename === typename) return obj;
-    const { _Typename: _drop, ...rest } = obj as Record<string, unknown> & { _Typename?: unknown };
-    void _drop;
+    // Drop the driver-mangled `_Typename` AND any row-carried `__typename`
+    // that disagrees with the schema's: these rows were returned FOR this
+    // model's query, so the schema typename is correct by construction — and
+    // without stripping it, the spread would put the row's variant (a server
+    // echoing the schema KEY `tasks` instead of the typename `Task`) back on
+    // top of the stamp, sending hydration to the strict unknown-model error.
+    const { _Typename: _dropMangled, __typename: _dropRowVariant, ...rest } = obj as Record<
+      string,
+      unknown
+    > & { _Typename?: unknown; __typename?: unknown };
+    void _dropMangled;
+    void _dropRowVariant;
     return { __typename: typename, ...rest };
   }
 
@@ -547,7 +591,7 @@ export class OnDemandLoader {
     });
 
     // Expand: server returns related entities nested under each row
-    // (`row.layers = [{...}, ...]`). Walk the nested shape, stamp the
+    // (`row.blocks = [{...}, ...]`). Walk the nested shape, stamp the
     // typename from the schema's relation metadata (the server bakes
     // `__typename` into the JSONB but the postgres.camel driver
     // mangles it to `_Typename` mid-flight, so client-side stamping
@@ -622,8 +666,8 @@ export class OnDemandLoader {
 
   private resolveTypename(modelName: string): string {
     // Schema is the source of truth for wire typenames. The model proxy
-    // is keyed by camelCase plural (`slideLayers`) but the wire query +
-    // InstanceCache typeIndex use the typename (`SlideLayer`).
+    // is keyed by camelCase plural (`blocks`) but the wire query +
+    // InstanceCache typeIndex use the typename (`Block`).
     const def = (this.opts.schema as { models?: Record<string, { typename?: string }> })
       .models?.[modelName];
     return def?.typename ?? modelName;
@@ -669,8 +713,8 @@ function stableKey(
     const kb = JSON.stringify(b);
     return ka < kb ? -1 : ka > kb ? 1 : 0;
   });
-  // Expand is part of the query identity: `slides where deck=d1` and the same
-  // with `expand:['layers']` hydrate different data, so they must not share a
+  // Expand is part of the query identity: `sections where report=r1` and the same
+  // with `expand:['blocks']` hydrate different data, so they must not share a
   // ledger/dedup key. Sorted so relation order doesn't fork the key.
   const expandKey = expand && expand.length > 0 ? [...expand].sort() : undefined;
   return JSON.stringify({ modelName, where: sorted, orderBy, limit, expand: expandKey });
@@ -869,10 +913,10 @@ function likeRegex(pattern: string, insensitive: boolean): RegExp {
 }
 
 /**
- * Schema fields are camelCase (`slideId`); the wire query expects
+ * Schema fields are camelCase (`sectionId`); the wire query expects
  * the server-side column name. The query server's input resolver
  * casing-folds, but we send snake_case to match the convention used
- * by the existing loaders' postQuery calls (`'slide_id'` etc.).
+ * by the existing loaders' postQuery calls (`'section_id'` etc.).
  */
 function columnize(field: string): string {
   return field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);

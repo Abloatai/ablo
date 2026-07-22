@@ -15,7 +15,7 @@ import { runInAction } from 'mobx';
 import { getContext } from '../context.js';
 import { ModelScope } from '../InstanceCache.js';
 import type { Model } from '../Model.js';
-import type { ModelData } from '../types/modelData.js';
+import type { ModelData } from '../transaction/types/modelData.js';
 import type { SyncDelta } from './SyncWebSocket.js';
 
 /** One applied-delta result from the persistence layer's batch write, forwarded to the pool. */

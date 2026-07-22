@@ -16,7 +16,7 @@ import type { Model } from './Model.js';
 import { Database } from './Database.js';
 import { InstanceCache } from './InstanceCache.js';
 import { getActiveRegistry } from './ModelRegistry.js';
-import { AbloValidationError } from './errors.js';
+import { AbloValidationError } from './transaction/errors.js';
 
 /**
  * Options for LazyReferenceCollection behavior
@@ -182,9 +182,9 @@ export class LazyReferenceCollection<T extends Model> {
    * so any pool.remove invalidates the computed and re-renders the
    * consumer with the deleted item gone.
    *
-   * Without this, deleting a slide layer would pool.remove() cleanly
-   * but the canvas — which reads `slide.layers.value` — would keep
-   * showing the deleted layer until a full reload rebuilt the
+   * Without this, deleting a block would pool.remove() cleanly
+   * but the view — which reads `section.blocks.value` — would keep
+   * showing the deleted block until a full reload rebuilt the
    * collection.
    */
   get value(): T[] {

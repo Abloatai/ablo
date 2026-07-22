@@ -2,7 +2,7 @@
  * Declares a tree of named custom mutators grouped by model key. Each mutator is
  * a plain async function that receives `{ tx, args }` and composes any number of
  * `tx.mutations.*` and `tx.read.*` calls to carry out a named operation, such as
- * `slides.createWithLayers`.
+ * `sections.createWithBlocks`.
  *
  * The function is purely a place for types to anchor and returns its input
  * unchanged; the runtime that dispatches a mutator lives elsewhere — the
@@ -12,9 +12,9 @@
  * through to wherever they are invoked.
  */
 
-import type { Schema } from '../schema/schema.js';
+import type { Schema } from '../transaction/schema/schema.js';
 import type { Transaction } from './Transaction.js';
-import type { ResolveSchema } from '../types/global.js';
+import type { ResolveSchema } from '../transaction/types/global.js';
 
 /**
  * `ResolveSchema` narrowed to satisfy the `Schema` bound — mirrors

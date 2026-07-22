@@ -1,9 +1,12 @@
 ---
 title: "Quickstart"
+description: "Make your first coordinated write, on the Postgres you already have."
+sidebar:
+  icon: rocket
 ---
 
 Build with Ablo on **the Postgres you already have**. You declare a small Ablo
-schema for the models humans and agents edit together, connect Ablo to your
+schema for the models your agents edit together, connect Ablo to your
 database (`ablo connect`), and read and write every one of those models through
 `ablo.<model>`. You write through Ablo; it lands the change in your Postgres and
 confirms it by tailing your write-ahead log (WAL). Your rows live in your database,
@@ -86,6 +89,22 @@ the SDK's `Register` interface instead of colliding with it — the same shape
 import type { Model } from '@abloatai/ablo/schema';
 
 type WeatherReport = Model<'weatherReports'>; // fully typed from YOUR schema
+```
+
+The same block is where you name the metadata your claims carry. Add a
+`ClaimMeta` key and every `claim.state`, `claim.queue`, and held claim reads
+`target.meta` as that shape:
+
+```ts
+declare module '@abloatai/ablo' {
+  interface Register {
+    Schema: typeof schema;
+    ClaimMeta: { blocks: string[] };
+  }
+}
+
+const holder = ablo.weatherReports.claim.state({ id });
+holder?.target.meta?.blocks.length; // typed, no guard
 ```
 
 (The same `Register` binding types every hook and client — it's the
@@ -171,10 +190,9 @@ tables** — Ablo reads them, it does not create or migrate them:
   the tables with your own migration tool; Ablo syncs the subset of models you
   declared and reports the rest as "ignored / owned by you."
 
-> **Optional escape hatch:** if you have no tables yet and want Ablo to scaffold
-> them, `npx ablo migrate` can create your synced-model tables for you. This is
-> not the happy path — connecting a real database is `ablo connect` (step 3), and
-> your own migrations stay in charge of your schema.
+> **Starting from an empty database?** `npx ablo migrate` creates the tables
+> your schema needs. Once they exist, your own migration tool stays in charge
+> of them — Ablo adopts whatever shape you evolve.
 
 Nothing runs locally — there is no dev server to start. Your app talks to Ablo's
 hosted API; the rows live in your database.

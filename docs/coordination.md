@@ -1,12 +1,15 @@
 # Coordination Reference
 
+> Claim mechanics and the API behind them: who holds a row, who is waiting, and how the line moves.
+
 > **Governing convention:** [`concurrency-convention.md`](./concurrency-convention.md)
 > — the non-coercion principle (surface state, let the actor decide), the full
-> `onStale` taxonomy, the read-set (`reads[]`), and the boundaries. Read that for
-> the *why* and the contract; this reference is the *how* (claim mechanics + API).
+> `onStale` taxonomy, the batch premise (`reads[]`), and the boundaries. Read
+> that for the *why* and the contract; this reference is the *how* (claim
+> mechanics + API).
 
-Coordinate long-running work on a row so humans and agents don't clobber each
-other. Most writes need none of this — a plain `ablo.<model>.update({ id, data })`
+Coordinate long-running work on a row so agents — and the people watching them —
+don't clobber each other. Most writes need none of this — a plain `ablo.<model>.update({ id, data })`
 is **last-write-wins** by default.
 
 > **Read-modify-write under contention? Use the functional update — it owns all
@@ -128,46 +131,53 @@ disposition once, in the schema, so every commit to that model is governed
 without per-call wiring. This is the third coordination axis — orthogonal to
 `policy` (who may read a row) and `groups` (which delta channels it fans into).
 
-Add a `conflict` map to `model(...)`, keyed by the **committer's** participant
-kind (`user` / `agent` / `system`), with the same `onStale` vocabulary as values:
+Set a model's `conflict` stance with `coordination`, naming one rule per kind of
+committer:
 
-| value | meaning |
+```ts
+import { coordination, model, z } from '@abloatai/ablo/schema';
+
+export const cards = model(
+  {
+    title: z.string(),
+  },
+  {
+    // "a human's edit always wins (never blocked); an agent yields"
+    conflict: coordination.humansOverwrite().agentsReject(),
+  }
+);
+```
+
+Each rule pairs a committer with a disposition, drawn from the same `onStale`
+vocabulary the write guards use:
+
+| disposition | meaning |
 |---|---|
-| `'overwrite'` | the write wins; that committer is never blocked. |
-| `'reject'` | the write is refused; that committer yields to a held claim / stale snapshot. |
-| `'notify'` | hold the write and hand back the current value so the committer re-reads and re-applies (stale writes only). |
+| `overwrite` | the write wins; that committer is never blocked. |
+| `reject` | the write is refused; that committer yields to a held claim / stale snapshot. |
+| `notify` | hold the write and hand back the current value so the committer re-reads and re-applies (stale writes only). |
+
+That gives nine rules — `humansOverwrite` / `humansReject` / `humansNotify`,
+`agentsOverwrite` / `agentsReject` / `agentsNotify`, `systemOverwrite` /
+`systemReject` / `systemNotify` — and a chain may name as many as it needs. A
+kind left unnamed falls through to the engine default, and a kind named twice
+takes the later rule.
+
+When the rules are assembled at runtime rather than written out, each one is
+also a standalone function, and `coordination()` merges them:
 
 ```ts
-import { model, field } from '@abloatai/ablo/schema';
+import { coordination, humansOverwrite, agentsReject } from '@abloatai/ablo/schema';
 
-export const card = model('card', {
-  title: field.string(),
-}, {
-  // "a human's edit always wins (never blocked); an agent yields"
-  conflict: { user: 'overwrite', agent: 'reject' },
-});
+const stance = coordination(humansOverwrite(), agentsReject());
 ```
 
-### Composable helpers
-
-For the same map with an authoring surface that reads like the rest of the DSL,
-use the disposition helpers and the `coordination(...)` combinator (a `cn`/`cx`
-for conflict policy — later rules win on key collisions):
+Both forms produce the same thing: a map keyed by the committer's participant
+kind, which is what travels to the server.
 
 ```ts
-import { model, field, coordination, humansOverwrite, agentsReject } from '@abloatai/ablo/schema';
-
-export const card = model('card', {
-  title: field.string(),
-}, {
-  conflict: coordination(humansOverwrite(), agentsReject()),
-  // → { user: 'overwrite', agent: 'reject' }
-});
+{ user: 'overwrite', agent: 'reject' }
 ```
-
-Helpers, one per disposition: `humansOverwrite` / `humansReject` / `humansNotify`,
-`agentsOverwrite` / `agentsReject` / `agentsNotify`,
-`systemOverwrite` / `systemReject` / `systemNotify`.
 
 ### How it relates to per-write coordination
 
@@ -293,7 +303,7 @@ equivalent for when you hold a claim without `await using`.
 ### Claim-gated reads
 
 `claim.state({ id })` always returns immediately. Model reads such as
-`ablo.<model>.get(id)` are local reads and stay available while a claim is
+`ablo.<model>.local.retrieve(id)` are local reads and stay available while a claim is
 held. Server/model reads can choose a claimed policy:
 
 ```ts
@@ -546,11 +556,11 @@ snapshot.
 
 Reading or claiming a row auto-enrolls you in its sync group, which is enough for
 `claim.state`/`claim.queue` to observe co-participants. When you want to *hold*
-presence on a known set of rows — a deck's slides, a board's cards — and react to
+presence on a known set of rows — a workspace's documents, a board's cards — and react to
 who joins or leaves, use `join`:
 
 ```ts
-await using room = await ablo.slides.join(slideIds, { ttl: '5m' });
+await using room = await ablo.documents.join(slideIds, { ttl: '5m' });
 room.peers; // who else is here, live
 ```
 
@@ -627,7 +637,7 @@ inspect the `code`.
 
 `AbloStaleContextError.conflicts` lists the `(model, id, observedSyncId)` rows
 that moved during your generation window — use it for selective regeneration
-(re-think only the slides that changed, not the whole deck) and for metrics.
+(re-think only the documents that changed, not the whole workspace) and for metrics.
 
 ```ts
 try {

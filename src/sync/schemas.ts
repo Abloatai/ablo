@@ -2,32 +2,35 @@
  * Zod validation schemas for sync engine server responses.
  *
  * Validates data at the fetch boundary before it enters the sync engine.
- * Uses .passthrough() so the server can add fields without breaking clients.
+ * Unknown keys are kept, so a server that adds a field does not break a client
+ * that predates it.
  */
 
 import { z } from 'zod';
 import { getContext } from "../context.js";
-import { AbloValidationError } from "../errors.js";
-
-// ─── Sync Action Types ───────────────────────────────────────────────────────
-// The action codes a server delta can carry, matching the wire protocol's
-// action-type set.
-
-const SYNC_ACTION_VALUES = ['I', 'U', 'D', 'A', 'C', 'G', 'S', 'V'] as const;
+import { AbloValidationError } from "../transaction/errors.js";
+import { syncDeltaWireCoreSchema } from '../transaction/wire/delta.js';
 
 // ─── Server Delta Schema ─────────────────────────────────────────────────────
 
-export const ServerDeltaSchema = z
-  .object({
-    id: z.number(),
-    operation: z.enum(SYNC_ACTION_VALUES).optional(),
-    action: z.enum(SYNC_ACTION_VALUES).optional(),
-    modelName: z.string(),
-    entityId: z.string().optional(),
-    modelId: z.string().optional(),
-    data: z.record(z.string(), z.unknown()).nullable().optional(),
+/**
+ * A delta as it arrives in a bootstrap payload.
+ *
+ * The bootstrap routes return the same rows the broadcast path does, so the
+ * fields are taken from {@link syncDeltaWireCoreSchema} rather than restated
+ * here — a delta is one shape, and this is the reader for it, not a second
+ * definition of it. Unknown keys are kept, because the server sends its own
+ * wider projection (attribution, `projectId`) that later stages may read.
+ */
+export const ServerDeltaSchema = syncDeltaWireCoreSchema
+  .pick({
+    id: true,
+    actionType: true,
+    modelName: true,
+    modelId: true,
+    data: true,
   })
-  .passthrough();
+  .loose();
 
 export type ValidatedServerDelta = z.infer<typeof ServerDeltaSchema>;
 
@@ -69,8 +72,12 @@ export const BootstrapResponseSchema = z
     // absent when the server predates this field or the tenant has never
     // pushed a schema.
     schemaHash: z.string().optional(),
+    // Present when a paged single-model request stopped at its row limit
+    // with rows remaining: pass it back as the next page's cursor. Absent
+    // on the final page, on unpaged responses, and from older servers.
+    nextCursor: z.string().optional(),
   })
-  .passthrough();
+  .loose();
 
 export type ValidatedBootstrapResponse = z.infer<typeof BootstrapResponseSchema>;
 

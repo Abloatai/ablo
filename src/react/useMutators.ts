@@ -1,14 +1,14 @@
 'use client';
 
 import { useMemo } from 'react';
-import type { Schema } from '../schema/schema.js';
+import type { Schema } from '../transaction/schema/schema.js';
 import type { MutatorDefs, MutatorFn } from '../mutators/defineMutators.js';
 import { createTransaction } from '../mutators/Transaction.js';
-import { createRecordingTransaction } from '../mutators/RecordingTransaction.js';
+import { createRecordingMutation } from '../mutators/RecordingMutation.js';
 import type { UndoScope } from '../mutators/UndoManager.js';
-import type { ResolveSchema } from '../types/global.js';
+import type { ResolveSchema } from '../transaction/types/global.js';
 import { useSyncContext } from './context.js';
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import { getContext } from '../context.js';
 
 /**
@@ -55,7 +55,7 @@ export type MutatorInvokers<M> = {
 
 /**
  * Options passed to `useMutators`. When `undoScope` is set, every mutator
- * invocation is wrapped in a `RecordingTransaction` and its inverses are
+ * invocation is wrapped in a `RecordingMutation` and its inverses are
  * pushed to the scope as one undo entry.
  */
 export interface UseMutatorsOptions<S extends Schema> {
@@ -139,7 +139,7 @@ export function useMutators(
           // interleave their shared-model snapshots. See UndoScope.runRecorded.
           if (undoScope) {
             return undoScope.runRecorded(async () => {
-              const recording = createRecordingTransaction(schema, store, organizationId);
+              const recording = createRecordingMutation(schema, store, organizationId);
               try {
                 const result = await fn({ tx: recording.tx, args });
                 const entry = recording.getEntry(label);

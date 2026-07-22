@@ -1,15 +1,18 @@
 # Agent + Human
 
-A report-writing agent that yields when a human is editing the same report.
+> An agent that yields the row when a person is already holding it.
+
+A task-writing agent that yields when a person is editing the same task.
 
 ## Scenario
 
-The same reports are edited by both humans and agents. They must not collide:
+The same tasks are edited by agents and by the people watching them. They must
+not collide:
 
-- If a human already holds the row, the agent yields instead of fighting for it.
+- If a person already holds the row, the agent yields instead of fighting for it.
 - While the agent is updating, the UI can show who is active.
-- If the report changes mid-run, the commit is rejected instead of overwriting
-  the human's newer edit.
+- If the task changes mid-run, the commit is rejected instead of overwriting the
+  newer edit.
 
 A **claim** does both jobs. Claims don't lock — if another writer holds the row,
 `claim` waits for them, re-reads the fresh row, then hands it back to you on
@@ -21,70 +24,74 @@ a typed error if the row moved underneath you while the agent was busy.
 
 ## Schema-Backed Worker
 
-The worker uses the same schema client the app uses. It reads the report from
-the server with `retrieve({ id })`, claims the row, and writes through
-`ablo.weatherReports.update(...)` with a stale-check so a human's concurrent edit
-can't be overwritten.
+The worker uses the same schema client the app uses. It reads the task from the
+server with `retrieve({ id })`, claims the row, and writes through
+`ablo.tasks.update(...)` with a stale-check so a concurrent edit can't be
+overwritten.
 
 ```ts
 import Ablo, { AbloClaimedError, AbloStaleContextError } from '@abloatai/ablo';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
 const schema = defineSchema({
-  weatherReports: model({
-    location: z.string(),
-    status: z.enum(['pending', 'ready']),
+  tasks: model({
+    title: z.string(),
+    status: z.enum(['todo', 'doing', 'done']),
   }),
 });
 
-const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+  transport: 'http',
+});
 
-export async function markReady(reportId: string) {
+export async function markDone(taskId: string) {
   await ablo.ready();
 
   // retrieve({ id }) is an async server read — await it.
-  const report = await ablo.weatherReports.retrieve({ id: reportId });
-  if (!report) return { status: 'not_found' };
+  const task = await ablo.tasks.retrieve({ id: taskId });
+  if (!task) return { status: 'not_found' };
 
   try {
-    // queue: false → don't queue behind a current holder. If a human already
+    // queue: false → don't queue behind a current holder. If someone already
     // holds the row, claim rejects with AbloClaimedError (caught below), so the
     // agent yields instead of waiting. Omit it, or pass queue: true, to queue
     // behind them. description → the label observers see while we work.
-    await using claim = await ablo.weatherReports.claim({
-      id: reportId,
+    await using claim = await ablo.tasks.claim({
+      id: taskId,
       queue: false,
-      description: 'marking_ready',
+      description: 'marking_done',
     });
-    const claimed = claim.data;
+    if (claim.data.status === 'done') return { status: 'noop' };
 
     // Inside an active claim, `update` is stale-checked automatically: the SDK
     // attaches the claim's snapshot version as `readAt` and sets
     // `onStale: 'reject'`. The write below is therefore equivalent to passing
     // those options yourself:
     //
-    //   ablo.weatherReports.update({
-    //     id: claimed.id,
-    //     data: { status: 'ready' },
+    //   ablo.tasks.update({
+    //     id: claim.data.id,
+    //     data: { status: 'done' },
     //     wait: 'confirmed',
     //     readAt: <claim snapshot version>,
     //     onStale: 'reject',
     //   });
     //
-    // If a human saved a newer version mid-run, the row no longer matches
-    // `readAt`, so the server rejects this commit with AbloStaleContextError
-    // (caught below) instead of clobbering their edit.
-    const updated = await ablo.weatherReports.update({
-      id: claimed.id,
-      data: { status: 'ready' },
+    // If a newer version landed mid-run, the row no longer matches `readAt`, so
+    // the server rejects this commit with AbloStaleContextError (caught below)
+    // instead of clobbering that edit.
+    const updated = await ablo.tasks.update({
+      id: claim.data.id,
+      data: { status: 'done' },
       wait: 'confirmed',
     });
 
-    return { status: 'ready', report: updated };
+    return { status: 'done', task: updated };
   } catch (err) {
-    // A human already holds the row — yield this run and let them finish.
+    // Someone already holds the row — yield this run and let them finish.
     if (err instanceof AbloClaimedError) return { status: 'yielded' };
-    // A human saved a newer version while we held the claim. The stale-check
+    // A newer version was saved while we held the claim. The stale-check
     // rejected our commit, so nothing was overwritten — re-run on fresh data.
     if (err instanceof AbloStaleContextError) return { status: 'stale' };
     throw err;
@@ -101,14 +108,14 @@ Keep workers on the same schema-backed client as the app.
 
 import { useAblo } from '@abloatai/ablo/react';
 
-export function ReportRow({ report: serverReport }: Props) {
-  const data = useAblo((ablo) => ablo.weatherReports.get(serverReport.id)) ?? serverReport;
-  const active = useAblo((ablo) => ablo.weatherReports.claim.state({ id: serverReport.id }));
-  const agentActive = active?.participantKind === 'agent';
+export function TaskRow({ task: serverTask }: Props) {
+  const data = useAblo((ablo) => ablo.tasks.local.retrieve(serverTask.id)) ?? serverTask;
+  const holder = useAblo((ablo) => ablo.tasks.claim.state({ id: serverTask.id }));
+  const agentActive = holder?.participantKind === 'agent';
 
   return (
     <div>
-      <span>{data.location}</span>
+      <span>{data.title}</span>
       {agentActive ? <span>Agent is updating...</span> : null}
     </div>
   );
@@ -120,9 +127,9 @@ export function ReportRow({ report: serverReport }: Props) {
 - The claim is visible to everyone: the UI reads it synchronously with
   `claim.state({ id })`, and it also arrives over the live stream.
 - `claim({ id })` makes writers take turns instead of racing — with
-  `queue: false`, the agent simply yields when a human already holds the row.
-- The `update` made while the claim is held is stale-checked automatically, so a human's
+  `queue: false`, the agent simply yields when someone already holds the row.
+- The `update` made while the claim is held is stale-checked automatically, so an
   edit landing mid-run rejects the agent's write with a typed
   `AbloStaleContextError` instead of overwriting it.
-- That same write carries the claim, so each accepted change is attributed to
-  the run that made it.
+- That same write carries the claim, so each accepted change is attributed to the
+  run that made it.

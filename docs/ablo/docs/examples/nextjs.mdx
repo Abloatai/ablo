@@ -1,9 +1,19 @@
 ---
 title: "Next.js Example"
+description: "App-router setup: the two clients, the session route, and reactive reads."
+sidebar:
+  icon: triangle
 ---
 
-A production-shaped Next.js + Ablo Sync app. App Router, Server Actions, React
-Server Components, and live client subscriptions.
+A production-shaped Next.js app on Ablo — App Router, Server Actions, React
+Server Components, and live client subscriptions. It handles three things at
+once: a fast initial render from the server, writes that don't overwrite work
+already in progress, and a UI that updates the moment data changes.
+
+The key piece is `claim()`. Commit a write through it and Ablo rejects the write
+if the record moved since you read it, so nothing is silently clobbered. Claims
+don't lock: if another writer holds the row, `claim` waits for them, re-reads the
+fresh row, then hands it to you — writers serialize instead of colliding.
 
 ## Structure
 
@@ -17,7 +27,7 @@ app/
   tasks/
     [id]/
       page.tsx              # RSC: retrieve + render
-      actions.ts            # Server Action: schema update with stale-state check
+      actions.ts            # Server Action: claim, then write
       TaskEditor.tsx        # Client: live updates
 lib/
   ablo.ts                   # Server Ablo client (holds ABLO_API_KEY)
@@ -70,8 +80,8 @@ export async function POST() {
 ## Provider
 
 The browser client points `authEndpoint` at that route and is handed to
-`<AbloProvider>` as an instance (Stripe `<Elements stripe={...}>` model). Build
-it once at module scope so the socket isn't torn down on every render.
+`<AbloProvider>` as an instance. Build it once at module scope so the socket
+isn't torn down on every render.
 
 ```tsx
 // app/providers.tsx
@@ -148,8 +158,9 @@ export async function markDone(id: string) {
 }
 ```
 
-If another participant commits between the read and the write, the commit
-rejects. The action can re-fetch and ask the user to retry.
+The write runs while the claim is held. If anything else commits between the
+read and the write, the commit is rejected because the row changed underneath
+you — re-fetch and retry.
 
 ## Live Client
 
@@ -159,7 +170,7 @@ rejects. The action can re-fetch and ask the user to retry.
 import { useAblo } from '@abloatai/ablo/react';
 
 export function TaskEditor({ task: serverTask }: Props) {
-  const data = useAblo((ablo) => ablo.tasks.get(serverTask.id)) ?? serverTask;
+  const data = useAblo((ablo) => ablo.tasks.local.retrieve(serverTask.id)) ?? serverTask;
   const holder = useAblo((ablo) => ablo.tasks.claim.state({ id: serverTask.id }));
   const busy = Boolean(holder);
 
@@ -173,6 +184,5 @@ export function TaskEditor({ task: serverTask }: Props) {
 
 ## More
 
-- [Next.js landing](/nextjs) — the product overview.
-- [React reference](/docs/react) — every option on `useAblo`.
-- [API reference](/docs/api) — every option on the write path.
+- [React reference](/react) — every option on `useAblo`.
+- [API reference](/api) — every option on the write path.

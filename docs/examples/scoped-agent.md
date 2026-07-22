@@ -1,12 +1,15 @@
-# Agent Scoped to One Deck
+# Agent Scoped to One Workspace
 
-You want an agent that edits **one deck** and pushes realtime updates to the
-people on **that deck only** — not a broadcast to the whole org. The catch most
-people hit: which write reaches whom is decided by how the rows *relate*, not by
-which columns the write touched. So a slide edit that never sets `deckId` still
-reaches everyone viewing the deck, because the slide already belongs to it. You
-get this by declaring the relationship once, then narrowing the agent to the deck
-id — you never assemble a `deck:<id>` audience string by hand.
+> Narrow an agent to a single record's audience, so its writes reach that group and no one else.
+
+You want an agent that edits **one workspace** and pushes realtime updates to the
+participants on **that workspace only** — not a broadcast to the whole org. The
+catch most people hit: which write reaches whom is decided by how the rows
+*relate*, not by which columns the write touched. So a task edit that never sets
+`workspaceId` still reaches everyone watching the workspace, because the task already
+belongs to it. You get this by declaring the relationship once, then narrowing the
+agent to the workspace id — you never assemble a `workspace:<id>` audience string by
+hand.
 
 The three steps below show how to declare it, scope the agent, and write.
 
@@ -19,22 +22,20 @@ import { defineSchema, identityRole, model, relation, z } from '@abloatai/ablo/s
 
 export const schema = defineSchema(
   {
-    // A deck's rows form the group `deck:<id>` (the kind comes from `groups.root`).
-    decks: model(
+    // A workspace's rows form the group `workspace:<id>` (the kind comes from `groups.root`).
+    workspaces: model(
       { title: z.string() },
-      {},
-      { groups: { root: 'deck' } },
+      { groups: { root: 'workspace' } },
     ),
-    // A slide has no group of its own. It inherits its deck's group via the
-    // `parent` edge, so a slide write reaches everyone viewing the deck.
-    slides: model(
-      { deckId: z.string(), body: z.string() },
-      { deck: relation.belongsTo('decks', 'deckId', { parent: true }) },
-      {},
+    // A task has no group of its own. It inherits its workspace's group via the
+    // `parent` edge, so a task write reaches everyone watching the workspace.
+    tasks: model(
+      { workspaceId: z.string(), title: z.string() },
+      { relations: { workspace: relation.belongsTo('workspaces', 'workspaceId', { parent: true }) } },
     ),
   },
   {
-    // Humans get their full org scope automatically from these.
+    // People get their full org scope automatically from these.
     identityRoles: [
       identityRole({ kind: 'org', source: 'organizationId' }),
       identityRole({ kind: 'user', source: 'userId' }),
@@ -43,31 +44,31 @@ export const schema = defineSchema(
 );
 ```
 
-## 2. Dispatch — narrow the agent to the deck it's working on
+## 2. Dispatch — narrow the agent to the workspace it's working on
 
 An agent can never reach more than the user who triggered it — that's the upper
-limit. From there you narrow it to a single deck by minting the agent's session
-against **just that deck's sync group**. You build the group from the **model
-kind and id** with the typed `syncGroup` helper — `syncGroup('deck', deckId)`,
-never a hand-assembled `deck:<id>` string — where `'deck'` is the kind declared
-by the `decks` model's `scope`.
+limit. From there you narrow it to a single workspace by minting the agent's session
+against **just that workspace's sync group**. You build the group from the **model
+kind and id** with the typed `syncGroup` helper — `syncGroup('workspace', workspaceId)`,
+never a hand-assembled `workspace:<id>` string — where `'workspace'` is the kind
+declared by the `workspaces` model's `groups.root`.
 
 Mint the scoped session on your backend (it holds the `sk_` key; the browser
 never does), then hand the short-lived token to the browser client:
 
 ```ts
-// server — mints a scoped agent session for one deck
+// server — mints a scoped agent session for one workspace
 import Ablo from '@abloatai/ablo';
 import { syncGroup } from '@abloatai/ablo/schema';
 import { schema } from './schema';
 
 const server = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
-export async function mintDeckAgentSession(deckId: string, agentId: string) {
+export async function mintProjectAgentSession(workspaceId: string, agentId: string) {
   const { token } = await server.sessions.create({
     agent: { id: agentId },
-    can: { slides: ['read', 'update'] }, // operation allowlist for this run
-    syncGroups: [syncGroup('deck', deckId)], // narrowed to just this deck
+    can: { tasks: ['read', 'update'] }, // operation allowlist for this run
+    syncGroups: [syncGroup('workspace', workspaceId)], // narrowed to just this workspace
   });
   return token;
 }
@@ -81,7 +82,7 @@ import { schema } from './schema';
 
 const ablo = Ablo({
   schema,
-  apiKey: async () => mintDeckAgentSession(deckId, agentId),
+  apiKey: async () => mintProjectAgentSession(workspaceId, agentId),
 });
 
 // The agent run is mounted on behalf of its triggering user.
@@ -91,30 +92,30 @@ const ablo = Ablo({
 ```
 
 `syncGroups` requests, it never grants: at connect the server intersects the
-groups the session asks for with the groups the identity is actually allowed,
-so the agent can never reach a deck its triggering user couldn't.
+groups the session asks for with the groups the identity is actually allowed, so
+the agent can never reach a workspace its triggering user couldn't.
 
-## 3. Write — it fans out to everyone on that deck
+## 3. Write — it fans out to everyone on that workspace
 
 Inside any component under the provider, grab the scoped client with `useAblo()`
-and write. The connection is already narrowed to `deck:<deckId>` from Step 2.
+and write. The connection is already narrowed to `workspace:<workspaceId>` from Step 2.
 
 ```ts
-const ablo = useAblo<(typeof schema)['models']>();
+const ablo = useAblo();
 
-// Other participants subscribed to deck:<deckId> — the human in the editor,
-// a reviewer agent — receive this delta in realtime. Participants on other
-// decks never see it.
-await ablo.slides.update({ id: slideId, data: { body: 'Q4 revenue up 12% YoY' } });
+// Other participants subscribed to workspace:<workspaceId> — a reviewer agent, a
+// person watching in the UI — receive this delta in realtime. Participants on
+// other workspaces never see it.
+await ablo.tasks.update({ id: taskId, data: { title: 'Ship the Q4 report' } });
 ```
 
-The slide's delta is stamped `deck:<deckId>`, derived server-side from the
-slide → deck `parent` edge — not from `deckId` appearing in this particular
+The task's delta is stamped `workspace:<workspaceId>`, derived server-side from the
+task → workspace `parent` edge — not from `workspaceId` appearing in this particular
 write, and not from whatever the agent happened to subscribe to. The routing is
-decided by the data: a slide belongs to its deck, so its writes go to the deck's
-group, full stop.
+decided by the data: a task belongs to its workspace, so its writes go to the
+workspace's group, full stop.
 
 ## See also
 
 - [Identity & Sync Groups](../identity.md) — the full scope / parent / grants model.
-- [Agent + Human](./agent-human.md) — yielding when a human edits the same row.
+- [Agent + Human](./agent-human.md) — yielding when someone else edits the same row.

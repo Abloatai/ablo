@@ -15,9 +15,9 @@ import {
   type ReferenceMetadata,
   PropertyType,
   LoadStrategy,
-} from './types/index.js';
+} from './transaction/types/index.js';
 import { getContext } from './context.js';
-import { AbloValidationError } from './errors.js';
+import { AbloValidationError } from './transaction/errors.js';
 // Type-only — erased at runtime, so no Model ↔ ModelRegistry module cycle.
 import type { Model } from './Model.js';
 import type { ConcreteModelConstructor } from './BaseSyncedStore.js';
@@ -69,9 +69,9 @@ export interface SerializedReferenceMetadata
  * child's pending transactions can be cancelled.
  */
 export interface BackReferenceMetadata {
-  /** The parent model name (e.g., 'SlideDeck') */
+  /** The parent model name (e.g., 'Report') */
   parentModel: string;
-  /** The foreign key property on this model (e.g., 'deckId') */
+  /** The foreign key property on this model (e.g., 'reportId') */
   foreignKey: string;
   /** Whether to cascade-cancel transactions when parent is deleted */
   cascadeDelete: boolean;
@@ -409,7 +409,7 @@ export class ModelRegistry {
    * transactions for every child model that declares a back-reference to that
    * parent.
    *
-   * @param childModelName - The model that holds a foreign key to the parent (e.g., 'Slide')
+   * @param childModelName - The model that holds a foreign key to the parent (e.g., 'Section')
    * @param metadata - The back-reference configuration
    */
   registerBackReference(childModelName: string, metadata: BackReferenceMetadata): void {

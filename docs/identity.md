@@ -1,5 +1,7 @@
 # Identity & Sync Groups
 
+> Who is connecting, and which slice of state they are allowed to see.
+
 This is the doc the Quickstart skips: **who is connecting, and which slice
 of shared state do they get?** If you've wired `<AbloProvider client={ablo}>`
 and wondered where org / team / user actually come from — start here.
@@ -20,7 +22,7 @@ that.
 ## What a sync group is
 
 A **sync group** is a named channel of shared state — a string like
-`org:acme` or `deck:abc123`. It is simultaneously:
+`org:acme` or `workspace:abc123`. It is simultaneously:
 
 - **the unit of fan-out** — a confirmed write to a row publishes a delta to
   every participant subscribed to that row's sync group(s), and
@@ -38,7 +40,7 @@ runnable place, so the concepts below have code to attach to.
 The entire declaration surface is: `identityRoles` (who may see what), and on
 each model `scope` / `parent` / `grants` (which group a row fans out on), plus
 optional `syncGroups` at session-mint time (narrowing). Read the three blocks first —
-a human gets their `org` / `team` scope, an agent gets one `deck` — then the
+a human gets their `org` / `team` scope, an agent gets one `workspace` — then the
 sections after explain each.
 
 ```ts
@@ -47,20 +49,18 @@ import { defineSchema, identityRole, relation, model, z } from '@abloatai/ablo/s
 
 export const schema = defineSchema(
   {
-    // A scope root: its rows form the group `deck:<id>` (kind from `groups.root`).
+    // A scope root: its rows form the group `workspace:<id>` (kind from `groups.root`).
     // Tenant isolation defaults to a row-local `organization_id` column, so no
     // `policy` is needed here.
-    decks: model(
+    workspaces: model(
       { title: z.string(), status: z.enum(['draft', 'published']) },
-      {},
-      { groups: { root: 'deck' } },
+      { groups: { root: 'workspace' } },
     ),
-    // A child: it has no group of its own; it inherits its deck's group via the
-    // `parent` edge. A write to a slide reaches everyone viewing the deck.
-    slides: model(
-      { deckId: z.string() },
-      { deck: relation.belongsTo('decks', 'deckId', { parent: true }) },
-      {},
+    // A child: it has no group of its own; it inherits its workspace's group via the
+    // `parent` edge. A write to a document reaches everyone viewing the workspace.
+    documents: model(
+      { workspaceId: z.string() },
+      { relations: { workspace: relation.belongsTo('workspaces', 'workspaceId', { parent: true }) } },
     ),
   },
   {
@@ -88,12 +88,12 @@ export const schema = defineSchema(
 // 3. an AGENT run inherits its user, narrowed to the entities in play.
 // You narrow at SESSION-MINT time: your backend calls `sessions.create` with the
 // agent's allowed `syncGroups`, built from each model's scope via the
-// `syncGroup(kind, id)` helper — never a hand-built `deck:<id>` string. The agent's
+// `syncGroup(kind, id)` helper — never a hand-built `workspace:<id>` string. The agent's
 // runtime then connects with the minted token.
 const session = await server.sessions.create({
   agent: { id: agentId },
-  can: { Deck: ['read', 'update'] },
-  syncGroups: [syncGroup('deck', deckId)], // floor: just the deck it's working on
+  can: { Workspace: ['read', 'update'] },
+  syncGroups: [syncGroup('workspace', workspaceId)], // floor: just the workspace it's working on
 });
 // the agent runtime authenticates with the minted token
 const ablo = Ablo({ schema, apiKey: session.token });
@@ -103,27 +103,27 @@ That's the whole surface. The rest of this doc is the *why* behind each line.
 
 ## Two kinds of group — the whole mental model
 
-You just saw a human get `org` / `team` groups and an agent get one `deck`
+You just saw a human get `org` / `team` groups and an agent get one `workspace`
 group. That split is the model. Every sync group is named after one of two
 things:
 
 - **Membership groups** — named after *who you are*: `org:{id}`, `team:{id}`,
   `user:{id}`. Produced from **identity** (`identityRoles`, Half 1). They're
   standing and durable — they don't change as you work.
-- **Entity groups** — named after *a thing*: `dataroom:{id}`, `deck:{id}`,
-  `slide:{id}`. Produced from a **row's id** (a model's entity scope, Half 2).
+- **Entity groups** — named after *a thing*: `dataroom:{id}`, `workspace:{id}`,
+  `document:{id}`. Produced from a **row's id** (a model's entity scope, Half 2).
   They're granular — one per record — and any participant can be pointed at a
   specific set of them.
 
-Humans and agents fill that same space differently, and you declare the two in
-different places. A human's groups come from who they are, so you declare them
-once in the schema. An agent's groups come from what it's working on right now,
-so you pass them in code when you start the run.
+Agents and people fill that same space differently, and you declare the two in
+different places. An agent's groups come from what it's working on right now, so
+you pass them in code when you start the run. A person's groups come from who
+they are, so you declare them once in the schema.
 
 | | Subscribed by | Declared where | Gets |
 | --- | --- | --- | --- |
 | **Human** | *who they are* — membership | **the schema** (`identityRoles`) — a rule, written once | every `org` / `team` / `user` group their identity implies — their whole standing world |
-| **Agent** | *what it's been given* — entities | **code, at the spawn site** — chosen per run | a handful of entity groups: the dataroom it's in, the slides it has read — never beyond what its user's membership could reach |
+| **Agent** | *what it's been given* — entities | **code, at the spawn site** — chosen per run | a handful of entity groups: the dataroom it's in, the documents it has read — never beyond what its user's membership could reach |
 
 > **One line:** humans subscribe by who they are; agents subscribe by what
 > they've been given.
@@ -135,9 +135,9 @@ depends on *what it's working on*, which is only knowable at dispatch — so you
 pass its `syncGroups` **when your backend mints the agent session**
 (`sessions.create({ agent, can, syncGroups })`). The schema's
 only job for entities is to declare *that* a model is
-entity-scopable and *what its group is named* (`scope: 'deck'` → `deck:{id}`);
+entity-scopable and *what its group is named* (`scope: 'workspace'` → `workspace:{id}`);
 it never declares *which* entities a given agent gets. (A human can opt into the
-same runtime narrowing — a page scoped to one deck — but by default a human's
+same runtime narrowing — a page scoped to one workspace — but by default a human's
 scope is fully schema-derived.)
 
 So an agent doesn't need a `user:{id}` standing grant. It's a participant pointed
@@ -212,7 +212,7 @@ import { defineSchema, identityRole, model, z } from '@abloatai/ablo/schema';
 
 export const schema = defineSchema(
   {
-    decks: model({
+    workspaces: model({
       title: z.string(),
       status: z.enum(['draft', 'published']),
     }),
@@ -247,28 +247,30 @@ declarations, in order of how often you reach for them:
 **`groups.root` — this model is a scope root.** Its rows form a group of their
 own. The kind comes from the model's `typename` by default, or pass a string to
 set it explicitly (use the string form when the wire kind differs from the
-typename, e.g. typename `SlideDeck` but group `deck:<id>`):
+typename, e.g. typename `SlideDeck` but group `workspace:<id>`):
 
 ```ts
-decks: model({ title: z.string() }, {}, { groups: { root: 'deck' } });
-// a deck row → group `deck:<id>`
+workspaces: model({ title: z.string() }, { groups: { root: 'workspace' } });
+// a workspace row → group `workspace:<id>`
 ```
 
 **`parent` — this row lives inside another entity.** Mark the `belongsTo` edge
 to its owner; the row inherits that owner's group. This is the Zanzibar/ReBAC
 *parent* relation — "access inherits from parent" — and it chains transitively
-(a layer → its slide → its deck), so a write to any descendant reaches everyone
+(a block → its document → its workspace), so a write to any descendant reaches everyone
 viewing the root. A *reference* (a provenance/template pointer, not ownership)
 must **not** be marked `parent`, or the row would leak into an unrelated scope:
 
 ```ts
-slides: model(
-  { deckId: z.string(), sourceSlideId: z.string().optional() },
+documents: model(
+  { workspaceId: z.string(), sourceSlideId: z.string().optional() },
   {
-    deck: relation.belongsTo('decks', 'deckId', { parent: true }),  // ownership → inherit deck:<id>
-    sourceSlide: relation.belongsTo('slides', 'sourceSlideId'),     // reference → NOT routed
+    // default policy: row-local organization_id
+    relations: {
+      workspace: relation.belongsTo('workspaces', 'workspaceId', { parent: true }),  // ownership → inherit workspace:<id>
+      sourceSlide: relation.belongsTo('documents', 'sourceSlideId'),     // reference → NOT routed
+    },
   },
-  {},  // default policy: row-local organization_id
 );
 ```
 
@@ -288,10 +290,12 @@ org membership is already covered by the `org:` identity role.
 dataroomMember: model(
   { userId: z.string(), dataroomId: z.string() },
   {
-    member: relation.belongsTo('users', 'userId'),
-    room: relation.belongsTo('datarooms', 'dataroomId'),
+    relations: {
+      member: relation.belongsTo('users', 'userId'),
+      room: relation.belongsTo('datarooms', 'dataroomId'),
+    },
+    groups: { grants: { subject: 'member', scope: 'room' } },
   },
-  { groups: { grants: { subject: 'member', scope: 'room' } } },
 );
 ```
 
@@ -398,7 +402,7 @@ What carries identity — and just as importantly, what does *not* set the bound
 | ------------ | ------------------------------------------------------------------------------------------------ |
 | `userId` prop | App-level participant id, used for app-owned fields and read by your `identityRole` `source`. **Not** the security boundary — the server enforces scope from the authenticated request. |
 | `teamIds` (on the client) | Team ids expanded into team sync groups via your `identityRoles`.                   |
-| `syncGroups` (at session mint) | Optional. **Narrows** a minted session's subscription to a subset of what auth already allows — it can never widen it. Passed to `sessions.create({ user \| agent, syncGroups })`; build entries with `syncGroup(kind, id)`. Use it to scope an agent (or a focused page's session) to one entity, e.g. `[syncGroup('deck', 'abc123')]`. |
+| `syncGroups` (at session mint) | Optional. **Narrows** a minted session's subscription to a subset of what auth already allows — it can never widen it. Passed to `sessions.create({ user \| agent, syncGroups })`; build entries with `syncGroup(kind, id)`. Use it to scope an agent (or a focused page's session) to one entity, e.g. `[syncGroup('workspace', 'abc123')]`. |
 
 Because the server is the boundary, a client that changes `userId` to another
 user's id does not gain their data — the server resolves and enforces the real
@@ -433,21 +437,21 @@ an entity anchor on the models an agent operates on:
 
 ```ts
 // each scope-root model an agent edits forms a per-entity group
-documents: model({ /* … */ }, {}, { groups: { root: 'document' } }),
-decks:     model({ /* … */ }, {}, { groups: { root: 'deck' } }),
+documents: model({ /* … */ }, { groups: { root: 'document' } }),
+workspaces:     model({ /* … */ }, { groups: { root: 'workspace' } }),
 ```
 
 Then a run subscribes only to the entity groups for the rows it works on — a
 subset of what its user could see:
 
 ```ts
-// agent run triggered by `user`, working on one document + one deck.
+// agent run triggered by `user`, working on one document + one workspace.
 // Your backend mints the agent session narrowed to just the entities in play
 // (the floor). Build each group from the model's scope with `syncGroup(kind, id)`.
 const session = await server.sessions.create({
   agent: { id: agentId },
-  can: { Document: ['read', 'update'], Deck: ['read', 'update'] },
-  syncGroups: [syncGroup('document', documentId), syncGroup('deck', deckId)],
+  can: { Document: ['read', 'update'], Workspace: ['read', 'update'] },
+  syncGroups: [syncGroup('document', documentId), syncGroup('workspace', workspaceId)],
 });
 // identity (the ceiling) is inherited from the triggering user via your
 // session-mint logic; the agent runtime connects with the minted token.
@@ -491,9 +495,9 @@ it claimed.
 ## Narrowing to specific entities
 
 A human gets their full membership automatically (`identityRoles`). There are
-three ways to narrow a participant to specific entities — a page on one deck, or
+three ways to narrow a participant to specific entities — a page on one workspace, or
 an agent pointed at the entities it's working on. You **never hand-write**
-`deck:<id>`; build groups from the model's `scope` (Half 2) with the typed
+`workspace:<id>`; build groups from the model's `scope` (Half 2) with the typed
 `syncGroup(kind, id)` helper from `@abloatai/ablo/schema`.
 
 1. **At session mint — `syncGroups`.** When your backend mints a session, pass the
@@ -501,13 +505,13 @@ an agent pointed at the entities it's working on. You **never hand-write**
    the way to scope a focused page's session):
 
    ```ts
-   // an agent working across two decks and a document
+   // an agent working across two workspaces and a document
    const session = await server.sessions.create({
      agent: { id: agentId },
-     can: { Deck: ['read', 'update'], Document: ['read'] },
+     can: { Workspace: ['read', 'update'], Document: ['read'] },
      syncGroups: [
-       syncGroup('deck', deckA),
-       syncGroup('deck', deckB),
+       syncGroup('workspace', deckA),
+       syncGroup('workspace', deckB),
        syncGroup('document', docId),
      ],
    });
@@ -525,9 +529,9 @@ an agent pointed at the entities it's working on. You **never hand-write**
    [Coordination](./coordination.md).
 
 > **`groups.root` is the schema model option, not a client setting.**
-> `groups: { root: 'deck' }` in `model(...)` declares a scope root
+> `groups: { root: 'workspace' }` in `model(...)` declares a scope root
 > ([Half 2](#half-2--per-model-scope-row--group)) — it names the group
-> (`deck:<id>`) that the mechanisms above then subscribe to.
+> (`workspace:<id>`) that the mechanisms above then subscribe to.
 > There is no `Ablo({ scope })` constructor option. The lifecycle filter on
 > [`list()`](./api.md#model-methods) is a separate axis named **`state`**
 > (`'live' | 'archived' | 'all'`, GitHub's open/closed/all), precisely so it
@@ -536,7 +540,7 @@ an agent pointed at the entities it's working on. You **never hand-write**
 > **Requested groups never grant.** At connect, the server intersects the session's
 > `syncGroups` with what the identity is actually allowed (`requested ∩ allowed`).
 > So `syncGroups` only ever *narrows* within a participant's ceiling — an agent
-> can't reach a deck its capability doesn't already permit, no matter what it
+> can't reach a workspace its capability doesn't already permit, no matter what it
 > passes. Smaller bootstrap, less fan-out, same server-enforced boundary.
 
 ## How this compares — and the best practices it follows
@@ -583,7 +587,7 @@ The best practices Ablo inherits from that lineage:
    never the boundary. This is why changing `userId` in the browser grants nothing.
 
 3. **Scope by a hierarchical naming convention, declared once.** Ablo's `kind:id`
-   group naming (`org:…` / `team:…` from `identityRoles`, `deck:…` from a model's
+   group naming (`org:…` / `team:…` from `identityRoles`, `workspace:…` from a model's
    `scope`) is the same idea as [Liveblocks' recommended room-id naming pattern](https://liveblocks.io/docs/authentication/access-token)
    (`org:*`, `org:group:*`) and [Ably's channel capabilities](https://ably.com/docs/auth/capabilities).
    Declaring the convention in one place — never composing scope strings in

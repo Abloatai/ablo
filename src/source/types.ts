@@ -10,8 +10,10 @@
  * builds a change-event marker from an operation.
  */
 
-import { AbloValidationError } from '../errors.js';
-import type { Environment } from '../environment.js';
+import { AbloValidationError } from '../transaction/errors.js';
+import type { Environment } from '../transaction/environment.js';
+import type { CommitOperationType, OnStaleMode } from '../transaction/coordination/schema.js';
+import type { ParticipantKind } from '../transaction/types/participant.js';
 
 /** A scalar value that can appear in a source filter. */
 export type SourcePrimitive = string | number | boolean | null;
@@ -84,7 +86,7 @@ export type SourceListResult<Row> =
  */
 export interface SourceRequestContext {
   readonly participantId?: string;
-  readonly participantKind?: 'user' | 'agent' | 'system';
+  readonly participantKind?: ParticipantKind;
   readonly organizationId?: string;
   /** Trusted project plane selected by the authenticating credential. */
   readonly projectId?: string;
@@ -110,13 +112,13 @@ export interface SourceRequestContext {
  * do when the row changed since it was read at `readAt`.
  */
 export interface SourceOperation {
-  readonly type: 'CREATE' | 'UPDATE' | 'DELETE' | 'ARCHIVE' | 'UNARCHIVE';
+  readonly type: CommitOperationType;
   readonly model: string;
   readonly id?: string | null;
   readonly input?: Record<string, unknown> | null;
   readonly transactionId?: string | null;
   readonly readAt?: number | null;
-  readonly onStale?: 'reject' | 'overwrite' | 'notify' | null;
+  readonly onStale?: OnStaleMode | null;
 }
 
 /**

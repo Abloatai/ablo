@@ -1,10 +1,12 @@
 # Existing Python Backend
 
-Put Ablo in front of the records several people (or AI agents) edit at once and
-you get two things at no cost to your stack: every edit fans out live to
-everyone watching, and humans and agents write through one shared contract. Your
-Python service and database stay the source of truth — Ablo doesn't replace your
-backend, it coordinates the writes into it. You stop calling your endpoint
+> Add agent coordination to a Python API server without replacing it.
+
+Put Ablo in front of the records several agents (or the people alongside them)
+edit at once and you get two things at no cost to your stack: every edit fans out
+live to everyone watching, and agents and people write through one shared
+contract. The goal is not to replace the backend — your Python service and
+database stay the source of truth, and Ablo coordinates the writes into them. You stop calling your endpoint
 directly; you call Ablo, Ablo calls your endpoint, and Ablo pushes the result
 back out to every browser and agent on that record.
 
@@ -110,7 +112,7 @@ export function ReportRow({
 }: {
   report: { id: string; location: string; status: string };
 }) {
-  const report = useAblo((ablo) => ablo.weatherReports.get(serverReport.id)) ?? serverReport;
+  const report = useAblo((ablo) => ablo.weatherReports.local.retrieve(serverReport.id)) ?? serverReport;
   const active = useAblo((ablo) => ablo.weatherReports.claim.state({ id: serverReport.id }));
   const claimed = Boolean(active);
 

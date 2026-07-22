@@ -3,14 +3,14 @@
  * functions: {@link computeFKDepthPriority} works out a safe row-insertion
  * order from the schema's foreign-key relations, and
  * {@link deriveConfigFromSchema} packages that ordering, together with a few
- * defaults, into the {@link SyncEngineConfig} a client uses at startup. Both
+ * defaults, into the {@link RuntimeConfig} a client uses at startup. Both
  * are deterministic transforms of the schema and hold no engine state.
  */
 
-import type { Schema } from '../schema/schema.js';
-import type { RelationDef } from '../schema/relation.js';
-import type { SyncEngineConfig } from '../interfaces/index.js';
-import { schemaHash } from '../schema/serialize.js';
+import type { Schema } from '../transaction/schema/schema.js';
+import type { RelationDef } from '../transaction/schema/relation.js';
+import type { RuntimeConfig } from '../interfaces/index.js';
+import { schemaHash, modelHash, toSchemaJSON } from '../schema/serialize.js';
 
 // ── Config derivation from schema ─────────────────────────────────────────
 
@@ -164,7 +164,7 @@ export function computeFKDepthPriority(schema: Schema): ReadonlyMap<string, numb
   return out;
 }
 
-export function deriveConfigFromSchema(schema: Schema): SyncEngineConfig {
+export function deriveConfigFromSchema(schema: Schema): RuntimeConfig {
   // Field-level serialization for commits happens in the transaction queue,
   // which reads each model's declared fields from the model registry at commit
   // time. There is no per-field metadata to configure here, so these maps stay
@@ -179,6 +179,12 @@ export function deriveConfigFromSchema(schema: Schema): SyncEngineConfig {
     // schema the server currently has active. The server and the `ablo push`
     // command compute this same hash.
     expectedSchemaHash: schemaHash(schema),
+    // Per-model hashes for the SEMANTIC drift check: on a whole-hash mismatch
+    // the client compares only the models it declares, so an additive server
+    // change stays silent and a real divergence names the exact models.
+    expectedModelHashes: Object.fromEntries(
+      Object.entries(toSchemaJSON(schema).models).map(([key, model]) => [key, modelHash(model)]),
+    ),
     // For a projection (`selectModels`/`omitModels`), also carry the full source
     // schema's hash. The drift check accepts a server match on either hash, so a
     // subset client stays quiet against a server running its full source schema.

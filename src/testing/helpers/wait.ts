@@ -3,7 +3,7 @@
  * flushing pending work, polling for a condition, or waiting a fixed delay.
  */
 
-import { AbloConnectionError } from '../../errors.js';
+import { AbloConnectionError } from '../../transaction/errors.js';
 
 /**
  * Flushes all pending microtasks, such as resolved promises and

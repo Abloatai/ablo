@@ -14,9 +14,9 @@
 
 import { z } from 'zod';
 import type { QueryBatch, QueryBatchResult } from './types.js';
-import { translateHttpError } from '../errors.js';
-import { classifyRecovery, type RecoveryClass } from '../errorCodes.js';
-import { withAuthHeaders, type AuthTokenGetter } from '../auth/credentialSource.js';
+import { translateHttpError } from '../transaction/errors.js';
+import { classifyRecovery, type RecoveryClass } from '../transaction/errorCodes.js';
+import { withAuthHeaders, type AuthTokenGetter } from '../transaction/auth/credentialSource.js';
 import { getContext } from '../context.js';
 
 // ── Response validation ─────────────────────────────────────────────────
@@ -37,7 +37,7 @@ const QueryBatchResultSchema = z
   .object({
     results: z.array(QueryResultSchema),
   })
-  .passthrough();
+  .loose();
 
 export interface PostQueryOptions {
   /**

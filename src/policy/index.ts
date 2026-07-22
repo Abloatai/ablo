@@ -27,5 +27,5 @@ export type {
   ConflictPolicy,
   StaleContextConflict,
   ClaimHeldConflict,
-} from './types.js';
-export { defaultPolicy, capabilityPreemptPolicy, interpretConflictAxis } from './types.js';
+} from '../transaction/policy/types.js';
+export { defaultPolicy, capabilityPreemptPolicy, interpretConflictAxis } from '../transaction/policy/types.js';

@@ -10,7 +10,7 @@ import {
   ERROR_CONTRACT_VERSION,
   type ErrorCategory,
   type ErrorCodeSpec,
-} from '../src/errorCodes.js';
+} from '@ablo/transaction';
 
 const docUrlForCode = (code: string): string => `https://docs.abloatai.com/errors#${code}`;
 
@@ -39,13 +39,12 @@ const CATEGORY_ORDER: ReadonlyArray<{ key: ErrorCategory; title: string; blurb: 
   { key: 'auth', title: 'Authentication', blurb: 'Missing, invalid, revoked, or expired credentials. Re-authenticate.' },
   { key: 'permission', title: 'Permission', blurb: 'Credentials were valid but the action is forbidden for this caller.' },
   { key: 'capability', title: 'Capability', blurb: "The connection's resolved scope does not cover the attempted action." },
-  { key: 'claim', title: 'Claim & intent contention', blurb: 'The target is held by another participant. Usually retryable once the holder releases.' },
+  { key: 'claim', title: 'Claim contention', blurb: 'The target is held by another participant, or a claim lease could not be acquired. Usually retryable once the holder releases.' },
   { key: 'conflict', title: 'Conflict', blurb: 'The write collided with concurrent state (stale read, idempotency mismatch, incompatible change).' },
   { key: 'validation', title: 'Validation', blurb: 'The request payload or parameters were invalid. Fix the input and retry.' },
   { key: 'not_found', title: 'Not found', blurb: 'The referenced resource does not exist (or is hidden by scope).' },
   { key: 'tenant', title: 'Tenant / schema resolution', blurb: 'The named model could not be resolved in the tenant schema.' },
   { key: 'schema', title: 'Schema', blurb: 'Schema declaration or migration problems.' },
-  { key: 'intent', title: 'Intent lease', blurb: 'Intent-lease acquisition, queueing, and coordination.' },
   { key: 'bootstrap', title: 'Bootstrap', blurb: 'Initial snapshot fetch problems.' },
   { key: 'transport', title: 'Transport', blurb: 'Network, connection, queue, and timeout failures. Generally retryable.' },
   { key: 'rate_limit', title: 'Rate limit', blurb: 'Too many requests. Back off before retrying.' },
@@ -74,6 +73,8 @@ export function renderErrorsMdx(): string {
   lines.push(
     'description: "Every error Ablo returns, by category. This page is generated from the canonical registry — its anchors are the target of each error\'s doc_url."',
   );
+  lines.push('sidebar:');
+  lines.push('  icon: circle-alert');
   lines.push('---');
   lines.push('');
   lines.push(`Error contract version: \`${ERROR_CONTRACT_VERSION}\` (also sent on the \`Ablo-Version\` response header).`);

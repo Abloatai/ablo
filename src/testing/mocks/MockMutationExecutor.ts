@@ -12,8 +12,8 @@ import type {
   MutationOptions,
   CommitResult,
 } from '../../interfaces/index.js';
-import type { StaleNotification } from '../../coordination/schema.js';
-import { AbloError } from '../../errors.js';
+import type { StaleNotification } from '../../transaction/coordination/schema.js';
+import { AbloError } from '../../transaction/errors.js';
 
 export interface CapturedMutation {
   method: string;
@@ -33,7 +33,7 @@ export interface MockMutationExecutorOptions {
   shouldSucceed?: boolean;
   /** A delay applied before each call resolves, in milliseconds, to simulate a slow network. */
   latencyMs?: number;
-  /** Optional explicit receipt status. Omission preserves legacy confirmed semantics. */
+  /** The settlement status each commit reports. Defaults to `'confirmed'`. */
   status?: CommitResult['status'];
   /** Optional server-issued source/WAL correlation returned with queued receipts. */
   correlationId?: string;
@@ -66,7 +66,7 @@ export class MockMutationExecutor implements MutationExecutor {
     this._syncId = options.initialSyncId ?? 1;
     this._shouldSucceed = options.shouldSucceed ?? true;
     this._latencyMs = options.latencyMs ?? 0;
-    this._status = options.status;
+    this._status = options.status ?? 'confirmed';
     this._correlationId = options.correlationId;
     this._notifications = options.notifications;
     this._missingIds = options.missingIds;
@@ -146,7 +146,7 @@ export class MockMutationExecutor implements MutationExecutor {
     this._syncId = options?.initialSyncId ?? 1;
     this._shouldSucceed = options?.shouldSucceed ?? true;
     this._latencyMs = options?.latencyMs ?? 0;
-    this._status = options?.status;
+    this._status = options?.status ?? 'confirmed';
     this._correlationId = options?.correlationId;
     this._notifications = options?.notifications;
     this._missingIds = options?.missingIds;
@@ -180,19 +180,13 @@ export class MockMutationExecutor implements MutationExecutor {
         ...(this._missingIds ? { missingIds: this._missingIds } : {}),
       };
     }
-    const evidence = {
+    return {
+      lastSyncId: syncId,
+      status: 'confirmed',
+      ...(this._correlationId ? { correlationId: this._correlationId } : {}),
       ...(this._notifications ? { notifications: this._notifications } : {}),
       ...(this._missingIds ? { missingIds: this._missingIds } : {}),
     };
-    if (this._status === 'confirmed') {
-      return {
-        lastSyncId: syncId,
-        status: 'confirmed',
-        ...(this._correlationId ? { correlationId: this._correlationId } : {}),
-        ...evidence,
-      };
-    }
-    return { lastSyncId: syncId, ...evidence };
   }
 
   async executeCreate(
@@ -218,7 +212,7 @@ export class MockMutationExecutor implements MutationExecutor {
     await this._maybeDelay();
     this._maybeThrow('executeUpdate');
 
-    return { lastSyncId: this._syncId++ };
+    return { lastSyncId: this._syncId++, status: 'confirmed' };
   }
 
   async executeDelete(

@@ -1,5 +1,8 @@
 ---
 title: "Agents"
+description: "The stateless participant: wake on a trigger, read, claim, commit, go idle."
+sidebar:
+  icon: bot
 ---
 
 An agent is a **reactive** participant: it wakes on something happening, reads
@@ -8,9 +11,10 @@ workload — so agents talk to Ablo over **plain HTTP**, holding no WebSocket. T
 credential *is* the identity; the server resolves the org, scope, and actor from
 the key on every request (the Stripe server-SDK / Liveblocks-node shape).
 
-Humans get the live plane (WebSocket: presence, optimistic, sub-100ms). Agents
-get the stateless plane (HTTP). **Both operate on the same typed, coordinated
-state — and coordinate *with each other*.**
+Agents get the stateless plane (HTTP). People — when you add the `humans()`
+plugin — get the live plane (WebSocket: presence, optimistic, sub-100ms).
+**Both operate on the same typed, coordinated state — and coordinate *with each
+other*.**
 
 :::note
 Agents transact against your **pushed schema**, same as everyone — `ablo.tasks`
@@ -42,7 +46,7 @@ await ablo.tasks.update({ id: task.id, data: { status: "done" } });
 
 It exposes `retrieve` / `list` / `create` / `update` / `delete`, plus `commits`
 and `claim`. It does **not** expose the stateful-only surface (`get` /
-`getAll` / `getCount` local reads, `onChange` live subscription) — those need a
+`local` reads, `onChange` live subscription) — those need a
 live connection, so with `transport: 'http'` the return type narrows and they
 are a *compile error*, not a runtime surprise.
 
@@ -79,14 +83,18 @@ a message back to the claim it discusses.
 
 See [Agent Messaging](/agent-messaging) for the schema and setup details.
 
-## Humans + agents on one state
+## When a person is in the loop
 
-There's no separate "agent mode." A human editing a record over their WebSocket
-and an agent acting over HTTP share the same typed state and the same coordination
-plane: the agent can claim the row a human is editing (and wait in line), and the
-human sees the agent's committed changes stream in **live** — over the human's
-own socket, even though the agent committed over HTTP. You write the agent once;
-it's a first-class participant, not a bolt-on.
+There's no separate "agent mode" — and no separate human mode either. The bare
+client is the coordination layer; `humans()` is the plugin that adds the live
+plane on top of it. An agent acting over HTTP and a person editing over their
+socket share the same typed state and the same coordination: the agent can claim
+the row that person is holding (and wait in line), and they see the agent's
+committed changes stream in **live** over their own socket, even though the
+agent committed over HTTP.
+
+There is no `agents()` plugin, and the absence is the point — an agent is the
+default caller here, not a bolt-on.
 
 ## How an agent runs
 
@@ -103,7 +111,7 @@ agents costs nothing on the live plane — that capacity stays for humans.
 
 ## What stays on the live (human) plane
 
-`onChange` (live subscriptions) and `get`/`getAll`/`getCount` (local synced-pool
+`onChange` (live subscriptions) and the `local` reads (local synced-pool
 reads) require a WebSocket and a local store — they're for interactive UIs, not
 stateless agents. An agent reacts to an external trigger (a job/queue/webhook),
 then reads with `list`/`retrieve`. See [client behavior](/client-behavior) for

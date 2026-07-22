@@ -6,18 +6,18 @@
  * incoming rows. See {@link deriveSyncPlanFromSchema}.
  */
 
-import type { Schema } from '../schema/schema.js';
+import type { Schema } from '../transaction/schema/schema.js';
 
 /** A foreign-key index to register on the in-memory object pool when the store is constructed. */
 export interface ForeignKeyIndexSpec {
   /**
    * The name of the child model, where the foreign-key field lives, and the
    * name the object pool indexes by. Use the wire type-name casing (for
-   * example `'SlideLayer'`, not `'slideLayer'`), since that is the value
+   * example `'Block'`, not `'block'`), since that is the value
    * stamped onto reconstructed models and the key the pool looks up.
    */
   readonly modelName: string;
-  /** The foreign-key field name on the child model, for example `'slideId'`. */
+  /** The foreign-key field name on the child model, for example `'sectionId'`. */
   readonly fieldName: string;
 }
 

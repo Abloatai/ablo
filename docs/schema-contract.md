@@ -1,5 +1,7 @@
 # Schema Contract
 
+> One schema becomes typed clients, agent writes, interface reads, and the hosted push.
+
 Ablo's schema is the integration contract. Define it once, pass it to `Ablo(...)`,
 and every actor gets the same typed model surface:
 
@@ -10,7 +12,7 @@ defineSchema(...) -> ablo.<model>.create/retrieve/update/claim(...)
 That one object drives:
 
 - typed model clients in trusted server runtimes,
-- React selectors through `useAblo((ablo) => ablo.<model>.get(id))`,
+- React selectors through `useAblo((ablo) => ablo.<model>.local.retrieve(id))`,
 - agent and background-worker writes,
 - Data Source request/response shape when your database stays canonical,
 - hosted schema push, migration planning, and schema-version gating.
@@ -75,8 +77,8 @@ const ready = await ablo.weatherReports.list({ where: { status: 'ready' } });
 Use synchronous local reads in render after data has synced:
 
 ```ts
-const report = ablo.weatherReports.get(reportId);
-const pending = ablo.weatherReports.getAll({ where: { status: 'pending' } });
+const report = ablo.weatherReports.local.retrieve(reportId);
+const pending = ablo.weatherReports.local.list({ where: { status: 'pending' } });
 ```
 
 Use model writes for every actor:

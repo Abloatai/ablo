@@ -13,7 +13,7 @@
  * database is ignored.
  */
 
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import pc from 'picocolors';
 import postgres from 'postgres';
 import { serializeSchema, resolveTenancy, tenancyColumn, type SchemaJSON } from '@abloatai/ablo/schema';

@@ -1,5 +1,8 @@
 ---
 title: "CLI"
+description: "Scaffold a schema, connect a database, push it, and watch it sync."
+sidebar:
+  icon: terminal
 ---
 
 The `ablo` CLI gets you from an empty project to live-syncing data: scaffold a
@@ -36,7 +39,7 @@ This mirrors `stripe login`.
 | `ablo login`             | Authorize in the browser; provisions + stores a test and a live key.       |
 | `ablo login --project <slug>` | Same, but scope (and mint) the pair to a project, and make it active. |
 | `ablo logout`            | Remove the stored keys.                                                    |
-| `ablo status`            | Show the active org, mode, both keys (prefix + expiry), and server health. |
+| `ablo status`            | Show the active org, mode, both keys (prefix, what each can do, expiry), and server health. |
 | `ablo mode [sandbox\|production]` | Switch the active environment. With no argument, prompts.                         |
 
 Keys live in `~/.config/ablo/credentials.json` (mode `0600`), keyed by project
@@ -51,8 +54,11 @@ belongs to one of them. Test keys are bound to an isolated sandbox: their reads
 and writes never touch production data. Switch with `ablo mode`; `ablo dev` is always
 the sandbox by design.
 
-The schema, however, is **shared** across the org — pushing a schema (from
-either environment) defines the same models sandbox and production see; only the rows differ.
+The schema is **one definition serving both**: a sandbox reads the production
+schema until it is pushed one of its own, so your test and live keys see the same
+models and only the rows differ. Each plane keeps its own copy once pushed, so a
+schema change reaches production when you push it with a live key — see
+[Deployment](/deployment).
 
 ## Projects
 
@@ -102,6 +108,29 @@ profiles entirely: it acts in whatever project it was minted for.
 | `ablo pull`                        | **Direct Postgres** — generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`).                              | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force`                                     |
 | `ablo check`                       | **Direct Postgres** — verify your _existing_ tables fit the schema (read-only, no schema changes).                                                       | `--schema <path>`, `--export <name>`, `--app-schema <name>`                                            |
 | `ablo generate`                    | Emit TypeScript types from the schema.                                                                                                        | `--out <path>`, `--schema`, `--export`                                                                 |
+| `ablo docs`                        | Read these pages for the version you installed — offline, no network (see [`ablo docs`](#ablo-docs)).                                          | `--json`                                                                                               |
+
+## `ablo docs`
+
+The documentation for the version in your `node_modules`, not the version on the
+website.
+
+```bash
+npx ablo docs                  # every page, with what it covers
+npx ablo docs coordination     # one page, as markdown
+npx ablo docs --json           # the page list, machine-readable
+```
+
+These pages ship inside the npm package, so they describe the code beside them
+and stay reachable with no network — the sandboxes and CI runners agents work in
+often have none. That matters most when a project is pinned: `get` / `getAll` /
+`getCount` became `retrieve` / `list` in 0.35.0, and a website always describes
+the newest release, so an agent on an earlier version reads the new name and
+writes a call its own package doesn't have.
+
+Pass a slug (`coordination`), a path (`docs/coordination.md`), or a file name
+(`AGENTS.md`). A miss names the closest page. The same pages are served over
+HTTP at `/api/docs/<slug>` and through the docs MCP server.
 
 ## `ablo dev`
 

@@ -66,10 +66,21 @@ claims are visible while the work is still in progress.
 [Version History &amp; Migration Guide](./docs/migration.md)
 
 It works with the auth and database you already have. **In production, your
-database is the system of record.** Ablo is the sync + coordination layer on top
-of it: it consumes your Postgres' logical-replication stream, scopes realtime
-data to *sync groups* from your own identity, and your application keeps owning
-the write path — every row lives in your Postgres. (Trying Ablo with no database
+database is the system of record.** You write through Ablo, and Ablo writes to
+your Postgres: the call enters Ablo's commit chokepoint — where claims, ordering,
+and idempotency are enforced — and lands in your own tables through a scoped
+writer role. The commit is accepted (`queued`) the moment Ablo takes it; when the
+row surfaces in your write-ahead log, the receipt is promoted to `confirmed`.
+**The WAL echo is how Ablo confirms, not how it writes** — your database, not
+Ablo, is the source of truth for row state, and that same stream is what keeps
+every connected client current, scoped to *sync groups* from your own identity.
+
+The writer role is non-superuser and cannot bypass RLS. Before each write Ablo
+sets your tenant context on the connection, so your own row-level security
+policies enforce against Ablo exactly as they do against your app. Ablo runs no
+DDL and owns no schema — your migration tool stays in charge of the shape of your
+database, and Ablo holds only the ordered transaction log and the coordination
+state, never your rows. (Trying Ablo with no database
 yet? A **sandbox** `sk_test` key holds throwaway **test data** — like Stripe test
 mode — so you can explore before pointing it at your Postgres. Test-mode only; in
 production every row lives in your database.)
@@ -91,7 +102,8 @@ production, your database is the system of record**.
 npm install @abloatai/ablo
 npx ablo login     # opens the browser: sign in (or sign up) → a sk_test_ key is saved locally
 npx ablo init      # scaffolds ablo/schema.ts (offers to log in if you skipped it)
-npx ablo push      # pushes your schema (sandbox), writes ABLO_API_KEY to .env.local, watches for changes
+npx ablo push      # pushes your schema (sandbox), writes ABLO_API_KEY to .env.local
+npx ablo dev       # the same push, watching ablo/schema.ts and re-pushing on save
 ```
 
 Then point Ablo at the tables for your synced models. Most teams **already
@@ -124,7 +136,7 @@ instead of guessing:
 
 ## Quick Start
 
-One schema, one client, one write path for humans and agents — this runs as-is
+One schema, one client, one write path for agents, servers, and people — this runs as-is
 after `ablo push`:
 
 ```ts
@@ -156,7 +168,7 @@ await ablo.weatherReports.update({
   claim, // the write completes the claimed work and releases the lease
 });
 
-const ready = ablo.weatherReports.get(created.id);
+const ready = ablo.weatherReports.local.retrieve(created.id);
 console.log({ id: ready?.id, status: ready?.status });
 
 await ablo.dispose();
@@ -202,16 +214,15 @@ function persist(client: Sync) { /* ... */ }
 
 ## Reading
 
-Two ways to read, depending on whether you can wait. `get(id)` / `getAll({ where })`
-/ `getCount({ where })` are instant — they read what's already local and re-render
-on their own when it changes, so they're what your UI uses. `retrieve(id)` /
-`list({ where })` go ask the server and return a `Promise`, for when you need the
-authoritative answer right now.
+Two ways to read, depending on whether you can wait. `retrieve({ id })` /
+`list({ where })` answer from what's local and go ask the server when they have
+to, so they return a `Promise`. Put `local.` in front and the read is restricted
+to what's already here — instant, reactive in render, and what your UI uses.
 
 ```ts
-ablo.weatherReports.get('report_stockholm');
+ablo.weatherReports.local.retrieve('report_stockholm');
 
-const pending = ablo.weatherReports.getAll({
+const pending = ablo.weatherReports.local.list({
   where: { status: 'pending' },
   orderBy: { location: 'asc' },
   limit: 20,
@@ -373,7 +384,7 @@ function App() {
 }
 
 function Report({ id }: { id: string }) {
-  const report = useAblo((ablo) => ablo.weatherReports.get(id));
+  const report = useAblo((ablo) => ablo.weatherReports.local.retrieve(id));
   const ablo = useAblo();
 
   if (!report) return null;
@@ -392,7 +403,7 @@ method as the server example above.
 
 `<AbloProvider>` owns the connection — no API key in the browser. That's the
 whole loop: read with `useAblo(selector)`, write with `ablo.<model>`, and every
-other client (human or agent) on that row sees it in real time. See
+other client (agent or human) on that row sees it in real time. See
 [React](./docs/react.md) for the `<AbloProvider>` prop surface (`client`,
 `userId`, `fallback`, `onError`) — schema, scope, and team membership live on the
 `Ablo({ … })` client you pass it — plus status hooks.
@@ -402,7 +413,7 @@ other client (human or agent) on that row sees it in real time. See
 Ablo is **not** an auth provider — you keep your own (Clerk, Auth0, NextAuth,
 whatever). Ablo's job starts after you've authenticated a request: you tell it
 *who* is connecting, and it scopes their realtime data to the right **sync
-groups** (named channels like `org:acme` or `deck:abc123` that are both the unit
+groups** (named channels like `org:acme` or `workspace:abc123` that are both the unit
 of fan-out and the unit of access).
 
 The model is a proxy: your `ABLO_API_KEY` stays on your trusted server, your
@@ -434,19 +445,25 @@ browser.
 
 ## Multiplayer
 
-There is no separate multiplayer mode. When human UI, server actions, and agent
-workers share the same schema and write through `ablo.<model>`, they all see
+There is no separate multiplayer mode. When agent workers, server actions, and
+human UI share the same schema and write through `ablo.<model>`, they all see
 each other's changes in real time — that's the default, not a feature you turn on.
 
 - `ablo.<model>.create/update/delete` fan out confirmed deltas to subscribers.
 - `useAblo(...)` gives React clients the live row, kept current automatically.
-- `ablo.<model>.claim({ id })` / `claim.state({ id })` / `claim.queue({ id })` let humans and agents coordinate (and observe) active work on a row — and the line waiting behind it — before a write lands.
+- `ablo.<model>.claim({ id })` / `claim.state({ id })` / `claim.queue({ id })` let agents and people coordinate (and observe) active work on a row — and the line waiting behind it — before a write lands.
+
+The bare client is the coordination layer: commit, read, observe, claim. The live
+plane people watch — presence, live queries, the local copy — is the `humans()`
+plugin on top of it, installed by default on a socket client. There is no
+`agents()` plugin, and the absence is the point: an agent is the default caller
+here, not a special one.
 
 Writes go through Ablo. `ablo.<model>.create/update/delete` and the HTTP write
 endpoint enter Ablo's commit chokepoint — where claims, ordering, and idempotency
 are enforced — and Ablo lands the change in your database. It then tails the WAL to
 confirm the row landed and fans the confirmed change out to every connected client.
-One surface for humans, servers, and agents; one place coordination happens.
+One surface for agents, servers, and people; one place coordination happens.
 
 ## HTTP Writes
 
@@ -477,7 +494,7 @@ connects:
 
 | | How Ablo connects to your Postgres | Use when |
 | --- | --- | --- |
-| **`ablo connect`** (primary) | Sets up logical replication and a scoped writer role (`npx ablo connect apply` does it end to end). Ablo writes your rows through the writer role and reads them back over the WAL to confirm — it writes rows but runs no DDL and owns no schema. | Your database can grant a `REPLICATION` role (most can). |
+| **`ablo connect`** (primary) | Sets up logical replication and a scoped writer role (`npx ablo connect apply` does it end to end). Ablo writes your rows through the writer role and reads them back over the WAL to confirm — it writes rows but runs no DDL and owns no schema. The role is non-superuser and cannot bypass RLS, so your own policies govern Ablo's writes. | Your database can grant a `REPLICATION` role (most can). |
 | **Signed endpoint** (fallback) | Your app exposes one route built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`); Ablo writes and confirms through it. Needs no replication setup. | Your database **can't** grant a replication role (a locked-down managed DB). |
 
 Your database is the system of record. See

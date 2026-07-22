@@ -15,7 +15,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import pc from 'picocolors';
-import { classifyCredentialKind } from '../auth/credentialPolicy.js';
+import { classifyCredentialKind } from '../transaction/auth/credentialPolicy.js';
 import { resolveApiKey, normalizeMode, type Mode } from './config';
 import { brand } from './theme';
 import { apiBaseUrl } from './push';

@@ -10,7 +10,7 @@ import type {
   Schema,
   SchemaRecord,
   InferCreate,
-} from '../schema/schema.js';
+} from '../transaction/schema/schema.js';
 import type { DataSourceAdapter } from './adapter.js';
 import { changeSetSchema } from './contract.js';
 import {

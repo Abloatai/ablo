@@ -5,7 +5,7 @@
  * These helpers let tests construct deltas without a live server.
  */
 
-import type { SyncActionType, SyncAction } from '../../types/index.js';
+import type { SyncActionType, SyncAction } from '../../stores/syncAction.js';
 
 let deltaCounter = 0;
 

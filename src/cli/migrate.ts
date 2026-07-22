@@ -16,7 +16,7 @@
  *   ablo migrate --schema path.ts --export schema
  */
 
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import pc from 'picocolors';
 import { writeFileSync } from 'fs';
 import postgres from 'postgres';
@@ -39,11 +39,10 @@ import { loadSchema } from './push';
  * the CLI dispatcher can print it) so the two never drift. Mirrors the flags in
  * `parseMigrateArgs` below.
  */
-export const MIGRATE_USAGE = `  ablo migrate — provision your schema's tables in your own Postgres (DATABASE_URL)
+export const MIGRATE_USAGE = `  ablo migrate — create the tables your schema needs in your own database (DATABASE_URL)
 
-  To connect a real database, run \`ablo connect\` — Ablo reads your WAL via logical
-  replication, the one way. \`migrate\` is the optional escape hatch for provisioning
-  tables when you don't already have them.
+  Use it when your schema defines models with no tables behind them yet;
+  \`ablo connect\` adopts tables you already have.
 
   Usage:
     npx ablo migrate                      Create the synced-model tables (with row-level security)

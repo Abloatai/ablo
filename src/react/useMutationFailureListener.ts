@@ -2,11 +2,11 @@
 
 import { useContext, useEffect, useRef } from 'react';
 import { AbloInternalContext } from './internalContext.js';
-import { AbloValidationError } from '../errors.js';
-import type { Transaction } from '../transactions/TransactionQueue.js';
+import { AbloValidationError } from '../transaction/errors.js';
+import type { QueuedMutation } from '../transactions/mutations/MutationQueue.js';
 
 export interface MutationFailurePayload {
-  transaction: Transaction;
+  transaction: QueuedMutation;
   error: Error;
   permanent?: boolean;
 }

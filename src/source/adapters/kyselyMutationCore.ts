@@ -8,11 +8,11 @@
  * drift into separate hand-written mappers.
  */
 
-import { AbloValidationError } from '../../errors.js';
-import type { Schema, SchemaRecord } from '../../schema/schema.js';
+import { AbloValidationError } from '../../transaction/errors.js';
+import type { Schema, SchemaRecord } from '../../transaction/schema/schema.js';
 import { toSchemaJSON } from '../../schema/serialize.js';
 import { camelToSnake, snakeToCamel } from '../../schema/ddl.js';
-import { tenancyColumn } from '../../schema/tenancy.js';
+import { tenancyColumn } from '../../transaction/schema/tenancy.js';
 import type { AdapterReadRequest, Row } from '../adapter.js';
 import type { Operation } from '../contract.js';
 

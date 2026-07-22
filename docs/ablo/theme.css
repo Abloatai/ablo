@@ -1,0 +1,25 @@
+/*
+ * Token and style overrides — the last layer in Blume's cascade, after the
+ * defaults and the `theme` block in blume.config.ts.
+ */
+
+/*
+ * The header search trigger ships with a hardcoded `rounded-full`, so it ignores
+ * `theme.radius` and reads as a pill against our otherwise tight corners. Pull
+ * it back onto the site's own radius token.
+ */
+[data-blume-search-open] {
+  border-radius: var(--blume-radius);
+}
+
+/*
+ * Hide the "Edit on GitHub" page action. Blume derives it from `github` in the
+ * config with no separate toggle, but it points readers at the wrong file: most
+ * pages here are generated from `packages/sync-engine/docs/*.md`, so an edit to
+ * the .mdx it links to is overwritten by the next `npm run build:docs`.
+ * `display: none` (not `visibility`) so it leaves the accessibility tree too.
+ * The header repo link and the feedback widget are unaffected.
+ */
+[data-blume-page-actions] a[href*="/edit/"] {
+  display: none;
+}

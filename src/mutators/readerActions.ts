@@ -1,5 +1,5 @@
-import type { Schema, InferModel } from '../schema/schema.js';
-import type { ModelDef } from '../schema/model.js';
+import type { Schema, InferModel } from '../transaction/schema/schema.js';
+import type { ModelDef } from '../transaction/schema/model.js';
 // Type-only — see the note in `mutateActions.ts`.
 import type { SyncStoreContract } from '../react/context.js';
 

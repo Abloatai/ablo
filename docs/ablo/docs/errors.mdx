@@ -1,9 +1,11 @@
 ---
 title: "Error codes"
 description: "Every error Ablo returns, by category. This page is generated from the canonical registry — its anchors are the target of each error's doc_url."
+sidebar:
+  icon: circle-alert
 ---
 
-Error contract version: `2026-07-15` (also sent on the `Ablo-Version` response header).
+Error contract version: `2026-07-21` (also sent on the `Ablo-Version` response header).
 
 Every error — over HTTP or WebSocket — carries the same envelope:
 
@@ -247,12 +249,6 @@ Registering a trusted issuer requires a secret (`sk_`) API key. The key presente
 
 The request targeted an organization the caller is not scoped to.
 
-### parent_turn_foreign_agent
-
-`HTTP 403` · not retryable
-
-The referenced parent turn belongs to a different agent, so it cannot be used here.
-
 ### project_scope_denied
 
 `HTTP 403` · not retryable
@@ -270,12 +266,6 @@ Schema registration could not create tables in the target database: the engine i
 `HTTP 403` · not retryable
 
 Test mode requires a registered dev database for this org — run `npx ablo init` to register one for your test key.
-
-### turn_foreign_agent
-
-`HTTP 403` · not retryable
-
-This turn belongs to a different agent, so the caller cannot act on it.
 
 ### wide_scope_forbidden
 
@@ -299,9 +289,9 @@ This capability cannot be used — it is unknown, revoked, or expired. Request a
 
 This action falls outside the scope granted to the connection, so it was denied.
 
-## Claim & intent contention
+## Claim contention
 
-The target is held by another participant. Usually retryable once the holder releases.
+The target is held by another participant, or a claim lease could not be acquired. Usually retryable once the holder releases.
 
 ### claim_conflict
 
@@ -363,12 +353,6 @@ This write carried a fencing token below the row’s current high-water: a later
 
 The wait for a capability grant timed out before one arrived. Retry the request.
 
-### malformed_claim
-
-`HTTP 400` · not retryable
-
-The claim payload could not be parsed. A claim must name the model and the entity it targets; check the payload shape and resend.
-
 ### model_claim_not_configured
 
 `client-only` · not sent over the network
@@ -393,18 +377,6 @@ Another participant held a claim on this row and did not release it in time. Ret
 
 join() opens a presence/claim subscription and needs a live WebSocket, so it is unavailable on the HTTP transport and on model proxies built without a socket. Use the standard Ablo(&#123; schema, apiKey &#125;) client (default WebSocket transport).
 
-### slide_intent_missing_deck_id
-
-`HTTP 400` · not retryable
-
-This slide claim is missing the id of the deck it belongs to.
-
-### slide_intent_unknown_sibling
-
-`HTTP 400` · not retryable
-
-This slide claim references a sibling slide that does not exist in the deck.
-
 ## Conflict
 
 The write collided with concurrent state (stale read, idempotency mismatch, incompatible change).
@@ -414,6 +386,12 @@ The write collided with concurrent state (stale read, idempotency mismatch, inco
 `client-only` · not sent over the network
 
 A functional update kept losing to concurrent writes and exhausted its reconcile budget. Back off and retry, raise `retries`, or move the row to the WebSocket transport.
+
+### database_already_connected
+
+`HTTP 409` · not retryable
+
+This database is already connected to another environment in your organization. Ablo streams a database from one environment at a time, so connecting it to a second one would leave the two reading the same change stream, and the newer connection would take the stream over from the older. Give this environment a database of its own — on a branching provider a branch of the same database is the usual answer, and it is what sandbox is for. If you meant to move the connection rather than add one, disconnect it from the environment that holds it with `ablo connect deregister` first.
 
 ### foreign_key_violation
 
@@ -605,12 +583,6 @@ The request body was missing, unparseable, or the wrong shape.
 
 The id in the request is not a valid identifier.
 
-### invalid_intent
-
-`HTTP 400` · not retryable
-
-The claim request was malformed and could not be processed.
-
 ### invalid_json
 
 `HTTP 400` · not retryable
@@ -646,6 +618,12 @@ The submitted schema could not be parsed.
 `HTTP 400` · not retryable
 
 Sync groups must be `default` or `<namespace>:<id>`.
+
+### malformed_claim
+
+`HTTP 400` · not retryable
+
+The claim payload could not be parsed. A claim must name the model and the entity it targets; check the payload shape and resend.
 
 ### malformed_subscription
 
@@ -706,6 +684,18 @@ The database rejected the write because a required column was left empty — a n
 `HTTP 400` · not retryable
 
 An organization id is required for this request.
+
+### position_missing_parent
+
+`HTTP 400` · not retryable
+
+This row gives a position but not the parent it belongs to, so the position cannot be resolved. Send the parent id alongside the position.
+
+### position_unknown_sibling
+
+`HTTP 400` · not retryable
+
+This row is positioned relative to another row that is not in the same parent. Check that the neighbouring row id is correct and still present.
 
 ### presence_identity_required
 
@@ -809,12 +799,6 @@ A data-source operation arrived without the entity `id` it targets.
 
 A task id is required for this request.
 
-### turn_validation_failed
-
-`HTTP 422` · not retryable
-
-The agent turn payload failed server-side validation and was not applied.
-
 ### upload_fields_required
 
 `HTTP 400` · not retryable
@@ -839,6 +823,12 @@ The usage request was invalid.
 
 The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `claim`) failed validation against the write-options schema.
 
+### write_payload_invalid
+
+`client-only` · not sent over the network
+
+A write payload contained a value that cannot be represented safely as JSON. Use plain objects, arrays, finite numbers, strings, booleans, null, or valid dates.
+
 ## Not found
 
 The referenced resource does not exist (or is hidden by scope).
@@ -848,6 +838,12 @@ The referenced resource does not exist (or is hidden by scope).
 `HTTP 404` · not retryable
 
 No capability exists with the given id.
+
+### claim_not_found
+
+`HTTP 404` · not retryable
+
+No claim of yours exists with the given id. It was released, it expired, or it was never acquired on this plane.
 
 ### entity_not_found
 
@@ -873,21 +869,15 @@ The row targeted by this update does not exist — it may have been deleted sinc
 
 No database is connected to this plane yet, so there is nothing to check. Connect one with `ablo connect apply`, then run the check again.
 
-### parent_turn_not_found
-
-`HTTP 404` · not retryable
-
-The referenced parent turn does not exist.
-
-### turn_not_found
-
-`HTTP 404` · not retryable
-
-The referenced turn does not exist.
-
 ## Tenant / schema resolution
 
 The named model could not be resolved in the tenant schema.
+
+### connected_database_unreachable
+
+`HTTP 503` · not retryable
+
+Ablo could not reach the database connected to this environment: it refused the credentials on file, or did not answer at all. A database often changes after it is connected — a password is rotated, an instance is replaced — while the connection goes on pointing at what used to be there. The error names the host it tried. If the password changed, `ablo connect rotate` re-keys the roles and re-registers them; if the database itself was replaced, `ablo connect apply` sets up the new one and `ablo connect register` hands it over. Run either with a key for this environment.
 
 ### model_not_provisioned
 
@@ -1065,6 +1055,12 @@ The model's table identifier is invalid.
 
 Initial snapshot fetch problems.
 
+### bootstrap_cancelled
+
+`client-only` · not sent over the network
+
+This bootstrap request was cancelled before it finished, because a newer one replaced it or the bootstrap it belonged to had already failed. It is not retried on its own.
+
 ### bootstrap_fetch_timeout
 
 `HTTP 504` · retryable
@@ -1165,6 +1161,12 @@ A network error occurred while resolving your identity. Check connectivity and r
 
 The server is at connection capacity. Retry shortly — transient and not specific to your credentials.
 
+### malformed_response
+
+`HTTP 502` · not retryable
+
+The server sent a message this client could not read, so it was declined whole rather than applied in part. Nothing was changed locally. This normally means the client and the server are running different versions; upgrading the client resolves it.
+
 ### protocol_version_unsupported
 
 `HTTP 426` · not retryable
@@ -1245,6 +1247,12 @@ Server-side failures. Generally retryable with backoff.
 
 Capability authentication is disabled on this server.
 
+### capability_rotation_unavailable
+
+`HTTP 500` · not retryable
+
+This capability could not be rotated, because the environment it belongs to could not be read from it. It is unchanged and still works. Create a replacement capability and retire this one.
+
 ### entity_fetch_failed
 
 `HTTP 500` · retryable
@@ -1298,18 +1306,6 @@ The task-create response arrived without a task id, so the result cannot be used
 `HTTP 500` · retryable
 
 The org's registered database could not be resolved or dialed. Ablo never falls back to shared storage for a dedicated tenant — retry, and check the datasource status if it persists.
-
-### turn_close_failed
-
-`HTTP 500` · retryable
-
-The agent turn could not be closed cleanly on the server. It is safe to retry the close.
-
-### turn_open_failed
-
-`HTTP 500` · retryable
-
-The agent turn could not be opened on the server. It is safe to retry.
 
 ### upload_not_configured
 

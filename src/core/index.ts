@@ -42,14 +42,19 @@ export { postQuery, type PostQueryOptions } from '../query/client.js';
 // Computes a dependency-safe ordering for a set of models by walking their
 // foreign-key relationships, so writes commit parents before children. Used by
 // schema-aware test fixtures and scaffolding tools.
-export { computeFKDepthPriority } from '../client/Ablo.js';
+export { computeFKDepthPriority } from '../client/schemaConfig.js';
 
 // ── Provider-facing dependency-injection types ──
 // The interfaces you implement to plug your own services into the provider
 // stack — a logger, an observability sink, a mutation executor, a
 // session-error detector, and so on.
+// The two `Sync*` names below are deprecated aliases removed in 0.36.0. A
+// barrel has to keep re-exporting its own aliases until then, or consumers
+// lose them a version early — so the deprecation is acknowledged, not heeded.
 export type {
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
   SyncLogger,
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
   SyncObservabilityProvider,
   MutationExecutor,
   SessionErrorDetector,
@@ -87,4 +92,4 @@ export {
 
 // An enum naming the strategies for loading a model's data. Referenced when
 // registering models in extension code.
-export { LoadStrategy } from '../types/index.js';
+export { LoadStrategy } from '../transaction/types/index.js';

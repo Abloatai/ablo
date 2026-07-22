@@ -28,10 +28,10 @@
  */
 
 import { z } from 'zod';
-import { AbloValidationError } from '../errors.js';
-import type { FieldMeta } from './field.js';
-import type { Tenancy } from './tenancy.js';
-import type { ModelResidency } from './residency.js';
+import { AbloValidationError } from '../transaction/errors.js';
+import type { FieldMeta } from '../transaction/schema/field.js';
+import type { Tenancy } from '../transaction/schema/tenancy.js';
+import type { ModelResidency } from '../transaction/schema/residency.js';
 import type {
   ModelDef,
   RelationRecord,
@@ -40,8 +40,8 @@ import type {
   PersistOptions,
   AutoFillRule,
   ConflictAxis,
-} from './model.js';
-import type { RelationDef, RelationType } from './relation.js';
+} from '../transaction/schema/model.js';
+import type { RelationDef, RelationType } from '../transaction/schema/relation.js';
 import {
   baseFieldsSchema,
   type Schema,
@@ -49,7 +49,7 @@ import {
   type IdentityRole,
   type EntityRole,
   type SessionSettings,
-} from './schema.js';
+} from '../transaction/schema/schema.js';
 
 /** Current schema-JSON envelope version. Bump this on a breaking change to the
  * JSON shape itself — not to a user's schema. */
@@ -312,7 +312,23 @@ export function parseSchema(json: string): Schema {
  * active schema hash. Not a security primitive.
  */
 export function schemaHash(schema: Schema): string {
-  const canonical = canonicalJson(toSchemaJSON(schema));
+  return fnv1a(canonicalJson(toSchemaJSON(schema)));
+}
+
+/**
+ * Content hash of ONE serialized model — the unit of the semantic drift check.
+ * Two schemas agree on a model exactly when these match, which is what lets a
+ * client compare only the models it declares instead of welding itself to the
+ * whole-schema hash (where any additive push reads as drift). Computed over the
+ * model's `SchemaJSON` entry with the same canonicalization and hash as
+ * {@link schemaHash}, on both the client and the server's `GET /api/schema`.
+ */
+export function modelHash(modelJson: unknown): string {
+  return fnv1a(canonicalJson(modelJson));
+}
+
+/** FNV-1a over an already-canonical string — shared by both hashes above. */
+function fnv1a(canonical: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < canonical.length; i++) {
     h ^= canonical.charCodeAt(i);

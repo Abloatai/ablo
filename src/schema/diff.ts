@@ -29,7 +29,7 @@
  * required is a separate nullability change that a backfill must run before.
  */
 
-import type { FieldMeta } from './field.js';
+import type { FieldMeta } from '../transaction/schema/field.js';
 import type { SchemaJSON, ModelJSON } from './serialize.js';
 
 export type FieldType = FieldMeta['type'];

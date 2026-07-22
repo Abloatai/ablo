@@ -25,7 +25,7 @@ export interface BootstrapModel {
   /**
    * The schema key used by source endpoints. `name` stays the wire and result model
    * name (usually the typename), while source handlers are keyed by the developer's
-   * schema key, such as `files` or `slideLayers`.
+   * schema key, such as `files` or `blocks`.
    */
   sourceModel?: string;
   table: string;

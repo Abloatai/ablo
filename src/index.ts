@@ -33,7 +33,7 @@
  * that consult the local cache first and fall back to the network, de-duplicating
  * concurrent requests for the same row. They are the default, and the right
  * choice for stateless callers whose local graph starts empty.
- * `ablo.<model>.get(id)`, `.getAll(...)`, and `.getCount(...)` are synchronous
+ * `ablo.<model>.local.retrieve(id)`, `.local.list(...)`, and `.local.count(...)` are synchronous
  * snapshots of the already-loaded local graph with no network round-trip — use
  * them in reactive React selectors (`useAblo((ablo) => ablo.<model>.get(id))`)
  * once the graph is warm.
@@ -59,14 +59,23 @@
 // one name. It is the default export, so `import Ablo from '@abloatai/ablo'`
 // works, and a named export, so `import { Ablo }` compiles too.
 export { Ablo } from './client/Ablo.js';
+// The reactive materialiser as a declared capability (ADR 0016): installed by
+// default on the socket client, named explicitly when the list is written out.
+// `AbloPlugin` is the one uniform shape every capability declares.
+export { humans } from './client/humans.js';
+export type { HumansSurface } from './client/humans.js';
+// The core client: `Ablo({ ..., plugins: [] })` — the stateless surface plus
+// the live feed, nothing else (ADR 0016).
+export type { AbloCoreClient } from './client/coreClient.js';
+export type { AbloPlugin, PipelineStage, TransportCapabilities } from './transaction/plugin.js';
 export type { MutationExecutor } from './interfaces/index.js';
 // The functional-update surface: `ablo.<model>.update(id, current => next)`.
-export type { ModelUpdater, ContentionOptions } from './client/functionalUpdate.js';
-export { DEFAULT_CONTENTION_RETRIES } from './client/functionalUpdate.js';
+export type { ModelUpdater, ContentionOptions } from './transaction/resources/functionalUpdate.js';
+export { DEFAULT_CONTENTION_RETRIES } from './transaction/resources/functionalUpdate.js';
 // The reactive-read view of the client: model reads typed as reactive rows
 // (data fields + computeds, no relation accessors) — what `useAblo` selectors
 // receive.
-export type { AbloReads } from './client/Ablo.js';
+export type { AbloReads } from './client/abloClient.js';
 // The stateless HTTP client is constructed through `Ablo({ transport: 'http' })`.
 // There is no separate constructor to import; annotate values with the
 // `AbloHttpClient` type, which is the return type of that call.
@@ -74,20 +83,22 @@ export {
   type AbloHttpClientOptions,
   type AbloHttpClient,
   type HttpModelClient,
-} from './client/httpClient.js';
+} from './transaction/transport/httpClient.js';
 export {
   ABLO_DEFAULT_BASE_URL,
   ABLO_HOSTED_API_DOMAIN,
   ABLO_HOSTED_HTTP_BASE_URL,
   normalizeAbloHostedBaseUrl,
-} from './client/auth.js';
+} from './transaction/auth/apiKey.js';
 // The flat surface is deliberately small: `AbloOptions` is what every caller
 // sees on `Ablo({...})`, and the `Model*Params` types are the option objects
 // you pass to `ablo.<model>.{retrieve,create,update,delete}`. Every other
 // shape — Commit, Claim, Model, Claimed — is reached through the namespace, as
 // `Ablo.Commit.*`, `Ablo.Claim.*`, `Ablo.Model.*`, and `Ablo.ClaimedOptions`.
+export type { AbloOptions } from './client/Ablo.js';
+// The request contract comes from `client/resourceTypes` — the module that owns
+// the resource surface — not through the factory, which merely constructs it.
 export type {
-  AbloOptions,
   LocalCountOptions,
   LocalReadOptions,
   ModelListScope,
@@ -96,46 +107,40 @@ export type {
   ModelCreateParams,
   ModelUpdateParams,
   ModelDeleteParams,
-} from './client/Ablo.js';
+} from './client/resourceTypes.js';
 /**
  * @deprecated Use `Ablo.Claim.Held`. This compatibility export remains until
  * the next major release because it was explicitly documented in 0.20.1.
  */
-export type { HeldClaim } from './client/Ablo.js';
+export type { HeldClaim } from './client/resourceTypes.js';
 /** The resolved value of the row-free `ablo.<model>.claim(id)` overload — a
  *  held lease on a key whose row Ablo does not hold (a {@link HeldClaim} with
  *  no `.data`). */
-export type { HeldLease } from './client/Ablo.js';
-export type { AbloPersistence } from './client/persistence.js';
+export type { HeldLease } from './client/resourceTypes.js';
+export type { AbloPersistence } from './transaction/persistence.js';
 export {
   durableWritesConfigSchema,
   durableWriteStoreSchema,
   pendingWriteSchema,
-} from './transactions/durableWriteStore.js';
+} from './transactions/mutations/durableWriteStore.js';
 export type {
   DurableWritesConfig,
   DurableWriteStore,
   PendingWrite,
-} from './transactions/durableWriteStore.js';
-/* eslint-disable @typescript-eslint/no-deprecated -- public compatibility aliases through the next major release */
-export type {
-  CommitOutboxRecord,
-  CommitOutboxStore,
-} from './transactions/commitOutboxStore.js';
-/* eslint-enable @typescript-eslint/no-deprecated */
+} from './transactions/mutations/durableWriteStore.js';
 export {
   durableCommitEnvelopeSchema,
-} from './transactions/commitEnvelope.js';
+} from './transaction/transactions/settlement/commitEnvelope.js';
 export type {
   CommitOutboxScope,
   DurableCommitEnvelope,
-} from './transactions/commitEnvelope.js';
+} from './transaction/transactions/settlement/commitEnvelope.js';
 export {
   durableHttpCommitEnvelopeSchema,
-} from './transactions/httpCommitEnvelope.js';
+} from './transaction/transactions/settlement/httpCommitEnvelope.js';
 export type {
   DurableHttpCommitEnvelope,
-} from './transactions/httpCommitEnvelope.js';
+} from './transaction/transactions/settlement/httpCommitEnvelope.js';
 // Participant types live under `Ablo.Participant.*` —
 // `Ablo.Participant.Joined`, `Ablo.Participant.Manager`,
 // `Ablo.Participant.JoinOptions`, etc. Same dot-access shape as
@@ -181,6 +186,10 @@ export { defaultPolicy, capabilityPreemptPolicy, interpretConflictAxis } from '.
 // tell failures apart — by `e instanceof AbloX` or `e.type === 'AbloX'` — along
 // with the helper that translates an HTTP response into the right class.
 export {
+  AbloSessionError,
+  // Deprecated alias, removed in 0.36.0. The barrel keeps re-exporting it until
+  // then so consumers don't lose the name a version early.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
   SyncSessionError,
   AbloError,
   AbloAuthenticationError,
@@ -206,16 +215,16 @@ export {
   classifyRecovery,
   recoveryClassSchema,
   RECOVERY_CLASSES,
-} from './errors.js';
-export type { RequiredCapability } from './errors.js';
-export type { ErrorCode, WireErrorCode, ErrorCategory, ErrorCodeSpec, RecoveryClass } from './errors.js';
+} from './transaction/errors.js';
+export type { RequiredCapability } from './transaction/errors.js';
+export type { ErrorCode, WireErrorCode, ErrorCategory, ErrorCodeSpec, RecoveryClass } from './transaction/errors.js';
 // The wire contract for errors, with no dependencies: the JSON envelope shape
 // plus the table mapping each AbloError subclass to an HTTP status. A server
 // that returns Ablo errors can assert against these so its responses never
 // drift from what the client expects.
-export { errorEnvelope, statusForType } from './wire/errorEnvelope.js';
-export type { ErrorEnvelope } from './wire/errorEnvelope.js';
-export { WS_BEARER_SUBPROTOCOL_PREFIX, WS_SYNC_SUBPROTOCOL } from './auth/credentialSource.js';
+export { errorEnvelope, statusForType } from './transaction/wire/errorEnvelope.js';
+export type { ErrorEnvelope } from './transaction/wire/errorEnvelope.js';
+export { WS_BEARER_SUBPROTOCOL_PREFIX, WS_SYNC_SUBPROTOCOL } from './transaction/auth/credentialSource.js';
 export {
   ENVIRONMENTS,
   environmentSchema,
@@ -223,8 +232,8 @@ export {
   environmentFromKeyPrefix,
   environmentToKeyPrefix,
   isSandboxEnvironment,
-} from './environment.js';
-export type { Environment, KeyPrefixEnvironment } from './environment.js';
+} from './transaction/environment.js';
+export type { Environment, KeyPrefixEnvironment } from './transaction/environment.js';
 
 // The write-options contract: the single Zod schema for the option bag every
 // write accepts (`ablo.<model>.create/update/delete`, `commits.create`, and the
@@ -236,33 +245,44 @@ export {
   writeOptionsSchema,
   onStaleModeSchema,
   assertWriteOptions,
-} from './client/writeOptionsSchema.js';
-export type { WriteOptionsInput } from './client/writeOptionsSchema.js';
+} from './transaction/resources/writeOptionsSchema.js';
+export type { WriteOptionsInput } from './transaction/resources/writeOptionsSchema.js';
+// The schema's inferred type, served beside it. Without this on the barrel a
+// consumer that only depends on `@abloatai/ablo` can validate an `onStale`
+// value at runtime but cannot name its type — so it writes the three modes out
+// by hand, which is how the vocabulary spread in the first place.
+export type { OnStaleMode } from './transaction/coordination/schema.js';
 export type { WriteOptions, MutationOptions } from './interfaces/index.js';
 
 // The value handed back to a writer whose change hit a stale-context conflict
 // under `onStale: 'notify'`. Instead of throwing, the commit succeeds and
 // returns this notification so the caller can reconcile against the current
 // value and retry rather than discard its work.
-export { staleNotificationSchema, readDependencySchema } from './coordination/schema.js';
-export type { StaleNotification, ReadDependency } from './coordination/schema.js';
+export { staleNotificationSchema, readDependencySchema } from './transaction/coordination/schema.js';
+export type { StaleNotification, ReadDependency } from './transaction/coordination/schema.js';
 // Collects claim events and stale-write collisions into an ordered list you can
 // print to inspect coordination, or read through `collisions()` to assert on in
 // tests. Pass `new ClaimLog()` as `Ablo({ observability })`.
-export { ClaimLog, formatClaim, formatConflict } from './coordination/trace.js';
-export type { ClaimLogEntry } from './coordination/trace.js';
+export { ClaimLog, formatClaim, formatConflict } from './coordination/ClaimLog.js';
+export type { ClaimLogEntry } from './coordination/ClaimLog.js';
 export type {
   ClaimEvent,
   ConflictEvent,
+  // Deprecated alias, removed in 0.36.0 — re-exported until then. See above.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
   SyncObservabilityProvider,
 } from './interfaces/index.js';
 // Spread this to provide a custom `observability` that overrides only the hooks
 // you care about (e.g. captureClaim) and no-ops the rest.
-export { noopObservability } from './SyncEngineContext.js';
+export { noopObservability } from './RuntimeContext.js';
 // Detects a stuck local store: use these to recognize when the browser's
 // IndexedDB backing store fails to open in time, so your app can show a
 // recovery screen instead of hanging.
 export { IDBOpenTimeoutError, isStorageOpenTimeout } from './core/openIDBWithTimeout.js';
+
+// The payload of `ablo.onCommitLatency` — how long each write took to land,
+// split into the local durable seal and the remote acknowledgement.
+export type { CommitLatencySample } from './transactions/mutations/commitLatency.js';
 
 // A machine-readable manifest of the SDK's public verb and option names, bound
 // at compile time to the real types so the lists can never name a method or
@@ -275,20 +295,19 @@ export {
 } from './surface.js';
 export type { ModelVerb, ListOptionKey, AbloOptionKey } from './surface.js';
 
-// The type-registration point. Register your Schema and UserMeta once through
-// module augmentation:
+// The type-registration point. Register your Schema, UserMeta and ClaimMeta
+// once through module augmentation:
 //   declare module '@abloatai/ablo' { interface Register { Schema: ... } }
 // The augmentation merges into this declaration, and the resolved types are
 // then available under the `Ablo` namespace (`Ablo.ResolveSchema`, and so on).
-export type { Register, DefaultSyncShape } from './types/global.js';
+export type { Register, DefaultSyncShape } from './transaction/types/global.js';
 
 // Advanced, and rarely imported. Custom mutators. Ordinary writes go through
 // `ablo.<model>.create/update/delete`; reach for `defineMutators` only when you
 // need a named, multi-step mutation with its own undo behavior. The matching
 // types live under the `Ablo` namespace:
-//   Ablo.Mutator.Fn, Ablo.Transaction
-//   Ablo.Mutator.UndoEntry, Ablo.Mutator.InverseOp
-//   Ablo.Query, Ablo.QueryBatch, Ablo.QueryBatchResult
+//   Ablo.Mutator.Fn, Ablo.Mutator.Transaction
+//   Ablo.Mutator.UndoEntry, Ablo.Mutator.UndoScope, Ablo.Mutator.InverseOp
 export { defineMutators } from './mutators/defineMutators.js';
 // `createTransaction` lets callers outside React — server-side workers, agent
 // runtimes — run custom mutators without the `useMutators` hook. Build a
@@ -304,4 +323,4 @@ export { createTransaction, type Transaction } from './mutators/Transaction.js';
 // then reports a difference that isn't real — a common trap when reconciling an
 // Ablo row against external editor state. These compare independent of key
 // order, so use them instead.
-export { deepEqual, stableStringify } from './utils/json.js';
+export { deepEqual, stableStringify } from './transaction/utils/json.js';

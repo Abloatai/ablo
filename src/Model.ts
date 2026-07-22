@@ -12,7 +12,7 @@ import { v4 as uuid } from 'uuid';
 import { M1 } from './utils/mobxSetup.js';
 import { getActiveRegistry, hasActiveRegistry } from './ModelRegistry.js';
 import { getContext } from './context.js';
-import { AbloValidationError } from './errors.js';
+import { AbloValidationError } from './transaction/errors.js';
 /** Store interface — methods that Model subclasses can call on the store */
 interface SyncStoreRef {
   getByForeignKey<T extends Model>(modelName: string, foreignKey: string, id: string): T[];
@@ -28,7 +28,7 @@ interface SyncStoreRef {
   /** Unarchive a previously archived model. */
   unarchive(model: Model): Promise<void>;
 }
-import type { PropertyMetadata } from './types/index.js';
+import type { PropertyMetadata } from './transaction/types/index.js';
 
 // Type aliases for better type safety
 /** Model data type - allows any object with string keys.
@@ -149,7 +149,7 @@ export abstract class Model {
     // A record that arrives WITH `createdAt` but WITHOUT `updatedAt` is
     // server/IDB data whose update timestamp didn't survive the wire —
     // falling back to "now" here fabricated an edit time for every such
-    // record on every bootstrap (the decks gallery sorted everything to
+    // record on every bootstrap (the reports gallery sorted everything to
     // "edited just now"). Fall back to createdAt instead; only a genuinely
     // new local model (no dates at all) stamps the current time.
     this.updatedAt = data.updatedAt
@@ -187,10 +187,10 @@ export abstract class Model {
    * narrow the return to their concrete store type.
    *
    * @example
-   *   // In a Slide model getter
-   *   const store = Slide.getStore();
+   *   // In a Section model getter
+   *   const store = Section.getStore();
    *   if (!store) return [];
-   *   return store.getByForeignKey<SlideLayer>('SlideLayer', 'slideId', this.id);
+   *   return store.getByForeignKey<Block>('Block', 'sectionId', this.id);
    */
   static getStore<T extends SyncStoreRef = SyncStoreRef>(): T | null {
     return Model.store as T | null;
@@ -220,9 +220,9 @@ export abstract class Model {
       // Preserve the earliest captured `old` for this field until the entry
       // is cleared (by `clearChanges` on sync-ack or by a mutator consuming
       // it). Consecutive in-place mutations between mutator invocations —
-      // e.g. a drag loop writing `layer.position = ...` on every frame —
+      // e.g. a drag loop writing `block.position = ...` on every frame —
       // would otherwise overwrite `.old` with each frame's predecessor,
-      // destroying the pre-session baseline that `RecordingTransaction`
+      // destroying the pre-session baseline that `RecordingMutation`
       // relies on to record a correct undo inverse. `.new` always reflects
       // the latest value so the transaction queue's `getChanges()` keeps
       // sending the right payload to the server.
@@ -279,7 +279,7 @@ export abstract class Model {
    *
    * This per-instance baseline is needed because application code can edit a
    * model in two ways that coexist: a direct property write
-   * (`slide.title = 'foo'`) and a recorded mutation. A design in which every
+   * (`section.title = 'foo'`) and a recorded mutation. A design in which every
    * write went through a single recorded path would not need it, since the
    * last acknowledged state would already be the authoritative baseline.
    */
@@ -301,8 +301,8 @@ export abstract class Model {
    * Capture a before-image for `keys` — the single source of truth for the
    * "previous value" that undo inverses are built from. Both undo paths call
    * this so they can never drift: the stream path
-   * (`TransactionQueue.extractPreviousData`) and the manual-record path
-   * (`RecordingTransaction.snapshotFields`).
+   * (`MutationQueue.extractPreviousData`) and the manual-record path
+   * (`RecordingMutation.snapshotFields`).
    *
    * Resolution order per key:
    *   1. `modifiedProperties.get(key).old` — first-old-wins pre-session

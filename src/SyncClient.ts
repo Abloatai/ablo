@@ -4,7 +4,7 @@
  * optimistic changes, holds them while the client is offline, sends them to
  * the server when connectivity returns, and resolves conflicts when the
  * server's version of a row disagrees with the local one. It sits between the
- * reactive object pool and the {@link TransactionQueue} that delivers writes
+ * reactive object pool and the {@link MutationQueue} that delivers writes
  * over the network.
  */
 
@@ -12,32 +12,38 @@ import { runInAction } from 'mobx';
 import { v4 as uuid } from 'uuid';
 import { InstanceCache, ModelScope } from './InstanceCache.js';
 import { Model } from './Model.js';
-import type { ModelData } from './types/modelData.js';
+import type { ModelData } from './transaction/types/modelData.js';
+import { snapshotJsonValue } from './transaction/utils/json.js';
 // ModelRegistry instance accessed via this.objectPool.registry
-import { LoadStrategy } from './types/index.js';
+import { LoadStrategy } from './transaction/types/index.js';
 import { getContext } from './context.js';
-import { AbloAuthenticationError, AbloError, AbloValidationError } from './errors.js';
+import { AbloAuthenticationError, AbloError, AbloValidationError } from './transaction/errors.js';
 import { EventEmitter } from 'events';
 import { NetworkMonitor } from './NetworkMonitor.js';
-import { TransactionQueue } from './transactions/TransactionQueue.js';
+import { MutationQueue } from './transactions/mutations/MutationQueue.js';
+import {
+  observeCommitLatency,
+  type CommitLatencySample,
+} from './transactions/mutations/commitLatency.js';
 import {
   legacyPendingMutationRecordSchema,
   PENDING_MUTATION_REPLAY_WINDOW_MS,
   pendingMutationRecordId,
   pendingMutationRecordSchema,
   persistedMutationSchema,
-} from './transactions/replayValidation.js';
+  type PendingMutationRecord,
+} from './transactions/mutations/replayValidation.js';
 import {
   UnconfirmedWrites,
   type UnconfirmedWritesMetrics,
-} from './transactions/UnconfirmedWrites.js';
+} from './transactions/mutations/UnconfirmedWrites.js';
 import type { Database } from './Database.js';
 import type { WriteOptions } from './interfaces/index.js';
-import { SyncPosition } from './sync/syncPosition.js';
+import { LogPosition } from './transaction/logPosition.js';
 import {
   DatabaseCommitOutboxStore,
-} from './transactions/commitOutboxStore.js';
-import type { DurableWriteStore } from './transactions/durableWriteStore.js';
+} from './transactions/mutations/commitOutboxStore.js';
+import type { DurableWriteStore } from './transactions/mutations/durableWriteStore.js';
 
 interface SyncObserver {
   onSync?: (event: SyncEvent) => void;
@@ -142,7 +148,7 @@ export class SyncClient extends EventEmitter {
    * @internal — test seam, stripped from the published declarations by
    * `stripInternal`. Unit suites deliver queue lifecycle events directly.
    */
-  readonly transactionQueue: TransactionQueue;
+  readonly mutationQueue: MutationQueue;
   private observers = new Set<SyncObserver>();
 
   // Authentication context
@@ -179,11 +185,11 @@ export class SyncClient extends EventEmitter {
 
   /**
    * The client's position in the global delta order, held as the single
-   * canonical {@link SyncPosition} instance. The store advances `applied` and
+   * canonical {@link LogPosition} instance. The store advances `applied` and
    * `persisted` as deltas land, the queue advances `acked` on commit
    * responses, and snapshots and claims read `readFloor`.
    */
-  readonly position = new SyncPosition();
+  readonly position = new LogPosition();
 
   constructor(
     objectPool: InstanceCache,
@@ -197,8 +203,8 @@ export class SyncClient extends EventEmitter {
     this.commitOutboxNamespace = commitOutboxNamespace;
     this.networkMonitor = new NetworkMonitor();
 
-    // Initialize TransactionQueue with proper configuration
-    this.transactionQueue = new TransactionQueue({
+    // Initialize MutationQueue with proper configuration
+    this.mutationQueue = new MutationQueue({
       position: this.position,
       maxBatchSize: 50, // Larger batches keep the batch count low for bulk operations
       // A short delay keeps writes responsive; coalescing still groups them
@@ -210,8 +216,8 @@ export class SyncClient extends EventEmitter {
         strategy: 'last-write-wins',
       },
     });
-    this.transactionQueue.setCommitOutbox(commitOutbox);
-    this.transactionQueue.on(
+    this.mutationQueue.setCommitOutbox(commitOutbox);
+    this.mutationQueue.on(
       'commit:envelope_persisted',
       (event: { sourceMutationIds: string[] }) => {
         if (event.sourceMutationIds.length === 0) return;
@@ -225,7 +231,7 @@ export class SyncClient extends EventEmitter {
         }
       },
     );
-    this.transactionQueue.on(
+    this.mutationQueue.on(
       'transaction:completed',
       (transaction: { sourceMutationIds?: string[] }) => {
         const completed = new Set(transaction.sourceMutationIds ?? []);
@@ -245,7 +251,7 @@ export class SyncClient extends EventEmitter {
         }
       },
     );
-    this.transactionQueue.on(
+    this.mutationQueue.on(
       'transaction:failed',
       ({ transaction }: { transaction: { sourceMutationIds?: string[] } }) => {
         const failed = transaction.sourceMutationIds ?? [];
@@ -270,8 +276,8 @@ export class SyncClient extends EventEmitter {
       },
     );
 
-    // Provide connection state to TransactionQueue - prevents rollbacks during disconnection
-    this.transactionQueue.setConnectionChecker(() => this.connectionState === 'connected');
+    // Provide connection state to MutationQueue - prevents rollbacks during disconnection
+    this.mutationQueue.setConnectionChecker(() => this.connectionState === 'connected');
 
     // Restore object-pool state when a transaction is rolled back. If the
     // server rejects a write or it times out, the model's previous state is
@@ -301,7 +307,7 @@ export class SyncClient extends EventEmitter {
     // losing a failed reconnect flush silently.
     this.networkMonitor.on('online', () => {
       void this.handleReconnection().catch((error: unknown) => {
-        getContext().observability.captureTransactionFailure({
+        getContext().observability.captureMutationFailure({
           context: 'network-online-reconnection',
           error: error instanceof Error ? error : new Error(String(error)),
         });
@@ -309,7 +315,7 @@ export class SyncClient extends EventEmitter {
     });
     this.networkMonitor.on('offline', () => {
       void this.handleDisconnection().catch((error: unknown) => {
-        getContext().observability.captureTransactionFailure({
+        getContext().observability.captureMutationFailure({
           context: 'network-offline-handler',
           error: error instanceof Error ? error : new Error(String(error)),
         });
@@ -334,12 +340,12 @@ export class SyncClient extends EventEmitter {
    *      discard the optimistic state silently.
    *
    * Treating both paths the same caused the deletion-flicker bug: every
-   * cancelled update on a multi-layer chart fired a per-model observer
+   * cancelled update on a multi-child record fired a per-model observer
    * event and a `[SyncClient.rollback]` warn, producing N renders and N
    * spam log lines for one user-initiated delete.
    */
   private setupTransactionRollbackHandling(): void {
-    this.transactionQueue.on(
+    this.mutationQueue.on(
       'optimistic:rollback',
       (event: {
         model: Model;
@@ -364,7 +370,7 @@ export class SyncClient extends EventEmitter {
         // `AbloServerError` with `httpStatus: 500`). Falling back to
         // generic message lets us still see unstructured errors.
         // Mechanic-level breadcrumb only. The authoritative, user-facing
-        // reason is logged once at `warn` by `TransactionQueue.handleFailure`
+        // reason is logged once at `warn` by `MutationQueue.handleFailure`
         // (`Permanent error - rolling back`). Logging the same typed cause
         // again here at `warn` is what produced three identical dumps per
         // rejected write — keep it at `debug` so the rollback mechanics are
@@ -420,7 +426,7 @@ export class SyncClient extends EventEmitter {
             if (model.disposed) {
               // Follow-on of an already-logged permanent error, not its own
               // problem: the tx that failed has already surfaced the cause in
-              // TransactionQueue. Restoring a disposed model is a no-op by
+              // MutationQueue. Restoring a disposed model is a no-op by
               // design (can't revive the private isDisposed flag), so keep this
               // at `debug` instead of emitting a second `warn` that reads as a
               // distinct failure in the console.
@@ -450,7 +456,7 @@ export class SyncClient extends EventEmitter {
             reason,
           });
         } catch (error) {
-          getContext().observability.captureTransactionFailure({
+          getContext().observability.captureMutationFailure({
             context: 'rollback-failed',
             transactionId: transaction.id,
             modelName: transaction.modelName,
@@ -463,13 +469,13 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Forward reconciliation requests from the {@link TransactionQueue} to the
+   * Forward reconciliation requests from the {@link MutationQueue} to the
    * sync layer. When delta confirmation times out, the queue emits
    * `reconciliation:needed` instead of rolling back, so optimistic state the
    * server may already have committed is never destroyed.
    */
   private setupReconciliationForwarding(): void {
-    this.transactionQueue.on(
+    this.mutationQueue.on(
       'reconciliation:needed',
       (event: {
         reason: string;
@@ -503,7 +509,7 @@ export class SyncClient extends EventEmitter {
    * deliver the missing deltas and confirm the transaction.
    */
   private setupAwaitingTransactionPersistence(): void {
-    this.transactionQueue.on(
+    this.mutationQueue.on(
       'transaction:persist_awaiting',
       (event: {
         txId: string;
@@ -518,7 +524,7 @@ export class SyncClient extends EventEmitter {
     );
 
     // Clean up persisted awaiting transactions when they're finally confirmed
-    this.transactionQueue.on(
+    this.mutationQueue.on(
       'transaction:completed',
       (tx: { id: string; modelName: string; modelId: string }) => {
         // void is safe: the handler's body is fully try/catch'd.
@@ -534,13 +540,13 @@ export class SyncClient extends EventEmitter {
     // server processes it, we drain on rollback too so a stale id
     // doesn't permanently silence a foreign delta sharing the same id
     // (vanishingly unlikely for UUIDs, but cheap insurance).
-    this.transactionQueue.on(
+    this.mutationQueue.on(
       'transaction:created',
       (tx: { id: string; localOnly?: boolean }) => {
         if (!tx.localOnly) this.echoTracker.markPending(tx.id);
       },
     );
-    this.transactionQueue.on(
+    this.mutationQueue.on(
       'optimistic:rollback',
       (event: { transaction: { id: string } }) => {
         this.echoTracker.drainOnRollback(event.transaction.id);
@@ -582,7 +588,7 @@ export class SyncClient extends EventEmitter {
         }
       );
     } catch (error) {
-      getContext().observability.captureTransactionFailure({
+      getContext().observability.captureMutationFailure({
         context: 'persist-awaiting-transaction',
         modelName: event.model,
         modelId: event.modelId,
@@ -610,7 +616,7 @@ export class SyncClient extends EventEmitter {
 
     getContext().observability.setContext(userId, organizationId);
 
-    this.transactionQueue.setCommitOutboxScope({
+    this.mutationQueue.setCommitOutboxScope({
       organizationId,
       participantId: userId,
       namespace: this.commitOutboxNamespace,
@@ -627,7 +633,7 @@ export class SyncClient extends EventEmitter {
     // Restore exact, already-sealed requests first. The returned source ids
     // suppress any legacy queue entry left behind by an older non-atomic
     // handoff.
-    const sealedMutationIds = await this.transactionQueue.restoreDurableCommits();
+    const sealedMutationIds = await this.mutationQueue.restoreDurableCommits();
     await this.restoreMutationQueue(sealedMutationIds);
 
     // Read the initial network status from the injected OnlineStatusProvider.
@@ -668,7 +674,7 @@ export class SyncClient extends EventEmitter {
    * 2. **Required-field gate** — if the row is missing any field listed
    *    in the model's `requiredFields`, return `null` so the caller
    *    skips this record. Used for FK columns whose absence renders the
-   *    row unrecoverable (e.g. a SlideLayer with no slideId).
+   *    row unrecoverable (e.g. a Block with no sectionId).
    *
    * The engine itself is product-neutral: model identity (which fields
    * to back-fill, which absences are fatal) lives entirely in the
@@ -732,9 +738,7 @@ export class SyncClient extends EventEmitter {
     // Get model types that should be hydrated on startup (skip lazy per LSE)
     const modelTypes = this.objectPool.registry.getRegisteredModelNames().filter((name) => {
       const meta = this.objectPool.registry.getMetadata(name);
-      return (
-        meta?.loadStrategy === LoadStrategy.instant || meta?.loadStrategy === LoadStrategy.partial
-      );
+      return meta?.loadStrategy === LoadStrategy.instant;
     });
 
     const totalStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -804,7 +808,7 @@ export class SyncClient extends EventEmitter {
                 `[SyncClient.hydrate] Successfully healed ${recordsToHeal.length} ${modelType} records`
               );
             } catch (err) {
-              getContext().observability.captureTransactionFailure({
+              getContext().observability.captureMutationFailure({
                 context: 'persist-healed-records',
                 modelName: modelType,
                 error: err instanceof Error ? err : new Error(String(err)),
@@ -883,9 +887,7 @@ export class SyncClient extends EventEmitter {
     // Model types to rehydrate (same filter as hydrateFromDatabase)
     const modelTypes = this.objectPool.registry.getRegisteredModelNames().filter((name) => {
       const meta = this.objectPool.registry.getMetadata(name);
-      return (
-        meta?.loadStrategy === LoadStrategy.instant || meta?.loadStrategy === LoadStrategy.partial
-      );
+      return meta?.loadStrategy === LoadStrategy.instant;
     });
 
     // ── Phase 1: Read from IndexedDB & create model instances (async I/O) ──
@@ -1047,7 +1049,9 @@ export class SyncClient extends EventEmitter {
     // object can reach here with `hasChanges === undefined`. `undefined === false`
     // is false → we fall through to the normal path rather than risk dropping a
     // real write. Only a genuine Model with an empty dirty-set is skipped.
-    if (type === 'update' && model.hasChanges === false) return;
+    if (type === 'update' && model.hasChanges === false) {
+      return;
+    }
 
     // Capture changes before the pool action runs. Pool operations —
     // upsert in particular — can clear the model's local changes, so
@@ -1065,7 +1069,7 @@ export class SyncClient extends EventEmitter {
     });
 
     // QueryProcessor uses `models:changed` to invalidate caches. Coalesce
-    // to one event per microtask: a paste of 100 layers should re-run
+    // to one event per microtask: a paste of 100 rows should re-run
     // affected queries ONCE, not 100×.
     this.markModelChanged(model.getModelName());
   }
@@ -1112,7 +1116,7 @@ export class SyncClient extends EventEmitter {
   /**
    * Update existing model with pre-computed changes.
    * Used by saveManyOptimized when incoming models have empty change-tracking
-   * (e.g. freshly constructed SpreadsheetCellModels from decomposeSpreadsheetDocument).
+   * (e.g. freshly constructed cell models from a bulk document decomposition).
    */
   updateWithChanges(model: Model, changes?: Record<string, unknown>): void {
     getContext().logger.debug(`SyncClient.updateWithChanges`, {
@@ -1143,7 +1147,7 @@ export class SyncClient extends EventEmitter {
     });
   }
 
-  /** Expose the GraphQL client for atomic mutations (e.g., createSlideWithLayers).
+  /** Expose the GraphQL client for atomic mutations (e.g., createSectionWithBlocks).
    *  Used by SyncedStore for operations that bypass the transaction queue
    *  but still need optimistic pool updates at the sync layer. */
   get gql() {
@@ -1159,7 +1163,7 @@ export class SyncClient extends EventEmitter {
 
   /**
    * Clear all pending mutations for a specific model
-   * Called before deletion to prevent "layer not found" errors on the server
+   * Called before deletion to prevent "record not found" errors on the server
    */
   private clearPendingMutationsForModel(modelId: string): void {
     const beforeCount = this.pendingMutations.length;
@@ -1175,7 +1179,7 @@ export class SyncClient extends EventEmitter {
       });
 
       for (const mutation of removed) {
-        // Once staged, TransactionQueue owns cancellation and transfers this
+        // Once staged, MutationQueue owns cancellation and transfers this
         // source id into the superseding delete envelope. Deleting the journal
         // row here would make that valid atomic promotion look like a
         // multi-tab loser. Truly unstaged work can be canceled locally.
@@ -1194,7 +1198,7 @@ export class SyncClient extends EventEmitter {
 
   /**
    * Upload a file and create its attachment record. The upload runs through
-   * the {@link TransactionQueue}, and a model is built from the server's
+   * the {@link MutationQueue}, and a model is built from the server's
    * response and added to the pool.
    */
   async uploadFile(
@@ -1213,8 +1217,8 @@ export class SyncClient extends EventEmitter {
     }
 
     try {
-      // Use TransactionQueue to handle the upload mutation
-      const result = await this.transactionQueue.uploadAttachment(
+      // Use MutationQueue to handle the upload mutation
+      const result = await this.mutationQueue.uploadAttachment(
         file,
         {
           id: options.id,
@@ -1248,7 +1252,7 @@ export class SyncClient extends EventEmitter {
 
       return null;
     } catch (error) {
-      getContext().observability.captureTransactionFailure({
+      getContext().observability.captureMutationFailure({
         context: 'file-upload',
         error: error instanceof Error ? error : new Error(String(error)),
       });
@@ -1289,7 +1293,7 @@ export class SyncClient extends EventEmitter {
       metadata: options.metadata,
     }));
 
-    const results = await this.transactionQueue.batchUploadAttachments(files, items, {
+    const results = await this.mutationQueue.batchUploadAttachments(files, items, {
       userId: this.userId,
       organizationId: this.organizationId,
     });
@@ -1322,7 +1326,7 @@ export class SyncClient extends EventEmitter {
    * IndexedDB persistence and the server push are deferred to a microtask, so
    * many pushes within the same tick collapse into a single serialization and
    * a single process call. Without the deferral, queueing a hundred mutations
-   * at once — a large paste, a document import, bulk layer creation — would
+   * at once — a large paste, a document import, bulk row creation — would
    * reserialize the whole growing queue a hundred times, an O(N²) cost in
    * `model.toJSON()`.
    *
@@ -1398,18 +1402,67 @@ export class SyncClient extends EventEmitter {
       return;
     }
     try {
-      const records = batch.map((mutation) => this.pendingMutationRecord(mutation));
-      const database = this.database as Database & {
-        saveTransactions?: (rows: typeof records) => Promise<void>;
-      };
-      if (database.saveTransactions) {
-        await database.saveTransactions(records);
-      } else {
-        await Promise.all(records.map((record) => database.saveTransaction(record)));
+      // Build each durable row independently. A malformed mutation must not
+      // prevent unrelated writes from the same event-loop burst from being
+      // journaled and dispatched.
+      const entries: {
+        mutation: PendingMutation;
+        record: PendingMutationRecord;
+      }[] = [];
+      for (const mutation of batch) {
+        try {
+          entries.push({
+            mutation,
+            record: this.pendingMutationRecord(mutation),
+          });
+        } catch (error) {
+          mutation.rejectJournal?.(error);
+        }
       }
-      for (const mutation of batch) mutation.resolveJournal?.();
-    } catch (error) {
-      for (const mutation of batch) mutation.rejectJournal?.(error);
+      if (entries.length === 0) return;
+
+      const database = this.database as Database & {
+        saveTransactions?: (rows: readonly PendingMutationRecord[]) => Promise<void>;
+      };
+      const saveOne = async (record: PendingMutationRecord): Promise<void> => {
+        // Some adapters (including IndexedDB's put path) can throw before
+        // returning a Promise. The async wrapper turns that into an individual
+        // rejected outcome instead of aborting construction of the whole list.
+        await database.saveTransaction(record);
+      };
+      let outcomes: PromiseSettledResult<void>[];
+      if (database.saveTransactions) {
+        try {
+          await database.saveTransactions(entries.map(({ record }) => record));
+          outcomes = entries.map(() => ({
+            status: 'fulfilled',
+            value: undefined,
+          }));
+        } catch {
+          // IndexedDB aborts a multi-row transaction when any value cannot be
+          // cloned. Retry one row per transaction to identify the offender and
+          // preserve every valid sibling. Re-putting a row is idempotent by id.
+          outcomes = await Promise.allSettled(
+            entries.map(({ record }) => saveOne(record)),
+          );
+        }
+      } else {
+        outcomes = await Promise.allSettled(
+          entries.map(({ record }) => saveOne(record)),
+        );
+      }
+
+      for (const [index, entry] of entries.entries()) {
+        const outcome = outcomes[index];
+        if (outcome?.status === 'fulfilled') {
+          entry.mutation.resolveJournal?.();
+        } else {
+          entry.mutation.rejectJournal?.(
+            outcome?.reason ??
+              new Error('Mutation journal persistence failed'),
+          );
+        }
+      }
     } finally {
       for (const mutation of batch) {
         mutation.resolveJournal = undefined;
@@ -1430,7 +1483,7 @@ export class SyncClient extends EventEmitter {
     schedule(() => {
       this.syncScheduled = false;
       if (getContext().onlineStatus.isOnline()) {
-        this.processPendingMutations().catch((err) => {
+        this.processPendingMutations().catch((err: unknown) => {
           getContext().observability.breadcrumb(
             'Background sync failed',
             'sync.transaction',
@@ -1449,7 +1502,7 @@ export class SyncClient extends EventEmitter {
         { code: 'write_options_invalid' },
       );
     }
-    return pendingMutationRecordSchema.parse({
+    const candidate = {
       id: pendingMutationRecordId(mutation.mutationId),
       type: 'pending_mutation',
       storageVersion: 2,
@@ -1472,7 +1525,12 @@ export class SyncClient extends EventEmitter {
         namespace: this.commitOutboxNamespace,
       },
       timestamp: mutation.timestamp.getTime(),
-    });
+    };
+    // One framework-neutral boundary contract owns both Proxy unwrapping and
+    // rejection of values JSON would silently corrupt before IndexedDB sees it.
+    return pendingMutationRecordSchema.parse(
+      snapshotJsonValue(candidate, '$.pendingMutation'),
+    );
   }
 
   private async persistPendingMutation(mutation: PendingMutation): Promise<void> {
@@ -1601,7 +1659,7 @@ export class SyncClient extends EventEmitter {
       getContext().logger.debug('[SyncClient] Failed to restore offline mutation queue', {
         error: error instanceof Error ? error.message : String(error),
       });
-      getContext().observability.captureTransactionFailure({
+      getContext().observability.captureMutationFailure({
         context: 'restore-mutation-queue',
         error: error instanceof Error ? error : String(error),
       });
@@ -1613,7 +1671,7 @@ export class SyncClient extends EventEmitter {
    *
    * Best Practice: Only sync models that still exist locally (local-first principle)
    * - If a model was deleted locally → skip any pending updates/creates for it
-   * - This prevents "layer not found" errors from fast copy-paste-delete workflows
+   * - This prevents "record not found" errors from fast copy-paste-delete workflows
    */
   async processPendingMutations(): Promise<void> {
     if (this.pendingMutations.length === 0) return;
@@ -1690,7 +1748,7 @@ export class SyncClient extends EventEmitter {
         (pending) => pending.mutationId !== mutation.mutationId,
       );
       mutation.rejectStaged?.(outcome.reason);
-      getContext().observability.captureTransactionFailure({
+      getContext().observability.captureMutationFailure({
         context: 'persist-pending-mutation',
         error:
           outcome.reason instanceof Error
@@ -1702,13 +1760,13 @@ export class SyncClient extends EventEmitter {
     // Stage every mutation synchronously within the same event-loop tick;
     // the transaction queue's microtask batches and sends them together.
     for (const mutation of journaledMutations) {
-      // Stage synchronously - TransactionQueue handles batching, retry, and errors
+      // Stage synchronously - MutationQueue handles batching, retry, and errors
       this.stageMutation(mutation);
     }
   }
 
   /**
-   * Stage mutation to TransactionQueue - mutations in same tick are batched via microtask
+   * Stage mutation to MutationQueue - mutations in same tick are batched via microtask
    *
    * @param mutation.capturedChanges - Pre-captured changes to use instead of re-reading from model
    */
@@ -1727,7 +1785,7 @@ export class SyncClient extends EventEmitter {
     // apply, store add). That means the write never entered the queue, so
     // capture it instead of dropping it silently.
     const captureStagingFailure = (error: unknown): void => {
-      getContext().observability.captureTransactionFailure({
+      getContext().observability.captureMutationFailure({
         context: `stage-mutation-${mutation.type}`,
         modelName: mutation.model.getModelName(),
         modelId: mutation.model.id,
@@ -1738,14 +1796,14 @@ export class SyncClient extends EventEmitter {
 
     const staging =
       mutation.type === 'update'
-        ? this.transactionQueue.update(
+        ? this.mutationQueue.update(
             mutation.model,
             ctx,
             mutation.capturedChanges,
             mutation.writeOptions,
             mutation.mutationId,
           )
-        : this.transactionQueue[mutation.type].bind(this.transactionQueue)(
+        : this.mutationQueue[mutation.type].bind(this.mutationQueue)(
             mutation.model,
             ctx,
             mutation.writeOptions,
@@ -1889,7 +1947,7 @@ export class SyncClient extends EventEmitter {
     try {
       // Prefer a single batch flush for pending mutations (fast path)
       try {
-        await this.transactionQueue.flushOfflineQueue();
+        await this.mutationQueue.flushOfflineQueue();
       } catch {}
       // Process all queued mutations
       await this.processPendingMutations();
@@ -1897,7 +1955,7 @@ export class SyncClient extends EventEmitter {
       this.setConnectionState('connected');
       this.emit('sync:reconnected');
     } catch (error) {
-      getContext().observability.captureTransactionFailure({
+      getContext().observability.captureMutationFailure({
         context: 'reconnection-sync',
         error: error instanceof Error ? error : new Error(String(error)),
       });
@@ -1938,10 +1996,10 @@ export class SyncClient extends EventEmitter {
       getContext().observability.breadcrumb(`Connection: ${oldState} → ${state}`, 'sync.websocket');
       if (state === 'connected') {
         this.emit('connection:established');
-        this.transactionQueue.setConnectionState('connected');
+        this.mutationQueue.setConnectionState('connected');
       } else if (state === 'disconnected') {
         this.emit('connection:disconnected');
-        this.transactionQueue.setConnectionState('disconnected');
+        this.mutationQueue.setConnectionState('disconnected');
       }
     }
   }
@@ -2005,8 +2063,8 @@ export class SyncClient extends EventEmitter {
     // Browser online state may have marked the client connected before the
     // WebSocket itself was ready. Always kick both durable lanes on the real
     // socket event, even when the high-level state did not change.
-    void this.transactionQueue.flushOfflineQueue().catch((error: unknown) => {
-      getContext().observability.captureTransactionFailure({
+    void this.mutationQueue.flushOfflineQueue().catch((error: unknown) => {
+      getContext().observability.captureMutationFailure({
         context: 'restore-commit-outbox',
         error: error instanceof Error ? error : new Error(String(error)),
       });
@@ -2027,7 +2085,7 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Notify the {@link TransactionQueue} of an incoming delta so it can confirm
+   * Notify the {@link MutationQueue} of an incoming delta so it can confirm
    * hosted writes by sync-id threshold and queued forwards by their echoed
    * source-batch correlation id.
    * @param syncId - The sync id of the received delta.
@@ -2040,7 +2098,7 @@ export class SyncClient extends EventEmitter {
     correlationId?: string,
   ): void {
     try {
-      this.transactionQueue.onDeltaReceived(
+      this.mutationQueue.onDeltaReceived(
         syncId,
         transactionId,
         correlationId,
@@ -2064,8 +2122,8 @@ export class SyncClient extends EventEmitter {
    * deletion. The store calls this when a delete delta arrives for a parent,
    * cancelling any queued writes on children that reference it.
    *
-   * @param childModelName - The child model type (for example, `SlideLayer`).
-   * @param foreignKey - The foreign-key property name (for example, `slideId`).
+   * @param childModelName - The child model type (for example, `Block`).
+   * @param foreignKey - The foreign-key property name (for example, `sectionId`).
    * @param parentId - The id of the deleted parent.
    * @returns The number of transactions cancelled.
    */
@@ -2074,7 +2132,7 @@ export class SyncClient extends EventEmitter {
     foreignKey: string,
     parentId: string
   ): number {
-    return this.transactionQueue.cancelTransactionsByForeignKey(
+    return this.mutationQueue.cancelTransactionsByForeignKey(
       childModelName,
       foreignKey,
       parentId
@@ -2083,10 +2141,10 @@ export class SyncClient extends EventEmitter {
 
   /**
    * Wait for a transaction to be confirmed by its delta echo. Delegates to the
-   * {@link TransactionQueue}, which handles the confirmation timeout.
+   * {@link MutationQueue}, which handles the confirmation timeout.
    */
   waitForDeltaConfirmation(transactionId: string): Promise<void> {
-    return this.transactionQueue.waitForConfirmation(transactionId);
+    return this.mutationQueue.waitForConfirmation(transactionId);
   }
 
   /**
@@ -2121,11 +2179,11 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Get pending transaction count from TransactionQueue
+   * Get pending transaction count from MutationQueue
    * Used by SyncedStore to compute hasUnsyncedChanges
    */
   getPendingTransactionCount(): number {
-    const stats = this.transactionQueue.getStats();
+    const stats = this.mutationQueue.getStats();
     // Include pending and executing as "unsynced"
     // awaiting_delta transactions are included in 'executing' until confirmed
     // Completed and failed are "synced" (either done or gave up)
@@ -2138,13 +2196,13 @@ export class SyncClient extends EventEmitter {
    */
   onTransactionEvent(event: 'created' | 'completed' | 'failed', callback: () => void): () => void {
     const eventName = `transaction:${event}`;
-    this.transactionQueue.on(eventName, callback);
-    return () => this.transactionQueue.off(eventName, callback);
+    this.mutationQueue.on(eventName, callback);
+    return () => this.mutationQueue.off(eventName, callback);
   }
 
   /**
    * Subscribe to mutation failures with the full payload. Mirrors the
-   * underlying TransactionQueue 'transaction:failed' shape so consumers
+   * underlying MutationQueue 'transaction:failed' shape so consumers
    * can render typed UI (toast keyed by `AbloError.type`, route-level
    * "this entity reverted" boundaries, telemetry).
    *
@@ -2155,21 +2213,33 @@ export class SyncClient extends EventEmitter {
    */
   onMutationFailure(
     listener: (payload: {
-      transaction: import('./transactions/TransactionQueue.js').Transaction;
+      transaction: import('./transactions/mutations/MutationQueue.js').QueuedMutation;
       error: Error;
       permanent?: boolean;
     }) => void,
   ): () => void {
-    this.transactionQueue.on('transaction:failed', listener);
-    return () => this.transactionQueue.off('transaction:failed', listener);
+    this.mutationQueue.on('transaction:failed', listener);
+    return () => this.mutationQueue.off('transaction:failed', listener);
   }
 
   /**
-   * Subscribe to local transaction creation with the full {@link Transaction}
+   * Subscribe to commit round-trip latency, split into the local seal and the
+   * remote acknowledgement. Fires once per completed commit.
+   *
+   * Taps the {@link MutationQueue} emitter for the same reason
+   * {@link onMutationFailure} does: the commit lifecycle events originate
+   * there and the SyncClient's own emitter never rebroadcasts them.
+   */
+  onCommitLatency(listener: (sample: CommitLatencySample) => void): () => void {
+    return observeCommitLatency(this.mutationQueue, listener);
+  }
+
+  /**
+   * Subscribe to local transaction creation with the full {@link QueuedMutation}
    * payload (`type`, `modelName`, `modelId`, `data`, `previousData`). This is
    * the feed the store's local-mutation subscription taps for undo recording.
    *
-   * It subscribes to the {@link TransactionQueue}'s emitter directly, since
+   * It subscribes to the {@link MutationQueue}'s emitter directly, since
    * that is the only emitter that fires `transaction:created`. The SyncClient's
    * own emitter (reached through {@link subscribe}) never rebroadcasts that
    * event, so routing undo through `subscribe('transaction:created')` would
@@ -2177,9 +2247,9 @@ export class SyncClient extends EventEmitter {
    * reason.
    */
   onLocalTransaction(
-    listener: (tx: import('./transactions/TransactionQueue.js').Transaction) => void,
+    listener: (tx: import('./transactions/mutations/MutationQueue.js').QueuedMutation) => void,
   ): () => void {
-    this.transactionQueue.on('transaction:created', listener);
+    this.mutationQueue.on('transaction:created', listener);
     interface CommitEventOperation {
       type: string;
       model: string;
@@ -2220,7 +2290,7 @@ export class SyncClient extends EventEmitter {
       snapshotsByCommit.delete(payload.clientTxId);
       const TYPE_BY_WIRE: Record<
         string,
-        import('./transactions/TransactionQueue.js').Transaction['type']
+        import('./transactions/mutations/MutationQueue.js').QueuedMutation['type']
       > = {
         CREATE: 'create',
         UPDATE: 'update',
@@ -2271,14 +2341,14 @@ export class SyncClient extends EventEmitter {
         });
       });
     };
-    this.transactionQueue.on('commit:staging', onCommitStaging);
-    this.transactionQueue.on('commit:seal_failed', onCommitSealFailed);
-    this.transactionQueue.on('commit:created', onCommitCreated);
+    this.mutationQueue.on('commit:staging', onCommitStaging);
+    this.mutationQueue.on('commit:seal_failed', onCommitSealFailed);
+    this.mutationQueue.on('commit:created', onCommitCreated);
     return () => {
-      this.transactionQueue.off('transaction:created', listener);
-      this.transactionQueue.off('commit:staging', onCommitStaging);
-      this.transactionQueue.off('commit:seal_failed', onCommitSealFailed);
-      this.transactionQueue.off('commit:created', onCommitCreated);
+      this.mutationQueue.off('transaction:created', listener);
+      this.mutationQueue.off('commit:staging', onCommitStaging);
+      this.mutationQueue.off('commit:seal_failed', onCommitSealFailed);
+      this.mutationQueue.off('commit:created', onCommitCreated);
       snapshotsByCommit.clear();
     };
   }
@@ -2287,14 +2357,14 @@ export class SyncClient extends EventEmitter {
    * Wait for the latest in-flight transaction for (modelName, modelId)
    * to be confirmed by the server, or reject if it's rolled back.
    * Resolves immediately when no transaction is in flight — see
-   * `TransactionQueue.confirmationFor` for the lookup contract.
+   * `MutationQueue.confirmationFor` for the lookup contract.
    *
    * Distinct from `waitForDeltaConfirmation(transactionId)` which keys
    * off a known tx id; this variant is for call sites that hold a
    * Model reference but never see the underlying transaction.
    */
   waitForConfirmation(modelName: string, modelId: string): Promise<void> {
-    return this.transactionQueue.confirmationFor(modelName, modelId);
+    return this.mutationQueue.confirmationFor(modelName, modelId);
   }
 
   /**
@@ -2304,7 +2374,7 @@ export class SyncClient extends EventEmitter {
     return {
       connectionState: this.connectionState,
       pendingMutationsCount: this.pendingMutations.length,
-      transactionQueue: this.transactionQueue.getDebugInfo(),
+      mutationQueue: this.mutationQueue.getDebugInfo(),
     };
   }
 
@@ -2340,7 +2410,7 @@ export class SyncClient extends EventEmitter {
    * Mark a local transaction as optimistically applied. The matching
    * server delta (when it arrives with the same `transactionId`) will
    * be recognized as an echo and skip the pool mutation. Called
-   * automatically by `TransactionQueue` when a transaction is staged;
+   * automatically by `MutationQueue` when a transaction is staged;
    * exposed publicly so tests can drive the API directly.
    */
   markTransactionPending(transactionId: string): void {
@@ -2358,15 +2428,15 @@ export class SyncClient extends EventEmitter {
   }
 
   /**
-   * Package-internal accessor for the {@link TransactionQueue}. Used by
+   * Package-internal accessor for the {@link MutationQueue}. Used by
    * `Ablo.commits.create()` to route raw multi-operation envelopes through the
    * same retry-on-reconnect lane as the model proxy path, and by tests to
    * exercise the queue's interaction with {@link markTransactionPending} on the
    * real instance the SyncClient subscribes to. It is not re-exported to SDK
    * consumers; `Ablo` is the public surface.
    */
-  getTransactionQueue(): TransactionQueue {
-    return this.transactionQueue;
+  getMutationQueue(): MutationQueue {
+    return this.mutationQueue;
   }
 
   applyDeltaBatchToPool(
@@ -2392,8 +2462,8 @@ export class SyncClient extends EventEmitter {
     const idsToArchive: string[] = [];
 
     // Pre-pass: collect every id slated for `remove` in this batch. The
-    // chart-delete flicker came from this exact pattern: a peer (or the
-    // user themself) deletes a chart with N layers; the commit produces
+    // parent-delete flicker came from this exact pattern: a peer (or the
+    // user themself) deletes a parent with N children; the commit produces
     // BOTH residual `update` deltas (from the optimistic edits that
     // happened just before the delete) AND `remove` deltas. The
     // `update` branch below would `createFromData` the row back into
@@ -2424,7 +2494,7 @@ export class SyncClient extends EventEmitter {
 
       // If a later op in this batch will remove this id, skip earlier
       // add/update ops on it. Server FK ordering can produce
-      // U(layer)+D(layer) when an optimistic edit and a delete both
+      // U(child)+D(child) when an optimistic edit and a delete both
       // commit in the same window; only the final state matters.
       if ((action === 'add' || action === 'update') && idsBeingRemoved.has(modelId)) {
         continue;

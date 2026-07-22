@@ -1,5 +1,8 @@
 ---
 title: "API Keys"
+description: "The credential that carries an agent's identity and bounds what it may write."
+sidebar:
+  icon: key-round
 ---
 
 Authenticate a server-side client — a route handler, worker, or CLI — by passing an API key when you create the client.
@@ -99,10 +102,12 @@ Test and live keys are the same shape; the prefix names the environment:
 - `sk_live_…` — a key against your live data.
 
 Every org has a default sandbox, plus any number of additional
-sandboxes you create. **Data is isolated per sandbox; the schema is shared
-across the whole org.** A schema you push from a test key defines the same
-models your live keys see — only the rows differ. This mirrors how Stripe
-separates sandbox and production data while keeping the API shape identical.
+sandboxes you create. **Data is isolated per sandbox; the schema is one
+definition serving both.** A sandbox reads the production schema until it is
+pushed one of its own, so your test and live keys see the same models and only
+the rows differ — how Stripe separates sandbox and production data while keeping
+the API shape identical. A schema change reaches production when you push it
+with a live key ([Deployment](/deployment)).
 
 ## Scopes
 

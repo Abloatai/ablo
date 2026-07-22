@@ -1,5 +1,7 @@
 # Operating on Your Database
 
+> Which actions run freely, which to verify first, and which belong to a human.
+
 Ablo sits over your database as a coordination layer, not an owner. It reads
 your Postgres replication stream and routes each write through a claim-checked
 commit that lands in your own tables. It never runs DDL, never migrates, never
@@ -79,7 +81,7 @@ code question. The question that governs safety is *does removing this drop a
 real table on the next push* — and that one is answered against the database,
 not the codebase. Before removing a model that maps a live table, confirm the
 table is gone or empty and that your push path is additive; otherwise keep the
-model until the data is dealt with. A `load: 'manual'` mapping is often present
+model until the data is dealt with. A `load: 'lazy'` mapping is often present
 precisely to hold a table in place, so treat its comment as load-bearing.
 
 ## The verification loop

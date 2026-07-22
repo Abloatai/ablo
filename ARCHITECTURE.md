@@ -67,7 +67,7 @@ in [`__tests__/unit`](__tests__/unit/), [`integration`](__tests__/integration/),
 1. Application code calls `ablo.<model>.retrieve({ id })` or `.list(...)`.
 2. The stateful client goes through `createModelProxy` and `OnDemandLoader`; the
    HTTP client goes through the typed HTTP facade and private `httpTransport`.
-3. Network results hydrate or return typed rows. `get`, `getAll`, and `getCount`
+3. Network results hydrate or return typed rows. The `local` reads
    read the already-loaded local graph and never create another read protocol.
 
 ### Write

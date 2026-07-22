@@ -1,6 +1,8 @@
 # Client Behavior
 
-When several writers touch the same data at once — a person in the browser, a Server Action, an agent worker — the SDK decides whose write lands and how the others find out. This page is the reference for that: per-write options like `wait` and `onStale`, claiming a record so your slow work runs uninterrupted, and which errors are safe to retry.
+> Per-write options, claim behavior, and which errors are safe to retry.
+
+When several writers touch the same data at once — an agent worker, a Server Action, a person in the browser — the SDK decides whose write lands and how the others find out. This page is the reference for that: per-write options like `wait` and `onStale`, claiming a record so your slow work runs uninterrupted, and which errors are safe to retry.
 
 Claims don't lock. If another writer holds the row, `claim` waits for them, re-reads the fresh row, then hands it to you — so two writers serialize instead of clobbering.
 
@@ -32,7 +34,7 @@ Common options:
 | `baseURL` | Override the hosted sync endpoint for staging or private deployments. |
 | `persistence` | `memory` by default. Use `indexeddb` for a durable browser cache that survives reloads. |
 | `durableWrites` | Optional crash recovery for unacknowledged agent/worker writes. Independent of the default memory cache; accepts `{ store, namespace? }`. |
-| `transport` | `'websocket'` (default) is the live, stateful client — a persistent socket, a local synced pool, and `onChange` subscriptions. `'http'` returns the **stateless** client for server-side actors (agents, workers, serverless): the same `ablo.<model>` read/write/claim surface, but each call is one HTTP round-trip with no socket. Under `'http'` the return type narrows to `AbloHttpClient`, so stateful-only methods (`get`/`getAll`, `onChange`, `join`) are compile errors rather than runtime gaps. |
+| `transport` | `'websocket'` (default) is the live, stateful client — a persistent socket, a local synced pool, and `onChange` subscriptions. `'http'` returns the **stateless** client for server-side actors (agents, workers, serverless): the same `ablo.<model>` read/write/claim surface, but each call is one HTTP round-trip with no socket. Under `'http'` the return type narrows to `AbloHttpClient`, so stateful-only methods (the `local` reads, `onChange`, `join`) are compile errors rather than runtime gaps. |
 | `fetch` | Custom fetch implementation for tests or non-standard runtimes. |
 | `defaultHeaders` | Extra headers attached to every HTTP request. |
 | `defaultQuery` | Extra query parameters attached to every HTTP request. |
@@ -52,7 +54,7 @@ Each schema model becomes a typed model:
 await ablo.ready();
 
 const report = await ablo.weatherReports.retrieve({ id: 'report_stockholm' });
-const local = ablo.weatherReports.get('report_stockholm');
+const local = ablo.weatherReports.local.retrieve('report_stockholm');
 
 await ablo.weatherReports.create({ data: { location: 'Stockholm', status: 'pending' } });
 await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' }, wait: 'confirmed' });
@@ -60,11 +62,11 @@ await ablo.weatherReports.delete({ id: 'report_stockholm', wait: 'confirmed' });
 ```
 
 Call `retrieve`/`list` first — they fetch from the server and you `await` them.
-After that, `get`/`getAll`/`getCount` read the already-synced data instantly with
+After that, `local.retrieve`/`local.list`/`local.count` read the already-synced data instantly with
 no `await`, and stay reactive in render. Use the async pair to load, the sync trio
 to read.
 
-`getAll` accepts the same practical read options the React selector path uses:
+`local.list` accepts the same practical read options the React selector path uses:
 `where`, `filter`, `orderBy`, `limit`, `offset`, and `state`. The `state`
 lifecycle filter defaults to `'live'`; pass `'archived'` or `'all'` when you
 intentionally want non-live rows.
@@ -91,7 +93,7 @@ await ablo.weatherReports.update({
 
 Once the server accepts the write, every other connected client gets the new row
 automatically — no polling or manual refresh on your side. React clients that use
-`useAblo((ablo) => ablo.weatherReports.get(id))` receive the new row, and selectors
+`useAblo((ablo) => ablo.weatherReports.local.retrieve(id))` receive the new row, and selectors
 such as `useAblo((ablo) => ablo.weatherReports.claim.state({ id }))`
 receive active claim state. There is
 no extra multiplayer setup beyond routing shared state through Ablo.

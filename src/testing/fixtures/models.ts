@@ -8,7 +8,7 @@
 
 import { Model } from '../../Model.js';
 import { ModelRegistry } from '../../ModelRegistry.js';
-import { PropertyType, LoadStrategy } from '../../types/index.js';
+import { PropertyType, LoadStrategy } from '../../transaction/types/index.js';
 
 // ─────────────────────────────────────────────
 // Test Model Classes

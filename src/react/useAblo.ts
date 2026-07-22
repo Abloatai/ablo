@@ -6,8 +6,8 @@ import type { Ablo, AbloReads, ModelClaim } from '../client/Ablo.js';
 import type { ModelOperations } from '../client/createModelProxy.js';
 import { getModelClientMeta } from '../client/createModelProxy.js';
 import { Model } from '../Model.js';
-import type { SchemaRecord } from '../schema/schema.js';
-import type { ResolveSchema } from '../types/global.js';
+import type { SchemaRecord } from '../transaction/schema/schema.js';
+import type { ResolveSchema } from '../transaction/types/global.js';
 import { useReactive } from './useReactive.js';
 
 /**
@@ -83,7 +83,7 @@ function readModelResult<T, C>(
     return { data: initial, claims: EMPTY_CLAIMS, claimed: false };
   }
 
-  const data = snapshotValue(modelClient.get(id) ?? initial);
+  const data = snapshotValue(modelClient.local.retrieve(id) ?? initial);
   const meta = getModelClientMeta(modelClient);
   const claims = meta && engine
     ? engine.claims.list({ model: meta.key, id })
@@ -133,7 +133,7 @@ function snapshotValue<T>(value: T): T {
  * // Reactive selector (a synchronous local snapshot). The selector's reads
  * // are typed as snapshot rows — data fields + computeds, no relation
  * // accessors — matching what the hook actually returns:
- * const doc = useAblo((ablo) => ablo.documents.get(id)) ?? serverDoc;
+ * const doc = useAblo((ablo) => ablo.documents.local.retrieve(id)) ?? serverDoc;
  * const active = useAblo((ablo) => ablo.documents.claim.state({ id }));
  *
  * // Without the augmentation, pass the schema as a type argument:

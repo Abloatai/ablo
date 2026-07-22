@@ -34,9 +34,7 @@ type Expect<T extends true> = T;
 export const PUBLIC_MODEL_VERBS = [
   'retrieve',
   'list',
-  'get',
-  'getAll',
-  'getCount',
+  'local',
   'create',
   'update',
   'delete',
@@ -52,7 +50,7 @@ type _ModelVerbsExact = Expect<
 
 // ── the read/list query option surface ─────────────────────────────────────
 /**
- * The option keys accepted by `list`, `getAll`, and `onChange`, matching the
+ * The option keys accepted by `local.list` and `onChange`, matching the
  * keys of {@link LocalReadOptions}. Note that the lifecycle filter is named
  * `state`, not `scope`.
  */
@@ -85,12 +83,16 @@ export const PUBLIC_ABLO_OPTION_KEYS = [
   'transport',
   'debug',
   'logLevel',
+  'logger',
   'authToken',
   'baseURL',
   'fetch',
   'defaultHeaders',
   'defaultQuery',
   'dangerouslyAllowBrowser',
+  'collaborationEvents',
+  'plugins',
+  'wait',
 ] as const;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 type _AbloOptionKeysExact = Expect<

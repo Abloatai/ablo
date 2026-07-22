@@ -10,7 +10,7 @@
  * monotonic cursor.
  */
 
-import { AbloValidationError } from '../../errors.js';
+import { AbloValidationError } from '../../transaction/errors.js';
 import type {
   AdapterCommitResult,
   AdapterReadRequest,

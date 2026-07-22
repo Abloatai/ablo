@@ -4,9 +4,8 @@
  */
 
 // Uses native IndexedDB for maximum performance
-import { z } from 'zod';
-import type { SyncAction } from '../types/index.js';
 import { getContext } from '../context.js';
+import { syncActionSchema, type SyncAction } from './syncAction.js';
 
 /**
  * The validation boundary for rows read back from the store. A row may have
@@ -16,18 +15,9 @@ import { getContext } from '../context.js';
  * {@link SyncAction}. A row that fails to parse is dropped and logged rather
  * than replayed as a malformed delta.
  */
-const storedSyncActionSchema = z.object({
-  id: z.number(),
-  modelName: z.string(),
-  modelId: z.string(),
-  action: z.enum(['I', 'U', 'A', 'D', 'C', 'G', 'S', 'V']),
-  data: z.unknown(),
-  __class: z.literal('SyncAction').default('SyncAction'),
-});
-
 /** Parse one stored row into a SyncAction, or `null` (dropped + logged). */
 function toSyncAction(row: unknown): SyncAction | null {
-  const parsed = storedSyncActionSchema.safeParse(row);
+  const parsed = syncActionSchema.safeParse(row);
   if (!parsed.success) {
     getContext().logger.debug('[SyncActionStore] Dropping malformed stored sync action', {
       issues: parsed.error.issues.map((i) => i.path.join('.')).join(', '),

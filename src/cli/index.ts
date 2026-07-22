@@ -15,9 +15,11 @@ import { resolveApiKey, resolvePushPlan, guardActiveProjectKey } from './config'
 import { mode } from './mode';
 import { projects, ensureProject, projectSlugFromPackageName } from './projects';
 import { status } from './status';
+import { doctor } from './doctor';
 import { logs } from './logs';
 import { webhooks } from './webhooks';
 import { check } from './check';
+import { docs, DOCS_USAGE } from './docs';
 import { upgrade } from './upgrade';
 import { pull, buildSchemaSourceFromDb } from './pull';
 import { prismaPull } from './prismaPull';
@@ -36,6 +38,7 @@ const LOGO = `
  */
 const SUBCOMMAND_USAGE: Readonly<Record<string, string>> = {
   connect: CONNECT_USAGE,
+  docs: DOCS_USAGE,
   migrate: MIGRATE_USAGE,
 };
 
@@ -67,6 +70,8 @@ async function main() {
     await projects(process.argv.slice(3));
   } else if (command === 'status') {
     await status(process.argv.slice(3));
+  } else if (command === 'doctor') {
+    await doctor();
   } else if (command === 'logs') {
     await logs(process.argv.slice(3));
   } else if (command === 'webhooks') {
@@ -89,6 +94,8 @@ async function main() {
     await dev(oneShot ? devArgs : [...devArgs, '--watch']);
   } else if (command === 'check') {
     await check(process.argv.slice(3));
+  } else if (command === 'docs') {
+    await docs(process.argv.slice(3));
   } else if (command === 'pull') {
     // `ablo pull`         → introspect the live database (lossy: no enums/relations)
     // `ablo pull prisma`  → read a Prisma schema file (lossless: enums + relations)
@@ -159,51 +166,106 @@ async function main() {
     );
     console.error(`    Run \`ablo push${process.argv.slice(4).join(' ') ? ' ' + process.argv.slice(4).join(' ') : ''}\` instead.`);
     process.exitCode = 1;
+  } else if (process.argv.includes('--all')) {
+    printFullHelp();
   } else {
-    console.log(LOGO);
-    console.log(`  ${pc.bold('Usage:')}`);
-    console.log(`    npx ablo init                          Scaffold ablo/ directory + starter schema`);
-    console.log(`    npx ablo init --yes [--framework nextjs] Non-interactive (agents/CI): no prompts, flag-driven`);
-    console.log(`                  [--auth apikey] [--storage replication|endpoint] [--project <slug>] [--no-project]`);
-    console.log(`                  [--no-agent] [--no-pull] [--no-install] [--no-login]`);
-    console.log(`    npx ablo login                         Authorize in your browser (provisions sandbox + production keys)`);
-    console.log(`    npx ablo login --project <slug>        Same, scoped to a project (mints its keys, makes it active)`);
-    console.log(`    npx ablo logout                        Remove the stored API key`);
-    console.log(`    npx ablo mode [sandbox|production]     Switch active environment, like Stripe`);
-    console.log(`    npx ablo projects list                 List the org's projects (default + your own)`);
-    console.log(`    npx ablo projects create <slug>        Create a project (its keys/schema/data are isolated)`);
-    console.log(`    npx ablo projects use <slug|default>   Switch the active project (run login --project to mint its keys)`);
-    console.log(`    npx ablo status                        Show org, mode, keys, and server health`);
-    console.log(`    npx ablo status --json                 Same, machine-readable (mode, key prefix, org id, api host)`);
-    console.log(`    npx ablo logs [-n N] [--since 15m]     Tail commit activity (follows; --no-follow to exit)`);
-    console.log(`    npx ablo webhooks create <url>         Register an outbound webhook endpoint (writes ABLO_WEBHOOK_SECRET)`);
-    console.log(`    npx ablo webhooks list|roll|enable|rm  Manage webhook endpoints + delivery health`);
-    console.log(`    npx ablo dev                           Push your schema definition (sandbox) + watch for changes`);
-    console.log(`    npx ablo dev --no-watch                Push once and exit (no file watcher)`);
-    console.log(`    npx ablo pull                          Generate schema.ts from your existing database (read-only, lossy)`);
-    console.log(`    npx ablo pull prisma [path]            Generate schema.ts from a Prisma schema (keeps enums + relations)`);
-    console.log(`    npx ablo pull drizzle <module>         Generate schema.ts from a Drizzle schema (keeps enums + relations)`);
-    console.log(`    npx ablo check                         Check your existing database fits the schema (read-only, creates no tables)`);
-    console.log(`    npx ablo connect                       Connect a real database — prints the logical-replication setup SQL (the one way)`);
-    console.log(`    npx ablo connect check                 Validate DATABASE_URL is replication-ready (wal_level, publication, role, replica identity)`);
-    console.log(`    npx ablo connect scan                  Read-only audit for leftover Ablo sync infra in a customer DB`);
-    console.log(`    npx ablo connect deregister            Remove this project's data source — Ablo stops reading/writing it`);
-    console.log(`    npx ablo migrate                       Provision your synced-model tables in your own Postgres (optional escape hatch — \`connect\` is the way)`);
-    console.log(`    npx ablo migrate --dry-run             Print the SQL without executing (preview)`);
-    console.log(`    npx ablo push                          Upload your schema definition to Ablo (metadata only — rows stay in your DB)`);
-    console.log(`    npx ablo push --force                  Allow destructive/unexecutable changes`);
-    console.log(`    npx ablo push --rename a:b             Treat model "a" as renamed to "b"`);
-    console.log(`    npx ablo push --backfill model.field=value  Seed existing rows so a required field can be added`);
-    console.log(`    npx ablo upgrade                       Migrate your code to the current API (preview; add --write to apply)`);
-    console.log(`    npx ablo generate                      Emit TypeScript types from your schema`);
-    console.log(`    npx ablo generate --out path.ts        Write generated types to a path`);
-    console.log();
-    console.log(`  ${pc.bold('Schema workflow:')}`);
-    console.log(`    The server holds its own copy of your schema — edit ${brand('ablo/schema.ts')}, then`);
-    console.log(`    run ${brand('ablo push')} (or keep ${brand('ablo dev')} running) before the server will accept`);
-    console.log(`    writes to new or changed models. Skip it and writes fail with ${pc.yellow('server_execute_unknown_model')}.`);
-    console.log();
+    printCoreHelp();
   }
+}
+
+/**
+ * The default help: the core loop, grouped by task — not a reference dump.
+ * Every line names what the command does for you in plain words; flags,
+ * variants, and the rest of the surface live behind `ablo help --all`.
+ */
+function printCoreHelp(): void {
+  console.log(LOGO);
+  console.log(`  ${pc.bold('Start')}`);
+  console.log(`    npx ablo init                Scaffold ablo/ with a starter schema ${pc.dim('(--yes runs without prompts, for agents/CI)')}`);
+  console.log(`    npx ablo login               Authorize in your browser — sets up your sandbox and production keys`);
+  console.log(`    npx ablo connect             Connect your database — shows the setup to run, or applies it for you`);
+  console.log();
+  console.log(`  ${pc.bold('Every day')}`);
+  console.log(`    npx ablo dev                 Push your schema and keep watching for changes`);
+  console.log(`    npx ablo push                Upload your schema — schema only; your rows stay in your database`);
+  console.log(`    npx ablo status              See what this key acts on, your pushed schema, and whether writes will work`);
+  console.log(`    npx ablo doctor              Check the whole setup at once and list everything that would block a write`);
+  console.log(`    npx ablo logs                Follow writes as they happen`);
+  console.log();
+  console.log(`  ${pc.bold('More')}`);
+  console.log(`    npx ablo docs                Read the docs for the version you installed — offline, no network`);
+  console.log(`    npx ablo help --all          Every command and flag`);
+  console.log(`    npx ablo <command> --help    Details for one command`);
+  console.log();
+  console.log(
+    pc.dim(`  Edit ${pc.bold('ablo/schema.ts')}, then push — writes to models you haven't pushed fail with `) +
+      pc.yellow('server_execute_unknown_model') +
+      pc.dim('.'),
+  );
+  console.log();
+}
+
+/** The full reference behind `ablo help --all`: every command, plain words. */
+function printFullHelp(): void {
+  console.log(LOGO);
+  console.log(`  ${pc.bold('Set up')}`);
+  console.log(`    npx ablo init                          Scaffold ablo/ with a starter schema`);
+  console.log(`    npx ablo init --yes [--framework nextjs] No prompts, flag-driven (agents/CI)`);
+  console.log(`                  [--auth apikey] [--storage replication|endpoint] [--project <slug>] [--no-project]`);
+  console.log(`                  [--no-agent] [--no-pull] [--no-install] [--no-login]`);
+  console.log(`    npx ablo login                         Authorize in your browser — sets up your sandbox and production keys`);
+  console.log(`    npx ablo login --project <slug>        Same, for one project — its keys become the active ones`);
+  console.log(`    npx ablo logout                        Remove the stored API key`);
+  console.log();
+  console.log(`  ${pc.bold('Your database')}`);
+  console.log(`    npx ablo connect                       Connect your database — shows the setup to run, or applies it for you`);
+  console.log(`    npx ablo connect apply                 Run that setup for you, from a one-time admin URL`);
+  console.log(`    npx ablo connect check                 Confirm your database is ready to share changes with Ablo`);
+  console.log(`    npx ablo connect scan                  List anything Ablo ever set up in your database (read-only)`);
+  console.log(`    npx ablo connect deregister            Disconnect this project's database — Ablo stops reading and writing it`);
+  console.log(`    npx ablo migrate                       Create the tables your schema needs in your own database`);
+  console.log(`    npx ablo migrate --dry-run             Show the SQL without running it`);
+  console.log(`    npx ablo pull                          Generate schema.ts from your database (read-only)`);
+  console.log(`    npx ablo pull prisma [path]            Generate schema.ts from a Prisma schema (keeps enums + relations)`);
+  console.log(`    npx ablo pull drizzle <module>         Generate schema.ts from a Drizzle schema (keeps enums + relations)`);
+  console.log(`    npx ablo check                         Check your database fits the schema — read-only, creates nothing`);
+  console.log();
+  console.log(`  ${pc.bold('Your schema')}`);
+  console.log(`    npx ablo dev                           Push your schema and keep watching for changes`);
+  console.log(`    npx ablo dev --no-watch                Push once and exit`);
+  console.log(`    npx ablo push                          Upload your schema — schema only; your rows stay in your database`);
+  console.log(`    npx ablo push --force                  Allow destructive changes`);
+  console.log(`    npx ablo push --rename a:b             Treat model "a" as renamed to "b"`);
+  console.log(`    npx ablo push --backfill model.field=value  Seed existing rows so a required field can be added`);
+  console.log(`    npx ablo generate                      Emit TypeScript types from your schema`);
+  console.log(`    npx ablo generate --out path.ts        Write generated types to a path`);
+  console.log(`    npx ablo upgrade                       Rewrite your code to the current API (preview; --write applies)`);
+  console.log();
+  console.log(`  ${pc.bold('Read the docs')}`);
+  console.log(`    npx ablo docs                          List every page — these ship in the package, so they match your version`);
+  console.log(`    npx ablo docs <page>                   Print one page as markdown (no network needed)`);
+  console.log(`    npx ablo docs --json                   The page list, machine-readable`);
+  console.log();
+  console.log(`  ${pc.bold("See what's happening")}`);
+  console.log(`    npx ablo status                        See what this key acts on, your pushed schema, and whether writes will work`);
+  console.log(`    npx ablo status --json                 Same, machine-readable`);
+  console.log(`    npx ablo doctor                        Every setup check at once — exits non-zero when a write would fail`);
+  console.log(`    npx ablo logs [-n N] [--since 15m]     Follow writes as they happen (--no-follow to exit)`);
+  console.log();
+  console.log(`  ${pc.bold('Workspace')}`);
+  console.log(`    npx ablo mode [sandbox|production]     Pick the environment everyday commands act in`);
+  console.log(`    npx ablo projects list                 List your projects, and the keys held for each`);
+  console.log(`    npx ablo projects create <slug>        Create a project — its keys, schema, and data are separate`);
+  console.log(`    npx ablo projects use <slug|default>   Switch the active project`);
+  console.log(`    npx ablo webhooks create <url>         Send committed changes to your endpoint (writes ABLO_WEBHOOK_SECRET)`);
+  console.log(`    npx ablo webhooks list|roll|enable|rm  Manage webhook endpoints + delivery health`);
+  console.log();
+  console.log(
+    pc.dim(`  Edit ${pc.bold('ablo/schema.ts')}, then push — writes to models you haven't pushed fail with `) +
+      pc.yellow('server_execute_unknown_model') +
+      pc.dim('.'),
+  );
+  console.log();
 }
 
 /** Abort the wizard cleanly on Ctrl-C / Esc. */
@@ -935,7 +997,7 @@ import { schema } from './schema';
  *
  * Run it with \`npx tsx ablo/agent.ts\` while the app is open in a browser tab —
  * its writes appear there instantly (same as another human), and stream in
- * \`npx ablo logs\`. That's the whole idea: humans and agents on one typed,
+ * \`npx ablo logs\`. That's the whole idea: agents and people on one typed,
  * synced dataset.
  */
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
@@ -984,7 +1046,7 @@ import { useState } from 'react';
 // (mounted by app/providers.tsx) — it never imports the server \`sk_\` client.
 export function TaskList() {
   const ablo = useAblo(); // typed client for writes (null until the provider is ready)
-  const tasks = useAblo((a) => a.tasks.getAll({ where: { status: 'todo' }, orderBy: { priority: 'desc' } })) ?? [];
+  const tasks = useAblo((a) => a.tasks.local.list({ where: { status: 'todo' }, orderBy: { priority: 'desc' } })) ?? [];
   const [title, setTitle] = useState('');
 
   const handleCreate = async () => {

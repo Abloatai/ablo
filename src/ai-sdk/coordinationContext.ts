@@ -22,8 +22,8 @@ import type {
   LanguageModelV3Prompt,
 } from '@ai-sdk/provider';
 import type { Ablo } from '../client/Ablo.js';
-import type { SchemaRecord } from '../schema/schema.js';
-import type { Claim, ClaimTarget } from '../types/streams.js';
+import type { SchemaRecord } from '../transaction/schema/schema.js';
+import type { Claim, ClaimTarget } from '../transaction/types/streams.js';
 
 export type { ClaimTarget };
 
@@ -64,7 +64,7 @@ export function coordinationContextMiddleware<R extends SchemaRecord = SchemaRec
       // Look up peer claims on the same target. This reads the agent's reactive
       // `claims.others` array in memory, with no I/O. The type is compared
       // case-insensitively: observed claims carry a lowercased type name (such as
-      // `slidedeck`) while callers write the schema's type name (`SlideDeck`).
+      // `report`) while callers write the schema's type name (`Report`).
       const wantedType = target.type.toLowerCase();
       const peerClaims = agent.claims.others.filter(
         (claim) =>

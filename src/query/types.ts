@@ -5,77 +5,30 @@
  * list of `[column, operator, value]` conditions combined with AND, and
  * `related` names the schema relations to fetch alongside each row. The server
  * compiles a query against your schema: it reads the model's relation metadata
- * to turn `related: ['layers']` into the right join, and turns each condition
+ * to turn `related: ['blocks']` into the right join, and turns each condition
  * into a WHERE fragment. The protocol carries no model-specific logic, so
  * adding a model or relation is a schema change rather than a server change.
  *
  * The `IN` operator lets you batch a read by any column, including a foreign
- * key — for example, fetching every layer whose `slideId` falls in a set of
+ * key — for example, fetching every block whose `sectionId` falls in a set of
  * ids.
  */
 
-/** Primitive operand types allowed in a where clause. */
-export type WherePrimitive = string | number | boolean | null;
-
-/**
- * The comparison operators a {@link WhereClause} may use: equality and
- * inequality, ordering, set membership (`IN` / `NOT IN`), null checks
- * (`IS` / `IS NOT`), and case-sensitive or case-insensitive pattern
- * matching (`LIKE`, `ILIKE`, and their negations).
- */
-export type WhereOp =
-  | '='
-  | '!='
-  | '<'
-  | '<='
-  | '>'
-  | '>='
-  | 'IN'
-  | 'NOT IN'
-  | 'IS'
-  | 'IS NOT'
-  | 'LIKE'
-  | 'NOT LIKE'
-  | 'ILIKE'
-  | 'NOT ILIKE';
-
-/**
- * A single condition. Two supported shapes:
- *
- *   - `[col, value]` — shortcut for `[col, '=', value]`
- *   - `[col, op, value]` — explicit operator
- *
- * The value is a single primitive for scalar operators and an array of
- * primitives for IN/NOT IN.
- */
-export type WhereClause =
-  | readonly [col: string, value: WherePrimitive]
-  | readonly [col: string, op: WhereOp, value: WherePrimitive | readonly WherePrimitive[]];
-
-/**
- * Client-facing where shape for `load({where})` and `deleteMany({where})`.
- *
- * Two shapes accepted, both AND-combined:
- *
- *   - Object form: `{ name: 'foo', orgId: '1' }` — each entry is an `=`
- *     clause; array values become `IN`. Ergonomic for the common case.
- *   - Tuple form: `[['name', 'ILIKE', '%Goldman%'], ['orgId', '1']]` —
- *     explicit operators (LIKE/ILIKE/<=/etc.). Matches the wire
- *     `WhereClause[]` 1:1, so no translation layer.
- *
- * The two forms compose: pass tuple form when you need an operator,
- * object form otherwise. For OR semantics, run two `load()` calls and
- * union client-side — keeps the protocol AND-only.
- */
-export type LoadWhere<T> =
-  | Partial<T>
-  | { [K in keyof T]?: T[K] | readonly T[K][] }
-  | readonly WhereClause[];
+// The where grammar describes the *request*, not any local copy of the rows it
+// returns, so it lives in the settlement core (ADR 0016). Re-exported here so
+// the existing `query/types` import path keeps resolving.
+export type {
+  WherePrimitive,
+  WhereOp,
+  WhereClause,
+  LoadWhere,
+} from '../transaction/resources/where.js';
+import type { WhereClause } from '../transaction/resources/where.js';
 
 /** A single structured fetch request. */
 export interface Query {
   /**
-   * Client-facing model name (e.g. "File", "SlideLayer", "Message").
+   * Client-facing model name (e.g. "File", "Block", "Message").
    * The server's adapter maps this to the actual database table.
    */
   model: string;
@@ -94,7 +47,7 @@ export interface Query {
    * relation metadata and joins the related rows in. They come back nested
    * under the relation key:
    *
-   *   { __typename: 'Slide', id: '…', layers: [{ __typename: 'SlideLayer', … }] }
+   *   { __typename: 'Section', id: '…', blocks: [{ __typename: 'Block', … }] }
    */
   related?: readonly string[];
 

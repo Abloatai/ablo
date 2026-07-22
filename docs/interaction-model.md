@@ -1,8 +1,10 @@
 # Interaction Model
 
-When a person, a server action, and an AI agent can all write to the same row,
-you need one write path that stops them from clobbering each other. Ablo gives
-you exactly one: load the row, claim it while you work, update it, and wait for
+> The one write path every actor shares: load, claim, update, confirm.
+
+When two agents, a server action, and a person can all write to the same row, you
+need one write path that stops them from clobbering each other. Ablo gives you
+exactly one: load the row, claim it while you work, update it, and wait for
 confirmation. This page walks through that path and the few primitives behind it.
 
 Here's the whole path in one block — claim a row, update it inside the claim, and
@@ -24,7 +26,7 @@ of clobbering.
 | Primitive | Plane | Purpose |
 |---|---|---|
 | `Schema` | State | Declares typed models the app and agents can read and write. |
-| `Model` | State | The generated `ablo.<model>` model. Use `retrieve`/`list` (async server reads), `get`/`getAll`/`getCount` (synchronous local reads), `create`, `update`, and `delete`. |
+| `Model` | State | The generated `ablo.<model>` model. Use `retrieve`/`list` (async reads), `local.retrieve`/`local.list`/`local.count` (the same verbs, synchronous and local-only), `create`, `update`, and `delete`. |
 | `Claim` | Coordination | Who is working on a target. Taken via `ablo.<model>.claim({ id })` and read via `ablo.<model>.claim.state({ id })`. Ephemeral — never persisted. |
 | `Commit` | Protocol | The durable write underneath model updates. Most users do not call it directly. |
 | `Receipt` | Protocol | The lower-level durable result for custom runtimes. Schema writes use `wait: 'confirmed'`. |

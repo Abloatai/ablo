@@ -3,15 +3,15 @@
  * browser — one per registered model — alongside the single
  * {@link SyncActionStore} for pending changes. It creates each store from the
  * model's metadata, tracks readiness, and provisions the underlying IndexedDB
- * object stores. A model's load strategy (instant, lazy, or partial) decides
- * how and when its data is loaded.
+ * object stores. A model's load strategy — instant or lazy — decides how and
+ * when its data is loaded.
  */
 
 import { ModelRegistry } from '../ModelRegistry.js';
 import { ObjectStore } from '../stores/ObjectStore.js';
 import { SyncActionStore } from '../stores/SyncActionStore.js';
-import { LoadStrategy } from '../types/index.js';
-import { AbloValidationError } from '../errors.js';
+import { LoadStrategy } from '../transaction/types/index.js';
+import { AbloValidationError } from '../transaction/errors.js';
 
 /**
  * StoreManager - Central manager for all ObjectStore instances
@@ -82,9 +82,6 @@ export class StoreManager {
       ms: duration.toFixed(2),
     });
 
-    // Log store distribution
-    const storeTypes = this.getStoreTypeDistribution();
-    getContext().logger.debug('Store distribution', storeTypes);
   }
 
   /**
@@ -110,12 +107,11 @@ export class StoreManager {
   /**
    * Create stores (tables) in IndexedDB
    */
-  async createStores(db: IDBDatabase, transaction: IDBTransaction): Promise<void> {
+  async createStores(db: IDBDatabase): Promise<void> {
     getContext().logger.info('Creating tables for all registered models');
 
     for (const modelName of this.modelRegistry.getRegisteredModelNames()) {
       const storeName = modelName;
-      const metadata = this.modelRegistry.getMetadata(modelName);
 
       // Skip if store already exists
       if (db.objectStoreNames.contains(storeName)) {
@@ -138,11 +134,6 @@ export class StoreManager {
           // speed and isn't consumer-actionable → debug.
           getContext().logger.debug('Failed to create index', { store: storeName, prop: propName, error });
         }
-      }
-
-      // For partial load strategy models, we'll create additional partial index database later
-      if (metadata?.loadStrategy === LoadStrategy.partial) {
-        getContext().logger.debug('Model will have additional partial index database', { modelName });
       }
     }
 
@@ -271,25 +262,6 @@ export class StoreManager {
   }
 
   /**
-   * Get store type distribution for debugging
-   */
-  getStoreTypeDistribution(): { full: number; partial: number } {
-    let full = 0;
-    let partial = 0;
-
-    for (const [modelName] of Array.from(this.stores)) {
-      const metadata = this.modelRegistry.getMetadata(modelName);
-      if (metadata?.loadStrategy === LoadStrategy.partial) {
-        partial++;
-      } else {
-        full++;
-      }
-    }
-
-    return { full, partial };
-  }
-
-  /**
    * Get stores by load strategy
    */
   getStoresByStrategy(strategy: LoadStrategy): ObjectStore[] {
@@ -303,38 +275,6 @@ export class StoreManager {
     }
 
     return stores;
-  }
-
-  /**
-   * Get models to load for bootstrapping
-   */
-  getModelsToLoad(): {
-    instant: string[];
-    lazy: string[];
-    partial: string[];
-  } {
-    const instant: string[] = [];
-    const lazy: string[] = [];
-    const partial: string[] = [];
-
-    for (const [modelName] of Array.from(this.stores)) {
-      const metadata = this.modelRegistry.getMetadata(modelName);
-
-      switch (metadata?.loadStrategy) {
-        case LoadStrategy.instant:
-          instant.push(modelName);
-          break;
-        case LoadStrategy.lazy:
-          lazy.push(modelName);
-          break;
-        case LoadStrategy.partial:
-          partial.push(modelName);
-          break;
-        // Skip explicitlyRequested and local
-      }
-    }
-
-    return { instant, lazy, partial };
   }
 
   /**
@@ -391,7 +331,6 @@ export class StoreManager {
    */
   async getComprehensiveStats(): Promise<{
     totalStores: number;
-    storeTypes: { full: number; partial: number };
     readiness: { ready: number; notReady: number };
     totalRecords: number;
     storeDetails: {
@@ -433,7 +372,6 @@ export class StoreManager {
 
     return {
       totalStores: this.stores.size,
-      storeTypes: this.getStoreTypeDistribution(),
       readiness: {
         ready: readyCount,
         notReady: this.stores.size - readyCount,

@@ -12,7 +12,7 @@ import {
   deleteIDBWithTimeout,
   IDBOpenTimeoutError,
 } from './openIDBWithTimeout.js';
-import { AbloConnectionError } from '../errors.js';
+import { AbloConnectionError } from '../transaction/errors.js';
 import { getActiveRegistry, hasActiveRegistry } from '../ModelRegistry.js';
 
 export interface DatabaseInfo {

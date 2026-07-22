@@ -6,15 +6,21 @@
  * one schema that validates it.
  *
  * These schemas describe the adapter's own contract: the change set it commits,
- * the outbox row it stores, and the table migrations it ships. They do not
- * redefine the shared `SourceOperation` and `SourceEvent` wire types, which live
- * in `types.ts`; instead `operationSchema` is kept structurally compatible with
- * `SourceOperation`, a compatibility the assertion at the end of this file proves
- * at compile time so the schema and the interface cannot drift apart.
+ * the outbox row it stores, and the table migrations it ships. The operation
+ * vocabulary is not restated here — `operationSchema` is projected from the
+ * core's `commitOperationSchema`, so an action or field added to the commit
+ * contract reaches a data source by construction. The assertion at the end of
+ * this file then pins the published `SourceOperation` interface to that
+ * projection, which is what keeps the interface tied to the core rather than
+ * merely tied to a second local copy of it.
  */
 
 import { z } from 'zod';
-import { correlationIdSchema } from '../wire/commit.js';
+import { correlationIdSchema } from '../transaction/wire/commit.js';
+import {
+  commitOperationSchema,
+  commitOperationTypeSchema,
+} from '../transaction/coordination/schema.js';
 import {
   ABLO_SOURCE_CLIENT_TX_ID_MAX_LENGTH,
   ABLO_SOURCE_ECHO_MAX_OPERATIONS,
@@ -26,30 +32,32 @@ import {
 
 const jsonObject = z.record(z.string(), z.unknown());
 
-/** Mirrors `SourceOperation['type']`. */
-export const operationTypeSchema = z.enum([
-  'CREATE',
-  'UPDATE',
-  'DELETE',
-  'ARCHIVE',
-  'UNARCHIVE',
-]);
+/**
+ * Served, not mirrored. The commit vocabulary is declared once in the core; a
+ * data source speaks the same five actions, so it re-exports them rather than
+ * listing them again under a second name.
+ */
+export const operationTypeSchema = commitOperationTypeSchema;
 export type OperationType = z.infer<typeof operationTypeSchema>;
 
 /**
- * A single operation within a change set, and the runtime validator for it. It is
- * structurally compatible with the shared `SourceOperation` type, as the assertion
- * at the end of this file confirms.
+ * A single operation within a change set, and the runtime validator for it.
+ *
+ * The field set is projected from `commitOperationSchema` — an operation
+ * reaching a data source is a commit operation minus the two fields the core
+ * settles internally (`bypass`, `fenceToken`). The two `min(1)` overrides are
+ * deliberate and local: this is a customer-implemented boundary, so an empty
+ * model name or row id is rejected here rather than forwarded. Stating them as
+ * an extension keeps the tightening visible as a choice instead of hiding it
+ * inside a second copy of the shape.
  */
-export const operationSchema = z.object({
-  type: operationTypeSchema,
-  model: z.string().min(1),
-  id: z.string().min(1).nullish(),
-  input: jsonObject.nullish(),
-  transactionId: z.string().nullish(),
-  readAt: z.number().nullish(),
-  onStale: z.enum(['reject', 'overwrite', 'notify']).nullish(),
-});
+export const operationSchema = commitOperationSchema
+  .omit({ bypass: true, fenceToken: true })
+  .extend({
+    model: z.string().min(1),
+    id: z.string().min(1).nullish(),
+    input: jsonObject.nullish(),
+  });
 export type Operation = z.infer<typeof operationSchema>;
 
 /** The supported customer-transaction echo mechanism. */

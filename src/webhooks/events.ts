@@ -11,7 +11,7 @@
  * skip a change it has already processed, and to apply changes in the order they
  * were committed.
  */
-import type { SyncDeltaAction } from '../wire/delta.js';
+import type { SyncDeltaAction } from '../transaction/wire/delta.js';
 
 /**
  * Maps each delta action code to the verb that appears in an event type. Only
@@ -37,10 +37,10 @@ export interface AbloWebhookEvent {
   /** A stable, unique event identifier equal to `String(syncId)`. Use it to
    *  deduplicate deliveries. */
   readonly id: string;
-  /** The event type, formatted as `<model>.<verb>`, such as `"slide.updated"`.
+  /** The event type, formatted as `<model>.<verb>`, such as `"report.updated"`.
    *  Branch on this to route the event. */
   readonly type: string;
-  /** The name of the model whose row changed, such as `"Slide"`. */
+  /** The name of the model whose row changed, such as `"Report"`. */
   readonly model: string;
   /** The identifier of the row that changed. */
   readonly objectId: string;

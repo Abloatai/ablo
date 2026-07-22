@@ -14,7 +14,7 @@
  * call site.
  */
 
-import { AbloValidationError } from '../../errors.js';
+import { AbloValidationError } from '../../transaction/errors.js';
 import type {
   AdapterCommitResult,
   AdapterReadRequest,
@@ -30,7 +30,7 @@ import {
   SOURCE_IDEMPOTENCY_RETENTION,
   sourceChangeIntentHash,
 } from '../idempotency.js';
-import type { SchemaRecord, Schema } from '../../schema/schema.js';
+import type { SchemaRecord, Schema } from '../../transaction/schema/schema.js';
 import {
   ABLO_POSTGRES_COMMIT_ECHO_PREFIX,
   type SourceListQuery,
@@ -56,9 +56,14 @@ export interface PrismaRaw {
   $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>;
 }
 
-/** A Prisma client, or its interactive-transaction client, as a structural shape that needs no `@prisma/client` import. */
+/**
+ * A Prisma client as a structural shape that needs no `@prisma/client` import.
+ * The interactive-transaction callback receives only {@link PrismaRaw}: Prisma's
+ * own tx client strips `$transaction` (no nesting), so requiring it there made
+ * a real `PrismaClient` unassignable to this shape.
+ */
 export interface PrismaLike extends PrismaRaw {
-  $transaction<T>(fn: (tx: PrismaLike & PrismaRaw) => Promise<T>): Promise<T>;
+  $transaction<T>(fn: (tx: PrismaRaw) => Promise<T>): Promise<T>;
 }
 
 export interface PrismaDataSourceOptions {
@@ -78,7 +83,7 @@ const lowerFirst = (s: string): string => (s ? s.charAt(0).toLowerCase() + s.sli
  * to infer from a string. The cast is checked at runtime immediately afterward by
  * confirming that `findMany` is a function on the resolved delegate.
  */
-function delegateFor(client: PrismaLike, name: string): PrismaDelegate {
+function delegateFor(client: PrismaRaw, name: string): PrismaDelegate {
   const delegate = (client as unknown as Record<string, PrismaDelegate | undefined>)[name];
   if (!delegate || typeof delegate.findMany !== 'function') {
     throw new AbloValidationError(`prismaDataSource: no Prisma delegate "${name}" on the client`, { code: 'source_adapter_misconfigured' });
@@ -141,7 +146,7 @@ export function prismaDataSource<S extends SchemaRecord>(
   const delegateName = options.delegateName ?? lowerFirst;
   void schema; // held for typed reads and model validation
 
-  const applyOperation = async (tx: PrismaLike, op: Operation): Promise<Row> => {
+  const applyOperation = async (tx: PrismaRaw, op: Operation): Promise<Row> => {
     const delegate = delegateFor(tx, delegateName(op.model));
     const id = rowId(op);
     switch (op.type) {

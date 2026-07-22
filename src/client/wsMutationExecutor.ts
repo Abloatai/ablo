@@ -5,14 +5,14 @@
  * client wires this up automatically unless you supply your own executor.
  */
 
-import type { ReadDependency, TrackDependency } from '../coordination/schema.js';
+import type { ReadDependency, TrackDependency } from '../transaction/coordination/schema.js';
 import type {
   MutationExecutor,
   MutationOperation,
   MutationOptions,
 } from '../interfaces/index.js';
 import type { CommitAck } from '../sync/commitFrames.js';
-import { AbloError, AbloConnectionError } from '../errors.js';
+import { AbloError, AbloConnectionError } from '../transaction/errors.js';
 
 // ── Default mutation executor (wire: `commit` frame over WebSocket) ──────
 
@@ -27,7 +27,7 @@ import { AbloError, AbloConnectionError } from '../errors.js';
  * the ready socket.
  *
  * When set, `options.idempotencyKey` is sent as the wire-level `clientTxId`, so
- * retrying a call with the same key is safe. TransactionQueue always supplies
+ * retrying a call with the same key is safe. MutationQueue always supplies
  * this key before its first attempt and owns reuse across retries. The fallback
  * generation below exists only for direct, one-shot executor consumers.
  */
@@ -37,7 +37,6 @@ import { AbloError, AbloConnectionError } from '../errors.js';
 	      operations: readonly MutationOperation[],
 	      clientTxId: string,
 	      timeoutMs?: number,
-	      causedByTaskId?: string | null,
 	      reads?: readonly ReadDependency[] | null,
 	      track?: readonly TrackDependency[] | null,
 	    ) => Promise<CommitAck>;
@@ -65,7 +64,6 @@ import { AbloError, AbloConnectionError } from '../errors.js';
 	        operations,
 	        clientTxId,
 	        undefined, // use sendCommit's built-in 15s default; no per-call override
-	        options?.causedByTaskId,
 	        options?.reads,
 	        options?.track,
 	      );

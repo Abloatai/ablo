@@ -19,7 +19,7 @@
 
 import pc from 'picocolors';
 
-import { AbloError, classifyRecovery } from '../errors.js';
+import { AbloError, classifyRecovery } from '../transaction/errors.js';
 import { brand } from './theme.js';
 
 export interface RenderErrorOptions {
@@ -52,6 +52,31 @@ function isStringArray(v: unknown): v is readonly string[] {
 }
 
 /**
+ * Wrap one paragraph to the block's measure. A message that explains a remedy
+ * runs to several sentences, and left to the terminal's own soft-wrap the
+ * continuation lines fall back to column zero — the block loses its shape
+ * exactly where it is trying to be read. Caps at 76 columns even on a wide
+ * terminal, because a very long line is hard to track back to regardless of
+ * whether it fits. A word longer than the measure (a host, a connection string)
+ * is left whole rather than hyphenated.
+ */
+function wrapParagraph(text: string, indent: string): string[] {
+  const measure = Math.max(32, Math.min(76, (process.stdout.columns ?? 80) - indent.length - 1));
+  const lines: string[] = [];
+  let current = '';
+  for (const word of text.split(/\s+/)) {
+    if (current === '') current = word;
+    else if (current.length + 1 + word.length <= measure) current += ` ${word}`;
+    else {
+      lines.push(indent + current);
+      current = word;
+    }
+  }
+  if (current !== '') lines.push(indent + current);
+  return lines;
+}
+
+/**
  * Renders a few well-known, high-value keys from `details` compactly, rather
  * than dumping the whole object. Any other details surface only under
  * `--verbose`.
@@ -61,7 +86,12 @@ function renderKnownDetails(
   line: (s: string) => void,
 ): void {
   if (!details) return;
-  const { retryAfterSeconds, missingIds, requiredCapability, unexecutable, errors } = details;
+  const { retryAfterSeconds, missingIds, requiredCapability, unexecutable, errors, target } =
+    details;
+  // What Ablo dialled, for the errors that dial something. Recognising the wrong
+  // host on sight is most of the diagnosis, so it earns a line of its own rather
+  // than sitting behind `--verbose`.
+  if (typeof target === 'string') line(`    ${pc.dim('tried')}  ${target}`);
   if (typeof retryAfterSeconds === 'number') line(`    ${pc.dim('retry')}  after ${retryAfterSeconds}s`);
   if (isStringArray(missingIds) && missingIds.length > 0) {
     const shown = missingIds.slice(0, 5).join(', ');
@@ -99,13 +129,28 @@ export function renderCliError(err: unknown, opts: RenderErrorOptions = {}): voi
     line('');
     line(`  ${brand('ablo')} ${pc.red('✗')} ${pc.bold(titleForType(err.type))}${codeTag}`);
     line('');
-    line(`    ${err.message}`);
-    if (err.param) line(`    ${pc.dim('field')}  ${err.param}`);
-    renderKnownDetails(err.details, line);
+    // A message that explains a remedy earns more than one sentence, so
+    // paragraphs are honoured rather than run together, and each is wrapped to
+    // the block's measure instead of being left to the terminal.
+    for (const paragraph of err.message.split('\n')) {
+      if (paragraph === '') line('');
+      else for (const wrapped of wrapParagraph(paragraph, '    ')) line(wrapped);
+    }
+    // The labelled fields are a block of their own, not a fourth paragraph —
+    // buffer them so a blank line separates them from the prose, and so an
+    // error with nothing to label doesn't end on a stray gap.
+    const fields: string[] = [];
+    const field = (s: string) => fields.push(s);
+    if (err.param) field(`    ${pc.dim('field')}  ${err.param}`);
+    renderKnownDetails(err.details, field);
     const hint = err.code ? RECOVERY_HINT[classifyRecovery(err.code)] : undefined;
-    if (hint) line(`    ${pc.dim(hint)}`);
-    if (err.docUrl) line(`    ${pc.dim('docs')}   ${err.docUrl}`);
-    if (err.requestId) line(`    ${pc.dim('ref')}    ${err.requestId}`);
+    if (hint) field(`    ${pc.dim(hint)}`);
+    if (err.docUrl) field(`    ${pc.dim('docs')}   ${err.docUrl}`);
+    if (err.requestId) field(`    ${pc.dim('ref')}    ${err.requestId}`);
+    if (fields.length > 0) {
+      line('');
+      for (const f of fields) line(f);
+    }
     if (verbose) {
       if (err.details && Object.keys(err.details).length > 0) {
         line(`    ${pc.dim('details')} ${JSON.stringify(err.details)}`);

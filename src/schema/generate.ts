@@ -15,8 +15,8 @@
  * runtime SDK resolves those through its typed accessors.
  */
 
-import type { FieldMeta } from './field.js';
-import { BASE_FIELDS } from './schema.js';
+import type { FieldMeta } from '../transaction/schema/field.js';
+import { BASE_FIELDS } from '../transaction/schema/schema.js';
 import type { SchemaJSON, ModelJSON } from './serialize.js';
 
 function tsType(meta: FieldMeta): string {

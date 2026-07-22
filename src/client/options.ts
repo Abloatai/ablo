@@ -5,22 +5,22 @@
  * This module holds only types and has no runtime imports.
  */
 
-import type { Schema, SchemaRecord } from '../schema/schema.js';
+import type { Schema, SchemaRecord } from '../transaction/schema/schema.js';
 import type {
-  SyncEngineConfig,
-  SyncLogger,
+  RuntimeConfig,
+  Logger,
   MutationExecutor,
-  SyncObservabilityProvider,
-  SyncAnalytics,
+  ObservabilityProvider,
+  Analytics,
   SessionErrorDetector,
   OnlineStatusProvider,
 } from '../interfaces/index.js';
-import type { AbloPersistence } from './persistence.js';
+import type { AbloPersistence } from '../transaction/persistence.js';
 import type {
   DurableWriteStore,
   DurableWritesConfig,
-} from '../transactions/durableWriteStore.js';
-import type { CommitOutboxScope } from '../transactions/commitEnvelope.js';
+} from '../transaction/durableWrites.js';
+import type { CommitOutboxScope } from '../transaction/transactions/settlement/commitEnvelope.js';
 
 // ── Options ───────────────────────────────────────────────────────────────
 
@@ -30,8 +30,10 @@ import type { CommitOutboxScope } from '../transactions/commitEnvelope.js';
  * existing auth session. The canonical definition lives in `./auth`; it is
  * re-exported here for convenience.
  */
-export type { ApiKeySetter } from './auth.js';
-import type { ApiKeySetter } from './auth.js';
+export type { ApiKeySetter } from '../transaction/auth/apiKey.js';
+import type { ApiKeySetter } from '../transaction/auth/apiKey.js';
+import type { AbloPlugin } from '../transaction/plugin.js';
+import type { ParticipantKind } from '../transaction/types/participant.js';
 
 /**
  * Options for the {@link Ablo} client.
@@ -55,6 +57,14 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * pass; start here.
    */
   schema: Schema<S>;
+
+  /**
+   * The capabilities installed on this client. Each plugin appears once in
+   * the list; a duplicate, or a plugin the chosen transport cannot carry,
+   * fails while the client is being constructed with an error naming the
+   * plugin. Omitted, the client installs `humans()` — today's default.
+   */
+  plugins?: readonly AbloPlugin[];
 
   /**
    * The API key — the auth field most apps set. It accepts three shapes:
@@ -137,6 +147,15 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * })
    * ```
    */
+  /**
+   * Wire message types to surface as collaboration events, e.g.
+   * `['document:selection', 'document:cursor']`.
+   *
+   * These name your application's own concepts, so the SDK ships no default —
+   * a schema with no documents should never receive document events. Declare
+   * the ones you broadcast.
+   */
+  collaborationEvents?: readonly string[];
   durableWrites?: DurableWritesConfig;
 
   /**
@@ -165,8 +184,8 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * serverless handlers. It offers the same `ablo.<model>` surface and coordination
    * plane, but every call is a single HTTP round-trip, identity rides the bearer
    * credential, and no socket is opened. With `'http'` the return type narrows to
-   * {@link AbloHttpClient}, so stateful-only capabilities such as `get`, `getAll`,
-   * and `onChange` become compile errors instead of runtime gaps.
+   * {@link AbloHttpClient}, so stateful-only capabilities such as the `local`
+   * reads and `onChange` become compile errors instead of runtime gaps.
    *
    * Session minting through `sessions.create` is available on both transports.
    *
@@ -178,12 +197,19 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * Turns Ablo's diagnostic logging on or off. `true` surfaces the `[Ablo]`
    * coordination trace — claims requested, queued, granted, and released, agent
    * handovers, and connection state — so you can watch the coordination between
-   * humans and agents while debugging. Omitting it, or `false`, keeps the quiet
+   * agents and people while debugging. Omitting it, or `false`, keeps the quiet
    * default of warnings and errors only. For a middle ground use {@link logLevel}.
    * The `ABLO_LOG_LEVEL` environment variable overrides it, and a custom logger
    * takes precedence.
    */
   debug?: boolean | undefined;
+
+  /**
+   * Route Ablo's log lines through your own logger (pino, winston, a test spy)
+   * instead of the default console `[Ablo]` logger. Supplying one bypasses
+   * {@link debug}/{@link logLevel} — your logger owns the thresholds.
+   */
+  logger?: Logger;
 
   /**
    * The log threshold for the default `[Ablo]` logger; takes precedence over
@@ -224,6 +250,34 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * session token (`ek_`/`rk_`) or you route through a controlled server proxy.
    */
   dangerouslyAllowBrowser?: boolean | undefined;
+
+  /**
+   * How far a write goes before its promise settles, for every model write on
+   * this client. The same word each write already takes per call
+   * (`create({ …, wait: 'confirmed' })`); setting it here makes it the default
+   * instead of repeating it.
+   *
+   * A write resolves as soon as it is applied locally and queued. That is what
+   * makes the UI immediate, and it is right for most writes — but it means a
+   * write the server later REFUSES has no caller left to tell. The rejection
+   * reverts the local row and reaches `ablo.onMutationFailure(…)`, and an
+   * application that subscribes to neither shows the change, then loses it,
+   * with nothing thrown anywhere.
+   *
+   * ```ts
+   * const ablo = new Ablo({ schema, apiKey, wait: 'confirmed' });
+   * try {
+   *   await ablo.documents.update({ id, data });   // throws if refused
+   * } catch (err) {
+   *   if (err instanceof AbloError) show(err.message);
+   * }
+   * ```
+   *
+   * The cost is real: each write now waits for the server's answer, so it is a
+   * choice between immediacy and certainty rather than a strict improvement.
+   * A per-call `wait` still wins over this.
+   */
+  wait?: 'queued' | 'confirmed' | undefined;
 }
 
 export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
@@ -307,7 +361,7 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    * @deprecated The server derives the participant kind from the apiKey's scope.
    * Pass `apiKey` only.
    */
-  kind?: 'user' | 'agent' | 'system';
+  kind?: ParticipantKind;
 
   /**
    * @deprecated The server derives user identity from the apiKey's scope, or from
@@ -331,13 +385,13 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
   capabilityToken?: string;
 
   /** Custom logger (default: console). Supplying one bypasses {@link debug}/{@link logLevel}. */
-  logger?: SyncLogger;
+  logger?: Logger;
 
   /**
    * Turns Ablo's diagnostic logging on or off. `true` surfaces the `[Ablo]`
    * coordination trace — claims acquired, queued, granted, and released, agent
    * handovers, and connection state — along with internal lifecycle events, so you
-   * can watch the coordination between humans and agents. Omitting it, or `false`,
+   * can watch the coordination between agents and people. Omitting it, or `false`,
    * keeps the quiet default of warnings and errors only. For a middle ground use
    * {@link logLevel}. The `ABLO_LOG_LEVEL` environment variable overrides it, and a
    * custom {@link logger} takes precedence.
@@ -366,6 +420,8 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
   persistence?: AbloPersistence;
 
   /** Internal mirror of {@link AbloOptions.durableWrites}. */
+  /** Wire message types to surface as collaboration events. Empty unless declared. */
+  collaborationEvents?: readonly string[];
   durableWrites?: DurableWritesConfig;
 
   /** @deprecated Internal mirror of {@link AbloOptions.commitOutbox}. */
@@ -417,13 +473,13 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    * Custom observability provider (Sentry, Honeycomb, OTel, etc.).
    * Default: a noop implementation that drops all breadcrumbs and spans.
    */
-  observability?: SyncObservabilityProvider;
+  observability?: ObservabilityProvider;
 
   /**
    * Custom analytics provider (PostHog, Amplitude, Segment, etc.).
    * Default: a noop implementation that drops all events.
    */
-  analytics?: SyncAnalytics;
+  analytics?: Analytics;
 
   /**
    * Detect whether an error from a mutation/bootstrap response means the
@@ -449,12 +505,12 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
   mutationExecutor?: MutationExecutor;
 
   /**
-   * Partial overrides for the auto-derived `SyncEngineConfig`. Merged on
+   * Partial overrides for the auto-derived `RuntimeConfig`. Merged on
    * top of `deriveConfigFromSchema(schema)`. Use this when you need
    * specific `modelCreatePriority`, `batchableModels`, or
    * `essentialFields` settings that the schema cannot express.
    */
-  configOverrides?: Partial<SyncEngineConfig>;
+  configOverrides?: Partial<RuntimeConfig>;
 
   /**
    * The sync groups (entity scopes) this client subscribes to. Normally the server
@@ -483,4 +539,8 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    * identity from the token through the identity endpoint instead.
    */
   organizationId?: string;
+
+  /** The client-wide write default — see {@link AbloOptions.wait}. Projected
+   *  from the public option rather than restated, so the two cannot diverge. */
+  wait?: AbloOptions['wait'];
 }

@@ -16,7 +16,7 @@
  */
 
 import { z } from 'zod';
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 
 /** A row payload — JSON-shaped record used by create/createMany inverses. */
 const rowDataSchema = z.record(z.string(), z.unknown());
@@ -46,7 +46,7 @@ export const inverseOpSchema = z.discriminatedUnion('kind', [
 
 /** One undo entry = one mutator invocation's inverses + paired forwards. */
 export const undoEntrySchema = z.object({
-  /** Optional label for diagnostics / UI ("Move layer", "Delete slide", etc). */
+  /** Optional label for diagnostics / UI ("Move block", "Delete section", etc). */
   label: z.string().optional(),
   /** Applied (in array order) to reverse the invocation. */
   inverses: z.array(inverseOpSchema),

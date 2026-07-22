@@ -23,7 +23,7 @@
  */
 
 import { resolveIdentity } from '../auth/index.js';
-import { resolveBootstrapBaseUrl } from '../client/auth.js';
+import { resolveBootstrapBaseUrl } from '../transaction/auth/apiKey.js';
 import {
   getActiveProject,
   getMode,
@@ -171,7 +171,12 @@ async function nameProject(
   organizationId: string,
   opts: ResolveTargetOptions,
 ): Promise<TargetProject> {
-  const list = await listProjects(opts.apiKey, resolveBootstrapBaseUrl({ url: opts.url }));
+  // The HOST, not the `/api`-suffixed bootstrap base the identity call above
+  // needs: `listProjects` builds `${base}/api/v1/projects` itself. Passing the
+  // bootstrap base asked for `…/api/api/v1/projects`, and the 404 degraded
+  // every confirmed project to the fallback below — which is why `ablo status`
+  // printed a project id where its slug belongs.
+  const list = await listProjects(opts.apiKey, opts.url);
   const match = list?.find((p) => p.id === projectId);
   if (match) {
     return { id: match.id, slug: match.slug, name: match.name, isDefault: match.default };
@@ -234,18 +239,29 @@ export function reconcile(input: {
   return mismatches;
 }
 
-/** A one-line, prose remediation for a mismatch — plain lead, then the fix. */
-export function describeMismatch(m: TargetMismatch): string {
-  if (m.kind === 'project') {
-    return (
-      `The key targets project ${m.actual}, but ${m.intended} is selected locally. ` +
-      `This key routes the push, so it lands on ${m.actual}. ` +
-      `Run \`ablo projects use ${m.actual}\` to match, or use a key minted for ${m.intended}.`
-    );
+/**
+ * ONE short, consequence-first note covering however many saved-selection
+ * divergences exist. It answers the only question that matters — "is this
+ * going where I meant?" — and offers the one real remedy (the matching key).
+ * It never mentions saved settings, modes, reconciliation, or which input
+ * "wins": that is the system explaining itself, and a click-and-play surface
+ * states the target once (the command header) and asks about intent.
+ */
+export function describeMismatches(mismatches: readonly TargetMismatch[]): string | null {
+  if (mismatches.length === 0) return null;
+  const actual: string[] = [];
+  const selected: string[] = [];
+  for (const m of mismatches) {
+    if (m.kind === 'environment') {
+      actual.push(m.keyEnv);
+      selected.push(m.cliMode);
+    } else {
+      actual.push(`project ${m.actual}`);
+      selected.push(m.intended);
+    }
   }
   return (
-    `The key deploys to ${m.keyEnv}, but the CLI mode is ${m.cliMode}. ` +
-    `The key wins, so this acts on ${m.keyEnv}. ` +
-    `Run \`ablo mode ${m.keyEnv}\` to match, or present a ${m.cliMode} key.`
+    `This key acts on ${actual.join(' · ')}, not ${selected.join(' · ')} as selected. ` +
+    `Wrong target? Use a key for ${selected.join(' · ')}.`
   );
 }

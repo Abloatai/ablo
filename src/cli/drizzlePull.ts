@@ -18,7 +18,7 @@
  */
 
 import pc from 'picocolors';
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import { existsSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 // Type-only at module scope, so these are erased at compile time. The runtime

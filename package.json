@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.34.1",
+  "version": "0.35.0",
   "description": "The Collaboration Layer For AI Agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -54,12 +54,6 @@
       "types": "./dist/batching/index.d.ts",
       "import": "./dist/batching/index.js",
       "default": "./dist/batching/index.js"
-    },
-    "./agent": {
-      "@ablo/source": "./src/agent/index.ts",
-      "types": "./dist/agent/index.d.ts",
-      "import": "./dist/agent/index.js",
-      "default": "./dist/agent/index.js"
     },
     "./ai-sdk": {
       "@ablo/source": "./src/ai-sdk/index.ts",
@@ -132,6 +126,12 @@
       "types": "./dist/webhooks/index.d.ts",
       "import": "./dist/webhooks/index.js",
       "default": "./dist/webhooks/index.js"
+    },
+    "./docs": {
+      "@ablo/source": "./src/docs/index.ts",
+      "types": "./dist/docs/index.d.ts",
+      "import": "./dist/docs/index.js",
+      "default": "./dist/docs/index.js"
     }
   },
   "files": [
@@ -139,7 +139,6 @@
     "!dist/__type_probe.*",
     "docs/*.md",
     "docs/examples/*.md",
-    "docs/mcp/*.md",
     "examples",
     "AGENTS.md",
     "llms.txt",
@@ -152,7 +151,10 @@
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.build.json && npm run build:cli",
     "build:cli": "tsup --config tsup.cli.config.ts",
+    "typecheck": "npm run typecheck:src && npm run typecheck:cli && npm run typecheck:scripts",
+    "typecheck:src": "tsc -p tsconfig.json",
     "typecheck:cli": "tsc -p tsconfig.cli.json",
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "prepack": "node scripts/strip-source-condition.mjs",
     "postpack": "node scripts/restore-source-condition.mjs",
     "pack:check": "node scripts/pack-check.mjs",
@@ -227,7 +229,7 @@
     "mobx": "^6.13.7",
     "mobx-react-lite": "^4.0.0",
     "uuid": "^11.1.0",
-    "zod": "^4.1.11"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.0",

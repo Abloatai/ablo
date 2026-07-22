@@ -17,8 +17,8 @@
  * mutation. This gives same-key concurrency one database arbiter and one effect.
  */
 
-import { AbloValidationError } from '../../errors.js';
-import type { Schema, SchemaRecord } from '../../schema/schema.js';
+import { AbloValidationError } from '../../transaction/errors.js';
+import type { Schema, SchemaRecord } from '../../transaction/schema/schema.js';
 import type {
   AdapterCommitResult,
   DataSourceAdapter,

@@ -5,7 +5,7 @@
  * reuse the same level gating rather than hand-rolling a console wrapper.
  */
 
-import type { SyncLogger } from '../interfaces/index.js';
+import type { Logger } from '../interfaces/index.js';
 
 // ── Default console logger ────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ export function resolveLogLevel(opts?: { debug?: boolean; logLevel?: LogLevel })
  * Builds the default logger, gated at `level` and prefixed `[Ablo]` so its lines
  * stand out in a console full of other tools' output.
  */
-export function createConsoleLogger(level: LogLevel): SyncLogger {
+export function createConsoleLogger(level: LogLevel): Logger {
   const threshold = LOG_LEVEL_RANK[level];
   const emit = (lvl: LogLevel, fn: (...args: unknown[]) => void, args: unknown[]) => {
     if (typeof console === 'undefined' || LOG_LEVEL_RANK[lvl] < threshold) return;

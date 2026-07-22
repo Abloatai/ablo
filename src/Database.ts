@@ -9,25 +9,19 @@
 import { DatabaseManager, type DatabaseInfo, type WorkspaceMetadata } from './core/DatabaseManager.js';
 import { StoreManager } from './core/StoreManager.js';
 import { ModelRegistry } from './ModelRegistry.js';
-import { LoadStrategy } from './types/index.js';
+import { LoadStrategy } from './transaction/types/index.js';
 import { getContext } from './context.js';
-import { AbloConnectionError, AbloValidationError } from './errors.js';
+import { AbloConnectionError, AbloValidationError } from './transaction/errors.js';
 import type { BootstrapFetcher, BootstrapData } from './sync/BootstrapFetcher.js';
 import { InMemoryObjectStore } from './adapters/inMemoryStorage.js';
-import { syncPositionSchema } from './sync/syncPosition.js';
+import { logPositionSchema } from './transaction/logPosition.js';
+import type { SyncDeltaAction } from './transaction/wire/delta.js';
+import type { OnStaleMode } from './transaction/coordination/schema.js';
+import type { BootstrapType } from './transaction/types/index.js';
 import { highestPersistedPrefixSyncId } from './sync/persistedPrefix.js';
 
 /** Generic record type for model data */
 type ModelData = Record<string, unknown>;
-
-/** Server delta format from bootstrap */
-interface ServerDelta {
-  id: number;
-  operation: string;
-  modelName: string;
-  entityId: string;
-  data: ModelData;
-}
 
 /** Persisted mutation in a transaction */
 interface PersistedMutation {
@@ -37,7 +31,7 @@ interface PersistedMutation {
   timestamp: string;
   writeOptions?: {
     readAt?: number | null;
-    onStale?: 'reject' | 'overwrite' | 'notify' | null;
+    onStale?: OnStaleMode | null;
   };
 }
 
@@ -141,20 +135,10 @@ function isAcceptedOutboxPromotion(
   );
 }
 
-/**
- * How a session establishes its baseline state at startup.
- *
- * 'full' — Fetch a complete snapshot from the server, clear the local store,
- *   load the snapshot, and adopt its `lastSyncId`.
- *
- * 'partial' — Fetch only the deltas since the stored `lastSyncId` and apply
- *   them on top of the existing local data.
- *
- * 'local' — Skip the server entirely: hydrate the {@link InstanceCache} from the
- *   local store, connect the WebSocket with the stored `lastSyncId`, and
- *   receive deltas from there onward. Used when offline with valid local data.
- */
-export type BootstrapType = 'full' | 'partial' | 'local';
+// Re-exported, not redeclared. `@ablo/transaction`'s `types` module owns this
+// vocabulary and documents what each mode does; this package held a byte-identical
+// second copy while its own test fixtures already imported the canonical one.
+export type { BootstrapType };
 
 export interface BootstrapRequirements {
   type: BootstrapType;
@@ -376,8 +360,8 @@ export class Database {
     // Open workspace database
     this.workspaceDb = await this.databaseManager.openWorkspaceDatabase(
       this.currentDbInfo,
-      async (db, tx) => {
-        await this.storeManager.createStores(db, tx);
+      async (db) => {
+        await this.storeManager.createStores(db);
       }
     );
 
@@ -516,7 +500,7 @@ export class Database {
     // which only catches falsy, and get sent to the server as the resume
     // point). Invalid → 0 → full bootstrap, the safe degradation.
     const metadataLastSyncId =
-      syncPositionSchema.shape.persisted.safeParse(metadata?.lastSyncId).data ?? 0;
+      logPositionSchema.shape.persisted.safeParse(metadata?.lastSyncId).data ?? 0;
     const dataAge = metadata?.updatedAt ? Date.now() - metadata.updatedAt.getTime() : Infinity;
 
     // ── Cache-validity check ─────────────────────────────────────
@@ -651,13 +635,19 @@ export class Database {
         let deltaResults: BootstrapResult['deltaResults'];
 
         if (deltas.length > 0) {
-          // Convert server delta format to processDelta format
-          const formattedDeltas = (deltas as ServerDelta[]).map((delta) => ({
+          // Narrow the wire delta to what processDelta reads. The field names
+          // are the wire's own — the only change is `id` becoming `syncId`.
+          // A group-change frame carries its payload as a JSON string, decoded
+          // here exactly as the live delta path does in BaseSyncedStore.
+          const formattedDeltas = deltas.map((delta) => ({
             syncId: delta.id,
-            actionType: delta.operation as 'I' | 'U' | 'D' | 'A' | 'V' | 'C' | 'G' | 'S' | 'M',
+            actionType: delta.actionType,
             modelName: delta.modelName,
-            modelId: delta.entityId,
-            data: delta.data,
+            modelId: delta.modelId,
+            data:
+              typeof delta.data === 'string'
+                ? (JSON.parse(delta.data) as ModelData)
+                : delta.data,
           }));
 
           // Use batch processing for better performance
@@ -754,6 +744,18 @@ export class Database {
           }
         }
 
+        // The model is marked persisted below whether or not every item landed,
+        // because a partial store is still what the next sync reconciles
+        // against. Counted and surfaced here so a partial does not read as a
+        // clean bootstrap.
+        if (writeErrors > 0) {
+          getContext().observability.breadcrumb(
+            `Stored ${modelName} with ${writeErrors} of ${modelData.length} items dropped`,
+            'sync.database',
+            'warning',
+          );
+        }
+
         // Mark model as persisted after successful write
         try {
           await this.setModelPersisted(modelName, true);
@@ -811,7 +813,7 @@ export class Database {
    *
    * Update deltas carry only the changed fields, so they are merged onto the
    * existing record rather than replacing it. That preserves fields the delta
-   * omits (such as deckId or title), and an explicit null is kept as a value,
+   * omits (such as reportId or title), and an explicit null is kept as a value,
    * clearing that field.
    */
   async processDelta(delta: {
@@ -822,7 +824,7 @@ export class Database {
      * but the switch returns a no-op verify if one slips through (e.g.
      * replayed from the bootstrap queue) rather than crashing the engine.
      */
-    actionType: 'I' | 'U' | 'D' | 'A' | 'V' | 'C' | 'G' | 'S' | 'M';
+    actionType: SyncDeltaAction;
     modelName: string;
     modelId: string;
     data: ModelData | null;
@@ -910,7 +912,7 @@ export class Database {
 
         // Skip the update when there's no existing record to merge with:
         // building a record from partial update data would corrupt it
-        // (missing deckId, and so on).
+        // (missing reportId, and so on).
         if (!existing) {
           getContext().observability.breadcrumb(
             'Skipping UPDATE delta - no existing record to merge with',
@@ -1016,10 +1018,17 @@ export class Database {
         );
         return { action: 'verify', modelName, modelId, data: null };
 
-      default:
-        throw new AbloValidationError(`Unknown action type: ${actionType}`, {
-          code: 'db_unknown_action_type',
-        });
+      default: {
+        // The switch above is exhaustive over the declared action types, so
+        // this branch is only reachable when a value escapes the type — hence
+        // stringifying whatever actually arrived rather than the `never`.
+        const _exhaustive: never = actionType;
+        void _exhaustive;
+        throw new AbloValidationError(
+          `Unknown action type: ${JSON.stringify(actionType)}`,
+          { code: 'db_unknown_action_type' }
+        );
+      }
     }
   }
 
@@ -1047,7 +1056,7 @@ export class Database {
        * shouldn't reach batch processing, but the switch inside returns
        * no-op verify for them if one slips through.
        */
-      actionType: 'I' | 'U' | 'D' | 'A' | 'V' | 'C' | 'G' | 'S' | 'M';
+      actionType: SyncDeltaAction;
       modelName: string;
       modelId: string;
       data: ModelData | null;
@@ -1193,8 +1202,7 @@ export class Database {
       if (
         delta.actionType === 'U' ||
         delta.actionType === 'I' ||
-        delta.actionType === 'C' ||
-        delta.actionType === 'M'
+        delta.actionType === 'C'
       ) {
         const key = `${delta.modelName}:${delta.modelId}`;
         const deleteSyncId = deleteSyncIds.get(key);
@@ -1267,7 +1275,7 @@ export class Database {
                 missingIds.add(id);
               }
             }
-          } catch (error) {
+          } catch {
             getContext().observability.breadcrumb(
               `Batch read failed for ${modelName}, falling back to individual reads`,
               'sync.database',
@@ -1402,7 +1410,7 @@ export class Database {
 
               // Skip the update when there's no existing record to merge with:
               // building a record from partial update data would corrupt it
-              // (missing deckId, and so on).
+              // (missing reportId, and so on).
               if (!existing) {
                 getContext().observability.breadcrumb(
                   'Batch: Skipping UPDATE delta - no existing record',
@@ -1485,7 +1493,7 @@ export class Database {
           persistedIndexes.add(r.idx);
         }
       } catch (err) {
-        // Surface the IDB error directly — `captureTransactionFailure`
+        // Surface the IDB error directly — `captureMutationFailure`
         // routes to Sentry, but during interactive debugging the console
         // needs to show the specific failure (e.g. `ConstraintError`,
         // `DataError`, `AbortError`) so we can find what's wrong with
@@ -1504,7 +1512,7 @@ export class Database {
               : typeof delta.data,
           })),
         });
-        getContext().observability.captureTransactionFailure({
+        getContext().observability.captureMutationFailure({
           context: 'batch-indexeddb-operation',
           modelName,
           error: idbErr,

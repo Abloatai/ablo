@@ -1,5 +1,7 @@
 # Audit log
 
+> Trace any committed change back to the key that made it, and to the person behind that key.
+
 The audit log records who changed what in your org, and when — including
 changes an AI agent made on a person's behalf. Every change is one row, and the
 rows are chained with a keyed hash (HMAC-SHA256) so you can later prove the

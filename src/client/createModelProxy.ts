@@ -3,8 +3,8 @@
  * `ablo.<model>`.
  *
  * Each schema model gets one {@link ModelOperations}: the async server reads
- * `retrieve` and `list`, the synchronous local-graph snapshots `get`, `getAll`,
- * and `getCount`, the writes `create`, `update`, and `delete`, the coordination
+ * `retrieve` and `list`, the same verbs restricted to the local graph under
+ * `local`, the writes `create`, `update`, and `delete`, the coordination
  * namespace `claim` (callable as `claim({ id })`, plus `claim.state`,
  * `claim.queue`, `claim.release`, and `claim.reorder`), `join`, and `onChange`.
  * The factory returns a plain object; the client assembles the `ablo.<model>`
@@ -14,38 +14,38 @@
 import { autorun } from 'mobx';
 import {
   AbloClaimedError,
-  AbloStaleContextError,
   AbloValidationError,
   formatClaimedErrorMessage,
   toAbloError,
   type ClaimErrorClaim,
-} from '../errors.js';
+} from '../transaction/errors.js';
 import {
   reconcileFunctionalUpdate,
   type ModelUpdater,
   type ContentionOptions,
-} from './functionalUpdate.js';
+} from '../transaction/resources/functionalUpdate.js';
 import type { MutationOptions } from '../interfaces/index.js';
-import type {
-  TrackDependency,
-  StaleNotification,
-} from '../coordination/schema.js';
+import {
+  claimDescription,
+  type TrackDependency,
+} from '../transaction/coordination/schema.js';
 import { Model, modelAsRow } from '../Model.js';
-import { toMs } from '../utils/duration.js';
-import { LEASE_TTL_MS } from '../wire/protocol.js';
+import { toMs } from '../transaction/utils/duration.js';
+import { LEASE_TTL_MS } from '../transaction/wire/protocol.js';
 import {
   heartbeatCadenceMs,
   resolveHeartbeatOptions,
   startClaimHeartbeatLoop,
-} from './claimHeartbeatLoop.js';
-import { assertWriteOptions } from './writeOptionsSchema.js';
+} from '../transaction/coordination/claimHeartbeatLoop.js';
+import { assertWriteOptions } from '../transaction/resources/writeOptionsSchema.js';
+import { modelTarget, subTarget } from '../transaction/coordination/index.js';
+import type { ModelTarget } from '../transaction/coordination/schema.js';
 import type { ModelRegistry } from '../ModelRegistry.js';
 import type { InstanceCache } from '../InstanceCache.js';
 import type { SyncClient } from '../SyncClient.js';
 import type { OnDemandLoader } from '../sync/OnDemandLoader.js';
 import type { JoinedParticipant } from '../sync/participants.js';
-import type { LoadWhere } from '../query/types.js';
-import { ModelScope } from '../types/index.js';
+import { ModelScope } from '../transaction/types/index.js';
 import type {
   Duration,
   Claim,
@@ -56,8 +56,56 @@ import type {
   ClaimWaitOptions,
   ClaimTarget,
   Snapshot,
-  TargetRange,
-} from '../types/streams.js';
+} from '../transaction/types/streams.js';
+
+// The request contract — every option and parameter shape a caller passes to a
+// read, a write, or a claim — lives in the settlement core (ADR 0016). This
+// factory binds it to reactive model instances; the shapes themselves are
+// transport- and consumer-agnostic. Re-exported so `./createModelProxy` stays a
+// working import path for the whole surface.
+export type {
+  ModelListScope,
+  ModelTrackParams,
+  ModelTrackResult,
+  LocalReadOptions,
+  LocalCountOptions,
+  ServerReadOptions,
+  ServerRetrieveOptions,
+  ClaimTargetOptions,
+  ClaimParams,
+  ClaimLookupParams,
+  ClaimReorderParams,
+  ClaimOptions,
+  ClaimReadApi,
+  AwaitedClaimMethod,
+  ClaimApi,
+  ModelRetrieveParams,
+  ModelCreateParams,
+  ModelUpdateParams,
+  ModelDeleteParams,
+  JoinOptions,
+} from '../transaction/resources/modelOperations.js';
+export type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim, HeldLease };
+
+import type {
+  ClaimApi,
+  ClaimLookupParams,
+  ClaimOptions,
+  ClaimParams,
+  ClaimReorderParams,
+  JoinOptions,
+  LocalCountOptions,
+  LocalReadOptions,
+  ModelCreateParams,
+  ModelDeleteParams,
+  ModelRetrieveParams,
+  ModelTrackParams,
+  ModelTrackResult,
+  ModelUpdateParams,
+  ServerReadOptions,
+} from '../transaction/resources/modelOperations.js';
+import type { HttpModelClient } from '../transaction/transport/httpClient.js';
+import type { ParticipantKind } from '../transaction/types/participant.js';
 
 export interface ModelClientMeta {
   readonly key: string;
@@ -71,95 +119,27 @@ export function getModelClientMeta(modelClient: unknown): ModelClientMeta | unde
   return modelClientMeta.get(modelClient);
 }
 
-export type ModelListScope = ModelScope | 'live' | 'archived' | 'all';
 
-/** Options for `track({ id })` — register a durable read-dependency on a row. */
-export interface ModelTrackParams {
-  /** The row to keep hearing about, by id. */
-  id: string;
-  /**
-   * The sync watermark this track is premised on. Omit to baseline at the
-   * current head — "tell me about anything from here on". Pass a known
-   * `lastSyncId` (e.g. the one you read the row at) to also catch a change that
-   * already landed between that read and this call.
-   */
-  readAt?: number;
-}
+/**
+ * The entity a coordination read names, without the sub-entity narrowing —
+ * projected from {@link ModelTarget} so the two members are spelled once.
+ */
+type EntityHalf = Pick<ModelTarget, 'model' | 'id'>;
 
-/** The result of `track({ id })`. */
-export interface ModelTrackResult {
-  /**
-   * Tracks that had ALREADY fired at registration time — a change matching an
-   * open track that landed before this call. Present only when something was
-   * already stale; the ongoing signal arrives on the receipts of later commits.
-   */
-  notifications?: StaleNotification[];
-}
-
-/** Options for the synchronous local-pool reads `get`, `getAll`, and
- *  `onChange` — a JavaScript `filter`, an equality `where`, and a lifecycle
- *  `state`. This is the local, reactive axis; contrast {@link ServerReadOptions},
- *  the asynchronous server axis. */
-export interface LocalReadOptions<T> {
-  where?: Partial<T>;
-  /** Arbitrary local predicate. Applied after `where`. */
-  filter?: (entity: T) => boolean;
-  orderBy?: { [K in keyof T]?: 'asc' | 'desc' };
-  limit?: number;
-  offset?: number;
-  /** Lifecycle filter — `live` (the default), `archived`, or `all`. Named
-   *  `state` so it does not collide with the sync-group `scope`. */
-  state?: ModelListScope;
-}
-
-export type LocalCountOptions<T> = Pick<
-  LocalReadOptions<T>,
-  'where' | 'filter' | 'state'
->;
-
-/** Options for the asynchronous server reads `retrieve` and `list` — the
- *  operator `where` filter, `type`, and `expand`. This is the server axis;
- *  contrast {@link LocalReadOptions}, the local, reactive axis. */
-export interface ServerReadOptions<T> {
-  /**
-   * Filter for the lookup. Accepts two forms:
-   *   - object form — `{ name: 'foo' }`: equality, where an array value means `IN`
-   *   - tuple form — `[['name', 'ILIKE', '%Goldman%']]`: explicit operators
-   *
-   * See {@link LoadWhere} for the full grammar. The wire protocol matches on AND
-   * only; for OR semantics, run two `list()` calls and union the results.
-   */
-  where?: LoadWhere<T>;
-  orderBy?: { [K in keyof T]?: 'asc' | 'desc' };
-  limit?: number;
-  /**
-   * `complete` waits for the server. `unknown` returns whatever is local
-   * immediately and refreshes in the background.
-   */
-  type?: 'complete' | 'unknown';
-  /**
-   * Schema-declared relation names to hydrate alongside the primary
-   * rows. The server's compiler resolves each name via the schema's
-   * relation metadata (`relation.belongsTo` / `relation.hasMany`)
-   * and emits the JOIN.
-   */
-  expand?: readonly string[];
-}
-
-/** Options for the single-row async server read `retrieve({ id })`. A subset of
- *  {@link ServerReadOptions} — `where`/`limit`/`orderBy` are fixed by the id. */
-export type ServerRetrieveOptions = Pick<ServerReadOptions<unknown>, 'type' | 'expand'>;
-
-export interface ModelCollaboration<T> {
+// Model-agnostic by construction: every member below names a target by
+// `{ model, id }` and answers in claim/snapshot terms, so the row type never
+// appears. It carried a `<T>` that nothing in the body read, which made
+// `ModelCollaboration<Task>` and `ModelCollaboration<Invoice>` the same type
+// while reading as though they differed.
+export interface ModelCollaboration {
   createClaim(options: {
-    target: {
-      model: string;
-      id: string;
-      field?: string;
-      path?: string;
-      range?: TargetRange;
-      meta?: Record<string, unknown>;
-    };
+    /**
+     * The locator, in the spelling the SDK surface and the HTTP routes use.
+     * The canonical {@link ModelTarget} rather than a shape spelled here: this
+     * boundary is what a claim's narrowing has to cross, and a member missing
+     * from it dies before the socket sees it.
+     */
+    target: ModelTarget;
     /** Peer-visible description of the work (`'rewriting the risk section'`). */
     description?: string;
     ttl?: Duration;
@@ -185,24 +165,24 @@ export interface ModelCollaboration<T> {
    * difference is this internal contract takes an explicit `{ model, id }`
    * target because it isn't bound to a single model.
    */
-  state(target: { model: string; id: string }): Claim | null;
+  state(target: EntityHalf): Claim | null;
   /**
    * The reactive wait queue on a target — the FIFO line of queued claims
    * behind the holder. Synchronous snapshot off the synced claim stream.
    */
-  queue(target: { model: string; id: string }): readonly Claim[];
+  queue(target: EntityHalf): readonly Claim[];
   /**
    * Re-rank the wait queue on a target (privileged — server-gated). `order` is
    * the desired front-of-line ordering, taken from `queue(target)`.
    */
-  reorder(target: { model: string; id: string }, order: readonly Claim[]): void;
+  reorder(target: EntityHalf, order: readonly Claim[]): void;
   /**
    * Resolve once no participant holds an active claim on the target.
    * The contender's "wait until it's free" — delegates to the claim
    * stream's `waitFor`.
    */
   waitFor(
-    target: { model: string; id: string },
+    target: EntityHalf,
     options?: ClaimWaitOptions,
   ): Promise<void>;
   /**
@@ -216,7 +196,7 @@ export interface ModelCollaboration<T> {
    * holds the lease: server presence frames exclude a holder's own claims, so
    * the holder builds its own view.
    */
-  readonly selfParticipantKind?: 'user' | 'agent' | 'system';
+  readonly selfParticipantKind?: ParticipantKind;
   /**
    * Subscribes the connection to a scope's sync group(s) — read interest. The
    * typed surface calls this on single-entity reads and claim observation so a
@@ -246,297 +226,55 @@ export interface ModelCollaboration<T> {
   ): Promise<JoinedParticipant>;
 }
 
-export interface ClaimTargetOptions<T = Record<string, unknown>> {
-  /** Peer-visible description of the work being performed — the sentence a
-   *  contending participant reads to decide whether to wait, work elsewhere, or
-   *  move on. Defaults to `'editing'`. The same field on every claim surface. */
-  description?: string;
-  /** Field-level target, for fine-grained claimed-state badges. */
-  field?: string;
-  /** Optional path for document/file-like targets. */
-  path?: string;
-  /** Optional range for document/file-like targets. */
-  range?: TargetRange;
-  /** App-defined structured metadata. */
-  meta?: Record<string, unknown>;
-  /** Crash-cleanup TTL — the claim auto-releases if the holder dies. */
-  ttl?: Duration;
-  /**
-   * Behavior under contention. `true` (the default) queues behind the current
-   * holder and resolves once the row is yours. `false` is fail-fast: if another
-   * participant already holds the row, it rejects immediately with
-   * {@link AbloClaimedError} instead of waiting. Use `false` to deduplicate
-   * distributed work ("if someone else has this job, skip it"), where waiting
-   * would mean double-processing.
-   *
-   * The high-level typed claim defaults this on because it serializes writers;
-   * the low-level lease and the HTTP client default it off, since they resolve
-   * immediately and cannot transparently wait for a grant.
-   */
-  queue?: boolean;
-  /**
-   * Backpressure: queue, but not behind too many others. If the server reports a
-   * position at or beyond `maxQueueDepth` when the client joins the line, it
-   * rejects with {@link AbloClaimedError} (`queue_too_deep`) instead of waiting.
-   * Omit to wait however deep the queue is.
-   */
-  maxQueueDepth?: number;
-  /**
-   * Keep the lease alive for the duration of real work by beating on a
-   * cadence — the pattern for background workers whose task outlives the
-   * crash-cleanup TTL. `true` beats every third of the TTL (so two beats can
-   * fail before the lease is at risk, and a crashed worker's lease still
-   * lapses within one beat window); a duration such as `'2m'` sets the
-   * cadence explicitly. The loop stops on release. A beat answered with a
-   * definitive loss stops the loop and calls {@link onHeartbeatLost}; you can
-   * also beat manually with `held.heartbeat()`.
-   */
-  heartbeat?: true | Duration;
-  /**
-   * Called once if the auto-heartbeat learns the lease is no longer yours
-   * (expired and possibly granted onward). The loop has already stopped;
-   * abandon the work or re-claim. Any write attempted under the old lease is
-   * independently rejected by its `readAt` guard.
-   */
-  onHeartbeatLost?: (error: AbloClaimedError) => void;
-  /**
-   * Called after every successful beat (manual or auto) with the server's
-   * answer — chiefly `queueDepth`, the number of participants waiting in
-   * line behind this lease. A worker that can checkpoint may read pressure
-   * here and release early when others wait.
-   */
-  onHeartbeat?(beat: ClaimHeartbeat): void;
-}
 
-/** Options for `claim({ id, ... })`. */
-export interface ClaimParams<T = Record<string, unknown>>
-  extends ClaimTargetOptions<T> {
-  readonly id: string;
-}
+/**
+ * The synchronous, local-only reads — reached as `ablo.<model>.local.*`.
+ *
+ * Every verb mirrors its asynchronous sibling on the base surface, and the one
+ * word in front is the whole difference. It is a narrowing, not a claim about
+ * the other side: `retrieve` consults the local graph and then the network,
+ * while `local.retrieve` is restricted to what is already resident — which is
+ * also why it can return a value instead of a promise. There is nothing to
+ * await.
+ *
+ * These reads exist only here. Exposing them at the top level too would undo
+ * the distinction the namespace draws.
+ */
+export interface LocalReads<T> {
+  /**
+   * Snapshot of a single row from the local graph. `undefined` when the row is
+   * not resident — a graph that is still empty, or a `lazy` model not yet
+   * loaded. Pairs with reactive selectors:
+   * `useAblo((ablo) => ablo.<model>.local.retrieve(id))`.
+   */
+  retrieve(id: string): T | undefined;
 
-export interface ClaimLookupParams<T = Record<string, unknown>> {
-  readonly id: string;
-  readonly field?: string;
-}
+  /**
+   * Snapshot of a filtered collection from the local graph. Empty until
+   * `retrieve`, `list`, or bootstrap has warmed the graph.
+   */
+  list(options?: LocalReadOptions<T>): T[];
 
-export interface ClaimReorderParams<T = Record<string, unknown>>
-  extends ClaimLookupParams<T> {
-  readonly order: readonly Claim[];
+  /** Count rows in the local graph. */
+  count(options?: LocalCountOptions<T>): number;
 }
 
 /**
- * A claim handle: the held entity data plus an explicit release hook.
+ * What a reactive client adds on top of the base per-model surface: a live
+ * graph to read (`local`), the synchronous projection of the claim reads, and
+ * the two subscriptions a persistent socket makes possible.
  *
- * ```ts
- * const claim = await ablo.weatherReports.claim({
- *   id: 'report_stockholm',
- *   description: 'Fetching current weather before writing the forecast.',
- * });
- * try {
- *   await ablo.weatherReports.update({
- *     id: claim.target.id,
- *     data: { status: 'ready' },
- *     claim,
- *   });
- * } finally {
- *   await claim.release();
- * }
- * ```
- *
- * `data` is a snapshot taken after the lease is held. Write through the flat
- * `ablo.<model>.update({ id, data, claim })` verb — the handle carries the
- * lease id and snapshot watermark for attribution and stale-write protection.
+ * `claim` is here rather than inherited because the two transports carry
+ * deliberately different claim types, and the difference is load-bearing: a
+ * stateless client has no local copy, so `state`/`queue`/`reorder` must be
+ * awaited, while a reactive client resolves them synchronously — which is
+ * precisely what lets a React render read claim state inline. The stateless
+ * form is *derived* from this one through {@link AwaitedClaimMethod}, so the
+ * only permitted difference between them is that promise wrapper.
  */
-// The canonical claim handle types live in `../types/streams`. They are
-// re-exported here so existing import paths keep working.
-export type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim, HeldLease };
-
-export type ClaimOptions<T = Record<string, unknown>> = ClaimTargetOptions<T>;
-
-/**
- * The coordination surface for a model, exposed as a callable namespace.
- *
- * Most callers do not need this namespace directly. Put `claim: { ... }` on a
- * write and the SDK acquires/releases around that one mutation:
- *
- * ```ts
- * await ablo.tasks.update({
- *   id,
- *   data: { title },
- *   claim: {
- *     field: 'title',
- *     description: 'Renaming the task to match the project brief.',
- *   },
- * });
- * ```
- *
- * Use `claim({ id, ... })` when a tool spans multiple writes and needs one
- * handle. `state`, `queue`, and `reorder` are coordination reads/scheduler
- * controls for UI and operators.
- */
-/**
- * The coordination reads and scheduler controls on a claim namespace, in their
- * reactive (synchronous) form: `state`, `queue`, and `reorder` resolve against
- * the local pool with no round-trip, which is what lets a reactive selector read
- * coordination state inside a React render.
- *
- * This is the single source of truth for the claim read surface. The stateless
- * HTTP client exposes the awaited projection of exactly these methods (derived
- * via {@link AwaitedClaimMethod}), so the two transports cannot drift — change a
- * signature here and the HTTP surface follows.
- */
-export interface ClaimReadApi<T = Record<string, unknown>> {
-  /**
-   * Current holder for a row, or `null` when free. Use this for UI badges and
-   * preflight checks, not for the normal write path.
-   */
-  state(params: ClaimLookupParams<T>): Claim | null;
-
-  /**
-   * FIFO wait line behind the current holder. Advanced: useful for operator
-   * UIs and schedulers.
-   */
-  queue(params: ClaimLookupParams<T>): { readonly object: 'list'; readonly data: readonly Claim[] };
-
-  /**
-   * Re-rank the wait line. Advanced and permission-gated.
-   */
-  reorder(params: ClaimReorderParams<T>): void;
-
-  /** Release a manual claim handle early. Single-write claims auto-release. */
-  release(params: ClaimLookupParams<T> | Claim<T>): Promise<void>;
-}
-
-/**
- * The awaited form of a claim method: a synchronous return becomes a `Promise`,
- * an already-async one (`release`) is left untouched. Used to derive the
- * stateless HTTP claim surface from the reactive {@link ClaimReadApi}.
- */
-export type AwaitedClaimMethod<F> = F extends (...args: infer A) => infer R
-  ? R extends Promise<unknown>
-    ? (...args: A) => R
-    : (...args: A) => Promise<R>
-  : F;
-
-export interface ClaimApi<T> extends ClaimReadApi<T> {
-  /**
-   * Takes a claim and returns an explicit held-work handle — a {@link HeldClaim}.
-   * `data`, `release`, `revoke`, and the async disposer are always present (this
-   * call re-reads the row under the lease), so callers can use `handle.data`
-   * directly and `await using` works without a guard.
-   */
-  (params: ClaimParams<T>): Promise<HeldClaim<T>>;
-  /**
-   * Takes a claim by id alone, for a row that lives only in the customer's own
-   * database — Ablo has never seen it, so there is nothing to re-read. Returns a
-   * {@link HeldLease}: the same lease controls as {@link HeldClaim}
-   * (`release`, `revoke`, `heartbeat`, `await using`) but no `.data`. Locking a
-   * key you know by id is exactly this — serialize writers without first
-   * syncing the row into Ablo.
-   */
-  (id: string, opts?: ClaimOptions<T>): Promise<HeldLease>;
-}
-
-export interface ModelRetrieveParams extends ServerRetrieveOptions {
-  readonly id: string;
-}
-
-export interface ModelCreateParams<T, CreateInput>
-  extends MutationOptions {
-  readonly data: CreateInput;
-  readonly id?: string | null;
-  readonly claim?: Claim<T> | ClaimTargetOptions<T> | null;
-}
-
-export interface ModelUpdateParams<T>
-  extends MutationOptions {
-  readonly id: string;
-  readonly data: Partial<T>;
-  readonly claim?: Claim<T> | ClaimTargetOptions<T> | null;
-}
-
-export interface ModelDeleteParams<T>
-  extends MutationOptions {
-  readonly id: string;
-  readonly claim?: Claim<T> | ClaimTargetOptions<T> | null;
-}
-
-/** Options for the WebSocket-only `ablo.<model>.join(ids, options?)`. */
-export interface JoinOptions {
-  /**
-   * Lease TTL for the underlying presence claim — the participant
-   * auto-releases after this if the holder dies. Compact duration string
-   * (`'5m'`) or ms number, mirroring the claim `ttl`.
-   */
-  ttl?: Duration;
-}
-
-export interface ModelOperations<T, CreateInput> {
-  /**
-   * Reads a single entity by id from the server; asynchronous. Resolves through
-   * a three-tier lookup — local pool, then IndexedDB, then a network
-   * `POST /sync/query` — and lands the row in the local graph. Resolves to
-   * `undefined` when no such row exists.
-   *
-   * This is the default "get me this entity" read, and the one a stateless
-   * client wants, since its local graph starts empty. For a synchronous read of
-   * an already-warm graph (such as a React selector) use `get(id)`.
-   */
-  retrieve(params: ModelRetrieveParams): Promise<T | undefined>;
-
-  /**
-   * Lists entities matching a filter from the server; asynchronous. Uses the
-   * same three-tier lookup and graph hydration as `retrieve`, deduplicated so
-   * concurrent identical calls share one request. Returns the matched rows. For
-   * a synchronous read of the local graph use `getAll(...)`.
-   */
-  list(options?: ServerReadOptions<T>): Promise<T[]>;
-
-  /**
-   * Synchronous snapshot of a single entity from the local graph; no network.
-   * Returns `undefined` when the row is not resident (a client whose graph is
-   * still empty, or a `lazy` model not yet loaded). Pairs with reactive
-   * selectors: `useAblo((ablo) => ablo.<model>.get(id))`.
-   */
-  get(id: string): T | undefined;
-
-  /**
-   * Synchronous snapshot of a filtered collection from the local graph; no
-   * network round-trip. Empty until `retrieve`, `list`, or bootstrap has warmed
-   * the graph.
-   */
-  getAll(options?: LocalReadOptions<T>): T[];
-
-  /** Count entities in the local graph; synchronous, no network. */
-  getCount(options?: LocalCountOptions<T>): number;
-
-  /**
-   * Create a new entity — **optimistic, offline-first**. Resolves once
-   * the mutation is queued locally, not when the server confirms.
-   * Server rejection rolls back automatically; watch `sync.syncStatus`.
-   */
-  create(params: ModelCreateParams<T, CreateInput>): Promise<T>;
-
-  /** Update an entity by id — optimistic, offline-first (see `create`). */
-  update(params: ModelUpdateParams<T>): Promise<T>;
-  /**
-   * Updates under contention with a function of the latest state —
-   * `update(id, current => next)`. The client reads the freshest row, runs your
-   * updater, writes the result as a compare-and-swap, and re-reads and re-runs
-   * on any concurrent write. Nothing about claims, identity, or conflict codes
-   * surfaces: the write either lands or throws {@link AbloContentionError} once
-   * its reconcile budget is spent. Return `null` or `undefined` from the updater
-   * to skip the write. Resolves to the reconciled row, or `undefined` when the
-   * updater opted out.
-   */
-  update(
-    id: string,
-    updater: ModelUpdater<T>,
-    options?: ContentionOptions,
-  ): Promise<T | undefined>;
-
-  /** Delete an entity by id — optimistic, offline-first (see `create`). */
-  delete(params: ModelDeleteParams<T>): Promise<void>;
+interface ReactiveModelSurface<T> {
+  /** The synchronous local-graph reads. */
+  local: LocalReads<T>;
 
   /**
    * Claim a row so other writers wait or are rejected until you're done, and
@@ -567,26 +305,6 @@ export interface ModelOperations<T, CreateInput> {
   claim: ClaimApi<T>;
 
   /**
-   * Register a durable read-dependency on a row of this model — keep hearing
-   * about it after this call returns. Where the per-write `reads` gate lives for
-   * exactly one commit, a track persists on the server: any change that lands on
-   * the tracked row rides back on the `notifications` of your next commit, so a
-   * long-running actor learns its context went stale without re-reading. A track
-   * you already have is refreshed, not duplicated (it is an idempotent upsert).
-   *
-   * ```ts
-   * await ablo.tasks.track({ id: 'task_42' });
-   * // …minutes of other work later, on your next write…
-   * const res = await ablo.tasks.update({ id: 'task_42', data: { done: true } });
-   * res.notifications; // populated if task_42 changed under you in the meantime
-   * ```
-   *
-   * The returned `notifications` are only the tracks that had ALREADY fired at
-   * registration time; the ongoing signal arrives on later receipts.
-   */
-  track(params: ModelTrackParams): Promise<ModelTrackResult>;
-
-  /**
    * Joins the sync group(s) for one or more rows of this model and returns a
    * live participant handle — presence (`.peers`), the scoped claim stream
    * (`.claims`), and `.leave()` / `await using` disposal. This is a presence
@@ -597,7 +315,7 @@ export interface ModelOperations<T, CreateInput> {
    * clients and throws on any non-WebSocket construction.
    *
    * ```ts
-   * await using participant = await ablo.slides.join(slideIds, { ttl: '5m' });
+   * await using participant = await ablo.sections.join(sectionIds, { ttl: '5m' });
    * participant.peers; // who else is here
    * ```
    */
@@ -611,8 +329,25 @@ export interface ModelOperations<T, CreateInput> {
     callback: (entities: T[]) => void,
     options?: LocalReadOptions<T>,
   ): () => void;
-
 }
+
+/**
+ * Everything reachable as `ablo.<model>` on a reactive client.
+ *
+ * The base is not written here — it is the transport-independent per-model
+ * surface, taken whole. A reactive client is that surface plus what a live
+ * graph makes possible, so this type states the relationship instead of
+ * restating the members, and a verb added to the base arrives here on its own.
+ *
+ * `claim` is the one member the base cannot supply directly: the two forms
+ * differ by an awaitedness transform, so it is replaced rather than inherited.
+ * See {@link ReactiveModelSurface}.
+ */
+export type ModelOperations<T, CreateInput> = Omit<
+  HttpModelClient<T, CreateInput>,
+  'claim'
+> &
+  ReactiveModelSurface<T>;
 
 export function createModelProxy<T, C>(
   schemaKey: string,
@@ -621,8 +356,35 @@ export function createModelProxy<T, C>(
   syncClient: SyncClient,
   registry: ModelRegistry,
   hydration: OnDemandLoader,
-  collaboration?: ModelCollaboration<T>,
+  collaboration?: ModelCollaboration,
+  /** The client-wide `wait` default; a per-call `wait` still wins over it. */
+  defaultWait?: 'queued' | 'confirmed',
 ): ModelOperations<T, C> {
+  /**
+   * Resolve a row **this** resource owns.
+   *
+   * The pool is one id space, so `objectPool.get(id)` happily returns another
+   * model's row. Every write path below addresses rows by bare id, so without
+   * this an id from a sibling model resolves and gets written — silently
+   * corrupting a row the caller never named.
+   *
+   * `undefined` means genuinely absent. A row belonging to another model throws:
+   * unlike a read, a cross-model *write* is never a legitimate outcome, and
+   * naming both models turns a silent corruption into a one-line diagnosis.
+   */
+  const ownRowOrThrow = (id: string): Model | undefined => {
+    const own = objectPool.getOfType(id, registeredModelName);
+    if (own) return own;
+    const foreign = objectPool.get(id);
+    if (!foreign) return undefined;
+    const owner = foreign.getModelName();
+    throw new AbloValidationError(
+      `No ${registeredModelName} with id ${id} — that id belongs to a ${owner}. ` +
+        `Read or write it through ${owner}.`,
+      { code: 'entity_not_found' },
+    );
+  };
+
   const ModelClass = registry.getModelByName(registeredModelName);
   if (!ModelClass) {
     throw new AbloValidationError(
@@ -674,7 +436,11 @@ export function createModelProxy<T, C>(
     model: Model,
     options?: MutationOptions,
   ): Promise<void> => {
-    if (options?.wait !== 'confirmed') return;
+    // A per-call `wait` wins; otherwise the client-wide default decides. This
+    // is the single point that turns "confirmed" into actually waiting, so a
+    // client configured that way rejects on a refused write everywhere rather
+    // than in the one place a caller remembered to ask.
+    if ((options?.wait ?? defaultWait) !== 'confirmed') return;
     await syncClient.syncNow();
     await syncClient.waitForConfirmation(model.getModelName(), model.id);
   };
@@ -714,10 +480,6 @@ export function createModelProxy<T, C>(
     typeof (value as { id?: unknown }).id === 'string' &&
     typeof (value as { release?: unknown }).release === 'function';
 
-  const claimMeta = (
-    options: ClaimTargetOptions<T> | undefined,
-  ): Record<string, unknown> | undefined => options?.meta;
-
   const claimContextFromClaim = (claim: Claim): ClaimErrorClaim => {
     return {
       id: claim.id,
@@ -728,12 +490,8 @@ export function createModelProxy<T, C>(
       status: claim.status,
       expiresAt: claim.expiresAt,
       target: {
-        model: claim.target.type,
-        id: claim.target.id,
-        path: claim.target.path,
-        range: claim.target.range,
-        field: claim.target.field,
-        meta: claim.target.meta,
+        ...modelTarget(claim.target),
+        ...subTarget(claim.target),
       },
     };
   };
@@ -797,10 +555,10 @@ export function createModelProxy<T, C>(
     }
 
     // Ensure the row exists locally before claiming.
-    let model = objectPool.get(id);
+    let model = ownRowOrThrow(id);
     if (!model) {
       await load({ where: [['id', id]] });
-      model = objectPool.get(id);
+      model = ownRowOrThrow(id);
     }
     if (!model) {
       throw new AbloValidationError(
@@ -827,12 +585,12 @@ export function createModelProxy<T, C>(
       target: {
         model: wireModel,
         id,
-        ...(options.field ? { field: options.field } : {}),
-        ...(options.path ? { path: options.path } : {}),
-        ...(options.range ? { range: options.range } : {}),
-        ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
+        // The whole sub-entity locator in one move — listing its members here
+        // is what let `fields` die between the caller and the lease, so the
+        // claim covered the whole row while the caller believed it named parts.
+        ...subTarget(options),
       },
-      description: options.description ?? 'editing',
+      description: claimDescription(options),
       ttl: options.ttl,
       queue: !failFast,
       maxQueueDepth: options.maxQueueDepth,
@@ -853,21 +611,18 @@ export function createModelProxy<T, C>(
       // holder's final write may not have fanned out yet — the exact
       // stale-snapshot race this re-read closes.
       await load({ where: [['id', id]], type: 'complete' });
-      model = objectPool.get(id) ?? model;
+      model = ownRowOrThrow(id) ?? model;
     }
 
     const snapshot = collaboration.createSnapshot(schemaKey, id);
-    const description = options.description ?? 'editing';
+    const description = claimDescription(options);
     // The self-claim's `ClaimTarget` mirrors what a peer's `claim.state` would
     // report (`state` maps `held.target.model` to `type`), so a holder and a
     // peer see the same `target.type` for one row — the wire model token.
     const selfTarget: ClaimTarget = {
       type: wireModel,
       id,
-      ...(options.field ? { field: options.field } : {}),
-      ...(options.path ? { path: options.path } : {}),
-      ...(options.range ? { range: options.range } : {}),
-      ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
+      ...subTarget(options),
     };
     const ttlMs =
       options.ttl !== undefined ? toMs(options.ttl) : DEFAULT_LEASE_TTL_MS;
@@ -882,10 +637,7 @@ export function createModelProxy<T, C>(
     const target = {
       type: schemaKey,
       id,
-      ...(options.field ? { field: options.field } : {}),
-      ...(options.path ? { path: options.path } : {}),
-      ...(options.range ? { range: options.range } : {}),
-      ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
+      ...subTarget(options),
     };
     // A beat resolves with the server's extended expiry; keep the local
     // self-claim estimate in step so `claim.state` renders the real window,
@@ -998,12 +750,12 @@ export function createModelProxy<T, C>(
       target: {
         model: wireModel,
         id,
-        ...(options.field ? { field: options.field } : {}),
-        ...(options.path ? { path: options.path } : {}),
-        ...(options.range ? { range: options.range } : {}),
-        ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
+        // The whole sub-entity locator in one move — listing its members here
+        // is what let `fields` die between the caller and the lease, so the
+        // claim covered the whole row while the caller believed it named parts.
+        ...subTarget(options),
       },
-      description: options.description ?? 'editing',
+      description: claimDescription(options),
       ttl: options.ttl,
       queue: !failFast,
       maxQueueDepth: options.maxQueueDepth,
@@ -1014,14 +766,11 @@ export function createModelProxy<T, C>(
     // empty). It costs nothing extra and gives a write taken under this lease a
     // real `readAt` to guard against changes since the lease was acquired.
     const snapshot = collaboration.createSnapshot(schemaKey, id);
-    const description = options.description ?? 'editing';
+    const description = claimDescription(options);
     const selfTarget: ClaimTarget = {
       type: wireModel,
       id,
-      ...(options.field ? { field: options.field } : {}),
-      ...(options.path ? { path: options.path } : {}),
-      ...(options.range ? { range: options.range } : {}),
-      ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
+      ...subTarget(options),
     };
     const ttlMs =
       options.ttl !== undefined ? toMs(options.ttl) : DEFAULT_LEASE_TTL_MS;
@@ -1036,10 +785,7 @@ export function createModelProxy<T, C>(
     const target = {
       type: schemaKey,
       id,
-      ...(options.field ? { field: options.field } : {}),
-      ...(options.path ? { path: options.path } : {}),
-      ...(options.range ? { range: options.range } : {}),
-      ...(claimMeta(options) ? { meta: claimMeta(options) } : {}),
+      ...subTarget(options),
     };
     // A beat resolves with the server's extended expiry; keep the local
     // self-claim estimate in step so `claim.state` renders the real window.
@@ -1118,7 +864,14 @@ export function createModelProxy<T, C>(
   // members to read/steer the coordination plane. Attach the readers to the
   // callable so `ablo.<model>.claim(...)` and `ablo.<model>.claim.state(...)`
   // are the same object.
-  const claimApi: ClaimApi<T> = Object.assign(claim, {
+  // `state` and `queue` take a caller-named `meta` shape. The runtime cannot
+  // check it and is not meant to: `target.meta` is application data the
+  // protocol carries verbatim and never interprets, so naming its type is the
+  // caller asserting what it put there — the same bargain as parsing your own
+  // JSON into an interface. These read as `Claim` here, and the one assertion
+  // that applies the caller's parameter is on the assignment below, in one
+  // place rather than at every call site.
+  const claimReaders = {
     state(params: ClaimLookupParams<T>): Claim | null {
       // Read interest: a passive observer of a row's claim state must enter that
       // row's entity scope, or it sits only on broader `org:`/`user:` groups and
@@ -1159,34 +912,20 @@ export function createModelProxy<T, C>(
     release: guard((params: ClaimLookupParams<T> | Claim<T>): Promise<void> =>
       releaseClaim(isClaimHandle(params) ? params.target.id : params.id),
     ),
-  });
+  };
 
-  const operations: ModelOperations<T, C> = {
-    retrieve: guard(
-      async (params: ModelRetrieveParams): Promise<T | undefined> => {
-        // Read-interest enrolment: reading a row enters its entity scope, so a
-        // client lands in the same group the holder's claim presence fans out
-        // on and `claim.state`/`claim.queue` report peers. Best-effort and
-        // fire-and-forget — it never makes the read reject or run slower.
-        void collaboration?.enterScope?.({ [schemaKey]: params.id });
-        const rows = await load({
-          ...params,
-          where: [['id', params.id]],
-          limit: 1,
-        });
-        return rows[0];
-      },
-    ),
+  // The one place the caller's `meta` parameter is applied — see the note on
+  // `claimReaders`. Everything else about this object is checked structurally.
+  const claimApi = Object.assign(claim, claimReaders) as ClaimApi<T>;
 
-    // No automatic scope enrolment on bulk `list`/`getAll`: that would subscribe
-    // to an unbounded set of rows' entity groups.
-    list: guard(load),
-
-    get(id: string): T | undefined {
-      return objectPool.get(id) as T | undefined;
+  const local: LocalReads<T> = {
+    retrieve(id: string): T | undefined {
+      // Scoped to this model: an id belonging to a sibling model reads as
+      // absent rather than being handed back as if it were a `T`.
+      return objectPool.getOfType(id, registeredModelName) as T | undefined;
     },
 
-    getAll(options): T[] {
+    list(options): T[] {
       const all = objectPool.getByType(
         ModelClass,
         (options?.state ?? ModelScope.live) as ModelScope,
@@ -1225,9 +964,33 @@ export function createModelProxy<T, C>(
       return result;
     },
 
-    getCount(options): number {
-      return this.getAll(options).length;
+    count(options): number {
+      return local.list(options).length;
     },
+  };
+
+  const operations: ModelOperations<T, C> = {
+    local,
+
+    retrieve: guard(
+      async (params: ModelRetrieveParams): Promise<T | undefined> => {
+        // Read-interest enrolment: reading a row enters its entity scope, so a
+        // client lands in the same group the holder's claim presence fans out
+        // on and `claim.state`/`claim.queue` report peers. Best-effort and
+        // fire-and-forget — it never makes the read reject or run slower.
+        void collaboration?.enterScope?.({ [schemaKey]: params.id });
+        const rows = await load({
+          ...params,
+          where: [['id', params.id]],
+          limit: 1,
+        });
+        return rows[0];
+      },
+    ),
+
+    // No automatic scope enrolment on bulk `list`: that would subscribe to an
+    // unbounded set of rows' entity groups.
+    list: guard(load),
 
     create: guard(async (params: ModelCreateParams<T, C>): Promise<T> => {
       const id = params.id ?? Model.generateId();
@@ -1251,12 +1014,9 @@ export function createModelProxy<T, C>(
           target: {
             model: wireModel,
             id,
-            ...(claim.field ? { field: claim.field } : {}),
-            ...(claim.path ? { path: claim.path } : {}),
-            ...(claim.range ? { range: claim.range } : {}),
-            ...(claimMeta(claim) ? { meta: claimMeta(claim) } : {}),
+            ...subTarget(claim),
           },
-          description: claim.description ?? 'creating',
+          description: claimDescription(claim, 'creating'),
           ttl: claim.ttl,
           queue: claim.queue !== false,
           maxQueueDepth: claim.maxQueueDepth,
@@ -1332,7 +1092,7 @@ export function createModelProxy<T, C>(
               // `type: 'complete'` forces the round-trip — the hydration ledger
               // would otherwise serve a possibly-stale local row for a hydrated id.
               await load({ where: [['id', id]], type: 'complete' });
-              const fresh = objectPool.get(id);
+              const fresh = ownRowOrThrow(id);
               const snapshot = collaboration.createSnapshot(schemaKey, id);
               return {
                 data: fresh ? modelAsRow<T>(fresh) : undefined,
@@ -1340,7 +1100,7 @@ export function createModelProxy<T, C>(
               };
             },
             writeNext: async (patch, readAt) => {
-              const model = objectPool.get(id);
+              const model = ownRowOrThrow(id);
               if (!model) {
                 throw new AbloValidationError(
                   `Entity not found: ${registeredModelName}/${id}`,
@@ -1371,7 +1131,7 @@ export function createModelProxy<T, C>(
           }
         }
         const { id } = params;
-        const model = objectPool.get(id);
+        const model = ownRowOrThrow(id);
         if (!model)
           throw new AbloValidationError(
             `Entity not found: ${registeredModelName}/${id}`,
@@ -1446,7 +1206,10 @@ export function createModelProxy<T, C>(
         return;
       }
       const { id } = params;
-      const model = objectPool.get(id);
+      // Scoped: "ensure absent" stays idempotent for an id this model simply
+      // doesn't hold, but an id owned by a sibling model throws rather than
+      // deleting a row the caller never addressed.
+      const model = ownRowOrThrow(id);
       // Idempotent delete: "ensure absent". A row that isn't in this client's
       // replicated view is already gone from its perspective, so a delete is a
       // no-op success rather than an `entity_not_found` error. This matches the
@@ -1494,14 +1257,14 @@ export function createModelProxy<T, C>(
       };
       // A track carries no write, so it rides the commit lane as a zero-operation
       // commit: the queue tolerates disconnects and de-dupes replays, and the
-      // server's track-only path registers the dependency and reports anything
+      // server's track-only path registers the premise and reports anything
       // that already fired. Reuse the same lane the batch `commits.create` door
       // uses rather than opening a bespoke transport.
       const clientTxId =
         typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
           ? crypto.randomUUID()
           : `tx_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-      const queue = syncClient.getTransactionQueue();
+      const queue = syncClient.getMutationQueue();
       await queue.enqueueCommit(clientTxId, [], { track: [dep] });
       const { notifications } = await queue.waitForCommitReceipt(clientTxId);
       return notifications && notifications.length > 0 ? { notifications } : {};
@@ -1524,8 +1287,7 @@ export function createModelProxy<T, C>(
 
     onChange(callback, options): () => void {
       return autorun(() => {
-        const entities = this.getAll(options);
-        callback(entities);
+        callback(local.list(options));
       });
     },
   };

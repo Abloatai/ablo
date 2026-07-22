@@ -82,7 +82,7 @@ function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
 
 export class SubscriptionManager {
   private readonly transport: SubscriptionTransport;
-  private readonly baseGroups: ReadonlySet<string>;
+  private baseGroups: ReadonlySet<string>;
   private readonly warmTtlMs: number;
   private readonly maxWarm: number;
   private readonly now: () => number;
@@ -101,7 +101,12 @@ export class SubscriptionManager {
   private inFlight: Promise<void> | null = null;
   private dirty = false;
 
-  private readonly cancelSweep: (() => void) | null;
+  /** Arms the sweep timer; `null` when sweeping is disabled. The timer is
+   *  armed lazily, on the first warm entry — sweeping exists only to expire
+   *  warm groups, so a manager that never warms one holds no timer (and a
+   *  client that is constructed but never navigates holds none either). */
+  private readonly armSweep: (() => void) | null;
+  private cancelSweep: (() => void) | null = null;
 
   constructor(options: SubscriptionManagerOptions) {
     this.transport = options.transport;
@@ -118,12 +123,23 @@ export class SubscriptionManager {
           const handle = setInterval(fn, ms);
           return () => { clearInterval(handle); };
         });
-      this.cancelSweep = schedule(() => {
-        void this.sweep();
-      }, sweepInterval);
+      this.armSweep = () => {
+        this.cancelSweep = schedule(() => {
+          void this.sweep();
+        }, sweepInterval);
+      };
     } else {
-      this.cancelSweep = null;
+      this.armSweep = null;
     }
+  }
+
+  /**
+   * Seeds the permanent scopes once the host resolves identity. The manager
+   * can exist from client construction — before the connection's read scope
+   * is known — so the base set is seeded rather than fixed at construction.
+   */
+  setBaseGroups(groups: readonly string[]): void {
+    this.baseGroups = new Set(groups);
   }
 
   /**
@@ -134,6 +150,7 @@ export class SubscriptionManager {
    * warm — callers guard before calling this.
    */
   private warmGroup(group: string): void {
+    if (this.armSweep && !this.cancelSweep) this.armSweep();
     this.warm.delete(group);
     this.warm.set(group, this.now() + this.warmTtlMs);
     while (this.warm.size > this.maxWarm) {
@@ -231,6 +248,7 @@ export class SubscriptionManager {
   /** Stop the sweep timer. The connection is unaffected. */
   dispose(): void {
     this.cancelSweep?.();
+    this.cancelSweep = null;
   }
 
   /**

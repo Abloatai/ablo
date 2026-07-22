@@ -1,6 +1,6 @@
 {
   "$generated": "packages/sync-engine/scripts/generate-error-docs.mts",
-  "version": "2026-07-15",
+  "version": "2026-07-21",
   "envelope": [
     "type",
     "code",
@@ -79,6 +79,14 @@
       "retryable": false,
       "message": "The client has no base URL configured, so it cannot address the server. Set the base URL when constructing the client.",
       "docUrl": "https://docs.abloatai.com/errors#base_url_missing"
+    },
+    {
+      "code": "bootstrap_cancelled",
+      "category": "bootstrap",
+      "surface": "client",
+      "retryable": false,
+      "message": "This bootstrap request was cancelled before it finished, because a newer one replaced it or the bootstrap it belonged to had already failed. It is not retried on its own.",
+      "docUrl": "https://docs.abloatai.com/errors#bootstrap_cancelled"
     },
     {
       "code": "bootstrap_fetch_timeout",
@@ -224,6 +232,15 @@
       "docUrl": "https://docs.abloatai.com/errors#capability_required"
     },
     {
+      "code": "capability_rotation_unavailable",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": false,
+      "message": "This capability could not be rotated, because the environment it belongs to could not be read from it. It is unchanged and still works. Create a replacement capability and retire this one.",
+      "docUrl": "https://docs.abloatai.com/errors#capability_rotation_unavailable"
+    },
+    {
       "code": "capability_scope_denied",
       "category": "capability",
       "surface": "wire",
@@ -276,6 +293,15 @@
       "retryable": false,
       "message": "The claim held on this row was lost before the write could apply. Re-acquire the claim and retry.",
       "docUrl": "https://docs.abloatai.com/errors#claim_lost"
+    },
+    {
+      "code": "claim_not_found",
+      "category": "not_found",
+      "surface": "wire",
+      "httpStatus": 404,
+      "retryable": false,
+      "message": "No claim of yours exists with the given id. It was released, it expired, or it was never acquired on this plane.",
+      "docUrl": "https://docs.abloatai.com/errors#claim_not_found"
     },
     {
       "code": "claim_not_wired",
@@ -419,6 +445,15 @@
       "docUrl": "https://docs.abloatai.com/errors#commit_too_many_operations"
     },
     {
+      "code": "connected_database_unreachable",
+      "category": "tenant",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": false,
+      "message": "Ablo could not reach the database connected to this environment: it refused the credentials on file, or did not answer at all. A database often changes after it is connected — a password is rotated, an instance is replaced — while the connection goes on pointing at what used to be there. The error names the host it tried. If the password changed, `ablo connect rotate` re-keys the roles and re-registers them; if the database itself was replaced, `ablo connect apply` sets up the new one and `ablo connect register` hands it over. Run either with a key for this environment.",
+      "docUrl": "https://docs.abloatai.com/errors#connected_database_unreachable"
+    },
+    {
       "code": "connection_limit_exceeded",
       "category": "rate_limit",
       "surface": "wire",
@@ -452,6 +487,15 @@
       "retryable": false,
       "message": "The plane's data source is not in a verified, resolvable state. Fix its registration, secret, or configuration; Ablo will not fall through to hosted storage.",
       "docUrl": "https://docs.abloatai.com/errors#data_source_blocked"
+    },
+    {
+      "code": "database_already_connected",
+      "category": "conflict",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": false,
+      "message": "This database is already connected to another environment in your organization. Ablo streams a database from one environment at a time, so connecting it to a second one would leave the two reading the same change stream, and the newer connection would take the stream over from the older. Give this environment a database of its own — on a branching provider a branch of the same database is the usual answer, and it is what sandbox is for. If you meant to move the connection rather than add one, disconnect it from the environment that holds it with `ablo connect deregister` first.",
+      "docUrl": "https://docs.abloatai.com/errors#database_already_connected"
     },
     {
       "code": "database_host_not_allowed",
@@ -814,15 +858,6 @@
       "docUrl": "https://docs.abloatai.com/errors#invalid_id"
     },
     {
-      "code": "invalid_intent",
-      "category": "validation",
-      "surface": "wire",
-      "httpStatus": 400,
-      "retryable": false,
-      "message": "The claim request was malformed and could not be processed.",
-      "docUrl": "https://docs.abloatai.com/errors#invalid_intent"
-    },
-    {
       "code": "invalid_json",
       "category": "validation",
       "surface": "wire",
@@ -1017,12 +1052,21 @@
     },
     {
       "code": "malformed_claim",
-      "category": "claim",
+      "category": "validation",
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
       "message": "The claim payload could not be parsed. A claim must name the model and the entity it targets; check the payload shape and resend.",
       "docUrl": "https://docs.abloatai.com/errors#malformed_claim"
+    },
+    {
+      "code": "malformed_response",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 502,
+      "retryable": false,
+      "message": "The server sent a message this client could not read, so it was declined whole rather than applied in part. Nothing was changed locally. This normally means the client and the server are running different versions; upgrading the client resolves it.",
+      "docUrl": "https://docs.abloatai.com/errors#malformed_response"
     },
     {
       "code": "malformed_subscription",
@@ -1309,24 +1353,6 @@
       "docUrl": "https://docs.abloatai.com/errors#organization_mismatch"
     },
     {
-      "code": "parent_turn_foreign_agent",
-      "category": "permission",
-      "surface": "wire",
-      "httpStatus": 403,
-      "retryable": false,
-      "message": "The referenced parent turn belongs to a different agent, so it cannot be used here.",
-      "docUrl": "https://docs.abloatai.com/errors#parent_turn_foreign_agent"
-    },
-    {
-      "code": "parent_turn_not_found",
-      "category": "not_found",
-      "surface": "wire",
-      "httpStatus": 404,
-      "retryable": false,
-      "message": "The referenced parent turn does not exist.",
-      "docUrl": "https://docs.abloatai.com/errors#parent_turn_not_found"
-    },
-    {
       "code": "pool_model_class_not_registered",
       "category": "client",
       "surface": "client",
@@ -1349,6 +1375,24 @@
       "retryable": false,
       "message": "Subscribed to a model that is not registered with the pool.",
       "docUrl": "https://docs.abloatai.com/errors#pool_subscribe_unregistered"
+    },
+    {
+      "code": "position_missing_parent",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "This row gives a position but not the parent it belongs to, so the position cannot be resolved. Send the parent id alongside the position.",
+      "docUrl": "https://docs.abloatai.com/errors#position_missing_parent"
+    },
+    {
+      "code": "position_unknown_sibling",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "This row is positioned relative to another row that is not in the same parent. Check that the neighbouring row id is correct and still present.",
+      "docUrl": "https://docs.abloatai.com/errors#position_unknown_sibling"
     },
     {
       "code": "presence_identity_required",
@@ -1763,24 +1807,6 @@
       "docUrl": "https://docs.abloatai.com/errors#session_expired"
     },
     {
-      "code": "slide_intent_missing_deck_id",
-      "category": "claim",
-      "surface": "wire",
-      "httpStatus": 400,
-      "retryable": false,
-      "message": "This slide claim is missing the id of the deck it belongs to.",
-      "docUrl": "https://docs.abloatai.com/errors#slide_intent_missing_deck_id"
-    },
-    {
-      "code": "slide_intent_unknown_sibling",
-      "category": "claim",
-      "surface": "wire",
-      "httpStatus": 400,
-      "retryable": false,
-      "message": "This slide claim references a sibling slide that does not exist in the deck.",
-      "docUrl": "https://docs.abloatai.com/errors#slide_intent_unknown_sibling"
-    },
-    {
       "code": "snapshot_reserved_key",
       "category": "validation",
       "surface": "wire",
@@ -1995,51 +2021,6 @@
       "docUrl": "https://docs.abloatai.com/errors#transaction_read_unknown_model"
     },
     {
-      "code": "turn_close_failed",
-      "category": "server",
-      "surface": "wire",
-      "httpStatus": 500,
-      "retryable": true,
-      "message": "The agent turn could not be closed cleanly on the server. It is safe to retry the close.",
-      "docUrl": "https://docs.abloatai.com/errors#turn_close_failed"
-    },
-    {
-      "code": "turn_foreign_agent",
-      "category": "permission",
-      "surface": "wire",
-      "httpStatus": 403,
-      "retryable": false,
-      "message": "This turn belongs to a different agent, so the caller cannot act on it.",
-      "docUrl": "https://docs.abloatai.com/errors#turn_foreign_agent"
-    },
-    {
-      "code": "turn_not_found",
-      "category": "not_found",
-      "surface": "wire",
-      "httpStatus": 404,
-      "retryable": false,
-      "message": "The referenced turn does not exist.",
-      "docUrl": "https://docs.abloatai.com/errors#turn_not_found"
-    },
-    {
-      "code": "turn_open_failed",
-      "category": "server",
-      "surface": "wire",
-      "httpStatus": 500,
-      "retryable": true,
-      "message": "The agent turn could not be opened on the server. It is safe to retry.",
-      "docUrl": "https://docs.abloatai.com/errors#turn_open_failed"
-    },
-    {
-      "code": "turn_validation_failed",
-      "category": "validation",
-      "surface": "wire",
-      "httpStatus": 422,
-      "retryable": false,
-      "message": "The agent turn payload failed server-side validation and was not applied.",
-      "docUrl": "https://docs.abloatai.com/errors#turn_validation_failed"
-    },
-    {
       "code": "undo_entry_invalid",
       "category": "client",
       "surface": "client",
@@ -2142,6 +2123,14 @@
       "retryable": false,
       "message": "The write options (`idempotencyKey` / `label` / `wait` / `readAt` / `onStale` / `claim`) failed validation against the write-options schema.",
       "docUrl": "https://docs.abloatai.com/errors#write_options_invalid"
+    },
+    {
+      "code": "write_payload_invalid",
+      "category": "validation",
+      "surface": "client",
+      "retryable": false,
+      "message": "A write payload contained a value that cannot be represented safely as JSON. Use plain objects, arrays, finite numbers, strings, booleans, null, or valid dates.",
+      "docUrl": "https://docs.abloatai.com/errors#write_payload_invalid"
     },
     {
       "code": "ws_not_ready",

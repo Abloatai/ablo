@@ -12,11 +12,11 @@
 
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import {
   COMMIT_CORRELATION_ID_MAX_LENGTH,
   correlationIdSchema,
-} from '../wire/commit.js';
+} from '../transaction/wire/commit.js';
 import type { ChangeSet, Operation } from './contract.js';
 
 const SOURCE_ECHO_TRANSACTION_ID_PREFIX = 'ablo_echo_tx_v1:';

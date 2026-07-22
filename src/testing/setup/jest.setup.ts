@@ -6,14 +6,15 @@
  */
 
 import 'fake-indexeddb/auto';
-import { resetSyncEngine } from '../../context.js';
+import { resetRuntime } from '../../context.js';
+import { deserialize, serialize } from 'node:v8';
 
 // ─────────────────────────────────────────────
 // Reset sync engine context between tests
 // ─────────────────────────────────────────────
 
 beforeEach(() => {
-  resetSyncEngine();
+  resetRuntime();
 });
 
 // ─────────────────────────────────────────────
@@ -125,8 +126,12 @@ if (typeof document !== 'undefined') {
 // ─────────────────────────────────────────────
 
 if (typeof globalThis.structuredClone === 'undefined') {
+  // A JSON round-trip is not a structured-clone polyfill: notably, it silently
+  // unwraps MobX Proxy values that real IndexedDB rejects with DataCloneError.
+  // V8's serializer enforces the same non-cloneable-value boundary, so journal
+  // tests exercise the browser failure mode instead of accepting invalid rows.
   (globalThis as Record<string, unknown>).structuredClone = <T>(value: T): T =>
-    JSON.parse(JSON.stringify(value));
+    deserialize(serialize(value)) as T;
 }
 
 // ─────────────────────────────────────────────

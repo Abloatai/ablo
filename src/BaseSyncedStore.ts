@@ -12,9 +12,10 @@
  */
 
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
-import { AbloConnectionError, AbloValidationError, toAbloError } from './errors.js';
-import type { RecoveryClass } from './errorCodes.js';
+import { AbloConnectionError, AbloValidationError, toAbloError } from './transaction/errors.js';
+import type { RecoveryClass } from './transaction/errorCodes.js';
 import { ConnectionManager } from './sync/ConnectionManager.js';
+import { contextLogger, contextSocketObservability } from './sync/contextPorts.js';
 import { SubscriptionManager } from './sync/SubscriptionManager.js';
 import {
   resolveParticipantSyncGroups,
@@ -25,7 +26,7 @@ import type { Database, BootstrapResult } from './Database.js';
 import type { BootstrapData } from './sync/BootstrapFetcher.js';
 import type { InstanceCache } from './InstanceCache.js';
 import { ModelRegistry } from './ModelRegistry.js';
-import { PropertyType } from './types/index.js';
+import { PropertyType } from './transaction/types/index.js';
 import {
   SyncWebSocket,
   type SyncDelta,
@@ -34,22 +35,23 @@ import {
   type GroupRemovedPayload,
   type BootstrapHint,
   type BootstrapDataEvent,
-  type PresenceUpdateEvent,
+  type PresenceUpdate,
   type EventMap,
   type DefaultCollaborationEvents,
+  type SyncWebSocketEventMap,
 } from './sync/SyncWebSocket.js';
 import { QueryProcessor } from './core/QueryProcessor.js';
 import { Model, rowAsModel } from './Model.js';
 import { getContext } from './context.js';
-import { SyncSessionError, isAccessCredentialExpiryCloseReason } from './errors.js';
+import { AbloSessionError, isAccessCredentialExpiryCloseReason } from './transaction/errors.js';
 import { ModelScope } from './InstanceCache.js';
 import { LazyReferenceCollection } from './LazyReferenceCollection.js';
-import type { Schema } from './schema/schema.js';
+import type { Schema } from './transaction/schema/schema.js';
 // The store contract types (SyncStoreContract, LocalMutation, SyncStatus)
 // live in a React-free core module and are re-exported for React consumers.
 import type { SyncStatus, SyncStoreContract, LocalMutation } from './core/storeContract.js';
-import type { AuthCredentialSource } from './auth/credentialSource.js';
-import type { ModelData } from './types/modelData.js';
+import type { AuthCredentialSource } from './transaction/auth/credentialSource.js';
+import type { ModelData } from './transaction/types/modelData.js';
 import { deriveSyncPlanFromSchema } from './sync/syncPlan.js';
 import type { EnrichmentPlanEntry, ForeignKeyIndexSpec } from './sync/syncPlan.js';
 import { CredentialLifecycle, type CredentialRefresher } from './sync/credentialLifecycle.js';
@@ -59,6 +61,7 @@ import * as bootstrapApply from './sync/bootstrapApply.js';
 import type { PoolContext, RehydrationStats } from './sync/bootstrapApply.js';
 import * as deltaPipeline from './sync/deltaPipeline.js';
 import type { DeltaPipelineContext } from './sync/deltaPipeline.js';
+import type { ParticipantKind } from './transaction/types/participant.js';
 
 // ── Exported types ──────────────────────────────────────────────────────────
 
@@ -71,7 +74,7 @@ export type ConcreteModelConstructor<T extends Model> = new (data?: any) => T;
 
 // ModelData is defined in a separate module to break the type cycle between
 // BaseSyncedStore and SyncClient, and is re-exported here.
-export type { ModelData } from './types/modelData.js';
+export type { ModelData } from './transaction/types/modelData.js';
 
 /** Query result interface */
 export interface QueryResult<T extends Model> {
@@ -90,6 +93,17 @@ export interface SyncedStoreConfig {
   enableOffline?: boolean;
   enableCache?: boolean;
   enableTelemetry?: boolean;
+
+  /**
+   * Wire message types to surface as collaboration events, e.g.
+   * `['document:selection', 'document:cursor']`.
+   *
+   * The vocabulary belongs to the application, not the SDK — these name the
+   * application's own concepts, and a schema with no documents should never see
+   * them. Defaults to none, so an application opts in by naming the events it
+   * actually broadcasts.
+   */
+  collaborationEvents?: readonly string[];
 
   /**
    * Declarative enrichment plan consumed by `enrichRelations`. Replaces
@@ -124,7 +138,7 @@ export interface UserContext {
    *  sessions; 'agent' for headless bots / worker processes. The
    *  store routes this to SyncWebSocket so the WS URL carries
    *  `kind=agent` and the server applies capability-token auth. */
-  kind?: 'user' | 'agent' | 'system';
+  kind?: ParticipantKind;
   /** Restricted (`rk_`) API key for `kind: 'agent'` — the agent's
    *  bearer credential. Sent in the `ablo.bearer.<token>` WebSocket
    *  subprotocol, never in the URL. */
@@ -161,9 +175,15 @@ export interface SmartSyncOptions {
 // re-exported here.
 export type { RehydrationStats } from './sync/bootstrapApply.js';
 
-/** Bootstrap timeout configuration */
+/**
+ * Bootstrap retry configuration.
+ *
+ * There is deliberately no overall timeout here. How long one attempt may run
+ * is not a policy this layer gets to invent — it is a property of the fetcher's
+ * watchdogs, read from `BootstrapFetcher.budgetMs`. A second number kept here
+ * would only be able to disagree with them, which is exactly what it used to do.
+ */
 export const BOOTSTRAP_CONFIG = {
-  OVERALL_TIMEOUT_MS: 15_000,
   MAX_RETRY_ATTEMPTS: 3,
   RETRY_DELAY_MS: 500,
 } as const;
@@ -179,7 +199,7 @@ export type {
   GroupRemovedPayload,
   BootstrapHint,
   BootstrapDataEvent,
-  PresenceUpdateEvent,
+  PresenceUpdate,
 };
 
 // deriveSyncPlanFromSchema derives a sync plan from a schema and is
@@ -205,13 +225,13 @@ export { deriveSyncPlanFromSchema } from './sync/syncPlan.js';
  * the underlying SyncWebSocket without casts:
  *
  * @example
- *   interface AbloEvents {
- *     'sheet:selection': [SheetSelectionEvent];
- *     'slide:cursor':    [SlideCursorEvent];
+ *   interface EditorEvents {
+ *     'document:selection': [SelectionEvent];
+ *     'document:cursor':    [CursorEvent];
  *   }
- *   class SyncedStore extends BaseSyncedStore<AbloEvents> {
- *     subscribeToSlideCursor(handler: (e: SlideCursorEvent) => void) {
- *       return this.syncWebSocket?.subscribe('slide:cursor', handler);
+ *   class EditorStore extends BaseSyncedStore<EditorEvents> {
+ *     subscribeToCursor(handler: (e: CursorEvent) => void) {
+ *       return this.syncWebSocket.subscribe('document:cursor', handler);
  *     }
  *   }
  */
@@ -253,15 +273,20 @@ export class BaseSyncedStore<
 
 
   // ── Real-time sync ──
-  protected syncWebSocket: SyncWebSocket<TCollaboration> | null = null;
+  /**
+   * The connection, owned by whoever built this store (ADR 0016 follow-up
+   * 3b): the host constructs it and hands it in, the store seeds its late
+   * values during `initialize()` and owns the lifecycle from there. One
+   * instance for the store's whole lifetime — reconnects replace the socket
+   * inside it, never the object.
+   */
+  protected readonly syncWebSocket: SyncWebSocket<TCollaboration>;
   /**
    * Dynamic read interest (area-of-interest) over the connection's sync
-   * groups. Lives alongside `syncWebSocket` and is recreated with it; the
-   * stable `enterScope`/`leaveScope`/`pinScope`/`unpinScope` methods forward
-   * to whichever instance is current, so callers (the React participant
-   * hook) never hold a stale reference. Null until `setupWebSocketSync`.
+   * groups. Constructed with the connection; the permanent base scopes are
+   * seeded in `setupWebSocketSync` once identity resolves.
    */
-  protected areaOfInterest: SubscriptionManager | null = null;
+  protected readonly areaOfInterest: SubscriptionManager;
   /** Sync groups whose current state has been backfilled into the pool
    *  (hydrate-on-enter). Cleared when the pool is reset on (re)bootstrap. */
   private readonly hydratedGroups = new Set<string>();
@@ -269,29 +294,62 @@ export class BaseSyncedStore<
    *  enters of the same scope so they share one fetch. */
   private readonly hydratingGroups = new Map<string, Promise<void>>();
   private _syncServerUrl?: string;
+  /** Application-declared collaboration event types; empty unless configured. */
+  private _collaborationEvents: readonly string[] = [];
 
   /**
    * Public accessor for the underlying SyncWebSocket. Used by the
    * factory in `createSyncEngine` to wire the default mutation
    * executor — the executor needs the WS handle to send commit
    * frames, and the factory can't reach `protected` state through
-   * normal typing. Returns null until WS is initialized during
-   * `initialize()`.
+   * normal typing.
    */
-  getSyncWebSocket(): SyncWebSocket<TCollaboration> | null {
+  getSyncWebSocket(): SyncWebSocket<TCollaboration> {
     return this.syncWebSocket;
+  }
+
+  /**
+   * Subscribe to pushed frames — deltas, presence updates, claim grants and
+   * losses, connection changes, and this store's collaboration events.
+   * Durable by construction: the connection object exists for the store's
+   * whole lifetime (reconnects replace only the socket inside it), so a
+   * subscription made before the first connect starts delivering when the
+   * socket opens and keeps delivering across every reconnect. Returns the
+   * unsubscribe function.
+   */
+  subscribe<K extends keyof SyncWebSocketEventMap<TCollaboration>>(
+    event: K,
+    handler: (...args: SyncWebSocketEventMap<TCollaboration>[K]) => void,
+  ): () => void {
+    return this.syncWebSocket.subscribe(event, handler);
+  }
+
+  /**
+   * Send a collaboration event (an app-specific real-time message from this
+   * store's `TCollaboration` map). A no-op while the connection is down —
+   * presence-grade traffic is not queued.
+   */
+  sendCollaborationEvent<K extends string & keyof TCollaboration>(
+    messageType: K,
+    payload: TCollaboration[K] extends [infer P]
+      ? Omit<P & Record<string, unknown>, 'timestamp'>
+      : never,
+  ): void {
+    this.syncWebSocket.sendCollaborationEvent(messageType, payload);
   }
 
   // ── Area-of-interest (dynamic read subscription) ─────────────────
   //
   // `enterScope`/`leaveScope` move the connection's read interest as the
-  // user navigates (open or close a deck, sheet, or doc); `pinScope`/`unpinScope`
+  // user navigates (open or close a record); `pinScope`/`unpinScope`
   // express prominence (an active claim keeps a group subscribed). All four
   // resolve the scope to sync-group strings through the same resolver the
   // claim path uses (`resolveParticipantSyncGroups`), so read interest and
-  // write claims always agree on the string for a given entity. They are
-  // no-ops before the socket exists, and they never reject when the transport
-  // is offline (see {@link SubscriptionManager.reconcile}).
+  // write claims always agree on the string for a given entity. Before the
+  // connection opens they record interest without a wire send, and they
+  // never reject when the transport is offline (see
+  // {@link SubscriptionManager.reconcile}); the on-connect `resync` pushes
+  // whatever interest accumulated.
 
   private scopeToGroups(scope: ParticipantScope): string[] {
     return resolveParticipantSyncGroups(scope, this.schema);
@@ -306,10 +364,10 @@ export class BaseSyncedStore<
    * and the live delta stream keeps flowing regardless.
    */
   enterScope(scope: ParticipantScope, opts?: { hydrate?: boolean }): Promise<void> {
-    const mgr = this.areaOfInterest;
-    if (!mgr) return Promise.resolve();
     const groups = this.scopeToGroups(scope);
-    const subscribed = Promise.all(groups.map((g) => mgr.enter(g))).then(() => undefined);
+    const subscribed = Promise.all(groups.map((g) => this.areaOfInterest.enter(g))).then(
+      () => undefined,
+    );
     if (!opts?.hydrate) return subscribed;
     return subscribed.then(() => this.hydrateGroups(groups));
   }
@@ -356,29 +414,23 @@ export class BaseSyncedStore<
 
   /** Leave a scope → its groups go warm (hysteresis), then drop on sweep. */
   leaveScope(scope: ParticipantScope): Promise<void> {
-    const mgr = this.areaOfInterest;
-    if (!mgr) return Promise.resolve();
-    return Promise.all(this.scopeToGroups(scope).map((g) => mgr.leave(g))).then(
-      () => undefined,
-    );
+    return Promise.all(
+      this.scopeToGroups(scope).map((g) => this.areaOfInterest.leave(g)),
+    ).then(() => undefined);
   }
 
   /** Pin a scope (active claim / prominence) → never warms while pinned. */
   pinScope(scope: ParticipantScope): Promise<void> {
-    const mgr = this.areaOfInterest;
-    if (!mgr) return Promise.resolve();
-    return Promise.all(this.scopeToGroups(scope).map((g) => mgr.pin(g))).then(
-      () => undefined,
-    );
+    return Promise.all(
+      this.scopeToGroups(scope).map((g) => this.areaOfInterest.pin(g)),
+    ).then(() => undefined);
   }
 
   /** Release a pin → the group transitions to warm rather than dropping. */
   unpinScope(scope: ParticipantScope): Promise<void> {
-    const mgr = this.areaOfInterest;
-    if (!mgr) return Promise.resolve();
-    return Promise.all(this.scopeToGroups(scope).map((g) => mgr.unpin(g))).then(
-      () => undefined,
-    );
+    return Promise.all(
+      this.scopeToGroups(scope).map((g) => this.areaOfInterest.unpin(g)),
+    ).then(() => undefined);
   }
 
   // ── Internal helpers ──
@@ -415,12 +467,12 @@ export class BaseSyncedStore<
   protected pendingDeltas: SyncDelta[] = [];
   protected batchTimer: ReturnType<typeof setTimeout> | null = null;
   protected syncPromise: Promise<void> | null = null;
-  /** Resume/ack cursor — delegates to the shared SyncPosition (see
-   *  sync/syncPosition.ts). Advances only after IDB persistence. */
+  /** Resume/ack cursor — delegates to the shared LogPosition (see
+   *  logPosition.ts). Advances only after IDB persistence. */
   protected get lastAckedId(): number {
     return this.syncClient.position.persisted;
   }
-  /** Pool-applied cursor — delegates to the shared SyncPosition. */
+  /** Pool-applied cursor — delegates to the shared LogPosition. */
   protected get highestProcessedSyncId(): number {
     return this.syncClient.position.applied;
   }
@@ -428,6 +480,8 @@ export class BaseSyncedStore<
   // ── Delta queuing during bootstrap ──
   protected bootstrapDeltaQueue: SyncDelta[] | null = null;
   protected activeBootstrapCount = 0;
+  /** The live deadline for the bootstrap attempt in flight, if any. */
+  private bootstrapDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ── Delete tracking ──
   protected pendingDeletes = new Set<string>();
@@ -442,6 +496,15 @@ export class BaseSyncedStore<
       database: Database;
       objectPool: InstanceCache;
       modelRegistry: ModelRegistry;
+      /**
+       * The connection, built by the host. When omitted, the store constructs
+       * its own from `url` and the collaboration-event config — the
+       * self-contained path subclasses and tests use. Either way the store
+       * owns the lifecycle from here: it seeds the late values (identity,
+       * read scope, resume cursor) during `initialize()` and releases the
+       * first connect.
+       */
+      syncWebSocket?: SyncWebSocket<TCollaboration>;
       /**
        * Optional schema. When provided, {@link deriveSyncPlanFromSchema} walks
        * the schema's models and relations to auto-populate foreign-key indexes
@@ -464,6 +527,36 @@ export class BaseSyncedStore<
     this.auth = dependencies.auth;
     this.schema = dependencies.schema;
     this._syncServerUrl = dependencies.url;
+    this._collaborationEvents = config.collaborationEvents ?? [];
+
+    // The connection exists from construction (ADR 0016 follow-up 3b): the
+    // host hands one in, or the store builds its own. `deferConnect` holds
+    // it closed until `initialize()` has seeded identity and read scope, so
+    // nothing can open an unscoped connection in between.
+    this.syncWebSocket =
+      dependencies.syncWebSocket ??
+      new SyncWebSocket<TCollaboration>({
+        baseUrl: this._syncServerUrl,
+        collaborationEvents: [...this._collaborationEvents],
+        getAuthToken: this.auth?.getAuthToken,
+        deferConnect: true,
+        capabilities: {
+          partialBootstrap: true,
+          compressedDeltas: true,
+          streamingBootstrap: true,
+          batchedDeltas: true,
+        },
+      });
+    this.areaOfInterest = new SubscriptionManager({ transport: this.syncWebSocket });
+    this.wireSocketEvents();
+
+    // QueuedMutation events for pendingChanges tracking — connection-
+    // independent, wired once for the store's lifetime.
+    this.disposers.push(
+      this.syncClient.onTransactionEvent('created', () => { this.incrementPendingChanges(); }),
+      this.syncClient.onTransactionEvent('completed', () => { this.decrementPendingChanges(); }),
+      this.syncClient.onTransactionEvent('failed', () => { this.decrementPendingChanges(); }),
+    );
 
     // Set this store as the global Model store
     Model.setStore(this as Parameters<typeof Model.setStore>[0]);
@@ -628,13 +721,16 @@ export class BaseSyncedStore<
    * `performCredentialRefresh` / `startCredentialLifecycle` methods below
    * are thin delegates so the store's public surface is unchanged.
    */
-  private readonly credentialLifecycle = new CredentialLifecycle({
-    setAuthToken: (token) => { this.auth?.setAuthToken(token); },
-    nudgeReconnect: () => { this.nudgeReconnect(); },
-    reportSessionExpired: () => {
-      this.connectionManager?.send({ type: 'BOOTSTRAP_FAILED_SESSION' });
+  private readonly credentialLifecycle = new CredentialLifecycle(
+    {
+      setAuthToken: (token) => { this.auth?.setAuthToken(token); },
+      nudgeReconnect: () => { this.nudgeReconnect(); },
+      reportSessionExpired: () => {
+        this.connectionManager?.send({ type: 'BOOTSTRAP_FAILED_SESSION' });
+      },
     },
-  });
+    contextLogger,
+  );
 
   /**
    * Listeners registered via `subscribeSessionError()`. Fired when the
@@ -658,7 +754,7 @@ export class BaseSyncedStore<
 
   /**
    * Subscribe to per-mutation failure payloads. Forwarded from the
-   * underlying `SyncClient.transactionQueue` so consumers (toast layer,
+   * underlying `SyncClient.mutationQueue` so consumers (toast layer,
    * route-level reverted boundaries, telemetry) can react without
    * reaching across the store. Returns an unsubscribe function.
    *
@@ -670,12 +766,26 @@ export class BaseSyncedStore<
    */
   subscribeMutationFailure(
     listener: (payload: {
-      transaction: import('./transactions/TransactionQueue.js').Transaction;
+      transaction: import('./transactions/mutations/MutationQueue.js').QueuedMutation;
       error: Error;
       permanent?: boolean;
     }) => void,
   ): () => void {
     return this.syncClient.onMutationFailure(listener);
+  }
+
+  /**
+   * Subscribe to commit round-trip latency. Forwarded from the underlying
+   * `SyncClient` for the same reason as `subscribeMutationFailure` — the
+   * React provider binds against this surface, so the engine's wiring stays
+   * private while the SDK keeps one hook to expose.
+   */
+  subscribeCommitLatency(
+    listener: (
+      sample: import('./transactions/mutations/commitLatency.js').CommitLatencySample,
+    ) => void,
+  ): () => void {
+    return this.syncClient.onCommitLatency(listener);
   }
 
   /**
@@ -690,19 +800,19 @@ export class BaseSyncedStore<
   /**
    * Observe the LOCAL mutation stream for undo recording (see
    * {@link import('./core/storeContract.js').LocalMutation}). Taps the
-   * TransactionQueue's `transaction:created` event — fired once per local
+   * MutationQueue's `transaction:created` event — fired once per local
    * create/update/delete/archive with `previousData` already captured.
    * Remote/collaborator deltas apply via `applyDeltaBatchToPool` and never
    * emit here, so undo is naturally local-only (you can't undo a teammate).
    */
   subscribeLocalMutations(handler: (mutation: LocalMutation) => void): () => void {
-    // Tap the TransactionQueue directly via `onLocalTransaction`. The previous
+    // Tap the MutationQueue directly via `onLocalTransaction`. The previous
     // `syncClient.subscribe('transaction:created', …)` route registered the
     // handler on SyncClient's OWN emitter, which never fires that event (only
     // the queue's emitter does) — so undo recorded nothing. See
     // `SyncClient.onLocalTransaction` for the full rationale.
     return this.syncClient.onLocalTransaction((tx) => {
-      if (!tx?.type || !tx.modelName || !tx.modelId) return;
+      if (!tx.modelName || !tx.modelId) return;
       handler({
         type: tx.type,
         modelName: tx.modelName,
@@ -726,82 +836,116 @@ export class BaseSyncedStore<
   ): Promise<T> {
     let lastError: Error | null = null;
 
-    for (let attempt = 1; attempt <= BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS; attempt++) {
-      if (signal?.aborted) {
-        throw new DOMException('Initialization aborted', 'AbortError');
-      }
+    // An aborted initialize has to stop the transfer, not just stop waiting for
+    // it. Without this the caller returns while a cold start keeps downloading,
+    // and those chunks are still in flight when the next initialize begins.
+    const onCallerAbort = (): void => { this.database.helper.abort(); };
+    signal?.addEventListener('abort', onCallerAbort, { once: true });
 
-      // `navigator.onLine === false` is the MDN-reliable "definitely
-      // offline" signal. Don't use `!navigator.onLine`: Node 22+ exposes
-      // `globalThis.navigator` with `onLine === undefined`, so the
-      // negation false-positives every server-side bootstrap (e.g. the
-      // server-side agent.run dispatch path through `connectAgent`).
-      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-        getContext().observability.breadcrumb(
-          `Bootstrap attempt ${attempt} skipped - offline`,
-          'sync.bootstrap',
-          'warning'
-        );
-        throw new AbloConnectionError('Bootstrap skipped - device is offline', {
-          code: 'bootstrap_offline',
-        });
-      }
-
-      try {
-        getContext().logger.info(
-          `[BaseSyncedStore] Bootstrap attempt ${attempt}/${BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS}`
-        );
-
-        const result = (await Promise.race([
-          bootstrapFn(),
-          this.createBootstrapTimeout(attempt),
-        ])) as T;
-
-        getContext().logger.info('[BaseSyncedStore] Bootstrap completed successfully', { attempt });
-        return result;
-      } catch (error) {
-        lastError = error as Error;
-        const isTimeout = error instanceof Error && error.message.includes('timed out');
-        const isAbort = error instanceof DOMException && error.name === 'AbortError';
-        const isNetworkError = error instanceof TypeError && error.message.includes('fetch');
-
-        if (isAbort) throw error;
-        if (SyncSessionError.isSessionError(error)) throw error;
-
-        if (isNetworkError && typeof navigator !== 'undefined' && navigator.onLine === false) {
-          getContext().observability.captureBootstrapFailure(error, { type: 'network-offline' });
-          throw error;
+    try {
+      for (let attempt = 1; attempt <= BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS; attempt++) {
+        if (signal?.aborted) {
+          throw new DOMException('Initialization aborted', 'AbortError');
         }
 
-        getContext().observability.breadcrumb(
-          `Bootstrap attempt ${attempt} failed`,
-          'sync.bootstrap',
-          'warning',
-          { isTimeout, isNetworkError, willRetry: attempt < BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS }
-        );
+        // `navigator.onLine === false` is the MDN-reliable "definitely
+        // offline" signal. Don't use `!navigator.onLine`: Node 22+ exposes
+        // `globalThis.navigator` with `onLine === undefined`, so the
+        // negation false-positives every server-side bootstrap (e.g. the
+        // server-side agent.run dispatch path through `connectAgent`).
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          getContext().observability.breadcrumb(
+            `Bootstrap attempt ${attempt} skipped - offline`,
+            'sync.bootstrap',
+            'warning'
+          );
+          throw new AbloConnectionError('Bootstrap skipped - device is offline', {
+            code: 'bootstrap_offline',
+          });
+        }
 
-        if (isTimeout && attempt < BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS) {
-          getContext().logger.info('[BaseSyncedStore] Resetting state before bootstrap retry');
-          this.resetBootstrapState();
-          await new Promise((resolve) => setTimeout(resolve, BOOTSTRAP_CONFIG.RETRY_DELAY_MS));
-        } else if (!isTimeout && attempt < BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+        try {
+          getContext().logger.info(
+            `[BaseSyncedStore] Bootstrap attempt ${attempt}/${BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS}`
+          );
+
+          const result = (await Promise.race([
+            bootstrapFn(),
+            this.createBootstrapTimeout(attempt),
+          ])) as T;
+
+          getContext().logger.info('[BaseSyncedStore] Bootstrap completed successfully', { attempt });
+          return result;
+        } catch (error) {
+          lastError = error as Error;
+          const isTimeout = error instanceof Error && error.message.includes('timed out');
+          const isAbort = error instanceof DOMException && error.name === 'AbortError';
+          const isNetworkError = error instanceof TypeError && error.message.includes('fetch');
+
+          if (isAbort) throw error;
+          if (AbloSessionError.isSessionError(error)) throw error;
+
+          if (isNetworkError && typeof navigator !== 'undefined' && navigator.onLine === false) {
+            getContext().observability.captureBootstrapFailure(error, { type: 'network-offline' });
+            throw error;
+          }
+
+          getContext().observability.breadcrumb(
+            `Bootstrap attempt ${attempt} failed`,
+            'sync.bootstrap',
+            'warning',
+            { isTimeout, isNetworkError, willRetry: attempt < BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS }
+          );
+
+          if (isTimeout && attempt < BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS) {
+            getContext().logger.info('[BaseSyncedStore] Resetting state before bootstrap retry');
+            this.resetBootstrapState();
+            await new Promise((resolve) => setTimeout(resolve, BOOTSTRAP_CONFIG.RETRY_DELAY_MS));
+          } else if (!isTimeout && attempt < BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+        } finally {
+          // Disarm this attempt's deadline the moment it settles — a live timer
+          // would abort whatever the next attempt puts in flight.
+          this.clearBootstrapDeadline();
         }
       }
+
+      throw lastError
+        ? toAbloError(lastError)
+        : new AbloConnectionError('Bootstrap failed after all retry attempts', {
+            code: 'bootstrap_fetch_timeout',
+          });
+    } finally {
+      signal?.removeEventListener('abort', onCallerAbort);
+      this.clearBootstrapDeadline();
     }
-
-    throw lastError
-      ? toAbloError(lastError)
-      : new AbloConnectionError('Bootstrap failed after all retry attempts', {
-          code: 'bootstrap_fetch_timeout',
-        });
   }
 
-  /** Create a timeout promise for bootstrap attempts */
+  /**
+   * The outer deadline for one bootstrap attempt.
+   *
+   * The length is DERIVED from the fetcher's own watchdog budget, not chosen. A
+   * chosen number is what broke this: the previous fixed 15s was shorter than a
+   * single model chunk's allowance — 20s waiting for response headers plus 15s
+   * of stall grace — so on any workspace with one slow model the deadline fired
+   * before the watchdogs it was meant to backstop, and every attempt timed out
+   * by construction. The watchdogs below are progress-based and already
+   * guarantee termination; this deadline exists only for a hang somewhere other
+   * than the network, so it must sit above them, and it can only do that
+   * reliably by asking them how long they take.
+   *
+   * Reaching it aborts the work in flight. `Promise.race` merely stops waiting:
+   * without the abort the losing bootstrap keeps running, keeps its sockets, and
+   * races the retry that replaced it — which is how one page load turned into
+   * dozens of overlapping requests.
+   */
   protected createBootstrapTimeout(attempt: number): Promise<never> {
-    const timeoutMs = BOOTSTRAP_CONFIG.OVERALL_TIMEOUT_MS + (attempt - 1) * 3_000;
+    const timeoutMs = this.database.helper.budgetMs;
     return new Promise((_, reject) => {
-      setTimeout(() => {
+      this.clearBootstrapDeadline();
+      this.bootstrapDeadlineTimer = setTimeout(() => {
+        this.database.helper.abort();
         reject(
           new AbloConnectionError(
             `Bootstrap timed out after ${timeoutMs}ms (attempt ${attempt})`,
@@ -810,6 +954,16 @@ export class BaseSyncedStore<
         );
       }, timeoutMs);
     });
+  }
+
+  /** Disarm the deadline once its attempt has settled. Load-bearing now that
+   *  firing it aborts real work: a leftover timer would cancel a later,
+   *  unrelated bootstrap. */
+  private clearBootstrapDeadline(): void {
+    if (this.bootstrapDeadlineTimer !== null) {
+      clearTimeout(this.bootstrapDeadlineTimer);
+      this.bootstrapDeadlineTimer = null;
+    }
   }
 
   /** Reset bootstrap-related state for a clean retry */
@@ -854,7 +1008,7 @@ export class BaseSyncedStore<
         this.dataReady = true;
       }
 
-      if (this.syncWebSocket && !this.syncWebSocket.isConnected()) {
+      if (!this.syncWebSocket.isConnected()) {
         this.syncWebSocket.resetReconnectAttempts();
         this.syncWebSocket.connect();
       }
@@ -864,9 +1018,9 @@ export class BaseSyncedStore<
     } catch (error) {
       getContext().observability.captureBootstrapFailure(error, { type: 'connection-store-reconnect' });
 
-      if (SyncSessionError.isSessionError(error)) {
-        this.syncWebSocket?.setSessionErrorDetected();
-        this.syncWebSocket?.disconnect();
+      if (AbloSessionError.isSessionError(error)) {
+        this.syncWebSocket.setSessionErrorDetected();
+        this.syncWebSocket.disconnect();
         this.updateSyncStatus({ state: 'error', error: error });
 
         // SECURITY: Clear locally cached data when session is invalid
@@ -879,10 +1033,14 @@ export class BaseSyncedStore<
       if (!this.dataReady && this.objectPool.size === 0) {
         try {
           await this.syncClient.hydrateFromDatabase();
-          if (this.objectPool.size > 0) {
+          // Re-read through a local: the guard above narrowed `size` to 0, and
+          // the compiler carries that narrowing across the await even though
+          // hydrating is precisely what fills the pool.
+          const hydratedSize = this.objectPool.size;
+          if (hydratedSize > 0) {
             this.dataReady = true;
             getContext().logger.info('[BaseSyncedStore] Hydrated from local fallback', {
-              objectPoolSize: this.objectPool.size,
+              objectPoolSize: hydratedSize,
             });
           }
         } catch (fallbackError) {
@@ -969,11 +1127,11 @@ export class BaseSyncedStore<
     return {
       database: this.database,
       objectPool: this.objectPool,
-      getSubscribedSyncGroups: () => this.syncWebSocket?.getSyncGroups() ?? [],
+      getSubscribedSyncGroups: () => this.syncWebSocket.getSyncGroups(),
       getCurrentSyncGroups: () =>
         this.userContext ? this.resolveSyncGroups(this.userContext) : null,
       getBootstrapMode: () => this.userContext?.bootstrapMode,
-      disconnectWebSocket: () => { this.syncWebSocket?.disconnect(); },
+      disconnectWebSocket: () => { this.syncWebSocket.disconnect(); },
       emitConnectionEvent: (event) => { this.onConnectionEvent?.(event); },
       handleGroupAdded: (payload, syncId) => this.handleGroupAdded(payload, syncId),
       computeUpdatedSyncGroups: (payload) => this.computeUpdatedSyncGroups(payload),
@@ -1204,12 +1362,12 @@ export class BaseSyncedStore<
         return { success: false, error: error };
       }
 
-      const isSession = SyncSessionError.isSessionError(error);
+      const isSession = AbloSessionError.isSessionError(error);
       getContext().observability.captureBootstrapFailure(error, { type: 'initialize' });
 
       if (isSession) {
-        this.syncWebSocket?.setSessionErrorDetected();
-        this.syncWebSocket?.disconnect();
+        this.syncWebSocket.setSessionErrorDetected();
+        this.syncWebSocket.disconnect();
         this.updateSyncStatus({ state: 'error', error: error });
         return { success: false, error: error };
       }
@@ -1225,7 +1383,7 @@ export class BaseSyncedStore<
         this.dataReady = true;
         this.initialized = true;
         this.updateSyncStatus(
-          this.syncWebSocket?.isConnected()
+          this.syncWebSocket.isConnected()
             ? { state: 'idle', progress: 100 }
             : { state: 'offline', offlineSince: new Date() }
         );
@@ -1259,11 +1417,11 @@ export class BaseSyncedStore<
           cause: error,
         });
         getContext().observability.captureBootstrapFailure(error, { type: 'background' });
-        if (SyncSessionError.isSessionError(error)) {
-          this.syncWebSocket?.setSessionErrorDetected();
-          this.syncWebSocket?.disconnect();
+        if (AbloSessionError.isSessionError(error)) {
+          this.syncWebSocket.setSessionErrorDetected();
+          this.syncWebSocket.disconnect();
           this.updateSyncStatus({ state: 'error', error: error });
-        } else if (!this.syncWebSocket?.isConnected()) {
+        } else if (!this.syncWebSocket.isConnected()) {
           this.updateSyncStatus({ state: 'offline', offlineSince: new Date() });
         }
       }
@@ -1318,15 +1476,24 @@ export class BaseSyncedStore<
    * driven session" vs "is this a server agent". The latter never has
    * a tab to lose focus or a network adapter to wake up.
    */
-  protected createConnectionManager(kind?: 'user' | 'agent' | 'system'): ConnectionManager | null {
+  protected createConnectionManager(kind?: ParticipantKind): ConnectionManager | null {
     if (kind === 'agent') return null;
     return new ConnectionManager({
       baseUrl: this._syncServerUrl,
-      getAuthToken: () => this.auth?.getAuthToken() ?? this.syncWebSocket?.getAuthToken() ?? null,
+      getAuthToken: () => this.auth?.getAuthToken() ?? this.syncWebSocket.getAuthToken() ?? null,
+      logger: contextLogger,
+      observability: contextSocketObservability,
     });
   }
 
-  /** Disconnect and clean up all resources */
+  /**
+   * Disconnect and clean up all resources. Terminal: this means "the client
+   * is finished", not "close and reopen later" — the connection object stays
+   * assigned but closed, the event wiring is torn down, and nothing
+   * re-initializes a disconnected store. (Mid-session closes during recovery
+   * go through the connection FSM's `onDisconnectWebSocket`, which closes
+   * the transport without touching the store.)
+   */
   async disconnect(): Promise<void> {
     this.stopCredentialLifecycle();
     if (this.batchTimer) { clearTimeout(this.batchTimer); this.batchTimer = null; }
@@ -1341,11 +1508,11 @@ export class BaseSyncedStore<
     }
 
     try {
-      const last = this.syncWebSocket?.getLastSyncId?.() || 0;
+      const last = this.syncWebSocket.getLastSyncId();
       if (last > 0) await this.database.updateWorkspaceMetadata({ lastSyncId: last });
     } catch {}
 
-    if (this.syncWebSocket) { this.syncWebSocket.disconnect(); this.syncWebSocket = null; }
+    this.syncWebSocket.disconnect();
     this.syncClient.disconnect();
     this.queryProcessor.clearCache();
     // Stop the pool's GC interval — the one timer the pool arms itself.
@@ -1416,7 +1583,6 @@ export class BaseSyncedStore<
    */
   protected async waitForWebSocketConnected(timeoutMs: number): Promise<boolean> {
     const ws = this.syncWebSocket;
-    if (!ws) return false;
     if (ws.isConnected()) return true;
 
     return new Promise<boolean>((resolve) => {
@@ -1440,6 +1606,16 @@ export class BaseSyncedStore<
     });
   }
 
+  /**
+   * Seed the connection's late values and open it. The socket itself exists
+   * from construction; what identity resolution supplies — the participant
+   * kind, the credential, the read scope, and the resume cursor — is seeded
+   * here, and only then is the held first connect released. A retried
+   * `initialize()` after a failed `ready()` re-runs this against the same
+   * connection object: the reconnect counter is reset for a clean slate,
+   * while the session-error latch deliberately survives (only the
+   * credential-expiry recovery clears it).
+   */
   protected setupWebSocketSync(context: UserContext, lastSyncId: number): void {
     if (!context.userId || !context.organizationId) {
       getContext().observability.breadcrumb(
@@ -1450,32 +1626,34 @@ export class BaseSyncedStore<
       return;
     }
 
-    this.syncWebSocket = new SyncWebSocket<TCollaboration>({
-      baseUrl: this._syncServerUrl,
-      userId: context.userId,
-      organizationId: context.organizationId,
-      syncGroups: [...this.resolveSyncGroups(context)],
-      lastSyncId,
-      kind: context.kind,
-      capabilityToken: context.capabilityToken,
-      getAuthToken: this.auth?.getAuthToken,
-      capabilities: {
-        partialBootstrap: true,
-        compressedDeltas: true,
-        streamingBootstrap: true,
-        batchedDeltas: true,
-      },
-    });
+    if (context.kind) this.syncWebSocket.setKind(context.kind);
+    if (context.capabilityToken) {
+      this.syncWebSocket.setCapabilityToken(context.capabilityToken);
+    }
+    const syncGroups = this.resolveSyncGroups(context);
+    this.syncWebSocket.setSyncGroups(syncGroups);
+    this.syncWebSocket.setLastSyncId(lastSyncId || 0);
+    // The permanent base scopes for read interest — same set the connection
+    // subscribes to at upgrade, so the two can never disagree.
+    this.areaOfInterest.setBaseGroups(syncGroups);
 
-    // Area-of-interest manager — owns dynamic read-subscription over this
-    // connection. baseGroups (the org/user scopes) are always subscribed;
-    // enterScope/leaveScope move per-entity interest. Recreated with the
-    // socket; torn down via the disposer pushed below.
-    this.areaOfInterest = new SubscriptionManager({
-      transport: this.syncWebSocket,
-      baseGroups: this.resolveSyncGroups(context),
-    });
+    // ── Connection FSM ────────────────────────────────────────────
+    // Instantiate + start the SDK's ConnectionManager so every consumer
+    // gets correct online/offline recovery. Guarded: a retried
+    // `initialize()` reuses the manager it already started.
+    if (!this.connectionManager) this.startConnectionManager(context.kind);
 
+    this.syncWebSocket.resetReconnectAttempts();
+    this.syncWebSocket.allowConnect();
+    this.syncWebSocket.connect();
+  }
+
+  /**
+   * Wire the store's handlers onto the connection. Runs once, at
+   * construction — the connection object is stable for the store's
+   * lifetime, so the wiring is too.
+   */
+  protected wireSocketEvents(): void {
     // Connection events → forward to connection lifecycle callback
     const onConnected = this.syncWebSocket.subscribe('connected', () => {
       this.syncClient.markConnected();
@@ -1490,7 +1668,7 @@ export class BaseSyncedStore<
       // changed while offline; after a full reconnect the new socket's URL
       // carries only base groups. `resync` re-pushes the current desired set
       // so the server-side index matches what the user is actually viewing.
-      void this.areaOfInterest?.resync();
+      void this.areaOfInterest.resync();
     });
 
     const onDisconnected = this.syncWebSocket.subscribe('disconnected', () => {
@@ -1562,7 +1740,7 @@ export class BaseSyncedStore<
     };
 
     const onSessionError = this.syncWebSocket.subscribe('session_error', (error: Error) => {
-      // WS analog of HTTP's `apikey_expired` (see SyncSessionError.
+      // WS analog of HTTP's `apikey_expired` (see AbloSessionError.
       // isSessionErrorResponse): the hub's keepalive reaper closes sockets
       // whose SHORT-LIVED access credential (`ek_`/`rk_`) passed its expiry
       // with `4001 credential_expired`. That is re-mintable from the
@@ -1571,7 +1749,7 @@ export class BaseSyncedStore<
       // Only a mint that answers `null` (the login itself is gone) falls
       // through to the terminal path. Without this branch, every credential
       // TTL elapse wedged the socket behind the write-once session latch.
-      if (SyncSessionError.isSessionError(error) && isAccessCredentialExpiryCloseReason(error.message)) {
+      if (AbloSessionError.isSessionError(error) && isAccessCredentialExpiryCloseReason(error.message)) {
         getContext().observability.breadcrumb(
           'WebSocket closed for expired access credential — re-minting',
           'sync.websocket',
@@ -1580,7 +1758,7 @@ export class BaseSyncedStore<
         // Un-latch BEFORE the async mint so the FSM's own recovery
         // (probe → refreshing_credential → reconnect) is never blocked on
         // our .then() ordering.
-        this.syncWebSocket?.clearSessionError();
+        this.syncWebSocket.clearSessionError();
         void this.performCredentialRefresh().then((outcome) => {
           if (outcome === 'refreshed') {
             if (this.connectionManager) {
@@ -1592,8 +1770,8 @@ export class BaseSyncedStore<
               // (createConnectionManager returns null for kind 'agent') —
               // reconnect the socket directly; connect() reads the
               // freshly-minted credential from the credential source.
-              this.syncWebSocket?.resetReconnectAttempts();
-              this.syncWebSocket?.connect();
+              this.syncWebSocket.resetReconnectAttempts();
+              this.syncWebSocket.connect();
             }
             return;
           }
@@ -1601,7 +1779,7 @@ export class BaseSyncedStore<
             // The mint endpoint rejected: the long-lived login is gone.
             // Re-latch so writes reject with the permanent session type
             // (see SyncWebSocket.notConnectedError) instead of parking.
-            this.syncWebSocket?.setSessionErrorDetected();
+            this.syncWebSocket.setSessionErrorDetected();
             handleTerminalSessionError(error);
           }
           // 'network_error' → transient mint failure. The WS_DISCONNECTED
@@ -1637,17 +1815,18 @@ export class BaseSyncedStore<
       onDelta, onDeltaBatch, onBootstrapRequired,
       onBootstrapData, onPresenceUpdate,
       onError, onSessionError, onHandshakeFailed, onReconnectFailed,
-      () => { this.areaOfInterest?.dispose(); this.areaOfInterest = null; },
+      () => { this.areaOfInterest.dispose(); },
     );
+  }
 
-    // ── Connection FSM ────────────────────────────────────────────
-    // Instantiate + start the SDK's ConnectionManager so every
-    // consumer gets correct online/offline recovery. Previously this
-    // was an external concern (each app rebuilt its own FSM); now
-    // it's default behavior. The `onConnectionEvent` hook stays as
-    // the bridge — WS events fire the hook, the hook forwards into
-    // the FSM.
-    this.connectionManager = this.createConnectionManager(context.kind);
+  /**
+   * Build and start the connection FSM. The `onConnectionEvent` hook is the
+   * bridge — WS events fire the hook, the hook forwards into the FSM. Called
+   * from `setupWebSocketSync` because the FSM's shape depends on the resolved
+   * participant kind (agents get none — see {@link createConnectionManager}).
+   */
+  private startConnectionManager(kind?: ParticipantKind): void {
+    this.connectionManager = this.createConnectionManager(kind);
     if (this.connectionManager) {
       const manager = this.connectionManager;
       // Preserve any externally-set onConnectionEvent — chain rather
@@ -1676,13 +1855,13 @@ export class BaseSyncedStore<
         onReconnect: () => this.performReconnect(),
         onRefreshCredential: () => this.performCredentialRefresh(),
         onSessionExpired: () => {
-          const err = new SyncSessionError('Session expired');
+          const err = new AbloSessionError('Session expired');
           for (const listener of this.sessionErrorListeners) {
             try { listener(err); } catch {}
           }
         },
         onDisconnectWebSocket: () => {
-          this.syncWebSocket?.disconnect();
+          this.syncWebSocket.disconnect();
         },
         // Mirror FSM transitions into the visible `syncStatus.state` so
         // the UI can show "Reconnecting…" while the FSM cycles through
@@ -1736,14 +1915,6 @@ export class BaseSyncedStore<
         },
       });
     }
-
-    // Transaction events for pendingChanges tracking
-    const unsubCreated = this.syncClient.onTransactionEvent('created', () => { this.incrementPendingChanges(); });
-    const unsubCompleted = this.syncClient.onTransactionEvent('completed', () => { this.decrementPendingChanges(); });
-    const unsubFailed = this.syncClient.onTransactionEvent('failed', () => { this.decrementPendingChanges(); });
-    this.disposers.push(unsubCreated, unsubCompleted, unsubFailed);
-
-    this.syncWebSocket.connect();
   }
 
   // ── Delta processing pipeline ─────────────────────────────────────────────
@@ -1786,7 +1957,7 @@ export class BaseSyncedStore<
           results,
           (name, data) => this.enrichRelations(name, data),
         ); },
-      acknowledge: (syncId) => { this.syncWebSocket?.acknowledge?.(syncId); },
+      acknowledge: (syncId) => { this.syncWebSocket.acknowledge(syncId); },
       get objectPool() { return store.objectPool; },
       // Dynamic-dispatch hooks — protected override points on this class.
       getStateFields: (modelName) => this.getStateFields(modelName),
@@ -1902,7 +2073,7 @@ export class BaseSyncedStore<
    * schema build time) to find children. The previous implementation did
    * `getByType(ctor).filter(e => e.toJSON()[foreignKey] === parentId)` —
    * a full pool scan per child model + a `toJSON()` allocation per
-   * candidate. For a deck delete with 10K layers in the pool, that was
+   * candidate. For a report delete with 10K blocks in the pool, that was
    * 10K toJSON allocations per cascade level. The FK-indexed lookup
    * skips both the scan AND the allocation.
    */
@@ -1972,7 +2143,7 @@ export class BaseSyncedStore<
    * Save a model (create or update).
    *
    * Accepts any entity shape with `{ id: string }` so consumers can pass the
-   * Zod-inferred model types from `InferModel<Schema, K>` without knowing
+   * Zod-inferred model types from `Model<Schema, K>` without knowing
    * about the internal `Model` base class. At runtime, every entity reaching
    * this method came through the object pool (via `store.create`, a query
    * accessor, or an optimistic insert) and IS a `Model` instance — the one
@@ -1998,7 +2169,7 @@ export class BaseSyncedStore<
     }
   }
 
-  /** Save with an atomic server mutation (e.g., createSlideWithLayers) */
+  /** Save with an atomic server mutation (e.g., createSectionWithBlocks) */
   async saveWithAtomicMutation(
     model: Model,
     mutation: (gql: unknown) => Promise<unknown>
@@ -2031,7 +2202,7 @@ export class BaseSyncedStore<
 
 
   // ── Query API ────────────────────────────────────────────────────────────
-  // `ablo.<model>.get` / `ablo.<model>.getAll` is the read surface for
+  // `ablo.<model>.local.retrieve` / `.local.list` is the read surface for
   // application code. Custom mutators read transactionally through
   // `tx.<model>`, backed by `createReaderActions`.
 
@@ -2058,20 +2229,20 @@ export class BaseSyncedStore<
    * Create a model instance locally, typed via the schema.
    *
    * ```ts
-   * const sheet = store.create('spreadsheetSheets', { name, spreadsheetId });
-   * // sheet: SpreadsheetSheet | null — no cast needed
+   * const ledger = store.create('ledgers', { name, reportId });
+   * // ledger: Ledger | null — no cast needed
    * ```
    *
    * The `typename` arg is the schema key (camelCase plural, e.g.
-   * `'spreadsheetSheets'`); the returned instance has the
-   * `InferModel<Schema, K>` shape including computeds + relation accessors.
+   * `'ledgers'`); the returned instance has the
+   * `Model<Schema, K>` shape including computeds + relation accessors.
    * Wraps `pool.create(...)` — the underlying runtime is unchanged, just
    * type-narrowed.
    */
   create<K extends keyof TSchema['models'] & string>(
     typename: K,
     data: Record<string, unknown>,
-  ): import('./schema/schema.js').InferModel<TSchema, K> | null {
+  ): import('./transaction/schema/schema.js').Model<TSchema, K> | null {
     if (!this.schema) {
       throw new AbloValidationError(
         'store.create requires a schema to be passed to the BaseSyncedStore constructor.',
@@ -2086,7 +2257,7 @@ export class BaseSyncedStore<
     // built from the same Zod shape), TypeScript just can't unify the SDK's
     // static `Model` class with the schema's object-literal type.
     return this.objectPool.create(wireTypename, data) as
-      | import('./schema/schema.js').InferModel<TSchema, K>
+      | import('./transaction/schema/schema.js').Model<TSchema, K>
       | null;
   }
 
@@ -2145,7 +2316,7 @@ export class BaseSyncedStore<
   /**
    * Get all models of a type. Returns Model[] honestly — callers that need
    * narrow types should use `useAblo((ablo) => ablo.<model>.list(...))`
-   * which does proper inference via `InferModel<S, K>`.
+   * which does proper inference via `Model<S, K>`.
    */
   allModelsOfType(modelClass: ModelConstructor<Model>, scope?: ModelScope): Model[] {
     return this.objectPool.getByType(modelClass, scope ?? ModelScope.live);
@@ -2153,7 +2324,7 @@ export class BaseSyncedStore<
 
   /** Error handler for fire-and-forget flushPendingDeltas calls */
   protected handleFlushError = (error: unknown): void => {
-    getContext().observability.captureTransactionFailure({
+    getContext().observability.captureMutationFailure({
       context: 'flush-pending-deltas',
       modelName: 'batch',
       modelId: 'batch',
@@ -2173,8 +2344,6 @@ export class BaseSyncedStore<
       modelId: delta.modelId,
       data: typeof delta.data === 'string' ? JSON.parse(delta.data) : delta.data,
     });
-
-    if (!dbResult) return;
 
     // Track pending deletes for query filtering
     if (dbResult.action === 'remove') {
@@ -2203,7 +2372,7 @@ export class BaseSyncedStore<
   }
 
   /** Handle presence_update event. Override in subclass. */
-  protected handlePresenceUpdate(_data: PresenceUpdateEvent): void {}
+  protected handlePresenceUpdate(_data: PresenceUpdate): void {}
 
   // ── Pending changes tracking ─────────────────────────────────────────────
 

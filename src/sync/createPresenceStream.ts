@@ -23,15 +23,28 @@
  *       `leave`.
  */
 
-import type { SyncWebSocket, PresenceUpdateEvent } from './SyncWebSocket.js';
+import type { WsTransport } from '../transaction/transport/wsTransport.js';
+import type { PresenceUpdate } from './SyncWebSocket.js';
 import type {
   Activity,
   Peer,
   PresenceStream,
   PresenceTarget,
-} from '../types/streams.js';
-import { asyncIteratorFrom } from '../utils/asyncIterator.js';
-import { participantKindFromWire } from '../coordination/schema.js';
+} from '../transaction/types/streams.js';
+
+import { asyncIteratorFrom } from '../transaction/utils/asyncIterator.js';
+import { participantKindFromWire } from '../transaction/coordination/schema.js';
+import { isTargetTuple, subTarget, wireTarget } from '../transaction/coordination/index.js';
+import type { ParticipantKind } from '../transaction/types/participant.js';
+
+/**
+ * The wire capability the presence stream actually uses: subscribe to typed
+ * inbound frames, check liveness, and send outbound frames. The duplex
+ * `WsTransport` satisfies it — the same port shape the claim stream depends
+ * on — so the stream can attach to whatever connection the host built,
+ * without naming the engine's subclass.
+ */
+export type PresenceTransport = Pick<WsTransport, 'subscribe' | 'isConnected' | 'send'>;
 
 export interface PresenceStreamConfig {
   /** Identity used to filter our own echoed frames out of `others`. */
@@ -50,16 +63,32 @@ export interface PresenceStreamConfig {
 export interface AttachablePresenceStream extends PresenceStream {
   /** Wire the stream to a now-ready transport. Calls before this are
    *  buffered (self mutations only — no wire send). Idempotent. */
-  attach(transport: SyncWebSocket): void;
+  attach(transport: PresenceTransport): void;
+  /**
+   * Seeds the participant identity once the host resolves it. The stream can
+   * be built before identity is known — a hosted client learns who it is
+   * from its credential's scope during connect — and until then the
+   * construction-time values (possibly empty) would leave the `self` entry
+   * blank and let the participant's own echoed frames into `others`. Updates
+   * the `self` entry in place, so held references see the resolved identity.
+   */
+  setParticipant(participant: {
+    id: string;
+    kind?: ParticipantKind;
+    syncGroups?: readonly string[];
+  }): void;
   /** Tear down listeners. Stream object stays usable as a no-op. */
   dispose(): void;
 }
 
 export function createPresenceStream(
   config: PresenceStreamConfig,
-  transport: SyncWebSocket | null = null,
+  transport: PresenceTransport | null = null,
 ): AttachablePresenceStream {
-  const { participantId, label, syncGroups, isAgent = false } = config;
+  const { label, syncGroups, isAgent = false } = config;
+  // Mutable: the host seeds the resolved identity via `setParticipant` once
+  // it is known; the own-echo filter always reads the current value.
+  let participantId = config.participantId;
 
   // ── Self ─────────────────────────────────────────────────────────
   const self: Peer = {
@@ -88,10 +117,10 @@ export function createPresenceStream(
   };
 
   // ── Wire wiring ──────────────────────────────────────────────────
-  let attached: SyncWebSocket | null = null;
+  let attached: PresenceTransport | null = null;
   const unsubs: (() => void)[] = [];
 
-  function attach(t: SyncWebSocket): void {
+  function attach(t: PresenceTransport): void {
     if (attached) return; // idempotent
     attached = t;
 
@@ -112,7 +141,7 @@ export function createPresenceStream(
     // (userId / isAgent / timestamp); translate them into the shape this
     // stream exposes (participantId / participantKind / lastActive).
     unsubs.push(
-      t.subscribe('presence_update', (event: PresenceUpdateEvent) => {
+      t.subscribe('presence_update', (event: PresenceUpdate) => {
         if (event.userId === participantId) return; // own echo
         if (!event.userId) return;
 
@@ -120,9 +149,11 @@ export function createPresenceStream(
           case 'leave':
             if (othersById.delete(event.userId)) notifyListeners();
             return;
+          // No `undefined` arm: every site that builds a presence frame stamps
+          // `kind`, and the schema now says so, so an unlabelled frame is not a
+          // shape the transport can hand us.
           case 'enter':
-          case 'update':
-          case undefined: {
+          case 'update': {
             const entry: Peer = {
               participantKind: participantKindFromWire(
                 event.participantKind,
@@ -132,14 +163,12 @@ export function createPresenceStream(
               syncGroups: event.syncGroups ?? [],
               activity: event.activity
                 ? {
-                    entityType: event.activity.entityType,
-                    entityId: event.activity.entityId,
-                    path: event.activity.path,
-                    range: event.activity.range,
-                    field: event.activity.field,
-                    meta: event.activity.meta,
+                    ...wireTarget(event.activity),
+                    ...subTarget(event.activity),
                     action: event.activity.action,
-                    detail: event.activity.detail,
+                    ...(event.activity.detail !== undefined
+                      ? { detail: event.activity.detail }
+                      : {}),
                   }
                 : { entityType: 'Unknown', entityId: '', action: event.status },
               lastActive: event.timestamp
@@ -179,24 +208,12 @@ export function createPresenceStream(
   }
 
   function resolveTarget(target: PresenceTarget): Activity {
-    if (Array.isArray(target)) {
+    if (isTargetTuple(target)) {
       return { entityType: target[0], entityId: target[1], action: 'unknown' };
     }
-    const obj = target as {
-      type: string;
-      id: string;
-      path?: string;
-      range?: Activity['range'];
-      field?: string;
-      meta?: Activity['meta'];
-    };
     return {
-      entityType: obj.type,
-      entityId: obj.id,
-      path: obj.path,
-      range: obj.range,
-      field: obj.field,
-      meta: obj.meta,
+      ...wireTarget(target),
+      ...subTarget(target),
       action: 'unknown',
     };
   }
@@ -239,6 +256,17 @@ export function createPresenceStream(
       );
     },
     attach,
+    setParticipant(participant): void {
+      participantId = participant.id;
+      const writable = self as {
+        participantId: string;
+        participantKind: Peer['participantKind'];
+        syncGroups: readonly string[];
+      };
+      writable.participantId = participant.id;
+      if (participant.kind) writable.participantKind = participant.kind;
+      if (participant.syncGroups) writable.syncGroups = [...participant.syncGroups];
+    },
     dispose(): void {
       for (const off of unsubs) off();
       unsubs.length = 0;

@@ -25,10 +25,10 @@
 export { z } from 'zod';
 
 // Field helpers (optional convenience wrappers around Zod)
-export { field, indexed, getFieldMeta, type FieldBuilder, type FieldMeta } from './field.js';
+export { field, indexed, getFieldMeta, type FieldBuilder, type FieldMeta } from '../transaction/schema/field.js';
 
 // Relation builders
-export { relation, type RelationDef, type RelationType } from './relation.js';
+export { relation, type RelationDef, type RelationType } from '../transaction/schema/relation.js';
 
 // Tenancy — the single source of truth for how a model's rows are tenant-scoped.
 export {
@@ -42,7 +42,7 @@ export {
   type Tenancy,
   type ScopedViaRef,
   type PolicyInput,
-} from './tenancy.js';
+} from '../transaction/schema/tenancy.js';
 
 // Model residency — which database a model's rows live in (`tenant` can be a
 // customer's own database, `control` is Ablo's). A sibling axis to `tenancy`.
@@ -50,33 +50,21 @@ export {
   residencySchema,
   DEFAULT_RESIDENCY,
   type ModelResidency,
-  // Deliberate back-compat re-export of the deprecated aliases:
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  planeSchema,
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  DEFAULT_PLANE,
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  type SchemaPlane,
-} from './residency.js';
+} from '../transaction/schema/residency.js';
 
 // The stored `sync_deltas` row, described as Zod schemas grouped by subsystem and by
 // which database the columns live in.
 export {
   syncDeltaCoreSchema,
   deltaAttributionSchema,
-  deltaProvenanceSchema,
   syncDeltaRowSchema,
   participantKindSchema,
   confirmationStateSchema,
   backfillProvenanceSchema,
   DELTA_DATA_CLASSIFICATION,
   DELTA_PHYSICAL_STORAGE,
-  // Deliberate back-compat re-export; physical storage is the precise name.
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  DELTA_RESIDENCY,
   type SyncDeltaCore,
   type DeltaAttribution,
-  type DeltaProvenance,
   type SyncDeltaRow,
   type ParticipantKind,
   type ConfirmationState,
@@ -99,20 +87,25 @@ export {
   type SyncDeltaWireCore,
   type ClientSyncDelta,
   type ServerSyncDelta,
-} from '../wire/delta.js';
+} from '../transaction/wire/delta.js';
 
 // Model builder
 export {
   model,
   scopeKindOf,
+  // Both meanings: the value a tool enumerates to learn the strategies, and the
+  // type a `load` option is checked against. `loadsAtBootstrap` is the one
+  // predicate both the client subscription and the server payload ask.
+  LoadStrategy,
+  DEFAULT_LOAD_STRATEGY,
+  loadsAtBootstrap,
   type ModelDef,
   type ModelOptions,
-  type LoadStrategy,
   type PersistOptions,
   type RelationRecord,
   type GrantsRef,
   type ConflictAxis,
-} from './model.js';
+} from '../transaction/schema/model.js';
 
 // Coordination authoring helpers for the `conflict` axis — composable disposition
 // functions plus a combinator that merges them.
@@ -143,7 +136,6 @@ export {
   type SchemaRecord,
   type Model,
   type Row,
-  type InferModel,
   type InferCreate,
   type InferRow,
   type InferModelNames,
@@ -187,7 +179,7 @@ export {
   type SessionSettings,
   type SessionSettingSource,
   RESERVED_SESSION_SETTINGS,
-} from './schema.js';
+} from '../transaction/schema/schema.js';
 
 // Schema ⇄ JSON — serialize a schema for transport and rebuild it on the far side.
 export {
@@ -196,6 +188,7 @@ export {
   toSchemaJSON,
   fromSchemaJSON,
   schemaHash,
+  modelHash,
   type SchemaJSON,
   type ModelJSON,
   type RelationJSON,
@@ -267,4 +260,8 @@ export {
   type InferQueryResult,
 } from './queries.js';
 
-export { schemaToOpenApi, type SchemaToOpenApiOptions } from './openapi.js';
+// The OpenAPI generator describes the language-agnostic `/v1` surface — the
+// primitive itself, which a Python or Go caller consumes with no TypeScript
+// anywhere — so it lives in the settlement core (ADR 0016). Re-exported here so
+// the `@abloatai/ablo/schema` import path keeps resolving.
+export { abloOpenApi, schemaToOpenApi, type SchemaToOpenApiOptions } from '../transaction/schema/openapi.js';

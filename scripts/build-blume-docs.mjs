@@ -14,14 +14,15 @@
  * hand-written pages without a `.md` source are also left untouched.
  *
  * Transform per file: drop the leading H1 (Blume renders the frontmatter title as
- * the page heading), rewrite Mintlify callout components (`<Note>`, `<Warning>`,
+ * the page heading), lift the promise line beneath it into `description`
+ * frontmatter (see `liftPromise`), rewrite Mintlify callout components (`<Note>`, `<Warning>`,
  * `<Tip>`, `<Info>`) to Blume's `:::directive` syntax, escape MDX-hostile prose
  * (bare `<`/`{`/`}` outside code -- Blume compiles `.mdx` through Astro/MDX, which
  * reads those as JSX), and prepend frontmatter + a "do not edit" banner. Run with
  * `--check` to fail when the on-disk `.mdx` is stale (used by `lint:docs-site`).
  */
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -51,7 +52,9 @@ const TITLES = {
   audit: 'Audit log',
   'data-sources': 'Connect Your Database',
   'operating-on-your-database': 'Operating on Your Database',
+  'session-settings': 'Session Settings',
   'integration-guide': 'Integration Guide',
+  deployment: 'Deployment',
   index: 'Ablo Docs',
   'api-keys': 'API Keys',
   mcp: 'Model Context Protocol',
@@ -64,15 +67,86 @@ const TITLES = {
   webhooks: 'Webhooks',
   projects: 'Projects',
   'agent-messaging': 'Agent Messaging',
+  debugging: 'Debugging & Logs',
+  idempotency: 'Idempotency',
+  // Examples. These were hand-written site pages that drifted from the package
+  // docs into a second, divergent copy -- one teaching a `claim.state` field
+  // (`actorKind`) that exists only as a database column, another declaring
+  // SDK-provided fields on a model. Generated from the package docs now, so
+  // there is one definition site and the drift cannot recur.
+  'examples/agent-human': 'Agent + Human',
+  'examples/ai-sdk-tool': 'AI SDK Tool',
+  'examples/existing-python-backend': 'Existing Python Backend',
+  'examples/nextjs': 'Next.js Example',
+  'examples/scoped-agent': 'Scoped Agent',
+  'examples/server-agent': 'Server Agent',
 };
 
-// Optional `description` frontmatter, preserved for pages that had one.
-const DESCRIPTIONS = {
-  sessions:
-    'Short-lived, scoped credentials your backend mints -- one resource for both end-user browser sessions and scoped agents.',
-  projects:
-    'One organization, many apps -- each project has its own schema, its own data planes, and its own keys.',
+// Sidebar icon per slug -- a Lucide name, resolved to inline SVG at build time.
+// Every generated page carries one so the sidebar reads as a set rather than a
+// list with gaps; a slug missing here simply renders without an icon.
+const ICONS = {
+  index: 'book-open',
+  quickstart: 'rocket',
+  'integration-guide': 'plug',
+  deployment: 'ship',
+  cli: 'terminal',
+  identity: 'fingerprint',
+  groups: 'share-2',
+  coordination: 'handshake',
+  'concurrency-convention': 'git-merge',
+  'interaction-model': 'mouse-pointer-click',
+  'schema-contract': 'braces',
+  guarantees: 'shield-check',
+  'client-behavior': 'monitor',
+  projects: 'boxes',
+  'api-keys': 'key-round',
+  sessions: 'id-card',
+  audit: 'scroll-text',
+  'data-sources': 'database',
+  agents: 'bot',
+  'agent-messaging': 'messages-square',
+  webhooks: 'webhook',
+  react: 'atom',
+  mcp: 'plug-zap',
+  api: 'code-xml',
+  migration: 'history',
+  'how-it-works': 'workflow',
+  'operating-on-your-database': 'database-zap',
+  'session-settings': 'lock-keyhole',
+  debugging: 'bug',
+  idempotency: 'repeat',
+  'examples/agent-human': 'users',
+  'examples/ai-sdk-tool': 'wrench',
+  'examples/existing-python-backend': 'server-cog',
+  'examples/nextjs': 'triangle',
+  'examples/scoped-agent': 'key-round',
+  'examples/server-agent': 'server',
 };
+
+/**
+ * Lift a page's promise line out of the markdown body into `description`
+ * frontmatter.
+ *
+ * The convention: an H1 is followed by a one-paragraph blockquote stating what
+ * the page is for. That blockquote IS the description -- it has one definition
+ * site (the source doc, which also ships in the npm tarball and reads correctly
+ * as plain markdown), and the frontmatter derives from it. A page without one
+ * simply renders no description.
+ *
+ * Returns `[description, remainingBody]`.
+ */
+function liftPromise(body) {
+  const match = body.match(/^((?:>.*\n)+)\n/);
+  if (!match) return ['', body];
+  const description = match[1]
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.replace(/^>\s?/, ''))
+    .join(' ')
+    .trim();
+  return [description, body.slice(match[0].length)];
+}
 
 // Mintlify callout components -> Blume block directives. The source docs author
 // callouts as block-level tags on their own lines (`<Note>` ... `</Note>`), so a
@@ -115,8 +189,11 @@ function transform(md, slug) {
     return ` FENCE${fences.length - 1} `;
   });
 
-  // 2. Drop the leading H1 -- the frontmatter title becomes the page heading.
+  // 2. Drop the leading H1 -- the frontmatter title becomes the page heading --
+  // then lift the promise line that follows it into `description`.
   body = body.replace(/^\s*#\s+.*\n+/, '');
+  const [description, rest] = liftPromise(body);
+  body = rest;
 
   // 2b. Link rewriting for the site.
   const GH = 'https://github.com/Abloatai/ablo/blob/main';
@@ -149,8 +226,9 @@ function transform(md, slug) {
   body = body.replace(/ FENCE(\d+) /g, (_, i) => fences[Number(i)]);
 
   const title = TITLES[slug];
-  const descLine = DESCRIPTIONS[slug] ? `description: ${JSON.stringify(DESCRIPTIONS[slug])}\n` : '';
-  const frontmatter = `---\ntitle: ${JSON.stringify(title)}\n${descLine}---\n\n`;
+  const descLine = description ? `description: ${JSON.stringify(description)}\n` : '';
+  const iconLine = ICONS[slug] ? `sidebar:\n  icon: ${ICONS[slug]}\n` : '';
+  const frontmatter = `---\ntitle: ${JSON.stringify(title)}\n${descLine}${iconLine}---\n\n`;
   return frontmatter + body.replace(/^\n+/, '').replace(/\s+$/, '') + '\n';
 }
 
@@ -219,6 +297,15 @@ function changelogCategory(body) {
   return 'Fixes';
 }
 
+/** How many of the newest changelog entries stay in the agent-facing files
+ *  (`llms.txt`/`llms-full.txt`, search). Recent entries carry current-truth
+ *  migration guidance an agent needs; older ones announce APIs that have since
+ *  changed shape or left the SDK, and an agent reading the full history can
+ *  meet a feature announcement before its removal note. Older entries stay on
+ *  the site (`/changelog` renders every page) — `noindex` only keeps them out
+ *  of the agent files and search. */
+const CHANGELOG_AGENT_WINDOW = 12;
+
 /** One Blume changelog page per `## X.Y.Z` section of CHANGELOG.md. Each page is
  *  `type: changelog`, and Blume assembles them into the `/changelog` timeline. */
 function buildChangelogPages() {
@@ -227,7 +314,7 @@ function buildChangelogPages() {
   return raw
     .split(/^## (?=\d+\.\d+\.\d+)/m)
     .slice(1)
-    .map((part) => {
+    .map((part, index) => {
       const nl = part.indexOf('\n');
       const version = part.slice(0, nl).trim().replace(/\s*\(.*\)$/, '');
       // CHANGELOG.md uses the internal package name; the public site uses the
@@ -237,19 +324,71 @@ function buildChangelogPages() {
         .trim();
       const category = changelogCategory(sectionBody);
       const dateLine = dates[version] ? `date: ${dates[version]}\n` : '';
+      // CHANGELOG.md is newest-first, so the index is the entry's age.
+      const noindexLine = index >= CHANGELOG_AGENT_WINDOW ? 'noindex: true\n' : '';
       const frontmatter =
         `---\n` +
         `title: "v${version}"\n` +
         `type: changelog\n` +
         dateLine +
+        noindexLine +
         `changelog:\n  version: "${version}"\n  category: "${category}"\n` +
         `---\n\n`;
       return { version, content: `${frontmatter}${sectionBody}\n` };
     });
 }
 
+/**
+ * Every site route a link may target: the pages generated here, the pages the
+ * site tree carries under their own pipelines (`errors`, `examples/`, `mcp/`),
+ * and the two routes mounted by `blume.config.ts`.
+ */
+function siteRoutes() {
+  const routes = new Set(Object.keys(TITLES).map((slug) => `/${slug}`));
+  routes.add('/').add('/changelog').add('/api-reference');
+  const walk = (dir, prefix) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) walk(resolve(dir, entry.name), `${prefix}${entry.name}/`);
+      else if (/\.mdx?$/.test(entry.name)) routes.add(`${prefix}${entry.name.replace(/\.mdx?$/, '')}`);
+    }
+  };
+  walk(OUT, '/');
+  return routes;
+}
+
+/**
+ * A component's `href` is a JSX attribute, so the markdown link rewriter above
+ * never sees it -- `<Card href="/coordination">` survives a page rename as a
+ * silent 404. Pin every one to a route that exists.
+ */
+function validateHrefs(mdx, label, routes) {
+  const bad = [...mdx.matchAll(/href="(\/[^"#]*)(?:#[^"]*)?"/g)]
+    .map(([, href]) => href)
+    .filter((href) => !routes.has(href.replace(/\/$/, '') || '/'));
+  if (bad.length) throw new Error(`${label}: href targets no site page: ${bad.join(', ')}`);
+}
+
+/**
+ * The product line has ONE definition site: the promise line under the H1 of
+ * `docs/index.md`. The site config derives it from the generated frontmatter;
+ * `llms.txt` opens with the same line as a sentence. Neither may drift.
+ */
+function validateTagline(promise) {
+  if (!promise) throw new Error('docs/index.md has no promise line under its H1');
+  const expected = `Ablo is ${promise[0].toLowerCase()}${promise.slice(1)}`;
+  if (!readFileSync(resolve(packageRoot, 'llms.txt'), 'utf8').includes(expected)) {
+    throw new Error(
+      `llms.txt does not carry the landing page's promise line.\n` +
+        `       expected: ${expected}\n` +
+        `       Edit docs/index.md if the line itself should change; llms.txt follows it.`,
+    );
+  }
+}
+
 const check = process.argv.includes('--check');
+const routes = siteRoutes();
 const stale = [];
+let landingPromise = '';
 let count = 0;
 
 for (const slug of Object.keys(TITLES)) {
@@ -262,6 +401,11 @@ for (const slug of Object.keys(TITLES)) {
   }
   const out = transform(md, slug);
   validate(out, `${slug}.mdx`);
+  validateHrefs(out, `${slug}.mdx`, routes);
+  if (slug === 'index') {
+    const described = out.match(/^description: (".*")$/m);
+    landingPromise = described ? JSON.parse(described[1]) : '';
+  }
   const outPath = resolve(OUT, `${slug}.mdx`);
   if (check) {
     let current = '';
@@ -272,10 +416,14 @@ for (const slug of Object.keys(TITLES)) {
     }
     if (current !== out) stale.push(slug);
   } else {
+    // Nested slugs (`examples/…`) need their folder before the first write.
+    mkdirSync(resolve(outPath, '..'), { recursive: true });
     writeFileSync(outPath, out);
   }
   count++;
 }
+
+validateTagline(landingPromise);
 
 // Changelog: one `type: changelog` page per release, assembled into the timeline.
 const changelogPages = buildChangelogPages();

@@ -26,7 +26,7 @@
 
 import type { SyncStoreContract } from '../react/context.js';
 import type { InverseOp } from './inverseOp.js';
-import { deepEqual } from '../utils/json.js';
+import { deepEqual } from '../transaction/utils/json.js';
 
 /**
  * How undo and redo treat a field that a collaborator changed after your

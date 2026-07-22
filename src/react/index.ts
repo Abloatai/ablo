@@ -21,9 +21,9 @@
  *
  * # Data hooks
  *
- *   useAblo((ablo) => ablo.tasks.get(id))  — subscribe to a local snapshot (the main read API)
+ *   useAblo((ablo) => ablo.tasks.local.retrieve(id))  — subscribe to a local snapshot (the main read API)
  *   useAblo()                              — the typed client, for callbacks and effects:
- *                                            synchronous local reads (`ablo.<model>.get`/`getAll`),
+ *                                            synchronous local reads (`ablo.<model>.local.retrieve`/`local.list`),
  *                                            async server reads (`retrieve`/`list`),
  *                                            and writes (`create`/`update`/`delete`)
  *   useMutators(defs, opts?)               — define custom mutators
@@ -49,8 +49,9 @@ export type {
   DefaultSyncShape,
   ResolveSchema,
   ResolveUserMeta,
+  ResolveClaimMeta,
   ResolveModelKey,
-} from '../types/global.js';
+} from '../transaction/types/global.js';
 
 // ── Umbrella provider + lifecycle hooks ────────────────────────────
 export {
@@ -64,7 +65,6 @@ export {
   type ParticipantStatus,
   type UseJoinOptions,
   type UseJoinReturn,
-  type MeshParticipantStatus,
 } from './AbloProvider.js';
 
 export {
@@ -118,4 +118,4 @@ export {
 } from './useAblo.js';
 
 // ── ModelScope re-export ───────────────────────────────────────────
-export { ModelScope } from '../types/index.js';
+export { ModelScope } from '../transaction/types/index.js';

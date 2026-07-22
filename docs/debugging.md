@@ -1,6 +1,8 @@
 # Debugging & Logs
 
-By default the SDK is quiet — it logs only warnings and errors. When you're building a human + agent flow and want to *see* the coordination happen (who claimed what, who's waiting in line, who got preempted), turn on Ablo's diagnostic logging. Every line is prefixed `[Ablo]` so it's obvious which output is ours in a console full of other tools.
+> Watch claims, queueing, and grants as they happen while you build.
+
+By default the SDK is quiet — it logs only warnings and errors. When you're building a multi-agent flow and want to *see* the coordination happen (who claimed what, who's waiting in line, who got preempted), turn on Ablo's diagnostic logging. Every line is prefixed `[Ablo]` so it's obvious which output is ours in a console full of other tools.
 
 ## Turn it on
 
@@ -39,7 +41,7 @@ Precedence: an explicit `logLevel` wins, then `debug: true` (⇒ `debug`), then 
 
 ## What you'll see — the coordination trace
 
-These lines (all at `info`) let you watch the human + agent handover you built:
+These lines (all at `info`) let you watch the handover you built:
 
 ```
 [Ablo] claim: requesting documents:doc_42 for "editing" (will queue if contended)
@@ -61,7 +63,7 @@ Read it as the lifecycle of one claim:
 
 ## Where the logs run
 
-The coordination trace and the proactive credential refresh run **in the browser** (and any client that holds a live socket) — that's where the human + agent activity is. Server-side code that mints credentials or does one-shot reads won't emit the trace; it has no live session to narrate.
+The coordination trace and the proactive credential refresh run **in the browser** (and any client that holds a live socket) — that's where the live coordination activity is. Server-side code that mints credentials or does one-shot reads won't emit the trace; it has no live session to narrate.
 
 ## Bring your own logger
 

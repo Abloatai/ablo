@@ -1,7 +1,7 @@
 import { Model, modelAsRow } from '../Model.js';
-import { AbloValidationError } from '../errors.js';
-import type { Schema, InferModel, InferCreate } from '../schema/schema.js';
-import type { ModelDef } from '../schema/model.js';
+import { AbloValidationError } from '../transaction/errors.js';
+import type { Schema, InferModel, InferCreate } from '../transaction/schema/schema.js';
+import type { ModelDef } from '../transaction/schema/model.js';
 // Type-only — `SyncStoreContract` is the store interface; importing the type
 // does not pull the React `context` module's runtime.
 import type { SyncStoreContract } from '../react/context.js';
@@ -11,10 +11,10 @@ import type { SyncStoreContract } from '../react/context.js';
  * overloaded: pass a single row to act on one entity, or an array to act on
  * many within the same synchronous tick. An array call stages every entry
  * together through `Promise.all`, so the microtask coalescer in
- * `TransactionQueue` collapses the whole batch into one commit on the wire.
+ * `MutationQueue` collapses the whole batch into one commit on the wire.
  *
  * These are plain imperative actions with no React dependency. The transaction
- * system (`Transaction` and `RecordingTransaction`) and `BaseSyncedStore` build
+ * system (`Transaction` and `RecordingMutation`) and `BaseSyncedStore` build
  * on them, and application code reaches them through `ablo.<model>.create`,
  * `ablo.<model>.update`, and `ablo.<model>.delete`.
  */

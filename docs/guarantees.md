@@ -1,7 +1,9 @@
 # Guarantees
 
-When an Ablo write succeeds, the server has accepted it — and when two people or
-agents touch the same row, Ablo coordinates them instead of letting one silently
+> Exactly what a confirmed write, a rejected stale write, and a held claim each promise.
+
+When an Ablo write succeeds, the server has accepted it — and when two agents
+touch the same row, Ablo coordinates them instead of letting one silently
 overwrite the other. This page is the precise list of what you can count on:
 confirmed writes, stale-write protection, claims, and the audit trail behind
 every change.

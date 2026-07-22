@@ -1,29 +1,30 @@
 /**
- * Assembles a ready-to-use {@link SyncEngineContext} for tests. The context
+ * Assembles a ready-to-use {@link RuntimeContext} for tests. The context
  * bundles every dependency the engine needs — logger, network monitor,
  * mutation executor, and configuration — so a test can start the engine
  * without a real backend. {@link createTestContext} is the entry point: it
- * wires the mocks, installs the context globally through {@link initSyncEngine},
+ * wires the mocks, installs the context globally through {@link initRuntime},
  * and returns handles to each mock for assertions.
  */
 
-import type { SyncEngineContext } from '../../SyncEngineContext.js';
+import type { RuntimeContext } from '../../RuntimeContext.js';
 import {
   noopLogger,
   noopObservability,
   noopAnalytics,
   defaultSessionErrorDetector,
   emptyConfig,
-} from '../../SyncEngineContext.js';
+} from '../../RuntimeContext.js';
 import type {
-  SyncLogger,
-  SyncObservabilityProvider,
+  Logger,
+  ObservabilityProvider,
   SessionErrorDetector,
-  SyncEngineConfig,
+  RuntimeConfig,
 } from '../../interfaces/index.js';
-import { initSyncEngine, resetSyncEngine } from '../../context.js';
+import { initRuntime, resetRuntime } from '../../context.js';
 import {
   ModelRegistry,
+  getActiveRegistry,
   setActiveRegistry,
   hasActiveRegistry,
   clearActiveRegistry,
@@ -34,22 +35,22 @@ import { MockNetworkMonitor } from './MockNetworkMonitor.js';
 
 export interface TestContextOptions {
   /** Replaces the default no-op logger. */
-  logger?: SyncLogger;
+  logger?: Logger;
   /** Replaces the default no-op observability provider. */
-  observability?: SyncObservabilityProvider;
+  observability?: ObservabilityProvider;
   /** Replaces the detector that decides whether an error means the session has expired. */
   sessionErrorDetector?: SessionErrorDetector;
   /** Options forwarded to the {@link MockMutationExecutor} that the context creates. */
   mutationExecutorOptions?: ConstructorParameters<typeof MockMutationExecutor>[0];
-  /** A partial {@link SyncEngineConfig} merged over the defaults. */
-  config?: Partial<SyncEngineConfig>;
+  /** A partial {@link RuntimeConfig} merged over the defaults. */
+  config?: Partial<RuntimeConfig>;
   /** Starts the network monitor offline. Defaults to online. */
   startOffline?: boolean;
 }
 
 export interface TestContextResult {
   /** The assembled context that {@link createTestContext} installed globally. */
-  context: SyncEngineContext;
+  context: RuntimeContext;
 
   /** Handles to the underlying mocks, so tests can drive them and assert on them. */
   mocks: {
@@ -62,8 +63,8 @@ export interface TestContextResult {
 }
 
 /**
- * Builds a {@link SyncEngineContext} with every mock pre-wired and installs it
- * globally through {@link initSyncEngine}, so code under test reaches the engine
+ * Builds a {@link RuntimeContext} with every mock pre-wired and installs it
+ * globally through {@link initRuntime}, so code under test reaches the engine
  * the same way it would in production. Returns the context, the mock handles,
  * and a cleanup function to call when the test finishes.
  *
@@ -78,7 +79,7 @@ export function createTestContext(options: TestContextOptions = {}): TestContext
   const mutationExecutor = new MockMutationExecutor(options.mutationExecutorOptions);
   const networkMonitor = new MockNetworkMonitor(!options.startOffline);
 
-  const config: SyncEngineConfig = {
+  const config: RuntimeConfig = {
     ...emptyConfig,
     ...options.config,
     // Merge maps/sets properly if overrides provided
@@ -86,7 +87,8 @@ export function createTestContext(options: TestContextOptions = {}): TestContext
       options.config?.modelCreatePriority ?? emptyConfig.modelCreatePriority,
   };
 
-  const context: SyncEngineContext = {
+  const context: RuntimeContext = {
+    getModelMetadata: (name) => (hasActiveRegistry() ? getActiveRegistry().getMetadata(name) : undefined),
     logger: options.logger ?? noopLogger,
     observability: options.observability ?? noopObservability,
     analytics: noopAnalytics,
@@ -96,7 +98,7 @@ export function createTestContext(options: TestContextOptions = {}): TestContext
     config,
   };
 
-  initSyncEngine(context);
+  initRuntime(context);
 
   // Bootstrap a default ModelRegistry with test models if none is active.
   // Tests that manage their own registry call setActiveRegistry before this.
@@ -114,7 +116,7 @@ export function createTestContext(options: TestContextOptions = {}): TestContext
       networkMonitor,
     },
     cleanup: () => {
-      resetSyncEngine();
+      resetRuntime();
       // Leave the active ModelRegistry in place on purpose. Async callbacks
       // from in-flight transactions can call Model.toJSON() after a test's
       // teardown has run; keeping the default registry available keeps those

@@ -1,17 +1,26 @@
 ---
 title: "Existing Python Backend"
+description: "Add agent coordination to a Python API server without replacing it."
+sidebar:
+  icon: server-cog
 ---
 
+Put Ablo in front of the records several agents (or the people alongside them)
+edit at once and you get two things at no cost to your stack: every edit fans out
+live to everyone watching, and agents and people write through one shared
+contract. The goal is not to replace the backend — your Python service and
+database stay the source of truth, and Ablo coordinates the writes into them. You stop calling your endpoint
+directly; you call Ablo, Ablo calls your endpoint, and Ablo pushes the result
+back out to every browser and agent on that record.
+
 Use this path when a product already has a Python API server and every button
-currently calls an application endpoint.
+currently calls an application endpoint. It applies to any API-backed app, not
+only Python — a YC company's existing dashboard can keep its current
+endpoint/service/database shape and migrate one coordinated model at a time.
 
-The goal is not to replace the backend. Keep the Python service layer and
-database as the source of truth. Add Ablo as the shared write path for records
-that need multiplayer now and agent-safe writes later.
-
-This also applies to any API-backed app, not only Python. A product like a YC
-company's existing dashboard can keep its current endpoint/service/database
-shape and migrate one coordinated resource at a time.
+Here is the full path a button takes. After your Python service commits the
+change, Ablo pushes it live to every other browser and agent watching that
+record (the "realtime fanout" step at the bottom):
 
 ```txt
 Browser UI
@@ -28,23 +37,21 @@ Browser UI
 Create a schema for the records that need realtime coordination.
 
 ```ts
-// web/ablo.schema.ts
+// web/ablo/schema.ts
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
 export const schema = defineSchema({
-  tasks: model({
-    id: z.string(),
-    title: z.string(),
-    status: z.enum(['todo', 'doing', 'done']),
-    updatedAt: z.string(),
+  weatherReports: model({
+    location: z.string(),
+    status: z.enum(['pending', 'ready']),
   }),
 });
 ```
 
 ```ts
-// web/ablo.ts
+// web/ablo.ts — SERVER-ONLY client (holds the sk_ key; never imported in the browser).
 import Ablo from '@abloatai/ablo';
-import { schema } from './ablo.schema';
+import { schema } from './ablo/schema';
 
 export const ablo = Ablo({
   schema,
@@ -52,8 +59,10 @@ export const ablo = Ablo({
 });
 ```
 
-Mount the React provider near the app root so client components can subscribe to
-model resources without importing server credentials.
+Mount the React provider near the app root. Build the browser client first —
+with an `apiKey` resolver (an async `() => Promise<string | null>`) that fetches
+the short-lived session token your backend minted, instead of carrying the
+secret key — then pass it to the provider via `client`.
 
 ```tsx
 // web/app/providers.tsx
@@ -61,10 +70,10 @@ model resources without importing server credentials.
 
 import Ablo from '@abloatai/ablo';
 import { AbloProvider } from '@abloatai/ablo/react';
-import { schema } from '@/ablo.schema';
+import { schema } from '@/ablo/schema';
 
-// authEndpoint points at the route that mints a per-user ek_ — the browser
-// holds no secret. Build the client once at module scope, not per render.
+// Browser client: no secret key — `authEndpoint` points at the session route
+// your server exposes (below); the SDK fetches and refreshes the token.
 const ablo = Ablo({
   schema,
   authEndpoint: '/api/ablo-session',
@@ -75,32 +84,52 @@ export function Providers({ children }: { children: React.ReactNode }) {
 }
 ```
 
+The session route mints with the server client that holds the `sk_` key — the
+browser only ever sees the short-lived token:
+
+```ts
+// web/app/api/ablo-session/route.ts
+import { ablo } from '@/ablo';
+
+export const runtime = 'nodejs';
+
+export async function POST() {
+  const userId = await currentUserId(); // your auth
+  const { token } = await ablo.sessions.create({ user: { id: userId } });
+  return Response.json({ token });
+}
+```
+
 ## 2. Add Live Reads In The UI
 
 Keep the first render backed by the existing Python endpoint. After that,
-subscribe to the same model resource Ablo writes through.
+subscribe to the same model client Ablo writes through.
 
 ```tsx
 'use client';
 
 import { useAblo } from '@abloatai/ablo/react';
 
-export function TaskRow({ task: serverTask }: { task: Task }) {
-  const task = useAblo((ablo) => ablo.tasks.get(serverTask.id)) ?? serverTask;
-  const holder = useAblo((ablo) => ablo.tasks.claim.state({ id: serverTask.id }));
-  const busy = Boolean(holder);
+export function ReportRow({
+  report: serverReport,
+}: {
+  report: { id: string; location: string; status: string };
+}) {
+  const report = useAblo((ablo) => ablo.weatherReports.local.retrieve(serverReport.id)) ?? serverReport;
+  const active = useAblo((ablo) => ablo.weatherReports.claim.state({ id: serverReport.id }));
+  const claimed = Boolean(active);
 
   return (
-    <button disabled={busy || task.status === 'done'}>
-      {busy ? 'Someone is editing' : task.title}
+    <button disabled={claimed || report.status === 'ready'}>
+      {claimed ? 'Someone is editing' : report.location}
     </button>
   );
 }
 ```
 
-The selector reads through the synchronous `get` / `claim.state` reads (never
-the async `retrieve`/`list`), so React uses the same model resource as writes
-and agents.
+No string model key is needed in the first example. Because the selector reads
+straight from `ablo.weatherReports`, your reads, your writes, and any agent all
+go through one client — so a live edit shows up here without extra wiring.
 
 ## 3. Add One Python Data Source Endpoint
 
@@ -129,7 +158,7 @@ import os
 import time
 from fastapi import APIRouter, HTTPException, Request
 
-from app.services.tasks import get_task, list_tasks, apply_task_operations
+from app.services.reports import get_report, list_reports, apply_report_operations
 
 router = APIRouter()
 
@@ -169,15 +198,15 @@ async def ablo_source(request: Request):
     body = json.loads(raw_body)
 
     if body["type"] == "load":
-        if body["model"] == "tasks":
-            return {"row": await get_task(body["id"])}
+        if body["model"] == "weatherReports":
+            return {"row": await get_report(body["id"])}
 
     if body["type"] == "list":
-        if body["model"] == "tasks":
-            return {"rows": await list_tasks(body.get("query", {}))}
+        if body["model"] == "weatherReports":
+            return {"rows": await list_reports(body.get("query", {}))}
 
     if body["type"] == "commit":
-        rows = await apply_task_operations(
+        rows = await apply_report_operations(
             operations=body["operations"],
             client_tx_id=body.get("clientTxId"),
             scope=body.get("scope", {}),
@@ -187,7 +216,7 @@ async def ablo_source(request: Request):
     raise HTTPException(status_code=400, detail="unsupported request")
 ```
 
-`apply_task_operations` should reuse the same transaction and validation logic
+`apply_report_operations` should reuse the same transaction and validation logic
 the existing Python endpoints already use. Dedupe by `clientTxId` so retries are
 safe.
 
@@ -202,20 +231,20 @@ Button -> Python endpoint -> service -> database
 Target button path:
 
 ```txt
-Button -> ablo.tasks.update(...)
+Button -> ablo.weatherReports.update(...)
 Ablo -> Python Data Source endpoint
 Python service -> database
 Ablo -> realtime fanout and receipt
 ```
 
-The app does not need a flag-day rewrite. Move one resource at a time.
+The app does not need a flag-day rewrite. Move one model at a time.
 
 ```ts
-const snap = ablo.snapshot({ tasks: taskId });
+const snap = ablo.snapshot({ weatherReports: reportId });
 
-await ablo.tasks.update({
-  id: taskId,
-  data: { status: 'done' },
+await ablo.weatherReports.update({
+  id: reportId,
+  data: { status: 'ready' },
   readAt: snap.stamp,
   onStale: 'reject',
   wait: 'confirmed',
@@ -223,7 +252,10 @@ await ablo.tasks.update({
 ```
 
 Use `readAt` and `onStale: 'reject'` for actions that depend on state the user
-or agent already saw.
+or agent already saw. If two people both click "mark ready" on a report one of
+them already finished, `onStale: 'reject'` makes the second write fail instead
+of silently clobbering — `readAt: snap.stamp` is the version the user actually
+saw, and the write is rejected if the row changed underneath them.
 
 ## 5. Report Direct Database Writes
 
@@ -246,17 +278,18 @@ and timestamp. If the change originated from an Ablo commit, include the same
 Agents use the same model API as the UI:
 
 ```ts
-const task = await ablo.tasks.retrieve({ id: taskId });
-const snap = ablo.snapshot({ tasks: taskId });
+const report = await ablo.weatherReports.retrieve({ id: reportId });
+const snap = ablo.snapshot({ weatherReports: reportId });
 
-await ablo.tasks.update({
-  id: taskId,
-  data: { status: 'done' },
+await ablo.weatherReports.update({
+  id: reportId,
+  data: { status: 'ready' },
   readAt: snap.stamp,
   onStale: 'reject',
   wait: 'confirmed',
 });
 ```
 
-That is the point of the migration: humans and agents share one write contract,
-while the Python backend remains the canonical business logic and database owner.
+Agents reach for the exact same calls the UI does — the same write contract
+stated at the top of this page. The Python backend keeps owning the business
+logic and the database; agents just become another safe writer in front of it.

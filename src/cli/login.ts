@@ -22,6 +22,9 @@
 import { spawn } from 'child_process';
 import pc from 'picocolors';
 import { intro, outro, note, spinner, log, select, isCancel, cancel } from '@clack/prompts';
+import { translateHttpError } from '../transaction/errors.js';
+import { provisionKeyResponseSchema, type ProvisionedKey } from '../transaction/wire/index.js';
+import { credentialCapability } from './credentialCapability';
 import {
   setProfileKeys,
   getActiveProject,
@@ -87,18 +90,9 @@ interface DeviceTokenResponse {
   error_description?: string;
 }
 
-interface ProvisionKey {
-  apiKey: string;
-  expiresAt?: string;
-}
-interface ProvisionResponse {
-  test: ProvisionKey;
-  live?: ProvisionKey;
-  organizationId?: string;
-  /** The project the keys were scoped to (null = the org-default). */
-  project?: { id: string; slug: string } | null;
-  error?: string;
-}
+// What the handoff answers with is defined once, in the wire module the route
+// building it reads too — see `provisionKeyResponseSchema`.
+type ProvisionKey = ProvisionedKey;
 
 /** Pull `--project <slug>` out of the argv (the only login flag). */
 function parseProjectFlag(argv: readonly string[]): string | undefined {
@@ -247,17 +241,52 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
     }),
   }).catch(() => null);
 
-  if (!provRes?.ok) {
+  if (!provRes) {
     s.stop('Could not provision a key.');
-    const reason = provRes ? ((await provRes.json().catch(() => ({}))) as ProvisionResponse).error : undefined;
-    if (reason) log.error(reason);
-    else if (provRes) log.error(`Key provisioning returned ${provRes.status} from ${DASHBOARD_URL}/api/cli/provision-key.`);
     log.error(
-      `The browser approval succeeded but the key handoff failed. Try again, or grab a ${pc.bold('sk_test_')} key from the dashboard and set ${pc.bold('ABLO_API_KEY')}.`,
+      `Could not reach ${DASHBOARD_URL} to finish the handoff. Check your connection and run \`ablo login\` again.`,
     );
     process.exit(1);
   }
-  const prov = (await provRes.json()) as ProvisionResponse;
+  if (!provRes.ok) {
+    s.stop('Could not provision a key.');
+    // The dashboard forwards the engine's error envelope untouched, so read it
+    // through the same translator every other transport uses rather than
+    // reaching for a field name — the envelope is flat (`message`/`code`), and
+    // a hand-picked key here would silently go quiet the moment it moved.
+    const err = translateHttpError(
+      provRes.status,
+      await provRes.json().catch(() => null),
+      provRes.headers.get('x-request-id') ?? undefined,
+    );
+    log.error(err.message);
+    if (err.code === 'entity_not_found' && targetProject) {
+      // The server names the organization it searched and what that
+      // organization holds, so the remaining question is only which of the two
+      // is wrong: the account that approved in the browser, or the slug.
+      log.error(
+        `If that isn't the account you meant, run ${pc.bold('npx ablo logout')} and sign in again. Otherwise create it with ${pc.bold(`npx ablo projects create ${targetProject}`)}.`,
+      );
+    } else {
+      log.error(
+        `The browser approval succeeded but the key handoff failed. Try again, or grab a ${pc.bold('sk_test_')} key from the dashboard and set ${pc.bold('ABLO_API_KEY')}.`,
+      );
+    }
+    process.exit(1);
+  }
+  // The one place the handoff's body is checked. A response that does not match
+  // would otherwise be stored as credentials and fail later, on some unrelated
+  // command, with nothing pointing back at the login that wrote it.
+  const parsedProv = provisionKeyResponseSchema.safeParse(
+    await provRes.json().catch(() => null),
+  );
+  if (!parsedProv.success) {
+    s.stop('Could not provision a key.');
+    log.error('The key handoff returned something this version does not recognize.');
+    log.error(`Try again, or upgrade with ${pc.bold('npm i -g @abloatai/ablo')}.`);
+    process.exit(1);
+  }
+  const prov = parsedProv.data;
   const entry = (k: ProvisionKey): KeyEntry => ({
     apiKey: k.apiKey,
     ...(prov.organizationId ? { organizationId: prov.organizationId } : {}),
@@ -279,8 +308,13 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
   );
   s.stop(`Saved keys to ${path}`);
   const where = prov.project ? ` ${pc.dim(`(project ${prov.project.slug})`)}` : '';
+  // The production key rides along silently, and it observes rather than
+  // deploys. Naming that here means the reader learns it while holding the key,
+  // instead of from a 403 the first time they push to production.
+  const live = prov.live ? credentialCapability(prov.live.apiKey).note : null;
   outro(
-    `${pc.green('✓')} Logged in ${pc.dim('(sandbox)')}${where}. Run ${pc.bold('npx ablo push')} to push your schema.`,
+    `${pc.green('✓')} Logged in ${pc.dim('(sandbox)')}${where}. Run ${pc.bold('npx ablo push')} to push your schema.` +
+      (live ? `\n  ${pc.dim(`Your production key: ${live}`)}` : ''),
   );
 }
 

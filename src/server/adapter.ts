@@ -21,7 +21,7 @@ import type {
   SourceOperation,
   SourceRequestContext,
 } from '../source/index.js';
-import type { ServerSyncDelta } from '../wire/delta.js';
+import type { ServerSyncDelta } from '../transaction/wire/delta.js';
 import type { BootstrapModel } from './readConfig.js';
 import type { CommitContext, CommitResult } from './commit.js';
 import type { StorageMode } from './storageMode.js';
@@ -51,6 +51,12 @@ export type ReadResult =
       readonly models: Record<string, Row[]>;
       /** Models whose read failed (partial success), if any. */
       readonly failedModels?: string[];
+      /**
+       * Present when a paged read (`ReadRequest.page`) stopped at its row
+       * limit with rows remaining: pass it back as the next page's cursor.
+       * Absent on the final page and on unpaged reads.
+       */
+      readonly nextCursor?: string;
     }
   | {
       readonly kind: 'query';
@@ -117,6 +123,14 @@ export type ReadRequest =
       readonly models: readonly BootstrapModel[];
       readonly requestedModels?: readonly string[];
       readonly scope?: SourceRequestContext;
+      /**
+       * Keyset pagination for a SINGLE-model read (`requestedModels` names
+       * exactly one model): return at most `limit` rows, starting after the
+       * row whose id equals `cursor`. The result carries `nextCursor` while
+       * rows remain. Ignored for multi-model reads and by adapters whose
+       * backend pages upstream on its own.
+       */
+      readonly page?: { readonly cursor?: string; readonly limit: number };
     }
   | {
       readonly kind: 'query';

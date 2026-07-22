@@ -10,7 +10,7 @@
  * app compiles against are the ones the database and sync layer enforce.
  */
 
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import { writeFileSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import pc from 'picocolors';

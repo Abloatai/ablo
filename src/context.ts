@@ -1,29 +1,29 @@
 /**
- * Module-level accessor for the sync engine's shared context.
+ * Module-level accessor for the sync engine's runtime context.
  *
- * The context is set once, during initialization, by {@link initSyncEngine}.
+ * The context is set once, during initialization, by {@link initRuntime}.
  * Code throughout the package reaches its shared dependencies — logger,
  * observability, online-status detector, configuration, and the mutation
  * executor — through {@link getContext} instead of receiving them through every
  * constructor.
  */
 
-import type { SyncEngineContext } from './SyncEngineContext.js';
+import type { RuntimeContext } from './RuntimeContext.js';
 import {
   noopLogger,
   noopObservability,
   browserOnlineStatus,
   defaultSessionErrorDetector,
   emptyConfig,
-} from './SyncEngineContext.js';
+} from './RuntimeContext.js';
 
-let _context: SyncEngineContext | null = null;
+let _context: RuntimeContext | null = null;
 
 /**
- * Initialize the sync engine with application-provided dependencies.
- * Must be called before any sync engine operations.
+ * Install the caller-provided runtime dependencies. Must be called before any
+ * operation that reaches {@link getContext}.
  */
-export function initSyncEngine(context: SyncEngineContext): void {
+export function initRuntime(context: RuntimeContext): void {
   _context = context;
 }
 
@@ -32,7 +32,7 @@ export function initSyncEngine(context: SyncEngineContext): void {
  * Returns a safe fallback with no-op implementations if not yet initialized,
  * so SDK files can import at module load time without crashing.
  */
-export function getContext(): SyncEngineContext {
+export function getContext(): RuntimeContext {
   if (!_context) {
     return _fallback;
   }
@@ -42,26 +42,27 @@ export function getContext(): SyncEngineContext {
 /**
  * Check if the sync engine has been initialized.
  */
-export function isSyncEngineInitialized(): boolean {
+export function isRuntimeInitialized(): boolean {
   return _context !== null;
 }
 
 /**
  * Reset context (for testing or cleanup).
  */
-export function resetSyncEngine(): void {
+export function resetRuntime(): void {
   _context = null;
 }
 
 /** Fallback context with no-op implementations */
-const _fallback: SyncEngineContext = {
+const _fallback: RuntimeContext = {
   logger: noopLogger,
   observability: noopObservability,
   onlineStatus: browserOnlineStatus,
   sessionErrorDetector: defaultSessionErrorDetector,
   config: emptyConfig,
+  getModelMetadata: () => undefined,
   mutationExecutor: {
-    commit: () => Promise.resolve({ lastSyncId: 0 }),
+    commit: () => Promise.resolve({ lastSyncId: 0, status: 'confirmed' as const }),
     executeCreate: () => Promise.resolve(),
     executeUpdate: () => Promise.resolve(null),
     executeDelete: () => Promise.resolve(),

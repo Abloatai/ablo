@@ -96,38 +96,50 @@ export function describeRemoteFailure(failure: RemoteReadinessFailure): {
   readonly label: string;
   readonly fix: string;
 } {
+  // Plain-language labels: name the problem by what it means for the user, not by
+  // the Postgres internal (wal_level, publication, REPLICATION attribute…). The
+  // `fix` string carries the exact how; the label just says what's not ready yet.
   switch (failure.item) {
     case 'wal_level':
-      return {
-        label: failure.actual
-          ? `wal_level is ${failure.actual} (need logical)`
-          : `wal_level must be logical`,
-        fix: failure.fix,
-      };
+      return { label: `your database isn't set up to share changes as they happen yet`, fix: failure.fix };
     case 'publication':
-      return { label: 'the Ablo publication does not exist', fix: failure.fix };
+      return { label: `none of your tables are shared with Ablo yet`, fix: failure.fix };
     case 'replication_role':
-      return { label: 'the DATABASE_URL role lacks the REPLICATION attribute', fix: failure.fix };
+      return { label: `the login Ablo reads with can't follow your changes yet`, fix: failure.fix };
     case 'replica_identity':
       return {
-        label: `published tables cannot replicate UPDATE/DELETE${failure.actual ? ` (${failure.actual})` : ''}`,
+        label: `some shared tables don't record enough for Ablo to track edits and deletes`,
         fix: failure.fix,
       };
     case 'write_role':
-      return { label: 'ABLO_WRITE_DATABASE_URL is not a scoped DML role', fix: failure.fix };
+      return { label: `the login Ablo writes with isn't set up yet`, fix: failure.fix };
     case 'row_security':
-      return { label: 'the direct-write role does not enforce row_security', fix: failure.fix };
-    case 'schema_privileges':
-      return { label: 'the direct-write role has unsafe schema privileges', fix: failure.fix };
-    case 'idempotency_ledger':
-      return { label: 'ablo_idempotency is missing or has unsafe grants', fix: failure.fix };
-    case 'table_privileges':
+      return { label: `the writer login isn't set to honor your row-level security`, fix: failure.fix };
+    case 'database_privileges':
       return {
-        label: `the direct-write role lacks application DML${failure.actual ? ` (${failure.actual})` : ''}`,
+        label: `the writer login can still create things in your database`,
         fix: failure.fix,
       };
+    case 'schema_privileges':
+      return { label: `the writer login has broader access than it should`, fix: failure.fix };
+    case 'table_ownership':
+      return { label: `the writer login owns tables it should only write to`, fix: failure.fix };
+    case 'idempotency_ledger':
+      return { label: `Ablo's write-safety record is missing or misconfigured`, fix: failure.fix };
+    case 'table_privileges':
+      return { label: `the writer login can't write to your tables yet`, fix: failure.fix };
     case 'logical_marker':
-      return { label: 'the direct-write role cannot emit the correlation marker', fix: failure.fix };
+      return {
+        label: `the writer login can't send the signal Ablo uses to confirm a write landed`,
+        fix: failure.fix,
+      };
+    case 'publication_drift':
+      return {
+        // The tables you pushed but didn't share. A write to one of these would
+        // land in your database and never confirm — the failure this names.
+        label: `some tables in your schema aren't shared with Ablo${failure.actual ? ` (${failure.actual})` : ''}`,
+        fix: failure.fix,
+      };
     default:
       return { label: failure.item, fix: failure.fix };
   }

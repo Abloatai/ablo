@@ -1,5 +1,7 @@
 # Projects
 
+> One organization, many apps — each with its own schema, data planes, and keys.
+
 A **project** is the isolation unit inside your organization — the shape you
 know from Neon or Supabase. Each app you build gets its own project, and each
 project gets its own schema, its own sandbox/production data planes, and its

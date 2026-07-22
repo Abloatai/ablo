@@ -1,5 +1,7 @@
 # Sessions
 
+> Short-lived scoped credentials your backend mints for a browser or an agent.
+
 A **session** is a short-lived credential your backend mints with its `sk_` and
 hands to one actor — a signed-in **person's browser** or a scoped **agent**. It's
 the same primitive in both cases (backend-minted, short-lived, scoped); the only
@@ -16,7 +18,7 @@ const userSession = await ablo.sessions.create({
 // A scoped agent session — gated to exactly the operations you name.
 const agentSession = await ablo.sessions.create({
   agent: { id: 'agent:task-writer' },
-  can: { Task: ['read', 'update'], Deck: ['read'] },
+  can: { Task: ['read', 'update'], Workspace: ['read'] },
 });
 ```
 

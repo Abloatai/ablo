@@ -60,14 +60,14 @@
 
 import { tool } from 'ai';
 import type { z } from 'zod';
-import { AbloClaimedError, AbloNotFoundError } from '../errors.js';
+import { AbloClaimedError, AbloNotFoundError } from '../transaction/errors.js';
 import type {
   ClaimParams,
   ModelRetrieveParams,
   ModelUpdateParams,
 } from '../client/createModelProxy.js';
-import type { ModelUpdater, ContentionOptions } from '../client/functionalUpdate.js';
-import type { HeldClaim } from '../types/streams.js';
+import type { ModelUpdater, ContentionOptions } from '../transaction/resources/functionalUpdate.js';
+import type { HeldClaim } from '../transaction/types/streams.js';
 
 export type CoordinationStrategy = 'merge' | 'claim' | 'queue';
 

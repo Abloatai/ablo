@@ -1,5 +1,7 @@
 # Change Propagation
 
+> How one row's change reaches the rows and actors that depend on it.
+
 > How a change to one row reaches the rows and actors that depend on it, and how
 > to keep a chain of dependent work fresh. This is the propagation half of sync
 > groups; [`identity.md`](./identity.md) is the access half (who may read a
@@ -10,8 +12,8 @@
 
 ## Start from the problem
 
-An agent reads deck `A` to write slide `B`. A moment later it reads `B` to write
-layer `C`. Between those steps someone else edits `A`. The agent is now building
+An agent reads workspace `A` to write document `B`. A moment later it reads `B` to write
+block `C`. Between those steps someone else edits `A`. The agent is now building
 `C` on a premise that has moved — and nothing about writing `C` looks wrong in
 isolation. That is stale context, and it is the thing sync groups let you catch.
 
@@ -19,19 +21,19 @@ The recipe is one field on the commit: declare the group you read as a premise,
 and say what should happen if it moved.
 
 ```ts
-// The agent read everything under deck:abc to compose this write.
-await ablo.layers.update({
-  id: 'layer-C',
+// The agent read everything under workspace:abc to compose this write.
+await ablo.blocks.update({
+  id: 'block-C',
   data: { text: revised },
-  reads: [{ group: 'deck:abc', readAt: watermark, onStale: 'notify' }],
+  reads: [{ group: 'workspace:abc', readAt: watermark, onStale: 'notify' }],
 });
 ```
 
 At commit, inside the write transaction, the engine asks a single question: *did
-any delta routed to `deck:abc` land after `watermark`?* If nothing moved, the
+any delta routed to `workspace:abc` land after `watermark`?* If nothing moved, the
 write applies. If something moved, `onStale` decides — `notify` holds the write
 and hands the agent a `StaleNotification` naming the group, so it re-reads
-`deck:abc` and regenerates; `reject` aborts the batch with a `409`. The agent
+`workspace:abc` and regenerates; `reject` aborts the batch with a `409`. The agent
 never persists work built on a premise it can no longer see.
 
 ---
@@ -43,13 +45,13 @@ for you and leaves the third to you — on purpose.
 
 **Routing — who hears about a change.** Every row belongs to one or more sync
 groups, and a write fans out to all of them. A row also inherits its ancestors'
-groups: editing a layer stamps the delta with `layer:…`, `slide:…`, *and*
-`deck:…`, so everyone watching the deck sees the layer move. This is delivery,
+groups: editing a block stamps the delta with `block:…`, `document:…`, *and*
+`workspace:…`, so everyone watching the workspace sees the block move. This is delivery,
 resolved by walking the ownership tree at commit time. It routes the change; it
 never recomputes a value.
 
-**Structural cascade — what disappears with a change.** Deleting a deck removes
-its slides and layers. The database does that through `ON DELETE CASCADE`, but a
+**Structural cascade — what disappears with a change.** Deleting a workspace removes
+its documents and blocks. The database does that through `ON DELETE CASCADE`, but a
 database-level cascade emits no delta, so open clients would quietly hold rows
 that no longer exist. The engine closes that gap: before the delete it snapshots
 the subtree and emits a tombstone for each descendant, routed to the right
@@ -85,8 +87,8 @@ reaches `C`.
 
 The direction matters. The signal flows forward, A to B to C, and each hop is a
 real write an actor chose to make. The engine supplies the edges (group
-membership) and a stale signal on each edge (the read-dependency check); the
-actors are the runtime that walks them. It is closer to a spreadsheet an analyst
+membership) and a stale signal on each edge (the premise check); the actors are
+the runtime that walks them. It is closer to a spreadsheet an analyst
 recalculates cell by cell than to a reactive engine that recomputes the whole
 column for you.
 
@@ -102,16 +104,17 @@ Two consequences worth designing around:
 
 ---
 
-## Declaring a read premise
+## Declaring the batch premise
 
-A read-dependency is a premise for the *whole* batch: its disposition governs
-every write in the commit, not just one operation. You choose the granularity per
+`reads[]` declares what the commit was based on. Each entry is a premise, and
+each governs the *whole* commit: if one goes stale, its disposition applies to
+every write in the batch, not just one operation. You choose the granularity per
 entry.
 
 ```ts
 reads: [
-  { group: 'deck:abc', readAt: N, onStale: 'notify' },      // did anything in the deck move?
-  { model: 'Slide', id: 's-1', readAt: N, fields: ['title'] }, // did this row (this field) move?
+  { group: 'workspace:abc', readAt: N, onStale: 'notify' },      // did anything in the workspace move?
+  { model: 'Document', id: 's-1', readAt: N, fields: ['title'] }, // did this row (this field) move?
 ]
 ```
 
@@ -137,7 +140,7 @@ the same row don't collide.
 
 ## Staying subscribed across commits: `track`
 
-A read premise guards a single commit: you state what you read, the engine
+A batch premise guards a single commit: you state what you read, the engine
 checks it, the premise is gone. That fits an actor that reads and writes in one
 breath. It does not fit a long-running one — an agent that reads a row now,
 works for a few minutes, and writes much later. By the time it commits, the
@@ -152,10 +155,10 @@ you, arriving on the write you were going to make anyway.
 
 ```ts
 // Register interest and walk away — no write required.
-await ablo.slides.track({ id: 's-1' });
+await ablo.documents.track({ id: 's-1' });
 
 // …minutes of other work later, on your next commit…
-const res = await ablo.layers.update({ id: 'layer-C', data: { text: revised } });
+const res = await ablo.blocks.update({ id: 'block-C', data: { text: revised } });
 res.notifications; // populated if s-1 moved under you in the meantime
 ```
 
@@ -169,11 +172,11 @@ You can also register a track as part of a write you are already making, the
 persisted companion to `reads`:
 
 ```ts
-await ablo.slides.update({
+await ablo.documents.update({
   id: 's-1',
   data: { title: revised },
-  reads: [{ group: 'deck:abc', readAt: N, onStale: 'notify' }], // guards THIS commit
-  track: [{ group: 'deck:abc' }],                               // and keeps watching after it
+  reads: [{ group: 'workspace:abc', readAt: N, onStale: 'notify' }], // guards THIS commit
+  track: [{ group: 'workspace:abc' }],                               // and keeps watching after it
 });
 ```
 
@@ -194,8 +197,8 @@ broad wakes actors for changes they don't care about, and one that is too narrow
 misses the dependency you meant to track.
 
 The rule of thumb: **make a group the smallest set of rows that must stay
-mutually consistent.** A deck and its slides belong together because editing one
-changes what the others mean; two unrelated decks do not. Reach for finer,
+mutually consistent.** A workspace and its documents belong together because editing one
+changes what the others mean; two unrelated workspaces do not. Reach for finer,
 overlapping groups when you genuinely have a dependency chain to track, and keep
 them coarse everywhere else.
 
@@ -204,7 +207,7 @@ them coarse everywhere else.
 ## Where this is defined
 
 - **Access** — who may read or write a group — is [`identity.md`](./identity.md).
-- **The convention** — non-coercion, the read-set, and the notification — is
+- **The convention** — non-coercion, the premise, and the notification — is
   [`concurrency-convention.md`](./concurrency-convention.md) (§4 and §5).
-- **The mechanics** — the three coordination layers underneath — are
+- **The mechanics** — the three coordination blocks underneath — are
   [`coordination.md`](./coordination.md).

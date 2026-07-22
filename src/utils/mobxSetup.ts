@@ -14,7 +14,7 @@ import {
   type IValueDidChange,
   type AnnotationMapEntry,
 } from 'mobx';
-import { PropertyType, type PropertyMetadata, type ReferenceMetadata } from '../types/index.js';
+import { PropertyType, type PropertyMetadata, type ReferenceMetadata } from '../transaction/types/index.js';
 import { getContext } from '../context.js';
 
 /**
@@ -176,7 +176,10 @@ export function M1<T extends M1Target>(
     annotations.updatedAt = observable;
   }
   if (!hasGetter('modifiedProperties') && !hasSetter('modifiedProperties')) {
-    annotations.modifiedProperties = observable;
+    // Track map membership, but keep change payloads as plain values. These
+    // entries are replaced rather than mutated and later cross IndexedDB's
+    // structured-clone boundary, where MobX's deep proxies are invalid.
+    annotations.modifiedProperties = observable.shallow;
   }
 
   // Add actions only if methods exist and aren't already actions.

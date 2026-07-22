@@ -3,7 +3,7 @@
  * the browser. See {@link ObjectStore}.
  */
 
-import type { ModelMetadata } from '../types/index.js';
+import type { ModelMetadata } from '../transaction/types/index.js';
 import type { ObjectStoreContract } from './ObjectStoreContract.js';
 
 /**

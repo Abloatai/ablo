@@ -11,7 +11,7 @@
  */
 
 import type { Model } from '../Model.js';
-import type { ModelScope } from '../types/index.js';
+import type { ModelScope } from '../transaction/types/index.js';
 import type { QueryView, QueryViewOptions } from './QueryView.js';
 import type { ViewRegistry } from './ViewRegistry.js';
 import type { ParticipantScope } from '../sync/participants.js';
@@ -45,7 +45,7 @@ export interface SyncStatus {
  */
 export interface LocalMutation {
   type: 'create' | 'update' | 'delete' | 'archive' | 'unarchive';
-  /** The registered name of the mutated model, for example `'SlideLayer'`. */
+  /** The registered name of the mutated model, for example `'Block'`. */
   modelName: string;
   modelId: string;
   /** The new field values, for a create or an update. */

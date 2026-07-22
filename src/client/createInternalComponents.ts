@@ -14,15 +14,16 @@ import { InstanceCache } from '../InstanceCache.js';
 import { SyncClient } from '../SyncClient.js';
 import { OnDemandLoader } from '../sync/OnDemandLoader.js';
 import { BootstrapFetcher } from '../sync/BootstrapFetcher.js';
-import type { AuthCredentialSource } from '../auth/credentialSource.js';
-import type { Schema, SchemaRecord } from '../schema/schema.js';
-import { resolveBootstrapBaseUrl } from './auth.js';
-import { shouldUseInMemoryPersistence, type AbloPersistence } from './persistence.js';
+import type { AuthCredentialSource } from '../transaction/auth/credentialSource.js';
+import type { Schema, SchemaRecord } from '../transaction/schema/schema.js';
+import { loadsAtBootstrap, type LoadStrategy } from '../transaction/schema/loadStrategy.js';
+import { resolveBootstrapBaseUrl } from '../transaction/auth/apiKey.js';
+import { shouldUseInMemoryPersistence, type AbloPersistence } from '../transaction/persistence.js';
 import type {
   DurableWriteStore,
   DurableWritesConfig,
-} from '../transactions/durableWriteStore.js';
-import { resolveDurableWrites } from './durableWrites.js';
+} from '../transactions/mutations/durableWriteStore.js';
+import { resolveDurableWrites } from '../transaction/durableWrites.js';
 
 export interface InternalComponentsInput<S extends SchemaRecord> {
   readonly schema: Schema<S>;
@@ -126,8 +127,8 @@ export function createInternalComponents<S extends SchemaRecord>(
 
 /**
  * Derives the set of models to fetch in the initial bootstrap request from each
- * model's load strategy. Models declared `load: 'lazy'` or `'manual'` are left
- * out of the bootstrap and fetched on demand instead. The default strategy is
+ * model's load strategy. Models declared `load: 'lazy'` are left out of the
+ * bootstrap and fetched on demand instead. The default strategy is
  * `'instant'`, which includes the model.
  */
 function deriveInstantModels<S extends SchemaRecord>(
@@ -137,12 +138,12 @@ function deriveInstantModels<S extends SchemaRecord>(
     (schema as { models?: Record<string, unknown> }).models ?? schema;
   return Object.entries(schemaModels).flatMap(([key, def]) => {
     if (!def || typeof def !== 'object' || !('load' in def)) {
-      return [key]; // no load → instant
+      return [key]; // no load → the default strategy
     }
-    const load = (def as { load?: string }).load;
-    if (!load || load === 'instant') {
+    const load = (def as { load?: LoadStrategy }).load;
+    if (loadsAtBootstrap(load)) {
       return [(def as { typename?: string }).typename ?? key];
     }
-    return []; // lazy or manual → skip
+    return [];
   });
 }

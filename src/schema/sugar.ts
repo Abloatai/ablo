@@ -30,7 +30,7 @@ import {
   type ModelOptions,
   type ComputedRecord,
   type RelationRecord,
-} from './model.js';
+} from '../transaction/schema/model.js';
 
 /**
  * Options accepted by every sugar verb. A strict subset of
@@ -93,8 +93,7 @@ function build<
   opts: SugarOptions<R, C> | undefined,
   baseline: Pick<ModelOptions, 'mutable' | 'load' | 'lazyObservable'>,
 ): ModelDef<Shape, R, C> {
-  return model(shape, (opts?.relations ?? {}) as R, {
-    mutable: baseline.mutable,
+  return model(shape, { relations: (opts?.relations ?? {}) as R, mutable: baseline.mutable,
     load: baseline.load,
     lazyObservable: opts?.lazyObservable ?? baseline.lazyObservable,
     typename: opts?.typename,
@@ -104,8 +103,7 @@ function build<
     bootstrapLimit: opts?.bootstrapLimit,
     bootstrapOrderBy: opts?.bootstrapOrderBy,
     persist: opts?.persist,
-    computed: opts?.computed,
-  });
+    computed: opts?.computed, });
 }
 
 /**
@@ -116,8 +114,7 @@ function build<
  * Pick the load suffix by data-access pattern:
  *   - `.instant`  — small, always-needed (Theme, Layout, StatusGroup)
  *   - `.lazy`     — large collections fetched on first query
- *     (SlideLayer, Message, Task)
- *   - `.manual`   — never auto-loaded; explicit queries only
+ *     (Block, Message, Task)
  */
 export const mutable = {
   instant: <
@@ -141,16 +138,6 @@ export const mutable = {
     opts?: SugarOptions<R, C>,
   ): ModelDef<Shape, R, C> =>
     build(shape, opts, { mutable: true, load: 'lazy', lazyObservable: true }),
-
-  manual: <
-    Shape extends z.ZodRawShape,
-    R extends RelationRecord = Record<string, never>,
-    C extends ComputedRecord = Record<string, never>,
-  >(
-    shape: Shape,
-    opts?: SugarOptions<R, C>,
-  ): ModelDef<Shape, R, C> =>
-    build(shape, opts, { mutable: true, load: 'manual', lazyObservable: true }),
 };
 
 /**
@@ -190,9 +177,10 @@ export const readOnly = {
     build(shape, opts, { mutable: false, load: 'lazy', lazyObservable: true }),
 
   /**
-   * Internal-only: never auto-loaded, never written by clients. The
-   * strongest safety posture — use for tables the SDK must know about
-   * (for type inference) but that should never flow over the wire.
+   * Internal-only: kept out of bootstrap and never written by clients. The
+   * strongest safety posture — use for tables the SDK must know about (for type
+   * inference) but that no client should be able to write. Rows still reach a
+   * client that reads the model, so this is a write boundary, not a read one.
    */
   internal: <
     Shape extends z.ZodRawShape,
@@ -202,5 +190,5 @@ export const readOnly = {
     shape: Shape,
     opts?: SugarOptions<R, C>,
   ): ModelDef<Shape, R, C> =>
-    build(shape, opts, { mutable: false, load: 'manual', lazyObservable: true }),
+    build(shape, opts, { mutable: false, load: 'lazy', lazyObservable: true }),
 };

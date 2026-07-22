@@ -1,5 +1,8 @@
 ---
 title: "API"
+description: "The per-method reference for every model call an agent or an interface can make."
+sidebar:
+  icon: code-xml
 ---
 
 > **Upgrading?** Every breaking change and its migration is on the
@@ -13,10 +16,12 @@ row, you can optionally `claim` it so they serialize instead of clobbering
 each other.
 
 Two things to know before the method list. **Reads come in two flavors:**
-`retrieve({ id })` / `list({ where })` are async and hit the server (use them when
-the row may not be local yet); `get(id)` / `getAll({ where })` / `getCount({ where })`
-are synchronous reads off the local graph (use them in render, after data has
-synced). **Claims don't lock.** If another writer holds the row, `claim` waits
+`retrieve({ id })` / `list({ where })` are async — they answer from what is
+already local and fall back to the server. Put `local.` in front of either and
+you get the same read restricted to what is already here, which is why it can
+return a value rather than a promise: `local.retrieve(id)`, `local.list({ where })`,
+`local.count({ where })`. Use those in render, after data has synced.
+**Claims don't lock.** If another writer holds the row, `claim` waits
 for them, re-reads the fresh row, then hands it to you — so two writers
 serialize instead of clobbering.
 
@@ -51,31 +56,31 @@ Each schema model becomes a typed model on the client:
 
 - `ablo.weatherReports.retrieve({ id })` reads one row asynchronously (server read).
 - `ablo.weatherReports.list({ where })` reads a collection asynchronously (server read).
-- `ablo.weatherReports.get(id)` reads one row synchronously from the local graph.
+- `ablo.weatherReports.local.retrieve(id)` reads one row synchronously from the local graph.
 - `ablo.weatherReports.create({ data })` creates a row.
 - `ablo.weatherReports.update({ id, data, ...options })` updates a row.
 - `ablo.weatherReports.delete({ id, ...options })` deletes a row.
 
-`retrieve`/`list` and `get`/`getAll`/`getCount` are not aliases. Use
-`retrieve({ id })` or `list({ where })` when the row may not be local yet — they
-hydrate pool → IndexedDB → network. Use `get(id)` / `getAll({ where })` /
-`getCount({ where })` for a cheap synchronous snapshot of what is already in
-the local graph.
+`local.` narrows a read to what has already synced. `retrieve({ id })` and
+`list({ where })` answer from the local graph and fall back to IndexedDB and
+then the network, so reach for them when the row may not be here yet.
+`local.retrieve(id)` and `local.list({ where })` are the same reads with the
+fallback removed — nothing to await, so they return a value.
 
 | Method | Returns | Use when |
 |---|---|---|
 | `retrieve({ id })` | `Promise<T \| undefined>` | You need one row, hydrating from local store and server. |
 | `list({ where })` | `Promise<T[]>` | You need to hydrate a collection from local store and server. |
-| `get(id)` | `T \| undefined` | You want a synchronous snapshot of one local row. |
-| `getAll(options?)` | `T[]` | You want a synchronous snapshot of a local collection. |
-| `getCount(options?)` | `number` | You want a synchronous count of local rows. |
+| `local.retrieve(id)` | `T \| undefined` | You want a synchronous snapshot of one local row. |
+| `local.list(options?)` | `T[]` | You want a synchronous snapshot of a local collection. |
+| `local.count(options?)` | `number` | You want a synchronous count of local rows. |
 | `create({ data, ...options })` | `Promise<T>` | You want to create through the schema model. |
 | `update({ id, data, ...options })` | `Promise<T>` | You want to update through the schema model. |
 | `delete({ id, ...options })` | `Promise<void>` | You want to delete through the schema model. |
 
 `retrieve`, `list`, `create`, `update`, and `delete` are the main path — they go
-through the server. `get` / `getAll` / `getCount` are **synchronous reads**
-off the rows a session has already synced, so a cheap re-read needs no round-trip.
+through the server. The `local` reads work off the rows a session has already
+synced, so a cheap re-read needs no round-trip.
 
 ## Protected Writes
 
@@ -105,7 +110,7 @@ Protected write options:
 
 ## Claims
 
-Before anyone writes a row, they can claim it so other people and agents see
+Before anyone writes a row, they can claim it so other agents and people see
 who is editing it in real time. Claims don't lock. If another writer holds the
 row, `claim` waits for them, re-reads the fresh row, then hands it to you — so
 two writers serialize instead of clobbering. A claim is temporary: it expires
@@ -208,7 +213,7 @@ The SDK is a convenience wrapper over a model-scoped HTTP surface — the same
 noun (`model`) and verbs as `ablo.<model>.…`. Non-JS callers (or curl) use it
 directly. The table below shows the shape with `{model}` as a placeholder; the
 [OpenAPI spec](./openapi.json) expands it into one **typed** path per model
-(`/api/v1/models/task`, `/api/v1/models/deck`, …, generated from your schema) so each
+(`/api/v1/models/task`, `/api/v1/models/workspace`, …, generated from your schema) so each
 endpoint documents that model's real field contract instead of a generic blob.
 
 | SDK call | HTTP |
@@ -234,7 +239,7 @@ error `code` (e.g. `stale_context`, `intent_conflict`) to act on.
 operations across rows/models that must commit together) — the per-model routes
 above are the one-record path. Both run the identical guarded-write engine.
 
-The [coordination MCP server](/mcp) (`@ablo/mcp`) is this same surface
+The [coordination MCP server](/mcp) (`@abloatai/mcp`) is this same surface
 rendered as agent tools.
 
 ## Errors

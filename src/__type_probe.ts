@@ -1,6 +1,6 @@
 /* eslint-disable */
 import { z } from 'zod';
-import { defineSchema } from "./schema/schema.js";
+import { defineSchema } from "./transaction/schema/schema.js";
 import { mutable } from './schema/sugar.js';
 
 const probeSchema = defineSchema({
@@ -16,7 +16,7 @@ const probeSchema = defineSchema({
   ),
 });
 
-import type { InferModel } from './schema/schema.js';
+import type { InferModel } from './transaction/schema/schema.js';
 export type Probe_Invitation = InferModel<typeof probeSchema, 'invitations'>;
 declare const probe: Probe_Invitation;
 export { probe };

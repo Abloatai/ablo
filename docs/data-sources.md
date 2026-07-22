@@ -1,5 +1,7 @@
 # Connect Your Database
 
+> Keep the rows in your own Postgres while Ablo coordinates and confirms every write.
+
 You write through Ablo, and Ablo writes to your Postgres. A call to
 `ablo.<model>.create / update / delete` enters Ablo's commit chokepoint — where
 claims, ordering, and idempotency are enforced — and Ablo applies the change to
@@ -180,7 +182,7 @@ await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 } })
 await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 }, wait: 'confirmed' });
 
 // Reads are live off the same stream.
-const report = ablo.weatherReports.get('report_stockholm');
+const report = ablo.weatherReports.local.retrieve('report_stockholm');
 ```
 
 A commit is accepted the moment Ablo takes it (`queued`); it becomes `confirmed`

@@ -162,3 +162,21 @@ export {
   decodeSourceEchoTransactionId,
   type SourceEchoTransactionId,
 } from './idempotency.js';
+// What Ablo leaves inside a customer's database, declared once — read by the
+// setup SQL, the replication runtime, and the audit that reports it back.
+export {
+  ABLO_FOOTPRINT,
+  ABLO_PUBLICATION,
+  ABLO_REPLICATION_SLOT,
+  ABLO_REPLICATION_ROLE,
+  ABLO_WRITE_ROLE,
+  ABLO_IDEMPOTENCY_TABLE,
+  ABLO_OUTBOX_TABLE,
+  REPLICATION_SLOT_NAME,
+  isValidReplicationSlotName,
+  footprintNamesFor,
+  type FootprintArtifact,
+  type FootprintKind,
+  type FootprintNames,
+  type FootprintPlane,
+} from './footprint.js';

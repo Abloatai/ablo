@@ -1,0 +1,270 @@
+---
+title: "Deployment"
+description: "What production takes: a database Ablo can reach, a key minted for the plane you mean, and a schema push in the deploy."
+sidebar:
+  icon: ship
+---
+
+One command answers the question this page exists for — would a write succeed
+right now, and if not, why:
+
+```bash
+ABLO_API_KEY=sk_live_… npx ablo status
+```
+
+```text
+  ablo status
+
+  key     sk_live_51H8… (ABLO_API_KEY env — overrides stored)
+  mode    production
+  org     org_3nKq…
+  project checkout (prj_7Yb2…)
+  acts on production
+  ○ sandbox     sk_test_9fJd… · expires in 71d
+  ● production  — no key
+  push    production with sk_live_51H8… (env)
+  api     https://api.abloatai.com  reachable
+  data    ✓ database connected to this plane (direct)
+  schema  4 models pushed (rev 12) hash 3f9a2c81 @ 2026-07-18
+          • orders         typename=orders
+          • lineItems      typename=lineItems
+          • fulfilments    typename=fulfilments
+          • reviews        typename=reviews
+
+  ✓ ready — a write should succeed
+```
+
+`status` asks the routing authority rather than sampling a read, because reads
+resolve while writes are held — a plane with no database connected serves every
+read and refuses every write. The verdict at the bottom is the whole page in one
+line, and `--json` puts the same conclusion in a `blockers` array you can gate a
+deploy on.
+
+## The three ingredients
+
+There is no Ablo service for you to deploy. Ablo is hosted, your rows live in
+your own Postgres, and your app runs where it already runs — so a deployment is
+three pieces pointed at the same plane.
+
+| Ingredient | Who runs it | What "deploying" means for it |
+|---|---|---|
+| **Your Postgres** | You (or your provider) | Registering it against your production plane, once, with a production key. |
+| **Ablo** | Hosted at `api.abloatai.com` | Nothing to run. You choose a project, a plane, and the keys that reach them. |
+| **Your app and agents** | You | Holding the right credential for the runtime, and pushing the schema in the deploy. |
+
+Everything below is those three in order.
+
+### Planes: what a deployment targets
+
+A **plane** is the isolation unit a credential acts on. `production` is the root
+plane; every sandbox sits beside it. Three things are per-plane, and knowing
+which three is most of what production readiness means:
+
+- **Rows** — a sandbox write is invisible to production and to every other sandbox.
+- **The registered database** — one per plane, so your production database and
+  your dev database are separate registrations.
+- **The active schema artifact** — the model shapes the engine actually routes on.
+
+A key's plane is fixed at mint and spelled in its prefix: `sk_live_` acts on
+production, `sk_test_` on a sandbox. There is no runtime override — the
+credential *is* the environment selector, which is why application code never
+passes one.
+
+One asymmetry is worth carrying into your deploy plan. A sandbox with no schema
+artifact of its own reads **production's**, so a schema pushed to production
+reaches your sandboxes automatically. The reverse does not hold: a push from a
+sandbox key creates a sandbox artifact that shadows production **for that
+sandbox's readers only**, and production keeps running the schema it was last
+pushed. Production gets its models when you push to production.
+
+## 1. The database production writes to
+
+Your production database joins Ablo the same way your dev database did — logical
+replication so Ablo can read and confirm, a scoped writer role so Ablo can land
+rows — run once, with a production key so the registration attaches to the
+production plane:
+
+```bash
+ABLO_API_KEY=sk_live_… npx ablo connect apply --url postgres://admin:…@host:5432/db
+ABLO_API_KEY=sk_live_… npx ablo connect check
+```
+
+[Connect Your Database](/data-sources) is the full walkthrough — the SQL, the
+two roles, and the complete list of what Ablo touches. Five things about it are
+specifically production concerns:
+
+**Your agents do not each hold a connection.** Every agent, worker, and function
+talks to Ablo, and Ablo holds the database connections — at most 4 connections
+per plane, the same 4 whether one caller is writing behind them or ten thousand
+are. They identify themselves as `ablo-direct-writer`, so `pg_stat_activity`
+accounts for everything Ablo has open at any moment. Size the database for that
+number rather than for your agent count.
+
+**Register the direct host, not the pooler.** A pooler terminates the session
+that replication needs, and it refuses the connection in the same words a wrong
+password would — so a pooled host reads as a credentials problem for as long as
+you let it. `ablo status` names a pooled host when it sees one, with the direct
+host to use instead.
+
+**Reachability is measured from Ablo's network, not yours.** `connect check`
+runs from the infrastructure replication runs on, so an IPv6-only,
+IP-allowlisted, or VPC-private database still verifies — and a database your
+laptop can reach but Ablo cannot fails here rather than at the first write.
+
+**`wal_level = logical` needs a restart.** It is server-wide and not reloadable.
+On RDS and Aurora it is a parameter-group change plus a reboot. Schedule it;
+it is the one setup step with downtime in it.
+
+**A replication slot retains WAL.** While Ablo is connected the slot holds what
+it has not yet acknowledged, so a long disconnection accumulates disk. Ablo
+monitors slot lag and retention and surfaces it, and drops an abandoned slot
+rather than letting it grow without bound.
+
+A database that cannot grant a `REPLICATION` role connects through the signed
+[Data Source endpoint](/data-sources) instead. Same model surface, same
+commit chokepoint — it is the marked fallback, so reach for it when replication
+is genuinely unavailable.
+
+## 2. The credential each runtime holds
+
+There is one field, `apiKey`, and what goes in it follows from where the code
+runs. In production that resolves to four rows:
+
+| Runtime | Credential | Notes |
+|---|---|---|
+| Server, worker, agent, cron | `sk_live_` in `ABLO_API_KEY` | Defaults from the environment, so most code passes nothing. |
+| Serverless function | `sk_live_` in `ABLO_API_KEY`, with `transport: 'http'` | Stateless request/response; nothing held open across invocations. |
+| Browser, read-only | `pk_live_` | Publishable and safe to ship, like a Stripe `pk_`. Reads only. |
+| Browser, writing as the signed-in user | `authEndpoint` | A route on your backend mints a short-lived `ek_` per user. |
+
+[API Keys](/api-keys) covers the model; [Sessions](/sessions) covers
+minting. Two things bite specifically at deploy time.
+
+**The live key `ablo login` gives you cannot push schema.** It is a restricted,
+observe-only `rk_live_` by design, so a stolen CLI config cannot write to
+production. A production deploy needs a **secret** `sk_live_` from the dashboard,
+supplied as `ABLO_API_KEY`. You do not have to discover this from a failed
+deploy: `ablo login`, `ablo mode production`, and `ablo status` each name what
+the key in hand does, and `ablo status --json` reports it as `effectiveKey.kind`
+for a pipeline to check before it pushes.
+
+**An explicit key always wins.** The CLI resolves `ABLO_API_KEY`, then
+`.env.local`, then `.env`, then the stored login — and `ablo status` prints which
+one it found under `key`, with its source. When a deploy lands somewhere
+surprising, that line is usually the answer.
+
+## 3. Pushing the schema is a deploy step
+
+The server keeps its own copy of your schema and routes on that copy. Until it
+has yours, a write to a new model fails with `server_execute_unknown_model` — so
+`ablo push` belongs in your deploy pipeline, ordered **before** the code that
+depends on the new models goes live.
+
+```bash
+ABLO_API_KEY=sk_live_… npx ablo push --yes
+```
+
+Production requires confirmation: interactively you type the destination
+project's name, which is what makes a wrong-project deploy impossible to do by
+reflex. In CI there is no TTY, so `--yes` is the confirmation and a push without
+it stops rather than proceeding unattended.
+
+**Additive changes pass; destructive ones ask.** Adding a model or an optional
+field applies cleanly. Dropping a model or a field, narrowing an enum, or a lossy
+cast is classified as data loss and needs `--force`; adding a required field to a
+populated table needs a `--backfill`. A push that fails is recorded `failed` and
+never activated, so a broken migration cannot leave clients gated against tables
+that do not match.
+
+This is the same expand-and-contract shape any online migration has, and it
+sequences the same way: push the additive change, deploy the code that writes
+both shapes, backfill, then push the removal in a later deploy once nothing reads
+the old field.
+
+**Drift is a connect-time rejection, not a runtime surprise.** A client built
+against a schema the server is no longer running is turned away when it connects.
+`ablo status` prints the local hash beside the deployed one, and the running
+client reports the same `serverSchemaHash` value, so the two can be matched at a
+glance.
+
+## Gate the deploy on the verdict
+
+`ablo status --json` reports the same conclusion the human output ends with, in a
+form a pipeline can act on. An empty `blockers` array is the machine-readable
+form of "ready":
+
+```bash
+blockers=$(ABLO_API_KEY=$ABLO_API_KEY npx ablo status --json | jq '.blockers | length')
+[ "$blockers" -eq 0 ] || { npx ablo status; exit 1; }
+```
+
+Each blocker carries a `problem` and the single `fix` that resolves it, in the
+order you should act on them: an unreachable API makes every other finding
+unverifiable, and a plane with nothing connected makes a schema question
+academic. The JSON also carries `confirmedTarget` — the org, project, and
+environment the server says this key resolves to — which is the authoritative
+answer to where a push would land.
+
+## Webhooks point at the deployed URL
+
+`npx ablo dev` forwards commits to your machine while you build, the way
+`stripe listen` does. A deployed endpoint is registered once, and Ablo returns
+the signing secret a single time:
+
+```bash
+ABLO_API_KEY=sk_live_… npx ablo webhooks create https://yourapp.com/api/ablo/[...all]
+ABLO_API_KEY=sk_live_… npx ablo webhooks list   # endpoints + delivery health
+```
+
+`webhooks list` reports each endpoint's status, cursor, and last error — the
+place to look when a mirror falls behind. [Webhooks](/webhooks) covers the
+handler, the Standard Webhooks signature, and rolling a secret.
+
+## What to watch once it is live
+
+- **`ablo logs`** — commit activity as it happens, scoped by the key, so a live
+  key streams the org and a test key streams only its sandbox. `--json` emits
+  NDJSON for piping.
+- **`ablo status`** — the readiness verdict. Cheap enough to run from a health
+  check on your own side.
+- **The [audit log](/audit)** — every confirmed write traced back to the key
+  that made it and the person who authorized that key.
+- **Your own logger** — pass `logger` to the client and SDK lifecycle, sync,
+  retry, and rollback events join your existing pipeline.
+
+Writes carry receipts rather than being fire-and-forget: a commit is accepted the
+moment Ablo takes it (`queued`) and becomes `confirmed` once the row appears on
+your database's WAL. [Guarantees](/guarantees) covers which state to wait for
+and what each promises.
+
+## When something is wrong
+
+| What you see | What it means | The fix |
+|---|---|---|
+| `no database is connected to this plane` | Writes are held rather than routed. Reads still resolve, which is why a read probe stays quiet. | `ablo connect apply` with a key for that plane. |
+| `password authentication failed` during connect | Often a pooled host refusing a session it cannot serve, in the words of a wrong password. | Register the direct database host. |
+| `server_execute_unknown_model` | The plane's active schema does not carry that model. | `ablo push` with a key for that plane. |
+| Clients rejected at connect | The deployed schema and the client's schema disagree. | Push this tree, or deploy the revision the server is running. |
+| `project_scope_denied` (403) | The model belongs to another project in your org. | Use a key minted for that project — a push cannot cross projects. |
+| 403 on `ablo push` | The key authenticated but cannot author schema. | A secret `sk_live_`; the `ablo login` live key is observe-only. |
+
+## The checklist
+
+1. Production database registered against the production plane, direct host, and
+   `ablo connect check` all green.
+2. A secret `sk_live_` in the deploy environment as `ABLO_API_KEY` — never in a
+   browser bundle.
+3. `ablo push --yes` in the pipeline, ahead of the code that needs the new models.
+4. `ablo status --json` gating the deploy on an empty `blockers` array.
+5. Browser clients on a `pk_live_` or an `authEndpoint`, not a secret key.
+6. Webhook endpoints registered at their deployed URLs, with the signing secret
+   in your environment.
+
+## Next steps
+
+- [Connect Your Database](/data-sources) — the setup this page registers, in full.
+- [Projects](/projects) — one org, many apps, each with its own planes and keys.
+- [API Keys](/api-keys) — which credential each runtime holds, and what it may do.
+- [CLI](/cli) — every command, its flags, and the environment variables.
+- [Operating on Your Database](/operating-on-your-database) — which actions run freely and which belong to a human.
+- [Debugging & Logs](/debugging) — watching claims, queueing, and grants while you build.

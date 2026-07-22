@@ -29,6 +29,9 @@ export default defineConfig(
     // Consumer-facing snippets — not compiled by any tsconfig in this package.
     'examples/**',
     'docs/**',
+    // Register fixtures — their own `tsc` program (typetests/tsconfig.json),
+    // deliberately outside the lint program, which carries one registration.
+    'typetests/**',
   ]),
   {
     files: ['src/**/*.ts', 'src/**/*.tsx', '__tests__/**/*.ts', '__tests__/**/*.tsx'],

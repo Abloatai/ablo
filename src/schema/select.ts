@@ -12,8 +12,8 @@
  * import { schema as full } from './schema';
  * import { selectModels } from '@abloatai/ablo/schema';
  *
- * // Subscribe to identity and dataroom content only.
- * export const schema = selectModels(full, ['users', 'organizations', 'datarooms', 'folders', 'files']);
+ * // Subscribe to identity and document content only.
+ * export const schema = selectModels(full, ['users', 'organizations', 'workspaces', 'folders', 'files']);
  * ```
  *
  * Relations whose target falls outside the selected set are dropped, so the
@@ -22,10 +22,10 @@
  * a record's fan-out — the selected set must be closed under `parent` edges.
  */
 
-import type { Schema, SchemaRecord } from './schema.js';
-import type { ModelDef } from './model.js';
-import type { RelationDef } from './relation.js';
-import { AbloValidationError } from '../errors.js';
+import type { Schema, SchemaRecord } from '../transaction/schema/schema.js';
+import type { ModelDef } from '../transaction/schema/model.js';
+import type { RelationDef } from '../transaction/schema/relation.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import { schemaHash } from './serialize.js';
 
 export function selectModels<S extends SchemaRecord, K extends keyof S & string>(

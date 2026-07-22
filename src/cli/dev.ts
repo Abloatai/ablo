@@ -20,8 +20,8 @@
  *   ablo dev --no-watch
  */
 
-import { AbloValidationError } from '../errors.js';
-import { classifyCredentialKind } from '../auth/credentialPolicy.js';
+import { AbloValidationError } from '../transaction/errors.js';
+import { classifyCredentialKind } from '../transaction/auth/credentialPolicy.js';
 import pc from 'picocolors';
 import { spinner } from '@clack/prompts';
 import { watch, existsSync, readFileSync, writeFileSync, appendFileSync } from 'fs';
@@ -31,11 +31,13 @@ import {
   loadSchema,
   pushSchema,
   fmtSignal,
+  apiBaseUrl,
   DEFAULT_SCHEMA_PATH,
   DEFAULT_EXPORT,
   DEFAULT_URL,
 } from './push';
-import { resolveEffectiveApiKey, getMode, type Mode } from './config';
+import { resolveEffectiveApiKey } from './config';
+import { looksLikeCredentialRefusal, poolerExplanation } from './readiness';
 import { brand } from './theme';
 
 export interface DevArgs {
@@ -95,15 +97,13 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
  */
 export function classifyKey(
   apiKey: string | undefined,
-  activeMode: Mode,
 ): { ok: true } | { ok: false; reason: string } {
   if (!apiKey) {
     return {
       ok: false,
       reason:
-        `No API key. Run ${pc.bold('npx ablo login')} for the sandbox dev loop — or set ${pc.bold('ABLO_API_KEY')} ` +
-        `(${pc.bold('sk_test_')} = sandbox; ${pc.bold('sk_live_')} = deliberate production deploy). ` +
-        pc.dim(`Mode is currently '${activeMode}'.`),
+        `No API key. Run ${pc.bold('npx ablo login')} — or set ${pc.bold('ABLO_API_KEY')} ` +
+        `(${pc.bold('sk_test_')} = sandbox; ${pc.bold('sk_live_')} = production).`,
     };
   }
   if (apiKey.startsWith('sk_test_')) return { ok: true };
@@ -253,7 +253,18 @@ async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; me
         `${serverSays ?? "This key can't author schema (missing schema:push scope)."}\n` + pc.dim(hint),
     };
   }
-  return { ok: false, message: `Push failed (${status}): ${body.message ?? body.reason ?? bodyText}` };
+  const serverMessage = String(body.message ?? body.reason ?? bodyText);
+  // A credential refusal from the database is the one failure here whose words
+  // point away from its cause: the pooled host says "password authentication
+  // failed" about a password that is correct and working elsewhere in the same
+  // session. Ask the plane what host it holds before repeating that.
+  if (looksLikeCredentialRefusal(serverMessage)) {
+    const pooled = await poolerExplanation(apiBaseUrl(), args.apiKey);
+    if (pooled) {
+      return { ok: false, message: `${serverMessage}\n${pc.dim(pooled)}` };
+    }
+  }
+  return { ok: false, message: `Push failed (${status}): ${serverMessage}` };
 }
 
 export async function dev(argv: readonly string[]): Promise<void> {
@@ -273,7 +284,7 @@ export async function dev(argv: readonly string[]): Promise<void> {
   // `classifyKey`, which names the production path.
   if (!args.apiKey) args.apiKey = resolveEffectiveApiKey('sandbox').key;
 
-  const key = classifyKey(args.apiKey, getMode());
+  const key = classifyKey(args.apiKey);
   if (!key.ok) {
     console.error(pc.red(`  ${key.reason}`));
     process.exit(1);

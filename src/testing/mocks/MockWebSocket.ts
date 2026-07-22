@@ -4,8 +4,8 @@
  * can drive connection changes, deltas, and bootstrap hints by hand.
  */
 
-import type { SyncActionType } from '../../types/index.js';
-import type { BootstrapReason } from '../../wire/bootstrapReason.js';
+import type { SyncActionType } from '../../stores/syncAction.js';
+import type { BootstrapReason } from '../../transaction/wire/bootstrapReason.js';
 
 /** The shape of a single delta — one change the server pushes to the client. */
 export interface MockDelta {

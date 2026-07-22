@@ -8,6 +8,7 @@ Claims don't lock. If another writer holds the row, `claim` waits for them and r
 
 Don't hand-write the integration. Run the CLI; it generates the current-API schema, client, the database connection (logical replication by default, or a signed Data Source endpoint as the fallback), and (for Next.js) the browser provider + session route:
 
+- **Read the docs for THIS version:** `npx ablo docs` lists every page, `npx ablo docs <page>` prints one. They ship inside the installed package, so they describe the code in `node_modules` and work with no network. Read them instead of a docs URL — a website describes the newest release, so against a pinned version it will hand you a call your package doesn't have (`retrieve`/`list` replaced `get`/`getAll`/`getCount` in 0.35.0).
 - **Scaffold:** `npx ablo init --yes` — flag-driven, never prompts. Override defaults with `--framework <nextjs|vite|remix|vanilla>`, `--auth <apikey|…>`, `--no-agent`, `--no-pull`, `--no-install`, `--no-login`. (Plain `ablo init` needs a TTY and will **HANG** in an agent/CI run — always pass `--yes`.)
 - **Auth:** set `ABLO_API_KEY` in the environment. Do **NOT** run `ablo login` — it opens a browser device flow and blocks an agent.
 - **Connect your database — logical replication (the primary path):** `npx ablo connect` prints the setup SQL (`wal_level=logical`, a publication, a `REPLICATION` role); `npx ablo connect register` registers the source with Ablo in one step. Ablo **consumes your Postgres' logical-replication stream** — it never runs DDL on, writes to, owns, or migrates your database, and your application keeps the write path. Registration **is** the enable; there is no tier or flag to pick. (Ablo hosts only the transaction log + coordination, never your rows.)
@@ -15,7 +16,7 @@ Don't hand-write the integration. Run the CLI; it generates the current-API sche
 - **No database yet?** A sandbox `sk_test` key holds throwaway **test data** (Stripe-test-mode style) so you can try Ablo before connecting your own Postgres. Test-mode only — in production every row lives in your database.
 - **Adopt an existing DB schema:** `npx ablo pull prisma [path]` / `pull drizzle <module>` (lossless) or `pull` (live DB, lossy). Writes `ablo/schema.ts`.
 - **Push your schema — REQUIRED before any write works.** The server keeps its OWN copy of the schema. After you create or edit `ablo/schema.ts`, run `npx ablo push` (one-shot) — or `npx ablo dev --no-watch`. **Skip this and every write to a new or changed model fails with `server_execute_unknown_model`.** (Plain `ablo dev` watches forever — never run it bare in an agent.)
-- **Other long-running:** `npx ablo logs --no-follow` (default tails forever). `npx ablo mode test|live` ALWAYS pass the argument. `status`, `push`, `pull`, `check`, `generate` are one-shot — safe as-is.
+- **Other long-running:** `npx ablo logs --no-follow` (default tails forever). `npx ablo mode test|live` ALWAYS pass the argument. `status`, `push`, `pull`, `check`, `generate`, `docs` are one-shot — safe as-is.
 
 When you use the signed-endpoint fallback, the generated `ablo/data-source.ts` is the whole endpoint and needs no hand-editing: `dataSourceNext({ schema, apiKey, adapter: prismaDataSource(prisma, schema) })` (or `drizzleDataSource(db, schema)`). The adapter owns commit / idempotency / outbox.
 

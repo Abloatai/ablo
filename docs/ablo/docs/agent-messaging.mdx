@@ -1,5 +1,8 @@
 ---
 title: "Agent Messaging"
+description: "Durable handoffs between agents, linked to the claim they are about."
+sidebar:
+  icon: messages-square
 ---
 
 Use a normal model when agents or humans need durable communication inside a
@@ -34,7 +37,6 @@ export const schema = defineSchema({
       status: z.string(),
       teamId: z.string(),
     },
-    {},
     { entityRoles: [entityRole({ kind: "team", source: "teamId" })] },
   ),
 
@@ -49,7 +51,6 @@ export const schema = defineSchema({
       aboutEntityId: z.string().optional(),
       aboutIntentId: z.string().optional(),
     },
-    {},
     { entityRoles: [entityRole({ kind: "team", source: "teamId" })] },
   ),
 });
@@ -123,7 +124,7 @@ Peers outside that syncGroup do not.
 Live clients read locally and update when deltas arrive:
 
 ```ts
-const rows = ablo.messages.getAll({
+const rows = ablo.messages.local.list({
   where: { teamId },
   orderBy: { createdAt: "asc" },
 });

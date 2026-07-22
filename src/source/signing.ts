@@ -27,8 +27,15 @@ export interface SourceSignatureOptions {
 
 /** Inputs to {@link verifyAbloSourceRequest}. */
 export interface SourceSignatureVerificationOptions {
-  /** The incoming request, whose headers carry the signature to check. */
-  readonly request: Request;
+  /**
+   * The incoming request, whose headers carry the signature to check. Any
+   * request-shaped object works: a fetch `Request` (its `Headers` is read with
+   * `.get`), or a plain header record like Node's `req.headers` — matching
+   * what the runtime has always accepted.
+   */
+  readonly request: {
+    readonly headers?: Headers | Record<string, string | string[] | undefined>;
+  };
   /** The request body, which must match what was signed. */
   readonly body: string;
   /** The API key to verify against. */
@@ -86,17 +93,20 @@ export class SourceSignatureError extends Error {
 
 const DEFAULT_SIGNATURE_TOLERANCE_MS = 5 * 60 * 1000;
 
-function getHeader(request: Request, name: string): string | null {
-  const headers = request.headers as
-    | Headers
-    | Record<string, string | undefined>
-    | undefined;
+function getHeader(
+  request: SourceSignatureVerificationOptions['request'],
+  name: string,
+): string | null {
+  const headers = request.headers;
   if (!headers) return null;
   if (typeof (headers as Headers).get === 'function') {
     return (headers as Headers).get(name);
   }
-  const record = headers as Record<string, string | undefined>;
-  return record[name] ?? record[name.toLowerCase()] ?? null;
+  const record = headers as Record<string, string | string[] | undefined>;
+  const value = record[name] ?? record[name.toLowerCase()] ?? null;
+  // Node folds repeated headers into an array; the signature headers are
+  // single-valued, so the first entry is the one that was signed.
+  return Array.isArray(value) ? (value[0] ?? null) : value;
 }
 
 /**

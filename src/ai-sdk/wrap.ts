@@ -4,7 +4,7 @@
  * Tool implementations do not change. Keep tools as normal AI SDK tools; use
  * `ablo.<model>.update({ id, data, claim })` inside `execute`. This wrapper is
  * only for the surrounding model call, when the UI already knows "this turn is
- * about deck_abc" before the model chooses a tool.
+ * about report_abc" before the model chooses a tool.
  *
  * It declares one realtime claim while the model is generating and injects a
  * short note if someone else is already working on the same target.
@@ -13,7 +13,7 @@
  * const wrapped = wrapWithMultiplayer({
  *   model: anthropic('claude-opus-4-7'),
  *   agent,
- *   target: { type: 'SlideDeck', id: 'deck-abc' },
+ *   target: { type: 'Report', id: 'report-abc' },
  * });
  *
  * const result = streamText({
@@ -32,7 +32,7 @@ import type {
   LanguageModelV3Middleware,
 } from '@ai-sdk/provider';
 import type { Ablo } from '../client/Ablo.js';
-import type { SchemaRecord } from '../schema/schema.js';
+import type { SchemaRecord } from '../transaction/schema/schema.js';
 import {
   coordinationContextMiddleware,
   type ClaimTarget,

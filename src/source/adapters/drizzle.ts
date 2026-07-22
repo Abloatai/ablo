@@ -34,7 +34,7 @@
  * generics.
  */
 
-import { AbloValidationError } from '../../errors.js';
+import { AbloValidationError } from '../../transaction/errors.js';
 import { sql, type SQL } from 'drizzle-orm';
 import type {
   AdapterCommitResult,
@@ -51,10 +51,10 @@ import {
   SOURCE_IDEMPOTENCY_RETENTION,
   sourceChangeIntentHash,
 } from '../idempotency.js';
-import type { Schema, SchemaRecord } from '../../schema/schema.js';
+import type { Schema, SchemaRecord } from '../../transaction/schema/schema.js';
 import { toSchemaJSON } from '../../schema/serialize.js';
 import { camelToSnake, snakeToCamel } from '../../schema/ddl.js';
-import { tenancyColumn } from '../../schema/tenancy.js';
+import { tenancyColumn } from '../../transaction/schema/tenancy.js';
 import { ABLO_POSTGRES_COMMIT_ECHO_PREFIX } from '../types.js';
 
 /** The subset of a Drizzle database/transaction handle the adapter calls. */

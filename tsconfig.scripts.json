@@ -1,0 +1,28 @@
+{
+  // Typecheck config for the repo-tooling scripts written in TypeScript
+  // (scripts/*.mts). These are never bundled or shipped — tsx runs them
+  // directly — so nothing else in the package's build graph covers them, and
+  // for a long time they were checked by nothing at all. That gap let a
+  // generator declare `key: 'intent'` against a `key: ErrorCategory`
+  // annotation and silently emit an empty docs section, so the config exists
+  // to make an invalid category a compile error rather than a missing page.
+  //
+  // They import their sources with explicit `.mts` specifiers (real ESM, as
+  // tsx executes them), hence NodeNext + allowImportingTsExtensions. The
+  // `@ablo/source` custom condition inherited from ../tsconfig/base.json
+  // resolves `@ablo/transaction` to that package's `src`, so this runs
+  // without a prior build — matching how `npm run generate:errors` behaves.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "rootDir": "."
+  },
+  "include": ["scripts/**/*.mts"],
+  // Reads the built `../dist`, so type-checking it would fail on a clean tree
+  // and pass or fail depending on how stale dist happened to be. It is
+  // covered by actually running it against a real build instead.
+  "exclude": ["node_modules", "dist", "scripts/verify-drizzle-roundtrip.mts"]
+}

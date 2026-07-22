@@ -6,7 +6,7 @@
  * client sync logic without a live server.
  */
 
-import type { BootstrapType } from '../../types/index.js';
+import type { BootstrapType } from '../../transaction/types/index.js';
 
 export type BootstrapModelData = Record<string, Record<string, unknown>[]>;
 

@@ -18,17 +18,19 @@
  */
 
 import pc from 'picocolors';
-import { AbloValidationError } from '../errors.js';
-import { classifyCredentialKind } from '../auth/credentialPolicy.js';
+import { AbloValidationError, translateHttpError } from '../transaction/errors.js';
+import { classifyCredentialKind } from '../transaction/auth/credentialPolicy.js';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { execFileSync } from 'child_process';
 import { confirm, text, isCancel, cancel } from '@clack/prompts';
 import { serializeSchema, schemaHash, type Schema } from '@abloatai/ablo/schema';
-import { ABLO_DEFAULT_BASE_URL } from '../client/hostedEndpoints.js';
-import { resolveEffectiveApiKey, getMode, type EffectiveKeySource } from './config';
-import { resolveTarget, describeMismatch, type ResolvedTarget } from './target';
+import { ABLO_DEFAULT_BASE_URL } from '../transaction/auth/hostedEndpoints.js';
+import { resolveEffectiveApiKey, type EffectiveKeySource } from './config';
+import { resolveTarget, describeMismatches, type ResolvedTarget } from './target';
 import { brand } from './theme';
+import { renderCliError } from './renderError';
+import { participantKindSchema } from '../transaction/coordination/schema.js';
 
 export interface PushArgs {
   schemaPath: string;
@@ -40,8 +42,6 @@ export interface PushArgs {
   backfills: { model: string; field: string; value: string | number | boolean }[];
   /** Skip the interactive confirmation (CI / scripted deploys). */
   yes: boolean;
-  /** Don't refuse a production push when the schema file has uncommitted changes. */
-  allowDirty: boolean;
   /** Compute and print the plan — target, model diff, and git state — then exit
    *  without applying anything, so you can preview a deploy before running it. */
   dryRun: boolean;
@@ -146,7 +146,6 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
   let url = process.env.ABLO_API_URL ?? DEFAULT_URL;
   let force = false;
   let yes = false;
-  let allowDirty = false;
   let dryRun = false;
   const renames: { from: string; to: string }[] = [];
   const backfills: { model: string; field: string; value: string | number | boolean }[] = [];
@@ -171,7 +170,8 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
         yes = true;
         break;
       case '--allow-dirty':
-        allowDirty = true;
+        // Accepted and ignored: git state is a note now, never a refusal, so
+        // old scripts passing this keep working with nothing to override.
         break;
       case '--dry-run':
       case '--plan':
@@ -209,7 +209,7 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
 
   // Strip a trailing slash so `${url}/api/schema` is well-formed.
   url = url.replace(/\/+$/, '');
-  return { schemaPath, exportName, url, apiKey: process.env.ABLO_API_KEY, force, renames, backfills, yes, allowDirty, dryRun };
+  return { schemaPath, exportName, url, apiKey: process.env.ABLO_API_KEY, force, renames, backfills, yes, dryRun };
 }
 
 /** Dynamically import the user's schema module (TS) and return the export. */
@@ -300,7 +300,7 @@ async function fetchActiveSchema(url: string, apiKey: string): Promise<RemoteSch
 /** Compact conflict string for a diff line: `{user:overwrite,agent:reject}` or ''. */
 function conflictStr(c: Record<string, string> | null | undefined): string {
   if (!c) return '';
-  const parts = (['user', 'agent', 'system'] as const).flatMap((k) => (c[k] ? [`${k}:${c[k]}`] : []));
+  const parts = participantKindSchema.options.flatMap((k) => (c[k] ? [`${k}:${c[k]}`] : []));
   return parts.length ? `{${parts.join(',')}}` : '';
 }
 
@@ -349,10 +349,15 @@ function printPlan(local: Map<string, string>, remote: RemoteSchema | null): voi
 /**
  * Pre-flight gate run after the banner + plan, before the write. Encodes the
  * sandbox/production separation: sandbox confirms interactively (and proceeds
- * silently when not a TTY, so the dev/CI loop never hangs); production is gated
- * hard — uncommitted schema is refused (unless `--allow-dirty`), and applying
- * requires a typed confirmation (TTY) or an explicit `--yes` (CI). Calls
- * `process.exit(1)` on refusal/cancel; returns when clear to apply.
+ * silently when not a TTY, so the dev/CI loop never hangs); production
+ * requires a typed confirmation (TTY) or an explicit `--yes` (CI).
+ *
+ * Deliberately NO git gate: Ablo blocks only on what it is authoritative
+ * about — the DESTINATION (the typed project-name confirmation below). Whether
+ * the schema file is committed is the user's workflow, so git state is a
+ * one-line note earlier in the flow, never a refusal. (The old refusal was
+ * also theater: `--yes` skipped it, so CI never saw it and only humans paid.)
+ * Calls `process.exit(1)` on refusal/cancel; returns when clear to apply.
  */
 async function confirmPush(args: PushArgs, target: ResolvedTarget): Promise<void> {
   const env = target.confirmed?.environment ?? target.keyEnv;
@@ -360,12 +365,6 @@ async function confirmPush(args: PushArgs, target: ResolvedTarget): Promise<void
   const tty = Boolean(process.stdout.isTTY && process.stdin.isTTY);
 
   if (isProd && !args.yes) {
-    const git = schemaGitState(args.schemaPath);
-    if (git?.dirty && !args.allowDirty) {
-      console.error(`  ${pc.red('✗')} Refusing to deploy uncommitted schema to ${pc.red(pc.bold('production'))}.`);
-      console.error(pc.dim(`    Commit ${pc.bold(args.schemaPath)} first, or pass ${pc.bold('--allow-dirty')} to override.`));
-      process.exit(1);
-    }
     if (!tty) {
       console.error(`  ${pc.red('✗')} Refusing to deploy to ${pc.red(pc.bold('production'))} non-interactively without confirmation.`);
       console.error(pc.dim(`    Re-run with ${pc.bold('--yes')} to confirm in CI/scripts.`));
@@ -427,9 +426,6 @@ function printPushTarget(
       : env === 'sandbox'
         ? pc.bold('sandbox')
         : pc.yellow('unknown env');
-  const cliMode = getMode();
-  const modeNote = env && env !== cliMode ? ` ${pc.yellow(`(cli mode: ${cliMode})`)}` : '';
-
   // Project + org: server-confirmed when available, otherwise the local
   // preference with an explicit "unconfirmed" marker.
   let projectLabel: string;
@@ -446,7 +442,9 @@ function printPushTarget(
     projectLabel = `${shown} ${pc.yellow('(unconfirmed — server did not answer)')}`;
   }
 
-  console.log(`\n  ${brand('ablo')} ${pc.dim('push')} ${pc.dim('→')} ${envLabel}${modeNote}`);
+  // ONE statement of the target — never two truths on this line. A divergence
+  // from the saved workspace selection is the note below, not a parenthetical.
+  console.log(`\n  ${brand('ablo')} ${pc.dim('push')} ${pc.dim('→')} ${envLabel}`);
   if (confirmed?.organizationId) console.log(`  ${pc.dim('org')}      ${pc.dim(confirmed.organizationId)}`);
   console.log(`  ${pc.dim('project')}  ${projectLabel}`);
   console.log(`  ${pc.dim('target')}   ${pc.dim(target.url)}`);
@@ -462,11 +460,9 @@ function printPushTarget(
  *  whether any project-level drift was found — the kind a production push must
  *  make the operator acknowledge by name. */
 function warnMismatches(target: ResolvedTarget): { projectDrift: boolean } {
-  let projectDrift = false;
-  for (const m of target.mismatches) {
-    if (m.kind === 'project') projectDrift = true;
-    console.log(`  ${pc.yellow('⚠')}  ${pc.yellow(describeMismatch(m))}\n`);
-  }
+  const projectDrift = target.mismatches.some((m) => m.kind === 'project');
+  const note = describeMismatches(target.mismatches);
+  if (note) console.log(`  ${pc.yellow('⚠')}  ${pc.yellow(note)}\n`);
   return { projectDrift };
 }
 
@@ -509,12 +505,13 @@ export async function push(argv: readonly string[]): Promise<void> {
 
   if (!args.apiKey) {
     // Point at both environments, since either kind of key would work here.
+    // No mode talk: with no key there is no target, and the key is what picks
+    // one (sk_test_ → sandbox, sk_live_ → production).
     console.error(
       pc.red(`  No API key.`) +
         pc.dim(
-          ` Run ${pc.bold('npx ablo login')} for the sandbox dev loop — or set ${pc.bold('ABLO_API_KEY')} ` +
-            `(${pc.bold('sk_test_')} = sandbox; ${pc.bold('sk_live_')} = deliberate production deploy). ` +
-            `Mode is currently '${getMode()}'.`,
+          ` Run ${pc.bold('npx ablo login')} — or set ${pc.bold('ABLO_API_KEY')} ` +
+            `(${pc.bold('sk_test_')} = sandbox; ${pc.bold('sk_live_')} = production).`,
         ),
     );
     process.exit(1);
@@ -706,7 +703,13 @@ export async function push(argv: readonly string[]): Promise<void> {
       );
     }
   } else {
-    console.error(pc.red(`  Push failed (${status}): ${body.message ?? body.reason ?? bodyText}`));
+    // Everything the server rejects arrives as the Stripe-shaped envelope, so
+    // rebuild the typed error and let the ONE renderer lay it out — code, docs
+    // link, recovery hint, request id. Printing `body.message` alone threw all
+    // of that away: a stale plane registration reached the terminal as a bare
+    // `password authentication failed for user '<role>'`, naming a role but not
+    // the host, the environment, or a next step.
+    renderCliError(translateHttpError(status, Object.keys(body).length > 0 ? body : bodyText));
   }
   process.exit(1);
 }

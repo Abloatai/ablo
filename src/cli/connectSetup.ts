@@ -16,18 +16,18 @@ import type postgres from 'postgres';
 import { z } from 'zod';
 import { idempotencyLedgerMigrations } from '../source/migrations';
 
-/**
- * The canonical Postgres publication name that Ablo's replication reads from.
- * The setup SQL and the replication consumer both use exactly this name, so the
- * recipe you run and the runtime that connects can never disagree.
- */
-export const ABLO_PUBLICATION = 'ablo_publication';
+// The names of the objects the recipe creates come from the footprint, which is
+// also what the audit reads — so an object this setup starts creating cannot
+// become one the audit fails to look for. Imported as well as re-exported: a
+// bare `export … from` re-exports without binding the names in this module,
+// and the SQL builders below use all three.
+import {
+  ABLO_PUBLICATION,
+  ABLO_REPLICATION_ROLE,
+  ABLO_WRITE_ROLE,
+} from '../source/footprint.js';
 
-/** The least-privilege replication role the recipe prescribes. */
-export const ABLO_REPLICATION_ROLE = 'ablo_replicator';
-
-/** The separate least-privilege role used only for direct application DML. */
-export const ABLO_WRITE_ROLE = 'ablo_writer';
+export { ABLO_PUBLICATION, ABLO_REPLICATION_ROLE, ABLO_WRITE_ROLE };
 
 export const DIRECT_DATA_SOURCE_ROUTES = [
   'public-allowlist',
@@ -137,6 +137,18 @@ export function connectSetupSql(input: {
     // and the table grants alone bound it.
     `CREATE ROLE ${quoteIdent(writeRole)} WITH LOGIN PASSWORD '<write-password>' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;`,
     `ALTER ROLE ${quoteIdent(writeRole)} SET row_security = on;`,
+    // Every Postgres database GRANTs TEMP on itself to PUBLIC out of the box,
+    // and PUBLIC grants reach every role regardless of NOINHERIT — so without
+    // this revoke the writer holds create/temp authority Ablo's write gate
+    // refuses, on a completely stock database. Database-level only: the
+    // schema-level CREATE the customer's own roles may rely on is never
+    // touched here (that stays a checklist fix they apply knowingly). Object
+    // owners keep their privileges implicitly; re-grant TEMPORARY to your own
+    // roles that need it.
+    `-- required: removes the create/temp defaults every login inherits, so the writer stays DML-only
+DO $$ BEGIN
+  EXECUTE format('REVOKE TEMPORARY, CREATE ON DATABASE %I FROM PUBLIC', current_database());
+END $$;`,
     `GRANT USAGE ON SCHEMA public TO ${quoteIdent(writeRole)};`,
     applicationGrant,
     ...writerSequenceGrants,

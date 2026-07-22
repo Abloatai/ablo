@@ -2,7 +2,7 @@
 
 import { useContext } from 'react';
 import { AbloInternalContext } from './internalContext.js';
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 
 /**
  * Returns the application user id passed to the nearest `<AbloProvider>`, or

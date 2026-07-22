@@ -7,11 +7,11 @@
  */
 
 import { z } from 'zod';
-import type { Schema } from '../schema/schema.js';
-import { baseFieldsSchema } from '../schema/schema.js';
+import type { Schema } from '../transaction/schema/schema.js';
+import { baseFieldsSchema } from '../transaction/schema/schema.js';
 import type { ModelRegistry } from '../ModelRegistry.js';
 import { Model } from '../Model.js';
-import { LoadStrategy, PropertyType } from '../types/index.js';
+import { PropertyType } from '../transaction/types/index.js';
 
 // ── Auto model registration from schema ───────────────────────────────────
 
@@ -62,10 +62,10 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
     const computed = (modelDef as { computed?: Record<string, (self: Record<string, unknown>) => unknown> }).computed;
     const DynamicModel = createDynamicModelClass(modelName, jsonSubFields, fieldNames, computed, isLazy);
 
-    // Respect the schema's load strategy so lazy models skip IDB hydration + bootstrap
-    const loadStrategy = modelDef.load === 'lazy' || modelDef.load === 'manual'
-      ? LoadStrategy.lazy
-      : LoadStrategy.instant;
+    // The schema's strategy carries straight through — authoring and runtime
+    // name the same set, so there is nothing here to translate and nothing to
+    // fall out of step. Lazy models skip IDB hydration and bootstrap.
+    const loadStrategy = modelDef.load;
 
     registry.registerModel(modelName, DynamicModel, {
       loadStrategy,
@@ -84,7 +84,7 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
     // id, and indexing every scalar is worse still.
     const indexedFields = new Set<string>();
     for (const relDef of Object.values(modelDef.relations)) {
-      if (relDef.type === 'belongsTo' && relDef.foreignKey && relDef.options?.index === true) {
+      if (relDef.type === 'belongsTo' && relDef.foreignKey && relDef.options.index === true) {
         indexedFields.add(relDef.foreignKey);
       }
     }
@@ -92,7 +92,7 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
     // Register fields as properties (from Zod shape).
     for (const [fieldName, rawZodType] of Object.entries(modelDef.shape)) {
       const zodType = rawZodType as z.ZodType;
-      const isOptional = zodType.isOptional?.() ?? false;
+      const isOptional = zodType.isOptional();
       // A field is indexed if it is the foreign key of a
       // `belongsTo({ index: true })` relation. A `description === 'indexed'` tag
       // also works, for consumers using the `field.*().indexed()` builder.
@@ -103,7 +103,7 @@ export function registerModelsFromSchema(schema: Schema, registry: ModelRegistry
       // would walk every nested property and create an atom per leaf, producing a
       // storm of updates on each commit or streaming change. Reference tracking
       // watches only reassignment, which is how blob consumers actually use them.
-      const wireType = modelDef.fields?.[fieldName]?.type;
+      const wireType = modelDef.fields[fieldName]?.type;
       const observability: 'deep' | 'shallow' | 'ref' | undefined =
         wireType === 'json' ? 'ref' : undefined;
       registry.registerProperty(modelName, fieldName, {

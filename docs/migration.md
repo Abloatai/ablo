@@ -1,5 +1,7 @@
 # Version History & Migration Guide
 
+> Every breaking change and the edit it requires, newest first.
+
 The breaking-changes-first companion to the [Changelog](../CHANGELOG.md). The
 changelog tells the story of each release; this page tells you exactly what to
 change when you upgrade.
@@ -11,6 +13,8 @@ change when you upgrade.
 
 | Version | What changed | What to do |
 |---|---|---|
+| **0.35.0** | Synchronous reads moved under `local`, mirroring the async verbs | `get(id)` → `local.retrieve(id)`; `getAll(options)` → `local.list(options)`; `getCount(options)` → `local.count(options)` |
+| **0.35.0** | `causedByTaskId` write option + seven `turn_*` error codes removed | Delete the `causedByTaskId` argument from writes; a branch on `turn_validation_failed` was unreachable and can go with it |
 | **0.34.0** | Presence verb renamed `watch` → `join` | `ablo.<model>.watch(ids)` → `ablo.<model>.join(ids)`; `useWatch` → `useJoin`; the `WatchOptions` / `UseWatchOptions` / `UseWatchReturn` types → `JoinOptions` / `UseJoinOptions` / `UseJoinReturn`; error code `model_watch_not_configured` → `model_join_not_configured` |
 | **0.28.0** | Removed React placeholders that had no working runtime | `usePresence` → `usePeers` or `useJoin`; `useClaim` → `ablo.<model>.claim`; `SyncGroupProvider` / `useSyncGroup` → `useJoin({ scope })` |
 | **0.11.0** | Historical `intent` → `claim` rename | The hook renamed in that release was later removed in 0.28.0. Current code uses `ablo.<model>.claim` or `useJoin` |
@@ -27,6 +31,60 @@ change when you upgrade.
 
 ---
 
+## 0.35.0 — the synchronous reads move under `local`
+
+```diff
+- const task  = ablo.tasks.get(id);
+- const open  = ablo.tasks.getAll({ where: { status: 'open' } });
+- const count = ablo.tasks.getCount({ where: { status: 'open' } });
++ const task  = ablo.tasks.local.retrieve(id);
++ const open  = ablo.tasks.local.list({ where: { status: 'open' } });
++ const count = ablo.tasks.local.count({ where: { status: 'open' } });
+```
+
+Options, return types, and reactivity inside `useAblo` selectors are unchanged.
+Every verb now matches its asynchronous sibling, and `local` narrows the read to
+what has already synced — which is what lets it return a value rather than a
+promise.
+
+`getAll` and `getCount` are distinctive enough to rename by search. `get` is not:
+in most codebases it is outnumbered many times over by `Map.get` and
+`headers.get`, and no search separates them. Upgrade the package first and let
+the compiler name the sites — each one is a type error at exactly the call that
+has to move.
+
+## 0.35.0 — `causedByTaskId` and the `turn_*` error codes removed
+
+0.9.2 retired the `turn` primitive but left one field standing: `causedByTaskId`
+on the write options bag. It was never usable. The server validated it against a
+task record that nothing in the system has ever created, so supplying it had the
+whole batch rejected with `turn_validation_failed`, while leaving it null passed
+straight through. The safe way to use the option was to not use it.
+
+**Removed:** `MutationOptions.causedByTaskId`, the seven `turn_*` error codes
+(`turn_validation_failed`, `turn_open_failed`, `turn_close_failed`,
+`turn_not_found`, `turn_foreign_agent`, `parent_turn_not_found`,
+`parent_turn_foreign_agent`), and the stored row's provenance slice
+(`deltaProvenanceSchema` and the `DeltaProvenance` type). `syncDeltaRowSchema` is
+now the core and attribution slices composed.
+
+```diff
+- await ablo.documents.update({ id, data, causedByTaskId: turnId });
++ await ablo.documents.update({ id, data });
+```
+
+Attribution is unaffected. A delta still records the actor, the `onBehalfOf`
+principal behind a delegated write, the capability that authorized it, and the
+claim it was made under — which is what answers "who did this, and by what
+right." On the wire the field was optional and nullable, so a client that still
+sends it is accepted and ignored.
+
+The `caused_by_task_id` column stays, for the reason 0.9.2 gave when it kept it:
+the audit hash-chain signs its value into every row. Dropping it is a versioned
+migration of its own.
+
+---
+
 ## 0.34.0 — presence verb renamed `watch` → `join`
 
 The model-level presence verb read like a data subscription but delivered
@@ -35,13 +93,13 @@ does. `ablo.<model>.join(ids, { ttl })` opens the participant handle
 (`.peers`, `.claims`, `await using` disposal); the returned `status` was
 already `'joined'`, and the layer beneath always called itself `join`, so the
 verb now matches. `onChange` remains the way to hear row *values* change, and
-`track` remains the durable read-dependency for actors.
+`track` remains the durable premise for actors.
 
 ```ts
 // before
-await using room = await ablo.slides.watch(slideIds, { ttl: '5m' });
+await using room = await ablo.documents.watch(documentIds, { ttl: '5m' });
 // after
-await using room = await ablo.slides.join(slideIds, { ttl: '5m' });
+await using room = await ablo.documents.join(documentIds, { ttl: '5m' });
 ```
 
 The React hook follows: `useWatch({ scope })` → `useJoin({ scope })`. There is
@@ -148,7 +206,7 @@ distinct stores.
 server-side actors (agents, workers, serverless): the same `ablo.<model>` surface
 and `claim` coordination, but each call is one HTTP round-trip with identity on
 the Bearer credential — no websocket, no local synced pool. The return type
-narrows, so stateful-only APIs (`get` / `getAll` / `onChange`) become compile
+narrows, so stateful-only APIs (the `local` reads, `onChange`) become compile
 errors instead of latent runtime gaps. Existing code keeps the default
 `'websocket'` transport, unchanged.
 
@@ -227,7 +285,7 @@ modifier are named siblings. Reactive local reads stay on the synchronous
 + await ablo.tasks.retrieve({ id })
 
 - useAblo((ablo) => ablo.tasks.retrieve(id)) ?? serverTask
-+ useAblo((ablo) => ablo.tasks.get(id)) ?? serverTask
++ useAblo((ablo) => ablo.tasks.local.retrieve(id)) ?? serverTask
 ```
 
 `claim` now returns a disposable handle instead of taking a callback. The handle

@@ -1,0 +1,40 @@
+---
+/**
+ * Makes the sidebar's group disclosures mutually exclusive — opening one closes
+ * the others.
+ *
+ * This is done by giving every sidebar `<details>` a shared `name`, which is the
+ * native HTML exclusive-accordion primitive: the browser then enforces
+ * one-open-at-a-time itself, with no click handlers, no state to keep in sync,
+ * and correct keyboard and screen-reader behavior for free.
+ *
+ * It's applied from here rather than in the sidebar component because Blume owns
+ * that component (`NavTree.astro`, ~500 lines covering three display modes, the
+ * mobile drawer, i18n, and RTL) — ejecting the whole thing via `blume add
+ * sidebar` to set one attribute would fork it away from upstream fixes.
+ *
+ * Scoped to `[data-blume-nav-drawer]`, the single element that is the mobile
+ * drawer and, at `lg:`, the sticky desktop sidebar. That deliberately excludes
+ * the other disclosures on the page — the mobile "On this page" outline and the
+ * export menu in the page actions — which must keep opening independently.
+ */
+---
+
+<script is:inline>
+  (() => {
+    const GROUP_NAME = "blume-sidebar-group";
+    const apply = () => {
+      const sidebar = document.querySelector("[data-blume-nav-drawer]");
+      if (!sidebar) return;
+      for (const el of sidebar.querySelectorAll("details")) {
+        // Only top-level groups: a nested disclosure sharing the name would
+        // close its own parent as it opened, hiding itself.
+        if (el.parentElement?.closest("details")) continue;
+        el.name = GROUP_NAME;
+      }
+    };
+    apply();
+    // Re-apply after client-side navigation, when the sidebar is re-rendered.
+    document.addEventListener("astro:page-load", apply);
+  })();
+</script>

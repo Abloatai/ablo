@@ -36,10 +36,15 @@
  *                            from a prior integration; reports, never drops.
  */
 
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import pc from 'picocolors';
 import postgres from 'postgres';
-import { readProjectWriteDatabaseUrl, readProjectReplicationUrlWithSource } from './dbRole';
+import { ABLO_FOOTPRINT, type FootprintKind } from '../source/footprint.js';
+import {
+  readProjectWriteDatabaseUrl,
+  readProjectReplicationUrlWithSource,
+  readProjectAdminDatabaseUrl,
+} from './dbRole';
 import { resolveApiKey } from './config';
 import { apiBaseUrl } from './push';
 import { brand } from './theme';
@@ -118,6 +123,13 @@ export interface ConnectArgs {
   writeRole: string;
   /** The established inbound network route; every value here is direct. */
   route: DirectDataSourceRoute;
+  /**
+   * `--manual`: print the setup SQL instead of running it, even when a credential
+   * is reachable. Bare `ablo connect` runs the seamless apply path when it can
+   * reach the database and a person is present to confirm; this forces the recipe
+   * for someone who would rather run the statements themselves.
+   */
+  manual: boolean;
 }
 
 /**
@@ -138,6 +150,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
   let yes = false;
   let showSql = false;
   let scan = false;
+  let manual = false;
   let tables: readonly string[] = [];
   let role = ABLO_REPLICATION_ROLE;
   let writeRole = ABLO_WRITE_ROLE;
@@ -184,6 +197,9 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
         break;
       case '--show-sql':
         showSql = true;
+        break;
+      case '--manual':
+        manual = true;
         break;
       case '--tables': {
         const value = argv[++i] ?? '';
@@ -232,6 +248,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
     role,
     writeRole,
     route,
+    manual,
   };
 }
 
@@ -358,22 +375,22 @@ interface PgErrorLike {
   message?: string;
 }
 
-export type SyncInfraArtifactKind = 'relation' | 'type';
-
+/**
+ * One entry of the audit: a footprint object and whether this database has it.
+ * The declaration is carried through rather than flattened to a name, so the
+ * report can lead with what leaving the object behind costs.
+ */
 export interface SyncInfraArtifact {
-  readonly kind: SyncInfraArtifactKind;
+  readonly kind: FootprintKind;
   readonly name: string;
   readonly present: boolean;
+  /** What it is for, from the footprint declaration. */
+  readonly purpose: string;
+  /** Set when leaving it in place has a cost worth naming. */
+  readonly hazard?: string;
+  /** Installed by an older Ablo only — never by a current one. */
+  readonly retired?: boolean;
 }
-
-const SYNC_INFRA_RELATIONS = [
-  'sync_deltas',
-  'sync_id_seq',
-  'sync_metadata',
-  'mutation_log',
-] as const;
-
-const SYNC_INFRA_TYPES = ['participant_kind', 'backfill_provenance', 'confirmation_state'] as const;
 
 /** Render a checklist item the way `ablo check` renders model rows. */
 function printCheckItem(item: CheckItem): void {
@@ -554,27 +571,50 @@ export async function probeDirectWriteReadiness(
   return items;
 }
 
+/** The catalog lookup that answers "is this object here", per object class. */
+const FOOTPRINT_LOOKUP: Readonly<Record<FootprintKind, string>> = {
+  table: `SELECT to_regclass($1)::text IS NOT NULL AS present`,
+  type: `SELECT to_regtype($1)::text IS NOT NULL AS present`,
+  publication: `SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1) AS present`,
+  slot: `SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1) AS present`,
+  role: `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) AS present`,
+};
+
 /**
- * Detects leftover Ablo-owned sync tables and types in the connected database.
- * Read-only by design — it reports what it finds and never drops anything, since
- * removing this infrastructure is a deliberate, confirmed step rather than
- * something the CLI does on its own.
+ * Reports which parts of Ablo's footprint this database still holds.
+ *
+ * Read-only by design: it reports and never drops, since removing any of it is a
+ * deliberate, confirmed step rather than something the CLI does on its own.
+ *
+ * It walks {@link ABLO_FOOTPRINT} — the same declaration the setup SQL and the
+ * replication runtime read — rather than a list of its own. The list of its own
+ * is why this audit spent a generation looking only for tables an earlier Ablo
+ * installed, while reporting nothing about the publication, the roles, the
+ * bookkeeping table, or the replication slot that Ablo actually leaves behind.
  */
 export async function auditTenantSyncInfra(
   sql: postgres.Sql
 ): Promise<readonly SyncInfraArtifact[]> {
   const artifacts: SyncInfraArtifact[] = [];
-  for (const name of SYNC_INFRA_RELATIONS) {
-    const rows = await sql.unsafe<{ reg: string | null }[]>(`SELECT to_regclass($1)::text AS reg`, [
-      `public.${name}`,
-    ] as never[]);
-    artifacts.push({ kind: 'relation', name, present: rows[0]?.reg != null });
-  }
-  for (const name of SYNC_INFRA_TYPES) {
-    const rows = await sql.unsafe<{ reg: string | null }[]>(`SELECT to_regtype($1)::text AS reg`, [
-      `public.${name}`,
-    ] as never[]);
-    artifacts.push({ kind: 'type', name, present: rows[0]?.reg != null });
+  for (const artifact of ABLO_FOOTPRINT) {
+    // Tables and types are resolved through the search path; a publication,
+    // slot, or role is cluster- or database-wide and has no schema.
+    const key =
+      artifact.kind === 'table' || artifact.kind === 'type'
+        ? `public.${artifact.name}`
+        : artifact.name;
+    const rows = await sql.unsafe<{ present: boolean | null }[]>(
+      FOOTPRINT_LOOKUP[artifact.kind],
+      [key] as never[]
+    );
+    artifacts.push({
+      kind: artifact.kind,
+      name: artifact.name,
+      present: rows[0]?.present === true,
+      purpose: artifact.purpose,
+      ...(artifact.hazard ? { hazard: artifact.hazard } : {}),
+      ...(artifact.retired ? { retired: true } : {}),
+    });
   }
   return artifacts;
 }
@@ -823,27 +863,46 @@ async function runScan(): Promise<void> {
   await sql.end({ timeout: 2 });
 
   console.log(
-    `\n  ${brand('ablo')} ${pc.dim('connect scan')}  ${pc.dim('audit for leftover Ablo sync infrastructure')}\n`
+    `\n  ${brand('ablo')} ${pc.dim('connect scan')}  ${pc.dim("what Ablo has in this database")}\n`
   );
   const present = artifacts.filter((a) => a.present);
   if (present.length === 0) {
-    console.log(`  ${pc.green('✓')} No deprecated Ablo sync infrastructure found in public.\n`);
+    console.log(`  ${pc.green('✓')} Nothing of Ablo's is in this database.\n`);
     process.exit(0);
   }
 
-  for (const artifact of present) {
-    const label = artifact.kind === 'type' ? 'type' : 'relation';
-    console.log(`  ${pc.yellow('!')} ${label} ${pc.bold(`public.${artifact.name}`)} exists`);
+  // Current objects are what a connected database is SUPPOSED to hold, so they
+  // are reported, not flagged. Retired ones are the leftovers — no current Ablo
+  // creates them, so their presence is always something to clean up.
+  const current = present.filter((a) => !a.retired);
+  const retired = present.filter((a) => a.retired);
+
+  if (current.length > 0) {
+    console.log(`  ${pc.dim("What Ablo's setup put here:")}\n`);
+    for (const artifact of current) {
+      console.log(`  ${pc.green('•')} ${artifact.kind} ${pc.bold(artifact.name)}`);
+      console.log(`      ${pc.dim(artifact.purpose)}`);
+      // The slot is the one object whose cost of being left behind is the
+      // database's, not Ablo's — so it is said out loud rather than filed
+      // under a name the reader would have to already understand.
+      if (artifact.hazard) console.log(`      ${pc.yellow(artifact.hazard)}`);
+    }
+    console.log('');
   }
-  console.log(
-    `\n  ${pc.yellow(`${present.length} artifact${present.length === 1 ? '' : 's'} found`)} ` +
-      pc.dim(
-        '— do not drop automatically. Confirm the org/environment is log-authoritative, then follow '
-      ) +
-      pc.bold('docs/runbooks/wal-stage5-customer-db-infra-cleanup.md') +
-      pc.dim('.\n')
-  );
-  process.exit(1);
+
+  if (retired.length > 0) {
+    console.log(`  ${pc.dim('Left by an older version of Ablo — safe to remove:')}\n`);
+    for (const artifact of retired) {
+      console.log(`  ${pc.yellow('!')} ${artifact.kind} ${pc.bold(artifact.name)}`);
+      console.log(`      ${pc.dim(artifact.purpose)}`);
+    }
+    console.log(
+      `\n  ${pc.dim('Nothing is dropped for you — removing any of it is your call. Once this ')}` +
+        `${pc.dim("database is disconnected, none of it is read again.")}\n`
+    );
+  }
+
+  process.exit(retired.length > 0 ? 1 : 0);
 }
 
 export async function connect(argv: readonly string[]): Promise<void> {
@@ -881,6 +940,34 @@ export async function connect(argv: readonly string[]): Promise<void> {
     await runScan();
     return;
   }
+
+  // Bare `ablo connect`, no subcommand. The seamless path — plain-language plan,
+  // confirm, apply — is fully built inside `apply` and carries every property
+  // the SQL wall was standing in for: two scoped roles rather than one omnipotent
+  // one, an admin credential used once and never persisted, a footprint that
+  // `connect scan` audits and `connect deregister` removes. What reads as
+  // enterprise ceremony is the wall of DDL, and that is a presentation default,
+  // not the security model — `apply` already hides its own SQL behind
+  // `--show-sql` on the same principle. So bare `connect` runs `apply` WHEN it is
+  // safe to, and prints the recipe otherwise:
+  //
+  //   - no reachable credential          → recipe (there is nothing to apply with)
+  //   - no TTY and no explicit `--yes`   → recipe (an agent or CI job, with no
+  //                                        human to see the confirm — the one
+  //                                        case where auto-applying is reckless)
+  //   - `--manual`                       → recipe (asked for it)
+  //   - otherwise                        → apply (a person, at a database Ablo
+  //                                        can reach; `apply` still confirms)
+  //
+  // `apply` owns the confirm and its own non-TTY guard, so this decides only
+  // whether the seamless path is even offered, never whether it runs unattended.
+  const credentialReachable = (args.url ?? readProjectAdminDatabaseUrl()) != null;
+  const canConfirm = process.stdout.isTTY || args.yes;
+  if (!args.manual && credentialReachable && canConfirm) {
+    const { runConnectApply } = await import('./connectApply');
+    await runConnectApply(args);
+    return;
+  }
   printConnectRecipe(args);
 }
 
@@ -888,28 +975,36 @@ export async function connect(argv: readonly string[]): Promise<void> {
  * Usage text for `ablo connect --help`. Kept beside the parser (and exported
  * so the CLI dispatcher can print it) so the two never drift.
  */
-export const CONNECT_USAGE = `  ablo connect — direct writes, settled by logical replication
+export const CONNECT_USAGE = `  ablo connect — connect your own database
 
-  Ablo applies coordinated DML with a scoped writer role. WAL observes what committed,
-  orders it with external changes, and confirms it. Your Postgres remains authoritative.
+  Your database stays the source of truth. Ablo writes through a narrowly scoped
+  login you create, watches what actually commits, and confirms each write back.
 
   Usage:
-    npx ablo connect                      Print the exact setup SQL instead of running it
-    npx ablo connect apply                Set it up end to end: create the roles, publish, register
-    npx ablo connect register             Register both scoped credentials as one direct DataSource (hand-run-SQL path)
-    npx ablo connect deregister           Remove this project's data source — Ablo stops reading/writing it
-    npx ablo connect check                Verify the connected database from Ablo's side (needs only ABLO_API_KEY)
-    npx ablo connect rotate               New passwords for both scoped roles, then re-register
-    npx ablo connect scan                 Read-only audit for leftover Ablo sync tables/types (never drops)
+    npx ablo connect                      Set it up for you when Ablo can reach your database; otherwise print the SQL
+    npx ablo connect --manual             Print the exact setup SQL instead of running it
+    npx ablo connect register             Register the logins after running the SQL yourself
+    npx ablo connect deregister           Disconnect this project's database — Ablo stops reading and writing it
+    npx ablo connect check                Confirm the connected database is ready, from Ablo's side (needs only ABLO_API_KEY)
+    npx ablo connect rotate               New passwords for both logins, then re-register
+    npx ablo connect scan                 List anything Ablo ever set up in your database (read-only, never drops)
+
+  Running it: bare \`ablo connect\` sets everything up for you — creating the two
+  scoped logins, sharing your tables, and registering — whenever it finds a
+  database it can reach (\`--url\`, else DATABASE_URL) and a terminal to confirm in.
+  With no reachable database, no terminal (an agent or CI run) unless you pass
+  \`--yes\`, or \`--manual\`, it prints the SQL for you to run yourself. \`apply\` is
+  kept as an explicit spelling of the same thing.
 
   Modifiers:
-    --url <admin-conn>   Admin connection for apply/rotate (else DATABASE_URL)
+    --url <admin-conn>   Admin connection used once to set up (else DATABASE_URL); never stored
     --tables a,b,c       Publish only these tables (default: all tables)
     --role <name>        Name the replication role (default: ablo_replicator)
     --write-role <name>  Name the DML role (default: ablo_writer)
     --route <route>      public-allowlist | privatelink | peering | vpn
-    --yes                Skip the apply confirmation (non-interactive)
-    --show-sql           Show the exact statements in the apply plan
+    --manual             Print the setup SQL instead of running it
+    --yes                Set up without the confirmation (non-interactive)
+    --show-sql           Show the exact statements before running them
 
   apply registers with Ablo directly; the admin credential is used only on this
   machine and never persisted. Your app holds only ABLO_API_KEY.`;

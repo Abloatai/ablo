@@ -10,12 +10,12 @@ import {
   createContext,
   type ReactNode,
 } from 'react';
-import type { Schema, SchemaRecord } from '../schema/schema.js';
+import type { Schema, SchemaRecord } from '../transaction/schema/schema.js';
 import { Ablo } from '../client/Ablo.js';
 import type {
   Claim,
   Peer,
-} from '../types/streams.js';
+} from '../transaction/types/streams.js';
 import type {
   EngineParticipant,
   ParticipantScope,
@@ -28,7 +28,7 @@ import {
 } from '../sync/participants.js';
 import { SyncContext, type SyncStoreContract } from './context.js';
 import { AbloInternalContext, type AbloInternalContextValue } from './internalContext.js';
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import { useSyncStatus } from './useSyncStatus.js';
 import { DefaultFallback } from './DefaultFallback.js';
 
@@ -415,7 +415,7 @@ export interface UseJoinOptions {
    * Default `false`: opening a scope subscribes the connection to its deltas
    * (read interest, via `update_subscription`) but does NOT claim it — a
    * viewer is not a claimant. Set `true` when the participant intends to
-   * WRITE (editing a deck, an agent staking work): the claim is sent so peers
+   * WRITE (editing a report, an agent staking work): the claim is sent so peers
    * observe it, and the scope is pinned so it stays subscribed (never warms)
    * for as long as the claim is held.
    */
@@ -427,15 +427,12 @@ export interface UseJoinOptions {
    * Default `false`: entering a scope subscribes to its FUTURE deltas only — if
    * the scope's rows aren't already loaded, the view is empty until something
    * changes. Set `true` when opening an entity that may not be loaded yet (a
-   * deep-linked deck, a never-opened sheet) so its current rows are fetched and
+   * deep-linked report, a never-opened ledger) so its current rows are fetched and
    * injected once, then kept fresh by the live tail. The fetch is single-flight
    * and runs once per group; a failure soft-fails (the live tail still flows).
    */
   readonly hydrate?: boolean;
 }
-
-/** @deprecated Use `ParticipantStatus`. */
-export type MeshParticipantStatus = ParticipantStatus;
 
 export interface UseJoinReturn {
   readonly participant: EngineParticipant | null;
@@ -468,8 +465,8 @@ export function useJoin(opts: UseJoinOptions): UseJoinReturn {
   const ctx = useContext(AbloInternalContext);
   const engine = ctx?.engine ?? null;
   const { paused = false } = opts;
-  // Resolve the model-form scope ({ decks: id } / refs) THROUGH the schema, so a
-  // model's declared `scope` kind is honored (typename `SlideDeck` → `deck:<id>`,
+  // Resolve the model-form scope ({ reports: id } / refs) THROUGH the schema, so a
+  // model's declared `scope` kind is honored (typename `Report` → `report:<id>`,
   // not the `type:id` string fallback). Schema appears once the engine is ready;
   // until then refs resolve by convention, then re-resolve when it arrives.
   const scopeKey = JSON.stringify(
@@ -547,7 +544,6 @@ export function useJoin(opts: UseJoinOptions): UseJoinReturn {
       return;
     if (syncStatus.name !== 'connected') return;
     const ws = engine._ws;
-    if (!ws) return;
     const store = engine._store;
 
     let cancelled = false;
@@ -623,7 +619,7 @@ export function useJoin(opts: UseJoinOptions): UseJoinReturn {
  * subscription on unmount).
  *
  * ```ts
- * const peers = usePeers({ slideDecks: deckId });
+ * const peers = usePeers({ reports: reportId });
  * const alone = !peers.some((p) => p.participantKind === 'user');
  * ```
  */
@@ -672,7 +668,7 @@ export function usePeers(scope?: ParticipantScope): readonly Peer[] {
  *
  * The generic parameter narrows the return type to your schema's
  * model record so call sites get typed `sync.tasks.findMany()` /
- * `sync.slides.create(...)` without a cast at the call site:
+ * `sync.sections.create(...)` without a cast at the call site:
  *
  * ```ts
  * const sync = useSync<(typeof schema)['models']>();

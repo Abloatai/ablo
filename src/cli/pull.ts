@@ -16,7 +16,7 @@
  * then confirm it with `ablo check`.
  */
 
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import pc from 'picocolors';
 import postgres from 'postgres';
 import { existsSync, writeFileSync } from 'fs';

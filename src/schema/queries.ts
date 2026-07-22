@@ -13,27 +13,27 @@
  *   } from '@abloatai/ablo/schema';
  *
  *   const schema = defineSchema({
- *     slideLayer: model(
- *       { slideId: z.string(), type: z.string() },
- *       { slide: relation.belongsTo('slides', 'slideId') },
- *       { load: 'lazy', typename: 'SlideLayer', persist: {} },
+ *     block: model(
+ *       { sectionId: z.string(), type: z.string() },
+ *       { section: relation.belongsTo('sections', 'sectionId') },
+ *       { load: 'lazy', typename: 'Block', persist: {} },
  *     ),
  *   });
  *
  *   const queries = defineQueries(schema, {
- *     slideLayersByDeck: query({
- *       input:   z.object({ deckId: z.string() }),
- *       returns: 'slideLayer',   // ← type-checked against schema.models
+ *     blocksByReport: query({
+ *       input:   z.object({ reportId: z.string() }),
+ *       returns: 'block',   // ← type-checked against schema.models
  *     }),
  *   });
  *
- *   type Input  = InferQueryInput<typeof queries.queries.slideLayersByDeck>;
- *   //    ^? { deckId: string }
+ *   type Input  = InferQueryInput<typeof queries.queries.blocksByReport>;
+ *   //    ^? { reportId: string }
  *   type Result = InferQueryResult<
  *     typeof schema,
- *     typeof queries.queries.slideLayersByDeck
+ *     typeof queries.queries.blocksByReport
  *   >;
- *   //    ^? Array<SlideLayer>
+ *   //    ^? Array<Block>
  *
  * Design notes:
  *
@@ -56,8 +56,8 @@
  */
 
 import { z } from 'zod';
-import type { Schema, InferModel, InferModelNames } from './schema.js';
-import { AbloValidationError } from '../errors.js';
+import type { Schema, InferModel, InferModelNames } from '../transaction/schema/schema.js';
+import { AbloValidationError } from '../transaction/errors.js';
 
 // ── Query definition types ────────────────────────────────────────────────
 
@@ -112,15 +112,15 @@ interface QuerySpec<
  * Define a query.
  *
  * `TReturns` is a `const` generic so TypeScript preserves the literal
- * type of the `returns` value at call time (e.g., `'slideLayer'`
+ * type of the `returns` value at call time (e.g., `'block'`
  * instead of widening to `string`). This is what lets `defineQueries`
  * type-check `returns` against the schema's model keys without
  * requiring the consumer to write `as const` manually.
  *
  * ```ts
- * const slideLayersByDeck = query({
- *   input:   z.object({ deckId: z.string() }),
- *   returns: 'slideLayer',
+ * const blocksByReport = query({
+ *   input:   z.object({ reportId: z.string() }),
+ *   returns: 'block',
  * });
  * ```
  */
@@ -167,8 +167,8 @@ export interface Queries<
  * Infer the input type of a query from its zod schema.
  *
  * ```ts
- * type Input = InferQueryInput<typeof queries.queries.slideLayersByDeck>;
- * // { deckId: string }
+ * type Input = InferQueryInput<typeof queries.queries.blocksByReport>;
+ * // { reportId: string }
  * ```
  */
 export type InferQueryInput<Q extends QueryDef> = z.infer<Q['input']>;
@@ -186,9 +186,9 @@ export type InferQueryInput<Q extends QueryDef> = z.infer<Q['input']>;
  * ```ts
  * type Result = InferQueryResult<
  *   typeof schema,
- *   typeof queries.queries.slideLayersByDeck
+ *   typeof queries.queries.blocksByReport
  * >;
- * // Array<SlideLayer>
+ * // Array<Block>
  * ```
  */
 export type InferQueryResult<
@@ -221,23 +221,23 @@ export type InferQueryResult<
  * exist" error deep inside the loader.
  *
  * Each resolved query gets its `name` populated from the record key:
- * `queries.slideLayersByDeck.name === 'slideLayersByDeck'`. Dispatch and
+ * `queries.blocksByReport.name === 'blocksByReport'`. Dispatch and
  * lookup code read `queryDef.name` directly rather than re-deriving it from
  * the surrounding record.
  *
  * ```ts
  * const schema = defineSchema({
- *   slideLayer: model(
- *     { slideId: z.string() },
+ *   block: model(
+ *     { sectionId: z.string() },
  *     {},
- *     { load: 'lazy', typename: 'SlideLayer', persist: {} },
+ *     { load: 'lazy', typename: 'Block', persist: {} },
  *   ),
  * });
  *
  * const queries = defineQueries(schema, {
- *   slideLayersByDeck: query({
- *     input:   z.object({ deckId: z.string() }),
- *     returns: 'slideLayer',   // ← type-checked
+ *   blocksByReport: query({
+ *     input:   z.object({ reportId: z.string() }),
+ *     returns: 'block',   // ← type-checked
  *   }),
  * });
  * ```

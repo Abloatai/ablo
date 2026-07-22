@@ -11,8 +11,8 @@ import { makeObservable, observable, action, computed, runInAction } from 'mobx'
 import { Model } from './Model.js';
 import { ModelRegistry } from './ModelRegistry.js';
 import { getContext } from './context.js';
-import { AbloValidationError } from './errors.js';
-import { ModelScope } from './types/index.js';
+import { AbloValidationError } from './transaction/errors.js';
+import { ModelScope } from './transaction/types/index.js';
 import { ViewRegistry } from './core/ViewRegistry.js';
 import { QueryView, type QueryViewOptions } from './core/QueryView.js';
 
@@ -71,7 +71,7 @@ export class InstanceCache {
   // invalidation to get wrong.
 
   // Foreign key indexes: Map<"ModelType:fieldName", Map<fieldValue, ObservableSet<modelId>>>
-  // Enables O(1) lookups like "all SlideLayer models where slideId = X"
+  // Enables O(1) lookups like "all Block models where sectionId = X"
   // instead of scanning all models of a type and filtering.
   private foreignKeyIndexes = new Map<string, Map<string, Set<string>>>();
   // Registry of which fields to index: Map<modelName, fieldName[]>
@@ -248,6 +248,39 @@ export class InstanceCache {
     this.metrics.hits++;
 
     return model ?? undefined;
+  }
+
+  /**
+   * Look a row up **within one model**.
+   *
+   * The pool is a single id space: `get(id)` returns whatever row carries that
+   * id, whatever model it belongs to. That is the correct storage shape — ids
+   * are globally unique, the same premise as Relay's Global Object
+   * Identification — but it means an *untyped* lookup cannot stand in for a
+   * typed one. Apollo and EmberData avoid the question by keying their identity
+   * maps on `Type:id`; with unique ids the equivalent guarantee comes from
+   * stating the expected model at the lookup instead.
+   *
+   * Returns `undefined` for a row belonging to another model: from the asking
+   * model's perspective that id is simply absent. Callers that must tell "not
+   * here" apart from "here, but another model's" should compare against
+   * {@link get}.
+   *
+   * Prefer this over `get()` anywhere the caller knows which model it wants —
+   * `get()` returning another model's row has caused three product bugs, most
+   * recently a resize gesture that reverted after every commit.
+   */
+  // `T` appears only in the return position, which is normally a caller-chosen
+  // cast in disguise. It is sound here precisely because `modelName` is checked
+  // at runtime below before the row is handed back, so the caller's expected
+  // type and the row's registered identity cannot disagree.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
+  getOfType<T extends Model = Model>(id: string, modelName: string): T | undefined {
+    const model = this.get(id);
+    if (!model) return undefined;
+    // Checked, so the assertion below is sound: `typeIndex` and
+    // `getModelName()` are the same registered-name identity.
+    return model.getModelName() === modelName ? (model as T) : undefined;
   }
 
   /**
@@ -437,13 +470,13 @@ export class InstanceCache {
       this.addToTypeIndex(id, modelType);
       // Populate the foreign-key indexes. The single-item `add()` path
       // does this; `addBatch()` used to skip it, which meant every
-      // layer / sheet cell / message that came in through a bulk
-      // loader (`ensureDeckLayers`, `prefetchSlideLayers`, bootstrap
+      // block / ledger cell / message that came in through a bulk
+      // loader (`ensureReportBlocks`, `prefetchSectionBlocks`, bootstrap
       // hydration) was in the pool but invisible to `hasMany` lookups
-      // — `slide.layers` returned `[]` until the user clicked a layer
+      // — `section.blocks` returned `[]` until the user clicked a block
       // and something else ran a non-batch `add` that happened to
       // populate the FK index as a side effect. The UX symptom was
-      // "slides show empty until you click on one." Adding this one
+      // "sections show empty until you click on one." Adding this one
       // line closes the gap.
       this.addToForeignKeyIndex(id, model, modelType);
       this.metrics.additions++;
@@ -574,7 +607,7 @@ export class InstanceCache {
     // FK cleanup silently no-ops — leaving ghost ids in the FK index.
     // That causes `getByForeignKey(..., parentId)` to report
     // `matched > returned` (dropped-no-entry) and, on the UI, keeps the
-    // stale layer visible until the next reload rebuilds the index
+    // stale block visible until the next reload rebuilds the index
     // from fresh data. Do the FK/type cleanup first, then delete the
     // entry.
     runInAction(() => {
@@ -737,7 +770,7 @@ export class InstanceCache {
    * data. Cleaner than `createFromData({ __typename, ...data })` — the
    * typename lives in the arg list, not hidden inside the data object.
    *
-   * Used for optimistic local writes: `pool.create('Slide', { id, deckId, ... })`.
+   * Used for optimistic local writes: `pool.create('Section', { id, reportId, ... })`.
    * For hydration from server deltas (where `__typename` already rides on
    * the payload), use `createFromData(data)` directly — that path is kept
    * because the wire format attaches the discriminator to the data itself.
@@ -826,7 +859,7 @@ export class InstanceCache {
         existing.updateFromData(data);
         return existing;
       }
-      // Different type with same ID - this is a shared PK scenario (e.g., Project/Dataroom)
+      // Different type with same ID - this is a shared PK scenario (e.g., two models sharing one row id)
       // Don't return existing, create new model (will use composite key for storage)
     }
 
@@ -846,7 +879,7 @@ export class InstanceCache {
         `[InstanceCache.createFromData] FAILED ${modelName}`,
         { errorMessage, stack: error instanceof Error ? error.stack : undefined },
       );
-      getContext().observability.captureTransactionFailure({
+      getContext().observability.captureMutationFailure({
         context: 'createFromData',
         modelName,
         modelId: data.id,
@@ -1065,7 +1098,7 @@ export class InstanceCache {
         // caused silent data loss — any model actively being rendered
         // through a schema-driven dynamic class (i.e., most of them)
         // would be demoted, collected, and the next render's
-        // `weakRef.deref()` returned undefined, so layers / cells /
+        // `weakRef.deref()` returned undefined, so blocks / cells /
         // messages "disappeared" after ~10 min of idle.
         //
         // The `hasObservedCollections()` guard used by the eviction
@@ -1165,8 +1198,8 @@ export class InstanceCache {
    * Register a foreign key field for indexing on a model type.
    * Call once during app initialization (e.g., after model registration).
    *
-   * Example: registerForeignKey('SlideLayer', 'slideId')
-   * This enables getByForeignKey('SlideLayer', 'slideId', someSlideId) → O(1) lookup
+   * Example: registerForeignKey('Block', 'sectionId')
+   * This enables getByForeignKey('Block', 'sectionId', someSectionId) → O(1) lookup
    */
   registerForeignKey(modelName: string, fieldName: string): void {
     const fields = this.foreignKeyConfig.get(modelName) ?? [];
@@ -1214,7 +1247,7 @@ export class InstanceCache {
     // entry for this specific parent id (entity genuinely has no
     // children). These used to `console.warn` diagnostic dumps on every
     // call, which turned into hundreds of log lines per second during
-    // cursor hover / rapid re-renders on the deck page. If a caller
+    // cursor hover / rapid re-renders on a busy page. If a caller
     // needs visibility into "why is this empty," wire an opt-in
     // `logger.debug` at the specific call site rather than re-adding
     // a blanket warn here.

@@ -17,7 +17,7 @@ import { resolveEffectiveApiKey, type EffectiveKeySource } from './config';
 import { apiBaseUrl } from './push';
 import { brand } from './theme';
 import { registerEndpoint } from './connectSetup';
-import { resolveTarget, describeMismatch, type ResolvedTarget } from './target';
+import { resolveTarget, describeMismatches, type ResolvedTarget } from './target';
 
 /** The (project, environment) plane a disconnect will act on, for display. */
 function planeLabel(target: ResolvedTarget): { project: string; env: string } {
@@ -74,11 +74,10 @@ export async function disconnect(argv: readonly string[]): Promise<void> {
   const { project, env } = planeLabel(target);
   const envLabel = env === 'production' ? pc.yellow(env) : pc.dim(env);
 
-  // Surface a wrong-project / wrong-environment divergence before the call, not
-  // after — the key wins server-side, so this is the moment to catch it.
-  for (const mismatch of target.mismatches) {
-    console.log(`  ${pc.yellow('⚠')}  ${describeMismatch(mismatch)}\n`);
-  }
+  // Surface a saved-selection divergence before the call, not after — this is
+  // the moment to catch acting on the wrong plane.
+  const divergence = describeMismatches(target.mismatches);
+  if (divergence) console.log(`  ${pc.yellow('⚠')}  ${divergence}\n`);
 
   if (!skipConfirm) {
     if (!process.stdout.isTTY) {

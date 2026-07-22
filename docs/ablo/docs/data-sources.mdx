@@ -1,5 +1,8 @@
 ---
 title: "Connect Your Database"
+description: "Keep the rows in your own Postgres while Ablo coordinates and confirms every write."
+sidebar:
+  icon: database
 ---
 
 You write through Ablo, and Ablo writes to your Postgres. A call to
@@ -182,7 +185,7 @@ await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 } })
 await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 }, wait: 'confirmed' });
 
 // Reads are live off the same stream.
-const report = ablo.weatherReports.get('report_stockholm');
+const report = ablo.weatherReports.local.retrieve('report_stockholm');
 ```
 
 A commit is accepted the moment Ablo takes it (`queued`); it becomes `confirmed`

@@ -22,11 +22,11 @@
  *    backfills.
  */
 
-import { AbloValidationError } from '../errors.js';
+import { AbloValidationError } from '../transaction/errors.js';
 import type { SchemaJSON, ModelJSON } from './serialize.js';
 import type { MigrationStep, BackfillValue, FieldType } from './diff.js';
-import type { FieldMeta } from './field.js';
-import { resolveTenancy, tenancyColumn } from './tenancy.js';
+import type { FieldMeta } from '../transaction/schema/field.js';
+import { resolveTenancy, tenancyColumn } from '../transaction/schema/tenancy.js';
 
 export interface ProvisionPlan {
   /** The Postgres schema the tables live in (`app_<id>` or `public`). */
