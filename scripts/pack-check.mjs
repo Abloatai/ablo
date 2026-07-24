@@ -26,6 +26,22 @@ const fail = (message) => {
   process.exit(1);
 };
 
+/**
+ * Does the `exports` tree carry the `@ablo/source` condition anywhere?
+ * Only `exports` is the shipping hazard (it resolves a consumer's import to
+ * raw ./src/*.ts). `scripts` legitimately reference it via `tsx --conditions`
+ * and are inert for consumers, so a raw whole-file substring scan false-fails.
+ * @param {string} pkgJsonText
+ */
+const exportsCarryCondition = (pkgJsonText) => {
+  const exportsTree = JSON.parse(pkgJsonText).exports ?? {};
+  const walk = (node) => {
+    if (node === null || typeof node !== 'object' || Array.isArray(node)) return false;
+    return Object.entries(node).some(([key, value]) => key === CONDITION || walk(value));
+  };
+  return walk(exportsTree);
+};
+
 const workDir = mkdtempSync(join(tmpdir(), 'ablo-pack-check-'));
 try {
   const packOutput = execFileSync(
@@ -52,17 +68,17 @@ try {
     fail('package.json.prepack-backup shipped in the tarball');
   }
 
-  // 1. packed package.json must be free of the condition
+  // 1. packed package.json's exports must be free of the condition
   execFileSync('tar', ['-xzf', tarballPath, '-C', workDir, 'package/package.json']);
   const packedPkg = readFileSync(join(workDir, 'package', 'package.json'), 'utf8');
-  if (packedPkg.includes(CONDITION)) {
-    fail(`packed package.json still contains '${CONDITION}'`);
+  if (exportsCarryCondition(packedPkg)) {
+    fail(`packed package.json exports still carry the '${CONDITION}' condition`);
   }
 
-  // 2. dev tree must still have it (postpack restored)
+  // 2. dev tree's exports must still have it (postpack restored)
   const devPkg = readFileSync(packageJsonPath, 'utf8');
-  if (!devPkg.includes(CONDITION)) {
-    fail(`dev package.json lost its '${CONDITION}' condition — postpack did not restore`);
+  if (!exportsCarryCondition(devPkg)) {
+    fail(`dev package.json exports lost the '${CONDITION}' condition — postpack did not restore`);
   }
 
   // 3a. no backup file left behind
