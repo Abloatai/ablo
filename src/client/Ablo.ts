@@ -27,7 +27,6 @@
  */
 
 import type { SchemaRecord } from '../transaction/schema/schema.js';
-import type { MutationExecutor } from '../interfaces/index.js';
 import { AbloValidationError } from '../transaction/errors.js';
 import { SyncWebSocket, type DefaultCollaborationEvents } from '../sync/SyncWebSocket.js';
 // Value import is cycle-safe: httpClient.js and httpTransport.js take the client
@@ -48,6 +47,7 @@ import {
 } from '../transaction/plugin.js';
 import { noopLogger } from '../transaction/logger.js';
 import { humans, type HumansSurface } from './humans.js';
+import { kStoreCluster } from './storeCluster.js';
 import { createCoreClient, type AbloCoreClient } from './coreClient.js';
 import { buildReactiveEngine } from './reactiveEngine.js';
 import { resolveClientPrelude } from './clientPrelude.js';
@@ -63,7 +63,6 @@ import type { AbloOptions } from './options.js';
 // `AbloReads` is named by `Ablo.Reads` in the namespace below as well as
 // re-exported, so it needs the import too — same reason as `AbloOptions`.
 import type { AbloClient, AbloReads } from './abloClient.js';
-import { createDefaultMutationExecutor } from './wsMutationExecutor.js';
 
 // `AbloOptions` is named in the signatures below as well as re-exported, so it
 // needs the import above in addition to this line — `export … from` re-exports
@@ -175,11 +174,15 @@ export function Ablo<const S extends SchemaRecord>(
   //    `connect()`, and `deferConnect` keeps even that closed until the store
   //    has seeded identity and read scope during `ready()` — the late-bound
   //    values (`kind`, the credential, `syncGroups`, the resume cursor) are
-  //    seeded there, not here. Built only for the reactive path: the core
-  //    client (`plugins: []`) constructs its own feed, and no plugin runs on
-  //    that path to read this one.
+  //    seeded there, not here. Whether to build it is read off what the
+  //    listed plugins DECLARE — a plugin that requires a duplex transport
+  //    gets one to attach to — never off a plugin's name; interrogating the
+  //    assembly by id is the context's `hasPlugin`, a capability for
+  //    plugins, not a dispatch key for this root. The empty list builds
+  //    nothing here: the core client (`plugins: []`) constructs its own
+  //    feed, and no plugin runs on that path to read this one.
   const pluginList: readonly AbloPlugin[] = options.plugins ?? [humans()];
-  const transport = pluginList.some((plugin) => plugin.id === 'humans')
+  const transport = pluginList.some((plugin) => plugin.requires?.duplex === true)
     ? new SyncWebSocket<DefaultCollaborationEvents>({
         baseUrl: url,
         kind,
@@ -190,21 +193,15 @@ export function Ablo<const S extends SchemaRecord>(
       })
     : null;
 
-  //    The default mutation executor sends `{ type: 'commit', ... }` over
-  //    that connection; before it opens, sends reject with the diagnosed
-  //    not-ready error and the MutationQueue owns the retry. Caller-supplied
-  //    executors are still honored for advanced cases (test mocks,
-  //    alternative transports).
-  const executor: MutationExecutor =
-    internalOptions.mutationExecutor ?? createDefaultMutationExecutor(() => transport);
-
   // Resolve the capability list before anything heavy is constructed
   // (ADR 0016). The two configuration gates — a duplicate id, a transport
   // mismatch — fire here, while the stack still points at the caller's own
   // setup. With no list given, the reactive materialiser is installed:
   // today's default client. (Flipping the bare default to the stateless core
   // is the mirror-flip step, decided with the published version identity —
-  // not here.)
+  // not here.) The context carries the host's resolved values — url,
+  // credential source, identity — so `humans().init` constructs the store
+  // cluster right here, during resolution.
   const installedPlugins: Record<string, unknown> = resolvePlugins(
     pluginList,
     { duplex: true },
@@ -217,6 +214,8 @@ export function Ablo<const S extends SchemaRecord>(
       ...(transport ? { transport } : {}),
       participant: { id: participantId, kind },
       syncGroups: internalOptions.syncGroups ?? [],
+      url,
+      auth: authCredentials,
     },
   );
   const humansSurface = installedPlugins.humans as HumansSurface | undefined;
@@ -265,18 +264,31 @@ export function Ablo<const S extends SchemaRecord>(
     );
   }
 
-  // The reactive engine is the humans() capability: everything from here on
-  // — runtime context, store, streams, model proxies, resources — builds in
-  // `./reactiveEngine.ts`, fed the prelude plus the plugin's contribution
-  // (the presence stream). The host owns construction; plugins declare and
-  // contribute. A plugin surface that hands back a whole-client constructor
-  // inverts that relationship — tried and rejected (ADR 0016, follow-up 3b).
+  const cluster = humansSurface[kStoreCluster];
+  if (!cluster) {
+    // Unreachable on this path: the context above carries everything the
+    // cluster needs (connection, url, credential source, schema). A missing
+    // cluster means the context and the plugin disagree — say so rather
+    // than building a client with no store.
+    throw new AbloValidationError(
+      'The reactive client was selected but no store was constructed.',
+      { code: 'invalid_options', param: 'plugins' },
+    );
+  }
+
+  // The reactive engine is the humans() capability: `init` constructed the
+  // store cluster (runtime, component graph, store) from the widened
+  // context; what remains here builds in `./reactiveEngine.ts`, fed the
+  // prelude plus the plugin's contributions. The host owns assembly;
+  // plugins declare and construct their own parts. A plugin surface that
+  // hands back a whole-client constructor inverts that relationship —
+  // tried and rejected (ADR 0016, follow-up 3b).
   return layerPluginSurface(buildReactiveEngine<S>({
     ...prelude,
     options,
-    executor,
     transport,
     presence: humansSurface.presence,
+    cluster,
     createSibling: (siblingOptions) => Ablo(siblingOptions),
   }), installedPlugins);
 }

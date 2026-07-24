@@ -95,5 +95,5 @@ another org's project ids 404 — never confirm existence across orgs.
 
 | Code | Status | Meaning |
 |------|--------|---------|
-| `project_scope_denied` | 403 | The model/resource belongs to another project in your org — use a key minted for that project. |
+| `project_scope_denied` | 403 | The model/resource belongs to another project in your org: use a key minted for that project. |
 | `project_slug_taken` | 409 | A project with this slug already exists in the organization. |

@@ -14,7 +14,8 @@
  * client behind that interface.
  */
 
-import { getContext } from '../context.js';
+import { globalRuntime } from '../context.js';
+import type { RuntimeContext } from '../RuntimeContext.js';
 import type { BootstrapResult } from '../Database.js';
 import type { SyncDelta } from './SyncWebSocket.js';
 
@@ -36,6 +37,8 @@ export interface RehydrationStats {
  * takes effect through this interface.
  */
 export interface PoolContext {
+  /** The owning client's runtime. Defaults to the module-global bridge. */
+  readonly runtime?: RuntimeContext;
   /** Applies persisted delta results to the in-memory pool, with the host's relation enrichment bound. */
   applyDeltaBatchToPool(results: NonNullable<BootstrapResult['deltaResults']>): void;
   /** Writes bootstrap data into the pool: creates models, heals partial rows, upserts, and removes stale local copies the server no longer reports. */
@@ -93,7 +96,7 @@ export function applyBootstrapToPool(
 
   const elapsedMs = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - start);
 
-  getContext().logger.info('[BaseSyncedStore] Bootstrap applied', {
+  (ctx.runtime ?? globalRuntime).logger.info('[BaseSyncedStore] Bootstrap applied', {
     ...stats, elapsedMs, poolSize: ctx.getPoolSize(),
   });
 

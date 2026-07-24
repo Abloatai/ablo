@@ -28,7 +28,7 @@ There are two ways data flows out of Ablo, and they're for different jobs:
 | | reaches | use it for |
 |---|---|---|
 | **Realtime** (`useAblo`, WSS) | your live UI | instant, optimistic rendering |
-| **Webhooks** (this page) | your database | a durable copy you own — analytics, backups, server logic |
+| **Webhooks** (this page) | your database | a durable copy you own: analytics, backups, server logic |
 
 Most apps use both: the realtime stream for the UI, the webhook stream to keep
 their database in sync. This page is the webhook stream.
@@ -37,8 +37,8 @@ If you know Stripe, you already know the shape:
 
 | Stripe | Ablo |
 |---|---|
-| `stripe.x.create(...)` — make the change | the Ablo client — make the change (+ live sync) |
-| `/stripe-webhook` — confirm and persist | `/api/ablo/[...all]` — persist into your database |
+| `stripe.x.create(...)`: make the change | the Ablo client: make the change (+ live sync) |
+| `/stripe-webhook`: confirm and persist | `/api/ablo/[...all]`: persist into your database |
 | Stripe owns the charges | Ablo owns the transaction log |
 | you mirror charges into your database | you mirror the log into your database |
 
@@ -53,11 +53,11 @@ Every delivery is a batch of events. Each event:
 | field | meaning |
 |---|---|
 | `type` | `"<model>.<verb>"` with the model name lowercased, e.g. `task.updated` |
-| `model` | the model name exactly as declared in your schema — the table to write |
+| `model` | the model name exactly as declared in your schema: the table to write |
 | `objectId` | the changed row's id |
 | `data` | the post-change row, or `null` on delete (like Stripe's `event.data.object`) |
-| `syncId` | monotonic log position — **dedupe and order by this** |
-| `id` | `String(syncId)` — the event id |
+| `syncId` | monotonic log position: **dedupe and order by this** |
+| `id` | `String(syncId)`: the event id |
 | `createdAt` | ISO commit timestamp |
 
 ```ts
@@ -203,8 +203,8 @@ sequenceDiagram
 
 | behavior | how it works |
 |---|---|
-| **Ordering** | Every event carries `syncId`, a monotonic log position. Apply in `syncId` order — Ablo guarantees the order because it owns the log. |
-| **Retries** | A non-`2xx` (or no response within the timeout) is retried with backoff: immediate, 5s, 5m, 30m, 2h, 5h, 10h, 10h — 8 attempts over ~32h. |
+| **Ordering** | Every event carries `syncId`, a monotonic log position. Apply in `syncId` order: Ablo guarantees the order because it owns the log. |
+| **Retries** | A non-`2xx` (or no response within the timeout) is retried with backoff: immediate, 5s, 5m, 30m, 2h, 5h, 10h, 10h: 8 attempts over ~32h. |
 | **Auto-disable** | After the retries exhaust, the endpoint is marked `disabled` and delivery stops until you `ablo webhooks enable <id>`. |
 | **Replay** | Nothing is lost on failure: the log *is* the durable buffer, and delivery resumes from the endpoint's cursor once it's healthy. |
 
@@ -216,7 +216,7 @@ sequenceDiagram
 - **Return `2xx` fast.** Acknowledge first, then do slow work asynchronously.
 - **Subscribe to only what you need.** Set `enabledEvents` to the models you
   mirror (`['*']` is the default = all).
-- **Roll secrets periodically.** `ablo webhooks roll <id>` mints a new secret;
+- **Roll secrets periodically:** `ablo webhooks roll <id>` mints a new secret;
   Standard Webhooks supports a rotation window so in-flight events still verify.
 - **Verify the raw body.** Frameworks that re-serialize JSON will break the
   signature — verify the bytes you received.

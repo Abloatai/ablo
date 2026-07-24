@@ -10,11 +10,12 @@
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
 import { Model } from './Model.js';
 import { ModelRegistry } from './ModelRegistry.js';
-import { getContext } from './context.js';
+import { globalRuntime } from './context.js';
+import type { RuntimeContext } from './RuntimeContext.js';
 import { AbloValidationError } from './transaction/errors.js';
 import { ModelScope } from './transaction/types/index.js';
-import { ViewRegistry } from './core/ViewRegistry.js';
-import { QueryView, type QueryViewOptions } from './core/QueryView.js';
+import { ViewRegistry } from './views/ViewRegistry.js';
+import { QueryView, type QueryViewOptions } from './views/QueryView.js';
 
 /** Constructor type for Model subclasses - uses abstract to handle variance */
 type ModelConstructor<T extends Model> = abstract new (...args: never[]) => T;
@@ -33,6 +34,8 @@ interface PoolConfig {
   maxAge?: number;
   gcInterval?: number;
   useWeakRefs?: boolean;
+  /** The owning client's runtime. Defaults to the module-global bridge. */
+  runtime?: RuntimeContext;
 }
 
 interface DeltaInfo {
@@ -87,7 +90,8 @@ export class InstanceCache {
   };
 
   // Configuration
-  private config: Required<PoolConfig>;
+  private config: Required<Omit<PoolConfig, 'runtime'>>;
+  private readonly runtime: RuntimeContext;
   private gcTimer?: NodeJS.Timeout;
 
   // ModelRegistry instance — single source of truth for model metadata
@@ -153,6 +157,7 @@ export class InstanceCache {
       gcInterval: config.gcInterval ?? 60000, // 1 minute
       useWeakRefs: config.useWeakRefs ?? true,
     };
+    this.runtime = config.runtime ?? globalRuntime;
 
     // Store the model registry reference
     if (!modelRegistry) {
@@ -336,7 +341,7 @@ export class InstanceCache {
         ) {
           // Internal delta-ordering anomaly that reconciles on the next
           // catch-up — forensic, not consumer-actionable → debug.
-          getContext().logger.debug(
+          this.runtime.logger.debug(
             `InstanceCache.add() SUSPICIOUS: INSERT after ${history.lastAction}`,
             { modelType, id, syncId: deltaInfo.syncId },
           );
@@ -661,7 +666,7 @@ export class InstanceCache {
           // Fallback resolved — hand-coded class not in registry but name matches.
           // This is expected during migration from hand-coded → dynamic models.
         } catch (e) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             `Failed to create fallback instance for ${modelClass.name}`,
             'sync.database',
             'error',
@@ -811,11 +816,11 @@ export class InstanceCache {
       if (modelName === 'Unknown') {
         // Malformed row with no type marker — dropped, but nothing the consumer
         // can act on (the actionable schema-drift case is handled below) → debug.
-        getContext().logger.debug(
+        this.runtime.logger.debug(
           'InstanceCache.createFromData: No model identifier found',
           { data },
         );
-        getContext().modelDebugLogger?.logError('Unknown', 'CREATE', 'No model identifier found', data);
+        this.runtime.modelDebugLogger?.logError('Unknown', 'CREATE', 'No model identifier found', data);
         return null;
       }
 
@@ -833,14 +838,14 @@ export class InstanceCache {
       // Genuinely actionable and NOT self-healing: a model the server is sending
       // isn't in your schema, so these rows are silently skipped. Keep at warn,
       // consumer register (their model name + the `ablo status` fix); forensics ride debug.
-      getContext().logger.warn(
+      this.runtime.logger.warn(
         `Received data for "${modelName}", which isn't in your schema — these rows will be skipped. Run \`ablo status\` to compare your local schema with the server.`,
       );
-      getContext().logger.debug(
+      this.runtime.logger.debug(
         `InstanceCache.createFromData: No constructor found for model "${modelName}"`,
         { data },
       );
-      getContext().modelDebugLogger?.logError(
+      this.runtime.modelDebugLogger?.logError(
         modelName,
         'CREATE',
         `No constructor found for model "${modelName}"`,
@@ -864,7 +869,7 @@ export class InstanceCache {
     }
 
     // Log model creation attempt
-    getContext().modelDebugLogger?.logCreation(modelName, data, Constructor);
+    this.runtime.modelDebugLogger?.logCreation(modelName, data, Constructor);
 
     try {
       // Pass data directly to constructor for Prisma-first models
@@ -875,17 +880,17 @@ export class InstanceCache {
       const errorMessage = error instanceof Error ? error.message : String(error);
       // Internal construction failure — captured via observability below and
       // re-fetched on resync; the stack is forensic → debug.
-      getContext().logger.debug(
+      this.runtime.logger.debug(
         `[InstanceCache.createFromData] FAILED ${modelName}`,
         { errorMessage, stack: error instanceof Error ? error.stack : undefined },
       );
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: 'createFromData',
         modelName,
         modelId: data.id,
         error: errorMessage,
       });
-      getContext().modelDebugLogger?.logError(modelName, 'CREATE', errorMessage, {
+      this.runtime.modelDebugLogger?.logError(modelName, 'CREATE', errorMessage, {
         data,
         constructor: Constructor.name,
       });
@@ -1122,7 +1127,7 @@ export class InstanceCache {
       }
 
       if (skippedObserved > 0) {
-        getContext().logger.debug(
+        this.runtime.logger.debug(
           `[InstanceCache GC] Skipped ${skippedObserved} models with active React observers`,
         );
       }
@@ -1276,7 +1281,7 @@ export class InstanceCache {
       // has dangling refs (legacy orphan deltas, pending CREATE
       // transactions, etc.). Noisy at warn level, useful during
       // investigation.
-      getContext().logger.debug('[InstanceCache.getByForeignKey] ROWS DROPPED', {
+      this.runtime.logger.debug('[InstanceCache.getByForeignKey] ROWS DROPPED', {
         modelName,
         fieldName,
         fieldValue,

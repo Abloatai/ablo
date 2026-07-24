@@ -1,46 +1,38 @@
 /**
- * The reactive engine build — everything `humans()` means at construction
- * time (ADR 0016). `Ablo({ ... })` resolves auth and capabilities, then hands
- * this module the prelude; from here on it is all materialisation: the
- * runtime context, the internal components, the store and its credential
- * lifecycle, presence and claim streams, the typed model proxies, and the
- * commit/claim/session resources — assembled into the reactive client.
+ * The reactive engine assembly (ADR 0016). `Ablo({ ... })` resolves auth and
+ * capabilities; `humans().init` constructs the store cluster; the lifecycle
+ * — first mint, identity, ready() — lives in `./storeLifecycle.ts`. What
+ * remains here is assembly around those parts: the claim stream and
+ * participant manager, options validation, the typed model proxies, and the
+ * commit/claim/session resources — composed into the reactive client.
  *
  * Extracted from the factory so the composition root stays a root: resolve,
- * dispatch, return. The construction moves behind `humans().init` proper when
- * the plugin context can carry these inputs — until then the factory calls
- * this directly for the humans-installed path.
+ * dispatch, return. The remaining assembly converts to decoration of a
+ * host-built core client with the per-model surface split — the cut's own
+ * design step (docs/plans/package-split.md).
  */
 
 import type { Schema, SchemaRecord } from '../transaction/schema/schema.js';
-import type {
-  RuntimeConfig,
-  MutationExecutor,
-} from '../interfaces/index.js';
 import {
   durableCommitOperationSchema,
   type DurableCommitOperation,
 } from '../transaction/transactions/settlement/commitEnvelope.js';
-import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, toAbloError, claimedError } from '../transaction/errors.js';
+import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, claimedError } from '../transaction/errors.js';
 import type { ModelTarget, ModelClaim } from '../transaction/coordination/schema.js';
-import { modelTarget, streamTarget, subTarget } from '../transaction/coordination/index.js';
-import { initRuntime } from '../context.js';
-import { getActiveRegistry } from '../ModelRegistry.js';
+import type { BatchFence } from '../transaction/coordination/index.js';
 import {
-  noopObservability,
-  browserOnlineStatus,
-  defaultSessionErrorDetector,
-  noopAnalytics,
-} from '../RuntimeContext.js';
-import { alwaysOnline } from '../adapters/alwaysOnline.js';
+	batchFence,
+	fenceTokenFor,
+	modelTarget,
+	streamTarget,
+	subTarget,
+} from '../transaction/coordination/index.js';
 import { validateAbloOptions } from './validateAbloOptions.js';
-import { type RefreshScheduler } from '../transaction/auth/index.js';
 import { mintSession } from '../transaction/auth/sessionMint.js';
 import type { MintSessionContext } from '../transaction/auth/sessionMint.js';
 import { modelWireNames } from '../transaction/auth/capability.js';
-import { createInternalComponents } from './createInternalComponents.js';
-import { resolveParticipantIdentity } from '../transaction/auth/identity.js';
-import { BaseSyncedStore } from '../BaseSyncedStore.js';
+import type { StoreCluster } from './storeCluster.js';
+import { startStoreLifecycle } from './storeLifecycle.js';
 import type { SyncWebSocket, CoreSyncEventMap } from '../sync/SyncWebSocket.js';
 import { createClaimStream } from '../sync/createClaimStream.js';
 import { awaitClaimGrant } from '../sync/awaitClaimGrant.js';
@@ -51,7 +43,6 @@ import type { ClaimWaitOptions, Snapshot } from '../transaction/types/streams.js
 import type { Claim } from '../transaction/types/streams.js';
 import type { ApiKeySetter } from '../transaction/auth/apiKey.js';
 import { resolveApiKeyValue, resolveBootstrapBaseUrl } from '../transaction/auth/apiKey.js';
-import { shouldUseInMemoryPersistence } from '../transaction/persistence.js';
 import type { AbloOptions } from './options.js';
 import type { ClientPrelude } from './clientPrelude.js';
 import type {
@@ -66,10 +57,8 @@ import type {
   CreateAgentSessionParams,
   CreateSessionParams,
 } from './resourceTypes.js';
-import { deriveConfigFromSchema } from './schemaConfig.js';
 import { createModelProxy, type ModelOperations } from './createModelProxy.js';
 import { assertWriteOptions } from '../transaction/resources/writeOptionsSchema.js';
-import { registerModelsFromSchema } from './modelRegistration.js';
 // Type-only import back into the factory module — erased at compile time, so
 // it closes no runtime cycle (the factory value-imports this builder).
 import type { Ablo } from './Ablo.js';
@@ -84,7 +73,6 @@ import type { Ablo } from './Ablo.js';
  */
 export interface ReactiveEngineInputs<S extends SchemaRecord> extends ClientPrelude<S> {
   options: AbloOptions<S>;
-  executor: MutationExecutor;
   /**
    * The connection, constructed by the factory before the plugin list
    * resolved — the same instance `PluginContext.transport` carries. The
@@ -94,6 +82,12 @@ export interface ReactiveEngineInputs<S extends SchemaRecord> extends ClientPrel
   /** The humans() plugin's contribution — built by its `init`, already
    *  attached to the connection the context carried. */
   presence: AttachablePresenceStream;
+  /**
+   * The store cluster `humans().init` constructed from the widened context:
+   * this client's runtime, the component graph, and the store. The engine
+   * assembles around it and constructs none of it.
+   */
+  cluster: StoreCluster;
   /**
    * Constructs a sibling client (`ablo.agents.create(...)` mints a scoped key
    * and builds a second engine with it). Injected by the factory — a direct
@@ -114,48 +108,20 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     configuredAuthToken,
     credentialResolver,
     authCredentials,
-    executor,
     transport,
     participantId,
     kind,
     presence,
+    cluster,
     createSibling,
   } = inputs;
   const schema = options.schema;
 
-  // 1. Derive config from schema
-  // 1. Derive config from schema, then layer caller-supplied overrides on top.
-  //    `configOverrides` is a shallow merge: caller takes precedence per key.
-  const config: RuntimeConfig = {
-    ...deriveConfigFromSchema(schema),
-    ...internalOptions.configOverrides,
-  };
-
-
-  // 3. Initialize SDK context (one call — hides all DI wiring).
-  //    Each provider can be overridden individually; the noop defaults
-  //    are preserved for the zero-config consumer path.
-  initRuntime({
-    logger,
-    observability: internalOptions.observability ?? noopObservability,
-    analytics: internalOptions.analytics ?? noopAnalytics,
-    sessionErrorDetector: internalOptions.sessionErrorDetector ?? defaultSessionErrorDetector,
-    onlineStatus:
-      internalOptions.onlineStatus ??
-      (shouldUseInMemoryPersistence(options)
-        ? alwaysOnline()
-        : browserOnlineStatus),
-    config,
-    mutationExecutor: executor,
-    getModelMetadata: (name) => getActiveRegistry().getMetadata(name),
-  });
-
-  // 4. Create internal components (user never sees these). See
-  //    `./createInternalComponents.ts` for the construction order
-  //    and what each component does. Model registration happens
-  //    here (via `registerModelsFromSchema`, in `./modelRegistration.ts`)
-  //    because the schema-to-Model-class translation is client-construction
-  //    wiring that isn't worth pulling into the components module.
+  // The store cluster — this client's runtime, the component graph, the
+  // registered models, and the store — was constructed by `humans().init`
+  // from the widened plugin context (see `./storeCluster.ts`). The engine
+  // assembles around it.
+  const { runtime, components, store } = cluster;
   const {
     modelRegistry,
     objectPool,
@@ -163,80 +129,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     database,
     syncClient,
     hydration,
-  } = createInternalComponents({
-    schema,
-    url,
-    options: internalOptions,
-    auth: authCredentials,
-  });
-  registerModelsFromSchema(schema, modelRegistry);
-
-  // 5. BaseSyncedStore handles the initialization orchestration
-  //    (open DB → hydrate IDB → connect WS → fetch bootstrap → hydrate again →
-  //    ready) and exposes the observable `syncStatus` we expose on the engine.
-  //
-  //    Phase 2: pass the schema into the store so `deriveSyncPlanFromSchema`
-  //    can auto-populate version vector keys, FK indexes, and enrichment
-  //    rules from the declarative `belongsTo({ index, enrich })` annotations.
-  //    Consumers using class-based subclasses with `new SyncedStore(...)`
-  //    directly can pass explicit config arrays instead.
-  const store = new BaseSyncedStore(
-    {
-      syncClient,
-      database,
-      objectPool,
-      modelRegistry,
-      syncWebSocket: transport,
-      schema,
-      url,
-      auth: authCredentials,
-    },
-    // Collaboration vocabulary is the application's: the SDK subscribes to the
-    // event types the caller declares and to nothing by default.
-    { collaborationEvents: internalOptions.collaborationEvents ?? [] },
-  );
-
-  // Hand the credential lifecycle to the client (refresher + proactive refresh
-  // timer + wake/online/focus re-mint). Installed once here so refresh works for
-  // any consumer of `Ablo({ auth })`, not only those who render `<AbloProvider>`.
-  // The first mint happens in `ready()` so the first connection carries a token.
-  //
-  // Long-lived server clients also get the pre-roll timer on windowless hosts
-  // (`proactiveInNode`): their socket must renew its `rk_` or `ek_` before the
-  // server's keepalive reaper closes it (4001 `credential_expired`). Two signals
-  // qualify — an agent or system participant, and an absolute endpoint-string
-  // `apiKey` (a relative one can't be fetched in Node, so an absolute URL is
-  // unambiguously a deliberate server client). User-kind clients in Node (an
-  // SSR/RSC module evaluating scaffolded browser code) stay reactive-only.
-  if (credentialResolver) {
-    const rawEndpoint = internalOptions.authEndpoint ?? internalOptions.apiKey;
-    const absoluteEndpoint =
-      typeof rawEndpoint === 'string' && /^https?:\/\//i.test(rawEndpoint);
-    store.startCredentialLifecycle(credentialResolver, {
-      /* eslint-disable @typescript-eslint/no-deprecated -- `kind` gates the self-hosted proactive pre-roll; hosted path derives it from the apiKey scope */
-      proactiveInNode:
-        internalOptions.kind === 'agent' ||
-        internalOptions.kind === 'system' ||
-        absoluteEndpoint,
-      /* eslint-enable @typescript-eslint/no-deprecated */
-    });
-  }
-
-  // Put the lazy-query lane on the same auth-recovery path as the WebSocket probe
-  // and the proactive pre-roll: a 401 on `/sync/query` re-mints via the store's
-  // single-flight lifecycle and replays once, instead of silently returning empty
-  // rows against an expired `ek_` until the next proactive tick. Late-bound
-  // because the coordinator is constructed before the store exists.
-  hydration.setCredentialRecovery((recovery) => store.recoverFromAuthRejection(recovery));
-
-  // Bind this executor to this client's MutationQueue. Without it, the queue
-  // resolves `mutationExecutor` from the module-level `getContext()`, which
-  // `initRuntime()` overwrites on every client construction. In multi-client
-  // flows (for example a worker plus a per-job peer) the second `initRuntime()`
-  // call would silently redirect the first client's queue through the second
-  // client's executor closure, so the first client's commits would dispatch
-  // over the wrong connection.
-  syncClient.getMutationQueue().setMutationExecutor(executor);
+  } = components;
 
   // Self identity, late-bound the same way the connection's values are: the
   // construction-time guess seeds it (correct on the self-hosted path, empty
@@ -258,13 +151,6 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
   // locals above.
   const presenceStream = presence;
   const claimStream = createClaimStream({ participantId, logger }, transport);
-  const participantManager = createParticipantManager({
-    ready,
-    transport,
-    presence: presenceStream,
-    claims: claimStream,
-    schema,
-  });
 
   // 6. Validate options up front — fail loudly on obviously wrong inputs so
   //    strangers don't get silent empty results. Validation errors are written
@@ -298,212 +184,48 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     );
   }
 
-  // 7. The ready() promise drives the BaseSyncedStore.initialize() generator
-  //    to completion. First call kicks off the initialization; subsequent
-  //    calls return the same promise (idempotent).
-  //
-  //    Status is tracked in store.syncStatus (MobX observable) — the single
-  //    source of truth. No duplicate closure variables.
-	  let _readyPromise: Promise<void> | null = null;
-	  let _refreshScheduler: RefreshScheduler | null = null;
-	  /** Resolved account scope — set once identity resolution completes in
-	   *  `ready()`; exposed as the readonly `ablo.organizationId` accessor. */
-	  let _resolvedOrganizationId: string | null = null;
+  // 7. The lifecycle — first mint, identity resolution, credential refresh,
+  //    and the idempotent ready() driving store.initialize() — is the
+  //    materialiser's own (`./storeLifecycle.ts`); the engine wires it with
+  //    the prelude's credential slice and seeds its own state through the
+  //    callback: the self locals (read by the model proxies' getters) and
+  //    the streams' own-echo filters, before the store ever connects.
+  /** Resolved account scope — seeded once identity resolution completes;
+   *  exposed as the readonly `ablo.organizationId` accessor. */
+  let _resolvedOrganizationId: string | null = null;
+  const lifecycle = startStoreLifecycle({
+    cluster,
+    schema,
+    internalOptions,
+    authCredentials,
+    credentialResolver,
+    configuredApiKey,
+    configuredAuthToken,
+    url,
+    kind,
+    logger,
+    validationError: _validationError,
+    onIdentityResolved: ({ userId, participantKind, accountScope, syncGroups }) => {
+      selfParticipantId = userId;
+      selfParticipantKind = participantKind;
+      _resolvedOrganizationId = accountScope;
+      presenceStream.setParticipant({
+        id: userId,
+        kind: participantKind,
+        syncGroups: [...syncGroups],
+      });
+      claimStream.setParticipant({ id: userId });
+    },
+  });
+  const ready = lifecycle.ready;
 
-  async function ready(): Promise<void> {
-    if (_readyPromise) return _readyPromise;
-
-    if (_validationError) {
-      _readyPromise = Promise.reject(_validationError);
-      return _readyPromise;
-    }
-
-    _readyPromise = (async () => {
-      try {
-        // Mint the first access credential before we connect, so the initial
-        // WebSocket upgrade and bootstrap carry a valid bearer (no tokenless first
-        // connect that has to self-heal). Only when a refreshing resolver is wired
-        // and no static credential is already present. Follows the `apiKey`
-        // resolver contract: `null` means the login is gone (terminal — fail ready
-        // so the app shows sign-in); a throw means transient (rethrown; autoStart
-        // swallows it and the lifecycle's online/wake triggers retry).
-        if (credentialResolver && !authCredentials.getAuthToken()) {
-          const token = await credentialResolver();
-          if (!token) {
-            throw new AbloAuthenticationError(
-              'Auth resolver returned null before connect — the user is not signed in.',
-              { code: 'auth_no_credentials' },
-            );
-          }
-          authCredentials.setAuthToken(token);
-        }
-
-        // Resolve participant identity + scope. Three branches —
-        // hosted-cloud apiKey exchange, self-derived from capability
-        // token, or legacy explicit options. See `./identity.ts`.
-        const resolved = await resolveParticipantIdentity({
-          options: internalOptions,
-          internalOptions,
-          url,
-          kind,
-          configuredApiKey,
-          // Resolve identity against the live token, not the construction-time
-          // `configuredAuthToken`. Consumers using a function `apiKey` never pass
-          // `authToken` at construction — the lifecycle mints the first `ek_` or
-          // `rk_` and calls `setAuthToken()` before `ready()`, which updates the
-          // shared credential source. Reading the frozen `configuredAuthToken`
-          // here made `/auth/identity` fire with no bearer (returning
-          // `no_matching_provider` / `session_expired`) even though the token was
-          // present. This reads the shared credential source, like every other
-          // transport.
-          configuredAuthToken: authCredentials.getAuthToken() ?? configuredAuthToken,
-          bootstrapHelper,
-          auth: authCredentials,
-	          logger,
-	        });
-        const {
-          userId,
-          accountScope,
-          teamIds,
-          capabilityToken,
-	          syncGroups,
-	          participantKind,
-	        } = resolved;
-
-	        // Fail-loud guard: detect the degenerate "no real sync groups
-	        // resolved" state before opening the socket. It is the same class of bug as
-	        // a
-	        // sensible-looking default that's functionally broken: the
-	        // SDK ends up subscribing only to the server-side
-	        // `['default']` fallback, no
-	        // delta has that tag, live fan-out silently never delivers.
-	        // For human users (kind:'user') this is almost certainly a
-	        // misconfiguration upstream — either the caller didn't pass
-	        // `syncGroups`, or auth resolution didn't derive them, or
-	        // both. Warn loudly so the next debugging session starts here
-	        // instead of with "live updates don't work, hard reload fixes
-	        // it."
-	        const resolvedSyncGroups = syncGroups ?? [];
-	        if (
-	          participantKind === 'user' &&
-	          (resolvedSyncGroups.length === 0 ||
-	            (resolvedSyncGroups.length === 1 && resolvedSyncGroups[0] === 'default'))
-	        ) {
-	          // Actionable and not self-healing (no live updates until fixed):
-	          // kept at warn level for consumers; the low-level diagnostic
-	          // fields ride the debug log below.
-	          logger.warn(
-	            'This client was started without sync groups, so it will not receive ' +
-	              'live updates. Pass `syncGroups` (for example ' +
-	              '`["org:<id>", "user:<id>"]`) or check that your auth provider supplies them.',
-	          );
-	          logger.debug('degenerate syncGroups — details', { participantKind, resolvedSyncGroups });
-	        }
-
-        _resolvedOrganizationId = accountScope;
-
-        // Seed the resolved identity into everything that filters or stamps
-        // by participant: the presence and claim streams (own-echo filters,
-        // the presence `self` entry) and the model proxies' collaboration
-        // checks (via the getters over the locals). This runs before the
-        // store connects, so no frame is ever filtered against the
-        // construction-time guess.
-        selfParticipantId = userId;
-        selfParticipantKind = participantKind;
-        presenceStream.setParticipant({
-          id: userId,
-          kind: participantKind,
-          syncGroups: resolvedSyncGroups,
-        });
-        claimStream.setParticipant({ id: userId });
-
-        if (resolved.refreshScheduler) {
-          _refreshScheduler = resolved.refreshScheduler;
-        }
-
-        // Drive the generator to completion. Each yielded promise is awaited
-        // then fed back — this is standard generator consumption.
-        //
-        // The store.initialize() generator updates store.syncStatus as it
-        // progresses (syncing → idle on success, error on failure), so the
-        // consumer's `sync.syncStatus` observable reflects real-time state.
-        // Resolve bootstrap mode: explicit option wins; otherwise
-        // agents default to 'none' (transactional participant — see
-        // option doc) and everyone else defaults to 'full'.
-        const resolvedBootstrapMode: 'full' | 'none' =
-          internalOptions.bootstrapMode ?? (participantKind === 'agent' ? 'none' : 'full');
-
-        const gen = store.initialize({
-          userId,
-          organizationId: accountScope,
-          teamIds,
-          kind: participantKind,
-          capabilityToken,
-          syncGroups,
-          bootstrapMode: resolvedBootstrapMode,
-        });
-        let current = gen.next();
-        while (!current.done) {
-          const yielded = current.value;
-          const resolved = yielded instanceof Promise ? await yielded : yielded;
-          current = gen.next(resolved);
-        }
-
-        const result = current.value;
-        if (!result.success) {
-          throw result.error
-            ? toAbloError(result.error)
-            : new AbloConnectionError('Sync engine initialization failed', {
-                code: 'bootstrap_fetch_timeout',
-              });
-        }
-
-        logger.info('Sync engine ready', { models: Object.keys(schema.models).length });
-      } catch (err) {
-        // Coerce so the rejection a consumer awaiting `ready()` catches is
-        // always an AbloError — connection setup is held to the same
-        // never-leak-untagged contract as the model operations.
-        const error = toAbloError(err);
-        // Make sure syncStatus reflects the failure for observer() components
-        store.syncStatus.state = 'error';
-        store.syncStatus.error = error;
-        // Log the typed envelope (type + code + status), not just the bare
-        // message — so the console line names it as an Ablo error and carries
-        // the code (e.g. AbloAuthenticationError/identity_resolve_failed on a
-        // 401) instead of reading like an untagged failure.
-        logger.error('Sync engine failed to initialize', {
-          type: error.type,
-          code: error.code,
-          httpStatus: error.httpStatus,
-          error: error.message,
-        });
-        // Clear the memo so a future `ready()` re-attempts bootstrap instead of
-        // replaying this rejection forever. Bootstrap failures here are transient
-        // by nature — offline, an IndexedDB open timeout, a bootstrap fetch
-        // hiccup — and the early `if (_readyPromise) return _readyPromise` guard
-        // would otherwise hand every later caller this same dead promise, bricking
-        // the engine until a full page reload. Nulling it lets the provider's
-        // online/wake/retry triggers drive a clean re-bootstrap. (The terminal
-        // `_validationError` branch above intentionally stays cached — config
-        // can't change without recreating the engine.)
-        _readyPromise = null;
-        throw error;
-      }
-    })();
-
-    return _readyPromise;
-  }
-
-  // 9. Optional auto-start for convenience. Opt-in because silent background
-  //    init has historically been the #1 source of "why isn't my data loading"
-  //    bug reports. Explicit `await sync.ready()` is the default — errors
-  //    surface immediately instead of being swallowed.
-  if (!_validationError && internalOptions.autoStart) {
-    void ready().catch(() => {
-      // Error is captured in store.syncStatus; consumers should check
-      // `sync.syncStatus.state === 'error'` to detect failures.
-    });
-  }
+  const participantManager = createParticipantManager({
+    ready,
+    transport,
+    presence: presenceStream,
+    claims: claimStream,
+    schema,
+  });
 
   // 9b. waitForFlush — drains pending mutations using the store's
   //     pendingChanges counter (already maintained by BaseSyncedStore based
@@ -532,7 +254,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	  function normalizeCommitOperation(
 	    op: CommitOperationInput,
 	    defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
-	    fenceToken?: number | null,
+	    fence: BatchFence | null,
 	  ): DurableCommitOperation {
 	    const type = op.action.toUpperCase();
 	    const id = op.id ?? '';
@@ -544,15 +266,14 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      transactionId: op.transactionId ?? undefined,
 	      readAt: op.readAt ?? defaults.readAt ?? undefined,
 	      onStale: op.onStale ?? defaults.onStale ?? undefined,
-	      // The batch's claim (if any) supplies one token for every op, mirroring
-	      // how it supplies the batch `readAt`.
-	      fenceToken: op.fenceToken ?? fenceToken ?? undefined,
+	      fenceToken:
+	        op.fenceToken ?? fenceTokenFor(fence, op.model, op.id ?? null) ?? undefined,
 	    });
 	  }
 
 	  function normalizeCommitOperations(
 	    commitOptions: CommitCreateOptions,
-	    fenceToken?: number | null,
+	    fence: BatchFence | null,
 	  ): DurableCommitOperation[] {
 	    if (commitOptions.operations.length === 0) {
 	      throw new AbloValidationError(
@@ -561,9 +282,10 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      );
 	    }
 	    return commitOptions.operations.map((op) =>
-	      normalizeCommitOperation(op, commitOptions, fenceToken),
+	      normalizeCommitOperation(op, commitOptions, fence),
 	    );
 	  }
+
 
 	  function modelClaimFromActive(claim: Claim): ModelClaim {
 	    const target = {
@@ -731,6 +453,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	          ({ waited, fenceToken } = await awaitClaimGrant(transport, claim.id, {
 	            timeoutMs: claimOptions.waitTimeoutMs,
 	            maxQueueDepth: claimOptions.maxQueueDepth,
+	            signal: claimOptions.signal,
 	            logger,
 	          }));
 	        } catch (err) {
@@ -750,6 +473,39 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      return waitForModelUnclaimed(target, options);
 	    },
 	  });
+
+  /**
+   * One held claim, as the public claim-state object.
+   *
+   * The live claim stream only tracks *open* claims; terminal states
+   * (committed / expired / canceled) drop out of the list entirely — exactly
+   * the ephemeral coordination model — so a present entry is by definition
+   * `status: 'active'`.
+   */
+  const claimStateOf = (held: ModelClaim | undefined) => {
+    if (!held) return null;
+    return {
+      object: 'claim' as const,
+      id: held.id,
+      status: 'active' as const,
+      target: {
+        ...streamTarget(held.target),
+        ...subTarget(held.target),
+      },
+      description: held.description ?? 'editing',
+      heldBy: held.actor,
+      participantKind: held.participantKind,
+      expiresAt: held.expiresAt,
+      // Carried, not dropped: the coordinator writes a heartbeat's `details`
+      // into `meta.progress` on the holder's record so an observer can see
+      // what a long hold is doing. It reached `ModelClaim` and stopped here,
+      // which left the beat writable and unreadable — a channel with a setter
+      // and no getter. `target.meta` beside it stays the declared shape; this
+      // is the open record, because a declared shape has no member for a key
+      // the holder did not write.
+      ...(held.meta !== undefined ? { meta: held.meta } : {}),
+    };
+  };
 
   // Build the typed proxy — one property per model. Done after publicClaims
   // exists so model clients can expose workflow helpers such as
@@ -784,27 +540,17 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
           publicClaims.queueFor(streamTarget(target)),
         reorder: (target, order) =>
           { publicClaims.reorder(streamTarget(target), order); },
-        state: (target) => {
-          // The live claim stream only tracks *open* (active) claims;
-          // terminal states (committed / expired / canceled) drop out of
-          // the list entirely — exactly the ephemeral coordination model.
-          // So a present entry is, by definition, `status: 'active'`.
-          const held = publicClaims.list(modelTarget(target))[0];
-          if (!held) return null;
-          return {
-            object: 'claim',
-            id: held.id,
-            status: 'active',
-            target: {
-              ...streamTarget(held.target),
-              ...subTarget(held.target),
-            },
-            description: held.description ?? 'editing',
-            heldBy: held.actor,
-            participantKind: held.participantKind,
-            expiresAt: held.expiresAt,
-          };
-        },
+        // One row can have several holders — sub-row claims on disjoint
+        // targets are all granted — so `state` and `holders` read the same
+        // list and differ only in how much of it they answer with. The
+        // projection lives here once: two copies of it would drift the
+        // moment a field is added to one caller's answer.
+        state: (target) => claimStateOf(publicClaims.list(modelTarget(target))[0]),
+        holders: (target) =>
+          publicClaims
+            .list(modelTarget(target))
+            .map((held) => claimStateOf(held))
+            .filter((claim): claim is NonNullable<typeof claim> => claim !== null),
         waitFor: (target, waitOptions) =>
           publicClaims.waitFor(modelTarget(target), waitOptions),
         // Getters, not copies: identity is late-bound (seeded in `ready()`),
@@ -826,10 +572,13 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
         // `ablo.<model>.join(ids, { ttl })` performs a scoped participant join
         // on this model's sync group(s). WebSocket only — `join` throws
         // `AbloConnectionError` if the socket isn't ready.
+        // `ttl` passes straight through — both surfaces spell the lease the
+        // same way now, so there is no rename here to make a field's name
+        // disagree with the value it carries.
         createJoin: (modelKey, ids, options) =>
           participantManager.join({
             scope: { [modelKey]: ids },
-            ...(options?.ttl !== undefined ? { ttlSeconds: options.ttl } : {}),
+            ...(options?.ttl !== undefined ? { ttl: options.ttl } : {}),
           }),
       },
       // The client-wide `wait` default; a per-call `wait` still wins.
@@ -863,7 +612,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	          onStale:
 	            commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
 	        },
-	        claim?.fenceToken ?? null,
+	        batchFence(claim?.target, claim?.fenceToken),
 	      );
 	      const wait = commitOptions.wait ?? 'confirmed';
 	      // Route through the MutationQueue's commit lane so the call
@@ -1062,8 +811,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     },
 
     async dispose() {
-      _refreshScheduler?.dispose();
-      _refreshScheduler = null;
+      lifecycle.dispose();
       try {
         await store.disconnect();
       } catch (err) {

@@ -41,10 +41,29 @@ import type { ClaimTargetDetails } from './locator.js';
  * lowercased them.
  */
 function fieldSet(target: ClaimTargetDetails | undefined): Set<string> {
-  const names = [
+  const named = [
     ...(target?.field !== undefined ? [target.field] : []),
     ...(target?.fields ?? []),
   ];
+  // A path names a part too: `/content/3` addresses a position inside the
+  // `content` field, so a claim on it covers that field and nothing else.
+  //
+  // Deriving it here is what stops a path from reading as EVERY field. A
+  // target that named no field left this set empty, and an empty set means
+  // "all of them" — so a claim on one paragraph blocked a write to `status`
+  // on the same row. It also makes the exclusion honest in the other
+  // direction: a write of the whole `content` field does conflict with a
+  // claim on part of it, because nothing can write only that part.
+  //
+  // Only when no field was named outright — an explicit `field`/`fields`
+  // beside a path is the caller being specific, and is not second-guessed.
+  // A bare `range` derives nothing: it names a span without saying of what,
+  // so it stays the conservative whole-row answer.
+  const rootOfPath =
+    named.length === 0 && target?.path !== undefined
+      ? target.path.split('/').filter(Boolean)[0]
+      : undefined;
+  const names = rootOfPath !== undefined ? [...named, rootOfPath] : named;
   return new Set(names.map((n) => n.toLowerCase()));
 }
 
@@ -56,32 +75,6 @@ function hasSubtarget(target: ClaimTargetDetails | undefined): boolean {
       (target?.fields && target.fields.length > 0) ||
       target?.range,
   );
-}
-
-function lower(value: string | undefined): string | undefined {
-  return value?.toLowerCase();
-}
-
-/**
- * Whether two paths address overlapping parts of a document.
- *
- * Paths are hierarchical, so equality is the wrong test: `/content` contains
- * `/content/3`, and a writer holding the parent is holding the child too.
- * Comparing them as opaque strings reported no conflict and granted both
- * leases — the parent's writer and the child's writer would then both write,
- * and one update would vanish with nothing raised anywhere.
- *
- * Containment is checked on a separator boundary so `/content` contains
- * `/content/3` but not `/contentious`, which is the same trap as any
- * prefix match over structured names.
- */
-function pathsOverlap(a: string, b: string): boolean {
-  const x = lower(a) ?? '';
-  const y = lower(b) ?? '';
-  if (x === y) return true;
-  const contains = (parent: string, child: string): boolean =>
-    child.startsWith(parent.endsWith('/') ? parent : `${parent}/`);
-  return contains(x, y) || contains(y, x);
 }
 
 function rangesOverlap(a: TargetRange, b: TargetRange): boolean {
@@ -99,9 +92,19 @@ export function targetsConflict(
   // narrower path/field/range claim under the same entity.
   if (!hasSubtarget(held) || !hasSubtarget(incoming)) return true;
 
-  if (held.path && incoming?.path && !pathsOverlap(held.path, incoming.path)) {
-    return false;
-  }
+  // A claim is only as fine as the smallest thing the write path can address,
+  // and today that is a field: nothing writes part of a value. So two paths
+  // into the SAME field contend, and this rule used to grant them both — by
+  // comparing paths for containment and answering "disjoint" for `/content/3`
+  // against `/content/7`. Both holders were then blocked at their first write,
+  // each by the other, which is a wait dressed as concurrency and resolves
+  // only when someone releases.
+  //
+  // Both are answered below instead, through the field a path names: same
+  // field, conflict; different fields, disjoint. Path containment returns when
+  // a field can declare a smaller write unit than its whole value — an
+  // operation rather than a value — because that is what makes two positions
+  // inside one field separately writable and the disjointness real.
 
   // A claim that names no field covers every field, so it conflicts with any
   // claim under the same path. Two that both name fields conflict only where

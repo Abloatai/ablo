@@ -26,6 +26,7 @@ import type { HttpClientConfig } from './httpOptions.js';
 import type {
   CommitResource,
   HttpClaimApi,
+  HttpClaimsResource,
   HttpTransportModel,
   ModelReadOptions,
   ModelMutationOptions,
@@ -160,6 +161,14 @@ export type AbloHttpClient<S extends SchemaRecord> = {
   /** Replays every pending durable HTTP write in seal order and waits for settlement. */
   waitForFlush(): Promise<void>;
   readonly commits: CommitResource;
+  /**
+   * Claim-ticket operations keyed by `claimId`: `retrieve` polls a queued
+   * ticket to its grant, `heartbeat` keeps one lease (held or queued) alive,
+   * `heartbeatAll` beats every lease this identity holds in one round trip.
+   * The id comes from `AbloClaimedError('claim_queued')`, which carries it on
+   * `error.claims`.
+   */
+  readonly claims: HttpClaimsResource;
   dispose(): Promise<void>;
   /** Resolves the bearer credential this client authenticates with, or `null` if none is set. */
   getAuthToken(): Promise<string | null>;
@@ -181,6 +190,7 @@ const PROTOCOL_MEMBERS = new Set<string>([
   'waitForFlush',
   'dispose',
   'commits',
+  'claims',
   'getAuthToken',
   'sessions',
 ]);

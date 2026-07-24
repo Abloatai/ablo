@@ -1,6 +1,6 @@
 {
   "$generated": "packages/sync-engine/scripts/generate-error-docs.mts",
-  "version": "2026-07-21",
+  "version": "2026-07-23",
   "envelope": [
     "type",
     "code",
@@ -291,7 +291,7 @@
       "surface": "wire",
       "httpStatus": 409,
       "retryable": false,
-      "message": "The claim held on this row was lost before the write could apply. Re-acquire the claim and retry.",
+      "message": "The claim held on this row was lost before the write could apply. Re-acquire with `ablo.<model>.claim` and retry from its fresh snapshot.",
       "docUrl": "https://docs.abloatai.com/errors#claim_lost"
     },
     {
@@ -317,7 +317,7 @@
       "surface": "wire",
       "httpStatus": 409,
       "retryable": true,
-      "message": "The claim was queued behind the current lease holder and will be granted in turn. Wait, or read `claim.queue` to see your position.",
+      "message": "The claim was queued behind the current lease holder and will be granted in turn. Poll `claims.retrieve({ claimId })` for the grant — the id rides on the error — or read `claim.queue` to see the line.",
       "docUrl": "https://docs.abloatai.com/errors#claim_queued"
     },
     {
@@ -328,14 +328,6 @@
       "retryable": true,
       "message": "The wait for this claim lease was aborted before the lease was granted.",
       "docUrl": "https://docs.abloatai.com/errors#claim_wait_aborted"
-    },
-    {
-      "code": "claim_wait_poll_interval_required",
-      "category": "claim",
-      "surface": "client",
-      "retryable": false,
-      "message": "Waiting on a claim requires a poll interval, and none was provided.",
-      "docUrl": "https://docs.abloatai.com/errors#claim_wait_poll_interval_required"
     },
     {
       "code": "cli_invalid_arguments",
@@ -738,7 +730,7 @@
       "surface": "wire",
       "httpStatus": 504,
       "retryable": true,
-      "message": "The wait for a capability grant timed out before one arrived. Retry the request.",
+      "message": "The wait for the claim grant timed out before your turn arrived (`waitTimeoutMs`). Claim again to rejoin the line, raise the cap, or re-read and proceed without the claim.",
       "docUrl": "https://docs.abloatai.com/errors#grant_timeout"
     },
     {
@@ -1056,7 +1048,7 @@
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
-      "message": "The claim payload could not be parsed. A claim must name the model and the entity it targets; check the payload shape and resend.",
+      "message": "The claim payload could not be parsed. A claim on a row must name the model and the entity it targets; a claim on a scope, which is what `join` opens, must name sync groups spelled `kind:id` or `default`. Check the payload shape and resend.",
       "docUrl": "https://docs.abloatai.com/errors#malformed_claim"
     },
     {
@@ -1525,7 +1517,7 @@
       "surface": "wire",
       "httpStatus": 503,
       "retryable": true,
-      "message": "The transaction queue is over its depth limit, so new writes are being rejected until it drains. Retry shortly.",
+      "message": "The line is already past its depth limit. For a claim, more participants were waiting than your `maxQueueDepth` allows — claim again without the cap to wait anyway, or work elsewhere and retry later. For a write, the transaction queue is draining — retry shortly.",
       "docUrl": "https://docs.abloatai.com/errors#queue_too_deep"
     },
     {
@@ -1629,6 +1621,15 @@
       "retryable": false,
       "message": "Your schema maps to tables that are not members of the replication publication, so their changes silently never stream and the source looks frozen. The missing tables and the exact `ALTER PUBLICATION … ADD TABLE …` to add them are in the error details — Ablo never alters your database for you.",
       "docUrl": "https://docs.abloatai.com/errors#replication_publication_drift"
+    },
+    {
+      "code": "replication_reset_required",
+      "category": "conflict",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": false,
+      "message": "A connected log plane has live rows for a mapped model that disappeared. Declare a rename or an explicit drop/reset before advancing the schema.",
+      "docUrl": "https://docs.abloatai.com/errors#replication_reset_required"
     },
     {
       "code": "request_too_large",
@@ -1891,7 +1892,7 @@
       "surface": "wire",
       "httpStatus": 409,
       "retryable": false,
-      "message": "The row changed after you read it — the write's `readAt` watermark is older than the current row version. Re-read the row and retry.",
+      "message": "The row changed after you read it — the write's `readAt` watermark is older than the current row version. Pass a function to `update(id, current => next)` and the SDK re-reads and retries for you; or re-read and retry by hand.",
       "docUrl": "https://docs.abloatai.com/errors#stale_context"
     },
     {
@@ -2097,6 +2098,15 @@
       "retryable": false,
       "message": "The usage request was invalid.",
       "docUrl": "https://docs.abloatai.com/errors#usage_invalid"
+    },
+    {
+      "code": "user_scope_not_enforced",
+      "category": "tenant",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "Rows in this model belong to one person rather than to the whole organization, and that boundary is kept where the rows are stored. This plane is currently served from its log, which carries the organization and the project on every row but not the owner — so the boundary cannot be applied here, and serving the read would show one member another member's private records. It was declined whole and nothing was returned. Serve the plane from its tables, or read with a credential that acts for the organization rather than for a person.",
+      "docUrl": "https://docs.abloatai.com/errors#user_scope_not_enforced"
     },
     {
       "code": "wait_for_timeout",

@@ -5,7 +5,7 @@ sidebar:
   icon: circle-alert
 ---
 
-Error contract version: `2026-07-21` (also sent on the `Ablo-Version` response header).
+Error contract version: `2026-07-23` (also sent on the `Ablo-Version` response header).
 
 Every error — over HTTP or WebSocket — carries the same envelope:
 
@@ -309,7 +309,7 @@ The claim-lease coordination subsystem is temporarily unavailable, so the claim 
 
 `HTTP 409` · not retryable
 
-The claim held on this row was lost before the write could apply. Re-acquire the claim and retry.
+The claim held on this row was lost before the write could apply. Re-acquire with `ablo.<model>.claim` and retry from its fresh snapshot.
 
 ### claim_not_wired
 
@@ -321,19 +321,13 @@ Claims were used, but this runtime has no claim support wired in. The standard `
 
 `HTTP 409` · retryable
 
-The claim was queued behind the current lease holder and will be granted in turn. Wait, or read `claim.queue` to see your position.
+The claim was queued behind the current lease holder and will be granted in turn. Poll `claims.retrieve({ claimId })` for the grant — the id rides on the error — or read `claim.queue` to see the line.
 
 ### claim_wait_aborted
 
 `HTTP 409` · retryable
 
 The wait for this claim lease was aborted before the lease was granted.
-
-### claim_wait_poll_interval_required
-
-`client-only` · not sent over the network
-
-Waiting on a claim requires a poll interval, and none was provided.
 
 ### entity_claimed
 
@@ -351,7 +345,7 @@ This write carried a fencing token below the row’s current high-water: a later
 
 `HTTP 504` · retryable
 
-The wait for a capability grant timed out before one arrived. Retry the request.
+The wait for the claim grant timed out before your turn arrived (`waitTimeoutMs`). Claim again to rejoin the line, raise the cap, or re-read and proceed without the claim.
 
 ### model_claim_not_configured
 
@@ -417,6 +411,12 @@ This idempotency key belongs to an expired retained source intent and cannot be 
 
 The schema change is incompatible with the schema currently deployed and cannot be applied as-is.
 
+### replication_reset_required
+
+`HTTP 409` · not retryable
+
+A connected log plane has live rows for a mapped model that disappeared. Declare a rename or an explicit drop/reset before advancing the schema.
+
 ### source_transport_pinned
 
 `HTTP 409` · not retryable
@@ -427,7 +427,7 @@ An earlier attempt under this idempotency key was pinned to a different source t
 
 `HTTP 409` · not retryable
 
-The row changed after you read it — the write's `readAt` watermark is older than the current row version. Re-read the row and retry.
+The row changed after you read it — the write's `readAt` watermark is older than the current row version. Pass a function to `update(id, current => next)` and the SDK re-reads and retries for you; or re-read and retry by hand.
 
 ### unique_violation
 
@@ -623,7 +623,7 @@ Sync groups must be `default` or `<namespace>:<id>`.
 
 `HTTP 400` · not retryable
 
-The claim payload could not be parsed. A claim must name the model and the entity it targets; check the payload shape and resend.
+The claim payload could not be parsed. A claim on a row must name the model and the entity it targets; a claim on a scope, which is what `join` opens, must name sync groups spelled `kind:id` or `default`. Check the payload shape and resend.
 
 ### malformed_subscription
 
@@ -927,6 +927,12 @@ This model's table has no `organization_id` column, which Ablo requires to isola
 
 Named a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` — the server keeps its own copy of the schema.
 
+### user_scope_not_enforced
+
+`HTTP 400` · not retryable
+
+Rows in this model belong to one person rather than to the whole organization, and that boundary is kept where the rows are stored. This plane is currently served from its log, which carries the organization and the project on every row but not the owner — so the boundary cannot be applied here, and serving the read would show one member another member's private records. It was declined whole and nothing was returned. Serve the plane from its tables, or read with a credential that acts for the organization rather than for a person.
+
 ## Schema
 
 Schema declaration or migration problems.
@@ -1177,7 +1183,7 @@ The client sync-protocol version is outside the range this server supports — u
 
 `HTTP 503` · retryable
 
-The transaction queue is over its depth limit, so new writes are being rejected until it drains. Retry shortly.
+The line is already past its depth limit. For a claim, more participants were waiting than your `maxQueueDepth` allows — claim again without the cap to wait anyway, or work elsewhere and retry later. For a write, the transaction queue is draining — retry shortly.
 
 ### replication_lag_timeout
 

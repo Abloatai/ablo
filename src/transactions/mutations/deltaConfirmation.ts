@@ -8,7 +8,8 @@
  * has no cyclic dependency and can be tested on its own.
  */
 
-import { getContext } from '../../context.js';
+import { globalRuntime } from '../../context.js';
+import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { LogPosition } from '../../transaction/logPosition.js';
 import type { QueuedMutation } from './commitPayload.js';
 
@@ -31,6 +32,8 @@ export interface DeltaConfirmationContext {
   emit(event: string, payload?: unknown): void;
   isConnected(): boolean;
   position: LogPosition;
+  /** The owning client's runtime. Defaults to the module-global bridge. */
+  runtime?: RuntimeContext;
 }
 
 export class DeltaConfirmationTracker {
@@ -47,7 +50,11 @@ export class DeltaConfirmationTracker {
   // Track retry attempts per transaction for exponential backoff
   private deltaConfirmationRetries = new Map<string, number>();
 
-  constructor(private readonly ctx: DeltaConfirmationContext) {}
+  private readonly runtime: RuntimeContext;
+
+  constructor(private readonly ctx: DeltaConfirmationContext) {
+    this.runtime = ctx.runtime ?? globalRuntime;
+  }
 
   /** Applied-cursor alias, kept so the read sites below stay legible. */
   private get lastSeenSyncId(): number {
@@ -84,7 +91,7 @@ export class DeltaConfirmationTracker {
 
     // Debug: Show state when delta arrives
     if (awaitingTxs.length > 0 || executingTxs.length > 0) {
-      getContext().logger.debug('tx:delta_received', {
+      this.runtime.logger.debug('tx:delta_received', {
         syncId,
         lastSeenSyncId: this.lastSeenSyncId,
         awaitingCount: awaitingTxs.length,
@@ -128,7 +135,7 @@ export class DeltaConfirmationTracker {
         this.ctx.optimisticUpdates.delete(tx.id);
         confirmedCount++;
 
-        getContext().logger.debug('tx:confirm_via_delta', {
+        this.runtime.logger.debug('tx:confirm_via_delta', {
           txId: tx.id.slice(0, 8),
           model: tx.modelName,
           neededSyncId: tx.syncIdNeededForCompletion,
@@ -141,7 +148,7 @@ export class DeltaConfirmationTracker {
     // Log batch summary only if we confirmed something
     if (confirmedCount > 0) {
       // Leave a breadcrumb when transactions confirm.
-      getContext().observability.breadcrumb('Transactions confirmed via delta', 'sync.transaction', 'info', {
+      this.runtime.observability.breadcrumb('Transactions confirmed via delta', 'sync.transaction', 'info', {
         count: confirmedCount,
         syncId,
         remainingAwaiting: awaitingTxs.length - confirmedCount,
@@ -172,7 +179,7 @@ export class DeltaConfirmationTracker {
       if (!this.ctx.isConnected()) {
         // Self-healing: re-schedule the confirmation wait while offline, no
         // consumer action needed → debug.
-        getContext().logger.debug('[MutationQueue] Timeout fired while disconnected - re-scheduling', {
+        this.runtime.logger.debug('[MutationQueue] Timeout fired while disconnected - re-scheduling', {
           txId: tx.id.slice(0, 8),
           model: tx.modelName,
         });
@@ -183,7 +190,7 @@ export class DeltaConfirmationTracker {
 
       const retryCount = this.deltaConfirmationRetries.get(tx.id) ?? 0;
 
-      getContext().observability.captureReconciliation({
+      this.runtime.observability.captureReconciliation({
         reason: 'delta_timeout',
         model: tx.modelName,
         modelId: tx.modelId,
@@ -217,7 +224,7 @@ export class DeltaConfirmationTracker {
 
         // Self-healing retry with backoff — the server already committed; we're
         // just waiting on the delta. No consumer action → debug.
-        getContext().logger.debug('[MutationQueue] Re-scheduling with backoff', {
+        this.runtime.logger.debug('[MutationQueue] Re-scheduling with backoff', {
           txId: tx.id.slice(0, 8),
           model: tx.modelName,
           nextTimeoutMs: nextTimeout,
@@ -233,7 +240,7 @@ export class DeltaConfirmationTracker {
         this.deltaConfirmationRetries.delete(tx.id);
         this.deltaConfirmationTimeouts.delete(tx.id);
 
-        getContext().observability.captureDeltaRetryExhausted({
+        this.runtime.observability.captureDeltaRetryExhausted({
           txId: tx.id,
           model: tx.modelName,
           modelId: tx.modelId,

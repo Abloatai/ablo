@@ -41,24 +41,18 @@ function isZodSchema(value: unknown): value is z.ZodType {
 
 // ── Metadata types ────────────────────────────────────────────────────────
 
-/** The sync-engine metadata describing one field, available at runtime through a
- *  model's `fields` map. The {@link field} builders attach it, and the migration
- *  planner, type generator, and OpenAPI generator all read it. */
-export interface FieldMeta {
-  /** Sync-engine type tag, which maps to storage and serialization hints. */
-  type: 'string' | 'number' | 'boolean' | 'date' | 'enum' | 'json';
-  /** Whether the field was marked optional via `.optional()` or `.nullable()`. */
-  isOptional: boolean;
-  /** Whether the field was marked indexed via `.indexed()`. */
-  isIndexed: boolean;
-  /**
-   * Physical database column name override. When absent, SQL layers derive
-   * the column from the field name using the active casing convention.
-   */
-  column?: string;
-  /** For enums: the allowed values. */
-  enumValues?: readonly string[];
-}
+/**
+ * The sync-engine metadata describing one field, available at runtime through a
+ * model's `fields` map. The {@link field} builders attach it, and the migration
+ * planner, type generator, and OpenAPI generator all read it.
+ *
+ * Declared in `wire/modelShape.ts` and inferred here, not restated: this record
+ * crosses the wire twice — serialized into the pushed artifact, and reported
+ * back by `GET /api/schema` — so a second declaration would be a copy that
+ * drifts in whichever direction nobody is looking.
+ */
+export type { FieldMeta } from '../wire/modelShape.js';
+import type { FieldMeta } from '../wire/modelShape.js';
 
 // ── Metadata encoding ─────────────────────────────────────────────────────
 //

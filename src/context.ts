@@ -40,6 +40,30 @@ export function getContext(): RuntimeContext {
 }
 
 /**
+ * The module-global runtime as an instance-shaped value — the bridge for code
+ * that is not yet constructed with its client's own `RuntimeContext`.
+ *
+ * Every member reads {@link getContext} at call time, so a context installed
+ * after construction is still picked up (tests construct first and
+ * `initRuntime` later). Classes take `runtime` as a constructor option with
+ * this as the default; a client that threads its own instance is isolated
+ * from other clients in the same process, a construction that doesn't is
+ * last-writer-wins exactly as before. Retired reference by reference as
+ * construction moves behind `humans()` (docs/plans/package-split.md).
+ */
+export const globalRuntime: RuntimeContext = {
+  get logger() { return getContext().logger; },
+  get observability() { return getContext().observability; },
+  get analytics() { return getContext().analytics; },
+  get sessionErrorDetector() { return getContext().sessionErrorDetector; },
+  get onlineStatus() { return getContext().onlineStatus; },
+  get modelDebugLogger() { return getContext().modelDebugLogger; },
+  get mutationExecutor() { return getContext().mutationExecutor; },
+  get config() { return getContext().config; },
+  getModelMetadata: (name) => getContext().getModelMetadata(name),
+};
+
+/**
  * Check if the sync engine has been initialized.
  */
 export function isRuntimeInitialized(): boolean {

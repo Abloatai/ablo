@@ -1,10 +1,10 @@
 /**
- * Small, self-contained helpers for sorting, filtering, and binary insertion.
- * The incrementally-updated views that implement {@link IncrementalView} rely on
- * these for their ordering and matching, so keeping the rules in one place
- * ensures every view sorts and filters identically. The functions here work on
- * plain arrays and values — they hold no reference to models, pools, or the
- * reactivity system.
+ * The {@link IncrementalView} contract — the interface a live view implements
+ * to receive add/update/remove notifications — together with the sorting,
+ * matching, and binary-insertion rules every view shares. Keeping the rules in
+ * one place ensures every view sorts and filters identically. The functions
+ * here work on plain arrays and values — they hold no reference to models,
+ * pools, or the reactivity system.
  */
 
 /**

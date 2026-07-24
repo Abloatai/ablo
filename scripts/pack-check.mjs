@@ -70,8 +70,18 @@ try {
     fail('package.json.prepack-backup left in the working tree');
   }
 
+  // 4. the CLI lives in its own package now — a cli bundle reappearing in the
+  //    SDK tarball would silently hand every consumer 13+ MB back, and the
+  //    bin shim must ship or `npx ablo` dies on install.
+  if (report.files.some((f) => f.path === 'dist/cli.cjs')) {
+    fail('dist/cli.cjs shipped in the SDK tarball — the CLI belongs to packages/cli');
+  }
+  if (!report.files.some((f) => f.path === 'bin/ablo.cjs')) {
+    fail('bin/ablo.cjs missing from the tarball — `npx ablo` would have no bin');
+  }
+
   console.log(
-    `[pack:check] OK: ${report.filename} is '${CONDITION}'-free, dev tree intact`
+    `[pack:check] OK: ${report.filename} is '${CONDITION}'-free, CLI-bundle-free, dev tree intact`
   );
 } finally {
   rmSync(workDir, { recursive: true, force: true });

@@ -179,4 +179,4 @@ export {
   type FootprintKind,
   type FootprintNames,
   type FootprintPlane,
-} from './footprint.js';
+} from '../transaction/footprint.js';

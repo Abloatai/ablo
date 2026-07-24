@@ -14,6 +14,10 @@
  */
 
 import { z } from 'zod';
+// Composed, never restated: these are the artifact's own shapes, and a
+// hand-written mirror here would be a second copy of the exact record this
+// response exists to stop withholding.
+import { fieldMetaSchema, relationMetaSchema } from './modelShape.js';
 import { onStaleModeSchema } from '../coordination/schema.js';
 import type { SyncDeltaAction } from './delta.js';
 // Kept for the {@link ListEnvelope} references below; `GET /v1/logs`'s own
@@ -100,8 +104,39 @@ export const schemaModelResponseSchema = z.object({
   typename: z.string(),
   /** Declared disposition, or null for the engine default. */
   conflict: conflictAxisWireSchema.nullable(),
-  /** Per-model content hash — the unit of the client's drift check. */
+  /**
+   * Per-model content hash — the unit of the client's drift check, and the
+   * revalidation key for everything below it.
+   *
+   * `fields` and `relations` change only when this does, so a client reads the
+   * shape once and thereafter compares hashes: a cheap poll that refetches on a
+   * push and never otherwise. Introspection that costs one request per schema
+   * version rather than one per question.
+   */
   hash: z.string(),
+  /**
+   * The model's fields, by name.
+   *
+   * The schema artifact has always carried these and this response dropped
+   * them, so a caller with no local schema declaration — which is every caller
+   * that is not TypeScript — had no way to learn that `task.title` is a
+   * required string. It found out from a 400 at the end of a round trip.
+   *
+   * For an agent that is not merely slow, it is a reasoning detour: a typo
+   * discovered through a rejected write costs a turn and an explanation, where
+   * the same typo checked locally costs a millisecond.
+   *
+   * Absent on an artifact written before this was reported, which is why it is
+   * optional rather than empty — "this server does not tell me" and "this model
+   * has no fields" are different facts.
+   */
+  fields: z.record(z.string(), fieldMetaSchema).optional(),
+  /**
+   * The model's relations, by name — what a caller may expand, and into what.
+   *
+   * Optional for the same reason as {@link fields}.
+   */
+  relations: z.record(z.string(), relationMetaSchema).optional(),
 });
 export type SchemaModelResponse = z.infer<typeof schemaModelResponseSchema>;
 

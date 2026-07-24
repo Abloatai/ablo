@@ -13,9 +13,9 @@ The declarative seam introduced in 0.32.0 for carrying tenant identity into your
 
 ```ts
 defineSchema({
-  models: { document: { /* … */ } },
+  models: { document: {/* … */} },
   sessionSettings: { 'app.current_org': 'orgId' },
-})
+});
 ```
 
 The setting name is the key, so a setting takes exactly one source and a duplicate is unrepresentable rather than something to validate away. If you adopted `tenantContext` in 0.32.0, rename it to `sessionSettings` and turn each `{ guc: 'app.current_org', from: 'orgId' }` into `'app.current_org': 'orgId'`; the exported names followed the rename — `TenantContextMapping` and `TenantContextSource` became `SessionSettings` and `SessionSettingSource`, and `RESERVED_TENANT_CONTEXT_GUCS` became `RESERVED_SESSION_SETTINGS`. The meaning is unchanged: Ablo fills only settings it resolves from your authenticated identity, never from client-supplied data, so a mapping can forward the tenant Ablo already trusts but can never widen a writer's scope, and settings the engine reserves for itself — `row_security`, the timeouts — are still refused at definition time. Schemas pushed before the rename keep parsing.

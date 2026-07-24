@@ -38,11 +38,15 @@ import { PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER } from '../wire/protocolVersi
 import { commitReceiptSchema, type CommitReceiptWire } from '../wire/commit.js';
 import {
   claimAcquireResponseSchema,
+  claimHeartbeatBatchReplySchema,
   claimHeartbeatReplySchema,
   claimListResponseSchema,
+  claimStateSchema,
   type ClaimHeartbeatReply,
   type ClaimListResponse,
+  type ClaimQueuedResponse,
   type ClaimRequest,
+  type ClaimState,
   type ClaimTargetBody,
 } from '../wire/claims.js';
 import {
@@ -53,6 +57,7 @@ import { toMs } from '../utils/duration.js';
 import {
   heartbeatCadenceMs,
   resolveHeartbeatOptions,
+  resolveHeartbeatPlan,
   startClaimHeartbeatLoop,
 } from '../coordination/claimHeartbeatLoop.js';
 import type { HttpClientConfig } from './httpOptions.js';
@@ -64,6 +69,7 @@ import type {
   CommitResource,
   CommitWait,
   HttpClaimApi,
+  HttpClaimsResource,
   HttpTransportModel,
   ModelClaim,
   ModelMutationOptions,
@@ -107,8 +113,14 @@ import type {
 } from '../resources/modelOperations.js';
 import type { Duration } from '../utils/duration.js';
 import type { TrackDependency } from '../coordination/schema.js';
-import { claimDescription } from '../coordination/schema.js';
-import { subTarget, streamTarget } from '../coordination/locator.js';
+import { claimDescription, partName } from '../coordination/schema.js';
+import type { BatchFence } from '../coordination/locator.js';
+import {
+  subTarget,
+  streamTarget,
+  batchFence,
+  fenceTokenFor,
+} from '../coordination/locator.js';
 import { declaredMeta, wireMeta } from '../coordination/claimMeta.js';
 import type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim } from '../types/streams.js';
 import type { CoordinationObservability } from '../observability.js';
@@ -168,6 +180,12 @@ export interface HttpTransport {
   dispose(): Promise<void>;
   purge(): Promise<void>;
   readonly commits: CommitResource;
+  /**
+   * Claim-ticket operations keyed by `claimId` — the id a queued acquire
+   * hands back on `AbloClaimedError('claim_queued')`. See
+   * {@link HttpClaimsResource}.
+   */
+  readonly claims: HttpClaimsResource;
   model<T = Record<string, unknown>>(name: string): HttpTransportModel<T>;
   /**
    * Resolve the active bearer credential this client authenticates with — the
@@ -1008,7 +1026,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   function normalizeCommitOperation(
     op: CommitOperationInput,
     defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
-    fenceToken?: number | null
+    fence: BatchFence | null
   ): CommitOperationInput {
     return {
       action: op.action,
@@ -1018,15 +1036,13 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       transactionId: op.transactionId ?? null,
       readAt: op.readAt ?? defaults.readAt ?? null,
       onStale: op.onStale ?? defaults.onStale ?? null,
-      // The batch's claim (if any) supplies one token for every op, mirroring
-      // how it supplies the batch `readAt`.
-      fenceToken: op.fenceToken ?? fenceToken ?? null,
+      fenceToken: op.fenceToken ?? fenceTokenFor(fence, op.model, op.id ?? null),
     };
   }
 
   function normalizeCommitOperations(
     commitOptions: CommitCreateOptions,
-    fenceToken?: number | null
+    fence: BatchFence | null
   ): readonly CommitOperationInput[] {
     if (commitOptions.operations.length === 0) {
       throw new AbloValidationError('Commit requires a non-empty `operations` array.', {
@@ -1034,7 +1050,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       });
     }
     return commitOptions.operations.map((op) =>
-      normalizeCommitOperation(op, commitOptions, fenceToken)
+      normalizeCommitOperation(op, commitOptions, fence)
     );
   }
 
@@ -1052,7 +1068,152 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       { method: 'GET' },
       claimListResponseSchema
     );
-    return { active: body.claims, queue: body.queue };
+    // One list, one resource in two states: holders and waiters are told
+    // apart by each entry's `status`, not by bespoke envelope members.
+    return {
+      active: body.data.filter((row) => row.status !== 'queued'),
+      queue: body.data.filter((row) => row.status === 'queued'),
+    };
+  }
+
+  // The claim-ticket surface: everything a caller does holding only a
+  // `claimId` — which is all a queued acquire leaves in its hand. Each method
+  // is a thin cast of its route; the reply schemas are the wire's own, so the
+  // surface cannot describe a response the server does not send.
+  const claims: HttpClaimsResource = {
+    retrieve({ claimId }): Promise<ClaimState> {
+      return requestJson(
+        `/v1/claims/${encodeURIComponent(claimId)}`,
+        { method: 'GET' },
+        claimStateSchema
+      );
+    },
+    heartbeat({ claimId, ttl }): Promise<ClaimHeartbeatReply> {
+      return requestJson(
+        `/v1/claims/${encodeURIComponent(claimId)}/heartbeat`,
+        {
+          method: 'POST',
+          body: JSON.stringify(ttl !== undefined ? { ttl } : {}),
+        },
+        claimHeartbeatReplySchema
+      );
+    },
+    async heartbeatAll(options) {
+      const reply = await requestJson(
+        '/v1/claims/heartbeat',
+        {
+          method: 'POST',
+          body: JSON.stringify(options?.ttl !== undefined ? { ttl: options.ttl } : {}),
+        },
+        claimHeartbeatBatchReplySchema
+      );
+      return reply.results;
+    },
+    async release({ claimId }) {
+      await requestRaw(`/v1/claims/${encodeURIComponent(claimId)}`, {
+        method: 'DELETE',
+      });
+    },
+  };
+
+  // How the stateless client waits its turn. The queued slot is real server
+  // state, so one heartbeat per tick does both jobs: it refreshes this
+  // waiter's slot and reports the line's answer — `queued` (still waiting) or
+  // `held` (granted). The first check comes quickly because most holds are a
+  // short claim→write→release; after that the cadence relaxes, with jitter so
+  // a fleet of waiters doesn't beat in step.
+  const GRANT_POLL_FIRST_MS = 250;
+  const GRANT_POLL_INTERVAL_MS = 1_000;
+  // An abort cuts the sleep short so the wait ends within a tick of the
+  // signal, not at the next scheduled beat.
+  const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+    new Promise((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      signal?.addEventListener('abort', done, { once: true });
+    });
+
+  async function awaitGrantOverHttp(
+    targetLabel: string,
+    queued: ClaimQueuedResponse,
+    options: { maxQueueDepth?: number; waitTimeoutMs?: number; signal?: AbortSignal }
+  ): Promise<{ id: string; fenceToken?: number }> {
+    // The queued reply is a claim resource in its waiting state, so the
+    // handle is its `id` — same rule as the 201 and the poll.
+    const claimId = queued.id;
+    const { signal } = options;
+    // Leave the line before rejecting: an abandoned slot would otherwise sit
+    // in the queue until its TTL lapses, stalling every waiter behind it.
+    const rejectAndLeave = async (error: AbloClaimedError): Promise<never> => {
+      await claims.release({ claimId }).catch(() => {});
+      throw error;
+    };
+
+    if (options.maxQueueDepth !== undefined && queued.position >= options.maxQueueDepth) {
+      return rejectAndLeave(
+        new AbloClaimedError(
+          `Claim queue for ${targetLabel} is ${queued.position} deep (max ${options.maxQueueDepth}).`,
+          { code: 'queue_too_deep' }
+        )
+      );
+    }
+
+    const deadline =
+      options.waitTimeoutMs !== undefined ? Date.now() + options.waitTimeoutMs : undefined;
+    let delay = GRANT_POLL_FIRST_MS;
+    for (;;) {
+      if (signal?.aborted) {
+        return rejectAndLeave(
+          new AbloClaimedError(
+            `The wait for the claim on ${targetLabel} was aborted before the grant arrived.`,
+            { code: 'claim_wait_aborted' }
+          )
+        );
+      }
+      if (deadline !== undefined && Date.now() >= deadline) {
+        return rejectAndLeave(
+          new AbloClaimedError(
+            `Timed out after ${options.waitTimeoutMs}ms waiting for the queue grant on ${targetLabel}.`,
+            { code: 'grant_timeout' }
+          )
+        );
+      }
+      await sleep(
+        deadline !== undefined ? Math.min(delay, Math.max(0, deadline - Date.now())) : delay,
+        signal
+      );
+      if (signal?.aborted) {
+        return rejectAndLeave(
+          new AbloClaimedError(
+            `The wait for the claim on ${targetLabel} was aborted before the grant arrived.`,
+            { code: 'claim_wait_aborted' }
+          )
+        );
+      }
+      delay = GRANT_POLL_INTERVAL_MS * (0.85 + Math.random() * 0.3);
+      // A lease that ended answers the beat with 409 `claim_lost`, which the
+      // wire error mapping raises as AbloClaimedError before this reads
+      // anything — the wait fails with the loss, as the socket wait does.
+      const beat = await claims.heartbeat({ claimId });
+      if (beat.status !== 'held') continue;
+      // Granted. The heartbeat ack does not carry the fence token — the claim
+      // state does, server-stamped at grant.
+      const state = await claims.retrieve({ claimId });
+      if (state.status !== 'active') {
+        return rejectAndLeave(
+          new AbloClaimedError(`Claim lost while queued for ${targetLabel}.`, {
+            code: 'claim_lost',
+          })
+        );
+      }
+      return state.fenceToken !== undefined
+        ? { id: claimId, fenceToken: state.fenceToken }
+        : { id: claimId };
+    }
   }
 
   async function applyClaimedPolicy(
@@ -1092,7 +1253,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           readAt: commitOptions.readAt ?? claim?.readAt ?? null,
           onStale: commitOptions.onStale ?? (claim?.readAt !== undefined ? 'reject' : null),
         },
-        claim?.fenceToken ?? null
+        batchFence(claim?.target, claim?.fenceToken)
       );
       const requestBody = {
         operations,
@@ -1328,33 +1489,21 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         { method: 'POST', body: JSON.stringify(request) },
         claimAcquireResponseSchema
       );
-      // HELD BY ADR 0018 (`docs/decisions/0018-the-premise-is-the-missing-structure.md`).
-      // Raising a successful outcome as an exception is wrong, and this stays
-      // wrong on purpose: it is the symptom the ADR is derived from, so removing
-      // the smell without the structure would hide the reason for the work.
-      //
-      // Being queued is not a transport failure — it is "I cannot establish my
-      // premise yet." Premise is the structure the codebase approximates six
-      // ways and has never modelled, which is why this was never solvable here.
-      // A client-side polling loop is specifically ruled out: it would become a
-      // shape callers build against, and the better it worked the harder it
-      // would be to replace with the status this should be.
-      //
-      // A caller that must wait today can poll `GET /v1/claims/{claimId}`, which
-      // is served and published. That primitive is safe to build on; a blessed
-      // wait algorithm here is not.
-      // The two arms are told apart by `status`, which only the queued reply
-      // carries — see `claimAcquireResponseSchema` for why they cannot be a
-      // discriminated union.
-      if ('status' in body) {
-        throw new AbloClaimedError(
-          `Target ${name}/${params.id} is held; queued at position ${body.position}. ` +
-            `Poll \`GET /v1/claims/{claimId}\` for the grant — the HTTP client does not await it.`,
-          { code: 'claim_queued' }
-        );
+      // One resource, two states, discriminated by `status`. The queued arm
+      // WAITS, exactly as the socket client does: `claim({ id })` means
+      // "serialize me behind the holder" on every transport, and the grant
+      // machinery is the SDK's to own, not a loop each caller re-derives.
+      // (Being queued is still not an error — ADR 0018 — which is precisely
+      // why it no longer surfaces as one here. The `claims` namespace remains
+      // the manual ticket surface.)
+      if (body.status === 'queued') {
+        return awaitGrantOverHttp(`${name}/${params.id}`, body, params);
       }
-      const { id, fenceToken } = body.claim;
-      return fenceToken !== undefined ? { id, fenceToken } : { id };
+      // The lease's own fields are mirrored at the top level, the same place
+      // the poll puts them — one reader for both answers.
+      return body.fenceToken !== undefined
+        ? { id: body.id, fenceToken: body.fenceToken }
+        : { id: body.id };
     };
     const releaseClaim = (params: ClaimLookupParams<T> | Claim<T>): Promise<void> =>
       requestRaw(claimPath(isClaimHandle(params) ? params.target.id : params.id), {
@@ -1384,14 +1533,36 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       return heldHeartbeatReply(reply, `claim ${claimId} on ${name}/${id}`);
     };
 
-    async function claimImpl(params: ClaimParams<T>): Promise<HeldClaim<T>> {
-      const { id: claimId, fenceToken } = await acquireClaim(params);
+    function claimImpl(
+      params: ClaimParams<T> & { queue: false }
+    ): Promise<HeldClaim<T> | null>;
+    function claimImpl(params: ClaimParams<T>): Promise<HeldClaim<T>>;
+    async function claimImpl(params: ClaimParams<T>): Promise<HeldClaim<T> | null> {
+      let acquired: { id: string; fenceToken?: number };
+      try {
+        acquired = await acquireClaim(params);
+      } catch (error) {
+        // The try-claim: a held target is an expected outcome of `queue:
+        // false`, not an error — resolve `null` and let the caller move on.
+        // Every other failure (auth, validation, network) stays a rejection,
+        // and the write-site claim path calls `acquireClaim` directly, so a
+        // write that could not claim still fails loudly.
+        if (
+          params.queue === false &&
+          error instanceof AbloClaimedError &&
+          (error.code === 'entity_claimed' || error.code === 'claim_conflict')
+        ) {
+          return null;
+        }
+        throw error;
+      }
+      const { id: claimId, fenceToken } = acquired;
       observability?.captureClaim({
         phase: 'acquired',
         claimId,
         model: name,
         id: params.id,
-        ...(params.field ? { field: params.field } : {}),
+        ...(params.field ? { field: partName(params.field) } : {}),
         description: claimDescription(params),
       });
       const { data, stamp } = await retrieveModel<T>(name, { id: params.id });
@@ -1404,6 +1575,10 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           [params.id]
         );
       }
+      // One reading of the heartbeat options — cadence and callbacks from
+      // whichever spelling the caller used (plan object, shorthand, or the
+      // deprecated flat callbacks).
+      const plan = resolveHeartbeatPlan(params);
       const heartbeat = async (
         beatOptions?: Duration | ClaimHeartbeatOptions
       ): Promise<ClaimHeartbeat> => {
@@ -1412,21 +1587,21 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           ttl: resolved.ttl ?? params.ttl,
           ...(resolved.details !== undefined ? { details: resolved.details } : {}),
         });
-        params.onHeartbeat?.(beat);
+        plan.onBeat?.(beat);
         return beat;
       };
 
       // Opt-in auto-heartbeat — the background-worker cadence. The stateless
       // HTTP claim defaults to the server's acquire window when no TTL
       // was requested, so the default cadence lands at 20s beats.
-      const stopHeartbeatLoop = params.heartbeat
+      const stopHeartbeatLoop = plan.loop
         ? startClaimHeartbeatLoop({
             beat: () => heartbeat(),
             intervalMs: heartbeatCadenceMs(
               params.ttl !== undefined ? toMs(params.ttl) : DEFAULT_CLAIM_TTL_MS,
-              params.heartbeat
+              plan.cadence
             ),
-            ...(params.onHeartbeatLost ? { onLost: params.onHeartbeatLost } : {}),
+            ...(plan.onLost ? { onLost: plan.onLost } : {}),
           })
         : undefined;
 
@@ -1464,7 +1639,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     ): Promise<ClaimListResponse> =>
       requestJson(
         `/v1/claims?model=${encodeURIComponent(name)}&id=${encodeURIComponent(params.id)}${
-          params.field ? `&field=${encodeURIComponent(params.field)}` : ''
+          params.field ? `&field=${encodeURIComponent(partName(params.field))}` : ''
         }`,
         { method: 'GET' },
         claimListResponseSchema
@@ -1473,7 +1648,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       release: releaseClaim,
       state: async (params: ClaimLookupParams<T>): Promise<Claim | null> => {
         const res = await claimsForEntity(params);
-        const first = res.claims?.[0];
+        // Holders come first in the one list; a `queued` entry is a waiter.
+        const first = res.data.find((row) => row.status !== 'queued');
         return first ? claimFromModelClaim(first) : null;
       },
       queue: async (
@@ -1482,7 +1658,9 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         const res = await claimsForEntity(params);
         return {
           object: 'list',
-          data: (res.queue ?? []).map(claimFromModelClaim),
+          data: res.data
+            .filter((row) => row.status === 'queued')
+            .map(claimFromModelClaim),
         };
       },
       reorder: async (params: ClaimReorderParams<T>): Promise<void> => {
@@ -1681,6 +1859,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     async dispose() {},
     async purge() {},
     commits,
+    claims,
     model,
     sessions: {
       async create(params: CreateSessionParams<SchemaRecord>): Promise<AbloSession> {

@@ -27,9 +27,9 @@ that.
 A **sync group** is a named channel of shared state — a string like
 `org:acme` or `workspace:abc123`. It is simultaneously:
 
-- **the unit of fan-out** — a confirmed write to a row publishes a delta to
+- **the unit of fan-out:** a confirmed write to a row publishes a delta to
   every participant subscribed to that row's sync group(s), and
-- **the unit of access** — a participant receives a row's deltas *only if* the
+- **the unit of access:** a participant receives a row's deltas *only if* the
   row's sync group is in their allowed set.
 
 There is no built-in `org` / `team` / `user` concept in the engine. Those are
@@ -104,16 +104,16 @@ const ablo = Ablo({ schema, apiKey: session.token });
 
 That's the whole surface. The rest of this doc is the *why* behind each line.
 
-## Two kinds of group — the whole mental model
+## Two kinds of group: the whole mental model
 
 You just saw a human get `org` / `team` groups and an agent get one `workspace`
 group. That split is the model. Every sync group is named after one of two
 things:
 
-- **Membership groups** — named after *who you are*: `org:{id}`, `team:{id}`,
+- **Membership groups:** named after *who you are*: `org:{id}`, `team:{id}`,
   `user:{id}`. Produced from **identity** (`identityRoles`, Half 1). They're
   standing and durable — they don't change as you work.
-- **Entity groups** — named after *a thing*: `dataroom:{id}`, `workspace:{id}`,
+- **Entity groups:** named after *a thing*: `dataroom:{id}`, `workspace:{id}`,
   `document:{id}`. Produced from a **row's id** (a model's entity scope, Half 2).
   They're granular — one per record — and any participant can be pointed at a
   specific set of them.
@@ -125,8 +125,8 @@ they are, so you declare them once in the schema.
 
 | | Subscribed by | Declared where | Gets |
 | --- | --- | --- | --- |
-| **Human** | *who they are* — membership | **the schema** (`identityRoles`) — a rule, written once | every `org` / `team` / `user` group their identity implies — their whole standing world |
-| **Agent** | *what it's been given* — entities | **code, at the spawn site** — chosen per run | a handful of entity groups: the dataroom it's in, the documents it has read — never beyond what its user's membership could reach |
+| **Human** | *who they are*: membership | **the schema** (`identityRoles`): a rule, written once | every `org` / `team` / `user` group their identity implies: their whole standing world |
+| **Agent** | *what it's been given*: entities | **code, at the spawn site**: chosen per run | a handful of entity groups: the dataroom it's in, the documents it has read: never beyond what its user's membership could reach |
 
 > **One line:** humans subscribe by who they are; agents subscribe by what
 > they've been given.
@@ -200,7 +200,7 @@ Scoping is two declarations that meet in the middle. One describes the
 (which group does this row belong to?). A participant sees a row **iff** the
 row's sync group is in the participant's allowed set.
 
-### Half 1 — `identityRoles`: identity → allowed groups
+### Half 1 (`identityRoles`): identity → allowed groups
 
 Declared once, on the schema, via the `identityRole({ kind, source })` factory.
 Each role is **pure data**: a `kind` (the group's prefix — `org`, `user`, `team`)
@@ -241,7 +241,7 @@ in-process and on a hosted server that only ever sees the compiled JSON.
 > `user:{id}` role above already covers it — see
 > [Agents are participants too](#agents-are-participants-too).
 
-### Half 2 — per-model scope: row → group
+### Half 2 (per-model scope): row → group
 
 You never write a sync-group string for a row. You declare a model's *place* in
 the entity graph and the engine derives the groups its rows fan out on. Three
@@ -313,7 +313,7 @@ options as `tenancy-option-removed` errors and steers you to `policy: { by:
 explicit `policy: { by: 'none' }`. See
 `packages/sync-engine/src/schema/model.ts` for the full option set.
 
-## How identity reaches Ablo — the proxy model
+## How identity reaches Ablo: the proxy model
 
 This is the part the README's "authenticates with the signed-in user's
 session" glossed over. Concretely:
@@ -403,9 +403,9 @@ What carries identity — and just as importantly, what does *not* set the bound
 
 | Where        | Purpose                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------ |
-| `userId` prop | App-level participant id, used for app-owned fields and read by your `identityRole` `source`. **Not** the security boundary — the server enforces scope from the authenticated request. |
+| `userId` prop | App-level participant id, used for app-owned fields and read by your `identityRole` `source`. **Not** the security boundary: the server enforces scope from the authenticated request. |
 | `teamIds` (on the client) | Team ids expanded into team sync groups via your `identityRoles`.                   |
-| `syncGroups` (at session mint) | Optional. **Narrows** a minted session's subscription to a subset of what auth already allows — it can never widen it. Passed to `sessions.create({ user \| agent, syncGroups })`; build entries with `syncGroup(kind, id)`. Use it to scope an agent (or a focused page's session) to one entity, e.g. `[syncGroup('workspace', 'abc123')]`. |
+| `syncGroups` (at session mint) | Optional. **Narrows** a minted session's subscription to a subset of what auth already allows: it can never widen it. Passed to `sessions.create({ user \| agent, syncGroups })`; build entries with `syncGroup(kind, id)`. Use it to scope an agent (or a focused page's session) to one entity, e.g. `[syncGroup('workspace', 'abc123')]`. |
 
 Because the server is the boundary, a client that changes `userId` to another
 user's id does not gain their data — the server resolves and enforces the real
@@ -434,7 +434,7 @@ agent authority = (triggering user's allowed set)    ← ceiling, inherited (on-
 ```
 
 Concretely: each model an agent edits declares a `scope`
-([Half 2](#half-2--per-model-scope-row--group)), so each row forms its own
+([Half 2](#half-2-per-model-scope-row--group)), so each row forms its own
 group. The agent subscribes only to the groups for the rows it touches. Declare
 an entity anchor on the models an agent operates on:
 
@@ -478,22 +478,21 @@ not *what's reachable*.
 Three rules make agent access safe, and they fall out of the model above rather
 than needing a separate agent permission system:
 
-- **Inherit the user, and no more** — the OAuth
+- **Inherit the user, and no more:** the OAuth
   [on-behalf-of](https://workos.com/blog/oauth-on-behalf-of-ai-agents) model: the
   agent's reach is tied to the consenting user, never the org.
-- **Least privilege, just-in-time** — scoped to the task's entities, not standing
+- **Least privilege, just-in-time:** scoped to the task's entities, not standing
   org-wide access (the over-privilege pattern
   [OWASP's NHI Top 10](https://www.token.security/assets/the-ultimate-non-human-identity-security-guide)
   flags as the dominant agent risk).
-- **Dual-principal attribution** — record both the executing agent and the
+- **Dual-principal attribution:** record both the executing agent and the
   triggering human.
 
 Identity is 1:1 with a human participant; authority is narrowed to the work. That
 split is what lets Ablo keep *one model API for every actor* without ever
 granting an agent standing access to everything its user can see. The agent that
-runs the [Coordinating long agent work](https://github.com/Abloatai/ablo/blob/main/README.md#coordinating-long-agent-work)
-`claim` loop is, to the scoping layer, that same participant — scoped to the row
-it claimed.
+runs the [Coordination](/coordination) `claim` loop is, to the scoping layer,
+that same participant — scoped to the row it claimed.
 
 ## Narrowing to specific entities
 
@@ -533,7 +532,7 @@ an agent pointed at the entities it's working on. You **never hand-write**
 
 > **`groups.root` is the schema model option, not a client setting.**
 > `groups: { root: 'workspace' }` in `model(...)` declares a scope root
-> ([Half 2](#half-2--per-model-scope-row--group)) — it names the group
+> ([Half 2](#half-2-per-model-scope-row--group)) — it names the group
 > (`workspace:<id>`) that the mechanisms above then subscribe to.
 > There is no `Ablo({ scope })` constructor option. The lifecycle filter on
 > [`list()`](/api#model-methods) is a separate axis named **`state`**
@@ -546,7 +545,7 @@ an agent pointed at the entities it's working on. You **never hand-write**
 > can't reach a workspace its capability doesn't already permit, no matter what it
 > passes. Smaller bootstrap, less fan-out, same server-enforced boundary.
 
-## How this compares — and the best practices it follows
+## How this compares, and the best practices it follows
 
 Ablo's identity model is not novel; it's the convergent answer every serious
 realtime / sync SDK arrived at. Knowing which industry pattern it *is* tells you
@@ -554,7 +553,7 @@ how to reason about it.
 
 **Realtime authorization splits into two shapes.** Ablo is firmly in the first:
 
-- **Server derives scope from authenticated identity** — the server decides what
+- **Server derives scope from authenticated identity:** the server decides what
   a participant may read/write and the client cannot override it. This is Ablo's
   proxy model. It's the same shape as
   [Supabase Realtime's RLS-on-connect](https://supabase.com/docs/guides/realtime/authorization)
@@ -563,7 +562,7 @@ how to reason about it.
   checks the permissions for you" — recommended for production), and
   [ElectricSQL **proxy auth**](https://electric-sql.com/docs/guides/auth) (a
   reverse-proxy sets shape params server-side before forwarding).
-- **Client proposes, server authorizes the exact request** — the client names
+- **Client proposes, server authorizes the exact request:** the client names
   the room/shape and the server signs off, as in
   [Pusher's channel authorization endpoint](https://pusher.com/docs/channels/server_api/authorizing-users/),
   [ElectricSQL **gatekeeper auth**](https://github.com/electric-sql/electric/blob/main/examples/gatekeeper-auth/README.md),

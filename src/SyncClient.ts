@@ -13,10 +13,12 @@ import { v4 as uuid } from 'uuid';
 import { InstanceCache, ModelScope } from './InstanceCache.js';
 import { Model } from './Model.js';
 import type { ModelData } from './transaction/types/modelData.js';
+import type { AppliedChange } from './transaction/plugin.js';
 import { snapshotJsonValue } from './transaction/utils/json.js';
 // ModelRegistry instance accessed via this.objectPool.registry
 import { LoadStrategy } from './transaction/types/index.js';
-import { getContext } from './context.js';
+import { globalRuntime } from './context.js';
+import type { RuntimeContext } from './RuntimeContext.js';
 import { AbloAuthenticationError, AbloError, AbloValidationError } from './transaction/errors.js';
 import { EventEmitter } from 'events';
 import { NetworkMonitor } from './NetworkMonitor.js';
@@ -142,7 +144,7 @@ function toEpochMs(value: unknown): number {
 export class SyncClient extends EventEmitter {
   private objectPool: InstanceCache;
   private database: Database;
-  private get mutationExecutor() { return getContext().mutationExecutor; }
+  private get mutationExecutor() { return this.runtime.mutationExecutor; }
   private networkMonitor: NetworkMonitor;
   /**
    * @internal — test seam, stripped from the published declarations by
@@ -196,16 +198,18 @@ export class SyncClient extends EventEmitter {
     database: Database,
     commitOutbox: DurableWriteStore = new DatabaseCommitOutboxStore(database),
     commitOutboxNamespace = 'default',
+    private readonly runtime: RuntimeContext = globalRuntime,
   ) {
     super();
     this.objectPool = objectPool;
     this.database = database;
     this.commitOutboxNamespace = commitOutboxNamespace;
-    this.networkMonitor = new NetworkMonitor();
+    this.networkMonitor = new NetworkMonitor(this.runtime);
 
     // Initialize MutationQueue with proper configuration
     this.mutationQueue = new MutationQueue({
       position: this.position,
+      runtime: this.runtime,
       maxBatchSize: 50, // Larger batches keep the batch count low for bulk operations
       // A short delay keeps writes responsive; coalescing still groups them
       batchDelay: 150,
@@ -307,7 +311,7 @@ export class SyncClient extends EventEmitter {
     // losing a failed reconnect flush silently.
     this.networkMonitor.on('online', () => {
       void this.handleReconnection().catch((error: unknown) => {
-        getContext().observability.captureMutationFailure({
+        this.runtime.observability.captureMutationFailure({
           context: 'network-online-reconnection',
           error: error instanceof Error ? error : new Error(String(error)),
         });
@@ -315,7 +319,7 @@ export class SyncClient extends EventEmitter {
     });
     this.networkMonitor.on('offline', () => {
       void this.handleDisconnection().catch((error: unknown) => {
-        getContext().observability.captureMutationFailure({
+        this.runtime.observability.captureMutationFailure({
           context: 'network-offline-handler',
           error: error instanceof Error ? error : new Error(String(error)),
         });
@@ -376,7 +380,7 @@ export class SyncClient extends EventEmitter {
         // rejected write — keep it at `debug` so the rollback mechanics are
         // available when debugging but don't double the console noise.
         const abloErr = error instanceof AbloError ? error : undefined;
-        getContext().logger.debug('[SyncClient.rollback]', {
+        this.runtime.logger.debug('[SyncClient.rollback]', {
           txType: transaction.type,
           modelName: transaction.modelName,
           modelId: transaction.modelId.slice(0, 12),
@@ -387,7 +391,7 @@ export class SyncClient extends EventEmitter {
           requestId: abloErr?.requestId,
           message: error?.message,
         });
-        getContext().observability.captureRollback({
+        this.runtime.observability.captureRollback({
           transactionType: transaction.type,
           modelName: transaction.modelName,
           modelId: transaction.modelId,
@@ -408,7 +412,7 @@ export class SyncClient extends EventEmitter {
             // DELETE "not found" rollback: the entity doesn't exist on the server.
             // Instead of restoring a ghost entity, remove it locally too.
             // Both sides agree: this entity should not exist.
-            getContext().observability.breadcrumb(
+            this.runtime.observability.breadcrumb(
               'DELETE rolled back with "not found" - removing ghost entity',
               'sync.conflict',
               'info',
@@ -430,7 +434,7 @@ export class SyncClient extends EventEmitter {
               // design (can't revive the private isDisposed flag), so keep this
               // at `debug` instead of emitting a second `warn` that reads as a
               // distinct failure in the console.
-              getContext().logger.debug('[SyncClient] Rollback skipped restore (model already disposed)', {
+              this.runtime.logger.debug('[SyncClient] Rollback skipped restore (model already disposed)', {
                 modelId: transaction.modelId,
                 modelName: transaction.modelName,
                 reason,
@@ -456,7 +460,7 @@ export class SyncClient extends EventEmitter {
             reason,
           });
         } catch (error) {
-          getContext().observability.captureMutationFailure({
+          this.runtime.observability.captureMutationFailure({
             context: 'rollback-failed',
             transactionId: transaction.id,
             modelName: transaction.modelName,
@@ -486,7 +490,7 @@ export class SyncClient extends EventEmitter {
         lastSeenSyncId: number;
         retryCount: number;
       }) => {
-        getContext().observability.captureReconciliation({
+        this.runtime.observability.captureReconciliation({
           reason: event.reason,
           model: event.model,
           modelId: event.modelId,
@@ -577,7 +581,7 @@ export class SyncClient extends EventEmitter {
         },
       });
 
-      getContext().observability.breadcrumb(
+      this.runtime.observability.breadcrumb(
         'Persisted unconfirmed transaction to IDB',
         'sync.transaction',
         'info',
@@ -588,7 +592,7 @@ export class SyncClient extends EventEmitter {
         }
       );
     } catch (error) {
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: 'persist-awaiting-transaction',
         modelName: event.model,
         modelId: event.modelId,
@@ -614,7 +618,7 @@ export class SyncClient extends EventEmitter {
     this.userId = userId;
     this.organizationId = organizationId;
 
-    getContext().observability.setContext(userId, organizationId);
+    this.runtime.observability.setContext(userId, organizationId);
 
     this.mutationQueue.setCommitOutboxScope({
       organizationId,
@@ -641,7 +645,7 @@ export class SyncClient extends EventEmitter {
     // reports online by default. NetworkMonitor drives the ongoing
     // online/offline transitions below — this read is only the initial
     // snapshot taken when identity is set.
-    if (getContext().onlineStatus.isOnline()) {
+    if (this.runtime.onlineStatus.isOnline()) {
       this.setConnectionState('connected');
     } else {
       // Offline - start in offline mode
@@ -697,7 +701,7 @@ export class SyncClient extends EventEmitter {
         const replacement =
           rule.from === 'organizationId' ? this.organizationId : this.userId;
         if (!replacement) continue;
-        getContext().observability.captureSelfHealing({
+        this.runtime.observability.captureSelfHealing({
           modelName: modelType,
           modelId: idPrefix,
           field: rule.field,
@@ -711,7 +715,7 @@ export class SyncClient extends EventEmitter {
     if (meta.requiredFields) {
       for (const field of meta.requiredFields) {
         if (result[field]) continue;
-        getContext().observability.captureSelfHealing({
+        this.runtime.observability.captureSelfHealing({
           modelName: modelType,
           modelId: idPrefix,
           field,
@@ -794,7 +798,7 @@ export class SyncClient extends EventEmitter {
 
         // Persist healed records back to IndexedDB (fire-and-forget, non-blocking)
         if (recordsToHeal.length > 0 && this.database) {
-          getContext().logger.info(
+          this.runtime.logger.info(
             `[SyncClient.hydrate] Persisting ${recordsToHeal.length} healed ${modelType} records to IndexedDB`
           );
           // Use fire-and-forget to not block hydration.
@@ -804,11 +808,11 @@ export class SyncClient extends EventEmitter {
               for (const { id, data } of recordsToHeal) {
                 await this.database.putRecord(modelType, id, data);
               }
-              getContext().logger.info(
+              this.runtime.logger.info(
                 `[SyncClient.hydrate] Successfully healed ${recordsToHeal.length} ${modelType} records`
               );
             } catch (err) {
-              getContext().observability.captureMutationFailure({
+              this.runtime.observability.captureMutationFailure({
                 context: 'persist-healed-records',
                 modelName: modelType,
                 error: err instanceof Error ? err : new Error(String(err)),
@@ -827,7 +831,7 @@ export class SyncClient extends EventEmitter {
           createMs: (typeEnd - afterFetch).toFixed(2),
         });
       } catch (error) {
-        getContext().observability.captureBootstrapFailure(error, { type: `hydrate-${modelType}` });
+        this.runtime.observability.captureBootstrapFailure(error, { type: `hydrate-${modelType}` });
       }
     }
 
@@ -838,7 +842,7 @@ export class SyncClient extends EventEmitter {
 
     // Log per-type perf after the batched add (so logs still show per-type breakdown)
     for (const entry of perTypePerfLogs) {
-      getContext().logger.debug('hydrate:type', parseFloat(entry.fetchMs) + parseFloat(entry.createMs), {
+      this.runtime.logger.debug('hydrate:type', parseFloat(entry.fetchMs) + parseFloat(entry.createMs), {
         type: entry.type,
         fetched: entry.fetched,
         added: entry.added,
@@ -848,7 +852,7 @@ export class SyncClient extends EventEmitter {
     }
 
     const totalEnd = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    getContext().logger.debug('hydrate:total', totalEnd - totalStart, {
+    this.runtime.logger.debug('hydrate:total', totalEnd - totalStart, {
       totalModels: totalAdded,
       addBatchMs: (addEnd - addStart).toFixed(2),
     });
@@ -857,7 +861,7 @@ export class SyncClient extends EventEmitter {
     try {
       const preseededTypes = this.objectPool.registry.getRegisteredModelNames();
       const stats = this.objectPool.getStats();
-      getContext().logger.info('startup_summary', {
+      this.runtime.logger.info('startup_summary', {
         typesPreseeded: preseededTypes.length,
         poolSize: stats.size,
         typeCounts: stats.typeCounts,
@@ -945,7 +949,7 @@ export class SyncClient extends EventEmitter {
               allModels.push(model);
             }
           } catch (error) {
-            getContext().observability.breadcrumb(
+            this.runtime.observability.breadcrumb(
               'Model creation failed during rehydration',
               'sync.bootstrap',
               'warning',
@@ -959,7 +963,7 @@ export class SyncClient extends EventEmitter {
           }
         }
       } catch (error) {
-        getContext().observability.captureBootstrapFailure(error, { type: `rehydrate-${modelType}` });
+        this.runtime.observability.captureBootstrapFailure(error, { type: `rehydrate-${modelType}` });
       }
     }
 
@@ -1005,13 +1009,13 @@ export class SyncClient extends EventEmitter {
       elapsedMs,
     };
 
-    getContext().logger.info('[SyncClient.rehydrate] Complete', {
+    this.runtime.logger.info('[SyncClient.rehydrate] Complete', {
       ...stats,
       poolSize: this.objectPool.size,
       ghostIds: ghostIds.length > 0 ? ghostIds.slice(0, 5).map((id) => id.slice(0, 8)) : [],
     });
 
-    getContext().observability.breadcrumb('Rehydration complete', 'sync.bootstrap', 'info', {
+    this.runtime.observability.breadcrumb('Rehydration complete', 'sync.bootstrap', 'info', {
       added: stats.added,
       updated: stats.updated,
       removed: stats.removed,
@@ -1119,7 +1123,7 @@ export class SyncClient extends EventEmitter {
    * (e.g. freshly constructed cell models from a bulk document decomposition).
    */
   updateWithChanges(model: Model, changes?: Record<string, unknown>): void {
-    getContext().logger.debug(`SyncClient.updateWithChanges`, {
+    this.runtime.logger.debug(`SyncClient.updateWithChanges`, {
       modelId: model.id,
       modelType: model.getModelName(),
     });
@@ -1172,7 +1176,7 @@ export class SyncClient extends EventEmitter {
     const afterCount = this.pendingMutations.length;
 
     if (beforeCount !== afterCount) {
-      getContext().logger.debug('[SyncClient.clearPendingMutationsForModel] Cleared pending mutations', {
+      this.runtime.logger.debug('[SyncClient.clearPendingMutationsForModel] Cleared pending mutations', {
         modelId,
         clearedCount: beforeCount - afterCount,
         remainingCount: afterCount,
@@ -1252,7 +1256,7 @@ export class SyncClient extends EventEmitter {
 
       return null;
     } catch (error) {
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: 'file-upload',
         error: error instanceof Error ? error : new Error(String(error)),
       });
@@ -1482,9 +1486,9 @@ export class SyncClient extends EventEmitter {
         : (cb: () => void) => Promise.resolve().then(cb);
     schedule(() => {
       this.syncScheduled = false;
-      if (getContext().onlineStatus.isOnline()) {
+      if (this.runtime.onlineStatus.isOnline()) {
         this.processPendingMutations().catch((err: unknown) => {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             'Background sync failed',
             'sync.transaction',
             'warning',
@@ -1562,7 +1566,7 @@ export class SyncClient extends EventEmitter {
       ): Promise<void> => {
           const parsed = persistedMutationSchema.safeParse(mutation);
           if (!parsed.success) {
-            getContext().logger.debug('[SyncClient] Dropping malformed persisted mutation', {
+            this.runtime.logger.debug('[SyncClient] Dropping malformed persisted mutation', {
               issues: parsed.error.issues.map((i) => i.path.join('.')).join(', '),
             });
             return;
@@ -1574,7 +1578,7 @@ export class SyncClient extends EventEmitter {
           const age = Date.now() - writtenAt;
           if (!(age < PENDING_MUTATION_REPLAY_WINDOW_MS)) {
             heldForReview += 1;
-            getContext().logger.warn(
+            this.runtime.logger.warn(
               'A saved local write is older than the server idempotency window and was held for review.',
             );
             return;
@@ -1622,7 +1626,7 @@ export class SyncClient extends EventEmitter {
             await restore(legacy.data.mutation, true);
             continue;
           }
-          getContext().logger.debug('[SyncClient] Dropping malformed pending mutation record', {
+          this.runtime.logger.debug('[SyncClient] Dropping malformed pending mutation record', {
             rowId: row.id,
           });
           continue;
@@ -1632,7 +1636,7 @@ export class SyncClient extends EventEmitter {
           parsed.data.scope.participantId !== this.userId ||
           parsed.data.scope.namespace !== this.commitOutboxNamespace
         ) {
-          getContext().logger.warn(
+          this.runtime.logger.warn(
             'A saved local write belongs to a different account or server and was held for review.',
           );
           continue;
@@ -1656,10 +1660,10 @@ export class SyncClient extends EventEmitter {
       // A restore failure means queued offline writes did NOT rehydrate.
       // Self-healing is impossible here (the record may be unreadable), but
       // the failure must be visible for diagnosis instead of silent loss.
-      getContext().logger.debug('[SyncClient] Failed to restore offline mutation queue', {
+      this.runtime.logger.debug('[SyncClient] Failed to restore offline mutation queue', {
         error: error instanceof Error ? error.message : String(error),
       });
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: 'restore-mutation-queue',
         error: error instanceof Error ? error : String(error),
       });
@@ -1689,7 +1693,7 @@ export class SyncClient extends EventEmitter {
       // identity, which surfaces downstream as "writes never confirm"; we do
       // NOT name internal wiring (`SyncClient.initialize`) here because that
       // method isn't part of the @abloatai/ablo surface a reader could act on.
-      getContext().logger.debug(
+      this.runtime.logger.debug(
         '[sync] writes waiting for identity (user/org not set yet) — queued, will retry',
         {
           pending: this.pendingMutations.length,
@@ -1699,7 +1703,7 @@ export class SyncClient extends EventEmitter {
       );
       return;
     }
-    if (!getContext().onlineStatus.isOnline()) return; // Skip if offline
+    if (!this.runtime.onlineStatus.isOnline()) return; // Skip if offline
     if (this.isDisposed) return; // Skip if disposed
 
     if (this.stagedMutationIds.size > 0) return;
@@ -1748,7 +1752,7 @@ export class SyncClient extends EventEmitter {
         (pending) => pending.mutationId !== mutation.mutationId,
       );
       mutation.rejectStaged?.(outcome.reason);
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: 'persist-pending-mutation',
         error:
           outcome.reason instanceof Error
@@ -1785,7 +1789,7 @@ export class SyncClient extends EventEmitter {
     // apply, store add). That means the write never entered the queue, so
     // capture it instead of dropping it silently.
     const captureStagingFailure = (error: unknown): void => {
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: `stage-mutation-${mutation.type}`,
         modelName: mutation.model.getModelName(),
         modelId: mutation.model.id,
@@ -1833,7 +1837,7 @@ export class SyncClient extends EventEmitter {
       : 0;
     const serverUpdatedAt = toEpochMs(serverData.updatedAt);
 
-    getContext().logger.debug('Conflict resolution', {
+    this.runtime.logger.debug('Conflict resolution', {
       modelId: localModel.id,
       modelType: localModel.getModelName(),
       hasLocalChanges,
@@ -1849,7 +1853,7 @@ export class SyncClient extends EventEmitter {
     const shouldForceAcceptServer = this.hasCriticalStateChange(criticalServerStates);
 
     if (shouldForceAcceptServer) {
-      getContext().logger.debug('Accepting server update - critical state change detected', {
+      this.runtime.logger.debug('Accepting server update - critical state change detected', {
         modelId: localModel.id,
         criticalStates: criticalServerStates,
       });
@@ -1865,7 +1869,7 @@ export class SyncClient extends EventEmitter {
     // Keep locally changed fields; apply server for the rest.
     if (hasLocalChanges) {
       const localChanges = localModel.getChanges();
-      getContext().logger.debug('Merging server update with local dirty fields', {
+      this.runtime.logger.debug('Merging server update with local dirty fields', {
         modelId: localModel.id,
         keptFields: Object.keys(localChanges || {}),
       });
@@ -1888,7 +1892,7 @@ export class SyncClient extends EventEmitter {
     // No local changes: fall back to LWW to converge
     // Accept server regardless of timestamp equality to stay in sync
     const acceptReason = serverUpdatedAt > localUpdatedAt ? 'server is newer' : 'no local changes';
-    getContext().logger.debug(`Accepting server update - ${acceptReason}`);
+    this.runtime.logger.debug(`Accepting server update - ${acceptReason}`);
     localModel.updateFromData(serverData);
     localModel.clearChanges();
     localModel.markAsSynced();
@@ -1941,7 +1945,7 @@ export class SyncClient extends EventEmitter {
    * Handle network reconnection
    */
   private async handleReconnection(): Promise<void> {
-    getContext().observability.breadcrumb('Network reconnected', 'sync.offline');
+    this.runtime.observability.breadcrumb('Network reconnected', 'sync.offline');
     this.emit('sync:reconnecting');
 
     try {
@@ -1955,7 +1959,7 @@ export class SyncClient extends EventEmitter {
       this.setConnectionState('connected');
       this.emit('sync:reconnected');
     } catch (error) {
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: 'reconnection-sync',
         error: error instanceof Error ? error : new Error(String(error)),
       });
@@ -1967,7 +1971,7 @@ export class SyncClient extends EventEmitter {
    * Handle network disconnection
    */
   private async handleDisconnection(): Promise<void> {
-    getContext().observability.breadcrumb('Network disconnected', 'sync.offline');
+    this.runtime.observability.breadcrumb('Network disconnected', 'sync.offline');
     this.setConnectionState('disconnected');
     this.emit('sync:offline');
   }
@@ -1992,8 +1996,8 @@ export class SyncClient extends EventEmitter {
     this.connectionState = state;
 
     if (oldState !== state) {
-      getContext().observability.setConnectionState(state);
-      getContext().observability.breadcrumb(`Connection: ${oldState} → ${state}`, 'sync.websocket');
+      this.runtime.observability.setConnectionState(state);
+      this.runtime.observability.breadcrumb(`Connection: ${oldState} → ${state}`, 'sync.websocket');
       if (state === 'connected') {
         this.emit('connection:established');
         this.mutationQueue.setConnectionState('connected');
@@ -2039,7 +2043,7 @@ export class SyncClient extends EventEmitter {
         try {
           observer.onSync(event);
         } catch (error) {
-          getContext().observability.breadcrumb('Observer error', 'sync.transaction', 'error', {
+          this.runtime.observability.breadcrumb('Observer error', 'sync.transaction', 'error', {
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -2064,7 +2068,7 @@ export class SyncClient extends EventEmitter {
     // WebSocket itself was ready. Always kick both durable lanes on the real
     // socket event, even when the high-level state did not change.
     void this.mutationQueue.flushOfflineQueue().catch((error: unknown) => {
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: 'restore-commit-outbox',
         error: error instanceof Error ? error : new Error(String(error)),
       });
@@ -2104,7 +2108,7 @@ export class SyncClient extends EventEmitter {
         correlationId,
       );
     } catch (e) {
-      getContext().observability.breadcrumb(
+      this.runtime.observability.breadcrumb(
         'Failed to notify delta received',
         'sync.transaction',
         'warning',
@@ -2440,20 +2444,7 @@ export class SyncClient extends EventEmitter {
   }
 
   applyDeltaBatchToPool(
-    dbResults: {
-      action: string;
-      modelName: string;
-      modelId: string;
-      data?: Record<string, unknown> | null;
-      /**
-       * Server-stamped transaction id, echoing the client's commit op
-       * id. Used by echo detection to recognize "this is the
-       * confirmation of a mutation I've already applied locally."
-       * Optional because system-emitted deltas (sync_group changes,
-       * schema-derived deltas, etc.) don't have a client transaction.
-       */
-      transactionId?: string;
-    }[],
+    dbResults: readonly AppliedChange[],
     enrichRelations: (modelName: string, data: Record<string, unknown>) => Record<string, unknown>,
   ): void {
     const modelsToAdd: Model[] = [];
@@ -2546,7 +2537,7 @@ export class SyncClient extends EventEmitter {
           // fall-through.
           // Self-healing: the next catch-up poll / reconnect re-fetches and
           // re-applies this delta, so it's forensic, not consumer-actionable → debug.
-          getContext().logger.debug('[SyncClient.applyDeltaBatchToPool] skipping pool op for unpersisted delta', {
+          this.runtime.logger.debug('[SyncClient.applyDeltaBatchToPool] skipping pool op for unpersisted delta', {
             modelName,
             modelId: modelId.slice(0, 12),
           });

@@ -23,561 +23,89 @@
 
 ---
 
-Most AI products are single-player by default: one agent per task, one person at
-a time. The moment it goes multiplayer, with several agents and the people
-alongside them writing to the same live state, it breaks.
+Every write to your data, whether it comes from a person, a server, or an agent,
+arrives coordinated with the others and stays attributed afterward.
 
-People working on the same thing coordinate by looking and talking. You see
-someone's cursor in the paragraph, so you wait. You say you'll take the first
-half. None of that is in the software. It is just what people do, and the
-software only has to show them enough to do it.
+We work on the same things by looking and talking. You see someone's cursor in
+the paragraph, so you wait, or you say you'll take the first half. None of that
+is in the software. It's just what people do, and the software only has to show
+them enough to do it.
 
-Agents have neither. They cannot see who else is in the record, and cannot say
-what they are about to change. Two of them read the same row, think for thirty
-seconds, and the second one writes over the first, and nobody finds out. The
-writes are not even the main part: an agent acts on what it read, so if any of it
-moved while it was thinking, it does the wrong thing without colliding with
-anyone at all. This does not get better as the models get better.
-
-A **claim** is both of those senses in one call. It is how an agent sees that a
-record is already taken, and how it says that it is taking one. That is the job a
-cursor and a highlighted selection already do in a shared document, made explicit
-for something that cannot look:
-
-| In a shared document | With Ablo |
-| --- | --- |
-| You see a cursor in the paragraph | The agent reads `claim.state` before it starts |
-| You wait for them to move on | It waits its turn in a fair line |
-| You say "I'll take the first half" | It declares the row it is taking |
-| You re-read what they changed | It is handed the fresh row on its turn |
-
-When the row moves anyway, say a record the agent reasoned against is bumped the
-moment before it commits, the commit is rejected and the agent is handed back
-exactly the records that changed, so it re-reads only those and not the world.
-
-Under the hood, you define your data once with a Zod schema and get the same
-typed model client for every actor: people, server actions, and agents.
+Agents have neither. Two of them read the same row, think for thirty seconds,
+and the second one writes over the first, and nobody finds out. The writes
+aren't even the main part: an agent acts on what it read, so if any of it moved
+while it was thinking, it does the wrong thing without colliding with anyone at
+all. That probably doesn't get better as the models get better.
 
 ```ts
-await ablo.weatherReports.create({ data })                  // create
-await ablo.weatherReports.retrieve({ id })                  // read
-await ablo.weatherReports.update({ id, data })              // update
-await using claim = await ablo.weatherReports.claim({ id }) // hold for slow agent work
+// Two agents reprice the same order. One gets it at a time.
+await using claim = await ablo.orders.claim({ id: orderId });
+
+const order = claim.data;                    // the current row, not the one you read a minute ago
+const priced = await pricingAgent(order);    // slow: an LLM call, a vendor API
+
+await ablo.orders.update({
+  id: order.id,
+  data: { total: priced.total, discount: priced.discount, status: 'repriced' },
+  claim,
+});
 ```
 
-The schema is the public contract. It gives you typed model methods, realtime
-fanout, React selectors, agent writes, and the HTTP/Data Source shape for
-non-JavaScript services. Every confirmed change shows up everywhere, and active
-claims are visible while the work is still in progress.
+The second agent waits its turn, then gets handed the order as it now stands. If
+the pricing call throws, the row frees on the way out, unchanged. A person
+editing that order in the UI is in the same line as the agents.
 
-**[Get started](#set-up)** &nbsp;·&nbsp; point your coding agent at the shipped
-`llms.txt` &nbsp;·&nbsp; **upgrading?** see the
-[Version History &amp; Migration Guide](./docs/migration.md)
+And the write it eventually makes is signed:
 
-It works with the auth and database you already have. **In production, your
-database is the system of record.** You write through Ablo, and Ablo writes to
-your Postgres: the call enters Ablo's commit chokepoint, where claims, ordering,
-and idempotency are enforced, and lands in your own tables through a scoped
-writer role. The commit is accepted (`queued`) the moment Ablo takes it; when the
-row surfaces in your write-ahead log, the receipt is promoted to `confirmed`.
-**The WAL echo is how Ablo confirms, not how it writes.** Your database, not
-Ablo, is the source of truth for row state, and that same stream is what keeps
-every connected client current, scoped to *sync groups* from your own identity.
+```ts
+{
+  actorKind:         'agent',      // 'user' | 'agent' | 'system'
+  actorId:           'agent_pricing',
+  onBehalfOfKind:    'user',
+  onBehalfOfId:      'user_amir',  // the person the agent acted for
+  capabilityId:      'key_live_ops',
+  confirmationState: 'approved',   // ran on its own, was previewed, or was signed off
+}
+```
 
-The writer role is non-superuser and cannot bypass RLS. Before each write Ablo
-sets your tenant context on the connection, so your own row-level security
-policies enforce against Ablo exactly as they do against your app. Ablo runs no
-DDL and owns no schema: your migration tool stays in charge of the shape of your
-database, and Ablo holds only the ordered transaction log and the coordination
-state, never your rows. (Trying Ablo with no database
-yet? A **sandbox** `sk_test` key holds throwaway **test data**, like Stripe test
-mode, so you can explore before pointing it at your Postgres. Test-mode only; in
-production every row lives in your database.)
+Every committed change lands in an audit log carrying that attribution, chained
+with a keyed hash so any later alteration shows up. You write none of it.
 
-**Built for** several agents working a shared backlog, AI agent workflows on your
-own infrastructure, collaborative editors where agents and people co-edit, and
-internal tools. Anywhere agents, and the people alongside them, change shared
-state and everyone has to see it live.
+- **Coordination.** Claims, a fair queue, and stale-write rejection, so slow agent work can't land on a moved row.
+- **Realtime.** Every confirmed change reaches every connected client, agent or human, with no separate multiplayer mode to enable.
+- **Your database and your auth stay yours.** Rows live in your Postgres under your own security policies; Ablo runs no migrations and owns no schema. Bring Clerk, Auth0, NextAuth, whatever you have.
+- **A history you can answer questions from.** Who changed what, on whose behalf, with which key, and whether a human approved it.
 
-## Set up
-
-The CLI takes you from nothing to a synced schema. It handles the account,
-the key, and the env file. You bring one thing: a Postgres you already have,
-the same `DATABASE_URL` (local, Neon, RDS, any will do) that backs your auth,
-audit, and log tables. Ablo syncs a *subset* of models against it; **in
-production, your database is the system of record**.
+## Start
 
 ```bash
 npm install @abloatai/ablo
-npx ablo login     # opens the browser: sign in (or sign up) → a sk_test_ key is saved locally
-npx ablo init      # scaffolds ablo/schema.ts (offers to log in if you skipped it)
-npx ablo push      # pushes your schema (sandbox), writes ABLO_API_KEY to .env.local
-npx ablo dev       # the same push, watching ablo/schema.ts and re-pushing on save
+npx ablo login     # sign in; saves a test key
+npx ablo init      # scaffolds your schema
+npx ablo push      # writes ABLO_API_KEY to .env.local, and you're running
 ```
 
-Then point Ablo at the tables for your synced models. Most teams **already
-have those tables** (often Prisma- or Drizzle-managed). Adopt them with
-`npx ablo pull` / `npx ablo check`, the common case. Let Ablo own its own
-tables instead? `npx ablo migrate` provisions them in your Postgres (reads
-`DATABASE_URL`). Either way your other tables are left untouched.
+Point it at your own Postgres when you're ready with `npx ablo connect`.
 
-After `ablo push`, the [Quick Start](#quick-start) below runs as-is, because
-`ABLO_API_KEY` is already in `.env.local` (frameworks load it automatically;
-plain Node: `node --env-file=.env.local app.ts`). `npx ablo status` shows
-what's configured at any time.
-
-**Keys & runtime.** Ablo needs Node 24+ and TypeScript 5+. Keys come in two of
-*your* environments: `sk_test_` and `sk_live_`, like Stripe. `ablo login`
-mints both. Keep the key in trusted server runtimes only. In the browser,
-`<AbloProvider>` authenticates with the signed-in user's session, never the raw
-key. Your database is connected once, out of band, via `npx ablo connect`
-(logical replication); if it can't grant a replication role, expose a signed
-[Data Source endpoint](./docs/data-sources.md) instead.
-
-For production (React, an existing backend, Data Source, agents), the
-[Integration Guide](./docs/integration-guide.md) is the deeper map.
-
-**Prefer to let an agent wire it?** The package ships an `llms.txt`, a precise
-map of the API, so Claude Code or Cursor integrates from the real surface
-instead of guessing:
-
-> Read `node_modules/@abloatai/ablo/llms.txt`, then add an Ablo schema, a `<AbloProvider>`, and my first create / retrieve / update.
-
-## Quick Start
-
-One schema, one client, one write path for agents, servers, and people. This runs as-is
-after `ablo push`:
-
-```ts
-import Ablo from '@abloatai/ablo';
-import { defineSchema, model, z } from '@abloatai/ablo/schema';
-
-const schema = defineSchema({
-  // id, createdAt, updatedAt, organizationId, createdBy come free on every model
-  weatherReports: model({
-    location: z.string(),
-    status: z.enum(['pending', 'ready']),
-    forecast: z.string().optional(),
-  }),
-});
-
-const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
-await ablo.ready();
-
-const created = await ablo.weatherReports.create({
-  data: { location: 'Stockholm', status: 'pending' },
-});
-
-// Claim the row before slow work. Anyone else waits in line, then re-reads.
-await using claim = await ablo.weatherReports.claim({ id: created.id });
-const forecast = await fetchForecast(claim.data.location); // slow: API or LLM call
-await ablo.weatherReports.update({
-  id: created.id,
-  data: { status: 'ready', forecast },
-  claim, // the write completes the claimed work and releases the lease
-});
-
-const ready = ablo.weatherReports.local.retrieve(created.id);
-console.log({ id: ready?.id, status: ready?.status });
-
-await ablo.dispose();
-```
-
-Expected output:
-
-```txt
-{ id: '...', status: 'ready' }
-```
-
-### TypeScript setup (once, scaffolded for you)
-
-`npx ablo init` writes `ablo/register.ts` next to your schema. It binds your
-schema to the SDK's types once, the same declaration-merging shape
-[TanStack Router uses](https://tanstack.com/router/latest/docs/framework/react/guide/type-safety),
-so every hook and client infers from it:
-
-```ts
-// ablo/register.ts (scaffolded by `npx ablo init`)
-import type { schema } from './schema';
-declare module '@abloatai/ablo' {
-  interface Register { Schema: typeof schema }
-}
-export {};
-```
-
-```ts
-import type { Model } from '@abloatai/ablo/schema';
-
-type WeatherReport = Model<'weatherReports'>; // fully typed from your schema
-```
-
-To pass the client around, take the type from the value, the tRPC /
-Drizzle idiom:
-
-```ts
-export const sync = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
-export type Sync = typeof sync;
-
-function persist(client: Sync) { /* ... */ }
-```
-
-## Reading
-
-Two ways to read, depending on whether you can wait. `retrieve({ id })` /
-`list({ where })` answer from what's local and go ask the server when they have
-to, so they return a `Promise`. Put `local.` in front and the read is restricted
-to what's already here: instant, reactive in render, and what your UI uses.
-
-```ts
-ablo.weatherReports.local.retrieve('report_stockholm');
-
-const pending = ablo.weatherReports.local.list({
-  where: { status: 'pending' },
-  orderBy: { location: 'asc' },
-  limit: 20,
-});
-
-const ready = await ablo.weatherReports.list({
-  where: { status: 'ready' },
-  type: 'complete',
-});
-```
-
-An array value in `where` means `IN`. On `list`, `type: 'complete'` waits for
-the server; `'unknown'` returns what's local now and refreshes in the background.
-
-## Writing
-
-`create` / `update` apply optimistically and resolve to the row. Two options
-matter day to day:
-
-| Option | Values | What it does |
-| --- | --- | --- |
-| `wait` | `'queued'` \| `'confirmed'` | `'confirmed'` resolves only after the server acks the write; `'queued'` resolves as soon as it's locally queued (fire-and-forget). |
-| `idempotencyKey` | `string` | Auto-generated per call. Override only when you own the retry boundary (e.g. a job id) so a re-run dedupes server-side. |
-
-```ts
-await ablo.weatherReports.update({ id, data: { status: 'ready' }, wait: 'confirmed' });
-```
-
-To guard a write against a row that changed under you, pass `readAt` + `onStale`.
-See [Coordinating long agent work](#coordinating-long-agent-work).
-
-## Coordinating long agent work
-
-An agent reads a row, thinks for 30s, and writes back, clobbering whatever changed
-meanwhile, or worse, acting on stale state. `claim` holds the row across that gap:
-
-```ts
-await using claim = await ablo.weatherReports.claim({ id: 'report_stockholm' });
-const report = claim.data;
-const forecast = await weatherAgent.getWeather(report.location);
-await ablo.weatherReports.update({
-  id: report.id,
-  data: { forecast, status: 'ready' },
-  claim, // attribute the write to the held claim
-});
-```
-
-If someone else holds the row, `claim()` waits in a fair queue, then re-reads, so
-`report` is the current row, never a stale snapshot. Reads stay open by
-default; only acting on the row serializes. The claim releases when the `await
-using` scope exits, on return and on a throw. That "on throw" is why `await
-using` earns its keep: if the agent call fails before the write, the row frees
-for the next in line and stays exactly as it was, with no cleanup of your own.
-
-See who's mid-edit before you act, then decide to wait or skip:
-
-```ts
-ablo.weatherReports.claim.state({ id: 'report_stockholm' });
-ablo.weatherReports.claim.queue({ id: 'report_stockholm' });
-
-{
-  await using claim = await ablo.weatherReports.claim({ id, queue: false });
-  /* do the held work */
-}
-
-{
-  await using claim = await ablo.weatherReports.claim({ id, maxQueueDepth: 2 });
-  /* do the held work */
-}
-```
-
-`claim.state` returns the holder (or `null`); `claim.queue` returns the line waiting
-behind it. `queue: false` skips rather than waiting when the row is held;
-`maxQueueDepth: 2` bails when two or more are already ahead.
-
-Default reads keep working while a row is claimed. Server reads that need claimed
-semantics can opt in with `ifClaimed: 'return' | 'fail'`.
-
-Even an unclaimed write can't land on stale reasoning. The commit is guarded:
-
-```ts
-try {
-  await ablo.weatherReports.update({ id, data: { status: 'ready' }, readAt, onStale: 'reject' });
-} catch (e) {
-  if (e instanceof AbloStaleContextError) { /* row moved under you: re-read, retry */ }
-}
-```
-
-> Use `await using` for ordinary held work; the claim releases when the scope
-> exits. Call `claim.release({ id })` only to give a manually held claim back
-> early.
-
-See [Coordination](./docs/coordination.md) for the full `claim` / `claim.state` /
-`claim.queue` / `claim.release` reference.
-
-## Background workers: jobs that run for minutes, not seconds
-
-Your API route enqueues a job on your own queue (SQS, EventBridge, anything);
-a worker on your own infrastructure does the slow part. **Keep that queue.
-Ablo is the worker's data layer.** It covers the two things every queue leaves
-to you: keeping the row safe, and showing progress live.
-
-Long work holds its claim by **heartbeating**, the same pattern as an SQS
-visibility heartbeat or a Temporal activity heartbeat:
-
-```ts
-// on your worker: stateless HTTP, no socket to hold
-await using claim = await ablo.weatherReports.claim({
-  id: msg.reportId,
-  ttl: '10m',
-  heartbeat: true,                 // beats automatically until release
-  onHeartbeatLost: () => abort(),  // the lease is gone → stop working
-});
-
-for (const step of steps) {
-  await runStep(step);
-  // write progress to the row: every subscribed UI updates live
-  await ablo.weatherReports.update({ id: msg.reportId, data: { progress: step.pct }, claim });
-}
-```
-
-- A worker that **crashes** stops beating; the row frees within one beat and
-  the next worker takes over.
-- A worker that **wakes up late** learns it on its next beat
-  (`AbloClaimedError`), and the write path rejects its stale writes anyway.
-- **Retries stay on your queue.** The redelivered job claims the now-free
-  row, reads its current state, and resumes.
-- A worker holding **many rows** extends them all in one call:
-  `ablo.claims.heartbeatAll({ ttl: '5m' })`.
-
-SQS's heartbeat protects the *message* from redelivery; Ablo's protects the
-*row* from concurrent and stale writes. SQS is at-least-once, so two workers
-will eventually get the same job, and the claim is what keeps that from
-corrupting data.
-
-## React
-
-In a React app it's the **same `ablo.<model>` API**, just mounted through a
-provider and read with hooks, from `@abloatai/ablo/react`. Wrap your tree once;
-everything inside is live.
-
-```tsx
-import Ablo from '@abloatai/ablo';
-import { AbloProvider, useAblo } from '@abloatai/ablo/react';
-import { schema } from './ablo/schema';
-
-// Build the client once. authEndpoint is your session route; no key in the browser.
-const ablo = Ablo({
-  schema,
-  authEndpoint: '/api/ablo-session',
-});
-
-function App() {
-  return (
-    <AbloProvider client={ablo}>
-      <Report id="report_stockholm" />
-    </AbloProvider>
-  );
-}
-
-function Report({ id }: { id: string }) {
-  const report = useAblo((ablo) => ablo.weatherReports.local.retrieve(id));
-  const ablo = useAblo();
-
-  if (!report) return null;
-
-  return (
-    <button onClick={() => ablo?.weatherReports.update({ id, data: { status: 'ready' } })}>
-      {report.status}
-    </button>
-  );
-}
-```
-
-The `useAblo(selector)` read re-renders whenever the row changes, whether you,
-a teammate, or an agent changed it. The write is the same optimistic, fan-out
-method as the server example above.
-
-`<AbloProvider>` owns the connection, so no API key reaches the browser. That's the
-whole loop: read with `useAblo(selector)`, write with `ablo.<model>`, and every
-other client (agent or human) on that row sees it in real time. See
-[React](./docs/react.md) for the `<AbloProvider>` prop surface (`client`,
-`userId`, `fallback`, `onError`) plus status hooks. Schema, scope, and team
-membership live on the `Ablo({ … })` client you pass it.
-
-## Identity & Sync Groups
-
-Ablo is **not** an auth provider. You keep your own (Clerk, Auth0, NextAuth,
-whatever). Ablo's job starts after you've authenticated a request: you tell it
-*who* is connecting, and it scopes their realtime data to the right **sync
-groups** (named channels like `org:acme` or `workspace:abc123` that are both the unit
-of fan-out and the unit of access).
-
-The model is a proxy: your `ABLO_API_KEY` stays on your trusted server, your
-server resolves the signed-in user (org / team / user) from your own auth, and
-the browser connects as an already-scoped participant that never holds the key
-and can't widen its own scope. Your schema's `identityRoles` map that identity
-to sync-group strings.
-
-`userId` / `teamIds` come from your auth, resolved server-side:
-
-```tsx
-// team membership is asserted server-side when the session route mints the token.
-const ablo = Ablo({
-  schema,
-  authEndpoint: '/api/ablo-session',
-});
-
-<AbloProvider client={ablo} userId={user.id}>
-  <App />
-</AbloProvider>
-```
-
-If it isn't obvious where org / team / user come from in the Quick Start above,
-that's because they come from *your* app. See
-[Identity & Sync Groups](./docs/identity.md) for the full picture: what a sync
-group is, the two halves of scoping (`identityRoles` + per-model `orgScoped` /
-`syncGroupFormat`), and how identity reaches Ablo without an API key in the
-browser.
-
-## Multiplayer
-
-There is no separate multiplayer mode. When agent workers, server actions, and
-human UI share the same schema and write through `ablo.<model>`, they all see
-each other's changes in real time. That's the default, not a feature you turn on.
-
-- `ablo.<model>.create/update/delete` fan out confirmed deltas to subscribers.
-- `useAblo(...)` gives React clients the live row, kept current automatically.
-- `ablo.<model>.claim({ id })` / `claim.state({ id })` / `claim.queue({ id })` let agents and people coordinate (and observe) active work on a row, and the line waiting behind it, before a write lands.
-
-The bare client is the coordination layer: commit, read, observe, claim. The live
-plane people watch (presence, live queries, the local copy) is the `humans()`
-plugin on top of it, installed by default on a socket client. There is no
-`agents()` plugin, and the absence is the point: an agent is the default caller
-here, not a special one.
-
-Writes go through Ablo. `ablo.<model>.create/update/delete` and the HTTP write
-endpoint enter Ablo's commit chokepoint, where claims, ordering, and idempotency
-are enforced, and Ablo lands the change in your database. It then tails the WAL to
-confirm the row landed and fans the confirmed change out to every connected client.
-One surface for agents, servers, and people; one place coordination happens.
-
-## HTTP Writes
-
-Use the SDK when you are in JavaScript and want typed models or realtime. Use the
-HTTP endpoint when a server-to-server caller needs to write without opening a
-WebSocket:
+## Docs
 
 ```bash
-curl https://api.abloatai.com/api/v1/commits \
-  -H "Authorization: Bearer sk_test_..." \
-  -H "Content-Type: application/json" \
-  -d '{ "operations": [
-        { "action": "update", "model": "weatherReports", "id": "report_stockholm", "data": { "status": "ready" } }
-      ] }'
+npx ablo docs             # every page, for the version you installed
+npx ablo docs audit       # or any one of them
 ```
 
-```json
-{ "object": "commit_receipt", "status": "confirmed", "serverTxId": "tx_…", "lastSyncId": 1042, "ops": 1 }
-```
+Those pages ship inside the package, so they match your install and need no
+network. The same pages are at [docs.abloatai.com](https://docs.abloatai.com).
 
-## Your Database
+Building with a coding agent? Point it at `node_modules/@abloatai/ablo/llms.txt`.
 
-In production, every schema model is backed by **your own database**, and that's
-where your rows live. You write through Ablo; it lands each change in your Postgres
-through a scoped role, then tails the WAL to confirm it and fan it out. Ablo holds
-the ordered transaction log and coordination, never your rows. Two ways it
-connects:
-
-| | How Ablo connects to your Postgres | Use when |
-| --- | --- | --- |
-| **`ablo connect`** (primary) | Sets up logical replication and a scoped writer role (`npx ablo connect apply` does it end to end). Ablo writes your rows through the writer role and reads them back over the WAL to confirm; it writes rows but runs no DDL and owns no schema. The role is non-superuser and cannot bypass RLS, so your own policies govern Ablo's writes. | Your database can grant a `REPLICATION` role (most can). |
-| **Signed endpoint** (fallback) | Your app exposes one route built from an ORM adapter (`prismaDataSource` / `drizzleDataSource`); Ablo writes and confirms through it. Needs no replication setup. | Your database **can't** grant a replication role (a locked-down managed DB). |
-
-Your database is the system of record. See
-[Connect Your Database](./docs/data-sources.md).
-
-## Configuration
-
-`Ablo({ ... })` takes your schema and your key. Your database is connected
-**out of band**: once, via `npx ablo connect` (logical replication) or a signed
-[Data Source endpoint](./docs/data-sources.md), not through the constructor.
-Every other option has correct defaults:
-
-| Option | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `schema` | `Schema` | (required) | Typed model proxies (`ablo.<model>.*`) |
-| `apiKey` | `string \| ApiKeySetter \| null` | `process.env.ABLO_API_KEY` | Server key: a string, or an async function for rotation |
-
-Keep `apiKey` in trusted server runtimes. In the browser, `<AbloProvider>`
-authenticates with the signed-in user's session; the raw-key path is gated
-behind `dangerouslyAllowBrowser` for server-proxy setups only. Advanced hooks
-(custom `fetch`, logging, observability, transport overrides) live in
-[Client Behavior](./docs/client-behavior.md).
-
-## Errors
-
-Every SDK error extends `AbloError` and carries a `requestId` for support.
-Discriminate with `instanceof` or the `type` string; the string form also
-survives worker / `postMessage` boundaries, where `instanceof` does not:
-
-```ts
-try {
-  await ablo.weatherReports.update({ id, data: { status: 'ready' }, readAt, onStale: 'reject' });
-} catch (e) {
-  if (e instanceof AbloStaleContextError) { /* row moved under you: re-read, retry */ }
-  if ((e as AbloError).type === 'AbloClaimedError') { /* another participant holds it */ }
-}
-```
-
-| Error | When |
-| --- | --- |
-| `AbloAuthenticationError` | Invalid / missing / expired credentials |
-| `AbloPermissionError` / `CapabilityError` | Action forbidden by scope |
-| `AbloRateLimitError` | Rate limited (carries `retryAfterSeconds`) |
-| `AbloIdempotencyError` | Same `idempotencyKey` reused with a different body |
-| `AbloValidationError` | Invalid request payload |
-| `AbloStaleContextError` | Write carried `readAt`, but the row has newer changes (`conflicts`) |
-| `AbloClaimedError` | Target is claimed by another participant (`claims`) |
-| `AbloConnectionError` / `AbloServerError` | Transport failure / server 5xx |
-| `SyncSessionError` | Session expired (prompts re-auth) |
-
-## Reconnect & retries
-
-The client owns reconnection so your code doesn't have to. A dropped WebSocket
-reconnects automatically with exponential backoff (1s → 30s, ±15% jitter, up to
-~7.5 minutes); session errors (401/403) suppress it so you re-authenticate
-instead of looping. Commits are idempotent by client transaction id, and a
-commit that times out is never silently rolled back; the client reconciles
-against authoritative server state on reconnect. These defaults are the
-contract; there are no retry or timeout knobs to tune.
-
-## Production Reference
-
-- [Version History & Migration Guide](./docs/migration.md): every breaking change, what to change, and which version introduced it. Read before bumping a minor.
-- [Identity & Sync Groups](./docs/identity.md): use your own authentication; tell Ablo who's connecting and how org / team / user map to sync-group scope.
-- [Schema Contract](./docs/schema-contract.md): one schema becomes typed model clients, React reads, agent writes, Data Source shape, and schema push.
-- [Guarantees](./docs/guarantees.md): confirmed writes, stale-write protection, claim coordination, and agent lifecycle.
-- [Integration Guide](./docs/integration-guide.md): integrate React, your database, multiplayer, and agents.
-- [React](./docs/react.md): `<AbloProvider>`, `useAblo`, presence, status, and bootstrap gating.
-- [Coordination](./docs/coordination.md): the `claim` / `claim.state` / `claim.queue` / `claim.release` / `heartbeat` reference. Hold a row across slow agent work, minutes or hours via heartbeats, and observe the line waiting behind it.
-- [Client Behavior](./docs/client-behavior.md): options, errors, retries, timeouts, and public imports.
-- [Connect Your Database](./docs/data-sources.md): connect your Postgres by logical replication (`npx ablo connect`) or, as a fallback, a signed endpoint; your database is the system of record either way.
-- [Existing Python Backend](./docs/examples/existing-python-backend.md): migrate existing Python endpoints to multiplayer and agent-safe writes gradually.
-- [AI SDK Tool](./docs/examples/ai-sdk-tool.md): use Ablo inside an AI SDK tool call.
-- [Server Agent](./docs/examples/server-agent.md): schema-backed worker.
+Start with [Quickstart](./docs/quickstart.md) ·
+[Integration Guide](./docs/integration-guide.md) ·
+[Coordination](./docs/coordination.md) ·
+[Audit log](./docs/audit.md) ·
+[Connect your database](./docs/data-sources.md) ·
+[Guarantees](./docs/guarantees.md) ·
+[Migration](./docs/migration.md)
 
 ## License
 

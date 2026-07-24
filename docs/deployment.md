@@ -57,10 +57,10 @@ A **plane** is the isolation unit a credential acts on. `production` is the root
 plane; every sandbox sits beside it. Three things are per-plane, and knowing
 which three is most of what production readiness means:
 
-- **Rows** — a sandbox write is invisible to production and to every other sandbox.
-- **The registered database** — one per plane, so your production database and
+- **Rows:** a sandbox write is invisible to production and to every other sandbox.
+- **The registered database:** one per plane, so your production database and
   your dev database are separate registrations.
-- **The active schema artifact** — the model shapes the engine actually routes on.
+- **The active schema artifact:** the model shapes the engine actually routes on.
 
 A key's plane is fixed at mint and spelled in its prefix: `sk_live_` acts on
 production, `sk_test_` on a sandbox. There is no runtime override — the
@@ -219,14 +219,14 @@ handler, the Standard Webhooks signature, and rolling a secret.
 
 ## What to watch once it is live
 
-- **`ablo logs`** — commit activity as it happens, scoped by the key, so a live
+- **`ablo logs`:** commit activity as it happens, scoped by the key, so a live
   key streams the org and a test key streams only its sandbox. `--json` emits
   NDJSON for piping.
-- **`ablo status`** — the readiness verdict. Cheap enough to run from a health
+- **`ablo status`:** the readiness verdict. Cheap enough to run from a health
   check on your own side.
-- **The [audit log](./audit.md)** — every confirmed write traced back to the key
+- **The [audit log](./audit.md):** every confirmed write traced back to the key
   that made it and the person who authorized that key.
-- **Your own logger** — pass `logger` to the client and SDK lifecycle, sync,
+- **Your own logger:** pass `logger` to the client and SDK lifecycle, sync,
   retry, and rollback events join your existing pipeline.
 
 Writes carry receipts rather than being fire-and-forget: a commit is accepted the
@@ -242,7 +242,7 @@ and what each promises.
 | `password authentication failed` during connect | Often a pooled host refusing a session it cannot serve, in the words of a wrong password. | Register the direct database host. |
 | `server_execute_unknown_model` | The plane's active schema does not carry that model. | `ablo push` with a key for that plane. |
 | Clients rejected at connect | The deployed schema and the client's schema disagree. | Push this tree, or deploy the revision the server is running. |
-| `project_scope_denied` (403) | The model belongs to another project in your org. | Use a key minted for that project — a push cannot cross projects. |
+| `project_scope_denied` (403) | The model belongs to another project in your org. | Use a key minted for that project: a push cannot cross projects. |
 | 403 on `ablo push` | The key authenticated but cannot author schema. | A secret `sk_live_`; the `ablo login` live key is observe-only. |
 
 ## The checklist

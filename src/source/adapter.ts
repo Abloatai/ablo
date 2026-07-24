@@ -8,16 +8,18 @@
  * write your own.
  *
  * An endpoint adapter reads and writes your database, and it owns the transactional
- * outbox and idempotency bookkeeping as well, so you never write those by hand:
+ * outbox and idempotency bookkeeping as well, so you never write those by hand.
+ * Hand it to the handler in one slot:
  *
  *   export const POST = dataSource({
  *     schema, apiKey: process.env.ABLO_API_KEY!,
- *     ...sourceHandlersFromAdapter(prismaDataSource(prisma, schema), schema),
+ *     adapter: prismaDataSource(prisma, schema),
  *   });
  *
- * `sourceHandlersFromAdapter` is the bridge: it turns a single adapter into the
- * handler's `commit`, `events`, and per-model `load` and `list` operations, so no
- * code above the adapter needs to know which mapper you chose.
+ * That is the path to teach. {@link sourceHandlersFromAdapter} is the lower-level
+ * bridge behind it — it expands one adapter into the handler's `commit`, `events`,
+ * and per-model `load` and `list` operations, and is worth reaching for only when
+ * you want to override one of those while the adapter serves the rest.
  */
 
 import type { SourceListQuery, SourceRequestContext } from './types.js';

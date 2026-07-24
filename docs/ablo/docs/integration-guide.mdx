@@ -14,7 +14,7 @@ backend and a database, one model at a time.
 
 Three things hold no matter which actor is writing:
 
-- **One model API for every actor.** `ablo.<model>.update(...)` is what
+- **One model API for every actor:** `ablo.<model>.update(...)` is what
   React components, server actions, background workers, and AI agents
   all call. No separate "agent SDK," no parallel mutation path. The
   attribution comes from the credential, not the call site.
@@ -354,8 +354,19 @@ server   -> ablo.weatherReports.update(...)
 Ablo coordinates those writes, fans out confirmed deltas, exposes active claims,
 and lets callers reject stale writes with `readAt`.
 
-Direct writes to your own database bypass that stream until your app reports the
-change through Data Source events.
+A write that reaches your database some other way still reaches connected
+clients. A `psql` session, a cron job, an admin tool, a legacy endpoint: Ablo
+tails your write-ahead log, so a change it did not make is picked up and fanned
+out like any other, attributed to the data source rather than to an agent.
+
+What such a write does not get is the coordination. It never entered the commit
+chokepoint, so no claim was checked, no `readAt` was compared, and no idempotency
+key was honoured. It can land on top of a row an agent is holding. Route anything
+that must respect a claim through `ablo.<model>`.
+
+On the [Data Source endpoint fallback](/data-sources) there is no replication
+stream to tail, and there the original caveat holds: a direct write stays
+invisible until your app reports it through Data Source events.
 
 ## 6. Existing API Backend
 

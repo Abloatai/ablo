@@ -23,6 +23,8 @@ import type {
   DurableWriteStore,
   DurableWritesConfig,
 } from '../transactions/mutations/durableWriteStore.js';
+import type { RuntimeContext } from '../RuntimeContext.js';
+import { globalRuntime } from '../context.js';
 import { resolveDurableWrites } from '../transaction/durableWrites.js';
 
 export interface InternalComponentsInput<S extends SchemaRecord> {
@@ -42,6 +44,9 @@ export interface InternalComponentsInput<S extends SchemaRecord> {
     readonly commitOutbox?: DurableWriteStore;
   };
   readonly auth?: AuthCredentialSource;
+  /** The owning client's runtime, threaded into every component built here.
+   *  Defaults to the module-global bridge for direct construction. */
+  readonly runtime?: RuntimeContext;
 }
 
 export interface InternalComponents {
@@ -57,17 +62,19 @@ export function createInternalComponents<S extends SchemaRecord>(
   input: InternalComponentsInput<S>,
 ): InternalComponents {
   const { schema, url, options, auth } = input;
+  const runtime = input.runtime ?? globalRuntime;
 
   // The registry is created here, but model registration happens in the caller,
   // which owns the schema-to-class translation.
   const modelRegistry = new ModelRegistry({
     validateOnRegister: false,
     allowLateReferences: true,
+    runtime,
   });
   setActiveRegistry(modelRegistry);
 
   const objectPool = new InstanceCache(
-    { maxSize: options.maxPoolSize ?? 10000 },
+    { maxSize: options.maxPoolSize ?? 10000, runtime },
     modelRegistry,
   );
 
@@ -80,6 +87,7 @@ export function createInternalComponents<S extends SchemaRecord>(
     syncGroups: options.syncGroups,
     instantModels: deriveInstantModels(schema),
     getAuthToken: auth?.getAuthToken,
+    runtime,
   });
 
   const database = new Database(modelRegistry, bootstrapHelper, {
@@ -87,6 +95,7 @@ export function createInternalComponents<S extends SchemaRecord>(
     // for one. Node and edge runtimes always use the in-memory store because
     // IndexedDB is unavailable there.
     inMemory: shouldUseInMemoryPersistence(options),
+    runtime,
   });
   const durableWrites = resolveDurableWrites(options);
   const syncClient = new SyncClient(
@@ -94,6 +103,7 @@ export function createInternalComponents<S extends SchemaRecord>(
     database,
     durableWrites.store,
     durableWrites.namespace ?? url,
+    runtime,
   );
 
   // Lazy-load lane: hydrates the object pool and IndexedDB on demand for
@@ -107,6 +117,7 @@ export function createInternalComponents<S extends SchemaRecord>(
     schema,
     baseUrl: bootstrapBaseUrl,
     getAuthToken: auth?.getAuthToken,
+    runtime,
   });
 
   // Drop the lazy-lane hydration ledger on reconnect. While connected, the

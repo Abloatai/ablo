@@ -39,7 +39,7 @@ import { z } from 'zod';
  * error documentation and returned on the `Ablo-Version` response header, so a
  * consumer can detect when its expected contract has drifted from the server's.
  */
-export const ERROR_CONTRACT_VERSION = '2026-07-21';
+export const ERROR_CONTRACT_VERSION = '2026-07-23';
 
 /** A coarse grouping of error codes, used to organize metrics and documentation. */
 export type ErrorCategory =
@@ -217,15 +217,19 @@ export const ERROR_CODES = {
   // only loop. Recovery belongs to the caller: take a claim, which queues fairly
   // behind the holder (`ablo.<model>.claim`), or re-read and rebase.
   claim_conflict: wire('claim', 409, false, 'Another participant holds a claim on this row, so the write was rejected. Take a claim with `ablo.<model>.claim` to queue fairly behind the holder, or re-read and rebase.'),
-  claim_lost: wire('claim', 409, false, 'The claim held on this row was lost before the write could apply. Re-acquire the claim and retry.'),
+  claim_lost: wire('claim', 409, false, 'The claim held on this row was lost before the write could apply. Re-acquire with `ablo.<model>.claim` and retry from its fresh snapshot.'),
   fence_token_stale: wire('claim', 409, false, 'This write carried a fencing token below the row’s current high-water: a later holder claimed the row, wrote, and moved on while this claim was lapsed, so applying the write would silently overwrite their work. The claim is gone — re-claim the row and retry from the current state.'),
   entity_claimed: wire('claim', 409, false, 'This row is currently claimed by another participant, so the write was blocked. Queue behind the holder with `ablo.<model>.claim`, or wait for the claim to clear.'),
   // A claim payload that cannot be parsed is a malformed request, not
   // contention — it is filed with `malformed_subscription` below rather than
   // with the 409s above, so the claim category stays purely about a target
   // being held. This is the code for a claim that fails to name its target,
-  // over either transport.
-  malformed_claim: wire('validation', 400, false, 'The claim payload could not be parsed. A claim must name the model and the entity it targets; check the payload shape and resend.'),
+  // over either transport — and for the participant claim behind `join`, which
+  // names scopes rather than a row but fails the same way and to the same
+  // caller. The copy covers both because the caller sees one word, `claim`, and
+  // needs to be told which shape was expected without being handed a lecture on
+  // the two frames.
+  malformed_claim: wire('validation', 400, false, 'The claim payload could not be parsed. A claim on a row must name the model and the entity it targets; a claim on a scope, which is what `join` opens, must name sync groups spelled `kind:id` or `default`. Check the payload shape and resend.'),
   malformed_subscription: wire('validation', 400, false, 'The `update_subscription` payload was malformed; expected `{ syncGroups: string[] }`.'),
   // The counterpart to the two above, pointing the other way: those are a
   // client sending the server something it cannot read, this is the server
@@ -245,7 +249,7 @@ export const ERROR_CODES = {
   // `readAt`, so resending the identical payload can never succeed. Recovery
   // is a caller-level re-read that produces a NEW request with a fresh
   // watermark — the same shape as `claim_conflict`.
-  stale_context: wire('conflict', 409, false, "The row changed after you read it — the write's `readAt` watermark is older than the current row version. Re-read the row and retry."),
+  stale_context: wire('conflict', 409, false, "The row changed after you read it — the write's `readAt` watermark is older than the current row version. Pass a function to `update(id, current => next)` and the SDK re-reads and retries for you; or re-read and retry by hand."),
   // Raised by the functional `update(id, current => next)` form once its
   // internal reconcile budget is exhausted, because the row stayed continuously
   // contended. The SDK has already retried; the caller decides whether to back
@@ -335,10 +339,9 @@ export const ERROR_CODES = {
   // ── claim / lease (409 / transport) ───────────────────────────────
   claim_lease_unavailable: wire('claim', 503, true, 'The claim-lease coordination subsystem is temporarily unavailable, so the claim could not be processed. Retry shortly.'),
   claim_not_wired: client('claim', 'Claims were used, but this runtime has no claim support wired in. The standard `Ablo({ schema, apiKey })` client wires it up automatically.'),
-  claim_queued: wire('claim', 409, true, 'The claim was queued behind the current lease holder and will be granted in turn. Wait, or read `claim.queue` to see your position.'),
+  claim_queued: wire('claim', 409, true, 'The claim was queued behind the current lease holder and will be granted in turn. Poll `claims.retrieve({ claimId })` for the grant — the id rides on the error — or read `claim.queue` to see the line.'),
   claim_wait_aborted: wire('claim', 409, true, 'The wait for this claim lease was aborted before the lease was granted.'),
-  claim_wait_poll_interval_required: client('claim', 'Waiting on a claim requires a poll interval, and none was provided.'),
-  grant_timeout: wire('claim', 504, true, 'The wait for a capability grant timed out before one arrived. Retry the request.'),
+  grant_timeout: wire('claim', 504, true, 'The wait for the claim grant timed out before your turn arrived (`waitTimeoutMs`). Claim again to rejoin the line, raise the cap, or re-read and proceed without the claim.'),
 
   // ── bootstrap (transport) ──────────────────────────────────────────
   bootstrap_fetch_timeout: wire('bootstrap', 504, true, 'The initial bootstrap fetch timed out before the server responded. Retry shortly.'),
@@ -365,7 +368,7 @@ export const ERROR_CODES = {
   commit_failed: wire('transport', 500, true, 'The commit reached the server but failed to apply. Retrying may succeed.'),
   replication_lag_timeout: wire('transport', 504, true, "The data source accepted the write, but its correlated authoritative source delta did not arrive before the confirmation deadline. The write may still materialize; retry with the same idempotency key or wait for source ingestion to recover."),
   commit_offline_grace_expired: wire('transport', 503, false, 'The offline grace window expired before this commit could be sent, so it was not applied. Re-apply the change once the connection returns.'),
-  queue_too_deep: wire('transport', 503, true, 'The transaction queue is over its depth limit, so new writes are being rejected until it drains. Retry shortly.'),
+  queue_too_deep: wire('transport', 503, true, 'The line is already past its depth limit. For a claim, more participants were waiting than your `maxQueueDepth` allows — claim again without the cap to wait anyway, or work elsewhere and retry later. For a write, the transaction queue is draining — retry shortly.'),
   flush_timeout: wire('transport', 504, true, 'Flushing the transaction queue timed out before every pending write was sent. Retry once connectivity stabilizes.'),
   wait_for_timeout: wire('transport', 504, true, 'A wait-for condition timed out before it was satisfied. Retry, or extend the timeout.'),
   instance_at_capacity: wire('transport', 503, true, 'The server is at connection capacity. Retry shortly — transient and not specific to your credentials.'),
@@ -506,6 +509,7 @@ export const ERROR_CODES = {
   request_too_large: wire('validation', 413, false, 'The request body exceeds the maximum size.'),
   invalid_schema: wire('validation', 400, false, 'The submitted schema could not be parsed.'),
   incompatible_change: wire('conflict', 409, false, 'The schema change is incompatible with the schema currently deployed and cannot be applied as-is.'),
+  replication_reset_required: wire('conflict', 409, false, 'A connected log plane has live rows for a mapped model that disappeared. Declare a rename or an explicit drop/reset before advancing the schema.'),
 } as const satisfies Record<string, ErrorCodeSpec>;
 
 /**

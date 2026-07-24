@@ -7,7 +7,7 @@
  */
 
 import { type Model, modelAsRow } from '../Model.js';
-import type { IncrementalView } from './queryUtils.js';
+import type { IncrementalView } from './incrementalView.js';
 
 export class ViewRegistry {
   private views = new Map<string, Set<IncrementalView>>();

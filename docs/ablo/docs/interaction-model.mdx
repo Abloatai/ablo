@@ -89,13 +89,15 @@ and the live claim stream.
 ## Conflict resolution
 
 Schema updates can carry `readAt` and `onStale`. If the state advanced past
-`readAt`, Ablo applies the `onStale` policy:
+`readAt`, Ablo applies the `onStale` disposition:
 
-- `reject` — fail the commit (first writer wins).
-- `notify` — accept the write, but flag it for product review.
-- `overwrite` — apply the write unconditionally.
+- `reject` fails the commit, and the caller retries from scratch.
+- `notify` holds the write, leaving the row as it stands, and returns a
+  `StaleNotification` with the current value for the actor to reconcile.
+- `overwrite` applies the write unconditionally, with no check.
 
-The choice is per-commit. No CRDT default; the policy is explicit.
+The choice is per-commit, and there is no CRDT default: the policy is explicit.
+The full taxonomy lives in [Concurrency Convention](/concurrency-convention).
 
 ## The contract in one sentence
 

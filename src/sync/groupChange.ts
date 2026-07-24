@@ -10,7 +10,8 @@
  * which it reaches the client's local storage and connection lifecycle hooks.
  */
 
-import { getContext } from '../context.js';
+import { globalRuntime } from '../context.js';
+import type { RuntimeContext } from '../RuntimeContext.js';
 import type {
   SyncDelta,
   SyncGroupChangePayload,
@@ -58,7 +59,13 @@ export interface GroupChangeContext {
   handleGroupAdded(payload: GroupAddedPayload, syncId: number): Promise<void>;
   computeUpdatedSyncGroups(payload: SyncGroupChangePayload): string[];
   forceFullRebootstrap(): void;
+  /** The owning client's runtime. Defaults to the module-global bridge. */
+  readonly runtime?: RuntimeContext;
 }
+
+/** The context's runtime, falling back to the module-global bridge. */
+const runtimeOf = (ctx: GroupChangeContext): RuntimeContext =>
+  ctx.runtime ?? globalRuntime;
 
 /**
  * Marker returned when a group-change payload cannot be parsed, kept distinct
@@ -73,12 +80,12 @@ const MALFORMED_PAYLOAD: unique symbol = Symbol('malformed-group-change-payload'
  * would leave the delta pipeline after the watermark has already advanced. The
  * delta is never re-delivered, so the security clear it carried would be lost.
  */
-function parseGroupChangePayload(delta: SyncDelta): unknown {
+function parseGroupChangePayload(delta: SyncDelta, runtime: RuntimeContext): unknown {
   if (typeof delta.data !== 'string') return delta.data;
   try {
     return JSON.parse(delta.data);
   } catch (error) {
-    getContext().logger.debug('[BaseSyncedStore] Malformed group-change payload', {
+    runtime.logger.debug('[BaseSyncedStore] Malformed group-change payload', {
       syncId: delta.id,
       actionType: delta.actionType,
       error: error instanceof Error ? error.message : String(error),
@@ -98,7 +105,7 @@ async function clearForUnknownGroupChange(
   delta: SyncDelta,
   kind: string,
 ): Promise<void> {
-  getContext().logger.debug(
+  runtimeOf(ctx).logger.debug(
     `[BaseSyncedStore] Unreadable ${kind} payload — clearing cached data and re-bootstrapping`,
     { syncId: delta.id },
   );
@@ -125,7 +132,7 @@ export async function handleSyncGroupChange(
   ctx: GroupChangeContext,
   delta: SyncDelta,
 ): Promise<void> {
-  const raw = parseGroupChangePayload(delta);
+  const raw = parseGroupChangePayload(delta, runtimeOf(ctx));
   if (raw === MALFORMED_PAYLOAD) {
     // The payload is unreadable, so we cannot tell which groups changed, and
     // this delta will never be re-delivered because the watermark has already
@@ -152,7 +159,7 @@ export async function handleSyncGroupChange(
     addedGroups: (rawObj.addedGroups as string[]) ?? [],
   };
 
-  getContext().logger.info('[BaseSyncedStore] Sync group change received (legacy)', {
+  runtimeOf(ctx).logger.info('[BaseSyncedStore] Sync group change received (legacy)', {
     removedGroups: payload.removedGroups,
     addedGroups: payload.addedGroups,
     syncId: delta.id,
@@ -164,7 +171,7 @@ export async function handleSyncGroupChange(
   if (payload.removedGroups.length > 0) {
     await ctx.database.clear();
     ctx.objectPool.clear();
-    getContext().logger.info('[BaseSyncedStore] Cleared cached data due to revoked sync groups', {
+    runtimeOf(ctx).logger.info('[BaseSyncedStore] Cleared cached data due to revoked sync groups', {
       removedGroups: payload.removedGroups,
     });
   }
@@ -185,7 +192,7 @@ export async function handleGroupAdded(
   payload: GroupAddedPayload,
   syncId: number,
 ): Promise<void> {
-  getContext().logger.info('[BaseSyncedStore] Group added (incremental)', {
+  runtimeOf(ctx).logger.info('[BaseSyncedStore] Group added (incremental)', {
     group: payload.group,
     syncId,
   });
@@ -206,7 +213,7 @@ export async function handleGroupRemoved(
   ctx: GroupChangeContext,
   delta: SyncDelta,
 ): Promise<void> {
-  const raw = parseGroupChangePayload(delta);
+  const raw = parseGroupChangePayload(delta, runtimeOf(ctx));
   if (raw === MALFORMED_PAYLOAD) {
     // The payload is unreadable: access was revoked but we cannot tell which
     // group. Fall back to a full clear, the safe direction for an
@@ -218,13 +225,13 @@ export async function handleGroupRemoved(
   const groupKey = typeof rawObj.group === 'string' ? rawObj.group : undefined;
 
   if (!groupKey) {
-    getContext().logger.debug('[BaseSyncedStore] Group removed delta missing group key', {
+    runtimeOf(ctx).logger.debug('[BaseSyncedStore] Group removed delta missing group key', {
       syncId: delta.id,
     });
     return;
   }
 
-  getContext().logger.info('[BaseSyncedStore] Group removed', {
+  runtimeOf(ctx).logger.info('[BaseSyncedStore] Group removed', {
     group: groupKey,
     syncId: delta.id,
   });
@@ -265,7 +272,7 @@ export function computeUpdatedSyncGroups(
  */
 export function forceFullRebootstrap(ctx: GroupChangeContext): void {
   if (ctx.getBootstrapMode() === 'none') {
-    getContext().logger.info(
+    runtimeOf(ctx).logger.info(
       '[BaseSyncedStore] forceFullRebootstrap skipped (bootstrapMode=none)',
     );
     return;
@@ -311,7 +318,7 @@ export async function checkSyncGroupShrinkage(ctx: GroupChangeContext): Promise<
     const removedGroups = stored.filter((g: string) => !currentGroups.has(g));
 
     if (removedGroups.length > 0) {
-      getContext().logger.info('[BaseSyncedStore] Sync groups shrank — forcing full bootstrap', {
+      runtimeOf(ctx).logger.info('[BaseSyncedStore] Sync groups shrank — forcing full bootstrap', {
         removedGroups,
         storedCount: stored.length,
         currentCount: currentGroups.size,
@@ -329,7 +336,7 @@ export async function checkSyncGroupShrinkage(ctx: GroupChangeContext): Promise<
       subscribedSyncGroups: Array.from(currentGroups),
     });
   } catch (error) {
-    getContext().logger.debug('[BaseSyncedStore] Failed to check sync group shrinkage', {
+    runtimeOf(ctx).logger.debug('[BaseSyncedStore] Failed to check sync group shrinkage', {
       error: error instanceof Error ? error.message : String(error),
     });
   }

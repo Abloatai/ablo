@@ -26,7 +26,6 @@
  * Related surfaces live on their own import subpaths:
  *   @abloatai/ablo/schema   — defineSchema, model, z (Zod)
  *   @abloatai/ablo/react    — <AbloProvider>, useQuery, useMutate
- *   @abloatai/ablo/testing  — test harnesses and fixtures
  *
  * Reads come in two flavors, distinguished by where the data is fetched from.
  * `ablo.<model>.retrieve({ id })` and `.list({ where })` are asynchronous reads
@@ -259,6 +258,11 @@ export type { WriteOptions, MutationOptions } from './interfaces/index.js';
 // returns this notification so the caller can reconcile against the current
 // value and retry rather than discard its work.
 export { staleNotificationSchema, readDependencySchema } from './transaction/coordination/schema.js';
+// The claim-part marker: schema field names typecheck plainly on a claim
+// target; an app-defined part (a cell, a section) is named through `part()`.
+export { part } from './transaction/coordination/schema.js';
+export type { ClaimPart } from './transaction/coordination/schema.js';
+export type { ClaimField } from './transaction/resources/modelOperations.js';
 export type { StaleNotification, ReadDependency } from './transaction/coordination/schema.js';
 // Collects claim events and stale-write collisions into an ordered list you can
 // print to inspect coordination, or read through `collisions()` to assert on in
@@ -278,7 +282,7 @@ export { noopObservability } from './RuntimeContext.js';
 // Detects a stuck local store: use these to recognize when the browser's
 // IndexedDB backing store fails to open in time, so your app can show a
 // recovery screen instead of hanging.
-export { IDBOpenTimeoutError, isStorageOpenTimeout } from './core/openIDBWithTimeout.js';
+export { IDBOpenTimeoutError, isStorageOpenTimeout } from './stores/openIDBWithTimeout.js';
 
 // The payload of `ablo.onCommitLatency` — how long each write took to land,
 // split into the local durable seal and the remote acknowledgement.

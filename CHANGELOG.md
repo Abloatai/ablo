@@ -1,673 +1,757 @@
 # Changelog
 
+## 0.36.0
+
+### Minor Changes
+
+- 816081b: `claim({ id })` now means the same thing on every transport: serialize me
+  behind whoever holds this row. The stateless HTTP client used to reject a
+  contended claim with `claim_queued` and leave the wait to you; now it holds
+  your place in the server's FIFO line — heartbeating the queued ticket under
+  the hood — and resolves to the same held claim the realtime client hands
+  back, with the row re-read after the grant so your snapshot reflects what the
+  previous holder committed. The contended-agent snippet is copy-pastable
+  between a browser tab and a Lambda without edits. Shape the wait the same way
+  on either transport: the new `waitTimeoutMs` caps it (rejects `grant_timeout`
+  and leaves the line), the new `signal` cancels it from outside (an
+  `AbortSignal` — a cancelled agent task or an unmounted component takes its
+  queued claim with it, rejecting `claim_wait_aborted`), `maxQueueDepth` bounds
+  the line you'll join, and `queue: false` is now the try-claim: a held
+  target resolves `null` — a declined try is an expected outcome, not an
+  error — so claim-or-skip dedup reads `if (!claim) return` with no
+  try/catch. (Previously it rejected with `entity_claimed`; a _write_ to a
+  held row still does.)
+
+  For callers that manage the wait themselves, the HTTP client gains an
+  `ablo.claims` namespace — the ticket surface: `retrieve({ claimId })` polls a
+  ticket to its grant (fence token included), `heartbeat({ claimId, ttl? })`
+  keeps a held or queued lease alive by its id, `heartbeatAll({ ttl? })`
+  extends every lease your identity holds in one round trip, and
+  `release({ claimId })` gives a ticket back, promoting the waiters behind you.
+
+  Claims can also target part of a row — a `path` into a document, a `range` of
+  text, a `field` or set of `fields` — and two claims on non-overlapping parts
+  of the same row are both granted. The engine has enforced this all along; it
+  is now documented (the coordination reference leads with it), proven by
+  grant-level tests, and gated so the docs can never again describe a narrower
+  target than the wire accepts. The part names also read your schema now:
+  `field` and `fields` autocomplete from the model's own field names, and an
+  app-defined part — a cell, a section — has an explicit spelling: `part('B2')`
+  (exported from the package root), which will become the only spelling for
+  non-field names once the typed react binding removes the last loose arm.
+  Inverted ranges (`startLine > endLine`) are rejected at the boundary instead
+  of granting a lease that excludes no one.
+
+  The claim options themselves now show their structure: every option sits on
+  one of four axes — what you claim (`field`/`fields`/`path`/`range`), what
+  others see (`description`/`meta`), how you wait
+  (`queue`/`maxQueueDepth`/`waitTimeoutMs`/`signal`), and how long you hold
+  (`ttl`/`heartbeat`) — and the docs and the type read in that order. The
+  lease axis slims from four members to two:
+  `heartbeat: { every?, onBeat?, onLost? }` carries the cadence and both
+  callbacks in one place, with `true` and a bare duration still the
+  shorthands. Removed: the flat `onHeartbeat` and `onHeartbeatLost` options —
+  move each callback onto the plan, unchanged: `heartbeat: { onBeat, onLost }`.
+
+  The react layer gains its typed binding: `createAbloReact(schema)` (from
+  `@abloatai/ablo/react`) returns `{ AbloProvider, useAblo }` with the schema
+  captured once — the one-binding-file convention of tRPC and typed
+  react-redux hooks. Components import `useAblo` from your `lib/ablo` and
+  never spell a type argument; the global `AbloProvider`/`useAblo<R>` keep
+  working unchanged.
+
+  Coordination errors now name the next call: `grant_timeout` says how to
+  rejoin or proceed, `stale_context` points at the functional update, and
+  `queue_too_deep` distinguishes its claim meaning from its write meaning.
+  Removed: the `claim_wait_poll_interval_required` error code — no code path
+  ever raised it, so no caller can be affected.
+
+- 7950669: A new `@abloatai/ablo/syncLog` subpath exposes the canonical sync-log contracts:
+  the Zod schemas and types for a delta's position and identity (`deltaPosition`,
+  `clientMutationId`, `sourceCorrelationId`, `sourceChangeId`, `replicationLsn`),
+  and the `commitDispatchMarker` that names the delta range a commit wrote. These
+  are the single definition the client and server both read, so a tool that
+  follows or reconciles the log validates positions and markers against the same
+  shapes the engine enforces.
+- 61e4daf: The `/testing` subpath no longer ships. It carried the package's own test
+  scaffolding — mocks, fixtures, and harnesses built on internals that were never
+  a stable contract. If your tests need a stand-in for the write path, implement
+  the public `MutationExecutor` interface from the `/core` subpath; a recording
+  executor is about eighty lines and stays type-checked against the same contract
+  the real client uses. For storage-adapter authors, `/source/conformance` remains
+  the supported suite for proving an adapter correct.
+
 ## 0.35.0
 
 ### Minor Changes
 
-- 6be1d99: The `@abloatai/ablo/agent` entry point is removed, along with the single name it exported, `Agent`.
+The `@abloatai/ablo/agent` entry point is removed, along with the single name it exported, `Agent`.
 
-  There is no separate agent SDK, and in practice there has not been one for some time: an agent is
-  the same client with a different transport. `Ablo({ schema, apiKey, transport: 'http' })` returns a
-  stateless, request/response client whose credential is its identity, carrying the same typed
-  `ablo.<model>` surface a browser or a server action uses, minus the parts that need a socket — the
-  `local` reads and `onChange`, which are absent from the type rather than failing at runtime. A
-  second entry point offered a second way in and, mostly, a second thing to keep in step with the
-  first. If you imported from `@abloatai/ablo/agent`, import from `@abloatai/ablo` and select the
-  transport.
+There is no separate agent SDK, and in practice there has not been one for some time: an agent is
+the same client with a different transport. `Ablo({ schema, apiKey, transport: 'http' })` returns a
+stateless, request/response client whose credential is its identity, carrying the same typed
+`ablo.<model>` surface a browser or a server action uses, minus the parts that need a socket — the
+`local` reads and `onChange`, which are absent from the type rather than failing at runtime. A
+second entry point offered a second way in and, mostly, a second thing to keep in step with the
+first. If you imported from `@abloatai/ablo/agent`, import from `@abloatai/ablo` and select the
+transport.
 
-  `ClaimEvent.participantKind` is also removed. A claim event is one transition in a lease's
-  lifecycle — acquired, queued, granted, lost, rejected, expired — and it identifies the actor that
-  moved it. Whether that actor was a person, an agent, or the system is a property of the holder, not
-  of the transition, and stating it on every event meant maintaining the same fact in two shapes. Read
-  it where the holder is described instead: `ablo.<model>.claim.state({ id })` returns the current
-  holder with its `participantKind`, which is what the "an agent is editing this" affordance in a UI
-  has always read.
+`ClaimEvent.participantKind` is also removed. A claim event is one transition in a lease's
+lifecycle — acquired, queued, granted, lost, rejected, expired — and it identifies the actor that
+moved it. Whether that actor was a person, an agent, or the system is a property of the holder, not
+of the transition, and stating it on every event meant maintaining the same fact in two shapes. Read
+it where the holder is described instead: `ablo.<model>.claim.state({ id })` returns the current
+holder with its `participantKind`, which is what the "an agent is editing this" affordance in a UI
+has always read.
 
-- 1b12959: The client is now the coordination layer, and the things built on top of it are
-  capabilities you install rather than parts of the client you get whether you use
-  them or not.
+The client is now the coordination layer, and the things built on top of it are
+capabilities you install rather than parts of the client you get whether you use
+them or not.
 
-  ```ts
-  import { Ablo, humans } from '@abloatai/ablo';
+```ts
+import { Ablo, humans } from '@abloatai/ablo';
 
-  const ablo = Ablo({ schema, apiKey, plugins: [humans()] });
-  ```
+const ablo = Ablo({ schema, apiKey, plugins: [humans()] });
+```
 
-  `humans()` declares the local, watchable copy: the offline store, live queries,
-  presence, and the framework bindings — everything that exists because a person
-  is looking at the screen. What remains underneath is what coordination actually
-  needs: commit, read, observe, claim. Omit `plugins` and `humans()` is installed
-  for you, so an application that renders anything today keeps working with no
-  change; naming it in the list only makes visible what was already true.
+`humans()` declares the local, watchable copy: the offline store, live queries,
+presence, and the framework bindings — everything that exists because a person
+is looking at the screen. What remains underneath is what coordination actually
+needs: commit, read, observe, claim. Omit `plugins` and `humans()` is installed
+for you, so an application that renders anything today keeps working with no
+change; naming it in the list only makes visible what was already true.
 
-  There is no `agents()` counterpart, and the absence is the point. An agent is
-  not a special caller that needs its own mode — it is the ordinary one, and what
-  it needs is the client without the materialiser. That is the same observation
-  behind removing the `/agent` entry point in this release: there was never a
-  second SDK to enter, only a client with a transport that does not open a socket.
-  `Ablo({ schema, apiKey, transport: 'http' })` is the whole of it, and because
-  `humans()` requires a duplex connection, asking for it on that client fails while
-  the client is being constructed, with an error naming the plugin, rather than
-  resolving to a presence stream that can never receive a frame. A plugin listed
-  twice fails the same way.
+There is no `agents()` counterpart, and the absence is the point. An agent is
+not a special caller that needs its own mode — it is the ordinary one, and what
+it needs is the client without the materialiser. That is the same observation
+behind removing the `/agent` entry point in this release: there was never a
+second SDK to enter, only a client with a transport that does not open a socket.
+`Ablo({ schema, apiKey, transport: 'http' })` is the whole of it, and because
+`humans()` requires a duplex connection, asking for it on that client fails while
+the client is being constructed, with an error naming the plugin, rather than
+resolving to a presence stream that can never receive a frame. A plugin listed
+twice fails the same way.
 
-  The rearrangement is also why the reactive `ablo.<model>` surface composes from
-  the transport-independent one rather than restating it — the note on the renamed
-  local reads describes what that buys — and why `track`, a durable premise that
-  keeps no local copy, sits in the core where an agent can reach it without
-  installing a materialiser it has no use for.
+The rearrangement is also why the reactive `ablo.<model>` surface composes from
+the transport-independent one rather than restating it — the note on the renamed
+local reads describes what that buys — and why `track`, a durable premise that
+keeps no local copy, sits in the core where an agent can reach it without
+installing a materialiser it has no use for.
 
-  This is a seam, not a finished migration. `humans()` today constructs the
-  presence stream and declares the constraint that keeps it off a stateless
-  client; the rest of the materialiser — the store, the bootstrap, the delta
-  pipeline, the framework bindings — still lives in the composition root and moves
-  behind the same door as the plugin context grows to carry what each piece needs.
-  The contract those pieces will arrive through is the one published here, so a
-  capability written against it now keeps working as they do.
+This is a seam, not a finished migration. `humans()` today constructs the
+presence stream and declares the constraint that keeps it off a stateless
+client; the rest of the materialiser — the store, the bootstrap, the delta
+pipeline, the framework bindings — still lives in the composition root and moves
+behind the same door as the plugin context grows to carry what each piece needs.
+The contract those pieces will arrive through is the one published here, so a
+capability written against it now keeps working as they do.
 
-- 6be1d99: The shape of a claim's `meta` is now declared once, on `Register`, beside your
-  schema:
+The shape of a claim's `meta` is now declared once, on `Register`, beside your
+schema:
 
-  ```ts
-  declare module '@abloatai/ablo' {
-    interface Register {
-      Schema: typeof schema;
-      ClaimMeta: { blocks: string[] };
-    }
+```ts
+declare module '@abloatai/ablo' {
+  interface Register {
+    Schema: typeof schema;
+    ClaimMeta: { blocks: string[] };
   }
-  ```
+}
+```
 
-  From then on `claim.state({ id })?.target.meta`, every entry in `claim.queue`,
-  and the claim you hold under `await using` all read that shape, and the `typeof`
-  guard each of those reads used to need is gone. The same declaration types what
-  you write — `claim({ id, meta: { blocks } })` — so the writer and every reader
-  agree by construction rather than by convention, which is the half a per-call
-  type argument could never reach: naming the shape at the read site said nothing
-  about what the write site was allowed to put there.
+From then on `claim.state({ id })?.target.meta`, every entry in `claim.queue`,
+and the claim you hold under `await using` all read that shape, and the `typeof`
+guard each of those reads used to need is gone. The same declaration types what
+you write — `claim({ id, meta: { blocks } })` — so the writer and every reader
+agree by construction rather than by convention, which is the half a per-call
+type argument could never reach: naming the shape at the read site said nothing
+about what the write site was allowed to put there.
 
-  Prefer the registration to the per-call `claim.state<MyMeta>({ id })`, because
-  one declaration is one place to change when the metadata grows a field. The
-  type argument remains supported and is still the honest answer for a program
-  carrying more than one metadata shape; only its default moved, from a bare
-  record to whatever you registered. A program that registers nothing sees no
-  change at all — `target.meta` stays the loose record it has always been.
+Prefer the registration to the per-call `claim.state<MyMeta>({ id })`, because
+one declaration is one place to change when the metadata grows a field. The
+type argument remains supported and is still the honest answer for a program
+carrying more than one metadata shape; only its default moved, from a bare
+record to whatever you registered. A program that registers nothing sees no
+change at all — `target.meta` stays the loose record it has always been.
 
-  What travels between participants is untouched. Claim metadata is carried
-  verbatim and never interpreted, and the protocol keeps accepting any object it
-  is given, so a peer on a newer build can send a field this one has never heard
-  of and it still arrives intact. The declaration is a promise about what your own
-  program writes, not a filter on what it receives.
+What travels between participants is untouched. Claim metadata is carried
+verbatim and never interpreted, and the protocol keeps accepting any object it
+is given, so a peer on a newer build can send a field this one has never heard
+of and it still arrives intact. The declaration is a promise about what your own
+program writes, not a filter on what it receives.
 
-- e4b538b: A model's conflict stance can be written as a chain through one name.
+A model's conflict stance can be written as a chain through one name.
 
-  ```ts
-  import { coordination, model, z } from '@abloatai/ablo/schema';
+```ts
+import { coordination, model, z } from '@abloatai/ablo/schema';
 
-  export const cards = model(
-    {
-      title: z.string(),
-    },
-    {
-      conflict: coordination.humansOverwrite().agentsReject(),
-    }
-  );
-  ```
+export const cards = model(
+  {
+    title: z.string(),
+  },
+  {
+    conflict: coordination.humansOverwrite().agentsReject(),
+  }
+);
+```
 
-  The nine disposition rules were the only loose functions left in the schema DSL.
-  Everything else there arrives under a noun that owns it — `relation.belongsTo`,
-  `field.string`, `mutable.lazy` — but declaring that humans overwrite and agents
-  yield meant importing three separate names to say one thing, and a schema with a
-  couple of stances spent more of its import list on conflict rules than on the rest
-  of the language combined.
+The nine disposition rules were the only loose functions left in the schema DSL.
+Everything else there arrives under a noun that owns it — `relation.belongsTo`,
+`field.string`, `mutable.lazy` — but declaring that humans overwrite and agents
+yield meant importing three separate names to say one thing, and a schema with a
+couple of stances spent more of its import list on conflict rules than on the rest
+of the language combined.
 
-  So the rules now hang off `coordination`, and each one returns an axis that is
-  still open to the next, the way a field chains its own modifiers. The rules
-  themselves are unchanged, and each remains the single place its disposition map is
-  written; the chain delegates to the standalone function rather than restating it.
-  Those standalone functions stay exported, and `coordination()` still merges them,
-  which is the form to reach for when the rules are assembled at runtime rather than
-  written out:
+So the rules now hang off `coordination`, and each one returns an axis that is
+still open to the next, the way a field chains its own modifiers. The rules
+themselves are unchanged, and each remains the single place its disposition map is
+written; the chain delegates to the standalone function rather than restating it.
+Those standalone functions stay exported, and `coordination()` still merges them,
+which is the form to reach for when the rules are assembled at runtime rather than
+written out:
 
-  ```ts
-  const stance = coordination(humansOverwrite(), agentsReject());
-  ```
+```ts
+const stance = coordination(humansOverwrite(), agentsReject());
+```
 
-  Both forms produce the same plain, serializable map keyed by the committer's
-  participant kind — `{ user: 'overwrite', agent: 'reject' }` — and the engine reads
-  it at the commit chokepoint exactly as before. A kind left unnamed still falls
-  through to the engine default, and a kind named twice still takes the later rule.
+Both forms produce the same plain, serializable map keyed by the committer's
+participant kind — `{ user: 'overwrite', agent: 'reject' }` — and the engine reads
+it at the commit chokepoint exactly as before. A kind left unnamed still falls
+through to the engine default, and a kind named twice still takes the later rule.
 
-- 6be1d99: `captureTransactionFailure` on the observability provider is renamed to `captureMutationFailure`.
-  If you pass an `observability` provider to `Ablo(...)`, rename that one method; its argument is
-  unchanged.
+`captureTransactionFailure` on the observability provider is renamed to `captureMutationFailure`.
+If you pass an `observability` provider to `Ablo(...)`, rename that one method; its argument is
+unchanged.
 
-  The rename frees a word that had been doing two jobs. A transaction, in this system, is a unit of
-  write that settles — the thing you author, hand to the engine, and get a receipt for. But the same
-  word also named the client's optimistic queue, the buffer of writes that have been applied locally
-  and are still waiting for the server to agree. The callback belonged to the second meaning: it
-  fires when a queued write has exhausted its attempts and will never land, so the local change is
-  rolled back and something upstream needs to hear about it. Calling that a transaction failure
-  invited the reading that a settlement had failed, which is a different event with a different
-  remedy — and as the settlement layer grew a vocabulary of its own, the collision stopped being
-  cosmetic.
+The rename frees a word that had been doing two jobs. A transaction, in this system, is a unit of
+write that settles — the thing you author, hand to the engine, and get a receipt for. But the same
+word also named the client's optimistic queue, the buffer of writes that have been applied locally
+and are still waiting for the server to agree. The callback belonged to the second meaning: it
+fires when a queued write has exhausted its attempts and will never land, so the local change is
+rolled back and something upstream needs to hear about it. Calling that a transaction failure
+invited the reading that a settlement had failed, which is a different event with a different
+remedy — and as the settlement layer grew a vocabulary of its own, the collision stopped being
+cosmetic.
 
-  There is no compatibility alias, and the reason is worth stating, because it is the opposite of
-  the usual one. `captureMutationFailure` is a required member of the provider interface. A provider
-  still carrying the old spelling therefore does not satisfy that interface at all: the compiler
-  stops the build and names the missing member, at the line where the provider is constructed. An
-  optional alias would have made that build succeed while the engine went on calling a method the
-  provider does not implement — quiet in exactly the way a renamed callback must not be. The
-  compiler is the better messenger here, and this note is the rest of the message.
+There is no compatibility alias, and the reason is worth stating, because it is the opposite of
+the usual one. `captureMutationFailure` is a required member of the provider interface. A provider
+still carrying the old spelling therefore does not satisfy that interface at all: the compiler
+stops the build and names the missing member, at the line where the provider is constructed. An
+optional alias would have made that build succeed while the engine went on calling a method the
+provider does not implement — quiet in exactly the way a renamed callback must not be. The
+compiler is the better messenger here, and this note is the rest of the message.
 
-- 6be1d99: `debug`, `logLevel`, and `persistence` are no longer accepted on the stateless HTTP client. They
-  remain exactly where they have always worked — on the default client, over the socket.
+`debug`, `logLevel`, and `persistence` are no longer accepted on the stateless HTTP client. They
+remain exactly where they have always worked — on the default client, over the socket.
 
-  They were reachable on `Ablo({ transport: 'http' })` only because that client's options type was
-  assembled from the whole composition bag rather than from the fields the transport actually reads,
-  and nothing on the HTTP path ever read them. `persistence` configures a local store a stateless
-  client does not keep. `debug` and `logLevel` turn on the `[Ablo]` coordination trace, which
-  narrates presence, claim grants, and queueing — frames that arrive over a socket an HTTP client
-  never opens. Passing any of the three was accepted and did nothing, which is the kind of option
-  that costs a reader an afternoon before they conclude the feature is broken.
+They were reachable on `Ablo({ transport: 'http' })` only because that client's options type was
+assembled from the whole composition bag rather than from the fields the transport actually reads,
+and nothing on the HTTP path ever read them. `persistence` configures a local store a stateless
+client does not keep. `debug` and `logLevel` turn on the `[Ablo]` coordination trace, which
+narrates presence, claim grants, and queueing — frames that arrive over a socket an HTTP client
+never opens. Passing any of the three was accepted and did nothing, which is the kind of option
+that costs a reader an afternoon before they conclude the feature is broken.
 
-  If you passed one to an HTTP client, delete it: nothing changes, because nothing was happening.
-  If what you wanted was the trace from a server-side worker, it is not a setting you were missing —
-  a stateless agent holds no live session to narrate, and its writes are visible in the audit log and
-  in `ablo logs` instead.
+If you passed one to an HTTP client, delete it: nothing changes, because nothing was happening.
+If what you wanted was the trace from a server-side worker, it is not a setting you were missing —
+a stateless agent holds no live session to narrate, and its writes are visible in the audit log and
+in `ablo logs` instead.
 
-- 6be1d99: A model's load strategy is now `'instant'` or `'lazy'`, and nothing else. The
-  word `'manual'` is gone, along with the `mutable.manual(...)` helper that set
-  it.
+A model's load strategy is now `'instant'` or `'lazy'`, and nothing else. The
+word `'manual'` is gone, along with the `mutable.manual(...)` helper that set
+it.
 
-  The strategy had drifted into two declarations that never agreed. The authoring
-  side, reached through `@abloatai/ablo/schema`, offered `'instant' | 'lazy' |
+The strategy had drifted into two declarations that never agreed. The authoring
+side, reached through `@abloatai/ablo/schema`, offered `'instant' | 'lazy' |
 'manual'`. The runtime side, reached through `@abloatai/ablo/core` under the
-  same name, offered `instant`, `lazy`, `partial`, `explicitlyRequested`, and
-  `local`. Importing `LoadStrategy` from the two paths gave you two different
-  types, and no compiler anywhere would tell you which one you had.
+same name, offered `instant`, `lazy`, `partial`, `explicitlyRequested`, and
+`local`. Importing `LoadStrategy` from the two paths gave you two different
+types, and no compiler anywhere would tell you which one you had.
 
-  Only `instant` and `lazy` were ever real. `'manual'` promised loading a model
-  "only when you explicitly call `sync.model.load()`", a method that was never
-  built; a model declared manual resolved to `lazy` and loaded on first access
-  like any other. `partial` had live branches in the client but no way to declare
-  it, and `explicitlyRequested` and `local` had neither. So the correction is
-  mostly the removal of vocabulary that described behavior the engine did not
-  have — a model that said `manual` was already behaving as `lazy`, and continues
-  to, which is why this changes what your schema is allowed to say rather than
-  what your program does.
+Only `instant` and `lazy` were ever real. `'manual'` promised loading a model
+"only when you explicitly call `sync.model.load()`", a method that was never
+built; a model declared manual resolved to `lazy` and loaded on first access
+like any other. `partial` had live branches in the client but no way to declare
+it, and `explicitlyRequested` and `local` had neither. So the correction is
+mostly the removal of vocabulary that described behavior the engine did not
+have — a model that said `manual` was already behaving as `lazy`, and continues
+to, which is why this changes what your schema is allowed to say rather than
+what your program does.
 
-  Replace `load: 'manual'` with `load: 'lazy'`, and `mutable.manual(...)` with
-  `mutable.lazy(...)`. `readOnly.internal(...)` stays, and its guarantee is
-  unchanged and worth restating plainly: it is a write boundary, not a read one.
-  Clients cannot commit to an internal model, and the server rejects any attempt.
-  Its rows still reach a client that reads the model.
+Replace `load: 'manual'` with `load: 'lazy'`, and `mutable.manual(...)` with
+`mutable.lazy(...)`. `readOnly.internal(...)` stays, and its guarantee is
+unchanged and worth restating plainly: it is a write boundary, not a read one.
+Clients cannot commit to an internal model, and the server rejects any attempt.
+Its rows still reach a client that reads the model.
 
-  `LoadStrategy` now has one declaration behind both import paths. It reads as a
-  value where the engine branches on it — `LoadStrategy.instant` — and as the
-  plain string an author types in `model(…, { load: 'instant' })`, and the two
-  can no longer name different sets.
+`LoadStrategy` now has one declaration behind both import paths. It reads as a
+value where the engine branches on it — `LoadStrategy.instant` — and as the
+plain string an author types in `model(…, { load: 'instant' })`, and the two
+can no longer name different sets.
 
-  Two names join it on `@abloatai/ablo/schema`. `DEFAULT_LOAD_STRATEGY` is the
-  strategy a model gets when it declares none, and `loadsAtBootstrap(load)`
-  answers whether a model's rows arrive in the bootstrap payload or on first
-  access. The predicate is exported because both halves of the system have to
-  agree on it: the client builds its bootstrap subscription from the schema and
-  the server assembles the payload from the same schema, and they had been
-  asking the question in three different spellings — `load !== 'lazy'` in one
-  place, `load === 'instant'` in another. Against two members those agree. A
-  third member would have had one side enrolling it and the other withholding it,
-  which surfaces as rows that never arrive, a long way from the line responsible.
+Two names join it on `@abloatai/ablo/schema`. `DEFAULT_LOAD_STRATEGY` is the
+strategy a model gets when it declares none, and `loadsAtBootstrap(load)`
+answers whether a model's rows arrive in the bootstrap payload or on first
+access. The predicate is exported because both halves of the system have to
+agree on it: the client builds its bootstrap subscription from the schema and
+the server assembles the payload from the same schema, and they had been
+asking the question in three different spellings — `load !== 'lazy'` in one
+place, `load === 'instant'` in another. Against two members those agree. A
+third member would have had one side enrolling it and the other withholding it,
+which surfaces as rows that never arrive, a long way from the line responsible.
 
 - The three synchronous reads on `ablo.<model>` are renamed. `get(id)`, `getAll(options)`,
   and `getCount(options)` become `local.retrieve(id)`, `local.list(options)`, and
   `local.count(options)`.
 
-  The old names were a pair that carried no information. `get` and `retrieve` are
-  synonyms in English, so a reader who found `ablo.tasks.get(id)` beside
-  `ablo.tasks.retrieve({ id })` had no way to tell from the words which one waited
-  on the network and which one did not — the difference had to be memorised, and
-  it was memorised imperfectly. Two bugs reached review that way, both of them a
-  synchronous read standing in for an asynchronous one against a graph that had
-  not warmed up yet, both of them invisible in the diff because the line read
-  exactly like the call it should have been.
+The old names were a pair that carried no information. `get` and `retrieve` are
+synonyms in English, so a reader who found `ablo.tasks.get(id)` beside
+`ablo.tasks.retrieve({ id })` had no way to tell from the words which one waited
+on the network and which one did not — the difference had to be memorised, and
+it was memorised imperfectly. Two bugs reached review that way, both of them a
+synchronous read standing in for an asynchronous one against a graph that had
+not warmed up yet, both of them invisible in the diff because the line read
+exactly like the call it should have been.
 
-  The new names say the thing out loud. Every verb is the verb it already was on
-  the asynchronous side; the only addition anywhere in the design is the word
-  `local`, and it is a narrowing rather than a claim about its sibling.
-  `retrieve` consults the local graph first and falls back to the network;
-  `local.retrieve` is restricted to what is already resident, which is also why it
-  can hand back a value instead of a promise. There is nothing to await. Reading
-  `ablo.tasks.local.list({ where })`, you know both what it does and what it costs
-  without leaving the line.
+The new names say the thing out loud. Every verb is the verb it already was on
+the asynchronous side; the only addition anywhere in the design is the word
+`local`, and it is a narrowing rather than a claim about its sibling.
+`retrieve` consults the local graph first and falls back to the network;
+`local.retrieve` is restricted to what is already resident, which is also why it
+can hand back a value instead of a promise. There is nothing to await. Reading
+`ablo.tasks.local.list({ where })`, you know both what it does and what it costs
+without leaving the line.
 
-  The reads themselves are unchanged — same options, same lifecycle `state`
-  filter, same reactivity inside `useAblo` selectors and in render. Only the path
-  to them moved, and it is the only path: the local reads are not also exposed at
-  the top level, because a namespace that duplicates what sits beside it stops
-  disambiguating anything.
+The reads themselves are unchanged — same options, same lifecycle `state`
+filter, same reactivity inside `useAblo` selectors and in render. Only the path
+to them moved, and it is the only path: the local reads are not also exposed at
+the top level, because a namespace that duplicates what sits beside it stops
+disambiguating anything.
 
-  Underneath, the rename arrives with a structural change that will keep the
-  surface honest from here on. The reactive `ablo.<model>` type was hand-written as
-  a second list that happened to agree with the transport-independent one, and
-  nothing linked them: a verb added to one said nothing about the other. It is now
-  composed from that base rather than restated, so a verb added there arrives on
-  the reactive client on its own. `track` — registering a durable premise on a
-  row — is the first to arrive that way.
+Underneath, the rename arrives with a structural change that will keep the
+surface honest from here on. The reactive `ablo.<model>` type was hand-written as
+a second list that happened to agree with the transport-independent one, and
+nothing linked them: a verb added to one said nothing about the other. It is now
+composed from that base rather than restated, so a verb added there arrives on
+the reactive client on its own. `track` — registering a durable premise on a
+row — is the first to arrive that way.
 
-  Migrating is mechanical, but reach for the compiler rather than a search. `getAll`
-  and `getCount` are distinctive enough to find by name; `get` is not, and in a
-  codebase of any size it hides among the `Map.get` and `headers.get` calls that a
-  search cannot tell it from. Removing the old names from the type turns the
-  question into a list of type errors, each one a site that genuinely needs to
-  move.
+Migrating is mechanical, but reach for the compiler rather than a search. `getAll`
+and `getCount` are distinctive enough to find by name; `get` is not, and in a
+codebase of any size it hides among the `Map.get` and `headers.get` calls that a
+search cannot tell it from. Removing the old names from the type turns the
+question into a list of type errors, each one a site that genuinely needs to
+move.
 
-- 0002877: A capability is declared in the vocabulary you write, and every other spelling
-  of it derives from that declaration.
+A capability is declared in the vocabulary you write, and every other spelling
+of it derives from that declaration.
 
-  ```ts
-  import { grantedOperations, modelWireNames } from '@abloatai/ablo/auth';
+```ts
+import { grantedOperations, modelWireNames } from '@abloatai/ablo/auth';
 
-  const operations = grantedOperations(
-    { documents: ['read', 'update'] },
-    modelWireNames(schema.models)
-  );
-  ```
+const operations = grantedOperations(
+  { documents: ['read', 'update'] },
+  modelWireNames(schema.models)
+);
+```
 
-  The same grant used to be spelled five times: a literal union in the resource
-  types, a `z.array(z.string())` on the wire, a field-by-field parser in the mint
-  route, an object literal in the response type, and a hand-written `model.verb`
-  array at every caller that mints without the SDK. Nothing failed when those
-  drifted apart. The drift surfaced later as `capability_scope_denied` on a grant
-  the caller was certain it held, at a call site with no view of the spelling that
-  had gone stale.
+The same grant used to be spelled five times: a literal union in the resource
+types, a `z.array(z.string())` on the wire, a field-by-field parser in the mint
+route, an object literal in the response type, and a hand-written `model.verb`
+array at every caller that mints without the SDK. Nothing failed when those
+drifted apart. The drift surfaced later as `capability_scope_denied` on a grant
+the caller was certain it held, at a call site with no view of the spelling that
+had gone stale.
 
-  They are now one module on `@abloatai/ablo/auth`. `capabilityOperationSchema`
-  holds the verb vocabulary; `grantedOperationSchema` derives the wire pattern
-  `<model>.<verb>` from it as a template literal, so tightening the verbs cannot
-  leave a stale regex or a stale published contract behind. `CapabilityCan<S>`
-  narrows the declaration to one schema's models, so `can: { tasks: ['update'] }`
-  fails to compile against a schema with no `tasks` model.
+They are now one module on `@abloatai/ablo/auth`. `capabilityOperationSchema`
+holds the verb vocabulary; `grantedOperationSchema` derives the wire pattern
+`<model>.<verb>` from it as a template literal, so tightening the verbs cannot
+leave a stale regex or a stale published contract behind. `CapabilityCan<S>`
+narrows the declaration to one schema's models, so `can: { tasks: ['update'] }`
+fails to compile against a schema with no `tasks` model.
 
-  `modelWireNames` is the derivation worth knowing about, because it is the one
-  people got wrong by hand. A model whose type name is overridden — schema key
-  `documents`, type name `Document` — must be granted as `document.update`, and a
-  caller who works that out by eye learns otherwise at enforcement time. Pass your
-  schema's models and the map is built for you. It is a required argument rather
-  than an optional one: an omitted map would mint the schema key verbatim, which
-  is right for most models and wrong for exactly the ones that need it.
+`modelWireNames` is the derivation worth knowing about, because it is the one
+people got wrong by hand. A model whose type name is overridden — schema key
+`documents`, type name `Document` — must be granted as `document.update`, and a
+caller who works that out by eye learns otherwise at enforcement time. Pass your
+schema's models and the map is built for you. It is a required argument rather
+than an optional one: an omitted map would mint the schema key verbatim, which
+is right for most models and wrong for exactly the ones that need it.
 
-  Two more derivations ride along. `expandReadYourWrites` appends `<model>.read`
-  for every model the grant can write, because a scoped agent that may update a
-  row has to be able to read it or the read gate starves the writes the grant
-  allows — write verbs stay the source of truth, reads are derived and deduped,
-  and a model the grant cannot write stays unreadable. And a grant is now checked
-  against the schema **at the mint**: `capabilityModelAliases` accepts any of the
-  three names one model answers to (type name, schema key, table name), and
-  `unresolvableOperations` reports the ones that name nothing, so a typo is a
-  rejected mint rather than a credential that looks healthy until its first write.
+Two more derivations ride along. `expandReadYourWrites` appends `<model>.read`
+for every model the grant can write, because a scoped agent that may update a
+row has to be able to read it or the read gate starves the writes the grant
+allows — write verbs stay the source of truth, reads are derived and deduped,
+and a model the grant cannot write stays unreadable. And a grant is now checked
+against the schema **at the mint**: `capabilityModelAliases` accepts any of the
+three names one model answers to (type name, schema key, table name), and
+`unresolvableOperations` reports the ones that name nothing, so a typo is a
+rejected mint rather than a credential that looks healthy until its first write.
 
-  ### Breaking
+### Breaking
 
-  `ExchangeApiKeyRequest.operations` narrows from `readonly string[]` to
-  `readonly GrantedOperation[]`. If you assembled that array by hand, the compiler
-  will now reject any entry that is not `<model>.<verb>` — including the `'*'`
-  wildcard, which was never a member of the wire form and is no longer typable as
-  one. Build the array with `grantedOperations(can, modelWireNames(schema.models))`
-  instead of composing the strings; that is the same call the SDK makes, and it
-  resolves the type-name override you would otherwise have to remember.
+`ExchangeApiKeyRequest.operations` narrows from `readonly string[]` to
+`readonly GrantedOperation[]`. If you assembled that array by hand, the compiler
+will now reject any entry that is not `<model>.<verb>` — including the `'*'`
+wildcard, which was never a member of the wire form and is no longer typable as
+one. Build the array with `grantedOperations(can, modelWireNames(schema.models))`
+instead of composing the strings; that is the same call the SDK makes, and it
+resolves the type-name override you would otherwise have to remember.
 
-- feb88a2: Three error codes carried the word "intent", left over from the vocabulary the
-  coordination layer used before it settled on claims. The word had come to mean
-  two unrelated things in the same registry, so both are now named for what they
-  are.
+Three error codes carried the word "intent", left over from the vocabulary the
+coordination layer used before it settled on claims. The word had come to mean
+two unrelated things in the same registry, so both are now named for what they
+are.
 
-  `invalid_intent` is removed. It was raised when a claim request failed to name
-  the model and row it targeted — which is what `malformed_claim` already
-  described, in the same words, for the same failure arriving over the WebSocket
-  instead of over HTTP. The two have been merged into `malformed_claim`; a caller
-  switching on `invalid_intent` should switch on `malformed_claim` instead, and
-  the HTTP status is 400 either way.
+`invalid_intent` is removed. It was raised when a claim request failed to name
+the model and row it targeted — which is what `malformed_claim` already
+described, in the same words, for the same failure arriving over the WebSocket
+instead of over HTTP. The two have been merged into `malformed_claim`; a caller
+switching on `invalid_intent` should switch on `malformed_claim` instead, and
+the HTTP status is 400 either way.
 
-  `slide_intent_missing_deck_id` and `slide_intent_unknown_sibling` are renamed to
-  `slide_position_missing_deck_id` and `slide_position_unknown_sibling`. These were
-  never about claims at all: they report that a slide created at a position stated
-  relative to its neighbours — "before this one" — could not have that position
-  resolved, because no deck was named or because the neighbour is not in it. An
-  earlier rename had swept the word "claim" through their descriptions and left
-  them reading as contention errors, so their messages are rewritten to say what
-  actually went wrong.
+`slide_intent_missing_deck_id` and `slide_intent_unknown_sibling` are renamed to
+`position_missing_parent` and `position_unknown_sibling`. These were never about
+claims at all: they report that a row created at a position stated relative to
+its neighbours — "before this one" — could not have that position resolved,
+because the parent it belongs to was not named or because the neighbour is not
+in it. An earlier rename had swept the word "claim" through their descriptions
+and left them reading as contention errors. The slide and the deck have gone the
+same way as the intent: nothing in the rule is particular to a deck, and a
+registry that every schema's callers switch on should not name one consumer's
+models, so the codes and their messages now speak of a row and its parent. Both
+remain `validation` errors carrying a 400.
 
-  `malformed_claim` moves from the `claim` category to `validation`, alongside
-  `malformed_subscription`. The code, its 400 status, and its meaning are
-  unchanged — only the grouping it appears under in the error documentation. The
-  `claim` category now holds only genuine contention, which is what its name
-  promised.
+`malformed_claim` moves from the `claim` category to `validation`, alongside
+`malformed_subscription`. The code, its 400 status, and its meaning are
+unchanged — only the grouping it appears under in the error documentation. The
+`claim` category now holds only genuine contention, which is what its name
+promised.
 
-- e4b538b: `model()` now takes a shape and one options object. Relations, which used to hold a
-  positional argument of their own in between, are the `relations` key on those options.
+`model()` now takes a shape and one options object. Relations, which used to hold a
+positional argument of their own in between, are the `relations` key on those options.
 
-  ```ts
-  documents: model(
-    {
-      title: z.string(),
-      projectId: z.string(),
-    },
-    {
-      relations: { project: relation.belongsTo('projects', 'projectId') },
-      conflict: coordination(humansOverwrite(), agentsReject()),
-      load: 'lazy',
-    }
-  ),
-  ```
+```ts
+documents: model(
+  {
+    title: z.string(),
+    projectId: z.string(),
+  },
+  {
+    relations: { project: relation.belongsTo('projects', 'projectId') },
+    conflict: coordination(humansOverwrite(), agentsReject()),
+    load: 'lazy',
+  }
+),
+```
 
-  The middle argument was the problem. Most models have no relations at all, yet nearly
-  every model has something to say about itself — a table it maps to, a load strategy, a
-  conflict disposition — and the only way to reach that third argument was to write the
-  second one first. So the schema filled up with empty braces standing in for edges that
-  did not exist. In this repository alone the placeholder appeared 104 times, which made
-  `{}` the single most common thing anyone ever passed in that position: more often than
-  any real relations object. A reader opening a schema met the empty braces before they
-  met the model.
+The middle argument was the problem. Most models have no relations at all, yet nearly
+every model has something to say about itself — a table it maps to, a load strategy, a
+conflict disposition — and the only way to reach that third argument was to write the
+second one first. So the schema filled up with empty braces standing in for edges that
+did not exist. In this repository alone the placeholder appeared 104 times, which made
+`{}` the single most common thing anyone ever passed in that position: more often than
+any real relations object. A reader opening a schema met the empty braces before they
+met the model.
 
-  Nothing about relations themselves changes. They are built with the same
-  `relation.belongsTo` and `relation.hasMany` factories, they carry the same options, and
-  the engine reads them exactly as before — to index foreign keys, to order inserts so a
-  parent lands before its children, and to generate the accessors behind `task.project`.
-  They have simply stopped being a position and become a name, which is what they always
-  were to everything downstream.
+Nothing about relations themselves changes. They are built with the same
+`relation.belongsTo` and `relation.hasMany` factories, they carry the same options, and
+the engine reads them exactly as before — to index foreign keys, to order inserts so a
+parent lands before its children, and to generate the accessors behind `task.project`.
+They have simply stopped being a position and become a name, which is what they always
+were to everything downstream.
 
-  Migrating is mechanical, and the compiler finds every site. A call that passed an empty
-  placeholder drops it:
+Migrating is mechanical, and the compiler finds every site. A call that passed an empty
+placeholder drops it:
 
-  ```ts
-  -model({ title: z.string() }, {}, { groups: { root: 'workspace' } }) +
-    model({ title: z.string() }, { groups: { root: 'workspace' } });
-  ```
+```ts
+-model({ title: z.string() }, {}, { groups: { root: 'workspace' } }) +
+  model({ title: z.string() }, { groups: { root: 'workspace' } });
+```
 
-  A call that passed real relations folds them in under their own key:
+A call that passed real relations folds them in under their own key:
 
-  ```ts
-  - model({ title: z.string(), projectId: z.string() }, {
-  -   project: relation.belongsTo('projects', 'projectId'),
-  - }, { load: 'lazy' })
-  + model({ title: z.string(), projectId: z.string() }, {
-  +   relations: { project: relation.belongsTo('projects', 'projectId') },
-  +   load: 'lazy',
-  + })
-  ```
+```ts
+- model({ title: z.string(), projectId: z.string() }, {
+-   project: relation.belongsTo('projects', 'projectId'),
+- }, { load: 'lazy' })
++ model({ title: z.string(), projectId: z.string() }, {
++   relations: { project: relation.belongsTo('projects', 'projectId') },
++   load: 'lazy',
++ })
+```
 
-  A call that passed only fields is untouched.
+A call that passed only fields is untouched.
 
-- e4b538b: `app.current_user_id` is now a reserved session setting, so a schema can no
-  longer claim it — and a read that cannot be scoped to the person asking says so
-  with `user_scope_not_enforced` instead of quietly returning rows.
+`app.current_user_id` is now a reserved session setting, so a schema can no
+longer claim it — and a read that cannot be scoped to the person asking says so
+with `user_scope_not_enforced` instead of quietly returning rows.
 
-  Ablo's direct-write connection already applied a fixed bundle of settings before
-  your DML — the organization, the project, the environment, the sandbox, the
-  acting participant — and `sessionSettings` let a schema forward any of those
-  into a differently-named setting its own policies read. What a schema could
-  never do was reassign one of the engine's own settings, because that would let a
-  schema push relax the scoping under which Ablo writes. `RESERVED_SESSION_SETTINGS`
-  is the list that prevents it, and the engine now sets one more: the acting user.
+Ablo's direct-write connection already applied a fixed bundle of settings before
+your DML — the organization, the project, the environment, the sandbox, the
+acting participant — and `sessionSettings` let a schema forward any of those
+into a differently-named setting its own policies read. What a schema could
+never do was reassign one of the engine's own settings, because that would let a
+schema push relax the scoping under which Ablo writes. `RESERVED_SESSION_SETTINGS`
+is the list that prevents it, and the engine now sets one more: the acting user.
 
-  The setting carries a person's id when a person is behind the write, and `'*'`
-  when the request comes from a backend credential acting as the organization
-  itself. Absent identity writes the empty string rather than leaving the previous
-  value on a pooled connection, so a policy reading it denies rather than
-  inheriting. Your own policies are welcome to read it; they simply cannot be the
-  thing that decides what it contains.
+The setting carries a person's id when a person is behind the write, and `'*'`
+when the request comes from a backend credential acting as the organization
+itself. Absent identity writes the empty string rather than leaving the previous
+value on a pooled connection, so a policy reading it denies rather than
+inheriting. Your own policies are welcome to read it; they simply cannot be the
+thing that decides what it contains.
 
-  If your schema mapped `app.current_user_id` through `sessionSettings`, that entry
-  is now dropped at authoring time and at runtime, and the engine's own value
-  applies instead. Map a different name if your policies need a value you control.
+If your schema mapped `app.current_user_id` through `sessionSettings`, that entry
+is now dropped at authoring time and at runtime, and the engine's own value
+applies instead. Map a different name if your policies need a value you control.
 
-  The new error code covers the one arrangement where that boundary cannot hold. A
-  plane served from its retained log carries the organization and the project on
-  every row but not the owner, so a rule that names a person has nothing to act on
-  there. Rather than fold the rows and return a plausible answer, such a read is
-  declined whole — a member reading a colleague's private records would otherwise
-  be indistinguishable from a member reading their own. Reads made by a credential
-  acting for the organization are unaffected, as is every plane served from its
-  tables.
+The new error code covers the one arrangement where that boundary cannot hold. A
+plane served from its retained log carries the organization and the project on
+every row but not the owner, so a rule that names a person has nothing to act on
+there. Rather than fold the rows and return a plausible answer, such a read is
+declined whole — a member reading a colleague's private records would otherwise
+be indistinguishable from a member reading their own. Reads made by a credential
+acting for the organization are unaffected, as is every plane served from its
+tables.
 
-  All of this now has a page. The seam has been in the SDK since 0.32.0 and under
-  this name since 0.33.0, documented both times only in a release note — which is
-  a poor place to keep a feature rather than announce one:
-  a reader with row-level-security policies had no way to discover that Ablo sets
-  an identity context at all, let alone that they could point their own policies
-  at it. **Session Settings** states what the engine sets before every write, which
-  identities a mapping may name, which settings are reserved and why, and what
-  happens on a plane served from its log. Read it with `npx ablo docs
+All of this now has a page. The seam has been in the SDK since 0.32.0 and under
+this name since 0.33.0, documented both times only in a release note — which is
+a poor place to keep a feature rather than announce one:
+a reader with row-level-security policies had no way to discover that Ablo sets
+an identity context at all, let alone that they could point their own policies
+at it. **Session Settings** states what the engine sets before every write, which
+identities a mapping may name, which settings are reserved and why, and what
+happens on a plane served from its log. Read it with `npx ablo docs
 session-settings`, or on the site.
 
-- 5972a69: `causedByTaskId` is removed from `MutationOptions` — and so from the per-verb params that
-  compose it, `ModelCreateParams`, `ModelUpdateParams`, and `ModelDeleteParams` — together with
-  the seven `turn_*` error codes that existed to police it. It also leaves `CommitContext`, where
-  the server carried it from the wire to the stored row. The field was never usable for its stated
-  purpose: setting it was the one reliable way to have a write refused.
+`causedByTaskId` is removed from `MutationOptions` — and so from the per-verb params that
+compose it, `ModelCreateParams`, `ModelUpdateParams`, and `ModelDeleteParams` — together with
+the seven `turn_*` error codes that existed to police it. It also leaves `CommitContext`, where
+the server carried it from the wire to the stored row. The field was never usable for its stated
+purpose: setting it was the one reliable way to have a write refused.
 
-  It was the surviving half of an agent-turn protocol whose other half was never built. The idea
-  had been that an agent would open a turn, write under it, and close it, so that an auditor could
-  later ask what an agent did _because_ a person asked it to — a prompt at the root of a tree of
-  changes. What actually shipped was only the check. Every commit that carried a `causedByTaskId`
-  was validated against a task record, and nothing in the system has ever opened one, so the record
-  was never there. A caller who supplied the field had the entire batch rejected with
-  `turn_validation_failed`; a caller who left it null passed straight through. The prudent thing to
-  do with a documented, public option was to never touch it, and the field spent its life as
-  plumbing threaded through the wire protocol, the settlement envelope, the stored row, and the
-  replication consumer, carrying null on every path.
+It was the surviving half of an agent-turn protocol whose other half was never built. The idea
+had been that an agent would open a turn, write under it, and close it, so that an auditor could
+later ask what an agent did _because_ a person asked it to — a prompt at the root of a tree of
+changes. What actually shipped was only the check. Every commit that carried a `causedByTaskId`
+was validated against a task record, and nothing in the system has ever opened one, so the record
+was never there. A caller who supplied the field had the entire batch rejected with
+`turn_validation_failed`; a caller who left it null passed straight through. The prudent thing to
+do with a documented, public option was to never touch it, and the field spent its life as
+plumbing threaded through the wire protocol, the settlement envelope, the stored row, and the
+replication consumer, carrying null on every path.
 
-  Nothing is lost by its removal, because write attribution never depended on it. A delta already
-  records who made the change and on whose authority — the actor, the `onBehalfOf` principal behind
-  a delegated write, the capability that authorized it, and the claim the write was made under. Those
-  answer "who did this and by what right" without asking the caller to maintain a lifecycle the
-  engine never opened on their behalf. If your code passed `causedByTaskId`, delete the argument;
-  if it branched on `turn_validation_failed`, that branch was unreachable and can go with it.
+Nothing is lost by its removal, because write attribution never depended on it. A delta already
+records who made the change and on whose authority — the actor, the `onBehalfOf` principal behind
+a delegated write, the capability that authorized it, and the claim the write was made under. Those
+answer "who did this and by what right" without asking the caller to maintain a lifecycle the
+engine never opened on their behalf. If your code passed `causedByTaskId`, delete the argument;
+if it branched on `turn_validation_failed`, that branch was unreachable and can go with it.
 
-  The removed codes are `turn_validation_failed`, `turn_open_failed`, `turn_close_failed`,
-  `turn_not_found`, `turn_foreign_agent`, `parent_turn_not_found`, and `parent_turn_foreign_agent`.
-  `ERROR_CONTRACT_VERSION` moves to `2026-07-19`, as it does whenever a code leaves the registry.
-  The stored-row schema loses its provenance slice with them: `deltaProvenanceSchema` and the
-  `DeltaProvenance` type are gone, and `syncDeltaRowSchema` is now the core and attribution slices
-  composed, which is what it had always described in practice. On the wire the field was optional
-  and nullable, so a client that still sends it is accepted and ignored, and a client reading deltas
-  sees one fewer always-null key.
+The removed codes are `turn_validation_failed`, `turn_open_failed`, `turn_close_failed`,
+`turn_not_found`, `turn_foreign_agent`, `parent_turn_not_found`, and `parent_turn_foreign_agent`.
+`ERROR_CONTRACT_VERSION` moves to `2026-07-19`, as it does whenever a code leaves the registry.
+The stored-row schema loses its provenance slice with them: `deltaProvenanceSchema` and the
+`DeltaProvenance` type are gone, and `syncDeltaRowSchema` is now the core and attribution slices
+composed, which is what it had always described in practice. On the wire the field was optional
+and nullable, so a client that still sends it is accepted and ignored, and a client reading deltas
+sees one fewer always-null key.
 
-  The storage goes with it. The `caused_by_task_id` column leaves `sync_deltas`, `agent_actions_log`,
-  and `source_write_intents`, and the two tables that were never written — `agent_tasks` and
-  `agent_task_prompts` — are dropped along with the `agent_surface` enum that typed them. This looked
-  at first like a separate versioned migration, because the audit chain hashes the lineage id into
-  every row's signature and rewriting those signatures is not something a release should do quietly.
-  It turned out not to need rewriting. Every row was hashed with a null in that position, so the
-  canonical byte layout the stored hashes were computed against is preserved exactly by passing
-  `NULL::text` where the column used to be read — which is what the migration does, in the append
-  trigger and in the rechain function, before the column is dropped. The signature is untouched and
-  every historical `row_hash` still verifies. The `packages/audit-chain` reproduction freezes the same
-  position, so the two implementations cannot drift apart on it.
+The storage goes with it. The `caused_by_task_id` column leaves `sync_deltas`, `agent_actions_log`,
+and `source_write_intents`, and the two tables that were never written — `agent_tasks` and
+`agent_task_prompts` — are dropped along with the `agent_surface` enum that typed them. This looked
+at first like a separate versioned migration, because the audit chain hashes the lineage id into
+every row's signature and rewriting those signatures is not something a release should do quietly.
+It turned out not to need rewriting. Every row was hashed with a null in that position, so the
+canonical byte layout the stored hashes were computed against is preserved exactly by passing
+`NULL::text` where the column used to be read — which is what the migration does, in the append
+trigger and in the rechain function, before the column is dropped. The signature is untouched and
+every historical `row_hash` still verifies. The `packages/audit-chain` reproduction freezes the same
+position, so the two implementations cannot drift apart on it.
 
-- f0f4226: Eight names that were renamed in an earlier release, and have shipped since as
-  aliases beside the names that replaced them, are removed.
+Eight names that were renamed in an earlier release, and have shipped since as
+aliases beside the names that replaced them, are removed.
 
-  | Removed                 | Use                      |
-  | ----------------------- | ------------------------ |
-  | `CommitOutboxRecord`    | `PendingWrite`           |
-  | `CommitOutboxStore`     | `DurableWriteStore`      |
-  | `MeshParticipantStatus` | `ParticipantStatus`      |
-  | `planeSchema`           | `residencySchema`        |
-  | `SchemaPlane`           | `ModelResidency`         |
-  | `DEFAULT_PLANE`         | `DEFAULT_RESIDENCY`      |
-  | `DELTA_RESIDENCY`       | `DELTA_PHYSICAL_STORAGE` |
-  | `InferModel`            | `Model`                  |
+| Removed                 | Use                      |
+| ----------------------- | ------------------------ |
+| `CommitOutboxRecord`    | `PendingWrite`           |
+| `CommitOutboxStore`     | `DurableWriteStore`      |
+| `MeshParticipantStatus` | `ParticipantStatus`      |
+| `planeSchema`           | `residencySchema`        |
+| `SchemaPlane`           | `ModelResidency`         |
+| `DEFAULT_PLANE`         | `DEFAULT_RESIDENCY`      |
+| `DELTA_RESIDENCY`       | `DELTA_PHYSICAL_STORAGE` |
+| `InferModel`            | `Model`                  |
 
-  Each is a one-for-one substitution — the alias and its replacement were the same
-  type or the same value, so nothing about your program's behavior changes with
-  the name. `InferModel` is the one worth a sentence: `Model<typeof schema,
+Each is a one-for-one substitution — the alias and its replacement were the same
+type or the same value, so nothing about your program's behavior changes with
+the name. `InferModel` is the one worth a sentence: `Model<typeof schema,
 'tasks'>` reads as the domain rather than the machinery, which is why it became
-  the published spelling, and the old name is gone from `@abloatai/ablo/schema`
-  and from the `Ablo.Schema` namespace both. The type it named still exists
-  underneath, because `Model` is defined in terms of it rather than as a second
-  name for the same idea.
+the published spelling, and the old name is gone from `@abloatai/ablo/schema`
+and from the `Ablo.Schema` namespace both. The type it named still exists
+underneath, because `Model` is defined in terms of it rather than as a second
+name for the same idea.
 
-  An alias earns one release of overlap. That is what the surface snapshot in
-  this repository records and enforces: a published name may leave only from a
-  release that shipped it marked deprecated, which is the release in which a
-  reader could have found out. These eight were marked in 0.34.1, so this is the
-  release that may drop them, and dropping them is what keeps the rule a rule
-  rather than a preamble on a list that only grows.
+An alias earns one release of overlap. That is what the surface snapshot in
+this repository records and enforces: a published name may leave only from a
+release that shipped it marked deprecated, which is the release in which a
+reader could have found out. These eight were marked in 0.34.1, so this is the
+release that may drop them, and dropping them is what keeps the rule a rule
+rather than a preamble on a list that only grows.
 
-  `DELTA_RESIDENCY` is the one whose replacement is not merely a rename.
-  Residency and classification are separate axes — where a column physically
-  lives, and how sensitive its contents are — and one constant named as though
-  they were the same question. `DELTA_PHYSICAL_STORAGE` answers the first;
-  `DELTA_DATA_CLASSIFICATION`, which has been exported alongside it, answers the
-  second. If you were reading `DELTA_RESIDENCY` to decide handling rather than
-  placement, the classification constant is the one you wanted.
+`DELTA_RESIDENCY` is the one whose replacement is not merely a rename.
+Residency and classification are separate axes — where a column physically
+lives, and how sensitive its contents are — and one constant named as though
+they were the same question. `DELTA_PHYSICAL_STORAGE` answers the first;
+`DELTA_DATA_CLASSIFICATION`, which has been exported alongside it, answers the
+second. If you were reading `DELTA_RESIDENCY` to decide handling rather than
+placement, the classification constant is the one you wanted.
 
-- 320b8d7: `ablo docs` reads the documentation for the version you installed, and the
-  public docs routes now serve the whole corpus instead of two thirds of it.
+`ablo docs` reads the documentation for the version you installed, and the
+public docs routes now serve the whole corpus instead of two thirds of it.
 
-  A documentation URL always describes the newest release. A package in
-  `node_modules` is frozen at whatever version was published. Those two facts
-  drift apart the moment a project pins a dependency, and the drift is invisible
-  from both ends: the docs are correct, the code is correct, and the agent reading
-  one to write the other produces a call that does not exist. `get`, `getAll`, and
-  `getCount` became `retrieve` and `list` in 0.35.0, so an assistant working in a
-  project still on 0.34 reads the current page, writes `retrieve`, and watches it
-  fail against the package sitting beside it.
+A documentation URL always describes the newest release. A package in
+`node_modules` is frozen at whatever version was published. Those two facts
+drift apart the moment a project pins a dependency, and the drift is invisible
+from both ends: the docs are correct, the code is correct, and the agent reading
+one to write the other produces a call that does not exist. `get`, `getAll`, and
+`getCount` became `retrieve` and `list` in 0.35.0, so an assistant working in a
+project still on 0.34 reads the current page, writes `retrieve`, and watches it
+fail against the package sitting beside it.
 
-  The documentation already travelled in the npm tarball; nothing read it there.
-  `ablo docs` lists every page with what it covers, and `ablo docs <page>` prints
-  one as markdown — from the files shipped alongside the code they describe, so
-  they cannot disagree with it, and with no network at all, which is the condition
-  most agent work now runs under. `ablo docs --json` gives the same list to a
-  program. A new `@abloatai/ablo/docs` entry point exposes the catalog for
-  anything that wants to build its own reader.
+The documentation already travelled in the npm tarball; nothing read it there.
+`ablo docs` lists every page with what it covers, and `ablo docs <page>` prints
+one as markdown — from the files shipped alongside the code they describe, so
+they cannot disagree with it, and with no network at all, which is the condition
+most agent work now runs under. `ablo docs --json` gives the same list to a
+program. A new `@abloatai/ablo/docs` entry point exposes the catalog for
+anything that wants to build its own reader.
 
-  The same catalog now answers `/api/docs/*`. That surface had been maintained by
-  hand and had fallen twenty-one pages behind: `coordination`, the page explaining
-  how claims work, returned a 404 while the site published it, and so did
-  `sessions`, `webhooks`, `migration`, `deployment`, and every example but two.
-  Nothing failed when the list went stale, which is why it stayed stale. Pages are
-  now discovered rather than listed, so one is reachable the moment it is written,
-  and only what ships in the package is reachable at all.
+The same catalog now answers `/api/docs/*`. That surface had been maintained by
+hand and had fallen twenty-one pages behind: `coordination`, the page explaining
+how claims work, returned a 404 while the site published it, and so did
+`sessions`, `webhooks`, `migration`, `deployment`, and every example but two.
+Nothing failed when the list went stale, which is why it stayed stale. Pages are
+now discovered rather than listed, so one is reachable the moment it is written,
+and only what ships in the package is reachable at all.
 
-  One address changed meaning. `/api/docs/agents` returns the Agents guide, the
-  page the docs index has always linked under that name; the install playbook that
-  briefly answered there is at `/api/docs/AGENTS.md`, where it also answered
-  before.
+One address changed meaning. `/api/docs/agents` returns the Agents guide, the
+page the docs index has always linked under that name; the install playbook that
+briefly answered there is at `/api/docs/AGENTS.md`, where it also answered
+before.
 
-- 0002877: `GET /v1/logs` answers two questions now — what changed, and who is working on
-  what — through one envelope and one cursor.
+`GET /v1/logs` answers two questions now — what changed, and who is working on
+what — through one envelope and one cursor.
 
-  ```ts
-  import { feedEventSchema, parseFeedCursor } from '@abloatai/ablo/wire';
+```ts
+import { feedEventSchema, parseFeedCursor } from '@abloatai/ablo/wire';
 
-  const page = await fetch(`${baseUrl}/v1/logs?after=${cursor}`, {
-    headers: { authorization: `Bearer ${apiKey}` },
-  }).then((r) => r.json());
+const page = await fetch(`${baseUrl}/v1/logs?after=${cursor}`, {
+  headers: { authorization: `Bearer ${apiKey}` },
+}).then((r) => r.json());
 
-  for (const event of page.data) {
-    const entry = feedEventSchema.parse(event);
-    if (entry.object === 'log_event') applyChange(entry);
-  }
-  cursor = page.next_cursor;
-  ```
+for (const event of page.data) {
+  const entry = feedEventSchema.parse(event);
+  if (entry.object === 'log_event') applyChange(entry);
+}
+cursor = page.next_cursor;
+```
 
-  An entry is discriminated on `object`, so a reader that knows only the arm it
-  came for parses the whole page and skips the rest — which is what lets a second
-  arm be added to a feed that callers are already following. The two arms stay
-  separately sequenced on purpose. A claim is a lease rather than a settled fact,
-  and allocating its positions from the delta sequence would put ephemeral leases
-  into the log that clients materialise rows from and that WAL-echo promotion and
-  compaction operate over, where a burst of claim churn would be indistinguishable
-  from committed change. They share a reading, not a sequence.
+An entry is discriminated on `object`, so a reader that knows only the arm it
+came for parses the whole page and skips the rest — which is what lets a second
+arm be added to a feed that callers are already following. The two arms stay
+separately sequenced on purpose. A claim is a lease rather than a settled fact,
+and allocating its positions from the delta sequence would put ephemeral leases
+into the log that clients materialise rows from and that WAL-echo promotion and
+compaction operate over, where a burst of claim churn would be indistinguishable
+from committed change. They share a reading, not a sequence.
 
-  That is why the cursor carries a position for each, encoded `"<log>.<claims>"`.
-  A bare `"<log>"` still parses and resumes at claim position zero, which is the
-  right answer for every cursor issued before this existed: a caller who never
-  asked for claim events has no claim position to preserve. `parseFeedCursor`,
-  `formatFeedCursor`, and `feedCursorAdvanced` are exported from
-  `@abloatai/ablo/wire` alongside `feedEventSchema`, `logListResponseSchema`, and
-  `claimEventSchema`, so a program that builds its own reader states the grammar
-  once. `claimRecordSchema` and `heldClaimStatusSchema` join them on
-  `@abloatai/ablo/coordination` — the one claim record, and the peer-visible
-  projection of it.
+That is why the cursor carries a position for each, encoded `"<log>.<claims>"`.
+A bare `"<log>"` still parses and resumes at claim position zero, which is the
+right answer for every cursor issued before this existed: a caller who never
+asked for claim events has no claim position to preserve. `parseFeedCursor`,
+`formatFeedCursor`, and `feedCursorAdvanced` are exported from
+`@abloatai/ablo/wire` alongside `feedEventSchema`, `logListResponseSchema`, and
+`claimEventSchema`, so a program that builds its own reader states the grammar
+once. `claimRecordSchema` and `heldClaimStatusSchema` join them on
+`@abloatai/ablo/coordination` — the one claim record, and the peer-visible
+projection of it.
 
-  `GET /v1/claims` gains the filters the audit log already had: `actorId`,
-  `actorKind`, `onBehalfOfId`, and `capabilityId`, beside the existing `model` and
-  `id`. The names are audit's names deliberately. Asking what an agent is doing
-  and asking what it did should not require two vocabularies for one idea, and now
-  the tense is the only thing that differs.
+`GET /v1/claims` gains the filters the audit log already had: `actorId`,
+`actorKind`, `onBehalfOfId`, and `capabilityId`, beside the existing `model` and
+`id`. The names are audit's names deliberately. Asking what an agent is doing
+and asking what it did should not require two vocabularies for one idea, and now
+the tense is the only thing that differs.
 
-  The claim arm has no producer yet. Claim transitions are broadcast and recorded
-  nowhere, so there is no sequence to read a position from, and the route emits
-  only `log_event`s today — with no request parameter for selecting arms, because
-  a knob that cannot be honoured is how a contract comes to describe a server that
-  does not exist. What ships here is the definition that producer will fill: the
-  union parses today's pages unchanged, and the cursor already carries the second
-  position, so a follower written now keeps working when the arm arrives.
+The claim arm has no producer yet. Claim transitions are broadcast and recorded
+nowhere, so there is no sequence to read a position from, and the route emits
+only `log_event`s today — with no request parameter for selecting arms, because
+a knob that cannot be honoured is how a contract comes to describe a server that
+does not exist. What ships here is the definition that producer will fill: the
+union parses today's pages unchanged, and the cursor already carries the second
+position, so a follower written now keeps working when the arm arrives.
 
-  ### The cursor fix
+### The cursor fix
 
-  A malformed `after` is now an error rather than a position. The previous reader
-  was `parseInt(raw, 10)` with a `NaN` falling back to zero, so a truncated or
-  garbled cursor resumed from the beginning of the log and replayed it in full —
-  while looking exactly like a working follow, with the damage scaling to how long
-  the log had been running. Such a request is now declined with `invalid_request`,
-  naming the `after` parameter and how to recover. `ablo logs` carried the mirror
-  of the same bug: it read the cursor with `Number(...)`, which is harmless while a
-  cursor is a bare delta id and silently wrong the moment it has two parts —
-  `Number('42.10')` is `42.1`, which re-serialises as `'42.1'` and resumes eight
-  claim positions late. The cursor is now a string end to end, passed back exactly
-  as it was issued.
+A malformed `after` is now an error rather than a position. The previous reader
+was `parseInt(raw, 10)` with a `NaN` falling back to zero, so a truncated or
+garbled cursor resumed from the beginning of the log and replayed it in full —
+while looking exactly like a working follow, with the damage scaling to how long
+the log had been running. Such a request is now declined with `invalid_request`,
+naming the `after` parameter and how to recover. `ablo logs` carried the mirror
+of the same bug: it read the cursor with `Number(...)`, which is harmless while a
+cursor is a bare delta id and silently wrong the moment it has two parts —
+`Number('42.10')` is `42.1`, which re-serialises as `'42.1'` and resumes eight
+claim positions late. The cursor is now a string end to end, passed back exactly
+as it was issued.
 
-- 6be1d99: `legacyCompatibleCommitReceiptSchema` is removed from `@abloatai/ablo/wire`. The WebSocket client
-  now parses a commit acknowledgement with `commitReceiptSchema`, the canonical one, directly.
+`legacyCompatibleCommitReceiptSchema` is removed from `@abloatai/ablo/wire`. The WebSocket client
+now parses a commit acknowledgement with `commitReceiptSchema`, the canonical one, directly.
 
-  It was a compatibility decoder rather than a contract: a `z.preprocess` step that supplied fields
-  older servers omitted and coerced their string `lastSyncId` into a number before handing the result
-  to the canonical schema, which did the real work. It was careful in one respect worth recording —
-  it never invented a source correlation, so an old or malformed queued receipt still failed closed
-  rather than being promoted to something the server had not said.
+It was a compatibility decoder rather than a contract: a `z.preprocess` step that supplied fields
+older servers omitted and coerced their string `lastSyncId` into a number before handing the result
+to the canonical schema, which did the real work. It was careful in one respect worth recording —
+it never invented a source correlation, so an old or malformed queued receipt still failed closed
+rather than being promoted to something the server had not said.
 
-  The servers it decoded for predate the commit contract, and the hosted engine has not spoken that
-  shape in some time. Keeping the wrapper meant every receipt on the socket path went through a
-  normalizer for a case that no longer arrives, and it left two spellings of "a receipt" on a
-  published surface whose entire purpose is to have one.
+The servers it decoded for predate the commit contract, and the hosted engine has not spoken that
+shape in some time. Keeping the wrapper meant every receipt on the socket path went through a
+normalizer for a case that no longer arrives, and it left two spellings of "a receipt" on a
+published surface whose entire purpose is to have one.
 
-  This matters only if you run a self-hosted engine older than the commit contract: its
-  acknowledgements will now fail to parse, and the write is reported as `commit_no_result` — pending
-  and safe to retry — rather than being silently normalized. Upgrade the engine. If you imported the
-  schema to parse receipts yourself, `commitReceiptSchema` is the replacement and always was the one
-  doing the parsing.
+This matters only if you run a self-hosted engine older than the commit contract: its
+acknowledgements will now fail to parse, and the write is reported as `commit_no_result` — pending
+and safe to retry — rather than being silently normalized. Upgrade the engine. If you imported the
+schema to parse receipts yourself, `commitReceiptSchema` is the replacement and always was the one
+doing the parsing.
 
 ### Patch Changes
 
-- 320b8d7: `ablo login`, `ablo mode`, and `ablo status` now say what the key in your hand
-  can do, and `status` labels the plane your credential reaches as `acts on`
-  rather than `env`.
+`ablo login`, `ablo mode`, and `ablo status` now say what the key in your hand
+can do, and `status` labels the plane your credential reaches as `acts on`
+rather than `env`.
 
-  Logging in provisions a pair — a secret sandbox key and a restricted production
-  one — so that a stolen CLI config cannot deploy to production. That protection
-  was deliberate and it was also silent. `login` confirmed the sandbox and moved
-  on, `mode production` printed a checkmark, and `status` showed the production
-  key as twelve characters of prefix. Nothing said the key could not push, so the
-  first notice was a 403 in the middle of a deploy, at the moment it cost the
-  most to learn.
+Logging in provisions a pair — a secret sandbox key and a restricted production
+one — so that a stolen CLI config cannot deploy to production. That protection
+was deliberate and it was also silent. `login` confirmed the sandbox and moved
+on, `mode production` printed a checkmark, and `status` showed the production
+key as twelve characters of prefix. Nothing said the key could not push, so the
+first notice was a 403 in the middle of a deploy, at the moment it cost the
+most to learn.
 
-  Each of those three commands now names the capability at the point it hands you
-  the credential: the key rows in `status` carry what each key does beside how
-  long it lasts, the line under `push` says which secret key deploys, and
-  `ablo status --json` reports `effectiveKey.kind` so a pipeline can check before
-  it pushes instead of after it fails. The wording has one definition site, so the
-  command that stores a key, the command that switches to it, and the command
-  that reports it cannot describe it three different ways.
+Each of those three commands now names the capability at the point it hands you
+the credential: the key rows in `status` carry what each key does beside how
+long it lasts, the line under `push` says which secret key deploys, and
+`ablo status --json` reports `effectiveKey.kind` so a pipeline can check before
+it pushes instead of after it fails. The wording has one definition site, so the
+command that stores a key, the command that switches to it, and the command
+that reports it cannot describe it three different ways.
 
-  The renamed `status` line is the same fix in smaller form. `mode` and `env`
-  printed as peers and were not: one is the environment you selected, the other is
-  the one your credential actually reaches, and when they diverged neither word
-  said which was which. `acts on` states the fact. The `--json` output is
-  unchanged apart from the added `kind`.
+The renamed `status` line is the same fix in smaller form. `mode` and `env`
+printed as peers and were not: one is the environment you selected, the other is
+the one your credential actually reaches, and when they diverged neither word
+said which was which. `acts on` states the fact. The `--json` output is
+unchanged apart from the added `kind`.
 
 ## 0.34.1
 

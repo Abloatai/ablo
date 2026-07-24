@@ -25,6 +25,7 @@ import type { ModelDef, RelationRecord } from './model.js';
 import type { RelationDef } from './relation.js';
 import { AbloValidationError } from '../errors.js';
 import type { IdentityRole } from './roles.js';
+import { fieldRef, type FieldRef } from './fieldRef.js';
 import { scopeSchema, grantsRefSchema } from './roles.js';
 
 // Sync-group roles (identity and entity) are defined in `./roles.js` and
@@ -256,6 +257,24 @@ export interface BaseModelMethods {
 export interface Schema<S extends SchemaRecord = SchemaRecord> {
   /** The raw model definitions */
   readonly models: S;
+
+  /**
+   * Every declared field as a {@link FieldRef} — the field as a value rather
+   * than a quoted name: `schema.fields.tasks.status`.
+   *
+   * A surface that names a field takes one of these instead of a string, so a
+   * name that does not exist stops compiling and a rename is a compile error at
+   * every use. Claims are the first caller; anything else that has to say
+   * "which field" should take a reference for the same reason.
+   *
+   * Base fields (`id`, `createdAt`, …) are not here: the schema does not
+   * declare them, and a caller naming one means the row, not a part of it.
+   */
+  readonly fields: {
+    readonly [K in keyof S]: S[K] extends ModelDef<infer Shape>
+      ? { readonly [F in Extract<keyof Shape, string>]: FieldRef }
+      : never;
+  };
 
   /** Zod schemas with base fields merged in */
   readonly validators: {
@@ -592,6 +611,26 @@ function assertRoundTrippableCamelCase(modelName: string, fieldName: string): vo
   }
 }
 
+/**
+ * One {@link FieldRef} per declared field, keyed by model then field.
+ *
+ * Every construction of a {@link Schema} goes through here — `defineSchema`,
+ * the `selectModels`/`omitModels` projections, and the deserializer — so a
+ * projection carries references for exactly the models it kept and a schema
+ * rebuilt from JSON carries them at all.
+ */
+export function buildFieldRefs(
+  models: Record<string, ModelDef>,
+): Record<string, Record<string, FieldRef>> {
+  const refs: Record<string, Record<string, FieldRef>> = {};
+  for (const [model, def] of Object.entries(models)) {
+    const perField: Record<string, FieldRef> = {};
+    for (const field of Object.keys(def.shape)) perField[field] = fieldRef(model, field);
+    refs[model] = perField;
+  }
+  return refs;
+}
+
 export function defineSchema<const S extends SchemaRecord>(
   models: S,
   options?: DefineSchemaOptions,
@@ -680,6 +719,7 @@ export function defineSchema<const S extends SchemaRecord>(
     // already part of ModelDef, so the shape is structurally unchanged.
     models: resolvedModels as unknown as S,
     validators: validators as Schema<S>['validators'],
+    fields: buildFieldRefs(resolvedModels) as Schema<S>['fields'],
     identityRoles: options?.identityRoles ?? [],
     sessionSettings: options?.sessionSettings ?? {},
   };

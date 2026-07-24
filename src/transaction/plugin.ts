@@ -20,6 +20,9 @@ import type { ErrorCodeSpec } from './errorCodes.js';
 import type { Logger } from './logger.js';
 import type { CoordinationObservability } from './observability.js';
 import type { WsTransport } from './transport/wsTransport.js';
+import type { AuthCredentialSource } from './auth/credentialSource.js';
+import type { SyncDeltaWireCore } from './wire/delta.js';
+import type { ModelData } from './types/modelData.js';
 
 /**
  * A string type that keeps literal inference alive: `id: 'humans'` stays the
@@ -63,6 +66,56 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
   'acknowledge',
   'notify',
 ];
+
+/**
+ * A delta as stage handlers receive it — the identity slice of the wire
+ * shape, projected rather than restated so the wire schema stays the one
+ * definition.
+ */
+export type StageDelta = Pick<
+  SyncDeltaWireCore,
+  'id' | 'actionType' | 'modelName' | 'modelId'
+>;
+
+/**
+ * One persisted change: what the durable write reported and the apply stage
+ * lands in the in-memory graph. `data` is absent for actions that carry
+ * none (a remove reports identity only).
+ */
+export interface AppliedChange {
+  action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
+  modelName: string;
+  modelId: string;
+  data?: ModelData | null;
+  /**
+   * Server-stamped transaction id, echoing the client's own commit
+   * operation id — how a client recognizes the confirmation of a change it
+   * already applied locally. Absent for system-emitted changes, which have
+   * no client transaction behind them.
+   */
+  transactionId?: string;
+}
+
+/**
+ * What each stage hands its handlers. Read off the delta pipeline these
+ * stages were read off, not invented: `receive` sees the delta being
+ * queued, `dedupe` and `persist` see the batch at those boundaries,
+ * `apply` and `notify` see the persisted changes, and `acknowledge` sees
+ * the persistence-gated cursor value.
+ */
+export interface StagePayloads {
+  receive: { readonly delta: StageDelta };
+  dedupe: { readonly deltas: readonly StageDelta[] };
+  persist: { readonly deltas: readonly StageDelta[] };
+  apply: { readonly changes: readonly AppliedChange[] };
+  acknowledge: { readonly syncId: number };
+  notify: { readonly changes: readonly AppliedChange[] };
+}
+
+/** The handler a plugin attaches at one stage. The payload derives from the key. */
+export type StageHandler<K extends PipelineStage> = (
+  payload: StagePayloads[K],
+) => void;
 
 /**
  * What a capability needs from whatever transport was selected.
@@ -115,6 +168,32 @@ export interface PluginContext<Options = unknown> {
 
   /** The connection's initial read scope (sync groups). */
   readonly syncGroups?: readonly string[];
+
+  /** The resolved server base URL, settled by the host before construction. */
+  readonly url?: string;
+
+  /**
+   * The client's single bearer-credential source, shared with every
+   * auth-aware transport the host built. A plugin that constructs its own
+   * fetching component hands this on rather than re-deriving a credential.
+   */
+  readonly auth?: AuthCredentialSource;
+
+  /**
+   * Whether a plugin with the given id is installed on this client. Supplied
+   * by {@link resolvePlugins} from the list it is resolving — the one place
+   * that truthfully knows the assembly — so a plugin interrogates what is
+   * installed instead of the host special-casing plugins by name.
+   */
+  readonly hasPlugin?: (id: string) => boolean;
+
+  /**
+   * The resolved plugin list itself, supplied by {@link resolvePlugins}
+   * alongside {@link hasPlugin} (which derives from it). A component a
+   * plugin constructs — the store and its delta pipeline — holds this list
+   * to dispatch the declared stage handlers through {@link runStage}.
+   */
+  readonly plugins?: readonly AbloPlugin[];
 }
 
 /**
@@ -154,8 +233,14 @@ export interface AbloPlugin<Surface = unknown> {
    */
   readonly errorCodes?: Readonly<Record<string, ErrorCodeSpec>>;
 
-  /** Which pipeline stage this plugin attaches to, if it observes deltas. */
-  readonly stage?: PipelineStage;
+  /**
+   * The pipeline stages this plugin attaches to: each key names a stage and
+   * holds the handler the runner invokes there. One field on purpose — a
+   * declared stage cannot exist without its handler, nor a handler without
+   * its stage, so the declaration can never point at nothing. The payload
+   * type derives from the key ({@link StagePayloads}).
+   */
+  readonly stages?: { readonly [K in PipelineStage]?: StageHandler<K> };
 
   /** Build the plugin's contribution to the client surface. */
   init(context: PluginContext): Surface;
@@ -217,6 +302,15 @@ export function resolvePlugins<const Plugins extends readonly AbloPlugin[], Opti
   const surface: Record<string, unknown> = {};
   const seen = new Set<string>();
 
+  // The assembly, injected from the list being resolved. Always this list's
+  // own answer — a host-supplied `plugins` or `hasPlugin` could disagree
+  // with the assembly it describes, so both are replaced, not deferred to.
+  const initContext: PluginContext<Options> = {
+    ...context,
+    plugins,
+    hasPlugin: (id: string): boolean => plugins.some((plugin) => plugin.id === id),
+  };
+
   for (const plugin of plugins) {
     if (seen.has(plugin.id)) {
       throw new AbloValidationError(
@@ -233,7 +327,7 @@ export function resolvePlugins<const Plugins extends readonly AbloPlugin[], Opti
       );
     }
 
-    surface[plugin.id] = plugin.init(context);
+    surface[plugin.id] = plugin.init(initContext);
   }
 
   return surface as InstalledSurface<Plugins>;
@@ -282,5 +376,21 @@ export function pluginsForStage(
   plugins: readonly AbloPlugin[],
   stage: PipelineStage,
 ): readonly AbloPlugin[] {
-  return plugins.filter((plugin) => plugin.stage === stage);
+  return plugins.filter((plugin) => plugin.stages?.[stage] !== undefined);
+}
+
+/**
+ * Invokes every handler declared for one stage, in declaration order, with
+ * that stage's payload. No handlers declared is a plain no-op, so a pipeline
+ * dispatches unconditionally at each boundary and pays nothing when the
+ * stage is unclaimed.
+ */
+export function runStage<K extends PipelineStage>(
+  plugins: readonly AbloPlugin[],
+  stage: K,
+  payload: StagePayloads[K],
+): void {
+  for (const plugin of plugins) {
+    plugin.stages?.[stage]?.(payload);
+  }
 }

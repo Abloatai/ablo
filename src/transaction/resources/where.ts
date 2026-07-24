@@ -15,6 +15,8 @@
 
 import { z } from 'zod';
 
+import { AbloValidationError } from '../errors.js';
+
 /** Primitive operand types allowed in a where clause. */
 export type WherePrimitive = string | number | boolean | null;
 
@@ -75,6 +77,54 @@ export const WHERE_LIKE_OPS: ReadonlySet<WhereOp> = new Set<WhereOp>([
   'ILIKE',
   'NOT ILIKE',
 ]);
+
+/**
+ * Does this operator accept this operand? The rule the sets above imply, stated
+ * once and thrown once.
+ *
+ * The sets were collapsed here because two copies of the split let one plane
+ * accept a request the other refused. The check that consumes them stayed
+ * duplicated — the SQL compiler and the log-plane evaluator each carried their
+ * own arity tests and their own wording — which leaves the same gap one step
+ * further along: relax `IN` in one evaluator and a request succeeds against a
+ * hosted plane and fails against a connected one, with no test in a position to
+ * notice.
+ *
+ * Returns the classification the caller needs next, so the check and the branch
+ * are the same statement rather than two that can disagree.
+ */
+export function classifyWhereOperand(
+  op: WhereOp,
+  value: unknown,
+): 'null' | 'array' | 'scalar' {
+  if (WHERE_NULL_OPS.has(op)) {
+    if (value !== null) {
+      throw new AbloValidationError(`${op} only supports null RHS`, {
+        code: 'query_unsupported_operator',
+      });
+    }
+    return 'null';
+  }
+  if (WHERE_ARRAY_OPS.has(op)) {
+    if (!Array.isArray(value)) {
+      throw new AbloValidationError(`${op} requires an array RHS`, {
+        code: 'query_unsupported_operator',
+      });
+    }
+    return 'array';
+  }
+  if (WHERE_SCALAR_OPS.has(op)) {
+    if (Array.isArray(value)) {
+      throw new AbloValidationError(`${op} requires a scalar RHS`, {
+        code: 'query_unsupported_operator',
+      });
+    }
+    return 'scalar';
+  }
+  throw new AbloValidationError(`unsupported operator: ${op}`, {
+    code: 'query_unsupported_operator',
+  });
+}
 
 /**
  * A single condition. Two supported shapes:

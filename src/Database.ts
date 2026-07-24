@@ -6,11 +6,13 @@
  * in-memory mirror of what this class persists.
  */
 
-import { DatabaseManager, type DatabaseInfo, type WorkspaceMetadata } from './core/DatabaseManager.js';
-import { StoreManager } from './core/StoreManager.js';
+import { DatabaseManager, type DatabaseInfo, type WorkspaceMetadata } from './stores/DatabaseManager.js';
+import { StoreManager } from './stores/StoreManager.js';
 import { ModelRegistry } from './ModelRegistry.js';
 import { LoadStrategy } from './transaction/types/index.js';
-import { getContext } from './context.js';
+import { globalRuntime } from './context.js';
+import type { RuntimeContext } from './RuntimeContext.js';
+import type { AppliedChange } from './transaction/plugin.js';
 import { AbloConnectionError, AbloValidationError } from './transaction/errors.js';
 import type { BootstrapFetcher, BootstrapData } from './sync/BootstrapFetcher.js';
 import { InMemoryObjectStore } from './adapters/inMemoryStorage.js';
@@ -160,12 +162,7 @@ export interface BootstrapResult {
    * was disconnected — without this, DELETE deltas persist to IDB but
    * ghost entities linger in the pool until a full reload.
    */
-  deltaResults?: {
-    action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
-    modelName: string;
-    modelId: string;
-    data?: ModelData | null;
-  }[];
+  deltaResults?: AppliedChange[];
 }
 
 export class Database {
@@ -216,7 +213,7 @@ export class Database {
   /** Essential fields that must be preserved during partial UPDATE merges.
    * Sourced from SyncEngineConfig.essentialFields — consumers define their own. */
   private get essentialFields(): Readonly<Record<string, readonly string[]>> {
-    return getContext().config.essentialFields;
+    return this.runtime.config.essentialFields;
   }
 
   /**
@@ -229,6 +226,8 @@ export class Database {
    */
   private readonly inMemory: boolean;
 
+  private readonly runtime: RuntimeContext;
+
   /** In-memory stores used when inMemory=true. Keyed by model name. */
   private inMemoryStores = new Map<string, InMemoryObjectStore>();
 
@@ -238,10 +237,11 @@ export class Database {
   constructor(
     modelRegistry: ModelRegistry,
     bootstrapHelper: BootstrapFetcher,
-    options?: { inMemory?: boolean },
+    options?: { inMemory?: boolean; runtime?: RuntimeContext },
   ) {
-    this.databaseManager = new DatabaseManager();
-    this.storeManager = new StoreManager(modelRegistry);
+    this.runtime = options?.runtime ?? globalRuntime;
+    this.databaseManager = new DatabaseManager(this.runtime);
+    this.storeManager = new StoreManager(modelRegistry, this.runtime);
     this.modelRegistry = modelRegistry;
     this.bootstrapHelper = bootstrapHelper;
     this.inMemory = options?.inMemory ?? false;
@@ -264,7 +264,7 @@ export class Database {
       ? this.inMemoryStores.get(modelName)
       : this.storeManager.getStore(modelName);
     if (!store && context) {
-      getContext().observability.breadcrumb(
+      this.runtime.observability.breadcrumb(
         `Store not found for model: ${modelName}`,
         'sync.database',
         'warning',
@@ -300,7 +300,7 @@ export class Database {
     );
 
     if (preserved.length > 0) {
-      getContext().logger.debug('[Database] UPDATE merged - preserved fields', {
+      this.runtime.logger.debug('[Database] UPDATE merged - preserved fields', {
         modelName,
         modelId: modelId.slice(0, 12),
         deltaFields: Object.keys(delta),
@@ -321,7 +321,7 @@ export class Database {
     // Creates InMemoryObjectStore instances for all registered models.
     // Bootstrap via HTTP still works; only local persistence is skipped.
     if (this.inMemory) {
-      getContext().logger.debug('Opening in-memory database (headless mode)');
+      this.runtime.logger.debug('Opening in-memory database (headless mode)');
       const allModels = this.modelRegistry.getRegisteredModelNames();
       for (const modelName of allModels) {
         const storeName = `store_${modelName.toLowerCase()}`;
@@ -335,14 +335,14 @@ export class Database {
         '__transactions',
         new InMemoryObjectStore('__transactions', '__transactions'),
       );
-      getContext().logger.info(
+      this.runtime.logger.info(
         `In-memory database opened: ${this.inMemoryStores.size} stores`,
       );
       return;
     }
 
     // ── Browser mode: IndexedDB (existing behavior, unchanged) ───
-    getContext().logger.debug('Opening IndexedDB database');
+    this.runtime.logger.debug('Opening IndexedDB database');
 
     // Initialize meta database
     await this.databaseManager.initializeMetaDatabase();
@@ -369,7 +369,7 @@ export class Database {
     await this.storeManager.initializeStores(this.workspaceDb);
 
     const readiness = await this.storeManager.checkReadinessOfStores();
-    getContext().logger.info(
+    this.runtime.logger.info(
       `Database opened: ${this.currentDbInfo.name} (${readiness.readyStores.length}/${readiness.totalStores} stores ready)`
     );
   }
@@ -442,7 +442,7 @@ export class Database {
    */
   markRequiresFullBootstrap(): void {
     this._forceFullBootstrap = true;
-    getContext().logger.info('[Database] Marked for forced full bootstrap (sync group change)');
+    this.runtime.logger.info('[Database] Marked for forced full bootstrap (sync group change)');
   }
 
   /**
@@ -477,7 +477,7 @@ export class Database {
       this._forceFullBootstrap = false;
       const instantModels = this.modelRegistry.getModelsByLoadStrategy(LoadStrategy.instant);
       const lazyModels = this.modelRegistry.getModelsByLoadStrategy(LoadStrategy.lazy);
-      getContext().logger.info('[Database.requiredBootstrap] Forced FULL bootstrap (sync group change)');
+      this.runtime.logger.info('[Database.requiredBootstrap] Forced FULL bootstrap (sync group change)');
       return {
         type: 'full',
         modelsToLoad: [...instantModels, ...lazyModels],
@@ -523,7 +523,7 @@ export class Database {
     const lastSyncId = dataExists ? metadataLastSyncId : 0;
 
     // Log the resolved database state for diagnostics.
-    getContext().logger.debug('[Database.requiredBootstrap] State check', {
+    this.runtime.logger.debug('[Database.requiredBootstrap] State check', {
       readinessReady: readiness.ready,
       hasMetadata: !!metadata,
       metadataLastSyncId,
@@ -543,12 +543,12 @@ export class Database {
     if (offline && hasLocalData) {
       // Offline with data - use local bootstrap (only option when offline)
       type = 'local';
-      getContext().logger.info('Offline detected with local data - using local bootstrap');
+      this.runtime.logger.info('Offline detected with local data - using local bootstrap');
     } else {
       // The server is the source of truth: always use a full bootstrap
       // when online.
       type = 'full';
-      getContext().logger.info('Full bootstrap - server is source of truth', {
+      this.runtime.logger.info('Full bootstrap - server is source of truth', {
         reason: offline ? 'offline_no_data' : 'server_authoritative',
         hasLocalData,
         lastSyncId,
@@ -578,12 +578,12 @@ export class Database {
     syncGroups: readonly string[],
     onProgress?: (loaded: number) => void
   ): Promise<BootstrapResult> {
-    getContext().logger.debug('Starting bootstrap fetch', {
+    this.runtime.logger.debug('Starting bootstrap fetch', {
       type: requirements.type,
       lastSyncId: requirements.lastSyncId,
       modelsToLoad: requirements.modelsToLoad,
     });
-    getContext().logger.info('Database: Starting bootstrap from Go server', {
+    this.runtime.logger.info('Database: Starting bootstrap from Go server', {
       type: requirements.type,
       syncGroups,
       modelsToLoad: requirements.modelsToLoad,
@@ -594,14 +594,14 @@ export class Database {
       // request can't leave the local store empty.
       const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
-      getContext().logger.info('Fetching bootstrap data from server (before clearing local data)', {
+      this.runtime.logger.info('Fetching bootstrap data from server (before clearing local data)', {
         type: requirements.type,
         lastSyncId: requirements.lastSyncId,
       });
 
       const bootstrapData = await this.bootstrapHelper.fetchBootstrap(requirements.lastSyncId);
 
-      getContext().logger.debug('Received bootstrap response', {
+      this.runtime.logger.debug('Received bootstrap response', {
         type: bootstrapData.type,
         lastSyncId: bootstrapData.lastSyncId,
         hasModels: !!bootstrapData.models,
@@ -620,7 +620,7 @@ export class Database {
       if (bootstrapData.type === 'partial') {
         const deltas = bootstrapData.deltas ?? [];
 
-        getContext().logger.info('Processing partial bootstrap with delta batch', {
+        this.runtime.logger.info('Processing partial bootstrap with delta batch', {
           deltaCount: deltas.length,
           fromSyncId: requirements.lastSyncId,
           toSyncId: bootstrapData.lastSyncId,
@@ -667,7 +667,7 @@ export class Database {
 
         const elapsed =
           (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTime;
-        getContext().logger.info(`Partial bootstrap complete in ${elapsed.toFixed(2)}ms`, {
+        this.runtime.logger.info(`Partial bootstrap complete in ${elapsed.toFixed(2)}ms`, {
           deltasApplied,
           lastSyncId: bootstrapData.lastSyncId,
         });
@@ -688,7 +688,7 @@ export class Database {
       for (const [modelName, modelData] of Object.entries(bootstrapData.models)) {
         // Handle null, undefined, or non-array data
         if (!modelData) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             `No data received for ${modelName}`,
             'sync.bootstrap',
             'warning'
@@ -697,7 +697,7 @@ export class Database {
         }
 
         if (!Array.isArray(modelData)) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             `Skipping non-array data for ${modelName}`,
             'sync.bootstrap',
             'warning'
@@ -707,13 +707,13 @@ export class Database {
 
         // Skip empty arrays silently (expected for some models)
         if (modelData.length === 0) {
-          getContext().logger.debug(`No ${modelName} items to store (empty array)`);
+          this.runtime.logger.debug(`No ${modelName} items to store (empty array)`);
           continue;
         }
 
         const store = this.getStore(modelName, 'bootstrap');
         if (!store) {
-          getContext().logger.debug(
+          this.runtime.logger.debug(
             `[Bootstrap] NO IDB STORE for ${modelName} — ${modelData.length} items DROPPED`,
           );
           continue;
@@ -733,7 +733,7 @@ export class Database {
             }
           } catch (error) {
             writeErrors++;
-            getContext().observability.breadcrumb(
+            this.runtime.observability.breadcrumb(
               `Failed to store ${modelName} item`,
               'sync.database',
               'error',
@@ -749,7 +749,7 @@ export class Database {
         // against. Counted and surfaced here so a partial does not read as a
         // clean bootstrap.
         if (writeErrors > 0) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             `Stored ${modelName} with ${writeErrors} of ${modelData.length} items dropped`,
             'sync.database',
             'warning',
@@ -774,10 +774,10 @@ export class Database {
 
       const elapsed =
         (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTime;
-      getContext().logger.info(
+      this.runtime.logger.info(
         `Bootstrap complete: ${modelsLoaded} items loaded, ${modelsStored} stored to IndexedDB in ${elapsed.toFixed(2)}ms`
       );
-      getContext().analytics?.capture('bootstrap_success', {
+      this.runtime.analytics?.capture('bootstrap_success', {
         responseTime: elapsed,
         modelsLoaded,
       });
@@ -785,13 +785,13 @@ export class Database {
       return { modelsLoaded, modelsStored, bootstrapData };
     } catch (error) {
       // Comprehensive error logging for bootstrap failures
-      getContext().observability.captureBootstrapFailure(error, {
+      this.runtime.observability.captureBootstrapFailure(error, {
         type: requirements.type,
         navigatorOnline: typeof navigator !== 'undefined' ? navigator.onLine : undefined,
       });
 
       // Track bootstrap failure telemetry
-      getContext().analytics?.capture('bootstrap_failed', {
+      this.runtime.analytics?.capture('bootstrap_failed', {
         bootstrapType: requirements.type,
         lastSyncId: requirements.lastSyncId,
         errorMessage: error instanceof Error ? error.message : String(error),
@@ -828,12 +828,7 @@ export class Database {
     modelName: string;
     modelId: string;
     data: ModelData | null;
-  }): Promise<{
-    action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
-    modelName: string;
-    modelId: string;
-    data?: ModelData | null;
-  }> {
+  }): Promise<AppliedChange> {
     const { actionType, modelName, modelId, data, syncId } = delta;
     const store = this.getStore(modelName, 'processDelta');
     if (!store) {
@@ -870,7 +865,7 @@ export class Database {
       // newly created, it was newly visible. We fall through to the 'I' case
       // after a debug trace so the two can be disambiguated in logs.
       case 'C':
-        getContext().observability.breadcrumb(
+        this.runtime.observability.breadcrumb(
           'Applying covering delta (gained permission)',
           'sync.database',
           'info',
@@ -892,7 +887,7 @@ export class Database {
             await this.updateWorkspaceMetadata({ lastSyncId: syncId });
           }
         } catch (err) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             `IndexedDB put failed for ${modelName}:${modelId}`,
             'sync.database',
             'error',
@@ -914,7 +909,7 @@ export class Database {
         // building a record from partial update data would corrupt it
         // (missing reportId, and so on).
         if (!existing) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             'Skipping UPDATE delta - no existing record to merge with',
             'sync.database',
             'warning',
@@ -942,7 +937,7 @@ export class Database {
             await this.updateWorkspaceMetadata({ lastSyncId: syncId });
           }
         } catch (err) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             `IndexedDB put failed for ${modelName}:${modelId}`,
             'sync.database',
             'error',
@@ -964,7 +959,7 @@ export class Database {
             await this.updateWorkspaceMetadata({ lastSyncId: syncId });
           }
         } catch (err) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             `IndexedDB delete failed for ${modelName}:${modelId}`,
             'sync.database',
             'error',
@@ -987,7 +982,7 @@ export class Database {
             await this.updateWorkspaceMetadata({ lastSyncId: syncId });
           }
         } catch (err) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             `IndexedDB archive put failed for ${modelName}:${modelId}`,
             'sync.database',
             'error',
@@ -1010,7 +1005,7 @@ export class Database {
       // queue), we return a no-op verify rather than crashing the engine.
       case 'G':
       case 'S':
-        getContext().observability.breadcrumb(
+        this.runtime.observability.breadcrumb(
           `Group membership delta (${actionType}) reached processDelta — should be handled upstream`,
           'sync.database',
           'warning',
@@ -1072,13 +1067,7 @@ export class Database {
       transactionId?: string;
     }[]
   ): Promise<{
-    results: {
-      action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
-      modelName: string;
-      modelId: string;
-      data?: ModelData | null;
-      transactionId?: string;
-    }[];
+    results: AppliedChange[];
     /**
      * Highest syncId whose IDB store transaction actually committed in this
      * batch. The runtime delta cursor (WS `lastSyncId`, server-side
@@ -1108,13 +1097,7 @@ export class Database {
     // shape, sequential apply per delta — fine since inMemory mode
     // doesn't need IDB transaction batching for performance.
     if (this.inMemory) {
-      const inMemResults: {
-        action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
-        modelName: string;
-        modelId: string;
-        data?: ModelData | null;
-        transactionId?: string;
-      }[] = [];
+      const inMemResults: AppliedChange[] = [];
       let inMemPersistedSyncId = 0;
       for (const delta of deltas) {
         const single = await this.processDelta({
@@ -1137,13 +1120,7 @@ export class Database {
     }
 
     // Prepare results aligned with input order
-    const results = new Array<{
-      action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
-      modelName: string;
-      modelId: string;
-      data?: ModelData | null;
-      transactionId?: string;
-    }>(deltas.length);
+    const results = new Array<AppliedChange>(deltas.length);
 
     // Build a delete index for conflict resolution. When a delete has a sync
     // id at or above a later insert or update for the same entity, that entity
@@ -1164,7 +1141,7 @@ export class Database {
     }
 
     if (deleteSyncIds.size > 0) {
-      getContext().logger.debug('[Database.processDeltaBatch] Built DELETE index for conflict resolution', {
+      this.runtime.logger.debug('[Database.processDeltaBatch] Built DELETE index for conflict resolution', {
         deleteCount: deleteSyncIds.size,
         totalDeltas: deltas.length,
       });
@@ -1213,7 +1190,7 @@ export class Database {
 
           if (deleteSyncId >= deltaSyncId) {
             // DELETE has equal or higher syncId - skip this UPDATE/INSERT
-            getContext().logger.debug('[Database.processDeltaBatch] Skipping stale delta (DELETE wins)', {
+            this.runtime.logger.debug('[Database.processDeltaBatch] Skipping stale delta (DELETE wins)', {
               modelName: delta.modelName,
               modelId: delta.modelId.slice(0, 12),
               actionType: delta.actionType,
@@ -1243,7 +1220,7 @@ export class Database {
     });
 
     if (skippedDueToConflict > 0) {
-      getContext().logger.info('[Database.processDeltaBatch] Conflict resolution summary', {
+      this.runtime.logger.info('[Database.processDeltaBatch] Conflict resolution summary', {
         skippedDueToConflict,
         totalDeltas: deltas.length,
         deleteCount: deleteSyncIds.size,
@@ -1276,7 +1253,7 @@ export class Database {
               }
             }
           } catch {
-            getContext().observability.breadcrumb(
+            this.runtime.observability.breadcrumb(
               `Batch read failed for ${modelName}, falling back to individual reads`,
               'sync.database',
               'warning'
@@ -1294,7 +1271,7 @@ export class Database {
         const failedToFetch = new Set<string>();
 
         if (missingIds.size > 0) {
-          getContext().logger.info(
+          this.runtime.logger.info(
             `[Database.processDeltaBatch] Found ${missingIds.size} missing records for ${modelName}, fetching from server...`
           );
 
@@ -1305,20 +1282,20 @@ export class Database {
               if (fetchedRecord) {
                 const compacted = this.compactRecord(modelName, fetchedRecord);
                 existingRecords.set(id, compacted);
-                getContext().logger.debug(
+                this.runtime.logger.debug(
                   `[Database.processDeltaBatch] Successfully fetched missing record: ${modelName}:${id}`
                 );
               } else {
                 // fetchEntity returns null for 404 — entity was deleted, skip the delta
                 failedToFetch.add(id);
-                getContext().logger.debug(
+                this.runtime.logger.debug(
                   `[Database.processDeltaBatch] Entity not found (deleted): ${modelName}:${id}`
                 );
               }
             } catch (error: unknown) {
               // Unexpected error (5xx, network failure) — mark for skipping and report
               failedToFetch.add(id);
-              getContext().observability.breadcrumb(
+              this.runtime.observability.breadcrumb(
                 `Failed to fetch missing record ${modelName}:${id}`,
                 'sync.database',
                 'warning',
@@ -1330,7 +1307,7 @@ export class Database {
           }
 
           if (failedToFetch.size > 0) {
-            getContext().logger.info(
+            this.runtime.logger.info(
               `[Database.processDeltaBatch] Skipping ${failedToFetch.size} stale UPDATE deltas for deleted entities`,
               {
                 modelName,
@@ -1354,13 +1331,7 @@ export class Database {
         const objectStore = tx.objectStore(modelName);
 
         // Stage results for this store; only commit to global results when tx completes successfully
-        const stagedResults: {
-          action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
-          modelName: string;
-          modelId: string;
-          data?: any;
-          idx: number;
-        }[] = [];
+        const stagedResults: (AppliedChange & { idx: number })[] = [];
 
         // Step 4: Process all deltas synchronously within transaction (no await!)
         for (const { idx, delta } of storeDeltas) {
@@ -1400,7 +1371,7 @@ export class Database {
               // store nor fetchable from the server (a 404), it was deleted,
               // so skip it rather than create an incomplete record.
               if (!existing && failedToFetch.has(modelId)) {
-                getContext().logger.debug('[Database.processDeltaBatch] Skipping UPDATE for deleted entity', {
+                this.runtime.logger.debug('[Database.processDeltaBatch] Skipping UPDATE for deleted entity', {
                   modelName,
                   modelId: modelId.slice(0, 12),
                 });
@@ -1412,7 +1383,7 @@ export class Database {
               // building a record from partial update data would corrupt it
               // (missing reportId, and so on).
               if (!existing) {
-                getContext().observability.breadcrumb(
+                this.runtime.observability.breadcrumb(
                   'Batch: Skipping UPDATE delta - no existing record',
                   'sync.database',
                   'warning',
@@ -1499,7 +1470,7 @@ export class Database {
         // `DataError`, `AbortError`) so we can find what's wrong with
         // the `compacted` payload shape or store schema.
         const idbErr = err instanceof Error ? err : new Error(String(err));
-        getContext().logger.debug('[Database.processDeltaBatch] store tx FAILED', {
+        this.runtime.logger.debug('[Database.processDeltaBatch] store tx FAILED', {
           modelName,
           storeDeltasCount: storeDeltas.length,
           errorName: idbErr.name,
@@ -1512,7 +1483,7 @@ export class Database {
               : typeof delta.data,
           })),
         });
-        getContext().observability.captureMutationFailure({
+        this.runtime.observability.captureMutationFailure({
           context: 'batch-indexeddb-operation',
           modelName,
           error: idbErr,
@@ -1542,7 +1513,7 @@ export class Database {
       try {
         await this.updateWorkspaceMetadata({ lastSyncId: highestPersistedSyncId });
       } catch (err) {
-        getContext().observability.breadcrumb(
+        this.runtime.observability.breadcrumb(
           'Failed to update metadata after batch',
           'sync.database',
           'error',
@@ -1557,7 +1528,7 @@ export class Database {
       // persisted" signal loud when it actually happens. If this fires
       // repeatedly on the same sync IDs, a specific row is un-writable
       // (validation? compact issue?) and needs fixing at that layer.
-      getContext().logger.debug('[Database.processDeltaBatch] cursor withheld due to failed store tx', {
+      this.runtime.logger.debug('[Database.processDeltaBatch] cursor withheld due to failed store tx', {
         seen: highestSyncId,
         persisted: highestPersistedSyncId,
         gap: highestSyncId - highestPersistedSyncId,
@@ -1580,7 +1551,7 @@ export class Database {
   async putRecord(modelName: string, id: string, data: Record<string, unknown>): Promise<void> {
     const store = this.getStore(modelName, 'putRecord');
     if (!store) {
-      getContext().observability.breadcrumb(
+      this.runtime.observability.breadcrumb(
         `Store not found for putRecord: ${modelName}`,
         'sync.database',
         'warning'
@@ -1631,7 +1602,7 @@ export class Database {
     // Graceful degradation: skip if database is closing or not open
     // This prevents "Database not opened" errors during React Strict Mode cleanup
     if (!this.workspaceDb || this.isClosing) {
-      getContext().observability.breadcrumb(
+      this.runtime.observability.breadcrumb(
         'updateWorkspaceMetadata: Database not open or closing',
         'sync.database',
         'warning',
@@ -1972,7 +1943,7 @@ export class Database {
     await this.databaseManager.close();
     this.currentDbInfo = null;
 
-    getContext().logger.debug('Database closed');
+    this.runtime.logger.debug('Database closed');
   }
 
   async clear(options: { includeWriteJournal?: boolean } = {}): Promise<void> {
@@ -1980,6 +1951,6 @@ export class Database {
     if (options.includeWriteJournal) {
       await this.transactionStore.clear();
     }
-    getContext().logger.info('All stores cleared');
+    this.runtime.logger.info('All stores cleared');
   }
 }

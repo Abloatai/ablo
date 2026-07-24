@@ -35,13 +35,13 @@ function rebindEngine<R extends SchemaRecord>(engine: Ablo<SchemaRecord>): Ablo<
 }
 
 /**
- * The same rebind viewed through the reactive-read surface — the identical
- * runtime object, with model reads typed as snapshot rows, because everything
- * a selector returns is converted through `snapshotValue` before the hook
- * hands it back.
+ * The reactive-read view of a client — the identical runtime object, with
+ * model reads typed as snapshot rows, because everything a selector returns
+ * is converted through `snapshotValue` before the hook hands it back. Same
+ * generic in and out, so this compiles with no schema rebinding.
  */
-function reactiveReads<R extends SchemaRecord>(engine: Ablo<SchemaRecord>): AbloReads<R> {
-  return rebindEngine<R>(engine) as AbloReads<R>;
+function reactiveReads<R extends SchemaRecord>(engine: Ablo<R>): AbloReads<R> {
+  return engine as AbloReads<R>;
 }
 
 // Selectors receive the reactive-read client: model reads are typed as
@@ -49,9 +49,9 @@ function reactiveReads<R extends SchemaRecord>(engine: Ablo<SchemaRecord>): Ablo
 // shape the hook actually returns after `toReactiveSnapshot()`. This makes the
 // selector's inferred result type honest — `row.layers` fails to compile here
 // instead of reading `undefined` at runtime.
-type ModelClientSelector<R extends SchemaRecord, T, C> =
+export type ModelClientSelector<R extends SchemaRecord, T, C> =
   (ablo: AbloReads<R>) => ModelOperations<T, C>;
-type AbloSelector<R extends SchemaRecord, T> = (ablo: AbloReads<R>) => T;
+export type AbloSelector<R extends SchemaRecord, T> = (ablo: AbloReads<R>) => T;
 
 export interface UseAbloModelOptions<T> {
   /**
@@ -73,8 +73,8 @@ export interface UseAbloModelResult<T> {
 export type UseAbloHydratedModelResult<T> =
   Omit<UseAbloModelResult<T>, 'data'> & { readonly data: T };
 
-function readModelResult<T, C>(
-  engine: Ablo<SchemaRecord> | null,
+function readModelResult<R extends SchemaRecord, T, C>(
+  engine: Ablo<R> | null,
   modelClient: ModelOperations<T, C> | undefined,
   id: string | undefined,
   initial: T | undefined,
@@ -123,6 +123,13 @@ function snapshotValue<T>(value: T): T {
  * augmentation (`declare module '@abloatai/ablo' { interface Register {
  * Schema: typeof schema } }`); the default type then resolves through your
  * schema's models, so call sites stay clean:
+ *
+ * **Prefer the binding.** `createAbloReact(schema)` captures the schema once
+ * in your app's binding file and returns a `useAblo` that needs none of the
+ * typing arrangements below — no type argument, no `Register` declaration
+ * (see `react.md`). Passing an explicit schema type argument to THIS hook is
+ * deprecated in favor of that binding; it keeps working for shared packages
+ * that cannot bind a concrete schema.
  *
  * ```ts
  * // With the Register augmentation (recommended):
@@ -188,8 +195,37 @@ export function useAblo<
   id?: string,
   options?: UseAbloModelOptions<T>,
 ): Ablo<R> | null | UseAbloModelResult<T> | T | undefined {
+  return useAbloImpl<R, T, C>(null, modelOrSelect, id, options);
+}
+
+/**
+ * @internal The one implementation behind `useAblo` and the bound hooks a
+ * `createAbloReact` binding returns — written once so the reactive read path
+ * cannot fork between the global hook and a factory's.
+ *
+ * `boundClient` is a binding's own context value — typed `Ablo<S>` at the
+ * factory, so that path never rebinds and never casts. `null` means "no
+ * binding provider in this tree": the global hook always passes it, and a
+ * binding hook mounted under a legacy provider falls through to the erased
+ * internal context, which is what keeps both mounts working while the last
+ * legacy mount migrates.
+ */
+export function useAbloImpl<
+  R extends SchemaRecord,
+  T = Record<string, unknown>,
+  C = unknown,
+>(
+  boundClient: Ablo<R> | null,
+  modelOrSelect?: ModelOperations<T, C> | ModelClientSelector<R, T, C> | AbloSelector<R, T>,
+  id?: string,
+  options?: UseAbloModelOptions<T>,
+): Ablo<R> | null | UseAbloModelResult<T> | T | undefined {
   const ctx = useContext(AbloInternalContext);
-  const engine = ctx?.engine ?? null;
+  // The bound client wins — it is already `Ablo<R>`, no rebinding. The
+  // fallback is the ONE remaining schema rebind in the SDK; it retires with
+  // the last legacy provider mount (docs/plans/typed-react-binding.md).
+  const engine: Ablo<R> | null =
+    boundClient ?? (ctx?.engine ? rebindEngine<R>(ctx.engine) : null);
   const initial = options?.initial;
   const isSelectorOnly = typeof modelOrSelect === 'function' && id === undefined;
   const modelClient: ModelOperations<T, C> | undefined =
@@ -237,5 +273,5 @@ export function useAblo<
 
   if (isSelectorOnly) return selected;
   if (modelOrSelect) return modelResult;
-  return engine === null ? null : rebindEngine<R>(engine);
+  return engine;
 }

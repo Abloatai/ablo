@@ -5,7 +5,13 @@
  * imports.
  */
 
-import type { OnStaleMode, ReadDependency, TrackDependency } from '../coordination/schema.js';
+import type {
+  ClaimHeartbeatAckPayload,
+  OnStaleMode,
+  ReadDependency,
+  TrackDependency,
+} from '../coordination/schema.js';
+import type { ClaimHeartbeatReply, ClaimState } from '../wire/claims.js';
 import type {
   ClientCommitReceipt,
   CommitWait,
@@ -132,6 +138,9 @@ export interface ClaimCreateOptions {
   readonly queue?: boolean;
   /** Cap on how long to wait for a queued grant before rejecting. */
   readonly waitTimeoutMs?: number;
+  /** Abort a pending wait from outside — rejects with `claim_wait_aborted`.
+   *  Ignored once the grant has arrived. */
+  readonly signal?: AbortSignal;
   /**
    * Backpressure: reject with `AbloClaimedError('queue_too_deep')` instead of
    * waiting if the queue is already `>= maxQueueDepth` when we join.
@@ -201,6 +210,52 @@ export interface ClaimResource extends ClaimStream {
   waitFor(target: Partial<ModelTarget>, options?: ClaimWaitOptions): Promise<void>;
 }
 
+/**
+ * The claim-ticket surface of the stateless HTTP client — the operations a
+ * caller performs holding only a `claimId`, which is what a queued acquire
+ * leaves in its hand (`AbloClaimedError('claim_queued')` carries it on
+ * `error.claims`). The WebSocket client never needs these: it awaits the grant
+ * on its socket.
+ *
+ * All three shapes are the wire's own — `claimStateSchema`,
+ * `claimHeartbeatReplySchema`, and the batch ack — so this surface cannot
+ * describe a response the server does not send.
+ */
+export interface HttpClaimsResource {
+  /**
+   * The claim's current state, by its id — `GET /v1/claims/{claimId}`. The
+   * poll half of the queued-grant handover: a queued caller polls until
+   * `status` is `'active'`, at which point `fenceToken` is present and the
+   * work can begin. `position` is advisory (a privileged caller can reorder
+   * the line, so it may go up); only `status` is authoritative.
+   */
+  retrieve(params: { readonly claimId: string }): Promise<ClaimState>;
+  /**
+   * One beat on the named lease — `POST /v1/claims/{claimId}/heartbeat`. On a
+   * held lease it extends the TTL; on a queued ticket it refreshes the
+   * waiter's slot in the line and reports `{ status: 'queued', position }`.
+   */
+  heartbeat(params: {
+    readonly claimId: string;
+    readonly ttl?: string | number;
+  }): Promise<ClaimHeartbeatReply>;
+  /**
+   * One beat for every lease this identity holds — `POST /v1/claims/heartbeat`,
+   * one ack per extended lease. The socketless twin of the realtime
+   * keepalive, for a stateless worker holding many rows.
+   */
+  heartbeatAll(options?: {
+    readonly ttl?: string | number;
+  }): Promise<readonly ClaimHeartbeatAckPayload[]>;
+  /**
+   * Give the ticket back — `DELETE /v1/claims/{claimId}`. On a held lease this
+   * releases it and promotes the head of the queue; on a queued ticket it
+   * leaves the line, so the waiters behind move up instead of waiting out
+   * your slot's TTL. Idempotent: releasing an already-ended claim is a no-op.
+   */
+  release(params: { readonly claimId: string }): Promise<void>;
+}
+
 export interface ModelMutationOptions extends ClaimedOptions {
   readonly claimRef?: string | { readonly id: string } | null;
   readonly idempotencyKey?: string | null;
@@ -229,6 +284,10 @@ export interface ModelMutationOptions extends ClaimedOptions {
  * `state`, `queue`, `reorder`, and `release` are the awaited form.
  */
 export type HttpClaimApi<T = Record<string, unknown>> =
+  // The try-claim first: `queue: false` resolves `null` on a held target —
+  // an expected outcome, not an error — while the queued default always
+  // resolves a held claim or rejects with a queue error.
+  ((params: ClaimParams<T> & { queue: false }) => Promise<HeldClaim<T> | null>) &
   ((params: ClaimParams<T>) => Promise<HeldClaim<T>>) & {
     [K in keyof ClaimReadApi<T>]: AwaitedClaimMethod<ClaimReadApi<T>[K]>;
   };

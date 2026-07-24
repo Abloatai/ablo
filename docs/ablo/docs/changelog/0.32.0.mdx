@@ -18,9 +18,9 @@ The other half of holding one key is trusting that Ablo's writer stays inside th
 
 ```ts
 defineSchema({
-  models: { document: { /* … */ } },
+  models: { document: {/* … */} },
   tenantContext: [{ guc: 'app.current_org', from: 'orgId' }],
-})
+});
 ```
 
 The `from` side is a closed set — `orgId`, `projectId`, `environment`, and the other identifiers Ablo establishes for the write from your credential. It is deliberately not free-form: a mapping can only pass through a value Ablo has already authenticated, never let a caller name its own tenant, so it can narrow what the writer sees but never widen it. Settings Ablo reserves for itself are refused at definition time. Your policies stay the sole authority on what the writer may touch; this only gives them the context they were written to read.

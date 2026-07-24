@@ -1,8 +1,9 @@
 /**
- * @abloatai/ablo/testing — Public test utilities for SDK consumers.
- *
- * Provides mock implementations, fixture factories, and test harnesses
- * for writing integration tests against the sync engine.
+ * Package-private test scaffolding: mock implementations, fixture factories,
+ * and test harnesses for this package's own tests. Not a subpath and not
+ * built into dist — the published testing surface for adapter authors is
+ * `./source/conformance`. Consumers outside this package write their own
+ * doubles against the public contracts (see `MutationExecutor` on `./core`).
  */
 
 // ─────────────────────────────────────────────

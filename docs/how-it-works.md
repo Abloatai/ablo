@@ -13,13 +13,13 @@ await ablo.tasks.update({ id: 'task_42', data: { status: 'done' }, wait: 'confir
 const task = ablo.tasks.local.retrieve('task_42');
 ```
 
-## The mental model — read this once
+## The mental model: read this once
 
 Ablo is a **coordination layer in front of your Postgres**. Agents, background
 jobs, and the people alongside them all change the same application data through
 one API, and Ablo makes sure their writes don't clobber each other.
 
-- **Writes go through Ablo.** `ablo.<model>.create / update / delete` enter Ablo's
+- **Writes go through Ablo:** `ablo.<model>.create / update / delete` enter Ablo's
   commit chokepoint — where claims, ordering, and idempotency are enforced — and
   Ablo applies the change to your Postgres through a scoped writer role. The commit
   is accepted (`queued`) the moment Ablo takes it.
@@ -37,17 +37,41 @@ one API, and Ablo makes sure their writes don't clobber each other.
 That's the shape: **you write through Ablo → it lands in your Postgres → the WAL
 echo confirms it → everyone connected sees it live.**
 
+## The primitives
+
+| Primitive | Plane | Purpose |
+|---|---|---|
+| `Schema` | State | Declares typed models the app and agents can read and write. |
+| `Model` | State | The generated `ablo.<model>` model. Use `retrieve`/`list` (async reads), `local.retrieve`/`local.list`/`local.count` (the same verbs, synchronous and local-only), `create`, `update`, and `delete`. |
+| `Claim` | Coordination | Who is working on a target. Taken via `ablo.<model>.claim({ id })` and read via `ablo.<model>.claim.state({ id })`. Ephemeral, never persisted. |
+| `Commit` | Protocol | The durable write underneath model updates. Most users do not call it directly. |
+| `Receipt` | Protocol | The lower-level durable result for custom runtimes. Schema writes use `wait: 'confirmed'`. |
+
+### Why each primitive is separate
+
+Why are `Claim`, `Commit`, and `Receipt` separate things instead of one? Each
+does a job the others cannot. If you are coming from Replicache or Yjs you would
+expect just `Commit`. Here is what the other two buy you over that minimum:
+
+- **`Claim` is not a read lock.** Reads stay open. Claims serialize
+  acting-on-the-row, so slow work can wait in FIFO order, re-read, and write
+  from fresh state.
+- **`Receipt` is not a `200 OK`.** It is the durable artifact a commit produced:
+  accepted commit id, server-assigned timestamps, stale-check outcome. It is
+  addressable after the fact and replayable into a different client. A status
+  code cannot be re-read by a sub-agent that was not on the original call.
+
 ## Where your data lives
 
 You point Ablo at a Postgres database, and that's where its rows live. Only *which*
 database differs by environment — the code is identical.
 
-- **Production** — your Postgres. `ablo connect` sets up a scoped writer role and
+- **Production:** your Postgres. `ablo connect` sets up a scoped writer role and
   logical replication; your rows live in your database, and Ablo writes to them
   through that role.
-- **Sandbox and local dev** — a separate or local Postgres you can throw away. Same
+- **Sandbox and local dev:** a separate or local Postgres you can throw away. Same
   models, same code, a different database behind them.
-- **Before you connect one** — Ablo keeps state in its own log, so you can build the
+- **Before you connect one.** Ablo keeps state in its own log, so you can build the
   whole app today and point it at a real database when you're ready.
 
 Registering the database is the whole switch. There is no tier or flag to choose.

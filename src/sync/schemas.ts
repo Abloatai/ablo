@@ -7,7 +7,8 @@
  */
 
 import { z } from 'zod';
-import { getContext } from "../context.js";
+import { globalRuntime } from "../context.js";
+import type { RuntimeContext } from "../RuntimeContext.js";
 import { AbloValidationError } from "../transaction/errors.js";
 import { syncDeltaWireCoreSchema } from '../transaction/wire/delta.js';
 
@@ -88,13 +89,16 @@ export type ValidatedBootstrapResponse = z.infer<typeof BootstrapResponseSchema>
  * result. On failure it records a diagnostic breadcrumb and throws an
  * {@link AbloValidationError} describing which fields were invalid.
  */
-export function parseBootstrapResponse(raw: unknown): ValidatedBootstrapResponse {
+export function parseBootstrapResponse(
+  raw: unknown,
+  runtime: RuntimeContext = globalRuntime,
+): ValidatedBootstrapResponse {
   const result = BootstrapResponseSchema.safeParse(raw);
 
   if (!result.success) {
     const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
 
-    getContext().observability.breadcrumb(
+    runtime.observability.breadcrumb(
       'Bootstrap response validation failed',
       'sync.bootstrap',
       'error',

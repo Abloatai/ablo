@@ -175,7 +175,7 @@ Your schema lives in a **project** — you push it once (`npx ablo push`) and ev
 session you mint resolves against it. The flow for serving end-users:
 
 1. **Push your schema** to your project.
-2. **Mint an `ek_` per user** — `sessions.create({ user: { id } })`. Your users
+2. **Mint an `ek_` per user:** `sessions.create({ user: { id } })`. Your users
    commit to that one schema.
 
 **Your users do not have Ablo accounts.** You authenticate them however you

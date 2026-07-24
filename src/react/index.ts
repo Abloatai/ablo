@@ -89,6 +89,9 @@ export {
   type MutationFailurePayload,
 } from './useMutationFailureListener.js';
 export { useCurrentUserId } from './useCurrentUserId.js';
+// The typed binding — capture the schema generic once, in the app's one
+// binding file, and import born-typed hooks everywhere (the tRPC shape).
+export { createAbloReact, type AbloReactBinding } from './createAbloReact.js';
 
 // ── Primitive for building custom reactive hooks ──────────────────
 //

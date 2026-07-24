@@ -7,8 +7,8 @@
 import type { Model } from '../../Model.js';
 import type { ModelScope } from '../../InstanceCache.js';
 import type { SyncStoreContract } from '../../react/context.js';
-import type { QueryView, QueryViewOptions } from '../../core/QueryView.js';
-import { ViewRegistry } from '../../core/ViewRegistry.js';
+import type { QueryView, QueryViewOptions } from '../../views/QueryView.js';
+import { ViewRegistry } from '../../views/ViewRegistry.js';
 import { AbloValidationError } from '../../transaction/errors.js';
 
 // Minimal query options matching SyncStoreContract

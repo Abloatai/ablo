@@ -90,7 +90,11 @@ class CoordinationAxis implements ConflictAxis {
 
   /** Apply one more rule, later winning on a repeated kind. */
   private and(rule: ConflictRule): CoordinationAxis {
-    return new CoordinationAxis({ ...this, ...rule });
+    // Assigned rather than spread, and for the reason the merge form below
+    // assigns too: what carries forward is the dispositions, which are own
+    // enumerable properties. The chaining methods live on the prototype and the
+    // constructor puts them back, so a chain accumulates nothing but data.
+    return new CoordinationAxis(Object.assign({}, this, rule));
   }
 
   humansOverwrite(): CoordinationAxis {

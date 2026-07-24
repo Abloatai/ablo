@@ -12,20 +12,18 @@
  */
 
 import { runInAction } from 'mobx';
-import { getContext } from '../context.js';
+import { globalRuntime } from '../context.js';
+import type { RuntimeContext } from '../RuntimeContext.js';
 import { ModelScope } from '../InstanceCache.js';
 import type { Model } from '../Model.js';
-import type { ModelData } from '../transaction/types/modelData.js';
 import type { SyncDelta } from './SyncWebSocket.js';
-
-/** One applied-delta result from the persistence layer's batch write, forwarded to the pool. */
-interface DeltaDbResult {
-  action: 'add' | 'update' | 'remove' | 'archive' | 'verify';
-  modelName: string;
-  modelId: string;
-  data?: ModelData | null;
-  transactionId?: string;
-}
+import type { ModelData } from '../transaction/types/modelData.js';
+import {
+  runStage,
+  pluginsForStage,
+  type AbloPlugin,
+  type AppliedChange,
+} from '../transaction/plugin.js';
 
 /**
  * What the pipeline needs back from the surrounding store: the shared mutable
@@ -34,6 +32,14 @@ interface DeltaDbResult {
  * subclass's overrides continue to take effect.
  */
 export interface DeltaPipelineContext {
+  /** The owning client's runtime. Defaults to the module-global bridge. */
+  readonly runtime?: RuntimeContext;
+  /**
+   * The installed plugins, whose declared stage handlers this pipeline
+   * dispatches at each boundary. Empty (or absent) on directly-constructed
+   * stores, where the store's own apply is the whole pipeline.
+   */
+  readonly stagePlugins?: readonly AbloPlugin[];
   // ── Shared pipeline state (host fields behind accessors) ──
   pendingDeltas: SyncDelta[];
   batchTimer: ReturnType<typeof setTimeout> | null;
@@ -64,9 +70,9 @@ export interface DeltaPipelineContext {
       data: ModelData | null;
       transactionId?: string;
     }[],
-  ): Promise<{ results: DeltaDbResult[]; persistedSyncId: number }>;
+  ): Promise<{ results: AppliedChange[]; persistedSyncId: number }>;
   /** Applies persisted delta results to the in-memory pool, with the host's relation enrichment bound. */
-  applyDeltaBatchToPool(results: DeltaDbResult[]): void;
+  applyDeltaBatchToPool(results: AppliedChange[]): void;
   /** Acknowledges a sync id back to the server; a no-op when the socket is down. */
   acknowledge(syncId: number): void;
 
@@ -107,7 +113,7 @@ export function handleGroupHandlerFailure(
   delta: SyncDelta,
   error: unknown,
 ): void {
-  getContext().logger.error(
+  (ctx.runtime ?? globalRuntime).logger.error(
     'Your access changed but cached data could not be cleared — resetting local data.',
     {
       syncId: delta.id,
@@ -266,6 +272,8 @@ export function enqueueDelta(
     ctx.cascadeCancelTransactionsForDeletedParent(delta.modelName, delta.modelId);
   }
 
+  // The delta is accepted and queued — the `receive` stage boundary.
+  runStage(ctx.stagePlugins ?? [], 'receive', { delta });
   ctx.pendingDeltas.push(delta);
   return true;
 }
@@ -291,7 +299,9 @@ export function scheduleDeltaFlush(ctx: DeltaPipelineContext): void {
 export async function flushPendingDeltas(ctx: DeltaPipelineContext): Promise<void> {
   if (ctx.pendingDeltas.length === 0) return;
 
+  const stagePlugins = ctx.stagePlugins ?? [];
   const deduplicatedDeltas = ctx.deduplicateDeltas(ctx.pendingDeltas);
+  runStage(stagePlugins, 'dedupe', { deltas: deduplicatedDeltas });
 
   // Custom entities → apply straight to the pool, skipping the local store.
   const customDeltas = deduplicatedDeltas.filter((d) => ctx.isCustomEntity(d.modelName));
@@ -338,9 +348,18 @@ export async function flushPendingDeltas(ctx: DeltaPipelineContext): Promise<voi
     }))
   );
   const dbResults = batch.results;
+  runStage(stagePlugins, 'persist', { deltas: regularDeltas });
 
-  // Apply the batch results to the in-memory pool.
-  ctx.applyDeltaBatchToPool(dbResults);
+  // Apply the batch results to the in-memory graph. When a plugin has
+  // declared the `apply` stage, its handlers ARE the apply — the
+  // materialiser attached where it said it would. The direct call is the
+  // bridge for stores constructed without plugins (subclasses, tests),
+  // whose own apply is the whole pipeline.
+  if (pluginsForStage(stagePlugins, 'apply').length > 0) {
+    runStage(stagePlugins, 'apply', { changes: dbResults });
+  } else {
+    ctx.applyDeltaBatchToPool(dbResults);
+  }
 
   // Acknowledge and advance the sync cursor, gated on persistence.
   //
@@ -354,9 +373,11 @@ export async function flushPendingDeltas(ctx: DeltaPipelineContext): Promise<voi
   if (persistedSyncId > ctx.lastAckedId) {
     ctx.acknowledge(persistedSyncId);
     ctx.advancePersisted(persistedSyncId);
+    runStage(stagePlugins, 'acknowledge', { syncId: persistedSyncId });
   }
 
   // Cache invalidation happens automatically via the 'models:changed' event.
+  runStage(stagePlugins, 'notify', { changes: dbResults });
 
   ctx.pendingDeltas = [];
   if (ctx.batchTimer) { clearTimeout(ctx.batchTimer); ctx.batchTimer = null; }

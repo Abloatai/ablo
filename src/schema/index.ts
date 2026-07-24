@@ -27,6 +27,11 @@ export { z } from 'zod';
 // Field helpers (optional convenience wrappers around Zod)
 export { field, indexed, getFieldMeta, type FieldBuilder, type FieldMeta } from '../transaction/schema/field.js';
 
+// A field as a value rather than a quoted name — `schema.fields.tasks.status`.
+// Surfaces that name a field (claims today) take one of these so a name that
+// does not exist stops compiling.
+export { isFieldRef, type FieldRef } from '../transaction/schema/fieldRef.js';
+
 // Relation builders
 export { relation, type RelationDef, type RelationType } from '../transaction/schema/relation.js';
 

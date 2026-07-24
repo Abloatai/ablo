@@ -38,10 +38,10 @@ The key is not a lookup that happens before the write — it is the **execution 
 itself**. Ablo inserts a pending row keyed by the caller and the key inside the same transaction as
 the mutation, and a unique index makes that insert the lock:
 
-- **Insert wins** — this transaction owns the execution and runs the write.
-- **Insert conflicts** — someone else owns it. The second caller waits for the owner to finish and
+- **Insert wins:** this transaction owns the execution and runs the write.
+- **Insert conflicts:** someone else owns it. The second caller waits for the owner to finish and
   then replays its recorded result.
-- **Insert conflicts, different request** — the key was reused to mean something else. Rejected.
+- **Insert conflicts, different request:** the key was reused to mean something else. Rejected.
 
 Because the lock and the write share a transaction, there is no window in which a write has happened
 but its key has not been recorded.
@@ -55,7 +55,7 @@ same key string without colliding, and one agent can never replay another's resu
 |---|---|
 | A new key | Runs the write. |
 | The same key, the same request, already finished | Replays the recorded result. The write does not run again. |
-| The same key, the same request, still running | Waits for the in-flight attempt, then replays its result. If the original is still running after a short wait, rejects with `idempotency_conflict` (409) — retry the same key. |
+| The same key, the same request, still running | Waits for the in-flight attempt, then replays its result. If the original is still running after a short wait, rejects with `idempotency_conflict` (409): retry the same key. |
 | The same key, a **different** request | Rejects with `idempotency_conflict` (409). A key is bound to the request it first arrived with. |
 
 Both conflict cases return the same code, so tell them apart by what your own
@@ -63,7 +63,7 @@ client did. If you retried an identical request, the original is still in flight
 — wait and retry the same key. If you changed the request, that is a client bug:
 use a new key.
 
-## Failures are not replayed — they re-run
+## Failures are not replayed: they re-run
 
 This is where Ablo deliberately differs from Stripe and from most payment APIs, and it is the
 behaviour most likely to surprise you.
@@ -109,7 +109,7 @@ may already have committed. Restore the original route and retry the same key.
 | Timeout or dropped connection, no response | Retry with the **same** key, with backoff. You get the recorded success, or the write runs now. |
 | `source_unreachable` (503) | Retry with the **same** key once connectivity recovers. The write stays pinned to its route. |
 | `replication_lag_timeout` (504) | The write may have materialized. Retry with the **same** key, or wait for source ingestion to catch up. |
-| `AbloStaleContextError` | Re-read the row, regenerate, then write under a **new** key — the new write is a new intention. |
+| `AbloStaleContextError` | Re-read the row, regenerate, then write under a **new** key: the new write is a new intention. |
 | `AbloClaimedError` | Someone else holds the row. Wait or yield; the key is unused, so reuse it when you retry. |
 | `idempotency_conflict` (409) after an identical retry | The original is still in flight. Wait, then retry the **same** key. |
 | `idempotency_conflict` (409) after changing the request | A client bug: a key is bound to the first request sent under it. Use a **new** key. |

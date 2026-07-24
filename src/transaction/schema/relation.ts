@@ -104,7 +104,15 @@ declare const __relationType: unique symbol;
 declare const __relationTarget: unique symbol;
 declare const __relationField: unique symbol;
 
-export type RelationType = 'belongsTo' | 'hasMany' | 'hasOne';
+/**
+ * The three edges the engine resolves. Inferred from `wire/modelShape.ts`
+ * rather than restated: the set is reported to callers by `GET /api/schema`,
+ * so it is protocol, and protocol has one definition.
+ */
+export type { RelationType } from '../wire/modelShape.js';
+// `export type { X } from` does NOT bind X in this module — the uses below need
+// their own import.
+import type { RelationType } from '../wire/modelShape.js';
 
 /**
  * A relation definition, carrying its type information at both the type and

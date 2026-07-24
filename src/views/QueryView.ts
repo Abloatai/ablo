@@ -13,12 +13,12 @@ import { observable, runInAction, type IObservableArray } from 'mobx';
 import { type Model, modelAsRow } from '../Model.js';
 import { ModelScope } from '../transaction/types/index.js';
 import type { ViewRegistry } from './ViewRegistry.js';
-import type { IncrementalView } from './queryUtils.js';
+import type { IncrementalView } from './incrementalView.js';
 import {
   compareValues,
   binaryInsertionIndex,
   findIndexById,
-} from './queryUtils.js';
+} from './incrementalView.js';
 
 // ---------------------------------------------------------------------------
 // Types

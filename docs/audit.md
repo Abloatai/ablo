@@ -23,11 +23,12 @@ with which key — and the chain columns that make the log tamper-evident:
   capabilityId:              string | null,    // the API key/capability used for the write
   capabilityLabel:           string | null,    // its human-readable name, for scanning the log
   delegationChainRootUserId: string | null,    // always points at a human
-  actionType:                string,           // e.g. 'weatherReport.update'
-  modelName:                 string,            // e.g. 'claude-opus-4-8'
+  actionType:                'I' | 'U' | 'D',  // insert, update, delete
+  modelName:                 string,           // the model that changed, e.g. 'orders'
+  modelId:                   string,           // the row that changed
   confirmationState:         'auto' | 'previewed' | 'approved' | 'required_human_approval' | 'auto_historical',
   diffSummary:               unknown,
-  // chain columns — carried on every stored row, checked by verify (below)
+  // chain columns, carried on every stored row and checked by verify (below)
   chainSeq:                  number,
   prevHash:                  string,
   rowHash:                   string,

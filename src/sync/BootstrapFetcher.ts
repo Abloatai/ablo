@@ -97,9 +97,12 @@ export interface BootstrapOptions {
    * {@link BootstrapFetcher.setAuthToken}.
    */
   getAuthToken?: AuthTokenGetter;
+  /** The owning client's runtime. Defaults to the module-global bridge. */
+  runtime?: RuntimeContext;
 }
 
-import { getContext } from '../context.js';
+import { globalRuntime } from '../context.js';
+import type { RuntimeContext } from '../RuntimeContext.js';
 import { AbloError, AbloSessionError, AbloConnectionError, translateHttpError, toAbloError, isRetryableCode } from '../transaction/errors.js';
 import { withAuthHeaders, type AuthTokenGetter } from '../transaction/auth/credentialSource.js';
 import {
@@ -107,7 +110,7 @@ import {
   describeSchemaDrift,
   type ServerSchemaModel,
 } from './schemaDrift.js';
-// SyncObservability replaced by getContext().observability
+// SyncObservability replaced by this.runtime.observability
 import { parseBootstrapResponse, type ValidatedServerDelta } from './schemas.js';
 
 /**
@@ -183,14 +186,17 @@ function classifyRequestFailure(
 }
 
 export class BootstrapFetcher {
-	  private options: Required<Omit<BootstrapOptions, 'baseUrl' | 'instantModels' | 'organizationId' | 'cacheScope' | 'getAuthToken'>> & {
+	  private options: Required<Omit<BootstrapOptions, 'baseUrl' | 'instantModels' | 'organizationId' | 'cacheScope' | 'getAuthToken' | 'runtime'>> & {
 	    baseUrl: string;
 	    instantModels?: string[];
 	    cacheScope: string | null;
 	    organizationId?: string;
 	    authToken?: string;
 	    getAuthToken?: AuthTokenGetter;
+	    runtime?: RuntimeContext;
 	  };
+
+  private readonly runtime: RuntimeContext;
   /**
    * Every in-flight request's controller, tagged with the lane it belongs to. A
    * registry rather than a single field because a chunked cold start runs
@@ -267,13 +273,13 @@ export class BootstrapFetcher {
    */
   private warnOnSchemaDrift(serverHash: string | undefined): void {
     if (this.schemaDriftWarned || !serverHash) return;
-    const clientHash = getContext().config.expectedSchemaHash;
+    const clientHash = this.runtime.config.expectedSchemaHash;
     if (!clientHash || clientHash === serverHash) return;
     // A projection (`selectModels`/`omitModels`) hashes its subset, which never
     // equals the full schema a server runs — so it also carries the source
     // schema's hash. Matching that means the client is a faithful subset of the
     // deployed schema: current, not drifted. Only warn when neither matches.
-    const sourceHash = getContext().config.expectedSourceSchemaHash;
+    const sourceHash = this.runtime.config.expectedSourceSchemaHash;
     if (sourceHash && sourceHash === serverHash) return;
     this.schemaDriftWarned = true;
     const org = this.options.organizationId;
@@ -285,7 +291,7 @@ export class BootstrapFetcher {
     // from the server's per-model surface before speaking; fall back to the
     // hash message only when that surface is unavailable (older server,
     // network hiccup). Fire-and-forget: never blocks or fails the bootstrap.
-    const clientModels = getContext().config.expectedModelHashes;
+    const clientModels = this.runtime.config.expectedModelHashes;
     if (clientModels && Object.keys(clientModels).length > 0) {
       void this.resolveSemanticDrift(clientModels, clientHash, serverHash, where);
       return;
@@ -319,7 +325,7 @@ export class BootstrapFetcher {
       const finding = classifySchemaDrift(clientModels, models);
       if (finding.kind === 'aligned') return; // additive server lead — not this client's concern
       if (finding.kind !== 'unknown') {
-        getContext().logger.warn(describeSchemaDrift(finding, where), {
+        this.runtime.logger.warn(describeSchemaDrift(finding, where), {
           clientSchemaHash: clientHash,
           serverSchemaHash: serverHash,
           serverUrl: this.baseUrl,
@@ -341,7 +347,7 @@ export class BootstrapFetcher {
     // `[Ablo]` namespace — consumers wiring their own logger (pino, etc.) lose
     // that prefix, and a drift warning that reads like the app's own log is
     // worse than none. The brand tells them at a glance who is talking.
-    getContext().logger.warn(
+    this.runtime.logger.warn(
       `Ablo: Schema drift — the schema this client was built with (${clientHash}) is not the ` +
         `one active on the server it connected to (${serverHash} at ${where}). Until they match, ` +
         `operations that depend on the difference will fail later with an opaque database error. ` +
@@ -362,6 +368,7 @@ export class BootstrapFetcher {
   }
 
   constructor(options: BootstrapOptions) {
+    this.runtime = options.runtime ?? globalRuntime;
     // Defaults are spread first; the explicit `baseUrl` then takes precedence,
     // resolved from `options.baseUrl` or the localhost fallback. Callers pass
     // the full base URL, including the `/api` prefix.
@@ -440,7 +447,7 @@ export class BootstrapFetcher {
     const key = this.flightKey(lastSyncId);
     const joined = this.flights.get(key);
     if (joined) {
-      getContext().logger.debug('Joining the bootstrap already in flight', { key });
+      this.runtime.logger.debug('Joining the bootstrap already in flight', { key });
       return joined;
     }
 
@@ -525,7 +532,7 @@ export class BootstrapFetcher {
         ? this.loadCachedBootstrap(this.options.cacheScope)
         : null;
       if (cached) {
-        getContext().logger.info('Using cached bootstrap (offline)');
+        this.runtime.logger.info('Using cached bootstrap (offline)');
         return cached;
       }
       throw new AbloConnectionError('Offline and no cached bootstrap available', {
@@ -533,7 +540,7 @@ export class BootstrapFetcher {
       });
     }
 
-    getContext().logger.info('Fetching fresh bootstrap data', { url });
+    this.runtime.logger.info('Fetching fresh bootstrap data', { url });
 
     const lane: CancelLane = syncGroupsOverride ? 'scoped' : 'bootstrap';
 
@@ -556,7 +563,7 @@ export class BootstrapFetcher {
         ? await this.fetchChunkedBootstrap(instantModels, this.options.syncGroups)
         : await this.fetchWithRetries(url, lane);
 
-      getContext().logger.info('Bootstrap data fetched', {
+      this.runtime.logger.info('Bootstrap data fetched', {
         type: data.type,
         lastSyncId: data.lastSyncId,
         chunked,
@@ -592,7 +599,7 @@ export class BootstrapFetcher {
         ? this.loadCachedBootstrap(this.options.cacheScope)
         : null;
       if (cached) {
-        getContext().observability.breadcrumb('Bootstrap cache fallback', 'sync.bootstrap', 'warning', {
+        this.runtime.observability.breadcrumb('Bootstrap cache fallback', 'sync.bootstrap', 'warning', {
           error: ablo.message,
         });
         return cached;
@@ -615,7 +622,7 @@ export class BootstrapFetcher {
       } catch (error) {
         // SessionError should NOT be retried - the session is invalid and needs re-authentication
         if (AbloSessionError.isSessionError(error)) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             'Bootstrap session error - redirecting to sign-in',
             'sync.bootstrap',
             'warning',
@@ -634,7 +641,7 @@ export class BootstrapFetcher {
         // unclassified error with no code) flow through to the retry/backoff.
         const ablo = toAbloError(error);
         if (ablo.code && !isRetryableCode(ablo.code)) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             'Bootstrap non-retryable error — failing fast',
             'sync.bootstrap',
             'warning',
@@ -644,7 +651,7 @@ export class BootstrapFetcher {
         }
 
         lastError = error as Error;
-        getContext().observability.breadcrumb('Bootstrap fetch failed', 'sync.bootstrap', 'warning', {
+        this.runtime.observability.breadcrumb('Bootstrap fetch failed', 'sync.bootstrap', 'warning', {
           attempt: attempt + 1,
         });
 
@@ -670,7 +677,7 @@ export class BootstrapFetcher {
     models: readonly string[],
     syncGroups: readonly string[],
   ): Promise<BootstrapData> {
-    getContext().logger.info('Bootstrap chunked by model', {
+    this.runtime.logger.info('Bootstrap chunked by model', {
       models: models.length,
     });
 
@@ -786,7 +793,7 @@ export class BootstrapFetcher {
 
     if (res.status === 304) {
       // Log for telemetry
-      getContext().logger.info('[Bootstrap] 304 Not Modified - using cached data');
+      this.runtime.logger.info('[Bootstrap] 304 Not Modified - using cached data');
       return { notModified: true, etag };
     }
 
@@ -829,6 +836,7 @@ export class BootstrapFetcher {
 
     const data: BootstrapData = parseBootstrapResponse(
       await this.readJsonWithStallGuard(res, controller),
+      this.runtime,
     );
     this.warnOnSchemaDrift(data.schemaHash);
 
@@ -841,7 +849,7 @@ export class BootstrapFetcher {
       // Offline persistence is best-effort; a failed cache write must not
       // block returning the freshly fetched data.
     }
-    getContext().logger.info('[Bootstrap] 200 OK - received new data');
+    this.runtime.logger.info('[Bootstrap] 200 OK - received new data');
     return { notModified: false, data, etag };
   }
 
@@ -881,7 +889,7 @@ export class BootstrapFetcher {
     const armStallTimer = () => {
       clearTimeout(stallTimer);
       stallTimer = setTimeout(() => {
-        getContext().observability.breadcrumb(
+        this.runtime.observability.breadcrumb(
           'Bootstrap download stalled',
           'sync.bootstrap',
           'warning',
@@ -949,7 +957,7 @@ export class BootstrapFetcher {
 
   private async fetchOnceWith(url: string, controller: AbortController): Promise<BootstrapData> {
     const timeoutId = setTimeout(() => {
-      getContext().observability.breadcrumb('Bootstrap fetch timeout', 'sync.bootstrap', 'warning', {
+      this.runtime.observability.breadcrumb('Bootstrap fetch timeout', 'sync.bootstrap', 'warning', {
         timeoutMs: this.options.fetchTimeout,
       });
       controller.abort(
@@ -1013,7 +1021,7 @@ export class BootstrapFetcher {
       throw translated;
     }
 
-    const data = parseBootstrapResponse(await this.readJsonWithStallGuard(response, controller));
+    const data = parseBootstrapResponse(await this.readJsonWithStallGuard(response, controller), this.runtime);
     this.warnOnSchemaDrift(data.schemaHash);
     // Offline caching happens in `fetchBootstrap` on the assembled result —
     // caching here would let a single-model chunk overwrite the full snapshot.
@@ -1102,10 +1110,10 @@ export class BootstrapFetcher {
 
       keysToRemove.forEach((key) => {
         localStorage.removeItem(key);
-        getContext().logger.debug('Cleared cache key', { key });
+        this.runtime.logger.debug('Cleared cache key', { key });
       });
     } catch (error) {
-      getContext().logger.debug('Failed to clear cache', { error });
+      this.runtime.logger.debug('Failed to clear cache', { error });
     }
   }
 
@@ -1118,7 +1126,7 @@ export class BootstrapFetcher {
     try {
       localStorage.setItem(this.getBootstrapCacheKey(orgId), JSON.stringify(data));
     } catch (e) {
-      getContext().logger.debug('Failed to cache bootstrap payload', {
+      this.runtime.logger.debug('Failed to cache bootstrap payload', {
         error: e instanceof Error ? e.message : String(e),
       });
     }
@@ -1170,7 +1178,7 @@ export class BootstrapFetcher {
       const body = (await response.json()) as { status?: unknown };
       return body.status === 'healthy';
     } catch {
-      getContext().observability.breadcrumb('Health check failed', 'sync.bootstrap', 'warning');
+      this.runtime.observability.breadcrumb('Health check failed', 'sync.bootstrap', 'warning');
       return false;
     }
   }

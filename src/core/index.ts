@@ -61,6 +61,7 @@ export type {
   OnlineStatusProvider,
   CommitResult,
   MutationOperation,
+  MutationOptions,
 } from '../interfaces/index.js';
 
 // The sync layer: the WebSocket wrapper and the delta shape it carries. Needed

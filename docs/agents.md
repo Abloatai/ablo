@@ -47,7 +47,7 @@ and `claim`. It does **not** expose the stateful-only surface (`get` /
 live connection, so with `transport: 'http'` the return type narrows and they
 are a *compile error*, not a runtime surprise.
 
-## Coordination — claim, queue, reorder
+## Coordination: claim, queue, reorder
 
 The differentiator. A claim is a **durable lease + FIFO wait-line** on a row —
 "who's working on this, who's waiting" — and it's request/response, so an agent

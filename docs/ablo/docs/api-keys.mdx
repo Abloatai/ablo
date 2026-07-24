@@ -24,9 +24,9 @@ Pick your row:
 
 | Where your code runs | What to pass | Example |
 |---|---|---|
-| **Server / worker / CLI** (can hold a secret) | your secret `sk_` — it defaults to `ABLO_API_KEY`, so usually pass **nothing** | `Ablo({ schema })` |
-| **Browser — read-only** | a publishable `pk_` (safe to ship, like a Stripe `pk_`) | `Ablo({ schema, apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY })` |
-| **Browser — writing as the signed-in user** | `authEndpoint` — the route on your own backend that mints a short-lived per-user token | `Ablo({ schema, authEndpoint: '/api/ablo-session' })` |
+| **Server / worker / CLI** (can hold a secret) | your secret `sk_`: it defaults to `ABLO_API_KEY`, so usually pass **nothing** | `Ablo({ schema })` |
+| **Browser: read-only** | a publishable `pk_` (safe to ship, like a Stripe `pk_`) | `Ablo({ schema, apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY })` |
+| **Browser: writing as the signed-in user** | `authEndpoint`: the route on your own backend that mints a short-lived per-user token | `Ablo({ schema, authEndpoint: '/api/ablo-session' })` |
 
 That's the whole story: one knob, filled by audience.
 
@@ -34,8 +34,8 @@ That's the whole story: one knob, filled by audience.
 
 | Stripe | Ablo | Where it goes |
 |---|---|---|
-| publishable `pk_` (client-safe) | `pk_` | browser — read-only |
-| secret `sk_` (server, full) | `sk_` | server — full authority |
+| publishable `pk_` (client-safe) | `pk_` | browser: read-only |
+| secret `sk_` (server, full) | `sk_` | server: full authority |
 | restricted `rk_` (granular) | `rk_` | scoped agent sessions (`sessions.create({ agent, can })`) |
 | ephemeral key (client, customer-scoped) | `ek_` | per-user browser sessions (`sessions.create({ user })`) |
 
@@ -77,7 +77,7 @@ Use API keys from trusted (server-side) runtimes:
 
 Never ship a secret API key to a browser bundle.
 
-## Publishable key (`pk_`) — browser-safe, read-only
+## Publishable key (`pk_`): browser-safe, read-only
 
 For a read-only browser experience, a publishable key is safe to ship in the
 bundle. Like a Stripe `pk_` or a Supabase anon key, it is long-lived,

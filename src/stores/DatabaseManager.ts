@@ -6,7 +6,8 @@
  * rows. {@link DatabaseManager} creates, versions, and deletes both tiers.
  */
 
-import { getContext } from '../context.js';
+import { globalRuntime } from '../context.js';
+import type { RuntimeContext } from '../RuntimeContext.js';
 import {
   openIDBWithTimeout,
   deleteIDBWithTimeout,
@@ -49,9 +50,7 @@ export class DatabaseManager {
   private metaDb: IDBDatabase | null = null;
   private readonly metaDbName = 'ablo_databases';
 
-  constructor() {
-    // Singleton-like behavior
-  }
+  constructor(private readonly runtime: RuntimeContext = globalRuntime) {}
 
   /**
    * Initialize the meta database (ablo_databases)
@@ -83,11 +82,11 @@ export class DatabaseManager {
       // safe to delete and re-create. Try exactly once: delete, then re-open.
       if (!(error instanceof IDBOpenTimeoutError)) throw error;
 
-      getContext().logger.debug(
+      this.runtime.logger.debug(
         '[sync-engine] meta DB open timed out — attempting self-heal (delete + retry)',
         { db: this.metaDbName, reason: error.reason },
       );
-      getContext().observability.captureBootstrapFailure(error, {
+      this.runtime.observability.captureBootstrapFailure(error, {
         type: 'meta-db-open-timeout',
       });
 
@@ -100,7 +99,7 @@ export class DatabaseManager {
       }
       // Fresh store — this open creates `ablo_databases` from scratch.
       this.metaDb = await open();
-      getContext().logger.info('[sync-engine] meta DB self-heal succeeded');
+      this.runtime.logger.info('[sync-engine] meta DB self-heal succeeded');
     }
   }
 
@@ -137,7 +136,7 @@ export class DatabaseManager {
       db.name?.startsWith('ablo_')
     );
 
-    getContext().observability.breadcrumb('Database info calculated', 'sync.database', 'info', {
+    this.runtime.observability.breadcrumb('Database info calculated', 'sync.database', 'info', {
       dbName,
       schemaVersion,
       existingDbCount: allUserDatabases.length,
@@ -258,12 +257,12 @@ export class DatabaseManager {
           if (createStoresFn && tx) {
             try {
               void createStoresFn(db, tx).catch((err) => {
-                getContext().observability.captureBootstrapFailure(err, {
+                this.runtime.observability.captureBootstrapFailure(err, {
                   type: 'store-creation',
                 });
               });
             } catch (err) {
-              getContext().observability.captureBootstrapFailure(err, {
+              this.runtime.observability.captureBootstrapFailure(err, {
                 type: 'store-creation',
               });
             }
@@ -271,7 +270,7 @@ export class DatabaseManager {
         },
       });
     } catch (error) {
-      getContext().observability.captureBootstrapFailure(error, {
+      this.runtime.observability.captureBootstrapFailure(error, {
         type: 'database-open',
       });
       throw error;
@@ -415,7 +414,7 @@ export class DatabaseManager {
       };
 
       deleteRequest.onerror = () => {
-        getContext().observability.breadcrumb(
+        this.runtime.observability.breadcrumb(
           `Failed to delete workspace database: ${dbInfo.name}`,
           'sync.database',
           'error'
@@ -424,7 +423,7 @@ export class DatabaseManager {
       };
 
       deleteRequest.onblocked = () => {
-        getContext().observability.breadcrumb(
+        this.runtime.observability.breadcrumb(
           `Database deletion blocked: ${dbInfo.name}`,
           'sync.database',
           'warning'

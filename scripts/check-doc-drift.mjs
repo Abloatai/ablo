@@ -186,7 +186,43 @@ function checkSessionSettingsPage() {
   }
 }
 
+/**
+ * The coordination reference must document every member of the claim target —
+ * the wire's `claimTargetSchema` is the shape, and the doc's parameter table is
+ * where a developer learns it exists. For months the table said
+ * `{ model, id, field? }` while the wire carried `path`, `range`, and `fields`,
+ * so sub-row exclusion — enforced the whole time — was undiscoverable, and the
+ * one mentioned key was described as a badge hint. The keys are read out of the
+ * schema so a key added there is a doc failure here, not a capability that
+ * ships dark. `model` and `id` are exempt: the call form supplies them
+ * (`ablo.<model>.claim({ id })`), so the doc documents them as the call, not as
+ * options.
+ */
+function checkClaimTargetCoverage() {
+  const page = resolve(packageRoot, 'docs/coordination.md');
+  const schemaModule = resolve(repoRoot, 'packages/transaction/src/wire/claims.ts');
+  const source = readFileSync(schemaModule, 'utf8');
+  const text = readFileSync(page, 'utf8');
+
+  const literal = /export const claimTargetSchema = z\.object\(\{([\s\S]*?)\}\);/.exec(source);
+  if (!literal) {
+    add(page, 'could not read claimTargetSchema from wire/claims.ts');
+    return;
+  }
+
+  const suppliedByCall = new Set(['model', 'id']);
+  const keys = [...literal[1].matchAll(/^\s*([A-Za-z_]\w*):/gm)]
+    .map((m) => m[1])
+    .filter((key) => !suppliedByCall.has(key));
+  for (const key of keys) {
+    if (!text.includes(`options.${key}`)) {
+      add(page, `claim target key \`${key}\` (wire claimTargetSchema) is not documented as \`options.${key}\``);
+    }
+  }
+}
+
 checkSessionSettingsPage();
+checkClaimTargetCoverage();
 
 const docs = publicDocRoots.flatMap((path) => walk(path));
 for (const file of docs) {

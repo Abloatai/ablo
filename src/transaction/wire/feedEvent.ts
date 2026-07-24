@@ -14,7 +14,7 @@
  */
 
 import { z } from 'zod';
-import { logEventSchema, type LogEvent } from './accountResponses.js';
+import { logEventSchema, logOpSchema, type LogEvent } from './accountResponses.js';
 import { claimEventSchema, type ClaimEvent } from './claimEvent.js';
 import { listEnvelopeSchema, type ListEnvelope } from './listEnvelope.js';
 
@@ -32,6 +32,34 @@ export type FeedEvent = LogEvent | ClaimEvent;
 /** `GET /v1/logs` — the canonical list envelope over the feed. */
 export const logListResponseSchema = listEnvelopeSchema(feedEventSchema);
 export type LogListResponse = ListEnvelope<FeedEvent>;
+
+/**
+ * The query string on `GET /v1/logs`.
+ *
+ * Values arrive as strings, so this describes the wire spelling rather than the
+ * parsed result — the same reason {@link listQuerySchema} does.
+ *
+ * Scope is NOT here and never will be: the plane, the organization and the sync
+ * groups all come off the credential. A caller cannot widen what it sees by
+ * asking, which is what makes this feed safe to hand an agent.
+ */
+export const logQuerySchema = z.object({
+  /**
+   * The `next_cursor` from the previous page, copied back unchanged. Omit it to
+   * start from the most recent entries — this is a tail, so the first page is
+   * the end of the log and `after` walks forward from there.
+   */
+  after: z.string().optional(),
+  /** Entries per page. Clamped server-side; the default is a short tail. */
+  limit: z.string().optional(),
+  /** Only this model's entries. */
+  model: z.string().optional(),
+  /** Only this kind of change. */
+  op: logOpSchema.optional(),
+  /** Only entries at or after this ISO 8601 timestamp. */
+  since: z.string().optional(),
+});
+export type LogQuery = z.infer<typeof logQuerySchema>;
 
 /**
  * The claim arm has no producer yet: claim transitions are broadcast today and

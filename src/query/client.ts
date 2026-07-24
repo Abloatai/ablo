@@ -17,7 +17,8 @@ import type { QueryBatch, QueryBatchResult } from './types.js';
 import { translateHttpError } from '../transaction/errors.js';
 import { classifyRecovery, type RecoveryClass } from '../transaction/errorCodes.js';
 import { withAuthHeaders, type AuthTokenGetter } from '../transaction/auth/credentialSource.js';
-import { getContext } from '../context.js';
+import { globalRuntime } from '../context.js';
+import type { RuntimeContext } from '../RuntimeContext.js';
 
 // ── Response validation ─────────────────────────────────────────────────
 //
@@ -49,6 +50,9 @@ export interface PostQueryOptions {
 
   /** Timeout in ms for the fetch request. Default: 30000. */
   fetchTimeout?: number;
+
+  /** The owning client's runtime. Defaults to the module-global bridge. */
+  runtime?: RuntimeContext;
 
   /**
    * Live bearer credential getter. Preferred over `capabilityToken` because it
@@ -94,6 +98,7 @@ export async function postQuery(
 ): Promise<QueryBatchResult> {
   const url = `${options.baseUrl}/sync/query`;
   const timeout = options.fetchTimeout ?? 30_000;
+  const runtime = options.runtime ?? globalRuntime;
 
   // At most two attempts: the original request, plus one replay after a
   // successful credential recovery (see `recoverCredential`). A second auth
@@ -149,7 +154,7 @@ export async function postQuery(
               : 'access_credential_expiry';
           const outcome = await options.recoverCredential(recovery);
           if (outcome === 'retry') {
-            getContext().logger.debug('[postQuery] credential recovered — replaying query once', {
+            runtime.logger.debug('[postQuery] credential recovered — replaying query once', {
               code: err.code ?? response.status,
             });
             continue;
@@ -162,10 +167,10 @@ export async function postQuery(
         // `debug` line. The read stays empty until the underlying cause, such
         // as auth or network, is resolved.
         const models = batch.queries.map((q) => q.model).join(', ');
-        getContext().logger.warn(
+        runtime.logger.warn(
           `Could not load ${models} — ${err.message} (code: ${err.code ?? response.status}). No results were returned.`,
         );
-        getContext().logger.debug('[postQuery.error] query http failure', {
+        runtime.logger.debug('[postQuery.error] query http failure', {
           type: err.type,
           code: err.code ?? response.status,
           models,
@@ -179,7 +184,7 @@ export async function postQuery(
       if (!parsed.success) {
         // A malformed server response isn't something the consumer can act on
         // (server/protocol issue) → debug, gated like everything else.
-        getContext().logger.debug('[postQuery.error] malformed response', {
+        runtime.logger.debug('[postQuery.error] malformed response', {
           issues: parsed.error.issues,
         });
         return { results: batch.queries.map(() => []) };

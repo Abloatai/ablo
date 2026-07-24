@@ -56,7 +56,11 @@ export {
   claimHeartbeatAckPayloadSchema,
   claimHeartbeatBatchPayloadSchema,
   claimHeartbeatBatchAckPayloadSchema,
-  // Read interest — area-of-interest navigation
+  // Read interest — what a connection receives, leased (`claim`/`release`,
+  // the frames behind `join`) and unleased (`update_subscription`).
+  MAX_FRAME_SYNC_GROUPS,
+  participantClaimPayloadSchema,
+  participantReleasePayloadSchema,
   updateSubscriptionPayloadSchema,
   subscriptionAckPayloadSchema,
   // Commit operation — carries the optimistic write-guard
@@ -127,7 +131,9 @@ export type {
   ClaimHeartbeatAckPayload,
   ClaimHeartbeatBatchPayload,
   ClaimHeartbeatBatchAckPayload,
-  // Read interest — area-of-interest navigation
+  // Read interest — leased and unleased
+  ParticipantClaimPayload,
+  ParticipantReleasePayload,
   UpdateSubscriptionPayload,
   SubscriptionAckPayload,
   // Commit operation — carries the optimistic write-guard
@@ -161,11 +167,14 @@ export { targetsConflict } from './targetConflict.js';
 // its three entity spellings (`entityType`/`entityId`, `model`/`id`,
 // `type`/`id`) saying the same thing while they coexist.
 export type {
+  BatchFence,
   ClaimTargetDetails,
   ClaimTargetSource,
   EntityLocator,
 } from './locator.js';
 export {
+  batchFence,
+  fenceTokenFor,
   isTargetTuple,
   subTarget,
   wireTarget,

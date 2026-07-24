@@ -16,7 +16,8 @@ import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
 import type { Database } from '../../Database.js';
 import { Model } from '../../Model.js';
-import { getContext } from '../../context.js';
+import { globalRuntime } from '../../context.js';
+import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { MutationOperationType } from '../../transaction/types/index.js';
 import {
   AbloError,
@@ -144,6 +145,8 @@ interface ConflictResolution {
 interface MutationQueueConfig {
   /** Shared client position (see logPosition.ts). One per client. */
   position?: LogPosition;
+  /** The owning client's runtime. Defaults to the module-global bridge. */
+  runtime?: RuntimeContext;
   maxBatchSize: number;
   batchDelay: number;
   maxRetries: number;
@@ -219,8 +222,10 @@ export class MutationQueue extends EventEmitter {
   // queue treats as transient and retries endlessly.
   private _mutationExecutor: import('../../interfaces/index.js').MutationExecutor | null = null;
   private get mutationExecutor() {
-    return this._mutationExecutor ?? getContext().mutationExecutor;
+    return this._mutationExecutor ?? this.runtime.mutationExecutor;
   }
+
+  private readonly runtime: RuntimeContext;
 
   private executionQueue: QueuedMutation[] = [];
   private isProcessing = false;
@@ -276,7 +281,7 @@ export class MutationQueue extends EventEmitter {
     try {
       this.emit(event, payload);
     } catch (error) {
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: `commit-lifecycle-listener:${event}`,
         error: error instanceof Error ? error : String(error),
       });
@@ -305,7 +310,7 @@ export class MutationQueue extends EventEmitter {
       // the caller — without this line the session degrades into "nothing
       // saves and nothing errors". One loud line at the moment the block
       // engages is the only visible trace.
-      getContext().logger.warn(
+      this.runtime.logger.warn(
         'sync paused: a saved write from an earlier session is older than the server replay window, so newer writes are held until it is reviewed',
         { sealedAt: envelope.sealedAt },
       );
@@ -314,7 +319,7 @@ export class MutationQueue extends EventEmitter {
   }
 
   private computePriorityScore(type: QueuedMutation['type'], modelName: string): number {
-    return computePriorityScore(type, modelName);
+    return computePriorityScore(type, modelName, this.runtime);
   }
 
   private ensureDerivedFields(transaction: QueuedMutation): void {
@@ -731,7 +736,7 @@ export class MutationQueue extends EventEmitter {
     try {
       await this.commitOutbox.remove(commitEnvelopeRecordId(idempotencyKey));
     } catch (error) {
-      getContext().logger.debug('[MutationQueue] Durable-write cleanup deferred', {
+      this.runtime.logger.debug('[MutationQueue] Durable-write cleanup deferred', {
         idempotencyKey,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1021,6 +1026,7 @@ export class MutationQueue extends EventEmitter {
 
   constructor(config?: Partial<MutationQueueConfig>) {
     super();
+    this.runtime = config?.runtime ?? globalRuntime;
     this.position = config?.position ?? new LogPosition();
     // Bind the confirmation tracker to this queue's store/ledger/events.
     // `isConnected` closes over `isConnectedFn` so `setConnectionChecker`
@@ -1033,6 +1039,7 @@ export class MutationQueue extends EventEmitter {
       },
       isConnected: () => this.isConnectedFn(),
       position: this.position,
+      runtime: this.runtime,
     });
 
         if (config) {
@@ -1173,7 +1180,7 @@ export class MutationQueue extends EventEmitter {
     if (inFlight.length === 0) return;
     // Each failed commit reaches the consumer through its own rejection path,
     // so this aggregate line is forensic and logged at debug rather than warn.
-    getContext().logger.debug(
+    this.runtime.logger.debug(
       `[MutationQueue] WS disconnected > ${graceMs}ms; failing ${inFlight.length} in-flight commit(s) with AbloConnectionError`,
       { inFlightIds: inFlight.map((id) => id.slice(0, 8)) },
     );
@@ -1260,7 +1267,7 @@ export class MutationQueue extends EventEmitter {
     const currentBatchIndex = this.batchIndex;
 
     // Log batch commit for performance monitoring
-    getContext().logger.debug('[MutationQueue] commitCreatedTransactions', {
+    this.runtime.logger.debug('[MutationQueue] commitCreatedTransactions', {
       count: this.createdTransactions.length,
       batchIndex: currentBatchIndex,
       types: this.createdTransactions.map((t) => `${t.type}:${t.modelName}`),
@@ -1381,7 +1388,7 @@ export class MutationQueue extends EventEmitter {
             this.optimisticUpdates.delete(tx.id);
           }
         }
-        getContext().logger.debug('txn:commit', 0, {
+        this.runtime.logger.debug('txn:commit', 0, {
           count: batch.length,
           lastSyncId: result.lastSyncId,
         });
@@ -1389,7 +1396,7 @@ export class MutationQueue extends EventEmitter {
       } catch (err) {
         // If one request fails, hand it and every later request back to the
         // normal lane. Their envelopes stay attached for safe retry.
-        const isOffline = !getContext().onlineStatus.isOnline();
+        const isOffline = !this.runtime.onlineStatus.isOnline();
         const isNetworkError =
           err instanceof Error &&
           (err.message.includes('Failed to fetch') ||
@@ -1397,7 +1404,7 @@ export class MutationQueue extends EventEmitter {
             err.message.includes('NetworkError'));
 
         if (!isOffline || !isNetworkError) {
-          getContext().observability.breadcrumb('Batch flush fallback failed', 'sync.transaction', 'warning', {
+          this.runtime.observability.breadcrumb('Batch flush fallback failed', 'sync.transaction', 'warning', {
             error: err instanceof Error ? err.message : String(err),
           });
         }
@@ -1545,7 +1552,7 @@ export class MutationQueue extends EventEmitter {
 
     // Skip Activity delete transactions - activities are permanent audit records
     if (actualModelName === 'Activity') {
-      getContext().logger.debug(
+      this.runtime.logger.debug(
         'MutationQueue.delete() skipping Activity deletion - permanent audit records',
         { modelId: model.id }
       );
@@ -1623,7 +1630,16 @@ export class MutationQueue extends EventEmitter {
     transaction.sourceMutationIds = [
       ...new Set([
         ...(transaction.sourceMutationIds ?? []),
-        ...canceledUpdates.flatMap((candidate) => candidate.sourceMutationIds ?? []),
+        // Absorb journal sources only from updates that never sealed an
+        // envelope. A sealed update's seal already CONSUMED its journal rows
+        // — they belong to that envelope forever — so listing them here
+        // poisons this delete's own seal: the new-envelope guard finds its
+        // sources missing, rejects with `idempotency_conflict`, and the
+        // optimistic delete reverts. That was a user-visible lost delete
+        // (edit a layer, then delete it while the edit was on the wire).
+        ...canceledUpdates.flatMap((candidate) =>
+          candidate.commitEnvelope ? [] : (candidate.sourceMutationIds ?? []),
+        ),
         ...(pendingMerge?.sourceMutationIds ?? []),
       ]),
     ];
@@ -1838,7 +1854,7 @@ export class MutationQueue extends EventEmitter {
     // are already executing, so the server is not flooded with concurrent
     // requests.
     if (this.executingCount >= this.config.maxExecutingTransactions) {
-      getContext().logger.debug('[MutationQueue] Backpressure: delaying batch, too many executing', {
+      this.runtime.logger.debug('[MutationQueue] Backpressure: delaying batch, too many executing', {
         executingCount: this.executingCount,
         max: this.config.maxExecutingTransactions,
       });
@@ -1887,7 +1903,7 @@ export class MutationQueue extends EventEmitter {
     // Declare batch outside try so it's accessible in finally for backpressure tracking
     let batch: QueuedMutation[] = [];
 
-    await getContext().observability.startSpanAsync(
+    await this.runtime.observability.startSpanAsync(
       'sync.batch',
       'sync.transaction.batch',
       async () => {
@@ -2064,7 +2080,7 @@ export class MutationQueue extends EventEmitter {
                     commitIdempotencyKey,
                     result.correlationId,
                   );
-                  getContext().logger.debug('tx:awaiting_delta', {
+                  this.runtime.logger.debug('tx:awaiting_delta', {
                     txId: tx.id.slice(0, 8),
                     model: tx.modelName,
                     reason: 'queued_forward_waiting_for_correlated_echo',
@@ -2087,7 +2103,7 @@ export class MutationQueue extends EventEmitter {
                 // A lastSyncId of 0 means the mutation succeeded but the server
                 // emitted no sync delta; record that anomaly for observability.
                 if (lastSyncId === 0) {
-                  getContext().observability.captureCommitZeroSyncId({
+                  this.runtime.observability.captureCommitZeroSyncId({
                     operationCount: operations.length,
                     operations: operations.map(
                       (op) => `${op.type}:${op.model}:${op.id?.slice(0, 8) ?? '?'}`
@@ -2109,7 +2125,7 @@ export class MutationQueue extends EventEmitter {
                     this.emit('transaction:completed', tx);
                     this.emit(`transaction:completed:${tx.id}`, tx);
                     this.optimisticUpdates.delete(tx.id);
-                    getContext().logger.debug('tx:confirm_delete_zero_syncid', {
+                    this.runtime.logger.debug('tx:confirm_delete_zero_syncid', {
                       txId: tx.id.slice(0, 8),
                       model: tx.modelName,
                       reason: 'delete_idempotent_no_delta',
@@ -2125,7 +2141,7 @@ export class MutationQueue extends EventEmitter {
                     this.emit('transaction:completed', tx);
                     this.emit(`transaction:completed:${tx.id}`, tx);
                     this.optimisticUpdates.delete(tx.id);
-                    getContext().logger.debug('tx:confirm_ack', {
+                    this.runtime.logger.debug('tx:confirm_ack', {
                       txId: tx.id.slice(0, 8),
                       model: tx.modelName,
                       serverSyncId: lastSyncId,
@@ -2133,7 +2149,7 @@ export class MutationQueue extends EventEmitter {
                     });
                   } else {
                     this.store.updateStatus(tx.id, 'awaiting_delta');
-                    getContext().logger.debug('tx:awaiting_delta', {
+                    this.runtime.logger.debug('tx:awaiting_delta', {
                       txId: tx.id.slice(0, 8),
                       model: tx.modelName,
                       neededSyncId: lastSyncId,
@@ -2182,7 +2198,7 @@ export class MutationQueue extends EventEmitter {
               // authoritative `warn` with the same typed cause) — passes
               // through here. Logging it at `warn` made one rejected write
               // surface three identical dumps; keep it at `debug`.
-              getContext().logger.debug('[MutationQueue] Batch commit rejected', {
+              this.runtime.logger.debug('[MutationQueue] Batch commit rejected', {
                 batchSize: batchOps.length,
                 models: batchOps.map(({ op }) => `${op.type}:${op.model}`),
                 errorType: abloErr?.type ?? (error as Error)?.name,
@@ -2201,7 +2217,7 @@ export class MutationQueue extends EventEmitter {
                 if (dispatchStarted) {
                   await this.removeDurableCommit(commitIdempotencyKey);
                 }
-                getContext().logger.info('[MutationQueue] Graceful handling: entity already deleted', {
+                this.runtime.logger.info('[MutationQueue] Graceful handling: entity already deleted', {
                   batchSize: batchOps.length,
                 });
 
@@ -2211,7 +2227,7 @@ export class MutationQueue extends EventEmitter {
                     this.store.updateStatus(tx.id, 'completed');
                     this.emit('transaction:completed', tx);
 
-                    getContext().logger.debug('[MutationQueue] Orphaned transaction treated as success', {
+                    this.runtime.logger.debug('[MutationQueue] Orphaned transaction treated as success', {
                       txId: tx.id.slice(0, 12),
                       model: tx.modelName,
                       type: op.type,
@@ -2272,7 +2288,7 @@ export class MutationQueue extends EventEmitter {
           }
 
           const batchEnd = typeof performance !== 'undefined' ? performance.now() : Date.now();
-          getContext().logger.debug('txn:batch', batchEnd - batchStart, {
+          this.runtime.logger.debug('txn:batch', batchEnd - batchStart, {
             maxBatchSize: this.config.maxBatchSize,
             remaining: this.executionQueue.length,
             executingCount: this.executingCount,
@@ -2602,7 +2618,7 @@ export class MutationQueue extends EventEmitter {
                 tx.id,
                 result.correlationId,
               );
-              getContext().logger.debug('[MutationQueue] commit lane awaiting source echo', {
+              this.runtime.logger.debug('[MutationQueue] commit lane awaiting source echo', {
                 txId: tx.id.slice(0, 12),
               });
             }
@@ -2640,7 +2656,7 @@ export class MutationQueue extends EventEmitter {
             // (reconnect or the next enqueueCommit) rather than tight-looping
             // while the connection is down.
             tx.status = 'pending';
-            getContext().logger.debug('[MutationQueue] commit lane transient', {
+            this.runtime.logger.debug('[MutationQueue] commit lane transient', {
               txId: tx.id.slice(0, 12),
               attempts: tx.attempts,
               transientAttempts: tx.transientAttempts ?? 0,
@@ -2654,7 +2670,7 @@ export class MutationQueue extends EventEmitter {
           // Internal bookkeeping; the consumer-facing rejection is emitted on
           // 'transaction:failed' and surfaced by the permanent-error headline,
           // so this line stays at debug.
-          getContext().logger.debug('[MutationQueue] commit lane permanent error', {
+          this.runtime.logger.debug('[MutationQueue] commit lane permanent error', {
             txId: tx.id.slice(0, 12),
             attempts: tx.attempts,
             message: error.message,
@@ -2883,7 +2899,7 @@ export class MutationQueue extends EventEmitter {
         const isRepeat = sig === this.lastPermanentErrorSig;
         this.lastPermanentErrorSig = sig;
 
-        const logger = getContext().logger;
+        const logger = this.runtime.logger;
 
         // Two registers from one call site, split by log level (the default
         // logger is gated at `warn`, so `debug` stays hidden unless
@@ -3056,7 +3072,7 @@ export class MutationQueue extends EventEmitter {
         this.enqueue(transaction);
       }
     } catch (error) {
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: 'load-persisted-transactions',
         error: error instanceof Error ? error : String(error),
       });
@@ -3086,8 +3102,8 @@ export class MutationQueue extends EventEmitter {
         if (parsed.success) {
           envelopes.push(parsed.data);
         } else {
-          getContext().logger.warn('A saved local write is unreadable and was held for review.');
-          getContext().observability.captureMutationFailure({
+          this.runtime.logger.warn('A saved local write is unreadable and was held for review.');
+          this.runtime.observability.captureMutationFailure({
             context: 'restore-commit-envelope',
             error: parsed.error,
           });
@@ -3113,10 +3129,10 @@ export class MutationQueue extends EventEmitter {
           Date.now() - envelope.sealedAt >=
           MutationQueue.DURABLE_REPLAY_WINDOW_MS
         ) {
-          getContext().logger.warn(
+          this.runtime.logger.warn(
             'A saved local write is too old to retry safely and was held for review.',
           );
-          getContext().observability.captureMutationFailure({
+          this.runtime.observability.captureMutationFailure({
             context: 'quarantine-expired-commit-envelope',
             error: `Envelope ${envelope.idempotencyKey} is too old to replay safely`,
           });
@@ -3134,7 +3150,7 @@ export class MutationQueue extends EventEmitter {
             envelope.scope.namespace !== this.commitOutboxScope.namespace
           )
         ) {
-          getContext().logger.warn(
+          this.runtime.logger.warn(
             'A saved local write belongs to a different account or server and was held for review.',
           );
           continue;
@@ -3167,10 +3183,10 @@ export class MutationQueue extends EventEmitter {
 
       if (this.commitLane.length > 0) void this.processCommitLane();
     } catch (error) {
-      getContext().logger.debug('[MutationQueue] Failed to restore durable writes', {
+      this.runtime.logger.debug('[MutationQueue] Failed to restore durable writes', {
         error: error instanceof Error ? error.message : String(error),
       });
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: 'restore-commit-envelopes',
         error: error instanceof Error ? error : String(error),
       });
@@ -3188,16 +3204,16 @@ export class MutationQueue extends EventEmitter {
   private deserializeTransaction(data: unknown): QueuedMutation | null {
     if (isNonReplayablePersistedRow(data)) return null;
 
-    const transaction = deserializePersistedTransaction(data);
+    const transaction = deserializePersistedTransaction(data, this.runtime);
     if (!transaction) {
       const rowId =
         typeof data === 'object' && data !== null && typeof (data as { id?: unknown }).id === 'string'
           ? (data as { id: string }).id
           : undefined;
-      getContext().logger.debug('[MutationQueue] Dropping malformed persisted transaction', {
+      this.runtime.logger.debug('[MutationQueue] Dropping malformed persisted transaction', {
         rowId,
       });
-      getContext().observability.captureMutationFailure({
+      this.runtime.observability.captureMutationFailure({
         context: 'deserialize-persisted-transaction',
         error: `Persisted transaction failed schema validation${rowId ? ` (id: ${rowId})` : ''}`,
       });
@@ -3228,7 +3244,7 @@ export class MutationQueue extends EventEmitter {
           // listener) must surface, not vanish — the status flip above is
           // already committed either way.
           void this.rollbackOptimistic(transaction, 'model_cancelled').catch((error: unknown) => {
-            getContext().observability.captureMutationFailure({
+            this.runtime.observability.captureMutationFailure({
               context: 'rollback-model-cancelled',
               error: error instanceof Error ? error : String(error),
             });
@@ -3271,7 +3287,7 @@ export class MutationQueue extends EventEmitter {
           this.store.updateStatus(transaction.id, 'rolled_back');
           void this.rollbackOptimistic(transaction, 'cascade_parent_deleted').catch(
             (error: unknown) => {
-              getContext().observability.captureMutationFailure({
+              this.runtime.observability.captureMutationFailure({
                 context: 'rollback-cascade-parent-deleted',
                 error: error instanceof Error ? error : String(error),
               });
@@ -3279,7 +3295,7 @@ export class MutationQueue extends EventEmitter {
           );
           cancelled++;
 
-          getContext().logger.debug('[MutationQueue] Cascade cancelled orphaned transaction', {
+          this.runtime.logger.debug('[MutationQueue] Cascade cancelled orphaned transaction', {
             txId: transaction.id.slice(0, 12),
             model: childModelName,
             foreignKey,
@@ -3312,15 +3328,15 @@ export class MutationQueue extends EventEmitter {
   }
 
   private extractCreateData(model: Model): MutationInput {
-    return projectCommitPayload(model.getModelName(), model.toJSON(), { dropUndefined: false });
+    return projectCommitPayload(model.getModelName(), model.toJSON(), { dropUndefined: false }, this.runtime);
   }
 
   private mapChangesToInput(modelName: string, changes: Record<string, unknown>): MutationInput {
-    return projectCommitPayload(modelName, changes, { dropUndefined: true });
+    return projectCommitPayload(modelName, changes, { dropUndefined: true }, this.runtime);
   }
 
   private extractUpdateData(model: Model): MutationInput {
-    return projectCommitPayload(model.getModelName(), model.getChanges(), { dropUndefined: true });
+    return projectCommitPayload(model.getModelName(), model.getChanges(), { dropUndefined: true }, this.runtime);
   }
 
   // Derive previous values for changed fields to support accurate rollback.

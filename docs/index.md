@@ -1,6 +1,6 @@
 # Ablo Docs
 
-> The agentic coordination layer: one API for AI agents, apps, and services to claim, change, and confirm the same rows.
+> Collaboration infrastructure for AI agents: one API for agents, apps, and services to claim, change, and confirm the same rows.
 
 Two agents reach for the same row. One claims it, does slow work — an LLM call,
 a fetch, a chain of tools — and commits. The second is neither rejected nor
@@ -110,12 +110,12 @@ Every surface reaches the same coordinated state. Pick by who is calling.
 
 | Surface | Use it for |
 |---|---|
-| **SDK** — `@abloatai/ablo`, `transport: 'http'` | The agents themselves. Stateless, request/response, nothing held open. The main path. |
-| **Coordination MCP** — `@abloatai/mcp` | An agent living inside an MCP host that needs claim and commit as tools. A data plane. |
-| **`humans()`** — with `@abloatai/ablo/react` | The interfaces a person watches agent work arrive in: presence, live queries, a local copy. |
-| **CLI** — `ablo` | Scaffolding, schema push, connecting a database. Terminals and CI. |
-| **REST** — `/api/v1` | Runtimes with no SDK. |
-| **Integration-helper MCP** — hosted `/api/mcp` | Teaching a coding assistant the SDK while you build. Docs, lint, and scaffolds only. |
+| **SDK**: `@abloatai/ablo`, `transport: 'http'` | The agents themselves. Stateless, request/response, nothing held open. The main path. |
+| **Coordination MCP**: `@abloatai/mcp` | An agent living inside an MCP host that needs claim and commit as tools. A data plane. |
+| **`humans()`**: with `@abloatai/ablo/react` | The interfaces a person watches agent work arrive in: presence, live queries, a local copy. |
+| **CLI**: `ablo` | Scaffolding, schema push, connecting a database. Terminals and CI. |
+| **REST**: `/api/v1` | Runtimes with no SDK. |
+| **Integration-helper MCP**: hosted `/api/mcp` | Teaching a coding assistant the SDK while you build. Docs, lint, and scaffolds only. |
 
 The two MCP servers are not interchangeable. The coordination server changes
 your data; the integration-helper server serves documentation and has no
@@ -136,6 +136,7 @@ default caller, not a special one.
 
 ## Concepts
 
+- [How Ablo Works](./how-it-works.md) — the mental model in one page: you write through Ablo, it lands in your Postgres, the write-ahead log confirms it. **Read this first.**
 - [Coordination](./coordination.md) — `claim`, `claim.state`, and `claim.queue`: who holds a row, and who is waiting.
 - [Concurrency Convention](./concurrency-convention.md) — the governing rule for how concurrent writes resolve.
 - [Guarantees](./guarantees.md) — what a confirmed write, a stale-write rejection, and a claim each promise.
@@ -144,7 +145,6 @@ default caller, not a special one.
 - [Agents](./agents.md) — the stateless participant: wake, read, claim, commit, idle.
 - [Agent Messaging](./agent-messaging.md) — durable handoffs between agents, linked to the claim they discuss.
 - [Identity & Sync Groups](./identity.md) — who is connecting, and which slice of state they see.
-- [Interaction Model](./interaction-model.md) — the schema, claim, update, confirmation loop.
 - [Change Propagation](./groups.md) — how one row's change reaches the actors that depend on it.
 - [Client Behavior](./client-behavior.md) — options, errors, retries, timeouts, and imports.
 

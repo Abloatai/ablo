@@ -8,8 +8,8 @@
  */
 
 import { ModelRegistry } from '../ModelRegistry.js';
-import { ObjectStore } from '../stores/ObjectStore.js';
-import { SyncActionStore } from '../stores/SyncActionStore.js';
+import { ObjectStore } from './ObjectStore.js';
+import { SyncActionStore } from './SyncActionStore.js';
 import { LoadStrategy } from '../transaction/types/index.js';
 import { AbloValidationError } from '../transaction/errors.js';
 
@@ -31,7 +31,10 @@ export class StoreManager {
   private isInitialized = false;
   private modelRegistry: ModelRegistry;
 
-  constructor(modelRegistry: ModelRegistry) {
+  constructor(
+    modelRegistry: ModelRegistry,
+    private readonly runtime: RuntimeContext = globalRuntime,
+  ) {
     this.modelRegistry = modelRegistry;
   }
 
@@ -43,11 +46,11 @@ export class StoreManager {
 
     if (this.isInitialized) {
       // Idempotent re-entry — harmless, nothing for the consumer to act on → debug.
-      getContext().logger.debug('StoreManager already initialized');
+      this.runtime.logger.debug('StoreManager already initialized');
       return;
     }
 
-    getContext().logger.info('Initializing ObjectStore instances for all models');
+    this.runtime.logger.info('Initializing ObjectStore instances for all models');
     const startTime = performance.now();
 
     // Get all registered models
@@ -71,13 +74,13 @@ export class StoreManager {
     );
 
     // Initialize SyncactionStore
-    this.syncactionStore = new SyncActionStore(this.db);
+    this.syncactionStore = new SyncActionStore(this.db, this.runtime);
     await this.syncactionStore.initialize();
 
     this.isInitialized = true;
     const duration = performance.now() - startTime;
 
-    getContext().logger.info('Initialized ObjectStores and SyncactionStore', {
+    this.runtime.logger.info('Initialized ObjectStores and SyncactionStore', {
       count: this.stores.size,
       ms: duration.toFixed(2),
     });
@@ -108,7 +111,7 @@ export class StoreManager {
    * Create stores (tables) in IndexedDB
    */
   async createStores(db: IDBDatabase): Promise<void> {
-    getContext().logger.info('Creating tables for all registered models');
+    this.runtime.logger.info('Creating tables for all registered models');
 
     for (const modelName of this.modelRegistry.getRegisteredModelNames()) {
       const storeName = modelName;
@@ -118,7 +121,7 @@ export class StoreManager {
         continue;
       }
 
-      getContext().logger.debug('Creating table', { storeName, modelName });
+      this.runtime.logger.debug('Creating table', { storeName, modelName });
 
       // Create object store with id as keyPath
       const store = db.createObjectStore(storeName, { keyPath: 'id' });
@@ -128,11 +131,11 @@ export class StoreManager {
       for (const propName of indexedProperties) {
         try {
           store.createIndex(propName, propName, { unique: false });
-          getContext().logger.debug('Created index', { store: storeName, prop: propName });
+          this.runtime.logger.debug('Created index', { store: storeName, prop: propName });
         } catch (error) {
           // Internal IndexedDB index setup — a miss only affects local query
           // speed and isn't consumer-actionable → debug.
-          getContext().logger.debug('Failed to create index', { store: storeName, prop: propName, error });
+          this.runtime.logger.debug('Failed to create index', { store: storeName, prop: propName, error });
         }
       }
     }
@@ -149,13 +152,13 @@ export class StoreManager {
     if (!db.objectStoreNames.contains('sync_action_table')) {
       const syncActionStore = db.createObjectStore('sync_action_table', { keyPath: 'id' });
       syncActionStore.createIndex('syncId', 'id');
-      getContext().logger.debug('Created sync_action_table');
+      this.runtime.logger.debug('Created sync_action_table');
     }
 
     // Create __meta table for model persistence state and database metadata
     if (!db.objectStoreNames.contains('__meta')) {
       db.createObjectStore('__meta');
-      getContext().logger.debug('Created __meta table');
+      this.runtime.logger.debug('Created __meta table');
     }
 
     // Create __transactions table for unsent transactions
@@ -169,7 +172,7 @@ export class StoreManager {
       transactionStore.createIndex('timestamp', 'timestamp');
       transactionStore.createIndex('status', 'status');
 
-      getContext().logger.debug('Created __transactions table');
+      this.runtime.logger.debug('Created __transactions table');
     }
   }
 
@@ -221,7 +224,7 @@ export class StoreManager {
 
     const allReady = notReadyStores.length === 0;
 
-    getContext().logger.debug('Store readiness', {
+    this.runtime.logger.debug('Store readiness', {
       ready: readyStores.length,
       total: this.stores.size,
       notReady: notReadyStores,
@@ -281,13 +284,13 @@ export class StoreManager {
    * Perform maintenance on all stores
    */
   async performMaintenance(): Promise<void> {
-    getContext().logger.info('Performing maintenance on all stores');
+    this.runtime.logger.info('Performing maintenance on all stores');
 
     const promises = Array.from(this.stores.values()).map((store) => store.performMaintenance());
 
     await Promise.all(promises);
 
-    getContext().logger.info('Store maintenance completed');
+    this.runtime.logger.info('Store maintenance completed');
   }
 
   /**
@@ -296,13 +299,13 @@ export class StoreManager {
   async clearAllStores(): Promise<void> {
     // Lifecycle chatter (logout / identity switch / reset), not a warning.
     // Logged at `debug` so it stays silent under the default `warn` threshold.
-    getContext().logger.debug('Clearing all stores');
+    this.runtime.logger.debug('Clearing all stores');
 
     const promises = Array.from(this.stores.values()).map((store) => store.clear());
 
     await Promise.all(promises);
 
-    getContext().logger.info('All stores cleared');
+    this.runtime.logger.info('All stores cleared');
   }
 
   /**
@@ -310,7 +313,7 @@ export class StoreManager {
    * Called before database connection is closed
    */
   markAllStoresAsClosing(): void {
-    getContext().logger.debug('Marking all stores as closing');
+    this.runtime.logger.debug('Marking all stores as closing');
 
     for (const store of this.stores.values()) {
       store.markAsClosing();
@@ -323,7 +326,7 @@ export class StoreManager {
     // explicitly to SyncActionStore rather than casting to reach a method that
     // may not exist.
 
-    getContext().logger.debug('All stores marked as closing');
+    this.runtime.logger.debug('All stores marked as closing');
   }
 
   /**
@@ -381,4 +384,5 @@ export class StoreManager {
     };
   }
 }
-import { getContext } from '../context.js';
+import { globalRuntime } from '../context.js';
+import type { RuntimeContext } from '../RuntimeContext.js';

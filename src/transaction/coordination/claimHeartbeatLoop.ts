@@ -40,6 +40,57 @@ export function resolveHeartbeatOptions(
 }
 
 /**
+ * The structured spelling of the auto-heartbeat — cadence and both callbacks
+ * in one place, so the lease axis of a claim is two members (`ttl`,
+ * `heartbeat`) rather than four. `true` and a bare Duration remain the
+ * shorthands: `heartbeat: '2m'` ≡ `heartbeat: { every: '2m' }`.
+ */
+export interface ClaimHeartbeatPlan {
+  /** Cadence between beats. Omitted: a third of the TTL, so two beats can
+   *  fail before the lease is at risk. */
+  readonly every?: Duration;
+  /** Called after every successful beat (auto or manual) with the server's
+   *  answer — chiefly `queueDepth`, the cooperative-yield pressure signal. */
+  readonly onBeat?: (beat: ClaimHeartbeat) => void;
+  /** Called once when a beat learns the lease is no longer yours. The loop
+   *  has already stopped; abandon the work or re-claim. */
+  readonly onLost?: (error: AbloClaimedError) => void;
+}
+
+/** What the handle assembly reads, whichever spelling the caller used. */
+export interface ResolvedHeartbeatPlan {
+  /** Whether the auto-beat loop runs at all. */
+  readonly loop: boolean;
+  /** Feed for {@link heartbeatCadenceMs} — `true` means the TTL-derived default. */
+  readonly cadence: true | Duration;
+  readonly onBeat?: (beat: ClaimHeartbeat) => void;
+  readonly onLost?: (error: AbloClaimedError) => void;
+}
+
+/**
+ * One reading of the heartbeat option, shared by both transports' handle
+ * assembly — cadence and callbacks from whichever spelling the caller used
+ * (`true`, a bare Duration, or the structured plan).
+ */
+export function resolveHeartbeatPlan(options: {
+  readonly heartbeat?: true | Duration | ClaimHeartbeatPlan;
+}): ResolvedHeartbeatPlan {
+  const { heartbeat } = options;
+  if (heartbeat !== undefined && typeof heartbeat === 'object') {
+    return {
+      loop: true,
+      cadence: heartbeat.every ?? true,
+      ...(heartbeat.onBeat ? { onBeat: heartbeat.onBeat } : {}),
+      ...(heartbeat.onLost ? { onLost: heartbeat.onLost } : {}),
+    };
+  }
+  return {
+    loop: Boolean(heartbeat),
+    cadence: heartbeat === undefined || heartbeat === true ? true : heartbeat,
+  };
+}
+
+/**
  * The beat cadence for a lease of `ttlMs`: an explicit duration when the
  * caller set one, otherwise a third of the TTL (floored at 1s) — the
  * DynamoDB-lock-client rule, leaving two missed beats of runway before the

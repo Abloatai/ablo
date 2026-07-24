@@ -16,7 +16,8 @@ import {
   PropertyType,
   LoadStrategy,
 } from './transaction/types/index.js';
-import { getContext } from './context.js';
+import { globalRuntime } from './context.js';
+import type { RuntimeContext } from './RuntimeContext.js';
 import { AbloValidationError } from './transaction/errors.js';
 // Type-only — erased at runtime, so no Model ↔ ModelRegistry module cycle.
 import type { Model } from './Model.js';
@@ -86,6 +87,8 @@ interface PendingReference {
 interface RegistryConfig {
   validateOnRegister?: boolean;
   allowLateReferences?: boolean;
+  /** The owning client's runtime. Defaults to the module-global bridge. */
+  runtime?: RuntimeContext;
 }
 
 /**
@@ -138,7 +141,8 @@ export class ModelRegistry {
   private backReferences = new Map<string, BackReferenceMetadata[]>();
 
   private schemaHash?: string;
-  private config: Required<RegistryConfig>;
+  private config: Required<Omit<RegistryConfig, 'runtime'>>;
+  private readonly runtime: RuntimeContext;
   private registeredModels = new Set<string>();
 
   private pendingHashUpdate = false;
@@ -148,6 +152,7 @@ export class ModelRegistry {
       validateOnRegister: config.validateOnRegister ?? true,
       allowLateReferences: config.allowLateReferences ?? true,
     };
+    this.runtime = config.runtime ?? globalRuntime;
   }
 
   private validateModelConstructor(name: string, constructor: unknown): void {
@@ -170,7 +175,7 @@ export class ModelRegistry {
     const required = ['updateFromData', 'toJSON', 'getModelName'];
     for (const method of required) {
       if (typeof (prototype as Record<string, unknown>)[method] !== 'function') {
-        getContext().logger.debug('Model missing required method', name, { method });
+        this.runtime.logger.debug('Model missing required method', name, { method });
       }
     }
   }
@@ -208,7 +213,7 @@ export class ModelRegistry {
 
     pending.push({ modelName, propertyName, metadata });
 
-    getContext().logger.debug('Reference deferred', `${modelName}.${propertyName}`, { targetModel: targetName });
+    this.runtime.logger.debug('Reference deferred', `${modelName}.${propertyName}`, { targetModel: targetName });
   }
 
   private resolvePendingReferences(targetModelName: string): void {
@@ -218,11 +223,11 @@ export class ModelRegistry {
     for (const ref of pending) {
       try {
         this.completeReferenceRegistration(ref.modelName, ref.propertyName, ref.metadata);
-        getContext().logger.debug('Reference resolved', `${ref.modelName}.${ref.propertyName}`, {
+        this.runtime.logger.debug('Reference resolved', `${ref.modelName}.${ref.propertyName}`, {
           targetModel: targetModelName,
         });
       } catch (error) {
-        getContext().observability.breadcrumb(
+        this.runtime.observability.breadcrumb(
           `Failed to resolve reference ${ref.modelName}.${ref.propertyName}`,
           'sync.database',
           'error',
@@ -283,11 +288,11 @@ export class ModelRegistry {
 
     // Check for duplicate
     if (this.models.has(name)) {
-      getContext().logger.debug('Model already registered, skipping', name);
+      this.runtime.logger.debug('Model already registered, skipping', name);
       return;
     }
 
-    getContext().logger.debug('Registering model', name);
+    this.runtime.logger.debug('Registering model', name);
 
     // Register. The one cast in this file: input is any Model-subclass
     // constructor (validated above); registered classes are concrete
@@ -317,7 +322,7 @@ export class ModelRegistry {
     // Invalidate schema hash
     this.schemaHash = undefined;
 
-    getContext().logger.debug('Model registered', name, metadata);
+    this.runtime.logger.debug('Model registered', name, metadata);
   }
 
   /**
@@ -344,7 +349,7 @@ export class ModelRegistry {
     if (existing) {
       if (this.arePropertiesCompatible(existing, metadata)) {
         // Properties are compatible, skip re-registration
-        getContext().logger.debug('Property already registered (compatible)', `${modelName}.${propertyName}`);
+        this.runtime.logger.debug('Property already registered (compatible)', `${modelName}.${propertyName}`);
         return;
       } else {
         throw new AbloValidationError(
@@ -358,7 +363,7 @@ export class ModelRegistry {
 
     this.schemaHash = undefined;
 
-    getContext().logger.debug('Property registered', `${modelName}.${propertyName}`, metadata);
+    this.runtime.logger.debug('Property registered', `${modelName}.${propertyName}`, metadata);
   }
 
   /**
@@ -430,7 +435,7 @@ export class ModelRegistry {
     // Reverse lookup (parent → children) is derived on demand by
     // `getChildModels`, which scans this map.
 
-    getContext().logger.debug('BackReference registered', `${childModelName} -> ${metadata.parentModel}`, {
+    this.runtime.logger.debug('BackReference registered', `${childModelName} -> ${metadata.parentModel}`, {
       foreignKey: metadata.foreignKey,
       cascadeDelete: metadata.cascadeDelete,
     });
@@ -549,7 +554,7 @@ export class ModelRegistry {
     // Create hash - browser-compatible simple hash
     this.schemaHash = this.simpleHash(sorted);
 
-    getContext().logger.debug('Schema hash updated', this.schemaHash);
+    this.runtime.logger.debug('Schema hash updated', this.schemaHash);
 
     return this.schemaHash;
   }
@@ -600,9 +605,9 @@ export class ModelRegistry {
 
     const isValid = errors.length === 0;
     if (isValid) {
-      getContext().logger.info('All model references are valid');
+      this.runtime.logger.info('All model references are valid');
     } else {
-      getContext().observability.breadcrumb('Reference validation failed', 'sync.database', 'error');
+      this.runtime.observability.breadcrumb('Reference validation failed', 'sync.database', 'error');
     }
 
     return {
@@ -655,7 +660,7 @@ export class ModelRegistry {
     this.schemaHash = undefined;
     this.pendingHashUpdate = false;
 
-    getContext().logger.info('ModelRegistry cleared');
+    this.runtime.logger.info('ModelRegistry cleared');
   }
 
   /**

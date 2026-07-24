@@ -120,49 +120,11 @@ blocks), and `ablo.<model>.claim.release({ id })` releases it early. The full
 coordination surface is `claim.state({ id })` / `claim.queue({ id })` /
 `claim.release({ id })` / `claim.reorder({ id, order })` hanging off `claim`.
 
-### The Claim State Object
-
-| Field | Type | Description |
-|---|---|---|
-| `object` | `'claim'` | String representing the object's type. |
-| `id` | string | Unique identifier for the claim. |
-| `status` | `'active' \| 'queued' \| 'committed' \| 'expired' \| 'canceled'` | The whole lifecycle, in one field. `active` is the holder; `queued` is a waiter in the FIFO line behind it. |
-| `target` | `{ type, id, field? }` | What is being coordinated. |
-| `description` | string | Peer-visible phrase for the work in progress — `'editing'`, `'writing'`, `'reviewing the risk section'`. Defaults to `'editing'`, and rides back in the rejection a blocked writer receives. |
-| `heldBy` | string | Participant id holding the claim. |
-| `participantKind` | `'user' \| 'agent' \| 'system'` | Who's behind it — a human (`user`), an AI (`agent`), or automated infrastructure (`system`). |
-| `createdAt` | number? | Ms-epoch the holder opened it. Optional — derived shapes may omit it. |
-| `expiresAt` | number | Ms-epoch at which the server auto-expires it if the holder doesn't finish. |
-
-```json
-{
-  "object": "claim",
-  "id": "claim_3MtwBwLkdIwHu7ix",
-  "status": "active",
-  "target": { "type": "weatherReports", "id": "report_stockholm", "field": "status" },
-  "description": "editing",
-  "heldBy": "agent:report-writer",
-  "participantKind": "agent",
-  "expiresAt": 1716580000000
-}
-```
-
-### Lifecycle
-
-```
-            claim({ id })              update({ id }) lands
-  (free) ───────────▶ active ───────────────────────▶ committed
-                        │
-            ┌───────────┴───────────┐
-            ▼                       ▼
-        canceled                 expired
-   (release w/o write)        (TTL; holder died)
-```
-
-A target is free when `ablo.<model>.claim.state({ id })` is `null`. Terminal
-states drop out of the live stream, so a present claim is either `active` (the
-holder) or `queued` (waiting in the FIFO line behind the holder; see
-`claim.queue({ id })`).
+The fields on a claim, its lifecycle diagram, and the full method surface are in
+[Coordination](./coordination.md#the-claim-state-object), which is where that
+object is defined. Note that the entity half of `target` is spelled `model`/`id`
+on the SDK's model surface and `type`/`id` on the claim handle and the wait
+line.
 
 ### Reading and claiming
 

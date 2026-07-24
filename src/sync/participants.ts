@@ -1,3 +1,4 @@
+import type { JoinOptions } from '../transaction/resources/modelOperations.js';
 import type { SyncWebSocket } from './SyncWebSocket.js';
 import type { Schema, SchemaRecord } from '../transaction/schema/schema.js';
 import { scopeKindOf, type ModelDef } from '../transaction/schema/model.js';
@@ -45,7 +46,13 @@ export interface EngineParticipant {
   readonly claims: ClaimStream;
 }
 
-export interface ParticipantJoinOptions {
+/**
+ * The options for a participant join. It extends the public per-model
+ * {@link JoinOptions} rather than restating its members, so the lease dial is
+ * declared once, in the core, and this surface adds only what a lower-level
+ * join can additionally say.
+ */
+export interface ParticipantJoinOptions extends JoinOptions {
   /**
    * The initial focus target, named in your schema's vocabulary and optionally
    * narrowed to a path, field, or range. When `scope` is omitted, this target
@@ -62,7 +69,17 @@ export interface ParticipantJoinOptions {
   readonly scope?: ParticipantScope;
   /** Present a narrower capability for this logical participant. */
   readonly capabilityToken?: string;
-  /** How long the claim lives, in seconds or a compact duration string (`30s`, `5m`). */
+  /**
+   * @deprecated Use `ttl`. Removed in 0.37.0.
+   *
+   * One lease, spelled two ways, and the seconds spelling was the one that
+   * misled: it accepted a duration string, so `ablo.<model>.join(ids, { ttl:
+   * '5m' })` reached this surface as `ttlSeconds: '5m'` — a field whose name
+   * asserts a unit its value did not carry. `ttl` takes the same values and is
+   * the spelling every other lease in the SDK already uses (`claim`'s `ttl`,
+   * `ClaimLeaseOptions.ttl`). The wire is unchanged: it has always carried
+   * seconds, and still does.
+   */
   readonly ttlSeconds?: number | string | null;
   /**
    * The activity to announce as soon as the claim is acknowledged. Defaults to
@@ -169,7 +186,9 @@ export function createParticipantManager(
       if (syncGroups.length > 0) {
         await transport.sendClaim(claimId, syncGroups, {
           capabilityToken: options.capabilityToken,
-          ttlSeconds: parseParticipantTtlSeconds(options.ttlSeconds),
+          // `ttl` is the spelling; `ttlSeconds` is the deprecated one, read
+          // second so a caller passing both gets the current name honored.
+          ttlSeconds: parseParticipantTtlSeconds(options.ttl ?? options.ttlSeconds),
         });
       }
 

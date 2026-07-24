@@ -7,7 +7,8 @@
  */
 
 import { EventEmitter } from 'events';
-import { getContext } from './context.js';
+import { globalRuntime } from './context.js';
+import type { RuntimeContext } from './RuntimeContext.js';
 
 export class NetworkMonitor extends EventEmitter {
   // Only `navigator.onLine === false` means offline. Node 18+ exposes a global
@@ -16,7 +17,7 @@ export class NetworkMonitor extends EventEmitter {
   private isOnline = !(typeof navigator !== 'undefined' && navigator.onLine === false);
   private lastOnlineCheck: Date = new Date();
 
-  constructor() {
+  constructor(private readonly runtime: RuntimeContext = globalRuntime) {
     super();
     this.setupListeners();
   }
@@ -26,7 +27,7 @@ export class NetworkMonitor extends EventEmitter {
     this.isOnline = true;
     this.lastOnlineCheck = new Date();
     if (wasOffline) {
-      getContext().logger.info('Network connection restored');
+      this.runtime.logger.info('Network connection restored');
       this.emit('online');
     }
   };
@@ -37,7 +38,7 @@ export class NetworkMonitor extends EventEmitter {
     if (wasOnline) {
       // Symmetric with 'Network connection restored' (info) — expected,
       // transient connectivity state, not an actionable warning.
-      getContext().logger.info('Network connection lost');
+      this.runtime.logger.info('Network connection lost');
       this.emit('offline');
     }
   };
@@ -56,7 +57,7 @@ export class NetworkMonitor extends EventEmitter {
     this.lastOnlineCheck = new Date();
 
     if (this.isOnline) {
-      getContext().logger.info('Tab became visible with network available — emitting visibility_online');
+      this.runtime.logger.info('Tab became visible with network available — emitting visibility_online');
       this.emit('visibility_online');
     }
   };

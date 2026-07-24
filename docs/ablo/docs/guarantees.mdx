@@ -68,11 +68,13 @@ await ablo.weatherReports.update({
 `onStale: 'reject'` prevents lost updates. If the target changed after the
 snapshot, the server rejects the write instead of applying stale reasoning.
 
-Advanced policies exist for controlled product flows:
+Two other dispositions exist. `overwrite` applies the write with no stale check
+at all. `notify` **holds** the write, so the row is left as it stands, and hands
+back a `StaleNotification` carrying the current value for the actor to reconcile
+and re-issue; the rest of the batch still commits.
 
-- `reject` fails the write when state moved.
-- `overwrite` applies the write without stale protection.
-- `notify` accepts the write and marks it for product review.
+See [Concurrency Convention](/concurrency-convention) for the full taxonomy,
+what each disposition is checked against, and where the convention stops.
 
 ## Claim Coordination
 
@@ -102,14 +104,39 @@ Agents should import the same schema as the app and write through
 
 ## Audit Trail
 
-Accepted writes can be attributed to:
+Attribution is not a separate log you opt into. It rides on the change itself.
+Every broadcast delta names the actor, the authority it acted under, the
+credential that authorized it, and the approval stage it was in:
 
-- the actor that wrote,
-- the human or system the actor worked on behalf of,
-- the model, operation, and state cursor.
+```ts
+{
+  modelName:         'weatherReports',
+  modelId:           'report_stockholm',
+  actionType:        'U',
+  actor:             { kind: 'agent', id: 'weather-agent-v3' },
+  onBehalfOf:        { kind: 'user',  id: 'user_8f2a' },
+  capabilityId:      '…',       // the key the write was authorized by
+  confirmationState: 'auto',    // previewed | approved | required_human_approval
+  createdAt:         '2026-05-14T14:22:01.034Z',
+}
+```
 
-For agent work, this is what lets an audit surface answer: "what changed, who
-authorized it, which run did it, and what state was it based on?"
+`actor` and `onBehalfOf` are derived from the credential, not from the call site,
+so an agent cannot name a different actor in its own write. `capabilityId` is
+non-null for every agent and system commit, so a write can always be traced to
+the key that made it, and from that key to the person it was issued to.
+
+The stored history goes one step further than recording. Audit rows are chained
+with a keyed hash, so the log is tamper-*evident*: `verify-chain` walks the chain
+and, if it breaks, names the sequence number and the hashes that disagree. No
+chain roots at an agent. The delegation root is always the person who set the
+work in motion.
+
+For agent work this is what answers, after the fact: what changed, who authorized
+it, which run did it, and whether a human was in the loop.
+
+See [Audit Log](/audit) for the stored row shape, the filters, verification,
+and export.
 
 ## Persistence
 

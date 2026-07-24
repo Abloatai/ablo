@@ -13,11 +13,30 @@
  * milliseconds; {@link toSeconds} returns whole seconds.
  */
 
+import { z } from 'zod';
 import { AbloValidationError } from '../errors.js';
 
 export type Duration = number | `${number}ms` | `${number}s` | `${number}m` | `${number}h`;
 
 const PATTERN = /^(\d+(?:\.\d+)?)(ms|s|m|h)$/;
+
+/**
+ * The same grammar as a boundary schema, so a duration crossing the wire is
+ * checked against the parser that will read it rather than against a second
+ * description of it.
+ *
+ * The regex is shared with {@link toMs} deliberately: `z.toJSONSchema` emits it
+ * as a `pattern`, which is how a non-TypeScript caller learns the grammar at
+ * all. A union of `number | string` — which is what this used to be on the
+ * claim bodies — publishes as "some number or some string" and leaves the units
+ * to be guessed.
+ */
+export const durationSchema = z.union([
+  z.number().positive(),
+  z.string().regex(PATTERN, {
+    message: 'expected a duration such as "500ms", "30s", "3m" or "24h"',
+  }),
+]);
 
 const UNIT_MS: Record<'ms' | 's' | 'm' | 'h', number> = {
   ms: 1,
@@ -32,8 +51,23 @@ const UNIT_MS: Record<'ms' | 's' | 'm' | 'h', number> = {
  * as `'500ms'`, `'30s'`, `'3m'`, or `'24h'`. Throws an
  * {@link AbloValidationError} with code `duration_invalid` when a string does
  * not match a supported unit.
+ *
+ * Two doors, one implementation. {@link toMs} takes the narrow {@link Duration}
+ * template type, so an SDK caller writing a literal gets the unit checked at
+ * compile time. {@link parseDurationMs} takes the widened `string | number` that
+ * {@link durationSchema} infers — the shape a value has after it crossed the
+ * wire and was validated at the boundary. Neither is a cast of the other, and
+ * neither carries its own copy of the grammar.
  */
 export function toMs(input: Duration): number {
+  return parseDurationMs(input);
+}
+
+/**
+ * {@link toMs} for a value that arrived over the wire, where the type system
+ * knows only `string | number` because that is what the boundary schema infers.
+ */
+export function parseDurationMs(input: string | number): number {
   if (typeof input === 'number') return input * 1_000;
   const match = PATTERN.exec(input);
   if (!match) {

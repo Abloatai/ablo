@@ -27,7 +27,10 @@ import {
   AbloValidationError,
   toAbloError,
 } from '../errors.js';
-import { updateSubscriptionPayloadSchema } from '../coordination/schema.js';
+import {
+  participantClaimPayloadSchema,
+  updateSubscriptionPayloadSchema,
+} from '../coordination/schema.js';
 import type { BootstrapReason } from '../wire/bootstrapReason.js';
 import type { ClientSyncDelta } from '../wire/delta.js';
 import type {
@@ -40,6 +43,7 @@ import type {
   ClaimQueue,
   ClaimQueued,
   ClaimRejection,
+  ParticipantClaimPayload,
   StaleNotification,
   ReadDependency,
   TrackDependency,
@@ -1069,14 +1073,31 @@ export class WsTransport<
   sendClaim(
     claimId: string,
     syncGroups: readonly string[],
-    options?: {
-      capabilityToken?: string;
-      ttlSeconds?: number;
+    options?: Pick<ParticipantClaimPayload, 'capabilityToken' | 'ttlSeconds'> & {
       timeoutMs?: number;
     },
   ): Promise<{ syncGroups: string[]; ttlSeconds?: number }> {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       return Promise.reject(this.notConnectedError('claim'));
+    }
+    // Checked against the schema the server ingests it with, for the same
+    // reason `updateSubscription` below is: the two frames name their scopes
+    // identically, so a group that would be refused there is refused here, at
+    // the call that asked for it, rather than coming back as a failed ack a
+    // round trip later with nothing to point at.
+    const payload = participantClaimPayloadSchema.safeParse({
+      claimId,
+      syncGroups: [...syncGroups],
+      capabilityToken: options?.capabilityToken,
+      ttlSeconds: options?.ttlSeconds,
+    });
+    if (!payload.success) {
+      return Promise.reject(
+        new AbloValidationError(
+          `join was given a sync group the protocol does not accept: ${payload.error.issues[0]?.message ?? 'unreadable'}. A group is 'default' or 'kind:id'.`,
+          { code: 'malformed_claim' },
+        ),
+      );
     }
     const timeoutMs = options?.timeoutMs ?? 15_000;
     return new Promise((resolve, reject) => {
@@ -1090,17 +1111,7 @@ export class WsTransport<
       }, timeoutMs);
       this.pendingClaims.set(claimId, { resolve, reject, timeout });
       try {
-        this.ws!.send(
-          JSON.stringify({
-            type: 'claim',
-            payload: {
-              claimId,
-              syncGroups: [...syncGroups],
-              capabilityToken: options?.capabilityToken,
-              ttlSeconds: options?.ttlSeconds,
-            },
-          }),
-        );
+        this.ws!.send(JSON.stringify({ type: 'claim', payload: payload.data }));
       } catch (error) {
         clearTimeout(timeout);
         this.pendingClaims.delete(claimId);

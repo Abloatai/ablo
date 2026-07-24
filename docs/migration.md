@@ -13,6 +13,7 @@ change when you upgrade.
 
 | Version | What changed | What to do |
 |---|---|---|
+| **0.36.0** | `ttlSeconds` deprecated on the join surfaces in favour of `ttl` | `useJoin({ scope, ttlSeconds: '5m' })` → `useJoin({ scope, ttl: '5m' })`; same for `ParticipantJoinOptions`. Both spellings work until 0.37.0 |
 | **0.35.0** | Synchronous reads moved under `local`, mirroring the async verbs | `get(id)` → `local.retrieve(id)`; `getAll(options)` → `local.list(options)`; `getCount(options)` → `local.count(options)` |
 | **0.35.0** | `causedByTaskId` write option + seven `turn_*` error codes removed | Delete the `causedByTaskId` argument from writes; a branch on `turn_validation_failed` was unreachable and can go with it |
 | **0.34.0** | Presence verb renamed `watch` → `join` | `ablo.<model>.watch(ids)` → `ablo.<model>.join(ids)`; `useWatch` → `useJoin`; the `WatchOptions` / `UseWatchOptions` / `UseWatchReturn` types → `JoinOptions` / `UseJoinOptions` / `UseJoinReturn`; error code `model_watch_not_configured` → `model_join_not_configured` |
@@ -31,7 +32,25 @@ change when you upgrade.
 
 ---
 
-## 0.35.0 — the synchronous reads move under `local`
+## 0.36.0: one lease is spelled `ttl`
+
+```diff
+- useJoin({ scope: { documents: [id] }, ttlSeconds: '5m' })
++ useJoin({ scope: { documents: [id] }, ttl: '5m' })
+```
+
+`ablo.<model>.join(ids, { ttl })` has always said `ttl`, and so does every other
+lease in the SDK: `claim`'s `ttl`, `ClaimLeaseOptions.ttl`. The lower-level join
+surfaces said `ttlSeconds` while accepting exactly the same values, including
+duration strings, so a `ttl: '5m'` handed down from the model verb arrived as
+`ttlSeconds: '5m'`, a field asserting a unit its value did not carry.
+
+Both spellings work until 0.37.0, and `ttl` wins if you pass both. The wire is
+unchanged: it has always carried seconds and still does.
+
+---
+
+## 0.35.0: the synchronous reads move under `local`
 
 ```diff
 - const task  = ablo.tasks.get(id);
@@ -53,7 +72,7 @@ in most codebases it is outnumbered many times over by `Map.get` and
 the compiler name the sites — each one is a type error at exactly the call that
 has to move.
 
-## 0.35.0 — `causedByTaskId` and the `turn_*` error codes removed
+## 0.35.0: `causedByTaskId` and the `turn_*` error codes removed
 
 0.9.2 retired the `turn` primitive but left one field standing: `causedByTaskId`
 on the write options bag. It was never usable. The server validated it against a
@@ -85,7 +104,7 @@ migration of its own.
 
 ---
 
-## 0.34.0 — presence verb renamed `watch` → `join`
+## 0.34.0: presence verb renamed `watch` → `join`
 
 The model-level presence verb read like a data subscription but delivered
 presence — who else is on a row and what they hold — so it now says what it
@@ -108,7 +127,7 @@ no compatibility alias — rename the call sites and the `WatchOptions` /
 
 ---
 
-## 0.28.0 — dead React multiplayer placeholders removed
+## 0.28.0: dead React multiplayer placeholders removed
 
 Four React exports looked usable but had no live implementation:
 
@@ -123,7 +142,7 @@ Four React exports looked usable but had no live implementation:
 There is no compatibility alias: the replacement APIs were already the only
 working paths.
 
-## 0.11.0 — `intent` → `claim` rename completed
+## 0.11.0: `intent` → `claim` rename completed
 
 > **Historical note:** this section documents the 0.11.0 transition.
 > `useClaim` was subsequently removed in 0.28.0 because its provider callback
@@ -166,7 +185,7 @@ contending holders (`AbloClaimedError.claims` and a policy reason folded into th
 message), and `participantKind` is the canonical `'user' | 'agent' | 'system'`
 on presence and claim state.
 
-## 0.10.0 — environment enum `sandbox` / `production`; stateless HTTP transport
+## 0.10.0: environment enum `sandbox` / `production`; stateless HTTP transport
 
 ### Environment enum rename (the only breaking change)
 
@@ -222,7 +241,7 @@ await ablo.tasks.update({ id, data: { status: 'done' } });
 
 ---
 
-## 0.9.2 — `turn` / agent-`tasks` removed; `intents` deprecated
+## 0.9.2: `turn` / agent-`tasks` removed; `intents` deprecated
 
 The SDK's coordination surface is now exactly two things: `ablo.<model>` writes
 and `claim`. The parallel `turn` / agent-`tasks` mechanism was redundant —
@@ -271,7 +290,7 @@ everywhere you coordinate concurrent work.
 
 ---
 
-## 0.9.0 — one options object per verb; disposable `claim`
+## 0.9.0: one options object per verb; disposable `claim`
 
 Every model verb takes a single options object, so the id, the data, and every
 modifier are named siblings. Reactive local reads stay on the synchronous
@@ -305,7 +324,7 @@ options object.
 
 ---
 
-## 0.8.0 — callable `claim` namespace
+## 0.8.0: callable `claim` namespace
 
 The flat coordination methods are gone; everything lives under `claim`.
 
@@ -318,7 +337,7 @@ The flat coordination methods are gone; everything lives under `claim`.
 
 ---
 
-## 0.7.0 — legacy React hooks removed
+## 0.7.0: legacy React hooks removed
 
 The query/mutation hooks were replaced by the single `useAblo()` accessor over
 typed model methods.
@@ -340,7 +359,7 @@ shape with the canonical `{ type, code, message, doc_url, request_id }` envelope
 
 ---
 
-## 0.6.0 — `onChange` and the Resource → Model rename
+## 0.6.0: `onChange` and the Resource → Model rename
 
 ```diff
 - ablo.tasks.subscribe(cb)
@@ -356,7 +375,7 @@ Also renamed: `Ablo.Resource.*` → `Ablo.Model.*`, `ModelTarget.resource` →
 
 ---
 
-## 0.5.0 — intent-handle method renames
+## 0.5.0: intent-handle method renames
 
 On the model intent handle (`ablo.<model>.intent(id)`):
 
@@ -373,7 +392,7 @@ unchanged at this release. (They were later folded under `claim` in 0.9.2.)
 
 ---
 
-## 0.3.0 — umbrella `<AbloProvider>`
+## 0.3.0: umbrella `<AbloProvider>`
 
 One provider component now owns the full React lifecycle. `<SyncProvider>`,
 `createAbloContext()`, and `withSync` were removed.
@@ -407,10 +426,10 @@ old code or old docs, this is the through-line:
 
 | Release | State of coordination |
 |---|---|
-| 0.4.0 | `ablo.<model>.intent(id)` introduced — per-entity intent handle |
+| 0.4.0 | `ablo.<model>.intent(id)` introduced: per-entity intent handle |
 | 0.5.0 | Intent-handle methods renamed to claim vocabulary (`acquire`→`claim`, …) |
 | 0.8.0 | Callable `claim` namespace (`claim(id)`, `claim.state`, `claim.queue`, …) |
 | 0.9.0 | `claim` returns an `await using` disposable handle |
-| 0.9.2 | `intents` deprecated and made `@internal` — **`claim` is the one coordination API** |
+| 0.9.2 | `intents` deprecated and made `@internal`: **`claim` is the one coordination API** |
 
 For the full chronological history, see the [Changelog](../CHANGELOG.md).

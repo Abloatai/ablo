@@ -30,6 +30,7 @@
 import { z } from 'zod';
 import { AbloValidationError } from '../transaction/errors.js';
 import type { FieldMeta } from '../transaction/schema/field.js';
+import { buildFieldRefs } from '../transaction/schema/schema.js';
 import type { Tenancy } from '../transaction/schema/tenancy.js';
 import type { ModelResidency } from '../transaction/schema/residency.js';
 import type {
@@ -284,6 +285,8 @@ export function fromSchemaJSON(json: SchemaJSON): Schema {
   }
   return {
     models: models,
+    // A schema rebuilt from JSON carries references too — the shapes are here.
+    fields: buildFieldRefs(models),
     validators: validators as Schema['validators'],
     identityRoles: json.identityRoles,
     sessionSettings: json.sessionSettings ?? {},

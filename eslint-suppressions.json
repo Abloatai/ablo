@@ -60,11 +60,6 @@
       "count": 1
     }
   },
-  "__tests__/e2e/cli-login-routing.test.ts": {
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 1
-    }
-  },
   "__tests__/e2e/delete-cascade.test.ts": {
     "@typescript-eslint/no-unsafe-argument": {
       "count": 3
@@ -776,152 +771,6 @@
       "count": 1
     }
   },
-  "src/cli/__tests__/connect.test.ts": {
-    "@typescript-eslint/require-await": {
-      "count": 1
-    }
-  },
-  "src/cli/__tests__/drizzle-pull.test.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 5
-    }
-  },
-  "src/cli/__tests__/logs.test.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 2
-    }
-  },
-  "src/cli/__tests__/prisma-pull.test.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 9
-    }
-  },
-  "src/cli/__tests__/renderError.test.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 1
-    },
-    "no-control-regex": {
-      "count": 1
-    }
-  },
-  "src/cli/check.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 1
-    }
-  },
-  "src/cli/config.ts": {
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 1
-    }
-  },
-  "src/cli/connect.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unnecessary-type-conversion": {
-      "count": 1
-    }
-  },
-  "src/cli/dbRole.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 2
-    }
-  },
-  "src/cli/dev.ts": {
-    "@typescript-eslint/no-base-to-string": {
-      "count": 1
-    },
-    "@typescript-eslint/no-empty-function": {
-      "count": 1
-    },
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 2
-    },
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 1
-    },
-    "@typescript-eslint/restrict-template-expressions": {
-      "count": 4
-    }
-  },
-  "src/cli/drizzlePull.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
-  },
-  "src/cli/index.ts": {
-    "@typescript-eslint/no-unnecessary-type-conversion": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
-    "@typescript-eslint/use-unknown-in-catch-callback-variable": {
-      "count": 1
-    }
-  },
-  "src/cli/login.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-type-conversion": {
-      "count": 1
-    }
-  },
-  "src/cli/migrate.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 1
-    }
-  },
-  "src/cli/prismaPull.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
-    "@typescript-eslint/prefer-optional-chain": {
-      "count": 1
-    },
-    "@typescript-eslint/require-await": {
-      "count": 1
-    }
-  },
-  "src/cli/projects.ts": {
-    "@typescript-eslint/no-base-to-string": {
-      "count": 2
-    }
-  },
-  "src/cli/pull.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 1
-    }
-  },
-  "src/cli/push.ts": {
-    "@typescript-eslint/no-base-to-string": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-type-conversion": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 2
-    },
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 2
-    },
-    "@typescript-eslint/restrict-template-expressions": {
-      "count": 4
-    }
-  },
-  "src/cli/theme.ts": {
-    "@typescript-eslint/no-unnecessary-type-conversion": {
-      "count": 1
-    }
-  },
   "src/client/Ablo.ts": {
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 1
@@ -1097,88 +946,8 @@
       "count": 1
     }
   },
-  "src/core/DatabaseManager.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 4
-    },
-    "@typescript-eslint/no-unnecessary-condition": {
-      "count": 3
-    },
-    "@typescript-eslint/no-unsafe-argument": {
-      "count": 2
-    },
-    "@typescript-eslint/no-unsafe-assignment": {
-      "count": 8
-    },
-    "@typescript-eslint/no-unsafe-member-access": {
-      "count": 19
-    },
-    "@typescript-eslint/no-useless-constructor": {
-      "count": 1
-    },
-    "@typescript-eslint/prefer-promise-reject-errors": {
-      "count": 13
-    },
-    "@typescript-eslint/require-await": {
-      "count": 2
-    },
-    "@typescript-eslint/use-unknown-in-catch-callback-variable": {
-      "count": 1
-    }
-  },
-  "src/core/QueryProcessor.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 1
-    },
-    "@typescript-eslint/no-unnecessary-type-parameters": {
-      "count": 2
-    },
-    "@typescript-eslint/prefer-nullish-coalescing": {
-      "count": 2
-    },
-    "@typescript-eslint/prefer-optional-chain": {
-      "count": 1
-    }
-  },
-  "src/core/QueryView.ts": {
-    "@typescript-eslint/prefer-optional-chain": {
-      "count": 1
-    }
-  },
-  "src/core/StoreManager.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 2
-    },
-    "@typescript-eslint/require-await": {
-      "count": 2
-    }
-  },
-  "src/core/__tests__/openIDBWithTimeout.test.ts": {
-    "@typescript-eslint/no-empty-function": {
-      "count": 1
-    },
-    "jest/unbound-method": {
-      "count": 2
-    }
-  },
-  "src/core/openIDBWithTimeout.ts": {
-    "@typescript-eslint/no-non-null-assertion": {
-      "count": 1
-    },
-    "@typescript-eslint/prefer-promise-reject-errors": {
-      "count": 1
-    },
-    "no-useless-escape": {
-      "count": 4
-    }
-  },
   "src/interfaces/index.ts": {
     "@typescript-eslint/no-redundant-type-constituents": {
-      "count": 1
-    }
-  },
-  "src/mutators/RecordingMutation.ts": {
-    "@typescript-eslint/no-deprecated": {
       "count": 1
     }
   },
@@ -1196,21 +965,27 @@
     }
   },
   "src/mutators/mutateActions.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 9
-    },
     "@typescript-eslint/unified-signatures": {
       "count": 1
-    }
-  },
-  "src/mutators/readerActions.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 8
     }
   },
   "src/policy/__tests__/defaultPolicy.test.ts": {
     "@typescript-eslint/await-thenable": {
       "count": 6
+    }
+  },
+  "src/query/QueryProcessor.ts": {
+    "@typescript-eslint/no-non-null-assertion": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unnecessary-type-parameters": {
+      "count": 2
+    },
+    "@typescript-eslint/prefer-nullish-coalescing": {
+      "count": 2
+    },
+    "@typescript-eslint/prefer-optional-chain": {
+      "count": 1
     }
   },
   "src/query/__tests__/client.test.ts": {
@@ -1250,11 +1025,6 @@
       "count": 1
     }
   },
-  "src/react/index.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 1
-    }
-  },
   "src/react/useAblo.ts": {
     "@typescript-eslint/no-unsafe-return": {
       "count": 1
@@ -1284,9 +1054,6 @@
     }
   },
   "src/schema/__tests__/inference.test.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 4
-    },
     "@typescript-eslint/no-non-null-assertion": {
       "count": 4
     },
@@ -1303,26 +1070,11 @@
       "count": 22
     }
   },
-  "src/schema/coordination.ts": {
-    "@typescript-eslint/no-unsafe-return": {
-      "count": 1
-    }
-  },
   "src/schema/generate.ts": {
     "@typescript-eslint/no-non-null-assertion": {
       "count": 2
     },
     "@typescript-eslint/prefer-optional-chain": {
-      "count": 1
-    }
-  },
-  "src/schema/index.ts": {
-    "@typescript-eslint/no-deprecated": {
-      "count": 1
-    }
-  },
-  "src/schema/queries.ts": {
-    "@typescript-eslint/no-deprecated": {
       "count": 1
     }
   },
@@ -1464,6 +1216,35 @@
       "count": 1
     }
   },
+  "src/stores/DatabaseManager.ts": {
+    "@typescript-eslint/no-non-null-assertion": {
+      "count": 4
+    },
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 3
+    },
+    "@typescript-eslint/no-unsafe-argument": {
+      "count": 2
+    },
+    "@typescript-eslint/no-unsafe-assignment": {
+      "count": 8
+    },
+    "@typescript-eslint/no-unsafe-member-access": {
+      "count": 19
+    },
+    "@typescript-eslint/no-useless-constructor": {
+      "count": 1
+    },
+    "@typescript-eslint/prefer-promise-reject-errors": {
+      "count": 13
+    },
+    "@typescript-eslint/require-await": {
+      "count": 2
+    },
+    "@typescript-eslint/use-unknown-in-catch-callback-variable": {
+      "count": 1
+    }
+  },
   "src/stores/ObjectStore.ts": {
     "@typescript-eslint/no-unnecessary-condition": {
       "count": 2
@@ -1482,6 +1263,14 @@
     },
     "@typescript-eslint/prefer-promise-reject-errors": {
       "count": 8
+    }
+  },
+  "src/stores/StoreManager.ts": {
+    "@typescript-eslint/no-non-null-assertion": {
+      "count": 2
+    },
+    "@typescript-eslint/require-await": {
+      "count": 2
     }
   },
   "src/stores/SyncActionStore.ts": {
@@ -1511,6 +1300,25 @@
     },
     "@typescript-eslint/require-await": {
       "count": 1
+    }
+  },
+  "src/stores/__tests__/openIDBWithTimeout.test.ts": {
+    "@typescript-eslint/no-empty-function": {
+      "count": 1
+    },
+    "jest/unbound-method": {
+      "count": 2
+    }
+  },
+  "src/stores/openIDBWithTimeout.ts": {
+    "@typescript-eslint/no-non-null-assertion": {
+      "count": 1
+    },
+    "@typescript-eslint/prefer-promise-reject-errors": {
+      "count": 1
+    },
+    "no-useless-escape": {
+      "count": 4
     }
   },
   "src/surface.ts": {
@@ -1761,6 +1569,11 @@
       "count": 1
     },
     "no-case-declarations": {
+      "count": 1
+    }
+  },
+  "src/views/QueryView.ts": {
+    "@typescript-eslint/prefer-optional-chain": {
       "count": 1
     }
   },

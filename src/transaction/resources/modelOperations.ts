@@ -13,7 +13,8 @@
 import type { ModelScope } from '../types/index.js';
 import type { ResolveClaimMeta } from '../types/global.js';
 import type { AbloClaimedError } from '../errors.js';
-import type { StaleNotification, TrackDependency } from '../coordination/schema.js';
+import type { ClaimPart, StaleNotification, TrackDependency } from '../coordination/schema.js';
+import type { ClaimHeartbeatPlan } from '../coordination/claimHeartbeatLoop.js';
 import type { Duration } from '../utils/duration.js';
 import type {
   Claim,
@@ -115,24 +116,106 @@ export interface ServerReadOptions<T> {
 /** Options for the single-row async server read `retrieve({ id })`. A subset of
  *  {@link ServerReadOptions} — `where`/`limit`/`orderBy` are fixed by the id. */
 export type ServerRetrieveOptions = Pick<ServerReadOptions<unknown>, 'type' | 'expand'>;
+/**
+ * A claimable part of a row: one of the model's own fields, an app-defined name
+ * marked with {@link part}, or any other string.
+ *
+ * The third arm is the one that matters, and it is not a TypeScript
+ * limitation. Function parameters are contravariant, so a claim accepting
+ * `'title' | 'status'` is not assignable to one accepting `string` — and the
+ * legacy `useAblo<R>()` path erases a concrete schema to `SchemaRecord`
+ * (`AbloProvider.tsx`: `engine as Ablo<SchemaRecord>`) and restores it, which
+ * is exactly that assignment. While that path exists this union must stay open,
+ * and `fields: ['titel']` therefore compiles, is granted, excludes nobody, and
+ * leaves the write of `title` unguarded — the conflict rule compares names as
+ * opaque strings, so an invented one matches no other claim and nothing reports
+ * it.
+ *
+ * The replacement already exists: `createAbloReact(schema)` creates its context
+ * after the schema is known, so nothing is erased and nothing is restored — the
+ * same shape as `createTRPCReact<AppRouter>()`. What remains is retiring the
+ * generic provider in favour of it; the callers are enumerated in
+ * docs/plans/typed-react-binding.md. When they have moved, this arm goes, and
+ * `fields: ['titel']` stops compiling with no change at any call site.
+ */
+export type ClaimField<T> =
+  | Extract<keyof T, string>
+  | ClaimPart
+  | (string & {});
+
+/**
+ * The options on a claim, in four axes — each answers one question, and no
+ * member sits in two:
+ *
+ * - **what you claim** — `field` / `fields` / `path` / `range`, the target
+ *   narrowed below the row;
+ * - **what others see** — `description` / `meta`, the presence half;
+ * - **how you wait** — `queue` / `maxQueueDepth` / `waitTimeoutMs` /
+ *   `signal`, admission to the line;
+ * - **how long you hold** — `ttl` / `heartbeat`, the lease.
+ */
 export interface ClaimTargetOptions<T = Record<string, unknown>> {
+  // ── What you claim — the target, narrowed below the row ────────────────
+
+  /**
+   * @deprecated Say it as a set: `fields: ['title']`. Removed in 0.37.0.
+   *
+   * One member for a set of one, beside another for a set of any size, is two
+   * ways to say one thing — and the singular is the one that misleads. A caller
+   * needing two parts reached for the member named `field` and packed
+   * `'b_3,b_7'` into it, which compares as a single unrelated name, so both
+   * writers were granted the same part and one update was lost. That spelling
+   * is refused now, and this member is going with it.
+   *
+   * The wire keeps reading `field` — it is frozen, and an older client emits it
+   * — so this is a change of what you write, not of what is understood.
+   */
+  field?: ClaimField<T>;
+  /**
+   * Narrow the claim to named parts of the row — one or several.
+   *
+   * Exclusion follows the target: claims on the same row conflict only where
+   * their sets intersect, so a holder on `['title']` and a holder on
+   * `['status']` proceed concurrently, while a whole-row claim (no target)
+   * conflicts with both. The per-field claimed-state badge is a consequence of
+   * the narrower lease, not its purpose.
+   */
+  fields?: readonly ClaimField<T>[];
+  /**
+   * @deprecated Claim the field the position lives in — `fields: ['content']`.
+   * Removed in 0.37.0.
+   *
+   * A claim may not be finer than the smallest thing the write path can
+   * address, and today that is a field: nothing writes part of a value. Two
+   * holders of `/content/3` and `/content/7` therefore contend, because either
+   * one committing takes the whole `content` field — so naming the position
+   * bought exclusion it could not deliver, and this member read as a peer of
+   * `fields` while being nothing of the kind.
+   *
+   * For a UI that draws a rail per block, put the block id in `meta`: that is
+   * the open bag for describing your work to peers, it renders exactly as well,
+   * and it promises nothing about exclusion. The wire keeps parsing `path`, so
+   * an older client is unaffected.
+   */
+  path?: string;
+  /**
+   * @deprecated Claim the field the span lives in — `fields: ['content']`.
+   * Removed in 0.37.0.
+   *
+   * Same rule as {@link path}: a span of a value is not separately writable, so
+   * two disjoint spans of one field contend. Unlike `path` this one has a
+   * future — a mergeable field makes an operation the write unit, at which
+   * point a span inside it is addressable and this becomes enforceable. It
+   * returns then, for code rather than prose, and it returns working.
+   */
+  range?: TargetRange;
+
+  // ── What others see — the presence half ────────────────────────────────
+
   /** Peer-visible description of the work being performed — the sentence a
    *  contending participant reads to decide whether to wait, work elsewhere, or
    *  move on. Defaults to `'editing'`. The same field on every claim surface. */
   description?: string;
-  /** Field-level target, for fine-grained claimed-state badges. */
-  field?: string;
-  /**
-   * Several named parts of the row at once. Claims conflict where their sets
-   * intersect, so two holders on disjoint parts do not wait for each other.
-   * Prefer this to packing names into `field`, which compares as one opaque
-   * string and lets overlapping sets both be granted.
-   */
-  fields?: readonly string[];
-  /** Optional path for document/file-like targets. */
-  path?: string;
-  /** Optional range for document/file-like targets. */
-  range?: TargetRange;
   /**
    * App-defined structured metadata, carried verbatim to every participant
    * that observes the claim. Declare its shape once, on `Register`'s
@@ -140,8 +223,9 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    * find — the write side and the read side are the same declaration.
    */
   meta?: ResolveClaimMeta;
-  /** Crash-cleanup TTL — the claim auto-releases if the holder dies. */
-  ttl?: Duration;
+
+  // ── How you wait — admission to the line ───────────────────────────────
+
   /**
    * Behavior under contention. `true` (the default) queues behind the current
    * holder and resolves once the row is yours. `false` is fail-fast: if another
@@ -149,10 +233,6 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    * {@link AbloClaimedError} instead of waiting. Use `false` to deduplicate
    * distributed work ("if someone else has this job, skip it"), where waiting
    * would mean double-processing.
-   *
-   * The high-level typed claim defaults this on because it serializes writers;
-   * the low-level lease and the HTTP client default it off, since they resolve
-   * immediately and cannot transparently wait for a grant.
    */
   queue?: boolean;
   /**
@@ -163,30 +243,38 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    */
   maxQueueDepth?: number;
   /**
+   * Cap on how long a queued claim waits for its grant before rejecting with
+   * {@link AbloClaimedError} (`grant_timeout`). Omit to wait as long as the
+   * line takes. Same meaning on both transports; on the stateless HTTP client
+   * a timed-out wait also leaves the line, so the slot is not left to expire.
+   */
+  waitTimeoutMs?: number;
+  /**
+   * Abort a pending wait from outside — the same signal that cancels
+   * everything else in the program, so a cancelled agent task or an unmounted
+   * component takes its queued claim with it. Rejects with
+   * {@link AbloClaimedError} (`claim_wait_aborted`); over HTTP the abort also
+   * leaves the line. Ignored once the grant has arrived — a held lease is
+   * never torn down by a late abort; release it instead.
+   */
+  signal?: AbortSignal;
+
+  // ── How long you hold — the lease ──────────────────────────────────────
+
+  /** Crash-cleanup TTL — the claim auto-releases if the holder dies. */
+  ttl?: Duration;
+  /**
    * Keep the lease alive for the duration of real work by beating on a
    * cadence — the pattern for background workers whose task outlives the
    * crash-cleanup TTL. `true` beats every third of the TTL (so two beats can
    * fail before the lease is at risk, and a crashed worker's lease still
    * lapses within one beat window); a duration such as `'2m'` sets the
-   * cadence explicitly. The loop stops on release. A beat answered with a
-   * definitive loss stops the loop and calls {@link onHeartbeatLost}; you can
-   * also beat manually with `held.heartbeat()`.
+   * cadence explicitly; the structured {@link ClaimHeartbeatPlan} carries the
+   * cadence and both callbacks in one place —
+   * `heartbeat: { every: '2m', onBeat, onLost }`. The loop stops on release.
+   * You can also beat manually with `held.heartbeat()`.
    */
-  heartbeat?: true | Duration;
-  /**
-   * Called once if the auto-heartbeat learns the lease is no longer yours
-   * (expired and possibly granted onward). The loop has already stopped;
-   * abandon the work or re-claim. Any write attempted under the old lease is
-   * independently rejected by its `readAt` guard.
-   */
-  onHeartbeatLost?: (error: AbloClaimedError) => void;
-  /**
-   * Called after every successful beat (manual or auto) with the server's
-   * answer — chiefly `queueDepth`, the number of participants waiting in
-   * line behind this lease. A worker that can checkpoint may read pressure
-   * here and release early when others wait.
-   */
-  onHeartbeat?(beat: ClaimHeartbeat): void;
+  heartbeat?: true | Duration | ClaimHeartbeatPlan;
 }
 
 /** Options for `claim({ id, ... })`. */
@@ -197,7 +285,10 @@ export interface ClaimParams<T = Record<string, unknown>>
 
 export interface ClaimLookupParams<T = Record<string, unknown>> {
   readonly id: string;
-  readonly field?: string;
+  /** @deprecated Say it as a set: `fields: ['title']`. Removed in 0.37.0. */
+  readonly field?: ClaimField<T>;
+  /** Read the claim state of named parts of the row rather than the row. */
+  readonly fields?: readonly ClaimField<T>[];
 }
 
 export interface ClaimReorderParams<T = Record<string, unknown>>
@@ -281,6 +372,27 @@ export interface ClaimReadApi<T = Record<string, unknown>> {
   ): Claim<Record<string, unknown>, M> | null;
 
   /**
+   * Every holder of a row, not just one.
+   *
+   * A claim that names a narrower target — a `path`, a `range`, a `field` or
+   * `fields` — excludes only what it overlaps, so several participants hold
+   * disjoint parts of one row at the same time and
+   * {@link ClaimReadApi.state} answers with one of them. This is the read
+   * behind a per-region UI: a rail for each claimed block, a chip for each
+   * participant. Synchronous and reactive off the same snapshot as `state`,
+   * so a render reads it inline.
+   *
+   * Own claim first when this client holds one, then peers. Takes the same
+   * `meta` parameter as {@link ClaimReadApi.state}.
+   */
+  list<M = ResolveClaimMeta>(
+    params: ClaimLookupParams<T>,
+  ): {
+    readonly object: 'list';
+    readonly data: readonly Claim<Record<string, unknown>, M>[];
+  };
+
+  /**
    * FIFO wait line behind the current holder. Advanced: useful for operator
    * UIs and schedulers. Takes the same `meta` parameter as
    * {@link ClaimReadApi.state}.
@@ -314,12 +426,23 @@ export type AwaitedClaimMethod<F> = F extends (...args: infer A) => infer R
 
 export interface ClaimApi<T> extends ClaimReadApi<T> {
   /**
+   * The try-claim: `queue: false` treats a held target as an expected outcome,
+   * not an error — it resolves `null`, so claim-or-skip dedup reads
+   * `if (!claim) return` with no try/catch. Who holds it, and why, stays
+   * readable through `claim.state({ id })`. (A write to a row someone else
+   * holds still rejects with `entity_claimed` — a failed write is an error;
+   * a declined try is not.)
+   */
+  (params: ClaimParams<T> & { queue: false }): Promise<HeldClaim<T> | null>;
+  /**
    * Takes a claim and returns an explicit held-work handle — a {@link HeldClaim}.
    * `data`, `release`, `revoke`, and the async disposer are always present (this
    * call re-reads the row under the lease), so callers can use `handle.data`
    * directly and `await using` works without a guard.
    */
   (params: ClaimParams<T>): Promise<HeldClaim<T>>;
+  /** The row-free try-claim — `null` when the key is already held. */
+  (id: string, opts: ClaimOptions<T> & { queue: false }): Promise<HeldLease | null>;
   /**
    * Takes a claim by id alone, for a row that lives only in the customer's own
    * database — Ablo has never seen it, so there is nothing to re-read. Returns a

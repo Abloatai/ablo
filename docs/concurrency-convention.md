@@ -2,9 +2,9 @@
 
 > The governing rule for how Ablo resolves concurrent writes to shared state.
 
-> The governing convention for how Ablo resolves concurrent writes to shared
-> state, and the boundaries of that convention. This is the contract; the
-> three-layer mechanics live in [`coordination.md`](./coordination.md).
+This page is the contract: the `onStale` dispositions, what a conflict is
+checked against, and where the convention stops. The three-layer mechanics of
+claiming live in [Coordination](./coordination.md).
 
 ---
 
@@ -27,8 +27,8 @@ moments in time:
 
 | form | when | mechanism |
 |---|---|---|
-| **Claim** | *prospective* — before you act | reserve the row; others queue. Coordinate so the conflict never forms. |
-| **Notification** | *in-flight* — after a concurrent change | surface the changed value; the actor resolves and re-issues. |
+| **Claim** | *prospective*: before you act | reserve the row; others queue. Coordinate so the conflict never forms. |
+| **Notification** | *in-flight*: after a concurrent change | surface the changed value; the actor resolves and re-issues. |
 
 Use a claim when you will hold the row across a slow read→reason→write gap. Use a
 notification when you didn't, and the premise moved under you.
@@ -42,9 +42,9 @@ when it goes stale. Three modes, split by whether they **force** an outcome:
 
 | mode | coercive? | what the engine does | who resolves | use when |
 |---|---|---|---|---|
-| `notify` | **No** — surface + delegate | Holds the write (does **not** apply it); returns a `StaleNotification` with the current value. | The actor (agent or human) reconciles and re-issues. | The aligned mode: tell the actor what changed, let it solve. |
-| `reject` | **Yes** — force-abort | Throws `AbloStaleContextError`; the batch is discarded. | The caller retries from scratch. | Hard invariants; legacy/strict callers. The current default. |
-| `overwrite` | **Yes** — force-clobber | Overwrites blindly last-writer-wins; **no** signal. | Nobody. | You genuinely own the field and concurrent values are noise. |
+| `notify` | **No**: surface + delegate | Holds the write (does **not** apply it); returns a `StaleNotification` with the current value. | The actor (agent or human) reconciles and re-issues. | The aligned mode: tell the actor what changed, let it solve. |
+| `reject` | **Yes**: force-abort | Throws `AbloStaleContextError`; the batch is discarded. | The caller retries from scratch. | Hard invariants; legacy/strict callers. The current default. |
+| `overwrite` | **Yes**: force-clobber | Overwrites blindly last-writer-wins; **no** signal. | Nobody. | You genuinely own the field and concurrent values are noise. |
 
 > `notify` is the convention. `reject` and `overwrite` are escape hatches for the
 > two ends — "never let this be wrong" and "never bother me." They are not the
@@ -82,9 +82,9 @@ reads: [
 ]
 ```
 
-- **Row** — did this specific row (optionally these fields) change? The literal
+- **Row:** did this specific row (optionally these fields) change? The literal
   per-object premise.
-- **Group** — did *anything* in this sync group change? `group` is a sync-group
+- **Group:** did *anything* in this sync group change? `group` is a sync-group
   key (`workspace:abc`, `document:s1`, `org:X`) — the same unit a participant **watches
   and claims**. This is the more Ablo-native granularity.
 
@@ -108,13 +108,13 @@ Shape (canonical in `coordination/schema.ts`):
 
 | field | meaning |
 |---|---|
-| `object` | Stripe-style type tag — `'stale_notification'` |
+| `object` | Stripe-style type tag: `'stale_notification'` |
 | `model`, `id` | the conflicting row (for a group dep, both are the group key) |
 | `group?` | set when this is a group-scoped notification |
 | `readAt` | the watermark the committer reasoned against |
-| `observedSyncId` | the newest delta on the premise — re-read at/after this |
+| `observedSyncId` | the newest delta on the premise: re-read at/after this |
 | `conflictingFields` | fields that moved (empty for group / whole-entity) |
-| `currentValues` | the live values of those fields — the premise to reconcile against (empty for group) |
+| `currentValues` | the live values of those fields: the premise to reconcile against (empty for group) |
 | `writtenBy` | `{ kind, id }` of the concurrent author, reported faithfully |
 
 Only `notify` produces a notification (the write was held). `reject` throws and
@@ -169,7 +169,7 @@ What the convention **guarantees**, and where it **stops**:
    or human) owns the resolution. The engine does not distinguish them — it is
    actor-neutral by design.
 
-2. **Truthfulness.** `currentValues` / `observedSyncId` reflect committed state at
+2. **Truthfulness:** `currentValues` / `observedSyncId` reflect committed state at
    detection time, inside the same transaction as the write. A notification is
    never speculative.
 
@@ -185,13 +185,11 @@ What the convention **guarantees**, and where it **stops**:
    so they must not be gated by `notify`.
 
 5. **Defaults.** A plain write (no `readAt`) is last-writer-wins with **no**
-   check. A guarded write with `readAt` but no `onStale` defaults to `reject`
-   (back-compat). *Open decision (§7).*
+   check. A guarded write with `readAt` but no `onStale` defaults to `reject`.
 
 6. **Policy seam.** Custom `ConflictPolicy` functions see **write-target**
    conflicts (`stale_context` / `claim_held`). **Batch-premise** conflicts are
-   currently resolved directly via each entry's `onStale`, not through the policy
-   seam. *Open decision (§7).*
+   resolved directly via each entry's `onStale`, not through the policy seam.
 
 7. **Claims win when held.** A non-holder writing to a claimed row is rejected
    (`AbloClaimedError`) regardless of `readAt` — the prospective form takes
@@ -200,29 +198,17 @@ What the convention **guarantees**, and where it **stops**:
 
 ---
 
-## 7. Open decisions (bounded, not yet made)
+## 7. What this convention does not cover
 
-These are deliberately left open; they change behavior and are the user's call.
+Three limits worth knowing before you rely on it.
 
-- **Default disposition for agents.** Should an agent-participant guarded write
-  default to `notify` (philosophy-aligned: surface, don't overwrite) instead of
-  `reject` (back-compat)? Trade-off: alignment vs. a behavior change for existing
-  agent callers.
-- **Batch premises through the policy seam.** Should premise conflicts also
-  pass through `ConflictPolicy` (requires a group-aware conflict shape), or stay
-  on the direct `onStale` mapping?
-
----
-
-## 8. Out of scope
-
-- Irreversible external side-effects (§6.4) — not gated by this convention.
-- Cross-object *serializability proof*. A batch premise is a sound check, not
-  a full precedence-graph guarantee; it catches only what the caller declared.
-  A caller that declares nothing gets **no check at all** — not write-target
-  checking, which needs a `readAt` to check against. A plain write is
-  last-writer-wins, as §6.5 says. The floor is zero, and closing that gap is the
-  subject of ADR 0018.
-- Identity → participant-kind mapping. `writtenBy.kind` reports whatever
-  authenticated (an `sk_` key resolves to `system`, not `agent`); how identities
-  map to kinds is a separate concern.
+- **Irreversible external side-effects.** Emails, payments, and third-party
+  calls are not gated by this convention (§6.4). The engine cannot hold or undo
+  them, so never place one behind `notify`.
+- **A caller that declares nothing gets no check.** The batch premise catches
+  only what you declared. Write-target checking needs a `readAt` to compare
+  against, so a plain write with neither is last-writer-wins (§6.5). What you
+  declare is what is protected.
+- **`writtenBy.kind` reports what authenticated, not what you meant.** An `sk_`
+  key resolves to `system`, not `agent`. How identities map to participant kinds
+  is a separate concern from this convention.

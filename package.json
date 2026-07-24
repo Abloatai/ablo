@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "description": "The Collaboration Layer For AI Agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -10,7 +10,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "ablo": "./dist/cli.cjs"
+    "ablo": "./bin/ablo.cjs"
   },
   "exports": {
     ".": {
@@ -36,12 +36,6 @@
       "types": "./dist/react/index.d.ts",
       "import": "./dist/react/index.js",
       "default": "./dist/react/index.js"
-    },
-    "./testing": {
-      "@ablo/source": "./src/testing/index.ts",
-      "types": "./dist/testing/index.d.ts",
-      "import": "./dist/testing/index.js",
-      "default": "./dist/testing/index.js"
     },
     "./core": {
       "@ablo/source": "./src/core/index.ts",
@@ -115,6 +109,12 @@
       "import": "./dist/wire/index.js",
       "default": "./dist/wire/index.js"
     },
+    "./syncLog": {
+      "@ablo/source": "./src/syncLog/index.ts",
+      "types": "./dist/syncLog/index.d.ts",
+      "import": "./dist/syncLog/index.js",
+      "default": "./dist/syncLog/index.js"
+    },
     "./server": {
       "@ablo/source": "./src/server/index.ts",
       "types": "./dist/server/index.d.ts",
@@ -135,6 +135,7 @@
     }
   },
   "files": [
+    "bin",
     "dist",
     "!dist/__type_probe.*",
     "docs/*.md",
@@ -149,21 +150,21 @@
   ],
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc -p tsconfig.build.json && npm run build:cli",
-    "build:cli": "tsup --config tsup.cli.config.ts",
-    "typecheck": "npm run typecheck:src && npm run typecheck:cli && npm run typecheck:scripts",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "typecheck": "npm run typecheck:src && npm run typecheck:scripts",
     "typecheck:src": "tsc -p tsconfig.json",
-    "typecheck:cli": "tsc -p tsconfig.cli.json",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "prepack": "node scripts/strip-source-condition.mjs",
     "postpack": "node scripts/restore-source-condition.mjs",
     "pack:check": "node scripts/pack-check.mjs",
-    "lint": "npm run lint:imports && npm run lint:errors && npm run lint:docs && npm run lint:docs-site",
+    "lint": "npm run lint:imports && npm run lint:errors && npm run lint:openapi && npm run lint:docs && npm run lint:docs-site",
     "build:docs": "node scripts/build-blume-docs.mjs",
     "lint:docs-site": "node scripts/build-blume-docs.mjs --check",
     "lint:imports": "node scripts/check-js-extensions.mjs",
     "generate:errors": "tsx scripts/generate-error-docs.mts",
+    "generate:openapi": "tsx --conditions=@ablo/source scripts/generate-openapi.mts",
     "lint:errors": "tsx scripts/check-error-docs.mts",
+    "lint:openapi": "tsx --conditions=@ablo/source scripts/generate-openapi.mts --check",
     "lint:docs": "node scripts/check-doc-drift.mjs",
     "lint:eslint": "eslint . --cache",
     "lint:pkg": "publint",
@@ -171,7 +172,6 @@
     "check:dist": "node scripts/check-dist-fresh.mjs",
     "pretest": "node scripts/check-dist-fresh.mjs",
     "test": "jest",
-    "test:quickstart": "node scripts/test-quickstart.mjs",
     "test:unit": "jest --testPathPatterns __tests__/unit",
     "test:integration": "jest --testPathPatterns __tests__/integration",
     "test:contract": "jest --testPathPatterns __tests__/contract",
@@ -225,7 +225,6 @@
     }
   },
   "dependencies": {
-    "jiti": "^2.7.0",
     "mobx": "^6.13.7",
     "mobx-react-lite": "^4.0.0",
     "uuid": "^11.1.0",
@@ -233,9 +232,7 @@
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.0",
-    "@clack/prompts": "^0.11.0",
     "@jest/globals": "^30.2.0",
-    "@prisma/client": "^7.3.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
@@ -250,13 +247,9 @@
     "jest": "^30.2.0",
     "jest-environment-jsdom": "^30.2.0",
     "jest-environment-node": "^30.2.0",
-    "picocolors": "^1.1.0",
-    "postgres": "^3.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "ts-jest": "^29.4.5",
-    "ts-morph": "^26.0.0",
-    "tsup": "^8.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.3",
     "publint": "^0.3.21",

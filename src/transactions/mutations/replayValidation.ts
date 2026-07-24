@@ -18,6 +18,8 @@
 import { z } from 'zod';
 import type { QueuedMutation } from './commitPayload.js';
 import { computePriorityScore, normalizeModelKey } from './commitPayload.js';
+import { globalRuntime } from '../../context.js';
+import type { RuntimeContext } from '../../RuntimeContext.js';
 import {
   commitEnvelopeMemberSchema,
   commitOutboxScopeSchema,
@@ -101,7 +103,10 @@ export function isNonReplayablePersistedRow(row: unknown): boolean {
  * fields the stored row lacks — status, attempts, priority, timestamp — are
  * re-derived the same way a freshly staged transaction derives them.
  */
-export function deserializePersistedTransaction(row: unknown): QueuedMutation | null {
+export function deserializePersistedTransaction(
+  row: unknown,
+  runtime: RuntimeContext = globalRuntime,
+): QueuedMutation | null {
   const parsed = persistedTransactionSchema.safeParse(row);
   if (!parsed.success) return null;
   const tx = parsed.data;
@@ -118,7 +123,7 @@ export function deserializePersistedTransaction(row: unknown): QueuedMutation | 
     createdAt: tx.createdAt ?? Date.now(),
     attempts: 0,
     priority: 'normal',
-    priorityScore: computePriorityScore(tx.type, tx.modelName),
+    priorityScore: computePriorityScore(tx.type, tx.modelName, runtime),
     ...(tx.batchId !== undefined ? { batchId: tx.batchId } : {}),
     ...(tx.commitEnvelope !== undefined
       ? { commitEnvelope: tx.commitEnvelope }

@@ -2,11 +2,10 @@
   // Typed-lint program for eslint.config.mjs — NOT used by any build.
   //
   // Why it exists: no single shipped tsconfig covers the whole package.
-  // tsconfig.test.json (NodeNext) can't parse the tests — they use
-  // extensionless relative imports and compile under ts-jest's inline
-  // tsconfig (module ESNext + moduleResolution bundler + `@abloatai/ablo`
-  // paths, see jest.config.ts) — and both shipped configs exclude src/cli or
-  // its __tests__. This mirrors the jest program so typed linting sees the
+  // tsconfig.json (NodeNext) can't parse the tests — they use extensionless
+  // relative imports and compile under ts-jest's inline tsconfig (module
+  // ESNext + moduleResolution bundler + `@abloatai/ablo` paths, see
+  // jest.config.ts). This mirrors the jest program so typed linting sees the
   // same types the test compiler does, over ALL of src/ + __tests__/.
   // Real build/typecheck semantics (NodeNext) are still enforced by
   // `tsc -p tsconfig.build.json` / CI typecheck — this program is lint-only.

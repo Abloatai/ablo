@@ -75,7 +75,7 @@ Run it against your database as a superuser or the DB owner. It creates:
 
   Scope it to a subset with `npx ablo connect --tables a,b,c`.
 
-- **A replication role** — it streams the WAL and `SELECT`s, nothing more. This is
+- **A replication role:** it streams the WAL and `SELECT`s, nothing more. This is
   the role Ablo reads and confirms through. You choose the password; it never
   passes through Ablo's CLI or servers:
 
@@ -87,7 +87,7 @@ Run it against your database as a superuser or the DB owner. It creates:
   On Amazon RDS the `REPLICATION` attribute is granted, not set directly:
   `GRANT rds_replication TO "ablo_replicator";`.
 
-- **A scoped writer role** — the role Ablo writes your rows through. It gets row
+- **A scoped writer role:** the role Ablo writes your rows through. It gets row
   DML (`SELECT, INSERT, UPDATE, DELETE`) and the sync ledger, and nothing else: no
   `REPLICATION`, no schema `CREATE`, `NOSUPERUSER NOBYPASSRLS`, row security on. It
   can change rows in your tables; it cannot change your database:
@@ -189,7 +189,7 @@ A commit is accepted the moment Ablo takes it (`queued`); it becomes `confirmed`
 once the row appears on your WAL. See [Guarantees](./guarantees.md) for what each
 state means and when to wait.
 
-## What Ablo touches in your database — the honest footprint
+## What Ablo touches in your database: the honest footprint
 
 This is the complete list. Nothing else.
 
@@ -197,7 +197,7 @@ This is the complete list. Nothing else.
 |---|---|---|
 | `ablo_publication` | A publication naming the tables Ablo reads and confirms against. | You create it (step 2). |
 | `ablo_replicator` role | A `REPLICATION` + `SELECT` role Ablo reads and confirms through. | You create it (step 2). |
-| `ablo_writer` role | A scoped DML role Ablo writes your rows through — row DML + ledger, nothing more. | You create it (step 2). |
+| `ablo_writer` role | A scoped DML role Ablo writes your rows through: row DML + ledger, nothing more. | You create it (step 2). |
 | Replication slot | A logical slot Ablo subscribes through to track its WAL position. | Ablo's runtime creates it on first connect. |
 | `wal_level = logical` | A server setting that **requires a restart**. | You set it (step 1). |
 

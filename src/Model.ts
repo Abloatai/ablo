@@ -534,9 +534,16 @@ export abstract class Model {
    * written, `onWrite(key, oldValue, newValue)` is invoked with the value
    * captured immediately before assignment. `applyChanges` passes a hook
    * that records the change in `modifiedProperties`; `updateFromData`
-   * passes none (hydration must not generate outbound mutations). This
-   * is the single source of mutation tracking now that the `mobx-setup`
-   * `observe()` bridge has been removed (one write path: the SDK proxy).
+   * passes none (hydration must not generate outbound mutations).
+   *
+   * This is not the ONLY tracking path. `mobxSetup`'s `observe()` bridge is
+   * live and forwards a DIRECT assignment (`layer.position = next`) to
+   * `propertyChanged` as well — product code writes model fields directly in
+   * plenty of places (keyboard nudge, formatting, AI tools), and those writes
+   * have to reach the server and the undo stream too. The two paths compose:
+   * a direct write establishes the first-old-wins baseline, and a later
+   * `applyChanges` carrying the value the model already holds is a no-op that
+   * leaves that baseline intact.
    */
   private assignFieldsFromData(
     data: ModelData,
@@ -605,10 +612,13 @@ export abstract class Model {
    * brand-new outbound mutation and the record would echo forever. For a
    * local user edit, use `applyChanges` instead.
    *
-   * Suppression is belt-and-suspenders: we pass no `onWrite` hook AND
-   * clear/restore `modifiedProperties` around the assignment, so any
-   * remaining `mobx-setup` `observe()` side-channel writes are discarded
-   * too. (The clear/restore is a harmless no-op once that bridge is gone.)
+   * Suppression takes two forms and BOTH are load-bearing: we pass no
+   * `onWrite` hook, and we clear/restore `modifiedProperties` around the
+   * assignment. The second is what catches `mobxSetup`'s `observe()` bridge,
+   * which fires on the assignment itself and would otherwise record an
+   * inbound delta as a local edit — queueing an outbound mutation that echoes
+   * forever, and putting a collaborator's change on your undo stack. Do not
+   * remove it while that bridge exists (`mobxSetup.M1`).
    */
   updateFromData(data: ModelData): void {
     if (this.isDisposed) {

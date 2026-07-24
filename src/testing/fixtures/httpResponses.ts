@@ -15,6 +15,7 @@
  * teaches nothing and gets copy-pasted wrong.
  */
 
+import { listEnvelope } from '../../transaction/wire/index.js';
 import type {
   ModelReadResponse,
   ModelListResponse,
@@ -91,34 +92,44 @@ export function modelClaim(args: {
 
 /** `POST /v1/models/{model}/{id}/claim` — 201, the lease is yours. */
 export function claimAcquiredResponse(claim: ModelClaim): ClaimAcquiredResponse {
-  return { id: claim.id, object: 'claim', claim } satisfies ClaimAcquiredResponse;
+  return {
+    id: claim.id,
+    object: 'claim',
+    status: 'active',
+    ...(claim.fenceToken !== undefined ? { fenceToken: claim.fenceToken } : {}),
+    expiresAt: claim.expiresAt,
+    claim,
+  } satisfies ClaimAcquiredResponse;
 }
 
 /** `POST /v1/models/{model}/{id}/claim` — 202, you are in the wait line. */
 export function claimQueuedResponse(args: {
-  claimId: string;
+  id: string;
   position: number;
   heldBy?: string;
   expiresAt?: number;
 }): ClaimQueuedResponse {
   return {
+    id: args.id,
+    object: 'claim',
     status: 'queued',
-    claimId: args.claimId,
     position: args.position,
     ...(args.heldBy !== undefined ? { heldBy: args.heldBy } : {}),
     ...(args.expiresAt !== undefined ? { expiresAt: args.expiresAt } : {}),
   } satisfies ClaimQueuedResponse;
 }
 
-/** `GET /v1/claims`. */
+/**
+ * `GET /v1/claims` — holders and waiters in one list, each carrying its
+ * `status`, which is how a reader tells them apart.
+ */
 export function claimListResponse(
   args: { claims?: readonly ModelClaim[]; queue?: readonly ModelClaim[] } = {},
 ): ClaimListResponse {
-  return {
-    object: 'list',
-    claims: args.claims ?? [],
-    queue: args.queue ?? [],
-  } satisfies ClaimListResponse;
+  return listEnvelope([
+    ...(args.claims ?? []),
+    ...(args.queue ?? []).map((claim) => ({ ...claim, status: 'queued' as const })),
+  ]) satisfies ClaimListResponse;
 }
 
 /** `POST /v1/models/{model}/{id}/claim/heartbeat`. */

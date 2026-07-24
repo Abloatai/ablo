@@ -41,6 +41,56 @@ never persists work built on a premise it can no longer see.
 
 ---
 
+## How you hear about it
+
+Four channels carry "something changed", and they answer four different
+questions. Pick by the question you have.
+
+```ts
+// A screen that stays current.
+ablo.documents.onChange((docs) => render(docs));
+
+// Who else is in here, and what are they holding.
+await using room = await ablo.documents.join(documentIds, { ttl: '5m' });
+room.peers;
+
+// Stop this write if the thing I read moved while I composed it.
+await ablo.blocks.update({ id, data, reads: [{ group: 'workspace:abc', readAt, onStale: 'notify' }] });
+
+// Tell me later if this moves, even though I am not writing now.
+await ablo.documents.track({ id: 's-1' });
+```
+
+| Question | Channel | Arrives |
+| --- | --- | --- |
+| What do the rows say right now? | `onChange` | As deltas land, on the socket |
+| Who else is working here? | `join`, then `room.peers` and `room.claims` | As participants come and go, on the socket |
+| Did the premise for **this** write move? | `reads` on the write | On that write's receipt, before it applies |
+| Has anything I read moved since? | `track` | On your next commit's receipt |
+
+Two distinctions do most of the work here.
+
+**`join` is about people; `track` is about data.** Both open a subscription and
+both are scoped by sync group, which is why they look alike. `join` reports
+participants: who is present, what they are doing, which rows they hold. `track`
+reports the rows themselves: something you said you cared about moved, here is
+the watermark to re-read it at. A tool that wants to avoid duplicating a peer's
+work needs `join`. A tool whose output goes stale when its inputs change needs
+`track`.
+
+**`reads` guards one write; `track` outlives it.** They speak the same
+vocabulary and produce the same `StaleNotification`. A `reads` entry is checked
+once, at the commit that carried it, and discarded. A `track` is persisted and
+re-checked against every delta after it, so a long-running actor hears about a
+change that landed while it was thinking, on the next commit it makes.
+
+`onChange` and `join` need a live socket, so they are available on the default
+WebSocket client. `reads` and `track` ride the commit, so they reach a socketless
+actor over HTTP too, which is what makes them the notification path for agents
+and workers.
+
+---
+
 ## Three ways a change reaches other rows
 
 "A affects B and C" means three different things. The engine does the first two
@@ -209,8 +259,12 @@ them coarse everywhere else.
 
 ## Where this is defined
 
-- **Access** — who may read or write a group — is [`identity.md`](/identity).
-- **The convention** — non-coercion, the premise, and the notification — is
+- **Access**, meaning who may read or write a group, is
+  [`identity.md`](/identity).
+- **The convention** behind non-coercion, the premise, and the notification is
   [`concurrency-convention.md`](/concurrency-convention) (§4 and §5).
-- **The mechanics** — the three coordination blocks underneath — are
+- **The mechanics**, the three coordination blocks underneath, are
   [`coordination.md`](/coordination).
+- **`join` and presence**, the participant half of the table above, are
+  [`coordination.md`](/coordination) for the claim stream and
+  [`react.md`](/react) for `useJoin`.

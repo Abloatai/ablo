@@ -35,10 +35,16 @@ import { LEASE_TTL_MS } from '../transaction/wire/protocol.js';
 import {
   heartbeatCadenceMs,
   resolveHeartbeatOptions,
+  resolveHeartbeatPlan,
   startClaimHeartbeatLoop,
 } from '../transaction/coordination/claimHeartbeatLoop.js';
 import { assertWriteOptions } from '../transaction/resources/writeOptionsSchema.js';
 import { modelTarget, subTarget } from '../transaction/coordination/index.js';
+// A named claim-meta crossing (see `claim-meta-crossings-are-enumerated` in
+// .dependency-cruiser.cjs): the reactive proxy's self-claim targets are
+// decodes that build a public claim, so their `meta` converts wire→declared
+// here like the other enumerated crossings.
+import { declaredMeta } from '../transaction/coordination/claimMeta.js';
 import type { ModelTarget } from '../transaction/coordination/schema.js';
 import type { ModelRegistry } from '../ModelRegistry.js';
 import type { InstanceCache } from '../InstanceCache.js';
@@ -151,6 +157,10 @@ export interface ModelCollaboration {
     queue?: boolean;
     /** Reject (don't wait) if the queue is already this deep when we join. */
     maxQueueDepth?: number;
+    /** Cap on the queued wait before rejecting with `grant_timeout`. */
+    waitTimeoutMs?: number;
+    /** Abort the queued wait — rejects with `claim_wait_aborted`. */
+    signal?: AbortSignal;
   }): Promise<Claim>;
   createSnapshot(modelKey: string, id: string): Snapshot;
   /**
@@ -166,6 +176,12 @@ export interface ModelCollaboration {
    * target because it isn't bound to a single model.
    */
   state(target: EntityHalf): Claim | null;
+  /**
+   * Every active claim on a target, not just one. Sub-row claims on disjoint
+   * parts of a row are all granted, so a row can have several holders at once
+   * and `state` answers with only the first of them.
+   */
+  holders(target: EntityHalf): readonly Claim[];
   /**
    * The reactive wait queue on a target — the FIFO line of queued claims
    * behind the holder. Synchronous snapshot off the synced claim stream.
@@ -355,7 +371,16 @@ export function createModelProxy<T, C>(
   objectPool: InstanceCache,
   syncClient: SyncClient,
   registry: ModelRegistry,
-  hydration: OnDemandLoader,
+  /**
+   * The one thing this factory asks of the loader: fetch rows for a model.
+   *
+   * Declared as the slice rather than the whole `OnDemandLoader` because the
+   * whole is a class, and a parameter typed as a class can only ever be
+   * satisfied by an instance of it — so every caller that has a narrower
+   * collaborator, a test most of all, is pushed into a cast through `unknown`
+   * to supply the one method that is actually read.
+   */
+  hydration: Pick<OnDemandLoader, 'fetch'>,
   collaboration?: ModelCollaboration,
   /** The client-wide `wait` default; a per-call `wait` still wins over it. */
   defaultWait?: 'queued' | 'confirmed',
@@ -520,7 +545,7 @@ export function createModelProxy<T, C>(
 
   const takeClaim = async (
     params: ClaimParams<T>,
-  ): Promise<HeldClaim<T>> => {
+  ): Promise<HeldClaim<T> | null> => {
     if (!collaboration) {
       throw new AbloValidationError(
         `Model "${schemaKey}" was built without the collaboration runtime, so claim() is unavailable here. Claiming needs no per-model config — use the standard Ablo({ schema, apiKey }) client and every model is claimable.`,
@@ -535,23 +560,15 @@ export function createModelProxy<T, C>(
     const contended = !!held && held.heldBy !== collaboration.selfParticipantId;
     const failFast = options.queue === false;
 
-    // Fail-fast (`queue: false`): if another participant already holds it,
-    // reject now instead of queuing. Best-effort at the client (a racing
-    // claim not yet synced into our snapshot slips through here) — the
-    // commit-time claim guard is the authoritative backstop that rejects
-    // the loser's first write. For work-distribution dedup that's exactly
-    // right: don't wait (that would double-process), skip.
+    // The try-claim (`queue: false`): a held target is an expected outcome,
+    // not an error, so it resolves `null` — the caller reads `if (!claim)`
+    // and moves on; who holds it stays readable via `claim.state`. Best-effort
+    // at the client (a racing claim not yet synced into our snapshot slips
+    // through here) — the commit-time claim guard is the authoritative
+    // backstop that rejects the loser's first write. For work-distribution
+    // dedup that's exactly right: don't wait (that would double-process), skip.
     if (failFast && contended) {
-      const claim = claimContextFromClaim(held);
-      throw new AbloClaimedError(
-        formatClaimedErrorMessage({
-          targetLabel: `${registeredModelName}/${id}`,
-          heldBy: held.heldBy,
-          claim,
-          fallback: `${registeredModelName}/${id} is held by ${held.heldBy ?? 'another participant'}.`,
-        }),
-        { code: 'entity_claimed', claims: [claim] },
-      );
+      return null;
     }
 
     // Ensure the row exists locally before claiming.
@@ -594,6 +611,10 @@ export function createModelProxy<T, C>(
       ttl: options.ttl,
       queue: !failFast,
       maxQueueDepth: options.maxQueueDepth,
+      // The one wait cap, declared once on ClaimTargetOptions — the socket
+      // wait and the HTTP poll-wait both honor it as `grant_timeout`.
+      waitTimeoutMs: options.waitTimeoutMs,
+      signal: options.signal,
     });
 
     // Only when the claim actually waited behind another holder can the row have
@@ -619,10 +640,15 @@ export function createModelProxy<T, C>(
     // The self-claim's `ClaimTarget` mirrors what a peer's `claim.state` would
     // report (`state` maps `held.target.model` to `type`), so a holder and a
     // peer see the same `target.type` for one row — the wire model token.
+    // Its `meta` is the DECLARED shape (the handle is a public claim), so the
+    // wire-shaped projection converts back through `declaredMeta` — the same
+    // crossing the HTTP handle assembly makes.
+    const { meta: selfMeta, ...selfNarrowed } = subTarget(options);
     const selfTarget: ClaimTarget = {
       type: wireModel,
       id,
-      ...subTarget(options),
+      ...selfNarrowed,
+      ...(selfMeta !== undefined ? { meta: declaredMeta(selfMeta) } : {}),
     };
     const ttlMs =
       options.ttl !== undefined ? toMs(options.ttl) : DEFAULT_LEASE_TTL_MS;
@@ -634,14 +660,20 @@ export function createModelProxy<T, C>(
       description,
       expiresAt,
     });
+    const { meta: targetMeta, ...targetNarrowed } = subTarget(options);
     const target = {
       type: schemaKey,
       id,
-      ...subTarget(options),
+      ...targetNarrowed,
+      ...(targetMeta !== undefined ? { meta: declaredMeta(targetMeta) } : {}),
     };
+    // One reading of the heartbeat options — cadence and callbacks from
+    // whichever spelling the caller used (plan object, shorthand, or the
+    // deprecated flat callbacks).
+    const plan = resolveHeartbeatPlan(options);
     // A beat resolves with the server's extended expiry; keep the local
     // self-claim estimate in step so `claim.state` renders the real window,
-    // and surface every answer through `onHeartbeat` (pressure signal).
+    // and surface every answer through the plan's `onBeat` (pressure signal).
     const heartbeat = async (
       beatOptions?: Duration | ClaimHeartbeatOptions,
     ): Promise<ClaimHeartbeat> => {
@@ -658,19 +690,17 @@ export function createModelProxy<T, C>(
       });
       const held = activeClaims.get(id);
       if (held) held.expiresAt = beat.expiresAt;
-      options.onHeartbeat?.(beat);
+      plan.onBeat?.(beat);
       return beat;
     };
 
     // Opt-in auto-heartbeat: the loop beats until release, and a definitive
-    // loss stops it and surfaces through `onHeartbeatLost`.
-    const stopHeartbeatLoop = options.heartbeat
+    // loss stops it and surfaces through the plan's `onLost`.
+    const stopHeartbeatLoop = plan.loop
       ? startClaimHeartbeatLoop({
           beat: () => heartbeat(),
-          intervalMs: heartbeatCadenceMs(ttlMs, options.heartbeat),
-          ...(options.onHeartbeatLost
-            ? { onLost: options.onHeartbeatLost }
-            : {}),
+          intervalMs: heartbeatCadenceMs(ttlMs, plan.cadence),
+          ...(plan.onLost ? { onLost: plan.onLost } : {}),
         })
       : undefined;
 
@@ -707,7 +737,7 @@ export function createModelProxy<T, C>(
   const takeRowFreeClaim = async (
     id: string,
     options: ClaimOptions<T>,
-  ): Promise<HeldLease> => {
+  ): Promise<HeldLease | null> => {
     if (!collaboration) {
       throw new AbloValidationError(
         `Model "${schemaKey}" was built without the collaboration runtime, so claim() is unavailable here. Claiming needs no per-model config — use the standard Ablo({ schema, apiKey }) client and every model is claimable.`,
@@ -721,22 +751,14 @@ export function createModelProxy<T, C>(
     const contended = !!held && held.heldBy !== collaboration.selfParticipantId;
     const failFast = options.queue === false;
 
-    // Fail-fast (`queue: false`): reject now if a holder is already visible.
-    // Best-effort at the client — a row this participant never synced usually
-    // carries no local claim state either, so a peer gets the deterministic
-    // rejection only once it has observed the holder (entered the row's entity
-    // scope). The server's queue is the backstop for the queuing path.
+    // The try-claim (`queue: false`): resolve `null` if a holder is already
+    // visible — an expected outcome, not an error. Best-effort at the client —
+    // a row this participant never synced usually carries no local claim state
+    // either, so a peer gets the deterministic `null` only once it has
+    // observed the holder (entered the row's entity scope). The server's
+    // queue is the backstop for the queuing path.
     if (failFast && contended) {
-      const claim = claimContextFromClaim(held);
-      throw new AbloClaimedError(
-        formatClaimedErrorMessage({
-          targetLabel: `${registeredModelName}/${id}`,
-          heldBy: held.heldBy,
-          claim,
-          fallback: `${registeredModelName}/${id} is held by ${held.heldBy ?? 'another participant'}.`,
-        }),
-        { code: 'entity_claimed', claims: [claim] },
-      );
+      return null;
     }
 
     // Enter the entity scope before acquiring the lease so the holder's claim
@@ -759,6 +781,10 @@ export function createModelProxy<T, C>(
       ttl: options.ttl,
       queue: !failFast,
       maxQueueDepth: options.maxQueueDepth,
+      // The one wait cap, declared once on ClaimTargetOptions — the socket
+      // wait and the HTTP poll-wait both honor it as `grant_timeout`.
+      waitTimeoutMs: options.waitTimeoutMs,
+      signal: options.signal,
     });
 
     // A watermark-only snapshot: `createSnapshot` still reads the engine's
@@ -787,6 +813,9 @@ export function createModelProxy<T, C>(
       id,
       ...subTarget(options),
     };
+    // One reading of the heartbeat options — cadence and callbacks from
+    // whichever spelling the caller used.
+    const plan = resolveHeartbeatPlan(options);
     // A beat resolves with the server's extended expiry; keep the local
     // self-claim estimate in step so `claim.state` renders the real window.
     const heartbeat = async (
@@ -805,17 +834,15 @@ export function createModelProxy<T, C>(
       });
       const held = activeClaims.get(id);
       if (held) held.expiresAt = beat.expiresAt;
-      options.onHeartbeat?.(beat);
+      plan.onBeat?.(beat);
       return beat;
     };
 
-    const stopHeartbeatLoop = options.heartbeat
+    const stopHeartbeatLoop = plan.loop
       ? startClaimHeartbeatLoop({
           beat: () => heartbeat(),
-          intervalMs: heartbeatCadenceMs(ttlMs, options.heartbeat),
-          ...(options.onHeartbeatLost
-            ? { onLost: options.onHeartbeatLost }
-            : {}),
+          intervalMs: heartbeatCadenceMs(ttlMs, plan.cadence),
+          ...(plan.onLost ? { onLost: plan.onLost } : {}),
         })
       : undefined;
 
@@ -849,12 +876,19 @@ export function createModelProxy<T, C>(
   // would collapse the overloads to one.
   const guardedTakeClaim = guard(takeClaim);
   const guardedTakeRowFreeClaim = guard(takeRowFreeClaim);
+  function claim(
+    params: ClaimParams<T> & { queue: false },
+  ): Promise<HeldClaim<T> | null>;
   function claim(params: ClaimParams<T>): Promise<HeldClaim<T>>;
+  function claim(
+    id: string,
+    opts: ClaimOptions<T> & { queue: false },
+  ): Promise<HeldLease | null>;
   function claim(id: string, opts?: ClaimOptions<T>): Promise<HeldLease>;
   function claim(
     arg: ClaimParams<T> | string,
     opts?: ClaimOptions<T>,
-  ): Promise<HeldClaim<T> | HeldLease> {
+  ): Promise<HeldClaim<T> | HeldLease | null> {
     return typeof arg === 'string'
       ? guardedTakeRowFreeClaim(arg, opts ?? {})
       : guardedTakeClaim(arg);
@@ -871,6 +905,33 @@ export function createModelProxy<T, C>(
   // JSON into an interface. These read as `Claim` here, and the one assertion
   // that applies the caller's parameter is on the assignment below, in one
   // place rather than at every call site.
+  /**
+   * This client's own claim on a row, as a claim-state object.
+   *
+   * The server excludes a holder's own presence frames and the client skips
+   * them, so a row this client holds is absent from every peer-derived read.
+   * Both `state` and `list` therefore synthesize it from the stored lease, and
+   * they do it through here so the two answers cannot describe the same
+   * holding differently.
+   */
+  const ownClaimState = (id: string): Claim | null => {
+    const own = activeClaims.get(id);
+    if (!own) return null;
+    return {
+      object: 'claim',
+      id: own.lease.id,
+      status: 'active',
+      target: own.target,
+      description: own.description,
+      heldBy: collaboration?.selfParticipantId ?? '',
+      participantKind: collaboration?.selfParticipantKind ?? 'user',
+      expiresAt: own.expiresAt,
+      // Symmetric with the peer projection: a holder reading its own claim
+      // sees the same `meta` an observer does.
+      ...(own.target.meta !== undefined ? { meta: own.target.meta } : {}),
+    };
+  };
+
   const claimReaders = {
     state(params: ClaimLookupParams<T>): Claim | null {
       // Read interest: a passive observer of a row's claim state must enter that
@@ -882,20 +943,30 @@ export function createModelProxy<T, C>(
       // the client skips them, so `state` would return null for a row this client
       // holds. Synthesize the active claim from the stored lease so the holder
       // sees its own claim, honoring the documented contract on `claim.state`.
-      const own = activeClaims.get(params.id);
-      if (own) {
-        return {
-          object: 'claim',
-          id: own.lease.id,
-          status: 'active',
-          target: own.target,
-          description: own.description,
-          heldBy: collaboration?.selfParticipantId ?? '',
-          participantKind: collaboration?.selfParticipantKind ?? 'user',
-          expiresAt: own.expiresAt,
-        };
-      }
-      return collaboration?.state({ model: wireModel, id: params.id }) ?? null;
+      return (
+        ownClaimState(params.id) ??
+        collaboration?.state({ model: wireModel, id: params.id }) ??
+        null
+      );
+    },
+
+    /**
+     * Every claim on the row, holders first. Sub-row claims on disjoint parts
+     * are all granted, so a row can have several holders at once and
+     * {@link state} answers with one of them — this is the read that renders
+     * all of them. Same list envelope as {@link queue}, reactive on the same
+     * snapshot, so a render reads it inline.
+     */
+    list(params: ClaimLookupParams<T>): { readonly object: 'list'; readonly data: readonly Claim[] } {
+      void collaboration?.enterScope?.({ [schemaKey]: params.id });
+      const own = ownClaimState(params.id);
+      const peers = collaboration?.holders({ model: wireModel, id: params.id }) ?? [];
+      return {
+        object: 'list',
+        // Own claim first: the server excludes a holder's own presence frames,
+        // so it is never among `peers` and the two never duplicate.
+        data: own ? [own, ...peers] : [...peers],
+      };
     },
 
     queue(params: ClaimLookupParams<T>): { readonly object: 'list'; readonly data: readonly Claim[] } {
@@ -1124,6 +1195,14 @@ export function createModelProxy<T, C>(
           params.claim && !isClaimHandle(params.claim) ? params.claim : null;
         if (autoClaim) {
           const handle = await takeClaim({ ...autoClaim, id: params.id });
+          // A declined try-claim is `null` only on the standalone verb; a
+          // write that could not take its claim is a failed write.
+          if (!handle) {
+            throw new AbloClaimedError(
+              `${registeredModelName}/${params.id} is held by another participant, so this update's claim could not be taken.`,
+              { code: 'entity_claimed' },
+            );
+          }
           try {
             return await operations.update({ ...params, claim: handle });
           } finally {
@@ -1198,6 +1277,13 @@ export function createModelProxy<T, C>(
         params.claim && !isClaimHandle(params.claim) ? params.claim : null;
       if (autoClaim) {
         const handle = await takeClaim({ ...autoClaim, id: params.id });
+        // Same rule as update: a write that could not take its claim fails.
+        if (!handle) {
+          throw new AbloClaimedError(
+            `${registeredModelName}/${params.id} is held by another participant, so this delete's claim could not be taken.`,
+            { code: 'entity_claimed' },
+          );
+        }
         try {
           await operations.delete({ ...params, claim: handle });
         } finally {

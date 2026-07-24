@@ -16,7 +16,8 @@
  * the locator again should touch this module and the schema, not every hop.
  */
 
-import type { ModelTarget, TargetRef, WireClaim } from './schema.js';
+import type { ClaimPart, ModelTarget, TargetRef, WireClaim } from './schema.js';
+import { partName } from './schema.js';
 import type { ClaimTarget, PresenceTarget } from '../types/streams.js';
 import type { ResolveClaimMeta } from '../types/global.js';
 // The one declared→wire conversion for claim metadata; `declaredMeta` is its
@@ -47,7 +48,10 @@ export type ClaimTargetDetails = Pick<
  * handle, the model surface, the HTTP claim params — which is the same
  * member-by-member copying this module exists to end.
  */
-export type ClaimTargetSource = Omit<ClaimTargetDetails, 'meta'> & {
+export type ClaimTargetSource = Omit<ClaimTargetDetails, 'meta' | 'field' | 'fields'> & {
+  /** A schema field name, or an app-defined part named with `part()`. */
+  readonly field?: string | ClaimPart;
+  readonly fields?: readonly (string | ClaimPart)[];
   readonly meta?: ClaimTargetDetails['meta'] | ResolveClaimMeta;
 };
 
@@ -74,8 +78,10 @@ export function subTarget(
   return {
     ...(source.path !== undefined ? { path: source.path } : {}),
     ...(source.range !== undefined ? { range: source.range } : {}),
-    ...(source.field !== undefined ? { field: source.field } : {}),
-    ...(source.fields !== undefined ? { fields: source.fields } : {}),
+    // Part names cross to their wire spelling here — the one declared→wire
+    // seam — so a `part('B2')` object never leaks into a frame or a URL.
+    ...(source.field !== undefined ? { field: partName(source.field) } : {}),
+    ...(source.fields !== undefined ? { fields: source.fields.map(partName) } : {}),
     ...(source.meta !== undefined ? { meta: wireMeta(source.meta) } : {}),
   };
 }
@@ -137,4 +143,41 @@ export function streamTarget(
 ): Pick<ClaimTarget, 'type' | 'id'> {
   const [type, id] = entityOf(source);
   return { type, id };
+}
+
+/**
+ * A batch claim's grant: its fencing token, and the one row it was granted over.
+ *
+ * A claim's `readAt` generalises across a batch; its token does not. The token
+ * is evidence of one row's place in the grant order, so it belongs only on the
+ * operation writing the row the claim covers. Presented anywhere else the server
+ * refuses it, because a token that travels is a fence any writer can raise.
+ */
+export type BatchFence = Pick<ModelTarget, 'model' | 'id'> & {
+  readonly token: number;
+};
+
+/** The batch's grant, or nothing when there is no claim, or none with a token. */
+export function batchFence(
+  source: EntityLocator | null | undefined,
+  token: number | null | undefined,
+): BatchFence | null {
+  return source == null || token == null
+    ? null
+    : { ...modelTarget(source), token };
+}
+
+/**
+ * The token an operation carries: its own if it names one, the batch's when it
+ * writes the claimed row, otherwise none.
+ */
+export function fenceTokenFor(
+  fence: BatchFence | null,
+  model: string,
+  id: string | null,
+): number | null {
+  if (fence === null || id === null) return null;
+  return model.toLowerCase() === fence.model.toLowerCase() && id === fence.id
+    ? fence.token
+    : null;
 }

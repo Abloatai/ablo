@@ -9,7 +9,8 @@
  * queue path and the HTTP commit path share the same projection.
  */
 
-import { getContext } from '../../context.js';
+import { globalRuntime } from '../../context.js';
+import type { RuntimeContext } from '../../RuntimeContext.js';
 import { MutationOperationType } from '../../transaction/types/index.js';
 import { snapshotJsonValue } from '../../transaction/utils/json.js';
 import type { OnStaleMode } from '../../transaction/coordination/schema.js';
@@ -55,8 +56,9 @@ export function projectCommitPayload(
   modelName: string,
   source: Record<string, unknown>,
   opts: { dropUndefined: boolean },
+  runtime: RuntimeContext = globalRuntime,
 ): MutationInput {
-  const metadata = getContext().getModelMetadata(modelName);
+  const metadata = runtime.getModelMetadata(modelName);
   const fields = metadata?.fields;
   const out: MutationInput = {};
 
@@ -174,9 +176,13 @@ export const stripModelSuffix = (modelName: string): string => modelName.replace
  * foreign-key ordering because the row already exists, so they all share the
  * configured default non-create priority.
  */
-export const computePriorityScore = (type: QueuedMutation['type'], modelName: string): number => {
+export const computePriorityScore = (
+  type: QueuedMutation['type'],
+  modelName: string,
+  runtime: RuntimeContext = globalRuntime,
+): number => {
   const { modelCreatePriority, defaultCreatePriority, defaultNonCreatePriority } =
-    getContext().config;
+    runtime.config;
   if (type !== 'create') return defaultNonCreatePriority;
   return modelCreatePriority.get(modelName) ?? defaultCreatePriority;
 };

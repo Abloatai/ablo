@@ -23,6 +23,7 @@
  */
 
 import type { Schema, SchemaRecord } from '../transaction/schema/schema.js';
+import { buildFieldRefs } from '../transaction/schema/schema.js';
 import type { ModelDef } from '../transaction/schema/model.js';
 import type { RelationDef } from '../transaction/schema/relation.js';
 import { AbloValidationError } from '../transaction/errors.js';
@@ -68,6 +69,8 @@ export function selectModels<S extends SchemaRecord, K extends keyof S & string>
 
   return {
     models: models as unknown as Pick<S, K>,
+    // References for exactly the models this projection kept.
+    fields: buildFieldRefs(models) as Schema<Pick<S, K>>['fields'],
     validators: validators as Schema<Pick<S, K>>['validators'],
     identityRoles: schema.identityRoles,
     sessionSettings: schema.sessionSettings,

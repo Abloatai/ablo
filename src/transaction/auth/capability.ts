@@ -206,6 +206,33 @@ export const capabilityScopeSchema = z.object({
 export type CapabilityScope = z.infer<typeof capabilityScopeSchema>;
 
 /**
+ * What `POST /v1/capabilities` answers with — **201**, the credential is minted.
+ *
+ * This is the first call any non-TypeScript client makes, and until it had a
+ * schema the published contract described it as `{ type: 'object' }`: a caller
+ * working from the reference could see that a capability could be minted and
+ * not where the token was in the reply.
+ *
+ * `scope` echoes what was MINTED, not what was asked. A `wideScope` mint stores
+ * the org-wide default and read-your-writes widens the verb axis, so a client
+ * that assumed its request came back verbatim would report a scope narrower
+ * than the one being enforced.
+ *
+ * `userMeta` is the caller's own blob, echoed. Ablo has no view into their user
+ * directory — the API key is what is trusted — so this is deliberately open.
+ */
+export const capabilityMintResponseSchema = z.object({
+  capabilityId: z.string().min(1),
+  token: z.string().min(1),
+  /** ISO 8601. */
+  expiresAt: z.string().min(1),
+  organizationId: z.string().min(1),
+  scope: capabilityScopeSchema,
+  userMeta: z.record(z.string(), z.unknown()),
+});
+export type CapabilityMintResponse = z.infer<typeof capabilityMintResponseSchema>;
+
+/**
  * `POST /v1/capabilities` — mint a capability for a participant.
  *
  * Where an ephemeral key is a session for a person, a capability is a scoped,

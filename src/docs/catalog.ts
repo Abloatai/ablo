@@ -57,12 +57,12 @@ const TEXT_MIME = 'text/plain; charset=utf-8';
  * the docs index cross-links as `agents`, and whichever of the two won that
  * name would silently shadow the other. Friendlier spellings are aliases below.
  */
-const PACKAGE_FILES: ReadonlyArray<{
+const PACKAGE_FILES: readonly {
   readonly filename: string;
   readonly title: string;
   readonly description: string;
   readonly mime: string;
-}> = [
+}[] = [
   {
     filename: 'AGENTS.md',
     title: 'AGENTS.md',
@@ -168,6 +168,10 @@ async function readDocsDirectory(dir: string, kind: DocKind): Promise<DocEntry[]
   return entries;
 }
 
+/** The H1 a page opens with, and the blockquote paragraph that follows it. */
+const H1_LINE = /^#[ \t]+(.+?)[ \t]*$/m;
+const PROMISE_BLOCKQUOTE = /^\s*\n((?:>.*\n)+)/;
+
 /**
  * Pull a page's title and promise line out of its markdown.
  *
@@ -179,11 +183,11 @@ export function parseDocHeader(body: string): {
   readonly title: string | null;
   readonly description: string;
 } {
-  const heading = body.match(/^#[ \t]+(.+?)[ \t]*$/m);
+  const heading = H1_LINE.exec(body);
   const title = heading?.[1] ?? null;
 
-  const afterHeading = heading?.index === undefined ? body : body.slice(heading.index + heading[0].length);
-  const promise = afterHeading.match(/^\s*\n((?:>.*\n)+)/);
+  const afterHeading = heading === null ? body : body.slice(heading.index + heading[0].length);
+  const promise = PROMISE_BLOCKQUOTE.exec(afterHeading);
   const description =
     promise?.[1]
       ?.split('\n')

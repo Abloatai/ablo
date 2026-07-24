@@ -2,13 +2,13 @@
 
 import { createContext, createElement, useContext, type ReactNode } from 'react';
 import type { Schema } from '../transaction/schema/schema.js';
-import type { SyncStoreContract } from '../core/storeContract.js';
+import type { SyncStoreContract } from '../storeContract.js';
 import { AbloValidationError } from '../transaction/errors.js';
 
 // `SyncStoreContract` and `LocalMutation` are defined in a React-free module,
 // so code that never touches React can still implement the store. They are
 // re-exported here for the convenience of React consumers.
-export type { SyncStoreContract, LocalMutation } from '../core/storeContract.js';
+export type { SyncStoreContract, LocalMutation } from '../storeContract.js';
 
 export interface SyncReactContext {
   store: SyncStoreContract;

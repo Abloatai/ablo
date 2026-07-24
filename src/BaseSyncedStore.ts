@@ -40,16 +40,18 @@ import {
   type DefaultCollaborationEvents,
   type SyncWebSocketEventMap,
 } from './sync/SyncWebSocket.js';
-import { QueryProcessor } from './core/QueryProcessor.js';
+import { QueryProcessor } from './query/QueryProcessor.js';
 import { Model, rowAsModel } from './Model.js';
-import { getContext } from './context.js';
+import { globalRuntime } from './context.js';
+import type { RuntimeContext } from './RuntimeContext.js';
+import type { AbloPlugin, AppliedChange } from './transaction/plugin.js';
 import { AbloSessionError, isAccessCredentialExpiryCloseReason } from './transaction/errors.js';
 import { ModelScope } from './InstanceCache.js';
 import { LazyReferenceCollection } from './LazyReferenceCollection.js';
 import type { Schema } from './transaction/schema/schema.js';
 // The store contract types (SyncStoreContract, LocalMutation, SyncStatus)
 // live in a React-free core module and are re-exported for React consumers.
-import type { SyncStatus, SyncStoreContract, LocalMutation } from './core/storeContract.js';
+import type { SyncStatus, SyncStoreContract, LocalMutation } from './storeContract.js';
 import type { AuthCredentialSource } from './transaction/auth/credentialSource.js';
 import type { ModelData } from './transaction/types/modelData.js';
 import { deriveSyncPlanFromSchema } from './sync/syncPlan.js';
@@ -126,7 +128,7 @@ export interface SyncedStoreConfig {
 
 // SyncStatus is defined in the React-free store-contract module, next to
 // SyncStoreContract which embeds it, and is re-exported here.
-export type { SyncStatus } from './core/storeContract.js';
+export type { SyncStatus } from './storeContract.js';
 
 /** User context for initialization */
 export interface UserContext {
@@ -260,6 +262,10 @@ export class BaseSyncedStore<
   };
 
   // ── Injected dependencies ──
+  /** The owning client's runtime; the module-global bridge when constructed directly. */
+  protected readonly runtime: RuntimeContext;
+  /** The installed plugins the delta pipeline dispatches stage handlers to. */
+  protected readonly stagePlugins: readonly AbloPlugin[];
   protected readonly syncClient: SyncClient;
   protected readonly database: Database;
   protected readonly objectPool: InstanceCache;
@@ -399,7 +405,7 @@ export class BaseSyncedStore<
         this.syncClient.applyBootstrapDataToPool(data, undefined, { scoped: true });
         for (const g of need) this.hydratedGroups.add(g);
       } catch (err) {
-        getContext().logger.debug('[BaseSyncedStore] scoped hydrate failed', {
+        this.runtime.logger.debug('[BaseSyncedStore] scoped hydrate failed', {
           syncGroups: need,
           error: err instanceof Error ? err.message : String(err),
         });
@@ -517,9 +523,19 @@ export class BaseSyncedStore<
       url?: string;
       /** Shared bearer credential source for every auth-aware transport. */
       auth?: AuthCredentialSource;
+      /** The owning client's runtime. Defaults to the module-global bridge. */
+      runtime?: RuntimeContext;
+      /**
+       * The installed plugins, whose declared stage handlers the delta
+       * pipeline dispatches. Empty on direct construction — the store's own
+       * apply is then the whole pipeline.
+       */
+      stagePlugins?: readonly AbloPlugin[];
     },
     config: SyncedStoreConfig = {}
   ) {
+    this.runtime = dependencies.runtime ?? globalRuntime;
+    this.stagePlugins = dependencies.stagePlugins ?? [];
     this.syncClient = dependencies.syncClient;
     this.database = dependencies.database;
     this.objectPool = dependencies.objectPool;
@@ -799,7 +815,7 @@ export class BaseSyncedStore<
 
   /**
    * Observe the LOCAL mutation stream for undo recording (see
-   * {@link import('./core/storeContract.js').LocalMutation}). Taps the
+   * {@link import('./storeContract.js').LocalMutation}). Taps the
    * MutationQueue's `transaction:created` event — fired once per local
    * create/update/delete/archive with `previousData` already captured.
    * Remote/collaborator deltas apply via `applyDeltaBatchToPool` and never
@@ -854,7 +870,7 @@ export class BaseSyncedStore<
         // negation false-positives every server-side bootstrap (e.g. the
         // server-side agent.run dispatch path through `connectAgent`).
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             `Bootstrap attempt ${attempt} skipped - offline`,
             'sync.bootstrap',
             'warning'
@@ -865,7 +881,7 @@ export class BaseSyncedStore<
         }
 
         try {
-          getContext().logger.info(
+          this.runtime.logger.info(
             `[BaseSyncedStore] Bootstrap attempt ${attempt}/${BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS}`
           );
 
@@ -874,7 +890,7 @@ export class BaseSyncedStore<
             this.createBootstrapTimeout(attempt),
           ])) as T;
 
-          getContext().logger.info('[BaseSyncedStore] Bootstrap completed successfully', { attempt });
+          this.runtime.logger.info('[BaseSyncedStore] Bootstrap completed successfully', { attempt });
           return result;
         } catch (error) {
           lastError = error as Error;
@@ -886,11 +902,11 @@ export class BaseSyncedStore<
           if (AbloSessionError.isSessionError(error)) throw error;
 
           if (isNetworkError && typeof navigator !== 'undefined' && navigator.onLine === false) {
-            getContext().observability.captureBootstrapFailure(error, { type: 'network-offline' });
+            this.runtime.observability.captureBootstrapFailure(error, { type: 'network-offline' });
             throw error;
           }
 
-          getContext().observability.breadcrumb(
+          this.runtime.observability.breadcrumb(
             `Bootstrap attempt ${attempt} failed`,
             'sync.bootstrap',
             'warning',
@@ -898,7 +914,7 @@ export class BaseSyncedStore<
           );
 
           if (isTimeout && attempt < BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS) {
-            getContext().logger.info('[BaseSyncedStore] Resetting state before bootstrap retry');
+            this.runtime.logger.info('[BaseSyncedStore] Resetting state before bootstrap retry');
             this.resetBootstrapState();
             await new Promise((resolve) => setTimeout(resolve, BOOTSTRAP_CONFIG.RETRY_DELAY_MS));
           } else if (!isTimeout && attempt < BOOTSTRAP_CONFIG.MAX_RETRY_ATTEMPTS) {
@@ -978,9 +994,9 @@ export class BaseSyncedStore<
       // is stale — clear it so re-entered groups backfill again.
       this.hydratedGroups.clear();
       this.hydratingGroups.clear();
-      getContext().logger.info('[BaseSyncedStore] Bootstrap state reset complete');
+      this.runtime.logger.info('[BaseSyncedStore] Bootstrap state reset complete');
     } catch {
-      getContext().observability.breadcrumb('Error resetting bootstrap state', 'sync.bootstrap', 'warning');
+      this.runtime.observability.breadcrumb('Error resetting bootstrap state', 'sync.bootstrap', 'warning');
     }
   }
 
@@ -1016,7 +1032,7 @@ export class BaseSyncedStore<
       this.updateSyncStatus({ state: 'idle', progress: 100 });
       return 'success';
     } catch (error) {
-      getContext().observability.captureBootstrapFailure(error, { type: 'connection-store-reconnect' });
+      this.runtime.observability.captureBootstrapFailure(error, { type: 'connection-store-reconnect' });
 
       if (AbloSessionError.isSessionError(error)) {
         this.syncWebSocket.setSessionErrorDetected();
@@ -1039,12 +1055,12 @@ export class BaseSyncedStore<
           const hydratedSize = this.objectPool.size;
           if (hydratedSize > 0) {
             this.dataReady = true;
-            getContext().logger.info('[BaseSyncedStore] Hydrated from local fallback', {
+            this.runtime.logger.info('[BaseSyncedStore] Hydrated from local fallback', {
               objectPoolSize: hydratedSize,
             });
           }
         } catch (fallbackError) {
-          getContext().logger.debug('[BaseSyncedStore] Local fallback failed', {
+          this.runtime.logger.debug('[BaseSyncedStore] Local fallback failed', {
             error: (fallbackError as Error).message,
           });
         }
@@ -1125,6 +1141,7 @@ export class BaseSyncedStore<
   /** Narrow context the group-change leaf talks back through. */
   private groupChangeContext(): GroupChangeContext {
     return {
+      runtime: this.runtime,
       database: this.database,
       objectPool: this.objectPool,
       getSubscribedSyncGroups: () => this.syncWebSocket.getSyncGroups(),
@@ -1204,6 +1221,7 @@ export class BaseSyncedStore<
   private poolContext(): PoolContext {
     const store = this;
     return {
+      runtime: this.runtime,
       applyDeltaBatchToPool: (results) =>
         { this.syncClient.applyDeltaBatchToPool(
           results,
@@ -1262,8 +1280,8 @@ export class BaseSyncedStore<
         yield this.syncClient.hydrateFromDatabase();
         hasLocalData = this.objectPool.size > 0;
       } catch (hydrateError) {
-        getContext().logger.debug('[sync-engine] IDB hydration failed', { error: hydrateError });
-        getContext().observability.captureBootstrapFailure(hydrateError, { type: 'hydration-from-idb' });
+        this.runtime.logger.debug('[sync-engine] IDB hydration failed', { error: hydrateError });
+        this.runtime.observability.captureBootstrapFailure(hydrateError, { type: 'hydration-from-idb' });
       }
 
       // Get sync baseline for WebSocket
@@ -1293,7 +1311,7 @@ export class BaseSyncedStore<
       >;
 
       if (context.bootstrapMode === 'none') {
-        getContext().logger.info(
+        this.runtime.logger.info(
           '[BaseSyncedStore] Bootstrap skipped (bootstrapMode=none)',
           { kind: context.kind ?? 'user' },
         );
@@ -1323,7 +1341,7 @@ export class BaseSyncedStore<
           // handler itself), which would otherwise vanish unhandled.
           void this.performBackgroundBootstrap(requirements, context, signal).catch(
             (error: unknown) => {
-              getContext().observability.captureBootstrapFailure(error, {
+              this.runtime.observability.captureBootstrapFailure(error, {
                 type: 'background-orchestration',
               });
             }
@@ -1363,7 +1381,7 @@ export class BaseSyncedStore<
       }
 
       const isSession = AbloSessionError.isSessionError(error);
-      getContext().observability.captureBootstrapFailure(error, { type: 'initialize' });
+      this.runtime.observability.captureBootstrapFailure(error, { type: 'initialize' });
 
       if (isSession) {
         this.syncWebSocket.setSessionErrorDetected();
@@ -1412,11 +1430,11 @@ export class BaseSyncedStore<
         this.applyBootstrapToPool(bootstrapResult, deltaProtectedIds);
         this.updateSyncStatus({ state: 'idle', progress: 100 });
       } catch (error) {
-        getContext().logger.debug('[sync-engine] Background bootstrap failed', {
+        this.runtime.logger.debug('[sync-engine] Background bootstrap failed', {
           error: error instanceof Error ? error.message : String(error),
           cause: error,
         });
-        getContext().observability.captureBootstrapFailure(error, { type: 'background' });
+        this.runtime.observability.captureBootstrapFailure(error, { type: 'background' });
         if (AbloSessionError.isSessionError(error)) {
           this.syncWebSocket.setSessionErrorDetected();
           this.syncWebSocket.disconnect();
@@ -1598,7 +1616,7 @@ export class BaseSyncedStore<
         if (resolved) return;
         resolved = true;
         unsubscribe();
-        getContext().logger.debug(
+        this.runtime.logger.debug(
           `[BaseSyncedStore] waitForWebSocketConnected timed out after ${timeoutMs}ms — initialize() will return but the next mutation may race the upgrade.`,
         );
         resolve(false);
@@ -1618,7 +1636,7 @@ export class BaseSyncedStore<
    */
   protected setupWebSocketSync(context: UserContext, lastSyncId: number): void {
     if (!context.userId || !context.organizationId) {
-      getContext().observability.breadcrumb(
+      this.runtime.observability.breadcrumb(
         'Cannot setup WebSocket sync without user context',
         'sync.websocket',
         'warning'
@@ -1678,7 +1696,7 @@ export class BaseSyncedStore<
     });
 
     const onReconnecting = this.syncWebSocket.subscribe('reconnecting', ({ attempt, delay }) => {
-      getContext().logger.info('[BaseSyncedStore] WebSocket reconnecting', { attempt, delay });
+      this.runtime.logger.info('[BaseSyncedStore] WebSocket reconnecting', { attempt, delay });
       this.updateSyncStatus({ state: 'reconnecting' });
     });
 
@@ -1720,7 +1738,7 @@ export class BaseSyncedStore<
     // Terminal session loss (revocation / the login itself is gone): notify,
     // route the FSM to its terminal state, and clear local data.
     const handleTerminalSessionError = (error: Error): void => {
-      getContext().observability.captureWebSocketError({ context: 'session-error', error: error.message });
+      this.runtime.observability.captureWebSocketError({ context: 'session-error', error: error.message });
       this.onConnectionEvent?.('WS_SESSION_ERROR');
       for (const listener of this.sessionErrorListeners) {
         try { listener(error); } catch {}
@@ -1731,10 +1749,10 @@ export class BaseSyncedStore<
       // When auth is revoked, locally cached data must not persist on disk.
       this.database.clear({ includeWriteJournal: true }).catch((clearErr) => {
         // consumer register: session ended, but cached data may remain on disk
-        getContext().logger.error(
+        this.runtime.logger.error(
           'Your session ended, but some locally cached data could not be cleared from this device.',
         );
-        getContext().logger.debug('[BaseSyncedStore] Failed to clear database on session error', clearErr);
+        this.runtime.logger.debug('[BaseSyncedStore] Failed to clear database on session error', clearErr);
       });
       this.objectPool.clear();
     };
@@ -1750,7 +1768,7 @@ export class BaseSyncedStore<
       // through to the terminal path. Without this branch, every credential
       // TTL elapse wedged the socket behind the write-once session latch.
       if (AbloSessionError.isSessionError(error) && isAccessCredentialExpiryCloseReason(error.message)) {
-        getContext().observability.breadcrumb(
+        this.runtime.observability.breadcrumb(
           'WebSocket closed for expired access credential — re-minting',
           'sync.websocket',
           'warning',
@@ -1803,10 +1821,10 @@ export class BaseSyncedStore<
 
     const onReconnectFailed = this.syncWebSocket.subscribe('reconnect_failed', ({ attempts }) => {
       // consumer register: reconnection exhausted — the app is now offline
-      getContext().logger.warn(
+      this.runtime.logger.warn(
         'Lost connection to the sync service and could not reconnect. Your app is now offline; changes will sync once the connection is restored.',
       );
-      getContext().logger.debug('[BaseSyncedStore] WebSocket reconnection gave up', { attempts });
+      this.runtime.logger.debug('[BaseSyncedStore] WebSocket reconnection gave up', { attempts });
       this.updateSyncStatus({ state: 'reconnecting' });
     });
 
@@ -1935,6 +1953,8 @@ export class BaseSyncedStore<
     if (this._deltaPipelineContext) return this._deltaPipelineContext;
     const store = this;
     this._deltaPipelineContext = {
+      runtime: this.runtime,
+      stagePlugins: this.stagePlugins,
       // Shared pipeline state, backed by the host fields.
       get pendingDeltas() { return store.pendingDeltas; },
       set pendingDeltas(deltas) { store.pendingDeltas = deltas; },
@@ -1952,11 +1972,7 @@ export class BaseSyncedStore<
       advancePersisted: (syncId) => { this.syncClient.position.advancePersisted(syncId); },
       // Persistence + pool writes.
       processDeltaBatch: (deltas) => this.database.processDeltaBatch(deltas),
-      applyDeltaBatchToPool: (results) =>
-        { this.syncClient.applyDeltaBatchToPool(
-          results,
-          (name, data) => this.enrichRelations(name, data),
-        ); },
+      applyDeltaBatchToPool: (results) => { this.applyChangesToPool(results); },
       acknowledge: (syncId) => { this.syncWebSocket.acknowledge(syncId); },
       get objectPool() { return store.objectPool; },
       // Dynamic-dispatch hooks — protected override points on this class.
@@ -1975,6 +1991,18 @@ export class BaseSyncedStore<
       },
     };
     return this._deltaPipelineContext;
+  }
+
+  /**
+   * Lands persisted changes in the in-memory pool, with this store's
+   * relation enrichment bound. The one apply path: the pipeline's bridge
+   * (no plugins installed) and the `humans()` apply handler both call it.
+   */
+  applyChangesToPool(changes: readonly AppliedChange[]): void {
+    this.syncClient.applyDeltaBatchToPool(
+      changes,
+      (name, data) => this.enrichRelations(name, data),
+    );
   }
 
   /** Get fields that represent meaningful state for deduplication. Override for model-specific fields. */
@@ -2096,7 +2124,7 @@ export class BaseSyncedStore<
     }
 
     if (totalCancelled > 0) {
-      getContext().logger.info('[BaseSyncedStore] Cascade cancelled orphaned transactions', {
+      this.runtime.logger.info('[BaseSyncedStore] Cascade cancelled orphaned transactions', {
         parentModel: parentModelName,
         parentId: parentId.slice(0, 12),
         totalCancelled,
@@ -2324,13 +2352,13 @@ export class BaseSyncedStore<
 
   /** Error handler for fire-and-forget flushPendingDeltas calls */
   protected handleFlushError = (error: unknown): void => {
-    getContext().observability.captureMutationFailure({
+    this.runtime.observability.captureMutationFailure({
       context: 'flush-pending-deltas',
       modelName: 'batch',
       modelId: 'batch',
       error: error instanceof Error ? error : new Error(String(error)),
     });
-    getContext().logger.debug('[BaseSyncedStore] Delta flush error', {
+    this.runtime.logger.debug('[BaseSyncedStore] Delta flush error', {
       error: error instanceof Error ? error.message : String(error),
     });
   };

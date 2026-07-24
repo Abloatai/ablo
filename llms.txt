@@ -2,11 +2,11 @@
 
 Ablo is collaboration infrastructure for AI agents: one API for agents, apps, and services to claim, change, and confirm the same rows.
 
-Here is the problem it solves. Two agents reach for `report_stockholm` at once. One claims the row, does slow work (an LLM call, a fetch, a chain of tools), and commits. The second is neither rejected nor allowed to clobber: it waits in line, is handed the row as it now stands, and proceeds. Claims don't lock. If another writer holds the row, `claim` waits for them, re-reads the fresh row, then hands it to you — so writers serialize instead of colliding. A person editing that row is simply another holder; the agent waits behind them the same way.
+Here is the problem it solves. Two agents reach for `report_stockholm` at once. One claims the row, does slow work (an LLM call, a fetch, a chain of tools), and commits. The second is neither rejected nor allowed to clobber: it waits in line, is handed the row as it now stands, and proceeds. Claims don't lock. If another writer holds the row, `claim` waits for them, re-reads the fresh row, then hands it to you — so writers serialize instead of colliding. A person editing that row is simply another holder; the agent waits behind them the same way. And a claim is as narrow as its target: name a `path`, a `range`, or a `field` and two claims on non-overlapping parts of the same row are both granted — region locking within one row, with no queueing between regions.
 
 Use AI SDK for the agent loop. Use Ablo when agent reads and writes must persist, coordinate with concurrent work, and leave an audit trail.
 
-## Surfaces — pick by who is calling
+## Surfaces: pick by who is calling
 
 Every surface reaches the same coordinated state. They are not interchangeable.
 
@@ -217,7 +217,7 @@ Import from these public paths only:
 
 Do not teach `/api`, `/agent`, `/ai-sdk`, `/core`, `/realtime`, or internal subpaths. (`/source` IS public — it's the Data Source endpoint surface above.)
 
-## CLI — agents run it NON-INTERACTIVELY
+## CLI: agents run it NON-INTERACTIVELY
 
 `ablo init` and other prompts need a TTY; an agent/CI run has none and will HANG. Always:
 

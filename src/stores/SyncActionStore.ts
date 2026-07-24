@@ -4,7 +4,8 @@
  */
 
 // Uses native IndexedDB for maximum performance
-import { getContext } from '../context.js';
+import { globalRuntime } from '../context.js';
+import type { RuntimeContext } from '../RuntimeContext.js';
 import { syncActionSchema, type SyncAction } from './syncAction.js';
 
 /**
@@ -16,10 +17,10 @@ import { syncActionSchema, type SyncAction } from './syncAction.js';
  * than replayed as a malformed delta.
  */
 /** Parse one stored row into a SyncAction, or `null` (dropped + logged). */
-function toSyncAction(row: unknown): SyncAction | null {
+function toSyncAction(row: unknown, runtime: RuntimeContext): SyncAction | null {
   const parsed = syncActionSchema.safeParse(row);
   if (!parsed.success) {
-    getContext().logger.debug('[SyncActionStore] Dropping malformed stored sync action', {
+    runtime.logger.debug('[SyncActionStore] Dropping malformed stored sync action', {
       issues: parsed.error.issues.map((i) => i.path.join('.')).join(', '),
     });
     return null;
@@ -40,7 +41,10 @@ export class SyncActionStore {
   private lastAppliedSyncId = 0;
   private pendingActions = new Map<number, SyncAction>();
 
-  constructor(db: IDBDatabase) {
+  constructor(
+    db: IDBDatabase,
+    private readonly runtime: RuntimeContext = globalRuntime,
+  ) {
     this.db = db;
   }
 
@@ -138,7 +142,7 @@ export class SyncActionStore {
           return;
         }
 
-        resolve(toSyncAction(data) ?? undefined);
+        resolve(toSyncAction(data, this.runtime) ?? undefined);
       };
 
       request.onerror = () => { reject(request.error); };
@@ -159,7 +163,7 @@ export class SyncActionStore {
       request.onsuccess = () => {
         const allData: unknown[] = request.result;
         const actions = allData
-          .map(toSyncAction)
+          .map((row) => toSyncAction(row, this.runtime))
           .filter((action): action is SyncAction => action !== null);
         resolve(actions);
       };
@@ -558,7 +562,7 @@ export class SyncActionStore {
           try {
             await this.updateLastSyncId(this.lastAppliedSyncId);
             const result = (actionsToRewind as unknown[])
-              .map(toSyncAction)
+              .map((row) => toSyncAction(row, this.runtime))
               .filter((action): action is SyncAction => action !== null);
             resolve(result);
           } catch (error) {

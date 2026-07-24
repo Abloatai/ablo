@@ -27,6 +27,7 @@ import { AbloValidationError } from '../transaction/errors.js';
 import type { Database } from '../Database.js';
 import type { Model } from '../Model.js';
 import type { ModelRegistry, RegisteredModelClass } from '../ModelRegistry.js';
+import type { RuntimeContext } from '../RuntimeContext.js';
 import { postQuery } from '../query/client.js';
 import type { RecoveryClass } from '../transaction/errorCodes.js';
 import type { LoadWhere, Query, WhereClause, WhereOp, WherePrimitive } from '../query/types.js';
@@ -46,6 +47,8 @@ export interface OnDemandLoaderOptions {
   readonly getAuthToken?: () => string | null;
   /** @deprecated Use `getAuthToken`. */
   readonly getCapabilityToken?: () => string | null;
+  /** The owning client's runtime. Defaults to the module-global bridge. */
+  readonly runtime?: RuntimeContext;
 }
 
 export interface FetchOptions<T> {
@@ -578,6 +581,7 @@ export class OnDemandLoader {
         baseUrl: this.opts.baseUrl,
         getAuthToken: this.authTokenProvider ?? undefined,
         recoverCredential: this.credentialRecovery ?? undefined,
+        runtime: this.opts.runtime,
       },
       { queries: [query] },
     );

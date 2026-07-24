@@ -594,6 +594,16 @@ export interface Claim<T = Record<string, unknown>, M = ResolveClaimMeta> {
    */
   readonly ttlSeconds?: number;
   /**
+   * The claim's open metadata bag, as it stands on the wire.
+   *
+   * A heartbeat's `details` land here under `progress` — last beat wins — so
+   * an observer can read what a long hold is doing without waiting for the
+   * holder to release. Deliberately the open record rather than the declared
+   * `ClaimMeta`: a shape the program declared has no member for a key the
+   * coordinator wrote, and `target.meta` beside it is that declared shape.
+   */
+  readonly meta?: Record<string, unknown>;
+  /**
    * 0-based place in the FIFO line — present only when `status: 'queued'`
    * (`0` = next behind the holder). Absent for the active holder.
    */

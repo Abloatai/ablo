@@ -14,6 +14,7 @@ import type { Schema, SchemaRecord } from '../transaction/schema/schema.js';
 import { Ablo } from '../client/Ablo.js';
 import type {
   Claim,
+  Duration,
   Peer,
 } from '../transaction/types/streams.js';
 import type {
@@ -406,6 +407,18 @@ export type { EngineParticipant, ParticipantScope, ParticipantStatus };
  */
 export interface UseJoinOptions {
   readonly scope?: ParticipantScope;
+  /**
+   * Lease TTL for the participant claim, as a compact duration (`'5m'`) or a
+   * number of seconds. The same dial and the same spelling as
+   * `ablo.<model>.join(ids, { ttl })` and every other lease in the SDK.
+   */
+  readonly ttl?: Duration;
+  /**
+   * @deprecated Use `ttl`. Removed in 0.37.0.
+   *
+   * The same rename as on `ParticipantJoinOptions`: one lease, and the seconds
+   * spelling was the one that misled, because it accepted duration strings too.
+   */
   readonly ttlSeconds?: number | string | null;
   /** Tear down + don't re-join while true. */
   readonly paused?: boolean;
@@ -549,7 +562,9 @@ export function useJoin(opts: UseJoinOptions): UseJoinReturn {
     let cancelled = false;
     const claimId = createParticipantClaimId();
     ws.sendClaim(claimId, scopedSyncGroups, {
-      ttlSeconds: parseParticipantTtlSeconds(opts.ttlSeconds),
+      // Reading the retired spelling IS the compatibility path; it goes at 0.37.0.
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      ttlSeconds: parseParticipantTtlSeconds(opts.ttl ?? opts.ttlSeconds),
     })
       .then(() => {
         if (!cancelled) setClaimConnected(true);
@@ -567,7 +582,8 @@ export function useJoin(opts: UseJoinOptions): UseJoinReturn {
       ws.sendRelease(claimId);
       void store.unpinScope?.(scope);
     };
-  }, [engine, paused, scopeKey, syncStatus.name, opts.ttlSeconds, opts.claim]);
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- same compatibility read as above.
+  }, [engine, paused, scopeKey, syncStatus.name, opts.ttl, opts.ttlSeconds, opts.claim]);
 
   // Bridge the engine's presence + claims streams into React state.
   // Plain useState + useEffect is sufficient — mid-frame tearing on a

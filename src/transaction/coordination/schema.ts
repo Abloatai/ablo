@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { syncGroupInputSchema } from '../schema/roles.js';
+import { isFieldRef, type FieldRef } from '../schema/fieldRef.js';
 import type { ParticipantKind } from '../types/participant.js';
 import type { AssertExact } from '../types/assertExact.js';
 
@@ -24,14 +25,92 @@ import type { AssertExact } from '../types/assertExact.js';
 //  Shared primitives
 // ─────────────────────────────────────────────────────────────────────────
 
-/** A line/column span within a text-bearing field (section body, doc, cell). */
-export const targetRangeSchema = z.object({
-  startLine: z.number(),
-  endLine: z.number(),
-  startColumn: z.number().optional(),
-  endColumn: z.number().optional(),
-});
+/**
+ * A span within a text-bearing part of a row (section body, doc, cell).
+ *
+ * Overlap is judged on the line axis alone: two ranges conflict when their
+ * `[startLine, endLine]` intervals intersect, and columns ride along for
+ * display. An editor that addresses by integer position rather than by line
+ * maps that position axis straight onto `startLine`/`endLine` — the test is
+ * plain interval intersection and never assumes the units are lines of a file.
+ */
+export const targetRangeSchema = z
+  .object({
+    startLine: z.number(),
+    endLine: z.number(),
+    startColumn: z.number().optional(),
+    endColumn: z.number().optional(),
+  })
+  // An inverted span claims nothing and collides with nothing — reject it at
+  // the boundary instead of granting a lease that never excludes anyone.
+  .refine((range) => range.startLine <= range.endLine, {
+    message: 'range.startLine must not be greater than range.endLine.',
+  });
 export type TargetRange = z.infer<typeof targetRangeSchema>;
+
+/**
+ * An app-defined claimable part name — a cell (`'B2'`), a section id, a
+ * block — made explicit with {@link part}. The schema's own field names need
+ * no marker; a name that is NOT a field does, so looseness is a visible
+ * decision at the call site rather than a silent absorber of typos.
+ *
+ * A small object rather than a branded string on purpose: a brand makes a
+ * concrete schema's claim params mutually unassignable with the erased
+ * `SchemaRecord` view, and the react context boundary erases and restores
+ * exactly that way. The object member stays pairwise comparable, so no
+ * boundary needs a cast through `unknown`.
+ */
+export interface ClaimPart {
+  readonly part: string;
+}
+
+/**
+ * Name an app-defined part of a row for a claim target: `part('B2')` for a
+ * cell, `part('sec_intro')` for a section. The conflict rule compares part
+ * names as opaque case-insensitive strings, so any name is legal on the
+ * wire — this marker exists purely so the type surface stays definite about
+ * the model's own fields.
+ */
+export function part(name: string): ClaimPart {
+  return { part: name };
+}
+
+/**
+ * The wire spelling of a part name, from whichever spelling the caller used.
+ *
+ * Three, because they are three different promises. A {@link FieldRef} —
+ * `schema.fields.tasks.status` — is a field the schema declares, so a name that
+ * does not exist never compiles. `part('B2')` is a name the schema does not
+ * know and says so. A bare string is neither, and survives only because the
+ * erased `SchemaRecord` view and untyped callers still need it.
+ *
+ * All three become the same string here: the wire has always carried names, and
+ * what differs is how much was known before the crossing.
+ */
+export function partName(value: string | ClaimPart | FieldRef): string {
+  if (typeof value === 'string') return value;
+  return isFieldRef(value) ? value.field : value.part;
+}
+
+/**
+ * One claimable part name.
+ *
+ * Names compare as opaque strings, so any name is legal — except one that is
+ * plainly several. A caller who needed to claim two parts and had only `field`
+ * to say it in packed them into one delimited string, and because
+ * `blocks:b_1,b_2` and `blocks:b_1` are different names, both writers were
+ * granted a lease on `b_1` and one of their updates was lost with nothing
+ * raised. `fields` exists to say that, and refusing the packed spelling is what
+ * makes the mistake visible at the moment it is made rather than as a missing
+ * update later.
+ *
+ * Deliberately narrow: only the comma, because that is what a caller reaches
+ * for to join a list. A part name is otherwise free.
+ */
+const partNameSchema = z.string().refine((name) => !name.includes(','), {
+  message:
+    'A part name cannot contain a comma. Claim several parts with `fields: [a, b]` — two names in one `field` compare as a single unrelated name, so both writers would be granted the same part.',
+});
 
 export const participantKindSchema = z.enum(['user', 'agent', 'system']);
 // The actor union is declared once, in types/participant.ts — the participant
@@ -137,7 +216,7 @@ export const targetRefSchema = z.object({
   entityId: z.string(),
   path: z.string().optional(),
   range: targetRangeSchema.optional(),
-  field: z.string().optional(),
+  field: partNameSchema.optional(),
   /**
    * Several named parts of one row, claimed together — three sections of a
    * document, two cells of a table.
@@ -153,7 +232,7 @@ export const targetRefSchema = z.object({
    * a claim naming `field` and a claim naming `fields` still compare correctly
    * against each other.
    */
-  fields: z.array(z.string()).readonly().optional(),
+  fields: z.array(partNameSchema).readonly().optional(),
   meta: z.record(z.string(), z.unknown()).optional(),
 });
 export type TargetRef = z.infer<typeof targetRefSchema>;
@@ -274,44 +353,59 @@ export type StaleNotification = z.infer<typeof staleNotificationSchema>;
  * See `packages/sync-engine/docs/concurrency-convention.md` (§4) for the
  * governing convention and the receive → reconcile loop.
  */
+const readRowDependencySchema = z.object({
+  model: z.string(),
+  id: z.string(),
+  readAt: z.number(),
+  fields: z.array(z.string()).readonly().optional(),
+  onStale: onStaleModeSchema.optional(),
+});
+
+const readGroupDependencySchema = z.object({
+  group: z.string(),
+  readAt: z.number(),
+  onStale: onStaleModeSchema.optional(),
+});
+
 export const readDependencySchema = z.union([
-  z.object({
-    model: z.string(),
-    id: z.string(),
-    readAt: z.number(),
-    fields: z.array(z.string()).readonly().optional(),
-    onStale: onStaleModeSchema.optional(),
-  }),
-  z.object({
-    group: z.string(),
-    readAt: z.number(),
-    onStale: onStaleModeSchema.optional(),
-  }),
+  readRowDependencySchema,
+  readGroupDependencySchema,
 ]);
 export type ReadDependency = z.infer<typeof readDependencySchema>;
 
 /**
  * A durable premise — what a participant is watching so that a later
- * change to it opens a {@link StaleNotification}. It is the persisted sibling of
- * a {@link ReadDependency}: the same reference shape, minus the disposition (a
- * track always notifies — that is what tracking is), with an optional `readAt`
- * that defaults to the watermark of the commit that registered it. The row form
- * watches one object; the group form watches a whole sync group ("anything in
- * `report:abc`"). Where a `ReadDependency` is checked once at commit and
- * discarded, a `TrackDependency` is kept and re-checked against every future
- * delta. See `packages/sync-engine/docs/groups.md` for how it drives change
- * propagation.
+ * change to it opens a {@link StaleNotification}. Where a {@link ReadDependency}
+ * is checked once at commit and discarded, a `TrackDependency` is kept and
+ * re-checked against every future delta. The row form watches one object; the
+ * group form watches a whole sync group ("anything in `report:abc`"). See
+ * `packages/sync-engine/docs/groups.md` for how it drives change propagation.
+ *
+ * It is a PROJECTION of the ephemeral premise, not a second declaration of the
+ * same reference: a track names its target exactly as a read does, and the
+ * three ways it differs are stated here as omissions the compiler holds.
+ *
+ *   • no `onStale` — a track always notifies; that is what tracking is;
+ *   • no `fields` — a track fires at row grain, because the server keeps one
+ *     row per tracked target and reports that the target moved, not which
+ *     column did (`track_dependencies` has no field axis to store one in);
+ *   • `readAt` optional — it defaults to the watermark of the commit that
+ *     registered the track, so a caller with nothing to say about when it last
+ *     looked gets "from here on".
+ *
+ * A field added to the premise reaches both halves; a field the durable half
+ * genuinely cannot carry has to be omitted here on purpose, in one line, rather
+ * than by being quietly left out of a copy.
  */
+const trackReadAtSchema = { readAt: z.number().optional() } as const;
+
 export const trackDependencySchema = z.union([
-  z.object({
-    model: z.string(),
-    id: z.string(),
-    readAt: z.number().optional(),
-  }),
-  z.object({
-    group: z.string(),
-    readAt: z.number().optional(),
-  }),
+  readRowDependencySchema
+    .omit({ onStale: true, fields: true, readAt: true })
+    .extend(trackReadAtSchema),
+  readGroupDependencySchema
+    .omit({ onStale: true, readAt: true })
+    .extend(trackReadAtSchema),
 ]);
 export type TrackDependency = z.infer<typeof trackDependencySchema>;
 
@@ -455,6 +549,30 @@ export const claimErrorSchema = z.object({
 export type ClaimError = z.infer<typeof claimErrorSchema>;
 
 /**
+ * Why a claim ended without its holder releasing it, or was refused.
+ *
+ * A closed set, because the two refusals are different guarantees and a reader
+ * has to be able to tell them apart: `conflict` means someone holds the row
+ * right now and you may queue behind them, while `coordination_unavailable`
+ * means the coordinator could not answer, so nothing is known about the row.
+ * `expired` and `preempted` are the two ways a lease you held ends.
+ *
+ * The rejection frame's `reason` stays a plain string on the wire — it is
+ * frozen, and an older server may send a word not listed here. This is the
+ * reader's side of it: a value that parses becomes the typed reason, and one
+ * that does not is simply absent rather than smuggled through as prose.
+ * {@link claimExpiredSchema} and {@link claimLostSchema} already spelled their
+ * reasons as enums; this brings the refusals into line.
+ */
+export const claimEventReasonSchema = z.enum([
+  'conflict',
+  'coordination_unavailable',
+  'expired',
+  'preempted',
+]);
+export type ClaimEventReason = z.infer<typeof claimEventReasonSchema>;
+
+/**
  * A declared, pending-mutation claim — the unit broadcast inside a presence
  * frame's `activeClaims`. The client supplies the descriptive `targetRef`
  * fields, a `description` of the work, and a chosen `claimId`; the server stamps
@@ -469,7 +587,29 @@ export type WireClaim = z.infer<typeof wireClaimSchema>;
 
 export const claimRejectionSchema = z.object({
   claimId: z.string(),
-  reason: z.string(),
+  /**
+   * Why the claim was refused, as one of {@link claimEventReasonSchema}'s
+   * words — so a caller can branch on it. `conflict` means someone holds the
+   * row right now and you may queue behind them; `coordination_unavailable`
+   * means the coordinator could not answer, so nothing is known about it.
+   * Those are different decisions, and a free string made them one.
+   *
+   * The wire spelling is frozen and an older server may send a word not listed
+   * there, so this reads the way {@link wireParticipantKindSchema} reads its
+   * dialect: a value that parses becomes the typed reason, and one that does
+   * not is absent rather than smuggled through as prose. Prose has its own
+   * field — `policyReason` below — which is why nothing is lost by refusing to
+   * carry it here.
+   *
+   * The registry code a caller finally sees on `AbloClaimedError`
+   * (`claim_conflict`) stays a separate vocabulary, mapped at the throw. Two
+   * small vocabularies with one mapping point beat one vocabulary and a
+   * projection of it that has to be maintained as the registry grows.
+   */
+  reason: z.preprocess(
+    (value) => (claimEventReasonSchema.safeParse(value).success ? value : undefined),
+    claimEventReasonSchema.optional(),
+  ),
   target: targetRefSchema.optional(),
   heldBy: z.string().optional(),
   /**
@@ -604,29 +744,6 @@ export const claimExpiredSchema = z.object({
 });
 export type ClaimExpired = z.infer<typeof claimExpiredSchema>;
 
-/**
- * Why a claim ended without its holder releasing it, or was refused.
- *
- * A closed set, because the two refusals are different guarantees and a reader
- * has to be able to tell them apart: `conflict` means someone holds the row
- * right now and you may queue behind them, while `coordination_unavailable`
- * means the coordinator could not answer, so nothing is known about the row.
- * `expired` and `preempted` are the two ways a lease you held ends.
- *
- * The rejection frame's `reason` stays a plain string on the wire — it is
- * frozen, and an older server may send a word not listed here. This is the
- * reader's side of it: a value that parses becomes the typed reason, and one
- * that does not is simply absent rather than smuggled through as prose.
- * {@link claimExpiredSchema} and {@link claimLostSchema} already spelled their
- * reasons as enums; this brings the refusals into line.
- */
-export const claimEventReasonSchema = z.enum([
-  'conflict',
-  'coordination_unavailable',
-  'expired',
-  'preempted',
-]);
-export type ClaimEventReason = z.infer<typeof claimEventReasonSchema>;
 
 /**
  * What a {@link ModelClaim} points at — the target locator as SDK callers see
@@ -971,19 +1088,103 @@ export type ClaimHeartbeatBatchAckPayload = z.infer<
 >;
 
 // ─────────────────────────────────────────────────────────────────────────
-//  Read interest — area-of-interest navigation (update_subscription)
+//  Read interest — what a connection receives
+//
+//  Two frames set it, and they differ in exactly one way: whether the
+//  interest is leased.
+//
+//    • `claim`  — a PARTICIPANT claim. Adds a scope under a handle, with a
+//      TTL and an optional capability token, and announces the sender into
+//      that scope's roster. This is the frame `ablo.<model>.join(...)` sends;
+//      `release` drops it. Several may be open on one connection at once.
+//    • `update_subscription` — REPLACES the connection's whole read set. No
+//      handle, no lease, no roster entry.
+//
+//  Both are bounded by the connection credential's grant, and both name their
+//  groups the same way, so both parse their `syncGroups` through the same
+//  element schema. Neither is the row lease — that is `claim_begin`, in the
+//  pessimistic-claims block above, which shares only a word.
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
- * The `update_subscription` payload a client sends. It replaces the
- * connection's read interest with the complete set of sync groups — the read
- * counterpart to a claim, with no write lock and no TTL. Each entry is a
+ * How many scopes one frame may name. A coarse abuse ceiling, not a business
+ * limit: a connection legitimately watches a handful of entities, and a list
+ * this long is an amplification attempt rather than a workload. Declared here,
+ * beside the two frames it bounds, so neither can be given a different answer.
+ */
+export const MAX_FRAME_SYNC_GROUPS = 200;
+
+/**
+ * The sync groups a scope-subscription frame names. Each entry is a
  * {@link syncGroupInputSchema} (`'default'` or a branded `kind:id`), so a
- * malformed group is rejected on ingest rather than silently indexed. The
- * element type is strict because this is untrusted client input.
+ * malformed group is rejected on ingest rather than silently indexed — a group
+ * that does not parse matches nothing, and subscribing to nothing quietly is
+ * the failure this element type exists to prevent.
+ *
+ * Strict because this is untrusted client input, and shared because the two
+ * frames below carry the same value: when they disagreed, `claim` accepted a
+ * malformed group that `update_subscription` refused, and the connection
+ * ended up leased to a scope it could never receive.
+ */
+const frameSyncGroupsSchema = z
+  .array(syncGroupInputSchema)
+  .max(MAX_FRAME_SYNC_GROUPS);
+
+/**
+ * The `claim` payload a client sends — the frame behind `join`.
+ *
+ * It opens one participant claim: the connection is added to each named
+ * scope's fan-out under `claimId`, announced into its presence roster, and
+ * holds that interest until `release`, the TTL lapses, or the socket closes.
+ * The handle is client-chosen because the client must be able to `release`
+ * the exact claim it opened while others stay open.
+ *
+ * This shape was, for a long time, written three times — built as a literal in
+ * the transport, restated as an interface on the server, and read back through
+ * a cast in the frame handler — which is how the frame came to be the only
+ * coordination message with no runtime check on the way in.
+ */
+export const participantClaimPayloadSchema = z.object({
+  /** Client-chosen handle. Echoed on `claim_ack`; names the claim to `release`. */
+  claimId: z.string().min(1),
+  syncGroups: frameSyncGroupsSchema,
+  /**
+   * A narrower capability to present for this claim than the connection's own.
+   * Absent means the connection's credential governs it.
+   */
+  capabilityToken: z.string().optional(),
+  /**
+   * Crash cleanup, in seconds. The server caps it at the capability's own TTL;
+   * absent means the claim lives until `release` or disconnect.
+   */
+  ttlSeconds: z.number().optional(),
+});
+export type ParticipantClaimPayload = z.infer<
+  typeof participantClaimPayloadSchema
+>;
+
+/**
+ * The `release` payload — drop one participant claim by its handle.
+ *
+ * A projection of the claim it releases rather than a second object, so the
+ * handle cannot be spelled one way when opened and another when dropped.
+ * Idempotent by contract: the server accepts an unknown handle silently, so a
+ * client releasing everything at shutdown never has to check what is still open.
+ */
+export const participantReleasePayloadSchema =
+  participantClaimPayloadSchema.pick({ claimId: true });
+export type ParticipantReleasePayload = z.infer<
+  typeof participantReleasePayloadSchema
+>;
+
+/**
+ * The `update_subscription` payload a client sends. It replaces the
+ * connection's read interest with the complete set of sync groups — the
+ * unleased counterpart to {@link participantClaimPayloadSchema}, with no
+ * handle, no TTL, and no roster entry.
  */
 export const updateSubscriptionPayloadSchema = z.object({
-  syncGroups: z.array(syncGroupInputSchema),
+  syncGroups: frameSyncGroupsSchema,
 });
 export type UpdateSubscriptionPayload = z.infer<
   typeof updateSubscriptionPayloadSchema

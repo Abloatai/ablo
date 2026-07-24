@@ -16,6 +16,17 @@ import { schema } from './ablo/schema';
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, debug: true });
 ```
 
+## CLI environment and target
+
+The CLI checks an explicit credential in this order: exported `ABLO_API_KEY`,
+`.env.local`, `.env`, then the key saved by `ablo login`. An exported value wins
+over project files. If a stale shell export (for example `OPENAI_API_KEY`) is
+shadowing a value in `.env.local`, restart the shell or unset the stale variable.
+
+When a command appears to use the wrong plane or project, run `ablo status`.
+It reports the credential source and, when reachable, the server-confirmed
+project and environment; that confirmed target is authoritative.
+
 `debug: true` is the simple switch. For finer control use `logLevel`, or set it without touching code via the `ABLO_LOG_LEVEL` environment variable.
 
 ```ts
@@ -34,15 +45,15 @@ ABLO_LOG_LEVEL=debug npm run dev               # same, from the environment
 |---|---|
 | `silent` | nothing |
 | `error` | failures only |
-| `warn` | **default** — warnings + errors |
+| `warn` | **default**: warnings + errors |
 | `info` | the above + the **coordination trace** (claims, grants, queueing) + connection state |
-| `debug` | the above + internal lifecycle (per-model registration, store hydration) — the full firehose |
+| `debug` | the above + internal lifecycle (per-model registration, store hydration): the full firehose |
 
 Precedence: an explicit `logLevel` wins, then `debug: true` (⇒ `debug`), then `ABLO_LOG_LEVEL`, then the `warn` default. `debug: false` (or omitting it) just means "don't raise the level."
 
 > For watching coordination, **`logLevel: 'info'` is the sweet spot** — you get the claim trace without the per-model registration chatter that `debug` adds.
 
-## What you'll see — the coordination trace
+## What you'll see: the coordination trace
 
 These lines (all at `info`) let you watch the handover you built:
 
@@ -57,12 +68,12 @@ These lines (all at `info`) let you watch the handover you built:
 
 Read it as the lifecycle of one claim:
 
-- **`requesting`** — your code (or an agent) called `ablo.<model>.claim(...)`. `(will queue if contended)` appears when you passed `{ queue: true }`.
-- **`queued … position N of M`** — the row was held, so you're waiting in the FIFO line. This is the "an agent is waiting behind a claim" moment; it re-logs only when your position changes, so you can watch it advance.
-- **`granted … your turn`** — you reached the head of the line; the lease is now yours and the row may have changed while you waited.
-- **`rejected … held by <who>`** — your claim was refused because someone else holds it (and the model's policy didn't let you in).
-- **`lost`** — you held the lease and it was taken (preempted by a higher-priority writer, or it expired).
-- **`released`** — you (or `await using`'s scope exit) gave the lease back.
+- **`requesting`:** your code (or an agent) called `ablo.<model>.claim(...)`. `(will queue if contended)` appears when you passed `{ queue: true }`.
+- **`queued … position N of M`:** the row was held, so you're waiting in the FIFO line. This is the "an agent is waiting behind a claim" moment; it re-logs only when your position changes, so you can watch it advance.
+- **`granted … your turn`:** you reached the head of the line; the lease is now yours and the row may have changed while you waited.
+- **`rejected … held by <who>`:** your claim was refused because someone else holds it (and the model's policy didn't let you in).
+- **`lost`:** you held the lease and it was taken (preempted by a higher-priority writer, or it expired).
+- **`released`:** you (or `await using`'s scope exit) gave the lease back.
 
 ## Where the logs run
 
@@ -85,7 +96,7 @@ Ablo({
 });
 ```
 
-## Read the coordination in code — the activity log
+## Read the coordination in code: the activity log
 
 The console trace above is for *you*, at a terminal. To put the same activity **inside your app** — an activity feed, a "who's editing" badge, a Sentry breadcrumb trail — read it programmatically. Same events, three layers; pick by audience:
 
@@ -117,7 +128,7 @@ interface ConflictEvent {
 
 `phase` is past-tense — the state the claim just entered — and maps one-to-one to what arrives on the wire.
 
-### Collect them — `ClaimLog`
+### Collect them: `ClaimLog`
 
 `ClaimLog` records both into an ordered list. Hand it to `observability`, then read it back:
 
@@ -139,7 +150,7 @@ It's also the simplest way to **assert** coordination in a test — no log scrap
 expect(log.collisions()).toHaveLength(0);   // no one stepped on anyone
 ```
 
-### Show it on a page — reactive
+### Show it on a page: reactive
 
 `ClaimLog.onChange` fires on every event and returns an unsubscribe — the exact shape `useSyncExternalStore` wants, so a live feed is a few lines:
 
@@ -187,6 +198,17 @@ const ablo = Ablo({
   },
 });
 ```
+
+`ClaimLog` implements the full `SyncObservabilityProvider`, so it drops straight
+into the `observability` slot. The surface exports `ClaimLog`, `formatClaim`,
+`formatConflict`, and `noopObservability`, plus the types `ClaimEvent`,
+`ConflictEvent`, `ClaimLogEntry`, and `SyncObservabilityProvider`.
+
+> **Both transports, from 0.21.0.** Observability fires on the WebSocket and on
+> the stateless HTTP transport (claim acquired, plus coordination-conflict
+> rejections on every write door). Before 0.21.0 only WebSocket emitted, so a
+> `ClaimLog` on an HTTP client, such as a headless server-agent eval, stayed
+> silent even though coordination still worked.
 
 ## Errors
 

@@ -71,6 +71,13 @@ export function awaitClaimGrant(
      * already ahead of us). Omit to wait however deep the queue is.
      */
     maxQueueDepth?: number;
+    /**
+     * Abort the wait from outside — the same signal that cancels everything
+     * else in the program. Rejects with `claim_wait_aborted`; once the grant
+     * has arrived the signal is ignored, so a held lease is never torn down
+     * by a late abort.
+     */
+    signal?: AbortSignal;
     /** Where grant transitions are logged. Defaults to silent. */
     logger?: Logger;
   },
@@ -175,6 +182,25 @@ export function awaitClaimGrant(
         }
       }),
     );
+
+    if (options?.signal) {
+      const signal = options.signal;
+      const abort = (): void =>
+        settle(() => {
+          reject(
+            new AbloClaimedError(
+              `The wait for claim ${claimId} was aborted before the grant arrived.`,
+              { code: 'claim_wait_aborted' },
+            ),
+          );
+        });
+      if (signal.aborted) {
+        abort();
+        return;
+      }
+      signal.addEventListener('abort', abort, { once: true });
+      unsubs.push(() => { signal.removeEventListener('abort', abort); });
+    }
 
     if (options?.timeoutMs && options.timeoutMs > 0) {
       timer = setTimeout(() => {

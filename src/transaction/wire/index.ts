@@ -29,8 +29,12 @@ export type { ListEnvelope } from './listEnvelope.js';
 // carries a position in each.
 export { claimEventSchema } from './claimEvent.js';
 export type { ClaimEvent } from './claimEvent.js';
-export { feedEventSchema, logListResponseSchema } from './feedEvent.js';
-export type { FeedEvent, LogListResponse } from './feedEvent.js';
+export {
+  feedEventSchema,
+  logListResponseSchema,
+  logQuerySchema,
+} from './feedEvent.js';
+export type { FeedEvent, LogListResponse, LogQuery } from './feedEvent.js';
 export {
   feedCursorSchema,
   parseFeedCursor,
@@ -188,6 +192,12 @@ export {
 // client reads them back through the same schemas, and the OpenAPI reference
 // derives from them rather than describing them from memory.
 export {
+  // The lease grammar and its one reading. The server parses TTLs with
+  // `claimTtlMs` rather than carrying a second parser — which is how a bare
+  // number came to mean seconds on one side and milliseconds on the other.
+  DEFAULT_CLAIM_TTL_MS,
+  claimTtlSchema,
+  claimTtlMs,
   claimTargetSchema,
   claimRequestSchema,
   claimHeartbeatRequestSchema,
@@ -200,6 +210,9 @@ export {
   claimHeartbeatReplySchema,
   claimHeartbeatBatchReplySchema,
   claimListResponseSchema,
+  claimReorderRequestSchema,
+  claimReorderReplySchema,
+  claimReleaseReplySchema,
 } from './claims.js';
 export type {
   ClaimTargetBody,
@@ -214,6 +227,9 @@ export type {
   ClaimHeartbeatReply,
   ClaimHeartbeatBatchReply,
   ClaimListResponse,
+  ClaimReorderRequest,
+  ClaimReorderReply,
+  ClaimReleaseReply,
 } from './claims.js';
 
 // The model read routes' responses — the envelope around a row, which is
@@ -223,6 +239,25 @@ export {
   modelListResponseSchema,
 } from './modelResponses.js';
 export type { ModelReadResponse, ModelListResponse } from './modelResponses.js';
+
+// What a model is made of — the artifact's own field and relation shapes, which
+// the schema read reports and every other layer derives its types from.
+export {
+  fieldTypeSchema,
+  fieldMetaSchema,
+  relationTypeSchema,
+  relationMetaSchema,
+} from './modelShape.js';
+export type {
+  FieldType,
+  FieldMeta,
+  RelationType,
+  RelationMeta,
+} from './modelShape.js';
+
+// The model write routes' body — the record in `data`, the guards beside it.
+export { modelMutationRequestSchema } from './modelMutations.js';
+export type { ModelMutationRequest } from './modelMutations.js';
 
 // The account routes' responses — projects, the deployed schema, the commit
 // log, usage. What the server, the CLI, and the MCP server agree on.
@@ -283,9 +318,11 @@ export {
   ephemeralKeyUserSchema,
   ephemeralKeyRequestSchema,
   capabilityRequestSchema,
+  capabilityMintResponseSchema,
 } from './auth.js';
 export type {
   EphemeralKeyUser,
   EphemeralKeyRequest,
   CapabilityRequest,
+  CapabilityMintResponse,
 } from './auth.js';

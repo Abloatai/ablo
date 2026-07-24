@@ -18,7 +18,7 @@ The three steps below show how to declare it, scope the agent, and write.
 
 See [Identity & Sync Groups](/identity) for the full reference.
 
-## 1. Schema — declare the relationship, once
+## 1. Schema: declare the relationship, once
 
 ```ts
 import { defineSchema, identityRole, model, relation, z } from '@abloatai/ablo/schema';
@@ -47,7 +47,7 @@ export const schema = defineSchema(
 );
 ```
 
-## 2. Dispatch — narrow the agent to the workspace it's working on
+## 2. Dispatch: narrow the agent to the workspace it's working on
 
 An agent can never reach more than the user who triggered it — that's the upper
 limit. From there you narrow it to a single workspace by minting the agent's session
@@ -98,7 +98,7 @@ const ablo = Ablo({
 groups the session asks for with the groups the identity is actually allowed, so
 the agent can never reach a workspace its triggering user couldn't.
 
-## 3. Write — it fans out to everyone on that workspace
+## 3. Write: it fans out to everyone on that workspace
 
 Inside any component under the provider, grab the scoped client with `useAblo()`
 and write. The connection is already narrowed to `workspace:<workspaceId>` from Step 2.

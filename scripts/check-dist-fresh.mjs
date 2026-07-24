@@ -73,18 +73,7 @@ if (src.max > lib.max + SLACK_MS) {
       `  newest source: ${relative(root, src.maxFile)} (${new Date(src.max).toISOString()})\n` +
       `  newest output: ${relative(root, lib.maxFile)} (${new Date(lib.max).toISOString()})\n` +
       '  Dependent packages consume dist/, so green tests here do not cover them.\n' +
-      '  Run: npm run build   (or tsc -p tsconfig.build.json && npm run build:cli)',
-  );
-  process.exit(1);
-}
-
-// The CLI bundle is built by a SEPARATE tool (tsup) and silently survives
-// `tsc`-only rebuilds — check it on its own so `ablo` never ships old code.
-const cli = join(distDir, 'cli.cjs');
-if (existsSync(cli) && src.max > statSync(cli).mtimeMs + SLACK_MS) {
-  console.error(
-    '[check-dist-fresh] dist/cli.cjs is STALE (lib output is fresh, the tsup ' +
-      'bundle is not). Run: npm run build:cli',
+      '  Run: npm run build',
   );
   process.exit(1);
 }

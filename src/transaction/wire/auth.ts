@@ -59,14 +59,16 @@ export type EphemeralKeyRequest = z.infer<typeof ephemeralKeyRequestSchema>;
  * `auth/capability.ts` — the grant is one structure, and its request form is a
  * face of it rather than a separate shape. Re-exported here so the wire barrel
  * stays the single import path for the boundary.
+ *
+ * This is the only import wire makes for something larger than a schema leaf,
+ * so it carries exactly the shape the barrel forwards and nothing else: the
+ * grant's own vocabulary — the verb enum, the `model.verb` spelling, the
+ * helpers that derive one from the other — is read from `auth/capability.ts`
+ * by the callers that build a grant, not through here.
  */
 export {
   capabilityRequestSchema,
-  grantedOperationSchema,
-  capabilityOperationSchema,
+  capabilityMintResponseSchema,
 } from '../auth/capability.js';
-export type {
-  CapabilityRequest,
-  GrantedOperation,
-  CapabilityOperation,
-} from '../auth/capability.js';
+export type { CapabilityMintResponse } from '../auth/capability.js';
+export type { CapabilityRequest } from '../auth/capability.js';

@@ -25,7 +25,7 @@ export interface TestWrapperOptions {
  *
  * @example
  * import { renderHook } from '@testing-library/react';
- * import { createReactTestWrapper, createMockSyncStore } from '@abloatai/ablo/testing';
+ * import { createReactTestWrapper, createMockSyncStore } from '../../src/testing';
  *
  * const mockStore = createMockSyncStore();
  * mockStore.setModels(Task, [task1, task2]);
@@ -56,7 +56,7 @@ export function createReactTestWrapper(
  * these helpers never have to install it.
  *
  * @example
- * import { renderSyncHook, createMockSyncStore } from '@abloatai/ablo/testing';
+ * import { renderSyncHook, createMockSyncStore } from '../../src/testing';
  *
  * const mockStore = createMockSyncStore();
  * mockStore.addModel(Task, myTask);

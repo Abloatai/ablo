@@ -10,11 +10,11 @@
  * the runtime bundle beyond the erased interface declarations.
  */
 
-import type { Model } from '../Model.js';
-import type { ModelScope } from '../transaction/types/index.js';
-import type { QueryView, QueryViewOptions } from './QueryView.js';
-import type { ViewRegistry } from './ViewRegistry.js';
-import type { ParticipantScope } from '../sync/participants.js';
+import type { Model } from './Model.js';
+import type { ModelScope } from './transaction/types/index.js';
+import type { QueryView, QueryViewOptions } from './views/QueryView.js';
+import type { ViewRegistry } from './views/ViewRegistry.js';
+import type { ParticipantScope } from './sync/participants.js';
 
 /**
  * A snapshot of the client's synchronization state, shaped for binding to UI.

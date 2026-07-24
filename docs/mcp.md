@@ -6,7 +6,7 @@ Ablo publishes **two** MCP servers for two different jobs. Don't confuse them:
 
 | Server | Purpose | Auth | Tools |
 |---|---|---|---|
-| **Coordination** (`@abloatai/mcp`) | Manage your Ablo the way the CLI does, and let an agent safely read & mutate application data | API key (`sk_…` / `rk_…`) | projects, schema, logs, usage — plus `get` / `list` / `create` / `update` / `delete` / `claim` / `release` over your rows |
+| **Coordination** (`@abloatai/mcp`) | Manage your Ablo the way the CLI does, and let an agent safely read & mutate application data | API key (`sk_…` / `rk_…`) | projects, schema, logs, usage: plus `get` / `list` / `create` / `update` / `delete` / `claim` / `release` over your rows |
 | **Integration-helper** (hosted `/api/mcp`) | Help an AI coding assistant write SDK integration code that compiles | none (public docs) | doc search, export surface, schema lint, scaffold |
 
 The coordination server manages your account **and is the data plane** — it is
@@ -37,7 +37,7 @@ claude mcp add ablo -- npx -y @abloatai/mcp
 | `list_projects` | `ablo projects list` | the org's projects (needs `sk_`) |
 | `create_project` | `ablo projects create` | create one (needs `sk_`) |
 | `tail_logs` | `ablo logs` | recent commits and the actor behind each |
-| `get_usage` | — | usage in daily buckets |
+| `get_usage` |: | usage in daily buckets |
 
 There are no key-management tools. A mint returns the plaintext once — only a
 hash is kept — so no tool can hand it back later, and returning it at mint time
@@ -63,7 +63,7 @@ Each tool mirrors an SDK verb, scoped to a model + id. Model names come from
 | `update_model` | `ablo.<model>.update({ id, … })` | guarded update |
 | `delete_model` | `ablo.<model>.delete({ id })` | guarded delete |
 | `claim_model` | `ablo.<model>.claim({ id })` | acquire / queue a coordination lease |
-| `release_claim` | — | release the lease so others proceed |
+| `release_claim` |: | release the lease so others proceed |
 
 The agent-facing contract — the safe loop, the "derive idempotency keys from
 the business event" rule, and the error-code playbook — ships as a loadable
@@ -94,9 +94,9 @@ claude mcp add --transport http ablo https://<your-app>/api/mcp
 
 The endpoint is identical for every client — only the config surface differs:
 
-- **Claude Code** — run the `claude mcp add` command above; verify with `/mcp list`, remove with `claude mcp remove ablo`.
-- **Cursor** — add the server to `~/.cursor/mcp.json` (macOS / Linux), then restart.
-- **Windsurf** — add the same JSON via Settings → Cascade → MCP, then restart.
+- **Claude Code:** run the `claude mcp add` command above; verify with `/mcp list`, remove with `claude mcp remove ablo`.
+- **Cursor:** add the server to `~/.cursor/mcp.json` (macOS / Linux), then restart.
+- **Windsurf:** add the same JSON via Settings → Cascade → MCP, then restart.
 
 Cursor and Windsurf use the same config shape:
 
@@ -120,7 +120,7 @@ Each client then lists the Ablo tools (`search_ablo_docs`, `get_recipe`, `get_ap
 | `get_recipe` | Returns the full markdown of one doc by name (e.g. `readme`, `quickstart`, `schema-contract`, `integration-guide`, `api`, `guarantees`). |
 | `get_api_surface` | Returns the structured export list for an SDK subpath (`@abloatai/ablo`, `./react`, `./schema`, `./testing`, …). Call with no argument to list every subpath. |
 | `validate_schema` | Lints `defineSchema` source against the DSL rules (camelCase fields, lowercase model keys, `scope`/`grants` sync groups, valid `load` strategies, no legacy builders) and returns a structured issue list. Runs no code. |
-| `scaffold_app` | Emits a starter file tree for a schema-first integration — `next`, `node-agent`, or `plain`, with a `data-source` (your own database) endpoint. |
+| `scaffold_app` | Emits a starter file tree for a schema-first integration: `next`, `node-agent`, or `plain`, with a `data-source` (your own database) endpoint. |
 
 #### Resources
 
