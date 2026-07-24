@@ -26,7 +26,7 @@
 Every write to your data, whether it comes from a person, a server, or an agent,
 arrives coordinated with the others and stays attributed afterward.
 
-We as humasn work on the same things by looking and talking. You see someone's cursor in
+We as humans work on the same things by looking and talking. You see someone's cursor in
 the paragraph, so you wait, or you say you'll take the first half. None of that
 is in the software. It's just what people do, and the software only has to show
 them enough to do it.
