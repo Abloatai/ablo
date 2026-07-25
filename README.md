@@ -28,6 +28,10 @@ backend services work on the same data. It gives every actor one typed API for
 reading, changing, coordinating, and observing shared state—while your
 Postgres remains the source of truth.
 
+The SDK is backed by a pure HTTP transaction API, so the same capabilities work
+in an agent runtime, a server, a job, a command-line tool, or an interactive
+application. No browser or reactive client is required.
+
 Use Ablo when several actors can touch the same orders, tasks, documents,
 financial models, customer records, or workflows. It keeps their work from
 silently overwriting each other, makes retries safe, confirms what actually
@@ -35,10 +39,22 @@ reached your database, and preserves who acted and on whose behalf.
 
 ## Why Ablo
 
-Most application infrastructure was designed around short requests from one
-human at a time. Agents work differently. They read state, reason for seconds
-or minutes, call other systems, delegate work, retry after failures, and often
-run beside other agents and people.
+Humans already know how to coordinate shared work. We see that somebody is
+editing a paragraph, say which part we will take, wait our turn, and look again
+before continuing. The software mostly needs to make that shared context
+visible; people supply the coordination themselves.
+
+Agents do not naturally have that awareness. Two agents can read the same row,
+reason for thirty seconds, and then overwrite each other. An agent can act on
+information that changed while it was thinking without producing a database
+conflict at all. Retries, delegation, and long-running tool calls make that
+problem larger, not smaller.
+
+Ablo gives agents the software equivalents of the capabilities humans use:
+they can see who is working, claim a row or field, wait fairly, receive fresh
+state when their turn begins, prove what they are allowed to do, and leave an
+attributed record of the result. People and backend services participate
+through the same rules.
 
 A database can make a write atomic, but it does not know that an agent is still
 reasoning about an old version of a row. A realtime feed can show the latest
