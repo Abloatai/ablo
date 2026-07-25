@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Coordination infrastructure for humans, agents, and backend systems.</strong>
+  <strong>The transaction layer for AI agents.</strong>
 </p>
 
 <p align="center">
@@ -22,45 +22,25 @@
 
 ---
 
-Ablo is a TypeScript framework and API for applications where AI agents,
-people, and backend services work on the same data. It provides typed reads and
-writes, claims, safe retries, authoritative confirmation, live updates, and
-attribution while your Postgres remains the source of truth.
+Safely coordinate AI agents, humans, workflows, and services writing to the
+same database.
 
-The SDK is backed by a pure HTTP transaction API, so Ablo works in agents,
-servers, jobs, command-line tools, and interactive applications without
-requiring a browser or reactive client.
+Ablo is an authoritative transaction layer for shared application state. Every
+write goes through one typed API where authority, idempotency, conflicts,
+ordering, and confirmation can be enforced. Your Postgres remains the source
+of truth.
 
 ## Why Ablo
 
-Humans coordinate shared work naturally. We see that somebody is editing,
-agree on who takes which part, wait our turn, and look again before continuing.
+Software used to have one writer: a human clicking through an application. AI
+applications now have humans, agents, workflows, and services acting
+concurrently. Databases keep transactions consistent. They do not coordinate
+autonomous work that reads now, reasons for thirty seconds, and writes later.
 
-Agents do not have that awareness. Two agents can read the same row, think for
-thirty seconds, and overwrite each other. An agent can act on information that
-changed while it was reasoning without causing a database conflict at all.
-
-Ablo gives agents the same practical capabilities humans rely on: see who is
-working, claim a row or field, wait fairly, receive fresh state, prove what
-they may do, and leave an attributed record. Humans and backend services use
-the same rules, so there is no separate agent write path.
-
-```ts
-await using claim = await ablo.orders.claim({ id: orderId });
-
-const priced = await pricingAgent(claim.data);
-
-await ablo.orders.update({
-  id: orderId,
-  data: { total: priced.total, status: 'repriced' },
-  claim,
-  wait: 'confirmed',
-});
-```
-
-The claim releases automatically. Overlapping work takes turns, stale work is
-rejected, retries are safe, and `confirmed` means the authoritative database
-reported the change back.
+Humans handle this naturally. We see that somebody is editing, agree on who
+takes which part, wait our turn, and look again before continuing. Ablo gives
+software actors those same capabilities: bounded authority, shared ownership,
+fresh context, safe handoffs, and an attributed record of what happened.
 
 ## Start
 
@@ -70,6 +50,43 @@ npx ablo init
 npx ablo push
 ```
 
+Read and write through the transaction layer:
+
+```ts
+const order = await ablo.orders.get({ id: orderId });
+
+if (!order) throw new Error('Order not found');
+await ablo.orders.update({
+  id: order.id,
+  data: { status: 'approved' },
+  wait: 'confirmed',
+});
+```
+
+`confirmed` means the authoritative database reported the change back. The
+same commit can be retried safely if the caller loses its connection.
+
+When work takes thirty seconds instead of one request, coordinate before the
+agent starts reasoning:
+
+```ts
+await using claim = await ablo.orders.claim({ id: orderId });
+
+const priced = await pricingAgent(claim.data);
+
+await ablo.orders.update({
+  id: claim.data.id,
+  data: { total: priced.total, status: 'repriced' },
+  claim,
+  wait: 'confirmed',
+});
+```
+
+Another actor touching the same work waits fairly and receives fresh state when
+its turn begins. If the agent fails, the claim releases automatically. If its
+context became stale, the write is rejected instead of silently overwriting
+work it never saw.
+
 Use `@abloatai/ablo` for agents and backend code,
 `@abloatai/ablo/client` for live applications, and
 `@abloatai/ablo/react` for React. All entrypoints share the same schema,
@@ -77,7 +94,6 @@ authority, commits, claims, and ordered changes.
 
 Read the [Quickstart](./docs/quickstart.md), browse
 [docs.abloatai.com](https://docs.abloatai.com), or run `npx ablo docs`.
-Coding agents can read `node_modules/@abloatai/ablo/llms.txt`.
 
 ## Contributing
 
