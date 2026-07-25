@@ -1,6 +1,6 @@
 {
   "name": "@ablo/agent",
-  "version": "0.37.0",
+  "version": "0.37.1",
   "private": true,
   "description": "Shared agent logic: tools, sandbox, middleware, prompts. Consumed by apps/web and apps/agent-worker.",
   "license": "SEE LICENSE IN LICENSE",

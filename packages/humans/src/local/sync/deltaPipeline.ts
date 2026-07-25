@@ -178,6 +178,23 @@ function isSameState(a: Record<string, unknown> | null, b: Record<string, unknow
 
 /** Deduplicate deltas to the same entity — keep meaningful state transitions only */
 export function deduplicateDeltas(ctx: DeltaPipelineContext, deltas: SyncDelta[]): SyncDelta[] {
+  // The dominant live-publication shape is a frame of independent entity
+  // creates. When every entity key occurs once, reconciliation cannot remove
+  // or reorder anything: preserve the already commit-ordered input directly
+  // and avoid allocating a bucket array, state signature, and two sorts per
+  // delta. The first duplicate falls through to the full transition logic.
+  const uniqueEntities = new Set<string>();
+  let hasDuplicateEntity = false;
+  for (const delta of deltas) {
+    const key = `${delta.modelName}:${delta.modelId}`;
+    if (uniqueEntities.has(key)) {
+      hasDuplicateEntity = true;
+      break;
+    }
+    uniqueEntities.add(key);
+  }
+  if (!hasDuplicateEntity) return deltas;
+
   const byEntity = new Map<string, SyncDelta[]>();
   for (const d of deltas) {
     const key = `${d.modelName}:${d.modelId}`;

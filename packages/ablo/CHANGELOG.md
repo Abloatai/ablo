@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.37.1
+
+### Patch Changes
+
+- 5344da6: Restore the full Ablo product explanation and examples in the public package
+  README, and reduce live-frame materialization overhead when every delta targets
+  a different entity.
+- Updated dependencies [5344da6]
+  - @abloatai/humans@0.37.1
+  - @abloatai/transaction@0.37.1
+
 ## 0.37.0
 
 ### Minor Changes
