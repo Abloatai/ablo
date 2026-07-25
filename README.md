@@ -23,41 +23,52 @@
 
 ---
 
-Every write to your data—whether it comes from a person, a server, or an
-agent—arrives coordinated with the others and stays attributable afterward.
+Ablo is a TypeScript framework for applications where AI agents, people, and
+backend services work on the same data. It gives every actor one typed API for
+reading, changing, coordinating, and observing shared state—while your
+Postgres remains the source of truth.
 
-Humans coordinate naturally. We see who is editing, talk about ownership, and
-wait when somebody else is already changing the same thing. Agents and
-background jobs do not have that shared awareness. Two workers can read the
-same row, spend thirty seconds reasoning, and then silently overwrite each
-other. A retry after a timeout can perform the same action twice. A write can
-return successfully before the database that matters has confirmed it.
+Use Ablo when several actors can touch the same orders, tasks, documents,
+financial models, customer records, or workflows. It keeps their work from
+silently overwriting each other, makes retries safe, confirms what actually
+reached your database, and preserves who acted and on whose behalf.
 
-Ablo puts one typed transaction and coordination layer in front of that shared
-state:
+## Why Ablo
 
-- **Safe concurrent work.** Claims, fair queues, field-level coordination, and
-  stale-context rejection keep slow work from landing on state it did not see.
-- **Idempotent transactions.** Atomic commits and durable receipts make retries
-  safe across timeouts, process restarts, and network failures.
-- **Authoritative settlement.** A write can wait until your customer-owned
-  Postgres confirms it, rather than treating an intermediate `200 OK` as truth.
-- **One path for every actor.** Human applications, AI agents, services, and
-  jobs use the same reads, writes, authority, ordering, and conflict rules.
-- **Realtime and durable observation.** Interactive clients receive live
-  updates, while headless consumers can resume an ordered feed from a cursor.
-- **Attribution and evidence.** Changes retain who acted, on whose behalf, with
-  which authority, and whether human confirmation was involved.
+Most application infrastructure was designed around short requests from one
+human at a time. Agents work differently. They read state, reason for seconds
+or minutes, call other systems, delegate work, retry after failures, and often
+run beside other agents and people.
 
-Your application data remains in your Postgres under your schema and security
-policies. Ablo coordinates writes, confirms them from the authoritative
-database stream, and records the evidence around them. It does not require a
-second application database or take ownership of your migrations.
+A database can make a write atomic, but it does not know that an agent is still
+reasoning about an old version of a row. A realtime feed can show the latest
+state, but it does not decide who should act next. A queue can serialize jobs,
+but it does not coordinate them with the person editing the same record.
 
-## Coordinate slow agent work
+Ablo brings those concerns together:
 
-Two agents can reprice the same order without racing. The second waits its
-turn, then receives the order as it exists after the first finishes:
+- **Claims and stale-context checks** coordinate slow work before it lands.
+- **Atomic, idempotent commits** make timeouts and retries safe.
+- **Authoritative confirmation** tells you when your database accepted a
+  change—not only when an API accepted the request.
+- **Typed capabilities** bound what a human, agent, or service may do.
+- **Realtime and durable observation** serve both interactive applications and
+  headless workers.
+- **Attribution and audit evidence** retain who acted, for whom, and with which
+  authority.
+
+The result is one coordination model for the whole application instead of a
+separate agent write path, multiplayer path, and backend path.
+
+## Get started
+
+```sh
+npm install @abloatai/ablo
+npx ablo init
+npx ablo push
+```
+
+When work takes time, claim the row before acting on it:
 
 ```ts
 await using claim = await ablo.orders.claim({ id: orderId });
@@ -73,156 +84,77 @@ await ablo.orders.update({
     status: 'repriced',
   },
   claim,
-});
-```
-
-If the agent call throws, the claim releases when the scope exits. If another
-actor changed the order before this work could land, Ablo rejects the stale
-write instead of silently overwriting unseen state.
-
-Claims can be as narrow as the work. A pricing agent can hold `total` and
-`discount` while a fulfillment agent changes `status` on the same order:
-
-```ts
-await using pricing = await ablo.orders.claim({
-  id: orderId,
-  fields: (order) => [order.total, order.discount],
-});
-
-await using fulfillment = await ablo.orders.claim({
-  id: orderId,
-  fields: (order) => order.status,
-});
-```
-
-Disjoint fields proceed concurrently; overlapping claims take turns.
-
-## Start
-
-```sh
-npm install @abloatai/ablo
-npx ablo init
-npx ablo push
-```
-
-Declare the models Ablo should coordinate:
-
-```ts
-// ablo/schema.ts
-import { defineSchema, model, z } from '@abloatai/ablo/schema';
-
-export const schema = defineSchema({
-  orders: model({
-    status: z.enum(['pending', 'approved', 'fulfilled']),
-    total: z.number(),
-    discount: z.number(),
-  }),
-});
-```
-
-Use the root package in agents, services, jobs, server actions, and other
-headless runtimes:
-
-```ts
-import Ablo from '@abloatai/ablo';
-import { schema } from './ablo/schema';
-
-const ablo = Ablo({
-  schema,
-  apiKey: process.env.ABLO_API_KEY,
-});
-
-const order = await ablo.orders.get({ id: orderId });
-
-await ablo.orders.update({
-  id: orderId,
-  data: { status: 'approved' },
   wait: 'confirmed',
 });
 ```
 
-`wait: 'confirmed'` resolves after the authoritative data source confirms the
-change. Durable receipts and idempotency keep the operation recoverable if the
-caller loses its connection while the write is in flight.
+If the agent fails, the claim releases automatically. If another actor changed
+the order first, Ablo rejects the stale work instead of overwriting state the
+agent never saw. If the connection drops, the commit can be retried safely.
 
-For a browser application, use the client entrypoint. It adds WebSocket-backed
-local state, optimistic interaction, presence, persistence, and live queries
-over the same transaction contract:
+Claims can cover a whole row or only the fields involved. That lets a pricing
+agent change `total` while a fulfillment agent changes `status` on the same
+order without making unrelated work wait.
+
+## One SDK for every actor
+
+Use the root package for agents, services, jobs, and server actions:
+
+```ts
+import Ablo from '@abloatai/ablo';
+```
+
+Use the client entrypoint for browser applications with live local state,
+optimistic interaction, persistence, and presence:
 
 ```ts
 import Ablo from '@abloatai/ablo/client';
-import { schema } from './ablo/schema';
-
-const ablo = Ablo({
-  schema,
-  authEndpoint: '/api/ablo-session',
-});
-
-await ablo.ready();
-
-const order = ablo.orders.local.get(orderId);
 ```
 
-React bindings are available from `@abloatai/ablo/react`.
+React bindings are available from `@abloatai/ablo/react`. All three entrypoints
+use the same schema, authority, commits, claims, settlement, and ordered
+changes. Realtime synchronization is part of Ablo, but it is not the product
+boundary: applications can use Ablo with or without a connected UI.
 
-## How the write path works
+## Your data stays yours
 
-1. A human application, agent, or backend service submits a typed commit.
-2. Ablo checks its identity, capability, idempotency key, claims, fences, and
-   stale context at one authority boundary.
-3. The accepted transaction is applied to your Postgres through a scoped
-   writer role.
-4. Ablo marks the transaction confirmed when your authoritative database
-   reports the change back.
-5. The resulting ordered change reaches durable observers and live
-   applications through the same feed.
+Ablo works with the Postgres database and authentication system you already
+use. Your database holds the rows, your migration tool owns the schema, and
+your security policies remain in force. Ablo coordinates changes and keeps the
+evidence around them; it does not require you to move application state into a
+replacement database.
 
-Ablo is more than a synchronization library. Realtime materialization is one
-way to consume the ordered transaction stream. The underlying product is the
-authority and coordination boundary that makes shared work safe whether or not
-a UI is connected.
+## Documentation
 
-## What a committed change carries
-
-A committed change can be traced to the model and row it affected, the human,
-agent, or system that performed it, the principal it acted for, the capability
-that authorized it, and its confirmation state. This makes questions such as
-“who changed this?”, “was it delegated?”, and “did the database confirm it?”
-answerable without building a parallel attribution system in every application.
-
-## Bring your own database and auth
-
-Run `npx ablo connect` when you are ready to use your Postgres. Ablo uses
-separate, scoped roles for applying writes and observing confirmation. Your
-database remains the source of truth, your migration tool owns the schema, and
-your existing row-level security remains part of the enforcement boundary.
-
-Ablo also works with your existing identity provider. Browser sessions receive
-short-lived, bounded credentials from your backend; server processes use
-server-side keys. Both are checked through the same capability vocabulary at
-the commit boundary.
-
-## Docs
+The full documentation ships with the package, so it matches the version you
+installed and remains available offline:
 
 ```sh
 npx ablo docs
 npx ablo docs coordination
 ```
 
-The documentation ships with the installed package, so it matches the version
-you are running and works without a network connection. The same pages are
-available at [docs.abloatai.com](https://docs.abloatai.com).
+The same guides are available at
+[docs.abloatai.com](https://docs.abloatai.com). Start with the
+[Quickstart](./docs/quickstart.md), [How it works](./docs/how-it-works.md),
+[Coordination](./docs/coordination.md), and
+[Guarantees](./docs/guarantees.md).
 
 Building with a coding agent? Point it at
 `node_modules/@abloatai/ablo/llms.txt`.
 
-Start with [Quickstart](./docs/quickstart.md) ·
-[How it works](./docs/how-it-works.md) ·
-[Integration guide](./docs/integration-guide.md) ·
-[Coordination](./docs/coordination.md) ·
-[Audit log](./docs/audit.md) ·
-[Connect your database](./docs/data-sources.md) ·
-[Guarantees](./docs/guarantees.md)
+## Contributing
+
+Ablo is free and open source. You can help by
+[opening an issue](https://github.com/Abloatai/ablo/issues),
+[suggesting a feature](https://github.com/Abloatai/ablo/issues/new), or
+[contributing code](https://github.com/Abloatai/ablo/pulls).
+
+## Security
+
+Please report security vulnerabilities privately through
+[GitHub Security Advisories](https://github.com/Abloatai/ablo/security/advisories/new)
+rather than opening a public issue.
 
 ## License
 
