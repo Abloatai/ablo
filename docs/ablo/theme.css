@@ -15,7 +15,7 @@
 /*
  * Hide the "Edit on GitHub" page action. Blume derives it from `github` in the
  * config with no separate toggle, but it points readers at the wrong file: most
- * pages here are generated from `packages/sync-engine/docs/*.md`, so an edit to
+ * pages here are generated from `packages/ablo/docs/*.md`, so an edit to
  * the .mdx it links to is overwritten by the next `npm run build:docs`.
  * `display: none` (not `visibility`) so it leaves the accessibility tree too.
  * The header repo link and the feedback widget are unaffected.

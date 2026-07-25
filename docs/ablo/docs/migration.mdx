@@ -17,7 +17,7 @@ change when you upgrade.
 | Version | What changed | What to do |
 |---|---|---|
 | **0.36.0** | `ttlSeconds` deprecated on the join surfaces in favour of `ttl` | `useJoin({ scope, ttlSeconds: '5m' })` → `useJoin({ scope, ttl: '5m' })`; same for `ParticipantJoinOptions`. Both spellings work until 0.37.0 |
-| **0.35.0** | Synchronous reads moved under `local`, mirroring the async verbs | `get(id)` → `local.retrieve(id)`; `getAll(options)` → `local.list(options)`; `getCount(options)` → `local.count(options)` |
+| **0.35.0** | Synchronous reads moved under `local`, mirroring the async verbs | `get(id)` → `local.get(id)`; `getAll(options)` → `local.list(options)`; `getCount(options)` → `local.count(options)` |
 | **0.35.0** | `causedByTaskId` write option + seven `turn_*` error codes removed | Delete the `causedByTaskId` argument from writes; a branch on `turn_validation_failed` was unreachable and can go with it |
 | **0.34.0** | Presence verb renamed `watch` → `join` | `ablo.<model>.watch(ids)` → `ablo.<model>.join(ids)`; `useWatch` → `useJoin`; the `WatchOptions` / `UseWatchOptions` / `UseWatchReturn` types → `JoinOptions` / `UseJoinOptions` / `UseJoinReturn`; error code `model_watch_not_configured` → `model_join_not_configured` |
 | **0.28.0** | Removed React placeholders that had no working runtime | `usePresence` → `usePeers` or `useJoin`; `useClaim` → `ablo.<model>.claim`; `SyncGroupProvider` / `useSyncGroup` → `useJoin({ scope })` |
@@ -59,7 +59,7 @@ unchanged: it has always carried seconds and still does.
 - const task  = ablo.tasks.get(id);
 - const open  = ablo.tasks.getAll({ where: { status: 'open' } });
 - const count = ablo.tasks.getCount({ where: { status: 'open' } });
-+ const task  = ablo.tasks.local.retrieve(id);
++ const task  = ablo.tasks.local.get(id);
 + const open  = ablo.tasks.local.list({ where: { status: 'open' } });
 + const count = ablo.tasks.local.count({ where: { status: 'open' } });
 ```
@@ -307,7 +307,7 @@ modifier are named siblings. Reactive local reads stay on the synchronous
 + await ablo.tasks.retrieve({ id })
 
 - useAblo((ablo) => ablo.tasks.retrieve(id)) ?? serverTask
-+ useAblo((ablo) => ablo.tasks.local.retrieve(id)) ?? serverTask
++ useAblo((ablo) => ablo.tasks.local.get(id)) ?? serverTask
 ```
 
 `claim` now returns a disposable handle instead of taking a callback. The handle

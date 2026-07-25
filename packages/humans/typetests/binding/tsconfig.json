@@ -1,0 +1,14 @@
+{
+  // The typed-binding probe's own program. It cannot share a compilation with
+  // the register fixtures one directory up: a `Register` augmentation merges
+  // across a whole program, and this probe pulls the full react + engine
+  // graph in — which the `ClaimMeta` registration retypes at claim sites the
+  // engine spells wire-shaped on purpose. One probe, one program, no
+  // registration: a red gate here must mean the binding's types broke.
+  "extends": "./../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../.."
+  },
+  "include": ["**/*.ts", "../../src/local/testing/typeEquality.ts"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -36,8 +36,8 @@ That's the whole story: one knob, filled by audience.
 |---|---|---|
 | publishable `pk_` (client-safe) | `pk_` | browser: read-only |
 | secret `sk_` (server, full) | `sk_` | server: full authority |
-| restricted `rk_` (granular) | `rk_` | scoped agent sessions (`sessions.create({ agent, can })`) |
-| ephemeral key (client, customer-scoped) | `ek_` | per-user browser sessions (`sessions.create({ user })`) |
+| restricted `rk_` (granular) | `rk_` | scoped agents (`agents.create({ can })`) |
+| ephemeral key (client, customer-scoped) | `ek_` | per-user browser sessions (`sessions.create({ user, can })`) |
 
 Mode lives in the prefix too — `sk_test_` / `sk_live_` — exactly like Stripe. The
 `apiKey` resolver fetching an `ek_` is Ablo's ephemeral-key flow: server mints, client holds.
@@ -45,7 +45,7 @@ Mode lives in the prefix too — `sk_test_` / `sk_live_` — exactly like Stripe
 **Why a function for browser writes?** Anything you ship to a browser must be public, and a
 public `pk_` is **read-only** — it can't carry one specific user's write authority. So when
 the browser writes *as the logged-in user*, your backend (which holds the secret `sk_` and
-knows who's signed in) mints a short-lived per-user token with `sessions.create({ user })`,
+knows who's signed in) mints a short-lived per-user token with `sessions.create({ user, can })`,
 and the browser's `apiKey` function fetches it. You don't manage refresh — the SDK calls the
 function once before connecting and then keeps the token fresh (re-mint before expiry, and on
 tab-focus / network-online / device-wake). This is the Stripe ephemeral-key / Supabase
@@ -61,10 +61,11 @@ knobs, and you set exactly one.
 
 | Mint | Call | Result |
 |---|---|---|
-| Human end-user session | `await server.sessions.create({ user: { id } })` | `ek_` (full user authority) |
-| Scoped delegated agent | `await server.sessions.create({ agent: { id }, can: { Task: ['update'] } })` | `rk_` (scoped to `can`) |
+| Human end-user session | `await server.sessions.create({ user: { id }, can: { tasks: ['read'] } })` | `ek_` (scoped to `can`) |
+| Ready agent client | `await server.agents.create({ can: { tasks: ['update'] } })` | Auto-refreshing client scoped to `can` |
+| Raw delegated agent token | `await server.sessions.create({ agent: { id }, can: { tasks: ['update'] } })` | `rk_` for another runtime |
 
-The principal kind comes from *which* shape you pass — `{ user }` → `user`, `{ agent, can }` → `agent`.
+The principal kind comes from *which* shape you pass — `{ user, can }` → `user`, `{ agent, can }` → `agent`.
 
 ## Server-Side API Keys
 

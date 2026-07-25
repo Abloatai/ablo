@@ -218,12 +218,12 @@ const updated = await ablo.weatherReports.update({
 console.log({ id: updated.id, status: updated.status }); // { id: '...', status: 'ready' }
 ```
 
-Read a single row back with `retrieve({ id })`. It resolves to the row, or to
+Read a single row back with `get({ id })`. It resolves to the row, or to
 `undefined` when no row has that id — so narrow it once, then the fields are
 fully typed:
 
 ```ts
-const report = await ablo.weatherReports.retrieve({ id: created.id });
+const report = await ablo.weatherReports.get({ id: created.id });
 if (!report) throw new Error(`weatherReports ${created.id} not found`);
 
 console.log(report.status); // 'ready'

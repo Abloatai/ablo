@@ -60,7 +60,7 @@ Each tool mirrors an SDK verb, scoped to a model + id. Model names come from
 
 | Tool | Mirrors | Does |
 |---|---|---|
-| `get_model` | `ablo.<model>.local.retrieve(id)` | read latest state + active claims |
+| `get_model` | `ablo.<model>.local.get(id)` | read latest state + active claims |
 | `list_records` | `ablo.<model>.list({…})` | cursor-paginated list with filters |
 | `create_model` | `ablo.<model>.create({ data })` | guarded create |
 | `update_model` | `ablo.<model>.update({ id, … })` | guarded update |
@@ -135,7 +135,7 @@ loading everything into context.
 
 Reusable, parameterised templates that drive an end-to-end flow:
 
-- `integrate-sync-engine` — wire the SDK into an existing project.
+- `integrate-ablo` — wire the SDK into an existing project.
 - `add-agent` — add an agent worker that coordinates via claims and
   conflict-safe writes.
 - `define-schema` — design a Zod-first schema from a description, then run

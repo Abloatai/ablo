@@ -41,7 +41,7 @@ const ablo = Ablo({
 export async function completeTask(taskId: string) {
   await ablo.ready();
 
-  const task = await ablo.tasks.retrieve({ id: taskId });
+  const task = await ablo.tasks.get({ id: taskId });
   if (!task) return { status: 'not_found' };
 
   await using claim = await ablo.tasks.claim({
@@ -61,7 +61,7 @@ export async function completeTask(taskId: string) {
 }
 ```
 
-`retrieve({ id })` is an async server read — it hits the server and returns the
+`get({ id })` is an async server read — it hits the server and returns the
 row (or `undefined`, which the early `not_found` guard handles). The update runs
 while the claim is held, and `wait: 'confirmed'` makes it resolve only once your
 database has confirmed the row landed.

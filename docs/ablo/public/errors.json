@@ -1,5 +1,5 @@
 {
-  "$generated": "packages/sync-engine/scripts/generate-error-docs.mts",
+  "$generated": "packages/ablo/scripts/generate-error-docs.mts",
   "version": "2026-07-23",
   "envelope": [
     "type",
@@ -553,12 +553,36 @@
       "docUrl": "https://docs.abloatai.com/errors#datasource_connection_unsupported"
     },
     {
+      "code": "db_cleanup_failed",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "Authenticated local data could not be completely removed from this device.",
+      "docUrl": "https://docs.abloatai.com/errors#db_cleanup_failed"
+    },
+    {
+      "code": "db_identity_mismatch",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "The local database belongs to a different authenticated identity or data plane.",
+      "docUrl": "https://docs.abloatai.com/errors#db_identity_mismatch"
+    },
+    {
       "code": "db_not_opened",
       "category": "client",
       "surface": "client",
       "retryable": false,
       "message": "The local database was accessed before it was opened.",
       "docUrl": "https://docs.abloatai.com/errors#db_not_opened"
+    },
+    {
+      "code": "db_secure_hash_unavailable",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "Secure local persistence requires Web Crypto SHA-256 support.",
+      "docUrl": "https://docs.abloatai.com/errors#db_secure_hash_unavailable"
     },
     {
       "code": "db_store_not_found",
@@ -850,6 +874,15 @@
       "docUrl": "https://docs.abloatai.com/errors#invalid_id"
     },
     {
+      "code": "invalid_input",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The mutator input could not be parsed or failed input validation.",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_input"
+    },
+    {
       "code": "invalid_json",
       "category": "validation",
       "surface": "wire",
@@ -866,6 +899,15 @@
       "retryable": false,
       "message": "The model name in the request is not a valid model identifier.",
       "docUrl": "https://docs.abloatai.com/errors#invalid_model"
+    },
+    {
+      "code": "invalid_mutator",
+      "category": "not_found",
+      "surface": "wire",
+      "httpStatus": 404,
+      "retryable": false,
+      "message": "The requested mutator is not registered on this server.",
+      "docUrl": "https://docs.abloatai.com/errors#invalid_mutator"
     },
     {
       "code": "invalid_options",
@@ -1343,6 +1385,15 @@
       "retryable": false,
       "message": "The request targeted an organization the caller is not scoped to.",
       "docUrl": "https://docs.abloatai.com/errors#organization_mismatch"
+    },
+    {
+      "code": "permission_denied",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The participant is not allowed to execute this mutator.",
+      "docUrl": "https://docs.abloatai.com/errors#permission_denied"
     },
     {
       "code": "pool_model_class_not_registered",
@@ -2107,6 +2158,15 @@
       "retryable": false,
       "message": "Rows in this model belong to one person rather than to the whole organization, and that boundary is kept where the rows are stored. This plane is currently served from its log, which carries the organization and the project on every row but not the owner — so the boundary cannot be applied here, and serving the read would show one member another member's private records. It was declined whole and nothing was returned. Serve the plane from its tables, or read with a credential that acts for the organization rather than for a person.",
       "docUrl": "https://docs.abloatai.com/errors#user_scope_not_enforced"
+    },
+    {
+      "code": "validation_failed",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The mutator rejected the input because it violates a business rule.",
+      "docUrl": "https://docs.abloatai.com/errors#validation_failed"
     },
     {
       "code": "wait_for_timeout",

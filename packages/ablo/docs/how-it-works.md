@@ -1,0 +1,136 @@
+# How Ablo Works
+
+> You write through Ablo, Ablo writes to your Postgres, and the write-ahead log confirms it.
+
+You write through Ablo, and Ablo writes to your Postgres. That one sentence is the
+whole model — everything below explains what it means and how to use it.
+
+```ts
+// You call Ablo. Ablo lands the change in your database and confirms it.
+await ablo.tasks.update({ id: 'task_42', data: { status: 'done' }, wait: 'confirmed' });
+
+// Reads come back live, kept current from your database.
+const task = ablo.tasks.local.get('task_42');
+```
+
+## The mental model: read this once
+
+Ablo is a **coordination layer in front of your Postgres**. Agents, background
+jobs, and the people alongside them all change the same application data through
+one API, and Ablo makes sure their writes don't clobber each other.
+
+- **Writes go through Ablo:** `ablo.<model>.create / update / delete` enter Ablo's
+  commit chokepoint — where claims, ordering, and idempotency are enforced — and
+  Ablo applies the change to your Postgres through a scoped writer role. The commit
+  is accepted (`queued`) the moment Ablo takes it.
+- **Your database confirms the write.** Ablo tails your write-ahead log (WAL). When
+  the row it wrote shows up there, the receipt is promoted to `confirmed`. So your
+  database, not Ablo, is the source of truth for row state — the WAL echo is how
+  Ablo *confirms*, not how it writes.
+- **Reads are live.** Ablo serves current state and keeps every connected client up
+  to date off that same stream.
+- **Ablo stores only the log.** Ablo holds the ordered transaction log
+  (`sync_deltas`) and the coordination state — the claims, the ordering, the
+  watermarks. Your rows live in your database. Ablo runs no DDL and owns no schema;
+  your migration tool stays in charge of the shape of your database.
+
+That's the shape: **you write through Ablo → it lands in your Postgres → the WAL
+echo confirms it → everyone connected sees it live.**
+
+## The primitives
+
+| Primitive | Plane | Purpose |
+|---|---|---|
+| `Schema` | State | Declares typed models the app and agents can read and write. |
+| `Model` | State | The generated `ablo.<model>` model. Use `retrieve`/`list` (async reads), `local.get`/`local.list`/`local.count` (the same verbs, synchronous and local-only), `create`, `update`, and `delete`. |
+| `Claim` | Coordination | Who is working on a target. Taken via `ablo.<model>.claim({ id })` and read via `ablo.<model>.claim.state({ id })`. Ephemeral, never persisted. |
+| `Commit` | Protocol | The durable write underneath model updates. Most users do not call it directly. |
+| `Receipt` | Protocol | The lower-level durable result for custom runtimes. Schema writes use `wait: 'confirmed'`. |
+
+### Why each primitive is separate
+
+Why are `Claim`, `Commit`, and `Receipt` separate things instead of one? Each
+does a job the others cannot. If you are coming from Replicache or Yjs you would
+expect just `Commit`. Here is what the other two buy you over that minimum:
+
+- **`Claim` is not a read lock.** Reads stay open. Claims serialize
+  acting-on-the-row, so slow work can wait in FIFO order, re-read, and write
+  from fresh state.
+- **`Receipt` is not a `200 OK`.** It is the durable artifact a commit produced:
+  accepted commit id, server-assigned timestamps, stale-check outcome. It is
+  addressable after the fact and replayable into a different client. A status
+  code cannot be re-read by a sub-agent that was not on the original call.
+
+## Where your data lives
+
+You point Ablo at a Postgres database, and that's where its rows live. Only *which*
+database differs by environment — the code is identical.
+
+- **Production:** your Postgres. `ablo connect` sets up a scoped writer role and
+  logical replication; your rows live in your database, and Ablo writes to them
+  through that role.
+- **Sandbox and local dev:** a separate or local Postgres you can throw away. Same
+  models, same code, a different database behind them.
+- **Before you connect one.** Ablo keeps state in its own log, so you can build the
+  whole app today and point it at a real database when you're ready.
+
+Registering the database is the whole switch. There is no tier or flag to choose.
+
+## Use it end to end
+
+```bash
+# 1. Install and scaffold.
+npm install @abloatai/ablo
+npx ablo init
+
+# 2. Push your schema (the models your agents edit together).
+npx ablo push
+
+# 3. Connect your database — one command, admin credential used once and discarded.
+npx ablo connect apply --url postgres://admin:...@host:5432/db
+```
+
+```bash
+# Your app's environment holds only the API key — never a connection string.
+ABLO_API_KEY=sk_live_...
+```
+
+```ts
+// 4. Build the client once.
+import Ablo from '@abloatai/ablo';
+import { schema } from './ablo/schema';
+export const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+
+// 5. Write through Ablo. It lands in your Postgres; wait: 'confirmed' blocks
+//    until the WAL echo proves the row is there.
+await ablo.tasks.update({ id: 'task_42', data: { status: 'done' }, wait: 'confirmed' });
+
+// 6. Read — live, no fetch loop.
+const task = ablo.tasks.local.get('task_42');
+
+// 7. Coordinate when more than one actor can touch a row. Hold a claim and Ablo
+//    serializes writes on that key against everyone else; read after claiming,
+//    then write. The lease releases automatically at the end of the scope.
+await using _hold = await ablo.tasks.claim('task_42');
+const latest = ablo.tasks.local.get('task_42'); // read after claiming, not from memory
+await ablo.tasks.update({ id: 'task_42', data: { status: 'done' } });
+```
+
+## Reading the architecture correctly
+
+The model changed once (ADR 0010), and older material described the earlier one.
+If you've read that a customer's app keeps writing while Ablo only tails the WAL,
+here is the current, correct reading:
+
+- **"Ablo tails the WAL."** True — to *confirm* your writes and serve live reads.
+  It is not the write path. You write **through** Ablo.
+- **"Ablo is out of the write path."** Not anymore. Ablo is the write chokepoint;
+  every write flows through its coordination and then into your database.
+- **"Ablo holds my rows."** Only in the no-database-yet sandbox. Once you connect a
+  database, your rows live in *your* Postgres — Ablo keeps just the log.
+- **"Ablo migrates my schema."** No. Ablo writes rows through a scoped role and runs
+  no DDL; your migrations own the shape of your database.
+
+For the setup details, see [Connect Your Database](./data-sources.md). For the
+coordination loop, see [Concurrency Convention](./concurrency-convention.md). For
+what `queued` and `confirmed` guarantee, see [Guarantees](./guarantees.md).

@@ -4,7 +4,7 @@ import { defineConfig } from "blume";
 /**
  * The site description IS the landing page's promise line. That line has one
  * definition site — the blockquote under the H1 of
- * `packages/sync-engine/docs/index.md` — which `npm run build:docs` lifts into
+ * `packages/ablo/docs/index.md` — which `npm run build:docs` lifts into
  * `docs/index.mdx` frontmatter. Read it here rather than restating it; the
  * build script pins `llms.txt` to the same line.
  */
@@ -13,7 +13,7 @@ function landingPromise(): string {
   const described = mdx.match(/^description: (".*")$/m);
   if (!described) {
     throw new Error(
-      "docs/index.mdx carries no description — run `npm run build:docs` in packages/sync-engine.",
+      "docs/index.mdx carries no description — run `npm run build:docs` in packages/ablo.",
     );
   }
   return JSON.parse(described[1]) as string;
@@ -23,7 +23,7 @@ function landingPromise(): string {
  * Ablo documentation site.
  *
  * Most pages under `docs/` are generated — prose from
- * `packages/sync-engine/docs/*.md`, the error reference from the code registry,
+ * `packages/ablo/docs/*.md`, the error reference from the code registry,
  * and `docs/changelog/*` from `CHANGELOG.md` — via `npm run build:docs` /
  * `npm run generate:errors` in that package. Edit the sources, not the output.
  * The `navigation.sidebar` below mirrors the curated group order the site

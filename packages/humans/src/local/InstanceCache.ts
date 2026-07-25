@@ -1,0 +1,1503 @@
+/**
+ * InstanceCache is the in-memory cache of live model instances, keyed by id and
+ * deduplicated so each entity has a single instance. It maintains type and
+ * foreign-key indexes for fast lookups, evicts entries under a size cap, and
+ * notifies subscribers and query views as models are added, updated, or
+ * removed. It holds a {@link ModelRegistry} to map between model names and
+ * constructor classes, but performs no persistence of its own.
+ */
+
+import { makeObservable, observable, action, computed, runInAction } from 'mobx';
+import { DEFER_MODEL_OBSERVABILITY, Model } from './Model.js';
+import { ModelRegistry } from './ModelRegistry.js';
+import { globalRuntime } from './context.js';
+import type { RuntimeContext } from './RuntimeContext.js';
+import { AbloValidationError } from '@ablo/transaction/errors';
+import { ModelScope } from '@ablo/transaction/types';
+import { ViewRegistry } from './views/ViewRegistry.js';
+import { QueryView, type QueryViewOptions } from './views/QueryView.js';
+
+/** Constructor type for Model subclasses - uses abstract to handle variance */
+type ModelConstructor<T extends Model> = abstract new (...args: never[]) => T;
+
+// Re-exported so `import { ModelScope } from './InstanceCache.js'` resolves
+export { ModelScope };
+
+interface ModelEntry {
+  model: Model | null; // null when using WeakRef-based GC
+  scope: ModelScope;
+  weakRef?: WeakRef<Model>;
+}
+
+interface PoolConfig {
+  maxSize?: number;
+  maxAge?: number;
+  gcInterval?: number;
+  useWeakRefs?: boolean;
+  /** The owning client's runtime. Defaults to the module-global bridge. */
+  runtime?: RuntimeContext;
+}
+
+interface DeltaInfo {
+  action?: string;
+  syncId?: number;
+}
+
+/**
+ * The in-memory cache of model instances, keyed by id and deduplicated so each
+ * entity resolves to a single instance.
+ */
+export class InstanceCache {
+  // Single source of truth for all models (observable for reactivity)
+  private entries = observable.map<string, ModelEntry>();
+  private typeIndex = observable.map<string, Set<string>>();
+
+  // Non-observable access time tracking — kept outside observable.map so that
+  // updating timestamps in get() during React render does NOT trigger MobX
+  // reactions (which would cause infinite re-render loops).
+  private accessTimes = new Map<string, number>();
+
+  // Deduplication tracking
+  private recentAdditions = new Map<string, number>(); // "modelType:modelId" -> timestamp
+  private deltaHistory = new Map<
+    string,
+    {
+      lastAction: string;
+      lastSyncId: number;
+      timestamp: number;
+    }
+  >();
+
+  // No intermediate cache layer — getByType() reads typeIndex and entries
+  // directly. Both are observable, so the data structures are themselves the
+  // reactivity source; there are no computed getters with conditional cache
+  // invalidation to get wrong.
+
+  // Foreign key indexes: Map<"ModelType:fieldName", Map<fieldValue, ObservableSet<modelId>>>
+  // Enables O(1) lookups like "all Block models where sectionId = X"
+  // instead of scanning all models of a type and filtering.
+  private foreignKeyIndexes = new Map<string, Map<string, Set<string>>>();
+  // Registry of which fields to index: Map<modelName, fieldName[]>
+  private foreignKeyConfig = new Map<string, string[]>();
+
+  // Performance tracking
+  private metrics = {
+    hits: 0,
+    misses: 0,
+    evictions: 0,
+    additions: 0,
+    duplicatesSkipped: 0,
+  };
+
+  // Configuration
+  private config: Required<Omit<PoolConfig, 'runtime'>>;
+  private readonly runtime: RuntimeContext;
+  private gcTimer?: NodeJS.Timeout;
+
+  // ModelRegistry instance — single source of truth for model metadata
+  readonly registry: ModelRegistry;
+
+  // ViewRegistry — tracks active QueryViews for incremental view maintenance
+  readonly viewRegistry: ViewRegistry = new ViewRegistry();
+
+  // Subscription registry
+  private subscriptions = new Map<string, Set<(model: Model) => void>>();
+
+  /**
+   * Subscribe to updates for a specific model type.
+   */
+  subscribe<T extends Model>(
+    modelClass: ModelConstructor<T>, 
+    callback: (model: T) => void
+  ): () => void {
+    const modelName = this.registry.getModelNameFromConstructor(modelClass);
+    if (!modelName) {
+      throw new AbloValidationError(`Model class not registered: ${modelClass.name}`, {
+        code: 'pool_subscribe_unregistered',
+      });
+    }
+
+    let subs = this.subscriptions.get(modelName);
+    if (!subs) {
+      subs = new Set();
+      this.subscriptions.set(modelName, subs);
+    }
+    const erased = callback as (model: Model) => void;
+    subs.add(erased);
+    return () => subs.delete(erased);
+  }
+
+  private notifySubscribers(model: Model): void {
+    const modelName = model.getModelName();
+    const subs = this.subscriptions.get(modelName);
+    if (subs) {
+      model.ensureObservable();
+      for (const callback of subs) {
+        callback(model);
+      }
+    }
+  }
+
+  constructor(config: PoolConfig = {}, modelRegistry?: ModelRegistry) {
+    this.config = {
+      maxSize: config.maxSize ?? 10000,
+      // Idle-eviction disabled by default. The 5-minute default used to
+      // live here, but with schema-driven dynamic classes not
+      // registering `LazyReferenceCollection`s, the
+      // `hasObservedCollections()` guard in gc() didn't fire for most
+      // actively-rendered models — and they'd evict out from under a
+      // user whose tab sat for 10 minutes. Memory pressure relief is
+      // handled by the `maxSize` LRU cap (see `evictOldest`), which is
+      // the bound that actually matches usage: "keep the most recent N
+      // entities, not the entities touched in the last N minutes."
+      //
+      // Callers who genuinely want time-based eviction can pass an
+      // explicit `maxAge`. Leaving the default at Infinity keeps
+      // correctness as the default and makes aggressive GC an opt-in.
+      maxAge: config.maxAge ?? Number.POSITIVE_INFINITY,
+      gcInterval: config.gcInterval ?? 60000, // 1 minute
+      useWeakRefs: config.useWeakRefs ?? true,
+    };
+    this.runtime = config.runtime ?? globalRuntime;
+
+    // Store the model registry reference
+    if (!modelRegistry) {
+      throw new AbloValidationError(
+        'InstanceCache requires ModelRegistry for production-safe model name lookup',
+        { code: 'pool_registry_missing' },
+      );
+    }
+    this.registry = modelRegistry;
+
+    // Type indexes are initialized on first use, so models can be registered
+    // after the InstanceCache is created; the first getByType call builds them.
+
+    // No computed cache layer: entries and typeIndex are both observable, and
+    // getByType() reads them directly, so MobX always tracks the dependency.
+    makeObservable(this, {
+      add: action,
+      addBatch: action,
+      upsertBatch: action,
+      removeBatch: action,
+      addToArchive: action,
+      remove: action,
+      removeFromArchive: action,
+      clear: action,
+      updateScope: action,
+      size: computed,
+    });
+
+    this.startGC();
+  }
+
+  // No computed getters — getByType() reads typeIndex and entries directly.
+  // Both are observable, so MobX always tracks the dependency; there is no
+  // conditional cache path that could silently drop a dependency.
+
+  // There is no cache layer to manage: typeIndex and entries are observable
+  // and read directly by getByType().
+
+  private resolveModel(entry: ModelEntry, id?: string): Model | undefined {
+    if (entry.model) return entry.model;
+    if (entry.weakRef) {
+      const model = entry.weakRef.deref();
+      if (model) {
+        entry.model = model;
+        if (id) this.accessTimes.set(id, Date.now());
+        return model;
+      }
+    }
+    return undefined;
+  }
+
+  // The type parameter appears only in the return position on purpose: this is
+  // an ergonomic typed accessor (like Map<K, V>.get) that centralizes what would
+  // otherwise be an `as T` cast at every call site.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
+  get<T extends Model = Model>(id: string): T | undefined {
+    const entry = this.entries.get(id);
+
+    if (!entry) {
+      runInAction(() => {
+        this.metrics.misses++;
+      });
+      return undefined;
+    }
+
+    let model = entry.model as T | undefined;
+
+    if (!model && entry.weakRef) {
+      const restoredModel = entry.weakRef.deref();
+      if (!restoredModel) {
+        runInAction(() => {
+          this.entries.delete(id);
+          this.removeFromTypeIndex(id, entry.model?.getModelName());
+          this.metrics.misses++;
+        });
+        return undefined;
+      }
+      model = restoredModel as T;
+      runInAction(() => {
+        entry.model = restoredModel;
+      });
+    }
+
+    // Never return disposed models — they are logically removed and may have
+    // torn-down internal state. Callers (e.g. flushPendingDeltas) must not
+    // receive a disposed reference that will throw on updateFromData().
+    if (model?.disposed) {
+      return undefined;
+    }
+
+    // Update access time in non-observable map — prevents MobX reactions during render
+    this.accessTimes.set(id, Date.now());
+    this.metrics.hits++;
+
+    model?.ensureObservable();
+    return model ?? undefined;
+  }
+
+  /**
+   * Look a row up **within one model**.
+   *
+   * The pool is a single id space: `get(id)` returns whatever row carries that
+   * id, whatever model it belongs to. That is the correct storage shape — ids
+   * are globally unique, the same premise as Relay's Global Object
+   * Identification — but it means an *untyped* lookup cannot stand in for a
+   * typed one. Apollo and EmberData avoid the question by keying their identity
+   * maps on `Type:id`; with unique ids the equivalent guarantee comes from
+   * stating the expected model at the lookup instead.
+   *
+   * Returns `undefined` for a row belonging to another model: from the asking
+   * model's perspective that id is simply absent. Callers that must tell "not
+   * here" apart from "here, but another model's" should compare against
+   * {@link get}.
+   *
+   * Prefer this over `get()` anywhere the caller knows which model it wants —
+   * `get()` returning another model's row has caused three product bugs, most
+   * recently a resize gesture that reverted after every commit.
+   */
+  // `T` appears only in the return position, which is normally a caller-chosen
+  // cast in disguise. It is sound here precisely because `modelName` is checked
+  // at runtime below before the row is handed back, so the caller's expected
+  // type and the row's registered identity cannot disagree.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
+  getOfType<T extends Model = Model>(id: string, modelName: string): T | undefined {
+    const model = this.get(id);
+    if (!model) return undefined;
+    // Checked, so the assertion below is sound: `typeIndex` and
+    // `getModelName()` are the same registered-name identity.
+    return model.getModelName() === modelName ? (model as T) : undefined;
+  }
+
+  /**
+   * Add model with deduplication support
+   */
+  add(model: Model, scope: ModelScope = ModelScope.live, deltaInfo?: DeltaInfo): void {
+    const id = model.id;
+    const modelType = model.getModelName();
+    const addKey = `${modelType}:${id}`;
+
+
+    // Ensure type index exists for this model type
+    if (!this.typeIndex.has(modelType)) {
+      this.typeIndex.set(modelType, observable.set<string>());
+    }
+
+    // Check if model already exists to prevent duplicates
+    const existingEntry = this.entries.get(id);
+    if (existingEntry?.model && !existingEntry.model.disposed) {
+      // Model already exists and is valid, update its scope if needed
+      if (existingEntry.scope !== scope) {
+        runInAction(() => {
+          this.entries.set(id, { ...existingEntry, scope });
+        });
+        this.accessTimes.set(id, Date.now());
+      }
+      this.metrics.duplicatesSkipped++;
+      return;
+    }
+
+    // Check rapid additions (within 50ms) for better deduplication
+    const lastAdded = this.recentAdditions.get(addKey);
+    if (lastAdded && Date.now() - lastAdded < 50) {
+      this.metrics.duplicatesSkipped++;
+      return;
+    }
+
+    // Check delta history for duplicate processing
+    if (deltaInfo?.syncId) {
+      const history = this.deltaHistory.get(addKey);
+
+      if (history) {
+        // Skip if we've already processed a newer or equal sync ID
+        if (history.lastSyncId >= deltaInfo.syncId) {
+          this.metrics.duplicatesSkipped++;
+          return;
+        }
+
+        // Warn about suspicious patterns
+        if (
+          deltaInfo.action === 'I' &&
+          (history.lastAction === 'U' || history.lastAction === 'D')
+        ) {
+          // Internal delta-ordering anomaly that reconciles on the next
+          // catch-up — forensic, not consumer-actionable → debug.
+          this.runtime.logger.debug(
+            `InstanceCache.add() SUSPICIOUS: INSERT after ${history.lastAction}`,
+            { modelType, id, syncId: deltaInfo.syncId },
+          );
+        }
+      }
+
+      // Update delta history
+      this.deltaHistory.set(addKey, {
+        lastAction: deltaInfo.action ?? 'U',
+        lastSyncId: deltaInfo.syncId,
+        timestamp: Date.now(),
+      });
+    }
+
+    // Track this addition
+    this.recentAdditions.set(addKey, Date.now());
+
+    // Clean old tracking entries periodically
+    if (this.recentAdditions.size > 100) {
+      this.cleanupTracking();
+    }
+
+    // Note: existingEntry check is now done earlier for better deduplication
+
+    if (this.entries.size >= this.config.maxSize) {
+      this.evictOldest();
+    }
+
+    const entry: ModelEntry = {
+      model,
+      scope,
+    };
+
+    if (this.config.useWeakRefs && this.isLargeModel(model)) {
+      entry.weakRef = new WeakRef(model);
+    }
+
+    this.accessTimes.set(id, Date.now());
+    runInAction(() => {
+      this.entries.set(id, entry);
+      this.addToTypeIndex(id, model.getModelName());
+      this.metrics.additions++;
+    });
+    // No cache to invalidate — typeIndex + entries are directly observable
+
+    // Notify views of the addition
+    this.notifySubscribers(model);
+    this.viewRegistry.notifyAdded(modelType, model);
+  }
+
+  /**
+   * Upsert a model - INSERT if new, UPDATE if exists
+   */
+  upsert(model: Model, scope: ModelScope = ModelScope.live): void {
+    const id = model.id;
+    const existingEntry = this.entries.get(id);
+
+    if (existingEntry?.model && !existingEntry.model.disposed) {
+      // Model exists - update it in-place
+      const existingModel = existingEntry.model;
+
+      // Skip updateFromData if same instance - preserves _local changes for client mutations
+      if (model !== existingModel) {
+        existingModel.updateFromData(model.toJSON());
+      }
+
+      // Update scope if different
+      if (existingEntry.scope !== scope) {
+        runInAction(() => {
+          this.entries.set(id, { ...existingEntry, scope });
+        });
+        this.accessTimes.set(id, Date.now());
+      }
+
+      this.notifySubscribers(existingModel);
+      // Notify views of the update
+      this.viewRegistry.notifyUpdated(existingModel.getModelName(), existingModel);
+    } else {
+      // Model doesn't exist - add it (add() already notifies views)
+      this.add(model, scope);
+    }
+  }
+
+  /**
+   * Batch add models - optimized for hydration
+   * All models are added in a single MobX action to minimize reactivity overhead
+   */
+  addBatch(models: Model[], scope: ModelScope = ModelScope.live): number {
+    if (models.length === 0) return 0;
+
+    let addedCount = 0;
+    const now = Date.now();
+    const newIds = new Set<string>();
+    for (const model of models) {
+      const existing = this.entries.get(model.id);
+      if (!existing?.model || existing.model.disposed) newIds.add(model.id);
+    }
+    const capacityNeeded = Math.max(
+      0,
+      this.entries.size + newIds.size - this.config.maxSize,
+    );
+    if (capacityNeeded > 0) this.evictOldestBatch(capacityNeeded);
+
+    // Process all models in a single action to avoid per-item reaction cycles
+    for (const model of models) {
+      const id = model.id;
+      const modelType = model.getModelName();
+
+      // Ensure type index exists
+      if (!this.typeIndex.has(modelType)) {
+        this.typeIndex.set(modelType, observable.set<string>());
+      }
+
+      // Skip if model already exists and is valid
+      const existingEntry = this.entries.get(id);
+      if (existingEntry?.model && !existingEntry.model.disposed) {
+        if (existingEntry.scope !== scope) {
+          this.entries.set(id, { ...existingEntry, scope });
+          this.accessTimes.set(id, now);
+        }
+        this.metrics.duplicatesSkipped++;
+        continue;
+      }
+
+      const entry: ModelEntry = {
+        model,
+        scope,
+      };
+      this.accessTimes.set(id, now);
+
+      if (this.config.useWeakRefs && this.isLargeModel(model)) {
+        entry.weakRef = new WeakRef(model);
+      }
+
+      this.entries.set(id, entry);
+      this.addToTypeIndex(id, modelType);
+      // Populate the foreign-key indexes. The single-item `add()` path
+      // does this; `addBatch()` used to skip it, which meant every
+      // block / ledger cell / message that came in through a bulk
+      // loader (`ensureReportBlocks`, `prefetchSectionBlocks`, bootstrap
+      // hydration) was in the pool but invisible to `hasMany` lookups
+      // — `section.blocks` returned `[]` until the user clicked a block
+      // and something else ran a non-batch `add` that happened to
+      // populate the FK index as a side effect. The UX symptom was
+      // "sections show empty until you click on one." Adding this one
+      // line closes the gap.
+      this.addToForeignKeyIndex(id, model, modelType);
+      this.metrics.additions++;
+      addedCount++;
+
+      this.notifySubscribers(model);
+      // Notify views of the addition
+      this.viewRegistry.notifyAdded(modelType, model);
+    }
+
+    // No cache to invalidate — typeIndex + entries are directly observable
+
+    return addedCount;
+  }
+
+  /**
+   * Batch upsert models - optimized for delta processing.
+   * All upserts happen in a single MobX action to minimize reactivity overhead.
+   */
+  upsertBatch(models: Model[], scope: ModelScope = ModelScope.live): void {
+    if (models.length === 0) return;
+
+    for (const model of models) {
+      const id = model.id;
+      const existingEntry = this.entries.get(id);
+
+      if (existingEntry?.model && !existingEntry.model.disposed) {
+        if (model !== existingEntry.model) {
+          existingEntry.model.updateFromData(model.toJSON());
+        }
+        if (existingEntry.scope !== scope) {
+          this.entries.set(id, { ...existingEntry, scope });
+          this.accessTimes.set(id, Date.now());
+        }
+        this.notifySubscribers(existingEntry.model);
+        // Notify views of the update
+        this.viewRegistry.notifyUpdated(existingEntry.model.getModelName(), existingEntry.model);
+      } else {
+        // Delegate to inline add logic (same as addBatch internals)
+        const modelType = model.getModelName();
+        if (!this.typeIndex.has(modelType)) {
+          this.typeIndex.set(modelType, observable.set<string>());
+        }
+        if (this.entries.size >= this.config.maxSize) {
+          this.evictOldest();
+        }
+        const entry: ModelEntry = { model, scope };
+        this.accessTimes.set(id, Date.now());
+        if (this.config.useWeakRefs && this.isLargeModel(model)) {
+          entry.weakRef = new WeakRef(model);
+        }
+        this.entries.set(id, entry);
+        this.addToTypeIndex(id, modelType);
+        this.metrics.additions++;
+        this.notifySubscribers(model);
+        // Notify views of the addition
+        this.viewRegistry.notifyAdded(modelType, model);
+      }
+    }
+
+    // No cache to invalidate — typeIndex + entries are directly observable
+  }
+
+  /**
+   * Batch remove models by ID - optimized for delta processing.
+   * All removals happen in a single MobX action to minimize reactivity overhead.
+   * Returns the number of models actually removed.
+   */
+  removeBatch(ids: string[]): number {
+    if (ids.length === 0) return 0;
+
+    let removedCount = 0;
+
+    for (const id of ids) {
+      const entry = this.entries.get(id);
+      if (!entry) continue;
+
+      const modelName = entry.model?.getModelName() ?? entry.weakRef?.deref()?.getModelName();
+
+      // FK/type cleanup must run before entries.delete — see `remove()`
+      // for the full explanation. Same bug, same fix.
+      this.removeFromTypeIndex(id, modelName);
+      this.entries.delete(id);
+
+      // Notify views of the removal before disposing
+      if (modelName) {
+        this.viewRegistry.notifyRemoved(modelName, id);
+      }
+
+      const model = entry.model ?? entry.weakRef?.deref();
+      // A non-Model object can reach the pool (see `clear`); only dispose a real one.
+      if (typeof model?.dispose === 'function') model.dispose();
+
+      const addKey = modelName ? `${modelName}:${id}` : id;
+      this.recentAdditions.delete(addKey);
+      this.deltaHistory.delete(addKey);
+      this.accessTimes.delete(id);
+
+      removedCount++;
+    }
+
+    // No cache to invalidate — typeIndex + entries are directly observable
+
+    return removedCount;
+  }
+
+  /**
+   * Read-only accessor for entity IDs by model type.
+   * Used by applyBootstrapToPool() and rehydrateFromDatabase() for ghost detection.
+   */
+  getIdsByModelType(modelType: string): ReadonlySet<string> | undefined {
+    return this.typeIndex.get(modelType);
+  }
+
+  addToArchive(model: Model): void {
+    this.add(model, ModelScope.archived);
+  }
+
+  remove(id: string): boolean {
+    const entry = this.entries.get(id);
+    if (!entry) return false;
+
+    const modelName = entry.model?.getModelName() ?? entry.weakRef?.deref()?.getModelName();
+
+    // Order matters here: `removeFromTypeIndex` → `removeFromForeignKeyIndex`
+    // reads the FK field values off the model via `this.entries.get(id)`.
+    // If we `this.entries.delete(id)` first, the model is gone and the
+    // FK cleanup silently no-ops — leaving ghost ids in the FK index.
+    // That causes `getByForeignKey(..., parentId)` to report
+    // `matched > returned` (dropped-no-entry) and, on the UI, keeps the
+    // stale block visible until the next reload rebuilds the index
+    // from fresh data. Do the FK/type cleanup first, then delete the
+    // entry.
+    runInAction(() => {
+      this.removeFromTypeIndex(id, modelName);
+      this.entries.delete(id);
+    });
+    // No cache to invalidate — typeIndex + entries are directly observable
+
+    // Notify views of the removal before disposing
+    if (modelName) {
+      this.viewRegistry.notifyRemoved(modelName, id);
+    }
+
+    const model = entry.model ?? entry.weakRef?.deref();
+    // A non-Model object can reach the pool (see `clear`); only dispose a real one.
+    if (typeof model?.dispose === 'function') model.dispose();
+
+    // Clean tracking
+    const addKey = modelName ? `${modelName}:${id}` : id;
+    this.recentAdditions.delete(addKey);
+    this.deltaHistory.delete(addKey);
+    this.accessTimes.delete(id);
+
+    return true;
+  }
+
+  removeFromArchive(id: string): boolean {
+    const entry = this.entries.get(id);
+    if (entry?.scope !== ModelScope.archived) {
+      return false;
+    }
+    return this.remove(id);
+  }
+
+  getByType(
+    modelClass: ModelConstructor<Model>,
+    scope: ModelScope = ModelScope.all
+  ): Model[] {
+    // Read typeIndex and entries directly. Both are observable maps, so MobX
+    // always tracks the dependency — there is no conditional cache path.
+    let actualModelName = this.registry.getModelNameFromConstructor(modelClass);
+    if (!actualModelName) {
+      actualModelName = this.registry.getModelNameFromConstructor(modelClass);
+
+      if (!actualModelName) {
+        try {
+          const ConcreteClass = modelClass as new (data: Record<string, unknown>) => Model;
+          const tempInstance = new ConcreteClass({});
+          actualModelName = tempInstance.getModelName();
+
+          // Fallback resolved — hand-coded class not in registry but name matches.
+          // This is expected during migration from hand-coded → dynamic models.
+        } catch (e) {
+          this.runtime.observability.breadcrumb(
+            `Failed to create fallback instance for ${modelClass.name}`,
+            'sync.database',
+            'error',
+            {
+              error: e instanceof Error ? e.message : String(e),
+            }
+          );
+          return [];
+        }
+      }
+    }
+
+    // Read from typeIndex (observable) to get IDs for this model type
+    const ids = this.typeIndex.get(actualModelName || '');
+    if (!ids || ids.size === 0) {
+      return [];
+    }
+
+    // Resolve each ID from entries (observable) with scope filtering.
+    // Note: we do not check `instanceof modelClass`, because schema-generated
+    // dynamic classes and hand-coded classes are different constructors that
+    // both represent the same model type. The typeIndex lookup by name is
+    // authoritative — if the name matched, the model belongs to this type.
+    const result: Model[] = [];
+    for (const id of ids) {
+      const entry = this.entries.get(id);
+      if (!entry) continue;
+      if (!this.matchesScope(entry.scope, scope)) continue;
+
+      const model = this.resolveModel(entry, id);
+      if (model && !model.disposed) {
+        result.push(model);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Get all models of a given type by string name.
+   * Used for custom entity types where multiple entity type names share
+   * the same CustomEntityModel constructor (getByType can't disambiguate).
+   * Reads from the same typeIndex as getByType — MobX tracks the dependency.
+   */
+  getByTypeName(modelName: string, scope: ModelScope = ModelScope.all): Model[] {
+    const ids = this.typeIndex.get(modelName);
+    if (!ids || ids.size === 0) {
+      return [];
+    }
+
+    const result: Model[] = [];
+    for (const id of ids) {
+      const entry = this.entries.get(id);
+      if (!entry) continue;
+      if (!this.matchesScope(entry.scope, scope)) continue;
+
+      const model = this.resolveModel(entry, id);
+      if (model && !model.disposed) {
+        result.push(model);
+      }
+    }
+
+    return result;
+  }
+
+  *iterateByType(
+    modelClass: ModelConstructor<Model>,
+    scope: ModelScope = ModelScope.all
+  ): Generator<Model, void, unknown> {
+    const actualModelName = this.registry.getModelNameFromConstructor(modelClass);
+    if (!actualModelName) {
+      throw new AbloValidationError(
+        `Model class ${modelClass.name} not registered in ModelRegistry`,
+        { code: 'pool_model_class_not_registered' },
+      );
+    }
+    const ids = this.typeIndex.get(actualModelName);
+    if (!ids) return;
+
+    for (const id of ids) {
+      const entry = this.entries.get(id);
+      if (!entry) continue;
+      if (!this.matchesScope(entry.scope, scope)) continue;
+
+      const model = this.get(id);
+      if (model && model instanceof modelClass) {
+        yield model;
+      }
+    }
+  }
+
+  updateScope(id: string, scope: ModelScope): void {
+    const entry = this.entries.get(id);
+    if (entry && entry.scope !== scope) {
+      // Re-set the entry so ObservableMap notifies observers of the change.
+      // Mutating entry.scope in-place wouldn't trigger MobX (plain object property).
+      runInAction(() => {
+        this.entries.set(id, { ...entry, scope });
+      });
+      this.accessTimes.set(id, Date.now());
+    }
+  }
+
+  /**
+   * Create (or update) a model instance locally, given a typename and raw
+   * data. Cleaner than `createFromData({ __typename, ...data })` — the
+   * typename lives in the arg list, not hidden inside the data object.
+   *
+   * Used for optimistic local writes: `pool.create('Section', { id, reportId, ... })`.
+   * For hydration from server deltas (where `__typename` already rides on
+   * the payload), use `createFromData(data)` directly — that path is kept
+   * because the wire format attaches the discriminator to the data itself.
+   */
+  create(typename: string, data: Record<string, unknown>): Model | null {
+    return this.createFromData({ ...data, __typename: typename });
+  }
+
+  createFromData(
+    data: Record<string, unknown> & {
+      __typename?: string;
+      __class?: string;
+      modelName?: string;
+      id?: string;
+    },
+    ModelClass?: new (data: Record<string, unknown>) => Model,
+    opts?: {
+      /**
+       * Throw (instead of warn + return null) when the wire names a model
+       * this client never registered. Passed by the developer-await read
+       * path (`OnDemandLoader`'s network leg) so a schema collision
+       * — the org's pushed schema names `Document` but this client only
+       * registered `documents` — surfaces AT the row that failed, with the
+       * known-model list and `ablo status` pointer, instead of bubbling up
+       * three layers later as a misleading `entity_not_found`. Left off
+       * (default) for the continuous delta loop and IDB-cache hydration,
+       * where a single unknown typename must not wedge the whole batch.
+       */
+      strict?: boolean;
+      /**
+       * Build a cold model for continuous wire ingestion. InstanceCache
+       * activates it before get/query/subscriber/view delivery, avoiding eager
+       * per-field MobX setup for rows no consumer has observed.
+       */
+      deferObservability?: boolean;
+    },
+  ): Model | null {
+    // Support multiple model identifier fields for backwards compatibility
+    const modelName = data.__typename ?? data.__class ?? data.modelName ?? 'Unknown';
+
+    const Constructor = ModelClass ?? this.registry.getModelByName(modelName);
+
+    if (!Constructor) {
+      if (modelName === 'Unknown') {
+        // Malformed row with no type marker — dropped, but nothing the consumer
+        // can act on (the actionable schema-drift case is handled below) → debug.
+        this.runtime.logger.debug(
+          'InstanceCache.createFromData: No model identifier found',
+          { data },
+        );
+        this.runtime.modelDebugLogger?.logError('Unknown', 'CREATE', 'No model identifier found', data);
+        return null;
+      }
+
+      if (opts?.strict) {
+        const known = this.registry.getRegisteredModelNames();
+        throw new AbloValidationError(
+          `Model "${modelName}" is not registered on this client` +
+            (known.length ? ` (known: ${known.join(', ')})` : '') +
+            `. The schema pushed to this org may differ from your local ` +
+            `schema — run \`ablo status\` to compare.`,
+          { code: 'model_not_registered' },
+        );
+      }
+
+      // Genuinely actionable and NOT self-healing: a model the server is sending
+      // isn't in your schema, so these rows are silently skipped. Keep at warn,
+      // consumer register (their model name + the `ablo status` fix); forensics ride debug.
+      this.runtime.logger.warn(
+        `Received data for "${modelName}", which isn't in your schema — these rows will be skipped. Run \`ablo status\` to compare your local schema with the server.`,
+      );
+      this.runtime.logger.debug(
+        `InstanceCache.createFromData: No constructor found for model "${modelName}"`,
+        { data },
+      );
+      this.runtime.modelDebugLogger?.logError(
+        modelName,
+        'CREATE',
+        `No constructor found for model "${modelName}"`,
+        data
+      );
+      return null;
+    }
+
+    // If the model already exists, update it in place instead of creating a
+    // duplicate. Keeping the existing instance alive preserves React's
+    // references and MobX's observation tracking.
+    if (data.id && this.entries.has(data.id)) {
+      const existing = this.get(data.id);
+      if (existing?.getModelName() === modelName) {
+        // Same ID and same type - update existing model with new data and return it
+        existing.updateFromData(data);
+        return existing;
+      }
+      // Different type with same ID - this is a shared PK scenario (e.g., two models sharing one row id)
+      // Don't return existing, create new model (will use composite key for storage)
+    }
+
+    // Log model creation attempt
+    this.runtime.modelDebugLogger?.logCreation(modelName, data, Constructor);
+
+    try {
+      if (opts?.deferObservability) {
+        Object.defineProperty(data, DEFER_MODEL_OBSERVABILITY, {
+          value: true,
+          enumerable: false,
+          configurable: true,
+        });
+      }
+      // Pass data directly to constructor for Prisma-first models
+      const model = new Constructor(data);
+
+      return model;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      // Internal construction failure — captured via observability below and
+      // re-fetched on resync; the stack is forensic → debug.
+      this.runtime.logger.debug(
+        `[InstanceCache.createFromData] FAILED ${modelName}`,
+        { errorMessage, stack: error instanceof Error ? error.stack : undefined },
+      );
+      this.runtime.observability.captureMutationFailure({
+        context: 'createFromData',
+        modelName,
+        modelId: data.id,
+        error: errorMessage,
+      });
+      this.runtime.modelDebugLogger?.logError(modelName, 'CREATE', errorMessage, {
+        data,
+        constructor: Constructor.name,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Clear the object pool
+   * @param options.preserveObserved - If true, keep models that are being observed by React
+   *                                   This prevents React components from holding stale references
+   *                                   after bootstrap/rehydration
+   */
+  clear(options: { preserveObserved?: boolean } = {}): void {
+    const preserveObserved = options.preserveObserved ?? false;
+    const preservedIds: string[] = [];
+    const preservedEntries: [string, ModelEntry][] = [];
+
+    for (const [id, entry] of this.entries) {
+      const model = entry.model ?? entry.weakRef?.deref();
+
+      // Check if this model should be preserved (has active React observers)
+      if (
+        preserveObserved &&
+        model &&
+        typeof model.hasObservedCollections === 'function' &&
+        model.hasObservedCollections()
+      ) {
+        // Keep this model alive - React is still using it
+        preservedIds.push(id);
+        preservedEntries.push([id, entry]);
+        continue;
+      }
+
+      // `rowAsModel` only casts, so a non-Model object can reach the pool (see
+      // the SyncClient no-op UPDATE guard). Guard that `dispose` is actually
+      // callable — mirroring the `hasObservedCollections` typeof-check above —
+      // rather than assume every pooled entry is a real Model.
+      if (typeof model?.dispose === 'function') model.dispose();
+    }
+
+    // Save access times for preserved entries before clearing
+    const preservedAccessTimes = new Map<string, number>();
+    for (const [id] of preservedEntries) {
+      const time = this.accessTimes.get(id);
+      if (time) preservedAccessTimes.set(id, time);
+    }
+
+    runInAction(() => {
+      this.entries.clear();
+      this.typeIndex.clear();
+      // Clear foreign key index data (preserves config/structure, just empties the value maps)
+      for (const index of this.foreignKeyIndexes.values()) {
+        index.clear();
+      }
+      this.recentAdditions.clear();
+      this.deltaHistory.clear();
+      this.metrics = {
+        hits: 0,
+        misses: 0,
+        evictions: 0,
+        additions: 0,
+        duplicatesSkipped: 0,
+      };
+
+      // Re-add preserved entries (also rebuilds foreign key indexes via addToTypeIndex)
+      for (const [id, entry] of preservedEntries) {
+        this.entries.set(id, entry);
+        const model = entry.model ?? entry.weakRef?.deref();
+        if (model) {
+          this.addToTypeIndex(id, model.getModelName());
+        }
+      }
+    });
+
+    // Restore access times: clear then re-add preserved
+    this.accessTimes.clear();
+    for (const [id, time] of preservedAccessTimes) {
+      this.accessTimes.set(id, time);
+    }
+    // No cache to invalidate — typeIndex + entries are directly observable
+  }
+
+  has(id: string): boolean {
+    return this.entries.has(id);
+  }
+
+  /**
+   * Touch a model to update its access time (prevents premature GC)
+   * Used by LazyReferenceCollection to keep parent models alive during active usage
+   */
+  touch(id: string): boolean {
+    const entry = this.entries.get(id);
+    if (!entry) {
+      return false;
+    }
+
+    this.accessTimes.set(id, Date.now());
+    return true;
+  }
+
+  getAllIds(): string[] {
+    return Array.from(this.entries.keys());
+  }
+
+  getAllModels(): Model[] {
+    const results: Model[] = [];
+    for (const [id] of this.entries) {
+      const model = this.get(id);
+      if (model) {
+        results.push(model);
+      }
+    }
+    return results;
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  get hitRate(): number {
+    const total = this.metrics.hits + this.metrics.misses;
+    return total > 0 ? (this.metrics.hits / total) * 100 : 0;
+  }
+
+  getStats() {
+    const scopeCounts = { live: 0, archived: 0 };
+    const typeCounts = new Map<string, number>();
+
+    for (const [, entry] of this.entries) {
+      if (entry.scope === ModelScope.live) scopeCounts.live++;
+      else if (entry.scope === ModelScope.archived) scopeCounts.archived++;
+
+      const modelName = entry.model?.getModelName() ?? entry.weakRef?.deref()?.getModelName();
+      if (modelName) {
+        typeCounts.set(modelName, (typeCounts.get(modelName) ?? 0) + 1);
+      }
+    }
+
+    return {
+      size: this.size,
+      hitRate: this.hitRate,
+      metrics: { ...this.metrics },
+      scopeCounts,
+      typeCounts: Object.fromEntries(typeCounts),
+      deltaHistorySize: this.deltaHistory.size,
+      recentAdditionsSize: this.recentAdditions.size,
+      config: { ...this.config },
+    };
+  }
+
+  clearDeltaHistory(olderThanMs = 3600000): void {
+    const now = Date.now();
+    const toDelete: string[] = [];
+
+    for (const [key, history] of this.deltaHistory) {
+      if (now - history.timestamp > olderThanMs) {
+        toDelete.push(key);
+      }
+    }
+
+    toDelete.forEach((key) => this.deltaHistory.delete(key));
+
+    // Delta history entries cleared silently
+  }
+
+  private cleanupTracking(): void {
+    const now = Date.now();
+    for (const [key, time] of this.recentAdditions) {
+      if (now - time > 1000) {
+        this.recentAdditions.delete(key);
+      }
+    }
+  }
+
+  private gc(): number {
+    return runInAction(() => {
+      const now = Date.now();
+      const toRemove: string[] = [];
+      let evicted = 0;
+      let skippedObserved = 0;
+
+      for (const [id, entry] of this.entries) {
+        // Check if model has expired based on last access time
+        const lastAccessed = this.accessTimes.get(id) ?? 0;
+        if (now - lastAccessed > this.config.maxAge) {
+          // Do not GC a model that has observed collections — disposing one
+          // React is still observing would break it (per MobX guidance).
+          // See: https://mobx.js.org/lazy-observables.html
+          const model = entry.model ?? entry.weakRef?.deref();
+          if (
+            model &&
+            typeof model.hasObservedCollections === 'function' &&
+            model.hasObservedCollections()
+          ) {
+            // Model has active React observers - refresh access time and skip GC
+            this.accessTimes.set(id, now);
+            skippedObserved++;
+            continue;
+          }
+
+          toRemove.push(id);
+          continue;
+        }
+
+        // Strong-to-weak-ref demotion at `maxAge / 2` used to live here,
+        // in service of memory-pressure relief: idle entries would lose
+        // their strong reference, V8 would collect them, and the next
+        // access would re-hydrate from IDB/network. In practice it
+        // caused silent data loss — any model actively being rendered
+        // through a schema-driven dynamic class (i.e., most of them)
+        // would be demoted, collected, and the next render's
+        // `weakRef.deref()` returned undefined, so blocks / cells /
+        // messages "disappeared" after ~10 min of idle.
+        //
+        // The `hasObservedCollections()` guard used by the eviction
+        // branch above only protects models that explicitly register a
+        // LazyReferenceCollection; plain observer() components reading
+        // properties don't register, so for typical UI usage the guard
+        // didn't apply. Rather than try to make React-observation
+        // globally visible to the pool, we drop the demotion phase
+        // entirely — hard eviction at `maxAge` (with its own guard) is
+        // the only automated removal now. If memory-pressure relief is
+        // needed later, gate it on an explicit policy (e.g.,
+        // `documenthidden` + `performance.memory.usedJSHeapSize`) rather
+        // than a time-based tick.
+      }
+
+      for (const id of toRemove) {
+        if (this.remove(id)) {
+          evicted++;
+          this.metrics.evictions++;
+        }
+      }
+
+      if (skippedObserved > 0) {
+        this.runtime.logger.debug(
+          `[InstanceCache GC] Skipped ${skippedObserved} models with active React observers`,
+        );
+      }
+
+      // Also clean up old tracking data
+      this.clearDeltaHistory();
+      this.cleanupTracking();
+
+      return evicted;
+    });
+  }
+
+  private startGC(): void {
+    if (this.gcTimer) return;
+    this.gcTimer = setInterval(() => this.gc(), this.config.gcInterval);
+    // Don't hold a headless Node process open just for pool GC — without
+    // this, an agent that never calls disconnect() can never exit. No-op in
+    // browsers (where setInterval returns a number without `unref`), which is
+    // why the call is optional even though the Node timer type always has it.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    this.gcTimer.unref?.();
+  }
+
+  stopGC(): void {
+    if (this.gcTimer) {
+      clearInterval(this.gcTimer);
+      this.gcTimer = undefined;
+    }
+  }
+
+  private evictOldest(): void {
+    this.evictOldestBatch(1);
+  }
+
+  /**
+   * Free capacity for a whole incoming frame in one scan.
+   *
+   * Calling evictOldest once per model made a full 10k-entry cache scan
+   * `incomingCount` times. A 400-row delta frame therefore performed four
+   * million entry visits before constructing models. Keep only the `count`
+   * oldest candidates in a bounded max-heap: a full sort paid
+   * O(cache log cache) for every sustained publication frame even though it
+   * consumed only the first few hundred entries. The heap preserves the same
+   * LRU/observed-model contract at O(cache log count) time and O(count) space.
+   */
+  private evictOldestBatch(count: number): void {
+    if (count <= 0) return;
+    runInAction(() => {
+      interface Candidate { id: string; accessedAt: number }
+      const oldest: Candidate[] = [];
+      const candidateAt = (index: number): Candidate => {
+        const candidate = oldest[index];
+        if (!candidate) throw new Error(`Missing eviction candidate at index ${index}`);
+        return candidate;
+      };
+      const swap = (left: number, right: number): void => {
+        const leftValue = candidateAt(left);
+        const rightValue = candidateAt(right);
+        oldest[left] = rightValue;
+        oldest[right] = leftValue;
+      };
+      const siftUp = (start: number): void => {
+        let index = start;
+        while (index > 0) {
+          const parent = Math.floor((index - 1) / 2);
+          if (candidateAt(parent).accessedAt >= candidateAt(index).accessedAt) break;
+          swap(parent, index);
+          index = parent;
+        }
+      };
+      const siftDown = (): void => {
+        let index = 0;
+        for (;;) {
+          const left = index * 2 + 1;
+          if (left >= oldest.length) return;
+          const right = left + 1;
+          const larger =
+            right < oldest.length &&
+            candidateAt(right).accessedAt > candidateAt(left).accessedAt
+              ? right
+              : left;
+          if (candidateAt(index).accessedAt >= candidateAt(larger).accessedAt) return;
+          swap(index, larger);
+          index = larger;
+        }
+      };
+
+      for (const [id, entry] of this.entries) {
+        // Skip models that are being observed by React - they must stay alive
+        const model = entry.model ?? entry.weakRef?.deref();
+        if (
+          model &&
+          typeof model.hasObservedCollections === 'function' &&
+          model.hasObservedCollections()
+        ) {
+          continue;
+        }
+
+        const candidate = {
+          id,
+          accessedAt: this.accessTimes.get(id) ?? 0,
+        };
+        if (oldest.length < count) {
+          oldest.push(candidate);
+          siftUp(oldest.length - 1);
+        } else if (candidate.accessedAt < candidateAt(0).accessedAt) {
+          oldest[0] = candidate;
+          siftDown();
+        }
+      }
+
+      for (const candidate of oldest) {
+        this.remove(candidate.id);
+        this.metrics.evictions++;
+      }
+    });
+  }
+
+  private isLargeModel(model: Model): boolean {
+    try {
+      // Most synchronized rows contain only short scalars. Serializing the
+      // entire model merely to discover that fact doubled wire-ingest object
+      // walking. Accumulate cheap scalar sizes and serialize only nested
+      // payloads that can plausibly cross the WeakRef threshold.
+      let size = 0;
+      for (const value of Object.values(model)) {
+        if (typeof value === 'string') {
+          size += value.length;
+        } else if (
+          typeof value === 'number' ||
+          typeof value === 'bigint' ||
+          typeof value === 'boolean'
+        ) {
+          size += 8;
+        } else if (value instanceof Date) {
+          size += 24;
+        } else if (value && typeof value === 'object') {
+          size += JSON.stringify(value).length;
+        }
+        if (size > 10240) return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  // ========== FOREIGN KEY INDEX ==========
+
+  /**
+   * Register a foreign key field for indexing on a model type.
+   * Call once during app initialization (e.g., after model registration).
+   *
+   * Example: registerForeignKey('Block', 'sectionId')
+   * This enables getByForeignKey('Block', 'sectionId', someSectionId) → O(1) lookup
+   */
+  registerForeignKey(modelName: string, fieldName: string): void {
+    const fields = this.foreignKeyConfig.get(modelName) ?? [];
+    if (!fields.includes(fieldName)) {
+      fields.push(fieldName);
+      this.foreignKeyConfig.set(modelName, fields);
+    }
+    // Initialize the index map
+    const indexKey = `${modelName}:${fieldName}`;
+    if (!this.foreignKeyIndexes.has(indexKey)) {
+      this.foreignKeyIndexes.set(indexKey, observable.map<string, Set<string>>());
+    }
+  }
+
+  /**
+   * Check whether a foreign key index exists for a given typename + field.
+   * Used by QueryView to decide whether to use FK-index for initial scan.
+   */
+  hasForeignKeyIndex(typename: string, fieldName: string): boolean {
+    const indexKey = `${typename}:${fieldName}`;
+    return this.foreignKeyIndexes.has(indexKey);
+  }
+
+  /**
+   * Create a QueryView — an incrementally maintained materialized view.
+   * The view registers itself with the ViewRegistry and receives
+   * incremental updates when models of the given typename change.
+   */
+  createView<T extends Record<string, unknown>>(
+    typename: string,
+    options?: QueryViewOptions<T>,
+  ): QueryView<T> {
+    return new QueryView<T>(typename, this, this.viewRegistry, options);
+  }
+
+  /**
+   * O(1) lookup of models by foreign key value.
+   * Returns model instances, filtered to live scope by default.
+   */
+  getByForeignKey(modelName: string, fieldName: string, fieldValue: string): Model[] {
+    const indexKey = `${modelName}:${fieldName}`;
+    const index = this.foreignKeyIndexes.get(indexKey);
+    // Both empty-path early-returns below are normal states, not errors:
+    // a model with no FK index yet (not populated), or an index with no
+    // entry for this specific parent id (entity genuinely has no
+    // children). These used to `console.warn` diagnostic dumps on every
+    // call, which turned into hundreds of log lines per second during
+    // cursor hover / rapid re-renders on a busy page. If a caller
+    // needs visibility into "why is this empty," wire an opt-in
+    // `logger.debug` at the specific call site rather than re-adding
+    // a blanket warn here.
+    if (!index) return [];
+
+    const ids = index.get(fieldValue);
+    if (!ids || ids.size === 0) return [];
+
+    const result: Model[] = [];
+    let droppedNoEntry = 0;
+    let droppedScope = 0;
+    let droppedDisposed = 0;
+    for (const id of ids) {
+      const entry = this.entries.get(id);
+      if (!entry) { droppedNoEntry++; continue; }
+      if (!this.matchesScope(entry.scope, ModelScope.live)) { droppedScope++; continue; }
+      const model = this.resolveModel(entry, id);
+      if (model && !model.disposed) {
+        result.push(model);
+      } else if (model?.disposed) {
+        droppedDisposed++;
+      }
+    }
+    if (droppedNoEntry || droppedScope || droppedDisposed) {
+      // Debug-level: happens on every render when a foreign-key index
+      // has dangling refs (legacy orphan deltas, pending CREATE
+      // transactions, etc.). Noisy at warn level, useful during
+      // investigation.
+      this.runtime.logger.debug('[InstanceCache.getByForeignKey] ROWS DROPPED', {
+        modelName,
+        fieldName,
+        fieldValue,
+        matched: ids.size,
+        returned: result.length,
+        droppedNoEntry,
+        droppedScope,
+        droppedDisposed,
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Add a model to foreign key indexes (called from addToTypeIndex path)
+   */
+  private addToForeignKeyIndex(id: string, model: Model, modelName: string): void {
+    // Silent no-ops for "no config / non-string value / missing index"
+    // — all three are legitimate states (non-indexed model, optional
+    // nullable FK, index not yet registered because the batch ran
+    // before schema registration completed). Diagnostic warns that
+    // used to live here spammed the console on every hot-path load.
+    const fields = this.foreignKeyConfig.get(modelName);
+    if (!fields) return;
+
+    for (const fieldName of fields) {
+      const fieldValue = model.getField(fieldName);
+      if (typeof fieldValue !== 'string') continue;
+
+      const indexKey = `${modelName}:${fieldName}`;
+      const index = this.foreignKeyIndexes.get(indexKey);
+      if (!index) continue;
+
+      let ids = index.get(fieldValue);
+      if (!ids) {
+        ids = observable.set<string>();
+        index.set(fieldValue, ids);
+      }
+      ids.add(id);
+    }
+  }
+
+  /**
+   * Remove a model from foreign key indexes (called from removeFromTypeIndex path)
+   */
+  private removeFromForeignKeyIndex(id: string, modelName?: string): void {
+    if (!modelName) return;
+    const fields = this.foreignKeyConfig.get(modelName);
+    if (!fields) return;
+
+    // We need the model to read the foreign key value
+    const entry = this.entries.get(id);
+    const model = entry?.model ?? entry?.weakRef?.deref();
+    if (!model) return;
+
+    for (const fieldName of fields) {
+      const fieldValue = model.getField(fieldName);
+      if (typeof fieldValue !== 'string') continue;
+
+      const indexKey = `${modelName}:${fieldName}`;
+      const index = this.foreignKeyIndexes.get(indexKey);
+      if (!index) continue;
+
+      const ids = index.get(fieldValue);
+      if (ids) {
+        ids.delete(id);
+        if (ids.size === 0) {
+          index.delete(fieldValue);
+        }
+      }
+    }
+  }
+
+  private addToTypeIndex(id: string, modelName?: string): void {
+    if (!modelName) return;
+
+    let ids = this.typeIndex.get(modelName);
+    if (!ids) {
+      ids = observable.set<string>();
+      this.typeIndex.set(modelName, ids);
+    }
+    ids.add(id);
+
+    // Update foreign key indexes. If we can't reach the model object,
+    // the FK index will be (re)populated on the first lookup that
+    // resolves the entry — no need to warn here.
+    const entry = this.entries.get(id);
+    const model = entry?.model ?? entry?.weakRef?.deref();
+    if (model) {
+      this.addToForeignKeyIndex(id, model, modelName);
+    }
+  }
+
+  private removeFromTypeIndex(id: string, modelName?: string): void {
+    if (!modelName) return;
+
+    // Remove from foreign key indexes BEFORE removing from entries
+    this.removeFromForeignKeyIndex(id, modelName);
+
+    const ids = this.typeIndex.get(modelName);
+    if (ids) {
+      ids.delete(id);
+      if (ids.size === 0) {
+        this.typeIndex.delete(modelName);
+      }
+    }
+  }
+
+  private matchesScope(entryScope: ModelScope, queryScope: ModelScope): boolean {
+    switch (queryScope) {
+      case ModelScope.all:
+        return true;
+      case ModelScope.live:
+        return entryScope === ModelScope.live;
+      case ModelScope.archived:
+        return entryScope === ModelScope.archived;
+      default:
+        return entryScope === queryScope;
+    }
+  }
+}

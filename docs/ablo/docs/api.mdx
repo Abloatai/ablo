@@ -16,10 +16,10 @@ row, you can optionally `claim` it so they serialize instead of clobbering
 each other.
 
 Two things to know before the method list. **Reads come in two flavors:**
-`retrieve({ id })` / `list({ where })` are async — they answer from what is
+`get({ id })` / `list({ where })` are async — they answer from what is
 already local and fall back to the server. Put `local.` in front of either and
 you get the same read restricted to what is already here, which is why it can
-return a value rather than a promise: `local.retrieve(id)`, `local.list({ where })`,
+return a value rather than a promise: `local.get(id)`, `local.list({ where })`,
 `local.count({ where })`. Use those in render, after data has synced.
 **Claims don't lock.** If another writer holds the row, `claim` waits
 for them, re-reads the fresh row, then hands it to you — so two writers
@@ -41,7 +41,7 @@ const schema = defineSchema({
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
 await ablo.ready();
-const report = await ablo.weatherReports.retrieve({ id: 'report_stockholm' });
+const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
 if (!report) throw new Error('Row not found');
 
 await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' }, wait: 'confirmed' });
@@ -54,24 +54,24 @@ agents, read the [Integration Guide](/integration-guide).
 
 Each schema model becomes a typed model on the client:
 
-- `ablo.weatherReports.retrieve({ id })` reads one row asynchronously (server read).
+- `ablo.weatherReports.get({ id })` reads one row asynchronously (server read).
 - `ablo.weatherReports.list({ where })` reads a collection asynchronously (server read).
-- `ablo.weatherReports.local.retrieve(id)` reads one row synchronously from the local graph.
+- `ablo.weatherReports.local.get(id)` reads one row synchronously from the local graph.
 - `ablo.weatherReports.create({ data })` creates a row.
 - `ablo.weatherReports.update({ id, data, ...options })` updates a row.
 - `ablo.weatherReports.delete({ id, ...options })` deletes a row.
 
-`local.` narrows a read to what has already synced. `retrieve({ id })` and
+`local.` narrows a read to what has already synced. `get({ id })` and
 `list({ where })` answer from the local graph and fall back to IndexedDB and
 then the network, so reach for them when the row may not be here yet.
-`local.retrieve(id)` and `local.list({ where })` are the same reads with the
+`local.get(id)` and `local.list({ where })` are the same reads with the
 fallback removed — nothing to await, so they return a value.
 
 | Method | Returns | Use when |
 |---|---|---|
-| `retrieve({ id })` | `Promise<T \| undefined>` | You need one row, hydrating from local store and server. |
+| `get({ id })` | `Promise<T \| undefined>` | You need one row, hydrating from local store and server. |
 | `list({ where })` | `Promise<T[]>` | You need to hydrate a collection from local store and server. |
-| `local.retrieve(id)` | `T \| undefined` | You want a synchronous snapshot of one local row. |
+| `local.get(id)` | `T \| undefined` | You want a synchronous snapshot of one local row. |
 | `local.list(options?)` | `T[]` | You want a synchronous snapshot of a local collection. |
 | `local.count(options?)` | `number` | You want a synchronous count of local rows. |
 | `create({ data, ...options })` | `Promise<T>` | You want to create through the schema model. |
@@ -182,7 +182,7 @@ endpoint documents that model's real field contract instead of a generic blob.
 |---|---|
 | `ablo.<model>.create({ data })` | `POST /api/v1/models/{model}` |
 | `ablo.<model>.list({ where })` | `GET /api/v1/models/{model}` |
-| `ablo.<model>.retrieve({ id })` | `GET /api/v1/models/{model}/{id}` |
+| `ablo.<model>.get({ id })` | `GET /api/v1/models/{model}/{id}` |
 | `ablo.<model>.update({ id, data })` | `PATCH /api/v1/models/{model}/{id}` |
 | `ablo.<model>.delete({ id })` | `DELETE /api/v1/models/{model}/{id}` |
 | `ablo.<model>.claim({ id })` | `POST /api/v1/models/{model}/{id}/claim` |

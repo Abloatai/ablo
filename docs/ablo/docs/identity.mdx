@@ -183,6 +183,7 @@ await mintUserSessionKey({
     organizationId: schemaOwnerOrgId,
     projectId: schemaProjectId,
   },
+  operations: ['task.read', 'task.update'],
   ttlSeconds: 3600,
 });
 ```
@@ -311,7 +312,7 @@ exposed the whole table cross-tenant, so `validate_schema` rejects the removed
 options as `tenancy-option-removed` errors and steers you to `policy: { by:
 'parent' }` (FK inheritance) or, for genuinely global reference data, the
 explicit `policy: { by: 'none' }`. See
-`packages/sync-engine/src/schema/model.ts` for the full option set.
+`packages/transaction/src/schema/model.ts` for the full option set.
 
 ## How identity reaches Ablo: the proxy model
 

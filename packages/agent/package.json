@@ -1,0 +1,116 @@
+{
+  "name": "@ablo/agent",
+  "version": "0.37.0",
+  "private": true,
+  "description": "Shared agent logic: tools, sandbox, middleware, prompts. Consumed by apps/web and apps/agent-worker.",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./src/index.ts"
+    },
+    "./agent": {
+      "source": "./src/agent/index.ts",
+      "types": "./dist/agent/index.d.ts",
+      "import": "./dist/agent/index.js",
+      "default": "./src/agent/index.ts"
+    },
+    "./primitives": {
+      "source": "./src/primitives/index.ts",
+      "types": "./dist/primitives/index.d.ts",
+      "import": "./dist/primitives/index.js",
+      "default": "./src/primitives/index.ts"
+    },
+    "./primitives/sandbox": {
+      "source": "./src/primitives/sandbox/index.ts",
+      "types": "./dist/primitives/sandbox/index.d.ts",
+      "import": "./dist/primitives/sandbox/index.js",
+      "default": "./src/primitives/sandbox/index.ts"
+    },
+    "./primitives/mutation": {
+      "source": "./src/primitives/mutation/index.ts",
+      "types": "./dist/primitives/mutation/index.d.ts",
+      "import": "./dist/primitives/mutation/index.js",
+      "default": "./src/primitives/mutation/index.ts"
+    },
+    "./catalog/tools": {
+      "source": "./src/catalog/tools/index.ts",
+      "types": "./dist/catalog/tools/index.d.ts",
+      "import": "./dist/catalog/tools/index.js",
+      "default": "./src/catalog/tools/index.ts"
+    },
+    "./catalog/prompts": {
+      "source": "./src/catalog/prompts/index.ts",
+      "types": "./dist/catalog/prompts/index.d.ts",
+      "import": "./dist/catalog/prompts/index.js",
+      "default": "./src/catalog/prompts/index.ts"
+    },
+    "./catalog/models": {
+      "source": "./src/catalog/models/index.ts",
+      "types": "./dist/catalog/models/index.d.ts",
+      "import": "./dist/catalog/models/index.js",
+      "default": "./src/catalog/models/index.ts"
+    },
+    "./utils/sanitize": {
+      "source": "./src/utils/sanitize.ts",
+      "types": "./dist/utils/sanitize.d.ts",
+      "import": "./dist/utils/sanitize.js",
+      "default": "./src/utils/sanitize.ts"
+    },
+    "./perception": {
+      "source": "./src/perception/index.ts",
+      "types": "./dist/perception/index.d.ts",
+      "import": "./dist/perception/index.js",
+      "default": "./src/perception/index.ts"
+    },
+    "./perception/ai-sdk": {
+      "source": "./src/perception/ai-sdk/index.ts",
+      "types": "./dist/perception/ai-sdk/index.d.ts",
+      "import": "./dist/perception/ai-sdk/index.js",
+      "default": "./src/perception/ai-sdk/index.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "agent",
+    "ai-sdk",
+    "tools",
+    "sandbox",
+    "isolated-vm"
+  ],
+  "peerDependencies": {
+    "@ai-sdk/provider": "^3.0.0",
+    "ai": "^6.0.0"
+  },
+  "dependencies": {
+    "isolated-vm": "^6.1.2",
+    "zod": "^4.4.3",
+    "@ablo/transaction": "file:../transaction"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "^3.0.0",
+    "@types/node": "^22.13.9",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vitest": "^4.0.0",
+    "ai": "^6.0.0"
+  }
+}

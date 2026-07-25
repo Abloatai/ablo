@@ -1,0 +1,32 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "paths": {
+      "@ablo/humans": ["./src/index.ts"],
+      "@ablo/humans/*": ["./src/*.ts"],
+      "@ablo/transaction": ["../transaction/src/index.ts"],
+      "@ablo/transaction/coordination": ["../transaction/src/coordination/index.ts"],
+      "@ablo/transaction/wire": ["../transaction/src/wire/index.ts"],
+      "@ablo/transaction/types": ["../transaction/src/types/index.ts"],
+      "@ablo/transaction/auth": ["../transaction/src/auth/index.ts"],
+      "@ablo/transaction/keys": ["../transaction/src/keys/index.ts"],
+      "@ablo/transaction/schema": ["../transaction/src/schema/index.ts"],
+      "@ablo/transaction/source": ["../transaction/src/source/index.ts"],
+      "@ablo/transaction/server": ["../transaction/src/server/index.ts"],
+      "@ablo/transaction/webhooks": ["../transaction/src/webhooks/index.ts"],
+      "@ablo/transaction/docs": ["../transaction/src/docs/index.ts"],
+      "@ablo/transaction/*": ["../transaction/src/*.ts"]
+    },
+    "noEmit": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "__tests__/**/*.ts",
+    "__tests__/**/*.tsx"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

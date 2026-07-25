@@ -95,7 +95,10 @@ export const runtime = 'nodejs';
 
 export async function POST() {
   const userId = await currentUserId(); // your auth
-  const { token } = await ablo.sessions.create({ user: { id: userId } });
+  const { token } = await ablo.sessions.create({
+    user: { id: userId },
+    can: { tasks: ['read', 'update'] },
+  });
   return Response.json({ token });
 }
 ```
@@ -115,7 +118,7 @@ export function ReportRow({
 }: {
   report: { id: string; location: string; status: string };
 }) {
-  const report = useAblo((ablo) => ablo.weatherReports.local.retrieve(serverReport.id)) ?? serverReport;
+  const report = useAblo((ablo) => ablo.weatherReports.local.get(serverReport.id)) ?? serverReport;
   const active = useAblo((ablo) => ablo.weatherReports.claim.state({ id: serverReport.id }));
   const claimed = Boolean(active);
 
@@ -278,7 +281,7 @@ and timestamp. If the change originated from an Ablo commit, include the same
 Agents use the same model API as the UI:
 
 ```ts
-const report = await ablo.weatherReports.retrieve({ id: reportId });
+const report = await ablo.weatherReports.get({ id: reportId });
 const snap = ablo.snapshot({ weatherReports: reportId });
 
 await ablo.weatherReports.update({

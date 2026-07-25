@@ -41,11 +41,10 @@ Reads stay open: reading a claimed row is allowed unless the caller explicitly
 asks for claimed gating. A claim carries a TTL so a crashed holder is
 auto-released and the queue advances.
 
-A claim is also as narrow as you make it. Name a part of the row — a `field`, a
-`path` into a document, a `range` of text — and exclusion follows the target:
-**two claims on non-overlapping parts of the same row are both granted**, and
-only overlapping targets queue behind each other. See
-[claiming part of a row](#claiming-part-of-a-row).
+A claim is also as narrow as you make it. Select one or more `fields` and
+exclusion follows the target: **two claims on different fields of the same row
+are both granted**, and only claims that share a field queue behind each other.
+See [claiming part of a row](#claiming-part-of-a-row).
 
 > **Transport: both wait — only the mechanism differs.** `claim({ id })` means
 > "serialize me behind whoever holds this row" on every transport. The
@@ -64,7 +63,7 @@ only overlapping targets queue behind each other. See
 > try-claim, which resolves `null` when the target is held (a declined try
 > is not an error) and takes no place in line. For
 > callers that manage the wait themselves, the ticket surface remains:
-> `ablo.claims.retrieve({ claimId })` polls a ticket to its grant,
+> `ablo.claims.get({ claimId })` polls a ticket to its grant,
 > `ablo.claims.heartbeat({ claimId })` keeps the slot, and
 > `ablo.claims.release({ claimId })` leaves the line. And contention can be
 > treated as a signal rather than a wait at all — catch the error, re-read
@@ -224,7 +223,7 @@ a model row. It's what `claim.state()` returns and what observers render.
 |---|---|---|
 | `id` | `string` | The claim id (distinct from the target row id). |
 | `status` | `ClaimStatus` | `'active' \| 'queued' \| 'committed' \| 'expired' \| 'canceled'`. `active` = the holder; `queued` = waiting in line behind it. The other three are terminal states you only see on a claim you just finished: `committed` (released after a successful write), `expired` (TTL lapsed), `canceled` (released early). |
-| `target` | `EntityRef` | What is being coordinated: the row (`{ model, id }`) plus any sub-row narrowing the holder claimed: `path?`, `range?`, `field?`, `fields?`, and opaque `meta?`. A target with no narrowing covers the whole row. |
+| `target` | `EntityRef` | What is being coordinated: the row (`{ model, id }`) plus any field narrowing the holder claimed: `field?`, `fields?`, and opaque `meta?`. A target with no narrowing covers the whole row. |
 | `description` | `string` | Peer-visible description of the work: the sentence another participant reads to decide whether to wait or move on (`'rewriting the risk section'`). Defaults to `'editing'`. |
 | `heldBy` | `string` | Participant holding (or waiting on) it (e.g. `'agent:forecaster'`). |
 | `participantKind` | `'user' \| 'agent' \| 'system'` | Who's behind it: a human (`user`), an AI (`agent`), or automated infrastructure (`system`). |
@@ -312,10 +311,7 @@ four axes. `claim({ id })` alone is a complete call; each axis is opt-in.
 | name | type | required | description |
 |---|---|---|---|
 | `id` | `string` | yes | The row id: same id as `retrieve` / `update`. |
-| `options.field` | `ClaimField` | no | **Deprecated: say it as a set: `fields: ['title']`. Removed in 0.37.0.** One member for a set of one, beside another for a set of any size, is two ways to say one thing, and the singular is the one that misled: a caller needing two parts packed them into it. The wire still reads `field`, so this changes what you write, not what is understood. |
-| `options.fields` | `ClaimField[]` | no | Claim named parts of the row instead of all of it: one or several. Prefer the selector form, `fields: (f) => [f.status]`, where the model hands you its own fields, so a field it does not have stops compiling and a rename is a compile error at every use. A bare name (`'status'`) autocompletes but is not checked; an app-defined part, a cell, a section, is named with `part('B2')`. Two sets conflict where they intersect, so holders of disjoint parts do not wait for each other, see [claiming part of a row](#claiming-part-of-a-row). A name containing a comma is refused: two names in one string compare as a single unrelated name, and both writers would be granted the same part. |
-| `options.path` | `string` | no | A hierarchical position in a document-shaped row: `'/content/3'` claims one block. Paths conflict on containment: `/content` covers `/content/3`, while `/content/3` and `/content/7` are disjoint and both granted. |
-| `options.range` | `TargetRange` | no | A span of the row's text: `{ startLine, endLine, startColumn?, endColumn? }`. Ranges conflict only where their line intervals overlap. An editor addressing by integer position maps it onto `startLine`/`endLine`: the test is plain interval intersection. |
+| `options.fields` | field selector | no | Claim fields declared by the model's Zod schema instead of the whole row: `fields: (task) => task.status`, or `fields: (task) => [task.status, task.title]` for several. The model supplies its own fields, so autocomplete is exact, a typo does not compile, and a schema rename is a compile error at every use. Two sets conflict where they intersect, so holders of disjoint fields do not wait for each other; see [claiming part of a row](#claiming-part-of-a-row). |
 
 *What others see* — the presence half:
 
@@ -376,67 +372,61 @@ Name a field and a typo cannot survive — the model is already bound by the cal
 so it hands you its own fields:
 
 ```ts
-await using mine = await ablo.tasks.claim({ id, fields: (f) => [f.status] });
+await using mine = await ablo.tasks.claim({ id, fields: (task) => task.status });
 ```
 
-`f.status` is checked against the model: a field it does not have stops
+`task.status` is checked against the model: a field it does not have stops
 compiling, and renaming one is a compile error at every use. Nothing to import,
 nothing to add to your schema file.
 
-`fields: ['status']` still works and still autocompletes; it just accepts
-`'titel'` too, which is granted, excludes nobody, and leaves the write of
-`title` unguarded.
+The selector is the public model API. Quoted field names exist only in the wire
+contract and low-level coordination protocol.
 
-A claim covers the whole row only when you name nothing narrower. Name a
-target — a `path` into a document, a `range` of text, a `field` or set of
-`fields` — and exclusion follows it: **two claims on non-overlapping parts of
-the same row are both granted**, and only overlapping targets queue behind
-each other.
+A claim covers the whole row only when you name nothing narrower. Select
+`fields` and exclusion follows them: **two claims on different
+fields of the same row are both granted**, and only claims that share a field
+queue behind each other.
 
 ```ts
-// Agent A holds one block of the document…
-await using intro = await ablo.documents.claim({
-  id: docId,
-  path: '/content/3',
-  description: 'rewriting the risk section',
+// Two agents on the SAME order at the same time. The pricing agent holds
+// `total` and `discount`; the fulfillment agent holds `status`. Disjoint
+// fields, so both are granted at once and neither waits on the other.
+await using priced = await ablo.orders.claim({
+  id: orderId,
+  fields: (o) => [o.total, o.discount],
+  description: 'repricing',
 });
 
-// …while agent B, in another process, holds a different block of the SAME
-// row. Granted immediately — /content/3 and /content/7 do not overlap.
-await using summary = await ablo.documents.claim({
-  id: docId,
-  path: '/content/7',
-  description: 'tightening the summary',
+await using shipping = await ablo.orders.claim({
+  id: orderId,
+  fields: (order) => order.status,
+  description: 'marking shipped',
 });
 ```
 
-Overlap is judged per axis:
+Overlap is set intersection. Holders on `total` and on `status` proceed
+concurrently; two claims that both name `total` queue; naming no field covers
+every field, so it conflicts with any narrower claim on the row.
 
-- **`path`:** hierarchical containment, on a separator boundary. `/content`
-  covers `/content/3`, so the parent's holder queues behind (or is queued
-  behind by) the child's; `/content/3` and `/content/7` are disjoint, and
-  `/content` never collides with `/contentious`.
-- **`field` / `fields`:** set intersection. Holders on `title` and `status`
-  proceed concurrently; naming no field covers all of them.
-- **`range`:** interval intersection on `[startLine, endLine]`. An editor
-  that addresses text by integer position rather than by line maps that
-  position axis straight onto `startLine`/`endLine`: the server's test is
-  plain interval intersection and never assumes the units are lines of a
-  file.
+**Field is the floor.** A claim cannot be finer than a whole field, because
+nothing writes part of a value: whichever holder commits first takes the entire
+field. Sub-field targets, a range of text or a path into a document, are not
+offered. Two writers holding different parts of one field is only safe once
+concurrent edits to that field can be reconciled (operational transformation),
+and that is not solved yet. When it is, sub-field targets return, and they
+return working.
 
-A claim with no target is the widest parent: it covers every part of the row
-and conflicts with any narrower claim on it. Region locking on a single
-document row is therefore one claim per region — the row stays one row, and
-the claims carve it up.
+A claim with no target is the widest parent: it covers every field of the row
+and conflicts with any narrower claim on it.
 
 ### Claim-gated reads
 
 `claim.state({ id })` always returns immediately. Model reads such as
-`ablo.<model>.local.retrieve(id)` are local reads and stay available while a claim is
+`ablo.<model>.local.get(id)` are local reads and stay available while a claim is
 held. Server/model reads can choose a claimed policy:
 
 ```ts
-await ablo.weatherReports.retrieve({
+await ablo.weatherReports.get({
   id: 'report_stockholm',
   ifClaimed: 'fail',
 });
@@ -482,9 +472,9 @@ whole coordination API.
 **One holder, and a row can have several.** This reads a row, not a target, and
 answers with a single claim. That is the whole story for a whole-row claim, and
 only part of it once you [claim parts of a row](#claiming-part-of-a-row): three
-agents holding `/content/3`, `/content/7`, and `title` are all active at once,
-and this read surfaces one of them. To render every holder — a rail per claimed
-block, a chip per participant — use [`claim.list`](#claimlist).
+agents holding `total`, `discount`, and `status` are all active at once, and
+this read surfaces one of them. To render every holder, a badge per claimed
+field or a chip per participant, use [`claim.list`](#claimlist).
 
 **Example**
 
@@ -517,9 +507,9 @@ Every holder of a row. Same synchronous, reactive read as `claim.state` — off
 the same local snapshot, safe to call inline in a render — and the same list
 envelope as [`claim.queue`](#claimqueue).
 
-Reach for it whenever a row can be claimed in parts. One agent rewriting
-`/content/3` while another tightens `/content/7` are two active claims on one
-row, and only this read returns both.
+Reach for it whenever a row can be claimed by field. One agent repricing
+`total` while another marks `status` are two active claims on one row, and only
+this read returns both.
 
 **Parameters**
 
@@ -531,14 +521,14 @@ row, and only this read returns both.
 when this client holds one, then the other participants'. Empty `data` when the
 row is free.
 
-**Example** — a rail for every claimed block:
+**Example** — a badge on every claimed field:
 
 ```tsx
-const { data: holders } = ablo.documents.claim.list({ id: docId });
+const { data: holders } = ablo.orders.claim.list({ id: orderId });
 
-return blocks.map((block) => {
-  const held = holders.find((c) => c.target.path === `/content/${block.index}`);
-  return <Block key={block.id} rail={held?.heldBy} note={held?.description} />;
+return FIELDS.map((field) => {
+  const held = holders.find((c) => c.target.field === field);
+  return <FieldBadge key={field} field={field} by={held?.heldBy} note={held?.description} />;
 });
 ```
 
@@ -794,7 +784,7 @@ try {
 
 ## Errors
 
-All extend `AbloError` (`packages/sync-engine/src/errors.ts`). Catch by `type` or
+All extend `AbloError` (`packages/transaction/src/errors.ts`). Catch by `type` or
 inspect the `code`.
 
 | error | `code` | thrown when | carries |

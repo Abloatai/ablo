@@ -1,0 +1,148 @@
+{
+  "name": "@abloatai/ablo",
+  "version": "0.37.0",
+  "description": "The public Ablo SDK for coordinated reads, commits, claims, observation, and reactive applications.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@ablo/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "@ablo/source": "./src/client.ts",
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js",
+      "default": "./dist/client.js"
+    },
+    "./react": {
+      "@ablo/source": "./src/react.ts",
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "default": "./dist/react.js"
+    },
+    "./schema": {
+      "@ablo/source": "./src/schema.ts",
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.js",
+      "default": "./dist/schema.js"
+    },
+    "./source": {
+      "@ablo/source": "./src/source.ts",
+      "types": "./dist/source.d.ts",
+      "import": "./dist/source.js",
+      "default": "./dist/source.js"
+    },
+    "./source/next": {
+      "@ablo/source": "./src/source-next.ts",
+      "types": "./dist/source-next.d.ts",
+      "import": "./dist/source-next.js",
+      "default": "./dist/source-next.js"
+    },
+    "./source/drizzle": {
+      "@ablo/source": "./src/source-drizzle.ts",
+      "types": "./dist/source-drizzle.d.ts",
+      "import": "./dist/source-drizzle.js",
+      "default": "./dist/source-drizzle.js"
+    },
+    "./source/kysely": {
+      "@ablo/source": "./src/source-kysely.ts",
+      "types": "./dist/source-kysely.d.ts",
+      "import": "./dist/source-kysely.js",
+      "default": "./dist/source-kysely.js"
+    },
+    "./source/conformance": {
+      "@ablo/source": "./src/source-conformance.ts",
+      "types": "./dist/source-conformance.d.ts",
+      "import": "./dist/source-conformance.js",
+      "default": "./dist/source-conformance.js"
+    },
+    "./server": {
+      "@ablo/source": "./src/server.ts",
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js",
+      "default": "./dist/server.js"
+    },
+    "./auth": {
+      "@ablo/source": "./src/auth.ts",
+      "types": "./dist/auth.d.ts",
+      "import": "./dist/auth.js",
+      "default": "./dist/auth.js"
+    },
+    "./coordination": {
+      "@ablo/source": "./src/coordination.ts",
+      "types": "./dist/coordination.d.ts",
+      "import": "./dist/coordination.js",
+      "default": "./dist/coordination.js"
+    },
+    "./wire": {
+      "@ablo/source": "./src/wire.ts",
+      "types": "./dist/wire.d.ts",
+      "import": "./dist/wire.js",
+      "default": "./dist/wire.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "examples",
+    "assets",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "llms.txt",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "prepack": "npm run build && node scripts/strip-source-condition.mjs",
+    "postpack": "node scripts/restore-source-condition.mjs",
+    "pack:check": "node scripts/pack-check.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "generate:errors": "tsx scripts/generate-error-docs.mts",
+    "lint:errors": "tsx scripts/check-error-docs.mts",
+    "build:docs": "node scripts/build-blume-docs.mjs",
+    "lint:docs": "node scripts/check-doc-drift.mjs",
+    "lint:pkg": "publint"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Abloatai/ablo.git",
+    "directory": "packages/ablo"
+  },
+  "dependencies": {
+    "@ablo/humans": "^0.37.0",
+    "@ablo/transaction": "^0.37.0"
+  },
+  "peerDependencies": {
+    "react": "^19.2.8"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.2.8",
+    "tsx": "^4.20.3",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vitest": "^4.1.4"
+  }
+}

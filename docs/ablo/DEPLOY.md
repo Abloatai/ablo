@@ -1,7 +1,7 @@
 # Deploying the Ablo docs (Blume → Vercel)
 
 The docs are authored in this monorepo and snapshotted into the public
-`Abloatai/ablo` repo on release by `packages/sync-engine/scripts/build-public-mirror.sh`
+`Abloatai/ablo` repo on release by `packages/ablo/scripts/build-workspace-mirror.sh`
 (it copies the whole `docs/ablo/` project). Under Mintlify, that push was enough —
 Mintlify built and hosted it. Blume produces static output, so `Abloatai/ablo`
 now builds and deploys it itself.
@@ -15,53 +15,19 @@ now builds and deploys it itself.
    `.vercel/project.json`, or read them in the project settings).
 2. Add three repo secrets to `Abloatai/ablo` → Settings → Secrets → Actions:
    `VERCEL_TOKEN` (a Vercel access token), `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`.
-3. Add the workflow below as `.github/workflows/deploy-docs.yml` in `Abloatai/ablo`.
+3. The release snapshot generates `.github/workflows/deploy-docs.yml` in
+   `Abloatai/ablo`; do not maintain a separate copy in the public repository.
 4. Point the custom domain: add `docs.abloatai.com` to the Vercel project, then
    set DNS `CNAME docs.abloatai.com → cname.vercel-dns.com`. Remove the old
    Mintlify integration/DNS once the Vercel deploy is green.
 
-## Workflow — `.github/workflows/deploy-docs.yml` (in Abloatai/ablo)
+## Generated workflow
 
-```yaml
-name: Deploy docs (Blume → Vercel)
-
-on:
-  push:
-    branches: [main]
-    paths: ["docs/ablo/**"]
-  workflow_dispatch:
-
-concurrency:
-  group: deploy-docs
-  cancel-in-progress: true
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docs/ablo
-    env:
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: docs/ablo/package-lock.json
-      - run: npm install --global vercel@latest
-      - run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      - run: vercel build --prod --token="$VERCEL_TOKEN"
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      - run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-```
+`packages/ablo/scripts/build-workspace-mirror.sh` owns the workflow alongside
+the npm release workflow. This keeps the exact public repository state
+reproducible when `sync-mirror.sh` replaces the mirror contents. Until all
+three Vercel secrets are configured, the workflow exits successfully with a
+warning and does not attempt a deployment.
 
 `vercel build` runs the project's `buildCommand` (installing deps and running
 `blume build`) and wraps `dist/` into `.vercel/output`; `vercel deploy --prebuilt`

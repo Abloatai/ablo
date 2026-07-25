@@ -1,80 +1,53 @@
 name: Release
-
-# Publishes @abloatai/ablo to npm with provenance attestations.
-#
-# Version-gated, push-driven. The monorepo mirror force-pushes `main` to
-# this repo on every sync (a fresh history, no tags), so a tag trigger
-# would never fire here. Instead we publish on every push to main but ONLY
-# when package.json's version isn't already on npm — so the cadence is
-# driven entirely by version bumps (changesets `version` in the monorepo).
-# Pushes that don't change the version are a no-op.
-#
-# The GitHub <-> npm link is metadata, not a second registry: package.json's
-# `repository`/`homepage`/`bugs` fields point at this repo (npm shows the
-# source link), and the README's npm badge points back at the package. npm
-# remains the single registry users install from.
-#
-# Trigger paths:
-#   - Push to main (mirror sync)              -> publish IF version is new
-#   - workflow_dispatch from the Actions tab  -> manual publish (same gate)
-#
-# Required repository secrets:
-#   NPM_TOKEN  - an "Automation" or "Granular Access" token from
-#                npmjs.com with publish permission on @abloatai/ablo.
-#                Automation tokens bypass 2FA, which CI needs.
-
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
-
 concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
-
 permissions:
   contents: read
-  id-token: write        # required for npm provenance via OIDC
-
+  id-token: write
 jobs:
-  publish:
+  verify-and-publish:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Install dependencies
-        # No lockfile is shipped in the mirror (lockfile lives at the
-        # monorepo root, which doesn't exist here). `install` resolves
-        # against the published-version-range each release.
-        run: npm install --no-fund --no-audit
-
-      - name: Build
-        run: npm run build
-
-      - name: Verify package contents
-        run: npm run pack:check
-
-      - name: Publish if version is new
-        # Version gate: skip when this exact version is already on npm, so
-        # repeated mirror pushes don't error or republish. A version bump is
-        # the only thing that triggers an actual publish.
-        run: |
-          NAME="$(node -p "require('./package.json').name")"
-          VERSION="$(node -p "require('./package.json').version")"
-          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
-            echo "$NAME@$VERSION already published — skipping."
-          else
-            echo "Publishing $NAME@$VERSION"
-            npm publish --provenance --access public
-          fi
+          node-version: 24.18.0
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - name: Production dependency audit
+        run: npm audit --omit=dev
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run test
+      - name: Fresh-project quickstart
+        run: npm run test:quickstart --workspace=@abloatai/cli
+      - name: Tarball contents
+        run: npm pack --dry-run --workspace=@ablo/transaction --workspace=@ablo/humans --workspace=@abloatai/ablo --workspace=@abloatai/cli
+      - name: Source-condition lifecycle
+        run: npm run pack:check --workspace=@ablo/transaction && npm run pack:check --workspace=@ablo/humans && npm run pack:check --workspace=@abloatai/ablo
+      - name: Package metadata
+        run: npx publint --strict packages/transaction && npx publint --strict packages/humans && npx publint --strict packages/ablo && npx publint --strict packages/cli
+      - name: Publish unpublished package versions
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+        run: |
+          set -euo pipefail
+          for package_name in transaction humans agent cli ablo tsconfig; do
+            dir="packages/$package_name"
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            private=$(node -p "require('./$dir/package.json').private === true")
+            [ "$private" = "true" ] && continue
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version already published"
+            else
+              (cd "$dir" && npm publish --access public --provenance)
+            fi
+          done

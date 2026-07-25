@@ -1,0 +1,36 @@
+{
+  // Typecheck config for the register fixtures — the one thing the package's
+  // main program cannot hold.
+  //
+  // A `Register` augmentation merges across a whole compilation, so a file that
+  // declares `ClaimMeta` retypes every claim in whatever program contains it.
+  // The main program already spends its single registration on the schema and
+  // user-metadata fixture (`src/types/__tests__/global.test.ts`), and its claim
+  // suites build wire-shaped targets on purpose. A second program is therefore
+  // the only place a *second* registration can be declared and read back, which
+  // is what these files do.
+  //
+  // Nothing here is emitted or bundled; `npm run typecheck:types` is the whole
+  // gate. `rootDir` reaches the package root because the fixtures share the
+  // type-equality helper with the main program's gate rather than restating it.
+  "extends": "./../tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "rootDir": "..",
+    // The fixtures deliberately pull `@ablo/transaction` sources into this
+    // program (that is what makes the registration reach the SDK's own claim
+    // paths), and the `@ablo/source` condition resolves them to `.ts`. Two
+    // flags this package ratcheted for itself are relaxed back to that
+    // package's own settings, so a fixture never fails on a rule its subject
+    // is not held to — a red gate here must mean the registration broke.
+    "noUncheckedIndexedAccess": false,
+    "verbatimModuleSyntax": false
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "dist", "binding"]
+}

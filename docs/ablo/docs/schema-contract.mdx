@@ -15,7 +15,7 @@ defineSchema(...) -> ablo.<model>.create/retrieve/update/claim(...)
 That one object drives:
 
 - typed model clients in trusted server runtimes,
-- React selectors through `useAblo((ablo) => ablo.<model>.local.retrieve(id))`,
+- React selectors through `useAblo((ablo) => ablo.<model>.local.get(id))`,
 - agent and background-worker writes,
 - Data Source request/response shape when your database stays canonical,
 - hosted schema push, migration planning, and schema-version gating.
@@ -73,14 +73,14 @@ readable, you just don't author them.
 Use async reads when the row may not be local:
 
 ```ts
-const report = await ablo.weatherReports.retrieve({ id: reportId });
+const report = await ablo.weatherReports.get({ id: reportId });
 const ready = await ablo.weatherReports.list({ where: { status: 'ready' } });
 ```
 
 Use synchronous local reads in render after data has synced:
 
 ```ts
-const report = ablo.weatherReports.local.retrieve(reportId);
+const report = ablo.weatherReports.local.get(reportId);
 const pending = ablo.weatherReports.local.list({ where: { status: 'pending' } });
 ```
 

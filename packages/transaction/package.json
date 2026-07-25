@@ -1,0 +1,211 @@
+{
+  "name": "@ablo/transaction",
+  "version": "0.37.0",
+  "description": "The headless Ablo transaction client and canonical contracts for reads, commits, settlement, claims, and durable observation.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@ablo/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./errorCodes": {
+      "@ablo/source": "./src/errorCodes.ts",
+      "types": "./dist/errorCodes.d.ts",
+      "import": "./dist/errorCodes.js",
+      "default": "./dist/errorCodes.js"
+    },
+    "./environment": {
+      "@ablo/source": "./src/environment.ts",
+      "types": "./dist/environment.d.ts",
+      "import": "./dist/environment.js",
+      "default": "./dist/environment.js"
+    },
+    "./coordination": {
+      "@ablo/source": "./src/coordination/index.ts",
+      "types": "./dist/coordination/index.d.ts",
+      "import": "./dist/coordination/index.js",
+      "default": "./dist/coordination/index.js"
+    },
+    "./wire": {
+      "@ablo/source": "./src/wire/index.ts",
+      "types": "./dist/wire/index.d.ts",
+      "import": "./dist/wire/index.js",
+      "default": "./dist/wire/index.js"
+    },
+    "./types": {
+      "@ablo/source": "./src/types/index.ts",
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/types/index.js",
+      "default": "./dist/types/index.js"
+    },
+    "./auth": {
+      "@ablo/source": "./src/auth/index.ts",
+      "types": "./dist/auth/index.d.ts",
+      "import": "./dist/auth/index.js",
+      "default": "./dist/auth/index.js"
+    },
+    "./keys": {
+      "@ablo/source": "./src/keys/index.ts",
+      "types": "./dist/keys/index.d.ts",
+      "import": "./dist/keys/index.js",
+      "default": "./dist/keys/index.js"
+    },
+    "./schema": {
+      "@ablo/source": "./src/schema/index.ts",
+      "types": "./dist/schema/index.d.ts",
+      "import": "./dist/schema/index.js",
+      "default": "./dist/schema/index.js"
+    },
+    "./schema/*": {
+      "@ablo/source": "./src/schema/*.ts",
+      "types": "./dist/schema/*.d.ts",
+      "import": "./dist/schema/*.js",
+      "default": "./dist/schema/*.js"
+    },
+    "./source": {
+      "@ablo/source": "./src/source/index.ts",
+      "types": "./dist/source/index.d.ts",
+      "import": "./dist/source/index.js",
+      "default": "./dist/source/index.js"
+    },
+    "./source/*": {
+      "@ablo/source": "./src/source/*.ts",
+      "types": "./dist/source/*.d.ts",
+      "import": "./dist/source/*.js",
+      "default": "./dist/source/*.js"
+    },
+    "./server": {
+      "@ablo/source": "./src/server/index.ts",
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js",
+      "default": "./dist/server/index.js"
+    },
+    "./server/*": {
+      "@ablo/source": "./src/server/*.ts",
+      "types": "./dist/server/*.d.ts",
+      "import": "./dist/server/*.js",
+      "default": "./dist/server/*.js"
+    },
+    "./batching": {
+      "@ablo/source": "./src/batching/index.ts",
+      "types": "./dist/batching/index.d.ts",
+      "import": "./dist/batching/index.js",
+      "default": "./dist/batching/index.js"
+    },
+    "./ai-sdk": {
+      "@ablo/source": "./src/ai-sdk/index.ts",
+      "types": "./dist/ai-sdk/index.d.ts",
+      "import": "./dist/ai-sdk/index.js",
+      "default": "./dist/ai-sdk/index.js"
+    },
+    "./ai-sdk/*": {
+      "@ablo/source": "./src/ai-sdk/*.ts",
+      "types": "./dist/ai-sdk/*.d.ts",
+      "import": "./dist/ai-sdk/*.js",
+      "default": "./dist/ai-sdk/*.js"
+    },
+    "./webhooks": {
+      "@ablo/source": "./src/webhooks/index.ts",
+      "types": "./dist/webhooks/index.d.ts",
+      "import": "./dist/webhooks/index.js",
+      "default": "./dist/webhooks/index.js"
+    },
+    "./webhooks/*": {
+      "@ablo/source": "./src/webhooks/*.ts",
+      "types": "./dist/webhooks/*.d.ts",
+      "import": "./dist/webhooks/*.js",
+      "default": "./dist/webhooks/*.js"
+    },
+    "./syncLog/*": {
+      "@ablo/source": "./src/syncLog/*.ts",
+      "types": "./dist/syncLog/*.d.ts",
+      "import": "./dist/syncLog/*.js",
+      "default": "./dist/syncLog/*.js"
+    },
+    "./syncLog": {
+      "@ablo/source": "./src/syncLog/index.ts",
+      "types": "./dist/syncLog/index.d.ts",
+      "import": "./dist/syncLog/index.js",
+      "default": "./dist/syncLog/index.js"
+    },
+    "./docs": {
+      "@ablo/source": "./src/docs/index.ts",
+      "types": "./dist/docs/index.d.ts",
+      "import": "./dist/docs/index.js",
+      "default": "./dist/docs/index.js"
+    },
+    "./docs/*": {
+      "@ablo/source": "./src/docs/*.ts",
+      "types": "./dist/docs/*.d.ts",
+      "import": "./dist/docs/*.js",
+      "default": "./dist/docs/*.js"
+    },
+    "./*": {
+      "@ablo/source": "./src/*.ts",
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js",
+      "default": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/**/__tests__/**",
+    "!src/**/*.test.ts",
+    "README.md",
+    "CONVENTIONS.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Abloatai/ablo.git",
+    "directory": "packages/transaction"
+  },
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "prepack": "npm run build && node ../ablo/scripts/strip-source-condition.mjs",
+    "postpack": "node ../ablo/scripts/restore-source-condition.mjs",
+    "pack:check": "node ../ablo/scripts/pack-check.mjs",
+    "lint:pkg": "publint",
+    "test": "vitest run src/headlessClient.test.ts && jest",
+    "typecheck": "tsc --noEmit && tsc -p typetests/tsconfig.json"
+  },
+  "dependencies": {
+    "uuid": "^11.1.0",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "ai": "^6.0.0",
+    "drizzle-orm": ">=0.44.0"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    },
+    "drizzle-orm": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@ablo/tsconfig": "*",
+    "@jest/globals": "^30.2.0",
+    "@types/jest": "^30.0.0",
+    "ai": "^6.0.0",
+    "jest": "^30.2.0",
+    "jest-environment-node": "^30.2.0",
+    "publint": "^0.3.17",
+    "ts-jest": "^29.4.5",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vitest": "^4.1.4"
+  }
+}

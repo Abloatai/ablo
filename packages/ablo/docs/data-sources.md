@@ -1,0 +1,254 @@
+# Connect Your Database
+
+> Keep the rows in your own Postgres while Ablo coordinates and confirms every write.
+
+You write through Ablo, and Ablo writes to your Postgres. A call to
+`ablo.<model>.create / update / delete` enters Ablo's commit chokepoint — where
+claims, ordering, and idempotency are enforced — and Ablo applies the change to
+your database through a scoped role. Your rows live in your database, which stays
+the system of record. Ablo reads your write-ahead log (WAL) to confirm each write
+landed and to keep every connected human and agent current.
+
+Ablo writes your **rows**; it never touches your **schema**. It runs no DDL and no
+migrations — your migration tool stays in charge of the shape of your database.
+Ablo only writes rows into tables you already have, through a role scoped to
+exactly that.
+
+> **Just trying Ablo?** You don't need a database to start. Pass an `apiKey` only,
+> and Ablo keeps your rows in its own log so you can build the whole app today —
+> like Stripe test mode. For a sandbox you can throw away, point Ablo at a separate
+> or local Postgres. Connect your production database (below) when you're ready for
+> it to be the system of record.
+
+Connecting sets up two capabilities on your Postgres: **logical replication**, so
+Ablo can read and confirm, and a **scoped DML role**, so Ablo can write. `ablo
+connect` prints the exact SQL. `ablo connect apply` runs it for you.
+
+## Connect in one command
+
+```bash
+npx ablo connect apply --url postgres://admin:...@host:5432/db
+```
+
+Pass an admin connection string with `--url` and it creates the publication, the
+two scoped roles, and the grants, turns on logical decoding where it can, registers
+both scoped roles with Ablo, and proves the setup by reconnecting and reading back.
+The admin credential is used on this machine only and never persisted — nothing is
+written to your `.env`, which keeps holding only `ABLO_API_KEY`. Pass `--show-sql`
+to see every statement first, or drop `--apply` to print the SQL and run it
+yourself. Rotate the scoped passwords any time with `ablo connect rotate`.
+
+The rest of this page is what that command sets up, step by step, for when you want
+to run it by hand or review exactly what changes.
+
+## The setup, step by step
+
+### 1. Enable logical decoding
+
+Turn on logical WAL so Ablo can decode row changes and confirm writes:
+
+```sql
+ALTER SYSTEM SET wal_level = 'logical';
+```
+
+`wal_level` is **not reloadable** — you must **restart Postgres** for it to take
+effect. On Amazon RDS / Aurora you can't `ALTER SYSTEM`; set
+`rds.logical_replication = 1` in the instance's parameter group instead, then
+reboot. (`ablo connect apply` attempts this for you and, where a managed
+provider refuses, hands you the one remaining step.)
+
+### 2. Run `ablo connect` for the publication and roles
+
+```bash
+npx ablo connect
+```
+
+`ablo connect` prints the exact, copy-pasteable setup SQL for **your** Postgres.
+Run it against your database as a superuser or the DB owner. It creates:
+
+- **A publication** naming the tables Ablo reads and confirms against
+  (`ablo_publication`, the single canonical name the runtime subscribes to):
+
+  ```sql
+  CREATE PUBLICATION "ablo_publication" FOR ALL TABLES;
+  ```
+
+  Scope it to a subset with `npx ablo connect --tables a,b,c`.
+
+- **A replication role:** it streams the WAL and `SELECT`s, nothing more. This is
+  the role Ablo reads and confirms through. You choose the password; it never
+  passes through Ablo's CLI or servers:
+
+  ```sql
+  CREATE ROLE "ablo_replicator" WITH REPLICATION LOGIN PASSWORD '<password>';
+  GRANT SELECT ON ALL TABLES IN SCHEMA public TO "ablo_replicator";
+  ```
+
+  On Amazon RDS the `REPLICATION` attribute is granted, not set directly:
+  `GRANT rds_replication TO "ablo_replicator";`.
+
+- **A scoped writer role:** the role Ablo writes your rows through. It gets row
+  DML (`SELECT, INSERT, UPDATE, DELETE`) and the sync ledger, and nothing else: no
+  `REPLICATION`, no schema `CREATE`, `NOSUPERUSER NOBYPASSRLS`, row security on. It
+  can change rows in your tables; it cannot change your database:
+
+  ```sql
+  CREATE ROLE "ablo_writer" WITH LOGIN PASSWORD '<write-password>'
+    NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "ablo_writer";
+  ```
+
+  Rename either role with `--role <name>` / `--write-role <name>`.
+
+The **replication slot** is created and owned by Ablo's runtime when it first
+subscribes — you don't pre-create it.
+
+### 3. Register the database with Ablo
+
+`ablo connect apply` already did this. If you ran the SQL by hand instead, hand
+Ablo both scoped connection strings once — the replication role it reads and
+confirms through, and the writer role it lands your rows through. Set them just
+long enough to register:
+
+```bash
+export ABLO_REPLICATION_DATABASE_URL=...   # the replication role
+export ABLO_WRITE_DATABASE_URL=...         # the writer role
+npx ablo connect register
+```
+
+`--register` posts them to Ablo, which holds them encrypted and uses them to read
+and write your database. Ablo holds them from here, so you can drop both from your
+environment — your app keeps only `ABLO_API_KEY`. The role passwords are generated
+for you and never printed; rotate them any time with `ablo connect rotate`. After
+this, Ablo does all the connecting.
+
+### 4. Verify readiness with `ablo connect check`
+
+```bash
+npx ablo connect check
+```
+
+`--check` needs only `ABLO_API_KEY`. It asks Ablo to check the database it now
+holds, from the same infrastructure replication runs on, and prints a green
+checklist or the precise per-item fix:
+
+- `wal_level` is `logical`
+- the `ablo_publication` publication exists
+- the replication role has the `REPLICATION` attribute
+- every published table has a usable `REPLICA IDENTITY` (a primary key, or
+  `REPLICA IDENTITY FULL`) so `UPDATE`/`DELETE` can replicate
+- the writer role is DML-ready — scoped, non-superuser, with the idempotency
+  ledger in place
+
+Because Ablo checks from its own network, a database your own machine can't reach —
+IPv6-only, IP-allowlisted, behind a VPN — still verifies. Re-run it until every
+item is green.
+
+Your **app** holds only the API key — never a connection string:
+
+```bash
+# .env — server runtime only, never the browser
+ABLO_API_KEY=sk_live_...
+```
+
+```ts
+import Ablo from '@abloatai/ablo';
+import { schema } from './ablo/schema';
+
+export const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+});
+```
+
+The Ablo schema describes **only your synced, collaborative models** — the rows
+Ablo coordinates and fans out in realtime. It is *not* your whole-database schema
+and does *not* replace your `schema.prisma` (or Drizzle schema). Your auth,
+billing, and other tables stay in your own ORM schema, owned by your own
+migrations. `ablo check` reflects this — it reports tables you didn't declare as
+"ignored / owned by you," which is exactly right.
+
+### 5. Write through `ablo.<model>`
+
+Every change goes through Ablo. The write enters the commit chokepoint, Ablo
+applies it to your Postgres through the writer role, and the WAL echo confirms it
+landed:
+
+```ts
+// Enters the chokepoint (claims, ordering, idempotency), lands in your Postgres.
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 } });
+
+// Block until your database has it and the WAL echo confirms.
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 }, wait: 'confirmed' });
+
+// Reads are live off the same stream.
+const report = ablo.weatherReports.local.get('report_stockholm');
+```
+
+A commit is accepted the moment Ablo takes it (`queued`); it becomes `confirmed`
+once the row appears on your WAL. See [Guarantees](./guarantees.md) for what each
+state means and when to wait.
+
+## What Ablo touches in your database: the honest footprint
+
+This is the complete list. Nothing else.
+
+| Object | What it is | Owned by |
+|---|---|---|
+| `ablo_publication` | A publication naming the tables Ablo reads and confirms against. | You create it (step 2). |
+| `ablo_replicator` role | A `REPLICATION` + `SELECT` role Ablo reads and confirms through. | You create it (step 2). |
+| `ablo_writer` role | A scoped DML role Ablo writes your rows through: row DML + ledger, nothing more. | You create it (step 2). |
+| Replication slot | A logical slot Ablo subscribes through to track its WAL position. | Ablo's runtime creates it on first connect. |
+| `wal_level = logical` | A server setting that **requires a restart**. | You set it (step 1). |
+
+Operational reality you should know up front:
+
+- **`wal_level = logical` needs a restart.** It is a one-time, server-wide change
+  and is not reloadable.
+- **A replication slot retains WAL.** While Ablo is connected, the slot holds the
+  WAL it hasn't yet acknowledged. If Ablo is disconnected for a long time, that WAL
+  accumulates and consumes disk. **Ablo monitors slot lag and WAL retention** and
+  surfaces it, so disk pressure never surprises you; an abandoned slot is dropped
+  rather than left to grow unbounded.
+- **The writer role changes rows, not your database.** It carries row DML plus the
+  sync ledger and nothing more — no `REPLICATION`, no DDL, no object ownership, and
+  it runs with row security on and `NOBYPASSRLS`. It is a real, tightly-scoped
+  privilege — describe it that way in a security review.
+
+Ablo runs **no DDL** and **owns no schema**: your migration tool stays in charge of
+the shape of your database, and Ablo writes only rows, only into tables you already
+have.
+
+## What Ablo stores on its side
+
+Your schema *definition* (model names, fields, types — pushed with `ablo push`),
+your hashed API keys, a safe projection of the connection registration (host,
+database, schema — the connection string itself is sealed and never echoed back),
+the replication slot position, and the ordered transaction log that drives sync and
+coordination. Your rows live in your database.
+
+> **Postgres replication status: Preview.** Registration, readiness checks, and
+> the server replication fleet are implemented and boot-wired. Preview describes
+> product rollout and support, not an inactive code path. Maintainers: see
+> [internal/postgres-replication.md](./internal/postgres-replication.md) for the
+> architecture and operational invariants.
+
+## When your database can't grant replication
+
+Some managed databases won't grant a `REPLICATION` role. For those, Ablo connects
+through a **signed Data Source endpoint** instead: you expose one signed HTTP route
+built from your ORM (`prismaDataSource` / `drizzleDataSource`, with `ablo_outbox` /
+`ablo_idempotency` bookkeeping), and Ablo writes and confirms through it — same
+`ablo.<model>` surface, same commit chokepoint, same `queued` → `confirmed`
+lifecycle. It needs no replication setup, which is exactly why it's the fallback:
+reach for it only when logical replication isn't available, and prefer `ablo
+connect` everywhere else.
+
+## Next steps
+
+- [Quickstart](./quickstart.md) — connect and write through `ablo.<model>`.
+- [Schema Contract](./schema-contract.md) — what the schema drives across SDK,
+  React, and agents.
+- [Guarantees](./guarantees.md) — what confirmed writes and stale checks mean.
+- [Integration Guide](./integration-guide.md) — the full app, React, multiplayer,
+  and agent path.

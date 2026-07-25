@@ -28,7 +28,7 @@ a typed error if the row moved underneath you while the agent was busy.
 ## Schema-Backed Worker
 
 The worker uses the same schema client the app uses. It reads the task from the
-server with `retrieve({ id })`, claims the row, and writes through
+server with `get({ id })`, claims the row, and writes through
 `ablo.tasks.update(...)` with a stale-check so a concurrent edit can't be
 overwritten.
 
@@ -52,8 +52,8 @@ const ablo = Ablo({
 export async function markDone(taskId: string) {
   await ablo.ready();
 
-  // retrieve({ id }) is an async server read — await it.
-  const task = await ablo.tasks.retrieve({ id: taskId });
+  // get({ id }) is an async server read — await it.
+  const task = await ablo.tasks.get({ id: taskId });
   if (!task) return { status: 'not_found' };
 
   try {
@@ -112,7 +112,7 @@ Keep workers on the same schema-backed client as the app.
 import { useAblo } from '@abloatai/ablo/react';
 
 export function TaskRow({ task: serverTask }: Props) {
-  const data = useAblo((ablo) => ablo.tasks.local.retrieve(serverTask.id)) ?? serverTask;
+  const data = useAblo((ablo) => ablo.tasks.local.get(serverTask.id)) ?? serverTask;
   const holder = useAblo((ablo) => ablo.tasks.claim.state({ id: serverTask.id }));
   const agentActive = holder?.participantKind === 'agent';
 

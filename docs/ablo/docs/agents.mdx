@@ -37,7 +37,7 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: "http" 
 // `retrieve` resolves to the row, or `undefined` when none matches.
 const open = await ablo.tasks.list({ where: { status: "todo" } });
 
-const task = await ablo.tasks.retrieve({ id: open[0].id });
+const task = await ablo.tasks.get({ id: open[0].id });
 if (!task) throw new Error("task not found");
 
 console.log(task.title);

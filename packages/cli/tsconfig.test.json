@@ -1,0 +1,20 @@
+{
+  // Type-checks the test tree, which `tsconfig.json` excludes and ts-jest does
+  // not check — its diagnostics skip files the project config excludes, so
+  // before this config the suite compiled at run time but was never
+  // type-checked by anything.
+  //
+  // DOM is in `lib` here and not in the base because tests reach modules that
+  // read `window`/`document` (the browser-facing auth surface), which the CLI's
+  // own sources never pull in.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // ts-jest emits CommonJS at run time, where verbatimModuleSyntax rejects
+    // ESM syntax — so the check must match how the tests are actually compiled.
+    "verbatimModuleSyntax": false,
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

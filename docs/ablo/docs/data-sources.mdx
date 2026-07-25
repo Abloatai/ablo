@@ -185,7 +185,7 @@ await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 } })
 await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 }, wait: 'confirmed' });
 
 // Reads are live off the same stream.
-const report = ablo.weatherReports.local.retrieve('report_stockholm');
+const report = ablo.weatherReports.local.get('report_stockholm');
 ```
 
 A commit is accepted the moment Ablo takes it (`queued`); it becomes `confirmed`

@@ -161,7 +161,7 @@ For rows that don't carry `organization_id` themselves but inherit tenancy via a
 foreign key, set `policy: { by: 'parent', fk: '<fk>', parent: '<parentTable>' }`.
 For genuinely global/reference data, `policy: { by: 'none' }`. ⚠ `by: 'none'`
 exposes the whole table cross-tenant, so it's an explicit, named branch — never a
-falsy flag. See `packages/sync-engine/src/schema/model.ts` for the full option set.
+falsy flag. See `packages/transaction/src/schema/model.ts` for the full option set.
 
 ## 2. Create The Client
 
@@ -223,7 +223,10 @@ const sync = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
 export async function POST() {
   const session = await auth(); // your own auth — returns the signed-in user
-  const { token } = await sync.sessions.create({ user: { id: session.userId } });
+  const { token } = await sync.sessions.create({
+    user: { id: session.userId },
+    can: { tasks: ['read', 'update'] },
+  });
   return Response.json({ token });
 }
 ```
@@ -258,8 +261,8 @@ refreshes before expiry.
 ## 3. Read State
 
 Reads come in two flavors, and you pick based on whether you can wait.
-`retrieve({ id })` and `list({ where })` hit the server (and hydrate the local
-store) — they're async, so you `await` them. `get(id)` (positional),
+`get({ id })` and `list({ where })` hit the server (and hydrate the local
+store) — they're async, so you `await` them. `local.get(id)`,
 `local.list({ where })`, and `local.count({ where })` read the already-synced local
 graph synchronously, so they're the ones you call in render — and the ones you
 use inside a `useAblo` selector, never the async `retrieve`/`list`.
@@ -270,15 +273,15 @@ and waits.
 ```ts
 await ablo.ready();
 
-const report = await ablo.weatherReports.retrieve({ id: 'report_stockholm' });
+const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
 if (!report) throw new Error('report not found');
 ```
 
-Use `local.retrieve`, `local.list`, and `local.count` for synchronous local-graph reads after
+Use `local.get`, `local.list`, and `local.count` for synchronous local-graph reads after
 data has synced.
 
 ```ts
-const report = ablo.weatherReports.local.retrieve('report_stockholm');
+const report = ablo.weatherReports.local.get('report_stockholm');
 const activeReports = ablo.weatherReports.local.list({
   where: { projectId: 'proj_123' },
   filter: (report) => report.status !== 'ready',
@@ -299,7 +302,7 @@ export function ReportRow({
 }: {
   report: { id: string; location: string; status: string };
 }) {
-  const report = useAblo((ablo) => ablo.weatherReports.local.retrieve(serverReport.id)) ?? serverReport;
+  const report = useAblo((ablo) => ablo.weatherReports.local.get(serverReport.id)) ?? serverReport;
   const active = useAblo((ablo) => ablo.weatherReports.claim.state({ id: serverReport.id }));
 
   return <button disabled={Boolean(active) || report.status === 'ready'}>{report.location}</button>;
@@ -390,7 +393,7 @@ The migration can be gradual:
 
 1. Declare schema for one model, such as `reports`.
 2. Keep existing server loads for first paint.
-3. Add `useAblo((ablo) => ablo.weatherReports.local.retrieve(id)) ?? serverReport` for live rows.
+3. Add `useAblo((ablo) => ablo.weatherReports.local.get(id)) ?? serverReport` for live rows.
 4. Add one Data Source endpoint that calls the existing service layer.
 5. Move one mutation button from `fetch('/api/reports/...')` to `ablo.weatherReports.update(...)`.
 6. Add an outbox/events path for writes that still happen outside Ablo.
@@ -519,9 +522,9 @@ them.
 
 | Method                                 | Use it for                                                                       |
 | -------------------------------------- | -------------------------------------------------------------------------------- |
-| `retrieve({ id })`                     | Async read of one row from the server (await it).                                |
+| `get({ id })`                     | Async read of one row from the server (await it).                                |
 | `list({ where })`                      | Async read of many rows from the server (await it).                              |
-| `get(id)`                              | Synchronous local read of one synced row (positional id; use in render).         |
+| `local.get(id)`                   | Synchronous local read of one synced row (use in render).                        |
 | `local.list({ where })`                | Synchronous local read of many synced rows.                                      |
 | `local.count({ where })`               | Synchronous local count of synced rows.                                          |
 | `create({ data, id? })`                | Create through the model client.                                                 |
@@ -531,5 +534,5 @@ them.
 | `claim({ id, description?, ttl? })`    | Acquire a disposable handle: wait for your turn, re-read, and hold the row.       |
 
 Keep first integrations on the model methods above. Every mutation and
-server-read verb takes one options object; only the synchronous `get(id)` stays
+server-read verb takes one options object; the synchronous `local.get(id)` stays
 positional.

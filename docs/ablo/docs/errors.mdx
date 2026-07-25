@@ -249,6 +249,12 @@ Registering a trusted issuer requires a secret (`sk_`) API key. The key presente
 
 The request targeted an organization the caller is not scoped to.
 
+### permission_denied
+
+`HTTP 403` · not retryable
+
+The participant is not allowed to execute this mutator.
+
 ### project_scope_denied
 
 `HTTP 403` · not retryable
@@ -583,6 +589,12 @@ The request body was missing, unparseable, or the wrong shape.
 
 The id in the request is not a valid identifier.
 
+### invalid_input
+
+`HTTP 400` · not retryable
+
+The mutator input could not be parsed or failed input validation.
+
 ### invalid_json
 
 `HTTP 400` · not retryable
@@ -817,6 +829,12 @@ The request must include a non-empty `items` array.
 
 The usage request was invalid.
 
+### validation_failed
+
+`HTTP 400` · not retryable
+
+The mutator rejected the input because it violates a business rule.
+
 ### write_options_invalid
 
 `client-only` · not sent over the network
@@ -850,6 +868,12 @@ No claim of yours exists with the given id. It was released, it expired, or it w
 `HTTP 404` · not retryable
 
 No row exists with the requested id. It may have been deleted, or the id may belong to a different environment.
+
+### invalid_mutator
+
+`HTTP 404` · not retryable
+
+The requested mutator is not registered on this server.
 
 ### model_not_found
 
@@ -1323,11 +1347,29 @@ Uploads are not configured on this deployment: the upload storage bucket and CDN
 
 Local SDK usage errors — never sent over the network. No HTTP status.
 
+### db_cleanup_failed
+
+`client-only` · not sent over the network
+
+Authenticated local data could not be completely removed from this device.
+
+### db_identity_mismatch
+
+`client-only` · not sent over the network
+
+The local database belongs to a different authenticated identity or data plane.
+
 ### db_not_opened
 
 `client-only` · not sent over the network
 
 The local database was accessed before it was opened.
+
+### db_secure_hash_unavailable
+
+`client-only` · not sent over the network
+
+Secure local persistence requires Web Crypto SHA-256 support.
 
 ### db_store_not_found
 

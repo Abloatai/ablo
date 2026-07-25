@@ -14,7 +14,7 @@ Here's the whole path in one block — claim a row, update it inside the claim, 
 let the claim release when your callback returns:
 
 ```ts
-const report = await ablo.weatherReports.retrieve({ id: 'report_stockholm' });
+const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
 
 await using claim = await ablo.weatherReports.claim({ id: 'report_stockholm' });
 await ablo.weatherReports.update({ id: claim.data.id, data: { status: 'ready' }, wait: 'confirmed' });
@@ -29,7 +29,7 @@ of clobbering.
 | Primitive | Plane | Purpose |
 |---|---|---|
 | `Schema` | State | Declares typed models the app and agents can read and write. |
-| `Model` | State | The generated `ablo.<model>` model. Use `retrieve`/`list` (async reads), `local.retrieve`/`local.list`/`local.count` (the same verbs, synchronous and local-only), `create`, `update`, and `delete`. |
+| `Model` | State | The generated `ablo.<model>` model. Use `retrieve`/`list` (async reads), `local.get`/`local.list`/`local.count` (the same verbs, synchronous and local-only), `create`, `update`, and `delete`. |
 | `Claim` | Coordination | Who is working on a target. Taken via `ablo.<model>.claim({ id })` and read via `ablo.<model>.claim.state({ id })`. Ephemeral — never persisted. |
 | `Commit` | Protocol | The durable write underneath model updates. Most users do not call it directly. |
 | `Receipt` | Protocol | The lower-level durable result for custom runtimes. Schema writes use `wait: 'confirmed'`. |
@@ -54,13 +54,13 @@ expect just `Commit`; here's what the other two buy you over that minimum:
 A normal schema-backed run is:
 
 ```ts
-const report = await ablo.weatherReports.retrieve({ id });
+const report = await ablo.weatherReports.get({ id });
 const active = ablo.weatherReports.claim.state({ id });
 await using claim = await ablo.weatherReports.claim({ id });
 await ablo.weatherReports.update({ id: claim.data.id, data: patch, wait: 'confirmed' });
 ```
 
-`retrieve({ id })` is an async server read (await it). `claim.state({ id })` is a
+`get({ id })` is an async server read (await it). `claim.state({ id })` is a
 synchronous local read of who currently holds the row — it never blocks.
 
 ## Coordination

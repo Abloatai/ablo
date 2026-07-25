@@ -57,7 +57,7 @@ const updateTask = tool({
     await ablo.ready();
 
     // retrieve hits the server for the latest row (async — await it).
-    const task = await ablo.tasks.retrieve({ id: taskId });
+    const task = await ablo.tasks.get({ id: taskId });
     if (!task) return { ok: false, reason: 'not_found' };
 
     // If another agent already holds this row, claim waits for them to finish,

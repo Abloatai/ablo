@@ -101,7 +101,7 @@ org / team / user map to what a participant can see.
 import { useAblo } from '@abloatai/ablo/react';
 
 export function ReportView({ report: serverReport }: { report: { id: string; location: string } }) {
-  const report = useAblo((ablo) => ablo.weatherReports.local.retrieve(serverReport.id)) ?? serverReport;
+  const report = useAblo((ablo) => ablo.weatherReports.local.get(serverReport.id)) ?? serverReport;
   const active = useAblo((ablo) => ablo.weatherReports.claim.state({ id: serverReport.id }));
   const claimed = Boolean(active);
 
@@ -111,7 +111,7 @@ export function ReportView({ report: serverReport }: { report: { id: string; loc
 
 The hook:
 
-1. Uses the same `ablo.<model>.local.retrieve(id)` / `.local.list()` methods you'd call anywhere
+1. Uses the same `ablo.<model>.local.get(id)` / `.local.list()` methods you'd call anywhere
    else in the SDK — the hook just makes them reactive.
 2. Tracks the model fields read by the selector and re-renders when confirmed
    deltas arrive.
@@ -126,7 +126,7 @@ effects, or writes:
 const abloClient = useAblo();
 ```
 
-Prefer selector reads like `useAblo((ablo) => ablo.<model>.local.retrieve(id))`. Older hooks
+Prefer selector reads like `useAblo((ablo) => ablo.<model>.local.get(id))`. Older hooks
 also accept a string model name; prefer the selector form shown above.
 
 For collections, keep the selector on the model client too:
@@ -144,12 +144,12 @@ const reports = useAblo((ablo) =>
 ## Server Load
 
 ```tsx
-const report = await ablo.weatherReports.retrieve({ id });
+const report = await ablo.weatherReports.get({ id });
 ```
 
 Use `retrieve` in Server Components when the row may not be in the local pool
 yet — it hydrates from the local store and the server, and returns a Promise, so
-`await` it. (Server reads come in two shapes: `retrieve({ id })` for one row and
+`await` it. (Server reads come in two shapes: `get({ id })` for one row and
 `list({ where })` for many; both are async. The synchronous local reads are
 the `local` reads, used in render below.)
 

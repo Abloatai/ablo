@@ -72,7 +72,10 @@ export async function POST() {
   const user = await getCurrentUser();
   if (!user) return new Response('Unauthorized', { status: 401 });
 
-  const session = await ablo.sessions.create({ user: { id: user.id } });
+  const session = await ablo.sessions.create({
+    user: { id: user.id },
+    can: { tasks: ['read', 'create', 'update'] },
+  });
   return Response.json({ token: session.token });
 }
 ```
@@ -127,7 +130,7 @@ export default async function TaskPage({
 }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   await ablo.ready();
-  const task = await ablo.tasks.retrieve({ id });
+  const task = await ablo.tasks.get({ id });
   if (!task) return null;
 
   return <TaskEditor task={task} />;
@@ -170,7 +173,7 @@ you — re-fetch and retry.
 import { useAblo } from '@abloatai/ablo/react';
 
 export function TaskEditor({ task: serverTask }: Props) {
-  const data = useAblo((ablo) => ablo.tasks.local.retrieve(serverTask.id)) ?? serverTask;
+  const data = useAblo((ablo) => ablo.tasks.local.get(serverTask.id)) ?? serverTask;
   const holder = useAblo((ablo) => ablo.tasks.claim.state({ id: serverTask.id }));
   const busy = Boolean(holder);
 

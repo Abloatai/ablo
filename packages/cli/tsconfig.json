@@ -1,0 +1,25 @@
+{
+  // One program over everything this package ships — the hole the carve
+  // closed: inside @ablo/transaction, `src/cli` was excluded from the bare
+  // `tsc -p tsconfig.json` and only a side config covered it.
+  //
+  // The CLI is bundled by tsup (esbuild), so it uses bundler module
+  // resolution and extensionless relative imports. The `@ablo/source` custom
+  // condition (from ../tsconfig/base.json) resolves `@ablo/transaction/*`
+  // and `@ablo/transaction/*` straight to each package's `src` — no prior
+  // build required.
+  //
+  // Tests are excluded here and type-checked by `tsconfig.test.json`, which
+  // `npm run typecheck` runs second. ts-jest compiles them at run time but
+  // reports no diagnostics for files this config excludes, so the test config
+  // is the only thing checking them.
+  "extends": "../tsconfig/base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src/__tests__"]
+}
