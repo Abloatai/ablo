@@ -9,9 +9,11 @@
 #
 # RITUAL (normally called by release.sh after the mirror workflow succeeds):
 #   1. confirm the mirror workflow published @abloatai/ablo
-#   2. packages/ablo/scripts/publish-release.sh [version]
+#   2. packages/ablo/scripts/publish-release.sh [version] [target]
 #
 # `version` defaults to the current packages/ablo/package.json version.
+# `target` defaults to the public repository's current `main`. Pass the exact
+# mirror commit when backfilling an older release.
 # Tag convention: v<version> (e.g. v0.6.0).
 #
 # Requires: `gh` authenticated with write access to Abloatai/ablo.
@@ -22,6 +24,7 @@ PKG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CHANGELOG="$PKG_DIR/CHANGELOG.md"
 
 VERSION="${1:-$(node -p "require('$PKG_DIR/package.json').version")}"
+TARGET="${2:-main}"
 TAG="v$VERSION"
 
 # Extract the `## <VERSION>` section, up to (not including) the next `## ` heading.
@@ -55,7 +58,7 @@ fi
 echo "Creating release $TAG on $MIRROR_REPO (notes sliced from CHANGELOG)..."
 printf '%s\n' "$NOTES" | gh release create "$TAG" \
   --repo "$MIRROR_REPO" \
-  --target main \
+  --target "$TARGET" \
   --title "$TAG" \
   --notes-file -
 
