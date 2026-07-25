@@ -10,11 +10,11 @@ import { DatabaseManager, type DatabaseInfo, type WorkspaceMetadata } from './st
 import type { PersistenceIdentity } from './stores/persistenceIdentity.js';
 import { StoreManager } from './stores/StoreManager.js';
 import { ModelRegistry } from './ModelRegistry.js';
-import { LoadStrategy } from '@ablo/transaction/types';
+import { LoadStrategy } from '@abloatai/transaction/types';
 import { globalRuntime } from './context.js';
 import type { RuntimeContext } from './RuntimeContext.js';
 import type { AppliedChange } from '../plugin.js';
-import { AbloConnectionError, AbloValidationError } from '@ablo/transaction/errors';
+import { AbloConnectionError, AbloValidationError } from '@abloatai/transaction/errors';
 import {
   persistenceDatabaseNamesForDeletion,
   purgeIndexedDbPersistence,
@@ -22,9 +22,9 @@ import {
 import type { BootstrapFetcher, BootstrapData } from './sync/BootstrapFetcher.js';
 import { InMemoryObjectStore } from './adapters/inMemoryStorage.js';
 import { logPositionSchema } from './logPosition.js';
-import type { SyncDeltaAction } from '@ablo/transaction/wire/delta';
-import type { OnStaleMode } from '@ablo/transaction/coordination/schema';
-import type { BootstrapType } from '@ablo/transaction/types';
+import type { SyncDeltaAction } from '@abloatai/transaction/wire/delta';
+import type { OnStaleMode } from '@abloatai/transaction/coordination/schema';
+import type { BootstrapType } from '@abloatai/transaction/types';
 import { highestPersistedPrefixSyncId } from './sync/persistedPrefix.js';
 
 /** Generic record type for model data */
@@ -142,7 +142,7 @@ function isAcceptedOutboxPromotion(
   );
 }
 
-// Re-exported, not redeclared. `@ablo/transaction`'s `types` module owns this
+// Re-exported, not redeclared. `@abloatai/transaction`'s `types` module owns this
 // vocabulary and documents what each mode does; this package held a byte-identical
 // second copy while its own test fixtures already imported the canonical one.
 export type { BootstrapType };

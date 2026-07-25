@@ -6,8 +6,8 @@
  */
 
 import { z } from 'zod';
-import { defineSchema } from '@ablo/transaction/schema/schema';
-import { model } from '@ablo/transaction/schema/model';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
 import {
   ABLO_SOURCE_CLIENT_TX_ID_MAX_LENGTH,
   signAbloSourceRequest,

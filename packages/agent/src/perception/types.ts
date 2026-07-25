@@ -7,7 +7,7 @@
  * of ambient state passed to AI SDK tools.
  */
 
-import type { Activity } from '@ablo/transaction/types/streams';
+import type { Activity } from '@abloatai/transaction/types/streams';
 
 // ── Transport-agnostic announce contract ─────────────────────────────────
 

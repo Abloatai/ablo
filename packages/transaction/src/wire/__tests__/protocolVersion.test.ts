@@ -17,7 +17,7 @@ import {
   PROTOCOL_VERSION_HEADER,
   protocolVersionProblem,
   resolveProtocolVersion,
-} from '@ablo/transaction/wire/protocolVersion';
+} from '@abloatai/transaction/wire/protocolVersion';
 
 describe('protocol version contract', () => {
   it('pins the current version — bumping requires a changelog entry', () => {

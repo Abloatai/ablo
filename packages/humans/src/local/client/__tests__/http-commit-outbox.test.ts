@@ -1,7 +1,7 @@
 /** @jest-environment node */
 
-import { createHttpTransport } from '@ablo/transaction/transport/httpTransport';
-import { idempotencyKeySchema } from '@ablo/transaction/transactions/settlement/idempotencyKey';
+import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
+import { idempotencyKeySchema } from '@abloatai/transaction/transactions/settlement/idempotencyKey';
 import type {
   DurableWriteStore,
   PendingWrite,
@@ -11,12 +11,12 @@ import {
   HTTP_COMMIT_REPLAY_WINDOW_MS,
   httpCommitEnvelopeRecordId,
   type DurableHttpCommitEnvelope,
-} from '@ablo/transaction/transactions/settlement/httpCommitEnvelope';
+} from '@abloatai/transaction/transactions/settlement/httpCommitEnvelope';
 import {
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
-} from '@ablo/transaction/wire/protocolVersion';
-import { modelReadResponse } from '@ablo/transaction/testing/fixtures/httpResponses';
+} from '@abloatai/transaction/wire/protocolVersion';
+import { modelReadResponse } from '@abloatai/transaction/testing/fixtures/httpResponses';
 
 const OUTBOX_SCOPE = {
   organizationId: 'org_test',

@@ -2,8 +2,8 @@ import { describe, expect, it, jest } from '@jest/globals';
 import {
   createEndpointCredentialResolver,
   isCredentialEndpoint,
-} from '@ablo/transaction/auth/credentialEndpoint';
-import { resolveApiKey } from '@ablo/transaction/auth/apiKey';
+} from '@abloatai/transaction/auth/credentialEndpoint';
+import { resolveApiKey } from '@abloatai/transaction/auth/apiKey';
 
 function response(status: number, body: unknown): Response {
   return {

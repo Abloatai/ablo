@@ -1,7 +1,7 @@
 import { Model, modelAsRow } from '../Model.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
-import type { Schema, InferModel, InferCreate } from '@ablo/transaction/schema/schema';
-import type { ModelDef } from '@ablo/transaction/schema/model';
+import { AbloValidationError } from '@abloatai/transaction/errors';
+import type { Schema, InferModel, InferCreate } from '@abloatai/transaction/schema/schema';
+import type { ModelDef } from '@abloatai/transaction/schema/model';
 // Type-only — `SyncStoreContract` is the store interface; importing the type
 // does not pull the React `context` module's runtime.
 import type { SyncStoreContract } from '../storeContract.js';

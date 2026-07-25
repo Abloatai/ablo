@@ -30,7 +30,7 @@ import {
   AbloConnectionError,
   AbloSessionError,
   isAccessCredentialExpiryCloseReason,
-} from '@ablo/transaction/errors';
+} from '@abloatai/transaction/errors';
 import { ClaimLog } from '../../coordination/ClaimLog.js';
 import { initRuntime, resetRuntime } from '../../context.js';
 import {

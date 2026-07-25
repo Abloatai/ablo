@@ -12,9 +12,9 @@
  */
 
 import { z } from 'zod';
-import { defineSchema } from '@ablo/transaction/schema/schema';
-import { model } from '@ablo/transaction/schema/model';
-import type { Logger } from '@ablo/transaction/logger';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
+import type { Logger } from '@abloatai/transaction/logger';
 import { Ablo } from '../../../Ablo.js';
 import { createInternalComponents } from '../createInternalComponents.js';
 import type { RuntimeContext } from '../../RuntimeContext.js';

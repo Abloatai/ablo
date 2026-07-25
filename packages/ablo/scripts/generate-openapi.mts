@@ -23,7 +23,7 @@ import { dirname, relative, resolve } from 'node:path';
 // Straight from the definition site, and run under `--conditions=@ablo/source`
 // so it reads `packages/transaction/src` rather than a `dist` that may lag the
 // schemas by a build — which would publish a contract for the previous commit.
-import { abloOpenApi } from '@ablo/transaction/schema/openapi';
+import { abloOpenApi } from '@abloatai/transaction/schema/openapi';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const target = resolve(repoRoot, 'docs/ablo/public/openapi.json');

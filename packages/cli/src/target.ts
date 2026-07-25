@@ -22,8 +22,8 @@
  * local view, clearly marked as unconfirmed.
  */
 
-import { resolveIdentity } from '@ablo/transaction/auth';
-import { resolveBootstrapBaseUrl } from '@ablo/transaction/auth/apiKey';
+import { resolveIdentity } from '@abloatai/transaction/auth';
+import { resolveBootstrapBaseUrl } from '@abloatai/transaction/auth/apiKey';
 import {
   getActiveProject,
   getMode,

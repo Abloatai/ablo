@@ -13,7 +13,7 @@ import {
   type ConflictAxis,
   type Conflict,
 } from '../types.js';
-import type { OnStaleMode } from '@ablo/transaction/coordination/schema';
+import type { OnStaleMode } from '@abloatai/transaction/coordination/schema';
 
 type Kind = 'user' | 'agent' | 'system';
 

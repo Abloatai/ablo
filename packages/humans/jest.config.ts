@@ -68,18 +68,18 @@ const config: Config = {
     '^react/(.*)$': `${reactRoot}/$1`,
     '^react-dom$': reactDomRoot,
     '^react-dom/(.*)$': `${reactDomRoot}/$1`,
-    // @ablo/transaction (the extracted settlement core, ADR 0013) resolves to
+    // @abloatai/transaction (the extracted settlement core, ADR 0013) resolves to
     // its src — jest doesn't follow the package's `@ablo/source` export
     // condition, so map it explicitly, mirroring tsc/dep-cruiser. Directory
     // barrels need their own line: the generic pattern appends `.ts` and
     // cannot land on an `index.ts`.
-    '^@ablo/transaction/(coordination|wire|types|auth|keys|schema|source|server|webhooks|docs)$':
+    '^@abloatai/transaction/(coordination|wire|types|auth|keys|schema|source|server|webhooks|docs)$':
       '<rootDir>/../transaction/src/$1/index.ts',
-    '^@ablo/transaction/(.*)$': '<rootDir>/../transaction/src/$1.ts',
-    '^@ablo/transaction$': '<rootDir>/../transaction/src/index.ts',
-    '^@ablo/humans/react$': '<rootDir>/src/react.ts',
-    '^@ablo/humans/(.*)$': '<rootDir>/src/$1.ts',
-    '^@ablo/humans$': '<rootDir>/src/index.ts',
+    '^@abloatai/transaction/(.*)$': '<rootDir>/../transaction/src/$1.ts',
+    '^@abloatai/transaction$': '<rootDir>/../transaction/src/index.ts',
+    '^@abloatai/humans/react$': '<rootDir>/src/react.ts',
+    '^@abloatai/humans/(.*)$': '<rootDir>/src/$1.ts',
+    '^@abloatai/humans$': '<rootDir>/src/index.ts',
   },
 
   testTimeout: 10000,

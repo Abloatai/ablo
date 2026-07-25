@@ -10,7 +10,7 @@ import {
   ERROR_CONTRACT_VERSION,
   type ErrorCategory,
   type ErrorCodeSpec,
-} from '@ablo/transaction';
+} from '@abloatai/transaction';
 
 const docUrlForCode = (code: string): string => `https://docs.abloatai.com/errors#${code}`;
 

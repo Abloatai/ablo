@@ -1,11 +1,11 @@
 import type { RuntimeContext } from '../../RuntimeContext.js';
-import type { ReadDependency, TrackDependency, OnStaleMode, StaleNotification } from '@ablo/transaction/coordination/schema';
-import { AbloConnectionError } from '@ablo/transaction/errors';
-import type { MutationCommitResult } from '@ablo/transaction/wire/commit';
+import type { ReadDependency, TrackDependency, OnStaleMode, StaleNotification } from '@abloatai/transaction/coordination/schema';
+import { AbloConnectionError } from '@abloatai/transaction/errors';
+import type { MutationCommitResult } from '@abloatai/transaction/wire/commit';
 import type {
   DurableCommitEnvelope,
   DurableCommitOperation,
-} from '@ablo/transaction/transactions/settlement/commitEnvelope';
+} from '@abloatai/transaction/transactions/settlement/commitEnvelope';
 import type { SealDurableCommitInput } from './commitTransport.js';
 
 export interface CommitTransaction {

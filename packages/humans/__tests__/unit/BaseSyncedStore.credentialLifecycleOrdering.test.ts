@@ -18,7 +18,7 @@ import type { SyncClient } from '../../src/local/SyncClient';
 import type { Database } from '../../src/local/Database';
 import type { InstanceCache } from '../../src/local/InstanceCache';
 import { ModelRegistry } from '../../src/local/ModelRegistry';
-import type { AuthCredentialSource } from '@ablo/transaction/auth/credentialSource';
+import type { AuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
 import { initRuntime, resetRuntime } from '../../src/local/context.js';
 import {
   noopLogger,

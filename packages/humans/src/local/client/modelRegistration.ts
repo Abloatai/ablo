@@ -7,11 +7,11 @@
  */
 
 import { z } from 'zod';
-import type { Schema } from '@ablo/transaction/schema/schema';
-import { baseFieldsSchema } from '@ablo/transaction/schema/schema';
+import type { Schema } from '@abloatai/transaction/schema/schema';
+import { baseFieldsSchema } from '@abloatai/transaction/schema/schema';
 import type { ModelRegistry } from '../ModelRegistry.js';
 import { DEFER_MODEL_OBSERVABILITY, Model } from '../Model.js';
-import { PropertyType } from '@ablo/transaction/types';
+import { PropertyType } from '@abloatai/transaction/types';
 
 // ── Auto model registration from schema ───────────────────────────────────
 

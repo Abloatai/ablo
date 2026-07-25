@@ -30,10 +30,10 @@
     "directory": "packages/cli"
   },
   "dependencies": {
-    "@ablo/transaction": "^0.37.0",
+    "@abloatai/transaction": "^0.37.0",
     "jiti": "^2.7.0",
     "zod": "^4.4.3",
-    "@ablo/humans": "^0.37.0"
+    "@abloatai/humans": "^0.37.0"
   },
   "devDependencies": {
     "@clack/prompts": "^0.11.0",

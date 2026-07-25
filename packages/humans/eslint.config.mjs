@@ -1,4 +1,4 @@
-// ESLint flat config for @ablo/humans (production doctor plan §4, Tier 3).
+// ESLint flat config for @abloatai/humans (production doctor plan §4, Tier 3).
 //
 // Full typescript-eslint strictTypeChecked + stylisticTypeChecked as `error`,
 // with pre-existing debt frozen via ESLint bulk suppressions

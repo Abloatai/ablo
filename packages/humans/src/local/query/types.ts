@@ -22,8 +22,8 @@ export type {
   WhereOp,
   WhereClause,
   LoadWhere,
-} from '@ablo/transaction/resources/where';
-import type { WhereClause } from '@ablo/transaction/resources/where';
+} from '@abloatai/transaction/resources/where';
+import type { WhereClause } from '@abloatai/transaction/resources/where';
 
 /** A single structured fetch request. */
 export interface Query {

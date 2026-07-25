@@ -20,8 +20,8 @@ import {
   Ablo,
   AbloConnectionError,
   type AbloHttpClient,
-} from '@ablo/transaction';
-import type { Schema, SchemaRecord } from '@ablo/transaction/schema';
+} from '@abloatai/transaction';
+import type { Schema, SchemaRecord } from '@abloatai/transaction/schema';
 import { createConsoleLogger, resolveLogLevel } from './consoleLogger.js';
 
 // These shapes describe what the issueToken callback receives and returns. They

@@ -27,7 +27,7 @@ import {
   extractWireCode,
   errorFromWire,
   toAbloError,
-} from '@ablo/transaction/errors';
+} from '@abloatai/transaction/errors';
 
 describe('AbloError hierarchy', () => {
   it('every subclass inherits from AbloError', () => {

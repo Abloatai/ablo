@@ -7,13 +7,13 @@
  * only. Both transports now agree: absent row → absent data. A claim on a
  * missing row still surfaces (nothing to hold).
  */
-import { createHttpTransport } from '@ablo/transaction/transport/httpTransport';
-import { AbloNotFoundError } from '@ablo/transaction/errors';
+import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
+import { AbloNotFoundError } from '@abloatai/transaction/errors';
 import {
   claimAcquiredResponse,
   modelClaim,
   modelReadResponse,
-} from '@ablo/transaction/testing/fixtures/httpResponses';
+} from '@abloatai/transaction/testing/fixtures/httpResponses';
 
 type Json = Record<string, unknown>;
 

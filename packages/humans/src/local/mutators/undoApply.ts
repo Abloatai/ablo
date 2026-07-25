@@ -26,7 +26,7 @@
 
 import type { SyncStoreContract } from '../storeContract.js';
 import type { InverseOp } from './inverseOp.js';
-import { deepEqual } from '@ablo/transaction/utils/json';
+import { deepEqual } from '@abloatai/transaction/utils/json';
 
 /**
  * How undo and redo treat a field that a collaborator changed after your

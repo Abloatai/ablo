@@ -18,7 +18,7 @@ import type { LocalModel } from '../../localModelContract.js';
 import type { MutationPersistencePort } from '../../mutationPersistence.js';
 import { globalRuntime } from '../../context.js';
 import type { RuntimeContext } from '../../RuntimeContext.js';
-import type { MutationOperationType } from '@ablo/transaction/types';
+import type { MutationOperationType } from '@abloatai/transaction/types';
 import {
   AbloError,
   AbloConnectionError,
@@ -26,17 +26,17 @@ import {
   AbloNotFoundError,
   AbloValidationError,
   errorCodeSpec,
-} from '@ablo/transaction/errors';
+} from '@abloatai/transaction/errors';
 import {
   LogPosition,
   type LogPositionPort,
 } from '../../logPosition.js';
 import type { WriteOptions } from '../../interfaces/index.js';
-import type { OnStaleMode, StaleNotification, ReadDependency, TrackDependency } from '@ablo/transaction/coordination/schema';
+import type { OnStaleMode, StaleNotification, ReadDependency, TrackDependency } from '@abloatai/transaction/coordination/schema';
 import {
   mutationCommitResultSchema,
   type MutationCommitResult,
-} from '@ablo/transaction/wire/commit';
+} from '@abloatai/transaction/wire/commit';
 import {
   projectCommitPayload,
   computePriorityScore,
@@ -87,9 +87,9 @@ import {
   type DurableCommitOperation,
   type DurableCommitOperationInput,
   type CommitOutboxScope,
-} from '@ablo/transaction/transactions/settlement/commitEnvelope';
+} from '@abloatai/transaction/transactions/settlement/commitEnvelope';
 import type { DurableWriteStore } from './durableWriteStore.js';
-import { stableStringify } from '@ablo/transaction/utils/json';
+import { stableStringify } from '@abloatai/transaction/utils/json';
 import {
   createLocalMutationPort,
   type LocalMutationPort,

@@ -15,7 +15,7 @@
  * since the schema generates one when the caller omits it.
  */
 
-import type { Schema, InferModel, InferCreate } from '@ablo/transaction/schema/schema';
+import type { Schema, InferModel, InferCreate } from '@abloatai/transaction/schema/schema';
 import type { SyncStoreContract } from '../storeContract.js';
 import type { MutateActions } from './mutateActions.js';
 import type { Transaction } from './Transaction.js';

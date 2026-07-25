@@ -1,6 +1,6 @@
 import { isObservable, observable } from 'mobx';
-import { AbloValidationError } from '@ablo/transaction/errors';
-import { snapshotJsonValue } from '@ablo/transaction/utils/json';
+import { AbloValidationError } from '@abloatai/transaction/errors';
+import { snapshotJsonValue } from '@abloatai/transaction/utils/json';
 
 describe('snapshotJsonValue', () => {
   it('turns nested observable JSON into a frozen plain snapshot', () => {

@@ -1,15 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { Schema } from '@ablo/transaction/schema/schema';
+import type { Schema } from '@abloatai/transaction/schema/schema';
 import {
   UndoManager,
   type UndoScope,
   type UndoScopeOptions,
 } from '../local/mutators/UndoManager.js';
-import type { ResolveSchema } from '@ablo/transaction/types/global';
+import type { ResolveSchema } from '@abloatai/transaction/types/global';
 import { useSyncContext } from './context.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 
 /**
  * Provides per-surface undo and redo for mutator invocations. Each named scope

@@ -7,7 +7,7 @@
  * code separately testable from the actual `exchangeApiKey` HTTP call.
  */
 
-import { createRefreshScheduler } from '@ablo/transaction/auth';
+import { createRefreshScheduler } from '@abloatai/transaction/auth';
 
 describe('createRefreshScheduler', () => {
   let logicalNow = 0;

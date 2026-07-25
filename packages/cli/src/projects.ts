@@ -28,12 +28,12 @@ import {
   DEFAULT_PROFILE,
   type ProfileKeys,
 } from './config';
-import { ABLO_DEFAULT_BASE_URL } from '@ablo/transaction/auth/hostedEndpoints';
+import { ABLO_DEFAULT_BASE_URL } from '@abloatai/transaction/auth/hostedEndpoints';
 import {
   projectResponseSchema,
   projectListResponseSchema,
   type ProjectResponse,
-} from '@ablo/transaction/wire';
+} from '@abloatai/transaction/wire';
 import { brand } from './theme';
 
 /**

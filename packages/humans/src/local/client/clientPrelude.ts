@@ -12,13 +12,13 @@
  * plugin list selected.
  */
 
-import type { ParticipantKind } from '@ablo/transaction/types/participant';
-import type { Logger } from '@ablo/transaction/logger';
-import type { SchemaRecord } from '@ablo/transaction/schema/schema';
+import type { ParticipantKind } from '@abloatai/transaction/types/participant';
+import type { Logger } from '@abloatai/transaction/logger';
+import type { SchemaRecord } from '@abloatai/transaction/schema/schema';
 import {
   createAuthCredentialSource,
   type AuthCredentialSource,
-} from '@ablo/transaction/auth/credentialSource';
+} from '@abloatai/transaction/auth/credentialSource';
 import {
   assertBrowserSafety,
   readProcessEnv,
@@ -29,7 +29,7 @@ import {
   resolveCredentialResolver,
   warnIfCliKeyMismatch,
   type CredentialProvider,
-} from '@ablo/transaction/auth/apiKey';
+} from '@abloatai/transaction/auth/apiKey';
 import type { AbloOptions, InternalAbloOptions } from './options.js';
 import { createConsoleLogger, resolveLogLevel } from './consoleLogger.js';
 

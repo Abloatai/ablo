@@ -1,1 +1,1 @@
-export * from '@ablo/transaction/schema/serialize';
+export * from '@abloatai/transaction/schema/serialize';

@@ -5,7 +5,7 @@
  *
  * Usage:
  *   import { z } from 'zod';
- *   import { defineSchema, model, relation } from '@ablo/transaction/schema';
+ *   import { defineSchema, model, relation } from '@abloatai/transaction/schema';
  *
  *   const schema = defineSchema({
  *     tasks: model({

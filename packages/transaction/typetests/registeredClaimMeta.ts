@@ -20,10 +20,10 @@
  * augments the module that declares `Register` directly.
  */
 
-import type { ResolveClaimMeta } from '@ablo/transaction/types/global';
-import type { Claim, ClaimTarget, HeldClaim } from '@ablo/transaction/types/streams';
-import type { ClaimTargetOptions } from '@ablo/transaction/resources/modelOperations';
-import type { ClaimCreateOptions } from '@ablo/transaction/resources/httpResources';
+import type { ResolveClaimMeta } from '@abloatai/transaction/types/global';
+import type { Claim, ClaimTarget, HeldClaim } from '@abloatai/transaction/types/streams';
+import type { ClaimTargetOptions } from '@abloatai/transaction/resources/modelOperations';
+import type { ClaimCreateOptions } from '@abloatai/transaction/resources/httpResources';
 type Identical<A, B> =
   (<T>() => T extends A ? 1 : 2) extends
   (<T>() => T extends B ? 1 : 2) ? true : false;
@@ -32,7 +32,7 @@ type Identical<A, B> =
 // below type-checks the SDK's own paths and not only its published types. They
 // used to compile because nothing anywhere registered a `ClaimMeta`; this is
 // what says they still compile when something does.
-import type { createHttpTransport } from '@ablo/transaction/transport/httpTransport';
+import type { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
 
 /**
  * The shape a program would register. An `interface` on purpose: it is the
@@ -44,7 +44,7 @@ interface ReviewMeta {
   reviewer?: string;
 }
 
-declare module '@ablo/transaction/types/global' {
+declare module '@abloatai/transaction/types/global' {
   interface Register {
     ClaimMeta: ReviewMeta;
   }

@@ -103,8 +103,8 @@ export interface BootstrapOptions {
 
 import { globalRuntime } from '../context.js';
 import type { RuntimeContext } from '../RuntimeContext.js';
-import { AbloError, AbloSessionError, AbloConnectionError, translateHttpError, toAbloError, isRetryableCode } from '@ablo/transaction/errors';
-import { withAuthHeaders, type AuthTokenGetter } from '@ablo/transaction/auth/credentialSource';
+import { AbloError, AbloSessionError, AbloConnectionError, translateHttpError, toAbloError, isRetryableCode } from '@abloatai/transaction/errors';
+import { withAuthHeaders, type AuthTokenGetter } from '@abloatai/transaction/auth/credentialSource';
 import {
   classifySchemaDrift,
   describeSchemaDrift,

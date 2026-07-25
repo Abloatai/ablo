@@ -2,7 +2,7 @@
 
 import { useContext, useEffect, useRef } from 'react';
 import { AbloInternalContext } from './internalContext.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 
 /** Subscribe to provider-level errors without causing component re-renders. */
 export function useErrorListener(listener: (error: Error) => void): void {

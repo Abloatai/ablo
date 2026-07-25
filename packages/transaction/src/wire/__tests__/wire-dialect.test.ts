@@ -18,7 +18,7 @@
  */
 
 import { z } from 'zod';
-import * as wire from '@ablo/transaction/wire';
+import * as wire from '@abloatai/transaction/wire';
 
 const isZodSchema = (value: unknown): value is z.ZodType =>
   typeof value === 'object' && value !== null && '_zod' in value;

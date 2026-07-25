@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import type { Schema } from '@ablo/transaction/schema/schema';
+import type { Schema } from '@abloatai/transaction/schema/schema';
 import type {
   MutatorDefs,
   MutatorFn,
@@ -9,9 +9,9 @@ import type {
 import { createTransaction } from '../local/mutators/Transaction.js';
 import { createRecordingMutation } from '../local/mutators/RecordingMutation.js';
 import type { UndoScope } from '../local/mutators/UndoManager.js';
-import type { ResolveSchema } from '@ablo/transaction/types/global';
+import type { ResolveSchema } from '@abloatai/transaction/types/global';
 import { useSyncContext } from './context.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import { getContext } from '../local/context.js';
 
 /**

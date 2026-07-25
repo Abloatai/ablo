@@ -7,7 +7,7 @@
  * (sign-out).
  */
 
-import { probeNetwork } from '@ablo/transaction/transport/networkProbe';
+import { probeNetwork } from '@abloatai/transaction/transport/networkProbe';
 
 interface FetchResponse {
   status: number;

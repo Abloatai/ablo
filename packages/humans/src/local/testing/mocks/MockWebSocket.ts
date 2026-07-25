@@ -5,7 +5,7 @@
  */
 
 import type { SyncActionType } from '../../stores/syncAction.js';
-import type { BootstrapReason } from '@ablo/transaction/wire/bootstrapReason';
+import type { BootstrapReason } from '@abloatai/transaction/wire/bootstrapReason';
 
 /** The shape of a single delta — one change the server pushes to the client. */
 export interface MockDelta {

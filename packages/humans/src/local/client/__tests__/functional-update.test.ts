@@ -12,14 +12,14 @@ import {
   reconcileFunctionalUpdate,
   isReconcilableConflict,
   type ReconcileTransport,
-} from '@ablo/transaction/resources/functionalUpdate';
+} from '@abloatai/transaction/resources/functionalUpdate';
 import {
   AbloContentionError,
   AbloStaleContextError,
   AbloClaimedError,
   AbloNotFoundError,
   AbloValidationError,
-} from '@ablo/transaction/errors';
+} from '@abloatai/transaction/errors';
 
 interface Row { content: string }
 

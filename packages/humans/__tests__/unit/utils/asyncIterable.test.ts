@@ -19,7 +19,7 @@ import { describe, it, expect, jest } from '@jest/globals';
 import {
   asyncIteratorFrom,
   asyncIteratorFromEvents,
-} from '@ablo/transaction/utils/asyncIterator';
+} from '@abloatai/transaction/utils/asyncIterator';
 
 describe('asyncIteratorFrom — snapshot semantics', () => {
   it('yields the current snapshot on every mutation', async () => {

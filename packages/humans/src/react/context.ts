@@ -1,9 +1,9 @@
 'use client';
 
 import { createContext, createElement, useContext, type ReactNode } from 'react';
-import type { Schema } from '@ablo/transaction/schema/schema';
+import type { Schema } from '@abloatai/transaction/schema/schema';
 import type { SyncStoreContract } from '../local/storeContract.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 
 // `SyncStoreContract` and `LocalMutation` are defined in a React-free module,
 // so code that never touches React can still implement the store. They are

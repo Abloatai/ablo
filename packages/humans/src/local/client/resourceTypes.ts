@@ -8,7 +8,7 @@
  * live participant handle.
  */
 
-export * from '@ablo/transaction/resources/httpResources';
+export * from '@abloatai/transaction/resources/httpResources';
 
 // The request contract for `ablo.<model>` — also core, re-joined here so this
 // module stays the single import path for the whole resource surface.
@@ -30,7 +30,7 @@ export type {
   ClaimHeartbeatOptions,
   HeldClaim,
   HeldLease,
-} from '@ablo/transaction/resources/modelOperations';
+} from '@abloatai/transaction/resources/modelOperations';
 
 // `ModelOperations` binds the request contract to reactive model instances, so
 // it lives with the factory that builds it rather than with the core.

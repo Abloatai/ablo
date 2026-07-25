@@ -2,8 +2,8 @@ import type {
   LanguageModelV3Middleware,
   LanguageModelV3Prompt,
 } from '@ai-sdk/provider';
-import type { WireClaim } from '@ablo/transaction/coordination';
-import type { ClaimTarget } from '@ablo/transaction/types/streams';
+import type { WireClaim } from '@abloatai/transaction/coordination';
+import type { ClaimTarget } from '@abloatai/transaction/types/streams';
 
 export type { ClaimTarget };
 

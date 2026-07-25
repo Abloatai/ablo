@@ -10,8 +10,8 @@
  * mislead if the URL were the thing actually missing.
  */
 
-import { AbloError, AbloValidationError } from '@ablo/transaction/errors';
-import type { ParticipantKind } from '@ablo/transaction/types/participant';
+import { AbloError, AbloValidationError } from '@abloatai/transaction/errors';
+import type { ParticipantKind } from '@abloatai/transaction/types/participant';
 
 /**
  * The subset of client options this validator reads. It is declared as its own

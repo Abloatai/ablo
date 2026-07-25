@@ -12,41 +12,41 @@
  * design step (docs/plans/package-split.md).
  */
 
-import type { Schema, SchemaRecord } from '@ablo/transaction/schema/schema';
+import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
 import {
   durableCommitOperationSchema,
   type DurableCommitOperation,
-} from '@ablo/transaction/transactions/settlement/commitEnvelope';
-import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, claimedError } from '@ablo/transaction/errors';
-import type { ModelTarget, ModelClaim } from '@ablo/transaction/coordination/schema';
-import type { BatchFence } from '@ablo/transaction/coordination';
+} from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, claimedError } from '@abloatai/transaction/errors';
+import type { ModelTarget, ModelClaim } from '@abloatai/transaction/coordination/schema';
+import type { BatchFence } from '@abloatai/transaction/coordination';
 import {
 	batchFence,
 	fenceTokenFor,
 	modelTarget,
 	streamTarget,
 	subTarget,
-} from '@ablo/transaction/coordination';
+} from '@abloatai/transaction/coordination';
 import { validateAbloOptions } from './validateAbloOptions.js';
-import { mintSession } from '@ablo/transaction/auth/sessionMint';
-import type { MintSessionContext } from '@ablo/transaction/auth/sessionMint';
+import { mintSession } from '@abloatai/transaction/auth/sessionMint';
+import type { MintSessionContext } from '@abloatai/transaction/auth/sessionMint';
 import {
   revokeCapability,
   rotateCapability,
-} from '@ablo/transaction/auth/capabilityLifecycle';
-import { modelWireNames } from '@ablo/transaction/auth/capability';
+} from '@abloatai/transaction/auth/capabilityLifecycle';
+import { modelWireNames } from '@abloatai/transaction/auth/capability';
 import type { StoreCluster } from './storeCluster.js';
 import { startStoreLifecycle } from './storeLifecycle.js';
 import type { SyncWebSocket, CoreSyncEventMap } from '../sync/SyncWebSocket.js';
 import { createClaimStream } from '../sync/createClaimStream.js';
-import { awaitClaimGrant } from '@ablo/transaction/coordination/awaitClaimGrant';
+import { awaitClaimGrant } from '@abloatai/transaction/coordination/awaitClaimGrant';
 import { createSnapshot } from '../sync/createSnapshot.js';
 import { createParticipantManager } from '../sync/participants.js';
 import type { AttachablePresenceStream } from '../../presenceStream.js';
-import type { ClaimWaitOptions, Snapshot } from '@ablo/transaction/types/streams';
-import type { Claim } from '@ablo/transaction/types/streams';
-import type { CredentialProvider } from '@ablo/transaction/auth/apiKey';
-import { resolveApiKeyValue, resolveBootstrapBaseUrl } from '@ablo/transaction/auth/apiKey';
+import type { ClaimWaitOptions, Snapshot } from '@abloatai/transaction/types/streams';
+import type { Claim } from '@abloatai/transaction/types/streams';
+import type { CredentialProvider } from '@abloatai/transaction/auth/apiKey';
+import { resolveApiKeyValue, resolveBootstrapBaseUrl } from '@abloatai/transaction/auth/apiKey';
 import type { AbloOptions } from './options.js';
 import type { ClientPrelude } from './clientPrelude.js';
 import type {
@@ -62,7 +62,7 @@ import type {
   CreateSessionParams,
 } from './resourceTypes.js';
 import { createModelProxy, type ModelOperations } from './createModelProxy.js';
-import { assertWriteOptions } from '@ablo/transaction/resources/writeOptionsSchema';
+import { assertWriteOptions } from '@abloatai/transaction/resources/writeOptionsSchema';
 import type { AbloClient as Ablo } from '../../client.js';
 
 /**

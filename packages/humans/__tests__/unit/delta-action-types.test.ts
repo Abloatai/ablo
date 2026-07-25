@@ -25,7 +25,7 @@ import {
   resetDeltaCounter,
 } from '../../src/local/testing';
 import type { SyncActionType } from '../../src/local/stores/syncAction.js';
-import { syncDeltaActionSchema } from '@ablo/transaction/wire/delta';
+import { syncDeltaActionSchema } from '@abloatai/transaction/wire/delta';
 
 describe('Delta action type constants', () => {
   it('SyncActionType union covers all 8 action letters', () => {

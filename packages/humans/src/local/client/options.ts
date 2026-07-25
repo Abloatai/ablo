@@ -5,7 +5,7 @@
  * This module holds only types and has no runtime imports.
  */
 
-import type { Schema, SchemaRecord } from '@ablo/transaction/schema/schema';
+import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
 import type {
   RuntimeConfig,
   Logger,
@@ -19,8 +19,8 @@ import type { AbloPersistence } from '../persistence.js';
 import type {
   DurableWriteStore,
   DurableWritesConfig,
-} from '@ablo/transaction/durableWrites';
-import type { CommitOutboxScope } from '@ablo/transaction/transactions/settlement/commitEnvelope';
+} from '@abloatai/transaction/durableWrites';
+import type { CommitOutboxScope } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
 
 // ── Options ───────────────────────────────────────────────────────────────
 
@@ -30,10 +30,10 @@ import type { CommitOutboxScope } from '@ablo/transaction/transactions/settlemen
  * existing auth session. The canonical definition lives in `./auth`; it is
  * re-exported here for convenience.
  */
-export type { CredentialProvider } from '@ablo/transaction/auth/apiKey';
-import type { CredentialProvider } from '@ablo/transaction/auth/apiKey';
+export type { CredentialProvider } from '@abloatai/transaction/auth/apiKey';
+import type { CredentialProvider } from '@abloatai/transaction/auth/apiKey';
 import type { AbloPlugin } from '../../plugin.js';
-import type { ParticipantKind } from '@ablo/transaction/types/participant';
+import type { ParticipantKind } from '@abloatai/transaction/types/participant';
 
 /**
  * Options for the {@link Ablo} client.
@@ -63,7 +63,7 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * the list; a duplicate, or a plugin the chosen transport cannot carry,
    * fails while the client is being constructed with an error naming the
    * plugin. Omitted, the client installs the compatibility `humans()` plugin.
-   * New code should install `humans()` from `@ablo/humans` explicitly.
+   * New code should install `humans()` from `@abloatai/humans` explicitly.
    */
   plugins?: readonly AbloPlugin[];
 

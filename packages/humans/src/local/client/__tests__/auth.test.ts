@@ -27,7 +27,7 @@ import {
   resolveBaseURL,
   resolveBootstrapBaseUrl,
   normalizeAbloHostedBaseUrl,
-} from '@ablo/transaction/auth/apiKey';
+} from '@abloatai/transaction/auth/apiKey';
 
 describe('resolveApiKey', () => {
   it('prefers explicit option over env', () => {
@@ -304,9 +304,9 @@ describe('assertBrowserSafety', () => {
 
 describe('warnIfCliKeyMismatch', () => {
   const freshWarn = async () => {
-    let mod!: typeof import('@ablo/transaction/auth/apiKey');
+    let mod!: typeof import('@abloatai/transaction/auth/apiKey');
     await jest.isolateModulesAsync(async () => {
-      mod = await import('@ablo/transaction/auth/apiKey');
+      mod = await import('@abloatai/transaction/auth/apiKey');
     });
     return mod.warnIfCliKeyMismatch;
   };

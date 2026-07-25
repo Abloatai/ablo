@@ -2,7 +2,7 @@
 
 import { createContext } from 'react';
 import type { AbloClient as Ablo } from '../client.js';
-import type { SchemaRecord } from '@ablo/transaction/schema/schema';
+import type { SchemaRecord } from '@abloatai/transaction/schema/schema';
 
 /**
  * The context that `<AbloProvider>` populates for its own hooks. It is kept

@@ -5,7 +5,7 @@
  * These tests protect the API surface that SDK consumers depend on.
  */
 
-import { defineSchema, model, field, relation } from '@ablo/transaction/schema';
+import { defineSchema, model, field, relation } from '@abloatai/transaction/schema';
 import { createTestContext } from '../../src/local/testing';
 
 describe('Contract: Schema DSL', () => {

@@ -4,7 +4,7 @@
   </a>
 </p>
 
-# @ablo/humans
+# @abloatai/humans
 
 The interactive local-state runtime behind Ablo applications.
 
@@ -39,7 +39,7 @@ For React:
 import { AbloProvider, useAblo } from '@abloatai/ablo/react';
 ```
 
-Use `@ablo/humans` directly only when building Ablo client plugins or
+Use `@abloatai/humans` directly only when building Ablo client plugins or
 framework integrations. Normal applications use `@abloatai/ablo/client` and
 `@abloatai/ablo/react`, which delegate to this package.
 

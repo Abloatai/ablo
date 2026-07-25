@@ -22,7 +22,7 @@
     "declarationMap": false,
     "sourceMap": false,
     "rootDir": "..",
-    // The fixtures deliberately pull `@ablo/transaction` sources into this
+    // The fixtures deliberately pull `@abloatai/transaction` sources into this
     // program (that is what makes the registration reach the SDK's own claim
     // paths), and the `@ablo/source` condition resolves them to `.ts`. Two
     // flags this package ratcheted for itself are relaxed back to that

@@ -16,7 +16,7 @@
  * then confirm it with `ablo check`.
  */
 
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import pc from 'picocolors';
 import postgres from 'postgres';
 import { existsSync, writeFileSync } from 'fs';

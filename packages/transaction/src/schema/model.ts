@@ -6,7 +6,7 @@
  *
  * Usage:
  *   import { z } from 'zod';
- *   import { model, relation } from '@ablo/transaction/schema';
+ *   import { model, relation } from '@abloatai/transaction/schema';
  *
  *   const tasks = model({
  *     title: z.string(),
@@ -389,7 +389,7 @@ export interface ModelDef<
  *
  * ```ts
  * import { z } from 'zod';
- * import { model, relation } from '@ablo/transaction/schema';
+ * import { model, relation } from '@abloatai/transaction/schema';
  *
  * // Fields alone
  * const tags = model({ label: z.string() });

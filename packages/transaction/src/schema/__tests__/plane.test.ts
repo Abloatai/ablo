@@ -5,8 +5,8 @@
  */
 
 import { z } from 'zod';
-import { model } from '@ablo/transaction/schema/model';
-import { defineSchema } from '@ablo/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { toSchemaJSON } from '../serialize.js';
 import { generateProvisionPlan } from '../ddl.js';
 

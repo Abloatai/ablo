@@ -127,8 +127,8 @@
     "directory": "packages/ablo"
   },
   "dependencies": {
-    "@ablo/humans": "^0.37.0",
-    "@ablo/transaction": "^0.37.0"
+    "@abloatai/humans": "^0.37.0",
+    "@abloatai/transaction": "^0.37.0"
   },
   "peerDependencies": {
     "react": "^19.2.8"

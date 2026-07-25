@@ -1,4 +1,4 @@
-import { AbloConnectionError } from '@ablo/transaction/errors';
+import { AbloConnectionError } from '@abloatai/transaction/errors';
 
 /**
  * The complete authenticated plane that owns one local replica. The same

@@ -22,7 +22,7 @@ import type { ConnectionCallbacks } from '../../src/local/sync/ConnectionManager
 // The probe moved into the settlement core with the transport (ADR 0016);
 // mock the core module — the sync-engine path re-exports it, so both the
 // manager's internal import and this test's import resolve to this mock.
-jest.mock('@ablo/transaction/transport/networkProbe', () => ({
+jest.mock('@abloatai/transaction/transport/networkProbe', () => ({
   probeNetwork: jest.fn(async () => ({ outcome: 'unreachable', latencyMs: null })),
 }));
 

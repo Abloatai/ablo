@@ -4,7 +4,7 @@
  * It is the counterpart to `ablo push`: where `push` sends your schema to the
  * hosted service to apply, `migrate` applies it directly to the database named
  * by `DATABASE_URL`. Both commands lower the schema through the same planner,
- * {@link generateProvisionPlan} from `@ablo/transaction/schema`, so the SQL —
+ * {@link generateProvisionPlan} from `@abloatai/transaction/schema`, so the SQL —
  * column types, row-level security, enum checks — is identical no matter which
  * side runs it. There is no second type map: a Zod `number` becomes
  * `DOUBLE PRECISION` here exactly as it does on the hosted path.
@@ -16,7 +16,7 @@
  *   ablo migrate --schema path.ts --export schema
  */
 
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import { spinner } from '@clack/prompts';
 import pc from 'picocolors';
 import { writeFileSync } from 'fs';
@@ -32,8 +32,8 @@ import {
   ddlLockRetryBackoffMs,
   type Schema,
   type SchemaJSON,
-} from '@ablo/transaction/schema';
-import { adapterTableMigrations } from '@ablo/transaction/source';
+} from '@abloatai/transaction/schema';
+import { adapterTableMigrations } from '@abloatai/transaction/source';
 import { loadSchema } from './push';
 
 /**

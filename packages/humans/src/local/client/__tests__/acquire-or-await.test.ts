@@ -16,14 +16,14 @@
 import { ModelRegistry } from '../../ModelRegistry.js';
 import { InstanceCache } from '../../InstanceCache.js';
 import { Model } from '../../Model.js';
-import { ModelScope, LoadStrategy } from '@ablo/transaction/types';
+import { ModelScope, LoadStrategy } from '@abloatai/transaction/types';
 import {
   createModelProxy,
   type ModelCollaboration,
 } from '../createModelProxy.js';
 import type { SyncClient } from '../../SyncClient.js';
 import type { OnDemandLoader } from '../../sync/OnDemandLoader.js';
-import type { Claim, Snapshot } from '@ablo/transaction/types/streams';
+import type { Claim, Snapshot } from '@abloatai/transaction/types/streams';
 
 interface TaskRow { id: string; title: string }
 

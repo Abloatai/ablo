@@ -12,7 +12,7 @@ import {
   RECOVERY_CLASSES,
   recoveryClassSchema,
   type RecoveryClass,
-} from '@ablo/transaction/errorCodes';
+} from '@abloatai/transaction/errorCodes';
 
 describe('classifyRecovery — the recovery taxonomy', () => {
   it('classifies the Stripe-style ephemeral access key expiry as re-mintable', () => {

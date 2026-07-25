@@ -1,3 +1,3 @@
-export { Ablo, humans } from '@ablo/humans';
-export type { AbloOptions, AbloReads, HumansSurface } from '@ablo/humans';
-export * from '@ablo/humans/react';
+export { Ablo, humans } from '@abloatai/humans';
+export type { AbloOptions, AbloReads, HumansSurface } from '@abloatai/humans';
+export * from '@abloatai/humans/react';

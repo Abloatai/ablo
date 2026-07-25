@@ -1,12 +1,12 @@
 {
   // One program over everything this package ships — the hole the carve
-  // closed: inside @ablo/transaction, `src/cli` was excluded from the bare
+  // closed: inside @abloatai/transaction, `src/cli` was excluded from the bare
   // `tsc -p tsconfig.json` and only a side config covered it.
   //
   // The CLI is bundled by tsup (esbuild), so it uses bundler module
   // resolution and extensionless relative imports. The `@ablo/source` custom
-  // condition (from ../tsconfig/base.json) resolves `@ablo/transaction/*`
-  // and `@ablo/transaction/*` straight to each package's `src` — no prior
+  // condition (from ../tsconfig/base.json) resolves `@abloatai/transaction/*`
+  // and `@abloatai/transaction/*` straight to each package's `src` — no prior
   // build required.
   //
   // Tests are excluded here and type-checked by `tsconfig.test.json`, which

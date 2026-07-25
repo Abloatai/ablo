@@ -8,8 +8,8 @@
  */
 
 import { getContext } from '../context.js';
-import type { Logger } from '@ablo/transaction/logger';
-import type { SocketObservability } from '@ablo/transaction/observability';
+import type { Logger } from '@abloatai/transaction/logger';
+import type { SocketObservability } from '@abloatai/transaction/observability';
 
 /** The context's logger, resolved at call time. */
 export const contextLogger: Logger = {

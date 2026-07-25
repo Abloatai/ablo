@@ -9,8 +9,8 @@
 import { z } from 'zod';
 import { globalRuntime } from "../context.js";
 import type { RuntimeContext } from "../RuntimeContext.js";
-import { AbloValidationError } from "@ablo/transaction/errors";
-import { syncDeltaWireCoreSchema } from '@ablo/transaction/wire/delta';
+import { AbloValidationError } from "@abloatai/transaction/errors";
+import { syncDeltaWireCoreSchema } from '@abloatai/transaction/wire/delta';
 
 // ─── Server Delta Schema ─────────────────────────────────────────────────────
 

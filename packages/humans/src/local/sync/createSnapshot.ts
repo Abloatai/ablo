@@ -13,13 +13,13 @@
  */
 
 import type { InstanceCache } from '../InstanceCache.js';
-import type { Schema } from '@ablo/transaction/schema/schema';
+import type { Schema } from '@abloatai/transaction/schema/schema';
 import type { SyncDelta, SyncWebSocket } from './SyncWebSocket.js';
 import type {
   ContextChange,
   Snapshot,
-} from '@ablo/transaction/types/streams';
-import { AbloValidationError } from '@ablo/transaction/errors';
+} from '@abloatai/transaction/types/streams';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import { modelAsRow } from '../Model.js';
 
 /**

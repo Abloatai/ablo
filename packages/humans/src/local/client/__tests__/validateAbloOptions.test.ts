@@ -9,7 +9,7 @@
  */
 
 import { validateAbloOptions } from '../validateAbloOptions.js';
-import { AbloError, AbloValidationError } from '@ablo/transaction/errors';
+import { AbloError, AbloValidationError } from '@abloatai/transaction/errors';
 
 const validSchema = { models: { tasks: {} } };
 

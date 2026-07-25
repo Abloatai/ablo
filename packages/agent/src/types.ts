@@ -3,7 +3,7 @@
  *
  * AgentContext is the canonical ambient-state bridge for tools — passed
  * via AI SDK's `experimental_context` option. Extends the base context
- * from @ablo/transaction with agent-package-specific fields (sandbox, ...).
+ * from @abloatai/transaction with agent-package-specific fields (sandbox, ...).
  */
 
 import type { Agent } from './perception/index.js';
@@ -15,7 +15,7 @@ export type { Sandbox, SandboxHooks };
 
 /**
  * Ambient context threaded into AI SDK tools via `experimental_context`.
- * Extends the base AgentContext from @ablo/transaction with a `sandbox`
+ * Extends the base AgentContext from @abloatai/transaction with a `sandbox`
  * field that code-execution tools (renderChart, execute) read.
  *
  * ```ts

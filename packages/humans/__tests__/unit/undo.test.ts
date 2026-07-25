@@ -29,7 +29,7 @@ import { z } from 'zod';
 import { InstanceCache as ObjectPool } from '../../src/local/InstanceCache';
 import { ModelRegistry, setActiveRegistry } from '../../src/local/ModelRegistry';
 import { Model } from '../../src/local/Model';
-import { defineSchema, model } from '@ablo/transaction/schema';
+import { defineSchema, model } from '@abloatai/transaction/schema';
 import type { SyncStoreContract, LocalMutation } from '../../src/react/context';
 import { createTransaction } from '../../src/local/mutators/Transaction';
 import { createRecordingMutation } from '../../src/local/mutators/RecordingMutation';

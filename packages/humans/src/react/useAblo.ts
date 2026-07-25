@@ -3,14 +3,14 @@
 import { useContext, useEffect, useState } from 'react';
 import { AbloInternalContext } from './internalContext.js';
 import type { AbloClient as Ablo, AbloReads } from '../client.js';
-import type { ModelClaim } from '@ablo/transaction/coordination';
+import type { ModelClaim } from '@abloatai/transaction/coordination';
 import {
   getModelClientMeta,
   type ModelOperations,
 } from '../local/client/createModelProxy.js';
 import { Model } from '../local/Model.js';
-import type { SchemaRecord } from '@ablo/transaction/schema/schema';
-import type { ResolveSchema } from '@ablo/transaction/types/global';
+import type { SchemaRecord } from '@abloatai/transaction/schema/schema';
+import type { ResolveSchema } from '@abloatai/transaction/types/global';
 import { useReactive } from '../useReactive.js';
 
 /**

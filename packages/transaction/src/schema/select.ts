@@ -10,7 +10,7 @@
  *
  * ```ts
  * import { schema as full } from './schema';
- * import { selectModels } from '@ablo/transaction/schema';
+ * import { selectModels } from '@abloatai/transaction/schema';
  *
  * // Subscribe to identity and document content only.
  * export const schema = selectModels(full, ['users', 'organizations', 'workspaces', 'folders', 'files']);

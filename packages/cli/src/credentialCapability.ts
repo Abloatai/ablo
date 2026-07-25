@@ -17,7 +17,7 @@
 import {
   classifyCredentialKind,
   type CredentialKind,
-} from '@ablo/transaction/auth/credentialPolicy';
+} from '@abloatai/transaction/auth/credentialPolicy';
 import { modeFromKey } from './config';
 
 export interface CredentialCapability {

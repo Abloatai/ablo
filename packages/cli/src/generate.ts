@@ -10,11 +10,11 @@
  * app compiles against are the ones the database and sync layer enforce.
  */
 
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import { writeFileSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import pc from 'picocolors';
-import { serializeSchema, generateTypes, type SchemaJSON } from '@ablo/transaction/schema';
+import { serializeSchema, generateTypes, type SchemaJSON } from '@abloatai/transaction/schema';
 import { loadSchema } from './push';
 
 export interface GenerateArgs {

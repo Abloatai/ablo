@@ -7,7 +7,7 @@
  * `task.project` or `project.tasks` directly.
  *
  * Usage:
- *   import { relation } from '@ablo/transaction/schema';
+ *   import { relation } from '@abloatai/transaction/schema';
  *
  *   const taskRelations = {
  *     project: relation.belongsTo('projects', 'projectId'),

@@ -25,7 +25,7 @@
 import type {
   WsTransport,
   PresenceUpdate,
-} from '@ablo/transaction/transport/wsTransport';
+} from '@abloatai/transaction/transport/wsTransport';
 import type {
   ClaimOptions,
   ClaimTarget,
@@ -37,25 +37,25 @@ import type {
   ClaimLost,
   ClaimStream,
   PresenceTarget,
-} from '@ablo/transaction/types/streams';
-import { asyncIteratorFrom } from '@ablo/transaction/utils/asyncIterator';
-import { toMs } from '@ablo/transaction/utils/duration';
+} from '@abloatai/transaction/types/streams';
+import { asyncIteratorFrom } from '@abloatai/transaction/utils/asyncIterator';
+import { toMs } from '@abloatai/transaction/utils/duration';
 import {
   claimDescription,
   descriptionFromMeta,
   participantKindFromWire,
-} from '@ablo/transaction/coordination/schema';
+} from '@abloatai/transaction/coordination/schema';
 import {
   isTargetTuple,
   subTarget,
   streamTarget,
   wireTarget,
   type ClaimTargetDetails,
-} from '@ablo/transaction/coordination/locator';
-import { declaredMeta } from '@ablo/transaction/coordination/claimMeta';
-import { AbloClaimedError, AbloConnectionError } from '@ablo/transaction/errors';
-import { resolveHeartbeatOptions } from '@ablo/transaction/coordination/claimHeartbeatLoop';
-import { noopLogger, type Logger } from '@ablo/transaction/logger';
+} from '@abloatai/transaction/coordination/locator';
+import { declaredMeta } from '@abloatai/transaction/coordination/claimMeta';
+import { AbloClaimedError, AbloConnectionError } from '@abloatai/transaction/errors';
+import { resolveHeartbeatOptions } from '@abloatai/transaction/coordination/claimHeartbeatLoop';
+import { noopLogger, type Logger } from '@abloatai/transaction/logger';
 
 /**
  * The wire capability the claim stream actually uses: subscribe to typed

@@ -11,17 +11,17 @@
  */
 
 import { getContext } from '../context.js';
-import { clientSyncDeltaSchema, type ClientSyncDelta } from '@ablo/transaction/wire/delta';
+import { clientSyncDeltaSchema, type ClientSyncDelta } from '@abloatai/transaction/wire/delta';
 import {
   WsTransport,
   type WsTransportOptions,
   type EventMap,
   type DefaultCollaborationEvents,
-} from '@ablo/transaction/transport/wsTransport';
+} from '@abloatai/transaction/transport/wsTransport';
 import { isRecord } from './wsFrameHandlers.js';
 // Sync-position state (lastSyncId watermark, version vector, server cursor).
 import { SyncCursor } from './syncCursor.js';
-import { PROTOCOL_VERSION } from '@ablo/transaction/wire/protocolVersion';
+import { PROTOCOL_VERSION } from '@abloatai/transaction/wire/protocolVersion';
 // Context-backed ports in the shape the core transport takes.
 import {
   contextLogger,
@@ -40,7 +40,7 @@ export type {
   DefaultCollaborationEvents,
   EventMap,
   SyncWebSocketEventMap,
-} from '@ablo/transaction/transport/wsTransport';
+} from '@abloatai/transaction/transport/wsTransport';
 
 /**
  * How often, while connected, the client polls for any deltas whose best-effort

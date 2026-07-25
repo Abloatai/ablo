@@ -16,13 +16,13 @@ import type {
   ModelOperations,
   ModelUpdateParams,
 } from '../../src/local/client/createModelProxy';
-import type { HttpModelClient } from '@ablo/transaction/transport/httpClient';
+import type { HttpModelClient } from '@abloatai/transaction/transport/httpClient';
 import type {
   ModelUpdater,
   ContentionOptions,
-} from '@ablo/transaction/resources/functionalUpdate';
-import type { CoordinatedModel } from '@ablo/transaction/ai-sdk/coordinatedTool';
-import { defineSchema, model, z } from '@ablo/transaction/schema';
+} from '@abloatai/transaction/resources/functionalUpdate';
+import type { CoordinatedModel } from '@abloatai/transaction/ai-sdk/coordinatedTool';
+import { defineSchema, model, z } from '@abloatai/transaction/schema';
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;

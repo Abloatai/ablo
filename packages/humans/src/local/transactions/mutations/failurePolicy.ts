@@ -1,7 +1,7 @@
 import type { MutationInput, QueuedMutation } from './commitPayload.js';
 import { asTransportError, extractStatusCode } from './commitPayload.js';
 import { mergeUpdateData } from './coalesceRules.js';
-import { AbloConnectionError, errorCodeSpec } from '@ablo/transaction/errors';
+import { AbloConnectionError, errorCodeSpec } from '@abloatai/transaction/errors';
 import type { MutationQueueConfig } from './MutationQueue.js';
 import type { MutationStore } from './MutationStore.js';
 

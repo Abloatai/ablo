@@ -6,7 +6,7 @@
  */
 
 import { z } from 'zod';
-import { syncDeltaActionSchema } from '@ablo/transaction/wire/delta';
+import { syncDeltaActionSchema } from '@abloatai/transaction/wire/delta';
 
 export const syncActionSchema = z.object({
   id: z.number(),

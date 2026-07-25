@@ -8,9 +8,9 @@
  */
 
 import { z } from 'zod';
-import { field, resolveFieldMeta } from '@ablo/transaction/schema/field';
-import { model } from '@ablo/transaction/schema/model';
-import { defineSchema } from '@ablo/transaction/schema/schema';
+import { field, resolveFieldMeta } from '@abloatai/transaction/schema/field';
+import { model } from '@abloatai/transaction/schema/model';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { Ablo, type InternalAbloOptions } from '../../src/Ablo';
 
 // ── Schema-level tests ──────────────────────────────────────────────────

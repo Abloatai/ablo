@@ -10,7 +10,7 @@
  * The differ is pure (no DB), so everything here is a fast unit test.
  */
 
-import type { FieldMeta } from '@ablo/transaction/schema/field';
+import type { FieldMeta } from '@abloatai/transaction/schema/field';
 import type { SchemaJSON, ModelJSON } from '../serialize.js';
 import {
   diffSchema,

@@ -13,7 +13,7 @@ import {
   ABLO_REPLICATION_SLOT,
   ABLO_IDEMPOTENCY_TABLE,
   ABLO_OUTBOX_TABLE,
-} from '@ablo/transaction/footprint';
+} from '@abloatai/transaction/footprint';
 import * as dbRole from '../dbRole';
 
 describe('registerEndpoint', () => {

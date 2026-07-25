@@ -23,8 +23,8 @@ import type { RuntimeContext } from '../../RuntimeContext.js';
 import {
   commitEnvelopeMemberSchema,
   commitOutboxScopeSchema,
-} from '@ablo/transaction/transactions/settlement/commitEnvelope';
-import { onStaleModeSchema } from '@ablo/transaction/coordination/schema';
+} from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import { onStaleModeSchema } from '@abloatai/transaction/coordination/schema';
 
 /** The subset of a write's options that is stored with each transaction or queued mutation. */
 const persistedWriteOptionsSchema = z

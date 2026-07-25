@@ -1,6 +1,6 @@
 # Transaction-core conventions
 
-`@ablo/transaction` is the settlement core. It defines, authorizes, orders, and
+`@abloatai/transaction` is the settlement core. It defines, authorizes, orders, and
 settles changes; it does not materialize a local copy of rows or reconcile an
 optimistic client. Apply ADR 0013's five-second test before adding or moving a
 module:
@@ -8,7 +8,7 @@ module:
 > If there were no UI and no offline mode, would this code still need to exist?
 
 Yes belongs here. IndexedDB, local stores, optimistic queues, bootstrap state,
-WebSocket lifecycle and reactive snapshots belong in `@ablo/humans`.
+WebSocket lifecycle and reactive snapshots belong in `@abloatai/humans`.
 
 ## One definition for boundary data
 

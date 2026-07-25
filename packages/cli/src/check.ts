@@ -13,10 +13,10 @@
  * database is ignored.
  */
 
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import pc from 'picocolors';
 import postgres from 'postgres';
-import { serializeSchema, resolveTenancy, tenancyColumn, type SchemaJSON } from '@ablo/transaction/schema';
+import { serializeSchema, resolveTenancy, tenancyColumn, type SchemaJSON } from '@abloatai/transaction/schema';
 import { loadSchema } from './push';
 import { camelToSnake } from './schemaIr';
 import { BASE_COLUMNS } from './schemaSource';

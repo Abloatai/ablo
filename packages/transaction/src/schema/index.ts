@@ -1,11 +1,11 @@
 /**
- * @ablo/transaction/schema — Schema Definition DSL
+ * @abloatai/transaction/schema — Schema Definition DSL
  *
  * Define your data models with Zod. Types are inferred automatically.
  *
  * ```ts
  * import { z } from 'zod';
- * import { defineSchema, model, relation } from '@ablo/transaction/schema';
+ * import { defineSchema, model, relation } from '@abloatai/transaction/schema';
  *
  * export const schema = defineSchema({
  *   tasks: model({

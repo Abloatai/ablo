@@ -1,8 +1,8 @@
-import type { JoinOptions } from '@ablo/transaction/resources/modelOperations';
+import type { JoinOptions } from '@abloatai/transaction/resources/modelOperations';
 import type { SyncWebSocket } from './SyncWebSocket.js';
-import type { Schema, SchemaRecord } from '@ablo/transaction/schema/schema';
-import { scopeKindOf, type ModelDef } from '@ablo/transaction/schema/model';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
+import { scopeKindOf, type ModelDef } from '@abloatai/transaction/schema/model';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import type {
   Claim,
   Activity,
@@ -12,12 +12,12 @@ import type {
   Peer,
   PresenceStream,
   PresenceTarget,
-} from '@ablo/transaction/types/streams';
+} from '@abloatai/transaction/types/streams';
 import {
   subTarget,
   streamTarget,
   wireTarget,
-} from '@ablo/transaction/coordination';
+} from '@abloatai/transaction/coordination';
 import type { AttachableClaimStream } from './createClaimStream.js';
 
 /**
@@ -111,7 +111,7 @@ export interface ScopedClaimOptions {
   /** Peer-visible description of the work. Defaults to `'editing'`. */
   readonly description?: string;
   /** How long the claim lives; the server expires it automatically after this. */
-  readonly ttl?: import('@ablo/transaction/types/streams').Duration;
+  readonly ttl?: import('@abloatai/transaction/types/streams').Duration;
 }
 
 export interface ScopedClaims {

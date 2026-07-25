@@ -17,7 +17,7 @@
  * `organization_id` column. Models that don't qualify are reported as skipped.
  */
 
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import pc from 'picocolors';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { brand } from './theme';

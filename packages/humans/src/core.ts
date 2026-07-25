@@ -92,11 +92,11 @@ export {
 export {
   awaitClaimGrant,
   type GrantTransport,
-} from '@ablo/transaction/coordination/awaitClaimGrant';
+} from '@abloatai/transaction/coordination/awaitClaimGrant';
 
 // An enum naming the strategies for loading a model's data. Referenced when
 // registering models in extension code.
-export { LoadStrategy } from '@ablo/transaction/types';
+export { LoadStrategy } from '@abloatai/transaction/types';
 
 // Construction-only options used by extension packages that assemble the
 // client around an existing store/provider. Kept on the explicit extension

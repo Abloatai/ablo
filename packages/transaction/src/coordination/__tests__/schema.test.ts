@@ -21,7 +21,7 @@ import {
   commitOperationSchema,
   presenceUpdateSchema,
   participantKindFromWire,
-} from '@ablo/transaction/coordination/schema';
+} from '@abloatai/transaction/coordination/schema';
 
 describe('coordination wire schema', () => {
   describe('layer 3 — optimistic stale-context', () => {

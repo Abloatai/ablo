@@ -1,5 +1,5 @@
 import { parseMigrateArgs, planFor } from '../migrate';
-import { defineSchema, model, z } from '@ablo/transaction/schema';
+import { defineSchema, model, z } from '@abloatai/transaction/schema';
 
 describe('parseMigrateArgs', () => {
   it('applies sensible defaults', () => {

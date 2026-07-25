@@ -8,7 +8,7 @@
 
 import { Model } from '../../Model.js';
 import { ModelRegistry } from '../../ModelRegistry.js';
-import { PropertyType, LoadStrategy } from '@ablo/transaction/types';
+import { PropertyType, LoadStrategy } from '@abloatai/transaction/types';
 
 // ─────────────────────────────────────────────
 // Test Model Classes

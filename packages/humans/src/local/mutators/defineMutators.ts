@@ -12,9 +12,9 @@
  * through to wherever they are invoked.
  */
 
-import type { Schema } from '@ablo/transaction/schema/schema';
+import type { Schema } from '@abloatai/transaction/schema/schema';
 import type { Transaction } from './Transaction.js';
-import type { ResolveSchema } from '@ablo/transaction/types/global';
+import type { ResolveSchema } from '@abloatai/transaction/types/global';
 
 /**
  * `ResolveSchema` narrowed to satisfy the `Schema` bound — mirrors

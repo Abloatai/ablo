@@ -12,8 +12,8 @@
  */
 
 import { z } from 'zod';
-import { defineSchema } from '@ablo/transaction/schema/schema';
-import { model } from '@ablo/transaction/schema/model';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
 import { Ablo, type InternalAbloOptions } from '../../../src/Ablo';
 import { createSnapshot } from '../../../src/local/sync/createSnapshot';
 import type { SyncDelta, SyncWebSocket } from '../../../src/local/sync/SyncWebSocket';

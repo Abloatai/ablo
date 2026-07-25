@@ -23,15 +23,15 @@
 
 import type { InstanceCache } from '../InstanceCache.js';
 import { ModelScope } from '../InstanceCache.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import type { Database } from '../Database.js';
 import type { Model } from '../Model.js';
 import type { ModelRegistry, RegisteredModelClass } from '../ModelRegistry.js';
 import type { RuntimeContext } from '../RuntimeContext.js';
 import { postQuery } from '../query/client.js';
-import type { RecoveryClass } from '@ablo/transaction/errorCodes';
+import type { RecoveryClass } from '@abloatai/transaction/errorCodes';
 import type { LoadWhere, Query, WhereClause, WhereOp, WherePrimitive } from '../query/types.js';
-import type { Schema } from '@ablo/transaction/schema/schema';
+import type { Schema } from '@abloatai/transaction/schema/schema';
 
 export interface OnDemandLoaderOptions {
   readonly objectPool: InstanceCache;

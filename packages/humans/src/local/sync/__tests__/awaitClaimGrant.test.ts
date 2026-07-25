@@ -1,8 +1,8 @@
 import {
   awaitClaimGrant,
   type GrantTransport,
-} from '@ablo/transaction/coordination/awaitClaimGrant';
-import { AbloClaimedError } from '@ablo/transaction/errors';
+} from '@abloatai/transaction/coordination/awaitClaimGrant';
+import { AbloClaimedError } from '@abloatai/transaction/errors';
 
 /** Fake transport: records handlers, lets the test push frames. */
 function fakeTransport() {

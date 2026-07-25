@@ -1,4 +1,4 @@
-import { bootstrapReasonSchema } from '@ablo/transaction/wire/bootstrapReason';
+import { bootstrapReasonSchema } from '@abloatai/transaction/wire/bootstrapReason';
 
 describe('bootstrapReasonSchema', () => {
   it('accepts the durable stream-gap recovery signal', () => {

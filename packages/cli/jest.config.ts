@@ -35,10 +35,10 @@ const config: Config = {
     // not follow the `@ablo/source` export condition, so map them explicitly,
     // mirroring tsc. Directory barrels need their own line: the generic
     // pattern appends `.ts` and cannot land on an `index.ts`.
-    '^@ablo/transaction/(coordination|wire|types|auth|keys|schema|source|server|webhooks|docs)$':
+    '^@abloatai/transaction/(coordination|wire|types|auth|keys|schema|source|server|webhooks|docs)$':
       '<rootDir>/../transaction/src/$1/index.ts',
-    '^@ablo/transaction/(.*)$': '<rootDir>/../transaction/src/$1.ts',
-    '^@ablo/transaction$': '<rootDir>/../transaction/src/index.ts',
+    '^@abloatai/transaction/(.*)$': '<rootDir>/../transaction/src/$1.ts',
+    '^@abloatai/transaction$': '<rootDir>/../transaction/src/index.ts',
   },
 
   testTimeout: 10000,

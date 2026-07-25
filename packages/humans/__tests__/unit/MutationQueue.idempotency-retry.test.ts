@@ -4,7 +4,7 @@
  * same ordered operations under the same wire idempotency key.
  */
 
-import { AbloConnectionError } from '@ablo/transaction/errors';
+import { AbloConnectionError } from '@abloatai/transaction/errors';
 import type { DurableWriteStore } from '../../src/local/transactions/mutations/durableWriteStore';
 import type {
   CommitResult,
@@ -16,7 +16,7 @@ import {
   MutationQueue,
   type QueuedMutation,
 } from '../../src/local/transactions/mutations/MutationQueue';
-import { createDurableCommitEnvelope } from '@ablo/transaction/transactions/settlement/commitEnvelope';
+import { createDurableCommitEnvelope } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
 import {
   createTaskFixture,
   createTestContext,

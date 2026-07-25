@@ -19,7 +19,7 @@
  * Pins the SOURCE registry (not the dist entry) so it guards the contract even
  * when the local build is stale.
  */
-import { ERROR_CODES, ERROR_CONTRACT_VERSION, type ErrorCodeSpec } from '@ablo/transaction/errorCodes';
+import { ERROR_CODES, ERROR_CONTRACT_VERSION, type ErrorCodeSpec } from '@abloatai/transaction/errorCodes';
 
 /** The contract-relevant projection — the fields an old SDK actually branches
  *  on. `message`/`recovery` intentionally omitted (see file header). */

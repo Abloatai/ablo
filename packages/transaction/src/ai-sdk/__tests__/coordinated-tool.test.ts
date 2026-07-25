@@ -4,15 +4,15 @@ import {
   type CoordinatedModel,
   type CoordinatedWriteResult,
 } from '../coordinatedTool.js';
-import { AbloClaimedError } from '@ablo/transaction/errors';
+import { AbloClaimedError } from '@abloatai/transaction/errors';
 import type {
   ModelUpdateParams,
 } from '../../resources/modelOperations.js';
 import type {
   ContentionOptions,
   ModelUpdater,
-} from '@ablo/transaction/resources/functionalUpdate';
-import type { HeldClaim } from '@ablo/transaction/types/streams';
+} from '@abloatai/transaction/resources/functionalUpdate';
+import type { HeldClaim } from '@abloatai/transaction/types/streams';
 
 // `ai` ships ESM/TS that Jest can't transform; coordinatedTool only uses
 // `tool()`, which is a pass-through that returns its definition (with `execute`).

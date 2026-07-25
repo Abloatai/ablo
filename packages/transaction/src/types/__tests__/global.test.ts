@@ -20,8 +20,8 @@ import type {
   ResolveUserMeta,
   ResolveModelKey,
   DefaultSyncShape,
-} from '@ablo/transaction/types/global';
-import type { Claim, ClaimTarget, HeldClaim } from '@ablo/transaction/types/streams';
+} from '@abloatai/transaction/types/global';
+import type { Claim, ClaimTarget, HeldClaim } from '@abloatai/transaction/types/streams';
 import type { Identical } from './typeEquality.js';
 
 // Build a fixture schema locally. The module augmentation below binds
@@ -51,7 +51,7 @@ const fixtureSchema = defineSchema({
 // Inside the repo that specifier resolves to nothing, and an augmentation of an
 // unresolved module silently becomes an ambient declaration that merges with
 // nothing, so the tests spell the workspace name.
-declare module '@ablo/transaction/types/global' {
+declare module '@abloatai/transaction/types/global' {
   interface Register {
     Schema: typeof fixtureSchema;
     UserMeta: { id: string; email: string };

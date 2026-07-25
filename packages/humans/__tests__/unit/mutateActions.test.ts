@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { InstanceCache as ObjectPool } from '../../src/local/InstanceCache';
 import { ModelRegistry, setActiveRegistry } from '../../src/local/ModelRegistry';
 import { Model } from '../../src/local/Model';
-import { defineSchema, model, field } from '@ablo/transaction/schema';
+import { defineSchema, model, field } from '@abloatai/transaction/schema';
 import type { SyncStoreContract } from '../../src/react/context';
 import { createMutateActions } from '../../src/local/mutators/mutateActions';
 import { ViewRegistry } from '../../src/local/views/ViewRegistry';

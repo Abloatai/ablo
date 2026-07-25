@@ -46,11 +46,11 @@
 // live in ./types. The engine vocabulary (Activity, WireClaim) lives
 // in ../types/streams.
 import type { PresenceAnnouncer, AgentContext } from './types.js';
-import type { Activity, WireClaim } from '@ablo/transaction/types/streams';
+import type { Activity, WireClaim } from '@abloatai/transaction/types/streams';
 import { createAgentSession } from './session.js';
 import { createConsoleLogger, resolveLogLevel } from './consoleLogger.js';
 export type { AgentContext } from './types.js';
-export type { WireClaim } from '@ablo/transaction/types/streams';
+export type { WireClaim } from '@abloatai/transaction/types/streams';
 
 /**
  * The record shape the sync server returns from its REST `/api/presence`
@@ -69,8 +69,8 @@ interface WirePeer {
   organizationId?: string;
   activeClaims?: WireClaim[];
 }
-import { AbloValidationError } from '@ablo/transaction/errors';
-import type { Logger } from '@ablo/transaction/logger';
+import { AbloValidationError } from '@abloatai/transaction/errors';
+import type { Logger } from '@abloatai/transaction/logger';
 
 export interface AgentOptions {
   /** Base URL of the sync server, e.g. `http://localhost:8080`. */

@@ -1,7 +1,7 @@
 import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { MutationPersistencePort } from '../../mutationPersistence.js';
 import type { MutationQueueConfig } from './MutationQueue.js';
-import type { CommitOutboxScope } from '@ablo/transaction/transactions/settlement/commitEnvelope';
+import type { CommitOutboxScope } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
 import type { QueuedMutation } from './commitPayload.js';
 import { MutationStore } from './MutationStore.js';
 import { normalizeModelKey } from './commitPayload.js';

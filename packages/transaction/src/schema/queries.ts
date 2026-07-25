@@ -10,7 +10,7 @@
  *   import { z } from 'zod';
  *   import {
  *     defineSchema, defineQueries, model, query, relation,
- *   } from '@ablo/transaction/schema';
+ *   } from '@abloatai/transaction/schema';
  *
  *   const schema = defineSchema({
  *     block: model(

@@ -3,7 +3,7 @@
  * flushing pending work, polling for a condition, or waiting a fixed delay.
  */
 
-import { AbloConnectionError } from '@ablo/transaction/errors';
+import { AbloConnectionError } from '@abloatai/transaction/errors';
 
 /**
  * Flushes all pending microtasks, such as resolved promises and

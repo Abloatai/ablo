@@ -10,9 +10,9 @@
  * quickstart loop walk (2026-06-10).
  */
 
-import { defineSchema } from '@ablo/transaction/schema/schema';
-import { model } from '@ablo/transaction/schema/model';
-import { field } from '@ablo/transaction/schema/field';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
+import { field } from '@abloatai/transaction/schema/field';
 import { toSchemaJSON } from '../serialize.js';
 import { diffSchema, generateMigrationPlan } from '../index.js';
 

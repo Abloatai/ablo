@@ -6,7 +6,7 @@
  * incoming rows. See {@link deriveSyncPlanFromSchema}.
  */
 
-import type { Schema } from '@ablo/transaction/schema/schema';
+import type { Schema } from '@abloatai/transaction/schema/schema';
 
 /** A foreign-key index to register on the in-memory object pool when the store is constructed. */
 export interface ForeignKeyIndexSpec {

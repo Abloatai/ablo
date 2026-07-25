@@ -1,4 +1,4 @@
-import { AbloConnectionError } from '@ablo/transaction/errors';
+import { AbloConnectionError } from '@abloatai/transaction/errors';
 import type { DatabaseInfo } from './DatabaseManager.js';
 import { deleteIDBWithTimeout } from './openIDBWithTimeout.js';
 import { v1PersistenceDatabaseNameForDeletion } from './v1PersistenceDeletion.js';

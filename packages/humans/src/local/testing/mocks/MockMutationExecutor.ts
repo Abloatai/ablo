@@ -12,8 +12,8 @@ import type {
   MutationOptions,
   MutationCommitResult as CommitResult,
 } from '../../interfaces/index.js';
-import type { StaleNotification } from '@ablo/transaction/coordination/schema';
-import { AbloError } from '@ablo/transaction/errors';
+import type { StaleNotification } from '@abloatai/transaction/coordination/schema';
+import { AbloError } from '@abloatai/transaction/errors';
 
 export interface CapturedMutation {
   method: string;

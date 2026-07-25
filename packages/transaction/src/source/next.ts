@@ -5,8 +5,8 @@
  * `POST` so your route file can export it in one line.
  *
  *   // app/api/ablo/source/route.ts
- *   import { dataSourceNext } from '@ablo/transaction/source/next';
- *   import { prismaDataSource } from '@ablo/transaction/source';
+ *   import { dataSourceNext } from '@abloatai/transaction/source/next';
+ *   import { prismaDataSource } from '@abloatai/transaction/source';
  *   import { schema } from '@/ablo/schema';
  *   import { prisma } from '@/lib/prisma';
  *

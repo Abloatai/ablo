@@ -4,8 +4,8 @@
  * authoritative read-back (framework defaults included), and for an idempotent
  * re-create of an existing id it is the EXISTING row, not the caller's input.
  */
-import { createHttpTransport } from '@ablo/transaction/transport/httpTransport';
-import { modelReadResponse } from '@ablo/transaction/testing/fixtures/httpResponses';
+import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
+import { modelReadResponse } from '@abloatai/transaction/testing/fixtures/httpResponses';
 
 type Json = Record<string, unknown>;
 

@@ -16,7 +16,7 @@ import type { Model } from './Model.js';
 import { Database } from './Database.js';
 import { InstanceCache } from './InstanceCache.js';
 import { getActiveRegistry } from './ModelRegistry.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 
 /**
  * Options for LazyReferenceCollection behavior

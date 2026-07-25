@@ -104,7 +104,7 @@
   "dependencies": {
     "isolated-vm": "^6.1.2",
     "zod": "^4.4.3",
-    "@ablo/transaction": "file:../transaction"
+    "@abloatai/transaction": "file:../transaction"
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.0",

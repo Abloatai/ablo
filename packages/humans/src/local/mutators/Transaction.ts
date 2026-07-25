@@ -14,11 +14,11 @@
  * bulk-insert method to learn.
  */
 
-import type { Schema } from '@ablo/transaction/schema/schema';
+import type { Schema } from '@abloatai/transaction/schema/schema';
 import type { SyncStoreContract } from '../storeContract.js';
 import { createMutateActions, type MutateActions } from './mutateActions.js';
 import { createReaderActions, type ReaderActions, type ReaderFindOptions } from './readerActions.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 
 /**
  * The full transaction surface: `tx.mutations.<key>.*` for writes and

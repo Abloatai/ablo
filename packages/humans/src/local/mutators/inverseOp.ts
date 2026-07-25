@@ -16,7 +16,7 @@
  */
 
 import { z } from 'zod';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 
 /** A row payload — JSON-shaped record used by create/createMany inverses. */
 const rowDataSchema = z.record(z.string(), z.unknown());

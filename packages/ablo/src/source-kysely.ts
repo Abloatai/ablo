@@ -1,1 +1,1 @@
-export * from '@ablo/transaction/source/kysely';
+export * from '@abloatai/transaction/source/kysely';

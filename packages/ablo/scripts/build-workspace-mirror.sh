@@ -77,8 +77,8 @@ cat > "$OUTPUT_DIR/package.json" <<'EOF'
   "license": "Apache-2.0",
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "npm run build --workspace=@ablo/transaction && npm run build --workspace=@ablo/humans && npm run build --workspace=@ablo/agent && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo",
-    "typecheck": "npm run typecheck --workspace=@ablo/transaction && npm run typecheck --workspace=@ablo/humans && npm run typecheck --workspace=@ablo/agent && npm run typecheck --workspace=@abloatai/cli && npm run typecheck --workspace=@abloatai/ablo",
+    "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@ablo/agent && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo",
+    "typecheck": "npm run typecheck --workspace=@abloatai/transaction && npm run typecheck --workspace=@abloatai/humans && npm run typecheck --workspace=@ablo/agent && npm run typecheck --workspace=@abloatai/cli && npm run typecheck --workspace=@abloatai/ablo",
     "test": "npm test --workspaces --if-present"
   }
 }
@@ -133,9 +133,9 @@ jobs:
       - name: Fresh-project quickstart
         run: npm run test:quickstart --workspace=@abloatai/cli
       - name: Tarball contents
-        run: npm pack --dry-run --workspace=@ablo/transaction --workspace=@ablo/humans --workspace=@abloatai/ablo --workspace=@abloatai/cli
+        run: npm pack --dry-run --workspace=@abloatai/transaction --workspace=@abloatai/humans --workspace=@abloatai/ablo --workspace=@abloatai/cli
       - name: Source-condition lifecycle
-        run: npm run pack:check --workspace=@ablo/transaction && npm run pack:check --workspace=@ablo/humans && npm run pack:check --workspace=@abloatai/ablo
+        run: npm run pack:check --workspace=@abloatai/transaction && npm run pack:check --workspace=@abloatai/humans && npm run pack:check --workspace=@abloatai/ablo
       - name: Package metadata
         run: npx publint --strict packages/transaction && npx publint --strict packages/humans && npx publint --strict packages/ablo && npx publint --strict packages/cli
       - name: Publish unpublished package versions

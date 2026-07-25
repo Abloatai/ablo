@@ -8,8 +8,8 @@
  * with no tests at all, and it had two of them.
  */
 
-import { targetsConflict, subTarget } from '@ablo/transaction/coordination';
-import { claimRequestSchema } from '@ablo/transaction/wire';
+import { targetsConflict, subTarget } from '@abloatai/transaction/coordination';
+import { claimRequestSchema } from '@abloatai/transaction/wire';
 
 describe('targetsConflict — whole-entity claims', () => {
   it('a claim naming no part of the row conflicts with everything under it', () => {

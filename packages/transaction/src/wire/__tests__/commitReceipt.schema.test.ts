@@ -3,7 +3,7 @@ import {
   commitExecutionResultSchema,
   commitReceiptSchema,
   mutationResultPayloadSchema,
-} from '@ablo/transaction/wire/commit';
+} from '@abloatai/transaction/wire/commit';
 
 const confirmedReceipt = {
   object: 'commit_receipt' as const,

@@ -90,7 +90,7 @@
 - Updated dependencies [16cc7d1]
 - Updated dependencies [08a3cad]
 - Updated dependencies [f60ed16]
-  - @ablo/transaction@0.37.0
-  - @ablo/humans@0.37.0
+  - @abloatai/transaction@0.37.0
+  - @abloatai/humans@0.37.0
 
 Release notes are generated from the repository changesets.

@@ -6,7 +6,7 @@
  * chains its own modifiers:
  *
  * ```ts
- * import { coordination } from '@ablo/transaction/schema';
+ * import { coordination } from '@abloatai/transaction/schema';
  *
  * conflict: coordination.humansOverwrite().agentsReject()
  * // → { user: 'overwrite', agent: 'reject' }  (a human's write wins, an agent's yields)

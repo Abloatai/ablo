@@ -15,7 +15,7 @@
  * teaches nothing and gets copy-pasted wrong.
  */
 
-import { listEnvelope } from '@ablo/transaction/wire';
+import { listEnvelope } from '@abloatai/transaction/wire';
 import type {
   ModelReadResponse,
   ModelListResponse,
@@ -23,8 +23,8 @@ import type {
   ClaimQueuedResponse,
   ClaimListResponse,
   ClaimHeartbeatReply,
-} from '@ablo/transaction/wire';
-import type { ModelClaim } from '@ablo/transaction/coordination';
+} from '@abloatai/transaction/wire';
+import type { ModelClaim } from '@abloatai/transaction/coordination';
 
 /** `GET /v1/models/{model}/{id}`. Pass `data: null` for a miss. */
 export function modelReadResponse(args: {

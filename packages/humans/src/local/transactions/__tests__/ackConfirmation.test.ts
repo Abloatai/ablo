@@ -23,13 +23,13 @@ import { createTestContext } from '../../testing/mocks/MockSyncContext.js';
 import type { TestContextResult } from '../../testing/mocks/MockSyncContext.js';
 import { createTaskFixture } from '../../testing/fixtures/models.js';
 import { waitFor } from '../../testing/helpers/wait.js';
-import type { StaleNotification } from '@ablo/transaction/coordination/schema';
-import { AbloConnectionError, AbloNotFoundError } from '@ablo/transaction/errors';
+import type { StaleNotification } from '@abloatai/transaction/coordination/schema';
+import { AbloConnectionError, AbloNotFoundError } from '@abloatai/transaction/errors';
 import type {
   DurableWriteStore,
   PendingWrite,
 } from '../mutations/durableWriteStore.js';
-import { commitEnvelopeRecordId } from '@ablo/transaction/transactions/settlement/commitEnvelope';
+import { commitEnvelopeRecordId } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
 
 class MemoryDurableWrites implements DurableWriteStore {
   readonly records = new Map<string, PendingWrite>();

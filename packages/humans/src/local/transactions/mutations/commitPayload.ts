@@ -11,11 +11,11 @@
 
 import { globalRuntime } from '../../context.js';
 import type { RuntimeContext } from '../../RuntimeContext.js';
-import { MutationOperationType } from '@ablo/transaction/types';
-import { snapshotJsonValue } from '@ablo/transaction/utils/json';
-import type { OnStaleMode } from '@ablo/transaction/coordination/schema';
+import { MutationOperationType } from '@abloatai/transaction/types';
+import { snapshotJsonValue } from '@abloatai/transaction/utils/json';
+import type { OnStaleMode } from '@abloatai/transaction/coordination/schema';
 import type { MutationOptions, WriteOptions } from '../../interfaces/index.js';
-import type { CommitEnvelopeMember } from '@ablo/transaction/transactions/settlement/commitEnvelope';
+import type { CommitEnvelopeMember } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
 
 export interface UserContext {
   userId: string;

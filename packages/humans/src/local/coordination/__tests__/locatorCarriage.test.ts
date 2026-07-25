@@ -31,9 +31,9 @@ import {
   wireTarget,
   modelTarget,
   streamTarget,
-} from '@ablo/transaction/coordination';
-import { claimRequestSchema } from '@ablo/transaction/wire';
-import { WsTransport } from '@ablo/transaction/transport/wsTransport';
+} from '@abloatai/transaction/coordination';
+import { claimRequestSchema } from '@abloatai/transaction/wire';
+import { WsTransport } from '@abloatai/transaction/transport/wsTransport';
 import {
   createClaimStream,
   type ClaimTransport,

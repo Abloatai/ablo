@@ -15,10 +15,10 @@ import {
   type ReferenceMetadata,
   PropertyType,
   LoadStrategy,
-} from '@ablo/transaction/types';
+} from '@abloatai/transaction/types';
 import { globalRuntime } from './context.js';
 import type { RuntimeContext } from './RuntimeContext.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 // Type-only — erased at runtime, so no Model ↔ ModelRegistry module cycle.
 import type { Model } from './Model.js';
 import type { ConcreteModelConstructor } from './BaseSyncedStore.js';

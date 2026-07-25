@@ -2,7 +2,7 @@ import { z } from 'zod';
 import {
   listEnvelope,
   listEnvelopeSchema,
-} from '@ablo/transaction/wire/listEnvelope';
+} from '@abloatai/transaction/wire/listEnvelope';
 
 const taskSchema = z.object({
   id: z.string(),

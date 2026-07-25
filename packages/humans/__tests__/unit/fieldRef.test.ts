@@ -16,9 +16,9 @@
 
 import { z } from 'zod';
 import { describe, expect, it } from '@jest/globals';
-import { defineSchema, model } from '@ablo/transaction/schema';
-import { subTarget } from '@ablo/transaction/coordination/locator';
-import { part } from '@ablo/transaction/coordination/schema';
+import { defineSchema, model } from '@abloatai/transaction/schema';
+import { subTarget } from '@abloatai/transaction/coordination/locator';
+import { part } from '@abloatai/transaction/coordination/schema';
 
 const schema = defineSchema({
   tasks: model({

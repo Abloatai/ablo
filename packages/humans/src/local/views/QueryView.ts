@@ -11,7 +11,7 @@
 
 import { observable, runInAction, type IObservableArray } from 'mobx';
 import { type Model, modelAsRow } from '../Model.js';
-import { ModelScope } from '@ablo/transaction/types';
+import { ModelScope } from '@abloatai/transaction/types';
 import type { ViewRegistry } from './ViewRegistry.js';
 import type { IncrementalView } from './incrementalView.js';
 import {

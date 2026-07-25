@@ -28,9 +28,9 @@ jobs:
       - name: Fresh-project quickstart
         run: npm run test:quickstart --workspace=@abloatai/cli
       - name: Tarball contents
-        run: npm pack --dry-run --workspace=@ablo/transaction --workspace=@ablo/humans --workspace=@abloatai/ablo --workspace=@abloatai/cli
+        run: npm pack --dry-run --workspace=@abloatai/transaction --workspace=@abloatai/humans --workspace=@abloatai/ablo --workspace=@abloatai/cli
       - name: Source-condition lifecycle
-        run: npm run pack:check --workspace=@ablo/transaction && npm run pack:check --workspace=@ablo/humans && npm run pack:check --workspace=@abloatai/ablo
+        run: npm run pack:check --workspace=@abloatai/transaction && npm run pack:check --workspace=@abloatai/humans && npm run pack:check --workspace=@abloatai/ablo
       - name: Package metadata
         run: npx publint --strict packages/transaction && npx publint --strict packages/humans && npx publint --strict packages/ablo && npx publint --strict packages/cli
       - name: Publish unpublished package versions

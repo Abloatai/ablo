@@ -11,7 +11,7 @@
  */
 
 import type { Model } from './Model.js';
-import type { ModelScope } from '@ablo/transaction/types';
+import type { ModelScope } from '@abloatai/transaction/types';
 import type { QueryView, QueryViewOptions } from './views/QueryView.js';
 import type { ViewRegistry } from './views/ViewRegistry.js';
 import type { ParticipantScope } from './sync/participants.js';

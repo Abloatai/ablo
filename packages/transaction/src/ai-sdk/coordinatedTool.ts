@@ -11,7 +11,7 @@
  * write:
  *
  * ```ts
- * import { coordinatedTool } from '@ablo/transaction/ai-sdk';
+ * import { coordinatedTool } from '@abloatai/transaction/ai-sdk';
  * import { z } from 'zod';
  *
  * const saveSection = coordinatedTool(ablo.documents, {
@@ -60,7 +60,7 @@
 
 import { tool } from 'ai';
 import type { z } from 'zod';
-import { AbloClaimedError, AbloNotFoundError } from '@ablo/transaction/errors';
+import { AbloClaimedError, AbloNotFoundError } from '@abloatai/transaction/errors';
 import type {
   ClaimParams,
   ModelRetrieveParams,

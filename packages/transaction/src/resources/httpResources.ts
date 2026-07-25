@@ -388,7 +388,7 @@ export interface CreateUserSessionParams<S extends SchemaRecord> {
   organizationId?: string;
   /** Sync groups this session may subscribe to — typed (`'default'` or
    *  `<namespace>:<id>`; build with `syncGroup(kind, id)` from
-   *  `@ablo/transaction/schema`). Omit for the server default:
+   *  `@abloatai/transaction/schema`). Omit for the server default:
    *  `[org:<your org>, user:<user.id>]`. */
   syncGroups?: readonly SyncGroupInput[];
   /** Required least-privilege grant. */
@@ -411,7 +411,7 @@ export interface CreateAgentSessionParams<S extends SchemaRecord> {
   can: CapabilityCan<S>;
   /** Sync groups this session may subscribe to — typed (`'default'` or
    *  `<namespace>:<id>`; build with `syncGroup(kind, id)` from
-   *  `@ablo/transaction/schema`). Omit for the server default: the org
+   *  `@abloatai/transaction/schema`). Omit for the server default: the org
    *  anchor (`org:<your org>`) + the agent's own anchor. */
   syncGroups?: readonly SyncGroupInput[];
   /** Token lifetime in seconds. Defaults to 900 (15 minutes). */

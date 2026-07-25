@@ -15,8 +15,8 @@ import {
   heartbeatCadenceMs,
   resolveHeartbeatPlan,
   startClaimHeartbeatLoop,
-} from '@ablo/transaction/coordination/claimHeartbeatLoop';
-import { AbloClaimedError, AbloConnectionError } from '@ablo/transaction/errors';
+} from '@abloatai/transaction/coordination/claimHeartbeatLoop';
+import { AbloClaimedError, AbloConnectionError } from '@abloatai/transaction/errors';
 
 describe('heartbeatCadenceMs', () => {
   it('defaults to a third of the TTL', () => {

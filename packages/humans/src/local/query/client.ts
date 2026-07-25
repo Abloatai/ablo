@@ -14,9 +14,9 @@
 
 import { z } from 'zod';
 import type { QueryBatch, QueryBatchResult } from './types.js';
-import { translateHttpError } from '@ablo/transaction/errors';
-import { classifyRecovery, type RecoveryClass } from '@ablo/transaction/errorCodes';
-import { withAuthHeaders, type AuthTokenGetter } from '@ablo/transaction/auth/credentialSource';
+import { translateHttpError } from '@abloatai/transaction/errors';
+import { classifyRecovery, type RecoveryClass } from '@abloatai/transaction/errorCodes';
+import { withAuthHeaders, type AuthTokenGetter } from '@abloatai/transaction/auth/credentialSource';
 import { globalRuntime } from '../context.js';
 import type { RuntimeContext } from '../RuntimeContext.js';
 

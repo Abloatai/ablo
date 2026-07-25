@@ -18,7 +18,7 @@ import {
   API_KEY_KINDS,
   API_KEY_ENVS,
   type ApiKeyKind,
-} from '@ablo/transaction/keys';
+} from '@abloatai/transaction/keys';
 
 describe('apiKeySchema (Zod-modeled key format)', () => {
   it('parses a minted key into typed parts', () => {

@@ -1,2 +1,2 @@
-export * from '@ablo/humans';
-export { Ablo as default } from '@ablo/humans';
+export * from '@abloatai/humans';
+export { Ablo as default } from '@abloatai/humans';

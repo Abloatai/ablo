@@ -5,7 +5,7 @@ import {
   AbloInternalContext,
   type QueuedMutation,
 } from '../reactRuntime.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 
 export interface MutationFailurePayload {
   transaction: QueuedMutation;

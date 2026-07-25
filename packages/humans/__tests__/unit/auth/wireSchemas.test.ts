@@ -1,4 +1,4 @@
-import { exchangeApiKey, resolveIdentity } from '@ablo/transaction/auth';
+import { exchangeApiKey, resolveIdentity } from '@abloatai/transaction/auth';
 
 function jsonResponse(
   body: unknown,

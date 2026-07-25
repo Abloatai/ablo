@@ -1,1 +1,1 @@
-export * from '@ablo/transaction/schema';
+export * from '@abloatai/transaction/schema';

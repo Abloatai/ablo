@@ -1,7 +1,7 @@
 import type {
   DurableWriteStore,
-} from '@ablo/transaction/durableWrites';
-import type { PendingWrite } from '@ablo/transaction/transactions/settlement/pendingWrite';
+} from '@abloatai/transaction/durableWrites';
+import type { PendingWrite } from '@abloatai/transaction/transactions/settlement/pendingWrite';
 
 export interface CommitOutboxDatabase {
   sealTransactionRecord(

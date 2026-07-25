@@ -13,7 +13,7 @@ import {
   deleteIDBWithTimeout,
   IDBOpenTimeoutError,
 } from './openIDBWithTimeout.js';
-import { AbloConnectionError } from '@ablo/transaction/errors';
+import { AbloConnectionError } from '@abloatai/transaction/errors';
 import { getActiveRegistry, hasActiveRegistry } from '../ModelRegistry.js';
 import {
   PERSISTENCE_NAMESPACE_VERSION,

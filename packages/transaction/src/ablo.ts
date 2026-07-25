@@ -16,7 +16,7 @@
  * ```
  *
  * The reactive materialiser — local store, live queries, presence rendering —
- * is provided by `@ablo/humans`, which layers
+ * is provided by `@abloatai/humans`, which layers
  * above this one and shares the same `ablo.<model>` surface (ADR 0016).
  */
 

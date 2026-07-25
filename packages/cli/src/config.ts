@@ -35,7 +35,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { readProjectApiKey, type ApiKeySource } from './dbRole';
-import type { KeyEnvironment } from '@ablo/transaction/environment';
+import type { KeyEnvironment } from '@abloatai/transaction/environment';
 
 // The CLI's `mode` selects which STORED KEY to present, so it is the engine's
 // credential axis rather than its plane axis — `ProfileKeys` holds one slot per

@@ -1,7 +1,7 @@
 import { InstanceCache } from '../InstanceCache.js';
 import { Model } from '../Model.js';
 import { ModelRegistry } from '../ModelRegistry.js';
-import { LoadStrategy } from '@ablo/transaction/types';
+import { LoadStrategy } from '@abloatai/transaction/types';
 
 class CacheRow extends Model {
   title: string;

@@ -10,8 +10,8 @@
 import { ModelRegistry } from '../ModelRegistry.js';
 import { ObjectStore } from './ObjectStore.js';
 import { SyncActionStore } from './SyncActionStore.js';
-import { LoadStrategy } from '@ablo/transaction/types';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { LoadStrategy } from '@abloatai/transaction/types';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 
 /**
  * StoreManager - Central manager for all ObjectStore instances

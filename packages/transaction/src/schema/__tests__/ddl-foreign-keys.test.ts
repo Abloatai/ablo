@@ -10,9 +10,9 @@
  */
 
 import { z } from 'zod';
-import { model } from '@ablo/transaction/schema/model';
-import { relation } from '@ablo/transaction/schema/relation';
-import { defineSchema } from '@ablo/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
+import { relation } from '@abloatai/transaction/schema/relation';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { toSchemaJSON } from '../serialize.js';
 import { generateProvisionPlan, generateMigrationPlan } from '../ddl.js';
 

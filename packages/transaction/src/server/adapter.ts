@@ -1,5 +1,5 @@
 /**
- * `@ablo/transaction/server` — the `DataAdapter` storage contract.
+ * `@abloatai/transaction/server` — the `DataAdapter` storage contract.
  *
  * A `DataAdapter` is the boundary between the sync engine and a database. The
  * engine asks it to do three things — `read` canonical rows, `commit` a change,

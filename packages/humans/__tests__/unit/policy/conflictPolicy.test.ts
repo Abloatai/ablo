@@ -14,7 +14,7 @@ import {
   type Conflict,
   type ConflictDecision,
   type ConflictPolicy,
-} from '@ablo/transaction/policy/types';
+} from '@abloatai/transaction/policy/types';
 
 const staleConflict: Conflict = {
   kind: 'stale_context',

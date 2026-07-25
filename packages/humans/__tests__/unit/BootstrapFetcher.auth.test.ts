@@ -1,5 +1,5 @@
 import { BootstrapFetcher } from '../../src/local/sync/BootstrapFetcher';
-import { createAuthCredentialSource } from '@ablo/transaction/auth/credentialSource';
+import { createAuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
 
 describe('BootstrapFetcher — shared auth source', () => {
   let originalFetch: typeof globalThis.fetch;

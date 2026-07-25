@@ -15,7 +15,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import pc from 'picocolors';
-import { classifyCredentialKind } from '@ablo/transaction/auth/credentialPolicy';
+import { classifyCredentialKind } from '@abloatai/transaction/auth/credentialPolicy';
 import { resolveApiKey, normalizeMode, type Mode } from './config';
 import { brand } from './theme';
 import { apiBaseUrl } from './push';

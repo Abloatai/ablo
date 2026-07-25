@@ -23,7 +23,7 @@ import type { Database } from '../../Database.js';
 import { createTestHarness } from '../../testing/helpers/syncEngineHarness.js';
 import type { TestHarness } from '../../testing/helpers/syncEngineHarness.js';
 import { createTaskFixture } from '../../testing/fixtures/models.js';
-import { ModelScope } from '@ablo/transaction/types';
+import { ModelScope } from '@abloatai/transaction/types';
 import type {
   DurableWriteStore,
   PendingWrite,

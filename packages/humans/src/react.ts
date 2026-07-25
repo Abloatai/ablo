@@ -58,9 +58,9 @@ export type {
   ResolveUserMeta,
   ResolveClaimMeta,
   ResolveModelKey,
-} from '@ablo/transaction/types/global';
+} from '@abloatai/transaction/types/global';
 
-export { ModelScope } from '@ablo/transaction/types';
+export { ModelScope } from '@abloatai/transaction/types';
 export type { SyncStoreContract } from './react/context.js';
 export type { MutateActions } from './local/mutators/mutateActions.js';
 export type {

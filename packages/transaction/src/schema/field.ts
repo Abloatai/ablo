@@ -7,7 +7,7 @@
  * chaining, and {@link resolveFieldMeta} reads it back out as a {@link FieldMeta}.
  *
  * Usage:
- *   import { field } from '@ablo/transaction/schema';
+ *   import { field } from '@abloatai/transaction/schema';
  *
  *   const tasks = model({
  *     title: field.string(),

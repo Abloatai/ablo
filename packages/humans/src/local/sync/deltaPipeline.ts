@@ -17,7 +17,7 @@ import type { RuntimeContext } from '../RuntimeContext.js';
 import { ModelScope } from '../InstanceCache.js';
 import type { Model } from '../Model.js';
 import type { SyncDelta } from './SyncWebSocket.js';
-import type { ModelData } from '@ablo/transaction/types/modelData';
+import type { ModelData } from '@abloatai/transaction/types/modelData';
 import {
   runStage,
   pluginsForStage,

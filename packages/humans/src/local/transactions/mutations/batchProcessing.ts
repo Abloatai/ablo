@@ -3,13 +3,13 @@ import type { MutationQueueConfig } from './MutationQueue.js';
 import type { MutationInput, QueuedMutation } from './commitPayload.js';
 import type { MutationStore } from './MutationStore.js';
 import type { OptimisticUpdateEntry } from './localMutation.js';
-import type { StaleNotification } from '@ablo/transaction/coordination/schema';
+import type { StaleNotification } from '@abloatai/transaction/coordination/schema';
 import type { DeltaConfirmationTracker } from './deltaConfirmation.js';
-import type { MutationCommitResult } from '@ablo/transaction/wire/commit';
-import type { DurableCommitEnvelope } from '@ablo/transaction/transactions/settlement/commitEnvelope';
-import { AbloError, AbloNotFoundError } from '@ablo/transaction/errors';
+import type { MutationCommitResult } from '@abloatai/transaction/wire/commit';
+import type { DurableCommitEnvelope } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import { AbloError, AbloNotFoundError } from '@abloatai/transaction/errors';
 import { applyWriteOptions, normalizeModelKey, TX_TYPE_TO_MUTATION_OP, type WriteOperationFields } from './commitPayload.js';
-import type { MutationOperationType } from '@ablo/transaction/types';
+import type { MutationOperationType } from '@abloatai/transaction/types';
 
 export interface BatchProcessingContext {
   readonly runtime: RuntimeContext;

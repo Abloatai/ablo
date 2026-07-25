@@ -3,7 +3,7 @@
  * the browser. See {@link ObjectStore}.
  */
 
-import type { ModelMetadata } from '@ablo/transaction/types';
+import type { ModelMetadata } from '@abloatai/transaction/types';
 import type { ObjectStoreContract } from './ObjectStoreContract.js';
 
 /**

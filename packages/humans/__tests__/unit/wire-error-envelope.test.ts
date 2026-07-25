@@ -26,9 +26,9 @@ import {
   errorEnvelopeSchema,
   statusForType,
   INTERNAL_ERROR_PUBLIC_MESSAGE,
-} from '@ablo/transaction/wire/errorEnvelope';
-import { AbloError, AbloValidationError } from '@ablo/transaction/errors';
-import { errorCodeSpec } from '@ablo/transaction/errorCodes';
+} from '@abloatai/transaction/wire/errorEnvelope';
+import { AbloError, AbloValidationError } from '@abloatai/transaction/errors';
+import { errorCodeSpec } from '@abloatai/transaction/errorCodes';
 
 describe('wire errorEnvelope — unknown-error masking', () => {
   it('masks a plain Error to the constant public message (no raw driver text)', () => {

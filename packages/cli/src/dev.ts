@@ -20,13 +20,13 @@
  *   ablo dev --no-watch
  */
 
-import { AbloValidationError } from '@ablo/transaction/errors';
-import { classifyCredentialKind } from '@ablo/transaction/auth/credentialPolicy';
+import { AbloValidationError } from '@abloatai/transaction/errors';
+import { classifyCredentialKind } from '@abloatai/transaction/auth/credentialPolicy';
 import pc from 'picocolors';
 import { spinner } from '@clack/prompts';
 import { watch, existsSync, readFileSync, writeFileSync, appendFileSync } from 'fs';
 import { resolve } from 'path';
-import { schemaHash, type Schema } from '@ablo/transaction/schema';
+import { schemaHash, type Schema } from '@abloatai/transaction/schema';
 import {
   loadSchema,
   pushSchema,

@@ -2,7 +2,7 @@ import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { MutationQueueConfig } from './MutationQueue.js';
 import type { QueuedMutation } from './commitPayload.js';
 import type { MutationStore } from './MutationStore.js';
-import { AbloError } from '@ablo/transaction/errors';
+import { AbloError } from '@abloatai/transaction/errors';
 import { extractStatusCode } from './commitPayload.js';
 
 export interface FailureHandlingContext {

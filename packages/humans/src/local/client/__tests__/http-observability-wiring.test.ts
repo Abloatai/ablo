@@ -10,14 +10,14 @@
  * only thing stubbed — no fabricated domain logic), asserting the two seams the
  * WS transport already had: claim acquired + coordination-conflict rejection.
  */
-import { createHttpTransport } from '@ablo/transaction/transport/httpTransport';
+import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
 import { ClaimLog } from '../../coordination/ClaimLog.js';
 import {
   claimAcquiredResponse,
   claimListResponse,
   modelClaim,
   modelReadResponse,
-} from '@ablo/transaction/testing/fixtures/httpResponses';
+} from '@abloatai/transaction/testing/fixtures/httpResponses';
 
 type Json = Record<string, unknown>;
 

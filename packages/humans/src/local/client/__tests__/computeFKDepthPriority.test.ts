@@ -24,7 +24,7 @@
  */
 
 import { z } from 'zod';
-import { defineSchema, model, relation } from '@ablo/transaction/schema';
+import { defineSchema, model, relation } from '@abloatai/transaction/schema';
 import { computeFKDepthPriority } from '../schemaConfig.js';
 
 /** Convenience: build the priority map from a schema literal. */

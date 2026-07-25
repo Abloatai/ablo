@@ -36,10 +36,10 @@
  *                            from a prior integration; reports, never drops.
  */
 
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import pc from 'picocolors';
 import postgres from 'postgres';
-import { ABLO_FOOTPRINT, type FootprintKind } from '@ablo/transaction/footprint';
+import { ABLO_FOOTPRINT, type FootprintKind } from '@abloatai/transaction/footprint';
 import {
   readProjectWriteDatabaseUrl,
   readProjectReplicationUrlWithSource,

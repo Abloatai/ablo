@@ -19,9 +19,9 @@
  */
 
 import { z } from 'zod';
-import { defineSchema } from '@ablo/transaction/schema/schema';
-import { model } from '@ablo/transaction/schema/model';
-import { syncGroupInputSchema } from '@ablo/transaction/schema/roles';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
+import { syncGroupInputSchema } from '@abloatai/transaction/schema/roles';
 import {
   resolveParticipantSyncGroups,
   syncGroupFromEntityRef,

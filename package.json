@@ -6,8 +6,8 @@
   "license": "Apache-2.0",
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "npm run build --workspace=@ablo/transaction && npm run build --workspace=@ablo/humans && npm run build --workspace=@ablo/agent && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo",
-    "typecheck": "npm run typecheck --workspace=@ablo/transaction && npm run typecheck --workspace=@ablo/humans && npm run typecheck --workspace=@ablo/agent && npm run typecheck --workspace=@abloatai/cli && npm run typecheck --workspace=@abloatai/ablo",
+    "build": "npm run build --workspace=@abloatai/transaction && npm run build --workspace=@abloatai/humans && npm run build --workspace=@ablo/agent && npm run build --workspace=@abloatai/cli && npm run build --workspace=@abloatai/ablo",
+    "typecheck": "npm run typecheck --workspace=@abloatai/transaction && npm run typecheck --workspace=@abloatai/humans && npm run typecheck --workspace=@ablo/agent && npm run typecheck --workspace=@abloatai/cli && npm run typecheck --workspace=@abloatai/ablo",
     "test": "npm test --workspaces --if-present"
   }
 }

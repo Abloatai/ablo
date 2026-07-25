@@ -12,8 +12,8 @@
  */
 
 import { makeObservable, observable, action, computed, runInAction } from 'mobx';
-import { AbloConnectionError, AbloValidationError, toAbloError } from '@ablo/transaction/errors';
-import type { RecoveryClass } from '@ablo/transaction/errorCodes';
+import { AbloConnectionError, AbloValidationError, toAbloError } from '@abloatai/transaction/errors';
+import type { RecoveryClass } from '@abloatai/transaction/errorCodes';
 import { ConnectionManager } from './sync/ConnectionManager.js';
 import { contextLogger, contextSocketObservability } from './sync/contextPorts.js';
 import { SubscriptionManager } from './sync/SubscriptionManager.js';
@@ -26,7 +26,7 @@ import type { Database, BootstrapResult, BootstrapRequirements } from './Databas
 import type { BootstrapData } from './sync/BootstrapFetcher.js';
 import type { InstanceCache } from './InstanceCache.js';
 import { ModelRegistry } from './ModelRegistry.js';
-import { PropertyType } from '@ablo/transaction/types';
+import { PropertyType } from '@abloatai/transaction/types';
 import {
   SyncWebSocket,
   type SyncDelta,
@@ -45,15 +45,15 @@ import { Model, rowAsModel } from './Model.js';
 import { globalRuntime } from './context.js';
 import type { RuntimeContext } from './RuntimeContext.js';
 import type { AbloPlugin, AppliedChange } from '../plugin.js';
-import { AbloSessionError, isAccessCredentialExpiryCloseReason } from '@ablo/transaction/errors';
+import { AbloSessionError, isAccessCredentialExpiryCloseReason } from '@abloatai/transaction/errors';
 import { ModelScope } from './InstanceCache.js';
 import { LazyReferenceCollection } from './LazyReferenceCollection.js';
-import type { Schema } from '@ablo/transaction/schema/schema';
+import type { Schema } from '@abloatai/transaction/schema/schema';
 // The store contract types (SyncStoreContract, LocalMutation, SyncStatus)
 // live in a React-free core module and are re-exported for React consumers.
 import type { SyncStatus, SyncStoreContract, LocalMutation } from './storeContract.js';
-import type { AuthCredentialSource } from '@ablo/transaction/auth/credentialSource';
-import type { ModelData } from '@ablo/transaction/types/modelData';
+import type { AuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
+import type { ModelData } from '@abloatai/transaction/types/modelData';
 import { deriveSyncPlanFromSchema } from './sync/syncPlan.js';
 import type { EnrichmentPlanEntry, ForeignKeyIndexSpec } from './sync/syncPlan.js';
 import { CredentialLifecycle, type CredentialRefresher } from './sync/credentialLifecycle.js';
@@ -72,7 +72,7 @@ import * as bootstrapApply from './sync/bootstrapApply.js';
 import type { PoolContext, RehydrationStats } from './sync/bootstrapApply.js';
 import * as deltaPipeline from './sync/deltaPipeline.js';
 import type { DeltaPipelineContext } from './sync/deltaPipeline.js';
-import type { ParticipantKind } from '@ablo/transaction/types/participant';
+import type { ParticipantKind } from '@abloatai/transaction/types/participant';
 import { queryByClass as runQueryByClass, countModels } from './store/queryApi.js';
 import type { QueuedMutation } from './transactions/mutations/MutationQueue.js';
 import type { CommitLatencySample } from './transactions/mutations/commitLatency.js';
@@ -88,7 +88,7 @@ export type ConcreteModelConstructor<T extends Model> = new (data?: any) => T;
 
 // ModelData is defined in a separate module to break the type cycle between
 // BaseSyncedStore and SyncClient, and is re-exported here.
-export type { ModelData } from '@ablo/transaction/types/modelData';
+export type { ModelData } from '@abloatai/transaction/types/modelData';
 
 /** Query result interface */
 export interface QueryResult<T extends Model> {
@@ -1800,7 +1800,7 @@ export class BaseSyncedStore<
   create<K extends keyof TSchema['models'] & string>(
     typename: K,
     data: Record<string, unknown>,
-  ): import('@ablo/transaction/schema/schema').Model<TSchema, K> | null {
+  ): import('@abloatai/transaction/schema/schema').Model<TSchema, K> | null {
     if (!this.schema) {
       throw new AbloValidationError(
         'store.create requires a schema to be passed to the BaseSyncedStore constructor.',
@@ -1815,7 +1815,7 @@ export class BaseSyncedStore<
     // built from the same Zod shape), TypeScript just can't unify the SDK's
     // static `Model` class with the schema's object-literal type.
     return this.objectPool.create(wireTypename, data) as
-      | import('@ablo/transaction/schema/schema').Model<TSchema, K>
+      | import('@abloatai/transaction/schema/schema').Model<TSchema, K>
       | null;
   }
 

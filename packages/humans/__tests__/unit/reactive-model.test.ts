@@ -12,10 +12,10 @@
 
 import { z } from 'zod';
 import { autorun, runInAction } from 'mobx';
-import { model } from '@ablo/transaction/schema/model';
-import { field } from '@ablo/transaction/schema/field';
-import { relation } from '@ablo/transaction/schema/relation';
-import { defineSchema } from '@ablo/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
+import { field } from '@abloatai/transaction/schema/field';
+import { relation } from '@abloatai/transaction/schema/relation';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { Ablo, type InternalAbloOptions } from '../../src/Ablo';
 import { Model } from '../../src/local/Model';
 import type { InstanceCache as ObjectPool } from '../../src/local/InstanceCache';

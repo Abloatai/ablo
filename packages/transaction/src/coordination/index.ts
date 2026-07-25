@@ -1,5 +1,5 @@
 /**
- * The `@ablo/transaction/coordination` entry point. It re-exports the wire
+ * The `@abloatai/transaction/coordination` entry point. It re-exports the wire
  * schemas and inferred types for the three coordination layers: presence (who
  * is currently active), claims (taking exclusive hold of a target before
  * writing it), and stale-context guards (rejecting a write that was based on an

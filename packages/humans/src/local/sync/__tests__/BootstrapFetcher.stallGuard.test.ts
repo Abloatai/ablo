@@ -13,7 +13,7 @@
  */
 import { BootstrapFetcher } from '../BootstrapFetcher.js';
 import { createTestContext } from '../../testing/mocks/MockSyncContext.js';
-import { AbloConnectionError } from '@ablo/transaction/errors';
+import { AbloConnectionError } from '@abloatai/transaction/errors';
 
 const encoder = new TextEncoder();
 

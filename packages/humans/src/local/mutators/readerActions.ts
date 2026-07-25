@@ -1,5 +1,5 @@
-import type { Schema, InferModel } from '@ablo/transaction/schema/schema';
-import type { ModelDef } from '@ablo/transaction/schema/model';
+import type { Schema, InferModel } from '@abloatai/transaction/schema/schema';
+import type { ModelDef } from '@abloatai/transaction/schema/model';
 // Type-only — see the note in `mutateActions.ts`.
 import type { SyncStoreContract } from '../storeContract.js';
 

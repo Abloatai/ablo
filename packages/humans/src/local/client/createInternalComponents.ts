@@ -14,10 +14,10 @@ import { InstanceCache } from '../InstanceCache.js';
 import { SyncClient } from '../SyncClient.js';
 import { OnDemandLoader } from '../sync/OnDemandLoader.js';
 import { BootstrapFetcher } from '../sync/BootstrapFetcher.js';
-import type { AuthCredentialSource } from '@ablo/transaction/auth/credentialSource';
-import type { Schema, SchemaRecord } from '@ablo/transaction/schema/schema';
-import { loadsAtBootstrap, type LoadStrategy } from '@ablo/transaction/schema/loadStrategy';
-import { resolveBootstrapBaseUrl } from '@ablo/transaction/auth/apiKey';
+import type { AuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
+import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
+import { loadsAtBootstrap, type LoadStrategy } from '@abloatai/transaction/schema/loadStrategy';
+import { resolveBootstrapBaseUrl } from '@abloatai/transaction/auth/apiKey';
 import {
   shouldUseInMemoryPersistence,
   type AbloPersistence,
@@ -25,10 +25,10 @@ import {
 import type {
   DurableWriteStore,
   DurableWritesConfig,
-} from '@ablo/transaction/durableWrites';
+} from '@abloatai/transaction/durableWrites';
 import type { RuntimeContext } from '../RuntimeContext.js';
 import { globalRuntime } from '../context.js';
-import { resolveDurableWrites } from '@ablo/transaction/durableWrites';
+import { resolveDurableWrites } from '@abloatai/transaction/durableWrites';
 
 export interface InternalComponentsInput<S extends SchemaRecord> {
   readonly schema: Schema<S>;

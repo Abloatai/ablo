@@ -11,14 +11,14 @@
 import { runInAction } from 'mobx';
 import { InstanceCache, ModelScope } from './InstanceCache.js';
 import { Model } from './Model.js';
-import type { ModelData } from '@ablo/transaction/types/modelData';
+import type { ModelData } from '@abloatai/transaction/types/modelData';
 import type { AppliedChange } from '../plugin.js';
-import { snapshotJsonValue } from '@ablo/transaction/utils/json';
+import { snapshotJsonValue } from '@abloatai/transaction/utils/json';
 // ModelRegistry instance accessed via this.objectPool.registry
-import { LoadStrategy } from '@ablo/transaction/types';
+import { LoadStrategy } from '@abloatai/transaction/types';
 import { globalRuntime } from './context.js';
 import type { RuntimeContext } from './RuntimeContext.js';
-import { AbloAuthenticationError, AbloError, AbloValidationError } from '@ablo/transaction/errors';
+import { AbloAuthenticationError, AbloError, AbloValidationError } from '@abloatai/transaction/errors';
 import { EventEmitter } from 'events';
 import { NetworkMonitor } from './NetworkMonitor.js';
 import {

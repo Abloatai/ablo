@@ -1,15 +1,15 @@
 import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { MutationExecutor } from '../../interfaces/index.js';
-import type { ReadDependency, TrackDependency } from '@ablo/transaction/coordination/schema';
+import type { ReadDependency, TrackDependency } from '@abloatai/transaction/coordination/schema';
 import {
   AbloConnectionError,
   AbloError,
   AbloIdempotencyError,
-} from '@ablo/transaction/errors';
+} from '@abloatai/transaction/errors';
 import {
   mutationCommitResultSchema,
   type MutationCommitResult,
-} from '@ablo/transaction/wire/commit';
+} from '@abloatai/transaction/wire/commit';
 import {
   createDurableCommitEnvelope,
   commitEnvelopeRecordId,
@@ -17,7 +17,7 @@ import {
   type CommitOutboxScope,
   type DurableCommitEnvelope,
   type DurableCommitOperation,
-} from '@ablo/transaction/transactions/settlement/commitEnvelope';
+} from '@abloatai/transaction/transactions/settlement/commitEnvelope';
 import type { DurableWriteStore } from './durableWriteStore.js';
 
 export interface CommitTransportContext {

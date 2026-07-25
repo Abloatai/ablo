@@ -11,7 +11,7 @@
  * one, so a stateless agent had no typed way to say "keep telling me about this
  * row". These pin the body it sends and the notifications it hands back.
  */
-import { createHttpTransport } from '@ablo/transaction/transport/httpTransport';
+import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
 
 type Json = Record<string, unknown>;
 

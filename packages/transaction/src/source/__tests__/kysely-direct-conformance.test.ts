@@ -1,6 +1,6 @@
-import { field } from '@ablo/transaction/schema/field';
-import { model } from '@ablo/transaction/schema/model';
-import { defineSchema } from '@ablo/transaction/schema/schema';
+import { field } from '@abloatai/transaction/schema/field';
+import { model } from '@abloatai/transaction/schema/model';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
 import type { Row } from '../adapter.js';
 import { runMutationTests } from '../conformance.js';
 import type { ChangeSet, Operation } from '../contract.js';

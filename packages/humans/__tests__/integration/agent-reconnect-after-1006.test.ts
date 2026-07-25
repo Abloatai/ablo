@@ -23,8 +23,8 @@
  */
 
 import { z } from 'zod';
-import { defineSchema } from '@ablo/transaction/schema';
-import { model } from '@ablo/transaction/schema/model';
+import { defineSchema } from '@abloatai/transaction/schema';
+import { model } from '@abloatai/transaction/schema/model';
 import { Ablo, type InternalAbloOptions } from '../../src/Ablo';
 
 // `Ablo()`'s public overload (`AbloOptions`) hides internal-only knobs

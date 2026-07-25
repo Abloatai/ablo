@@ -6,7 +6,7 @@
  * client sync logic without a live server.
  */
 
-import type { BootstrapType } from '@ablo/transaction/types';
+import type { BootstrapType } from '@abloatai/transaction/types';
 
 export type BootstrapModelData = Record<string, Record<string, unknown>[]>;
 

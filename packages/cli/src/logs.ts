@@ -12,13 +12,13 @@
  *   ablo logs --since 15m --json  # last 15m as NDJSON, then stream
  */
 
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import {
   parseFeedCursor,
   formatFeedCursor,
   feedCursorAdvanced,
   FEED_CURSOR_START,
-} from '@ablo/transaction/wire';
+} from '@abloatai/transaction/wire';
 import pc from 'picocolors';
 import { resolveApiKey, normalizeMode, type Mode } from './config';
 import { brand } from './theme';

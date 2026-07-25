@@ -8,13 +8,13 @@
 import { EventEmitter } from 'events';
 import { describe, it, expect } from '@jest/globals';
 import { createClaimStream, type ClaimTransport } from '../createClaimStream.js';
-import type { ClaimLost } from '@ablo/transaction/types/streams';
+import type { ClaimLost } from '@abloatai/transaction/types/streams';
 import {
   dispatchWsFrame,
   type WsSession,
-} from '@ablo/transaction/transport/wsFrameHandlers';
-import { noopLogger } from '@ablo/transaction/logger';
-import { noopSocketObservability } from '@ablo/transaction/observability';
+} from '@abloatai/transaction/transport/wsFrameHandlers';
+import { noopLogger } from '@abloatai/transaction/logger';
+import { noopSocketObservability } from '@abloatai/transaction/observability';
 
 /**
  * A `ClaimTransport` backed by a real EventEmitter, plus a test-only `emit` to

@@ -18,19 +18,19 @@
  */
 
 import pc from 'picocolors';
-import { AbloValidationError, translateHttpError } from '@ablo/transaction/errors';
-import { classifyCredentialKind } from '@ablo/transaction/auth/credentialPolicy';
+import { AbloValidationError, translateHttpError } from '@abloatai/transaction/errors';
+import { classifyCredentialKind } from '@abloatai/transaction/auth/credentialPolicy';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { execFileSync } from 'child_process';
 import { confirm, text, isCancel, cancel } from '@clack/prompts';
-import { serializeSchema, schemaHash, type Schema } from '@ablo/transaction/schema';
-import { ABLO_DEFAULT_BASE_URL } from '@ablo/transaction/auth/hostedEndpoints';
+import { serializeSchema, schemaHash, type Schema } from '@abloatai/transaction/schema';
+import { ABLO_DEFAULT_BASE_URL } from '@abloatai/transaction/auth/hostedEndpoints';
 import { resolveEffectiveApiKey, type EffectiveKeySource } from './config';
 import { resolveTarget, describeMismatches, type ResolvedTarget } from './target';
 import { brand } from './theme';
 import { renderCliError } from './renderError';
-import { participantKindSchema } from '@ablo/transaction/coordination/schema';
+import { participantKindSchema } from '@abloatai/transaction/coordination/schema';
 
 export interface PushArgs {
   schemaPath: string;

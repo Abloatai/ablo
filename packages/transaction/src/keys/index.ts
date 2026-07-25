@@ -3,7 +3,7 @@
  * place so every component that issues or checks a key agrees on the format.
  *
  * This module uses `node:crypto` and is therefore Node-only. It is published on
- * the `@ablo/transaction/keys` subpath and kept off the main browser-facing entry
+ * the `@abloatai/transaction/keys` subpath and kept off the main browser-facing entry
  * so a browser bundle never pulls in `node:crypto`.
  *
  * A key looks like `<sk|rk|ek|pk>_<live|test>_<30 base62 chars><6-char base62

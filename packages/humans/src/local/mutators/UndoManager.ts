@@ -14,7 +14,7 @@
  * {@link UndoScope.clear} on a sync error if you need strict correctness.
  */
 
-import type { Schema } from '@ablo/transaction/schema/schema';
+import type { Schema } from '@abloatai/transaction/schema/schema';
 import { getContext } from '../context.js';
 import type { SyncStoreContract, LocalMutation } from '../storeContract.js';
 import { createTransaction, type Transaction } from './Transaction.js';

@@ -9,19 +9,19 @@
  * engine.
  */
 
-import type { SchemaRecord, Schema } from '@ablo/transaction/schema/schema';
-import type { ParticipantKind } from '@ablo/transaction/types/participant';
-import type { Logger } from '@ablo/transaction/logger';
-import type { AuthCredentialSource } from '@ablo/transaction/auth/credentialSource';
-import type { RefreshScheduler } from '@ablo/transaction/auth';
-import type { CredentialProvider } from '@ablo/transaction/auth/apiKey';
-import { resolveParticipantIdentity } from '@ablo/transaction/auth/identity';
+import type { SchemaRecord, Schema } from '@abloatai/transaction/schema/schema';
+import type { ParticipantKind } from '@abloatai/transaction/types/participant';
+import type { Logger } from '@abloatai/transaction/logger';
+import type { AuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
+import type { RefreshScheduler } from '@abloatai/transaction/auth';
+import type { CredentialProvider } from '@abloatai/transaction/auth/apiKey';
+import { resolveParticipantIdentity } from '@abloatai/transaction/auth/identity';
 import {
   AbloAuthenticationError,
   AbloConnectionError,
   toAbloError,
-} from '@ablo/transaction/errors';
-import type { AbloError } from '@ablo/transaction/errors';
+} from '@abloatai/transaction/errors';
+import type { AbloError } from '@abloatai/transaction/errors';
 import type { InternalAbloOptions } from './options.js';
 import type { StoreCluster } from './storeCluster.js';
 

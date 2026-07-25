@@ -22,7 +22,7 @@ import { resolveTarget, describeMismatches, type ResolvedTarget } from './target
 import { credentialCapability } from './credentialCapability';
 import { brand } from './theme';
 import { apiBaseUrl } from './push';
-import { participantKindSchema } from '@ablo/transaction/coordination/schema';
+import { participantKindSchema } from '@abloatai/transaction/coordination/schema';
 import {
   fetchRoutingState,
   fetchPushedSchema,

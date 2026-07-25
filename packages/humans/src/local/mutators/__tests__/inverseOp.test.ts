@@ -6,7 +6,7 @@
  * later inside applyOps.
  */
 
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import {
   inverseOpSchema,
   undoEntrySchema,

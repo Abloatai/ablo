@@ -20,9 +20,9 @@ import { registerModelsFromSchema } from '../../client/modelRegistration.js';
 import { createTestHarness } from '../../testing/helpers/syncEngineHarness.js';
 import type { TestHarness } from '../../testing/helpers/syncEngineHarness.js';
 import { createTaskFixture } from '../../testing/fixtures/models.js';
-import { defineSchema } from '@ablo/transaction/schema/schema';
-import { model } from '@ablo/transaction/schema/model';
-import { ModelScope } from '@ablo/transaction/types';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
+import { ModelScope } from '@abloatai/transaction/types';
 import type {
   DurableWriteStore,
   PendingWrite,

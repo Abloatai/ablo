@@ -12,7 +12,7 @@ import {
   ABLO_REPLICATION_SLOT,
   type FootprintPlane,
   type FootprintArtifact,
-} from '@ablo/transaction/footprint';
+} from '@abloatai/transaction/footprint';
 
 const ORG = 'org_2b8f1c';
 const base: FootprintPlane = { organizationId: ORG, environment: 'production' };

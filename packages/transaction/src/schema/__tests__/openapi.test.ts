@@ -5,8 +5,8 @@
  * Bearer security scheme, and the `/v1/commits` route.
  */
 import { defineSchema, model, z } from '../index.js';
-import { abloOpenApi, schemaToOpenApi } from '@ablo/transaction/schema/openapi';
-import { commitRequestSchema } from '@ablo/transaction/wire';
+import { abloOpenApi, schemaToOpenApi } from '@abloatai/transaction/schema/openapi';
+import { commitRequestSchema } from '@abloatai/transaction/wire';
 
 const schema = defineSchema({
   tasks: model({

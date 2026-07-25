@@ -23,19 +23,19 @@
  *       `leave`.
  */
 
-import type { WsTransport } from '@ablo/transaction/transport/wsTransport';
-import type { PresenceUpdate } from '@ablo/transaction/transport/wsTransport';
+import type { WsTransport } from '@abloatai/transaction/transport/wsTransport';
+import type { PresenceUpdate } from '@abloatai/transaction/transport/wsTransport';
 import type {
   Activity,
   Peer,
   PresenceStream,
   PresenceTarget,
-} from '@ablo/transaction/types/streams';
+} from '@abloatai/transaction/types/streams';
 
-import { asyncIteratorFrom } from '@ablo/transaction/utils/asyncIterator';
-import { participantKindFromWire } from '@ablo/transaction/coordination/schema';
-import { isTargetTuple, subTarget, wireTarget } from '@ablo/transaction/coordination';
-import type { ParticipantKind } from '@ablo/transaction/types/participant';
+import { asyncIteratorFrom } from '@abloatai/transaction/utils/asyncIterator';
+import { participantKindFromWire } from '@abloatai/transaction/coordination/schema';
+import { isTargetTuple, subTarget, wireTarget } from '@abloatai/transaction/coordination';
+import type { ParticipantKind } from '@abloatai/transaction/types/participant';
 
 /**
  * The wire capability the presence stream actually uses: subscribe to typed

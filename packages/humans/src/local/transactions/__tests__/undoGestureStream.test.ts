@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { InstanceCache as ObjectPool } from '../../InstanceCache.js';
 import { ModelRegistry, setActiveRegistry } from '../../ModelRegistry.js';
 import { Model } from '../../Model.js';
-import { defineSchema, model } from '@ablo/transaction/schema';
+import { defineSchema, model } from '@abloatai/transaction/schema';
 import { UndoScope } from '../../mutators/UndoManager.js';
 import { createTransaction } from '../../mutators/Transaction.js';
 import {

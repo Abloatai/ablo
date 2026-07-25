@@ -4,7 +4,7 @@
  * CONTRACT — the human materializer resolves typed retrieve()/list() values.
  *
  * The request/response counterpart is owned and tested by
- * `@ablo/transaction`; this suite pins only the local reactive surface.
+ * `@abloatai/transaction`; this suite pins only the local reactive surface.
  */
 
 import {
@@ -20,7 +20,7 @@ import type { SyncClient } from '../../src/local/SyncClient';
 import { ModelRegistry } from '../../src/local/ModelRegistry';
 import { InstanceCache as ObjectPool } from '../../src/local/InstanceCache';
 import { Model } from '../../src/local/Model';
-import { LoadStrategy } from '@ablo/transaction/types';
+import { LoadStrategy } from '@abloatai/transaction/types';
 
 // ── Compile-time pins (surface.ts idiom) ────────────────────────────────────
 // Invariant type-equality: true only when A and B are mutually assignable. The

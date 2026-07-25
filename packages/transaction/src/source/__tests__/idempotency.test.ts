@@ -5,7 +5,7 @@ import {
   sourceEchoTransactionIdSchema,
   SOURCE_IDEMPOTENCY_RETENTION,
 } from '../idempotency.js';
-import { COMMIT_CORRELATION_ID_MAX_LENGTH } from '@ablo/transaction/wire/commit';
+import { COMMIT_CORRELATION_ID_MAX_LENGTH } from '@abloatai/transaction/wire/commit';
 
 describe('source WAL storage correlation envelope', () => {
   it('round-trips the shared correlation plus original operation identity', () => {

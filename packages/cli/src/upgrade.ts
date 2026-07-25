@@ -39,7 +39,7 @@ const VERB_ARGS: Record<string, readonly string[]> = {
   delete: ['id'],
   retrieve: ['id'],
 };
-const ABLO_REACT = new Set(['@abloatai/ablo/react', '@ablo/humans/react']);
+const ABLO_REACT = new Set(['@abloatai/ablo/react', '@abloatai/humans/react']);
 
 interface Edit {
   readonly file: string;

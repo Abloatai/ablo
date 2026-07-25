@@ -14,7 +14,7 @@
  */
 
 import { MutationQueue } from '../../src/local/transactions/mutations/MutationQueue';
-import { AbloConnectionError, AbloValidationError } from '@ablo/transaction/errors';
+import { AbloConnectionError, AbloValidationError } from '@abloatai/transaction/errors';
 import { createTestContext } from '../../src/local/testing';
 
 const OP = (id = 'op-1') => ({

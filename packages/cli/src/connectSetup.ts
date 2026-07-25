@@ -14,7 +14,7 @@
 import pc from 'picocolors';
 import type postgres from 'postgres';
 import { z } from 'zod';
-import { idempotencyLedgerMigrations } from '@ablo/transaction/source';
+import { idempotencyLedgerMigrations } from '@abloatai/transaction/source';
 
 // The names of the objects the recipe creates come from the footprint, which is
 // also what the audit reads — so an object this setup starts creating cannot
@@ -25,7 +25,7 @@ import {
   ABLO_PUBLICATION,
   ABLO_REPLICATION_ROLE,
   ABLO_WRITE_ROLE,
-} from '@ablo/transaction/footprint';
+} from '@abloatai/transaction/footprint';
 import { detectPooler } from './connectApply';
 
 export { ABLO_PUBLICATION, ABLO_REPLICATION_ROLE, ABLO_WRITE_ROLE };

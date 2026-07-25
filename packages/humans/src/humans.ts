@@ -1,12 +1,12 @@
 /**
  * Public human-facing local-state capability.
  *
- * The plugin and its local-state runtime belong to @ablo/humans. The
+ * The plugin and its local-state runtime belong to @abloatai/humans. The
  * shared settlement package supplies only the handoff identity and wire
  * contracts.
  */
 import type { AbloPlugin, PluginContext, AppliedChange } from './plugin.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import { createPresenceStream, type AttachablePresenceStream } from './presenceStream.js';
 import {
   buildStoreCluster,

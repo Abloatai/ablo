@@ -20,7 +20,7 @@ import { createTestContext } from '../../testing/mocks/MockSyncContext.js';
 import type { TestContextResult } from '../../testing/mocks/MockSyncContext.js';
 import { createTaskFixture } from '../../testing/fixtures/models.js';
 import { waitFor } from '../../testing/helpers/wait.js';
-import { AbloIdempotencyError } from '@ablo/transaction/errors';
+import { AbloIdempotencyError } from '@abloatai/transaction/errors';
 import type { Logger } from '../../interfaces/index.js';
 
 function spyLogger(): Logger & {

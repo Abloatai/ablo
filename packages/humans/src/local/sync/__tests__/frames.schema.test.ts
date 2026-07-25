@@ -10,7 +10,7 @@ import {
   wireCommitOperationSchema,
   commitPayloadSchema,
   commitMessageSchema,
-} from '@ablo/transaction/wire/frames';
+} from '@abloatai/transaction/wire/frames';
 import { buildCommitFrame } from '../commitFrames.js';
 
 describe('wireCommitOperationSchema', () => {

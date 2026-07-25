@@ -13,9 +13,9 @@
 
 import { z } from 'zod';
 import { createTestContext } from '../../src/local/testing';
-import { defineSchema } from '@ablo/transaction/schema/schema';
-import { model } from '@ablo/transaction/schema/model';
-import { relation } from '@ablo/transaction/schema/relation';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
+import { relation } from '@abloatai/transaction/schema/relation';
 import { registerModelsFromSchema } from '../../src/local/client/modelRegistration';
 import { getActiveRegistry } from '../../src/local/ModelRegistry';
 import type { Model } from '../../src/local/Model';

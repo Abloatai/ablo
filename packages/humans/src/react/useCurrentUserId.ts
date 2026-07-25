@@ -2,7 +2,7 @@
 
 import { useContext } from 'react';
 import { AbloInternalContext } from './internalContext.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 
 /** Returns the application user id supplied to the nearest AbloProvider. */
 export function useCurrentUserId(): string | null {

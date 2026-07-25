@@ -13,4 +13,4 @@ export {
   type CommitAck,
   type CommitFrameOperation,
   type ClaimTracePorts,
-} from '@ablo/transaction/transport/commitFrames';
+} from '@abloatai/transaction/transport/commitFrames';

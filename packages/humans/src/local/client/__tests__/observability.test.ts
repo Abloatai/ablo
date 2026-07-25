@@ -19,7 +19,7 @@
 import { autorun, reaction } from 'mobx';
 import { ModelRegistry, setActiveRegistry } from '../../ModelRegistry.js';
 import { Model } from '../../Model.js';
-import { PropertyType, LoadStrategy } from '@ablo/transaction/types';
+import { PropertyType, LoadStrategy } from '@abloatai/transaction/types';
 
 /**
  * Shape of the test fields installed on every model instance. Lets the test

@@ -7,11 +7,11 @@
  * mutations to your backend. The SDK ships sensible no-op defaults where it can.
  */
 
-import type { MutationCommitResultInput } from '@ablo/transaction/wire/commit';
-import type { OnStaleMode } from '@ablo/transaction/coordination/schema';
-export type { ClaimEvent, ConflictEvent } from '@ablo/transaction/coordination/events';
-import type { CoordinationObservability } from '@ablo/transaction/observability';
-export type { CoordinationObservability } from '@ablo/transaction/observability';
+import type { MutationCommitResultInput } from '@abloatai/transaction/wire/commit';
+import type { OnStaleMode } from '@abloatai/transaction/coordination/schema';
+export type { ClaimEvent, ConflictEvent } from '@abloatai/transaction/coordination/events';
+import type { CoordinationObservability } from '@abloatai/transaction/observability';
+export type { CoordinationObservability } from '@abloatai/transaction/observability';
 
 // ─────────────────────────────────────────────
 // Logger
@@ -21,8 +21,8 @@ export type { CoordinationObservability } from '@ablo/transaction/observability'
 // settlement core (ADR 0016). Re-exported here so `interfaces` stays the single
 // place a consumer looks for the contracts it implements. The `import type` is
 // load-bearing: `SyncLogger = Logger` below needs the name bound in this module.
-export type { Logger } from '@ablo/transaction/logger';
-import type { Logger } from '@ablo/transaction/logger';
+export type { Logger } from '@abloatai/transaction/logger';
+import type { Logger } from '@abloatai/transaction/logger';
 
 // ─────────────────────────────────────────────
 // Observability
@@ -38,11 +38,11 @@ export type {
   BreadcrumbCategory,
   WebSocketErrorDetails,
   TransportObservability,
-} from '@ablo/transaction/observability';
+} from '@abloatai/transaction/observability';
 import type {
   BreadcrumbCategory,
   TransportObservability,
-} from '@ablo/transaction/observability';
+} from '@abloatai/transaction/observability';
 
 export interface RollbackDetails {
   transactionType: string;
@@ -231,8 +231,8 @@ export type MutationCommitResult = MutationCommitResultInput;
 // re-exports without binding X in this module's scope, and `Pick<X, K>` on an
 // unbound X silently yields all-required properties rather than a missing-name
 // error at the Pick site.
-export type { MutationOptions } from '@ablo/transaction/resources/mutationOptions';
-import type { MutationOptions } from '@ablo/transaction/resources/mutationOptions';
+export type { MutationOptions } from '@abloatai/transaction/resources/mutationOptions';
+import type { MutationOptions } from '@abloatai/transaction/resources/mutationOptions';
 
 /**
  * The subset of {@link MutationOptions} that travels with each write as it is

@@ -14,13 +14,13 @@
  *     side of the asymmetry.
  */
 
-import { createHttpTransport } from '@ablo/transaction/transport/httpTransport';
-import { AbloClaimedError } from '@ablo/transaction/errors';
+import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
+import { AbloClaimedError } from '@abloatai/transaction/errors';
 import {
   claimListResponse,
   modelClaim,
   modelReadResponse,
-} from '@ablo/transaction/testing/fixtures/httpResponses';
+} from '@abloatai/transaction/testing/fixtures/httpResponses';
 
 const HELD_INTENT = modelClaim({
   id: 'int_held',

@@ -10,8 +10,8 @@ import {
   resolveCredential,
   type CredentialPrimitives,
   type ResolveCredentialContext,
-} from '@ablo/transaction/auth/credentialPolicy';
-import { AbloAuthenticationError } from '@ablo/transaction/errors';
+} from '@abloatai/transaction/auth/credentialPolicy';
+import { AbloAuthenticationError } from '@abloatai/transaction/errors';
 
 describe('classifyCredentialKind', () => {
   it('maps each Ablo key prefix to its kind', () => {

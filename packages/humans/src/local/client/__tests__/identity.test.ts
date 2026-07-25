@@ -12,12 +12,12 @@
  * while still exercising the dispatch logic.
  */
 
-import { resolveParticipantIdentity } from '@ablo/transaction/auth/identity';
-import { createAuthCredentialSource } from '@ablo/transaction/auth/credentialSource';
+import { resolveParticipantIdentity } from '@abloatai/transaction/auth/identity';
+import { createAuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
 import type { BootstrapFetcher } from '../../sync/BootstrapFetcher.js';
 import type { Logger } from '../../interfaces/index.js';
 
-jest.mock('@ablo/transaction/auth', () => ({
+jest.mock('@abloatai/transaction/auth', () => ({
   exchangeApiKey: jest.fn(),
   resolveIdentity: jest.fn(),
   createRefreshScheduler: jest.fn(() => ({
@@ -26,9 +26,9 @@ jest.mock('@ablo/transaction/auth', () => ({
   })),
 }));
 
-import { exchangeApiKey } from '@ablo/transaction/auth';
-import { resolveIdentity } from '@ablo/transaction/auth';
-import { createRefreshScheduler } from '@ablo/transaction/auth';
+import { exchangeApiKey } from '@abloatai/transaction/auth';
+import { resolveIdentity } from '@abloatai/transaction/auth';
+import { createRefreshScheduler } from '@abloatai/transaction/auth';
 
 const mockExchangeApiKey = exchangeApiKey as jest.MockedFunction<typeof exchangeApiKey>;
 const mockResolveIdentity = resolveIdentity as jest.MockedFunction<typeof resolveIdentity>;

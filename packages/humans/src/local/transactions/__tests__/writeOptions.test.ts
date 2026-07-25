@@ -20,8 +20,8 @@ import type { TestContextResult } from '../../testing/mocks/MockSyncContext.js';
 import { createTaskFixture } from '../../testing/fixtures/models.js';
 import { waitFor } from '../../testing/helpers/wait.js';
 import type { MutationOperation } from '../../interfaces/index.js';
-import { assertWriteOptions } from '@ablo/transaction/resources/writeOptionsSchema';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { assertWriteOptions } from '@abloatai/transaction/resources/writeOptionsSchema';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 
 describe('MutationQueue write-options threading', () => {
   let ctx: TestContextResult;

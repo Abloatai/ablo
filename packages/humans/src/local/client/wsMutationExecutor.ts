@@ -5,14 +5,14 @@
  * client wires this up automatically unless you supply your own executor.
  */
 
-import type { ReadDependency, TrackDependency } from '@ablo/transaction/coordination/schema';
+import type { ReadDependency, TrackDependency } from '@abloatai/transaction/coordination/schema';
 import type {
   MutationExecutor,
   MutationOperation,
   MutationOptions,
 } from '../interfaces/index.js';
 import type { CommitAck } from '../sync/commitFrames.js';
-import { AbloError, AbloConnectionError } from '@ablo/transaction/errors';
+import { AbloError, AbloConnectionError } from '@abloatai/transaction/errors';
 
 // ── Default mutation executor (wire: `commit` frame over WebSocket) ──────
 

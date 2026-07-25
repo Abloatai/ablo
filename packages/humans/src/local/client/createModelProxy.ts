@@ -16,40 +16,40 @@ import {
   AbloClaimedError,
   AbloValidationError,
   toAbloError,
-} from '@ablo/transaction/errors';
+} from '@abloatai/transaction/errors';
 import {
   reconcileFunctionalUpdate,
   type ModelUpdater,
   type ContentionOptions,
-} from '@ablo/transaction/resources/functionalUpdate';
+} from '@abloatai/transaction/resources/functionalUpdate';
 import type { MutationOptions } from '../interfaces/index.js';
 import {
   claimDescription,
   type TrackDependency,
-} from '@ablo/transaction/coordination/schema';
+} from '@abloatai/transaction/coordination/schema';
 import { Model, modelAsRow } from '../Model.js';
-import { toMs } from '@ablo/transaction/utils/duration';
-import { LEASE_TTL_MS } from '@ablo/transaction/wire/protocol';
+import { toMs } from '@abloatai/transaction/utils/duration';
+import { LEASE_TTL_MS } from '@abloatai/transaction/wire/protocol';
 import {
   heartbeatCadenceMs,
   resolveHeartbeatOptions,
   resolveHeartbeatPlan,
   startClaimHeartbeatLoop,
-} from '@ablo/transaction/coordination/claimHeartbeatLoop';
-import { assertWriteOptions } from '@ablo/transaction/resources/writeOptionsSchema';
-import { subTarget } from '@ablo/transaction/coordination';
+} from '@abloatai/transaction/coordination/claimHeartbeatLoop';
+import { assertWriteOptions } from '@abloatai/transaction/resources/writeOptionsSchema';
+import { subTarget } from '@abloatai/transaction/coordination';
 // A named claim-meta crossing (see `claim-meta-crossings-are-enumerated` in
 // .dependency-cruiser.cjs): the reactive proxy's self-claim targets are
 // decodes that build a public claim, so their `meta` converts wire→declared
 // here like the other enumerated crossings.
-import { declaredMeta } from '@ablo/transaction/coordination/claimMeta';
-import type { ModelTarget } from '@ablo/transaction/coordination/schema';
+import { declaredMeta } from '@abloatai/transaction/coordination/claimMeta';
+import type { ModelTarget } from '@abloatai/transaction/coordination/schema';
 import type { ModelRegistry } from '../ModelRegistry.js';
 import type { InstanceCache } from '../InstanceCache.js';
 import type { SyncClient } from '../SyncClient.js';
 import type { OnDemandLoader } from '../sync/OnDemandLoader.js';
 import type { JoinedParticipant } from '../sync/participants.js';
-import { ModelScope } from '@ablo/transaction/types';
+import { ModelScope } from '@abloatai/transaction/types';
 import type {
   Duration,
   Claim,
@@ -60,7 +60,7 @@ import type {
   ClaimWaitOptions,
   ClaimTarget,
   Snapshot,
-} from '@ablo/transaction/types/streams';
+} from '@abloatai/transaction/types/streams';
 
 // The request contract — every option and parameter shape a caller passes to a
 // read, a write, or a claim — lives in the settlement core (ADR 0016). This
@@ -89,7 +89,7 @@ export type {
   ModelUpdateParams,
   ModelDeleteParams,
   JoinOptions,
-} from '@ablo/transaction/resources/modelOperations';
+} from '@abloatai/transaction/resources/modelOperations';
 export type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim, HeldLease };
 
 import type {
@@ -108,9 +108,9 @@ import type {
   ModelTrackResult,
   ModelUpdateParams,
   ServerReadOptions,
-} from '@ablo/transaction/resources/modelOperations';
-import type { HttpModelClient } from '@ablo/transaction/transport/httpClient';
-import type { ParticipantKind } from '@ablo/transaction/types/participant';
+} from '@abloatai/transaction/resources/modelOperations';
+import type { HttpModelClient } from '@abloatai/transaction/transport/httpClient';
+import type { ParticipantKind } from '@abloatai/transaction/types/participant';
 
 export interface ModelClientMeta {
   readonly key: string;

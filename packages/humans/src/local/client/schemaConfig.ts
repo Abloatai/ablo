@@ -7,8 +7,8 @@
  * are deterministic transforms of the schema and hold no engine state.
  */
 
-import type { Schema } from '@ablo/transaction/schema/schema';
-import type { RelationDef } from '@ablo/transaction/schema/relation';
+import type { Schema } from '@abloatai/transaction/schema/schema';
+import type { RelationDef } from '@abloatai/transaction/schema/relation';
 import type { RuntimeConfig } from '../interfaces/index.js';
 import { schemaHash, modelHash, toSchemaJSON } from '../schema/serialize.js';
 

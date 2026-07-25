@@ -17,7 +17,7 @@
 import { loadSchema, DEFAULT_SCHEMA_PATH, DEFAULT_EXPORT } from './push';
 import { detectPooler } from './connectApply';
 import { requestRemoteValidation, type RemoteValidation } from './remoteValidation';
-import { schemaHash } from '@ablo/transaction/schema';
+import { schemaHash } from '@abloatai/transaction/schema';
 
 /** A model as the server reports it active for this key — pairing the schema key
  *  your local code addresses with the wire typename the engine routes on. */

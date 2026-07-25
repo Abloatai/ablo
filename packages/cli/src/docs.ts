@@ -18,7 +18,7 @@ import { readFile } from 'fs/promises';
 import { createRequire } from 'module';
 import { join, resolve } from 'path';
 import pc from 'picocolors';
-import { readDocsCatalog, findDoc, suggestSlugs, type DocEntry, type DocKind } from '@ablo/transaction/docs';
+import { readDocsCatalog, findDoc, suggestSlugs, type DocEntry, type DocKind } from '@abloatai/transaction/docs';
 import { terminalWidth } from './terminalWidth';
 import { brand } from './theme';
 
@@ -37,7 +37,7 @@ export const DOCS_USAGE = `
  * The names the SDK package answers to: the published name, and the workspace
  * name the monorepo resolves before a release rewrites it.
  */
-const SDK_PACKAGE_NAMES = ['@abloatai/ablo', '@ablo/transaction'];
+const SDK_PACKAGE_NAMES = ['@abloatai/ablo', '@abloatai/transaction'];
 
 /**
  * The root of the SDK install whose pages we print — the directory holding

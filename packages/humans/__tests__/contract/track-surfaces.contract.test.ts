@@ -11,12 +11,12 @@
 
 import { Ablo, type InternalAbloOptions } from '../../src/Ablo';
 import type { ModelOperations } from '../../src/local/client/createModelProxy';
-import type { HttpModelClient } from '@ablo/transaction/transport/httpClient';
+import type { HttpModelClient } from '@abloatai/transaction/transport/httpClient';
 import type {
   ModelTrackParams,
   ModelTrackResult,
-} from '@ablo/transaction/resources/modelOperations';
-import { defineSchema, model, z } from '@ablo/transaction/schema';
+} from '@abloatai/transaction/resources/modelOperations';
+import { defineSchema, model, z } from '@abloatai/transaction/schema';
 import type { Identical } from '../../src/local/testing/typeEquality';
 
 type Expect<T extends true> = T;

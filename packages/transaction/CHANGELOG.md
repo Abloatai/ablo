@@ -1,4 +1,4 @@
-# @ablo/transaction
+# @abloatai/transaction
 
 ## 0.37.0
 

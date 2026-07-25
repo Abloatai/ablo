@@ -6,7 +6,7 @@ import { reaction } from 'mobx';
 
 /**
  * Subscribe a React component to a MobX computation with a cached snapshot.
- * This is the framework-level reactive primitive owned by @ablo/humans;
+ * This is the framework-level reactive primitive owned by @abloatai/humans;
  * store/model hooks are layered above it.
  */
 export function useReactive<T>(

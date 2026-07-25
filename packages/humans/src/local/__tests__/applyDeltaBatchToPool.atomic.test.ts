@@ -19,7 +19,7 @@ import { reaction, runInAction } from 'mobx';
 import { ModelRegistry, setActiveRegistry, clearActiveRegistry } from '../ModelRegistry.js';
 import { InstanceCache } from '../InstanceCache.js';
 import { Model } from '../Model.js';
-import { ModelScope, LoadStrategy } from '@ablo/transaction/types';
+import { ModelScope, LoadStrategy } from '@abloatai/transaction/types';
 import { SyncClient } from '../SyncClient.js';
 import type { Database } from '../Database.js';
 

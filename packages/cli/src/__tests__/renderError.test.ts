@@ -1,5 +1,5 @@
 import { renderCliError } from '../renderError';
-import { AbloError } from '@ablo/transaction/errors';
+import { AbloError } from '@abloatai/transaction/errors';
 
 /** Strip ANSI so assertions match regardless of picocolors' TTY detection. */
 const clean = (s: string): string => s.replace(/\[[0-9;]*m/g, '');

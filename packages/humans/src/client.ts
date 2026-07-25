@@ -17,8 +17,8 @@ import type {
   Model,
   InferCreate,
   InferRow,
-} from '@ablo/transaction/schema/schema';
-import type { PresenceStream, Snapshot } from '@ablo/transaction/types/streams';
+} from '@abloatai/transaction/schema/schema';
+import type { PresenceStream, Snapshot } from '@abloatai/transaction/types/streams';
 import type { InstanceCache } from './local/InstanceCache.js';
 import type { SyncStoreContract } from './react/context.js';
 import type { SyncWebSocket, CoreSyncEventMap } from './local/sync/SyncWebSocket.js';
@@ -29,7 +29,7 @@ import type {
   CommitResource,
   CreateAgentClientParams,
   SessionResource,
-} from '@ablo/transaction/resources/httpResources';
+} from '@abloatai/transaction/resources/httpResources';
 export type { LocalReadOptions } from './local/client/resourceTypes.js';
 
 /** The typed sync engine client — one property per model in the schema */

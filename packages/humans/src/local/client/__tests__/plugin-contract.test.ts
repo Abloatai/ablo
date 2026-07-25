@@ -1,6 +1,6 @@
 /**
  * The plugin contract's two configuration gates and its stage ordering
- * (ADR 0016). The contract lives in `@ablo/humans/plugin`; the test lives
+ * (ADR 0016). The contract lives in `@abloatai/humans/plugin`; the test lives
  * here because the core package carries no test harness of its own.
  */
 
@@ -11,7 +11,7 @@ import {
   runStage,
   type AbloPlugin,
   type PluginContext,
-} from '@ablo/humans/plugin';
+} from '@abloatai/humans/plugin';
 
 // The contract requires a logger; nothing here reads what it emits.
 const noop = (): void => undefined;
@@ -179,8 +179,8 @@ describe('plugin contract', () => {
 
 import { Ablo } from '../../../Ablo.js';
 import { humans } from '../../../humans.js';
-import { defineSchema } from '@ablo/transaction/schema/schema';
-import { model } from '@ablo/transaction/schema/model';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
 import { z } from 'zod';
 
 const schema = defineSchema({});

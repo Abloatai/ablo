@@ -7,11 +7,11 @@ import { defineConfig } from 'tsup';
  * stay lean, and the SDK package ships no CLI bundle at all.
  *
  * Externalized (NOT bundled) — resolved at runtime from the right place:
- *   - `@ablo/transaction` / `@abloatai/ablo` (+ subpaths): the SDK. The
+ *   - `@abloatai/transaction` / `@abloatai/ablo` (+ subpaths): the SDK. The
  *     mirror rewrites the former to the latter; at runtime it resolves from
  *     the project being worked in (or this package's own dependency), so
  *     bundling it would duplicate the engine into cli.cjs.
- *   - `@ablo/transaction` (+ subpaths): external here as a declared
+ *   - `@abloatai/transaction` (+ subpaths): external here as a declared
  *     dependency; the mirror snapshot flattens it into the source tree, so
  *     the published bundle inlines it.
  *   - `@prisma/client`, `drizzle-orm` (+ subpaths): the customer's ORM. `ablo

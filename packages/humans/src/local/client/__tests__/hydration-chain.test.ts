@@ -10,11 +10,11 @@
 import { ModelRegistry, setActiveRegistry } from '../../ModelRegistry.js';
 import { InstanceCache } from '../../InstanceCache.js';
 import { Model } from '../../Model.js';
-import { ModelScope, LoadStrategy } from '@ablo/transaction/types';
+import { ModelScope, LoadStrategy } from '@abloatai/transaction/types';
 import { Ablo, type InternalAbloOptions } from '../../../Ablo.js';
 import { createModelProxy } from '../createModelProxy.js';
-import { defineSchema } from '@ablo/transaction/schema/schema';
-import { model } from '@ablo/transaction/schema/model';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
 import { z } from 'zod';
 import type { SyncClient } from '../../SyncClient.js';
 import type { OnDemandLoader } from '../../sync/OnDemandLoader.js';

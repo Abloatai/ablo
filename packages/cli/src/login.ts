@@ -22,8 +22,8 @@
 import { spawn } from 'child_process';
 import pc from 'picocolors';
 import { intro, outro, note, spinner, log, select, isCancel, cancel } from '@clack/prompts';
-import { translateHttpError } from '@ablo/transaction/errors';
-import { provisionKeyResponseSchema, type ProvisionedKey } from '@ablo/transaction/wire';
+import { translateHttpError } from '@abloatai/transaction/errors';
+import { provisionKeyResponseSchema, type ProvisionedKey } from '@abloatai/transaction/wire';
 import { credentialCapability } from './credentialCapability';
 import {
   setProfileKeys,

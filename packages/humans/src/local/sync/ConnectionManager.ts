@@ -12,4 +12,4 @@ export {
   type ConnectionEvent,
   type ConnectionCallbacks,
   type ConnectionManagerOptions,
-} from '@ablo/transaction/transport/connectionManager';
+} from '@abloatai/transaction/transport/connectionManager';

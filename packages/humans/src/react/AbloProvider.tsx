@@ -10,13 +10,13 @@ import {
   createContext,
   type ReactNode,
 } from 'react';
-import type { Schema, SchemaRecord } from '@ablo/transaction/schema/schema';
+import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
 import type { AbloClient as Ablo } from '../client.js';
 import type {
   Claim,
   Duration,
   Peer,
-} from '@ablo/transaction/types/streams';
+} from '@abloatai/transaction/types/streams';
 import type {
   EngineParticipant,
   ParticipantScope,
@@ -29,7 +29,7 @@ import {
 } from '../local/sync/participants.js';
 import { SyncContext, type SyncStoreContract } from './context.js';
 import { AbloInternalContext, type AbloInternalContextValue } from './internalContext.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import { useSyncStatus } from './useSyncStatus.js';
 import { DefaultFallback } from './DefaultFallback.js';
 

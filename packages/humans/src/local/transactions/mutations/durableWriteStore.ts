@@ -12,10 +12,10 @@
 export {
   durableWriteStoreSchema,
   durableWritesConfigSchema,
-} from '@ablo/transaction/durableWrites';
+} from '@abloatai/transaction/durableWrites';
 export type {
   DurableWriteStore,
   DurableWritesConfig,
-} from '@ablo/transaction/durableWrites';
-export { pendingWriteSchema } from '@ablo/transaction/transactions/settlement/pendingWrite';
-export type { PendingWrite } from '@ablo/transaction/transactions/settlement/pendingWrite';
+} from '@abloatai/transaction/durableWrites';
+export { pendingWriteSchema } from '@abloatai/transaction/transactions/settlement/pendingWrite';
+export type { PendingWrite } from '@abloatai/transaction/transactions/settlement/pendingWrite';

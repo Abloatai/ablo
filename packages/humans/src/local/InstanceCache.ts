@@ -12,8 +12,8 @@ import { DEFER_MODEL_OBSERVABILITY, Model } from './Model.js';
 import { ModelRegistry } from './ModelRegistry.js';
 import { globalRuntime } from './context.js';
 import type { RuntimeContext } from './RuntimeContext.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
-import { ModelScope } from '@ablo/transaction/types';
+import { AbloValidationError } from '@abloatai/transaction/errors';
+import { ModelScope } from '@abloatai/transaction/types';
 import { ViewRegistry } from './views/ViewRegistry.js';
 import { QueryView, type QueryViewOptions } from './views/QueryView.js';
 

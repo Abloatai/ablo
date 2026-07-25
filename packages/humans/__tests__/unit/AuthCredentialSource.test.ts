@@ -1,4 +1,4 @@
-import { createAuthCredentialSource } from '@ablo/transaction/auth/credentialSource';
+import { createAuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
 
 describe('AuthCredentialSource', () => {
   it('is the mutable source of bearer auth headers', () => {

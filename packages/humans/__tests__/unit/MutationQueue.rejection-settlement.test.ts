@@ -15,7 +15,7 @@
  */
 
 import { MutationQueue } from '../../src/local/transactions/mutations/MutationQueue';
-import { AbloClaimedError } from '@ablo/transaction/errors';
+import { AbloClaimedError } from '@abloatai/transaction/errors';
 import {
   createTestContext,
   createTaskFixture,

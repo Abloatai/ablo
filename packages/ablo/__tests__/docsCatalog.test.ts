@@ -9,7 +9,7 @@
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { readDocsCatalog, findDoc, parseDocHeader, suggestSlugs } from '@ablo/transaction/docs/catalog';
+import { readDocsCatalog, findDoc, parseDocHeader, suggestSlugs } from '@abloatai/transaction/docs/catalog';
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 

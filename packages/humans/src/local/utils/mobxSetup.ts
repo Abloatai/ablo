@@ -14,7 +14,7 @@ import {
   type IValueDidChange,
   type AnnotationMapEntry,
 } from 'mobx';
-import { PropertyType, type PropertyMetadata, type ReferenceMetadata } from '@ablo/transaction/types';
+import { PropertyType, type PropertyMetadata, type ReferenceMetadata } from '@abloatai/transaction/types';
 import { getContext } from '../context.js';
 
 /**

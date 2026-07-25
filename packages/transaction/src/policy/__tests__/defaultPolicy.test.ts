@@ -12,8 +12,8 @@
  * always-reject contract on the stale path.
  */
 
-import { defaultPolicy } from '@ablo/transaction/policy/types';
-import type { StaleContextConflict, ClaimHeldConflict } from '@ablo/transaction/policy/types';
+import { defaultPolicy } from '@abloatai/transaction/policy/types';
+import type { StaleContextConflict, ClaimHeldConflict } from '@abloatai/transaction/policy/types';
 
 const baseStale = (
   requestedMode?: StaleContextConflict['requestedMode'],

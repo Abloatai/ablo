@@ -4,7 +4,7 @@
   </a>
 </p>
 
-# @ablo/transaction
+# @abloatai/transaction
 
 The canonical transaction contracts and headless HTTP runtime behind Ablo.
 
@@ -34,7 +34,7 @@ await ablo.orders.update({
 });
 ```
 
-Use `@ablo/transaction` directly only when building Ablo adapters,
+Use `@abloatai/transaction` directly only when building Ablo adapters,
 integrations, or infrastructure that must consume the canonical contracts.
 The branded SDK delegates to this package without exposing that ownership map
 in normal application imports.

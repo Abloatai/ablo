@@ -7,7 +7,7 @@
  */
 
 import { createAbloReact } from '../../src/react/createAbloReact.js';
-import { defineSchema, model, z } from '@ablo/transaction/schema';
+import { defineSchema, model, z } from '@abloatai/transaction/schema';
 import type { Ablo } from '../../src/Ablo.js';
 import type { Identical } from '../../src/local/testing/typeEquality.js';
 

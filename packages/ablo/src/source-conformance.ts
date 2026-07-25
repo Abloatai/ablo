@@ -1,1 +1,1 @@
-export * from '@ablo/transaction/source/conformance';
+export * from '@abloatai/transaction/source/conformance';

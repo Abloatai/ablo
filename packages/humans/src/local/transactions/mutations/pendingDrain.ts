@@ -2,8 +2,8 @@ import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { QueuedMutation } from './commitPayload.js';
 import type { MutationStore } from './MutationStore.js';
 import type { OptimisticUpdateEntry } from './localMutation.js';
-import type { MutationCommitResult } from '@ablo/transaction/wire/commit';
-import type { DurableCommitEnvelope } from '@ablo/transaction/transactions/settlement/commitEnvelope';
+import type { MutationCommitResult } from '@abloatai/transaction/wire/commit';
+import type { DurableCommitEnvelope } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
 import { applyWriteOptions, TX_TYPE_TO_MUTATION_OP } from './commitPayload.js';
 
 export interface PendingDrainContext {

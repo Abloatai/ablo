@@ -18,8 +18,8 @@ import type {
   BreadcrumbCategory,
   SpanAttributes,
 } from './interfaces/index.js';
-import type { ModelMetadata } from '@ablo/transaction/types';
-import { AbloSessionError } from '@ablo/transaction/errors';
+import type { ModelMetadata } from '@abloatai/transaction/types';
+import { AbloSessionError } from '@abloatai/transaction/errors';
 
 export interface RuntimeContext {
   /** Structured logger */
@@ -59,12 +59,12 @@ export interface RuntimeContext {
 // No-op defaults for optional dependencies
 // ─────────────────────────────────────────────
 
-// Re-exported, not redeclared. `@ablo/transaction/logger` owns the no-op that
+// Re-exported, not redeclared. `@abloatai/transaction/logger` owns the no-op that
 // sits beside the `Logger` port. This package held a second, behaviourally
 // identical copy, and half of it imported the canonical one while the other
 // half imported this — so any change of semantics there would have reached
 // only one side, invisibly, because the identifier reads the same at both.
-export { noopLogger } from '@ablo/transaction/logger';
+export { noopLogger } from '@abloatai/transaction/logger';
 
 /** No-op observability — silently discards all observability calls */
 export const noopObservability: ObservabilityProvider = {

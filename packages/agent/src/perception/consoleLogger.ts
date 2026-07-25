@@ -5,7 +5,7 @@
  * reuse the same level gating rather than hand-rolling a console wrapper.
  */
 
-import type { Logger } from '@ablo/transaction/logger';
+import type { Logger } from '@abloatai/transaction/logger';
 
 // ── Default console logger ────────────────────────────────────────────────
 

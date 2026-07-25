@@ -19,8 +19,8 @@ import { z } from 'zod';
 
 import { AbloProvider } from '../../src/react/AbloProvider.js';
 import { Ablo } from '../../src/Ablo.js';
-import { defineSchema } from '@ablo/transaction/schema/schema';
-import { model } from '@ablo/transaction/schema/model';
+import { defineSchema } from '@abloatai/transaction/schema/schema';
+import { model } from '@abloatai/transaction/schema/model';
 
 const schema = defineSchema({
   chats: model({ title: z.string() }, { typename: 'Chat' }),

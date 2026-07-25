@@ -12,7 +12,7 @@
  * server-issued capability token instead of session cookies.
  *
  * ```ts
- * import Ablo from '@ablo/transaction';
+ * import Ablo from '@abloatai/transaction';
  *
  * const ablo = Ablo({
  *   schema,
@@ -125,6 +125,6 @@
 //
 // Everything else (Activity, Claim, Peer, ActiveClaim, ...)
 // lives on the `Ablo.*` namespace via
-// `import type { Ablo } from '@ablo/transaction'`.
+// `import type { Ablo } from '@abloatai/transaction'`.
 
 export { Agent } from './Agent.js';

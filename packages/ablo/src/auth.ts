@@ -1,1 +1,1 @@
-export * from '@ablo/transaction/auth';
+export * from '@abloatai/transaction/auth';

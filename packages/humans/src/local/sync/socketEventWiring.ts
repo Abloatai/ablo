@@ -1,4 +1,4 @@
-import { AbloSessionError, isAccessCredentialExpiryCloseReason } from '@ablo/transaction/errors';
+import { AbloSessionError, isAccessCredentialExpiryCloseReason } from '@abloatai/transaction/errors';
 import type { RuntimeContext } from '../RuntimeContext.js';
 import type { SyncClient } from '../SyncClient.js';
 import type { Database } from '../Database.js';

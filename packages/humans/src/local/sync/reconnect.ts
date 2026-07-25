@@ -1,4 +1,4 @@
-import { AbloSessionError } from '@ablo/transaction/errors';
+import { AbloSessionError } from '@abloatai/transaction/errors';
 import type { RuntimeContext } from '../RuntimeContext.js';
 import type { SyncClient } from '../SyncClient.js';
 import type { Database } from '../Database.js';

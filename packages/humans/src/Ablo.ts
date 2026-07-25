@@ -5,7 +5,7 @@
  * client with one property per model in your schema.
  *
  * Usage:
- *   import { Ablo } from '@ablo/humans';
+ *   import { Ablo } from '@abloatai/humans';
  *   import { schema } from './schema';
  *
  *   const sync = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
@@ -26,8 +26,8 @@
  * `./clientPrelude`, and the client this dispatches to is `./reactiveEngine`.
  */
 
-import type { SchemaRecord } from '@ablo/transaction/schema/schema';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import type { SchemaRecord } from '@abloatai/transaction/schema/schema';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import { SyncWebSocket, type DefaultCollaborationEvents } from './local/sync/SyncWebSocket.js';
 // Both halves of the plugin lifecycle: `resolvePlugins` turns the declared list
 // into a surface, `layerPluginSurface` merges that surface onto the built client.
@@ -36,7 +36,7 @@ import {
   resolvePlugins,
   type AbloPlugin,
   type MergedSurface,
-} from '@ablo/humans/plugin';
+} from '@abloatai/humans/plugin';
 import { humans, type HumansSurface } from './humans.js';
 import { kStoreCluster } from './local/client/storeCluster.js';
 import { buildReactiveEngine } from './local/client/reactiveEngine.js';
@@ -99,7 +99,7 @@ export type Ablo<S extends SchemaRecord> = AbloClient<S>;
  * const ablo = Ablo({ schema, authEndpoint: '/api/ablo-session' });
  * ```
  *
- * Server-side agents, workers, and services use `@ablo/transaction`.
+ * Server-side agents, workers, and services use `@abloatai/transaction`.
  */
 export function Ablo<
   const S extends SchemaRecord,
@@ -223,7 +223,7 @@ export function Ablo<const S extends SchemaRecord>(
 // ─────────────────────────────────────────────────────────────────────
 //
 // One default import, with types hung underneath via namespace dots:
-// `import { Ablo } from "@ablo/humans"` gets the factory, its return type, and
+// `import { Ablo } from "@abloatai/humans"` gets the factory, its return type, and
 // every type a typical consumer references (`Ablo.Peer`, `Ablo.Snapshot<S, K>`,
 // and so on) — all purely type-level, with zero runtime cost.
 //
@@ -231,14 +231,14 @@ export function Ablo<const S extends SchemaRecord>(
 // this file); the namespace re-exports them as a convenience path. Named imports
 // continue to work for callers who prefer them.
 
-import type * as _Streams from '@ablo/transaction/types/streams';
+import type * as _Streams from '@abloatai/transaction/types/streams';
 import type * as _Participants from './local/sync/participants.js';
-import type * as _Policy from '@ablo/transaction/policy/types';
+import type * as _Policy from '@abloatai/transaction/policy/types';
 import type * as _Mutators from './local/mutators/defineMutators.js';
 import type * as _Tx from './local/mutators/Transaction.js';
 import type * as _Undo from './local/mutators/UndoManager.js';
-import type * as _SchemaTypes from '@ablo/transaction/schema/schema';
-import type * as _Global from '@ablo/transaction/types/global';
+import type * as _SchemaTypes from '@abloatai/transaction/schema/schema';
+import type * as _Global from '@abloatai/transaction/types/global';
 
 /**
  * The canonical type namespace.
@@ -385,7 +385,7 @@ export namespace Ablo {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   export namespace Claim {
     export type Handle = import('./local/client/resourceTypes.js').Claim;
-    export type Held<T = Record<string, unknown>> = import('@ablo/transaction/types/streams').HeldClaim<T>;
+    export type Held<T = Record<string, unknown>> = import('@abloatai/transaction/types/streams').HeldClaim<T>;
     export type CreateOptions = import('./local/client/resourceTypes.js').ClaimCreateOptions;
     export type WaitOptions = import('./local/client/resourceTypes.js').ClaimWaitOptions;
     export type Client = import('./local/client/resourceTypes.js').ClaimResource;
@@ -414,32 +414,32 @@ export namespace Ablo {
   // ── Source (sub-namespace — customer-owned storage adapter) ──────
   // eslint-disable-next-line @typescript-eslint/no-namespace
   export namespace Source {
-    export type Operation = import('@ablo/transaction/source').SourceOperation;
-    export type Event = import('@ablo/transaction/source').SourceEvent;
+    export type Operation = import('@abloatai/transaction/source').SourceOperation;
+    export type Event = import('@abloatai/transaction/source').SourceEvent;
     export type EventForOperationOptions =
-      import('@ablo/transaction/source').SourceEventForOperationOptions;
-    export type EventsResult = import('@ablo/transaction/source').SourceEventsResult;
-    export type Scope = import('@ablo/transaction/source').SourceScope;
-    export type ApiKey = import('@ablo/transaction/source').SourceApiKey;
+      import('@abloatai/transaction/source').SourceEventForOperationOptions;
+    export type EventsResult = import('@abloatai/transaction/source').SourceEventsResult;
+    export type Scope = import('@abloatai/transaction/source').SourceScope;
+    export type ApiKey = import('@abloatai/transaction/source').SourceApiKey;
     export type Options<
       S extends _SchemaTypes.SchemaRecord = _SchemaTypes.SchemaRecord,
       TAuth = unknown,
-    > = import('@ablo/transaction/source').DataSourceOptions<S, TAuth>;
+    > = import('@abloatai/transaction/source').DataSourceOptions<S, TAuth>;
     export type ModelHandlers<
       Row,
       CreateInput,
       TAuth = unknown,
-    > = import('@ablo/transaction/source').SourceModelHandlers<Row, CreateInput, TAuth>;
+    > = import('@abloatai/transaction/source').SourceModelHandlers<Row, CreateInput, TAuth>;
     export type SignatureVerificationResult =
-      import('@ablo/transaction/source').SourceSignatureVerificationResult;
+      import('@abloatai/transaction/source').SourceSignatureVerificationResult;
 
     // Commit sub-cohort — params/result pair.
     // eslint-disable-next-line @typescript-eslint/no-namespace
     export namespace Commit {
       export type Params<TAuth = unknown> =
-        import('@ablo/transaction/source').SourceCommitParams<TAuth>;
+        import('@abloatai/transaction/source').SourceCommitParams<TAuth>;
       export type Result<Row = Record<string, unknown>> =
-        import('@ablo/transaction/source').SourceCommitResult<Row>;
+        import('@abloatai/transaction/source').SourceCommitResult<Row>;
     }
   }
 

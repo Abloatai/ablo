@@ -14,15 +14,15 @@
  * recorded in ADR 0016 — the contract itself only states what each field does.
  */
 
-import { AbloValidationError } from '@ablo/transaction/errors';
-import type { ParticipantKind } from '@ablo/transaction/types/participant';
-import type { ErrorCodeSpec } from '@ablo/transaction/errorCodes';
-import type { Logger } from '@ablo/transaction/logger';
-import type { CoordinationObservability } from '@ablo/transaction/observability';
-import type { WsTransport } from '@ablo/transaction/transport/wsTransport';
-import type { AuthCredentialSource } from '@ablo/transaction/auth/credentialSource';
-import type { SyncDeltaWireCore } from '@ablo/transaction/wire/delta';
-import type { ModelData } from '@ablo/transaction/types/modelData';
+import { AbloValidationError } from '@abloatai/transaction/errors';
+import type { ParticipantKind } from '@abloatai/transaction/types/participant';
+import type { ErrorCodeSpec } from '@abloatai/transaction/errorCodes';
+import type { Logger } from '@abloatai/transaction/logger';
+import type { CoordinationObservability } from '@abloatai/transaction/observability';
+import type { WsTransport } from '@abloatai/transaction/transport/wsTransport';
+import type { AuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
+import type { SyncDeltaWireCore } from '@abloatai/transaction/wire/delta';
+import type { ModelData } from '@abloatai/transaction/types/modelData';
 
 /**
  * A string type that keeps literal inference alive: `id: 'humans'` stays the

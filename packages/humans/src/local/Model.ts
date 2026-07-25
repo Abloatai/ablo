@@ -12,7 +12,7 @@ import { v4 as uuid } from 'uuid';
 import { M1 } from './utils/mobxSetup.js';
 import { getActiveRegistry, hasActiveRegistry } from './ModelRegistry.js';
 import { getContext } from './context.js';
-import { AbloValidationError } from '@ablo/transaction/errors';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 /** Store interface — methods that Model subclasses can call on the store */
 interface SyncStoreRef {
   getByForeignKey<T extends Model>(modelName: string, foreignKey: string, id: string): T[];
@@ -28,7 +28,7 @@ interface SyncStoreRef {
   /** Unarchive a previously archived model. */
   unarchive(model: Model): Promise<void>;
 }
-import type { PropertyMetadata } from '@ablo/transaction/types';
+import type { PropertyMetadata } from '@abloatai/transaction/types';
 
 /**
  * Internal wire-hydration hint. Symbol-keyed and non-enumerable at the call

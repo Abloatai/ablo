@@ -1,9 +1,9 @@
-import { AbloSessionError } from '@ablo/transaction/errors';
-import type { ParticipantKind } from '@ablo/transaction/types/participant';
+import { AbloSessionError } from '@abloatai/transaction/errors';
+import type { ParticipantKind } from '@abloatai/transaction/types/participant';
 import { ConnectionManager } from './ConnectionManager.js';
 import type { DefaultCollaborationEvents, EventMap, SyncWebSocket } from './SyncWebSocket.js';
 import type { SyncStatus } from '../storeContract.js';
-import type { AuthCredentialSource } from '@ablo/transaction/auth/credentialSource';
+import type { AuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
 import type { RuntimeContext } from '../RuntimeContext.js';
 import { contextLogger, contextSocketObservability } from './contextPorts.js';
 

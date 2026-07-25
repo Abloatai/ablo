@@ -21,10 +21,10 @@ const config: Config = {
   moduleFileExtensions: ['ts', 'js', 'json'],
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
-    '^@ablo/transaction/(coordination|wire|types|auth|keys|schema|source|server|webhooks)$':
+    '^@abloatai/transaction/(coordination|wire|types|auth|keys|schema|source|server|webhooks)$':
       '<rootDir>/src/$1/index.ts',
-    '^@ablo/transaction/(.*)$': '<rootDir>/src/$1.ts',
-    '^@ablo/transaction$': '<rootDir>/src/index.ts',
+    '^@abloatai/transaction/(.*)$': '<rootDir>/src/$1.ts',
+    '^@abloatai/transaction$': '<rootDir>/src/index.ts',
   },
   testTimeout: 10000,
 };

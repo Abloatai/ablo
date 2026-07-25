@@ -48,7 +48,7 @@ await firstDrain;
 
 const plugin = humans();
 if (plugin.id !== 'humans' || plugin.materialises !== true) {
-  throw new Error('@ablo/humans did not expose its materializer capability');
+  throw new Error('@abloatai/humans did not expose its materializer capability');
 }
 
 console.log('humans package integration clean');

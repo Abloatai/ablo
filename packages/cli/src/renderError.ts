@@ -19,7 +19,7 @@
 
 import pc from 'picocolors';
 
-import { AbloError, classifyRecovery } from '@ablo/transaction/errors';
+import { AbloError, classifyRecovery } from '@abloatai/transaction/errors';
 import { terminalWidth } from './terminalWidth.js';
 import { brand } from './theme.js';
 

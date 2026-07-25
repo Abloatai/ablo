@@ -7,9 +7,9 @@
  * registered `wait_for_timeout` code. A caller-initiated abort is NOT
  * mislabeled as a timeout — it propagates unchanged.
  */
-import { createHttpTransport } from '@ablo/transaction/transport/httpTransport';
-import { AbloConnectionError, isRetryableCode } from '@ablo/transaction/errors';
-import { modelReadResponse } from '@ablo/transaction/testing/fixtures/httpResponses';
+import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
+import { AbloConnectionError, isRetryableCode } from '@abloatai/transaction/errors';
+import { modelReadResponse } from '@abloatai/transaction/testing/fixtures/httpResponses';
 
 /** A fetch that never responds but honors its AbortSignal (a black hole). */
 const blackHoleFetch = ((_url: string | URL | Request, init?: RequestInit) =>
