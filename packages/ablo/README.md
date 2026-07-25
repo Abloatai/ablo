@@ -167,21 +167,15 @@ React bindings are available from `@abloatai/ablo/react`.
 
 ## How the write path works
 
-```text
-human application / agent / backend service
-                     |
-                     v
-          authorized, idempotent commit
-                     |
-                     v
-       claims · conflict checks · settlement
-                     |
-                     v
-       your Postgres + authoritative confirmation
-                     |
-                     v
-          ordered observation and live views
-```
+1. A human application, agent, or backend service submits a typed commit.
+2. Ablo checks its identity, capability, idempotency key, claims, fences, and
+   stale context at one authority boundary.
+3. The accepted transaction is applied to your Postgres through a scoped
+   writer role.
+4. Ablo marks the transaction confirmed when your authoritative database
+   reports the change back.
+5. The resulting ordered change reaches durable observers and live
+   applications through the same feed.
 
 Ablo is more than a synchronization library. Realtime materialization is one
 way to consume the ordered transaction stream. The underlying product is the
