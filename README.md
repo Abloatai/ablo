@@ -92,7 +92,7 @@ Use `@abloatai/ablo` for agents and backend code,
 `@abloatai/ablo/react` for React. All entrypoints share the same schema,
 authority, commits, claims, and ordered changes.
 
-Read the [Quickstart](./docs/quickstart.md), browse
+Read the [Quickstart](https://docs.abloatai.com/quickstart), browse
 [docs.abloatai.com](https://docs.abloatai.com), or run `npx ablo docs`.
 
 ## Contributing
