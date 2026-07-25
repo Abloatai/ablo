@@ -40,10 +40,12 @@ if [ -z "${NOTES//[$'\n\t ']/}" ]; then
   exit 1
 fi
 
-# Don't double-create a release for a tag that already exists.
+# Release creation is idempotent so a publish interrupted after this point can
+# be resumed safely.
 if gh release view "$TAG" --repo "$MIRROR_REPO" >/dev/null 2>&1; then
-  echo "error: release $TAG already exists on $MIRROR_REPO" >&2
-  exit 1
+  echo "Release $TAG already exists on $MIRROR_REPO."
+  echo "Done: https://github.com/$MIRROR_REPO/releases/tag/$TAG"
+  exit 0
 fi
 
 # Sanity: warn (don't block) if the version isn't on npm yet — release notes for

@@ -64,16 +64,3 @@ Use `authEndpoint` for the browser credential endpoint. The supported routes
 are `/v1/ephemeral_keys` and `/v1/capabilities`; the former `apiKey` endpoint
 option and legacy route aliases are removed. Credential callbacks now use the
 `CredentialProvider` type.
-
-### Verified throughput without dropping coordination guarantees
-
-The strict AWS benchmark sustained more than 10,000 committed operations per
-second across create, mixed-create, update, and delete workloads, with zero
-write errors and sub-second publication drain.
-
-The result covers the documented single-plane, 12-client, 500-operation test
-topology. Atomic commits, authorization, idempotency, conflict handling, audit
-delivery, ordered observation, replay, and authoritative confirmation remained
-enabled throughout the run.
-
-Release notes are generated from the repository changesets.

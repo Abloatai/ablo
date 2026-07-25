@@ -125,19 +125,8 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
       - run: npm ci
-      - name: Production dependency audit
-        run: npm audit --omit=dev
-      - run: npm run build
-      - run: npm run typecheck
-      - run: npm run test
-      - name: Fresh-project quickstart
-        run: npm run test:quickstart --workspace=@abloatai/cli
-      - name: Tarball contents
-        run: npm pack --dry-run --workspace=@abloatai/transaction --workspace=@abloatai/humans --workspace=@abloatai/ablo --workspace=@abloatai/cli
-      - name: Source-condition lifecycle
-        run: npm run pack:check --workspace=@abloatai/transaction && npm run pack:check --workspace=@abloatai/humans && npm run pack:check --workspace=@abloatai/ablo
-      - name: Package metadata
-        run: npx publint --strict packages/transaction && npx publint --strict packages/humans && npx publint --strict packages/ablo && npx publint --strict packages/cli
+      - name: Verify release workspace
+        run: bash packages/ablo/scripts/verify-release-workspace.sh
       - name: Publish unpublished package versions
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
