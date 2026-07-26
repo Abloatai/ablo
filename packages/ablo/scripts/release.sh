@@ -137,6 +137,7 @@ prepare_release() {
     exit 1
   fi
   node "$SCRIPT_DIR/finalize-release-notes.mjs" "$new_version"
+  npm run generate:openapi --workspace=@abloatai/ablo
   bash "$SCRIPT_DIR/refresh-public-lock.sh"
   node scripts/typesafety/check-public-surface.mjs --update
 
