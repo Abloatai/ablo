@@ -55,11 +55,17 @@ export interface ClaimGrantInfo {
    * `undefined` when the server does not fence (no minter wired).
    */
   readonly fenceToken?: number;
+  /** Authoritative branch watermark captured when the lease was granted. */
+  readonly readAt?: number;
 }
 
 /** Read the server-stamped fencing token off a grant frame, if present. */
 function readFenceToken(p: Record<string, unknown>): number | undefined {
   return typeof p.fenceToken === 'number' ? p.fenceToken : undefined;
+}
+
+function readWatermark(p: Record<string, unknown>): number | undefined {
+  return typeof p.readAt === 'number' ? p.readAt : undefined;
 }
 
 export function awaitClaimGrant(
@@ -102,8 +108,13 @@ export function awaitClaimGrant(
         if (p?.claimId === claimId) {
           logger.debug(`claim: acquired ${claimId} (target was free)`);
           const fenceToken = readFenceToken(p);
+          const readAt = readWatermark(p);
           settle(() => {
-            resolve({ waited: false, ...(fenceToken !== undefined ? { fenceToken } : {}) });
+            resolve({
+              waited: false,
+              ...(fenceToken !== undefined ? { fenceToken } : {}),
+              ...(readAt !== undefined ? { readAt } : {}),
+            });
           });
         }
       }),
@@ -115,8 +126,13 @@ export function awaitClaimGrant(
           // turn now" moment after waiting behind a holder.
           logger.info(`claim: granted ${claimId} — your turn (waited in queue)`);
           const fenceToken = readFenceToken(p);
+          const readAt = readWatermark(p);
           settle(() => {
-            resolve({ waited: true, ...(fenceToken !== undefined ? { fenceToken } : {}) });
+            resolve({
+              waited: true,
+              ...(fenceToken !== undefined ? { fenceToken } : {}),
+              ...(readAt !== undefined ? { readAt } : {}),
+            });
           });
         }
       }),

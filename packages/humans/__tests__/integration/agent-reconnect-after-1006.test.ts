@@ -118,11 +118,12 @@ describe('Agent-host WS reconnect after 1006 close', () => {
       baseURL: 'ws://localhost:8080',
       schema: testSchema,
       organizationId: 'org-1',
+      branchId: 'br_test',
+      branchRoot: false,
       kind: 'agent',
       agentId: 'worker-1',
       bootstrapMode: 'none',
       inMemory: true,
-      apiKey: 'test-key',
       capabilityToken: 'test-token',
     } as AbloTestOpts);
 
@@ -166,11 +167,12 @@ describe('Agent-host WS reconnect after 1006 close', () => {
       baseURL: 'ws://localhost:8080',
       schema: testSchema,
       organizationId: 'org-1',
+      branchId: 'br_test',
+      branchRoot: false,
       kind: 'agent',
       agentId: 'worker-2',
       bootstrapMode: 'none',
       inMemory: true,
-      apiKey: 'test-key',
       capabilityToken: 'test-token',
     } as AbloTestOpts);
 

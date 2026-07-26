@@ -31,8 +31,7 @@ import type { LoginDeps } from '../login';
 const DEVICE_CODE = 'dev_code_abc';
 const USER_CODE = 'WXYZ-1234';
 const ACCESS_TOKEN = 'sess_token_xyz';
-const TEST_KEY = 'sk_test_routingfixture';
-const LIVE_KEY = 'rk_live_routingfixture';
+const MANAGEMENT_KEY = 'mk_routingfixture';
 
 interface RecordedRequest {
   readonly method: string;
@@ -123,8 +122,7 @@ describe('ablo login — request routing across auth + dashboard hosts', () => {
       if (req.url === '/api/cli/provision-key') {
         const expiresAt = new Date(Date.now() + 90 * 86_400_000).toISOString();
         json(res, 201, {
-          test: { apiKey: TEST_KEY, expiresAt },
-          live: { apiKey: LIVE_KEY, expiresAt },
+          management: { apiKey: MANAGEMENT_KEY, expiresAt },
           organizationId: 'org_routing',
           organizationSlug: 'acme',
           project: null,
@@ -194,13 +192,13 @@ describe('ablo login — request routing across auth + dashboard hosts', () => {
     expect(openedUrls.some((u) => u.startsWith(authHost.origin))).toBe(false);
   });
 
-  it('persists the provisioned sandbox + production keys to the config dir', async () => {
+  it('persists the provisioned management credential to the config dir', async () => {
     const { login } = await import('../login');
     await login([], { openUrl: () => undefined });
 
     const creds = JSON.parse(readFileSync(join(configPath, 'credentials.json'), 'utf8'));
     const stored = JSON.stringify(creds);
-    expect(stored).toContain(TEST_KEY);
-    expect(stored).toContain(LIVE_KEY);
+    expect(stored).toContain(MANAGEMENT_KEY);
+    expect(creds.profiles.default.management.apiKey).toBe(MANAGEMENT_KEY);
   });
 });

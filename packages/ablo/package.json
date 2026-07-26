@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.37.1",
+  "version": "0.38.0",
   "description": "The public Ablo SDK for coordinated reads, commits, claims, observation, and reactive applications.",
   "license": "Apache-2.0",
   "type": "module",
@@ -82,6 +82,12 @@
       "import": "./dist/coordination.js",
       "default": "./dist/coordination.js"
     },
+    "./ai-sdk": {
+      "@ablo/source": "./src/ai-sdk.ts",
+      "types": "./dist/ai-sdk.d.ts",
+      "import": "./dist/ai-sdk.js",
+      "default": "./dist/ai-sdk.js"
+    },
     "./wire": {
       "@ablo/source": "./src/wire.ts",
       "types": "./dist/wire.d.ts",
@@ -112,6 +118,9 @@
     "test": "vitest run",
     "generate:errors": "tsx scripts/generate-error-docs.mts",
     "lint:errors": "tsx scripts/check-error-docs.mts",
+    "generate:openapi": "tsx --conditions=@ablo/source scripts/generate-openapi.mts",
+    "lint:openapi": "tsx --conditions=@ablo/source scripts/generate-openapi.mts --check",
+    "validate:openapi": "redocly lint ../../docs/ablo/public/openapi.json --extends=recommended --skip-rule=no-server-example.com",
     "build:docs": "node scripts/build-blume-docs.mjs",
     "lint:docs": "node scripts/check-doc-drift.mjs",
     "lint:pkg": "publint"
@@ -127,13 +136,17 @@
     "directory": "packages/ablo"
   },
   "dependencies": {
-    "@abloatai/humans": "^0.37.1",
-    "@abloatai/transaction": "^0.37.1"
+    "@abloatai/humans": "^0.38.0",
+    "@abloatai/transaction": "^0.38.0"
   },
   "peerDependencies": {
+    "ai": "^6.0.0 || ^7.0.0",
     "react": "^19.2.8"
   },
   "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    },
     "react": {
       "optional": true
     }

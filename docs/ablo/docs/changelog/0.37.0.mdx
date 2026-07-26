@@ -1,0 +1,47 @@
+---
+title: "v0.37.0"
+type: changelog
+date: 2026-07-25
+changelog:
+  version: "0.37.0"
+  category: "Fixes"
+---
+
+### One Ablo SDK for humans, agents, and backend systems
+
+Ablo is now presented and shipped as the transaction and coordination layer for
+shared application state—not only as a realtime synchronization library.
+
+Install `@abloatai/ablo` as the single public SDK:
+
+- `@abloatai/ablo` provides the pure HTTP path for agents, services, workers,
+  jobs, server actions, and other headless runtimes.
+- `@abloatai/ablo/client` adds live local state, optimistic interaction,
+  persistence, and presence for human-facing applications.
+- `@abloatai/ablo/react` provides the React bindings.
+
+Every entrypoint uses the same schema, capabilities, commits, claims,
+idempotency, settlement, and ordered changes. Authoritative reads use
+`model.get({ id })`; local reactive snapshots use `model.local.get(id)`.
+
+### Coordination now matches the unit applications can safely write
+
+Claims can coordinate an entire row or a typed set of fields. Two actors
+working on different fields of the same row can proceed concurrently, while
+overlapping work takes turns.
+
+Sub-field `path` and `range` claims have been removed because the write path
+cannot yet guarantee independent updates within one field. Applications using
+those options should claim the containing field instead and keep any
+cursor/range information in claim metadata for display.
+
+### Safer authority for browser applications
+
+Browser sessions now use one typed, short-lived credential flow and require a
+non-empty schema-typed `can` grant. Applications specify the exact model
+operations a session may perform instead of issuing ambient all-data access.
+
+Use `authEndpoint` for the browser credential endpoint. The supported routes
+are `/v1/ephemeral_keys` and `/v1/capabilities`; the former `apiKey` endpoint
+option and legacy route aliases are removed. Credential callbacks now use the
+`CredentialProvider` type.

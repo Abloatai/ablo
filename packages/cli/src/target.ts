@@ -7,14 +7,14 @@
  * nothing reconciles them: what the CLI *shows* (`ablo status`, the push banner)
  * has historically come from a LOCAL preference — `activeProject` in
  * `config.json`, set by `ablo projects use` — while what actually *routes* the
- * push is the API key's server-side scope, which the key prefix cannot reveal (a
- * prefix only tells sandbox from production). So `ablo projects use acme`
+ * push is the API key's server-side scope, which the key prefix cannot reveal.
+ * So `ablo projects use acme`
  * followed by a push with an `.env.local` key minted for `globex` prints
  * "project: acme" and deploys to globex.
  *
  * This resolver closes that gap. It asks the server who the key really is
- * (`GET /api/auth/identity`, which now returns the full `{ org, project,
- * environment, sandbox }` plane), names the project against the project list,
+ * (`GET /api/auth/identity`, which returns the full `{ org, project, branch }`
+ * target), names the project against the project list,
  * and compares that ground truth to the local preference. Commands render the
  * SERVER-CONFIRMED plane and surface any drift, so what you see is where you
  * land. When the server can't answer — offline, an older server, or a human
@@ -26,7 +26,6 @@ import { resolveIdentity } from '@abloatai/transaction/auth';
 import { resolveBootstrapBaseUrl } from '@abloatai/transaction/auth/apiKey';
 import {
   getActiveProject,
-  getMode,
   modeFromKey,
   type Mode,
   type ActiveProject,
@@ -55,14 +54,16 @@ export interface TargetProject {
 export interface ConfirmedTarget {
   organizationId: string;
   /** From the server; falls back to the key prefix when the server omits it. */
-  environment: Mode | null;
+  environment: string | null;
   /** Named project, or null when the identity carried no project (human
    *  session, or a server too old to report one). */
   project: TargetProject | null;
   /** The raw project id from the identity, even when it couldn't be named. */
   projectId: string | null;
-  /** The sandbox a sandbox-bound key belongs to, when present. */
-  sandboxId: string | null;
+  /** Immutable transaction branch confirmed by the server. */
+  branchId?: string | null;
+  /** True when branchId is the production root. */
+  branchRoot?: boolean;
 }
 
 /**
@@ -78,14 +79,6 @@ export type TargetMismatch =
       intended: string;
       /** The project the key actually targets. */
       actual: string;
-    }
-  | {
-      /** The key's environment isn't the CLI's active mode. */
-      kind: 'environment';
-      /** The environment the key deploys to (the real one). */
-      keyEnv: Mode;
-      /** The CLI's active `ablo mode`. */
-      cliMode: Mode;
     };
 
 export interface ResolvedTarget {
@@ -134,7 +127,7 @@ export async function resolveTarget(opts: ResolveTargetOptions): Promise<Resolve
     keyEnv,
     confirmed,
     localProject,
-    mismatches: reconcile({ confirmed, keyEnv, localProject, cliMode: getMode() }),
+    mismatches: reconcile({ confirmed, localProject }),
   };
 }
 
@@ -148,16 +141,16 @@ async function confirmFromServer(opts: ResolveTargetOptions): Promise<ConfirmedT
       timeoutMs: opts.timeoutMs ?? 4000,
     });
     const projectId = identity.projectId ?? null;
-    const environment: Mode | null = identity.environment ?? keyEnv;
     const project = projectId
       ? await nameProject(projectId, identity.accountScope, opts)
       : null;
     return {
       organizationId: identity.accountScope,
-      environment,
+      environment: keyEnv,
       project,
       projectId,
-      sandboxId: identity.sandboxId ?? null,
+      branchId: identity.branchId ?? null,
+      branchRoot: identity.branchRoot,
     };
   } catch {
     // Offline, an older server without the route, or a credential that can't
@@ -210,26 +203,14 @@ function confirmedProjectSlug(project: TargetProject): string {
 /**
  * Compares local intent against the confirmed plane and returns each real
  * divergence. Matching is by id where possible (the org-default project's id is
- * the org id), so a slug rename never reads as a false mismatch. Pure: the CLI
- * mode is passed in (not read from disk) so the reconciliation can be tested on
- * its inputs alone.
+ * the org id), so a slug rename never reads as a false mismatch.
  */
 export function reconcile(input: {
   confirmed: ConfirmedTarget | null;
-  keyEnv: Mode | null;
   localProject: ActiveProject | undefined;
-  /** The CLI's active `ablo mode` — the local environment preference. */
-  cliMode: Mode;
 }): TargetMismatch[] {
-  const { confirmed, keyEnv, localProject, cliMode } = input;
+  const { confirmed, localProject } = input;
   const mismatches: TargetMismatch[] = [];
-
-  // Environment: the key's real environment vs the CLI's active mode. Prefer
-  // the server's environment; fall back to the key prefix when it's all we have.
-  const realEnv = confirmed?.environment ?? keyEnv;
-  if (realEnv && realEnv !== cliMode) {
-    mismatches.push({ kind: 'environment', keyEnv: realEnv, cliMode });
-  }
 
   // Project: the local preference vs the key's real project. Only decidable
   // once the server confirms a project id.
@@ -260,13 +241,8 @@ export function describeMismatches(mismatches: readonly TargetMismatch[]): strin
   const actual: string[] = [];
   const selected: string[] = [];
   for (const m of mismatches) {
-    if (m.kind === 'environment') {
-      actual.push(m.keyEnv);
-      selected.push(m.cliMode);
-    } else {
-      actual.push(`project ${m.actual}`);
-      selected.push(m.intended);
-    }
+    actual.push(`project ${m.actual}`);
+    selected.push(m.intended);
   }
   return (
     `This key acts on ${actual.join(' · ')}, not ${selected.join(' · ')} as selected. ` +

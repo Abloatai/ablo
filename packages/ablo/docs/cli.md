@@ -11,7 +11,7 @@ SQL — so what you test is what ships.
 ```bash
 npx ablo init      # scaffold ablo/schema.ts + client
 npx ablo login     # authorize in the browser
-npx ablo dev       # push schema to the test sandbox + watch
+npx ablo dev       # prepare an isolated Git branch + push/watch
 ```
 
 **Two setup styles, and they pick your commands.** If your app database is the
@@ -19,42 +19,43 @@ source of truth, expose a [Data Source endpoint](./data-sources.md) and keep DB
 credentials in your app. If you explicitly want Ablo to open a Postgres
 connection, use the **Direct Postgres connector** commands: `ablo migrate`
 applies changes to your own `DATABASE_URL`, and `ablo check` / `ablo pull`
-adopt tables you already have. Hosted sandbox commands are tagged **Hosted**;
+adopt tables you already have. Hosted branch commands are tagged **Hosted**;
 direct-connector commands are tagged **Direct Postgres**.
 
 ## Authenticate
 
 `ablo login` runs the OAuth 2.0 device flow: it opens your browser, you choose
 **log in** or **create an account** and approve, and the CLI provisions a
-**test + live key pair** (90-day) and stores them locally. The test key is a
-sandbox `sk_test_` key; the live key is a restricted `rk_live_` key (read-only
-observation — `logs`, `status`), so a stolen config can't write to production.
-This mirrors `stripe login`.
+90-day, project-scoped `mk_` management credential. It has no test/live mode
+and cannot read or write application data. `ablo dev` uses it to create or
+resume a branch and exchanges it for a temporary branch-bound runtime key.
 
 | Command                  | What it does                                                               |
 | ------------------------ | -------------------------------------------------------------------------- |
-| `ablo login`             | Authorize in the browser; provisions + stores a test and a live key.       |
-| `ablo login --project <slug>` | Same, but scope (and mint) the pair to a project, and make it active. |
-| `ablo logout`            | Remove the stored keys.                                                    |
-| `ablo status`            | Show the active org, mode, both keys (prefix, what each can do, expiry), and server health. |
-| `ablo mode [sandbox\|production]` | Switch the active environment. With no argument, prompts.                         |
+| `ablo login`             | Authorize in the browser; store one project management credential.         |
+| `ablo login --project <slug>` | Same, scoped to a project, which becomes active.                     |
+| `ablo logout`            | Remove the stored credentials.                                             |
+| `ablo status`            | Show the active org/project, effective credential, branch target, and server health. |
 
-Keys live in `~/.config/ablo/credentials.json` (mode `0600`), keyed by project
-then environment; the non-secret `config.json` holds only the active mode and
-project. In **CI**, don't log in — set `ABLO_API_KEY`, which always overrides
-the stored key.
+Keys live in `~/.config/ablo/credentials.json` (mode `0600`), keyed by project.
+The non-secret `config.json` holds the active project. In **CI**, don't log in —
+set the project management credential as `ABLO_MANAGEMENT_KEY`; it overrides the
+stored credential during branch bootstrap.
 
-## Test vs live
+## Development branches vs live
 
-Like Stripe, every account has a **test** mode and a **live** mode, and a key
-belongs to one of them. Test keys are bound to an isolated sandbox: their reads
-and writes never touch production data. Switch with `ablo mode`; `ablo dev` is always
-the sandbox by design.
+A branch is your project at full strength over its own rows: the same models,
+the same schema artifacts, the same claims and the same rules production runs.
 
-The schema is **one definition serving both**: a sandbox reads the production
-schema until it is pushed one of its own, so your test and live keys see the same
-models and only the rows differ. Each plane keeps its own copy once pushed, so a
-schema change reaches production when you push it with a live key — see
+Production is the project root. `ablo dev` creates or reuses a child branch for
+your Git branch, then mints a temporary `sk_test_` key bound to that child.
+Reads, writes, schema artifacts, claims, and credentials stay isolated from
+production and from other development branches, which is what makes a
+schema-changing pull request as routine as a code-only one.
+
+There is no local mode switch. Development selection comes from Git or
+`--branch`; production authority comes only from an explicit live credential.
+Production schema changes use the reviewed one-shot path in
 [Deployment](./deployment.md).
 
 ## Projects
@@ -70,7 +71,7 @@ selects which profile every command authenticates with.
 | `ablo projects list`          | List the org's projects (marks the active one and the org-default).                |
 | `ablo projects create <slug>` | Create a project (`--name "Display Name"`). Its keys/schema/data are isolated.     |
 | `ablo projects use <slug>`    | Switch the active project. `ablo projects use default` returns to the org-default. |
-| `ablo login --project <slug>` | Mint and store a key pair for a project, and make it active.                       |
+| `ablo login --project <slug>` | Store management access for a project and make it active.                          |
 
 Because keys are fixed to a project, `projects use` only changes which profile
 is active — it never re-scopes an existing key. Switch to a project you haven't
@@ -81,14 +82,15 @@ npx ablo projects use war-room
 #   ✓ now targeting project war-room (prj_…)
 #   No key stored for this project yet — run `ablo login --project war-room` to mint one.
 
-npx ablo login --project war-room   # mints + stores its key pair, keeps it active
+npx ablo login --project war-room   # stores its management credential, keeps it active
 ```
 
 If you run a project-scoped command (`push`, `dev`) while the active project has
 no key — but other projects do — the CLI **refuses** rather than silently
 deploying with the wrong project's credential, and names the fix
-(`ablo login --project <slug>`). In CI, an explicit `ABLO_API_KEY` bypasses
-profiles entirely: it acts in whatever project it was minted for.
+(`ablo login --project <slug>`). In CI, an explicit `ABLO_MANAGEMENT_KEY`
+bypasses profiles for project/branch administration; the runtime key remains
+`ABLO_API_KEY`.
 
 ## Commands
 
@@ -96,10 +98,10 @@ profiles entirely: it acts in whatever project it was minted for.
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `ablo init`                        | Scaffold `ablo/` (`schema.ts`, client, optional Data Source / agent / component), write `.env`, install the SDK. Offers to log in at the end. |: |
 | `ablo login` / `logout` / `status` | Authentication & status (above).                                                                                                              |: |
-| `ablo mode [sandbox\|production]`   | Switch active environment.                                                                                                                           |: |
 | `ablo projects list\|create\|use\|rename` | Manage projects and the active one (see [Projects](#projects)). Each project's keys/schema/data are isolated.                          | `--name "<display>"` (create/rename)                                                                    |
-| `ablo dev`                         | **Hosted**: push the schema to your test sandbox, then watch `ablo/schema.ts` and re-push on save.                                           | `--no-watch`, `--schema <path>`, `--export <name>`, `--url <url>`                                      |
-| `ablo logs`                        | Tail your scope's commit activity (`stripe logs tail`). Follows by default.                                                                   | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow`, `--mode sandbox\|production` |
+| `ablo dev`                         | **Hosted**: ensure an isolated Git branch, wire its temporary key, push, then watch `ablo/schema.ts`.                                        | `--branch <slug>`, `--branch-ttl-hours <1-168>`, `--no-watch`, `--schema`, `--export`, `--url` |
+| `ablo branch list\|status\|check\|create\|ensure\|credential\|delete` | Manage and diagnose immutable branch planes and expiring credentials.                          | Run `ablo branch --help`; use `--json` for automation.                                                   |
+| `ablo logs`                        | Tail the effective credential's branch activity. Follows by default.                                                                          | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow` |
 | `ablo push`                        | **Hosted**: upload the schema to Ablo; the server diffs, migrates, and activates it.                                                         | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url`         |
 | `ablo migrate`                     | **Direct Postgres**: provision just the synced models (plus the adapter's `ablo_outbox` / `ablo_idempotency`) in your own `DATABASE_URL`. Leaves your other tables alone.                                                          | `--dry-run`, `--output <file>`, `--schema`, `--export`                                                 |
 | `ablo pull`                        | **Direct Postgres**: generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`).                              | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force`                                     |
@@ -131,15 +133,21 @@ HTTP at `/api/docs/<slug>` and through the docs MCP server.
 
 ## `ablo dev`
 
-The development loop. It pushes `ablo/schema.ts` to your **test sandbox**,
-prints the env line your app needs, then watches the file and re-pushes on every
-save (300 ms debounce). It refuses live keys so a tight save loop can never
-churn production data.
+The branch-first development loop. It discovers your Git/CI branch, ensures the
+matching Ablo child branch, exchanges the stored `mk_` project credential for an
+expiring branch-only key, writes that key to gitignored `.env.local`, pushes
+`ablo/schema.ts`, and re-pushes on every save.
 
 ```bash
-npx ablo dev             # push + watch
-npx ablo dev --no-watch  # push once and exit
+npx ablo dev                              # discover from Git, push + watch
+npx ablo dev --branch preview-pr-482      # explicit branch
+npx ablo dev --no-watch                   # prepare, push once, exit
+npx ablo dev --branch-ttl-hours 24        # change temporary-key lifetime
 ```
+
+It does not start your app, run migrations, create a database-provider branch,
+or copy production rows. Read [Branch-first development](./branch-development.md)
+for the exact discovery order, CI flow, database boundary, and troubleshooting.
 
 ## `ablo logs`
 
@@ -212,7 +220,7 @@ reshaping it. `ablo check` is read-only; it never proposes a migration.
 
 Same engine, two setups. If you use the **Direct Postgres connector**, use
 `ablo migrate` — it provisions the synced models in your own `DATABASE_URL`. If
-Ablo manages the sandbox/hosted store, use `ablo push` and `ablo dev` — the
+Ablo manages the hosted store, use `ablo push` and `ablo dev` — the
 server applies the change and version-gates connecting clients.
 
 ```bash

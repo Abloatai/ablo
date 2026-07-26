@@ -514,17 +514,14 @@ describe('dataSource', () => {
     expect(seen.bodyType).toBe('list');
   });
 
-  it('round-trips mode (sandbox/production) through scope context for handler-side isolation', async () => {
-    // Customer branches on `context.scope?.mode` to route sandbox traffic
-    // to an isolated store. The environment prefixes select isolated stores:
-    // same wire shape, different namespace.
-    const seenModes: (string | undefined)[] = [];
+  it('round-trips immutable branch identity through source scope', async () => {
+    const seenBranches: (string | undefined)[] = [];
     const handler = dataSource({
       schema,
       apiKey: TEST_API_KEY,
       files: {
         async list({ context }) {
-          seenModes.push(context.scope?.mode);
+          seenBranches.push(context.scope?.branchId);
           return [];
         },
       },
@@ -533,21 +530,15 @@ describe('dataSource', () => {
     await post(handler, {
       type: 'list',
       model: 'files',
-      scope: { mode: 'sandbox', organizationId: 'org_1' },
+      scope: { branchId: 'br_preview', organizationId: 'org_1' },
     });
     await post(handler, {
       type: 'list',
       model: 'files',
-      scope: { mode: 'production', organizationId: 'org_1' },
-    });
-    await post(handler, {
-      type: 'list',
-      model: 'files',
-      // omitted mode → undefined (customer treats as production by convention)
-      scope: { organizationId: 'org_1' },
+      scope: { branchId: 'br_main', organizationId: 'org_1' },
     });
 
-    expect(seenModes).toEqual(['sandbox', 'production', undefined]);
+    expect(seenBranches).toEqual(['br_preview', 'br_main']);
   });
 
   it('exposes scope context to authorize and list handlers', async () => {
@@ -576,8 +567,8 @@ describe('dataSource', () => {
         participantId: 'user_42',
         participantKind: 'user',
         organizationId: 'org_99',
+        branchId: 'br_preview',
         projectId: 'proj_docs',
-        sandboxId: 'sb_preview',
         requiredSyncGroups: ['org:org_99', 'user:user_42'],
       },
     });
@@ -589,8 +580,8 @@ describe('dataSource', () => {
     expect(seenScope.list).toMatchObject({
       participantKind: 'user',
       organizationId: 'org_99',
+      branchId: 'br_preview',
       projectId: 'proj_docs',
-      sandboxId: 'sb_preview',
     });
   });
 

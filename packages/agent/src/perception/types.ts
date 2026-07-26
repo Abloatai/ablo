@@ -13,9 +13,8 @@ import type { Activity } from '@abloatai/transaction/types/streams';
 
 /**
  * A minimal interface for announcing an agent's presence, independent of how it
- * connects. Both the WebSocket-based agent client and the REST-based agent
- * implement it, so higher-level code can depend on this interface without caring
- * which transport is in use.
+ * connects. Human-facing WebSocket clients implement it; headless transaction
+ * clients may omit it because activity presence is not a write-safety primitive.
  */
 export interface PresenceAnnouncer {
   announce(
@@ -69,7 +68,10 @@ export interface AgentContext {
       entityType: string,
       entityId: string,
       lastSeenAt: number,
-    ) => Promise<unknown>;
+    ) => Promise<{
+      readonly stale: boolean;
+      readonly reason: 'ok' | 'not_found' | 'modified';
+    }>;
   };
   /** The organization every operation is scoped to. */
   organizationId?: string;

@@ -18,11 +18,17 @@ import {
 } from './commands';
 import { push } from './push';
 import { generate } from './generate';
-import { dev, wireEnvLocal } from './dev';
+import { dev } from './dev';
 import { login, logout } from './login';
-import { resolveApiKey, resolvePushPlan, guardActiveProjectKey } from './config';
-import { mode } from './mode';
+import {
+  resolveApiKey,
+  resolveManagementKey,
+  resolvePushPlan,
+  guardActiveProjectKey,
+} from './config';
 import { projects, ensureProject, projectSlugFromPackageName } from './projects';
+import { branches } from './branches';
+import { runBranchDev } from './branchDev';
 import { status } from './status';
 import { doctor } from './doctor';
 import { logs } from './logs';
@@ -55,8 +61,8 @@ const HANDLERS: Readonly<Record<CommandName, (argv: readonly string[]) => Promis
   init: (argv) => init([...argv]),
   login: (argv) => login([...argv]),
   logout: () => logout(),
-  mode: (argv) => mode([...argv]),
   projects: (argv) => projects([...argv]),
+  branch: (argv) => branches([...argv]),
   status: (argv) => status([...argv]),
   doctor: () => doctor(),
   logs: (argv) => logs([...argv]),
@@ -74,11 +80,9 @@ const HANDLERS: Readonly<Record<CommandName, (argv: readonly string[]) => Promis
 };
 
 /**
- * `dev` is an alias for `ablo push --watch`, since nothing about it runs
- * locally. Honor an explicit `--no-watch` (push once, then exit): appending
- * `--watch` unconditionally would clobber it under last-flag-wins parsing, so
- * `ablo dev --no-watch` would watch forever — the runaway an unattended caller
- * most needs the `--no-watch` escape hatch to prevent.
+ * `dev` is the branch-first wrapper around the existing schema watcher. Honor
+ * an explicit `--no-watch` (push once, then exit): appending `--watch`
+ * unconditionally would clobber it under last-flag-wins parsing.
  */
 async function runDev(argv: readonly string[]): Promise<void> {
   const devArgs = [...argv];
@@ -86,11 +90,11 @@ async function runDev(argv: readonly string[]): Promise<void> {
   console.log(
     pc.dim(
       oneShot
-        ? '  `ablo dev --no-watch` is `ablo push` (push once, no watcher) — running that.'
-        : '  `ablo dev` is now `ablo push --watch` — running that.',
+        ? '  `ablo dev --no-watch` prepares this Git branch and pushes once.'
+        : '  `ablo dev` prepares this Git branch and watches the schema.',
     ),
   );
-  await dev(oneShot ? devArgs : [...devArgs, '--watch']);
+  await runBranchDev(oneShot ? devArgs : [...devArgs, '--watch']);
 }
 
 /**
@@ -106,13 +110,13 @@ async function runPull(argv: readonly string[]): Promise<void> {
 }
 
 /**
- * Two flows: the sandbox dev flow (role check, env wiring, server-side
+ * Two flows: the `ablo dev` watch loop (role check, env wiring, server-side
  * provisioning, optional --watch) and the raw one-shot pusher (production
- * deploys, advanced flags). The credential resolves explicit ABLO_API_KEY →ma
- * the active mode's stored credential (`resolvePushPlan`), so `ablo login` +
- * `ablo mode production` + `npx ablo push` deploys to production instead of
- * demanding sk_test_. `--watch` stays sandbox-only: it routes to the dev flow,
- * whose live-key refusal names the supported production path.
+ * deploys, advanced flags). The credential resolves an explicit `ABLO_API_KEY`
+ * first, then the active mode's stored credential (`resolvePushPlan`), so
+ * Production deploys use an explicit `sk_live_` ABLO_API_KEY; branch
+ * development always goes through `ablo dev`. `--watch` routes to the dev
+ * flow and a live key is pointed at the reviewed one-shot deploy.
  */
 async function runPush(argv: readonly string[]): Promise<void> {
   const rest = [...argv];
@@ -538,14 +542,10 @@ async function init(args: readonly string[] = []) {
   }
 
   const envFile = framework === 'nextjs' ? '.env.local' : '.env';
-  // When the user is already authenticated (and isn't passing ABLO_API_KEY via
-  // the shell), wire the real stored sandbox key instead of a placeholder, so
-  // `init` + `push` runs without an "unknown key" detour. `wireEnvLocal` owns the
-  // ABLO_API_KEY line and only targets `.env.local`, so this applies to the
-  // Next.js path; other frameworks keep the documented placeholder.
-  const resolvedKey = process.env.ABLO_API_KEY ? undefined : resolveApiKey('sandbox');
-  const wireRealKey = envFile === '.env.local' && Boolean(resolvedKey);
-  const envBody = generateEnv(storage, { includeApiKey: !wireRealKey });
+  // `ablo dev` is the only command that writes an application runtime key. The
+  // stored login credential can manage branches and must never be handed to the
+  // app by `init`.
+  const envBody = generateEnv(storage);
   if (!existsSync(envFile)) {
     writeFileSync(envFile, envBody);
     created.push(envFile);
@@ -558,12 +558,6 @@ async function init(args: readonly string[] = []) {
       created.push(`${envFile} ${pc.dim('(already configured)')}`);
     }
   }
-  if (wireRealKey && resolvedKey) {
-    // Idempotent: creates/replaces the ABLO_API_KEY line and .gitignores the file.
-    wireEnvLocal(resolvedKey);
-    created.push(`.env.local ${pc.dim('(ABLO_API_KEY set from your login)')}`);
-  }
-
   if (agent) {
     writeFileSync(join(abloDir, 'agent.ts'), generateAgent());
     created.push(`${abloDir}/agent.ts`);
@@ -614,8 +608,7 @@ async function init(args: readonly string[] = []) {
   }
 
   const steps = [
-    `Get a ${pc.bold('sk_test_')} key at ${pc.cyan('https://abloatai.com')}`,
-    `Run ${pc.bold('npx ablo login')} (or add ${pc.bold('ABLO_API_KEY')} to ${pc.bold(envFile)})`,
+    `Run ${pc.bold('npx ablo login')} to authorize branch management`,
     `Set ${pc.bold('DATABASE_URL')} in ${pc.bold(envFile)} — your Postgres is the system of record; rows live there, never with Ablo`,
     `Run ${pc.bold('npx ablo dev')} — pushes your schema definition and watches for changes`,
     ...(storage === 'replication'
@@ -646,10 +639,10 @@ async function init(args: readonly string[] = []) {
   // ONLY offered interactively (never from an agent / CI / `--no-login`).
   // Skipped when a credential already exists: login is part of init, not a
   // separate quickstart step, and a logged-in user shouldn't be re-asked.
-  const existingKey = resolveApiKey('sandbox');
+  const existingKey = resolveManagementKey();
   if (existingKey) {
     await ensureInitProject(opts);
-    outro(`Already authorized ${pc.dim(`(${existingKey.slice(0, 11)}…)`)} — run ${pc.bold('npx ablo push')} next. ${pc.dim('Docs:')} https://abloatai.com/docs`);
+    outro(`Already authorized ${pc.dim(`(${existingKey.slice(0, 11)}…)`)}. Run ${pc.bold('npx ablo dev')} next. ${pc.dim('Docs:')} https://abloatai.com/docs`);
     return;
   }
   if (interactive && opts.login) {
@@ -767,10 +760,8 @@ function generateEnv(storage: InitStorage, opts: { includeApiKey?: boolean } = {
       '# or the dashboard) and returns it once — paste it here.\n' +
       'ABLO_WEBHOOK_SECRET=whsec_your_endpoint_secret_here\n'
     : '';
-  // Omit the placeholder ABLO_API_KEY when init will wire the real stored key
-  // afterward (via wireEnvLocal), so the file ends with exactly one key line.
   const apiKeyBlock = includeApiKey
-    ? '# Ablo Sync Engine — use a sk_test_ key for local dev (`npx ablo push`)\nABLO_API_KEY=sk_test_your_key_here\n'
+    ? '# Ablo: a sk_test_ key for local development (`npx ablo dev` wires this for you)\nABLO_API_KEY=sk_test_your_key_here\n'
     : '';
   return `${apiKeyBlock}${webhookBlock}${databaseBlock}`;
 }

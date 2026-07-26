@@ -63,18 +63,17 @@ export type ProvisionedKey = z.infer<typeof provisionedKeySchema>;
 
 /**
  * What the CLI device flow gets back once a browser approval is exchanged for
- * credentials: the sandbox key `ablo push` authors with, and the restricted
- * production key that only observes.
+ * a project-scoped control-plane management credential. Runtime branch
+ * credentials are minted separately by `ablo dev` / `ablo branch credential`.
  *
- * `project` is the project both keys are scoped to, resolved SERVER-SIDE from
+ * `project` is the project the management credential is scoped to, resolved SERVER-SIDE from
  * the requested slug — null means the organization's default. The server's
  * answer is authoritative because it is what resolved the slug to an id, so the
- * CLI stores keys under the project named here rather than the one it asked
+ * CLI stores the credential under the project named here rather than the one it asked
  * for.
  */
 export const provisionKeyResponseSchema = z.object({
-  test: provisionedKeySchema,
-  live: provisionedKeySchema.optional(),
+  management: provisionedKeySchema,
   organizationId: z.string().optional(),
   organizationSlug: z.string().optional(),
   project: z.object({ id: z.string(), slug: z.string() }).nullable().optional(),

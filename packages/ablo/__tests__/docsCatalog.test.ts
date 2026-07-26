@@ -48,9 +48,21 @@ describe('docs catalog', () => {
   it('derives title and description from each page rather than a maintained list', async () => {
     const catalog = await readDocsCatalog(PACKAGE_ROOT);
     const coordination = findDoc(catalog, 'coordination');
+    const branchDevelopment = findDoc(catalog, 'branch-development');
+    const integrations = findDoc(catalog, 'integrations');
+    const temporal = findDoc(catalog, 'integrations/temporal');
+    const inngest = findDoc(catalog, 'integrations/inngest');
 
     expect(coordination?.title).toBe('Coordination Reference');
     expect(coordination?.description).toMatch(/^Claim mechanics/);
+    expect(branchDevelopment?.title).toBe('Branch-first development');
+    expect(branchDevelopment?.description).toMatch(/^Understand exactly what `ablo dev` prepares/);
+    expect(integrations?.title).toBe('Integrations');
+    expect(integrations?.description).toMatch(/^Compose Ablo's authoritative shared-state/);
+    expect(temporal?.title).toBe('Temporal for long-running tasks');
+    expect(temporal?.description).toMatch(/^Run long-lived, retryable agent tasks/);
+    expect(inngest?.title).toBe('Inngest for long-running tasks');
+    expect(inngest?.description).toMatch(/^Run event-driven, retryable agent tasks/);
     expect(catalog.filter((e) => e.kind !== 'package').every((e) => e.description !== '')).toBe(
       true
     );

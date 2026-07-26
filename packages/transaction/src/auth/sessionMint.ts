@@ -91,6 +91,9 @@ export async function mintSession<S extends SchemaRecord>(
       // response into the session resource's scope block.
       scope: {
         organizationId: res.organizationId,
+        projectId: res.projectId,
+        branchId: res.branchId,
+        branchRoot: res.branchRoot,
         syncGroups: res.syncGroups,
         operations: res.operations,
         participantKind: 'user',

@@ -87,6 +87,10 @@ describe('abloOpenApi (protocol reference)', () => {
         '/v1/capabilities',
         '/v1/capabilities/{id}',
         '/v1/capabilities/{id}/rotate',
+        '/v1/branches',
+        '/v1/branches/{id}',
+        '/v1/branches/{id}/credentials',
+        '/v1/branches/{id}/status',
         // Reading what changed is the other half of working alongside someone:
         // a client that can coordinate its writes but cannot see a peer's is
         // only half a participant.
@@ -126,15 +130,61 @@ describe('abloOpenApi (protocol reference)', () => {
     expect(Object.keys(schemaToOpenApi(few).paths as object).length).toBeLessThan(
       Object.keys(schemaToOpenApi(many).paths as object).length,
     );
-    expect(referencePaths).toBeLessThan(20);
+    expect(referencePaths).toBeLessThan(21);
   });
 
   it('is byte-identical no matter whose schema is pushed', () => {
     expect(JSON.stringify(abloOpenApi())).toBe(JSON.stringify(abloOpenApi()));
   });
 
-  it('ships no per-model component schemas, so payloads stay generic', () => {
-    expect((spec.components as Record<string, unknown>).schemas).toEqual({});
+  it('ships named protocol schemas without tenant-specific models', () => {
+    const schemas = (spec.components as Record<string, unknown>).schemas as Record<string, unknown>;
+    expect(Object.keys(schemas)).toEqual(
+      expect.arrayContaining([
+        'Claim',
+        'ClaimAcquire',
+        'CommitReceipt',
+        'Cursor',
+        'ErrorEnvelope',
+        'LogPage',
+        'ModelPage',
+      ]),
+    );
+    expect(schemas.Tasks).toBeUndefined();
+  });
+
+  it('gives every operation a stable unique operationId', () => {
+    const operationIds: string[] = [];
+    for (const pathItem of Object.values(paths)) {
+      for (const [method, rawOperation] of Object.entries(
+        pathItem as Record<string, unknown>,
+      )) {
+        if (!['get', 'post', 'put', 'patch', 'delete'].includes(method)) {
+          continue;
+        }
+        const operation = rawOperation as Record<string, unknown>;
+        expect(operation.operationId).toEqual(expect.any(String));
+        operationIds.push(operation.operationId as string);
+      }
+    }
+    expect(new Set(operationIds).size).toBe(operationIds.length);
+    expect(operationIds).toContain('updateModelRow');
+    expect(operationIds).toContain('commit');
+  });
+});
+
+describe('schemaToOpenApi operation names', () => {
+  it('uses model-specific stable names for generated clients', () => {
+    const paths = schemaToOpenApi(schema).paths as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >;
+
+    expect(paths['/v1/models/tasks']?.get?.operationId).toBe('listTasksRows');
+    expect(paths['/v1/models/tasks/{id}']?.patch?.operationId).toBe(
+      'updateTasksRow',
+    );
+    expect(paths['/v1/commits']?.post?.operationId).toBe('commit');
   });
 });
 
@@ -179,16 +229,76 @@ describe.each([
  * server validates against.
  */
 describe('the commit body is derived, not described', () => {
-  it('matches z.toJSONSchema(commitRequestSchema) exactly', () => {
+  it('carries the same properties and required fields as the Zod contract', () => {
     const published = obj(
       obj(obj(obj(obj(obj(obj(abloOpenApi().paths)['/v1/commits']).post).requestBody).content)['application/json']).schema,
     );
-    expect(published).toEqual(z.toJSONSchema(commitRequestSchema, { io: 'input' }));
+    const canonical = obj(z.toJSONSchema(commitRequestSchema, { io: 'input' }));
+    expect(Object.keys(obj(published.properties)).sort()).toEqual(
+      Object.keys(obj(canonical.properties)).sort(),
+    );
+    expect(published.required).toEqual(canonical.required);
   });
 
   it('picks up a field added to the contract without touching the generator', () => {
     const extended = commitRequestSchema.extend({ probeField: z.string().optional() });
     const derived = obj(obj(z.toJSONSchema(extended, { io: 'input' })).properties);
     expect(Object.keys(derived)).toContain('probeField');
+  });
+});
+
+describe('abloOpenApi generator readiness', () => {
+  const spec = abloOpenApi();
+  const paths = obj(spec.paths);
+  const schemas = obj(obj(spec.components).schemas);
+
+  it('references one canonical error envelope from every error response', () => {
+    for (const pathItem of Object.values(paths)) {
+      for (const [method, rawOperation] of Object.entries(obj(pathItem))) {
+        if (!['get', 'post', 'put', 'patch', 'delete'].includes(method)) continue;
+        const responses = obj(obj(rawOperation).responses);
+        expect(Object.keys(responses).some((status) => /^[45]/.test(status))).toBe(true);
+        for (const [status, rawResponse] of Object.entries(responses)) {
+          if (!/^[45]/.test(status) && status !== 'default') continue;
+          const schema = obj(
+            obj(obj(obj(rawResponse).content)['application/json']).schema,
+          );
+          expect(schema.$ref).toBe('#/components/schemas/ErrorEnvelope');
+        }
+      }
+    }
+  });
+
+  it('names and discriminates the coordination and receipt unions', () => {
+    expect(obj(schemas.ClaimAcquire).discriminator).toEqual({ propertyName: 'status' });
+    expect(obj(schemas.CommitReceipt).discriminator).toEqual({ propertyName: 'status' });
+    expect(obj(obj(schemas.ClaimAcquired).properties).claim).toEqual({
+      $ref: '#/components/schemas/Claim',
+    });
+  });
+
+  it('publishes integer page sizes for generated callers', () => {
+    for (const path of ['/v1/models/{model}', '/v1/logs']) {
+      const parameters = obj(obj(paths[path]).get).parameters as Json[];
+      expect(parameters.find((parameter) => parameter.name === 'limit')).toMatchObject({
+        schema: { type: 'integer', minimum: 1 },
+      });
+    }
+  });
+
+  it('uses the portable OpenAPI schema subset accepted by both generator candidates', () => {
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      if (typeof value !== 'object' || value === null) return;
+      const record = value as Json;
+      expect(record).not.toHaveProperty('$schema');
+      expect(record).not.toHaveProperty('propertyNames');
+      expect(record.additionalProperties).not.toEqual({});
+      Object.values(record).forEach(visit);
+    };
+    visit(spec);
   });
 });

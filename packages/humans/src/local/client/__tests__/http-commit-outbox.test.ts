@@ -518,8 +518,8 @@ describe('stateless HTTP commit outbox', () => {
           participantId: OUTBOX_SCOPE.participantId,
           accountScope: OUTBOX_SCOPE.organizationId,
           projectId: null,
-          environment: null,
-          sandboxId: null,
+          branchId: null,
+          branchRoot: false,
           syncGroups: [],
           userMeta: {},
         }));

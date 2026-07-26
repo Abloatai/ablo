@@ -27,6 +27,11 @@ Pick your row:
 
 That's the whole story: one knob, filled by audience.
 
+The `mk_` credential created by `ablo login` is different: it is a CLI
+control-plane credential, not an application API key. It can manage projects
+and branches and exchange for a branch-bound runtime key. Do not pass it to
+`Ablo(...)` or put it in `ABLO_API_KEY`.
+
 **Coming from Stripe? It's the same key model, same prefixes:**
 
 | Stripe | Ablo | Where it goes |
@@ -36,7 +41,14 @@ That's the whole story: one knob, filled by audience.
 | restricted `rk_` (granular) | `rk_` | scoped agents (`agents.create({ can })`) |
 | ephemeral key (client, customer-scoped) | `ek_` | per-user browser sessions (`sessions.create({ user, can })`) |
 
-Mode lives in the prefix too — `sk_test_` / `sk_live_` — exactly like Stripe. The
+Ablo also has one credential class that Stripe does not need:
+
+| Prefix | Purpose | Mode | Stored where |
+|---|---|---|---|
+| `mk_` | project and branch management | none | CLI credential store or `ABLO_MANAGEMENT_KEY` |
+
+Trust class lives in the prefix too — `sk_test_` / `sk_live_` — exactly like Stripe.
+It does not select a branch; the immutable server-side binding does that. The
 `apiKey` resolver fetching an `ek_` is Ablo's ephemeral-key flow: server mints, client holds.
 
 **Why a function for browser writes?** Anything you ship to a browser must be public, and a
@@ -91,21 +103,28 @@ cannot reach any control-plane operation. The moment the browser needs to write
 on a specific user's behalf, mint a short-lived `ek_` user session from your
 backend instead (see the Sessions guide).
 
-## Sandboxes and production
+## Branches and production
 
-Test and live keys are the same shape; the prefix names the environment:
+A branch is your project at full strength over its own rows: the same models,
+the same schema, the same claims and the same rules production runs.
 
-- `sk_test_…` — a key bound to a **sandbox**. Its reads and writes are isolated
-  to that sandbox and are invisible to live keys (and to other sandboxes).
+Production is the project's root branch. Development branches are isolated
+children, and a key's immutable branch binding decides which rows, schema,
+claims, and log it can reach:
+
+- `sk_test_…` — a key bound to a development branch. Its reads and
+  writes are invisible to production and to other branches.
 - `sk_live_…` — a key against your live data.
 
-Every org has a default sandbox, plus any number of additional
-sandboxes you create. **Data is isolated per sandbox; the schema is one
-definition serving both.** A sandbox reads the production schema until it is
-pushed one of its own, so your test and live keys see the same models and only
-the rows differ — how Stripe separates sandbox and production data while keeping
-the API shape identical. A schema change reaches production when you push it
-with a live key ([Deployment](./deployment.md)).
+`npx ablo dev` derives a branch from Git, ensures the matching child, and mints
+an expiring `sk_test_` key for it. The credential carries the immutable branch
+id; changing a slug in a request cannot change its authority. A child receives
+the parent's active schema when it is created and owns its artifact after that.
+A schema change reaches production only through the reviewed live-key path in
+[Deployment](./deployment.md).
+
+The shared default sandbox is no longer part of the development workflow.
+Branch identity is required for newly provisioned CLI and runtime credentials.
 
 ## Scopes
 
@@ -114,25 +133,30 @@ only what its job needs. A secret key with **no scopes** has full org authority
 (the default for a `sk_live_` backend key); a key with a non-empty scope set is
 restricted to exactly those grants:
 
-- `schema:push` — author the org schema (`ablo schema push`, `ablo dev`). A
-  high-risk, org-wide grant: because schema is shared, a push affects the live
-  table shape. A full-authority key has it implicitly; a *restricted* key (such
-  as a sandbox key) needs it granted explicitly.
-- `sandbox:<id>` — identifies which sandbox the key belongs to. (The key's data
-  isolation comes from that sandbox binding, not from this scope string.)
+- `schema:push` — author the schema artifact on the key's bound plane
+  (`ablo push`, `ablo dev`). A production push is high-risk because it changes
+  the live contract; a child push remains inside that branch. A
+  full-authority key has it implicitly; a restricted key needs it explicitly.
+- `project:manage` — list, create, and rename projects.
+- `branch:manage` — list, create, and delete child branches and mint their
+  temporary credentials.
 
-A key minted from the default sandbox carries `schema:push`, so
-`ablo dev` works out of the box. Keys from other sandboxes are **data-only** by
-default — enable "schema authoring" when minting if you want that key to push
-schema too. Hand data-only keys to embedded apps and CI agents; reserve
-schema-authoring keys for the developer running `ablo dev`.
+Both management scopes are explicit grants on `mk_` credentials. Runtime
+`sk_`, `rk_`, `pk_`, and `ek_` credentials cannot become management
+credentials through an empty scope set or a CLI fallback.
+
+Branch binding remains an authority boundary even when a key has no granular
+scope strings: a temporary child key can act only inside that child. It cannot
+manage siblings or gain root authority.
 
 ### `ablo dev`
 
 ```sh
-ABLO_API_KEY=sk_test_… npx ablo dev
+npx ablo login
+npx ablo dev
 ```
 
-Pushes your `ablo/schema.ts` to the test sandbox, prints the one line you need
-in `.env.local`, and re-pushes on every save. It refuses `sk_live_` keys so a
-tight save loop can never churn production data.
+The stored `mk_` project credential is used only to ensure the Git-derived child and
+mint an expiring branch credential. `dev` writes that temporary key to
+gitignored `.env.local`, pushes `ablo/schema.ts` to the child, and re-pushes on
+every save. See [Branch-first development](./branch-development.md).

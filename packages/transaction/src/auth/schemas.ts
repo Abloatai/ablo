@@ -21,8 +21,8 @@ export const IdentityResolveResponseSchema = z.object({
   // The rest of the resolved plane. The server always emits these keys; null
   // means the credential does not bind that axis.
   projectId: z.string().min(1).nullable(),
-  environment: z.enum(['sandbox', 'production']).nullable(),
-  sandboxId: z.string().min(1).nullable(),
+  branchId: z.string().min(1).nullable().default(null),
+  branchRoot: z.boolean().default(false),
   syncGroups: z.array(z.string()),
   userMeta: z.record(z.string(), z.unknown()),
 });
@@ -42,6 +42,9 @@ export const EphemeralKeyResponseSchema = z.object({
   expiresAt: z.string().min(1),
   organizationId: z.string().min(1),
   participantId: z.string().min(1),
+  projectId: z.string().min(1).nullable().default(null),
+  branchId: z.string().min(1).nullable().default(null),
+  branchRoot: z.boolean().default(false),
   syncGroups: z.array(z.string()),
   /** Effective operation grant stored on the credential. */
   operations: z.array(grantedOperationSchema).min(1),

@@ -60,6 +60,16 @@ export function mutationConformanceChecks(
   };
   return [
     {
+      name: 'adapter declares database, binding, and observation independently',
+      run: async () => {
+        const adapter = await make();
+        assert.ok(adapter.profile.id.length > 0);
+        assert.ok(adapter.profile.database.length > 0);
+        assert.ok(adapter.profile.binding.length > 0);
+        assert.ok(adapter.profile.observation.kind.length > 0);
+      },
+    },
+    {
       name: 'commit applies a CREATE and returns the canonical row',
       run: async () => {
         const adapter = await make();
@@ -174,6 +184,14 @@ export function mutationConformanceChecks(
 /** Guarantees that apply only to endpoint wrappers with an outbox/events feed. */
 export function endpointConformanceChecks(make: MakeAdapter): ConformanceCheck[] {
   return [
+    {
+      name: 'endpoint adapter declares transactional-outbox observation',
+      run: async () => {
+        const adapter = await make();
+        assert.equal(adapter.profile.observation.kind, 'transactional-outbox');
+        assert.equal(adapter.capabilities.outboxEvents, true);
+      },
+    },
     {
       name: 'endpoint replay does not append its correlated outbox event twice',
       run: async () => {

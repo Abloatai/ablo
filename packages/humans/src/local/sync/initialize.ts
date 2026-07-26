@@ -54,8 +54,8 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
         organizationId: context.organizationId,
         participantKind: context.kind ?? 'user',
         projectId: context.projectId ?? context.organizationId,
-        environment: context.environment ?? null,
-        sandboxId: context.sandboxId ?? null,
+        branchId: context.branchId,
+        branchRoot: context.branchRoot ?? false,
       });
 
       // Propagate identity only after storage is ready, then restore sealed

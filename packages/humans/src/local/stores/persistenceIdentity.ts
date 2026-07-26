@@ -1,17 +1,16 @@
 import { AbloConnectionError } from '@abloatai/transaction/errors';
 
 /**
- * The complete authenticated plane that owns one local replica. The same
- * participant can have different data in a project, sandbox, or environment;
- * those replicas must never share a namespace.
+ * The complete authenticated branch that owns one local replica. A branch id
+ * is authoritative.
  */
 export interface PersistenceIdentity {
   readonly participantId: string;
   readonly participantKind: string;
   readonly organizationId: string;
   readonly projectId: string | null;
-  readonly environment: 'sandbox' | 'production' | null;
-  readonly sandboxId: string | null;
+  readonly branchId: string;
+  readonly branchRoot: boolean;
 }
 
 export interface PersistedIdentityMetadata {
@@ -20,11 +19,11 @@ export interface PersistedIdentityMetadata {
   readonly workspaceId: string;
   readonly participantKind?: string;
   readonly projectId?: string | null;
-  readonly environment?: 'sandbox' | 'production' | null;
-  readonly sandboxId?: string | null;
+  readonly branchId?: string;
+  readonly branchRoot?: boolean;
 }
 
-export const PERSISTENCE_NAMESPACE_VERSION = 2;
+export const PERSISTENCE_NAMESPACE_VERSION = 4;
 
 function canonicalIdentity(
   identity: PersistenceIdentity,
@@ -33,8 +32,7 @@ function canonicalIdentity(
   return JSON.stringify([
     PERSISTENCE_NAMESPACE_VERSION,
     identity.projectId,
-    identity.environment,
-    identity.sandboxId,
+    ['branch', identity.branchId, identity.branchRoot],
     identity.organizationId,
     identity.participantKind,
     identity.participantId,
@@ -77,7 +75,7 @@ export function persistenceIdentityMatches(
     info.workspaceId === identity.organizationId &&
     info.participantKind === identity.participantKind &&
     (info.projectId ?? null) === identity.projectId &&
-    (info.environment ?? null) === identity.environment &&
-    (info.sandboxId ?? null) === identity.sandboxId
+    info.branchId === identity.branchId &&
+    (info.branchRoot ?? false) === identity.branchRoot
   );
 }

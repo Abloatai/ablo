@@ -239,6 +239,10 @@ export function grantedOperations(
  */
 export const capabilityScopeSchema = z.object({
   organizationId: z.string().min(1),
+  /** Credential target. Branch id is authoritative; null supports self-hosted identities. */
+  projectId: z.string().min(1).nullable().default(null),
+  branchId: z.string().min(1).nullable().default(null),
+  branchRoot: z.boolean().default(false),
   /**
    * The ROW axis — which sync groups this credential may act within. Read back
    * as plain strings rather than the branded form the request enforces: this is

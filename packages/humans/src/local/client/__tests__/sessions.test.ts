@@ -178,6 +178,9 @@ describe('ablo.sessions.create', () => {
     });
     expect(session.scope).toEqual({
       organizationId: 'org_1',
+      projectId: null,
+      branchId: null,
+      branchRoot: false,
       syncGroups: ['org:org_1', 'user:user_42'],
       operations: ['chat.read', 'chat.create', 'chat.update', 'chat.delete'],
       participantKind: 'user',

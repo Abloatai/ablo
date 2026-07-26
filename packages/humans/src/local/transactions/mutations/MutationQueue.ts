@@ -1222,17 +1222,20 @@ export class MutationQueue extends EventEmitter {
    * transaction.
    */
   confirmationFor(modelName: string, modelId: string): Promise<void> {
-    const candidates = [
-      ...this.store.getByStatus('pending'),
-      ...this.store.getByStatus('executing'),
-      ...this.store.getByStatus('awaiting_delta'),
-    ].filter(
-      (tx) => tx.modelName === modelName && tx.modelId === modelId,
-    );
-    if (candidates.length === 0) return Promise.resolve();
-    const latest = candidates.sort((a, b) => b.createdAt - a.createdAt)[0];
-    if (!latest) return Promise.resolve();
-    return latest.confirmation ?? Promise.resolve();
+    const transactions = this.store.getAll();
+    for (let index = transactions.length - 1; index >= 0; index--) {
+      const transaction = transactions[index];
+      if (
+        transaction?.modelName === modelName &&
+        transaction.modelId === modelId &&
+        (transaction.status === 'pending' ||
+          transaction.status === 'executing' ||
+          transaction.status === 'awaiting_delta')
+      ) {
+        return transaction.confirmation ?? Promise.resolve();
+      }
+    }
+    return Promise.resolve();
   }
 
   /**
@@ -1425,7 +1428,23 @@ export class MutationQueue extends EventEmitter {
   }
 
   private async drainPendingInternal(): Promise<void> {
-    await drainPendingSettlements(this.pendingDrainContext);
+    // The normal batch scheduler and the explicit/reconnect drain are two
+    // ways to drive the same durable queue. They must never seal the same
+    // staged source records concurrently: the first seal consumes those
+    // records, so the second would correctly reject them as already claimed.
+    //
+    // `isProcessing` is acquired synchronously before either path awaits,
+    // making it the queue-wide execution lock. If the normal lane already
+    // owns it, that lane will finish the pending work; callers waiting on a
+    // specific confirmation remain attached to the exact transaction.
+    if (this.isProcessing) return;
+    this.isProcessing = true;
+    try {
+      await drainPendingSettlements(this.pendingDrainContext);
+    } finally {
+      this.isProcessing = false;
+      if (this.executionQueue.length > 0) this.scheduleProcessing(true);
+    }
   }
   async create(
     model: LocalModel,

@@ -48,6 +48,7 @@ const TITLES = {
   migration: 'Version History & Migration Guide',
   'client-behavior': 'Client Behavior',
   cli: 'CLI',
+  'branch-development': 'Branch-first development',
   audit: 'Audit log',
   'data-sources': 'Connect Your Database',
   'operating-on-your-database': 'Operating on Your Database',
@@ -68,6 +69,9 @@ const TITLES = {
   'agent-messaging': 'Agent Messaging',
   debugging: 'Debugging & Logs',
   idempotency: 'Idempotency',
+  integrations: 'Integrations',
+  'integrations/temporal': 'Temporal for long-running tasks',
+  'integrations/inngest': 'Inngest for long-running tasks',
   // Examples. These were hand-written site pages that drifted from the package
   // docs into a second, divergent copy -- one teaching a `claim.state` field
   // (`actorKind`) that exists only as a database column, another declaring
@@ -90,6 +94,7 @@ const ICONS = {
   'integration-guide': 'plug',
   deployment: 'ship',
   cli: 'terminal',
+  'branch-development': 'git-branch',
   identity: 'fingerprint',
   groups: 'share-2',
   coordination: 'handshake',
@@ -114,6 +119,9 @@ const ICONS = {
   'session-settings': 'lock-keyhole',
   debugging: 'bug',
   idempotency: 'repeat',
+  integrations: 'blocks',
+  'integrations/temporal': 'clock-arrow-up',
+  'integrations/inngest': 'workflow',
   'examples/agent-human': 'users',
   'examples/ai-sdk-tool': 'wrench',
   'examples/existing-python-backend': 'server-cog',

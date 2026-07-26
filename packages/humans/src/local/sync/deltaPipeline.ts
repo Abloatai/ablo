@@ -24,6 +24,7 @@ import {
   type AbloPlugin,
   type AppliedChange,
 } from '../../plugin.js';
+import { observeDrainBatch, timeDrainStage, timeDrainStageAsync } from './drainProfile.js';
 
 /**
  * What the pipeline needs back from the surrounding store: the shared mutable
@@ -409,7 +410,8 @@ async function flushDeltaBatch(
   queuedDeltas: SyncDelta[],
 ): Promise<void> {
   const stagePlugins = ctx.stagePlugins ?? [];
-  const deduplicatedDeltas = ctx.deduplicateDeltas(queuedDeltas);
+  const deduplicatedDeltas = timeDrainStage('dedupe', () => ctx.deduplicateDeltas(queuedDeltas));
+  observeDrainBatch(queuedDeltas.length, deduplicatedDeltas.length);
   runStage(stagePlugins, 'dedupe', { deltas: deduplicatedDeltas });
 
   // Custom entities → apply straight to the pool, skipping the local store.
@@ -444,17 +446,19 @@ async function flushDeltaBatch(
   // handleGroupRemoved) and never reach here, though the persistence
   // signature accepts them defensively.
   const regularDeltas = deduplicatedDeltas.filter((d) => !ctx.isCustomEntity(d.modelName));
-  const batch = await ctx.processDeltaBatch(
-    regularDeltas.map((d) => ({
-      syncId: d.id,
-      actionType: d.actionType,
-      modelName: d.modelName,
-      modelId: d.modelId,
-      data: typeof d.data === 'string' ? JSON.parse(d.data) : d.data,
-      // Thread `transactionId` through so the receive layer can recognize
-      // echoes of locally-applied transactions and skip the pool mutation.
-      transactionId: d.transactionId,
-    }))
+  const batch = await timeDrainStageAsync('persist', () =>
+    ctx.processDeltaBatch(
+      regularDeltas.map((d) => ({
+        syncId: d.id,
+        actionType: d.actionType,
+        modelName: d.modelName,
+        modelId: d.modelId,
+        data: typeof d.data === 'string' ? JSON.parse(d.data) : d.data,
+        // Thread `transactionId` through so the receive layer can recognize
+        // echoes of locally-applied transactions and skip the pool mutation.
+        transactionId: d.transactionId,
+      }))
+    )
   );
   const dbResults = batch.results;
   runStage(stagePlugins, 'persist', { deltas: regularDeltas });
@@ -464,11 +468,13 @@ async function flushDeltaBatch(
   // materialiser attached where it said it would. The direct call is the
   // bridge for stores constructed without plugins (subclasses, tests),
   // whose own apply is the whole pipeline.
-  if (pluginsForStage(stagePlugins, 'apply').length > 0) {
-    runStage(stagePlugins, 'apply', { changes: dbResults });
-  } else {
-    ctx.applyDeltaBatchToPool(dbResults);
-  }
+  timeDrainStage('apply', () => {
+    if (pluginsForStage(stagePlugins, 'apply').length > 0) {
+      runStage(stagePlugins, 'apply', { changes: dbResults });
+    } else {
+      ctx.applyDeltaBatchToPool(dbResults);
+    }
+  });
 
   // Acknowledge and advance the sync cursor, gated on persistence.
   //
@@ -480,11 +486,15 @@ async function flushDeltaBatch(
   // be lost. The cursor and the persisted state must move together.
   const persistedSyncId = batch.persistedSyncId;
   if (persistedSyncId > ctx.lastAckedId) {
-    ctx.acknowledge(persistedSyncId);
-    ctx.advancePersisted(persistedSyncId);
-    runStage(stagePlugins, 'acknowledge', { syncId: persistedSyncId });
+    timeDrainStage('acknowledge', () => {
+      ctx.acknowledge(persistedSyncId);
+      ctx.advancePersisted(persistedSyncId);
+      runStage(stagePlugins, 'acknowledge', { syncId: persistedSyncId });
+    });
   }
 
   // Cache invalidation happens automatically via the 'models:changed' event.
-  runStage(stagePlugins, 'notify', { changes: dbResults });
+  timeDrainStage('notify', () => {
+    runStage(stagePlugins, 'notify', { changes: dbResults });
+  });
 }

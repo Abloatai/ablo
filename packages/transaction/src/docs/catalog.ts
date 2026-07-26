@@ -14,11 +14,11 @@
  * same line — so a page states its own promise exactly once, in the source that
  * ships in the npm tarball and still reads correctly as plain markdown.
  *
- * The published set mirrors the tarball's `files` globs (`docs/*.md`,
- * `docs/examples/*.md`, plus the three root files). Anything else under `docs/`
- * — `docs/internal/**` above all — is neither shipped nor catalogued, and that
- * exclusion is the only thing keeping internal notes off the public routes now
- * that they read from here.
+ * The published set is an explicit allowlist: `docs/*.md`,
+ * `docs/examples/*.md`, `docs/integrations/*.md`, plus the three root files.
+ * Anything else under `docs/` — `docs/internal/**` above all — is not
+ * catalogued, and that exclusion is the only thing keeping internal notes off
+ * the public routes now that they read from here.
  */
 
 import { readdir, readFile } from 'node:fs/promises';
@@ -115,7 +115,16 @@ export async function readDocsCatalog(packageRoot: string): Promise<DocEntry[]> 
   const entries: DocEntry[] = [];
 
   entries.push(...(await readDocsDirectory(docsDir, 'guide')));
-  entries.push(...(await readDocsDirectory(join(docsDir, 'examples'), 'example')));
+  entries.push(
+    ...(await readDocsDirectory(join(docsDir, 'examples'), 'example', 'examples')),
+  );
+  entries.push(
+    ...(await readDocsDirectory(
+      join(docsDir, 'integrations'),
+      'guide',
+      'integrations',
+    )),
+  );
 
   for (const file of PACKAGE_FILES) {
     const path = join(packageRoot, file.filename);
@@ -135,12 +144,15 @@ export async function readDocsCatalog(packageRoot: string): Promise<DocEntry[]> 
 }
 
 /**
- * Read one flat directory of markdown. Deliberately non-recursive: the shipped
- * set is `docs/*.md` plus `docs/examples/*.md`, so descending would catalogue
- * `docs/internal/**` — notes that are not in the tarball and must not reach a
- * public route.
+ * Read one explicitly allowed flat directory of markdown. Deliberately
+ * non-recursive: descending from `docs/` would catalogue `docs/internal/**`,
+ * notes that must not reach a public route.
  */
-async function readDocsDirectory(dir: string, kind: DocKind): Promise<DocEntry[]> {
+async function readDocsDirectory(
+  dir: string,
+  kind: DocKind,
+  slugPrefix?: string,
+): Promise<DocEntry[]> {
   let names: string[];
   try {
     const found = await readdir(dir, { withFileTypes: true });
@@ -157,7 +169,7 @@ async function readDocsDirectory(dir: string, kind: DocKind): Promise<DocEntry[]
     const stem = basename(name, '.md');
     const { title, description } = parseDocHeader(body);
     entries.push({
-      slug: kind === 'example' ? `examples/${stem}` : stem,
+      slug: slugPrefix ? `${slugPrefix}/${stem}` : stem,
       title: title ?? stem,
       description,
       kind,

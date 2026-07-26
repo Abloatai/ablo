@@ -626,6 +626,7 @@ export type ClaimLost = z.infer<typeof claimLostSchema>;
 export const claimAcquiredSchema = z.object({
   claimId: z.string(),
   fenceToken: z.number().optional(),
+  readAt: z.number().int().nonnegative().optional(),
   target: targetRefSchema,
 });
 export type ClaimAcquired = z.infer<typeof claimAcquiredSchema>;
@@ -640,6 +641,7 @@ export type ClaimAcquired = z.infer<typeof claimAcquiredSchema>;
 export const claimGrantedSchema = z.object({
   claimId: z.string(),
   fenceToken: z.number().optional(),
+  readAt: z.number().int().nonnegative().optional(),
   target: targetRefSchema,
 });
 export type ClaimGranted = z.infer<typeof claimGrantedSchema>;

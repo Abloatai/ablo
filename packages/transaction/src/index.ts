@@ -50,3 +50,4 @@ export * from './errors.js';
 // Pre-seam leaf surfaces, kept for compatibility with the first extraction.
 export * from './errorCodes.js';
 export * from './environment.js';
+export * from './branches.js';

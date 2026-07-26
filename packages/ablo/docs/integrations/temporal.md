@@ -1,0 +1,187 @@
+# Temporal for long-running tasks
+
+> Run long-lived, retryable agent tasks with Temporal while Ablo makes each
+> shared-state effect typed, idempotent, and authoritative.
+
+Temporal and Ablo solve different parts of a durable agent system:
+
+| Concern | Owner |
+|---|---|
+| Workflow history, replay, timers, retries, cancellation | Temporal |
+| Provider, messages, tools, approval, model loop | AI SDK |
+| Typed reads and writes, idempotency, claims, confirmation | Ablo |
+| Workflow names, task queues, retry policy, business behavior | Your application |
+
+The short version is:
+
+> Temporal makes sure the agent finishes. Ablo makes sure its changes are safe.
+
+## Keep Ablo calls in Activities
+
+Temporal Workflow code must be deterministic. An Ablo model operation performs
+network I/O, so instantiate `Ablo()` and call model resources in an Activity:
+
+```ts
+// activities/orders.ts
+import Ablo from '@abloatai/ablo';
+import { schema } from '../schema.js';
+
+const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+  transport: 'http',
+});
+
+export interface ApproveOrderInput {
+  orderId: string;
+  approvalNote: string;
+  idempotencyKey: string;
+}
+
+export async function approveOrder(input: ApproveOrderInput) {
+  return ablo.orders.update({
+    id: input.orderId,
+    data: {
+      status: 'approved',
+      approvalNote: input.approvalNote,
+    },
+    idempotencyKey: input.idempotencyKey,
+    wait: 'confirmed',
+  });
+}
+```
+
+The Activity uses the same branded model method as a route handler, job, or
+command-line process. There is no Temporal-specific Ablo transport.
+
+Workflow code creates the stable logical effect identity and schedules the
+Activity:
+
+```ts
+// workflows/approve-order.ts
+import { proxyActivities, workflowInfo } from '@temporalio/workflow';
+import type * as activities from '../activities/orders.js';
+
+const { approveOrder } = proxyActivities<typeof activities>({
+  startToCloseTimeout: '1 minute',
+  retry: { maximumAttempts: 5 },
+});
+
+export async function approveOrderWorkflow(orderId: string) {
+  const { workflowId, runId } = workflowInfo();
+
+  return approveOrder({
+    orderId,
+    approvalNote: 'Approved by the durable workflow.',
+    idempotencyKey: `${workflowId}:${runId}:approve-order:${orderId}`,
+  });
+}
+```
+
+Temporal may retry an Activity after the Ablo write succeeded but before the
+result reached Temporal. Every attempt must therefore send the same
+`idempotencyKey` and the same mutation body. Do not put an Activity attempt
+number, timestamp, or random value in the key.
+
+Using the Workflow Run ID is appropriate when a new run should represent a new
+effect. If an effect must survive Continue-As-New or a newly started Workflow
+run, accept a stable business operation ID as Workflow input instead.
+
+## Compose AI SDK tools through Activities
+
+Temporal's AI SDK integration can make the model interaction durable inside a
+Workflow. Any tool that touches Ablo still delegates to an Activity:
+
+```ts
+import { temporalProvider } from '@temporalio/ai-sdk/workflow';
+import { generateText, stepCountIs, tool } from 'ai';
+import { z } from 'zod';
+
+const result = await generateText({
+  model: temporalProvider.languageModel('gpt-4o-mini'),
+  prompt,
+  tools: {
+    approveOrder: tool({
+      description: 'Approve the order after reviewing it.',
+      inputSchema: z.object({ approvalNote: z.string() }),
+      execute: ({ approvalNote }) =>
+        approveOrder({
+          orderId,
+          approvalNote,
+          idempotencyKey: `${effectPrefix}:approve-order:${orderId}`,
+        }),
+    }),
+  },
+  stopWhen: stepCountIs(5),
+});
+```
+
+Register Temporal's `AiSdkPlugin` on the Worker and pin all
+`@temporalio/*` packages to one compatible version set. The integration is
+experimental, so replay-test Workflow histories before upgrading it.
+The import above matches the example's pinned `1.21.1` release. Follow the
+matching Temporal upgrade guide when changing that version set.
+
+Do not import `@abloatai/ablo/ai-sdk` into Workflow code. Its `readTool`,
+`createTool`, `updateTool`, and `deleteTool` helpers execute Ablo model
+operations directly and are intended for ordinary Node.js AI SDK loops. In a
+Temporal Workflow, define the tool at the application edge and make its
+`execute` function call a proxied Activity.
+
+## Idempotency rules
+
+For every mutating Activity:
+
+1. Create the key in deterministic Workflow code or accept a stable operation
+   ID in the Workflow input.
+2. Reuse the key and mutation body for every retry of the same logical effect.
+3. Use `wait: 'confirmed'` when later Workflow steps depend on the
+   authoritative database result.
+4. Treat reuse of a key with a different body as an application bug.
+5. Keep the Temporal retry horizon within Ablo's documented
+   [idempotency retention window](../idempotency.md).
+
+This gives effective-once composition for the advertised retention window. It
+does not make an external side effect physically execute only once; Temporal
+Activities are intentionally retryable.
+
+## Claims and cancellation
+
+A claim protects a short shared-state operation, not an entire Workflow
+history. Keep claim acquisition, the fresh read, the checked write, and release
+inside one Activity:
+
+```ts
+import { Context } from '@temporalio/activity';
+
+export async function applyReview(orderId: string, note: string) {
+  await using claim = await ablo.orders.claim({
+    id: orderId,
+    description: 'applying review',
+    signal: Context.current().cancellationSignal,
+  });
+
+  return ablo.orders.update({
+    id: claim.data.id,
+    data: { approvalNote: note },
+    claim,
+    wait: 'confirmed',
+  });
+}
+```
+
+For long model reasoning, reason in the Workflow and use a short Activity to
+re-read and apply the result. Do not return from an Activity while assuming a
+held lease will remain valid.
+
+## Complete example
+
+The repository's
+[`examples/temporal-agent`](../../../../examples/temporal-agent/README.md)
+contains a Workflow, Activities, Worker, client, durable AI SDK tool, and a
+simulated lost-response retry. It is a standalone application on purpose:
+Temporal stays out of Ablo's core packages and out of `packages/agent`.
+
+A dedicated `@abloatai/temporal` package should be introduced only after
+multiple production integrations reveal substantial, stable behavior that
+cannot be expressed clearly at this application boundary.

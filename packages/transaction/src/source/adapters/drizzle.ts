@@ -42,6 +42,8 @@ import type {
   DataSourceAdapter,
   Row,
 } from '../adapter.js';
+import { defineDatabaseAdapter } from '../adapterFactory.js';
+import { postgresAdapterProfile } from '../adapterProfile.js';
 import type { ChangeSet, EventsPage, Migration, Operation } from '../contract.js';
 import { outboxEventSchema } from '../contract.js';
 import { adapterTableMigrations } from '../migrations.js';
@@ -188,7 +190,8 @@ export function drizzleDataSource<S extends SchemaRecord>(
     return updated[0] ? toFields(mc, updated[0]) : { id, ...input };
   };
 
-  return {
+  return defineDatabaseAdapter({
+    profile: postgresAdapterProfile('drizzle', 'transactional-outbox'),
     capabilities: {
       transactions: true,
       propose: false,
@@ -287,5 +290,5 @@ export function drizzleDataSource<S extends SchemaRecord>(
       );
       return { events, nextCursor: events.at(-1)?.cursor ?? null };
     },
-  };
+  });
 }

@@ -217,10 +217,10 @@ commonly a Data Source handler keyed on `mode`. The mapping is exactly
 source resolvers, so per-project and per-environment traffic can be routed to
 distinct stores.
 
-> **CLI note:** the legacy single-file config that stored `test`/`live` key
-> buckets is no longer auto-migrated. If `ablo status` can't find your keys after
-> upgrading, re-run `ablo login` to write the current `sandbox`/`production`
-> layout.
+> **CLI note:** current login stores one mode-free `mk_` project management
+> credential. Legacy runtime key slots remain readable during the cutover, but
+> re-run `ablo login` before using branch/project commands so the CLI can store
+> the new credential.
 
 ### New (non-breaking): `transport: 'http'`
 

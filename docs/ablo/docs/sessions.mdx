@@ -202,20 +202,19 @@ those two lifetimes separate, which means:
   connectivity or tab focus returns. The user stays signed in for as long as
   your underlying session is valid, however brief or long the network drop.
 - **The user is signed out only when the underlying session is genuinely
-  rejected** — i.e. your `authEndpoint` responds **`401`/`403`** because the
-  cookie (or IdP session) is missing, expired, or revoked. That's the one
-  signal the provider treats as terminal.
+  gone** — your `authEndpoint` responds `401` with the canonical
+  `{ error: { code: 'session_expired' } }` body. An unrelated `401` or `403`
+  is a policy/configuration failure, not proof that the login ended.
 
 This mirrors the OAuth refresh-token rule (Okta/Auth0/Authgear): only a
 rejection of the *long-lived* credential ends the session — a network failure
 never does.
 
 :::note
-Your `authEndpoint` contract follows from this: return the token on success,
-respond **`401`/`403`** only when the user's session is actually gone, and let
-network/`5xx` failures surface as errors. Don't collapse "can't reach the mint
-endpoint" into "session expired" — returning a `401` for a transient blip will
-bounce a still-valid user to your sign-in page.
+Use `credentialEndpointSuccessSchema` and `credentialEndpointErrorSchema` from
+`@abloatai/ablo/auth` on the route. Return `session_expired` only when the
+application login is actually gone, and let network/`5xx` failures surface as
+errors.
 :::
 
 ## Scope

@@ -2,28 +2,27 @@
  * The Ablo CLI's local credential store, split across two files so that the
  * config file never holds a secret:
  *
- *   config.json       Non-secret settings: the active environment (mode) and the
- *                     active project. Safe to open, print, or let a tool read.
- *   credentials.json  The API keys, organized by project and then environment.
- *                     Written with `0600` permissions and never printed.
+ *   config.json       Non-secret settings: the active project plus legacy
+ *                     deploy-mode compatibility. Safe to inspect.
+ *   credentials.json  A mode-free `mk_` management credential per project,
+ *                     plus any legacy/runtime keys. Written with `0600`.
  *
  * This mirrors the `~/.aws/config` and `~/.aws/credentials` split, so anything
  * that inspects the config never encounters a secret.
  *
- * Keys are organized into per-project profiles. A profile is named `default`
- * (the organization-default project) or a project slug, and within it a key is
- * held under `sandbox` and `production`. `ablo projects use <slug>` selects the
- * active profile; `ablo login --project <slug>` mints a key pair into it.
+ * Credentials are organized into per-project profiles. A profile is named
+ * `default` (the organization-default project) or a project slug. `ablo login`
+ * stores one `mk_` management credential in the selected profile. `ablo dev`
+ * exchanges it for an expiring, branch-bound `sk_test_` runtime key and never
+ * persists that runtime key in this store.
  * Selecting a project never re-scopes an existing key — a key's project is fixed
  * when it is minted — so each project keeps its own credential and the active
  * project always resolves the matching one, or none, which surfaces as a precise
  * error rather than a silent push to the wrong project.
  *
- * Key prefixes stay `sk_test_`, `sk_live_`, and `rk_live_` — a wire contract the
- * server validates — while the human-facing vocabulary is sandbox and production.
- * `ablo mode sandbox|production` toggles which key within the active profile
- * `dev` and `push` use. An `ABLO_API_KEY` set in the environment always wins,
- * which is how a continuous-integration run supplies a key.
+ * `ABLO_MANAGEMENT_KEY` overrides project/branch administration.
+ * `ABLO_API_KEY` is reserved for data-plane runtime and deployment credentials.
+ * Legacy `sandbox`/`production` slots remain readable during the cutover.
  *
  * The store's location resolves from `$ABLO_CONFIG_DIR`, then
  * `$XDG_CONFIG_HOME/ablo`, then `~/.config/ablo`. `credentials.json` is written
@@ -56,8 +55,11 @@ export interface KeyEntry {
   expiresAt?: string;
 }
 
-/** The key pair for one project profile. */
+/** Credentials associated with one project profile. */
 export interface ProfileKeys {
+  /** Mode-free project control-plane credential from `ablo login`. */
+  management?: KeyEntry;
+  /** Legacy/runtime data credentials. New login flows do not populate these. */
   sandbox?: KeyEntry;
   production?: KeyEntry;
 }
@@ -115,10 +117,15 @@ function asKeyEntry(value: unknown): KeyEntry | undefined {
 function asProfileKeys(value: unknown): ProfileKeys | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const v = value as Record<string, unknown>;
+  const management = asKeyEntry(v.management);
   const sandbox = asKeyEntry(v.sandbox);
   const production = asKeyEntry(v.production);
-  if (!sandbox && !production) return undefined;
-  return { ...(sandbox ? { sandbox } : {}), ...(production ? { production } : {}) };
+  if (!management && !sandbox && !production) return undefined;
+  return {
+    ...(management ? { management } : {}),
+    ...(sandbox ? { sandbox } : {}),
+    ...(production ? { production } : {}),
+  };
 }
 
 /** Parse the `profiles` map, keeping only profiles that hold a real key. */
@@ -176,6 +183,10 @@ function hasKey(keys: ProfileKeys | undefined): boolean {
   return !!(keys?.sandbox || keys?.production);
 }
 
+function hasStoredCredential(keys: ProfileKeys | undefined): boolean {
+  return !!(keys?.management || hasKey(keys));
+}
+
 /**
  * Reads the stored config, returning null when none exists or it is unreadable
  * or malformed. It reads the current profile layout and transparently upgrades
@@ -204,7 +215,7 @@ export function readConfig(): StoredConfig | null {
   const migratedLegacy = hasKey(legacy) && !hasKey(profiles[activeName]);
   if (migratedLegacy) profiles[activeName] = legacy;
 
-  const anyKey = Object.values(profiles).some(hasKey);
+  const anyKey = Object.values(profiles).some(hasStoredCredential);
   if (!mode && !anyKey) return null;
 
   const config: StoredConfig = {
@@ -238,8 +249,9 @@ export function writeConfig(cfg: StoredConfig): string {
   // never resurrects an emptied profile.
   const profiles: Record<string, ProfileKeys> = {};
   for (const [name, keys] of Object.entries(cfg.profiles)) {
-    if (!hasKey(keys)) continue;
+    if (!hasStoredCredential(keys)) continue;
     profiles[name] = {
+      ...(keys.management ? { management: keys.management } : {}),
       ...(keys.sandbox ? { sandbox: keys.sandbox } : {}),
       ...(keys.production ? { production: keys.production } : {}),
     };
@@ -261,9 +273,9 @@ export function setKey(mode: Mode, entry: KeyEntry): string {
 }
 
 /**
- * Store a freshly-minted key pair under a named project profile and (by
- * default) make that project active. Used by `ablo login [--project <slug>]`,
- * which mints a `sandbox` + `production` pair scoped to one project.
+ * Store credentials under a named project profile and make that project
+ * active. New login flows provide `management`; legacy callers may still
+ * provide the runtime slots during the compatibility window.
  */
 export function setProfileKeys(
   profileName: string,
@@ -273,6 +285,7 @@ export function setProfileKeys(
   const cfg = readConfig() ?? emptyConfig(opts.mode);
   cfg.mode = opts.mode;
   cfg.profiles[profileName] = {
+    ...(keys.management ? { management: keys.management } : {}),
     ...(keys.sandbox ? { sandbox: keys.sandbox } : {}),
     ...(keys.production ? { production: keys.production } : {}),
   };
@@ -310,6 +323,13 @@ export function getKeyEntry(mode: Mode): KeyEntry | undefined {
   const cfg = readConfig();
   if (!cfg) return undefined;
   return cfg.profiles[activeProfileName(cfg)]?.[mode];
+}
+
+/** The active project's stored mode-free management credential. */
+export function getManagementKeyEntry(): KeyEntry | undefined {
+  const cfg = readConfig();
+  if (!cfg) return undefined;
+  return cfg.profiles[activeProfileName(cfg)]?.management;
 }
 
 /** Infer the environment a key belongs to from its prefix. */
@@ -426,6 +446,44 @@ export function resolveApiKey(modeOverride?: Mode): string | undefined {
  */
 export function resolveOrgKey(modeOverride?: Mode): string | undefined {
   return resolveKey({ purpose: 'org-read', mode: modeOverride }).key;
+}
+
+/**
+ * Resolve project control-plane authority. Runtime `ABLO_API_KEY` is
+ * intentionally ignored so a branch data credential can never become a
+ * management credential through CLI fallback.
+ */
+export function resolveManagementKey(): string | undefined {
+  if (process.env.ABLO_MANAGEMENT_KEY) return process.env.ABLO_MANAGEMENT_KEY;
+  const cfg = readConfig();
+  if (!cfg) return undefined;
+  const entry = cfg.profiles[activeProfileName(cfg)]?.management;
+  if (!entry) return undefined;
+  if (entry.expiresAt && Date.parse(entry.expiresAt) <= Date.now()) return undefined;
+  return entry.apiKey;
+}
+
+/**
+ * Resolve management authority for an organization-wide project operation.
+ * Unlike branch management, these routes do not target the key's project, so
+ * falling back across profiles cannot redirect data or branch lifecycle work.
+ */
+export function resolveOrgManagementKey(): string | undefined {
+  if (process.env.ABLO_MANAGEMENT_KEY) return process.env.ABLO_MANAGEMENT_KEY;
+  const cfg = readConfig();
+  if (!cfg) return undefined;
+  const profiles = [...new Set([
+    activeProfileName(cfg),
+    DEFAULT_PROFILE,
+    ...Object.keys(cfg.profiles),
+  ])];
+  for (const name of profiles) {
+    const entry = cfg.profiles[name]?.management;
+    if (!entry) continue;
+    if (entry.expiresAt && Date.parse(entry.expiresAt) <= Date.now()) continue;
+    return entry.apiKey;
+  }
+  return undefined;
 }
 
 /**

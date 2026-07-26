@@ -1,0 +1,30 @@
+---
+title: 'v0.37.1'
+type: changelog
+date: 2026-07-25
+changelog:
+  version: '0.37.1'
+  category: 'Fixes'
+---
+
+### A clearer introduction to Ablo
+
+The package README now explains Ablo from the problem outward: humans already
+coordinate shared work by seeing who is active, agreeing on ownership, waiting,
+and looking again before continuing; Ablo gives agents those same practical
+capabilities in software.
+
+It also makes the headless product explicit. The TypeScript SDK is backed by a
+pure HTTP transaction API, so agents, services, jobs, command-line tools, and
+interactive applications can use the same coordination model without requiring
+a browser or reactive client.
+
+### Lower overhead on busy write paths
+
+Large create batches now return only the inserted identifiers needed for
+idempotency handling instead of sending every inserted column back to the
+server. Live clients also bypass reconciliation work when a publication frame
+contains one change per entity.
+
+These changes reduce server response volume and client materialization work.
+There are no public API changes in 0.37.1.

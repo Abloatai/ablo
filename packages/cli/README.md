@@ -7,7 +7,7 @@ npx ablo init      # scaffold ablo/ with a starter schema
 npx ablo login     # authorize in your browser, set up your keys
 npx ablo connect   # connect your database
 npx ablo push      # upload your schema; your rows stay in your database
-npx ablo dev       # push, then keep watching for changes
+npx ablo dev       # prepare this Git branch, push, then watch
 npx ablo status    # see what your key acts on and whether writes will work
 ```
 
@@ -23,4 +23,7 @@ npm i -D @abloatai/cli
 
 ## What it does
 
-The CLI drives your Ablo project against the `@abloatai/ablo` SDK. Your schema lives in `ablo/`; `push` and `dev` send it to Ablo, and your rows stay in your own database.
+The CLI drives your Ablo project against the `@abloatai/ablo` SDK. Your schema
+lives in `ablo/`; `dev` gives each Git branch an isolated Ablo branch and
+temporary credential, while `push` is the lower-level one-shot schema command.
+Your rows stay in your own database.

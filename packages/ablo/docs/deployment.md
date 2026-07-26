@@ -54,25 +54,25 @@ Everything below is those three in order.
 ### Planes: what a deployment targets
 
 A **plane** is the isolation unit a credential acts on. `production` is the root
-plane; every sandbox sits beside it. Three things are per-plane, and knowing
-which three is most of what production readiness means:
+branch; development and preview branches are children. Three things are
+per-plane, and knowing which three is most of what production readiness means:
 
-- **Rows:** a sandbox write is invisible to production and to every other sandbox.
+- **Rows:** a child-branch write is invisible to production and every sibling.
 - **The registered database:** one per plane, so your production database and
   your dev database are separate registrations.
 - **The active schema artifact:** the model shapes the engine actually routes on.
 
-A key's plane is fixed at mint and spelled in its prefix: `sk_live_` acts on
-production, `sk_test_` on a sandbox. There is no runtime override — the
-credential *is* the environment selector, which is why application code never
-passes one.
+A key's plane is fixed at mint: `sk_live_` acts on production, while `sk_test_`
+is bound to one development branch. The immutable branch id,
+not a user-supplied slug, is the selector. This is why application code never
+passes an environment.
 
-One asymmetry is worth carrying into your deploy plan. A sandbox with no schema
-artifact of its own reads **production's**, so a schema pushed to production
-reaches your sandboxes automatically. The reverse does not hold: a push from a
-sandbox key creates a sandbox artifact that shadows production **for that
-sandbox's readers only**, and production keeps running the schema it was last
-pushed. Production gets its models when you push to production.
+A child copies its parent's active schema when it is created, then owns its
+schema history. A child push never changes production. Production gets new
+models only when the reviewed deployment pushes them to the root.
+
+There is no shared development plane. New credentials are branch-bound; follow
+[Branch-first development](./branch-development.md).
 
 ## 1. The database production writes to
 
@@ -141,9 +141,10 @@ minting. Two things bite specifically at deploy time.
 observe-only `rk_live_` by design, so a stolen CLI config cannot write to
 production. A production deploy needs a **secret** `sk_live_` from the dashboard,
 supplied as `ABLO_API_KEY`. You do not have to discover this from a failed
-deploy: `ablo login`, `ablo mode production`, and `ablo status` each name what
-the key in hand does, and `ablo status --json` reports it as `effectiveKey.kind`
-for a pipeline to check before it pushes.
+deploy: `ablo login` and `ablo status` name what the key in hand does, and
+`ablo status --json` reports it as `effectiveKey.kind` for a pipeline to check
+before it pushes. The deploy itself uses an explicit dashboard `sk_live_` in
+`ABLO_API_KEY`; there is no local mode switch.
 
 **An explicit key always wins.** The CLI resolves `ABLO_API_KEY`, then
 `.env.local`, then `.env`, then the stored login — and `ablo status` prints which
@@ -204,9 +205,9 @@ answer to where a push would land.
 
 ## Webhooks point at the deployed URL
 
-`npx ablo dev` forwards commits to your machine while you build, the way
-`stripe listen` does. A deployed endpoint is registered once, and Ablo returns
-the signing secret a single time:
+`npx ablo dev` prepares the schema branch; it does not forward webhooks. A
+deployed HTTPS endpoint is registered once, and Ablo returns the signing secret
+a single time:
 
 ```bash
 ABLO_API_KEY=sk_live_… npx ablo webhooks create https://yourapp.com/api/ablo/[...all]

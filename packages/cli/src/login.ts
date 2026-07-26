@@ -2,9 +2,8 @@
  * Manages the stored command-line credential through two commands.
  *
  *   ablo login                  Browser device flow (RFC 8628): you approve at
- *                               /cli, and the command provisions a test and a
- *                               live key pair, storing both under the active
- *                               project.
+ *                               /cli, and the command provisions one mode-free
+ *                               project management credential.
  *   ablo login --project <slug> The same, but scopes and mints the pair to a
  *                               named project, which then becomes active.
  *   ablo logout                 Clears the stored keys.
@@ -12,7 +11,8 @@
  * With no `--project`, login targets the currently active project — so it
  * doubles as a refresh in place — and otherwise falls back to the
  * organization's default project. In a headless or CI environment you don't log
- * in; you set `ABLO_API_KEY`, which always takes precedence.
+ * in; you set `ABLO_MANAGEMENT_KEY` for control-plane commands and a
+ * branch-bound `ABLO_API_KEY` for runtime commands.
  *
  * The device flow is two plain HTTP calls, one for the code and one that polls
  * for the token, which keeps the published command lean. Prompts are drawn with
@@ -24,7 +24,6 @@ import pc from 'picocolors';
 import { intro, outro, note, spinner, log, select, isCancel, cancel } from '@clack/prompts';
 import { translateHttpError } from '@abloatai/transaction/errors';
 import { provisionKeyResponseSchema, type ProvisionedKey } from '@abloatai/transaction/wire';
-import { credentialCapability } from './credentialCapability';
 import {
   setProfileKeys,
   getActiveProject,
@@ -227,7 +226,9 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
   }
 
   s.message(
-    targetProject ? `Provisioning keys for ${targetProject}…` : 'Provisioning a sandbox key…',
+    targetProject
+      ? `Provisioning project access for ${targetProject}…`
+      : 'Provisioning project access…',
   );
   const provRes = await fetch(`${DASHBOARD_URL}/api/cli/provision-key`, {
     method: 'POST',
@@ -269,7 +270,7 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
       );
     } else {
       log.error(
-        `The browser approval succeeded but the key handoff failed. Try again, or grab a ${pc.bold('sk_test_')} key from the dashboard and set ${pc.bold('ABLO_API_KEY')}.`,
+        `The browser approval succeeded but the credential handoff failed. Try ${pc.bold('npx ablo login')} again.`,
       );
     }
     process.exit(1);
@@ -292,29 +293,25 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
     ...(prov.organizationId ? { organizationId: prov.organizationId } : {}),
     ...(k.expiresAt ? { expiresAt: k.expiresAt } : {}),
   });
-  // Store the pair under the project profile the server scoped them to and make
-  // that project active. Default to sandbox (the dev loop); the production key
-  // rides along so `ablo mode production` works without another login. The
+  // Store the management credential under the project profile the server scoped
+  // it to and make that project active. The
   // server's `project` field (null means the org-default) is authoritative — it
   // resolved the slug to an id.
   const profileName = prov.project?.slug ?? DEFAULT_PROFILE;
   const path = setProfileKeys(
     profileName,
     {
-      sandbox: entry(prov.test),
-      ...(prov.live ? { production: entry(prov.live) } : {}),
+      management: entry(prov.management),
     },
     { mode: 'sandbox', activeProject: prov.project ?? undefined },
   );
-  s.stop(`Saved keys to ${path}`);
+  s.stop(`Saved project credential to ${path}`);
   const where = prov.project ? ` ${pc.dim(`(project ${prov.project.slug})`)}` : '';
-  // The production key rides along silently, and it observes rather than
-  // deploys. Naming that here means the reader learns it while holding the key,
-  // instead of from a 403 the first time they push to production.
-  const live = prov.live ? credentialCapability(prov.live.apiKey).note : null;
+  // One obvious next command. `ablo dev` is the local loop: it resolves your
+  // branch, wires `.env.local`, pushes, and watches. The stored mode is not
+  // named here because `dev` does not consult it.
   outro(
-    `${pc.green('✓')} Logged in ${pc.dim('(sandbox)')}${where}. Run ${pc.bold('npx ablo push')} to push your schema.` +
-      (live ? `\n  ${pc.dim(`Your production key: ${live}`)}` : ''),
+    `${pc.green('✓')} Logged in${where}. Run ${pc.bold('npx ablo dev')} to create or resume your Git branch and start with an expiring runtime key.`,
   );
 }
 
@@ -329,9 +326,11 @@ export function logout(): void {
   } else {
     console.log(`  ${pc.dim('○')} Not logged in — nothing to remove.`);
   }
-  if (process.env.ABLO_API_KEY) {
+  if (process.env.ABLO_MANAGEMENT_KEY) {
     console.log(
-      pc.dim(`  Note: ${pc.bold('ABLO_API_KEY')} is still set in this shell and takes precedence.`),
+      pc.dim(
+        `  Note: ${pc.bold('ABLO_MANAGEMENT_KEY')} is still set in this shell and takes precedence.`,
+      ),
     );
   }
 }

@@ -119,10 +119,10 @@ work asynchronously after responding.
 
 ## 2. Test locally
 
-You don't register a `localhost` URL. `npx ablo dev` forwards committed changes
-to your machine with a local signing secret — the same idea as Stripe's
-`stripe listen`. Run your app, run `ablo dev`, and writes flow into your local
-handler.
+`npx ablo dev` prepares an isolated schema branch; it does not forward webhook
+deliveries. Register an HTTPS endpoint that Ablo can reach. For local handler
+development, expose your app with the HTTPS tunnel your team already trusts,
+then register that temporary URL and remove the endpoint when you finish.
 
 ## 3. Register your endpoint
 

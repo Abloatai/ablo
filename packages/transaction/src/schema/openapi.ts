@@ -45,6 +45,7 @@ import {
   claimReorderReplySchema,
   claimReleaseReplySchema,
 } from '../wire/claims.js';
+import { errorEnvelopeSchema } from '../wire/errorEnvelope.js';
 import { modelReadResponseSchema, modelListResponseSchema } from '../wire/modelResponses.js';
 import { modelMutationRequestSchema } from '../wire/modelMutations.js';
 import { logListResponseSchema, logQuerySchema } from '../wire/feedEvent.js';
@@ -60,18 +61,101 @@ import {
   capabilityRotationResponseSchema,
   sessionRevocationResponseSchema,
 } from '../auth/capabilityLifecycle.js';
+import {
+  branchCredentialRequestSchema,
+  branchCredentialResponseSchema,
+  branchListResponseSchema,
+  branchResponseSchema,
+  branchStatusResponseSchema,
+  createBranchRequestSchema,
+} from '../branches.js';
+import { modelClaimSchema } from '../coordination/schema.js';
 
 /** Options for {@link schemaToOpenApi} — the metadata stamped into the generated spec. */
 export interface SchemaToOpenApiOptions {
   /** Spec title. Default `"Ablo API"`. */
   readonly title?: string;
-  /** Spec version. Default `"1.0.0"`. */
+  /** Spec version. Published artifacts pass the current Ablo package version. */
   readonly version?: string;
   /** API base URL. Default `"https://api.abloatai.com/api"`. */
   readonly serverUrl?: string;
 }
 
 type Json = Record<string, unknown>;
+
+const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);
+
+/**
+ * Give generators a stable public name for every operation.
+ *
+ * The map is deliberately exhaustive: adding a route without naming it throws
+ * while rendering the document instead of letting each language generator
+ * invent a different method name.
+ */
+function applyOperationIds(
+  paths: Json,
+  operationIds: Readonly<Record<string, string>>,
+): void {
+  const usedKeys = new Set<string>();
+  const usedIds = new Set<string>();
+
+  for (const [path, rawPathItem] of Object.entries(paths)) {
+    const pathItem = rawPathItem as Json;
+    for (const [method, rawOperation] of Object.entries(pathItem)) {
+      if (!HTTP_METHODS.has(method)) continue;
+      const key = `${method.toUpperCase()} ${path}`;
+      const operationId = operationIds[key];
+      if (!operationId) {
+        throw new Error(`OpenAPI operation ${key} has no stable operationId`);
+      }
+      if (usedIds.has(operationId)) {
+        throw new Error(`OpenAPI operationId ${operationId} is not unique`);
+      }
+      pathItem[method] = { ...(rawOperation as Json), operationId };
+      usedKeys.add(key);
+      usedIds.add(operationId);
+    }
+  }
+
+  const stale = Object.keys(operationIds).filter((key) => !usedKeys.has(key));
+  if (stale.length > 0) {
+    throw new Error(
+      `OpenAPI operationId map names operations that do not exist: ${stale.join(', ')}`,
+    );
+  }
+}
+
+const ABLO_OPERATION_IDS: Readonly<Record<string, string>> = {
+  'GET /v1/models/{model}': 'listModelRows',
+  'POST /v1/models/{model}': 'createModelRow',
+  'GET /v1/models/{model}/{id}': 'getModelRow',
+  'PATCH /v1/models/{model}/{id}': 'updateModelRow',
+  'DELETE /v1/models/{model}/{id}': 'deleteModelRow',
+  'POST /v1/models/{model}/{id}/claim': 'acquireModelClaim',
+  'DELETE /v1/models/{model}/{id}/claim': 'releaseModelClaim',
+  'POST /v1/models/{model}/{id}/claim/heartbeat': 'heartbeatModelClaim',
+  'POST /v1/models/{model}/{id}/claim/reorder': 'reorderModelClaimQueue',
+  'POST /v1/ephemeral_keys': 'mintEphemeralKey',
+  'GET /v1/branches': 'listBranches',
+  'POST /v1/branches': 'createBranch',
+  'GET /v1/branches/{id}': 'getBranch',
+  'DELETE /v1/branches/{id}': 'deleteBranch',
+  'POST /v1/branches/{id}/credentials': 'mintBranchCredential',
+  'GET /v1/branches/{id}/status': 'getBranchStatus',
+  'GET /v1/claims': 'listClaims',
+  'POST /v1/claims': 'acquireClaim',
+  'POST /v1/claims/heartbeat': 'heartbeatClaims',
+  'GET /v1/claims/{claimId}': 'getClaim',
+  'DELETE /v1/claims/{claimId}': 'releaseClaim',
+  'POST /v1/claims/{claimId}/heartbeat': 'heartbeatClaim',
+  'POST /v1/capabilities': 'mintCapability',
+  'GET /v1/capabilities/{id}': 'getCapability',
+  'DELETE /v1/capabilities/{id}': 'revokeCapability',
+  'POST /v1/capabilities/{id}/rotate': 'rotateCapability',
+  'GET /v1/schema': 'getSchema',
+  'GET /v1/logs': 'listLogEntries',
+  'POST /v1/commits': 'commit',
+};
 
 function fieldSchema(f: FieldMeta): Json {
   switch (f.type) {
@@ -106,6 +190,54 @@ const jsonResp = (description: string, schema: Json): Json => ({
   description,
   content: { 'application/json': { schema } },
 });
+const schemaRef = (name: string): Json => ({ $ref: `#/components/schemas/${name}` });
+const namedResp = (description: string, name: string): Json =>
+  jsonResp(description, schemaRef(name));
+
+/**
+ * Zod emits JSON Schema 2020-12. OpenAPI 3.1 accepts it, but SDK generators
+ * intentionally support a narrower, portable subset:
+ *
+ * - `$schema` belongs on a standalone JSON Schema document, not every embedded
+ *   OpenAPI Schema Object;
+ * - `propertyNames: { type: 'string' }` is redundant for JSON objects and is
+ *   unsupported by Stainless;
+ * - `additionalProperties: {}` means "any JSON value", but Stainless requires
+ *   the equivalent, explicit `true`.
+ *
+ * Keeping this normalization at the rendering boundary lets the Zod schemas
+ * remain the wire authority without publishing generator-hostile syntax.
+ */
+function portableSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(portableSchema);
+  if (typeof value !== 'object' || value === null) return value;
+
+  const source = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(source)) {
+    if (key === '$schema') continue;
+    if (
+      key === 'propertyNames' &&
+      typeof child === 'object' &&
+      child !== null &&
+      Object.keys(child).length === 1 &&
+      (child as Record<string, unknown>).type === 'string'
+    ) {
+      continue;
+    }
+    if (
+      key === 'additionalProperties' &&
+      typeof child === 'object' &&
+      child !== null &&
+      Object.keys(child).length === 0
+    ) {
+      result[key] = true;
+      continue;
+    }
+    result[key] = portableSchema(child);
+  }
+  return result;
+}
 /**
  * Derive a JSON Schema from a wire schema.
  *
@@ -116,9 +248,11 @@ const jsonResp = (description: string, schema: Json): Json => ({
  * call site rather than defaulted.
  */
 const derive = (schema: z.ZodType, io: 'input' | 'output'): Json =>
-  z.toJSONSchema(schema, { io, unrepresentable: 'any' }) as Json;
+  portableSchema(
+    z.toJSONSchema(schema, { io, unrepresentable: 'any' }),
+  ) as Json;
 
-const commitReceipt = (): Json => jsonResp('Commit receipt', derive(commitReceiptSchema, 'output'));
+const commitReceipt = (): Json => namedResp('Commit receipt', 'CommitReceipt');
 
 const modelParam = (): Json => ({
   name: 'model',
@@ -171,7 +305,16 @@ function withGenericRows(derived: Json): Json {
  */
 function queryParams(schema: z.ZodType): Json[] {
   const props = (derive(schema, 'input').properties ?? {}) as Record<string, Json>;
-  return Object.entries(props).map(([name, s]) => ({ name, in: 'query', schema: s }));
+  return Object.entries(props).map(([name, s]) => ({
+    name,
+    in: 'query',
+    // Query strings arrive at the server as text, but OpenAPI describes the
+    // caller-facing value before serialization. Generated clients should take
+    // an integer here and encode it, not expose a stringly typed page size.
+    schema: name === 'limit'
+      ? { type: 'integer', minimum: 1 }
+      : s,
+  }));
 }
 
 /**
@@ -180,7 +323,7 @@ function queryParams(schema: z.ZodType): Json[] {
  * and a retry after a lost response deserves to know which it got.
  */
 const releaseResp = (): Json =>
-  jsonResp('Released', derive(claimReleaseReplySchema, 'output'));
+  namedResp('Released', 'ClaimRelease');
 
 const claimIdParam = (): Json => ({
   name: 'claimId',
@@ -204,8 +347,12 @@ function envelope(options: SchemaToOpenApiOptions, description: string, paths: J
     openapi: '3.1.0',
     info: {
       title: options.title ?? 'Ablo API',
-      version: options.version ?? '1.0.0',
+      version: options.version ?? 'development',
       description,
+      license: {
+        name: 'Apache License 2.0',
+        identifier: 'Apache-2.0',
+      },
     },
     servers: [{ url: options.serverUrl ?? `${ABLO_HOSTED_HTTP_BASE_URL}/api` }],
     security: [{ bearerAuth: [] }],
@@ -217,6 +364,90 @@ function envelope(options: SchemaToOpenApiOptions, description: string, paths: J
     },
     paths,
   };
+}
+
+const ERROR_RESPONSES: Readonly<Record<string, string>> = {
+  '400': 'The request did not satisfy the published contract.',
+  '401': 'The Bearer credential is missing, malformed, or expired.',
+  '403': 'The credential does not authorize this operation.',
+  '404': 'The addressed resource does not exist in the credential scope.',
+  '409': 'The request conflicts with current claim, version, or idempotency state.',
+  '429': 'The caller exceeded an enforced rate limit.',
+  '500': 'The server could not complete the request.',
+  '503': 'A required service is temporarily unavailable.',
+};
+
+/**
+ * Every route passes failures through the same server error funnel. Publish
+ * that fact on every operation so generated transports decode all HTTP errors
+ * through `ErrorEnvelope`, rather than falling back to a language-specific raw
+ * response type.
+ */
+function attachCanonicalErrors(paths: Json): void {
+  for (const rawPathItem of Object.values(paths)) {
+    const pathItem = rawPathItem as Json;
+    for (const [method, rawOperation] of Object.entries(pathItem)) {
+      if (!HTTP_METHODS.has(method)) continue;
+      const operation = rawOperation as Json;
+      const responses = { ...(operation.responses as Json | undefined) };
+      for (const [status, description] of Object.entries(ERROR_RESPONSES)) {
+        responses[status] = namedResp(description, 'ErrorEnvelope');
+      }
+      responses.default = namedResp(
+        'An HTTP error not otherwise listed; decoded through the canonical envelope.',
+        'ErrorEnvelope',
+      );
+      operation.responses = responses;
+    }
+  }
+}
+
+function abloComponentSchemas(): Record<string, Json> {
+  const commitReceiptSchemaJson = derive(commitReceiptSchema, 'output');
+  commitReceiptSchemaJson.discriminator = { propertyName: 'status' };
+
+  const schemas: Record<string, Json> = {
+    Cursor: {
+      type: 'string',
+      description: 'An opaque pagination position. Copy it unchanged into the next request.',
+    },
+    ErrorEnvelope: derive(errorEnvelopeSchema, 'output'),
+    Claim: derive(modelClaimSchema, 'output'),
+    ClaimAcquire: {
+      oneOf: [schemaRef('ClaimAcquired'), schemaRef('ClaimQueued')],
+      discriminator: { propertyName: 'status' },
+    },
+    ClaimAcquired: derive(claimAcquiredResponseSchema, 'output'),
+    ClaimQueued: derive(claimQueuedResponseSchema, 'output'),
+    ClaimState: derive(claimStateSchema, 'output'),
+    ClaimList: derive(claimListResponseSchema, 'output'),
+    ClaimHeartbeat: derive(claimHeartbeatReplySchema, 'output'),
+    ClaimHeartbeatBatch: derive(claimHeartbeatBatchReplySchema, 'output'),
+    ClaimRelease: derive(claimReleaseReplySchema, 'output'),
+    ClaimReorder: derive(claimReorderReplySchema, 'output'),
+    CommitReceipt: commitReceiptSchemaJson,
+    ModelRead: withGenericRows(derive(modelReadResponseSchema, 'output')),
+    ModelPage: withGenericRows(derive(modelListResponseSchema, 'output')),
+    LogPage: derive(logListResponseSchema, 'output'),
+    SchemaRead: derive(schemaReadResponseSchema, 'output'),
+  };
+
+  // Reuse protocol concepts inside the named envelopes too. Without these
+  // refs, generators invent separate anonymous Claim and cursor models for
+  // every operation even though the server validates one canonical shape.
+  const properties = (name: string): Record<string, Json> =>
+    (schemas[name]?.properties ?? {}) as Record<string, Json>;
+  properties('ClaimAcquired').claim = schemaRef('Claim');
+  (properties('ClaimList').data as Json).items = schemaRef('Claim');
+  (properties('ModelRead').claims as Json).items = schemaRef('Claim');
+
+  for (const name of ['ClaimList', 'ModelPage', 'LogPage']) {
+    properties(name).next_cursor = {
+      oneOf: [schemaRef('Cursor'), { type: 'null' }],
+    };
+  }
+
+  return schemas;
 }
 
 /**
@@ -234,9 +465,9 @@ function envelope(options: SchemaToOpenApiOptions, description: string, paths: J
  * {@link schemaToOpenApi}.
  */
 export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
-  const rowResp = jsonResp(
+  const rowResp = namedResp(
     'The row, with the watermark it was read at and who holds it.',
-    withGenericRows(derive(modelReadResponseSchema, 'output')),
+    'ModelRead',
   );
   const tags = ['models'];
 
@@ -247,10 +478,10 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         summary: 'List rows of a model',
         parameters: [modelParam(), ...queryParams(listQuerySchema)],
         responses: {
-          '200': jsonResp(
+          '200': namedResp(
             'A page of rows. `next_cursor` feeds `starting_after` on the next ' +
               'call; `stamp` is the watermark the page was read at.',
-            withGenericRows(derive(modelListResponseSchema, 'output')),
+            'ModelPage',
           ),
         },
       },
@@ -292,16 +523,16 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         parameters: [modelParam(), idParam()],
         requestBody: optionalJsonBody(derive(claimRequestSchema, 'input')),
         responses: {
-          '201': jsonResp(
+          '201': namedResp(
             'The lease is yours. `claim.fenceToken` is set when the coordinator ' +
               'minted one; carry it on writes made under the lease.',
-            derive(claimAcquiredResponseSchema, 'output'),
+            'ClaimAcquire',
           ),
-          '202': jsonResp(
+          '202': namedResp(
             'The row was already held and you asked to queue. You are in line at ' +
               '`position` — heartbeat to keep the slot, and poll ' +
               '`GET /v1/claims/{claimId}` for the grant.',
-            derive(claimQueuedResponseSchema, 'output'),
+            'ClaimAcquire',
           ),
         },
       },
@@ -319,9 +550,9 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         parameters: [modelParam(), idParam()],
         requestBody: optionalJsonBody(derive(claimHeartbeatRequestSchema, 'input')),
         responses: {
-          '200': jsonResp(
+          '200': namedResp(
             'Lease extended (or queued slot refreshed)',
-            derive(claimHeartbeatReplySchema, 'output'),
+            'ClaimHeartbeat',
           ),
         },
       },
@@ -336,7 +567,7 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         parameters: [modelParam(), idParam()],
         requestBody: optionalJsonBody(derive(claimReorderRequestSchema, 'input')),
         responses: {
-          '200': jsonResp('Reordered', derive(claimReorderReplySchema, 'output')),
+          '200': namedResp('Reordered', 'ClaimReorder'),
         },
       },
     },
@@ -354,6 +585,77 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         responses: { '201': jsonResp('The minted credential', derive(EphemeralKeyResponseSchema, 'output')) },
       },
     },
+    '/v1/branches': {
+      get: {
+        tags: ['branches'],
+        summary: 'List transaction branches for the credential project',
+        responses: {
+          '200': jsonResp(
+            'The root and every active child branch.',
+            derive(branchListResponseSchema, 'output'),
+          ),
+        },
+      },
+      post: {
+        tags: ['branches'],
+        summary: 'Create an isolated child branch',
+        description:
+          'The returned id is immutable; retain it for automation. The slug is a project-scoped human handle.',
+        requestBody: jsonBody(derive(createBranchRequestSchema, 'input')),
+        responses: {
+          '201': jsonResp('The ready branch.', derive(branchResponseSchema, 'output')),
+        },
+      },
+    },
+    '/v1/branches/{id}': {
+      get: {
+        tags: ['branches'],
+        summary: 'Retrieve a branch by immutable id',
+        parameters: [idParam()],
+        responses: {
+          '200': jsonResp('The branch.', derive(branchResponseSchema, 'output')),
+        },
+      },
+      delete: {
+        tags: ['branches'],
+        summary: 'Delete a non-root branch and revoke its credentials',
+        parameters: [idParam()],
+        responses: {
+          '200': jsonResp('The deleted branch.', derive(branchResponseSchema, 'output')),
+        },
+      },
+    },
+    '/v1/branches/{id}/credentials': {
+      post: {
+        tags: ['branches', 'credentials'],
+        summary: 'Mint an expiring branch-bound test credential',
+        parameters: [idParam()],
+        requestBody: optionalJsonBody(
+          derive(branchCredentialRequestSchema, 'input'),
+        ),
+        responses: {
+          '201': jsonResp(
+            'A one-time plaintext credential. Do not persist it in source control.',
+            derive(branchCredentialResponseSchema, 'output'),
+          ),
+        },
+      },
+    },
+    '/v1/branches/{id}/status': {
+      get: {
+        tags: ['branches'],
+        summary: 'Diagnose one branch plane',
+        description:
+          'Returns branch lifecycle, active schema, compatibility with the parent schema, safe datasource coordinates, and readiness blockers.',
+        parameters: [idParam()],
+        responses: {
+          '200': jsonResp(
+            'The complete branch readiness view.',
+            derive(branchStatusResponseSchema, 'output'),
+          ),
+        },
+      },
+    },
     '/v1/claims': {
       get: {
         tags: ['claims'],
@@ -365,9 +667,9 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
           'request names both `model` and `id` — a wait line belongs to one row.',
         parameters: queryParams(claimListQuerySchema),
         responses: {
-          '200': jsonResp(
+          '200': namedResp(
             'Live claims, and the wait line behind the named row.',
-            derive(claimListResponseSchema, 'output'),
+            'ClaimList',
           ),
         },
       },
@@ -379,13 +681,13 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
           'row in `target` instead of the URL. Answers identically.',
         requestBody: jsonBody(derive(claimRequestSchema, 'input')),
         responses: {
-          '201': jsonResp(
+          '201': namedResp(
             'The lease is yours.',
-            derive(claimAcquiredResponseSchema, 'output'),
+            'ClaimAcquire',
           ),
-          '202': jsonResp(
+          '202': namedResp(
             'Already held, and you asked to queue. You are in line at `position`.',
-            derive(claimQueuedResponseSchema, 'output'),
+            'ClaimAcquire',
           ),
         },
       },
@@ -400,9 +702,9 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
           'credential holds on this plane.',
         requestBody: optionalJsonBody(derive(claimHeartbeatRequestSchema, 'input')),
         responses: {
-          '200': jsonResp(
+          '200': namedResp(
             'One ack per lease extended.',
-            derive(claimHeartbeatBatchReplySchema, 'output'),
+            'ClaimHeartbeatBatch',
           ),
         },
       },
@@ -416,7 +718,7 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
           'was granted. `position` is advisory — a privileged reorder can move it ' +
           'up — so branch on `status`, never on position.',
         parameters: [claimIdParam()],
-        responses: { '200': jsonResp('The claim state', derive(claimStateSchema, 'output')) },
+        responses: { '200': namedResp('The claim state', 'ClaimState') },
       },
       delete: {
         tags: ['claims'],
@@ -442,9 +744,9 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         parameters: [claimIdParam()],
         requestBody: optionalJsonBody(derive(claimHeartbeatRequestSchema, 'input')),
         responses: {
-          '200': jsonResp(
+          '200': namedResp(
             'Lease extended, or queued slot refreshed.',
-            derive(claimHeartbeatReplySchema, 'output'),
+            'ClaimHeartbeat',
           ),
         },
       },
@@ -518,9 +820,9 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
           'the shape once and poll the hashes after: a refetch only ever answers ' +
           'a push.',
         responses: {
-          '200': jsonResp(
+          '200': namedResp(
             'The deployed schema, or `active: false` when nothing is pushed.',
-            derive(schemaReadResponseSchema, 'output'),
+            'SchemaRead',
           ),
         },
       },
@@ -537,11 +839,11 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
           'widen what it sees by asking.',
         parameters: queryParams(logQuerySchema),
         responses: {
-          '200': jsonResp(
+          '200': namedResp(
             'A page of the feed, oldest first. Entries are discriminated on ' +
               '`object`, so a reader that meets an entry kind it does not know ' +
               'can skip it and keep paging.',
-            derive(logListResponseSchema, 'output'),
+            'LogPage',
           ),
         },
       },
@@ -557,13 +859,16 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
     },
   };
 
+  applyOperationIds(paths, ABLO_OPERATION_IDS);
+  attachCanonicalErrors(paths);
+
   return envelope(
     options,
     'The Ablo transaction layer: commit, read, and claim. `{model}` is any model ' +
       'from your pushed schema — the routes are the same whichever it is. ' +
       'Authenticate every request with your API key as a Bearer token.',
     paths,
-    {},
+    abloComponentSchemas(),
   );
 }
 
@@ -582,6 +887,7 @@ export function schemaToOpenApi<S extends SchemaRecord>(
   const models: SchemaRecord = schema.models;
   const paths: Json = {};
   const schemas: Record<string, Json> = {};
+  const operationIds: Record<string, string> = {};
 
   for (const [key, def] of Object.entries(models)) {
     const ref: Json = { $ref: `#/components/schemas/${pascal(key)}` };
@@ -597,7 +903,24 @@ export function schemaToOpenApi<S extends SchemaRecord>(
     schemas[pascal(key)] = { type: 'object', properties, required };
     const createBody = jsonBody({ type: 'object', properties: createProps });
 
-    paths[`/v1/models/${key}`] = {
+    const collectionPath = `/v1/models/${key}`;
+    const rowPath = `/v1/models/${key}/{id}`;
+    const claimPath = `/v1/models/${key}/{id}/claim`;
+    const heartbeatPath = `/v1/models/${key}/{id}/claim/heartbeat`;
+    const reorderPath = `/v1/models/${key}/{id}/claim/reorder`;
+    const modelName = pascal(key);
+
+    operationIds[`GET ${collectionPath}`] = `list${modelName}Rows`;
+    operationIds[`POST ${collectionPath}`] = `create${modelName}Row`;
+    operationIds[`GET ${rowPath}`] = `get${modelName}Row`;
+    operationIds[`PATCH ${rowPath}`] = `update${modelName}Row`;
+    operationIds[`DELETE ${rowPath}`] = `delete${modelName}Row`;
+    operationIds[`POST ${claimPath}`] = `acquire${modelName}Claim`;
+    operationIds[`DELETE ${claimPath}`] = `release${modelName}Claim`;
+    operationIds[`POST ${heartbeatPath}`] = `heartbeat${modelName}Claim`;
+    operationIds[`POST ${reorderPath}`] = `reorder${modelName}ClaimQueue`;
+
+    paths[collectionPath] = {
       get: {
         tags: [key],
         summary: `List ${key}`,
@@ -611,7 +934,7 @@ export function schemaToOpenApi<S extends SchemaRecord>(
       },
       post: { tags: [key], summary: `Create a ${key}`, requestBody: createBody, responses: { '200': commitReceipt() } },
     };
-    paths[`/v1/models/${key}/{id}`] = {
+    paths[rowPath] = {
       get: {
         tags: [key],
         summary: `Retrieve a ${key}`,
@@ -626,14 +949,14 @@ export function schemaToOpenApi<S extends SchemaRecord>(
       patch: { tags: [key], summary: `Update a ${key}`, parameters: [idParam()], requestBody: createBody, responses: { '200': commitReceipt() } },
       delete: { tags: [key], summary: `Delete a ${key}`, parameters: [idParam()], responses: { '200': commitReceipt() } },
     };
-    paths[`/v1/models/${key}/{id}/claim`] = {
+    paths[claimPath] = {
       post: { tags: [key], summary: `Claim a ${key} (acquire lease)`, parameters: [idParam()], responses: { '200': jsonResp('Claim acquired', { type: 'object' }) } },
       delete: { tags: [key], summary: `Release a ${key} claim`, parameters: [idParam()], responses: { '200': jsonResp('Released', { type: 'object' }) } },
     };
-    paths[`/v1/models/${key}/{id}/claim/heartbeat`] = {
+    paths[heartbeatPath] = {
       post: { tags: [key], summary: `Heartbeat a held ${key} claim (extend the lease for long-running work)`, parameters: [idParam()], responses: { '200': jsonResp('Lease extended (or queued slot refreshed)', derive(claimHeartbeatReplySchema, 'output')) } },
     };
-    paths[`/v1/models/${key}/{id}/claim/reorder`] = {
+    paths[reorderPath] = {
       post: { tags: [key], summary: `Reorder the ${key} wait-line (privileged)`, parameters: [idParam()], responses: { '200': jsonResp('Reordered', { type: 'object' }) } },
     };
   }
@@ -647,6 +970,11 @@ export function schemaToOpenApi<S extends SchemaRecord>(
       responses: { '200': commitReceipt() },
     },
   };
+  operationIds['POST /v1/commits'] = 'commit';
+  applyOperationIds(paths, operationIds);
+  attachCanonicalErrors(paths);
+
+  Object.assign(schemas, abloComponentSchemas());
 
   return envelope(
     options,

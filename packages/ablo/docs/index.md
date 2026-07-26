@@ -60,11 +60,14 @@ based on a row that has since changed is turned away rather than applied.
     stay in your own migrations.
 
     ```bash
-    npx ablo init && npx ablo push
+    npx ablo init
+    npx ablo dev
     ```
 
-    `push` is the step everything depends on: the server keeps its own copy of the schema, and
-    until it has yours, a write to a new model fails with `server_execute_unknown_model`.
+    `dev` gives the current Git branch an isolated Ablo branch, wires its temporary key,
+    pushes the schema, and watches for changes. Until the server has your schema, a write to
+    a new model fails with `server_execute_unknown_model`. See
+    [Branch-first development](./branch-development.md).
   </Step>
 
   <Step title="Connect the database the rows live in">
@@ -161,6 +164,7 @@ default caller, not a special one.
 
 - [Quickstart](./quickstart.md) — make your first coordinated write.
 - [Integration Guide](./integration-guide.md) — the canonical end-to-end integration.
+- [Integrations](./integrations.md) — long-running tasks, ingestion, and other application-edge runtimes.
 - [CLI & Migrations](./cli.md) — `init` / `connect` / `push` / `migrate` / `generate`.
 - [Connect Your Database](./data-sources.md) — where rows land when your own database is canonical.
 - [Deployment](./deployment.md) — the database, the keys, and the schema push that take an integration to production.

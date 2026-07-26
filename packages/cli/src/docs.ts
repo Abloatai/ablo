@@ -14,6 +14,7 @@
  * so adding a doc makes it appear with no edit to this file.
  */
 
+import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { createRequire } from 'module';
 import { join, resolve } from 'path';
@@ -34,12 +35,6 @@ export const DOCS_USAGE = `
 `;
 
 /**
- * The names the SDK package answers to: the published name, and the workspace
- * name the monorepo resolves before a release rewrites it.
- */
-const SDK_PACKAGE_NAMES = ['@abloatai/ablo', '@abloatai/transaction'];
-
-/**
  * The root of the SDK install whose pages we print — the directory holding
  * `docs/` and the package's own `package.json`.
  *
@@ -50,12 +45,22 @@ const SDK_PACKAGE_NAMES = ['@abloatai/ablo', '@abloatai/transaction'];
  */
 function packageRoot(): string | null {
   const contexts = [join(process.cwd(), 'package.json'), __filename];
+  const markers = [
+    // The SDK entry is <root>/dist/index.js.
+    { request: '@abloatai/ablo', levels: 2 },
+    // Compatibility markers for installs that expose the docs catalog itself.
+    { request: '@abloatai/ablo/docs', levels: 3 },
+    { request: '@abloatai/transaction/docs', levels: 3 },
+  ] as const;
   for (const context of contexts) {
     const req = createRequire(context);
-    for (const name of SDK_PACKAGE_NAMES) {
+    for (const marker of markers) {
       try {
-        // <root>/dist/docs/index.js, three levels below the package root.
-        return resolve(req.resolve(`${name}/docs`), '..', '..', '..');
+        const entry = req.resolve(marker.request);
+        const root = resolve(entry, ...Array.from({ length: marker.levels }, () => '..'));
+        // A transaction-only install has a docs catalog API but not the SDK's
+        // shipped pages. Do not mistake its README for a complete catalog.
+        if (existsSync(resolve(root, 'docs'))) return root;
       } catch {
         // Not resolvable from this context — try the next.
       }

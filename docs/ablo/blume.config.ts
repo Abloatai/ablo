@@ -127,6 +127,11 @@ export default defineConfig({
           items: ["/agents", "/agent-messaging"],
         },
         {
+          label: "Integrations",
+          icon: "blocks",
+          items: ["/integrations", "/integrations/temporal", "/integrations/inngest"],
+        },
+        {
           label: "Webhooks",
           icon: "radio-tower",
           items: ["/webhooks"],

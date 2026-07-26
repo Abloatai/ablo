@@ -66,24 +66,17 @@ deterministic demo; it does not call your API key or mutate hosted Ablo data.
 It is also built for coding agents: copy the sandbox prompt into Claude Code or
 Codex and ask it to wire one real model through the schema model API.
 
-Use the authenticated org dashboard sandbox for real integration work. The
-default sandbox is the equivalent of Stripe test mode:
-
-- it is scoped to the organization,
-- it has an isolated sync group prefix,
-- it mints `sk_test_*` keys,
-- it can be reset without touching live state,
-- additional sandboxes can start blank or from copied live configuration.
-
-Live keys and sandbox keys are separate. Use `sk_test_*` while wiring your app,
-agents, and Data Source endpoint; move to `sk_live_*` only when the same schema
-and write path are ready for production.
+Use `npx ablo dev` for real integration work. It derives an immutable branch
+from Git, inherits the parent schema, and writes a temporary branch credential
+to `.env.local`. Each developer or pull request gets independent schema, rows,
+claims, and logs. Use an explicit `sk_live_*` root credential only in the
+reviewed production deployment.
 
 When handing this to a coding agent, give it a concrete target:
 
 ```txt
 Add Ablo to this app for one model your agents edit.
-Use the org sandbox sk_test_* key. Declare schema, add the Ablo client, replace
+Run npx ablo dev and use its branch-bound key. Declare schema, add the Ablo client, replace
 one write with ablo.<model>.update(..., { readAt, onStale: 'reject',
 wait: 'confirmed' }), and add a smoke test for two concurrent writers.
 ```

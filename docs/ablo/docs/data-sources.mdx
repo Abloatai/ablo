@@ -247,6 +247,17 @@ lifecycle. It needs no replication setup, which is exactly why it's the fallback
 reach for it only when logical replication isn't available, and prefer `ablo
 connect` everywhere else.
 
+The current Prisma, Drizzle, and Kysely adapters are PostgreSQL bindings. Their
+profiles record three independent facts: the database is PostgreSQL, the binding
+is Prisma/Drizzle/Kysely, and observation is either the transactional outbox or
+PostgreSQL WAL. An ORM name does not imply that the same adapter supports every
+database that ORM can connect to.
+
+The outbox automatically observes writes made through Ablo. A write made
+directly by other application code is visible only if that code writes the same
+outbox record in its transaction. Native WAL observation sees both Ablo and
+external writes.
+
 ## Next steps
 
 - [Quickstart](/quickstart) — connect and write through `ablo.<model>`.

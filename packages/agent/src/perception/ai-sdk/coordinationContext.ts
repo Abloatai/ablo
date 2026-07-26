@@ -2,13 +2,15 @@ import type {
   LanguageModelV3Middleware,
   LanguageModelV3Prompt,
 } from '@ai-sdk/provider';
-import type { WireClaim } from '@abloatai/transaction/coordination';
-import type { ClaimTarget } from '@abloatai/transaction/types/streams';
+import type {
+  Claim,
+  ClaimTarget,
+} from '@abloatai/transaction/types/streams';
 
 export type { ClaimTarget };
 
 export interface CoordinationAgent {
-  pendingClaims(entityType: string, entityId: string): Promise<WireClaim[]>;
+  pendingClaims(entityType: string, entityId: string): Promise<readonly Claim[]>;
 }
 
 export interface CoordinationContextMiddlewareOptions {
@@ -30,7 +32,7 @@ export function coordinationContextMiddleware(
 
       const claims = (await agent.pendingClaims(target.type, target.id)).filter(
         (claim) =>
-          !excluded.has(claim.claimId) &&
+          !excluded.has(claim.id) &&
           targetsOverlap(claim, target),
       );
       if (claims.length === 0) return params;
@@ -40,9 +42,12 @@ export function coordinationContextMiddleware(
   };
 }
 
-function targetsOverlap(claim: WireClaim, target: ClaimTarget): boolean {
+function targetsOverlap(claim: Claim, target: ClaimTarget): boolean {
   const claimFields = new Set(
-    [...(claim.fields ?? []), ...(claim.field ? [claim.field] : [])].map(
+    [
+      ...(claim.target.fields ?? []),
+      ...(claim.target.field ? [claim.target.field] : []),
+    ].map(
       (field) => field.toLowerCase(),
     ),
   );
@@ -56,7 +61,7 @@ function targetsOverlap(claim: WireClaim, target: ClaimTarget): boolean {
 }
 
 function formatCoordinationNote(
-  claims: readonly WireClaim[],
+  claims: readonly Claim[],
   target: ClaimTarget,
 ): string {
   const entityLabel = target.type.toLowerCase();

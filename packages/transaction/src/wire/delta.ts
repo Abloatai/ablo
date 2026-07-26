@@ -66,6 +66,17 @@ export type SyncDeltaAction = z.infer<typeof syncDeltaActionSchema>;
  * serialized string (used by the group-change frames on `G` and `S` deltas), or
  * `null` on deletes. This is wider than the stored row's payload — which is only a
  * row or null — because the group-change frames encode their payload as a string.
+ *
+ * The record branch costs more than its contract suggests: it walks
+ * `Reflect.ownKeys` and rebuilds the payload into a fresh object on every parse,
+ * so client-side validation scales with a row's field count on a path that runs
+ * once per delta (2.7 microseconds at 23 fields, against 0.15 for a predicate).
+ * Replacing it was tried and reverted, because every faster spelling gives up
+ * something this contract owns: `z.custom` cannot be represented in JSON Schema
+ * and breaks the derived spec, and `z.unknown().refine` derives to an empty
+ * schema and infers `unknown`, which would widen {@link WireDeltaData}. A
+ * predicate must also match this schema's real acceptance, which is
+ * plain-object: `z.record` rejects `Date`, `Map`, and class instances.
  */
 export const wireDeltaDataSchema = z
   .union([z.record(z.string(), z.unknown()), z.string()])

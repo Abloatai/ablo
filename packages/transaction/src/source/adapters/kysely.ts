@@ -25,6 +25,8 @@ import type {
   MutationAdapter,
   Row,
 } from '../adapter.js';
+import { defineDatabaseAdapter } from '../adapterFactory.js';
+import { postgresAdapterProfile } from '../adapterProfile.js';
 import type { ChangeSet, EventsPage, Migration } from '../contract.js';
 import {
   changeSetSchema,
@@ -199,7 +201,11 @@ export function createKyselyMutationAdapter(
   options: KyselyMutationAdapterOptions = {},
 ): MutationAdapter {
   const markerModelFor = options.markerModelFor ?? ((model: string) => model);
-  return {
+  return defineDatabaseAdapter({
+    profile: postgresAdapterProfile(
+      'kysely',
+      mode === 'direct' ? 'postgres-wal' : 'transactional-outbox',
+    ),
     capabilities: {
       transactions: true,
       propose: false,
@@ -281,7 +287,7 @@ export function createKyselyMutationAdapter(
         return { rows };
       });
     },
-  };
+  });
 }
 
 /** Endpoint wrapper: mutation + ledger + outbox, with an optional marker. */
@@ -295,7 +301,7 @@ export function kyselyDataSource<S extends SchemaRecord>(
     'endpoint',
   );
 
-  return {
+  return defineDatabaseAdapter({
     ...mutation,
     capabilities: { ...mutation.capabilities, outboxEvents: true },
 
@@ -324,7 +330,7 @@ export function kyselyDataSource<S extends SchemaRecord>(
       );
       return { events, nextCursor: events.at(-1)?.cursor ?? null };
     },
-  };
+  });
 }
 
 /** Direct wrapper: mutation + ledger + required logical marker, never outbox. */

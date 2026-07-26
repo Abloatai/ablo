@@ -68,6 +68,9 @@ describe('resolveParticipantIdentity — hosted-cloud branch (apiKey)', () => {
       organizationId: 'org_acme',
       scope: {
         organizationId: 'org_acme',
+        projectId: 'project_orders',
+        branchId: 'br_feature_orders',
+        branchRoot: false,
         // A user scope carries no operation grants (those are the agent axis);
         // the wire form is now `model.verb`, and the old `'*'` wildcard is not a
         // member of it. Empty, like every other scope mock in this file.
@@ -107,6 +110,9 @@ describe('resolveParticipantIdentity — hosted-cloud branch (apiKey)', () => {
     expect(result).toMatchObject({
       userId: 'u1',
       accountScope: 'org_acme',
+      projectId: 'project_orders',
+      branchId: 'br_feature_orders',
+      branchRoot: false,
       capabilityToken: 'biscuit_abc',
       participantKind: 'user',
     });
@@ -254,8 +260,8 @@ describe('resolveParticipantIdentity — hosted-cloud branch (apiKey)', () => {
       participantId: 'u_self',
       accountScope: 'org_self',
       projectId: null,
-      environment: null,
-      sandboxId: null,
+      branchId: null,
+      branchRoot: false,
       syncGroups: [],
       userMeta: {},
     });
@@ -287,8 +293,8 @@ describe('resolveParticipantIdentity — self-derived branch (cap token, unknown
       participantId: 'agent_research',
       accountScope: 'org_acme',
       projectId: null,
-      environment: null,
-      sandboxId: null,
+      branchId: null,
+      branchRoot: false,
       syncGroups: ['org:org_acme'],
       userMeta: {},
     });
@@ -324,7 +330,7 @@ describe('resolveParticipantIdentity — self-derived branch (cap token, unknown
   });
 });
 
-describe('resolveParticipantIdentity — legacy explicit branch', () => {
+describe('resolveParticipantIdentity — explicit self-hosted identity', () => {
   it('skips both server calls when organizationId + user.id are present', async () => {
     const { helper, setCacheScope, setSyncGroups } = buildBootstrapFetcher();
     const auth = createAuthCredentialSource();
@@ -334,7 +340,11 @@ describe('resolveParticipantIdentity — legacy explicit branch', () => {
         user: { id: 'u_explicit', teamIds: ['team_1'] },
         syncGroups: ['org:org_explicit'],
       },
-      internalOptions: { organizationId: 'org_explicit' },
+      internalOptions: {
+        organizationId: 'org_explicit',
+        branchId: 'br_self_hosted',
+        branchRoot: true,
+      },
       url: 'wss://api.example.com',
       kind: 'user',
       configuredApiKey: null,
@@ -355,6 +365,8 @@ describe('resolveParticipantIdentity — legacy explicit branch', () => {
       teamIds: ['team_1'],
       capabilityToken: 'biscuit_self_hosted',
       participantKind: 'user',
+      branchId: 'br_self_hosted',
+      branchRoot: true,
     });
   });
 
@@ -364,7 +376,11 @@ describe('resolveParticipantIdentity — legacy explicit branch', () => {
 
     const result = await resolveParticipantIdentity({
       options: { agentId: 'agent_42', capabilityToken: 'biscuit_agent' },
-      internalOptions: { organizationId: 'org_explicit' },
+      internalOptions: {
+        organizationId: 'org_explicit',
+        branchId: 'br_self_hosted',
+        branchRoot: false,
+      },
       url: 'wss://api.example.com',
       kind: 'agent',
       configuredApiKey: null,

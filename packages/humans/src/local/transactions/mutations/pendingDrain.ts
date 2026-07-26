@@ -10,7 +10,7 @@ export interface PendingDrainContext {
   readonly runtime: RuntimeContext;
   readonly config: { deltaConfirmationTimeout: number };
   readonly store: MutationStore;
-  executionQueue: QueuedMutation[];
+  readonly executionQueue: QueuedMutation[];
   readonly optimisticUpdates: Map<string, OptimisticUpdateEntry>;
   readonly assertDurableReplayOpen: () => void;
   readonly processCommitLane: () => Promise<void>;
@@ -45,8 +45,13 @@ export async function drainPendingSettlements(ctx: PendingDrainContext): Promise
     // These rows may already be waiting behind the normal batch timer. The
     // reconnect fast path takes ownership of them for this attempt so the same
     // transaction cannot dispatch concurrently through both paths.
-    ctx.executionQueue = ctx.executionQueue.filter(
+    const retainedQueue = ctx.executionQueue.filter(
       (tx) => !pendingIds.has(tx.id),
+    );
+    ctx.executionQueue.splice(
+      0,
+      ctx.executionQueue.length,
+      ...retainedQueue,
     );
 
     const remaining = [...pending];

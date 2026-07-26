@@ -69,8 +69,9 @@ database differs by environment — the code is identical.
 - **Production:** your Postgres. `ablo connect` sets up a scoped writer role and
   logical replication; your rows live in your database, and Ablo writes to them
   through that role.
-- **Sandbox and local dev:** a separate or local Postgres you can throw away. Same
-  models, same code, a different database behind them.
+- **Development branches and local dev:** a separate or local Postgres, or a
+  branch of the one you already run. Same models, same code, a different
+  database behind them.
 - **Before you connect one.** Ablo keeps state in its own log, so you can build the
   whole app today and point it at a real database when you're ready.
 

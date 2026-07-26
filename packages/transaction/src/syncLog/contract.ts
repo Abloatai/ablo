@@ -1,7 +1,6 @@
 /** Canonical sync-log identity and position contracts shared by client/server. */
 
 import { z } from 'zod';
-import { environmentSchema } from '../environment.js';
 
 export const deltaPositionSchema = z.number().int().nonnegative();
 export type DeltaPosition = z.infer<typeof deltaPositionSchema>;
@@ -21,7 +20,7 @@ export type ReplicationLSN = z.infer<typeof replicationLsnSchema>;
 export const commitDispatchMarkerSchema = z.strictObject({
   kind: z.literal('sync_deltas'),
   organizationId: z.string().min(1),
-  environment: environmentSchema,
+  branchId: z.string().min(1),
   firstSyncId: deltaPositionSchema,
   lastSyncId: deltaPositionSchema,
 }).superRefine((value, ctx) => {

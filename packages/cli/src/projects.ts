@@ -19,8 +19,7 @@
 
 import pc from 'picocolors';
 import {
-  resolveApiKey,
-  resolveOrgKey,
+  resolveOrgManagementKey,
   getActiveProject,
   setActiveProject,
   guardActiveProjectKey,
@@ -47,17 +46,13 @@ function apiUrl(): string {
 }
 
 function requireKey(): string {
-  // Managing projects (list/create/rename/use) is an org-level operation, so it
-  // accepts any of the org's keys — not just the active project's. This is what
-  // keeps `ablo projects use default` reachable after switching to a project you
-  // never minted a key for; the strict resolver would leave you locked in.
-  const apiKey = resolveOrgKey();
+  const apiKey = resolveOrgManagementKey();
   if (!apiKey) {
     console.error(
-      pc.red('  No API key.') +
+      pc.red('  No project management credential.') +
         pc.dim(
-          ` Run ${pc.bold('npx ablo login')} — or set ${pc.bold('ABLO_API_KEY')} ` +
-            `(${pc.bold('sk_test_')} = sandbox; ${pc.bold('sk_live_')} = production).`,
+          ` Run ${pc.bold('npx ablo login')} — or set ${pc.bold('ABLO_MANAGEMENT_KEY')} ` +
+            `to an ${pc.bold('mk_')} credential.`,
         ),
     );
     process.exit(1);
@@ -173,7 +168,7 @@ export async function ensureProject(
   slug: string,
   name?: string,
 ): Promise<{ id: string; slug: string; created: boolean } | null> {
-  const apiKey = resolveApiKey();
+  const apiKey = resolveOrgManagementKey();
   if (!apiKey) return null;
   try {
     const { status, body } = await request('/api/v1/projects', apiKey, {
@@ -216,18 +211,16 @@ function describeKeys(profile: ProfileKeys | undefined): string {
   const now = Date.now();
   let usable = 0;
   let expired = 0;
-  for (const entry of [profile?.sandbox, profile?.production]) {
+  for (const entry of [profile?.management, profile?.sandbox, profile?.production]) {
     if (!entry) continue;
     const expiry = entry.expiresAt !== undefined ? Date.parse(entry.expiresAt) : undefined;
     if (expiry !== undefined && Number.isFinite(expiry) && expiry <= now) expired += 1;
     else usable += 1;
   }
-  // Which environments they open is a question `ablo mode` answers; here the
-  // count is the whole signal — whether this project is ready to work in.
   const parts: string[] = [];
-  if (usable > 0) parts.push(`${usable} key${usable === 1 ? '' : 's'}`);
+  if (usable > 0) parts.push(`${usable} credential${usable === 1 ? '' : 's'}`);
   if (expired > 0) parts.push(pc.yellow(`${expired} expired`));
-  return parts.length > 0 ? parts.join(pc.dim(', ')) : pc.dim('no keys');
+  return parts.length > 0 ? parts.join(pc.dim(', ')) : pc.dim('no credentials');
 }
 
 /**

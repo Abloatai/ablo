@@ -6,9 +6,10 @@
  * the `@abloatai/transaction/keys` subpath and kept off the main browser-facing entry
  * so a browser bundle never pulls in `node:crypto`.
  *
- * A key looks like `<sk|rk|ek|pk>_<live|test>_<30 base62 chars><6-char base62
- * CRC32 checksum>`. The middle segment is the stable environment prefix, mapped
- * on parse to `production` or `sandbox`. The recognizable prefix lets secret
+ * A data-plane key looks like
+ * `<sk|rk|ek|pk>_<live|test>_<30 base62 chars><6-char base62 CRC32 checksum>`.
+ * A control-plane management key is `mk_<body><checksum>` and deliberately has
+ * no live/test segment: it cannot access application data. The recognizable prefix lets secret
  * scanners spot a leaked key, and the trailing checksum lets the format reject a
  * mistyped or forged key locally, without a database round-trip. Older keys
  * (roughly a 43-character base64url body with no checksum) still validate by hash
@@ -28,7 +29,10 @@ import {
 
 // ── Vocabulary ──────────────────────────────────────────────────────────
 
-// The four key kinds:
+// The five credential kinds:
+//   management (mk_)  — project control-plane authority. It can manage projects
+//                       and branches and mint leaf branch credentials, but has
+//                       no data-plane read/write authority and no livemode.
 //   secret (sk_)      — backend and server-to-server use, including agents. Full
 //                       authority; never expose one in a browser.
 //   restricted (rk_)  — a scoped server key, such as an agent session token or a
@@ -41,7 +45,13 @@ import {
 //                       exchanged, never expires, nothing to refresh. It grants
 //                       read access to the organization's data and cannot write or
 //                       reach any control-plane operation.
-export const API_KEY_KINDS = ['secret', 'restricted', 'ephemeral', 'publishable'] as const;
+export const API_KEY_KINDS = [
+  'management',
+  'secret',
+  'restricted',
+  'ephemeral',
+  'publishable',
+] as const;
 export type ApiKeyKind = (typeof API_KEY_KINDS)[number];
 
 // A key's environment is the CREDENTIAL axis, not the plane axis: the format
@@ -51,12 +61,14 @@ export const API_KEY_ENVS = KEY_ENVIRONMENTS;
 export type ApiKeyEnv = KeyEnvironment;
 
 const PREFIX_BY_KIND: Record<ApiKeyKind, string> = {
+  management: 'mk',
   secret: 'sk',
   restricted: 'rk',
   ephemeral: 'ek',
   publishable: 'pk',
 };
 const KIND_BY_PREFIX: Record<string, ApiKeyKind> = {
+  mk: 'management',
   sk: 'secret',
   rk: 'restricted',
   ek: 'ephemeral',
@@ -72,7 +84,9 @@ const CHECKSUM_LEN = 6;
 const CHECKSUMMED_BODY_LEN = KEY_BODY_LEN + CHECKSUM_LEN;
 
 /** `<sk|rk|ek|pk>_<live|test>_<body>`; the body charset covers base62 as well as the legacy base64url form. */
-const KEY_RE = /^(sk|rk|ek|pk)_(live|test)_([0-9A-Za-z\-_]+)$/;
+const DATA_KEY_RE = /^(sk|rk|ek|pk)_(live|test)_([0-9A-Za-z\-_]+)$/;
+/** `mk_<body>`; management credentials have no data livemode segment. */
+const MANAGEMENT_KEY_RE = /^(mk)_([0-9A-Za-z\-_]+)$/;
 const BASE62_RE = /^[0-9A-Za-z]+$/;
 
 // ── Checksum (standard CRC-32, GitHub-compatible) ───────────────────────
@@ -128,8 +142,9 @@ export interface ParsedApiKey {
   /** The original plaintext. */
   raw: string;
   kind: ApiKeyKind;
-  env: ApiKeyEnv;
-  /** The chars after `<prefix>_<env>_` (body + checksum for new keys). */
+  /** Null for `mk_`, which has no data-plane livemode. */
+  env: ApiKeyEnv | null;
+  /** The random body + checksum after the recognizable prefix. */
   body: string;
   /** True when this is the new checksummed format (36-char base62 body). */
   checksummed: boolean;
@@ -146,17 +161,20 @@ function bodyIsChecksummed(body: string): boolean {
  * `checksummed: false` and is left for the server to validate by hash.
  */
 export const apiKeySchema = z.string().transform((raw, ctx): ParsedApiKey => {
-  const m = KEY_RE.exec(raw);
-  if (!m) {
+  const dataMatch = DATA_KEY_RE.exec(raw);
+  const managementMatch = MANAGEMENT_KEY_RE.exec(raw);
+  if (!dataMatch && !managementMatch) {
     ctx.addIssue({ code: 'custom', message: 'not a valid Ablo API key format' });
     return z.NEVER;
   }
-  const [, prefix, env, body] = m;
+  const prefix = dataMatch?.[1] ?? managementMatch?.[1];
+  const env = dataMatch?.[2];
+  const body = dataMatch?.[3] ?? managementMatch?.[2];
   const kind = prefix === undefined ? undefined : KIND_BY_PREFIX[prefix];
   // Unreachable on a KEY_RE match (all three groups are non-optional and the
   // prefix alternation is exactly the KIND_BY_PREFIX key set) — narrows the
   // regex-group lookups for the checks below.
-  if (kind === undefined || env === undefined || body === undefined) {
+  if (kind === undefined || body === undefined) {
     ctx.addIssue({ code: 'custom', message: 'not a valid Ablo API key format' });
     return z.NEVER;
   }
@@ -168,7 +186,10 @@ export const apiKeySchema = z.string().transform((raw, ctx): ParsedApiKey => {
   return {
     raw,
     kind,
-    env: environmentFromKeyPrefix(env as KeyPrefixEnvironment),
+    env:
+      kind === 'management'
+        ? null
+        : environmentFromKeyPrefix(env as KeyPrefixEnvironment),
     body,
     checksummed,
   };
@@ -199,13 +220,13 @@ export function environmentFromStoredKeyPrefix(prefix: string): KeyEnvironment |
 
 /** True when the key uses the new checksummed format (regardless of validity). */
 export function isChecksummedKey(raw: string): boolean {
-  const body = KEY_RE.exec(raw)?.[3];
+  const body = DATA_KEY_RE.exec(raw)?.[3] ?? MANAGEMENT_KEY_RE.exec(raw)?.[2];
   return body !== undefined && bodyIsChecksummed(body);
 }
 
 /** Verify the embedded checksum. Meaningful only for checksummed-format keys. */
 export function keyChecksumMatches(raw: string): boolean {
-  const body = KEY_RE.exec(raw)?.[3];
+  const body = DATA_KEY_RE.exec(raw)?.[3] ?? MANAGEMENT_KEY_RE.exec(raw)?.[2];
   if (body === undefined || !bodyIsChecksummed(body)) return false;
   return checksum6(raw.slice(0, -CHECKSUM_LEN)) === body.slice(KEY_BODY_LEN);
 }
@@ -217,13 +238,31 @@ export function keyChecksumMatches(raw: string): boolean {
  * once), its SHA-256 hash (persisted), and the 12-char display prefix.
  */
 export function generateApiKey(
-  env: ApiKeyEnv = 'production',
+  env: ApiKeyEnv | null = 'production',
   kind: ApiKeyKind = 'secret',
 ): { plaintext: string; hash: string; prefix: string } {
   const body = randomBase62(KEY_BODY_LEN);
-  const payload = `${PREFIX_BY_KIND[kind]}_${environmentToKeyPrefix(env)}_${body}`;
+  if (kind === 'management' && env !== null) {
+    throw new Error('management credentials do not have a live/test mode');
+  }
+  if (kind !== 'management' && env === null) {
+    throw new Error(`${kind} credentials require a live/test mode`);
+  }
+  const payload =
+    kind === 'management'
+      ? `${PREFIX_BY_KIND[kind]}_${body}`
+      : `${PREFIX_BY_KIND[kind]}_${environmentToKeyPrefix(env as ApiKeyEnv)}_${body}`;
   const plaintext = `${payload}${checksum6(payload)}`;
   return { plaintext, hash: hashApiKey(plaintext), prefix: plaintext.slice(0, 12) };
+}
+
+/** Mint a project-scoped, control-plane-only credential. */
+export function generateManagementKey(): {
+  plaintext: string;
+  hash: string;
+  prefix: string;
+} {
+  return generateApiKey(null, 'management');
 }
 
 /**

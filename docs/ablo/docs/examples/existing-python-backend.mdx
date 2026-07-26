@@ -90,16 +90,24 @@ browser only ever sees the short-lived token:
 ```ts
 // web/app/api/ablo-session/route.ts
 import { ablo } from '@/ablo';
+import { credentialEndpointSuccessSchema } from '@abloatai/ablo/auth';
 
 export const runtime = 'nodejs';
 
 export async function POST() {
   const userId = await currentUserId(); // your auth
-  const { token } = await ablo.sessions.create({
+  const { token, expiresAt } = await ablo.sessions.create({
     user: { id: userId },
     can: { tasks: ['read', 'update'] },
   });
-  return Response.json({ token });
+  return Response.json(
+    credentialEndpointSuccessSchema.parse({
+      token,
+      expiresAt,
+      credentialKind: 'ephemeral',
+    }),
+    { headers: { 'Cache-Control': 'no-store' } },
+  );
 }
 ```
 

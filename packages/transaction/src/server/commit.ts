@@ -16,7 +16,6 @@
 import type { ParticipantKind, ConfirmationState } from '../log/syncDeltaRow.js';
 import type { ParticipantRef } from '../wire/delta.js';
 import type { CommitExecutionResultInput } from '../wire/commit.js';
-import type { Environment } from '../environment.js';
 import type { ReadDependency, TrackDependency } from '../coordination/schema.js';
 
 export interface CommitContext {
@@ -27,21 +26,15 @@ export interface CommitContext {
    */
   participantKind: ParticipantKind;
   organizationId: string;
+  /** Immutable branch selected by the authenticated credential. */
+  branchId: string;
   /**
    * Project scope used to route source-mode storage. When omitted, the commit
    * targets the organization's default project.
    */
   projectId?: string;
-  /** Exact sandbox plane derived from the authenticated key, when present. */
-  sandboxId?: string;
   /** Optional external account scope forwarded to storage resolvers. */
   accountScope?: string;
-  /**
-   * The environment this commit runs in. Source-mode adapters forward it to the
-   * customer's handlers so that sandbox and production traffic can reach distinct
-   * customer-owned stores.
-   */
-  environment?: Environment;
   /**
    * The sync groups this participant subscribes to, taken from the connection
    * upgrade or the capability token. Each is appended to every delta's `sync_groups`
@@ -50,12 +43,6 @@ export interface CommitContext {
    * commit fans out to just the organization and user groups.
    */
   syncGroups?: readonly string[];
-  /**
-   * When true, the commit does not add `org:<organizationId>` to a delta's sync
-   * groups. Set this for sandbox writes, so that live organization subscribers do
-   * not receive test-environment changes.
-   */
-  omitOrgSyncGroup?: boolean;
   /**
    * The participant on whose authority the actor acted. For a direct human commit
    * this equals the actor; for an agent commit it is the human at the root of the

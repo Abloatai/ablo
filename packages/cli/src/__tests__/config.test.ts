@@ -13,6 +13,8 @@ import {
   normalizeMode,
   clearCredential,
   resolveApiKey,
+  resolveManagementKey,
+  resolveOrgManagementKey,
   resolveOrgKey,
   resolveKey,
   resolveEffectiveApiKey,
@@ -31,6 +33,7 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
     dir = mkdtempSync(join(tmpdir(), 'ablo-cfg-'));
     process.env = { ...OLD_ENV, ABLO_CONFIG_DIR: dir };
     delete process.env.ABLO_API_KEY;
+    delete process.env.ABLO_MANAGEMENT_KEY;
     // The effective-key chain reads ./.env.local and ./.env — pin cwd to the
     // fresh temp dir so a real project's env files can never leak into tests.
     oldCwd = process.cwd();
@@ -395,6 +398,41 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
       setProfileKeys('default', { sandbox: { apiKey: 'sk_test_default' } }, { mode: 'sandbox', activeProject: undefined });
       process.env.ABLO_API_KEY = 'sk_test_env';
       expect(resolveOrgKey()).toBe('sk_test_env');
+    });
+  });
+
+  describe('resolveManagementKey', () => {
+    it('prefers the dedicated override and never treats ABLO_API_KEY as management', () => {
+      setProfileKeys(
+        'default',
+        { management: { apiKey: 'mk_stored' } },
+        { mode: 'sandbox', activeProject: undefined },
+      );
+      process.env.ABLO_API_KEY = 'sk_test_runtime';
+      expect(resolveManagementKey()).toBe('mk_stored');
+      process.env.ABLO_MANAGEMENT_KEY = 'mk_ci';
+      expect(resolveManagementKey()).toBe('mk_ci');
+    });
+
+    it('falls back across project profiles and skips expired management credentials', () => {
+      setProfileKeys(
+        'default',
+        {
+          management: {
+            apiKey: 'mk_expired',
+            expiresAt: new Date(Date.now() - 1_000).toISOString(),
+          },
+        },
+        { mode: 'sandbox', activeProject: undefined },
+      );
+      setProfileKeys(
+        'orders',
+        { management: { apiKey: 'mk_orders' } },
+        { mode: 'sandbox', activeProject: { id: 'p_orders', slug: 'orders' } },
+      );
+      setActiveProject({ id: 'p_mail', slug: 'mail' });
+      expect(resolveManagementKey()).toBeUndefined();
+      expect(resolveOrgManagementKey()).toBe('mk_orders');
     });
   });
 

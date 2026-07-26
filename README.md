@@ -47,8 +47,12 @@ fresh context, safe handoffs, and an attributed record of what happened.
 ```sh
 npm install @abloatai/ablo
 npx ablo init
-npx ablo push
+npx ablo dev
 ```
+
+`ablo dev` prepares an isolated Ablo branch for your Git branch, writes its
+temporary credential to gitignored `.env.local`, pushes the schema, and watches
+for changes.
 
 Read and write through the transaction layer:
 
@@ -86,6 +90,23 @@ Another actor touching the same work waits fairly and receives fresh state when
 its turn begins. If the agent fails, the claim releases automatically. If its
 context became stale, the write is rejected instead of silently overwriting
 work it never saw.
+
+If you use AI SDK, expose the same operation as a typed model tool:
+
+```ts
+import { updateTool } from '@abloatai/ablo/ai-sdk';
+
+const approveOrder = updateTool(ablo.orders, {
+  description: 'Approve an order after reviewing it.',
+  inputSchema: z.object({ orderId: z.string() }),
+  id: ({ orderId }) => orderId,
+  apply: () => ({ status: 'approved' }),
+});
+```
+
+Ablo supplies `readTool`, `createTool`, `updateTool`, and `deleteTool` over the
+same authoritative resources. AI SDK keeps ownership of the model loop and tool
+execution.
 
 Use `@abloatai/ablo` for agents and backend code,
 `@abloatai/ablo/client` for live applications, and

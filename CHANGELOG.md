@@ -1,5 +1,105 @@
 # Changelog
 
+## 0.38.0
+
+### Branch-isolated development
+
+Ablo branches replace the former shared Sandbox mode. Every project has a
+protected Production root and can have multiple isolated development, preview,
+test, or long-lived branches. Credentials are bound to immutable branch
+identities, so changing a slug or request parameter cannot redirect a write.
+
+`npx ablo dev` now discovers the current Git or CI branch, ensures the matching
+Ablo branch, mints an expiring branch credential, writes it to the gitignored
+local environment, pushes the schema, and watches for changes. Use
+`npx ablo dev --no-watch --branch <name>` for a one-shot agent or CI setup.
+
+The CLI also provides `ablo branch list`, `create`, `ensure`, `status`, `check`,
+`credential`, and `delete`. The public HTTP and OpenAPI contracts expose the
+same lifecycle for other languages and deployment systems.
+
+This release removes the CLI mode switch and the dashboard Sandbox surface.
+Production remains the protected root; a development credential cannot select
+another branch or gain production authority.
+
+Source adapters and PostgreSQL footprint helpers now select immutable branches.
+If you construct `FootprintPlane` or `SourceRequestContext`, replace
+`environment`, `mode`, and `sandboxId` with `branchId`.
+
+### Temporal and Inngest integration guides
+
+New runnable examples and documentation show how Temporal and Inngest
+workflows use Ablo without introducing another authority path. Temporal
+activities and Inngest steps create the Ablo client, perform authoritative
+reads, acquire claims for long-running work, and submit idempotent writes
+through the same transaction API as every other caller.
+
+The integrations keep each product in its proper role: Temporal and Inngest
+own durable execution, scheduling, retries, and workflow history; Ablo owns
+shared-data authority, claims, conflicts, idempotency, settlement, and ordered
+observation. Workflow code does not open WebSockets or hold live client state.
+
+### Database adapter foundation, starting with PostgreSQL
+
+Customer-database adapters now declare their database, ORM binding, and
+observation strategy as separate axes. The existing Prisma, Drizzle, and Kysely
+integrations are accurately identified as PostgreSQL bindings using either a
+transactional outbox or PostgreSQL WAL.
+
+All built-in adapters are constructed through one validating factory and the
+shared conformance suite checks that the three axes are present. Impossible
+capability combinations fail during adapter construction instead of silently
+advertising guarantees the database path cannot provide.
+
+PostgreSQL is the first database profile on this axis. The contract leaves room
+for additional databases without pretending their transaction, observation,
+and change-capture guarantees are interchangeable with PostgreSQL.
+
+### Generated language SDK foundation
+
+The HTTP API is now explicitly treated as Ablo's language-neutral product
+boundary. Its OpenAPI artifact follows the current Ablo version and every
+operation has a stable, unique name suitable for deterministic Python and Go
+generation.
+
+The OpenAPI generator and drift check are restored as repository and CI gates.
+Future language clients will generate their transport, wire models, and error
+decoding from this contract, retaining handwritten code only for thin
+language-idiomatic resource and claim façades.
+
+The artifact now names shared claim, receipt, cursor, page, and error schemas;
+references the canonical error envelope from every operation; publishes typed
+pagination parameters and explicit union discriminators; and normalizes Zod's
+JSON Schema output to the portable subset accepted by the Python and Go
+generator candidates. CI also validates the rendered OpenAPI 3.1 document with
+an independent, pinned Redocly CLI.
+
+### AI SDK tools over the transaction API
+
+`@abloatai/ablo/ai-sdk` now exposes small tool adapters for authoritative
+reads, idempotent creates, concurrency-safe updates, and claimed deletes. These
+helpers use the caller's existing typed Ablo model resource; they do not add an
+agent runtime or a second transport.
+
+The public surface follows the model verbs directly: `readTool`, `createTool`,
+`updateTool`, and `deleteTool`. AI SDK metadata and approval policy pass through
+to each tool, destructive tools require approval by default, and cancellation
+stops queued claim acquisition.
+
+This deliberately replaces the previously published `coordinatedTool` naming:
+use `updateTool`, `UpdateToolModel`, `UpdateToolOptions`, `UpdateToolResult`,
+`UpdateStrategy`, and the `status` result field. The former
+`coordinatedTool`, `CoordinatedModel`, `CoordinatedToolOptions`,
+`CoordinatedWriteResult`, and `CoordinationStrategy` exports are removed rather
+than retained as legacy aliases.
+
+Queued tool writes now use Ablo's server-owned FIFO claim queue rather than
+recreating coordination with client-side polling.
+
+Internal job dispatch, concrete worker tools, prompts, sandboxes, and model
+selection remain application concerns and are not part of the public Ablo
+agent surface.
+
 ## 0.37.1
 
 ### A clearer introduction to Ablo

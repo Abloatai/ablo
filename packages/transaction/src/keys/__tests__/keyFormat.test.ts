@@ -12,6 +12,7 @@ import {
   apiKeySchema,
   parseApiKey,
   generateApiKey,
+  generateManagementKey,
   hashApiKey,
   isChecksummedKey,
   keyChecksumMatches,
@@ -28,14 +29,17 @@ describe('apiKeySchema (Zod-modeled key format)', () => {
     expect(parsed.body.length).toBe(36);
   });
 
-  it('mints the right prefix for every kind/env and self-validates', () => {
-    const expected: Record<ApiKeyKind, string> = {
+  it('mints the right prefix for every data kind/mode and self-validates', () => {
+    const expected: Record<Exclude<ApiKeyKind, 'management'>, string> = {
       secret: 'sk',
       restricted: 'rk',
       ephemeral: 'ek',
       publishable: 'pk',
     };
-    for (const kind of API_KEY_KINDS) {
+    for (const kind of API_KEY_KINDS.filter(
+      (candidate): candidate is Exclude<ApiKeyKind, 'management'> =>
+        candidate !== 'management',
+    )) {
       for (const env of API_KEY_ENVS) {
         const { plaintext, prefix } = generateApiKey(env, kind);
         const prefixEnv = env === 'sandbox' ? 'test' : 'live';
@@ -45,6 +49,18 @@ describe('apiKeySchema (Zod-modeled key format)', () => {
         expect(parseApiKey(plaintext)).not.toBeNull();
       }
     }
+  });
+
+  it('mints a mode-free management credential', () => {
+    const { plaintext, prefix } = generateManagementKey();
+    expect(plaintext.startsWith('mk_')).toBe(true);
+    expect(prefix.length).toBe(12);
+    expect(keyChecksumMatches(plaintext)).toBe(true);
+    expect(parseApiKey(plaintext)).toMatchObject({
+      kind: 'management',
+      env: null,
+      checksummed: true,
+    });
   });
 
   it('rejects a tampered body and a tampered checksum (offline)', () => {

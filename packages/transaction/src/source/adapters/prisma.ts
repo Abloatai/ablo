@@ -21,6 +21,8 @@ import type {
   DataSourceAdapter,
   Row,
 } from '../adapter.js';
+import { defineDatabaseAdapter } from '../adapterFactory.js';
+import { postgresAdapterProfile } from '../adapterProfile.js';
 import type { ChangeSet, EventsPage, Migration, Operation, OutboxEvent } from '../contract.js';
 import { outboxEventSchema } from '../contract.js';
 import { adapterTableMigrations } from '../migrations.js';
@@ -163,7 +165,8 @@ export function prismaDataSource<S extends SchemaRecord>(
     }
   };
 
-  return {
+  return defineDatabaseAdapter({
+    profile: postgresAdapterProfile('prisma', 'transactional-outbox'),
     capabilities: {
       transactions: true,
       propose: false,
@@ -278,5 +281,5 @@ export function prismaDataSource<S extends SchemaRecord>(
         nextCursor: events.at(-1)?.cursor ?? null,
       };
     },
-  };
+  });
 }

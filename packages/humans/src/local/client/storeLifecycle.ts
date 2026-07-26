@@ -194,8 +194,8 @@ export function startStoreLifecycle<S extends SchemaRecord>(
           userId,
           accountScope,
           projectId,
-          environment,
-          sandboxId,
+          branchId,
+          branchRoot,
           teamIds,
           capabilityToken,
           syncGroups,
@@ -257,13 +257,19 @@ export function startStoreLifecycle<S extends SchemaRecord>(
         // option doc) and everyone else defaults to 'full'.
         const resolvedBootstrapMode: 'full' | 'none' =
           internalOptions.bootstrapMode ?? (participantKind === 'agent' ? 'none' : 'full');
+        if (!branchId) {
+          throw new AbloConnectionError(
+            'The server did not resolve an Ablo branch for this credential.',
+            { code: 'invalid_request' },
+          );
+        }
 
         const gen = store.initialize({
           userId,
           organizationId: accountScope,
           projectId,
-          environment,
-          sandboxId,
+          branchId,
+          branchRoot,
           teamIds,
           kind: participantKind,
           capabilityToken,

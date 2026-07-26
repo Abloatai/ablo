@@ -1,7 +1,7 @@
 /**
  * `ablo status` — a one-glance orientation command. It answers who you are
- * authenticated as, whether you are pointed at the sandbox or production
- * environment, which API key is in play and whether it has expired, and whether
+ * authenticated as, which immutable branch the credential targets, which API
+ * key is in play and whether it has expired, and whether
  * the server is reachable — so you can see your setup at a glance instead of
  * inferring it from a failed request.
  */
@@ -116,8 +116,12 @@ function printTargetLines(
   // on` rather than `env`: `mode` and `env` read as peers and are not, one being
   // the setting you chose and the other what your credential actually reaches,
   // and nothing in the two words said which was which.
+  const branch = confirmed?.branchId ?? null;
   const env = confirmed?.environment ?? target?.keyEnv ?? null;
-  if (env) {
+  if (branch) {
+    const label = confirmed?.branchRoot ? 'production root' : `branch ${branch}`;
+    console.log(`  ${pc.dim('acts on')} ${pc.bold(label)}`);
+  } else if (env) {
     const suffix = confirmed ? '' : ` ${pc.yellow('(unconfirmed)')}`;
     console.log(`  ${pc.dim('acts on')} ${pc.bold(env)}${suffix}`);
   }
@@ -140,8 +144,8 @@ export async function status(args: string[] = []): Promise<void> {
   // `ablo push` and `ablo dev` present — so status never reports a different
   // credential than a deploy would use.
   const effective = resolveEffectiveApiKey();
-  // The server-confirmed plane this key acts on (org, project, environment),
-  // reconciled against the local `ablo projects use` / `ablo mode` preferences.
+  // The server-confirmed target this key acts on (org, project, branch),
+  // reconciled against the local project preference.
   // Resolved once, shared by both the human and JSON views. Null when there's no
   // key to resolve; `.confirmed` is null when the server couldn't answer.
   const target: ResolvedTarget | null = effective.key
@@ -164,7 +168,6 @@ export async function status(args: string[] = []): Promise<void> {
       : ({ kind: 'unknown', detail: 'unreachable' } as const);
     const driftForJson = schemaDrift(await readLocalSchemaHash(), pushed?.hash);
     const out = {
-      mode,
       // The locally-active project (`ablo projects use`); null = org-default.
       project: activeProject ?? null,
       // The credential the CLI resolves for requests, with its source —
@@ -188,18 +191,18 @@ export async function status(args: string[] = []): Promise<void> {
       organizationId: entry?.organizationId ?? null,
       // The SERVER-CONFIRMED plane this key resolves to — the authoritative
       // answer to "where does a push land", independent of the local
-      // `project`/`mode` preferences above. Null when the server didn't answer.
+      // project preference above. Null when the server didn't answer.
       confirmedTarget: target?.confirmed
         ? {
             organizationId: target.confirmed.organizationId,
             environment: target.confirmed.environment,
             project: target.confirmed.project,
             projectId: target.confirmed.projectId,
-            sandboxId: target.confirmed.sandboxId,
+            branchId: target.confirmed.branchId,
+            branchRoot: target.confirmed.branchRoot,
           }
         : null,
-      // Divergences between local intent and the confirmed plane (project not
-      // selected, mode not the key's environment). Empty when aligned.
+      // Divergence between local project intent and the confirmed target.
       mismatches: target?.mismatches ?? [],
       // What `ablo push` would do right now — the answer to "why did push
       // demand a different key".
@@ -253,7 +256,6 @@ export async function status(args: string[] = []): Promise<void> {
     console.log(`  ${pc.yellow('!')} Not logged in — run ${pc.bold('ablo login')}.`);
   }
 
-  console.log(`  ${pc.dim('mode')}    ${pc.bold(mode)}`);
   const activeEntry = getKeyEntry(mode);
   const key = describeEffectiveKey(mode, process.env.ABLO_API_KEY, activeEntry);
   if (key.keyMismatch) {
@@ -269,9 +271,11 @@ export async function status(args: string[] = []): Promise<void> {
   // The stored pair. Each row carries what its key can DO, not just its prefix:
   // `ablo login` stores an observe-only production key on purpose, and a reader
   // who cannot see that from the inventory discovers it from a failed deploy.
-  for (const m of ['sandbox', 'production'] as Mode[]) {
-    const entry = getKeyEntry(m);
-    const marker = m === mode ? pc.green('●') : pc.dim('○');
+  for (const { key: m, label } of [
+    { key: 'sandbox', label: 'management' },
+    { key: 'production', label: 'observer' },
+  ] as const) {
+    const entry = getKeyEntry(m as Mode);
     if (entry) {
       // Capability first, then expiry, joined the way `ablo logs` joins a line's
       // fields — what the key can do outranks how long it lasts.
@@ -281,10 +285,10 @@ export async function status(args: string[] = []): Promise<void> {
       ].filter(Boolean);
       const trail = facts.length ? ` ${pc.dim('·')} ${facts.join(pc.dim(' · '))}` : '';
       console.log(
-        `  ${marker} ${m.padEnd(10)}  ${pc.dim(`${entry.apiKey.slice(0, 12)}…`)}${trail}`,
+        `  ${pc.dim('○')} ${label.padEnd(10)}  ${pc.dim(`${entry.apiKey.slice(0, 12)}…`)}${trail}`,
       );
     } else {
-      console.log(`  ${marker} ${m.padEnd(10)}  ${pc.dim('— no key')}`);
+      console.log(`  ${pc.dim('○')} ${label.padEnd(10)}  ${pc.dim('— no key')}`);
     }
   }
 

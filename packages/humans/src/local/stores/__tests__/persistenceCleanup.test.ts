@@ -14,14 +14,14 @@ function openDatabase(name: string): Promise<IDBDatabase> {
 }
 
 const current: DatabaseInfo = {
-  name: 'ablo_v2_current',
-  namespaceVersion: 2,
+  name: 'ablo_v3_current',
+  namespaceVersion: 3,
   userId: 'Aa',
   workspaceId: 'org',
   participantKind: 'user',
   projectId: 'org',
-  environment: 'production',
-  sandboxId: null,
+  branchId: 'br_production',
+  branchRoot: true,
   schemaHash: 'schema',
   schemaVersion: 1,
   userVersion: 1,

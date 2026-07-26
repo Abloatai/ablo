@@ -13,22 +13,23 @@ import { wireEnvLocal, classifyKey } from '../dev';
 const KEY = 'sk_test_abc123';
 
 describe('classifyKey (message contract: every refusal enumerates the doors)', () => {
-  // Agents parrot these lines into READMEs and users act on them verbatim —
-  // each refusal must name BOTH paths (sandbox dev loop AND production
-  // deploy), never describe one valid path as if it were the only one.
+  // Agents parrot these lines into READMEs and users act on them verbatim, so
+  // each message must name BOTH doors (the `ablo dev` watch loop AND the
+  // production deploy), never describe one valid path as if it were the only
+  // one, and never describe the test plane as a lesser one.
   function reasonOf(apiKey: string | undefined): string {
     const result = classifyKey(apiKey);
     if (result.ok) throw new Error('expected a refusal');
     return result.reason;
   }
 
-  it('accepts a sandbox secret key', () => {
+  it('accepts a secret test key', () => {
     expect(classifyKey('sk_test_abc')).toEqual({ ok: true });
   });
 
-  it('keyless: names login and both key kinds — no mode bookkeeping', () => {
-    // With no key there is no target, and the key is what picks one — so the
-    // refusal names the two keys, never the saved mode.
+  it('keyless: names login and both key kinds, with no mode bookkeeping', () => {
+    // With no key there is no target, and the key is what picks one, so the
+    // message names the two keys, never the saved mode.
     const reason = reasonOf(undefined);
     expect(reason).toContain('ablo login');
     expect(reason).toContain('sk_test_');
@@ -36,11 +37,17 @@ describe('classifyKey (message contract: every refusal enumerates the doors)', (
     expect(reason).not.toContain('Mode is currently');
   });
 
-  it('live key: names the one-shot production path instead of just refusing', () => {
+  it('live key: routes to the one-shot production path, without demoting the test plane', () => {
     const reason = reasonOf('sk_live_abc');
     expect(reason).toContain('npx ablo push');
-    expect(reason).toContain('ablo mode production');
+    expect(reason).toContain('sk_test_');
     expect(reason).toContain('--watch');
+    // The equivalence is the point: same API and schema, different rows. A
+    // message that only forbids is what made the test plane read as lesser.
+    expect(reason).toContain('same API');
+    expect(reason).not.toContain('sandbox-only');
+    // `ablo mode` is a compatibility path, not something to teach in an error.
+    expect(reason).not.toContain('ablo mode');
   });
 
   it('restricted key: names the secret-key doors for both environments', () => {

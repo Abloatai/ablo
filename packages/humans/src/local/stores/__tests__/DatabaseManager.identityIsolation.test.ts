@@ -17,8 +17,8 @@ const identity = (
   participantKind: 'user',
   organizationId: 'org',
   projectId: 'project',
-  environment: 'production',
-  sandboxId: null,
+  branchId: 'br_production',
+  branchRoot: true,
   ...overrides,
 });
 
@@ -32,19 +32,18 @@ describe('DatabaseManager authenticated-plane isolation', () => {
     const bb = await persistenceDatabaseName(identity('BB'));
 
     expect(aa).not.toBe(bb);
-    expect(aa).toMatch(/^ablo_v2_[0-9a-f]{64}$/);
-    expect(bb).toMatch(/^ablo_v2_[0-9a-f]{64}$/);
+    expect(aa).toMatch(/^ablo_v4_[0-9a-f]{64}$/);
+    expect(bb).toMatch(/^ablo_v4_[0-9a-f]{64}$/);
   });
 
-  it('includes every authenticated plane axis in the namespace', async () => {
+  it('includes every authenticated branch axis in the namespace', async () => {
     const base = identity('user');
     const names = await Promise.all([
       persistenceDatabaseName(base),
       persistenceDatabaseName({ ...base, participantKind: 'agent' }),
       persistenceDatabaseName({ ...base, organizationId: 'other-org' }),
       persistenceDatabaseName({ ...base, projectId: 'other-project' }),
-      persistenceDatabaseName({ ...base, environment: 'sandbox' }),
-      persistenceDatabaseName({ ...base, sandboxId: 'sandbox-1' }),
+      persistenceDatabaseName({ ...base, branchId: 'br_feature', branchRoot: false }),
     ]);
 
     expect(new Set(names).size).toBe(names.length);
@@ -62,8 +61,8 @@ describe('DatabaseManager authenticated-plane isolation', () => {
       workspaceId: expected.organizationId,
       participantKind: expected.participantKind,
       projectId: expected.projectId,
-      environment: expected.environment,
-      sandboxId: expected.sandboxId,
+      branchId: expected.branchId,
+      branchRoot: expected.branchRoot,
       schemaHash: 'schema',
       schemaVersion: 1,
       userVersion: 1,

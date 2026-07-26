@@ -42,7 +42,11 @@ export interface IdentityResolveInput {
     readonly agentId?: string;
     readonly syncGroups?: string[];
   };
-  readonly internalOptions: { readonly organizationId?: string };
+  readonly internalOptions: {
+    readonly organizationId?: string;
+    readonly branchId?: string;
+    readonly branchRoot?: boolean;
+  };
   readonly url: string;
   readonly kind: ParticipantKind;
   readonly configuredApiKey: string | CredentialProvider | null;
@@ -57,10 +61,10 @@ export interface ResolvedIdentity {
   readonly accountScope: string;
   /** Concrete project selected by the credential. The org id is the default project. */
   readonly projectId: string | null;
-  /** Data environment selected by the credential. Null for explicit/self-hosted identities. */
-  readonly environment: 'sandbox' | 'production' | null;
-  /** Concrete sandbox selected by the credential, when applicable. */
-  readonly sandboxId: string | null;
+  /** Immutable transaction branch selected by the credential. */
+  readonly branchId: string | null;
+  /** True only when branchId is the project's production root. */
+  readonly branchRoot: boolean;
   readonly teamIds: string[] | undefined;
   readonly capabilityToken: string | undefined;
   readonly syncGroups: readonly string[] | undefined;
@@ -182,8 +186,8 @@ export async function resolveParticipantIdentity(
         userId,
         accountScope,
         projectId: accountScope,
-        environment: null,
-        sandboxId: null,
+        branchId: internalOptions.branchId ?? null,
+        branchRoot: internalOptions.branchRoot ?? false,
         teamIds: kind === 'user' ? options.user?.teamIds : undefined,
         capabilityToken: cred.getBearer,
         syncGroups: options.syncGroups,
@@ -232,8 +236,8 @@ async function resolveViaIdentity(
     userId: identity.participantId,
     accountScope: identity.accountScope,
     projectId: identity.projectId ?? identity.accountScope,
-    environment: identity.environment ?? null,
-    sandboxId: identity.sandboxId ?? null,
+    branchId: identity.branchId ?? null,
+    branchRoot: identity.branchRoot,
     teamIds: undefined,
     capabilityToken: bearer,
     syncGroups: mergedSyncGroups,
@@ -312,13 +316,9 @@ async function resolveHosted(input: HostedInput): Promise<ResolvedIdentity> {
   return {
     userId: exchange.scope.participantId,
     accountScope: exchange.scope.organizationId,
-    // The legacy capability exchange response predates the explicit plane
-    // fields returned by `/auth/identity`. A hosted secret-key client defaults
-    // to the org-default project; browser sessions use resolveViaIdentity and
-    // therefore receive the concrete project/environment/sandbox tuple.
-    projectId: exchange.scope.organizationId,
-    environment: null,
-    sandboxId: null,
+    projectId: exchange.scope.projectId ?? exchange.scope.organizationId,
+    branchId: exchange.scope.branchId,
+    branchRoot: exchange.scope.branchRoot,
     // teamIds isn't needed because the server already encoded
     // team-level access into scope.syncGroups.
     teamIds: undefined,

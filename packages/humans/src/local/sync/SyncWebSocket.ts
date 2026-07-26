@@ -12,6 +12,7 @@
 
 import { getContext } from '../context.js';
 import { clientSyncDeltaSchema, type ClientSyncDelta } from '@abloatai/transaction/wire/delta';
+import { drainProfilingEnabled, observeDrainStage } from './drainProfile.js';
 import {
   WsTransport,
   type WsTransportOptions,
@@ -212,7 +213,23 @@ export class SyncWebSocket<
    * and an observability breadcrumb; it is never applied. There is one parse per
    * delta — callers must not re-parse.
    */
+  /**
+   * Wire validation runs once per delta, so at drain scale it is a per-delta
+   * fixed cost rather than a payload-proportional one. The guard keeps the
+   * normal path free: when profiling is off this is a boolean test and a
+   * direct call, with no closure allocated per delta.
+   */
   private normalizeWireDelta(raw: unknown): SyncDelta | null {
+    if (!drainProfilingEnabled()) return this.parseWireDelta(raw);
+    const startedAt = performance.now();
+    try {
+      return this.parseWireDelta(raw);
+    } finally {
+      observeDrainStage('parse', performance.now() - startedAt);
+    }
+  }
+
+  private parseWireDelta(raw: unknown): SyncDelta | null {
     let candidate: unknown = raw;
     if (isRecord(raw)) {
       const normalized: Record<string, unknown> = { ...raw };

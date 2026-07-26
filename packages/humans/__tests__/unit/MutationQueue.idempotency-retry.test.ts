@@ -195,6 +195,37 @@ describe('MutationQueue retry idempotency', () => {
     expect(attempts[1]?.operations).toEqual(attempts[0]?.operations);
   });
 
+  it('removes reconnect-drained transactions from the canonical execution queue', async () => {
+    queue.dispose();
+    queue = new MutationQueue({ batchDelay: 60_000, maxBatchSize: 50 });
+    const attempts: CapturedAttempt[] = [];
+    queue.setMutationExecutor({
+      commit: (operations, options) => {
+        attempts.push({
+          operations: operations.map((operation) => ({ ...operation })),
+          ...(options ? { options: { ...options } } : {}),
+        });
+        return Promise.resolve({ lastSyncId: 42, status: 'confirmed' as const });
+      },
+      executeCreate: jest.fn(),
+      executeUpdate: jest.fn(),
+      executeDelete: jest.fn(),
+      executeArchive: jest.fn(),
+      executeUnarchive: jest.fn(),
+    });
+
+    const transaction = await queue.create(
+      createTaskFixture({ title: 'drain once' }),
+      USER_CONTEXT,
+    );
+    await Promise.resolve();
+    await queue.drainPending();
+    await transaction.confirmation;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(attempts).toHaveLength(1);
+  });
+
   it('keeps caller-supplied keys as separate requests during reconnect flush', async () => {
     queue.dispose();
     queue = new MutationQueue({ batchDelay: 60_000, maxBatchSize: 50 });

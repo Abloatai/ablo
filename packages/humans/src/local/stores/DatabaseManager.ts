@@ -31,8 +31,8 @@ export interface DatabaseInfo {
   workspaceId: string;
   participantKind: string;
   projectId: string | null;
-  environment: 'sandbox' | 'production' | null;
-  sandboxId: string | null;
+  branchId: string;
+  branchRoot: boolean;
   schemaHash: string;
   schemaVersion: number;
   userVersion?: number;
@@ -173,8 +173,8 @@ export class DatabaseManager {
       workspaceId: identity.organizationId,
       participantKind: identity.participantKind,
       projectId: identity.projectId,
-      environment: identity.environment,
-      sandboxId: identity.sandboxId,
+      branchId: identity.branchId,
+      branchRoot: identity.branchRoot,
       schemaHash,
       schemaVersion,
       userVersion,

@@ -1,11 +1,13 @@
 /**
  * The canonical interface every data-source backend implements, together with the bridge
  * that wires an implementation into the `dataSource()` HTTP handler. This package
- * defines the contract and ships adapters for three object-relational mappers —
+ * defines the contract and ships PostgreSQL bindings for three object-relational mappers —
  * {@link prismaDataSource}, {@link drizzleDataSource}, and {@link kyselyDataSource} —
  * each verified by shared mutation checks plus endpoint-only outbox checks. The
  * direct Kysely wrapper runs only the shared mutation contract. You can also
- * write your own.
+ * write your own through the `defineDatabaseAdapter` factory. PostgreSQL, the ORM
+ * binding, and WAL/outbox observation are recorded as separate profile axes;
+ * an ORM name never implies database portability.
  *
  * An endpoint adapter reads and writes your database, and it owns the transactional
  * outbox and idempotency bookkeeping as well, so you never write those by hand.
@@ -29,6 +31,7 @@ import type {
   EventsPage,
   Migration,
 } from './contract.js';
+import type { DatabaseAdapterProfile } from './adapterProfile.js';
 
 /**
  * A single row keyed by the schema's field names (for example `operatorId`), not
@@ -57,6 +60,8 @@ export interface AdapterCommitResult {
  * transaction id is never used as that namespace.
  */
 export interface MutationAdapter {
+  /** Database, binding, and observation are separate, explicit axes. */
+  readonly profile: DatabaseAdapterProfile;
   readonly capabilities: AdapterCapabilities;
   /** Infrastructure migrations required by this wrapper's advertised capabilities. */
   migrations(): readonly Migration[];

@@ -146,8 +146,10 @@ export interface UserContext {
   organizationId: string;
   /** Authenticated data-plane coordinates used to isolate local persistence. */
   projectId?: string | null;
-  environment?: 'sandbox' | 'production' | null;
-  sandboxId?: string | null;
+  /** Immutable branch target. Authoritative whenever present. */
+  branchId: string;
+  /** True only when branchId is the project's production root. */
+  branchRoot?: boolean;
   role?: string;
   teamIds?: string[];
   /** Participant kind on the wire. Default 'user' for browser

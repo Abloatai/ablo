@@ -17,6 +17,8 @@ import type {
   DataSourceAdapter,
   Row,
 } from '../adapter.js';
+import { defineDatabaseAdapter } from '../adapterFactory.js';
+import { memoryAdapterProfile } from '../adapterProfile.js';
 import type { ChangeSet, EventsPage, Migration, Operation, OutboxEvent } from '../contract.js';
 import {
   assertSourceIdempotencyIntent,
@@ -81,7 +83,8 @@ export function memoryDataSource(): DataSourceAdapter {
     }
   };
 
-  return {
+  return defineDatabaseAdapter({
+    profile: memoryAdapterProfile(),
     capabilities: {
       transactions: true,
       propose: false,
@@ -150,5 +153,5 @@ export function memoryDataSource(): DataSourceAdapter {
         nextCursor: page.at(-1)?.cursor ?? null,
       };
     },
-  };
+  });
 }

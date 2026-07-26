@@ -401,6 +401,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	    claim: Claim,
 	    waited = false,
 	    fenceToken?: number,
+	    readAt?: number,
 	  ): Claim {
 	    const release = (): Promise<void> => {
 	      claim.revoke?.();
@@ -416,6 +417,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      description: claim.description,
 	      target: claim.target,
 	      waited,
+	      ...(readAt !== undefined ? { readAt } : {}),
 	      ...(resolvedFenceToken !== undefined ? { fenceToken: resolvedFenceToken } : {}),
 	      release,
 	      revoke: claim.revoke,
@@ -448,9 +450,10 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      // holds the lease, never a half-claimed one racing the queue.
 	      let waited = false;
 	      let fenceToken: number | undefined;
+	      let readAt: number | undefined;
 	      if (claimOptions.queue) {
 	        try {
-	          ({ waited, fenceToken } = await awaitClaimGrant(transport, claim.id, {
+	          ({ waited, fenceToken, readAt } = await awaitClaimGrant(transport, claim.id, {
 	            timeoutMs: claimOptions.waitTimeoutMs,
 	            maxQueueDepth: claimOptions.maxQueueDepth,
 	            signal: claimOptions.signal,
@@ -464,7 +467,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	          throw err;
 	        }
 	      }
-	      return wrapClaimHandle(claim, waited, fenceToken);
+	      return wrapClaimHandle(claim, waited, fenceToken, readAt);
 	    },
 	    list(target?: Partial<ModelTarget>): readonly ModelClaim[] {
 	      return listModelClaims(target);

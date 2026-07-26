@@ -15,7 +15,7 @@ import {
 } from '@abloatai/transaction/footprint';
 
 const ORG = 'org_2b8f1c';
-const base: FootprintPlane = { organizationId: ORG, environment: 'production' };
+const base: FootprintPlane = { organizationId: ORG, branchId: 'br_main' };
 
 describe('footprintNamesFor', () => {
   it('gives every object a name no other connection can claim', () => {
@@ -34,16 +34,15 @@ describe('footprintNamesFor', () => {
     expect(footprintNamesFor(base)).toEqual(footprintNamesFor({ ...base }));
   });
 
-  it('separates every plane axis — this is the collision the constants guaranteed', () => {
+  it('separates every branch coordinate', () => {
     const planes: FootprintPlane[] = [
       base,
-      { ...base, environment: 'sandbox' },
+      { ...base, branchId: 'br_preview' },
       { ...base, projectId: 'proj_a' },
       { ...base, projectId: 'proj_b' },
-      { ...base, projectId: 'proj_a', sandboxId: 'sbx_1' },
-      { ...base, projectId: 'proj_a', sandboxId: 'sbx_2' },
+      { ...base, projectId: 'proj_a', branchId: 'br_a' },
+      { ...base, projectId: 'proj_a', branchId: 'br_b' },
       { ...base, organizationId: 'org_other' },
-      { organizationId: 'org_other', environment: 'sandbox' },
     ];
     const slots = planes.map((p) => footprintNamesFor(p).slot);
     expect(new Set(slots).size).toBe(planes.length);
@@ -55,7 +54,7 @@ describe('footprintNamesFor', () => {
     // second slot on the same database for the same connection.
     const stamped = footprintNamesFor({ ...base, projectId: ORG });
     const omitted = footprintNamesFor(base);
-    const empty = footprintNamesFor({ ...base, projectId: '', sandboxId: '' });
+    const empty = footprintNamesFor({ ...base, projectId: '' });
 
     expect(stamped).toEqual(omitted);
     expect(empty).toEqual(omitted);
@@ -64,9 +63,8 @@ describe('footprintNamesFor', () => {
   it('derives names Postgres accepts — lowercase, digits, underscore, under 63 bytes', () => {
     const long: FootprintPlane = {
       organizationId: 'org_' + 'x'.repeat(120),
-      environment: 'sandbox',
+      branchId: 'br_' + 'z'.repeat(120),
       projectId: 'proj_' + 'y'.repeat(120),
-      sandboxId: 'sbx_' + 'z'.repeat(120),
     };
     for (const plane of [base, long]) {
       const names = footprintNamesFor(plane);

@@ -19,6 +19,8 @@
 import { CONNECT_USAGE } from './connect';
 import { DOCS_USAGE } from './docs';
 import { MIGRATE_USAGE } from './migrate';
+import { BRANCH_USAGE } from './branches';
+import { BRANCH_DEV_USAGE } from './branchDev';
 
 /** Headings in the short help — the core loop, in the order you meet it. */
 export const CORE_GROUPS = ['Start', 'Every day', 'More'] as const;
@@ -71,12 +73,12 @@ export const COMMANDS = [
   },
   {
     name: 'login',
-    core: { group: 'Start', does: 'Authorize in your browser — sets up your sandbox and production keys' },
+    core: { group: 'Start', does: 'Authorize in your browser — stores project management access' },
     full: {
       group: 'Set up',
       rows: [
-        { run: 'login', does: 'Authorize in your browser — sets up your sandbox and production keys' },
-        { run: 'login --project <slug>', does: 'Same, for one project — its keys become the active ones' },
+        { run: 'login', does: 'Authorize in your browser — stores one mk_ management credential' },
+        { run: 'login --project <slug>', does: 'Same, for one project — it becomes active' },
       ],
     },
   },
@@ -130,12 +132,14 @@ export const COMMANDS = [
   },
   {
     name: 'dev',
-    core: { group: 'Every day', does: 'Push your schema and keep watching for changes' },
+    usage: BRANCH_DEV_USAGE,
+    core: { group: 'Every day', does: 'Prepare an isolated Git branch and watch your schema' },
     full: {
       group: 'Your schema',
       rows: [
-        { run: 'dev', does: 'Push your schema and keep watching for changes' },
-        { run: 'dev --no-watch', does: 'Push once and exit' },
+        { run: 'dev', does: 'Prepare an isolated Git branch, push schema, and watch' },
+        { run: 'dev --branch <slug>', does: 'Use an explicit branch instead of Git discovery' },
+        { run: 'dev --no-watch', does: 'Prepare the branch, push once, and exit' },
       ],
     },
   },
@@ -210,10 +214,19 @@ export const COMMANDS = [
     },
   },
   {
-    name: 'mode',
+    name: 'branch',
+    usage: BRANCH_USAGE,
     full: {
       group: 'Workspace',
-      rows: [{ run: 'mode [sandbox|production]', does: 'Pick the environment everyday commands act in' }],
+      rows: [
+        { run: 'branch list', does: 'List isolated branches for the active project' },
+        { run: 'branch status [id|slug]', does: 'Show schema, database, parent compatibility, and readiness' },
+        { run: 'branch check [id|slug]', does: 'CI alias for branch status' },
+        { run: 'branch create <slug>', does: 'Create a child of the production root' },
+        { run: 'branch ensure <slug> --credential', does: 'Resolve a branch and mint its expiring CI key' },
+        { run: 'branch credential <id>', does: 'Mint an expiring branch-bound test key' },
+        { run: 'branch delete <id>', does: 'Delete a non-root branch' },
+      ],
     },
   },
   {

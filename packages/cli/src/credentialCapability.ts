@@ -61,17 +61,17 @@ export function credentialCapability(key: string | undefined): CredentialCapabil
         kind,
         label: 'scoped',
         note:
-          'A scoped key does only what it was minted for, and pushing a schema needs a secret ' +
-          `${secret} key from the dashboard. The production key \`ablo login\` stores observes ` +
-          'rather than writes.',
+          'A scoped key does exactly what it was minted for. The production key `ablo login` ' +
+          'stores is for observing your live plane with `ablo status` and `ablo logs`; authoring ' +
+          `schema there takes a secret ${secret} key from the dashboard.`,
       };
     case 'publishable':
       return {
         kind,
         label: 'read-only',
         note:
-          'This is the key that is safe to ship in a browser bundle, and it reads only. Work ' +
-          `from a terminal wants a secret ${secret} key.`,
+          'This is the key that is safe to ship in a browser bundle, and it reads. Work from a ' +
+          `terminal wants a secret ${secret} key.`,
       };
     case 'ephemeral':
       return {

@@ -8,11 +8,22 @@ import { dataSourceNext } from '../src/source-next.js';
 import { drizzleDataSource } from '../src/source-drizzle.js';
 import { kyselyDataSource } from '../src/source-kysely.js';
 import { runDataSourceTests } from '../src/source-conformance.js';
+import {
+  defineDatabaseAdapter,
+  postgresAdapterProfile,
+} from '../src/source.js';
+import {
+  createTool,
+  deleteTool,
+  readTool,
+  updateTool,
+} from '../src/ai-sdk.js';
 
 describe('@abloatai/ablo public entry points', () => {
   it('publishes the intentional branded subpaths', () => {
     expect(Object.keys(manifest.exports).sort()).toEqual([
       '.',
+      './ai-sdk',
       './auth',
       './client',
       './coordination',
@@ -50,5 +61,14 @@ describe('@abloatai/ablo public entry points', () => {
     expect(typeof drizzleDataSource).toBe('function');
     expect(typeof kyselyDataSource).toBe('function');
     expect(typeof runDataSourceTests).toBe('function');
+    expect(typeof defineDatabaseAdapter).toBe('function');
+    expect(typeof postgresAdapterProfile).toBe('function');
+  });
+
+  it('serves AI SDK adapters through the branded path', () => {
+    expect(typeof readTool).toBe('function');
+    expect(typeof createTool).toBe('function');
+    expect(typeof updateTool).toBe('function');
+    expect(typeof deleteTool).toBe('function');
   });
 });

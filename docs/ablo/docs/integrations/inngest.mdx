@@ -1,0 +1,260 @@
+---
+title: "Inngest for long-running tasks"
+description: "Run event-driven, retryable agent tasks with Inngest while Ablo makes each shared-state effect typed, idempotent, and authoritative."
+sidebar:
+  icon: workflow
+---
+
+Inngest and Ablo solve different parts of a durable agent system:
+
+| Concern | Owner |
+|---|---|
+| Events, step checkpoints, retries, sleeps, flow control, cancellation | Inngest |
+| Provider calls, prompts, and model output | AI SDK |
+| Typed reads and writes, mutation idempotency, claims, confirmation | Ablo |
+| Event names, function definitions, effect identity, business behavior | Your application |
+
+The short version is:
+
+> Inngest makes sure the job resumes. Ablo makes sure its changes are safe.
+
+## Keep Ablo calls inside steps
+
+An Inngest function is ordinary application code, but external I/O belongs in
+a retriable `step.run()`. A successful step result is checkpointed and reused;
+a failed step is independently retried.
+
+```ts
+import Ablo from '@abloatai/ablo';
+import { Inngest, eventType } from 'inngest';
+import { z } from 'zod';
+import { schema } from './schema.js';
+
+const inngest = new Inngest({ id: 'orders' });
+const ablo = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+  transport: 'http',
+});
+
+const approvalRequested = eventType('orders/approval.requested', {
+  schema: z.object({
+    operationId: z.string(),
+    orderId: z.string(),
+    approvalNote: z.string(),
+  }),
+});
+
+export const approveOrder = inngest.createFunction(
+  {
+    id: 'approve-order',
+    triggers: [approvalRequested],
+    retries: 4,
+    idempotency: 'event.data.operationId',
+  },
+  async ({ event, step }) => {
+    const { operationId, orderId, approvalNote } = event.data;
+
+    return step.run('write-approved-order', () =>
+      ablo.orders.update({
+        id: orderId,
+        data: { status: 'approved', approvalNote },
+        idempotencyKey: `${operationId}:approve-order:${orderId}`,
+        wait: 'confirmed',
+      }),
+    );
+  },
+);
+```
+
+There is no Inngest-specific Ablo transport. The step calls the same branded
+model API as a route handler, worker, or command-line process.
+
+## Use both idempotency layers
+
+Send a globally scoped event ID and carry a stable business operation ID in the
+event:
+
+```ts
+await inngest.send(
+  approvalRequested.create(
+    {
+      operationId,
+      orderId,
+      approvalNote: 'Approved by the durable function.',
+    },
+    {
+      id: `orders-approval-requested-${operationId}`,
+    },
+  ),
+);
+```
+
+Inngest event IDs and function-level `idempotency` prevent duplicate function
+runs for Inngest's documented 24-hour window. They do not replace the Ablo
+mutation key. Ablo can confirm the write and the process can lose the response
+before Inngest checkpoints the step, causing the step callback to execute
+again.
+
+For every mutating step:
+
+1. Accept a stable business operation ID in the triggering event.
+2. Derive a separate key for each logical effect.
+3. Reuse the key and mutation body for every retry.
+4. Use `wait: 'confirmed'` when later steps depend on the authoritative result.
+5. Treat reuse of a key with another body as an application bug.
+6. Keep the complete retry horizon within Ablo's documented
+   [idempotency retention window](/idempotency).
+
+Never put Inngest's `attempt`, a timestamp, or a random value in the key.
+`runId` is suitable only when a newly created function run should represent a
+new effect.
+
+## Compose AI SDK as durable steps
+
+Inngest can checkpoint AI SDK calls with `step.ai.wrap()`. Keep the model call
+and the Ablo mutation as separate steps:
+
+```ts
+import { openai } from '@ai-sdk/openai';
+import { generateText } from 'ai';
+
+const { text: approvalNote } = await step.ai.wrap(
+  'review-order',
+  generateText,
+  {
+    model: openai('gpt-4o-mini'),
+    system:
+      'Return only a concise approval note suitable for an audit trail.',
+    prompt,
+  },
+);
+
+await step.run('apply-order-review', () =>
+  ablo.orders.update({
+    id: orderId,
+    data: { status: 'approved', approvalNote },
+    idempotencyKey: `${operationId}:apply-order-review:${orderId}`,
+    wait: 'confirmed',
+  }),
+);
+```
+
+This separation means retrying a write does not spend model tokens again, and
+retrying a model call cannot partially mutate shared state.
+
+For a multi-turn agent loop, checkpoint every model invocation and wrap every
+tool execution in its own `step.run()`. The generic
+`@abloatai/ablo/ai-sdk` helpers may execute inside a step because Inngest does
+not impose Temporal's deterministic Workflow sandbox. Explicit model calls are
+still preferable in the first integration because they make the effect key and
+step boundary visible.
+
+## Claims and cancellation
+
+A claim protects a short shared-state critical section, not an entire Inngest
+function. Acquire, fresh-read, checked-write, and release inside one
+`step.run()`:
+
+```ts
+await step.run('apply-review-with-claim', async () => {
+  const claim = await ablo.orders.claim({
+    id: orderId,
+    description: 'applying an Inngest review',
+  });
+
+  try {
+    return await ablo.orders.update({
+      id: claim.data.id,
+      data: { status: 'approved', approvalNote },
+      claim,
+      idempotencyKey: `${operationId}:apply-review:${orderId}`,
+      wait: 'confirmed',
+    });
+  } finally {
+    await claim.release();
+  }
+});
+```
+
+Do not hold a claim across `step.sleep()`, `step.waitForEvent()`, or an AI
+inference step. Configure `cancelOn` for the function, but do not assume that
+function cancellation aborts an already running Ablo network request. Keep
+claims short, release in `finally`, and rely on bounded claim leases for
+process-loss recovery.
+
+## Expose the application endpoint
+
+Mount Inngest's handler at the conventional `/api/inngest` path. For a plain
+Node application:
+
+```ts
+import { createServer } from 'node:http';
+import { serve } from 'inngest/node';
+
+const handler = serve({
+  client: inngest,
+  functions: [approveOrder],
+});
+
+createServer((request, response) => {
+  const path = new URL(request.url ?? '/', 'http://localhost').pathname;
+  if (path === '/api/inngest') return handler(request, response);
+  response.writeHead(404).end();
+}).listen(3000);
+```
+
+Use the framework-specific `serve` adapter in an existing Next.js, Express,
+Hono, or other supported application.
+
+Start the local app and Inngest Dev Server:
+
+```bash
+npm run dev
+npx --ignore-scripts=false inngest-cli@latest dev \
+  --no-discovery \
+  -u http://localhost:3000/api/inngest
+```
+
+Set `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` in production.
+
+## Test the failure boundary
+
+Use `@inngest/test`'s `InngestTestEngine` for function and step tests. A useful
+integration suite proves:
+
+- the Ablo write happens inside the expected named step;
+- a confirmed write followed by simulated response loss retries with the same
+  key and body and commits once;
+- conflicting reuse of a key fails;
+- checkpointed step state bypasses the Ablo callback;
+- claims release after write failure; and
+- the `/api/inngest` endpoint exposes function metadata without eagerly
+  creating an Ablo connection.
+
+The complete runnable suite lives in `examples/inngest-agent`.
+
+## Package boundary
+
+Inngest remains an application dependency:
+
+```text
+packages/
+  transaction/src/ai-sdk/    reusable model-backed AI SDK tools
+  ablo/src/ai-sdk.ts          @abloatai/ablo/ai-sdk
+
+examples/
+  inngest-agent/              events, functions, steps, endpoint, AI composition
+```
+
+Do not add Inngest to `packages/agent`. A dedicated `@abloatai/inngest` package
+is justified only after multiple real applications reveal substantial
+reusable behavior beyond a small function or step wrapper.
+
+## References
+
+- [Inngest TypeScript SDK v4](https://www.inngest.com/docs/reference/typescript/v4/intro)
+- [Inngest steps](https://www.inngest.com/docs/reference/typescript/functions/step-run)
+- [Inngest idempotency](https://www.inngest.com/docs/guides/handling-idempotency)
+- [Inngest AI inference steps](https://www.inngest.com/docs/features/inngest-functions/steps-workflows/step-ai-orchestration)
+- [Testing Inngest functions](https://www.inngest.com/docs/reference/typescript/v4/testing)

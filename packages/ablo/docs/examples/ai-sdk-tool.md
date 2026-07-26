@@ -1,17 +1,14 @@
-# AI SDK Tool
+# AI SDK Tools
 
-> Put a claim-and-commit loop inside an AI SDK tool call.
+> Give an AI SDK agent safe access to the same typed Ablo resources as your
+> backend.
 
 Use AI SDK for the agent loop and Ablo for the state boundary inside the tool.
 When an agent updates a shared record from inside a tool call you have a
-concurrency problem: another agent may be editing the same row, and a naive write
-silently overwrites it. This is the safe pattern — read the record, claim the row
-so anyone else waits their turn, write through a checked update, and release the
-claim automatically.
-
-Claims don't lock. If another writer holds the row, `claim` waits for them,
-re-reads the fresh row, then hands it to you — so two writers serialize instead
-of clobbering.
+concurrency problem: another agent or a person may be editing the same row, and
+a naive write can overwrite work the model never saw. Ablo's tool adapters put
+the authoritative read, retry, claim, and confirmed-write behavior behind the
+ordinary AI SDK tool contract.
 
 ```ts
 // app/api/chat/route.ts
@@ -20,11 +17,11 @@ import { defineSchema, model, z as schemaZ } from '@abloatai/ablo/schema';
 import { anthropic } from '@ai-sdk/anthropic';
 import {
   streamText,
-  tool,
   convertToModelMessages,
   stepCountIs,
   type UIMessage,
 } from 'ai';
+import { updateTool } from '@abloatai/ablo/ai-sdk';
 import { z } from 'zod';
 
 export const runtime = 'nodejs';
@@ -43,42 +40,19 @@ const ablo = Ablo({
   transport: 'http',
 });
 
-const updateTask = tool({
-  description: 'Update a task in the product database.',
+const updateTask = updateTool(ablo.tasks, {
+  title: 'Update task',
+  description: 'Update a task without overwriting concurrent work.',
   inputSchema: z.object({
     taskId: z.string(),
     status: z.enum(['todo', 'doing', 'done']).optional(),
     summary: z.string().optional(),
   }),
-  execute: async ({ taskId, status, summary }) => {
-    await ablo.ready();
-
-    // retrieve hits the server for the latest row (async — await it).
-    const task = await ablo.tasks.get({ id: taskId });
-    if (!task) return { ok: false, reason: 'not_found' };
-
-    // If another agent already holds this row, claim waits for them to finish,
-    // re-reads the fresh row, then hands it back on `claim.data`. The claim is
-    // released automatically when it goes out of scope.
-    await using claim = await ablo.tasks.claim({
-      id: taskId,
-      description: 'editing',
-      ttl: '2m',
-    });
-
-    // Because you hold the claim, this update is rejected if the row changed
-    // underneath you, instead of silently overwriting it.
-    const updated = await ablo.tasks.update({
-      id: claim.data.id,
-      data: {
-        status: status ?? claim.data.status,
-        summary: summary ?? claim.data.summary,
-      },
-      wait: 'confirmed',
-    });
-
-    return { ok: true, task: updated };
-  },
+  id: ({ taskId }) => taskId,
+  apply: (current, { status, summary }) => ({
+    status: status ?? current.status,
+    summary: summary ?? current.summary,
+  }),
 });
 
 export async function POST(req: Request) {
@@ -100,13 +74,12 @@ export async function POST(req: Request) {
 
 The model provider is interchangeable — swap `anthropic(...)` for any
 server-bound provider instance. What matters is that the route binds the model on
-the server (never trusting one sent in the request body), converts the incoming
-`UIMessage[]` with `convertToModelMessages`, and that the tool:
+the server (never trusting one sent in the request body) and converts the
+incoming `UIMessage[]` with `convertToModelMessages`.
 
-- reads the latest row with `retrieve` (a server read),
-- claims it for exclusive, ordered access — if someone else holds it, the claim
-  waits for them, then re-reads,
-- writes through the model resource, which is rejected if the row changed
-  underneath you,
-- waits for confirmation with `wait: 'confirmed'`,
-- and auto-releases the claim when the tool returns.
+`updateTool` defaults to a functional update: Ablo re-reads and reapplies the
+patch if another participant writes first. Use `strategy: 'claim'` when the
+model should skip work already owned by someone else, or `strategy: 'queue'`
+when it should wait in Ablo's server-owned FIFO claim queue. The same entrypoint
+also exports `readTool`, `createTool`, and `deleteTool`; deletes require AI SDK
+approval unless the application explicitly disables it.

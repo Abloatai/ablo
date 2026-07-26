@@ -521,15 +521,17 @@ export function createModelProxy<T, C>(
       | ModelDeleteParams<T, C>,
   ): MutationOptions => {
     const rest: MutationOptions = {
-      idempotencyKey: params.idempotencyKey,
-      label: params.label,
-      wait: params.wait,
-      readAt: params.readAt,
-      onStale: params.onStale,
-      fenceToken: params.fenceToken,
-      claimRef: params.claimRef,
-      reads: params.reads,
-      track: params.track,
+      ...(params.idempotencyKey !== undefined
+        ? { idempotencyKey: params.idempotencyKey }
+        : {}),
+      ...(params.label !== undefined ? { label: params.label } : {}),
+      ...(params.wait !== undefined ? { wait: params.wait } : {}),
+      ...(params.readAt !== undefined ? { readAt: params.readAt } : {}),
+      ...(params.onStale !== undefined ? { onStale: params.onStale } : {}),
+      ...(params.fenceToken !== undefined ? { fenceToken: params.fenceToken } : {}),
+      ...(params.claimRef !== undefined ? { claimRef: params.claimRef } : {}),
+      ...(params.reads !== undefined ? { reads: params.reads } : {}),
+      ...(params.track !== undefined ? { track: params.track } : {}),
     };
     // The write-options schema — the runtime twin of the compile-time params.
     // Catches plain-JavaScript callers (for example `onStale: 'rejct'`) at the
@@ -713,7 +715,7 @@ export function createModelProxy<T, C>(
     return {
       object: 'claim',
       id: lease.id,
-      readAt: snapshot.stamp,
+      readAt: lease.readAt ?? snapshot.stamp,
       // The fencing token the server minted for this grant, forwarded from the
       // lease so writes taken under this handle carry it (Option B).
       ...(lease.fenceToken !== undefined ? { fenceToken: lease.fenceToken } : {}),
@@ -1227,7 +1229,7 @@ export function createModelProxy<T, C>(
         const effective: MutationOptions | undefined = claimed
           ? {
               wait: 'confirmed',
-              readAt: claimed.snapshot.stamp,
+              readAt: claimed.lease.readAt ?? claimed.snapshot.stamp,
               onStale: 'reject',
               claimRef: { id: claimed.lease.id },
               ...opts,
@@ -1311,7 +1313,7 @@ export function createModelProxy<T, C>(
       const effective: MutationOptions | undefined = claimed
         ? {
             wait: 'confirmed',
-            readAt: claimed.snapshot.stamp,
+            readAt: claimed.lease.readAt ?? claimed.snapshot.stamp,
             onStale: 'reject',
             claimRef: { id: claimed.lease.id },
             ...(claimed.lease.fenceToken !== undefined

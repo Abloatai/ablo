@@ -110,6 +110,20 @@ export {
   type Row as AdapterRow,
 } from './adapter.js';
 export {
+  adapterBindingSchema,
+  databaseAdapterProfileSchema,
+  databaseKindSchema,
+  memoryAdapterProfile,
+  observationProfileSchema,
+  postgresAdapterProfile,
+  type AdapterBinding,
+  type DatabaseAdapterProfile,
+  type DatabaseKind,
+  type ObservationProfile,
+  type PostgresBinding,
+} from './adapterProfile.js';
+export { defineDatabaseAdapter } from './adapterFactory.js';
+export {
   operationSchema,
   operationTypeSchema,
   sourceCommitEchoSchema,

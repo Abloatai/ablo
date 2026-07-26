@@ -102,3 +102,15 @@ export { LoadStrategy } from '@abloatai/transaction/types';
 // client around an existing store/provider. Kept on the explicit extension
 // surface so those packages do not need the private alias package.
 export type { InternalAbloOptions } from './local/client/options.js';
+
+// Stage timings for the delta drain, so a benchmark harness can report where
+// an observer's catch-up time went instead of inferring it. Inert unless
+// `ABLO_PROFILE_DRAIN=true`, and read-only: the pipeline does the recording.
+export {
+  drainProfileSnapshot,
+  resetDrainProfile,
+  drainProfilingEnabled,
+  type DrainProfile,
+  type DrainStage,
+  type DrainStageTotals,
+} from './local/sync/drainProfile.js';

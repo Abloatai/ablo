@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/transaction",
-  "version": "0.37.1",
+  "version": "0.38.0",
   "description": "The headless Ablo transaction client and canonical contracts for reads, commits, settlement, claims, and durable observation.",
   "license": "Apache-2.0",
   "type": "module",
@@ -24,6 +24,12 @@
       "types": "./dist/environment.d.ts",
       "import": "./dist/environment.js",
       "default": "./dist/environment.js"
+    },
+    "./branches": {
+      "@ablo/source": "./src/branches.ts",
+      "types": "./dist/branches.d.ts",
+      "import": "./dist/branches.js",
+      "default": "./dist/branches.js"
     },
     "./coordination": {
       "@ablo/source": "./src/coordination/index.ts",
@@ -185,7 +191,7 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "ai": "^6.0.0",
+    "ai": "^6.0.0 || ^7.0.0",
     "drizzle-orm": ">=0.44.0"
   },
   "peerDependenciesMeta": {
@@ -201,6 +207,7 @@
     "@jest/globals": "^30.2.0",
     "@types/jest": "^30.0.0",
     "ai": "^6.0.0",
+    "drizzle-orm": "^0.45.2",
     "jest": "^30.2.0",
     "jest-environment-node": "^30.2.0",
     "publint": "^0.3.17",

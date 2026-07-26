@@ -1,5 +1,39 @@
 # @abloatai/cli
 
+## 0.38.0
+
+### Minor Changes
+
+- fae876d: Make Ablo branch-first across its transaction API, credentials, CLI, live
+  clients, and dashboard. Development and preview work now uses isolated,
+  immutable branch identities instead of a shared Sandbox mode. `ablo dev`
+  discovers or accepts a branch, ensures it, mints an expiring credential, wires
+  the local environment, and pushes the schema.
+
+  Source adapters and PostgreSQL footprint helpers now select immutable branches.
+  Callers constructing `FootprintPlane` or `SourceRequestContext` must replace
+  `environment`, `mode`, and `sandboxId` with `branchId`.
+
+  Add stable OpenAPI operation names and shared wire schemas as the foundation
+  for generated language SDKs. Add explicit PostgreSQL adapter profiles and a
+  validated adapter factory for Prisma, Drizzle, and Kysely integrations.
+
+  Add runnable Temporal and Inngest integration examples that keep durable
+  workflow execution in those systems while routing shared-data reads, claims,
+  idempotent writes, settlement, and observation through Ablo.
+
+  Add `@abloatai/ablo/ai-sdk` model tools for authoritative reads, idempotent
+  creates, concurrency-safe updates, and claimed deletes. Remove the previous
+  `coordinatedTool` API and narrow the internal agent package to composition and
+  perception adapters instead of owning runtimes, sandboxes, prompts, providers,
+  or application tools.
+
+### Patch Changes
+
+- Updated dependencies [fae876d]
+  - @abloatai/transaction@0.38.0
+  - @abloatai/humans@0.38.0
+
 ## 0.37.1
 
 ### Patch Changes

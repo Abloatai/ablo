@@ -15,7 +15,7 @@ schema** — your migration tool stays in charge of the shape of your database.
 
 > No database yet? Pass an `apiKey` only and Ablo keeps your rows in its own log,
 > so you can build the whole app today — like Stripe test mode. Point it at a
-> separate or local Postgres for a throwaway sandbox, or at your production
+> separate or local Postgres for a development branch, or at your production
 > database when you're ready.
 
 ## 1. Install and initialize
@@ -26,22 +26,23 @@ npx ablo init
 ```
 
 `ablo init` scaffolds your project (next step shows what it creates) and ends
-by signing you in — one browser click, and a `sk_test_` key is saved locally
-for the CLI. Later, `npx ablo push` (step 4) writes `ABLO_API_KEY` into your
-`.env.local` so the SDK finds it too — no manual copy-paste. `npx ablo login`
-also exists standalone. In CI, or to manage the key by hand, set it yourself
-instead:
+by signing you in — one browser click, and a project-scoped `mk_` management
+credential is saved locally. Later, `npx ablo dev` (step 4) prepares an isolated branch and writes
+its temporary `ABLO_API_KEY` into `.env.local`, so the SDK follows your Git
+branch with no manual copy-paste. `npx ablo login` also exists standalone. In
+CI, set project management access explicitly:
 
 ```bash
-export ABLO_API_KEY=sk_test_...
+export ABLO_MANAGEMENT_KEY=mk_...
 ```
 
-Every SDK and CLI call needs a key. Test and live keys work like Stripe's:
-`sk_test_*` for the sandbox, `sk_live_*` for production. In production a key
-points at the database *you* own; in the sandbox you can skip the database
-entirely and let Ablo's test plane host the rows (apiKey only). There is no
-keyless mode — a key is always required. (The public `/sandbox` page is a
-separate hosted demo, not your app.)
+Every runtime call needs a branch-bound API key. `ablo dev` exchanges the
+stored management credential for
+an expiring `sk_test_*` key bound to the current development branch.
+Production runtimes use `sk_live_*`. In production a key points at the database
+*you* own; on a development branch you can skip the database entirely and let
+Ablo host the rows (apiKey only). There is no keyless mode — a key is always
+required. (The public `/sandbox` page is a separate hosted demo, not your app.)
 
 ## 2. Your Ablo schema (init scaffolded it)
 
@@ -169,17 +170,24 @@ The full setup, the honest footprint (publication + slot + the `REPLICATION` and
 writer roles + the `wal_level` restart + slot/WAL retention Ablo monitors), and the
 Preview status are in [Connect Your Database](/data-sources).
 
-## 4. Push the schema, then map it to tables
+## 4. Start the branch development loop
 
 ```bash
-npx ablo push      # pushes the schema definition and writes ABLO_API_KEY to
-                   # .env.local. Add --watch to re-push on every save.
+npx ablo dev       # prepare this Git branch, push, and watch ablo/schema.ts
 ```
 
-`ablo push` uploads the schema *definition* — model names, fields, types. That
-metadata is what tells Ablo which models to coordinate. Skipping it makes every
-write to a new or changed model fail with `server_execute_unknown_model` — that
-error literally means "run `npx ablo push`."
+`ablo dev` discovers your Git branch, ensures a matching isolated Ablo branch,
+mints an eight-hour branch credential, writes it to gitignored `.env.local`,
+uploads the schema *definition*, and watches for schema edits. Model names,
+fields, and types tell Ablo which models to coordinate. Skipping the push makes
+every write to a new or changed model fail with
+`server_execute_unknown_model`.
+
+Use `npx ablo dev --no-watch` when you only need to prepare and push once. Use
+`npx ablo push` as the lower-level one-shot command when you deliberately want
+to push with the currently active key, including a reviewed production deploy.
+The complete mental model and CI examples are in
+[Branch-first development](/branch-development).
 
 Now map those models to your real Postgres tables. **Your migration tool owns the
 tables** — Ablo reads them, it does not create or migrate them:
@@ -194,8 +202,8 @@ tables** — Ablo reads them, it does not create or migrate them:
 > your schema needs. Once they exist, your own migration tool stays in charge
 > of them — Ablo adopts whatever shape you evolve.
 
-Nothing runs locally — there is no dev server to start. Your app talks to Ablo's
-hosted API; the rows live in your database.
+No Ablo server runs locally. The `ablo dev` process only watches your schema;
+your app talks to Ablo's hosted API, and the rows live in your database.
 
 ## 5. Write through the model
 

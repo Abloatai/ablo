@@ -6,7 +6,7 @@ An agent is a **reactive** participant: it wakes on something happening, reads
 what it needs, writes a result, and goes idle. That's a request/response
 workload — so agents talk to Ablo over **plain HTTP**, holding no WebSocket. The
 credential *is* the identity; the server resolves the org, scope, and actor from
-the key on every request (the Stripe server-SDK / Liveblocks-node shape).
+the key on every request.
 
 Agents get the stateless plane (HTTP). People — when you add the `humans()`
 plugin — get the live plane (WebSocket: presence, optimistic, sub-100ms).
@@ -31,7 +31,7 @@ import { schema } from "./schema";
 const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: "http" });
 
 // Reads + writes, fully typed off your schema.
-// `retrieve` resolves to the row, or `undefined` when none matches.
+// `get` resolves to the row, or `undefined` when none matches.
 const open = await ablo.tasks.list({ where: { status: "todo" } });
 
 const task = await ablo.tasks.get({ id: open[0].id });
@@ -41,11 +41,57 @@ console.log(task.title);
 await ablo.tasks.update({ id: task.id, data: { status: "done" } });
 ```
 
-It exposes `retrieve` / `list` / `create` / `update` / `delete`, plus `commits`
-and `claim`. It does **not** expose the stateful-only surface (`get` /
-`local` reads, `onChange` live subscription) — those need a
-live connection, so with `transport: 'http'` the return type narrows and they
-are a *compile error*, not a runtime surprise.
+It exposes `get` / `list` / `create` / `update` / `delete`, plus `commits`
+and `claim`. It does **not** expose stateful-only `local` reads or `onChange`
+subscriptions. Those need a live connection, so with `transport: 'http'` they
+are compile errors rather than runtime surprises.
+
+## AI SDK tools
+
+Keep AI SDK in charge of the model loop and expose only the Ablo operations the
+model needs:
+
+```ts
+import { generateText } from 'ai';
+import {
+  createTool,
+  deleteTool,
+  readTool,
+  updateTool,
+} from '@abloatai/ablo/ai-sdk';
+
+const tools = {
+  getTask: readTool(ablo.tasks, {
+    description: 'Read the current task.',
+    inputSchema: z.object({ taskId: z.string() }),
+    id: ({ taskId }) => taskId,
+  }),
+  createTask: createTool(ablo.tasks, {
+    description: 'Create a task.',
+    inputSchema: z.object({ requestId: z.string(), title: z.string() }),
+    id: ({ requestId }) => requestId,
+    data: ({ title }) => ({ title, status: 'todo' }),
+  }),
+  updateTask: updateTool(ablo.tasks, {
+    description: 'Update a task without overwriting concurrent work.',
+    inputSchema: z.object({ taskId: z.string(), status: z.string() }),
+    id: ({ taskId }) => taskId,
+    apply: (_current, { status }) => ({ status }),
+  }),
+  deleteTask: deleteTool(ablo.tasks, {
+    description: 'Delete a task after taking its claim.',
+    inputSchema: z.object({ taskId: z.string() }),
+    id: ({ taskId }) => taskId,
+    // Destructive tools require AI SDK approval by default.
+  }),
+};
+
+await generateText({ model, messages, tools });
+```
+
+These are adapters over the same typed resources used by ordinary backend
+code. Ablo does not own the planner, prompt system, memory, provider, worker,
+or workflow runtime.
 
 ## Coordination: claim, queue, reorder
 
@@ -59,7 +105,11 @@ clobber the same record.
 await using claim = await ablo.tasks.claim({ id: taskId });
 const task = claim.data;
 // …no one else can hold this row while you work…
-await ablo.tasks.update({ id: task.id, data: { status: "in_review" } });
+await ablo.tasks.update({
+  id: task.id,
+  data: { status: "in_review" },
+  claim,
+});
 
 await ablo.tasks.claim.state({ id: taskId });   // who holds it now (or null)
 await ablo.tasks.claim.queue({ id: taskId });   // the FIFO wait-line behind the holder
@@ -111,5 +161,5 @@ agents costs nothing on the live plane — that capacity stays for humans.
 `onChange` (live subscriptions) and the `local` reads (local synced-pool
 reads) require a WebSocket and a local store — they're for interactive UIs, not
 stateless agents. An agent reacts to an external trigger (a job/queue/webhook),
-then reads with `list`/`retrieve`. See [client behavior](/client-behavior) for
+then reads with `list`/`get`. See [client behavior](/client-behavior) for
 the full surface and [guarantees](/guarantees) for the coordination semantics.

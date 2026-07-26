@@ -520,6 +520,15 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    */
   organizationId?: string;
 
+  /**
+   * Immutable branch selected by a self-hosted credential. Hosted clients
+   * receive this from the credential exchange.
+   */
+  branchId?: string;
+
+  /** Whether the selected self-hosted branch is the project's root branch. */
+  branchRoot?: boolean;
+
   /** The client-wide write default — see {@link AbloOptions.wait}. Projected
    *  from the public option rather than restated, so the two cannot diverge. */
   wait?: AbloOptions['wait'];

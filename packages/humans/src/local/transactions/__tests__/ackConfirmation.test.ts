@@ -279,6 +279,20 @@ describe('ack-based transaction confirmation', () => {
     expect(second.status).toBe('awaiting_delta');
   });
 
+  it('waits for the newest same-row write when timestamps are equal', async () => {
+    ctx.mocks.mutationExecutor.setStatus('queued');
+    ctx.mocks.mutationExecutor.setCorrelationId('source-correlation-same-ms');
+    const task = createTaskFixture();
+    const first = await queue.update(task, userContext, { title: 'first' });
+    await waitFor(() => first.status === 'awaiting_delta');
+
+    const second = await queue.update(task, userContext, { title: 'second' });
+    await waitFor(() => second.status === 'awaiting_delta');
+    second.createdAt = first.createdAt;
+
+    expect(queue.confirmationFor(task.getModelName(), task.id)).toBe(second.confirmation);
+  });
+
   it('completes held notify members while the forwarded members await their echo', async () => {
     ctx.mocks.mutationExecutor.setStatus('queued');
     ctx.mocks.mutationExecutor.setCorrelationId('source-correlation-notify');

@@ -11,7 +11,6 @@
  */
 
 import { AbloValidationError } from '../errors.js';
-import type { Environment } from '../environment.js';
 import type { CommitOperationType, OnStaleMode } from '../coordination/schema.js';
 import type { ParticipantKind } from '../types/participant.js';
 
@@ -88,21 +87,11 @@ export interface SourceRequestContext {
   readonly participantId?: string;
   readonly participantKind?: ParticipantKind;
   readonly organizationId?: string;
-  /** Trusted project plane selected by the authenticating credential. */
+  /** Immutable branch selected by the authenticating credential. */
+  readonly branchId?: string;
+  /** Trusted project selected by the authenticating credential. */
   readonly projectId?: string;
-  /** Trusted sandbox plane selected by the authenticating credential. */
-  readonly sandboxId?: string;
   readonly requiredSyncGroups?: readonly string[];
-  /**
-   * Whether this request runs in production or sandbox mode. Branch your
-   * handlers on it — for example, read and write a separate sandbox database
-   * when `mode === 'sandbox'` — so sandbox traffic exercises the same code
-   * against isolated data. Keeping the two apart is your handler's
-   * responsibility, since your database holds the canonical rows.
-   *
-   * Defaults to `'production'` when omitted.
-   */
-  readonly mode?: Environment;
 }
 
 /**

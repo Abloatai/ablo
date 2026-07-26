@@ -27,6 +27,9 @@ import { abloOpenApi } from '@abloatai/transaction/schema/openapi';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const target = resolve(repoRoot, 'docs/ablo/public/openapi.json');
+const packageManifest = JSON.parse(
+  readFileSync(resolve(repoRoot, 'packages/ablo/package.json'), 'utf8'),
+) as { version: string };
 
 /**
  * The hosted API, and localhost beside it.
@@ -37,7 +40,7 @@ const target = resolve(repoRoot, 'docs/ablo/public/openapi.json');
  */
 const rendered = `${JSON.stringify(
   {
-    ...abloOpenApi({ title: 'Ablo API', version: '1.0.0' }),
+    ...abloOpenApi({ title: 'Ablo API', version: packageManifest.version }),
     servers: [
       { url: 'https://api.abloatai.com/api', description: 'Production' },
       { url: 'http://localhost:8787/api', description: 'Local development' },
