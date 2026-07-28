@@ -53,7 +53,11 @@ export interface DeltaPipelineContext {
   batchTimer: ReturnType<typeof setTimeout> | null;
   /** Queue for deltas arriving during an active bootstrap; null when none. */
   readonly bootstrapDeltaQueue: SyncDelta[] | null;
-  readonly smartSyncOptions: { readonly batchingDelay: number; readonly maxBatchSize: number };
+  readonly smartSyncOptions: {
+    readonly batchingDelay: number;
+    readonly maxBatchSize: number;
+    readonly applySliceDeltas: number;
+  };
   /** Pool-applied cursor (`syncClient.position.applied`). */
   readonly highestProcessedSyncId: number;
   /** Resume/ack cursor (`syncClient.position.persisted`). */
@@ -86,7 +90,8 @@ export interface DeltaPipelineContext {
 
   // ── Custom-entity pool ops (deltas that skip the local store) ──
   readonly objectPool: {
-    get(id: string): Model | undefined;
+    /** Ingestion-side lookup — resolves without activating observability. */
+    peek(id: string): Model | undefined;
     add(model: Model, scope: ModelScope): void;
     remove(id: string): boolean;
     /** Full in-memory clear — the revocation-failure fallback (see
@@ -312,6 +317,7 @@ export function enqueueDelta(
   // The delta is accepted and queued — the `receive` stage boundary.
   runStage(ctx.stagePlugins ?? [], 'receive', { delta });
   ctx.pendingDeltas.push(delta);
+  pipelineDebug.enqueued += 1;
   return true;
 }
 
@@ -400,6 +406,71 @@ async function drainPendingDeltas(ctx: DeltaPipelineContext): Promise<void> {
   }
 }
 
+/**
+ * Uninterrupted apply time allowed before the sliced loop yields — the
+ * "no visible stall" bound. Yields are amortized against it because one host
+ * yield costs milliseconds under load; at the measured per-delta apply cost
+ * this works out to roughly one yield per one to two 600-delta slices.
+ */
+const APPLY_YIELD_BUDGET_MS = 12;
+
+/**
+ * Wedge forensics: where the pipeline currently is, updated synchronously at
+ * every stage boundary. A hang diagnoses itself by which counter pair
+ * diverged and which phase the active flush froze in. Mirrored onto
+ * `globalThis.__abloPipelineDebug` so a bench watchdog in the same thread
+ * can read it without an import path into SDK internals — diagnostics only,
+ * a handful of numbers, no payload data.
+ */
+export const pipelineDebug = {
+  flushesStarted: 0,
+  flushesSettled: 0,
+  persistsStarted: 0,
+  persistsSettled: 0,
+  applySlices: 0,
+  applyYields: 0,
+  enqueued: 0,
+  phase: 'idle' as string,
+};
+(globalThis as { __abloPipelineDebug?: typeof pipelineDebug }).__abloPipelineDebug =
+  pipelineDebug;
+
+/**
+ * Split applied changes into slices of at most `maxDeltas`, never splitting a
+ * transaction: consecutive changes sharing a `transactionId` form one
+ * indivisible group (a commit reveals whole), while changes without one are
+ * individually splittable. A single transaction larger than the bound forms
+ * its own oversized slice, so apply always advances rather than stalling on
+ * an oversized commit — the same rule the server's publication chunking uses.
+ */
+export function sliceApplyChanges<T extends { readonly transactionId?: string }>(
+  changes: readonly T[],
+  maxDeltas: number,
+): readonly T[][] {
+  if (changes.length <= maxDeltas) return changes.length > 0 ? [[...changes]] : [];
+  const slices: T[][] = [];
+  let current: T[] = [];
+  let index = 0;
+  while (index < changes.length) {
+    // The indivisible unit starting here: one transaction's run, or a single
+    // untransacted change.
+    const transactionId = changes[index]!.transactionId;
+    let end = index + 1;
+    if (transactionId !== undefined) {
+      while (end < changes.length && changes[end]!.transactionId === transactionId) end += 1;
+    }
+    const groupSize = end - index;
+    if (current.length > 0 && current.length + groupSize > maxDeltas) {
+      slices.push(current);
+      current = [];
+    }
+    current.push(...changes.slice(index, end));
+    index = end;
+  }
+  if (current.length > 0) slices.push(current);
+  return slices;
+}
+
 function yieldToHost(): Promise<void> {
   const immediate = (
     globalThis as {
@@ -417,9 +488,12 @@ async function flushDeltaBatch(
   queuedDeltas: SyncDelta[],
 ): Promise<void> {
   openDrainBatchRow(queuedDeltas.length);
+  pipelineDebug.flushesStarted += 1;
   try {
     await flushDeltaBatchInner(ctx, queuedDeltas);
   } finally {
+    pipelineDebug.flushesSettled += 1;
+    pipelineDebug.phase = 'idle';
     closeDrainBatchRow();
   }
 }
@@ -429,6 +503,7 @@ async function flushDeltaBatchInner(
   queuedDeltas: SyncDelta[],
 ): Promise<void> {
   const stagePlugins = ctx.stagePlugins ?? [];
+  pipelineDebug.phase = 'dedupe';
   const deduplicatedDeltas = timeDrainStage('dedupe', () => ctx.deduplicateDeltas(queuedDeltas));
   observeDrainBatch(queuedDeltas.length, deduplicatedDeltas.length);
   runStage(stagePlugins, 'dedupe', { deltas: deduplicatedDeltas });
@@ -446,7 +521,7 @@ async function flushDeltaBatchInner(
         // gained permission to see the entity, so we insert it into the
         // pool as if newly created.
         if (delta.actionType === 'I' || delta.actionType === 'U' || delta.actionType === 'C') {
-          const existing = ctx.objectPool.get(delta.modelId);
+          const existing = ctx.objectPool.peek(delta.modelId);
           if (existing) {
             existing.updateFromData(data);
           } else {
@@ -465,6 +540,8 @@ async function flushDeltaBatchInner(
   // handleGroupRemoved) and never reach here, though the persistence
   // signature accepts them defensively.
   const regularDeltas = deduplicatedDeltas.filter((d) => !ctx.isCustomEntity(d.modelName));
+  pipelineDebug.phase = 'persist';
+  pipelineDebug.persistsStarted += 1;
   const batch = await timeDrainStageAsync('persist', () =>
     ctx.processDeltaBatch(
       regularDeltas.map((d) => ({
@@ -479,6 +556,7 @@ async function flushDeltaBatchInner(
       }))
     )
   );
+  pipelineDebug.persistsSettled += 1;
   const dbResults = batch.results;
   runStage(stagePlugins, 'persist', { deltas: regularDeltas });
 
@@ -487,13 +565,41 @@ async function flushDeltaBatchInner(
   // materialiser attached where it said it would. The direct call is the
   // bridge for stores constructed without plugins (subclasses, tests),
   // whose own apply is the whole pipeline.
-  timeDrainStage('apply', () => {
-    if (pluginsForStage(stagePlugins, 'apply').length > 0) {
-      runStage(stagePlugins, 'apply', { changes: dbResults });
-    } else {
-      ctx.applyDeltaBatchToPool(dbResults);
+  //
+  // Large batches apply in TIME SLICES: split at transaction boundaries into
+  // bounded chunks with the event loop yielded between them, so a catch-up
+  // wave reveals commit-by-commit instead of holding the thread for one long
+  // synchronous block. Each slice is still one MobX action (reactions fire
+  // once per slice), and a transaction never splits across slices — the
+  // commit remains the atomic unit of visibility.
+  const slices = sliceApplyChanges(dbResults, ctx.smartSyncOptions.applySliceDeltas);
+  await timeDrainStageAsync('apply', async () => {
+    const hasApplyPlugins = pluginsForStage(stagePlugins, 'apply').length > 0;
+    // Yield on a TIME budget, not per slice: a host yield costs milliseconds
+    // under load (measured ~7x throughput collapse when yielding every few
+    // deltas), so the yield decision amortizes it — only after the budget of
+    // uninterrupted apply work has been spent, and never before the first
+    // slice. Slices stay the atomicity unit; the budget only decides where
+    // the loop breathes.
+    let sliceStartedAt = performance.now();
+    for (let index = 0; index < slices.length; index++) {
+      if (index > 0 && performance.now() - sliceStartedAt > APPLY_YIELD_BUDGET_MS) {
+        pipelineDebug.phase = `apply-yield-${index}`;
+        pipelineDebug.applyYields += 1;
+        await yieldToHost();
+        sliceStartedAt = performance.now();
+      }
+      pipelineDebug.phase = `apply-slice-${index}`;
+      pipelineDebug.applySlices += 1;
+      const slice = slices[index]!;
+      if (hasApplyPlugins) {
+        runStage(stagePlugins, 'apply', { changes: slice });
+      } else {
+        ctx.applyDeltaBatchToPool(slice);
+      }
     }
   });
+  pipelineDebug.phase = 'acknowledge';
 
   // Acknowledge and advance the sync cursor, gated on persistence.
   //

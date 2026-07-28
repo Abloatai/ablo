@@ -83,6 +83,12 @@ This request must name a capability id, but none was provided.
 
 This operation requires a capability, and none was presented.
 
+### cli_api_key_missing
+
+`client-only` · not sent over the network
+
+The command needs an API key and none was found on this machine. Run `ablo login` (or set ABLO_API_KEY), then re-run the command.
+
 ### exchange_failed
 
 `HTTP 401` · not retryable
@@ -474,6 +480,12 @@ The database rejected a value that fails one of its check constraints. The error
 `HTTP 400` · not retryable
 
 A claim id is required for this request.
+
+### cli_database_url_missing
+
+`client-only` · not sent over the network
+
+The command needs a database connection string and none was found — no DATABASE_URL in the process environment, .env.local, or .env, and no --url flag.
 
 ### cli_invalid_arguments
 
@@ -1125,11 +1137,23 @@ The bootstrap response parsed but failed schema validation, so it was not applie
 
 Network, connection, queue, and timeout failures. Generally retryable.
 
+### api_unreachable
+
+`client-only` · not sent over the network
+
+The Ablo API could not be reached from this machine — the dial failed before any request arrived. Check the network, any proxy, and an ABLO_API_URL override, then retry.
+
 ### base_url_missing
 
 `client-only` · not sent over the network
 
 The client has no base URL configured, so it cannot address the server. Set the base URL when constructing the client.
+
+### cli_database_unreachable
+
+`client-only` · not sent over the network
+
+The database named by the connection string could not be reached from this machine. The host, port, network, or credential refused the dial before any statement ran.
 
 ### commit_failed
 
@@ -1214,6 +1238,12 @@ The line is already past its depth limit. For a claim, more participants were wa
 `HTTP 504` · retryable
 
 The data source accepted the write, but its correlated authoritative source delta did not arrive before the confirmation deadline. The write may still materialize; retry with the same idempotency key or wait for source ingestion to recover.
+
+### response_unrecognized
+
+`client-only` · not sent over the network
+
+The server answered successfully, but with a body this client does not recognize. The client may be older than the server — update it and retry.
 
 ### source_network_error
 

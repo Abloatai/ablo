@@ -274,6 +274,9 @@ export {
   logEventSchema,
   usageBucketSchema,
   usageReportResponseSchema,
+  meterUsageSchema,
+  billingSummarySchema,
+  usageSummaryResponseSchema,
   controlKeySchema,
   controlKeyListResponseSchema,
   keyMintedResponseSchema,
@@ -290,11 +293,41 @@ export type {
   LogEvent,
   UsageBucket,
   UsageReportResponse,
+  MeterUsage,
+  BillingSummary,
+  UsageSummaryResponse,
   ControlKey,
   ControlKeyListResponse,
   KeyMintedResponse,
   KeyRevokedResponse,
 } from './accountResponses.js';
+
+// The datasource routes' responses — the `ablo connect` surface: register,
+// validate, locate, list, deregister. What the server, the CLI, and the
+// dashboard agree on.
+export {
+  READINESS_ITEMS,
+  READINESS_ADVISORY_ITEMS,
+  isReadinessItem,
+  readinessFailureSchema,
+  readinessAdvisorySchema,
+  datasourceSummarySchema,
+  datasourceListResponseSchema,
+  datasourceValidationResponseSchema,
+  datasourceLocationResponseSchema,
+  datasourceDisconnectedResponseSchema,
+} from './dataSourceResponses.js';
+export type {
+  ReadinessItem,
+  ReadinessAdvisoryItem,
+  ReadinessFailure,
+  ReadinessAdvisory,
+  DatasourceSummary,
+  DatasourceListResponse,
+  DatasourceValidationResponse,
+  DatasourceLocationResponse,
+  DatasourceDisconnectedResponse,
+} from './dataSourceResponses.js';
 
 // The inbound socket surface: every frame the server can send, and how each
 // one's payload is validated.

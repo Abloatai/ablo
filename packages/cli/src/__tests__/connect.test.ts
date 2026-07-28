@@ -3,7 +3,6 @@ import {
   connectSetupSql,
   reconcilePublicationPlan,
   registerDirectDataSource,
-  registerEndpoint,
   ABLO_PUBLICATION,
   ABLO_REPLICATION_ROLE,
   ABLO_WRITE_ROLE,
@@ -15,22 +14,6 @@ import {
   ABLO_OUTBOX_TABLE,
 } from '@abloatai/transaction/footprint';
 import * as dbRole from '../dbRole';
-
-describe('registerEndpoint', () => {
-  it('targets the /api-mounted datasources route, matching the SDK', () => {
-    // The server mounts all routes under `/api`; a bare `/v1/datasources`
-    // matches nothing and surfaces as "Registration failed: Not found".
-    expect(registerEndpoint('https://api.abloatai.com')).toBe(
-      'https://api.abloatai.com/api/v1/datasources'
-    );
-  });
-
-  it('tolerates a trailing slash on the base URL', () => {
-    expect(registerEndpoint('https://api.abloatai.com/')).toBe(
-      'https://api.abloatai.com/api/v1/datasources'
-    );
-  });
-});
 
 describe('parseConnectArgs', () => {
   it('applies sensible defaults', () => {
@@ -472,7 +455,7 @@ describe('registerDirectDataSource — renders the server readiness checklist (e
       route: 'public-allowlist',
     });
 
-  it('renders each failing invariant from a TOP-LEVEL failures array', async () => {
+  it('renders each failing invariant from a TOP-LEVEL failures array, in plain language', async () => {
     stubFetch({
       type: 'invalid_request_error',
       code: 'data_source_blocked',
@@ -488,7 +471,10 @@ describe('registerDirectDataSource — renders the server readiness checklist (e
     const ok = await register();
     const out = errors.join('\n');
     expect(ok).toBe(false);
-    expect(out).toContain('table_privileges');
+    // The same label `connect check` prints — one rendering of the checklist,
+    // never the raw internal item name.
+    expect(out).toContain(`the writer login can't write to your tables yet`);
+    expect(out).not.toContain('table_privileges');
     expect(out).toContain('public.cb_documents');
     expect(out).toContain('Grant SELECT, INSERT, UPDATE, DELETE');
   });
@@ -502,7 +488,7 @@ describe('registerDirectDataSource — renders the server readiness checklist (e
     const ok = await register();
     const out = errors.join('\n');
     expect(ok).toBe(false);
-    expect(out).toContain('logical_marker');
+    expect(out).toContain('confirm a write landed');
     expect(out).toContain('pg_logical_emit_message');
   });
 });

@@ -180,10 +180,16 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
       const event = {
         clientTxId: txId,
         rows: receipt.notifications.map((n) => ({
-          model: n.model,
-          id: n.id,
-          fields: n.conflictingFields,
+          // The row that moved, in both scopes. A group notification used to
+          // report its group key here, so the log named a row that does not
+          // exist; the premise it breached is reported as `group` instead.
+          model: n.target.model,
+          id: n.target.id,
+          fields: n.target.fields ?? [],
           writtenBy: n.writtenBy.kind,
+          ...(n.scope === 'group'
+            ? { group: n.group, ...(n.propagation ? { via: n.propagation.via } : {}) }
+            : {}),
         })),
       };
       const message = formatConflict(event);

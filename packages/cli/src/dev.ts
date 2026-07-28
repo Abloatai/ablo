@@ -30,11 +30,10 @@ import {
   loadSchema,
   pushSchema,
   fmtSignal,
-  apiBaseUrl,
   DEFAULT_SCHEMA_PATH,
   DEFAULT_EXPORT,
-  DEFAULT_URL,
 } from './push';
+import { apiBaseUrl, DEFAULT_URL } from './controlPlane';
 import { resolveEffectiveApiKey } from './config';
 import { looksLikeCredentialRefusal, poolerExplanation } from './readiness';
 import { brand } from './theme';

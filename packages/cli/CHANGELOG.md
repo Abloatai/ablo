@@ -1,5 +1,16 @@
 # @abloatai/cli
 
+## 0.40.0
+
+### Minor Changes
+
+- 87b9797: Every CLI command that talks to Ablo's control plane now goes through one typed HTTP client, and failures reach you as named `cli_` error codes with plain-language messages instead of raw transport errors: a missing API key says how to log in, an unreachable database says what refused the dial. Setting `ABLO_JSON=1` switches command output to a machine-readable form for agents and scripts.
+
+### Patch Changes
+
+- @abloatai/transaction@0.40.0
+- @abloatai/humans@0.40.0
+
 ## 0.39.0
 
 ### Patch Changes

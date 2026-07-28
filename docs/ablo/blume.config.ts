@@ -93,7 +93,15 @@ export default defineConfig({
         {
           label: "Get Started",
           icon: "play",
-          items: ["/", "/quickstart", "/integration-guide", "/deployment", "/cli", "/debugging"],
+          items: [
+            "/",
+            "/quickstart",
+            "/integration-guide",
+            "/deployment",
+            "/pricing",
+            "/cli",
+            "/debugging",
+          ],
         },
         {
           label: "Concepts",

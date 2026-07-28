@@ -18,7 +18,7 @@ import pc from 'picocolors';
 import { classifyCredentialKind } from '@abloatai/transaction/auth/credentialPolicy';
 import { resolveApiKey, normalizeMode, type Mode } from './config';
 import { brand } from './theme';
-import { apiBaseUrl } from './push';
+import { apiBaseUrl } from './controlPlane';
 
 interface WebhookEndpointObject {
   object: 'webhook_endpoint';

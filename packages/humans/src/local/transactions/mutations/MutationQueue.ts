@@ -647,10 +647,20 @@ export class MutationQueue extends EventEmitter {
     let holdsEntireBatch = false;
 
     for (const notification of notifications) {
-      const candidates = targets.filter((target) => target.id === notification.id);
+      // Scope is decided before any target matching. A group premise fires over
+      // the WHOLE batch by convention, and its `target` now names the row that
+      // actually moved — which may well be a row this batch is writing, so
+      // matching first would misread a batch-wide hold as a per-row one.
+      if (notification.scope === 'group') {
+        holdsEntireBatch = true;
+        continue;
+      }
+      const candidates = targets.filter(
+        (target) => target.id === notification.target.id,
+      );
       const notificationKey = this.receiptTargetKey(
-        notification.model,
-        notification.id,
+        notification.target.model,
+        notification.target.id,
       );
       const exactTargets = candidates.filter(
         (target) => target.key === notificationKey,
@@ -661,7 +671,7 @@ export class MutationQueue extends EventEmitter {
         ),
       );
 
-      if (notification.group || candidates.length === 0) {
+      if (candidates.length === 0) {
         holdsEntireBatch = true;
         continue;
       }

@@ -187,11 +187,29 @@ export interface SmartSyncOptions {
   maxBootstrapSize?: number;
   batchingDelay?: number;
   maxBatchSize?: number;
+  /**
+   * Upper bound on deltas revealed per apply slice. A large flush batch is
+   * split at TRANSACTION boundaries into slices of at most this many deltas,
+   * with the event loop yielded between slices, so a catch-up wave never
+   * holds the thread for one long synchronous apply. A transaction larger
+   * than the bound still applies whole — the commit stays the atomic unit of
+   * visibility. `Infinity` restores single-slice behavior.
+   */
+  applySliceDeltas?: number;
 }
 
 // RehydrationStats is defined alongside the bootstrap-apply path and is
 // re-exported here.
 export type { RehydrationStats } from './sync/bootstrapApply.js';
+
+/** Bench-diagnostic slice-bound override; absent everywhere but the bench. */
+function benchApplySliceOverride(): number | undefined {
+  const host = globalThis as { process?: { env?: Record<string, string | undefined> } };
+  const raw = host.process?.env?.ABLO_APPLY_SLICE_DELTAS;
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
 
 /**
  * Bootstrap retry configuration.
@@ -652,6 +670,18 @@ export class BaseSyncedStore<
       // trickle just as well and keeps burst tails inside the drain budget.
       batchingDelay: 10,
       maxBatchSize: 50,
+      // ~600 deltas ≈ 9 to 14 ms of apply — inside a no-visible-stall
+      // budget, and a full 500-op commit reveals in one slice. The yield
+      // itself is TIME-budgeted in the pipeline (one or two yields per
+      // batch), because a host yield costs milliseconds under load.
+      // History: the "sliced-apply wedge" that briefly held this at
+      // Infinity was kernel memory limits against the bench's many-isolate
+      // process (semispace commits refused at stock max_map_count /
+      // CommitLimit), not this pipeline — with the limits raised, the
+      // sliced path ran the full certification load with zero errors and
+      // cut writer ack latency threefold. `ABLO_APPLY_SLICE_DELTAS` remains
+      // the bench-diagnostic override.
+      applySliceDeltas: benchApplySliceOverride() ?? 600,
     };
 
     // Create internal helpers

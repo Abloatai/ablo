@@ -28,6 +28,14 @@
       "docUrl": "https://docs.abloatai.com/errors#api_key_required"
     },
     {
+      "code": "api_unreachable",
+      "category": "transport",
+      "surface": "client",
+      "retryable": false,
+      "message": "The Ablo API could not be reached from this machine — the dial failed before any request arrived. Check the network, any proxy, and an ABLO_API_URL override, then retry.",
+      "docUrl": "https://docs.abloatai.com/errors#api_unreachable"
+    },
+    {
       "code": "apikey_expired",
       "category": "auth",
       "surface": "wire",
@@ -328,6 +336,30 @@
       "retryable": true,
       "message": "The wait for this claim lease was aborted before the lease was granted.",
       "docUrl": "https://docs.abloatai.com/errors#claim_wait_aborted"
+    },
+    {
+      "code": "cli_api_key_missing",
+      "category": "auth",
+      "surface": "client",
+      "retryable": false,
+      "message": "The command needs an API key and none was found on this machine. Run `ablo login` (or set ABLO_API_KEY), then re-run the command.",
+      "docUrl": "https://docs.abloatai.com/errors#cli_api_key_missing"
+    },
+    {
+      "code": "cli_database_unreachable",
+      "category": "transport",
+      "surface": "client",
+      "retryable": false,
+      "message": "The database named by the connection string could not be reached from this machine. The host, port, network, or credential refused the dial before any statement ran.",
+      "docUrl": "https://docs.abloatai.com/errors#cli_database_unreachable"
+    },
+    {
+      "code": "cli_database_url_missing",
+      "category": "validation",
+      "surface": "client",
+      "retryable": false,
+      "message": "The command needs a database connection string and none was found — no DATABASE_URL in the process environment, .env.local, or .env, and no --url flag.",
+      "docUrl": "https://docs.abloatai.com/errors#cli_database_url_missing"
     },
     {
       "code": "cli_invalid_arguments",
@@ -1706,6 +1738,14 @@
       "retryable": false,
       "message": "This migration adds a new required field that existing rows have no value for.",
       "docUrl": "https://docs.abloatai.com/errors#required_field_added"
+    },
+    {
+      "code": "response_unrecognized",
+      "category": "transport",
+      "surface": "client",
+      "retryable": false,
+      "message": "The server answered successfully, but with a body this client does not recognize. The client may be older than the server — update it and retry.",
+      "docUrl": "https://docs.abloatai.com/errors#response_unrecognized"
     },
     {
       "code": "risky_cast",

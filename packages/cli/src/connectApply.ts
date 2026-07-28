@@ -1,12 +1,11 @@
 /**
- * `ablo connect apply` runs the read-path setup for you instead of printing
- * SQL to copy. It connects with the admin credential (from `--url`, or
- * `DATABASE_URL`), creates the two scoped roles and the publication, turns on
- * logical decoding where it can, and registers both scoped connection strings
- * with Ablo directly — then proves it worked by reconnecting as the replication
- * role and running the readiness checklist. The admin credential is used once
- * and discarded; nothing is written to your `.env`, so your app keeps only
- * `ABLO_API_KEY`.
+ * `ablo connect apply` (and `rotate`) — the COMMAND: resolve the credential,
+ * take the preflight reads, show the plan, apply it, verify it, register it.
+ *
+ * The orchestration only. What the run would execute and how it reads lives in
+ * `connectPlan.ts`; the reads it takes before writing anything, and the
+ * decisions resting on them, live in `connectPreflight.ts`. This file is the
+ * order those happen in and what the operator is told at each point.
  *
  * Two principles shape it:
  *
@@ -14,25 +13,25 @@
  *      Ablo will set up in ordinary words; the exact statements are available on
  *      request (`--show-sql`) rather than shown by default, because raw DDL reads
  *      as risky even when every statement is safe and reversible.
- *   2. The grants come from one source. The privilege statements are taken
- *      verbatim from {@link connectSetupSql} — the same recipe `ablo connect`
- *      prints and tests assert — so the applied grants can never quietly drift
- *      from the documented ones. `apply` only swaps the three statements that
- *      must differ to run unattended: it makes the role and publication creation
- *      idempotent (safe to re-run) and substitutes a real, generated password
- *      for the recipe's `<password>` placeholder.
+ *   2. Nothing is registered that has not been proved. The admin credential is
+ *      used once and discarded, both scoped roles are dialled back and checked,
+ *      and a run that cannot succeed exits non-zero rather than handing Ablo a
+ *      credential the database will refuse.
  */
 
 import pc from 'picocolors';
 import postgres from 'postgres';
 import { confirm, isCancel } from '@clack/prompts';
 import {
+  AbloAuthenticationError,
+  AbloConnectionError,
+  AbloValidationError,
+} from '@abloatai/transaction/errors';
+import {
   ABLO_PUBLICATION,
   ABLO_REPLICATION_ROLE,
   ABLO_WRITE_ROLE,
-  connectSetupSql,
   probeReadiness,
-  quoteIdent,
   reconcilePublicationPlan,
   readPublicationState,
   registerDirectDataSource,
@@ -45,38 +44,34 @@ import {
   ownershipRemediation,
   formatUnresolvedOwnership,
 } from './connectOwnership';
-import type { ConnectArgs } from './connect';
-import {
-  generateRolePassword,
-  scramSha256Verifier,
-  rewriteDatabaseUrl,
-  readProjectAdminDatabaseUrl,
-} from './dbRole';
-import { resolveApiKey } from './config';
-import { apiBaseUrl } from './push';
+import { probeDirectWriteReadiness, type ConnectArgs } from './connect';
+import { detectPooler, detectProvider, logicalReplicationGuidance } from './dbProvider';
+import { generateRolePassword, rewriteDatabaseUrl, readProjectAdminDatabaseUrl } from './dbRole';
+import { resolveApiKey, resolveManagementKey, getMode } from './config';
+import { fetchDataSourceState } from './readiness';
+import { DEFAULT_SCHEMA_PATH } from './push';
+import { apiBaseUrl } from './controlPlane';
 import { brand } from './theme';
-
-/** How a role's password is written into the SQL — mirrors {@link scopedRoleStatements}. */
-export type PasswordMode = 'scram-verifier' | 'plaintext';
-
-/**
- * A single stage of the apply plan. `title`/`detail` are the plain-language
- * summary a person reads; `sql` is what actually runs. `kind` lets the runner
- * treat the write-ahead-log stage specially — it is the one stage a managed
- * provider may refuse, and the only one that can need a restart.
- */
-export interface ApplyStep {
-  readonly key: 'own' | 'wal' | 'publication' | 'replication-role' | 'write-role' | 'grants';
-  readonly title: string;
-  readonly detail: string;
-  readonly sql: readonly string[];
-}
-
-/** The password material for the two roles, already turned into a SQL literal. */
-export interface ApplyCredentials {
-  readonly replicationClause: string;
-  readonly writeClause: string;
-}
+import { resolveTarget, describeMismatches } from './target';
+import {
+  connectApplyPlan,
+  passwordClause,
+  printPlan,
+  type ApplyStep,
+  type PasswordMode,
+} from './connectPlan';
+import {
+  adminCanCreateRoles,
+  currentWalLevel,
+  presentRoles,
+  probeAsRole,
+  alreadyConnectedElsewhere,
+  locateExistingConnection,
+  reapplyBlocker,
+  rotateWithoutConnection,
+  schemaDeclaredTables,
+  type AdminCapabilityRow,
+} from './connectPreflight';
 
 /**
  * The recovery instruction for a rotation that re-keyed the database but never
@@ -114,208 +109,6 @@ export function postRegistrationOutcome(input: {
   };
 }
 
-/** Build the password clause for a role, either the SCRAM verifier or an escaped plaintext literal. */
-export function passwordClause(password: string, mode: PasswordMode): string {
-  return mode === 'scram-verifier' ? scramSha256Verifier(password) : password.replace(/'/g, "''");
-}
-
-/**
- * Create a role, or — only when re-keying is the point — set its password.
- *
- * The distinction is load-bearing and used not to be. This once recovered from
- * `duplicate_object` by running `ALTER ROLE … PASSWORD` unconditionally, which
- * is idempotent in the sense of not erroring and destructive in the sense that
- * matters: any second `apply` against a database silently re-keyed a role
- * another connection was still authenticating with. Because the secret store is
- * per-plane, each plane then held its own now-wrong copy of one role's password,
- * and the failure surfaced later and elsewhere as a rejected credential.
- *
- * So `apply` creates and otherwise leaves the role alone, and `rotate` — the
- * verb whose whole purpose is a new password — is the only thing that re-keys.
- * Postgres has no `CREATE ROLE IF NOT EXISTS`, so the guard is an explicit
- * `pg_roles` check rather than an exception handler. Attributes are never
- * re-asserted on an existing role: that trips managed-Postgres permission walls,
- * and the server-side probe audits the live attributes anyway.
- */
-function idempotentRole(
-  role: string,
-  attributes: string,
-  clause: string,
-  rotate: boolean,
-): string {
-  const lines = [
-    'DO $$ BEGIN',
-    `  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role.replace(/'/g, "''")}') THEN`,
-    `    CREATE ROLE ${quoteIdent(role)} WITH ${attributes} LOGIN PASSWORD '${clause}';`,
-  ];
-  if (rotate) {
-    lines.push('  ELSE', `    ALTER ROLE ${quoteIdent(role)} WITH LOGIN PASSWORD '${clause}';`);
-  }
-  lines.push('  END IF;', 'END $$;');
-  return lines.join('\n');
-}
-
-/**
- * Turn the canonical recipe from {@link connectSetupSql} into an executable,
- * idempotent, real-password plan. Every privilege statement is taken verbatim
- * from the recipe; only the write-ahead-log switch, the publication, and the two
- * role creations are replaced — the statements that must be idempotent and carry
- * a real password to run unattended.
- *
- * Pure and deterministic, so a test can assert the plan reuses exactly the
- * recipe's grants and swaps exactly the three heads.
- */
-export function connectApplyPlan(input: {
-  readonly tables?: readonly string[];
-  readonly role?: string;
-  readonly writeRole?: string;
-  /**
-   * Re-key roles that already exist. `apply` leaves an existing role's password
-   * alone — another connection may be authenticating with it — so only `rotate`,
-   * whose whole purpose is a new password, passes this.
-   */
-  readonly rotate?: boolean;
-  readonly credentials: ApplyCredentials;
-  /** Omit the write-ahead-log step when the cluster is already `wal_level = logical`. */
-  readonly walAlreadyLogical?: boolean;
-  /** Shapes the write-ahead-log step's guidance; managed providers show a
-   *  console/setting action instead of an `ALTER SYSTEM` that can't run. */
-  readonly provider?: DbProvider;
-  /** The publication's live membership. When given, the publish step reconciles it
-   *  to `--tables` (declarative); when omitted, it falls back to create-if-absent. */
-  readonly existingPublication?: PublicationState;
-  /** Inherit-grants that let this admin manage tables an earlier integration's role
-   *  owns, run first so the publish and grant steps apply cleanly. See connectOwnership. */
-  readonly inheritGrants?: readonly string[];
-}): readonly ApplyStep[] {
-  const role = input.role && input.role.length > 0 ? input.role : ABLO_REPLICATION_ROLE;
-  const writeRole =
-    input.writeRole && input.writeRole.length > 0 ? input.writeRole : ABLO_WRITE_ROLE;
-  const tables = input.tables ?? [];
-  const provider = input.provider ?? 'generic';
-
-  // The canonical recipe. We keep every statement except the three we must
-  // replace to run unattended, identified by their leading verb so a change to
-  // the recipe's wording surfaces in the drift test rather than silently.
-  const recipe = connectSetupSql({ tables, role, writeRole });
-  const isWal = (s: string): boolean => s.startsWith('ALTER SYSTEM SET wal_level');
-  const isPublication = (s: string): boolean => s.startsWith('CREATE PUBLICATION');
-  const isRoleCreate = (s: string): boolean => s.startsWith('CREATE ROLE ');
-  const grants = recipe.filter((s) => !isWal(s) && !isPublication(s) && !isRoleCreate(s));
-
-  const publicationTarget =
-    tables.length > 0 ? `FOR TABLE ${tables.map(quoteIdent).join(', ')}` : 'FOR ALL TABLES';
-
-  // The write-ahead-log step: nothing to do when the cluster is already
-  // logical; a plain SQL statement on self-hosted; a console/setting action
-  // (no SQL) on managed providers that reject ALTER SYSTEM.
-  const walStep: readonly ApplyStep[] = input.walAlreadyLogical
-    ? []
-    : [
-        provider === 'generic'
-          ? {
-              key: 'wal',
-              title: 'Let Ablo see your changes as they happen',
-              detail: 'lets Ablo read your changes as they happen (needs a restart to take effect)',
-              sql: [`ALTER SYSTEM SET wal_level = 'logical';`],
-            }
-          : {
-              key: 'wal',
-              title: 'Let Ablo see your changes as they happen',
-              detail: logicalReplicationGuidance(provider),
-              sql: [],
-            },
-      ];
-
-  // With live state, reconcile the publication to exactly `--tables` (declarative,
-  // Debezium-"filtered" style). Without it — the pure/fresh-DB path — create it if
-  // absent; a re-run against a matching publication is then a no-op.
-  const reconcile = input.existingPublication
-    ? reconcilePublicationPlan(input.existingPublication, tables)
-    : null;
-  const publicationSql = reconcile
-    ? reconcile.sql
-    : [
-        `DO $$ BEGIN
-  CREATE PUBLICATION ${quoteIdent(ABLO_PUBLICATION)} ${publicationTarget};
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;`,
-      ];
-  const publicationDetail =
-    reconcile?.sql.length === 0
-      ? 'already sharing exactly these tables — nothing to change'
-      : tables.length > 0
-        ? `a live feed of the ${tables.length} table${tables.length === 1 ? '' : 's'} you chose`
-        : 'a live feed of your tables';
-
-  // When an earlier integration's role owns your tables, grant this admin
-  // inheritance of that role first — so the publish and grant steps, which
-  // Postgres reserves for the owner, apply cleanly. Runs before everything else.
-  const ownStep: readonly ApplyStep[] =
-    input.inheritGrants && input.inheritGrants.length > 0
-      ? [
-          {
-            key: 'own',
-            title: 'Let this admin manage tables owned by another role',
-            detail:
-              'your admin inherits the owning role so the steps below apply — reversible, no ownership change',
-            sql: input.inheritGrants,
-          },
-        ]
-      : [];
-
-  return [
-    ...ownStep,
-    ...walStep,
-    {
-      key: 'publication',
-      title: 'Publish your tables to Ablo',
-      detail: publicationDetail,
-      sql: publicationSql,
-    },
-    {
-      key: 'replication-role',
-      title: 'Create the read-only login Ablo reads with',
-      detail: `${role} — it can follow your changes and read, nothing else`,
-      sql: [
-        idempotentRole(
-          role,
-          'REPLICATION',
-          input.credentials.replicationClause,
-          input.rotate === true,
-        ),
-      ],
-    },
-    {
-      key: 'write-role',
-      title: 'Create the login Ablo writes with',
-      detail: `${writeRole} — writes rows through Ablo; where a table has row-level-security policies, they govern its writes too (it can't bypass them)`,
-      sql: [
-        idempotentRole(
-          writeRole,
-          'NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT',
-          input.credentials.writeClause,
-          input.rotate === true,
-        ),
-      ],
-    },
-    {
-      key: 'grants',
-      title: 'Grant each role exactly what it needs',
-      detail:
-        'read access for the reader, row writes for the writer — no ownership, no schema changes',
-      sql: grants,
-    },
-  ];
-}
-
-/** Whether the currently-connected role can create other roles (needed to run the plan). */
-interface AdminCapabilityRow {
-  readonly rolname: string;
-  readonly rolsuper: boolean;
-  readonly rolcreaterole: boolean;
-}
-
 interface PgErrorLike {
   readonly message?: string;
 }
@@ -324,112 +117,6 @@ interface PgErrorLike {
 function isPlaintextRefusal(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return /plaintext password/i.test(message);
-}
-
-/** Print the plan as a short, scannable checklist — titles only, SQL only if asked. */
-function printPlan(steps: readonly ApplyStep[], showSql: boolean): void {
-  console.log(`  This sets up your database for Ablo:\n`);
-  for (const step of steps) {
-    console.log(`    ${pc.green('•')} ${step.title}`);
-    if (showSql) {
-      for (const statement of step.sql) {
-        for (const line of statement.split('\n')) console.log(`        ${pc.dim(line)}`);
-      }
-    }
-  }
-  console.log(
-    pc.dim(
-      `\n  Your admin password stays on this machine.${showSql ? '' : ' (--show-sql for the exact statements)'}\n`
-    )
-  );
-}
-
-/** Look up whether the connected admin role can create the scoped roles. */
-async function adminCanCreateRoles(sql: postgres.Sql): Promise<AdminCapabilityRow | null> {
-  const rows = await sql.unsafe<AdminCapabilityRow[]>(
-    `SELECT rolname, rolsuper, rolcreaterole FROM pg_roles WHERE rolname = current_user`
-  );
-  return rows[0] ?? null;
-}
-
-export type DbProvider = 'neon' | 'supabase' | 'rds' | 'generic';
-
-/**
- * Best-effort provider identification from the admin host. Enough to give the
- * right logical-replication instructions: the managed providers don't accept
- * `ALTER SYSTEM SET wal_level`, so printing it for them — as the recipe did for
- * a `neon.tech` host — is a statement that can't work.
- */
-export function detectProvider(hostOrTarget: string): DbProvider {
-  const host = hostOrTarget.toLowerCase();
-  if (host.includes('neon.tech')) return 'neon';
-  if (
-    host.includes('supabase.co') ||
-    host.includes('supabase.com') ||
-    host.includes('pooler.supabase')
-  ) {
-    return 'supabase';
-  }
-  if (host.includes('rds.amazonaws.com') || host.includes('.rds.')) return 'rds';
-  return 'generic';
-}
-
-/** A host that fronts the database through a connection pooler. */
-export interface PooledHost {
-  readonly provider: DbProvider;
-  /** The direct host, when it can be derived from the pooled one. */
-  readonly direct?: string;
-}
-
-/**
- * Whether a host reaches the database through a CONNECTION POOLER rather than
- * the database itself. This matters because a pooler is not a smaller version
- * of the database — it terminates the session, so logical replication and the
- * setup that establishes it cannot run over it at all.
- *
- * The failure is worth naming because of how it presents: a pooler commonly
- * refuses the connection as `password authentication failed`, which sends a
- * reader to check credentials that are perfectly correct.
- */
-export function detectPooler(hostOrTarget: string): PooledHost | null {
-  const host = hostOrTarget.toLowerCase();
-  const provider = detectProvider(host);
-  // Neon encodes it in the endpoint id, so the direct host is the same name
-  // with the marker removed — a fix the reader can apply without a lookup.
-  if (provider === 'neon' && host.includes('-pooler')) {
-    return { provider, direct: hostOrTarget.replace(/-pooler/i, '') };
-  }
-  // Supabase's pooler is a separate host entirely (`aws-0-<region>.pooler.…`),
-  // so there is no direct host to derive from it.
-  if (host.includes('pooler.supabase')) return { provider: 'supabase' };
-  // RDS Proxy fronts the instance under a `.proxy-` subdomain.
-  if (host.includes('.proxy-') && provider === 'rds') return { provider };
-  return null;
-}
-
-/** How to reach `wal_level = logical` on each provider, in one plain sentence. */
-export function logicalReplicationGuidance(provider: DbProvider): string {
-  switch (provider) {
-    case 'neon':
-      return `enable logical replication in your Neon project settings — it can't be set over SQL`;
-    case 'supabase':
-      return `raise wal_level to logical in your Supabase project's database settings`;
-    case 'rds':
-      return `set rds.logical_replication = 1 in the instance's parameter group, then reboot`;
-    case 'generic':
-      return `run the ALTER SYSTEM above, then restart Postgres — wal_level is not reloadable`;
-  }
-}
-
-/** The cluster's current `wal_level`, or '' when it can't be read. `SHOW` is
- *  permitted for every role, so this works even where `ALTER SYSTEM` does not. */
-async function currentWalLevel(sql: postgres.Sql): Promise<string> {
-  try {
-    const rows = await sql.unsafe<{ wal_level: string }[]>(`SHOW wal_level`);
-    return rows[0]?.wal_level ?? '';
-  } catch {
-    return '';
-  }
 }
 
 /**
@@ -492,13 +179,10 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
 
   const adminUrl = args.url ?? readProjectAdminDatabaseUrl();
   if (!adminUrl) {
-    console.error(
-      pc.red('  No admin connection string.') +
-        pc.dim(
-          ` Pass ${pc.bold('--url <admin-conn>')} (or set ${pc.bold('DATABASE_URL')}) and re-run.`
-        )
+    throw new AbloValidationError(
+      'No admin connection string. Pass --url <admin-conn> (or set DATABASE_URL) and re-run.',
+      { code: 'cli_database_url_missing' }
     );
-    process.exit(1);
   }
   // Show which database we resolved, and how — the admin credential is used once
   // here and then discarded, so the operator should see exactly what it points at
@@ -517,13 +201,20 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // so we never provision roles we then can't hand to Ablo.
   const apiKey = resolveApiKey();
   if (!apiKey) {
-    console.error(
-      pc.red('  Not logged in.') +
-        pc.dim(
-          ` Run ${pc.bold('ablo login')} (or set ${pc.bold('ABLO_API_KEY')}) so Ablo knows which project to register this database for.`
-        )
+    // `ablo login` stores a MANAGEMENT credential; registering a database needs
+    // a DATA key for the active project and mode. Reporting "not logged in" when
+    // a login is sitting on disk sends the reader back through the browser to
+    // arrive exactly here again, which is the one instruction guaranteed not to
+    // work. Tell them which credential is missing, not that they have none.
+    const loggedIn = resolveManagementKey() !== undefined;
+    throw new AbloAuthenticationError(
+      loggedIn
+        ? `You are logged in, but this project has no data key for ${getMode()}.\n` +
+          'Logging in stores a management credential, which can administer the project but cannot register a database. Registering needs a key scoped to the plane the database will belong to.\n' +
+          "Start one with `npx ablo dev`, or set ABLO_API_KEY to that plane's key."
+        : 'Not logged in. Run `ablo login` (or set ABLO_API_KEY) so Ablo knows which project to register this database for.',
+      { code: 'cli_api_key_missing' }
     );
-    process.exit(1);
   }
 
   console.log(
@@ -538,8 +229,14 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // cannot run over the session it terminates, so registration fails at the end
   // of a flow that has already asked for a confirmation and written two roles.
   // The detector lives in this file and was, until now, never consulted here.
+  //
+  // Only a NAMED pooled endpoint stops the run. A port match is a convention,
+  // not a fact: a pooler is routinely moved off it and a Postgres routinely put
+  // on it, so refusing there would block a working database with a confident
+  // explanation and no way past. The hint is still worth saying out loud, since
+  // the failure it predicts arrives disguised as a wrong password.
   const pooledAdmin = detectPooler(adminUrl);
-  if (pooledAdmin) {
+  if (pooledAdmin?.confidence === 'host') {
     console.error(
       `  ${pc.yellow('!')} ${pc.bold(target)} is a connection pooler, not the database.\n`
     );
@@ -555,6 +252,95 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
         : `    Re-run against the direct database host, not the pooled one.\n`
     );
     process.exit(1);
+  }
+  if (pooledAdmin?.confidence === 'port') {
+    console.log(
+      `  ${pc.yellow('!')} Port ${pc.bold(new URL(adminUrl).port)} is the one a connection pooler usually answers on.\n` +
+        pc.dim(
+          `    Replication cannot run over a pooler, so if that is what this is, point ${pc.bold('--url')}\n` +
+            `    at the database itself. Carrying on, since a database can use this port too.\n`
+        )
+    );
+  }
+
+  // `--tables` scopes the publication; absent it, every table is published, as
+  // before. The schema is read for a different purpose: it names the tables Ablo
+  // COORDINATES, which is what the readiness check should judge.
+  //
+  // Narrowing the publication by default was tried and reverted. It fixed the
+  // right complaint — another tool's tables blocking a connect — by the wrong
+  // mechanism, and bought a permanent one: an explicit membership list has to
+  // track the schema forever, so every added model becomes a table that accepts
+  // writes and never confirms them until someone reconciles it. On a database
+  // with seventeen published tables and four declared models it also silently
+  // dropped thirteen from replication. The complaint was never caused by
+  // publishing those tables; it was caused by CHECKING them.
+  const tables = args.tables;
+  const coordinatedTables = (await schemaDeclaredTables()) ?? [];
+  if (args.tables.length === 0) {
+    console.log(
+      pc.dim(
+        `  publishing every table${coordinatedTables.length > 0 ? `; readiness judged on the ${coordinatedTables.length} your schema declares` : ''} ` +
+          `(${pc.bold('--tables')} to publish only some)\n`
+      )
+    );
+  }
+
+  // Which plane is this actually acting on? `push` has asked since it shipped;
+  // `connect` never has, so a key from an ambient `.env.local` could target a
+  // different project than the one selected and nothing said so. That silence
+  // is expensive here: a deregister aimed at the wrong plane reports "no data
+  // source" and reads as "nothing to disconnect", which sends the operator
+  // looking for a problem that is not there. Same reconciliation `push` uses.
+  const connectTarget = await resolveTarget({
+    url: apiBaseUrl(),
+    apiKey,
+    keySource: 'env',
+  }).catch(() => null);
+  const mismatch = connectTarget ? describeMismatches(connectTarget.mismatches) : null;
+  if (mismatch) {
+    console.log(`  ${pc.yellow('!')} ${mismatch}\n`);
+  }
+
+  // Is this database already streaming to another plane? The registration guard
+  // has always known, and only said so after a run had written two roles and a
+  // publication. Asking first turns that into a refusal with nothing touched.
+  const heldElsewhere = alreadyConnectedElsewhere(
+    await locateExistingConnection({ apiUrl: apiBaseUrl(), apiKey, connectionString: adminUrl })
+  );
+  if (heldElsewhere) {
+    console.error(`  ${pc.yellow('!')} ${heldElsewhere}\n`);
+    console.error(
+      pc.dim(`    Your database is untouched.\n`) +
+        `  To move it here, disconnect it there first with ${pc.cyan('ablo connect deregister')}.\n`
+    );
+    process.exit(1);
+  }
+
+  // Rotate re-keys before it registers, so a rotate that cannot register strands
+  // the database on a password Ablo never receives. Ask the control plane what
+  // THIS plane holds first: nothing to re-key means the registration is a first
+  // connect, and a first connect is what the one-database-one-branch rule
+  // declines. See rotateWithoutConnection.
+  if (rotating) {
+    const state = await fetchDataSourceState(apiBaseUrl(), apiKey).catch(
+      (): { kind: 'unknown'; detail: string } => ({ kind: 'unknown', detail: 'unreachable' })
+    );
+    const refusal = rotateWithoutConnection({
+      rotating,
+      planeHasConnection: state.kind === 'connected',
+      known: state.kind !== 'unknown',
+      // 401/403 is Ablo answering and declining the key, not a network failure.
+      keyRejected: state.kind === 'unknown' && /HTTP 40[13]/.test(state.detail),
+    });
+    if (refusal) {
+      console.error(`  ${pc.yellow('!')} ${refusal}\n`);
+      console.error(
+        pc.dim(`    Your database is untouched.\n`) +
+          `  Connect it instead:  ${pc.cyan('npx ablo connect apply')}\n`
+      );
+      process.exit(1);
+    }
   }
 
   // 1. Confirm the admin credential can actually create/alter roles.
@@ -572,8 +358,11 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   } catch (err) {
     await admin.end({ timeout: 2 }).catch(() => undefined);
     const pg = (err ?? {}) as PgErrorLike;
-    console.error(pc.red(`  Couldn't connect: ${pg.message ?? String(err)}`));
-    process.exit(1);
+    throw new AbloConnectionError(`Couldn't connect: ${pg.message ?? String(err)}`, {
+      code: 'cli_database_unreachable',
+      details: { target },
+      cause: err,
+    });
   }
   if (!capability || !(capability.rolsuper || capability.rolcreaterole)) {
     await admin.end({ timeout: 2 });
@@ -591,7 +380,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // inheritance itself, as the first stage of the plan, so the run proceeds with no
   // manual step. Only ownership it genuinely can't take over stops the run.
   const ledger = await ledgerBlocker(admin).catch(() => null);
-  const foreignTables = await publishedTableBlockers(admin, args.tables).catch(() => []);
+  const foreignTables = await publishedTableBlockers(admin, tables).catch(() => []);
   const { inheritGrants, unresolved } = ownershipRemediation(
     [...(ledger ? [ledger] : []), ...foreignTables],
     capability.rolname
@@ -635,16 +424,42 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   const existingPublication = await readPublicationState(admin).catch(
     (): PublicationState => ({ exists: false, allTables: false, tables: [] })
   );
-  const pubReconcile = reconcilePublicationPlan(existingPublication, args.tables);
+  const pubReconcile = reconcilePublicationPlan(existingPublication, tables);
 
-  // 2. Generate fresh role passwords and build the plan. Every stage is
-  // idempotent, so `rotate` runs the same plan: an existing role has only its
-  // password re-keyed.
+  // 1e. The last read before anything is written: are the scoped roles already
+  // here? `apply` creates roles and keeps an existing one's password, so it has
+  // no new password to give Ablo for a role it finds. See reapplyBlocker.
+  const role = args.role && args.role.length > 0 ? args.role : ABLO_REPLICATION_ROLE;
+  const writeRole = args.writeRole && args.writeRole.length > 0 ? args.writeRole : ABLO_WRITE_ROLE;
+  const blocker = reapplyBlocker({
+    rotating,
+    existingRoles: await presentRoles(admin, [role, writeRole]).catch(() => []),
+  });
+  if (blocker) {
+    await admin.end({ timeout: 2 });
+    console.log(
+      `  ${pc.yellow('!')} ${blocker.roles.map((r) => pc.bold(r)).join(' and ')} ${blocker.plural ? 'are' : 'is'} already set up here.\n`
+    );
+    console.log(
+      pc.dim(
+        `    Your database is untouched. ${pc.bold('connect apply')} keeps the password of a role it\n` +
+          `    finds, since another connection may still be using it, so this run has no new\n` +
+          `    password to give Ablo.\n`
+      )
+    );
+    console.log(
+      `  Issue fresh passwords and hand them to Ablo:  ${pc.cyan('npx ablo connect rotate')}\n`
+    );
+    process.exit(1);
+  }
+
+  // 2. Generate fresh role passwords and build the plan. `rotate` runs the same
+  // plan with one difference: an existing role has its password re-keyed.
   const replicationPassword = generateRolePassword();
   const writePassword = generateRolePassword();
   const buildPlan = (mode: PasswordMode): readonly ApplyStep[] =>
     connectApplyPlan({
-      tables: args.tables,
+      tables,
       role: args.role,
       writeRole: args.writeRole,
       rotate: rotating,
@@ -726,8 +541,6 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   await admin.end({ timeout: 2 });
 
   // 5. Build the scoped connection strings in memory — never written to disk.
-  const role = args.role && args.role.length > 0 ? args.role : ABLO_REPLICATION_ROLE;
-  const writeRole = args.writeRole && args.writeRole.length > 0 ? args.writeRole : ABLO_WRITE_ROLE;
   const replicationUrl = rewriteDatabaseUrl(adminUrl, role, replicationPassword);
   const writeUrl = rewriteDatabaseUrl(adminUrl, writeRole, writePassword);
   console.log(`\n  ${pc.green('✓')} Roles ${rotating ? 're-keyed' : 'created'}.\n`);
@@ -749,26 +562,64 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // 7. Prove it locally where we can. A machine that can't dial the host says
   // nothing about whether Ablo can — the server re-checks from its own network at
   // registration — so a local dial failure is a note, not a stop.
-  const verifier = postgres(replicationUrl, {
-    max: 1,
-    prepare: false,
-    connect_timeout: 10,
-    onnotice: () => {
-      // Swallow postgres NOTICE chatter — the readiness checklist reports its own findings.
-    },
-  });
-  let items: readonly CheckItem[] | null;
-  try {
-    items = await probeReadiness(verifier);
-  } catch {
-    items = null;
+  //
+  // BOTH roles are probed, because they fail independently and only one of them
+  // used to be looked at. The writer is the role the engine's write gate judges,
+  // and its least-privilege checklist is the one that catches a schema where
+  // PUBLIC still holds CREATE — a stock PostgreSQL 14 or earlier, where the
+  // recipe deliberately leaves schema-level CREATE alone. Verifying only the
+  // replication role meant apply reported a connected database whose every write
+  // the engine would then refuse, with the refusal arriving later from Ablo's
+  // network as a permission error against a role apply had just created.
+  const replicationProbe = await probeAsRole(replicationUrl, (sql) =>
+    probeReadiness(sql, { coordinatedTables })
+  );
+  const writeProbe = await probeAsRole(writeUrl, probeDirectWriteReadiness);
+
+  // A refused credential is the one dial failure that says nothing about the
+  // network: the database answered, and turned down the very password about to
+  // be registered. Reported as "couldn't verify from here" it would arrive again
+  // from Ablo's network, where the same words read as an unreachable host and
+  // send the reader to look at firewalls. Name it here instead, while the cause
+  // is still local. A rotate carries on regardless: it has already re-keyed, so
+  // registration is what keeps Ablo's copy in step.
+  const refused = [
+    ...(replicationProbe.credentialRefused ? [role] : []),
+    ...(writeProbe.credentialRefused ? [writeRole] : []),
+  ];
+  if (refused.length > 0 && !rotating) {
+    console.log(
+      `\n  ${pc.yellow('!')} ${refused.map((r) => pc.bold(r)).join(' and ')} did not take the password from this run.\n`
+    );
+    console.log(
+      pc.dim(
+        `    Your database answered, so this is about the password, not the network,\n` +
+          `    and nothing was registered with Ablo.\n`
+      )
+    );
+    console.log(
+      `  Issue fresh passwords and hand them to Ablo:  ${pc.cyan('npx ablo connect rotate')}\n`
+    );
+    process.exit(1);
+  }
+  if (replicationProbe.items === null || writeProbe.items === null) {
     console.log(pc.dim(`  Couldn't verify from here; Ablo will validate from its own network.\n`));
   }
-  await verifier.end({ timeout: 2 }).catch(() => undefined);
 
-  const failed = items?.filter((i) => !i.ok) ?? [];
+  const items = [...(replicationProbe.items ?? []), ...(writeProbe.items ?? [])];
+  const failed = items.filter((i) => !i.ok);
   if (failed.length > 0) {
-    for (const item of failed) console.log(`  ${pc.yellow('!')} ${item.label}`);
+    // With the fix, not just the finding. These checklists carry the exact
+    // statement that resolves each one (the schema-CREATE item carries the
+    // `REVOKE CREATE ON SCHEMA … FROM PUBLIC` the recipe leaves to the
+    // operator), and a finding whose remedy is withheld sends the reader
+    // back to the docs for something already in hand.
+    for (const item of failed) {
+      console.log(`  ${pc.yellow('!')} ${item.label}`);
+      if (item.fix) {
+        for (const line of item.fix.split('\n')) console.log(pc.dim(`      ${line}`));
+      }
+    }
     if (!rotating) {
       console.log(`\n  ${pc.dim('Resolve, then re-run')}  ${pc.cyan(`npx ablo ${verb}`)}\n`);
       process.exit(1);

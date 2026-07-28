@@ -76,6 +76,15 @@ export interface ConflictEvent {
     id: string;
     fields: readonly string[];
     writtenBy?: ParticipantKind;
+    /**
+     * The group premise this row breached, when the conflict was found at group
+     * grain. `model`/`id` stay the row that actually moved, so a log line can
+     * say which row moved AND which premise it broke — the two used to be the
+     * same field, and a group conflict logged its group key as the row.
+     */
+    group?: string;
+    /** How the row reached `group` — `self`, `parent`, or `transitive`. */
+    via?: string;
   }[];
 }
 

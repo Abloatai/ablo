@@ -24,7 +24,7 @@ import { brand } from './theme';
 import { ADMIN_URL_VAR, readProjectAdminDatabaseUrl } from './dbRole';
 import { resolveEffectiveApiKey } from './config';
 import { fetchDataSourceState } from './readiness';
-import { apiBaseUrl } from './push';
+import { apiBaseUrl } from './controlPlane';
 
 const DEFAULT_SCHEMA_PATH = 'ablo/schema.ts';
 const DEFAULT_EXPORT = 'schema';

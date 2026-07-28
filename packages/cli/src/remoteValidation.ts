@@ -8,9 +8,21 @@
  * behind a VPN can be perfectly replicable while every local dial fails. When
  * the local probe fails to CONNECT (as opposed to connecting and finding
  * readiness problems), `--check` asks the engine to dial from its own network
- * via `POST /api/v1/datasources/validate`, and `--register` proceeds and lets
+ * via `POST /v1/datasources/validate`, and `--register` proceeds and lets
  * the registration preflight decide — both render the same checklist.
+ *
+ * The request itself goes through the control-plane boundary; this module
+ * owns what is left once the transport is shared: classifying LOCAL dial
+ * failures, and turning the engine's readiness items into plain language.
  */
+
+import {
+  datasourceValidationResponseSchema,
+  isReadinessItem,
+  type ReadinessFailure,
+  type ReadinessItem,
+} from '@abloatai/transaction/wire';
+import { tryControlPlane, type ControlPlaneFetch } from './controlPlane';
 
 /**
  * Error codes that mean "this machine could not reach the host" — DNS misses,
@@ -62,21 +74,12 @@ export function dialFailureReason(err: unknown): string | null {
 }
 
 /**
- * The validate-only endpoint for a given API base URL — mounted under `/api`
- * exactly like registration (see {@link registerEndpoint} in connect.ts).
+ * One failing readiness invariant, as the engine reports it over the wire —
+ * the wire contract's own type, never restated here.
  */
-export function validateEndpoint(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, '')}/api/v1/datasources/validate`;
-}
+export type RemoteReadinessFailure = ReadinessFailure;
 
-/** One failing readiness invariant, as the engine reports it over the wire. */
-export interface RemoteReadinessFailure {
-  readonly item: string;
-  readonly actual?: string;
-  readonly fix: string;
-}
-
-/** The engine's answer, or the HTTP failure that prevented one. */
+/** The engine's answer, or the typed failure that prevented one. */
 export type RemoteValidation =
   | {
       readonly ok: true;
@@ -88,112 +91,61 @@ export type RemoteValidation =
     }
   | { readonly ok: false; readonly status: number; readonly code?: string; readonly message: string };
 
+/** The observed value, parenthesized — only for items where it names the
+ *  user's own objects (their tables, their Postgres version), never for a
+ *  raw internal value like `wal_level = replica`. */
+const withActual = (label: string, actual: string | undefined): string =>
+  actual ? `${label} (${actual})` : label;
+
 /**
- * Render a wire failure as a checklist line — the same labels the local
- * `--check` prints, so the two paths read identically.
+ * Plain-language labels, one per vocabulary item: name the problem by what it
+ * means for the user, not by the Postgres internal (wal_level, publication,
+ * REPLICATION attribute…). The `fix` string carries the exact how; the label
+ * just says what's not ready yet.
+ *
+ * Typed against {@link ReadinessItem} so it is total by construction: adding
+ * an item to the wire vocabulary stops this compiling until the new item can
+ * be explained in plain words. The alternative — a switch with a fallback —
+ * is what let `server_version` reach readers as its raw internal name.
+ */
+const READINESS_LABELS: Readonly<Record<ReadinessItem, (f: RemoteReadinessFailure) => string>> = {
+  server_version: (f) =>
+    withActual(`your database's Postgres version is too old to share changes with Ablo`, f.actual),
+  wal_level: () => `your database isn't set up to share changes as they happen yet`,
+  publication: () => `none of your tables are shared with Ablo yet`,
+  replication_role: () => `the login Ablo reads with can't follow your changes yet`,
+  replica_identity: (f) =>
+    withActual(`some shared tables don't record enough for Ablo to track edits and deletes`, f.actual),
+  table_select: (f) => withActual(`the login Ablo reads with can't read some shared tables`, f.actual),
+  write_role: () => `the login Ablo writes with isn't set up yet`,
+  row_security: () => `the writer login isn't set to honor your row-level security`,
+  database_privileges: () => `the writer login can still create things in your database`,
+  schema_privileges: () => `the writer login has broader access than it should`,
+  table_ownership: (f) => withActual(`the writer login owns tables it should only write to`, f.actual),
+  idempotency_ledger: () => `Ablo's write-safety record is missing or misconfigured`,
+  table_privileges: (f) => withActual(`the writer login can't write to your tables yet`, f.actual),
+  logical_marker: () => `the writer login can't send the signal Ablo uses to confirm a write landed`,
+  // The tables you pushed but didn't share. A write to one of these would
+  // land in your database and never confirm — the failure this names.
+  publication_drift: (f) => withActual(`some tables in your schema aren't shared with Ablo`, f.actual),
+};
+
+/**
+ * Render a wire failure as a checklist line — the ONE rendering of the
+ * readiness checklist, used by `connect check`, registration refusals, and
+ * every other surface that shows these items, so the same failure never reads
+ * two ways. An item newer than this build passes through by name rather than
+ * failing: the vocabulary is closed for producers, open for readers.
  */
 export function describeRemoteFailure(failure: RemoteReadinessFailure): {
   readonly label: string;
   readonly fix: string;
 } {
-  // Plain-language labels: name the problem by what it means for the user, not by
-  // the Postgres internal (wal_level, publication, REPLICATION attribute…). The
-  // `fix` string carries the exact how; the label just says what's not ready yet.
-  switch (failure.item) {
-    case 'wal_level':
-      return { label: `your database isn't set up to share changes as they happen yet`, fix: failure.fix };
-    case 'publication':
-      return { label: `none of your tables are shared with Ablo yet`, fix: failure.fix };
-    case 'replication_role':
-      return { label: `the login Ablo reads with can't follow your changes yet`, fix: failure.fix };
-    case 'replica_identity':
-      return {
-        label: `some shared tables don't record enough for Ablo to track edits and deletes`,
-        fix: failure.fix,
-      };
-    case 'table_select':
-      return {
-        label: `the login Ablo reads with can't read some shared tables`,
-        fix: failure.fix,
-      };
-    case 'write_role':
-      return { label: `the login Ablo writes with isn't set up yet`, fix: failure.fix };
-    case 'row_security':
-      return { label: `the writer login isn't set to honor your row-level security`, fix: failure.fix };
-    case 'database_privileges':
-      return {
-        label: `the writer login can still create things in your database`,
-        fix: failure.fix,
-      };
-    case 'schema_privileges':
-      return { label: `the writer login has broader access than it should`, fix: failure.fix };
-    case 'table_ownership':
-      return { label: `the writer login owns tables it should only write to`, fix: failure.fix };
-    case 'idempotency_ledger':
-      return { label: `Ablo's write-safety record is missing or misconfigured`, fix: failure.fix };
-    case 'table_privileges':
-      return { label: `the writer login can't write to your tables yet`, fix: failure.fix };
-    case 'logical_marker':
-      return {
-        label: `the writer login can't send the signal Ablo uses to confirm a write landed`,
-        fix: failure.fix,
-      };
-    case 'publication_drift':
-      return {
-        // The tables you pushed but didn't share. A write to one of these would
-        // land in your database and never confirm — the failure this names.
-        label: `some tables in your schema aren't shared with Ablo${failure.actual ? ` (${failure.actual})` : ''}`,
-        fix: failure.fix,
-      };
-    default:
-      return { label: failure.item, fix: failure.fix };
-  }
+  const label = isReadinessItem(failure.item)
+    ? READINESS_LABELS[failure.item](failure)
+    : failure.item;
+  return { label, fix: failure.fix };
 }
-
-/** The wire shapes, parsed defensively — a lying server never crashes the CLI. */
-interface ValidationWireBody {
-  object?: unknown;
-  reachable?: unknown;
-  ready?: unknown;
-  reason?: unknown;
-  failures?: unknown;
-  code?: unknown;
-  message?: unknown;
-  error?: { code?: unknown; message?: unknown };
-}
-
-function parseWireFailures(value: unknown): readonly RemoteReadinessFailure[] {
-  if (!Array.isArray(value)) return [];
-  const failures: RemoteReadinessFailure[] = [];
-  for (const entry of value) {
-    if (entry === null || typeof entry !== 'object') continue;
-    const { item, actual, fix } = entry as { item?: unknown; actual?: unknown; fix?: unknown };
-    if (typeof item !== 'string' || typeof fix !== 'string') continue;
-    failures.push({ item, fix, ...(typeof actual === 'string' ? { actual } : {}) });
-  }
-  return failures;
-}
-
-/** The slice of a fetch response the validation client reads. */
-export interface ValidationHttpResponse {
-  readonly ok: boolean;
-  readonly status: number;
-  json(): Promise<unknown>;
-}
-
-/**
- * The slice of `fetch` the validation client needs — global fetch satisfies it
- * structurally, and tests inject a plain-object fake without needing the
- * runtime's `Response`/`Headers` globals.
- */
-export type ValidationFetch = (
-  url: string,
-  init: {
-    readonly method: 'POST';
-    readonly headers: Record<string, string>;
-    readonly body: string;
-  },
-) => Promise<ValidationHttpResponse>;
 
 /**
  * Ask the engine to report replication readiness from its own network — the
@@ -201,7 +153,8 @@ export type ValidationFetch = (
  * validates the source it already holds for the caller's plane, so the check
  * needs only the API key; with one, it dials that specific string (the
  * pre-registration probe). Never throws: network and HTTP failures come back as
- * `{ ok: false }` so the caller renders one consistent message.
+ * `{ ok: false }` with the typed error's code and message, so the caller
+ * renders one consistent message and can still branch on the code.
  */
 export async function requestRemoteValidation(input: {
   readonly apiUrl: string;
@@ -211,52 +164,36 @@ export async function requestRemoteValidation(input: {
   /** Separate scoped DML credential; when present the engine validates both legs. */
   readonly writeConnectionString?: string;
   /** Injectable for tests; defaults to global fetch. */
-  readonly fetchImpl?: ValidationFetch;
+  readonly fetchImpl?: ControlPlaneFetch;
 }): Promise<RemoteValidation> {
-  const doFetch: ValidationFetch = input.fetchImpl ?? fetch;
-  let res: ValidationHttpResponse;
-  try {
-    res = await doFetch(validateEndpoint(input.apiUrl), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${input.apiKey}` },
-      body: JSON.stringify({
-        ...(input.connectionString ? { connectionString: input.connectionString } : {}),
-        ...(input.writeConnectionString
-          ? { writeConnectionString: input.writeConnectionString }
-          : {}),
-      }),
-    });
-  } catch (err) {
+  const result = await tryControlPlane({
+    path: '/v1/datasources/validate',
+    method: 'POST',
+    baseUrl: input.apiUrl,
+    apiKey: input.apiKey,
+    body: {
+      ...(input.connectionString ? { connectionString: input.connectionString } : {}),
+      ...(input.writeConnectionString
+        ? { writeConnectionString: input.writeConnectionString }
+        : {}),
+    },
+    responseSchema: datasourceValidationResponseSchema,
+    ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
+  });
+  if (!result.ok) {
     return {
       ok: false,
-      status: 0,
-      message: `couldn't reach ${input.apiUrl}: ${err instanceof Error ? err.message : String(err)}`,
+      status: result.error.httpStatus ?? 0,
+      message: result.error.message,
+      ...(result.error.code !== undefined ? { code: result.error.code } : {}),
     };
   }
-
-  const body = (await res.json().catch(() => ({}))) as ValidationWireBody;
-  if (!res.ok) {
-    const code = typeof body.code === 'string' ? body.code : body.error?.code;
-    const message =
-      typeof body.message === 'string'
-        ? body.message
-        : typeof body.error?.message === 'string'
-          ? body.error.message
-          : `HTTP ${res.status}`;
-    return {
-      ok: false,
-      status: res.status,
-      message,
-      ...(typeof code === 'string' ? { code } : {}),
-    };
-  }
-
-  const reachable = body.reachable === true;
+  const verdict = result.value;
   return {
     ok: true,
-    reachable,
-    ready: body.ready === true,
-    ...(typeof body.reason === 'string' ? { reason: body.reason } : {}),
-    failures: parseWireFailures(body.failures),
+    reachable: verdict.reachable,
+    ready: verdict.ready,
+    ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}),
+    failures: verdict.failures,
   };
 }

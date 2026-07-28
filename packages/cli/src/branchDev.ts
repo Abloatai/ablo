@@ -15,7 +15,7 @@ import { AbloValidationError } from '@abloatai/transaction/errors';
 import { ensureBranchCredential } from './branches';
 import { resolveManagementKey } from './config';
 import { dev, type DevRuntimeOptions } from './dev';
-import { DEFAULT_URL } from './push';
+import { DEFAULT_URL } from './controlPlane';
 
 export const BRANCH_DEV_USAGE = `Usage:
   ablo dev [--branch <slug>] [--branch-ttl-hours <1-168>]

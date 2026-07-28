@@ -1812,6 +1812,7 @@ export class SyncClient extends EventEmitter {
     return this.mutationQueue.confirmationFor(modelName, modelId);
   }
 
+
   /**
    * Get detailed debug info for the sync debug page
    */
@@ -1950,7 +1951,13 @@ export class SyncClient extends EventEmitter {
 
       switch (action) {
         case 'add': {
-          const existing = this.objectPool.get(modelId);
+          // `peek`, not `get`: this loop is ingestion, not a consumer read.
+          // `get()` activates deferred MobX instrumentation, so reading
+          // through it here made the delta stream itself instrument every
+          // row it touched — the dominant term of apply cost for rows no
+          // consumer observes. Activation belongs to the consumer-facing
+          // reads (`get`, views, subscribers), which are unchanged.
+          const existing = this.objectPool.peek(modelId);
           if (existing) {
             existing.markAsSynced();
           } else if (result.data) {
@@ -1963,7 +1970,7 @@ export class SyncClient extends EventEmitter {
           break;
         }
         case 'update': {
-          const existing = this.objectPool.get(modelId);
+          const existing = this.objectPool.peek(modelId);
           if (existing && !existing.disposed && result.data) {
             enrichRelations(modelName, result.data);
             const resolved = this.resolveConflicts(existing, result.data);

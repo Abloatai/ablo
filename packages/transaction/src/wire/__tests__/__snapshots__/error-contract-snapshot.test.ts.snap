@@ -15,6 +15,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "api_unreachable": {
+      "category": "transport",
+      "httpStatus": null,
+      "retryable": false,
+      "surface": "client",
+    },
     "apikey_expired": {
       "category": "auth",
       "httpStatus": 401,
@@ -218,6 +224,24 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "httpStatus": 409,
       "retryable": true,
       "surface": "wire",
+    },
+    "cli_api_key_missing": {
+      "category": "auth",
+      "httpStatus": null,
+      "retryable": false,
+      "surface": "client",
+    },
+    "cli_database_unreachable": {
+      "category": "transport",
+      "httpStatus": null,
+      "retryable": false,
+      "surface": "client",
+    },
+    "cli_database_url_missing": {
+      "category": "validation",
+      "httpStatus": null,
+      "retryable": false,
+      "surface": "client",
     },
     "cli_invalid_arguments": {
       "category": "validation",
@@ -1163,6 +1187,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
     },
     "required_field_added": {
       "category": "schema",
+      "httpStatus": null,
+      "retryable": false,
+      "surface": "client",
+    },
+    "response_unrecognized": {
+      "category": "transport",
       "httpStatus": null,
       "retryable": false,
       "surface": "client",

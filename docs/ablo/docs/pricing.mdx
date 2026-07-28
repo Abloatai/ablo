@@ -1,0 +1,94 @@
+---
+title: "Pricing"
+description: "A monthly floor, and metered sync operations charged against it. Generated from the pricing contract, so every number here is the one the invoice uses."
+sidebar:
+  icon: receipt
+---
+
+Pricing version: `2026-07-27`.
+
+You pay a monthly floor, or your metered usage, whichever is greater. Usage is charged **against** the floor rather than added to it, so an organization on Scale that sends nothing pays the floor, and one that sends four times the floor pays four times the floor. There is no separate subscription line.
+
+## Tiers
+
+| | Monthly | Operations included | Per day | Connections | Storage |
+| --- | --- | --- | --- | --- | --- |
+| **Free** | $0 | 1M | 100K | 25 | 1 GiB |
+| **Scale** | $99 | 49.5M | No limit | 1,000 | 50 GiB |
+| **Enterprise** | From $2,000 | Committed | No limit | Committed | Committed |
+
+**Free.** Build against the real engine without a card.
+
+**Scale.** Production traffic, metered above a monthly floor.
+
+**Enterprise.** Committed volume, private networking, and an uptime guarantee.
+
+On Free, 1M operations is a hard stop: requests past it are refused rather than billed, so there is no way to run up a bill without a card. On every paid tier the figure is what the floor already covers at the rate card below, and operations past it are metered.
+
+The daily figure on Free is a burst guard rather than an allowance. A month of operations is roughly ten minutes of one agent running flat out, so without it a single runaway loop could spend the month in an afternoon. Paid tiers have no daily limit, because they are metered rather than stopped.
+
+| Included | Free | Scale | Enterprise |
+| --- | --- | --- | --- |
+| Single sign-on | No | No | Yes |
+| Audit log export | No | Yes | Yes |
+| Customer-managed encryption keys | No | No | Yes |
+| Private networking | No | No | Yes |
+| Custom limits | No | No | Yes |
+
+## What counts as an operation
+
+One number covers everything the engine does on your behalf.
+
+| Meter | Counts |
+| --- | --- |
+| commit operations | One per operation inside a commit. A commit that writes 500 rows counts 500. |
+| model reads | One per read request served by the engine. |
+| claim creates | One per claim taken. Releasing a claim is free. |
+
+A commit counts the same whether it arrived over HTTP or over the WebSocket. The transport is not part of the price.
+
+Three rules decide whether a request is counted at all:
+
+1. Only successful requests count. A rejected or failed request is never metered.
+2. A retry with the same `Idempotency-Key` counts once. The key the SDK puts on a commit is the same key the meter deduplicates on.
+3. Reads a client answers from its own local copy never reach the engine, so they never count.
+
+## Rate card
+
+Rates are marginal. Crossing a band reprices the operations above it and leaves the ones below it alone.
+
+| Monthly operations | Per million |
+| --- | --- |
+| First 50M | $2.00 |
+| 50M to 500M | $1.20 |
+| Above 500M | $0.60 |
+
+## What a month costs
+
+| Monthly operations | Scale |
+| --- | --- |
+| 1M | $99 |
+| 50M | $100 |
+| 500M | $640 |
+| 1B | $940 |
+
+Enterprise is priced in the contract, starting at $2,000 a month, with committed volume, limits, and an uptime guarantee.
+
+## Quoted but not billed
+
+Storage is a ceiling on each tier, not a meter. Concurrent connections are a cap, not a meter: a held socket is a reservation, so it is bounded rather than charged for. Neither appears on an invoice.
+
+## Watching usage
+
+Every metered response carries its own accounting, so you can see the position without opening a dashboard.
+
+```http
+X-Usage-Limit: 50000000
+X-Usage-Used: 12480311
+X-Usage-Remaining: 37519689
+X-Usage-Reset: 2026-08-01T00:00:00.000Z
+```
+
+Ablo emails the organization at 80 percent of a limit and again when it is reached. Past the limit the engine returns [`quota_exceeded`](/errors#quota_exceeded), and past the connection cap [`connection_limit_exceeded`](/errors#connection_limit_exceeded). Both are retryable, once the period rolls over, the limit is raised, or other connections drain.
+
+Requests authenticated by a browser session are never counted against a quota. Only API key traffic is metered and gated.

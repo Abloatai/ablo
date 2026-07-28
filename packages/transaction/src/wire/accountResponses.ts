@@ -19,6 +19,9 @@ import { z } from 'zod';
 // response exists to stop withholding.
 import { fieldMetaSchema, relationMetaSchema } from './modelShape.js';
 import { onStaleModeSchema } from '../coordination/schema.js';
+// The price's own vocabulary. A dashboard that restated the tier names or the
+// meter set would be a second definition of what the invoice is computed from.
+import { meterEventSchema, planTierSchema, rateBracketSchema } from './pricing.js';
 import type { SyncDeltaAction } from './delta.js';
 import { deltaSchema } from './delta.js';
 // Kept for the {@link ListEnvelope} references below; `GET /v1/logs`'s own
@@ -325,3 +328,76 @@ export const usageReportResponseSchema = z.object({
   data_freshness_seconds: z.number(),
 });
 export type UsageReportResponse = z.infer<typeof usageReportResponseSchema>;
+
+/**
+ * One meter's month-to-date usage, as a management surface shows it.
+ *
+ * `eventName` is the pricing contract's closed set rather than a free string,
+ * so a surface cannot render a meter the price does not recognise. `billable`
+ * says whether the meter reaches an invoice at all: bootstraps are recorded and
+ * gated but never charged, and a usage table that does not say so reads as a
+ * bill nobody sent.
+ */
+export const meterUsageSchema = z.object({
+  eventName: meterEventSchema,
+  displayName: z.string(),
+  /** Operations counted this period. */
+  total: z.number(),
+  /** Requests behind that total. A commit of 500 operations counts once here. */
+  count: z.number(),
+  /** The plan's monthly allowance for this meter; null where it is ungated. */
+  monthlyMax: z.number().nullable(),
+  billable: z.boolean(),
+});
+export type MeterUsage = z.infer<typeof meterUsageSchema>;
+
+/**
+ * What the period costs, computed once by the server from the pricing contract.
+ *
+ * The client renders these rather than recomputing them. A dashboard that does
+ * its own arithmetic is a second implementation of the price, and the one a
+ * customer reads before they are billed, so it is the copy that has to be
+ * right and the one nothing checks.
+ */
+export const billingSummarySchema = z.object({
+  tier: planTierSchema,
+  /** The tier as it reads on the pricing page. */
+  label: z.string(),
+  /** The monthly floor in USD; null where terms are contractual. */
+  monthlyMinimumUsd: z.number().nullable(),
+  /** Operations the floor already covers, or the hard cap on a capped tier. */
+  includedOps: z.number().nullable(),
+  /** Where the tier stops rather than bills; null on every metered tier. */
+  hardCapOps: z.number().nullable(),
+  /** The daily burst guard; null on every metered tier. */
+  dailyCapOps: z.number().nullable(),
+  /** Every billable meter, collapsed into the one number the price uses. */
+  opsUsed: z.number(),
+  /** The floor or the metered usage, whichever is greater. null = contract. */
+  projectedBillUsd: z.number().nullable(),
+  /** True where the published card is a starting point, not the terms. */
+  contractPriced: z.boolean(),
+  /**
+   * The rate card in force, so a surface can show what the next operation
+   * costs without shipping a copy of the price to the browser.
+   */
+  rateCard: z.array(rateBracketSchema).readonly(),
+});
+export type BillingSummary = z.infer<typeof billingSummarySchema>;
+
+/**
+ * `GET /v1/dashboard/usage-summary` — month-to-date usage and what it costs.
+ *
+ * Distinct from {@link usageReportResponseSchema}, which answers the public
+ * `GET /v1/usage` with daily buckets for a caller doing its own analysis. This
+ * one answers the question a person opens a dashboard to ask: what have I used,
+ * and what will it cost.
+ */
+export const usageSummaryResponseSchema = z.object({
+  plan: planTierSchema,
+  /** Start of the billing period the numbers cover, ISO-8601. */
+  periodStart: z.string(),
+  meters: z.array(meterUsageSchema).readonly(),
+  billing: billingSummarySchema,
+});
+export type UsageSummaryResponse = z.infer<typeof usageSummaryResponseSchema>;

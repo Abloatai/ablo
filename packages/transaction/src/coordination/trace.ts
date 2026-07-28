@@ -50,7 +50,15 @@ export function formatClaim(e: ClaimEvent): string {
 
 /** A notify-instead-of-abort stale write as one readable line. */
 export function formatConflict(e: ConflictEvent): string {
-  const rows = e.rows.map((r) => `${r.model}/${r.id}(${r.fields.join(',')})`).join(', ');
+  const rows = e.rows
+    .map((r) => {
+      // A group conflict reads as "which row moved, and which premise it broke",
+      // because those are two different things and the reader needs both to know
+      // whether to re-read one row or the whole group.
+      const premise = r.group ? ` ${r.via ? `${r.via} → ` : '→ '}${r.group}` : '';
+      return `${r.model}/${r.id}(${r.fields.join(',')})${premise}`;
+    })
+    .join(', ');
   return `conflict: tx ${e.clientTxId} — ${e.rows.length} row(s) changed underneath${rows ? `: ${rows}` : ''}`;
 }
 

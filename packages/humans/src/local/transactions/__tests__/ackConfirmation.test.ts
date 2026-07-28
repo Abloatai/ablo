@@ -70,11 +70,10 @@ class MemoryDurableWrites implements DurableWriteStore {
 function staleNotification(id: string): StaleNotification {
   return {
     object: 'stale_notification',
-    model: 'task',
-    id,
+    scope: 'row',
+    target: { model: 'task', id, fields: ['title'] },
     readAt: 1,
     observedSyncId: 2,
-    conflictingFields: ['title'],
     currentValues: { title: 'newer' },
     writtenBy: { kind: 'user', id: 'user-2' },
   };

@@ -72,6 +72,55 @@ describe('renderCliError', () => {
   });
 });
 
+describe('renderCliError — machine mode (--json / ABLO_JSON=1)', () => {
+  function captureJson(err: unknown): string {
+    const prev = process.exitCode;
+    const lines: string[] = [];
+    renderCliError(err, { write: (l) => lines.push(l), json: true });
+    process.exitCode = prev;
+    return lines.join('\n');
+  }
+
+  it('emits the canonical error envelope as one parseable line — the shape the API serves', () => {
+    const out = captureJson(
+      new AbloError('Your API key is invalid.', {
+        code: 'apikey_invalid',
+        httpStatus: 401,
+        requestId: 'req_abc123',
+        details: { retryAfterSeconds: 5 },
+      })
+    );
+    expect(out.split('\n')).toHaveLength(1);
+    const body = JSON.parse(out) as Record<string, unknown>;
+    // The fields an agent branches on, structured — nothing to scrape from
+    // colored text. Details spread flat, matching AbloError.toJSON.
+    expect(body).toMatchObject({
+      type: 'AbloError',
+      code: 'apikey_invalid',
+      message: 'Your API key is invalid.',
+      doc_url: 'https://docs.abloatai.com/errors#apikey_invalid',
+      request_id: 'req_abc123',
+      retryAfterSeconds: 5,
+    });
+  });
+
+  it('coerces a plain throw into the same envelope, keeping its message', () => {
+    const body = JSON.parse(captureJson(new Error('something broke'))) as Record<string, unknown>;
+    expect(body.message).toBe('something broke');
+    expect(typeof body.type).toBe('string');
+  });
+
+  it('sets process.exitCode = 1 in machine mode too', () => {
+    const prev = process.exitCode;
+    renderCliError(new AbloError('boom', { code: 'apikey_invalid' }), {
+      write: () => {},
+      json: true,
+    });
+    expect(process.exitCode).toBe(1);
+    process.exitCode = prev;
+  });
+});
+
 describe('AbloError.toString()', () => {
   it('is a single leak-proof line: name [code]: message (see docs) [request_id]', () => {
     const err = new AbloError('Your API key is invalid.', {

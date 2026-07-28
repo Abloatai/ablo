@@ -159,11 +159,11 @@ describe('WS transport observability wiring', () => {
       ops: 1,
       notifications: [
         {
-          model: 'documents',
-          id: 'doc-main',
+          object: 'stale_notification',
+          scope: 'row',
+          target: { model: 'documents', id: 'doc-main', fields: ['content'] },
           readAt: 1,
           observedSyncId: 42,
-          conflictingFields: ['content'],
           currentValues: { content: {} },
           writtenBy: { kind: 'user', id: 'u1' },
         },

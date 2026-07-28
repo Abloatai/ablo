@@ -1036,11 +1036,10 @@ describe('stateless HTTP commit outbox', () => {
   it('returns stale notifications from an HTTP commit receipt', async () => {
     const notification = {
       object: 'stale_notification' as const,
-      model: 'tasks',
-      id: 'a',
+      scope: 'row' as const,
+      target: { model: 'tasks', id: 'a', fields: ['title'] },
       readAt: 41,
       observedSyncId: 42,
-      conflictingFields: ['title'],
       currentValues: { title: 'newer' },
       writtenBy: { kind: 'user' as const, id: 'user-2' },
     };

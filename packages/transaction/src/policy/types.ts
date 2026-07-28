@@ -107,8 +107,16 @@ export type ConflictDecision =
    *
    * The monotonic `sync_id` landing order decides who yields: the stale
    * committer always recomputes against the newer value, an asymmetry that
-   * prevents two notifying writers from looping against each other. Retries are
-   * bounded by the client's reconciliation retry cap.
+   * prevents two notifying writers from looping against each other.
+   *
+   * That rules out livelock, and NOT starvation. Each round adopts a newer
+   * `observedSyncId`, so no baseline repeats — but a peer writing faster than
+   * the committer's read→decide→write gap keeps winning, and the rounds are
+   * unbounded because the engine does not re-issue: the actor does. Progress in
+   * the watermark is not progress in the work. The functional `update(id, fn)`
+   * bounds its own loop; a hand-rolled one must bound itself. To stop an actor
+   * writing at all while a belief it holds is stale, gate the belief —
+   * `track(..., { onStale: 'reject' })` — rather than the write.
    */
   | { readonly action: 'notify'; readonly reason?: string };
 

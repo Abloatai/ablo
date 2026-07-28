@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.40.0
+
+### The price is a contract, and the pricing page derives from it
+
+Ablo's pricing now lives in one module: the tiers, the rate card, and the
+arithmetic that turns a month of usage into a bill. Each tier has a monthly
+floor, and metered usage is charged against that floor rather than added to
+it, so an organization pays the greater of the two and never both. Commits,
+reads, and claim creates roll into one metered axis. Concurrent connections
+are a capacity reservation, so they are capped rather than billed.
+
+The published pricing page is generated from the same contract the meter
+charges against, and a CI gate fails any change that would let the page and
+the invoice disagree. The dashboard gains a billing page that shows the
+period's usage and what it costs.
+
+### Tracks that refuse to write on a stale belief
+
+A durable track can now carry `onStale: 'reject'`. The tracker's next commit
+is refused until it has observed the change it was tracking, so an agent
+cannot write on the basis of a row it has been shown to be stale. The default
+stays `notify`, which reports the movement on the receipt and lets the commit
+through. Group premises now name the concrete row that moved rather than the
+group alone, so reconciliation starts from the exact conflict instead of a
+re-read of everything the group covers.
+
+### A CLI that fails in plain language
+
+Every command that talks to Ablo's control plane goes through one typed HTTP
+client. Failures arrive as named `cli_` error codes with plain-language
+messages: a missing API key says how to log in, a missing connection string
+says where the CLI looked, an unreachable database says what refused the
+dial. Setting `ABLO_JSON=1` switches command output to a machine-readable
+form for agents and scripts.
+
 ## 0.39.0
 
 ### Schema-relative session grants

@@ -17,7 +17,7 @@
 
 import pc from 'picocolors';
 import { brand } from './theme';
-import { apiBaseUrl } from './push';
+import { apiBaseUrl } from './controlPlane';
 import { resolveEffectiveApiKey, getActiveProject } from './config';
 import { resolveTarget } from './target';
 import {

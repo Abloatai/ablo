@@ -14,36 +14,43 @@
  * opinion.
  */
 
+import {
+  datasourceListResponseSchema,
+  schemaReadResponseSchema,
+  type DatasourceSummary,
+  type SchemaModelResponse,
+  type SchemaReadResponse,
+} from '@abloatai/transaction/wire';
 import { loadSchema, DEFAULT_SCHEMA_PATH, DEFAULT_EXPORT } from './push';
-import { detectPooler } from './connectApply';
+import { detectPooler } from './dbProvider';
 import { requestRemoteValidation, type RemoteValidation } from './remoteValidation';
 import { schemaHash } from '@abloatai/transaction/schema';
 
-/** A model as the server reports it active for this key — pairing the schema key
- *  your local code addresses with the wire typename the engine routes on. */
-export interface PushedModel {
-  key: string;
-  typename: string;
-  conflict: { user?: string; agent?: string; system?: string } | null;
-}
+/** A model as the server reports it active for this key — the wire contract's
+ *  own type, never restated here. */
+export type PushedModel = SchemaModelResponse;
 
-export interface PushedSchema {
+type ActiveSchemaRead = Extract<SchemaReadResponse, { active: true }>;
+
+/**
+ * The wire union, flattened for display: the active-only fields become
+ * optional (absent on a plane nothing was pushed to), so status renderers read
+ * `pushed.hash` in one line instead of re-narrowing at every use. A projection
+ * of {@link SchemaReadResponse} — the field types stay the contract's.
+ */
+export interface PushedSchema
+  extends Partial<Pick<ActiveSchemaRead, 'version' | 'hash' | 'pushedAt'>> {
   active: boolean;
-  version?: number;
-  /** The deployed schema's content hash — the same value a running client
-   *  compares against when it warns about schema drift, so it can be matched
-   *  directly here. */
-  hash?: string;
-  pushedAt?: string | null;
-  models: PushedModel[];
+  models: readonly SchemaModelResponse[];
 }
 
 /**
  * Fetch the schema currently active for this key's environment (`GET /api/schema`).
- * Best-effort: any failure — unreachable server, unauthorized key, or a server
- * too old to serve the route — returns null, so a caller falls back to shorter
- * output rather than erroring. The key's scope determines which environment is
- * read; there is no environment argument to pass.
+ * Best-effort: any failure — unreachable server, unauthorized key, a server too
+ * old to serve the route, or a body that is not the schema response — returns
+ * null, so a caller falls back to shorter output rather than erroring. The
+ * key's scope determines which environment is read; there is no environment
+ * argument to pass.
  */
 export async function fetchPushedSchema(
   apiUrl: string,
@@ -58,7 +65,19 @@ export async function fetchPushedSchema(
       signal: ctrl.signal,
     });
     if (!res.ok) return null;
-    return (await res.json()) as PushedSchema;
+    // The one place this response is checked; below here it is a typed value.
+    const parsed = schemaReadResponseSchema.safeParse(await res.json());
+    if (!parsed.success) return null;
+    const read = parsed.data;
+    return read.active
+      ? {
+          active: true,
+          version: read.version,
+          hash: read.hash,
+          pushedAt: read.pushedAt,
+          models: read.models,
+        }
+      : { active: false, models: read.models };
   } catch {
     return null;
   } finally {
@@ -66,8 +85,9 @@ export async function fetchPushedSchema(
   }
 }
 
-/** How a connected database is reached — the two registration kinds. */
-export type DataSourceConnection = 'direct' | 'endpoint';
+/** How a connected database is reached — the two registration kinds, as the
+ *  wire contract names them. */
+export type DataSourceConnection = NonNullable<DatasourceSummary['connection']>;
 
 /**
  * What the calling key's plane has connected. `none` is the decisive one: it
@@ -126,20 +146,13 @@ export async function fetchDataSourceState(
       // is a fact about the key, not evidence that nothing is connected.
       return { kind: 'unknown', detail: `HTTP ${res.status}` };
     }
-    const body: unknown = await res.json();
-    const data =
-      typeof body === 'object' && body !== null && Array.isArray((body as { data?: unknown }).data)
-        ? ((body as { data: unknown[] }).data)
-        : null;
-    if (data === null) return { kind: 'unknown', detail: 'unrecognized response' };
-    if (data.length === 0) return { kind: 'none' };
-    const rows = data.filter((row): row is Record<string, unknown> =>
-      typeof row === 'object' && row !== null,
-    );
-    const connections = rows.map((row) =>
-      row.connection === 'endpoint' ? ('endpoint' as const) : ('direct' as const),
-    );
-    const hosts = rows.flatMap((row) => (typeof row.host === 'string' ? [row.host] : []));
+    // The one place this response is checked; below here it is a typed value.
+    const parsed = datasourceListResponseSchema.safeParse(await res.json());
+    if (!parsed.success) return { kind: 'unknown', detail: 'unrecognized response' };
+    const rows = parsed.data.data;
+    if (rows.length === 0) return { kind: 'none' };
+    const connections = rows.map((row) => row.connection ?? ('direct' as const));
+    const hosts = rows.flatMap((row) => (row.host !== undefined ? [row.host] : []));
     return { kind: 'connected', connections, hosts };
   } catch {
     return { kind: 'unknown', detail: 'unreachable' };

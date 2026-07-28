@@ -19,13 +19,22 @@
 
 import pc from 'picocolors';
 
-import { AbloError, classifyRecovery } from '@abloatai/transaction/errors';
+import { AbloError, classifyRecovery, toAbloError } from '@abloatai/transaction/errors';
 import { terminalWidth } from './terminalWidth.js';
 import { brand } from './theme.js';
 
 export interface RenderErrorOptions {
   /** Show the stack + raw details. Defaults to `--verbose`/`ABLO_VERBOSE=1`. */
   readonly verbose?: boolean;
+  /**
+   * Emit the failure as one JSON line — the canonical error envelope
+   * (`AbloError.toJSON`, the same `{ type, code, message, doc_url, … }` shape
+   * the API serves) — instead of the terminal block. For agents and scripts:
+   * every field a program branches on (`code`, `doc_url`, domain details)
+   * arrives structured, with nothing to scrape out of colored text. Defaults
+   * to `--json`/`ABLO_JSON=1`.
+   */
+  readonly json?: boolean;
   /** Output sink — defaults to `console.error`. Injectable for tests. */
   readonly write?: (line: string) => void;
 }
@@ -124,6 +133,17 @@ export function renderCliError(err: unknown, opts: RenderErrorOptions = {}): voi
   const line = opts.write ?? ((l: string) => { console.error(l); });
   const verbose =
     opts.verbose ?? (process.argv.includes('--verbose') || process.env.ABLO_VERBOSE === '1');
+  const json = opts.json ?? (process.argv.includes('--json') || process.env.ABLO_JSON === '1');
+
+  // Machine mode: the envelope itself, one line, nothing else. `toAbloError`
+  // coerces a plain throw so even an untyped failure arrives as the same
+  // shape; the message survives (this is local output, not the wire, so
+  // nothing needs masking).
+  if (json) {
+    line(JSON.stringify(toAbloError(err).toJSON()));
+    process.exitCode = 1;
+    return;
+  }
 
   if (err instanceof AbloError) {
     const codeTag = err.code ? `  ${pc.dim(`[${err.code}]`)}` : '';

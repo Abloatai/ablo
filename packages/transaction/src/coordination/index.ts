@@ -24,6 +24,10 @@ export {
   onStaleModeSchema,
   writeGuardSchema,
   staleNotificationSchema,
+  rowStaleNotificationSchema,
+  groupStaleNotificationSchema,
+  stalePropagationSchema,
+
   readDependencySchema,
   trackDependencySchema,
   // Layer 2 — pessimistic claim / claim-lease
@@ -101,6 +105,9 @@ export type {
   OnStaleMode,
   WriteGuard,
   StaleNotification,
+  RowStaleNotification,
+  GroupStaleNotification,
+  StalePropagation,
   ReadDependency,
   TrackDependency,
   // Layer 2 — pessimistic claim / claim-lease
@@ -179,3 +186,4 @@ export {
   modelTarget,
   streamTarget,
 } from './locator.js';
+

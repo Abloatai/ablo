@@ -22,7 +22,6 @@ import pc from 'picocolors';
 import { writeFileSync } from 'fs';
 import postgres from 'postgres';
 import { ADMIN_URL_VAR, readProjectAdminDatabaseUrl } from './dbRole';
-import { renderCliError } from './renderError';
 import {
   serializeSchema,
   generateProvisionPlan,
@@ -254,13 +253,10 @@ async function applyStatements(
 }
 
 export async function migrate(argv: readonly string[]): Promise<void> {
-  let args: MigrateArgs;
-  try {
-    args = parseMigrateArgs(argv);
-  } catch (err) {
-    console.error(pc.red(`  ${err instanceof Error ? err.message : String(err)}`));
-    process.exit(1);
-  }
+  // A parse failure propagates as the typed `cli_invalid_arguments` error it
+  // already is — the dispatcher's renderer shows the code, the message, and
+  // the docs link, the same block every other failure gets.
+  const args = parseMigrateArgs(argv);
 
   const schema = await loadSchema(args.schemaPath, args.exportName);
   const plan = planFor(schema, args.targetSchema);
@@ -291,12 +287,10 @@ export async function migrate(argv: readonly string[]): Promise<void> {
   // `.env.local`, which is a common place to keep it.
   const dbUrl = readProjectAdminDatabaseUrl();
   if (!dbUrl) {
-    console.error(
-      pc.red(
-        `  No ${ADMIN_URL_VAR} found (checked process env, .env.local, .env). Set it to apply, or use --dry-run to preview.`,
-      ),
+    throw new AbloValidationError(
+      `No ${ADMIN_URL_VAR} found (checked process env, .env.local, .env). Set it to apply, or use --dry-run to preview.`,
+      { code: 'cli_database_url_missing' },
     );
-    process.exit(1);
   }
 
   // `ablo migrate` provisions tables and nothing more: it does not create roles,
@@ -321,10 +315,10 @@ export async function migrate(argv: readonly string[]): Promise<void> {
     progress?.stop('Migration failed', 1);
     // Say what went wrong. A statement that fails is already logged with its
     // position and SQLSTATE, but everything before the first statement — a
-    // refused connection, a bad password, an unreachable host — arrives here
-    // and used to be discarded, leaving the command to exit non-zero with no
-    // output at all after "applying migration plan".
-    renderCliError(err);
-    process.exit(1);
+    // refused connection, a bad password, an unreachable host — arrives here.
+    // The spinner is stopped, then the error travels to the dispatcher's
+    // renderer like every other failure, so the block carries the code, the
+    // recovery hint, and the docs link.
+    throw err;
   }
 }

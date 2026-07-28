@@ -47,6 +47,10 @@ export type { ModelData } from './types/modelData.js';
 // The error hierarchy and its wire/recovery helpers.
 export * from './errors.js';
 
+// The price of the product: tiers, rate card, and the bill arithmetic the
+// published pricing page and the runtime caps both derive from.
+export * from './pricing.js';
+
 // Pre-seam leaf surfaces, kept for compatibility with the first extraction.
 export * from './errorCodes.js';
 export * from './environment.js';

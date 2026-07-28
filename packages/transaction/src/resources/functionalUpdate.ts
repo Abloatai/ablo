@@ -53,6 +53,17 @@ export interface ContentionOptions {
 /** Reconcile rounds before a hot row is declared permanently contended. */
 export const DEFAULT_CONTENTION_RETRIES = 16;
 
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Jittered backoff so N reconcilers retrying at once don't lock-step straight
+ * back into the same collision. Bounded; grows mildly with the attempt.
+ */
+function backoffMs(attempt: number): number {
+  return 60 + attempt * 40 + Math.floor(Math.random() * 60);
+}
+
 /**
  * Reports whether a thrown error means "another writer moved the row — re-read
  * and retry" rather than a genuine failure to surface. These are the
@@ -67,17 +78,6 @@ export function isReconcilableConflict(err: unknown): boolean {
     return err.code === 'claim_lost' || err.code === 'claim_queued';
   }
   return false;
-}
-
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Jittered backoff so N reconcilers retrying at once don't lock-step straight
- * back into the same collision. Bounded; grows mildly with the attempt.
- */
-function backoffMs(attempt: number): number {
-  return 60 + attempt * 40 + Math.floor(Math.random() * 60);
 }
 
 /**

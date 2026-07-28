@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/transaction",
-  "version": "0.39.0",
+  "version": "0.40.0",
   "description": "The headless Ablo transaction client and canonical contracts for reads, commits, settlement, claims, and durable observation.",
   "license": "Apache-2.0",
   "type": "module",
@@ -18,6 +18,12 @@
       "types": "./dist/errorCodes.d.ts",
       "import": "./dist/errorCodes.js",
       "default": "./dist/errorCodes.js"
+    },
+    "./pricing": {
+      "@ablo/source": "./src/pricing.ts",
+      "types": "./dist/pricing.d.ts",
+      "import": "./dist/pricing.js",
+      "default": "./dist/pricing.js"
     },
     "./environment": {
       "@ablo/source": "./src/environment.ts",

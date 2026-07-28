@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { syncGroupInputSchema } from '../schema/roles.js';
+import {
+  syncGroupInputSchema,
+  syncGroupRefSchema,
+  syncGroupSchema,
+} from '../schema/roles.js';
 export { syncGroupInputSchema } from '../schema/roles.js';
 import { isFieldRef, type FieldRef } from '../schema/fieldRef.js';
 import type { ParticipantKind } from '../types/participant.js';
@@ -214,6 +218,28 @@ export const targetRefSchema = z.object({
 export type TargetRef = z.infer<typeof targetRefSchema>;
 
 /**
+ * What a {@link ModelClaim} points at — the target locator as SDK callers see
+ * it, keyed by `model` and `id` rather than the wire schema's `entityType` and
+ * `entityId`. This is the public `ModelTarget` shape.
+ *
+ * Declared beside {@link targetRefSchema} because the two are the same shape in
+ * two spellings, and a member added to one belongs in the other. Both are read
+ * by {@link staleNotificationSchema} and the claim family below, so this has to
+ * precede them.
+ */
+export const modelTargetSchema = z
+  .object({
+    model: z.string(),
+    id: z.string(),
+    field: z.string().optional(),
+    /** Several named parts at once — see {@link targetRefSchema}. */
+    fields: z.array(z.string()).readonly().optional(),
+    meta: z.record(z.string(), z.unknown()).optional(),
+  })
+  .readonly();
+export type ModelTarget = z.infer<typeof modelTargetSchema>;
+
+/**
  * The same locator in the spelling the wait line and the claim handle use —
  * `{ type, id }` for the entity, the sub-entity half unchanged. It is a
  * projection of {@link targetRefSchema} rather than a second declaration, so a
@@ -270,45 +296,153 @@ export type WriteGuard = z.infer<typeof writeGuardSchema>;
  * re-commits. `reject` throws instead, and `overwrite` proceeds silently —
  * neither notifies.
  */
-export const staleNotificationSchema = z.object({
+/**
+ * A log position, as the server reports one.
+ *
+ * Server-PRODUCED watermarks are constrained here; the caller-supplied
+ * {@link writeGuardSchema} `readAt` deliberately is not. The asymmetry is the
+ * trust direction, not an oversight: the server controls what it stamps, so
+ * stating the domain costs nothing, while tightening an inbound field would
+ * reject payloads the wire accepts today.
+ */
+const syncIdSchema = z.number().int().nonnegative();
+
+/**
+ * How a change reached the premise that fired — the three ways a record joins a
+ * sync group, which is the vocabulary `RecordGroupSpec` already routes by
+ * (`selfKind` / `parents` / `transitive`) rather than a fourth name for it.
+ *
+ * Without this a group notification can only say "something in the group you
+ * read moved", and the cheapest correct response to that is to re-read the
+ * whole group. `via` plus the notification's `target` narrows it to the row
+ * that actually moved and how it got there, which is usually a one-row re-read.
+ *
+ *   • `self`       — the row that moved IS the group's scope root.
+ *   • `parent`     — it sits one declared containment edge below the root.
+ *   • `transitive` — the root is ≥2 hops up (`comment → task → project`).
+ */
+export const stalePropagationSchema = z
+  .object({
+    via: z.enum(['self', 'parent', 'transitive']),
+    /**
+     * The intermediate models walked from the moved row up to the scope root,
+     * nearest hop first — the part of the route a reader cannot see from the
+     * two endpoints. Empty on `self` and `parent`, which have no intermediate.
+     *
+     * Model names, not rows: naming the intermediate ROWS would cost a join per
+     * notification, and the route is what explains the reach. `target` already
+     * identifies the row that moved and `group` the premise it broke.
+     */
+    through: z.array(z.string()).readonly(),
+  })
+  .readonly();
+export type StalePropagation = z.infer<typeof stalePropagationSchema>;
+
+/**
+ * What both notification scopes carry. The arms below derive from it rather
+ * than restate it, the same way {@link claimStateSchema} projects the claim
+ * record.
+ */
+const staleNotificationBaseSchema = z.object({
   /** Names this object's type; every returned object carries such a tag. */
-  object: z.literal('stale_notification').optional(),
-  /** Model name of the conflicting row. */
-  model: z.string(),
-  /** Row id. */
-  id: z.string(),
-  /** The watermark the committer reasoned against (its `readAt`). */
-  readAt: z.number(),
+  object: z.literal('stale_notification'),
   /**
-   * Newest delta id on the row — the committer's new watermark. Re-capture
+   * The row that moved, and which part of it — `fields` holds the columns whose
+   * concurrent change collided (empty ⇒ a whole-entity CREATE/DELETE).
+   *
+   * The same shape a claim names its subject with, so one reader handles "who
+   * holds this row" and "this row moved under you" without learning two
+   * vocabularies. In BOTH scopes this is the row that actually changed: a group
+   * notification names the moved row here and the fired premise in `group`.
+   */
+  target: modelTargetSchema,
+  /** The watermark the committer reasoned against (its `readAt`). */
+  readAt: syncIdSchema,
+  /**
+   * Newest delta id on the premise — the committer's new watermark. Re-capture
    * context at/after this id to reconcile.
    */
-  observedSyncId: z.number(),
-  /**
-   * Fields whose concurrent change collided with this write (intersection of
-   * the committer's written columns and a newer delta's `changed_fields`).
-   * Empty ⇒ a whole-entity change (CREATE/DELETE/legacy delta).
-   */
-  conflictingFields: z.array(z.string()),
-  /**
-   * The live values of `conflictingFields` after the conflict — the piece a
-   * plain stale error omits. It lets the actor reconcile without a follow-up read.
-   */
-  currentValues: z.record(z.string(), z.unknown()),
+  observedSyncId: syncIdSchema,
   /** Who wrote the conflicting delta. */
   writtenBy: z.object({
     kind: participantKindSchema,
     id: z.string(),
   }),
-  /**
-   * Set when this notification is for a GROUP premise (e.g. `report:abc`,
-   * `section:s1`) rather than a single row — "something in the group you read
-   * changed." For a group notification `conflictingFields`/`currentValues` are
-   * empty (the change could span many rows); re-read the group at
-   * `observedSyncId` to reconcile. Absent ⇒ a row-scoped notification.
-   */
-  group: z.string().optional(),
 });
+
+/** A premise on one row: that row moved. */
+export const rowStaleNotificationSchema = staleNotificationBaseSchema.extend({
+  scope: z.literal('row'),
+  /**
+   * The live values of `target.fields` after the conflict — the piece a plain
+   * stale error omits. It lets the actor reconcile without a follow-up read.
+   *
+   * Row scope only. Reading live values is cheap for one known row and is what
+   * a group breach cannot promise, so the group arm omits the field rather than
+   * carrying an empty one that reads as "nothing changed".
+   */
+  currentValues: z.record(z.string(), z.unknown()),
+});
+export type RowStaleNotification = z.infer<typeof rowStaleNotificationSchema>;
+
+/** A premise on a whole sync group: something in it moved. */
+export const groupStaleNotificationSchema = staleNotificationBaseSchema.extend({
+  scope: z.literal('group'),
+  /**
+   * The group premise that fired (`report:abc`, `section:s1`).
+   *
+   * Same format schema the premise declares, so the value a caller writes into
+   * `reads[].group` and the value it gets back name a group identically. The
+   * BRANDED view is for values Ablo mints; a notification only echoes the
+   * premise it was handed, and re-parsing it to acquire a brand would be a
+   * second validation of data the commit boundary already checked.
+   */
+  group: syncGroupRefSchema,
+  /**
+   * How `target` reached `group`. Absent when the schema's record-group spec is
+   * unavailable to the commit path, which is the only case where the server
+   * knows a group moved without knowing the route.
+   */
+  propagation: stalePropagationSchema.optional(),
+  /**
+   * How much of the group moved — the decision "re-read these rows" versus
+   * "give up and take the whole group" needs a size, and a premise that only
+   * says *something* changed forces the expensive branch every time.
+   *
+   * Counts DISTINCT ROWS, not deltas: two writes to one row is one row's worth
+   * of re-reading. `sample` names the most recently changed of them and is
+   * capped, so `truncated` says whether it tells the whole story.
+   *
+   * Absent when the commit path did not measure it (a durable `track` fires per
+   * commit and does not pay for the extra statement).
+   */
+  changed: z
+    .object({
+      count: z.number().int().nonnegative(),
+      sample: z.array(modelTargetSchema).readonly(),
+      truncated: z.boolean(),
+    })
+    .optional(),
+});
+export type GroupStaleNotification = z.infer<
+  typeof groupStaleNotificationSchema
+>;
+
+/**
+ * One advisory, two scopes, told apart by `scope`.
+ *
+ * A real discriminated union rather than a flat object with an optional
+ * `group`, which is what {@link readDependencySchema} already does for the
+ * premise side. While it was flat, the two scopes disagreed about what their
+ * fields meant — `model`/`id` held a row in one and the group key in the other,
+ * and `conflictingFields`/`currentValues` were empty by construction in the
+ * group case — so every consumer had to re-derive the scope from `group`'s
+ * presence and read the prose to know which fields were load-bearing.
+ */
+export const staleNotificationSchema = z.discriminatedUnion('scope', [
+  rowStaleNotificationSchema,
+  groupStaleNotificationSchema,
+]);
 export type StaleNotification = z.infer<typeof staleNotificationSchema>;
 
 /**
@@ -338,7 +472,13 @@ const readRowDependencySchema = z.object({
 });
 
 const readGroupDependencySchema = z.object({
-  group: z.string(),
+  /**
+   * The caller-facing view of the format: `reads: [{ group: 'report:abc' }]`
+   * type-checks inline, `'nonsense'` does not. The
+   * {@link groupStaleNotificationSchema} this premise fires uses the branded
+   * view, because there Ablo is the author.
+   */
+  group: syncGroupRefSchema,
   readAt: z.number(),
   onStale: onStaleModeSchema.optional(),
 });
@@ -361,7 +501,12 @@ export type ReadDependency = z.infer<typeof readDependencySchema>;
  * same reference: a track names its target exactly as a read does, and the
  * three ways it differs are stated here as omissions the compiler holds.
  *
- *   • no `onStale` — a track always notifies; that is what tracking is;
+ *   • `onStale` NARROWED, not dropped — `notify` (the default) reports the
+ *     change on the tracker's next receipt and lets the commit through;
+ *     `reject` refuses that commit while the belief is stale, so an agent
+ *     cannot write on something it has been shown to be out of date about.
+ *     `overwrite` is excluded because it means "apply my write anyway" and a
+ *     track guards no write of its own to apply;
  *   • no `fields` — a track fires at row grain, because the server keeps one
  *     row per tracked target and reports that the target moved, not which
  *     column did (`track_dependencies` has no field axis to store one in);
@@ -373,15 +518,36 @@ export type ReadDependency = z.infer<typeof readDependencySchema>;
  * genuinely cannot carry has to be omitted here on purpose, in one line, rather
  * than by being quietly left out of a copy.
  */
-const trackReadAtSchema = { readAt: z.number().optional() } as const;
+/**
+ * A track's disposition — the premise enum with `overwrite` subtracted, derived
+ * from it rather than spelled again, so a mode added to the convention reaches
+ * a track unless it is deliberately excluded here.
+ */
+export const trackOnStaleSchema = onStaleModeSchema.exclude(['overwrite']);
+export type TrackOnStale = z.infer<typeof trackOnStaleSchema>;
+
+/**
+ * What a track does when the caller says nothing — reporting, the behavior every
+ * track had before the disposition existed, so an existing registration is
+ * unchanged.
+ *
+ * Declared here because the value has to agree in three places that cannot
+ * import each other: this schema, the column DEFAULT, and the server's insert.
+ * The two SQL copies are pinned to this one by a test
+ * (`trackOnStaleDomain.test.ts`) rather than by anyone remembering.
+ */
+export const DEFAULT_TRACK_ON_STALE: TrackOnStale = 'notify';
+
+const trackBaseSchema = {
+  readAt: z.number().optional(),
+  onStale: trackOnStaleSchema.optional(),
+} as const;
 
 export const trackDependencySchema = z.union([
   readRowDependencySchema
     .omit({ onStale: true, fields: true, readAt: true })
-    .extend(trackReadAtSchema),
-  readGroupDependencySchema
-    .omit({ onStale: true, readAt: true })
-    .extend(trackReadAtSchema),
+    .extend(trackBaseSchema),
+  readGroupDependencySchema.omit({ onStale: true, readAt: true }).extend(trackBaseSchema),
 ]);
 export type TrackDependency = z.infer<typeof trackDependencySchema>;
 
@@ -724,23 +890,6 @@ export const claimExpiredSchema = z.object({
 });
 export type ClaimExpired = z.infer<typeof claimExpiredSchema>;
 
-
-/**
- * What a {@link ModelClaim} points at — the target locator as SDK callers see
- * it, keyed by `model` and `id` rather than the wire schema's `entityType` and
- * `entityId`. This is the public `ModelTarget` shape.
- */
-export const modelTargetSchema = z
-  .object({
-    model: z.string(),
-    id: z.string(),
-    field: z.string().optional(),
-    /** Several named parts at once — see {@link targetRefSchema}. */
-    fields: z.array(z.string()).readonly().optional(),
-    meta: z.record(z.string(), z.unknown()).optional(),
-  })
-  .readonly();
-export type ModelTarget = z.infer<typeof modelTargetSchema>;
 
 /**
  * The two states a claim can be observed in while it still exists.

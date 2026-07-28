@@ -38,24 +38,82 @@ describe('coordination wire schema', () => {
     it('staleNotificationSchema validates a notify-instead-of-abort signal', () => {
       const parsed = staleNotificationSchema.safeParse({
         object: 'stale_notification',
-        model: 'task',
-        id: 't1',
+        scope: 'row',
+        target: { model: 'task', id: 't1', fields: ['status'] },
         readAt: 10,
         observedSyncId: 12,
-        conflictingFields: ['status'],
         currentValues: { status: 'done' },
         writtenBy: { kind: 'agent', id: 'agent-1' },
       });
       expect(parsed.success).toBe(true);
     });
 
-    it('staleNotificationSchema rejects a bad participant kind', () => {
+    it('a group notification names the row that moved AND the premise it broke', () => {
       const parsed = staleNotificationSchema.safeParse({
-        model: 'task',
-        id: 't1',
+        object: 'stale_notification',
+        scope: 'group',
+        // The moved row, two hops below the group's scope root — NOT the group
+        // key restated as a row, which is what this used to carry.
+        target: { model: 'SlideLayer', id: 'L-9', fields: ['fill'] },
+        group: 'deck:d-1',
+        propagation: { via: 'transitive', through: ['slides', 'decks'] },
         readAt: 10,
         observedSyncId: 12,
-        conflictingFields: [],
+        writtenBy: { kind: 'agent', id: 'agent-1' },
+      });
+      expect(parsed.success).toBe(true);
+      // Narrowing on `scope` is what makes the group-only fields reachable.
+      if (parsed.success && parsed.data.scope === 'group') {
+        expect(parsed.data.group).toBe('deck:d-1');
+        expect(parsed.data.propagation?.via).toBe('transitive');
+        expect(parsed.data.target.id).toBe('L-9');
+      }
+    });
+
+    it('a group notification can report how much of the group moved', () => {
+      const parsed = staleNotificationSchema.safeParse({
+        object: 'stale_notification',
+        scope: 'group',
+        target: { model: 'SlideLayer', id: 'L-9', fields: ['fill'] },
+        group: 'deck:d-1',
+        // The signal that lets an actor decline to re-read: 12k rows moved and
+        // the sample names only the newest few.
+        changed: {
+          count: 12_403,
+          sample: [{ model: 'SlideLayer', id: 'L-9' }],
+          truncated: true,
+        },
+        readAt: 10,
+        observedSyncId: 12,
+        writtenBy: { kind: 'agent', id: 'agent-1' },
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success && parsed.data.scope === 'group') {
+        expect(parsed.data.changed?.count).toBe(12_403);
+        expect(parsed.data.changed?.truncated).toBe(true);
+      }
+    });
+
+    it('a group notification requires a well-formed group key', () => {
+      const parsed = staleNotificationSchema.safeParse({
+        object: 'stale_notification',
+        scope: 'group',
+        target: { model: 'SlideLayer', id: 'L-9', fields: [] },
+        group: 'not-a-group-key', // no `kind:id` — matches nothing, so it is rejected
+        readAt: 10,
+        observedSyncId: 12,
+        writtenBy: { kind: 'agent', id: 'agent-1' },
+      });
+      expect(parsed.success).toBe(false);
+    });
+
+    it('staleNotificationSchema rejects a bad participant kind', () => {
+      const parsed = staleNotificationSchema.safeParse({
+        object: 'stale_notification',
+        scope: 'row',
+        target: { model: 'task', id: 't1', fields: [] },
+        readAt: 10,
+        observedSyncId: 12,
         currentValues: {},
         writtenBy: { kind: 'robot', id: 'x' },
       });
@@ -95,15 +153,40 @@ describe('coordination wire schema', () => {
         expect(readDependencySchema.safeParse({ group: 'report:abc' }).success).toBe(false);
       });
 
-      it('carries no disposition and no field grain — a track always notifies, at row grain', () => {
+      it('carries a NARROWED disposition and no field grain', () => {
         const parsed = trackDependencySchema.parse({
           model: 'Task',
           id: 't1',
           onStale: 'reject',
           fields: ['status'],
         });
-        expect(parsed).not.toHaveProperty('onStale');
+        // The disposition survives — it is what decides whether a moved belief
+        // merely reports or gates the tracker's next write.
+        expect(parsed).toMatchObject({ onStale: 'reject' });
+        // The field grain does not: `track_dependencies` has no column to store
+        // one in, so a track fires at row grain.
         expect(parsed).not.toHaveProperty('fields');
+      });
+
+      it('defaults to notify, so an existing track is unchanged', () => {
+        const parsed = trackDependencySchema.parse({ model: 'Task', id: 't1' });
+        expect(parsed).not.toHaveProperty('onStale'); // server default: 'notify'
+      });
+
+      it('excludes overwrite — a track guards no write of its own to apply', () => {
+        expect(
+          trackDependencySchema.safeParse({ model: 'Task', id: 't1', onStale: 'overwrite' })
+            .success,
+        ).toBe(false);
+        // The read premise, which DOES guard a write, still accepts it.
+        expect(
+          readDependencySchema.safeParse({
+            model: 'Task',
+            id: 't1',
+            readAt: 7,
+            onStale: 'overwrite',
+          }).success,
+        ).toBe(true);
       });
 
       it('a read premise keeps both', () => {

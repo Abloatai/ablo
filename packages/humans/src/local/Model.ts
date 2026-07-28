@@ -121,6 +121,17 @@ export abstract class Model {
   /** MobX observable properties storage */
   _mobxProperties: ModelData = {};
 
+  /**
+   * True while {@link updateFromData} assigns inbound wire data. The
+   * `observe()` bridge (`mobxSetup.M1`) checks it and skips the forward to
+   * {@link propertyChanged} entirely: hydration writes are not user edits, and
+   * the bridge's work per changed field — a nested action, map bookkeeping,
+   * and a fabricated `updatedAt` stamp — was already being discarded by the
+   * `modifiedProperties` swap in `updateFromData`. The swap stays as the
+   * correctness backstop; this flag removes the cost.
+   */
+  _isHydrating = false;
+
   /** Referenced models cache */
   _referencedModels: Record<string, Model | null> = {};
 
@@ -721,11 +732,14 @@ export abstract class Model {
     runInAction(() => {
       const originalTracking = this.modifiedProperties;
       this.modifiedProperties = new Map();
-
-      // No `onWrite` → this call records nothing itself.
-      this.assignFieldsFromData(data);
-
-      this.modifiedProperties = originalTracking;
+      this._isHydrating = true;
+      try {
+        // No `onWrite` → this call records nothing itself.
+        this.assignFieldsFromData(data);
+      } finally {
+        this._isHydrating = false;
+        this.modifiedProperties = originalTracking;
+      }
     });
 
     // Mark as persisted if updating existing model

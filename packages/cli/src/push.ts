@@ -25,7 +25,7 @@ import { resolve } from 'path';
 import { execFileSync } from 'child_process';
 import { confirm, text, isCancel, cancel } from '@clack/prompts';
 import { serializeSchema, schemaHash, type Schema } from '@abloatai/transaction/schema';
-import { ABLO_DEFAULT_BASE_URL } from '@abloatai/transaction/auth/hostedEndpoints';
+import { apiBaseUrl, DEFAULT_URL } from './controlPlane';
 import { resolveEffectiveApiKey, type EffectiveKeySource } from './config';
 import { resolveTarget, describeMismatches, type ResolvedTarget } from './target';
 import { brand } from './theme';
@@ -58,19 +58,6 @@ function coerceBackfill(raw: string): string | number | boolean {
 
 export const DEFAULT_SCHEMA_PATH = 'ablo/schema.ts';
 export const DEFAULT_EXPORT = 'schema';
-/** The default base URL for the hosted service, re-exported here under the name
- *  the other CLI commands import. */
-export const DEFAULT_URL = ABLO_DEFAULT_BASE_URL;
-
-/**
- * The Ablo control-plane origin the CLI calls, with any trailing slashes
- * trimmed: `ABLO_API_URL` when set, otherwise {@link DEFAULT_URL}. Defined once
- * so the connect commands — `check`, `register`, and `apply` — resolve the
- * same origin instead of each re-deriving it and risking a subtle drift.
- */
-export function apiBaseUrl(): string {
-  return (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
-}
 
 /** Formats a single migration signal — `{ model, field?, detail, shadowed? }` —
  *  for display. When `shadowed` is present, meaning a removal was diffed against
@@ -213,6 +200,29 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
 }
 
 /** Dynamically import the user's schema module (TS) and return the export. */
+
+/** Tables the customer's publication does not carry, as the push response reports them. */
+interface PublicationGap {
+  readonly missing: readonly string[];
+  readonly remediation?: string;
+}
+
+/**
+ * Read the publication advisory off a push response, or `null` when there is
+ * none to report. Narrowed rather than asserted: this is an optional field on a
+ * response an older engine does not send at all, so its absence is ordinary and
+ * must not throw on the success path.
+ */
+function publicationGap(value: unknown): PublicationGap | null {
+  if (typeof value !== 'object' || value === null) return null;
+  if (!('missing' in value) || !Array.isArray(value.missing)) return null;
+  const missing = value.missing.filter((table: unknown): table is string => typeof table === 'string');
+  if (missing.length === 0) return null;
+  const remediation =
+    'remediation' in value && typeof value.remediation === 'string' ? value.remediation : null;
+  return { missing, ...(remediation ? { remediation } : {}) };
+}
+
 export async function loadSchema(schemaPath: string, exportName: string): Promise<Schema> {
   const abs = resolve(process.cwd(), schemaPath);
   if (!existsSync(abs)) {
@@ -600,6 +610,29 @@ export async function push(argv: readonly string[]): Promise<void> {
               `before you read or write them.`,
           ),
         );
+      }
+      // Tables the customer's publication does not carry. Ablo streams changes
+      // only for published tables, so a model missing from it is accepted at
+      // commit and never confirmed — the table looks frozen while everything
+      // else works. Reported here because push is where Ablo learns the model
+      // exists, whichever tool created the table; and only reported, because
+      // adding a table to a publication requires owning it and Ablo's roles
+      // deliberately own nothing.
+      const publication = publicationGap(body.publication);
+      if (publication) {
+        const names = publication.missing.map((t) => pc.bold(t)).join(', ');
+        console.log(
+          `\n  ${pc.yellow('!')} Ablo is not receiving changes for ${names} yet.`
+        );
+        console.log(
+          pc.dim(
+            `    Your database streams only the tables it has been told to publish, and ` +
+              `these\n    are not on that list, so writes to them are accepted and never confirmed.`
+          )
+        );
+        if (publication.remediation) {
+          console.log(`\n    Run this on your database:\n      ${pc.cyan(publication.remediation)}\n`);
+        }
       }
     }
     return;

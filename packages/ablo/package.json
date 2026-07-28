@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.39.0",
+  "version": "0.40.0",
   "description": "The public Ablo SDK for coordinated reads, commits, claims, observation, and reactive applications.",
   "license": "Apache-2.0",
   "type": "module",
@@ -118,6 +118,8 @@
     "test": "vitest run",
     "generate:errors": "tsx scripts/generate-error-docs.mts",
     "lint:errors": "tsx scripts/check-error-docs.mts",
+    "generate:pricing": "tsx scripts/generate-pricing-docs.mts",
+    "lint:pricing": "tsx scripts/check-pricing-docs.mts",
     "generate:openapi": "tsx --conditions=@ablo/source scripts/generate-openapi.mts",
     "lint:openapi": "tsx --conditions=@ablo/source scripts/generate-openapi.mts --check",
     "validate:openapi": "redocly lint ../../docs/ablo/public/openapi.json --extends=recommended --skip-rule=no-server-example.com",
@@ -136,8 +138,8 @@
     "directory": "packages/ablo"
   },
   "dependencies": {
-    "@abloatai/humans": "^0.39.0",
-    "@abloatai/transaction": "^0.39.0"
+    "@abloatai/humans": "^0.40.0",
+    "@abloatai/transaction": "^0.40.0"
   },
   "peerDependencies": {
     "ai": "^6.0.0 || ^7.0.0",

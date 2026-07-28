@@ -575,6 +575,18 @@ export const ERROR_CODES = {
     'validation',
     'The CLI was invoked with an unknown flag or a malformed flag value.'
   ),
+  cli_api_key_missing: client(
+    'auth',
+    'The command needs an API key and none was found on this machine. Run `ablo login` (or set ABLO_API_KEY), then re-run the command.'
+  ),
+  cli_database_url_missing: client(
+    'validation',
+    'The command needs a database connection string and none was found — no DATABASE_URL in the process environment, .env.local, or .env, and no --url flag.'
+  ),
+  cli_database_unreachable: client(
+    'transport',
+    'The database named by the connection string could not be reached from this machine. The host, port, network, or credential refused the dial before any statement ran.'
+  ),
   commit_operation_required: wire(
     'validation',
     400,
@@ -1028,6 +1040,14 @@ export const ERROR_CODES = {
   fetch_unavailable: client(
     'transport',
     'This environment provides no `fetch` implementation, so HTTP requests cannot be made. Run on a platform with `fetch` (Node 18+, modern browsers) or supply a polyfill.'
+  ),
+  api_unreachable: client(
+    'transport',
+    'The Ablo API could not be reached from this machine — the dial failed before any request arrived. Check the network, any proxy, and an ABLO_API_URL override, then retry.'
+  ),
+  response_unrecognized: client(
+    'transport',
+    'The server answered successfully, but with a body this client does not recognize. The client may be older than the server — update it and retry.'
   ),
   base_url_missing: client(
     'transport',

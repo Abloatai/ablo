@@ -810,10 +810,13 @@ const ENVELOPE_KEYS: ReadonlySet<string> = new Set([
   'request_id',
   // Read into typed properties below, so they are not detail as well.
   'error',
-  'reason',
   'requiredCapability',
   'claims',
   'heldByClaim',
+  // `reason` is deliberately NOT here: it is domain detail (a driver's words
+  // beside the server's message), not an envelope field — the canonical
+  // envelope schema has no such key — so it must survive into `details` for a
+  // consumer that renders it as a secondary line.
 ]);
 
 /** The non-envelope remainder of an error body — what `details` was before it
@@ -839,10 +842,14 @@ export function translateHttpError(
       : undefined;
   const flatError = typeof parsed.error === 'string' ? parsed.error : undefined;
   const code = parsed.code ?? nested?.code ?? flatError;
+  // The producer's `message` outranks a `reason`: the message is the sentence a
+  // server wrote for a person (what happened and the remedy), while `reason` is
+  // raw diagnostic text — a database driver's words — attached beside it. A body
+  // that carries only `reason` still reads it, as older endpoints did.
   const message =
     nested?.message ??
-    parsed.reason ??
     parsed.message ??
+    parsed.reason ??
     flatError ??
     (typeof body === 'string' ? body : `HTTP ${status}`);
   const requiredCapability =

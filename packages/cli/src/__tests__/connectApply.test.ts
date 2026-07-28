@@ -1,19 +1,21 @@
+import { postRegistrationOutcome, ROTATE_STRANDED_CREDENTIALS_NOTICE } from '../connectApply';
 import {
-  connectApplyPlan,
-  passwordClause,
-  postRegistrationOutcome,
-  ROTATE_STRANDED_CREDENTIALS_NOTICE,
-  detectProvider,
-  detectPooler,
-  logicalReplicationGuidance,
-} from '../connectApply';
+  alreadyConnectedElsewhere,
+  reapplyBlocker,
+  rotateWithoutConnection,
+} from '../connectPreflight';
 import {
   ownershipBlockers,
   ownershipRemediation,
   formatUnresolvedOwnership,
   type OwnedRelationRow,
 } from '../connectOwnership';
-import { connectSetupSql, ABLO_PUBLICATION } from '../connectSetup';
+import {
+  connectSetupSql,
+  ABLO_PUBLICATION,
+  ABLO_REPLICATION_ROLE,
+  ABLO_WRITE_ROLE,
+} from '../connectSetup';
 
 const CREDS = { replicationClause: 'REPL_PW', writeClause: 'WRITE_PW' } as const;
 
@@ -23,167 +25,6 @@ function expectedGrants(input: { tables?: readonly string[]; role?: string; writ
     (s) => !s.startsWith('ALTER SYSTEM SET wal_level') && !s.startsWith('CREATE PUBLICATION') && !s.startsWith('CREATE ROLE '),
   );
 }
-
-describe('connectApplyPlan — executable, idempotent, real-password plan', () => {
-  const plan = connectApplyPlan({ credentials: CREDS });
-
-  it('is the five stages in dependency order', () => {
-    expect(plan.map((s) => s.key)).toEqual([
-      'wal',
-      'publication',
-      'replication-role',
-      'write-role',
-      'grants',
-    ]);
-  });
-
-  it('leads with an ownership stage carrying the inherit-grants, so apply fixes ownership itself', () => {
-    // The seamless path: when the admin can self-grant inheritance of an owning
-    // role, apply runs it as the first stage rather than stopping to ask — the
-    // grant must land before publish/grants, which Postgres reserves for the owner.
-    const withOwn = connectApplyPlan({
-      credentials: CREDS,
-      inheritGrants: ['GRANT "ablo_app" TO "neondb_owner" WITH INHERIT TRUE;'],
-    });
-    expect(withOwn[0]?.key).toBe('own');
-    expect(withOwn[0]?.sql).toEqual(['GRANT "ablo_app" TO "neondb_owner" WITH INHERIT TRUE;']);
-    expect(withOwn.findIndex((s) => s.key === 'own')).toBeLessThan(
-      withOwn.findIndex((s) => s.key === 'publication'),
-    );
-    // No inherit-grants → no ownership stage; the ordinary plan is unchanged.
-    expect(connectApplyPlan({ credentials: CREDS }).some((s) => s.key === 'own')).toBe(false);
-  });
-
-  it('reuses the recipe grants VERBATIM — the security-sensitive statements never drift', () => {
-    // The whole point: `--apply` must grant exactly what `ablo connect` documents
-    // and tests assert. If connectSetupSql changes a grant, this catches it.
-    const grantsStep = plan.find((s) => s.key === 'grants');
-    expect(grantsStep?.sql).toEqual(expectedGrants({}));
-  });
-
-  it('creates a role that is absent, and re-running never touches one that exists', () => {
-    // `apply` is safe to re-run, which is NOT the same as "re-running re-keys".
-    // A second apply against a database another connection is using must leave
-    // that connection's credential working — the earlier shape recovered from
-    // `duplicate_object` with an unconditional `ALTER ROLE … PASSWORD`, which
-    // silently invalidated it.
-    const roleSql = (key: 'replication-role' | 'write-role', p = plan) =>
-      p.find((s) => s.key === key)?.sql.join('\n') ?? '';
-
-    for (const key of ['replication-role', 'write-role'] as const) {
-      const sql = roleSql(key);
-      expect(sql).toContain('IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname =');
-      expect(sql).toContain('CREATE ROLE');
-      expect(sql).not.toContain('ALTER ROLE');
-    }
-    expect(roleSql('replication-role')).toContain('WITH REPLICATION LOGIN');
-  });
-
-  it('rotate is the one verb that re-keys an existing role', () => {
-    const rotating = connectApplyPlan({ credentials: CREDS, rotate: true });
-    for (const key of ['replication-role', 'write-role'] as const) {
-      const sql = rotating.find((s) => s.key === key)?.sql.join('\n') ?? '';
-      // Still creates when absent — rotate on a fresh database is a valid setup.
-      expect(sql).toContain('CREATE ROLE');
-      // …and re-keys when present, which is the whole point of the verb.
-      expect(sql).toContain('ALTER ROLE');
-      expect(sql).toContain('LOGIN PASSWORD');
-    }
-  });
-
-  it('makes publication creation idempotent', () => {
-    const pub = plan.find((s) => s.key === 'publication')?.sql.join('\n') ?? '';
-    expect(pub).toContain(`CREATE PUBLICATION "${ABLO_PUBLICATION}"`);
-    expect(pub).toContain('EXCEPTION WHEN duplicate_object THEN NULL');
-  });
-
-  it('substitutes the real password clause — no `<password>` placeholder survives', () => {
-    const all = plan.flatMap((s) => s.sql).join('\n');
-    expect(all).not.toContain('<password>');
-    expect(all).not.toContain('<write-password>');
-    expect(all).toContain('REPL_PW');
-    expect(all).toContain('WRITE_PW');
-  });
-
-  it('threads a table subset and custom role names through both heads and grants', () => {
-    const custom = connectApplyPlan({
-      tables: ['tasks', 'projects'],
-      role: 'my_reader',
-      writeRole: 'my_writer',
-      credentials: CREDS,
-    });
-    const pub = custom.find((s) => s.key === 'publication')?.sql.join('\n') ?? '';
-    expect(pub).toContain('FOR TABLE "tasks", "projects"');
-    expect(custom.find((s) => s.key === 'replication-role')?.sql.join('\n')).toContain('"my_reader"');
-    expect(custom.find((s) => s.key === 'write-role')?.sql.join('\n')).toContain('"my_writer"');
-    expect(custom.find((s) => s.key === 'grants')?.sql).toEqual(
-      expectedGrants({ tables: ['tasks', 'projects'], role: 'my_reader', writeRole: 'my_writer' }),
-    );
-  });
-});
-
-describe('provider detection and the write-ahead-log step', () => {
-  it('identifies managed providers from the host, and everything else as generic', () => {
-    expect(detectProvider('ep-tiny-fire-aj1gvf1c.c-3.us-east-2.aws.neon.tech/neondb')).toBe('neon');
-    expect(detectProvider('db.abcdefgh.supabase.co/postgres')).toBe('supabase');
-    expect(detectProvider('mydb.abc123.us-east-1.rds.amazonaws.com/app')).toBe('rds');
-    expect(detectProvider('10.0.0.5:5432/app')).toBe('generic');
-    expect(detectProvider('localhost/app')).toBe('generic');
-  });
-
-  it('tells a pooled host from the database itself, and derives the direct host where it can', () => {
-    // A pooler refuses the session with the same wording as a wrong password,
-    // so this is what keeps a correct credential from being blamed.
-    expect(detectPooler('ep-tiny-fire-aj1gvf1c-pooler.c-3.us-east-2.aws.neon.tech/neondb')).toEqual({
-      provider: 'neon',
-      direct: 'ep-tiny-fire-aj1gvf1c.c-3.us-east-2.aws.neon.tech/neondb',
-    });
-    // Supabase's pooler is a different host entirely, so there is none to derive.
-    expect(detectPooler('aws-0-eu-central-1.pooler.supabase.com/postgres')).toEqual({
-      provider: 'supabase',
-    });
-    expect(detectPooler('mydb.proxy-abc123.us-east-1.rds.amazonaws.com/app')).toEqual({
-      provider: 'rds',
-    });
-  });
-
-  it('stays silent on a direct host, so a real credential failure still reads as one', () => {
-    expect(detectPooler('ep-tiny-fire-aj1gvf1c.c-3.us-east-2.aws.neon.tech/neondb')).toBeNull();
-    expect(detectPooler('db.abcdefgh.supabase.co/postgres')).toBeNull();
-    expect(detectPooler('mydb.abc123.us-east-1.rds.amazonaws.com/app')).toBeNull();
-    expect(detectPooler('localhost/app')).toBeNull();
-  });
-
-  it('gives each managed provider its real path to logical replication — not an ALTER SYSTEM', () => {
-    expect(logicalReplicationGuidance('neon')).toMatch(/Neon project settings/);
-    expect(logicalReplicationGuidance('supabase')).toMatch(/Supabase/);
-    expect(logicalReplicationGuidance('rds')).toMatch(/rds\.logical_replication = 1/);
-    expect(logicalReplicationGuidance('generic')).toMatch(/ALTER SYSTEM/);
-  });
-
-  it('drops the WAL step entirely when the cluster is already logical', () => {
-    const plan = connectApplyPlan({ credentials: CREDS, walAlreadyLogical: true });
-    expect(plan.map((s) => s.key)).toEqual([
-      'publication',
-      'replication-role',
-      'write-role',
-      'grants',
-    ]);
-  });
-
-  it('shows a managed provider a console action, not an ALTER SYSTEM it cannot run', () => {
-    const plan = connectApplyPlan({ credentials: CREDS, provider: 'neon' });
-    const wal = plan.find((s) => s.key === 'wal');
-    expect(wal?.sql).toEqual([]); // no SQL — enabling it is a settings action
-    expect(wal?.detail).toMatch(/Neon project settings/);
-  });
-
-  it('keeps the runnable ALTER SYSTEM for self-hosted (generic) Postgres', () => {
-    const plan = connectApplyPlan({ credentials: CREDS });
-    const wal = plan.find((s) => s.key === 'wal');
-    expect(wal?.sql).toEqual([`ALTER SYSTEM SET wal_level = 'logical';`]);
-  });
-});
 
 describe('ownershipBlockers — the shared ownership preflight decision', () => {
   const row = (over: Partial<OwnedRelationRow>): OwnedRelationRow => ({
@@ -347,12 +188,91 @@ describe('postRegistrationOutcome — the --rotate partial-failure guard', () =>
   });
 });
 
-describe('passwordClause', () => {
-  it('produces a PostgreSQL SCRAM-SHA-256 verifier by default (plaintext never reaches the statement log)', () => {
-    expect(passwordClause('hunter2', 'scram-verifier')).toMatch(/^SCRAM-SHA-256\$4096:.+\$.+:.+$/);
+describe('reapplyBlocker — the guard on a password that was generated but never set', () => {
+  const ROLES = [ABLO_REPLICATION_ROLE, ABLO_WRITE_ROLE] as const;
+
+  it('stops a second apply, because the roles it found keep their old passwords', () => {
+    // The defect this exists for: apply generated a password, skipped CREATE ROLE
+    // for the role that already existed, and registered the generated one anyway.
+    // Ablo then dialled with a password the database had never accepted.
+    expect(reapplyBlocker({ rotating: false, existingRoles: [...ROLES] })).toEqual({
+      roles: [...ROLES],
+      plural: true,
+    });
   });
 
-  it('escapes a single quote for the plaintext fallback', () => {
-    expect(passwordClause("a'b", 'plaintext')).toBe("a''b");
+  it('stops on a single pre-existing role, and says so in the singular', () => {
+    expect(reapplyBlocker({ rotating: false, existingRoles: [ABLO_REPLICATION_ROLE] })).toEqual({
+      roles: [ABLO_REPLICATION_ROLE],
+      plural: false,
+    });
+  });
+
+  it('lets a first apply through', () => {
+    expect(reapplyBlocker({ rotating: false, existingRoles: [] })).toBeNull();
+  });
+
+  it('never stops a rotate — re-keying what it finds is the whole verb', () => {
+    expect(reapplyBlocker({ rotating: true, existingRoles: [...ROLES] })).toBeNull();
+    expect(reapplyBlocker({ rotating: true, existingRoles: [] })).toBeNull();
+  });
+});
+
+describe('rotateWithoutConnection — the guard on a re-key with nothing to re-key', () => {
+  it('refuses a rotate on a plane holding no connection, before any ALTER ROLE', () => {
+    // The defect it exists for: rotate re-keyed a live database, registration was
+    // then declined because the database already streams to another branch, and
+    // the database was left on a password Ablo never received.
+    const refusal = rotateWithoutConnection({ rotating: true, planeHasConnection: false, known: true, keyRejected: false });
+    expect(refusal).toMatch(/no connected database/i);
+    // The reason has to say why the ORDER makes it unsafe, not merely that it is.
+    expect(refusal).toMatch(/before Ablo can be told/i);
+  });
+
+  it('allows a rotate that has a registration to update', () => {
+    expect(rotateWithoutConnection({ rotating: true, planeHasConnection: true, known: true, keyRejected: false })).toBeNull();
+  });
+
+  it('never blocks apply, which is the verb for a first connect', () => {
+    expect(rotateWithoutConnection({ rotating: false, planeHasConnection: false, known: true, keyRejected: false })).toBeNull();
+  });
+
+  it('refuses when Ablo answered and turned the key down', () => {
+    // The hole this closes: a mistyped key made the state "unknown", unknown was
+    // permissive, and rotate re-keyed a live database before registration failed
+    // on the key. Answering-and-declining is not the same as not answering.
+    const refusal = rotateWithoutConnection({
+      rotating: true,
+      planeHasConnection: false,
+      known: false,
+      keyRejected: true,
+    });
+    expect(refusal).toMatch(/did not accept this API key/i);
+  });
+
+  it('does not refuse on an unreachable control plane — unknown is not a no', () => {
+    // A machine that cannot reach Ablo says nothing about what the plane holds,
+    // and refusing there would strand the operator differently.
+    expect(rotateWithoutConnection({ rotating: true, planeHasConnection: false, known: false, keyRejected: false })).toBeNull();
+  });
+});
+
+describe('alreadyConnectedElsewhere — the conflict refused before anything is written', () => {
+  it('names the project and branch holding it, which is where the reader must go', () => {
+    // A branch id alone resolves only inside its own project, so the refusal has
+    // to carry the project or it points at a door the reader cannot find.
+    const refusal = alreadyConnectedElsewhere({ project: 'proj_x', branch: 'br_root_abc' });
+    expect(refusal).toMatch(/project proj_x/);
+    expect(refusal).toMatch(/br_root_abc/);
+  });
+
+  it('falls back to the branch when the holder is the default project', () => {
+    expect(alreadyConnectedElsewhere({ project: null, branch: 'br_root_abc' })).toMatch(/branch br_root_abc/);
+  });
+
+  it('says nothing when no other plane holds it', () => {
+    // Also the unreachable-control-plane case: locate returns null rather than
+    // guessing, and an unanswered question is not evidence of a conflict.
+    expect(alreadyConnectedElsewhere(null)).toBeNull();
   });
 });

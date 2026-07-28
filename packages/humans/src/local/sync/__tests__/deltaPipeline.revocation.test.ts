@@ -57,7 +57,7 @@ function makePipelineCtx(overrides: {
     pendingDeltas: [],
     batchTimer: null,
     bootstrapDeltaQueue: null,
-    smartSyncOptions: { batchingDelay: 10, maxBatchSize: 100 },
+    smartSyncOptions: { batchingDelay: 10, maxBatchSize: 100, applySliceDeltas: 600 },
     highestProcessedSyncId: 0,
     lastAckedId: 0,
     onDeltaReceived: jest.fn(),

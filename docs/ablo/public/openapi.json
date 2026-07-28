@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ablo API",
-    "version": "0.39.0",
+    "version": "0.40.0",
     "description": "The Ablo transaction layer: commit, read, and claim. `{model}` is any model from your pushed schema — the routes are the same whichever it is. Authenticate every request with your API key as a Bearer token.",
     "license": {
       "name": "Apache License 2.0",
@@ -617,69 +617,266 @@
               "notifications": {
                 "type": "array",
                 "items": {
-                  "type": "object",
-                  "properties": {
-                    "object": {
-                      "type": "string",
-                      "const": "stale_notification"
-                    },
-                    "model": {
-                      "type": "string"
-                    },
-                    "id": {
-                      "type": "string"
-                    },
-                    "readAt": {
-                      "type": "number"
-                    },
-                    "observedSyncId": {
-                      "type": "number"
-                    },
-                    "conflictingFields": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    "currentValues": {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    "writtenBy": {
+                  "oneOf": [
+                    {
                       "type": "object",
                       "properties": {
-                        "kind": {
+                        "object": {
                           "type": "string",
-                          "enum": [
-                            "user",
-                            "agent",
-                            "system"
-                          ]
+                          "const": "stale_notification"
                         },
-                        "id": {
-                          "type": "string"
+                        "target": {
+                          "readOnly": true,
+                          "type": "object",
+                          "properties": {
+                            "model": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "field": {
+                              "type": "string"
+                            },
+                            "fields": {
+                              "readOnly": true,
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "meta": {
+                              "type": "object",
+                              "additionalProperties": true
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "readAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "observedSyncId": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "writtenBy": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "agent",
+                                "system"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "scope": {
+                          "type": "string",
+                          "const": "row"
+                        },
+                        "currentValues": {
+                          "type": "object",
+                          "additionalProperties": true
                         }
                       },
                       "required": [
-                        "kind",
-                        "id"
+                        "object",
+                        "target",
+                        "readAt",
+                        "observedSyncId",
+                        "writtenBy",
+                        "scope",
+                        "currentValues"
                       ],
                       "additionalProperties": false
                     },
-                    "group": {
-                      "type": "string"
+                    {
+                      "type": "object",
+                      "properties": {
+                        "object": {
+                          "type": "string",
+                          "const": "stale_notification"
+                        },
+                        "target": {
+                          "readOnly": true,
+                          "type": "object",
+                          "properties": {
+                            "model": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "field": {
+                              "type": "string"
+                            },
+                            "fields": {
+                              "readOnly": true,
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "meta": {
+                              "type": "object",
+                              "additionalProperties": true
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "readAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "observedSyncId": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "writtenBy": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "agent",
+                                "system"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "scope": {
+                          "type": "string",
+                          "const": "group"
+                        },
+                        "group": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]*:[\\s\\S]{1,}$"
+                        },
+                        "propagation": {
+                          "readOnly": true,
+                          "type": "object",
+                          "properties": {
+                            "via": {
+                              "type": "string",
+                              "enum": [
+                                "self",
+                                "parent",
+                                "transitive"
+                              ]
+                            },
+                            "through": {
+                              "readOnly": true,
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "via",
+                            "through"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "changed": {
+                          "type": "object",
+                          "properties": {
+                            "count": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "sample": {
+                              "readOnly": true,
+                              "type": "array",
+                              "items": {
+                                "readOnly": true,
+                                "type": "object",
+                                "properties": {
+                                  "model": {
+                                    "type": "string"
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "field": {
+                                    "type": "string"
+                                  },
+                                  "fields": {
+                                    "readOnly": true,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "meta": {
+                                    "type": "object",
+                                    "additionalProperties": true
+                                  }
+                                },
+                                "required": [
+                                  "model",
+                                  "id"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "truncated": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "count",
+                            "sample",
+                            "truncated"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "object",
+                        "target",
+                        "readAt",
+                        "observedSyncId",
+                        "writtenBy",
+                        "scope",
+                        "group"
+                      ],
+                      "additionalProperties": false
                     }
-                  },
-                  "required": [
-                    "model",
-                    "id",
-                    "readAt",
-                    "observedSyncId",
-                    "conflictingFields",
-                    "currentValues",
-                    "writtenBy"
-                  ],
-                  "additionalProperties": false
+                  ]
                 }
               },
               "missingIds": {
@@ -747,69 +944,266 @@
               "notifications": {
                 "type": "array",
                 "items": {
-                  "type": "object",
-                  "properties": {
-                    "object": {
-                      "type": "string",
-                      "const": "stale_notification"
-                    },
-                    "model": {
-                      "type": "string"
-                    },
-                    "id": {
-                      "type": "string"
-                    },
-                    "readAt": {
-                      "type": "number"
-                    },
-                    "observedSyncId": {
-                      "type": "number"
-                    },
-                    "conflictingFields": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    "currentValues": {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    "writtenBy": {
+                  "oneOf": [
+                    {
                       "type": "object",
                       "properties": {
-                        "kind": {
+                        "object": {
                           "type": "string",
-                          "enum": [
-                            "user",
-                            "agent",
-                            "system"
-                          ]
+                          "const": "stale_notification"
                         },
-                        "id": {
-                          "type": "string"
+                        "target": {
+                          "readOnly": true,
+                          "type": "object",
+                          "properties": {
+                            "model": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "field": {
+                              "type": "string"
+                            },
+                            "fields": {
+                              "readOnly": true,
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "meta": {
+                              "type": "object",
+                              "additionalProperties": true
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "readAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "observedSyncId": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "writtenBy": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "agent",
+                                "system"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "scope": {
+                          "type": "string",
+                          "const": "row"
+                        },
+                        "currentValues": {
+                          "type": "object",
+                          "additionalProperties": true
                         }
                       },
                       "required": [
-                        "kind",
-                        "id"
+                        "object",
+                        "target",
+                        "readAt",
+                        "observedSyncId",
+                        "writtenBy",
+                        "scope",
+                        "currentValues"
                       ],
                       "additionalProperties": false
                     },
-                    "group": {
-                      "type": "string"
+                    {
+                      "type": "object",
+                      "properties": {
+                        "object": {
+                          "type": "string",
+                          "const": "stale_notification"
+                        },
+                        "target": {
+                          "readOnly": true,
+                          "type": "object",
+                          "properties": {
+                            "model": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "field": {
+                              "type": "string"
+                            },
+                            "fields": {
+                              "readOnly": true,
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "meta": {
+                              "type": "object",
+                              "additionalProperties": true
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "readAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "observedSyncId": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "writtenBy": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "agent",
+                                "system"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "scope": {
+                          "type": "string",
+                          "const": "group"
+                        },
+                        "group": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]*:[\\s\\S]{1,}$"
+                        },
+                        "propagation": {
+                          "readOnly": true,
+                          "type": "object",
+                          "properties": {
+                            "via": {
+                              "type": "string",
+                              "enum": [
+                                "self",
+                                "parent",
+                                "transitive"
+                              ]
+                            },
+                            "through": {
+                              "readOnly": true,
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "via",
+                            "through"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "changed": {
+                          "type": "object",
+                          "properties": {
+                            "count": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "sample": {
+                              "readOnly": true,
+                              "type": "array",
+                              "items": {
+                                "readOnly": true,
+                                "type": "object",
+                                "properties": {
+                                  "model": {
+                                    "type": "string"
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "field": {
+                                    "type": "string"
+                                  },
+                                  "fields": {
+                                    "readOnly": true,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "meta": {
+                                    "type": "object",
+                                    "additionalProperties": true
+                                  }
+                                },
+                                "required": [
+                                  "model",
+                                  "id"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "truncated": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "count",
+                            "sample",
+                            "truncated"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "object",
+                        "target",
+                        "readAt",
+                        "observedSyncId",
+                        "writtenBy",
+                        "scope",
+                        "group"
+                      ],
+                      "additionalProperties": false
                     }
-                  },
-                  "required": [
-                    "model",
-                    "id",
-                    "readAt",
-                    "observedSyncId",
-                    "conflictingFields",
-                    "currentValues",
-                    "writtenBy"
-                  ],
-                  "additionalProperties": false
+                  ]
                 }
               },
               "missingIds": {
@@ -7288,7 +7682,8 @@
                               "type": "object",
                               "properties": {
                                 "group": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]*:[\\s\\S]{1,}$"
                                 },
                                 "readAt": {
                                   "type": "number"
@@ -7332,6 +7727,13 @@
                                 },
                                 "readAt": {
                                   "type": "number"
+                                },
+                                "onStale": {
+                                  "type": "string",
+                                  "enum": [
+                                    "reject",
+                                    "notify"
+                                  ]
                                 }
                               },
                               "required": [
@@ -7343,10 +7745,18 @@
                               "type": "object",
                               "properties": {
                                 "group": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]*:[\\s\\S]{1,}$"
                                 },
                                 "readAt": {
                                   "type": "number"
+                                },
+                                "onStale": {
+                                  "type": "string",
+                                  "enum": [
+                                    "reject",
+                                    "notify"
+                                  ]
                                 }
                               },
                               "required": [

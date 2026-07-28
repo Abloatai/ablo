@@ -107,11 +107,11 @@ describe('http track', () => {
 
   it('returns notifications for a track that had already fired', async () => {
     const fired = {
-      model: 'Document',
-      id: 'doc-main',
+      object: 'stale_notification' as const,
+      scope: 'row' as const,
+      target: { model: 'Document', id: 'doc-main', fields: ['title'] },
       readAt: 41,
       observedSyncId: 44,
-      conflictingFields: ['title'],
       currentValues: { title: 'Renamed while you were away' },
       writtenBy: { kind: 'agent', id: 'agent_other' },
     };

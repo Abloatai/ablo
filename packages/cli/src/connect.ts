@@ -36,7 +36,11 @@
  *                            from a prior integration; reports, never drops.
  */
 
-import { AbloValidationError } from '@abloatai/transaction/errors';
+import {
+  AbloAuthenticationError,
+  AbloConnectionError,
+  AbloValidationError,
+} from '@abloatai/transaction/errors';
 import pc from 'picocolors';
 import postgres from 'postgres';
 import { ABLO_FOOTPRINT, type FootprintKind } from '@abloatai/transaction/footprint';
@@ -46,7 +50,7 @@ import {
   readProjectAdminDatabaseUrl,
 } from './dbRole';
 import { resolveApiKey } from './config';
-import { apiBaseUrl } from './push';
+import { apiBaseUrl } from './controlPlane';
 import { brand } from './theme';
 import {
   describeRemoteFailure,
@@ -692,8 +696,10 @@ async function probeAndReport(
     const dial = dialFailureReason(err);
     if (dial) return { kind: 'no-dial', reason: dial };
     const pg = (err ?? {}) as PgErrorLike;
-    console.error(pc.red(`  Couldn't read the database: ${pg.message ?? String(err)}`));
-    process.exit(1);
+    throw new AbloConnectionError(`Couldn't read the database: ${pg.message ?? String(err)}`, {
+      code: 'cli_database_unreachable',
+      cause: err,
+    });
   }
   await sql.end({ timeout: 2 });
 
@@ -716,13 +722,10 @@ async function runCheck(): Promise<void> {
 
   const apiKey = resolveApiKey();
   if (!apiKey) {
-    console.error(
-      pc.red('  No API key found.') +
-        pc.dim(
-          ` Run ${pc.bold('ablo login')} (or set ${pc.bold('ABLO_API_KEY')}), then re-run ${pc.bold('ablo connect check')}.`
-        )
+    throw new AbloAuthenticationError(
+      'No API key found. Run `ablo login` (or set ABLO_API_KEY), then re-run `ablo connect check`.',
+      { code: 'cli_api_key_missing' }
     );
-    process.exit(1);
   }
 
   const apiUrl = apiBaseUrl();
@@ -794,13 +797,10 @@ async function runRegister(args: ConnectArgs): Promise<void> {
   const writeDbUrl = requireScopedUrl('write', 'register');
   const apiKey = resolveApiKey();
   if (!apiKey) {
-    console.error(
-      pc.red('  Not logged in.') +
-        pc.dim(
-          ` Run ${pc.bold('ablo login')} (or set ${pc.bold('ABLO_API_KEY')}) so Ablo knows which project to register this database for.`
-        )
+    throw new AbloAuthenticationError(
+      'Not logged in. Run `ablo login` (or set ABLO_API_KEY) so Ablo knows which project to register this database for.',
+      { code: 'cli_api_key_missing' }
     );
-    process.exit(1);
   }
 
   console.log(
@@ -856,9 +856,11 @@ async function runScan(): Promise<void> {
     artifacts = await auditTenantSyncInfra(sql);
   } catch (err) {
     const pg = (err ?? {}) as PgErrorLike;
-    console.error(pc.red(`  Couldn't audit the database: ${pg.message ?? String(err)}`));
     await sql.end({ timeout: 2 });
-    process.exit(1);
+    throw new AbloConnectionError(`Couldn't audit the database: ${pg.message ?? String(err)}`, {
+      code: 'cli_database_unreachable',
+      cause: err,
+    });
   }
   await sql.end({ timeout: 2 });
 
@@ -915,13 +917,9 @@ export async function connect(argv: readonly string[]): Promise<void> {
     return;
   }
 
-  let args: ConnectArgs;
-  try {
-    args = parseConnectArgs(argv);
-  } catch (err) {
-    console.error(pc.red(`  ${err instanceof Error ? err.message : String(err)}`));
-    process.exit(1);
-  }
+  // A parse failure propagates as the typed `cli_invalid_arguments` error it
+  // already is; the dispatcher's renderer owns how failures look.
+  const args = parseConnectArgs(argv);
 
   if (args.apply || args.rotate) {
     const { runConnectApply } = await import('./connectApply');

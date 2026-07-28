@@ -31,9 +31,32 @@ import { z } from 'zod';
  * {@link syncGroup}. Because the brand is an intersection it's still assignable
  * *to* `string`, so existing `string[]` plumbing keeps working unchanged.
  */
-export const syncGroupSchema = z
-  .templateLiteral([z.string().regex(/^[a-z][a-z0-9_]*$/), ':', z.string().min(1)])
-  .brand<'SyncGroup'>();
+/**
+ * The `kind:id` shape itself, unbranded — what a CALLER writes.
+ *
+ * Input and output want different strictness from one format, so the format is
+ * declared once here and viewed two ways. This view rejects `'nonsense'` at
+ * compile time (no colon ⇒ matches no group) while still accepting
+ * `` `org:${orgId}` `` written inline, which is the whole point of
+ * {@link SyncGroupInput}. Requiring the constructor on an input field buys no
+ * safety this does not already give and costs every call site a helper import.
+ */
+export const syncGroupRefSchema = z.templateLiteral([
+  z.string().regex(/^[a-z][a-z0-9_]*$/),
+  ':',
+  z.string().min(1),
+]);
+
+export type SyncGroupRef = z.infer<typeof syncGroupRefSchema>;
+
+/**
+ * The same format, branded — what the SERVER hands back.
+ *
+ * The brand earns its keep on the way out, where Ablo is the author: a consumer
+ * that receives a `SyncGroup` knows it was minted, and a raw string cannot
+ * masquerade as one.
+ */
+export const syncGroupSchema = syncGroupRefSchema.brand<'SyncGroup'>();
 
 export type SyncGroup = z.infer<typeof syncGroupSchema>;
 

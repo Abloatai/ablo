@@ -263,6 +263,11 @@
       "count": 1
     }
   },
+  "__tests__/unit/applyPool.bench.test.ts": {
+    "jest/unbound-method": {
+      "count": 1
+    }
+  },
   "__tests__/unit/BaseSyncedStore.hydrateGroups.test.ts": {
     "@typescript-eslint/require-await": {
       "count": 2
@@ -1068,7 +1073,7 @@
   },
   "src/local/sync/deltaPipeline.ts": {
     "@typescript-eslint/no-non-null-assertion": {
-      "count": 2
+      "count": 5
     },
     "@typescript-eslint/no-unsafe-assignment": {
       "count": 1

@@ -21,7 +21,7 @@ import {
 import { resolveTarget, describeMismatches, type ResolvedTarget } from './target';
 import { credentialCapability } from './credentialCapability';
 import { brand } from './theme';
-import { apiBaseUrl } from './push';
+import { apiBaseUrl } from './controlPlane';
 import { participantKindSchema } from '@abloatai/transaction/coordination/schema';
 import {
   fetchRoutingState,

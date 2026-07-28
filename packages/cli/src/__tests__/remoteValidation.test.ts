@@ -4,11 +4,11 @@
  * the endpoint path, wire parsing, and checklist rendering labels.
  */
 
+import { READINESS_ITEMS } from '@abloatai/transaction/wire';
 import {
   describeRemoteFailure,
   dialFailureReason,
   requestRemoteValidation,
-  validateEndpoint,
 } from '../remoteValidation';
 
 function codedError(code: string, message: string): Error {
@@ -47,32 +47,18 @@ describe('dialFailureReason', () => {
   });
 });
 
-describe('validateEndpoint', () => {
-  it('targets the /api-mounted validate route, matching registration', () => {
-    expect(validateEndpoint('https://api.abloatai.com')).toBe(
-      'https://api.abloatai.com/api/v1/datasources/validate',
-    );
-    expect(validateEndpoint('https://api.abloatai.com/')).toBe(
-      'https://api.abloatai.com/api/v1/datasources/validate',
-    );
-  });
-});
-
 describe('describeRemoteFailure', () => {
-  it('names each problem in plain language — no Postgres internals in the label', () => {
-    // The label says what's not ready for the user; the `fix` carries the how. No
-    // wal_level / publication / REPLICATION-attribute jargon reaches the reader.
-    const labels = [
-      describeRemoteFailure({ item: 'wal_level', actual: 'replica', fix: 'f' }).label,
-      describeRemoteFailure({ item: 'publication', fix: 'f' }).label,
-      describeRemoteFailure({ item: 'replication_role', fix: 'f' }).label,
-      describeRemoteFailure({ item: 'replica_identity', actual: 'public.users', fix: 'f' }).label,
-      describeRemoteFailure({ item: 'table_select', actual: 'public.users', fix: 'f' }).label,
-      describeRemoteFailure({ item: 'write_role', fix: 'f' }).label,
-      describeRemoteFailure({ item: 'logical_marker', fix: 'f' }).label,
-    ];
-    for (const label of labels) {
-      expect(label).not.toMatch(/wal_level|\bpublication\b|REPLICATION attribute|DML|correlation marker|logical/i);
+  it('labels EVERY vocabulary item in plain language — no Postgres internals, no raw names', () => {
+    // Iterates the wire vocabulary itself rather than a hand-picked sample, so
+    // an item added to READINESS_ITEMS cannot ship unlabelled: the renderer is
+    // total by construction (a missing label is a compile error), and this
+    // pins that no label leaks jargon. `server_version` shipped rendering as
+    // its raw internal name precisely because the old sample never covered it.
+    for (const item of READINESS_ITEMS) {
+      const { label, fix } = describeRemoteFailure({ item, actual: 'public.users', fix: 'f' });
+      expect(label).not.toBe(item);
+      expect(label).not.toMatch(/wal_level|\bpublication\b|REPLICATION attribute|DML|correlation marker|\blogical\b/i);
+      expect(fix).toBe('f');
     }
     expect(describeRemoteFailure({ item: 'wal_level', fix: 'f' }).label).toBe(
       `your database isn't set up to share changes as they happen yet`,
@@ -121,7 +107,7 @@ describe('requestRemoteValidation', () => {
       fetchImpl: (url, init) => {
         seen.url = url;
         seen.auth = init.headers.authorization;
-        seen.body = JSON.parse(init.body);
+        seen.body = JSON.parse(init.body ?? '{}');
         return Promise.resolve(
           jsonResponse(200, {
             object: 'datasource_validation',
@@ -145,7 +131,7 @@ describe('requestRemoteValidation', () => {
       apiKey: 'sk_test_k',
       fetchImpl: (_url, init) => {
         seen.auth = init.headers.authorization;
-        seen.body = JSON.parse(init.body);
+        seen.body = JSON.parse(init.body ?? '{}');
         return Promise.resolve(
           jsonResponse(200, {
             object: 'datasource_validation',
@@ -183,7 +169,10 @@ describe('requestRemoteValidation', () => {
     expect(result.code).toBe('no_data_source_registered');
   });
 
-  it('parses failures and drops malformed wire entries instead of crashing', async () => {
+  it('refuses a body with malformed failure entries rather than hiding them', async () => {
+    // The old decoder silently DROPPED entries it could not read — a checklist
+    // that loses items reads as closer-to-ready than the server said. A body
+    // whose entries don't parse is not this response; refuse it loudly.
     const result = await requestRemoteValidation({
       apiUrl: 'https://api.abloatai.com',
       apiKey: 'sk_test_k',
@@ -201,12 +190,7 @@ describe('requestRemoteValidation', () => {
           }),
         ),
     });
-    expect(result).toEqual({
-      ok: true,
-      reachable: true,
-      ready: false,
-      failures: [{ item: 'wal_level', actual: 'replica', fix: 'set it' }],
-    });
+    expect(result).toMatchObject({ ok: false, code: 'response_unrecognized' });
   });
 
   it('carries the unreachable reason through', async () => {

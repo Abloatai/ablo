@@ -27,6 +27,7 @@ import { getContext } from '../context.js';
 interface M1Target {
   _hasCustomObservability?: boolean;
   _isConstructing?: boolean;
+  _isHydrating?: boolean;
   _extraMobxAnnotations?: Record<string, AnnotationMapEntry>;
   setupObservability?(): void;
   propertyChanged?(name: string, oldValue: unknown, newValue: unknown): void;
@@ -282,6 +283,10 @@ export function M1<T extends M1Target>(
               // pre-construct models with partial data then bulk-assign
               // would otherwise spuriously fill `modifiedProperties`.
               if (target._isConstructing) return;
+              // Hydration writes (`updateFromData`) are inbound wire data,
+              // not user edits: the forward's result is discarded by the
+              // `modifiedProperties` swap anyway, so skip the work.
+              if (target._isHydrating) return;
               if (typeof target.propertyChanged === 'function') {
                 target.propertyChanged(
                   propName,

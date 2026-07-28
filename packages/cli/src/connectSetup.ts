@@ -14,6 +14,9 @@
 import pc from 'picocolors';
 import type postgres from 'postgres';
 import { z } from 'zod';
+import { datasourceSummarySchema, readinessFailureSchema } from '@abloatai/transaction/wire';
+import { tryControlPlane } from './controlPlane';
+import { describeRemoteFailure } from './remoteValidation';
 import { idempotencyLedgerMigrations } from '@abloatai/transaction/source';
 
 // The names of the objects the recipe creates come from the footprint, which is
@@ -26,7 +29,7 @@ import {
   ABLO_REPLICATION_ROLE,
   ABLO_WRITE_ROLE,
 } from '@abloatai/transaction/footprint';
-import { detectPooler } from './connectApply';
+import { detectPooler } from './dbProvider';
 
 export { ABLO_PUBLICATION, ABLO_REPLICATION_ROLE, ABLO_WRITE_ROLE };
 
@@ -330,9 +333,29 @@ export interface CheckItem {
  */
 export async function probeReadiness(
   sql: postgres.Sql,
-  opts: { readonly publication?: string } = {}
+  opts: {
+    readonly publication?: string;
+    /**
+     * The tables Ablo actually coordinates — its schema's models. When given,
+     * the replica-identity check considers only these.
+     *
+     * A publication may legitimately carry tables Ablo neither reads nor writes:
+     * `FOR ALL TABLES` sweeps in whatever else shares the database, and an agent
+     * framework's own tables were enough to refuse a connect outright, over a
+     * design their owner never chose and could not act on. Ablo has no standing
+     * to require a replica identity on a table it does not coordinate, so the
+     * check follows what it coordinates rather than what the publication happens
+     * to include. Omitted, every published table is checked (the `connect check`
+     * reading, where no schema is in hand).
+     */
+    readonly coordinatedTables?: readonly string[];
+  } = {}
 ): Promise<readonly CheckItem[]> {
   const publication = opts.publication ?? ABLO_PUBLICATION;
+  const coordinated =
+    opts.coordinatedTables && opts.coordinatedTables.length > 0
+      ? new Set(opts.coordinatedTables)
+      : null;
   const items: CheckItem[] = [];
 
   // 1. wal_level must be 'logical'.
@@ -419,13 +442,16 @@ export async function probeReadiness(
           )`,
       [publication] as never[]
     );
+    const relevant = coordinated
+      ? badRows.filter((row) => coordinated.has(row.table_name))
+      : badRows;
     items.push(
-      badRows.length === 0
+      relevant.length === 0
         ? { ok: true, label: `all published tables have a usable REPLICA IDENTITY` }
         : {
             ok: false,
-            label: `${badRows.length} published table${badRows.length === 1 ? '' : 's'} cannot replicate UPDATE/DELETE`,
-            fix: badRows
+            label: `${relevant.length} published table${relevant.length === 1 ? '' : 's'} cannot replicate UPDATE/DELETE`,
+            fix: relevant
               .map(
                 (r) =>
                   `${r.table_name}: add a PRIMARY KEY, or ALTER TABLE ${quoteIdent(r.table_name)} REPLICA IDENTITY FULL;`
@@ -439,70 +465,28 @@ export async function probeReadiness(
 }
 
 /**
- * The registration endpoint for a given API base URL. The server mounts every
- * route under `/api`, so the full path is `/api/v1/datasources` — the same path
- * `ablo connect register` posts to. A bare `/v1/datasources` matches no
- * route and comes back as the server's global "Not found".
+ * The failure detail a registration rejection carries beside its envelope: the
+ * readiness checklist and the driver's words, as the engine's error `details`.
+ * The nested `details` object is a fallback for a wrapping proxy or an older
+ * deployment that nested the same payload one level down.
  */
-export function registerEndpoint(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, '')}/api/v1/datasources`;
-}
-
-/**
- * The success body of a datasource registration. The server sends more than
- * this; every field is optional and unknown keys are dropped, so the CLI reads
- * exactly what it renders and nothing it doesn't. Parsed rather than cast so a
- * shape that drifts is caught here instead of surfacing as `undefined` deep in
- * the success message.
- */
-const DataSourceRegisterSuccess = z.object({
-  id: z.string().optional(),
-  host: z.string().optional(),
-  status: z.string().optional(),
-});
-
-/** One entry in the server-side readiness checklist. */
-const ReadinessFailure = z.object({
-  item: z.string().optional(),
-  actual: z.string().optional(),
-  fix: z.string().optional(),
-});
-
-/**
- * The failure envelope. The engine's canonical error object (`AbloError.toJSON`,
- * the shape `app.onError` emits) spreads its domain `details` at the TOP level, so
- * a readiness rejection arrives as `{ code, message, failures: [...] }` — `failures`
- * and `reason` sit beside `code`, not nested under a `details` key. We read them
- * from the top level and keep `details.failures` / `error.code` as fallbacks for a
- * wrapping proxy or an older deployment that nested them. All optional — a non-JSON
- * or partial body degrades to the HTTP-status message rather than throwing.
- */
-const DataSourceRegisterError = z.object({
-  code: z.string().optional(),
-  message: z.string().optional(),
-  // Canonical: top-level, spread from the engine's `details`.
-  failures: z.array(ReadinessFailure).optional(),
-  reason: z.string().optional(),
-  // Fallback: a wrapping proxy or older engine that nested the same payload.
-  details: z
-    .object({
-      failures: z.array(ReadinessFailure).optional(),
-      reason: z.string().optional(),
-    })
-    .optional(),
-  error: z.object({ code: z.string().optional(), message: z.string().optional() }).optional(),
-});
-
-/** Parse a `Response` body as JSON against `schema`, degrading to `{}` on a
- *  non-JSON or shape-mismatched body — the CLI always has a value to render. */
-async function parseJsonBody<T extends z.ZodType>(res: Response, schema: T): Promise<z.infer<T>> {
-  const parsed = schema.safeParse(await res.json().catch(() => null));
-  return parsed.success ? parsed.data : ({} as z.infer<T>);
-}
+const registerFailureDetailsSchema = z
+  .object({
+    failures: z.array(readinessFailureSchema).optional(),
+    reason: z.string().optional(),
+    details: z
+      .object({
+        failures: z.array(readinessFailureSchema).optional(),
+        reason: z.string().optional(),
+      })
+      .loose()
+      .optional(),
+  })
+  .loose();
 
 /**
  * Hand both scoped connection strings to Ablo's control plane
- * (`POST /api/v1/datasources`), authed by the project key — the org is derived
+ * (`POST /v1/datasources`), authed by the project key — the org is derived
  * server-side from the key, never sent in the body. Ablo stores the credentials
  * encrypted and its infrastructure is the only thing that opens either
  * connection from then on. Prints the outcome and returns whether it registered,
@@ -515,29 +499,22 @@ export async function registerDirectDataSource(opts: {
   readonly writeUrl: string;
   readonly route: DirectDataSourceRoute;
 }): Promise<boolean> {
-  let res: Response;
-  try {
-    res = await fetch(registerEndpoint(opts.apiUrl), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${opts.apiKey}` },
-      body: JSON.stringify({
-        connection: 'direct',
-        connectionString: opts.replicationUrl,
-        writeConnectionString: opts.writeUrl,
-        route: opts.route,
-      }),
-    });
-  } catch (err) {
-    console.error(
-      pc.red(
-        `\n  Couldn't reach ${opts.apiUrl}: ${err instanceof Error ? err.message : String(err)}\n`
-      )
-    );
-    return false;
-  }
+  const result = await tryControlPlane({
+    path: '/v1/datasources',
+    method: 'POST',
+    baseUrl: opts.apiUrl,
+    apiKey: opts.apiKey,
+    body: {
+      connection: 'direct',
+      connectionString: opts.replicationUrl,
+      writeConnectionString: opts.writeUrl,
+      route: opts.route,
+    },
+    responseSchema: datasourceSummarySchema,
+  });
 
-  if (res.ok) {
-    const body = await parseJsonBody(res, DataSourceRegisterSuccess);
+  if (result.ok) {
+    const body = result.value;
     const statusNote = body.status === 'active' ? `${opts.route}, active` : opts.route;
     console.log(
       `\n  ${pc.green('✓')} Registered${body.host ? ` ${pc.dim(body.host)}` : ''}${body.id ? ` ${pc.dim(`(${body.id})`)}` : ''} as a direct DataSource (${statusNote}).\n` +
@@ -547,42 +524,41 @@ export async function registerDirectDataSource(opts: {
     return true;
   }
 
-  // The server's error envelope is flat: `{ type, code, message, details }`. The
-  // nested `error.code` fallback is kept for older or wrapped deployments.
-  const body = await parseJsonBody(res, DataSourceRegisterError);
-  const code = body.code ?? body.error?.code;
-  const message = body.message ?? body.error?.message ?? `HTTP ${res.status}`;
-  console.error(pc.red(`\n  Registration failed: ${message}`));
-  if (code === 'forbidden') {
+  // The boundary already decoded the envelope into a typed error — code,
+  // message, and the engine's domain details all survive on it. What remains
+  // here is rendering: the code-specific guidance a refusal deserves.
+  const err = result.error;
+  const detail = registerFailureDetailsSchema.safeParse(err.details ?? {});
+  const failures = detail.success ? (detail.data.failures ?? detail.data.details?.failures ?? []) : [];
+  const reason = detail.success ? (detail.data.reason ?? detail.data.details?.reason) : undefined;
+  console.error(pc.red(`\n  Registration failed: ${err.message}`));
+  if (err.code === 'forbidden') {
     console.error(
       pc.dim(
         `  Registering a database needs a ${pc.bold('secret')} key (sk_…). Run ${pc.bold('ablo login')} for one.`
       )
     );
-  } else if (code === 'datasource_connection_unsupported') {
+  } else if (err.code === 'datasource_connection_unsupported') {
     console.error(
       pc.dim(
         `  This deployment can’t accept connection strings — use a self-hosted/hosted engine, or the signed endpoint fallback.`
       )
     );
-  } else if (code === 'database_not_replication_ready' || code === 'data_source_blocked') {
+  } else if (err.code === 'database_not_replication_ready' || err.code === 'data_source_blocked') {
     // The server re-ran the readiness probes from its own side and found failures.
     // It can see a different picture than the local --check — for example a
     // publication added since, or probes running as the replication role rather
-    // than yours. The engine spreads these at the top level; `details.failures` is
-    // the fallback for a wrapping proxy or an older nested envelope.
-    for (const f of body.failures ?? body.details?.failures ?? []) {
-      console.error(
-        `  ${pc.red('✗')} ${pc.bold(f.item ?? 'item')}${f.actual ? pc.dim(` (${f.actual})`) : ''}`
-      );
-      if (f.fix)
-        for (const line of f.fix.split('\n')) console.error(`      ${pc.red('•')} ${line}`);
+    // than yours. Rendered through the same labels `connect check` prints, so
+    // the identical failure never reads two ways.
+    for (const f of failures) {
+      const { label, fix } = describeRemoteFailure(f);
+      console.error(`  ${pc.red('✗')} ${pc.bold(label)}`);
+      for (const line of fix.split('\n')) console.error(`      ${pc.red('•')} ${line}`);
     }
     console.error(
       pc.dim(`\n  Apply the fixes, verify with ${pc.bold('ablo connect check')}, then re-run.`)
     );
-  } else if (code === 'database_unreachable' || code === 'source_unreachable') {
-    const reason = body.reason ?? body.details?.reason;
+  } else if (err.code === 'database_unreachable' || err.code === 'source_unreachable') {
     if (reason) console.error(pc.dim(`  ${reason}`));
     // A pooled host is the likeliest cause and the one that reads least like
     // itself: a pooler refuses the connection as `password authentication

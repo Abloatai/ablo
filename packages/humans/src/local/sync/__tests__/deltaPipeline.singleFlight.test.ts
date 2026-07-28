@@ -34,7 +34,7 @@ describe('delta pipeline single-flight drain', () => {
       pendingDeltas: [],
       batchTimer: null,
       bootstrapDeltaQueue: null,
-      smartSyncOptions: { batchingDelay: 10, maxBatchSize: 100 },
+      smartSyncOptions: { batchingDelay: 10, maxBatchSize: 100, applySliceDeltas: 600 },
       get highestProcessedSyncId() { return applied; },
       get lastAckedId() { return persisted; },
       onDeltaReceived: jest.fn(),

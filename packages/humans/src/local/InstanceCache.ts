@@ -13,7 +13,7 @@ import { ModelRegistry } from './ModelRegistry.js';
 import { globalRuntime } from './context.js';
 import type { RuntimeContext } from './RuntimeContext.js';
 import { AbloValidationError } from '@abloatai/transaction/errors';
-import { ModelScope } from '@abloatai/transaction/types';
+import { ModelScope, PropertyType } from '@abloatai/transaction/types';
 import { ViewRegistry } from './views/ViewRegistry.js';
 import { QueryView, type QueryViewOptions } from './views/QueryView.js';
 
@@ -48,9 +48,18 @@ interface DeltaInfo {
  * entity resolves to a single instance.
  */
 export class InstanceCache {
-  // Single source of truth for all models (observable for reactivity)
-  private entries = observable.map<string, ModelEntry>();
-  private typeIndex = observable.map<string, Set<string>>();
+  // Single source of truth for all models (observable for reactivity).
+  // Shallow on purpose, and the reactivity contract depends on it: readers
+  // track MEMBERSHIP (keys), and every entry-level change re-sets the whole
+  // entry (see `updateScope`) — in-place field writes on an entry do not
+  // notify. The deep default additionally converted every stored ModelEntry
+  // into an observable object, a per-add extendObservable/defineProperty
+  // pass that profiled as the single largest term of create-apply on the
+  // wire-ingestion path, bought nothing the contract uses, and meant
+  // `entries.get()` returned a converted wrapper rather than the object
+  // the insert stored.
+  private entries = observable.map<string, ModelEntry>({}, { deep: false });
+  private typeIndex = observable.map<string, Set<string>>({}, { deep: false });
 
   // Non-observable access time tracking — kept outside observable.map so that
   // updating timestamps in get() during React render does NOT trigger MobX
@@ -269,6 +278,38 @@ export class InstanceCache {
     this.metrics.hits++;
 
     model?.ensureObservable();
+    return model ?? undefined;
+  }
+
+  /**
+   * Ingestion-side lookup: resolve a row WITHOUT crossing the consumer
+   * boundary. Same resolution semantics as {@link get} — weak-ref revival,
+   * disposed rows filtered, access recency stamped — but the model is NOT
+   * activated. The delta-apply loop reads every row it updates, and reading
+   * through `get()` made the stream itself install per-field MobX
+   * instrumentation on rows no consumer ever observes; that activation is
+   * the dominant term of apply cost (measured 12.9 vs 2.9 µs/delta in
+   * `applyPool.bench.test.ts`). Consumer reads must keep using `get()`,
+   * which is what activates a deferred model.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
+  peek<T extends Model = Model>(id: string): T | undefined {
+    const entry = this.entries.get(id);
+    if (!entry) return undefined;
+
+    let model = entry.model as T | undefined;
+    if (!model && entry.weakRef) {
+      const restoredModel = entry.weakRef.deref();
+      if (!restoredModel) return undefined;
+      model = restoredModel as T;
+      runInAction(() => {
+        entry.model = restoredModel;
+      });
+    }
+
+    if (model?.disposed) return undefined;
+
+    this.touchAccess(id, Date.now());
     return model ?? undefined;
   }
 
@@ -720,6 +761,11 @@ export class InstanceCache {
 
       const model = this.resolveModel(entry, id);
       if (model && !model.disposed) {
+        // Bulk reads are a consumer boundary: rows land cold from the wire
+        // (delta ingestion applies with `peek` and never activates), so
+        // every read that hands models out must activate them, exactly as
+        // `get()` does. Idempotent — an active row pays one boolean check.
+        model.ensureObservable();
         result.push(model);
       }
     }
@@ -747,6 +793,8 @@ export class InstanceCache {
 
       const model = this.resolveModel(entry, id);
       if (model && !model.disposed) {
+        // Consumer boundary — activate, as in getByType.
+        model.ensureObservable();
         result.push(model);
       }
     }
@@ -1272,14 +1320,39 @@ export class InstanceCache {
     });
   }
 
+  /**
+   * Data-field keys to probe per model, resolved once per model name. Only
+   * stored-value fields can carry bulk; walking the whole instance also
+   * visited the base class's bookkeeping (`_mobxProperties`,
+   * `modifiedProperties`, `validationRules`, …) and JSON-stringified each of
+   * those empty containers on EVERY add — a first-order term of wire-ingest
+   * create apply. Reference/computed keys are deliberately excluded: reading
+   * them would execute their getters.
+   */
+  private sizeProbeKeys = new Map<string, readonly string[]>();
+
   private isLargeModel(model: Model): boolean {
     try {
-      // Most synchronized rows contain only short scalars. Serializing the
-      // entire model merely to discover that fact doubled wire-ingest object
-      // walking. Accumulate cheap scalar sizes and serialize only nested
-      // payloads that can plausibly cross the WeakRef threshold.
+      const modelName = model.getModelName();
+      let keys = this.sizeProbeKeys.get(modelName);
+      if (!keys) {
+        const props = this.registry.getProperties(modelName);
+        keys = [...props.entries()]
+          .filter(([, meta]) => meta.type === PropertyType.property || meta.type === PropertyType.ephemeralProperty)
+          .map(([key]) => key);
+        this.sizeProbeKeys.set(modelName, keys);
+      }
+      // A model with no registered stored fields (e.g. a custom entity) keeps
+      // the whole-instance walk, since its payload lives outside the schema.
+      const values: Iterable<unknown> = keys.length > 0
+        ? keys.map((key): unknown => Reflect.get(model, key))
+        : Object.values(model);
+
+      // Most synchronized rows contain only short scalars. Accumulate cheap
+      // scalar sizes and serialize only nested payloads that can plausibly
+      // cross the WeakRef threshold.
       let size = 0;
-      for (const value of Object.values(model)) {
+      for (const value of values) {
         if (typeof value === 'string') {
           size += value.length;
         } else if (
@@ -1375,6 +1448,9 @@ export class InstanceCache {
       if (!this.matchesScope(entry.scope, ModelScope.live)) { droppedScope++; continue; }
       const model = this.resolveModel(entry, id);
       if (model && !model.disposed) {
+        // Consumer boundary — activate, as in getByType. `hasMany` reads
+        // (`section.blocks`) observe fields off these rows directly.
+        model.ensureObservable();
         result.push(model);
       } else if (model?.disposed) {
         droppedDisposed++;
