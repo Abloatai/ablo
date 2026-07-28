@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.41.0
+
+### Log in before you have a schema
+
+`mintUserSessionKey` accepts `controlPlaneOnly` as a third grant form, for
+sessions that exist to prove identity to the dashboard and control surfaces
+rather than to read or write data. An organization that has pushed no schema
+can now complete `ablo login`, which is the very credential pushing requires;
+the old circle (push needs keys, keys need login, login needed a schema) is
+gone. Data sessions are unchanged, and a control-plane session holds no model
+authority.
+
+### `connect apply` asks before it touches your database
+
+The locate preflight runs before provisioning. When another plane of your
+organization already holds the source, `connect apply` refuses with exit 1,
+names `ablo connect deregister` as the way out, and leaves your database
+exactly as it found it; the same conflict used to be discovered only after a
+run had created roles and a publication. A connection string without a
+password is refused at registration with the field named, instead of failing
+later as a masked server error.
+
+### A CLI that says when a command does not exist
+
+Typing a command the CLI does not recognize used to print the full help and
+exit zero. It now fails with the name it did not recognize and, when a
+plausible target exists, the command to use: a typo lands on the intended
+command, and a wrong-but-reasonable name like `disconnect` points at
+`ablo connect deregister`.
+
 ## 0.40.0
 
 ### The price is a contract, and the pricing page derives from it

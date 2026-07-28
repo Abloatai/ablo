@@ -209,10 +209,10 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     const loggedIn = resolveManagementKey() !== undefined;
     throw new AbloAuthenticationError(
       loggedIn
-        ? `You are logged in, but this project has no data key for ${getMode()}.\n` +
-          'Logging in stores a management credential, which can administer the project but cannot register a database. Registering needs a key scoped to the plane the database will belong to.\n' +
-          "Start one with `npx ablo dev`, or set ABLO_API_KEY to that plane's key."
-        : 'Not logged in. Run `ablo login` (or set ABLO_API_KEY) so Ablo knows which project to register this database for.',
+        ? `You are logged in, but this project has no ${getMode()} data key.\n\n` +
+          `The key is looked for in ABLO_API_KEY, then in the credential stored for the active project in the active mode (${getMode()}). Logging in stores a management credential, which administers the project but cannot register a database — and a key for another mode is never used implicitly, so registering against production takes an explicit production key.\n\n` +
+          'Mint a sandbox key with `npx ablo dev`, or set ABLO_API_KEY to the key of the plane this database should join (its sk_live_ key for production).'
+        : 'Not logged in, and no ABLO_API_KEY is set. Run `ablo login` (or set ABLO_API_KEY) so Ablo knows which project to register this database for.',
       { code: 'cli_api_key_missing' }
     );
   }

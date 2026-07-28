@@ -67,6 +67,17 @@ export const ephemeralKeyRequestSchema = z.object({
    * model admits it — an immutable model takes `read` and nothing else.
    */
   activeSchemaOperations: z.array(capabilityOperationSchema).min(1).optional(),
+  /**
+   * The third grant form: NO data operations at all. For a session that exists
+   * only to prove who the user is to a control-plane surface (the dashboard,
+   * the CLI's provision-key exchange), which authorizes each call against the
+   * member table itself. Such a session must be mintable for an organization
+   * that has no active schema — provisioning credentials is how a schema gets
+   * pushed in the first place — so this form involves no schema at all. The
+   * credential lands with an allowlist that matches nothing, because an EMPTY
+   * allowlist reads as unrestricted at the gate rather than as nothing.
+   */
+  controlPlaneOnly: z.literal(true).optional(),
   /** Lifetime in seconds. Capped by the server's maximum. */
   ttlSeconds: z.number().int().positive().optional(),
   /** A human-readable tag recorded with the key, for debugging. */
@@ -82,12 +93,16 @@ export const ephemeralKeyRequestSchema = z.object({
   },
 ).refine(
   (request) =>
-    (request.operations === undefined) !== (request.activeSchemaOperations === undefined),
+    [request.operations, request.activeSchemaOperations, request.controlPlaneOnly].filter(
+      (form) => form !== undefined,
+    ).length === 1,
   {
-    // Exactly one, never both and never neither. Neither would leave the
+    // Exactly one, never several and never none. None would leave the
     // credential with an empty allowlist, which reads as UNRESTRICTED at the
-    // gate rather than as nothing; both would leave two answers to one question.
-    message: 'provide either operations or activeSchemaOperations, not both',
+    // gate rather than as nothing; several would leave two answers to one
+    // question.
+    message:
+      'provide exactly one of operations, activeSchemaOperations, or controlPlaneOnly',
     path: ['operations'],
   },
 );

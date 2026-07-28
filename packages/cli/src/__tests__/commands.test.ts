@@ -8,7 +8,7 @@
  * stop: before the registry, `ablo schema` was dispatched and printed nowhere.
  */
 
-import { COMMANDS, CORE_GROUPS, FULL_GROUPS, coreRows, fullRows, parseCommandName, type Command } from '../commands';
+import { COMMANDS, CORE_GROUPS, FULL_GROUPS, coreRows, fullRows, parseCommandName, suggestCommand, type Command } from '../commands';
 
 /** The registry at its declared type. `COMMANDS` keeps literal types, under
  *  which TypeScript can already prove some of these checks vacuous — reading it
@@ -59,5 +59,29 @@ describe('command registry', () => {
     expect(parseCommandName('schema')).toBe('schema'); // hidden, still reachable
     expect(parseCommandName('bogus')).toBeNull();
     expect(parseCommandName(undefined)).toBeNull();
+  });
+});
+
+describe('suggestCommand — the answer an unrecognized command gets', () => {
+  it('redirects a wrong-but-plausible name to its noun-verb command', () => {
+    // Not typos: real intents whose command lives under `connect`. The
+    // registry never grows a second name for the same operation; the
+    // suggestion is a pointer, not an alias.
+    expect(suggestCommand('disconnect')).toBe('connect deregister');
+    expect(suggestCommand('deregister')).toBe('connect deregister');
+    expect(suggestCommand('register')).toBe('connect register');
+    expect(suggestCommand('rotate')).toBe('connect rotate');
+  });
+
+  it('lands a typo on the intended command — including a typo of a redirect', () => {
+    expect(suggestCommand('stauts')).toBe('status');
+    expect(suggestCommand('pussh')).toBe('push');
+    // The doubled-letter typo that motivated this: `disconnnect` must reach
+    // `connect deregister`, not whichever registry name is coincidentally near.
+    expect(suggestCommand('disconnnect')).toBe('connect deregister');
+  });
+
+  it('offers nothing for a name near no command', () => {
+    expect(suggestCommand('frobnicate')).toBeNull();
   });
 });

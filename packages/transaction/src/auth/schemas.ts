@@ -46,9 +46,20 @@ export const EphemeralKeyResponseSchema = z.object({
   branchId: z.string().min(1).nullable().default(null),
   branchRoot: z.boolean().default(false),
   syncGroups: z.array(z.string()),
-  /** Effective operation grant stored on the credential. */
-  operations: z.array(grantedOperationSchema).min(1),
-});
+  /** Effective operation grant stored on the credential. Empty ONLY for a
+   *  control-plane-only session, which grants no data operations by design. */
+  operations: z.array(grantedOperationSchema),
+  /** Echoed for a session minted with the control-plane-only grant form: the
+   *  credential proves identity to control-plane surfaces and can touch no
+   *  application data. */
+  controlPlaneOnly: z.literal(true).optional(),
+}).refine(
+  (response) => response.controlPlaneOnly === true || response.operations.length > 0,
+  {
+    message: 'a data session must carry at least one granted operation',
+    path: ['operations'],
+  },
+);
 
 export type EphemeralKeyResponse = z.infer<typeof EphemeralKeyResponseSchema>;
 

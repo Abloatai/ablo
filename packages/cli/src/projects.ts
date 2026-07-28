@@ -8,7 +8,7 @@
  *   ablo projects rename <ref> <name>  Rename a project's display name (the
  *                                      slug is the stable handle and never changes)
  *   ablo projects use <slug|id>        Set the active project (stored locally
- *                                      in config.json, like `ablo mode`)
+ *                                      in config.json, like the environment preference)
  *   ablo projects use default          Return to the organization's default project
  *
  * The active project is a local, non-secret targeting preference: `ablo status`

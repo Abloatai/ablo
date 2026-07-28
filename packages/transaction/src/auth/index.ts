@@ -241,16 +241,25 @@ interface MintUserSessionBase {
  * for organizations whose schemas it does not own has no way to name their
  * models, and a grant is checked against the session's schema at mint time. The
  * server expands the verbs across that schema and stores the same enumerated
- * `model.verb` allowlist either way.
+ * `model.verb` allowlist either way. The third form grants no data operations
+ * at all, for a session that only proves identity to control-plane surfaces —
+ * it involves no schema, so it mints even for an organization that has not
+ * pushed one yet.
  */
 export type MintUserSessionRequest = MintUserSessionBase & {
-  /** The allowlist, named model by model. Provide this or the field below. */
+  /** The allowlist, named model by model. Provide exactly one grant form. */
   readonly operations?: readonly GrantedOperation[];
   /**
    * The allowlist as verbs alone, expanded by the server across the models in
-   * the session's active schema. Provide this or the field above.
+   * the session's active schema. Provide exactly one grant form.
    */
   readonly activeSchemaOperations?: readonly CapabilityOperation[];
+  /**
+   * No data operations: the session proves who the user is to control-plane
+   * surfaces (the dashboard, credential provisioning) and can touch no
+   * application data. Provide exactly one grant form.
+   */
+  readonly controlPlaneOnly?: true;
 };
 
 /**
@@ -278,13 +287,19 @@ export async function mintUserSessionKey(
       { code: 'base_url_missing' },
     );
   }
-  // Exactly one grant form. Both would be two answers to one question; neither
+  // Exactly one grant form. Several would be two answers to one question; none
   // would send an empty allowlist, and an empty allowlist is read as
   // unrestricted rather than as nothing. The server refuses either way; this
   // says so before the round trip, where the caller can see which call did it.
-  if ((options.operations === undefined) === (options.activeSchemaOperations === undefined)) {
+  const grantForms = [
+    options.operations,
+    options.activeSchemaOperations,
+    options.controlPlaneOnly,
+  ].filter((form) => form !== undefined).length;
+  if (grantForms !== 1) {
     throw new AbloAuthenticationError(
-      'Provide either operations or activeSchemaOperations for a user-session mint, not both.',
+      'Provide exactly one of operations, activeSchemaOperations, or controlPlaneOnly ' +
+        'for a user-session mint.',
       { code: 'invalid_body' },
     );
   }
@@ -316,9 +331,11 @@ export async function mintUserSessionKey(
             }
           : {}),
         ...(options.syncGroups ? { syncGroups: options.syncGroups } : {}),
-        ...(options.operations
-          ? { operations: options.operations }
-          : { activeSchemaOperations: options.activeSchemaOperations }),
+        ...(options.controlPlaneOnly
+          ? { controlPlaneOnly: true }
+          : options.operations
+            ? { operations: options.operations }
+            : { activeSchemaOperations: options.activeSchemaOperations }),
         ttlSeconds: options.ttlSeconds,
         ...(options.label ? { label: options.label } : {}),
       }),

@@ -139,11 +139,16 @@ const wire = (
   recovery?: RecoveryClass
 ): ErrorCodeSpec => ({ category, surface: 'wire', httpStatus, retryable, message, recovery });
 
-const client = (category: ErrorCategory, message: string): ErrorCodeSpec => ({
+const client = (
+  category: ErrorCategory,
+  message: string,
+  recovery?: RecoveryClass
+): ErrorCodeSpec => ({
   category,
   surface: 'client',
   retryable: false,
   message,
+  ...(recovery !== undefined ? { recovery } : {}),
 });
 
 /**
@@ -575,9 +580,13 @@ export const ERROR_CODES = {
     'validation',
     'The CLI was invoked with an unknown flag or a malformed flag value.'
   ),
+  // recovery `none`: no credential EXISTS yet, so the auth-category default
+  // ('auth_blocked' — "the credential was rejected") would tell the reader to
+  // inspect a key they don't have. The message carries the actual next step.
   cli_api_key_missing: client(
     'auth',
-    'The command needs an API key and none was found on this machine. Run `ablo login` (or set ABLO_API_KEY), then re-run the command.'
+    'The command needs an API key and none was found on this machine. Run `ablo login` (or set ABLO_API_KEY), then re-run the command.',
+    'none'
   ),
   cli_database_url_missing: client(
     'validation',

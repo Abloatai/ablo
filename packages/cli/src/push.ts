@@ -546,7 +546,7 @@ export async function push(argv: readonly string[]): Promise<void> {
 
   // Resolve the true target from the key: the server-confirmed org, project, and
   // environment it acts on, reconciled against the local `ablo projects use` /
-  // `ablo mode` preferences. Everything shown and confirmed below reads from
+  // stored environment preference. Everything shown and confirmed below reads from
   // this one resolution, so the banner can't say one thing while the push does
   // another.
   const target = await resolveTarget({ url: args.url, apiKey: args.apiKey, keySource });

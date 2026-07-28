@@ -1,8 +1,8 @@
 /**
  * `ablo connect deregister` — remove the active project's data-source registration so
  * Ablo stops reading and writing that database. Scoped to one plane: the active
- * project (`ablo projects use`) in the active environment (`ablo mode` + the
- * key's prefix), resolved and shown before the destructive call so a production
+ * project (`ablo projects use`) in the key's environment (its sk_test_/sk_live_
+ * prefix), resolved and shown before the destructive call so a production
  * plane is never disconnected by surprise. The server derives the plane from the
  * key, so a key can only disconnect its own org/project/environment/sandbox. The
  * database is untouched; the registration and Ablo's replication state go away —
@@ -154,7 +154,7 @@ export async function disconnect(argv: readonly string[]): Promise<void> {
   const apiUrl = apiBaseUrl();
 
   // Resolve the exact plane this key acts on (project + environment), reconciled
-  // against the local `ablo projects use` / `ablo mode` preferences — the same
+  // against the local `ablo projects use` selection — the same
   // resolution `ablo push` shows, so the banner can't say one plane while the
   // disconnect hits another.
   const target = await resolveTarget({ url: apiUrl, apiKey, keySource });
@@ -197,7 +197,7 @@ export const DISCONNECT_USAGE = `${brand('ablo')} connect deregister  ${pc.dim("
     npx ablo connect deregister          Remove the active project's data source (confirms first)
     npx ablo connect deregister --yes    Skip the confirmation
 
-  Acts on one plane — the active project (${pc.bold('ablo projects use')}) in the active
-  environment (${pc.bold('ablo mode')}), shown before it runs. Removes the registration and
+  Acts on one plane — the active project (${pc.bold('ablo projects use')}) in the key's
+  environment (its ${pc.bold('sk_test_')}/${pc.bold('sk_live_')} prefix), shown before it runs. Removes the registration and
   Ablo's replication state for that plane, so Ablo stops reading and writing the
   database. Reconnect with ${pc.bold('ablo connect')}.`;

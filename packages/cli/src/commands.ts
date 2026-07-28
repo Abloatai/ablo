@@ -273,6 +273,73 @@ export function parseCommandName(raw: string | undefined): CommandName | null {
   return raw !== undefined && BY_NAME.has(raw) ? (raw as CommandName) : null;
 }
 
+/**
+ * Where a name someone plausibly types leads, when it is not a command of its
+ * own. The registry stays noun-verb (`connect deregister`, never a second
+ * top-level `disconnect`); this map does the wayfinding without adding a
+ * second name for the same operation — the answer is a pointer, not an alias.
+ */
+const REDIRECTS: ReadonlyMap<string, string> = new Map([
+  ['disconnect', 'connect deregister'],
+  ['deregister', 'connect deregister'],
+  ['register', 'connect register'],
+  ['rotate', 'connect rotate'],
+]);
+
+/** Damerau-lite edit distance, enough to catch a doubled, dropped, or
+ *  swapped letter. Rolling typed-array rows: three suffice because the
+ *  transposition term reaches back exactly two. */
+function editDistance(a: string, b: string): number {
+  const cols = b.length + 1;
+  let prevPrev = new Int32Array(cols);
+  let prev = new Int32Array(cols);
+  let curr = new Int32Array(cols);
+  // Every read below is in bounds by construction (j ranges over [0, cols)
+  // and the arrays are `cols` long); the fallback exists only for the
+  // unchecked-index-access rule and is unreachable.
+  const at = (row: Int32Array, index: number): number => row[index] ?? 0;
+  for (let j = 0; j < cols; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j < cols; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      let best = Math.min(at(prev, j) + 1, at(curr, j - 1) + 1, at(prev, j - 1) + cost);
+      if (
+        i > 1 &&
+        j > 1 &&
+        a.charCodeAt(i - 1) === b.charCodeAt(j - 2) &&
+        a.charCodeAt(i - 2) === b.charCodeAt(j - 1)
+      ) {
+        best = Math.min(best, at(prevPrev, j - 2) + 1);
+      }
+      curr[j] = best;
+    }
+    [prevPrev, prev, curr] = [prev, curr, prevPrev];
+  }
+  return at(prev, b.length);
+}
+
+/**
+ * The invocation an unrecognized command was probably reaching for, or null.
+ * Checks the redirect map first (`disconnect` is not a typo, it is a wrong
+ * name with a right answer), then nearest-edit-distance over every command
+ * name AND redirect key, so `disconnnect` also lands on `connect deregister`
+ * rather than whichever registry name happens to be closest.
+ */
+export function suggestCommand(raw: string): string | null {
+  const exact = REDIRECTS.get(raw);
+  if (exact) return exact;
+  let best: { name: string; distance: number } | null = null;
+  for (const name of [...BY_NAME.keys(), ...REDIRECTS.keys()]) {
+    const distance = editDistance(raw.toLowerCase(), name);
+    if (distance <= 2 && (best === null || distance < best.distance)) {
+      best = { name, distance };
+    }
+  }
+  if (best === null) return null;
+  return REDIRECTS.get(best.name) ?? best.name;
+}
+
 /** Per-command usage, when the command's module publishes one. */
 export function usageFor(name: CommandName): string | undefined {
   return BY_NAME.get(name)?.usage;

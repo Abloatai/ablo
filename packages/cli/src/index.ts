@@ -11,11 +11,13 @@ import {
   coreRows,
   fullRows,
   parseCommandName,
+  suggestCommand,
   usageFor,
   CORE_GROUPS,
   FULL_GROUPS,
   type CommandName,
 } from './commands';
+import { AbloValidationError } from '@abloatai/transaction/errors';
 import { push } from './push';
 import { generate } from './generate';
 import { dev } from './dev';
@@ -157,8 +159,25 @@ function runRenamedSchema(argv: readonly string[]): void {
 }
 
 async function main() {
-  const command = parseCommandName(process.argv[2]);
+  const raw = process.argv[2];
+  const command = parseCommandName(raw);
   const argv = process.argv.slice(3);
+
+  // An unrecognized command must SAY so and exit non-zero — silently printing
+  // the help reads as "that command doesn't exist, here's everything", costs a
+  // person a re-read and an agent a whole turn, and hid both a typo
+  // (`disconnnect`) and a wrong-name (`disconnect` for `connect deregister`)
+  // behind an exit code of 0. `help` stays a help word, not an error.
+  if (!command && raw !== undefined && raw !== 'help' && !raw.startsWith('-')) {
+    const suggestion = suggestCommand(raw);
+    throw new AbloValidationError(
+      `\`${raw}\` isn't an ablo command.` +
+        (suggestion
+          ? ` Did you mean \`ablo ${suggestion}\`?`
+          : ' Run `ablo help --all` to see every command.'),
+      { code: 'cli_invalid_arguments' }
+    );
+  }
 
   // `ablo <command> --help` / `-h` should print usage, not forward `--help` into
   // the command's own arg parser — which throws "unknown flag: --help" and reads
