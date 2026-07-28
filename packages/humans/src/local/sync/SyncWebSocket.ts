@@ -272,12 +272,9 @@ export class SyncWebSocket<
   protected override handleDelta(rawDelta: unknown): void {
     const delta = this.normalizeWireDelta(rawDelta);
     if (!delta) return;
-    getContext().logger.debug('Received delta', {
-      action: delta.actionType,
-      model: delta.modelName,
-      id: delta.modelId,
-      syncId: delta.id,
-    });
+    // No per-delta debug here: the payload object is built even when the
+    // logger discards it, and this runs at the full live wire rate. Dropped
+    // malformed deltas are still logged by `normalizeWireDelta`.
 
     // Do not advance `this.cursor.lastSyncId` on receipt. The runtime cursor
     // must stay consistent with what has been persisted locally; otherwise the

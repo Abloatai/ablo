@@ -315,6 +315,19 @@ export interface Schema<S extends SchemaRecord = SchemaRecord> {
    * stamping it never perturbs `schemaHash`.
    */
   readonly sourceSchemaHash?: string;
+
+  /**
+   * Set only on a projection produced by `selectModels`/`omitModels`: the
+   * source-schema model keys the projection dropped, sorted. Clients bound to a
+   * projection use this to answer an access to a left-out model with a real
+   * error naming the model and the fix, instead of `undefined` and a TypeError
+   * three frames later. The distinction matters because an app can compile
+   * against the full source schema while running a projection, so the type
+   * system never sees the gap. Absent on a schema authored directly, where an
+   * unknown property is a typo the types already catch. Excluded from
+   * `toSchemaJSON`, so stamping it never perturbs `schemaHash`.
+   */
+  readonly omittedModels?: readonly string[];
 }
 
 // ── Type inference (powered by Zod) ───────────────────────────────────────

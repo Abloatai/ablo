@@ -69,13 +69,18 @@ find_release_run() {
   local mirror_sha="$1"
   local run_id=""
   for attempt in 1 2 3 4 5 6; do
-    run_id="$(gh run list -R "$MIRROR_REPO" --workflow=release.yml \
-      --commit "$mirror_sha" -L1 --json databaseId -q '.[0].databaseId')"
+    run_id="$(release_run_for_commit "$mirror_sha")"
     [[ -n "$run_id" ]] && break
     echo "    release run not visible yet ($attempt/6)" >&2
     sleep 5
   done
   printf '%s' "$run_id"
+}
+
+release_run_for_commit() {
+  local mirror_sha="$1"
+  gh run list -R "$MIRROR_REPO" --workflow=release.yml \
+    --commit "$mirror_sha" -L1 --json databaseId -q '.[0].databaseId'
 }
 
 verify_npm_versions() {
@@ -218,7 +223,12 @@ publish_release() {
     echo ">>> publish 3/5: waiting for GitHub verification and npm publishing"
     local run_id
     local conclusion
-    run_id="$(find_release_run "$mirror_sha")"
+    run_id="$(release_run_for_commit "$mirror_sha")"
+    if [[ -z "$run_id" ]]; then
+      echo "    dispatching release workflow for reviewed mirror"
+      gh workflow run release.yml -R "$MIRROR_REPO" --ref main
+      run_id="$(find_release_run "$mirror_sha")"
+    fi
     if [[ -z "$run_id" ]]; then
       echo "error: no release.yml run found for mirror commit $mirror_sha" >&2
       exit 1

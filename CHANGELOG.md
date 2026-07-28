@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.39.0
+
+### Schema-relative session grants
+
+`mintUserSessionKey` accepts `activeSchemaOperations` in place of `operations`.
+Send the verbs a session needs, such as `['read', 'create', 'update',
+'delete']`, and the server resolves them against the models in that session's
+active schema. A backend that mints sessions for organizations whose schemas it
+does not own no longer has to enumerate models it has no way to know.
+
+Calls that pass `operations` are unchanged. A request carries one form or the
+other, and the SDK rejects a call carrying both or neither before the round
+trip. What the session ends up holding is the same concrete `model.verb`
+allowlist either way, so nothing about enforcement changes. A verb is granted
+only where the model accepts it, which leaves an immutable model with reads
+alone. An organization that has not pushed a schema yet is told to push one
+rather than issued a key, since a grant that resolves to nothing would widen
+rather than narrow what the session can reach.
+
+### A named error for models outside your schema
+
+Reaching for a model that your schema projection leaves out now fails with a
+named `model_not_in_schema` error at the point of access, rather than
+surfacing later as a property that happens to be undefined.
+
+### Declared premises serialize against concurrent writers
+
+A commit that declares row premises now serializes those rows against
+concurrent commits, not only the rows it writes. Two commits that read the
+same rows and wrote different ones could previously both pass validation in a
+narrow window. The later commit now observes the earlier one and is rejected
+as stale, so a functional update re-reads and re-runs instead of committing on
+outdated reads.
+
+### Faster, atomic live updates
+
+The client applies an incoming batch of changes as one action, so reactive
+observers see the whole batch or none of it, never a half-applied batch. The
+apply path does substantially less work per change, the final partial batch of
+a burst materializes after 10 ms rather than 100 ms, and the client no longer
+assembles debug payloads it discards.
+
 ## 0.38.0
 
 ### Branch-isolated development

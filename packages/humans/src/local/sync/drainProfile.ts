@@ -32,6 +32,19 @@ export interface DrainStageTotals {
   readonly calls: number;
 }
 
+/**
+ * One flush batch on the wall clock. Wall time (`Date.now`) rather than
+ * `performance.now`, because rows cross the worker boundary and each thread
+ * has its own `performance` origin — the drain-tail stamps learned the same
+ * lesson. Stage entries are the batch's own share of each pipeline stage.
+ */
+export interface DrainBatchRow {
+  readonly startedAtWallMs: number;
+  readonly endedAtWallMs: number;
+  readonly deltas: number;
+  readonly stages: Readonly<Partial<Record<DrainStage, number>>>;
+}
+
 export interface DrainProfile {
   /** Flush batches drained. The per-batch fixed cost multiplies by this. */
   readonly batches: number;
@@ -42,6 +55,12 @@ export interface DrainProfile {
   /** Wall time from the first observed stage to the last. */
   readonly spanMs: number;
   readonly stages: Readonly<Record<DrainStage, DrainStageTotals>>;
+  /**
+   * The most recent flush batches, oldest first, capped — enough to cover a
+   * drain tail. Optional because derived profiles (window subtraction, fleet
+   * merges) drop it; only a worker's own snapshot carries rows.
+   */
+  readonly recentBatches?: readonly DrainBatchRow[];
 }
 
 const DRAIN_STAGES: readonly DrainStage[] = [
@@ -72,6 +91,73 @@ let deduplicated = 0;
 let firstMark: number | undefined;
 let lastMark = 0;
 
+/** Ring of recent batch rows. ~50 batches/sec at benchmark rates, so this covers seconds of tail. */
+const BATCH_ROW_CAP = 128;
+let batchRows: DrainBatchRow[] = [];
+interface OpenBatchRow {
+  startedAtWallMs: number;
+  deltas: number;
+  stages: Partial<Record<DrainStage, number>>;
+}
+/**
+ * The batch currently being flushed. Module-global like the totals above, so
+ * an isolate hosting several stores attributes interleaved awaits to whichever
+ * batch is open — the same per-isolate approximation the totals already make.
+ */
+let currentRow: OpenBatchRow | null = null;
+
+/**
+ * Wall-stamped persisted-cursor advances, oldest first. The benchmark's drain
+ * gate reads THESE rather than observing the cursor from a timer or a
+ * cross-thread poll: any observation that has to be scheduled onto the
+ * worker's event loop queues behind the very drain burst it is measuring and
+ * reports the queue's latency as drain. A stamp taken synchronously inside
+ * the acknowledge stage cannot be deferred by anything.
+ */
+export interface AcknowledgeStamp {
+  readonly syncId: number;
+  readonly atWallMs: number;
+}
+const ACK_STAMP_CAP = 512;
+let ackStamps: AcknowledgeStamp[] = [];
+
+/**
+ * Record a persisted-cursor advance. Called by the pipeline's acknowledge
+ * stage. Unlike every stage timer here, this is NOT gated on the profiler
+ * flag: it is one wall-clock read and one bounded push per flush batch —
+ * nothing against the batch's own work — and the certification benchmark
+ * runs unprofiled (the profiler costs ~15%), so the honest drain stamp must
+ * exist without it.
+ */
+export function observeDrainAcknowledge(syncId: number): void {
+  ackStamps.push({ syncId, atWallMs: Date.now() });
+  if (ackStamps.length > ACK_STAMP_CAP) ackStamps.shift();
+}
+
+/** The recorded persisted-advance stamps, oldest first. */
+export function drainAcknowledgeStamps(): readonly AcknowledgeStamp[] {
+  return [...ackStamps];
+}
+
+/** Begin a batch row. Called by the pipeline at flush entry when profiling. */
+export function openDrainBatchRow(deltaCount: number): void {
+  if (!enabled) return;
+  currentRow = { startedAtWallMs: Date.now(), deltas: deltaCount, stages: {} };
+}
+
+/** Close the open batch row and commit it to the ring. */
+export function closeDrainBatchRow(): void {
+  if (!enabled || currentRow === null) return;
+  batchRows.push({
+    startedAtWallMs: currentRow.startedAtWallMs,
+    endedAtWallMs: Date.now(),
+    deltas: currentRow.deltas,
+    stages: currentRow.stages,
+  });
+  if (batchRows.length > BATCH_ROW_CAP) batchRows.shift();
+  currentRow = null;
+}
+
 /**
  * Read once. A profiler that consults the environment on every delta would
  * itself become a per-delta cost in the path it is measuring.
@@ -98,6 +184,9 @@ export function observeDrainStage(stage: DrainStage, elapsedMs: number): void {
   const entry = totals[stage];
   entry.totalMs += elapsedMs;
   entry.calls += 1;
+  if (currentRow !== null) {
+    currentRow.stages[stage] = (currentRow.stages[stage] ?? 0) + elapsedMs;
+  }
   mark(elapsedMs);
 }
 
@@ -150,6 +239,7 @@ export function drainProfileSnapshot(): DrainProfile {
     deduplicated,
     spanMs: firstMark === undefined ? 0 : lastMark - firstMark,
     stages,
+    recentBatches: [...batchRows],
   };
 }
 
@@ -161,4 +251,7 @@ export function resetDrainProfile(): void {
   deduplicated = 0;
   firstMark = undefined;
   lastMark = 0;
+  batchRows = [];
+  currentRow = null;
+  ackStamps = [];
 }

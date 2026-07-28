@@ -24,7 +24,14 @@ import {
   type AbloPlugin,
   type AppliedChange,
 } from '../../plugin.js';
-import { observeDrainBatch, timeDrainStage, timeDrainStageAsync } from './drainProfile.js';
+import {
+  observeDrainBatch,
+  observeDrainAcknowledge,
+  timeDrainStage,
+  timeDrainStageAsync,
+  openDrainBatchRow,
+  closeDrainBatchRow,
+} from './drainProfile.js';
 
 /**
  * What the pipeline needs back from the surrounding store: the shared mutable
@@ -409,6 +416,18 @@ async function flushDeltaBatch(
   ctx: DeltaPipelineContext,
   queuedDeltas: SyncDelta[],
 ): Promise<void> {
+  openDrainBatchRow(queuedDeltas.length);
+  try {
+    await flushDeltaBatchInner(ctx, queuedDeltas);
+  } finally {
+    closeDrainBatchRow();
+  }
+}
+
+async function flushDeltaBatchInner(
+  ctx: DeltaPipelineContext,
+  queuedDeltas: SyncDelta[],
+): Promise<void> {
   const stagePlugins = ctx.stagePlugins ?? [];
   const deduplicatedDeltas = timeDrainStage('dedupe', () => ctx.deduplicateDeltas(queuedDeltas));
   observeDrainBatch(queuedDeltas.length, deduplicatedDeltas.length);
@@ -489,6 +508,7 @@ async function flushDeltaBatch(
     timeDrainStage('acknowledge', () => {
       ctx.acknowledge(persistedSyncId);
       ctx.advancePersisted(persistedSyncId);
+      observeDrainAcknowledge(persistedSyncId);
       runStage(stagePlugins, 'acknowledge', { syncId: persistedSyncId });
     });
   }

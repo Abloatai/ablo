@@ -1,5 +1,7 @@
 # @ablo/agent
 
+## 0.39.0
+
 ## 0.38.0
 
 - Narrowed `@ablo/agent` to internal AI SDK composition and Ablo coordination

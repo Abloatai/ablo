@@ -642,9 +642,6 @@
     },
     "@typescript-eslint/no-unused-vars": {
       "count": 1
-    },
-    "no-prototype-builtins": {
-      "count": 1
     }
   },
   "src/local/ModelRegistry.ts": {

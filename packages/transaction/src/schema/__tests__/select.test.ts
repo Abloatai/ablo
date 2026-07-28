@@ -7,8 +7,8 @@
  */
 
 import { defineSchema, model, relation, identityRole, z } from '../index.js';
-import { selectModels, omitModels } from '../select.js';
-import { schemaHash } from '../serialize.js';
+import { selectModels, omitModels, omittedModelError } from '../select.js';
+import { schemaHash, serializeSchema } from '../serialize.js';
 
 function buildCanonical() {
   return defineSchema(
@@ -142,5 +142,41 @@ describe('sourceSchemaHash stamping (drift-check support)', () => {
     // Only projections carry it; a hand-authored schema IS the deployed schema,
     // so plain own-hash equality is the right drift check there.
     expect(buildCanonical().sourceSchemaHash).toBeUndefined();
+  });
+});
+
+describe('omittedModels recording (projected-out access support)', () => {
+  it('records the dropped model keys, sorted', () => {
+    const sub = selectModels(buildCanonical(), ['organizations', 'datarooms']);
+    expect(sub.omittedModels).toEqual(['files', 'slides', 'users']);
+  });
+
+  it('unions a subset-of-a-subset with what the source already dropped', () => {
+    // A client bound to the nested projection cannot reach anything the
+    // intermediate dropped either, so the record must name all of it.
+    const intermediate = omitModels(buildCanonical(), ['slides']);
+    const nested = selectModels(intermediate, ['organizations']);
+    expect(nested.omittedModels).toEqual(['datarooms', 'files', 'slides', 'users']);
+  });
+
+  it('leaves a directly-authored schema without an omitted list', () => {
+    // On a hand-authored schema an unknown property is a typo the types catch;
+    // only a projection creates the compile-full-run-subset gap this closes.
+    expect(buildCanonical().omittedModels).toBeUndefined();
+  });
+
+  it('stays out of the serialized form, so recording it never perturbs the hash', () => {
+    const sub = selectModels(buildCanonical(), ['organizations', 'datarooms']);
+    expect(serializeSchema(sub)).not.toContain('omittedModels');
+  });
+});
+
+describe('omittedModelError', () => {
+  it('names the model, the cause, and the fix, under the stable code', () => {
+    const err = omittedModelError('invoices');
+    expect(err.code).toBe('model_not_in_schema');
+    expect(err.param).toBe('invoices');
+    expect(err.message).toContain('invoices');
+    expect(err.message).toContain('projection');
   });
 });

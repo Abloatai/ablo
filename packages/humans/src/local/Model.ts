@@ -90,6 +90,19 @@ export interface ModelChanges {
 const EMPTY_DERIVED_GETTERS: readonly string[] = Object.freeze([]);
 
 /**
+ * How {@link Model.assignFieldsFromData} treats one key on instances of one
+ * model class. Resolved once per (class, key) and cached: the decision depends
+ * only on class shape — prototype getters, registry annotations, declared
+ * fields — which is identical across instances of a generated model class.
+ * Every write disposition is still guarded per instance by a `key in this`
+ * check, so an instance that genuinely lacks the key falls back to the full
+ * resolution instead of trusting the cache.
+ */
+type FieldDisposition = 'write' | 'write-date' | 'skip-absent' | 'skip-readonly';
+
+const fieldWritePlans = new WeakMap<object, Map<string, FieldDisposition>>();
+
+/**
  * The abstract base class every domain model extends. It holds the model's id
  * and timestamps, tracks in-place property changes for change detection and
  * undo, and serializes itself, while leaving persistence and sync to the store
@@ -119,6 +132,18 @@ export abstract class Model {
 
   /** Original data snapshot */
   private _originalData?: ModelData;
+
+  /**
+   * Whether the persisted baseline needs recapturing. Hydration and ack land
+   * far more often than anything reads the baseline — an observer-only client
+   * reads it never — so each of those sites marks the snapshot stale and
+   * {@link getOriginalSnapshot} materializes it on first read. Correctness
+   * rests on the tracking invariant: every non-hydration write is recorded in
+   * `modifiedProperties` (first-old-wins), so between the stale mark and the
+   * read, untracked fields still hold exactly the values an eager capture
+   * would have recorded.
+   */
+  private _originalDataStale = false;
 
   /** Sync status */
   syncStatus: 'pending' | 'syncing' | 'synced' = 'pending';
@@ -291,7 +316,8 @@ export abstract class Model {
    */
   markAsPersisted(): void {
     this._isNew = false;
-    this._originalData = this.captureSnapshot();
+    this._originalData = undefined;
+    this._originalDataStale = true;
   }
 
   /**
@@ -315,6 +341,10 @@ export abstract class Model {
    * last acknowledged state would already be the authoritative baseline.
    */
   getOriginalSnapshot(): Readonly<ModelData> | undefined {
+    if (this._originalDataStale) {
+      this._originalData = this.captureSnapshot();
+      this._originalDataStale = false;
+    }
     return this._originalData;
   }
 
@@ -324,7 +354,8 @@ export abstract class Model {
   clearChanges(): void {
     runInAction(() => {
       this.modifiedProperties.clear();
-      this._originalData = this.captureSnapshot();
+      this._originalData = undefined;
+      this._originalDataStale = true;
     });
   }
 
@@ -580,48 +611,39 @@ export abstract class Model {
     data: ModelData,
     onWrite?: (key: string, oldValue: unknown, newValue: unknown) => void,
   ): void {
-    // Update properties with safety checks for read-only/computed accessors
-    for (const [key, raw] of Object.entries(data)) {
+    let plan = fieldWritePlans.get(this.constructor);
+    if (!plan) {
+      plan = new Map();
+      fieldWritePlans.set(this.constructor, plan);
+    }
+
+    for (const key in data) {
       if (key === 'id') continue;
+      if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+      const raw = data[key];
 
-      // Only attempt to set if the property exists on instance or prototype
-      if (!(this.hasOwnProperty(key) || key in this)) continue;
-
-      // Never assign to MobX computed properties (they may expose a setter that throws)
-      try {
-        if (isComputedProp(this, key)) {
-          continue;
-        }
-      } catch {
-        // If MobX internals are unavailable for some reason, fall back to descriptor checks below
+      let disposition = plan.get(key);
+      if (disposition === undefined) {
+        disposition = this.resolveFieldDisposition(key);
+        plan.set(key, disposition);
       }
 
-      // Resolve property descriptor from own or prototype chain
-      const ownDesc = Object.getOwnPropertyDescriptor(this, key);
-      let desc = ownDesc;
-      if (!desc) {
-        let proto = Object.getPrototypeOf(this) as object | null;
-        while (proto && proto !== Object.prototype && !desc) {
-          desc = Object.getOwnPropertyDescriptor(proto, key);
-          proto = Object.getPrototypeOf(proto) as object | null;
-        }
-      }
-
-      // Determine writability: allow if data descriptor writable, or accessor with setter
-      const writable = desc
-        ? ('writable' in desc && !!desc.writable) ||
-          ('set' in desc && typeof desc.set === 'function')
-        : true;
-      if (!writable) {
-        // Skip read-only accessor properties (getter-only)
+      if (disposition === 'skip-readonly') continue;
+      if (disposition === 'skip-absent') {
+        // The plan was built from an instance that lacked this key. Re-resolve
+        // for this instance without touching the cache, so heterogeneous
+        // shapes stay correct at the cost of the slow path.
+        if (!(key in this)) continue;
+        disposition = this.resolveFieldDisposition(key);
+        if (disposition === 'skip-readonly' || disposition === 'skip-absent') continue;
+      } else if (!(key in this)) {
         continue;
       }
 
       // Handle date conversions
-      const value =
-        (key === 'createdAt' || key === 'updatedAt' || key === 'archivedAt') && raw
-          ? new Date(raw as string | number)
-          : raw;
+      const value = disposition === 'write-date' && raw
+        ? new Date(raw as string | number)
+        : raw;
 
       // Capture the pre-write value BEFORE assignment so trackers
       // (undo inverse, getChanges) see the true previous value.
@@ -632,6 +654,44 @@ export abstract class Model {
 
       onWrite?.(key, oldValue, value);
     }
+  }
+
+  /**
+   * The uncached decision for one key: existence on instance or prototype,
+   * never a MobX computed (its setter may throw), and writability resolved
+   * through the descriptor chain — a data descriptor's `writable` or an
+   * accessor's setter.
+   */
+  private resolveFieldDisposition(key: string): FieldDisposition {
+    if (!(key in this)) return 'skip-absent';
+
+    try {
+      if (isComputedProp(this, key)) {
+        return 'skip-readonly';
+      }
+    } catch {
+      // If MobX internals are unavailable for some reason, fall back to descriptor checks below
+    }
+
+    const ownDesc = Object.getOwnPropertyDescriptor(this, key);
+    let desc = ownDesc;
+    if (!desc) {
+      let proto = Object.getPrototypeOf(this) as object | null;
+      while (proto && proto !== Object.prototype && !desc) {
+        desc = Object.getOwnPropertyDescriptor(proto, key);
+        proto = Object.getPrototypeOf(proto) as object | null;
+      }
+    }
+
+    const writable = desc
+      ? ('writable' in desc && !!desc.writable) ||
+        ('set' in desc && typeof desc.set === 'function')
+      : true;
+    if (!writable) return 'skip-readonly';
+
+    return key === 'createdAt' || key === 'updatedAt' || key === 'archivedAt'
+      ? 'write-date'
+      : 'write';
   }
 
   /**
@@ -670,7 +730,8 @@ export abstract class Model {
 
     // Mark as persisted if updating existing model
     if (!this._isNew) {
-      this._originalData = this.captureSnapshot();
+      this._originalData = undefined;
+      this._originalDataStale = true;
     }
 
     this.didUpdate();

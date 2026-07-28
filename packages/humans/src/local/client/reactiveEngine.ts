@@ -13,6 +13,7 @@
  */
 
 import type { Schema, SchemaRecord } from '@abloatai/transaction/schema/schema';
+import { omittedModelError } from '@abloatai/transaction/schema/select';
 import {
   durableCommitOperationSchema,
   type DurableCommitOperation,
@@ -933,6 +934,23 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
       });
     },
   } as Ablo<S>;
+
+  // A model the schema projection left out answers with an error naming the
+  // model and the fix, not `undefined`. An app can compile against the full
+  // source schema while running a projection, so the type system never sees
+  // this gap; without the stub the caller crashes one property later with a
+  // bare TypeError ("reading 'local'") that names neither. Non-enumerable so
+  // spread, Object.keys, and JSON.stringify walk past the stubs untriggered.
+  for (const name of schema.omittedModels ?? []) {
+    if (name in engine) continue;
+    Object.defineProperty(engine, name, {
+      get() {
+        throw omittedModelError(name);
+      },
+      enumerable: false,
+      configurable: true,
+    });
+  }
 
   return engine;
 }

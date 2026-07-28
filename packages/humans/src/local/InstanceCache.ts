@@ -55,7 +55,22 @@ export class InstanceCache {
   // Non-observable access time tracking — kept outside observable.map so that
   // updating timestamps in get() during React render does NOT trigger MobX
   // reactions (which would cause infinite re-render loops).
+  //
+  // Every write goes through `touchAccess`, which moves the key to the map's
+  // back, so iteration order IS recency order (oldest first). Eviction relies
+  // on that: `evictOldestBatch` takes the first eligible keys instead of
+  // scanning every entry.
   private accessTimes = new Map<string, number>();
+
+  /**
+   * Record an access. The delete-then-set moves an existing key to the back
+   * of the map's insertion order, which is what keeps `accessTimes` iterable
+   * oldest-first for eviction.
+   */
+  private touchAccess(id: string, at: number): void {
+    this.accessTimes.delete(id);
+    this.accessTimes.set(id, at);
+  }
 
   // Deduplication tracking
   private recentAdditions = new Map<string, number>(); // "modelType:modelId" -> timestamp
@@ -203,7 +218,7 @@ export class InstanceCache {
       const model = entry.weakRef.deref();
       if (model) {
         entry.model = model;
-        if (id) this.accessTimes.set(id, Date.now());
+        if (id) this.touchAccess(id, Date.now());
         return model;
       }
     }
@@ -250,7 +265,7 @@ export class InstanceCache {
     }
 
     // Update access time in non-observable map — prevents MobX reactions during render
-    this.accessTimes.set(id, Date.now());
+    this.touchAccess(id, Date.now());
     this.metrics.hits++;
 
     model?.ensureObservable();
@@ -312,7 +327,7 @@ export class InstanceCache {
         runInAction(() => {
           this.entries.set(id, { ...existingEntry, scope });
         });
-        this.accessTimes.set(id, Date.now());
+        this.touchAccess(id, Date.now());
       }
       this.metrics.duplicatesSkipped++;
       return;
@@ -381,7 +396,7 @@ export class InstanceCache {
       entry.weakRef = new WeakRef(model);
     }
 
-    this.accessTimes.set(id, Date.now());
+    this.touchAccess(id, Date.now());
     runInAction(() => {
       this.entries.set(id, entry);
       this.addToTypeIndex(id, model.getModelName());
@@ -415,7 +430,7 @@ export class InstanceCache {
         runInAction(() => {
           this.entries.set(id, { ...existingEntry, scope });
         });
-        this.accessTimes.set(id, Date.now());
+        this.touchAccess(id, Date.now());
       }
 
       this.notifySubscribers(existingModel);
@@ -462,7 +477,7 @@ export class InstanceCache {
       if (existingEntry?.model && !existingEntry.model.disposed) {
         if (existingEntry.scope !== scope) {
           this.entries.set(id, { ...existingEntry, scope });
-          this.accessTimes.set(id, now);
+          this.touchAccess(id, now);
         }
         this.metrics.duplicatesSkipped++;
         continue;
@@ -472,7 +487,7 @@ export class InstanceCache {
         model,
         scope,
       };
-      this.accessTimes.set(id, now);
+      this.touchAccess(id, now);
 
       if (this.config.useWeakRefs && this.isLargeModel(model)) {
         entry.weakRef = new WeakRef(model);
@@ -521,7 +536,7 @@ export class InstanceCache {
         }
         if (existingEntry.scope !== scope) {
           this.entries.set(id, { ...existingEntry, scope });
-          this.accessTimes.set(id, Date.now());
+          this.touchAccess(id, Date.now());
         }
         this.notifySubscribers(existingEntry.model);
         // Notify views of the update
@@ -536,7 +551,7 @@ export class InstanceCache {
           this.evictOldest();
         }
         const entry: ModelEntry = { model, scope };
-        this.accessTimes.set(id, Date.now());
+        this.touchAccess(id, Date.now());
         if (this.config.useWeakRefs && this.isLargeModel(model)) {
           entry.weakRef = new WeakRef(model);
         }
@@ -773,7 +788,7 @@ export class InstanceCache {
       runInAction(() => {
         this.entries.set(id, { ...entry, scope });
       });
-      this.accessTimes.set(id, Date.now());
+      this.touchAccess(id, Date.now());
     }
   }
 
@@ -989,7 +1004,7 @@ export class InstanceCache {
     // Restore access times: clear then re-add preserved
     this.accessTimes.clear();
     for (const [id, time] of preservedAccessTimes) {
-      this.accessTimes.set(id, time);
+      this.touchAccess(id, time);
     }
     // No cache to invalidate — typeIndex + entries are directly observable
   }
@@ -1008,7 +1023,7 @@ export class InstanceCache {
       return false;
     }
 
-    this.accessTimes.set(id, Date.now());
+    this.touchAccess(id, Date.now());
     return true;
   }
 
@@ -1107,7 +1122,7 @@ export class InstanceCache {
             model.hasObservedCollections()
           ) {
             // Model has active React observers - refresh access time and skip GC
-            this.accessTimes.set(id, now);
+            this.touchAccess(id, now);
             skippedObserved++;
             continue;
           }
@@ -1183,59 +1198,37 @@ export class InstanceCache {
   }
 
   /**
-   * Free capacity for a whole incoming frame in one scan.
+   * Free capacity for a whole incoming frame by taking the first eligible
+   * keys of the recency-ordered `accessTimes` map.
    *
-   * Calling evictOldest once per model made a full 10k-entry cache scan
-   * `incomingCount` times. A 400-row delta frame therefore performed four
-   * million entry visits before constructing models. Keep only the `count`
-   * oldest candidates in a bounded max-heap: a full sort paid
-   * O(cache log cache) for every sustained publication frame even though it
-   * consumed only the first few hundred entries. The heap preserves the same
-   * LRU/observed-model contract at O(cache log count) time and O(count) space.
+   * Every access moves its key to the back of that map (`touchAccess`), so
+   * iterating from the front visits entries oldest-first — the eviction
+   * order — at O(count) for a sustained publication frame. The previous
+   * shape kept a bounded max-heap but still walked EVERY cache entry per
+   * incoming frame, which at a 10k cap and ~1.3k-delta frames made the scan
+   * itself a first-order term of the observer's apply cost.
+   *
+   * The observed-model contract is unchanged: a model React is observing is
+   * skipped and stays in place, so it is reconsidered (and skipped again)
+   * on later evictions until it is no longer observed.
    */
   private evictOldestBatch(count: number): void {
     if (count <= 0) return;
     runInAction(() => {
-      interface Candidate { id: string; accessedAt: number }
-      const oldest: Candidate[] = [];
-      const candidateAt = (index: number): Candidate => {
-        const candidate = oldest[index];
-        if (!candidate) throw new Error(`Missing eviction candidate at index ${index}`);
-        return candidate;
-      };
-      const swap = (left: number, right: number): void => {
-        const leftValue = candidateAt(left);
-        const rightValue = candidateAt(right);
-        oldest[left] = rightValue;
-        oldest[right] = leftValue;
-      };
-      const siftUp = (start: number): void => {
-        let index = start;
-        while (index > 0) {
-          const parent = Math.floor((index - 1) / 2);
-          if (candidateAt(parent).accessedAt >= candidateAt(index).accessedAt) break;
-          swap(parent, index);
-          index = parent;
-        }
-      };
-      const siftDown = (): void => {
-        let index = 0;
-        for (;;) {
-          const left = index * 2 + 1;
-          if (left >= oldest.length) return;
-          const right = left + 1;
-          const larger =
-            right < oldest.length &&
-            candidateAt(right).accessedAt > candidateAt(left).accessedAt
-              ? right
-              : left;
-          if (candidateAt(index).accessedAt >= candidateAt(larger).accessedAt) return;
-          swap(index, larger);
-          index = larger;
-        }
-      };
+      const toEvict: string[] = [];
+      const staleAccessKeys: string[] = [];
 
-      for (const [id, entry] of this.entries) {
+      for (const id of this.accessTimes.keys()) {
+        if (toEvict.length >= count) break;
+
+        const entry = this.entries.get(id);
+        if (!entry) {
+          // remove()/clear() delete from both maps, so a stale key means a
+          // divergence — clean it up rather than let it linger.
+          staleAccessKeys.push(id);
+          continue;
+        }
+
         // Skip models that are being observed by React - they must stay alive
         const model = entry.model ?? entry.weakRef?.deref();
         if (
@@ -1246,21 +1239,34 @@ export class InstanceCache {
           continue;
         }
 
-        const candidate = {
-          id,
-          accessedAt: this.accessTimes.get(id) ?? 0,
-        };
-        if (oldest.length < count) {
-          oldest.push(candidate);
-          siftUp(oldest.length - 1);
-        } else if (candidate.accessedAt < candidateAt(0).accessedAt) {
-          oldest[0] = candidate;
-          siftDown();
+        toEvict.push(id);
+      }
+
+      for (const id of staleAccessKeys) this.accessTimes.delete(id);
+
+      // Safety net for an entry that never received an access stamp: it is
+      // invisible to the recency map, so fall back to the entry scan the old
+      // implementation always paid. Every add path stamps `accessTimes`, so
+      // this loop finds nothing and costs nothing in the normal case (it only
+      // runs at all when the recency map came up short).
+      if (toEvict.length < count) {
+        for (const [id, entry] of this.entries) {
+          if (toEvict.length >= count) break;
+          if (this.accessTimes.has(id)) continue;
+          const model = entry.model ?? entry.weakRef?.deref();
+          if (
+            model &&
+            typeof model.hasObservedCollections === 'function' &&
+            model.hasObservedCollections()
+          ) {
+            continue;
+          }
+          toEvict.push(id);
         }
       }
 
-      for (const candidate of oldest) {
-        this.remove(candidate.id);
+      for (const id of toEvict) {
+        this.remove(id);
         this.metrics.evictions++;
       }
     });

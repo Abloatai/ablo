@@ -16,7 +16,8 @@
  * access can't accidentally hit one).
  */
 import { Ablo } from '../../ablo.js';
-import { defineSchema, model, z } from '../../schema/index.js';
+import { defineSchema, model, selectModels, z } from '../../schema/index.js';
+import { AbloError } from '../../errors.js';
 import {
   claimHeartbeatReply,
   claimListResponse,
@@ -92,6 +93,35 @@ describe("Ablo({ transport: 'http' }) facade shape", () => {
     expect(Reflect.get(tasks, 'onChange')).toBeUndefined();
     expect(Reflect.get(tasks, 'getAll')).toBeUndefined();
     expect(Reflect.get(tasks, 'getCount')).toBeUndefined();
+  });
+
+  it('a model the schema projection left out throws the error that names it', () => {
+    // An app can compile against the full source schema while running a
+    // projection, so this misuse never fails a type check. The access itself
+    // must answer with the model's name and the fix, not undefined (which
+    // crashes one property later as a bare TypeError).
+    const full = defineSchema({
+      tasks: model({ title: z.string() }),
+      invoices: model({ total: z.number() }),
+    });
+    const projected = Ablo({
+      schema: selectModels(full, ['tasks']),
+      apiKey: 'sk_test_facadeunit',
+      baseURL: 'https://api.example.test',
+      dangerouslyAllowBrowser: true,
+      transport: 'http',
+    });
+    let thrown: unknown;
+    try {
+      Reflect.get(projected, 'invoices');
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(AbloError);
+    expect((thrown as AbloError).code).toBe('model_not_in_schema');
+    expect((thrown as AbloError).message).toContain('invoices');
+    // A plain typo is still a typo: only projected-out names get the error.
+    expect(Reflect.get(projected, 'invocies')).toBeUndefined();
   });
 });
 

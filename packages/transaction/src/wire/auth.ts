@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod';
-import { grantedOperationSchema } from '../auth/capability.js';
+import { capabilityOperationSchema, grantedOperationSchema } from '../auth/capability.js';
 import { syncGroupInputSchema } from '../coordination/schema.js';
 
 /** The participant this session acts as. */
@@ -48,8 +48,25 @@ export const ephemeralKeyRequestSchema = z.object({
   schemaOwnerOrgId: z.string().min(1).optional(),
   /** Narrow the session to these sync groups. */
   syncGroups: z.array(syncGroupInputSchema).readonly().optional(),
-  /** Required least-privilege allowlist. */
-  operations: z.array(grantedOperationSchema).min(1),
+  /**
+   * Least-privilege allowlist, named model by model. For a caller that knows
+   * the schema the session will resolve. Exactly one of this and
+   * {@link ephemeralKeyRequestSchema.shape.activeSchemaOperations} is required.
+   */
+  operations: z.array(grantedOperationSchema).min(1).optional(),
+  /**
+   * The same allowlist expressed as verbs alone, for a caller that CANNOT know
+   * the models: an identity service minting sessions for organizations whose
+   * schemas it does not own has no way to name them, and a grant is checked
+   * against the session's schema at mint time, so naming another schema's
+   * models fails every time.
+   *
+   * The server expands these across the models in the session's active schema
+   * and stores the concrete result, so what lands on the credential is the same
+   * enumerated allowlist as the field above. A verb is granted only where the
+   * model admits it — an immutable model takes `read` and nothing else.
+   */
+  activeSchemaOperations: z.array(capabilityOperationSchema).min(1).optional(),
   /** Lifetime in seconds. Capped by the server's maximum. */
   ttlSeconds: z.number().int().positive().optional(),
   /** A human-readable tag recorded with the key, for debugging. */
@@ -62,6 +79,16 @@ export const ephemeralKeyRequestSchema = z.object({
     message:
       'schemaProjectId and schemaOwnerOrgId must be provided together',
     path: ['schemaProjectId'],
+  },
+).refine(
+  (request) =>
+    (request.operations === undefined) !== (request.activeSchemaOperations === undefined),
+  {
+    // Exactly one, never both and never neither. Neither would leave the
+    // credential with an empty allowlist, which reads as UNRESTRICTED at the
+    // gate rather than as nothing; both would leave two answers to one question.
+    message: 'provide either operations or activeSchemaOperations, not both',
+    path: ['operations'],
   },
 );
 export type EphemeralKeyRequest = z.infer<typeof ephemeralKeyRequestSchema>;

@@ -843,6 +843,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "model_not_in_schema": {
+      "category": "client",
+      "httpStatus": null,
+      "retryable": false,
+      "surface": "client",
+    },
     "model_not_provisioned": {
       "category": "tenant",
       "httpStatus": 409,

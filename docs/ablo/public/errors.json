@@ -1240,6 +1240,14 @@
       "docUrl": "https://docs.abloatai.com/errors#model_not_found"
     },
     {
+      "code": "model_not_in_schema",
+      "category": "client",
+      "surface": "client",
+      "retryable": false,
+      "message": "A model was accessed on a client whose schema projection leaves it out.",
+      "docUrl": "https://docs.abloatai.com/errors#model_not_in_schema"
+    },
+    {
       "code": "model_not_provisioned",
       "category": "tenant",
       "surface": "wire",

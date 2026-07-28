@@ -45,6 +45,7 @@ import type {
   ModelUpdateParams,
 } from '../resources/modelOperations.js';
 import type { Schema, SchemaRecord, InferModel, InferCreate } from '../schema/schema.js';
+import { omittedModelError } from '../schema/select.js';
 import type { ModelUpdater, ContentionOptions } from '../resources/functionalUpdate.js';
 import { AbloConnectionError, AbloValidationError } from '../errors.js';
 
@@ -319,6 +320,7 @@ export function createAbloHttpClient<S extends SchemaRecord>(
     modelTypenames: modelWireNames(schema.models),
   });
   const schemaModels = new Set(Object.keys(schema.models));
+  const omittedModels = new Set(schema.omittedModels ?? []);
   const models = new Map<
     string,
     HttpModelClient<Record<string, unknown>, Record<string, unknown>>
@@ -343,7 +345,12 @@ export function createAbloHttpClient<S extends SchemaRecord>(
       }
       // Only schema models become model accessors. A typo or retired top-level
       // member resolves to undefined instead of manufacturing a plausible client.
-      return schemaModels.has(prop) ? model(prop) : undefined;
+      if (schemaModels.has(prop)) return model(prop);
+      // A model the schema projection left out is neither a typo nor a member:
+      // the caller compiled against the full source schema, so answer with the
+      // error that names the model and the fix rather than `undefined`.
+      if (omittedModels.has(prop)) throw omittedModelError(prop);
+      return undefined;
     },
   });
 

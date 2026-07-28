@@ -1290,34 +1290,25 @@ export class SyncClient extends EventEmitter {
    * local model has unsynced changes, so the two sides stay consistent.
    */
   resolveConflicts(localModel: Model, serverData: Record<string, unknown>): Model {
-    const hasLocalChanges = localModel.hasChanges;
-    // Safely get timestamp, handling both Date objects and strings
-    const localUpdatedAt = localModel.updatedAt
-      ? localModel.updatedAt instanceof Date
-        ? localModel.updatedAt.getTime()
-        : new Date(localModel.updatedAt).getTime()
-      : 0;
-    const serverUpdatedAt = toEpochMs(serverData.updatedAt);
+    // No entry-point debug here: this runs once per incoming update delta,
+    // and a debug call's payload is BUILT even when the logger discards it —
+    // a per-delta model scan on the apply hot path. The outcome branches
+    // below log the cases worth reading.
 
-    this.runtime.logger.debug('Conflict resolution', {
-      modelId: localModel.id,
-      modelType: localModel.getModelName(),
-      hasLocalChanges,
-      localUpdatedAt: localModel.updatedAt?.toString(),
-      serverUpdatedAt: serverData.updatedAt,
-      localChanges: localModel.getChanges(),
-      serverState: this.extractCriticalState(serverData),
-    });
-
-    // PRIORITY 1: Check for critical server states that must be respected
-    // These states override any local changes to maintain data consistency
-    const criticalServerStates = this.extractCriticalState(serverData);
-    const shouldForceAcceptServer = this.hasCriticalStateChange(criticalServerStates);
+    // PRIORITY 1: Check for critical server states that must be respected.
+    // These states override any local changes to maintain data consistency.
+    // Checked inline — the collected-object form (`extractCriticalState`)
+    // only materializes on the rare force-accept branch, for its log line.
+    const shouldForceAcceptServer =
+      (serverData.deletedAt !== undefined && serverData.deletedAt !== null) ||
+      (serverData.archivedAt !== undefined && serverData.archivedAt !== null) ||
+      serverData.isActive === false ||
+      (serverData.unassignedAt !== undefined && serverData.unassignedAt !== null);
 
     if (shouldForceAcceptServer) {
       this.runtime.logger.debug('Accepting server update - critical state change detected', {
         modelId: localModel.id,
-        criticalStates: criticalServerStates,
+        criticalStates: this.extractCriticalState(serverData),
       });
 
       // Force accept server state for critical changes
@@ -1329,7 +1320,7 @@ export class SyncClient extends EventEmitter {
 
     // Local-first: if we have local dirty fields, merge by field.
     // Keep locally changed fields; apply server for the rest.
-    if (hasLocalChanges) {
+    if (localModel.hasChanges) {
       const localChanges = localModel.getChanges();
       this.runtime.logger.debug('Merging server update with local dirty fields', {
         modelId: localModel.id,
@@ -1341,6 +1332,13 @@ export class SyncClient extends EventEmitter {
 
       // Preserve the most recent updatedAt without clearing dirty flags
       if (serverData.updatedAt || localModel.updatedAt) {
+        // Safely get timestamp, handling both Date objects and strings
+        const localUpdatedAt = localModel.updatedAt
+          ? localModel.updatedAt instanceof Date
+            ? localModel.updatedAt.getTime()
+            : new Date(localModel.updatedAt).getTime()
+          : 0;
+        const serverUpdatedAt = toEpochMs(serverData.updatedAt);
         const mergedUpdatedAt = new Date(Math.max(localUpdatedAt, serverUpdatedAt));
         // updateFromData accepts Date or ISO string for dates
         merged.updatedAt = mergedUpdatedAt;
@@ -1351,10 +1349,9 @@ export class SyncClient extends EventEmitter {
       return localModel;
     }
 
-    // No local changes: fall back to LWW to converge
-    // Accept server regardless of timestamp equality to stay in sync
-    const acceptReason = serverUpdatedAt > localUpdatedAt ? 'server is newer' : 'no local changes';
-    this.runtime.logger.debug(`Accepting server update - ${acceptReason}`);
+    // No local changes: fall back to LWW to converge. Accept server
+    // regardless of timestamp equality to stay in sync. Not logged — this is
+    // the common path for every collaborator update a client receives.
     localModel.updateFromData(serverData);
     localModel.clearChanges();
     localModel.markAsSynced();
@@ -1390,17 +1387,6 @@ export class SyncClient extends EventEmitter {
     }
 
     return critical;
-  }
-
-  /**
-   * Check if critical state changes exist that require forcing server state
-   */
-  private hasCriticalStateChange(criticalStates: Record<string, unknown>): boolean {
-    // Any critical state present means we should force accept server
-    return (
-      Object.keys(criticalStates).length > 0 &&
-      Object.values(criticalStates).some((v) => v !== null && v !== undefined)
-    );
   }
 
   /**
@@ -1902,6 +1888,22 @@ export class SyncClient extends EventEmitter {
     dbResults: readonly AppliedChange[],
     enrichRelations: (modelName: string, data: Record<string, unknown>) => Record<string, unknown>,
   ): void {
+    // The WHOLE batch — conflict resolution and model mutation included, not
+    // just the pool bookkeeping at the end — runs in one MobX action.
+    // `resolveConflicts` writes model fields via `updateFromData`; when those
+    // writes ran before the action, every delta opened its own top-level
+    // action and flushed reactions at its boundary, so a large frame paid one
+    // reaction pass per delta and an observer could see a partially applied
+    // frame between them.
+    runInAction(() => {
+      this.applyDeltaBatchToPoolInAction(dbResults, enrichRelations);
+    });
+  }
+
+  private applyDeltaBatchToPoolInAction(
+    dbResults: readonly AppliedChange[],
+    enrichRelations: (modelName: string, data: Record<string, unknown>) => Record<string, unknown>,
+  ): void {
     const modelsToAdd: Model[] = [];
     const modelsToUpsert: Model[] = [];
     const idsToRemove: string[] = [];
@@ -2002,27 +2004,21 @@ export class SyncClient extends EventEmitter {
       }
     }
 
-    // Reveal the whole frame in a single MobX action. `addBatch`,
-    // `upsertBatch`, `removeBatch`, and `updateScope` are each individually
-    // wrapped in an action, so calling them in sequence flushes reactions at
-    // every action boundary — a catch-up frame that adds, updates, and removes
-    // would fire every dependent reaction several times in a row, re-rendering
-    // and re-sorting on each. Wrapping them in one outer `runInAction` defers
-    // all reaction flushes to a single boundary, so dependents recompute
-    // exactly once regardless of how many models or operation kinds the frame
-    // touched. The app therefore never observes a partially applied frame.
-    runInAction(() => {
-      if (modelsToAdd.length > 0) this.objectPool.addBatch(modelsToAdd, ModelScope.live);
-      if (modelsToUpsert.length > 0) this.objectPool.upsertBatch(modelsToUpsert, ModelScope.live);
-      if (idsToRemove.length > 0) this.objectPool.removeBatch(idsToRemove);
-      for (const id of idsToArchive) this.objectPool.updateScope(id, ModelScope.archived);
+    // Reveal the whole frame at one reaction boundary: the caller's single
+    // action covers the collection loop above and these batch pool writes, so
+    // dependents recompute exactly once regardless of how many models or
+    // operation kinds the frame touched, and the app never observes a
+    // partially applied frame.
+    if (modelsToAdd.length > 0) this.objectPool.addBatch(modelsToAdd, ModelScope.live);
+    if (modelsToUpsert.length > 0) this.objectPool.upsertBatch(modelsToUpsert, ModelScope.live);
+    if (idsToRemove.length > 0) this.objectPool.removeBatch(idsToRemove);
+    for (const id of idsToArchive) this.objectPool.updateScope(id, ModelScope.archived);
 
-      // Emit changed model types so QueryProcessor can auto-invalidate.
-      // Kept inside the action so any observable query-cache state it
-      // flips is part of the same atomic reveal.
-      const changedTypes = new Set(dbResults.map(r => r.modelName));
-      if (changedTypes.size > 0) this.emit('models:changed', changedTypes);
-    });
+    // Emit changed model types so QueryProcessor can auto-invalidate.
+    // Kept inside the action so any observable query-cache state it
+    // flips is part of the same atomic reveal.
+    const changedTypes = new Set(dbResults.map(r => r.modelName));
+    if (changedTypes.size > 0) this.emit('models:changed', changedTypes);
   }
 
   /**

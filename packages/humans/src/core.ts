@@ -110,7 +110,10 @@ export {
   drainProfileSnapshot,
   resetDrainProfile,
   drainProfilingEnabled,
+  drainAcknowledgeStamps,
+  type AcknowledgeStamp,
   type DrainProfile,
+  type DrainBatchRow,
   type DrainStage,
   type DrainStageTotals,
 } from './local/sync/drainProfile.js';

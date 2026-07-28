@@ -94,6 +94,9 @@ export type {
   CapabilityModelShape,
   GrantedOperation,
 } from './capability.js';
+// A re-export does not bind the name in this module, and the mint request type
+// below needs it.
+import type { CapabilityOperation } from './capability.js';
 
 export interface ExchangeApiKeyRequest {
   readonly apiKey: string;
@@ -232,9 +235,22 @@ interface MintUserSessionBase {
   readonly timeoutMs?: number;
 }
 
+/**
+ * Exactly one grant form. Name the models when you know the schema the session
+ * will resolve; send verbs alone when you cannot — an identity service minting
+ * for organizations whose schemas it does not own has no way to name their
+ * models, and a grant is checked against the session's schema at mint time. The
+ * server expands the verbs across that schema and stores the same enumerated
+ * `model.verb` allowlist either way.
+ */
 export type MintUserSessionRequest = MintUserSessionBase & {
-  /** Required least-privilege operation allowlist. */
-  readonly operations: readonly GrantedOperation[];
+  /** The allowlist, named model by model. Provide this or the field below. */
+  readonly operations?: readonly GrantedOperation[];
+  /**
+   * The allowlist as verbs alone, expanded by the server across the models in
+   * the session's active schema. Provide this or the field above.
+   */
+  readonly activeSchemaOperations?: readonly CapabilityOperation[];
 };
 
 /**
@@ -260,6 +276,16 @@ export async function mintUserSessionKey(
     throw new AbloAuthenticationError(
       'baseUrl is required for user-session mint',
       { code: 'base_url_missing' },
+    );
+  }
+  // Exactly one grant form. Both would be two answers to one question; neither
+  // would send an empty allowlist, and an empty allowlist is read as
+  // unrestricted rather than as nothing. The server refuses either way; this
+  // says so before the round trip, where the caller can see which call did it.
+  if ((options.operations === undefined) === (options.activeSchemaOperations === undefined)) {
+    throw new AbloAuthenticationError(
+      'Provide either operations or activeSchemaOperations for a user-session mint, not both.',
+      { code: 'invalid_body' },
     );
   }
 
@@ -290,7 +316,9 @@ export async function mintUserSessionKey(
             }
           : {}),
         ...(options.syncGroups ? { syncGroups: options.syncGroups } : {}),
-        operations: options.operations,
+        ...(options.operations
+          ? { operations: options.operations }
+          : { activeSchemaOperations: options.activeSchemaOperations }),
         ttlSeconds: options.ttlSeconds,
         ...(options.label ? { label: options.label } : {}),
       }),

@@ -80,7 +80,37 @@ export function selectModels<S extends SchemaRecord, K extends keyof S & string>
     // subset still points at the original full schema rather than an intermediate
     // one. `schemaHash` ignores this field, so re-projecting stays deterministic.
     sourceSchemaHash: schema.sourceSchemaHash ?? schemaHash(schema),
+    // What was dropped, unioned with what the source had already dropped, so a
+    // subset-of-a-subset still names every model of the original full schema
+    // that this client cannot reach. Clients turn these names into throwing
+    // accessors — see `omittedModelError`.
+    omittedModels: [
+      ...new Set([
+        ...(schema.omittedModels ?? []),
+        ...Object.keys(schema.models).filter((k) => !keep.has(k)),
+      ]),
+    ].sort(),
   };
+}
+
+/**
+ * The error a client raises when a caller reaches for a model its schema
+ * projection left out.
+ *
+ * Defined beside the projection because the two are one contract: what
+ * `selectModels` records in `omittedModels`, a client answers with this error.
+ * Without it the access reads as `undefined` and the caller crashes one
+ * property later with a bare TypeError that never names the model or the fix —
+ * which is exactly what happens when an app compiles against the full source
+ * schema but runs a projection, the one misuse the type system cannot see.
+ */
+export function omittedModelError(model: string): AbloValidationError {
+  return new AbloValidationError(
+    `The ${model} model is not in this client's schema. ` +
+      `The schema is a projection that leaves ${model} out, so this client cannot read or write it. ` +
+      `Add '${model}' to the projection's model list to use it here.`,
+    { code: 'model_not_in_schema', param: model },
+  );
 }
 
 /**

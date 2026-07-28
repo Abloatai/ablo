@@ -644,7 +644,13 @@ export class BaseSyncedStore<
     this.smartSyncOptions = {
       maxDeltasBeforeBootstrap: 1000,
       maxBootstrapSize: 10 * 1024 * 1024,
-      batchingDelay: 100,
+      // The inbound-delta flush debounce. Under sustained traffic the
+      // `maxBatchSize` force-flush governs batching, so this timer decides
+      // exactly one thing: how long the FINAL partial batch of a burst sits
+      // before it materializes. At 100 ms it was the largest single term in
+      // the observer's drain tail on the throughput bench; 10 ms coalesces a
+      // trickle just as well and keeps burst tails inside the drain budget.
+      batchingDelay: 10,
       maxBatchSize: 50,
     };
 

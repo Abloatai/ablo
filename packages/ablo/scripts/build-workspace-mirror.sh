@@ -105,8 +105,6 @@ mkdir -p "$OUTPUT_DIR/.github/workflows"
 cat > "$OUTPUT_DIR/.github/workflows/release.yml" <<'EOF'
 name: Release
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 concurrency:
   group: publish-${{ github.ref }}

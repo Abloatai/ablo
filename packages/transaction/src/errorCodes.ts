@@ -1123,6 +1123,10 @@ export const ERROR_CODES = {
   lazy_ref_pool_missing: client('client', 'A lazy reference was resolved without a model pool.'),
   model_class_not_registered: client('client', 'The model class is not registered with the store.'),
   model_not_registered: client('client', 'The model is not registered with the store.'),
+  model_not_in_schema: client(
+    'client',
+    'A model was accessed on a client whose schema projection leaves it out.'
+  ),
   model_disposed: client('client', 'The model instance has been disposed.'),
   pool_model_class_not_registered: client(
     'client',

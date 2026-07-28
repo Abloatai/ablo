@@ -391,48 +391,85 @@ export class Database {
 
     const out: ModelData = {};
 
-    for (const [key, value] of Object.entries(data)) {
-      // Drop redundant or ephemeral markers
-      if (key === '__typename' || key === '__class' || key === 'clientId' || key === 'syncStatus') {
-        continue;
-      }
-
-      // Skip only `undefined`; preserve explicit `null`, which is a
-      // meaningful value for a nullable column.
-      if (value === undefined) {
-        continue;
-      }
-
-      if (Array.isArray(value)) {
-        if (value.length === 0) continue;
-        out[key] = value;
-        continue;
-      }
-
-      if (typeof value === 'object') {
-        // Preserve explicit null values
-        if (value === null) {
-          out[key] = null;
-          continue;
-        }
-
-        // Preserve Date objects (IndexedDB can clone these)
-        if (value instanceof Date) {
-          out[key] = value;
-          continue;
-        }
-
-        // For plain objects, drop if empty
-        if (Object.keys(value).length === 0) continue;
-        out[key] = value;
-        continue;
-      }
-
-      out[key] = value;
+    for (const key in data) {
+      if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+      this.compactAssign(out, key, data[key]);
     }
 
     // Always ensure id is present
     if (!out.id && data.id) out.id = data.id;
+
+    return out;
+  }
+
+  /**
+   * The one definition of the per-key compaction rule: drops the redundant
+   * markers `__typename`, `__class`, `clientId`, and `syncStatus`, drops
+   * `undefined`, empty arrays, and empty plain objects, and preserves
+   * explicit `null` (a meaningful "clear this field" for a nullable column)
+   * and `Date` instances (IndexedDB can clone these). `compactRecord` applies
+   * it into a fresh object; the batched in-memory delta path applies it
+   * directly onto the merge target so a delta costs one object, not four.
+   */
+  private compactAssign(out: ModelData, key: string, value: unknown): void {
+    if (key === '__typename' || key === '__class' || key === 'clientId' || key === 'syncStatus') {
+      return;
+    }
+
+    if (value === undefined) return;
+
+    if (Array.isArray(value)) {
+      if (value.length === 0) return;
+      out[key] = value;
+      return;
+    }
+
+    if (typeof value === 'object') {
+      if (value === null) {
+        out[key] = null;
+        return;
+      }
+
+      if (value instanceof Date) {
+        out[key] = value;
+        return;
+      }
+
+      if (Object.keys(value).length === 0) return;
+      out[key] = value;
+      return;
+    }
+
+    out[key] = value;
+  }
+
+  /**
+   * Compact a wire delta's payload in one pass, mirroring
+   * `compactRecord({ id: modelId, ...data })` exactly: the id key is
+   * processed first with the payload's own `id` winning over the envelope's,
+   * then each payload key in order. Passing an existing record as `out`
+   * makes this the update merge — compacted keys override, dropped keys
+   * leave the existing values untouched — without the intermediate
+   * id-injected and compacted copies the spread form allocates.
+   */
+  private compactDeltaRecord(
+    modelId: string,
+    data: Record<string, unknown>,
+    out: ModelData = {},
+  ): ModelData {
+    const hasOwnId = Object.prototype.hasOwnProperty.call(data, 'id');
+    this.compactAssign(out, 'id', hasOwnId ? data.id : modelId);
+
+    for (const key in data) {
+      if (key === 'id') continue;
+      if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+      this.compactAssign(out, key, data[key]);
+    }
+
+    if (!out.id) {
+      const idValue = hasOwnId ? data.id : modelId;
+      if (idValue) out.id = idValue;
+    }
 
     return out;
   }
@@ -1109,45 +1146,45 @@ export class Database {
       // catch-up frame. Apply the already-ordered batch directly, matching the
       // synchronous request scheduling used by the IndexedDB transaction path.
       for (const [index, delta] of deltas.entries()) {
-        const { actionType, modelName, modelId, data, syncId } = delta;
+        const { actionType, modelName, modelId, data, syncId, transactionId } = delta;
         const store = this.getStore(modelName, 'processDeltaBatch');
         let single: AppliedChange;
 
         if (!store || (typeof syncId === 'number' && syncId <= lastApplied)) {
-          single = { action: 'verify', modelName, modelId };
+          single = { action: 'verify', modelName, modelId, transactionId };
         } else {
           const memoryStore = store as InMemoryObjectStore;
-          const dataWithId =
-            data && typeof data === 'object'
-              ? { id: modelId, ...(data as Record<string, unknown>) }
-              : data;
-          const compacted =
-            dataWithId && typeof dataWithId === 'object'
-              ? this.compactRecord(modelName, dataWithId)
-              : dataWithId;
 
           switch (actionType) {
             case 'C':
-            case 'I':
+            case 'I': {
+              const compacted =
+                data && typeof data === 'object'
+                  ? this.compactDeltaRecord(modelId, data)
+                  : data;
               if (compacted && typeof compacted === 'object') {
                 memoryStore.putSync(compacted);
               }
-              single = { action: 'add', modelName, modelId, data: compacted };
+              single = { action: 'add', modelName, modelId, data: compacted, transactionId };
               break;
+            }
             case 'U': {
               const existing = memoryStore.getSync(modelId);
               if (!existing) {
-                single = { action: 'verify', modelName, modelId, data: null };
+                single = { action: 'verify', modelName, modelId, data: null, transactionId };
               } else {
-                const merged = { ...existing, ...compacted };
+                const merged: ModelData = { ...existing };
+                if (data && typeof data === 'object') {
+                  this.compactDeltaRecord(modelId, data, merged);
+                }
                 memoryStore.putSync(merged);
-                single = { action: 'update', modelName, modelId, data: merged };
+                single = { action: 'update', modelName, modelId, data: merged, transactionId };
               }
               break;
             }
             case 'D':
               memoryStore.deleteSync(modelId);
-              single = { action: 'remove', modelName, modelId };
+              single = { action: 'remove', modelName, modelId, transactionId };
               break;
             case 'A': {
               const archivedData = this.compactRecord(modelName, {
@@ -1156,18 +1193,18 @@ export class Database {
                 archivedAt: new Date(),
               });
               memoryStore.putSync(archivedData);
-              single = { action: 'archive', modelName, modelId, data: archivedData };
+              single = { action: 'archive', modelName, modelId, data: archivedData, transactionId };
               break;
             }
             case 'V':
             case 'G':
             case 'S':
-              single = { action: 'verify', modelName, modelId, data };
+              single = { action: 'verify', modelName, modelId, data, transactionId };
               break;
           }
         }
 
-        inMemResults[index] = { ...single, transactionId: delta.transactionId };
+        inMemResults[index] = single;
         if (
           single.action !== 'verify' &&
           typeof syncId === 'number' &&
