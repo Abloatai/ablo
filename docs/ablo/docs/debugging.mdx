@@ -18,12 +18,13 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, debug: true });
 
 ## CLI environment and target
 
-`push`, `dev`, and `status` follow the application-facing chain: exported
-`ABLO_API_KEY`, `.env.local`, `.env`, then the stored credential. An exported
-value wins over project files. Connect-family administration is intentionally
-stricter: it reads only the process environment and stored login, so an ambient
-file cannot silently choose the plane a database mutation acts on. When a file
-contains the missing key, the refusal names that rule and the remedy.
+Read-only diagnostics (`status`, `whoami`, `logs`, and `connect locate/check`)
+may inspect the application-facing chain: exported `ABLO_API_KEY`,
+`.env.local`, `.env`, then the stored credential. An exported value wins over
+project files. Mutations (`push` and `connect apply/rotate/register/deregister`)
+are intentionally stricter: they read the process environment, an explicit
+`--env-file`, or a stored compatibility credential. An ambient file cannot
+silently choose the branch a mutation acts on.
 
 Use the two diagnostics according to the question:
 
@@ -235,3 +236,57 @@ AbloValidationError [model_required_field_missing]: A required field was absent.
 ```
 
 Branch on `err.code` (stable) — never on the message (rewordable). See [Client Behavior](/client-behavior) for the full error model and which codes are safe to retry.
+
+### Diagnosing `capability_scope_denied`
+
+The same stable code covers two different enforcement layers, so inspect
+`error.details.origin`:
+
+- `capability_allowlist`: the branch/session credential did not grant the
+  operation. `requiredCapability.scope` names the missing `model.verb`, and
+  `details.resolvedOperations` shows the grants the server actually resolved.
+- `database_row_level_security`: Ablo's capability gate allowed the operation,
+  but Postgres rejected it under the customer table's RLS policy.
+  `details.databaseSessionContext` shows the organization, project, branch,
+  participant kind, user principal, and custom session-setting values applied
+  to that transaction.
+
+Every rejected live commit carries `requestId` on the thrown error and
+`request_id` in its JSON form and warning line:
+
+```ts
+import { AbloError } from '@abloatai/ablo';
+
+try {
+  await ablo.documents.create({
+    data,
+    wait: 'confirmed',
+  });
+} catch (error) {
+  if (error instanceof AbloError) {
+    console.error(error.code, error.requestId, error.requiredCapability, error.details);
+  }
+}
+```
+
+With `wait: 'confirmed'`, the awaited call rejects with that complete typed
+error. `onMutationFailure` remains the notification channel for optimistic
+writes that return before the server answers; it is not required to recover
+details from a confirmed write.
+
+### Local reads versus a confirmed server read
+
+`list()` without a completeness option may return the current local pool
+immediately. That is why it can be empty while Postgres contains rows: it is not
+evidence that the replication source has no history.
+
+Use:
+
+```ts
+await ablo.documents.list({ type: 'complete' });
+```
+
+`type: 'complete'` waits for a server round trip and returns the confirmed
+result. `type: 'unknown'` returns the local result immediately and refreshes it
+in the background. The distinction is freshness/completeness, not claimed
+versus unclaimed data.

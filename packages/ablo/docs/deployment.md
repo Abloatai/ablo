@@ -2,7 +2,7 @@
 
 > What production takes: a database Ablo can reach, a key minted for the plane you mean, and a schema push in the deploy.
 
-One command answers the question this page exists for — would a write succeed
+One command answers whether the infrastructure needed for a write is ready
 right now, and if not, why:
 
 ```bash
@@ -25,7 +25,7 @@ ABLO_API_KEY=sk_… npx ablo status
           • fulfilments    typename=fulfilments
           • reviews        typename=reviews
 
-  ✓ ready — a write should succeed
+  ✓ write infrastructure is ready — database constraints and row-level policies still apply
 ```
 
 `status` asks the routing authority rather than sampling a read, because reads

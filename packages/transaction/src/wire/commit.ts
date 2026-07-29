@@ -157,7 +157,9 @@ export const rejectedCommitReceiptSchema = z.object({
     code: errorCodeSchema,
     message: z.string(),
     field: z.string().optional(),
+    request_id: z.string().optional(),
     requiredCapability: requiredCapabilityWireSchema.optional(),
+    details: z.record(z.string(), z.unknown()).optional(),
   }),
 });
 export type RejectedCommitReceiptWire = z.infer<typeof rejectedCommitReceiptSchema>;

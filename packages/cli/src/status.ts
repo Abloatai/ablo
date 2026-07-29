@@ -411,7 +411,9 @@ export async function status(args: string[] = []): Promise<void> {
       `  ${pc.yellow('?')} ${pc.dim("nothing is blocking a write, but this key could not read the plane's databases — some checks were skipped")}`,
     );
   } else {
-    console.log(`  ${pc.green('✓')} ${pc.dim('ready — a write should succeed')}`);
+    console.log(
+      `  ${pc.green('✓')} ${pc.dim('write infrastructure is ready — database constraints and row-level policies still apply')}`,
+    );
   }
 
   console.log();

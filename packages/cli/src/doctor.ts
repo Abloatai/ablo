@@ -242,7 +242,9 @@ export async function doctor(): Promise<void> {
       `  ${pc.yellow('?')} ${pc.dim(`nothing is blocking a write, but ${skipped} check${skipped === 1 ? '' : 's'} could not be run`)}`,
     );
   } else {
-    console.log(`  ${pc.green('✓')} ${pc.dim('everything checks out — a write should succeed')}`);
+    console.log(
+      `  ${pc.green('✓')} ${pc.dim('write infrastructure is ready — your database constraints and row-level policies still apply')}`,
+    );
   }
   console.log();
 

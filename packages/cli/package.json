@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/cli",
-  "version": "0.43.0",
+  "version": "0.44.0",
   "description": "The ablo command line: set up Ablo, connect your database, and push your schema from the terminal.",
   "license": "Apache-2.0",
   "type": "module",
@@ -30,10 +30,10 @@
     "directory": "packages/cli"
   },
   "dependencies": {
-    "@abloatai/transaction": "^0.43.0",
+    "@abloatai/transaction": "^0.44.0",
     "jiti": "^2.7.0",
     "zod": "^4.4.3",
-    "@abloatai/humans": "^0.43.0"
+    "@abloatai/humans": "^0.44.0"
   },
   "devDependencies": {
     "@clack/prompts": "^0.11.0",

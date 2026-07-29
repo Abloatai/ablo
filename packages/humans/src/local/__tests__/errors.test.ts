@@ -236,4 +236,24 @@ describe('CapabilityError — domain-specific subclass', () => {
     const e = new CapabilityError('capability_invalid', 'unknown cap');
     expect(e.message).toBe('capability_invalid: unknown cap');
   });
+  it('keeps the support handle and resolved-scope diagnostics from the wire', () => {
+    const e = errorFromWire('database RLS denied the row', {
+      code: 'capability_scope_denied',
+      requestId: 'req_ws_123',
+      requiredCapability: { scope: 'documents.create' },
+      details: {
+        origin: 'database_row_level_security',
+        resolvedCapability: 'allowed',
+      },
+    });
+    expect(e).toBeInstanceOf(CapabilityError);
+    expect(e.requestId).toBe('req_ws_123');
+    expect((e as CapabilityError).requiredCapability).toEqual({
+      scope: 'documents.create',
+    });
+    expect(e.details).toMatchObject({
+      origin: 'database_row_level_security',
+      resolvedCapability: 'allowed',
+    });
+  });
 });

@@ -96,6 +96,34 @@ describe('canonical commit settlement receipts', () => {
     ).toBe(false);
   });
 
+  it('preserves actionable diagnostics on a rejected WebSocket commit', () => {
+    const rejected = mutationResultPayloadSchema.parse({
+      object: 'commit_receipt',
+      clientTxId: 'client-1',
+      serverTxId: '',
+      success: false,
+      status: 'rejected',
+      error: {
+        code: 'capability_scope_denied',
+        message: 'Postgres row-level security rejected this write.',
+        request_id: 'req_ws_123',
+        requiredCapability: { scope: 'documents.create' },
+        details: {
+          origin: 'database_row_level_security',
+          resolvedCapability: 'allowed',
+        },
+      },
+    });
+    expect(rejected.error).toMatchObject({
+      request_id: 'req_ws_123',
+      requiredCapability: { scope: 'documents.create' },
+      details: {
+        origin: 'database_row_level_security',
+        resolvedCapability: 'allowed',
+      },
+    });
+  });
+
   it('requires every settlement field a receipt claims, inventing none', () => {
     // Settlement is declared, not inferred. A receipt that omits `status`,
     // `object`, `serverTxId`, or `ops` is refused rather than back-filled, so a

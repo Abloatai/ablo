@@ -1,0 +1,38 @@
+---
+title: "v0.43.0"
+type: changelog
+date: 2026-07-29
+changelog:
+  version: "0.43.0"
+  category: "Fixes"
+---
+
+### Keys are branch-first
+
+A new key is simply `sk_…`, `rk_…`, `pk_…`, `ek_…`, or `mk_…`: thirty
+characters and a checksum, with no `live` or `test` in the name. A key's
+project and branch are bindings on the server-side key record, never claims
+encoded in the plaintext, so rotating, moving, or inspecting a key is a
+server-side question with a server-confirmed answer. Existing `live`/`test`
+keys keep working; those spellings are now compatibility forms rather than
+the model.
+
+What used to be called the effective key is now the runtime key, and
+`status --json` exposes it as `runtimeKey`. The documentation explains the
+project, branch, and capability model end to end in `docs/api-keys.md`,
+`docs/branch-development.md`, `docs/cli.md`, and `docs/data-sources.md`.
+
+### Credential lookup in the order mature CLIs use
+
+Commands resolve their credential from the process `ABLO_API_KEY` first, then
+an explicit `--env-file <path>`, then the stored credential. Read-only
+diagnostics may inspect `.env.local` to help; anything that mutates requires
+an explicit selection. Recovering a database connection is now one command:
+`ablo connect rotate` re-keys the existing roles in place and reuses the
+replication slot, so recovery never drops roles or touches your database by
+hand.
+
+### Removed
+
+`logs --mode` is gone: `logs` follows the branch bound to the key it runs
+with. The `effectiveKey` field of `status --json` is renamed `runtimeKey`.

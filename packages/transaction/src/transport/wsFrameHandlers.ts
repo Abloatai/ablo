@@ -223,14 +223,18 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
     // such as validation issues, survive being wrapped in an Error.
     let errorMessage: string;
     let errorCode: string | undefined;
+    let requestId: string | undefined;
     let requiredCapability: RequiredCapability | undefined;
+    let details: Readonly<Record<string, unknown>> | undefined;
     if (typeof error === 'string') {
       errorMessage = error;
     } else if (error != null && typeof error === 'object') {
       const obj = error as {
         code?: unknown;
         message?: unknown;
+        request_id?: unknown;
         requiredCapability?: unknown;
+        details?: unknown;
       };
       if (typeof obj.code === 'string') errorCode = obj.code;
       if (typeof obj.message === 'string') {
@@ -249,6 +253,14 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
       ) {
         requiredCapability = obj.requiredCapability as RequiredCapability;
       }
+      requestId =
+        typeof obj.request_id === 'string' ? obj.request_id : undefined;
+      details =
+        obj.details != null &&
+        typeof obj.details === 'object' &&
+        !Array.isArray(obj.details)
+          ? (obj.details as Readonly<Record<string, unknown>>)
+          : undefined;
     } else {
       errorMessage = 'mutation failed on server';
     }
@@ -298,7 +310,9 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
     pending.reject(
       errorFromWire(errorMessage, {
         code: errorCode,
+        requestId,
         requiredCapability,
+        details,
       }),
     );
   }

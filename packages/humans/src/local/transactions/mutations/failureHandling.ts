@@ -76,6 +76,9 @@ export async function handleFailure(ctx: FailureHandlingContext, transaction: Qu
           : '';
         const reason = abloErr?.message ? ` — ${abloErr.message}` : '';
         const code = abloErr?.code ? ` (code: ${abloErr.code})` : '';
+        const requestRef = abloErr?.requestId
+          ? ` [request_id: ${abloErr.requestId}]`
+          : '';
         // An optimistic write resolves before the server answers, so a later
         // rejection has no caller left to return to and this log is the only
         // place it appears. That reads to an application developer as their own
@@ -86,7 +89,7 @@ export async function handleFailure(ctx: FailureHandlingContext, transaction: Qu
         const channelNote = ctx.config.enableOptimistic
           ? ' To surface this in your app, subscribe with `ablo.onMutationFailure(…)`.'
           : '';
-        const headline = `Your ${transaction.type} to "${transaction.modelName}" was not saved${reason}${code}.${revertNote}${channelNote}`;
+        const headline = `Your ${transaction.type} to "${transaction.modelName}" was not saved${reason}${code}${requestRef}.${revertNote}${channelNote}`;
 
         if (isRepeat) {
           // Same write rejected for the same reason on each reconnect replay —

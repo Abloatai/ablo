@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.44.0
+
+### A scope denial names the wall it hit
+
+`capability_scope_denied` now distinguishes the Ablo capability allowlist
+from the customer database's row-level security. The error carries the
+required capability, the resolved operations, the participant and user
+principal, the branch, the organization and project, and any applied session
+settings, so "permission denied" is a diagnosis instead of a dead end: you
+can see whether your grant was missing a verb or whether your own database's
+row policy rejected the session context Ablo applied.
+
+### Write failures carry their request id
+
+A WebSocket write failure now carries the `requestId` the server logged it
+under, and a `wait: 'confirmed'` write rejects with the complete typed error
+rather than a bare failure, so the error you catch is the error the server
+recorded.
+
+### `doctor` reports readiness, not destiny
+
+`doctor` now says infrastructure is ready rather than promising a write will
+succeed, because database constraints and row-level security still apply at
+write time. The debugging guide explains how to read the new diagnostics,
+and documents that `list()` may answer from the local pool while
+`list({ type: 'complete' })` waits for the server round trip.
+
 ## 0.43.0
 
 ### Keys are branch-first

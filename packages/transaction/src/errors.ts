@@ -60,9 +60,9 @@ export class AbloError extends Error {
   readonly code?: string;
   /** HTTP status code, when the error originated from an HTTP response. */
   readonly httpStatus?: number;
-  /** A correlation id for tracing a request through the server, present when the
-   *  server returned one on the `x-request-id` header. Include it in support
-   *  requests. */
+  /** A correlation id for tracing work through the server, returned in an HTTP
+   *  `x-request-id` header or a live commit's rejection frame. Include it in
+   *  support requests. */
   readonly requestId?: string;
   /** The specific input that caused the error, as a model or field path such as
    *  `'dataroomMember.grants.subject'`, so tooling can point at the exact
@@ -502,8 +502,17 @@ export class CapabilityError extends AbloPermissionError {
     code: 'capability_scope_denied' | 'capability_invalid',
     message: string,
     requiredCapability?: RequiredCapability,
+    options?: {
+      requestId?: string;
+      details?: Readonly<Record<string, unknown>>;
+    },
   ) {
-    super(`${code}: ${message}`, { code });
+    super(`${code}: ${message}`, {
+      code,
+      httpStatus: 403,
+      ...(options?.requestId !== undefined ? { requestId: options.requestId } : {}),
+      ...(options?.details !== undefined ? { details: options.details } : {}),
+    });
     this.name = 'CapabilityError';
     if (requiredCapability !== undefined) {
       this.requiredCapability = requiredCapability;
@@ -751,7 +760,10 @@ export function errorFromWire(
   // A scoped credential was denied — route through CapabilityError so callers
   // can read `.requiredCapability` to attenuate-and-retry.
   if (code === 'capability_scope_denied' || code === 'capability_invalid') {
-    return new CapabilityError(code, message, requiredCapability);
+    return new CapabilityError(code, message, requiredCapability, {
+      ...(requestId !== undefined ? { requestId } : {}),
+      ...(details !== undefined ? { details } : {}),
+    });
   }
   // Claim enforcement (rides 409): the target entity is held by another
   // participant, or a lease this participant held is gone (`claim_lost` —
