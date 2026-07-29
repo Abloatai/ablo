@@ -104,6 +104,12 @@ export interface ResolveTargetOptions {
   keySource: EffectiveKeySource;
   /** Per-call network budget; defaults to a short, status-friendly 4s. */
   timeoutMs?: number;
+  /**
+   * Diagnostics normally degrade to `confirmed: null` while offline. An
+   * identity command cannot answer with a guess, so strict callers preserve
+   * the identity resolver's typed failure instead.
+   */
+  strict?: boolean;
 }
 
 /** Slug used to describe "the organization-default project" everywhere. */
@@ -152,7 +158,8 @@ async function confirmFromServer(opts: ResolveTargetOptions): Promise<ConfirmedT
       branchId: identity.branchId ?? null,
       branchRoot: identity.branchRoot,
     };
-  } catch {
+  } catch (error) {
+    if (opts.strict) throw error;
     // Offline, an older server without the route, or a credential that can't
     // resolve an identity. The caller falls back to the local view.
     return null;

@@ -49,8 +49,9 @@ import {
   readProjectReplicationUrlWithSource,
   readProjectAdminDatabaseUrl,
 } from './dbRole';
-import { resolveApiKey } from './config';
-import { apiBaseUrl } from './controlPlane';
+import { ambientEnvKeyNote, resolveApiKey } from './config';
+import { apiBaseUrl, requestControlPlane } from './controlPlane';
+import { datasourceLocationResponseSchema } from '@abloatai/transaction/wire';
 import { brand } from './theme';
 import {
   describeRemoteFailure,
@@ -117,6 +118,12 @@ export interface ConnectArgs {
    */
   scan: boolean;
   /**
+   * `locate`: ask which plane already holds this database — the stranded-plane
+   * question as a first-class answer, instead of a fact revealed only while an
+   * apply is being refused. Read-only; nothing is registered or changed.
+   */
+  locate: boolean;
+  /**
    * `--tables a,b,c`: publish only these tables instead of every table. When
    * empty (the default), the publication covers all tables.
    */
@@ -154,6 +161,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
   let yes = false;
   let showSql = false;
   let scan = false;
+  let locate = false;
   let manual = false;
   let tables: readonly string[] = [];
   let role = ABLO_REPLICATION_ROLE;
@@ -180,9 +188,12 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
       case 'scan':
         scan = true;
         break;
+      case 'locate':
+        locate = true;
+        break;
       default:
         throw new AbloValidationError(
-          `unknown connect subcommand: ${lead} (expected register, deregister, check, apply, rotate, scan)`,
+          `unknown connect subcommand: ${lead} (expected register, deregister, check, apply, rotate, scan, locate)`,
           { code: 'cli_invalid_arguments' }
         );
     }
@@ -248,6 +259,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
     yes,
     showSql,
     scan,
+    locate,
     tables,
     role,
     writeRole,
@@ -722,8 +734,9 @@ async function runCheck(): Promise<void> {
 
   const apiKey = resolveApiKey();
   if (!apiKey) {
+    const ambient = ambientEnvKeyNote();
     throw new AbloAuthenticationError(
-      'No API key found. Run `ablo login` (or set ABLO_API_KEY), then re-run `ablo connect check`.',
+      `No API key found. Run \`ablo login\` (or set ABLO_API_KEY), then re-run \`ablo connect check\`.${ambient ? `\n\n${ambient}` : ''}`,
       { code: 'cli_api_key_missing' }
     );
   }
@@ -797,8 +810,9 @@ async function runRegister(args: ConnectArgs): Promise<void> {
   const writeDbUrl = requireScopedUrl('write', 'register');
   const apiKey = resolveApiKey();
   if (!apiKey) {
+    const ambient = ambientEnvKeyNote();
     throw new AbloAuthenticationError(
-      'Not logged in. Run `ablo login` (or set ABLO_API_KEY) so Ablo knows which project to register this database for.',
+      `Not logged in. Run \`ablo login\` (or set ABLO_API_KEY) so Ablo knows which project to register this database for.${ambient ? `\n\n${ambient}` : ''}`,
       { code: 'cli_api_key_missing' }
     );
   }
@@ -907,6 +921,82 @@ async function runScan(): Promise<void> {
   process.exit(retired.length > 0 ? 1 : 0);
 }
 
+/**
+ * `ablo connect locate` — which plane holds this database?
+ *
+ * The conflict guard has always known the holder and said so only while
+ * refusing an apply. This asks the same question as a first-class answer, so
+ * an operator staring at "already connected elsewhere" can see the holder —
+ * and where to go — without starting a run. The connection string only
+ * IDENTIFIES the database (host, port, name); its credential is not used, and
+ * nothing is changed.
+ *
+ * A question answers honestly or fails loudly: unlike the apply preflight,
+ * which degrades an unreachable control plane to "no conflict found" because
+ * registration re-checks, this command has no second check behind it — so a
+ * failure to ask is an error, never a "nobody".
+ */
+async function runLocate(args: ConnectArgs): Promise<void> {
+  console.log(
+    `\n  ${brand('ablo')} ${pc.dim('connect locate')}  ${pc.dim('which plane holds this database')}\n`
+  );
+  const url = args.url ?? readProjectAdminDatabaseUrl();
+  if (!url) {
+    throw new AbloValidationError(
+      'Locating needs a connection string to identify the database. Pass --url <conn> (or set DATABASE_URL) and re-run.',
+      { code: 'cli_database_url_missing' }
+    );
+  }
+  const apiKey = resolveApiKey();
+  if (!apiKey) {
+    const ambient = ambientEnvKeyNote();
+    throw new AbloAuthenticationError(
+      `No API key found. Run \`ablo login\` (or set ABLO_API_KEY), then re-run \`ablo connect locate\`.${ambient ? `\n\n${ambient}` : ''}`,
+      { code: 'cli_api_key_missing' }
+    );
+  }
+  let label = 'this database';
+  try {
+    const parsed = new URL(url);
+    label = `${parsed.host}${parsed.pathname === '/' ? '' : parsed.pathname}`;
+  } catch {
+    /* keep the generic label if the URL doesn't parse */
+  }
+  const answer = await requestControlPlane({
+    path: '/v1/datasources/locate',
+    method: 'POST',
+    apiKey,
+    body: { connectionString: url },
+    responseSchema: datasourceLocationResponseSchema,
+  });
+  if (!answer.held) {
+    console.log(
+      `  ${pc.green('✓')} No plane holds ${pc.bold(label)} — ${pc.bold('ablo connect apply')} can register it here.\n`
+    );
+    return;
+  }
+  console.log(
+    `  ${pc.yellow('!')} ${pc.bold(label)} is connected to ${
+      answer.held.project ? `project ${pc.bold(answer.held.project)}, ` : ''
+    }branch ${pc.bold(answer.held.branch)}.\n`
+  );
+  console.log(
+    pc.dim(
+      `    Ablo streams a database from one plane at a time. To move it, disconnect it there\n` +
+        `    first — run `
+    ) +
+      pc.cyan('ablo connect deregister') +
+      pc.dim(` with a key for that plane, then connect here.\n`) +
+      pc.dim(`    Confirm a candidate key first with `) +
+      pc.bold('ablo whoami --key-env <NAME>') +
+      pc.dim(`.\n`) +
+      pc.dim(`    Match the project id to a name with `) +
+      pc.bold('ablo projects list --json') +
+      pc.dim('.') +
+      '\n'
+  );
+}
+
 export async function connect(argv: readonly string[]): Promise<void> {
   // `deregister` is the inverse of `register`; it forwards to the disconnect
   // implementation (lazy-imported, mirroring how `apply` reaches connectApply)
@@ -936,6 +1026,10 @@ export async function connect(argv: readonly string[]): Promise<void> {
   }
   if (args.scan) {
     await runScan();
+    return;
+  }
+  if (args.locate) {
+    await runLocate(args);
     return;
   }
 
@@ -986,6 +1080,7 @@ export const CONNECT_USAGE = `  ablo connect — connect your own database
     npx ablo connect check                Confirm the connected database is ready, from Ablo's side (needs only ABLO_API_KEY)
     npx ablo connect rotate               New passwords for both logins, then re-register
     npx ablo connect scan                 List anything Ablo ever set up in your database (read-only, never drops)
+    npx ablo connect locate               See which plane holds this database (read-only; nothing is changed)
 
   Running it: bare \`ablo connect\` sets everything up for you — creating the two
   scoped logins, sharing your tables, and registering — whenever it finds a

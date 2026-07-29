@@ -77,6 +77,10 @@ function printTargetLines(
   /** The org the stored key was minted for — the fallback when the server did
    *  not confirm one. */
   storedOrganizationId: string | undefined,
+  /** The stored org's slug, for prose. Only shown when it names the same org
+   *  as the line being printed — an env key can resolve to a different org
+   *  than the stored login, and the stored slug must not label that one. */
+  storedOrganizationSlug?: string,
 ): void {
   const confirmed = target?.confirmed ?? null;
 
@@ -88,7 +92,9 @@ function printTargetLines(
   const org = confirmed?.organizationId ?? storedOrganizationId;
   if (org) {
     const suffix = confirmed?.organizationId ? '' : ` ${pc.yellow('(unconfirmed)')}`;
-    console.log(`  ${pc.dim('org')}     ${pc.dim(org)}${suffix}`);
+    const slug = org === storedOrganizationId ? storedOrganizationSlug : undefined;
+    const label = slug ? `${pc.bold(slug)} ${pc.dim(`(${org})`)}` : pc.dim(org);
+    console.log(`  ${pc.dim('org')}     ${label}${suffix}`);
   } else {
     console.log(
       `  ${pc.dim('org')}     ${pc.yellow('unknown')} ${pc.dim('(the server did not confirm one for this key)')}`,
@@ -266,7 +272,12 @@ export async function status(args: string[] = []): Promise<void> {
   // environment the key resolves to. Falls back to the local `ablo projects
   // use` preference (marked unconfirmed) only when the server didn't answer.
   const activeProject = getActiveProject();
-  printTargetLines(target, activeProject, activeEntry?.organizationId);
+  printTargetLines(
+    target,
+    activeProject,
+    activeEntry?.organizationId,
+    activeEntry?.organizationSlug,
+  );
 
   // The stored pair. Each row carries what its key can DO, not just its prefix:
   // `ablo login` stores an observe-only production key on purpose, and a reader

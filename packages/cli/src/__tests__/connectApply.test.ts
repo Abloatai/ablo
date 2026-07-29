@@ -219,33 +219,75 @@ describe('reapplyBlocker — the guard on a password that was generated but neve
 });
 
 describe('rotateWithoutConnection — the guard on a re-key with nothing to re-key', () => {
-  it('refuses a rotate on a plane holding no connection, before any ALTER ROLE', () => {
+  it('refuses a rotate when there is no registration AND no roles — a first connect', () => {
     // The defect it exists for: rotate re-keyed a live database, registration was
     // then declined because the database already streams to another branch, and
     // the database was left on a password Ablo never received.
-    const refusal = rotateWithoutConnection({ rotating: true, planeHasConnection: false, known: true, keyRejected: false });
+    const refusal = rotateWithoutConnection({
+      rotating: true,
+      planeHasConnection: false,
+      known: true,
+      keyRejected: false,
+      existingRoles: [],
+    });
     expect(refusal).toMatch(/no connected database/i);
-    // The reason has to say why the ORDER makes it unsafe, not merely that it is.
-    expect(refusal).toMatch(/before Ablo can be told/i);
+    // The remedy travels with the refusal: the right verb for a first connect.
+    expect(refusal).toMatch(/connect apply/i);
   });
 
   it('allows a rotate that has a registration to update', () => {
-    expect(rotateWithoutConnection({ rotating: true, planeHasConnection: true, known: true, keyRejected: false })).toBeNull();
+    expect(
+      rotateWithoutConnection({
+        rotating: true,
+        planeHasConnection: true,
+        known: true,
+        keyRejected: false,
+        existingRoles: [],
+      })
+    ).toBeNull();
+  });
+
+  it('allows the STRANDED recovery: roles present, no registration', () => {
+    // The loop this closes: apply over existing roles says "run rotate";
+    // rotate on a plane with nothing registered said "run apply". Roles
+    // present with no registration IS the stranded state — an earlier run
+    // re-keyed the database and failed to register — and rotate is exactly
+    // its recovery: fresh passwords, then a registration that can validate.
+    expect(
+      rotateWithoutConnection({
+        rotating: true,
+        planeHasConnection: false,
+        known: true,
+        keyRejected: false,
+        existingRoles: ['ablo_replicator', 'ablo_writer'],
+      })
+    ).toBeNull();
   });
 
   it('never blocks apply, which is the verb for a first connect', () => {
-    expect(rotateWithoutConnection({ rotating: false, planeHasConnection: false, known: true, keyRejected: false })).toBeNull();
+    expect(
+      rotateWithoutConnection({
+        rotating: false,
+        planeHasConnection: false,
+        known: true,
+        keyRejected: false,
+        existingRoles: [],
+      })
+    ).toBeNull();
   });
 
-  it('refuses when Ablo answered and turned the key down', () => {
+  it('refuses when Ablo answered and turned the key down — even in the stranded state', () => {
     // The hole this closes: a mistyped key made the state "unknown", unknown was
     // permissive, and rotate re-keyed a live database before registration failed
-    // on the key. Answering-and-declining is not the same as not answering.
+    // on the key. Answering-and-declining is not the same as not answering. And
+    // existing roles must not soften it: a declined key can never be told the
+    // new password, whatever the database holds.
     const refusal = rotateWithoutConnection({
       rotating: true,
       planeHasConnection: false,
       known: false,
       keyRejected: true,
+      existingRoles: ['ablo_replicator'],
     });
     expect(refusal).toMatch(/did not accept this API key/i);
   });
@@ -253,7 +295,15 @@ describe('rotateWithoutConnection — the guard on a re-key with nothing to re-k
   it('does not refuse on an unreachable control plane — unknown is not a no', () => {
     // A machine that cannot reach Ablo says nothing about what the plane holds,
     // and refusing there would strand the operator differently.
-    expect(rotateWithoutConnection({ rotating: true, planeHasConnection: false, known: false, keyRejected: false })).toBeNull();
+    expect(
+      rotateWithoutConnection({
+        rotating: true,
+        planeHasConnection: false,
+        known: false,
+        keyRejected: false,
+        existingRoles: [],
+      })
+    ).toBeNull();
   });
 });
 

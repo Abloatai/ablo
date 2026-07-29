@@ -21,6 +21,7 @@ import { DOCS_USAGE } from './docs';
 import { MIGRATE_USAGE } from './migrate';
 import { BRANCH_USAGE } from './branches';
 import { BRANCH_DEV_USAGE } from './branchDev';
+import { WHOAMI_USAGE } from './whoami';
 
 /** Headings in the short help — the core loop, in the order you meet it. */
 export const CORE_GROUPS = ['Start', 'Every day', 'More'] as const;
@@ -97,6 +98,7 @@ export const COMMANDS = [
         { run: 'connect apply', does: 'Run that setup for you, from a one-time admin URL' },
         { run: 'connect check', does: 'Confirm your database is ready to share changes with Ablo' },
         { run: 'connect scan', does: 'List anything Ablo ever set up in your database (read-only)' },
+        { run: 'connect locate', does: 'See which plane holds a database before connecting it' },
         { run: 'connect deregister', does: "Disconnect this project's database — Ablo stops reading and writing it" },
       ],
     },
@@ -183,6 +185,18 @@ export const COMMANDS = [
         { run: 'docs', does: 'List every page — these ship in the package, so they match your version' },
         { run: 'docs <page>', does: 'Print one page as markdown (no network needed)' },
         { run: 'docs --json', does: 'The page list, machine-readable' },
+      ],
+    },
+  },
+  {
+    name: 'whoami',
+    usage: WHOAMI_USAGE,
+    full: {
+      group: "See what's happening",
+      rows: [
+        { run: 'whoami', does: 'Show the server-confirmed plane the active credential acts on' },
+        { run: 'whoami --key-env <NAME>', does: 'Inspect another key without exposing it in argv' },
+        { run: 'whoami --json', does: 'Same, machine-readable' },
       ],
     },
   },

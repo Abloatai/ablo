@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ablo API",
-    "version": "0.41.0",
+    "version": "0.42.0",
     "description": "The Ablo transaction layer: commit, read, and claim. `{model}` is any model from your pushed schema — the routes are the same whichever it is. Authenticate every request with your API key as a Bearer token.",
     "license": {
       "name": "Apache License 2.0",

@@ -200,5 +200,23 @@ describe('ablo login — request routing across auth + dashboard hosts', () => {
     const stored = JSON.stringify(creds);
     expect(stored).toContain(MANAGEMENT_KEY);
     expect(creds.profiles.default.management.apiKey).toBe(MANAGEMENT_KEY);
+    // The org the server scoped the credential to travels into the store, slug
+    // and id both — the slug is what `ablo status` prints in prose.
+    expect(creds.profiles.default.management.organizationId).toBe('org_routing');
+    expect(creds.profiles.default.management.organizationSlug).toBe('acme');
+  });
+
+  it('carries --org onto the approval URL as a preselect, and only then', async () => {
+    const openedUrls: string[] = [];
+    const { login } = await import('../login');
+    await login(['--org', 'acme'], { openUrl: (u) => openedUrls.push(u) });
+
+    expect(openedUrls).toEqual([
+      `${dashHost.origin}/cli?user_code=${USER_CODE}&org=acme`,
+    ]);
+    // The flag preselects on the page; the provision body must NOT name an org
+    // — the approved session's active org is the single authority downstream.
+    const prov = dashHost.requests.find((r) => r.path === '/api/cli/provision-key');
+    expect(prov?.body).toEqual({ device_code: DEVICE_CODE });
   });
 });

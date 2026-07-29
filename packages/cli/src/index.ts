@@ -32,6 +32,7 @@ import { projects, ensureProject, projectSlugFromPackageName } from './projects'
 import { branches } from './branches';
 import { runBranchDev } from './branchDev';
 import { status } from './status';
+import { whoami } from './whoami';
 import { doctor } from './doctor';
 import { logs } from './logs';
 import { webhooks } from './webhooks';
@@ -66,6 +67,7 @@ const HANDLERS: Readonly<Record<CommandName, (argv: readonly string[]) => Promis
   projects: (argv) => projects([...argv]),
   branch: (argv) => branches([...argv]),
   status: (argv) => status([...argv]),
+  whoami: (argv) => whoami([...argv]),
   doctor: () => doctor(),
   logs: (argv) => logs([...argv]),
   webhooks: (argv) => webhooks([...argv]),

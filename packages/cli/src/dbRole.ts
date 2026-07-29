@@ -347,11 +347,35 @@ export function readProjectWriteDatabaseUrl(cwd: string = process.cwd()): string
 }
 
 function readProjectEnvValue(variable: string, cwd: string): string | null {
+  return readProjectEnvVariable(variable, cwd, false)?.value ?? null;
+}
+
+/** A named value from the process environment or the project env files.
+ *
+ * This is intentionally explicit: callers choose the variable name before any
+ * file is read. It lets an inspection command such as `whoami --key-env
+ * ABLO_API_KEY_LIVE` examine a candidate key without sourcing the whole file
+ * (where a database URL containing `&` is shell syntax) and without letting an
+ * ambient file silently choose a target.
+ */
+export function readProjectEnvVariable(
+  variable: string,
+  cwd: string = process.cwd(),
+  includeProcess: boolean = true,
+): { value: string; source: ApiKeySource } | null {
+  if (includeProcess && process.env[variable]) {
+    return { value: process.env[variable], source: 'env' };
+  }
   for (const filename of ['.env.local', '.env']) {
     const path = resolve(cwd, filename);
     if (!existsSync(path)) continue;
     const match = new RegExp(`^${variable}=(.+)$`, 'm').exec(readFileSync(path, 'utf8'));
-    if (match?.[1]) return match[1].trim().replace(/^["']|["']$/g, '');
+    if (match?.[1]) {
+      return {
+        value: match[1].trim().replace(/^["']|["']$/g, ''),
+        source: filename as '.env.local' | '.env',
+      };
+    }
   }
   return null;
 }
@@ -376,12 +400,6 @@ export type ApiKeySource = 'env' | '.env.local' | '.env';
 export function readProjectApiKey(
   cwd: string = process.cwd(),
 ): { key: string; source: ApiKeySource } | null {
-  if (process.env.ABLO_API_KEY) return { key: process.env.ABLO_API_KEY, source: 'env' };
-  for (const name of ['.env.local', '.env'] as const) {
-    const path = resolve(cwd, name);
-    if (!existsSync(path)) continue;
-    const match = /^ABLO_API_KEY=(.+)$/m.exec(readFileSync(path, 'utf8'));
-    if (match?.[1]) return { key: match[1].trim().replace(/^["']|["']$/g, ''), source: name };
-  }
-  return null;
+  const found = readProjectEnvVariable('ABLO_API_KEY', cwd);
+  return found ? { key: found.value, source: found.source } : null;
 }

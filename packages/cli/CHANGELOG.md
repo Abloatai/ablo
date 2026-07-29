@@ -1,5 +1,18 @@
 # @abloatai/cli
 
+## 0.42.0
+
+### Minor Changes
+
+- 78b096a: `ablo whoami` answers what a key acts on, server-confirmed. Where `status` is the broad health report and deliberately degrades when the server cannot confirm identity, `whoami` either returns the confirmed organization, project, and branch or fails. Run it before a `connect` or `deregister` instead of inferring a key's scope from a failed mutation.
+
+  Re-pushing an unchanged schema no longer fails. The unchanged-schema fast path now defers provisioning exactly like a changed push, so a second `ablo push` on a plane with nothing to do succeeds instead of being refused.
+
+### Patch Changes
+
+- @abloatai/transaction@0.42.0
+- @abloatai/humans@0.42.0
+
 ## 0.41.0
 
 ### Patch Changes

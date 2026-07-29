@@ -46,11 +46,14 @@ export type Mode = KeyEnvironment;
  *  active project is set. */
 export const DEFAULT_PROFILE = 'default';
 
-/** A stored key for one environment. `organizationId`/`expiresAt` come from
- *  the device-login flow; `--api-key` login sets only `apiKey`. */
+/** A stored key for one environment. `organizationId`/`organizationSlug`/
+ *  `expiresAt` come from the device-login flow; `--api-key` login sets only
+ *  `apiKey`. */
 export interface KeyEntry {
   apiKey: string;
   organizationId?: string;
+  /** The organization's slug, for prose — the id stays for machine use. */
+  organizationSlug?: string;
   /** ISO-8601 absolute expiry, when the issuing flow sets one. */
   expiresAt?: string;
 }
@@ -428,6 +431,25 @@ export function clearCredential(): boolean {
 export function resolveApiKey(modeOverride?: Mode): string | undefined {
   // Strict data-path preset: the active project's key only, no env-file scan.
   return resolveKey({ purpose: 'data', mode: modeOverride }).key;
+}
+
+/**
+ * The one-line explanation for a missing key when a key is actually sitting in
+ * an env file beside the command. The strict data commands read only the
+ * process environment and the stored login — deliberately, so an ambient file
+ * cannot silently pick the plane a write acts on — but refusing without saying
+ * the file was seen reads as a broken key, not a loading rule: `status` shows
+ * the key and `connect` denies it exists, two seconds apart. Returns null when
+ * no env file holds one.
+ */
+export function ambientEnvKeyNote(cwd?: string): string | null {
+  const ambient = readProjectApiKey(cwd);
+  if (!ambient || ambient.source === 'env') return null;
+  return (
+    `Note: ${ambient.source} in this directory holds an ABLO_API_KEY, which this command does not load — ` +
+    'it reads only the process environment and your stored login, so a file cannot silently choose the plane. ' +
+    'Export the variable (or prefix the command with it) to use that key.'
+  );
 }
 
 /**

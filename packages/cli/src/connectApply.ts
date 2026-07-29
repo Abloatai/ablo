@@ -47,7 +47,7 @@ import {
 import { probeDirectWriteReadiness, type ConnectArgs } from './connect';
 import { detectPooler, detectProvider, logicalReplicationGuidance } from './dbProvider';
 import { generateRolePassword, rewriteDatabaseUrl, readProjectAdminDatabaseUrl } from './dbRole';
-import { resolveApiKey, resolveManagementKey, getMode } from './config';
+import { ambientEnvKeyNote, resolveApiKey, resolveManagementKey, getMode } from './config';
 import { fetchDataSourceState } from './readiness';
 import { DEFAULT_SCHEMA_PATH } from './push';
 import { apiBaseUrl } from './controlPlane';
@@ -177,7 +177,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   const rotating = args.rotate;
   const verb = rotating ? 'connect rotate' : 'connect apply';
 
-  const adminUrl = args.url ?? readProjectAdminDatabaseUrl();
+  let adminUrl = args.url ?? readProjectAdminDatabaseUrl();
   if (!adminUrl) {
     throw new AbloValidationError(
       'No admin connection string. Pass --url <admin-conn> (or set DATABASE_URL) and re-run.',
@@ -207,12 +207,13 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     // arrive exactly here again, which is the one instruction guaranteed not to
     // work. Tell them which credential is missing, not that they have none.
     const loggedIn = resolveManagementKey() !== undefined;
+    const ambient = ambientEnvKeyNote();
     throw new AbloAuthenticationError(
       loggedIn
         ? `You are logged in, but this project has no ${getMode()} data key.\n\n` +
           `The key is looked for in ABLO_API_KEY, then in the credential stored for the active project in the active mode (${getMode()}). Logging in stores a management credential, which administers the project but cannot register a database — and a key for another mode is never used implicitly, so registering against production takes an explicit production key.\n\n` +
-          'Mint a sandbox key with `npx ablo dev`, or set ABLO_API_KEY to the key of the plane this database should join (its sk_live_ key for production).'
-        : 'Not logged in, and no ABLO_API_KEY is set. Run `ablo login` (or set ABLO_API_KEY) so Ablo knows which project to register this database for.',
+          `Mint a sandbox key with \`npx ablo dev\`, or set ABLO_API_KEY to the key of the plane this database should join (its sk_live_ key for production).${ambient ? `\n\n${ambient}` : ''}`
+        : `Not logged in, and no ABLO_API_KEY is set. Run \`ablo login\` (or set ABLO_API_KEY) so Ablo knows which project to register this database for.${ambient ? `\n\n${ambient}` : ''}`,
       { code: 'cli_api_key_missing' }
     );
   }
@@ -237,21 +238,40 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // the failure it predicts arrives disguised as a wrong password.
   const pooledAdmin = detectPooler(adminUrl);
   if (pooledAdmin?.confidence === 'host') {
-    console.error(
-      `  ${pc.yellow('!')} ${pc.bold(target)} is a connection pooler, not the database.\n`
-    );
-    console.error(
-      pc.dim(
-        `    A pooler terminates the session, so replication cannot run over it. Setting up\n` +
-          `    through it creates roles that Ablo then cannot use to stream.\n`
-      )
-    );
-    console.error(
-      pooledAdmin.direct
-        ? `    Re-run against the direct host: ${pc.bold(pooledAdmin.direct)}\n`
-        : `    Re-run against the direct database host, not the pooled one.\n`
-    );
-    process.exit(1);
+    if (pooledAdmin.direct) {
+      // Same database, same credential, the endpoint replication can actually
+      // run over. The pooled URL stays right for the app runtime; refusing
+      // here handed the reader a URL to copy back in by hand, when the run
+      // already knew it.
+      adminUrl = pooledAdmin.direct;
+      const pooledLabel = target;
+      try {
+        const parsed = new URL(adminUrl);
+        target = `${parsed.host}${parsed.pathname === '/' ? '' : parsed.pathname}`;
+      } catch {
+        /* keep the previous label if the derived URL doesn't parse */
+      }
+      console.log(
+        `  ${pc.yellow('!')} ${pc.bold(pooledLabel)} is a connection pooler, so this run uses the direct host:\n` +
+          `    ${pc.bold(target)}\n` +
+          pc.dim(
+            `    A pooler terminates the session, so replication cannot run over it. Your app\n` +
+              `    keeps the pooled URL; the setup needs the database itself.\n`
+          )
+      );
+    } else {
+      console.error(
+        `  ${pc.yellow('!')} ${pc.bold(target)} is a connection pooler, not the database.\n`
+      );
+      console.error(
+        pc.dim(
+          `    A pooler terminates the session, so replication cannot run over it. Setting up\n` +
+            `    through it creates roles that Ablo then cannot use to stream.\n`
+        )
+      );
+      console.error(`    Re-run against the direct database host, not the pooled one.\n`);
+      process.exit(1);
+    }
   }
   if (pooledAdmin?.confidence === 'port') {
     console.log(
@@ -312,7 +332,11 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     console.error(`  ${pc.yellow('!')} ${heldElsewhere}\n`);
     console.error(
       pc.dim(`    Your database is untouched.\n`) +
-        `  To move it here, disconnect it there first with ${pc.cyan('ablo connect deregister')}.\n`
+        `  To move it here, disconnect it there first with ${pc.cyan('ablo connect deregister')}\n` +
+        pc.dim(`  (run with a key for that plane). Match the project id to a name with `) +
+        pc.bold('ablo projects list --json') +
+        pc.dim('.') +
+        '\n'
     );
     process.exit(1);
   }
@@ -322,24 +346,31 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // THIS plane holds first: nothing to re-key means the registration is a first
   // connect, and a first connect is what the one-database-one-branch rule
   // declines. See rotateWithoutConnection.
+  // What this plane holds, for rotate's guard. The key-rejected arm refuses
+  // HERE, before any dial: a key Ablo declines cannot be told a new password.
+  // The nothing-to-re-key arm waits for step 1e, where the database has said
+  // whether the scoped roles exist — a plane with no registration but the
+  // roles present is the stranded state rotate exists to recover, and judging
+  // it from the control plane alone built an apply↔rotate refusal loop.
+  let rotatePlane: { planeHasConnection: boolean; known: boolean; keyRejected: boolean } | null =
+    null;
   if (rotating) {
     const state = await fetchDataSourceState(apiBaseUrl(), apiKey).catch(
       (): { kind: 'unknown'; detail: string } => ({ kind: 'unknown', detail: 'unreachable' })
     );
-    const refusal = rotateWithoutConnection({
-      rotating,
+    rotatePlane = {
       planeHasConnection: state.kind === 'connected',
       known: state.kind !== 'unknown',
       // 401/403 is Ablo answering and declining the key, not a network failure.
       keyRejected: state.kind === 'unknown' && /HTTP 40[13]/.test(state.detail),
-    });
-    if (refusal) {
-      console.error(`  ${pc.yellow('!')} ${refusal}\n`);
-      console.error(
-        pc.dim(`    Your database is untouched.\n`) +
-          `  Connect it instead:  ${pc.cyan('npx ablo connect apply')}\n`
-      );
-      process.exit(1);
+    };
+    if (rotatePlane.keyRejected) {
+      const refusal = rotateWithoutConnection({ rotating, ...rotatePlane, existingRoles: [] });
+      if (refusal) {
+        console.error(`  ${pc.yellow('!')} ${refusal}\n`);
+        console.error(pc.dim(`    Your database is untouched.\n`));
+        process.exit(1);
+      }
     }
   }
 
@@ -431,9 +462,22 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // no new password to give Ablo for a role it finds. See reapplyBlocker.
   const role = args.role && args.role.length > 0 ? args.role : ABLO_REPLICATION_ROLE;
   const writeRole = args.writeRole && args.writeRole.length > 0 ? args.writeRole : ABLO_WRITE_ROLE;
+  const existingRoles = await presentRoles(admin, [role, writeRole]).catch(() => []);
+  // Rotate's nothing-to-re-key arm, now that the database has answered: no
+  // registration AND no roles means a first connect wearing the wrong verb;
+  // roles without a registration is the stranded state, and rotate proceeds.
+  if (rotatePlane) {
+    const refusal = rotateWithoutConnection({ rotating, ...rotatePlane, existingRoles });
+    if (refusal) {
+      await admin.end({ timeout: 2 });
+      console.error(`  ${pc.yellow('!')} ${refusal}\n`);
+      console.error(pc.dim(`    Your database is untouched.\n`));
+      process.exit(1);
+    }
+  }
   const blocker = reapplyBlocker({
     rotating,
-    existingRoles: await presentRoles(admin, [role, writeRole]).catch(() => []),
+    existingRoles,
   });
   if (blocker) {
     await admin.end({ timeout: 2 });

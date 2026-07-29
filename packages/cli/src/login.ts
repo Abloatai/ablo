@@ -6,11 +6,16 @@
  *                               project management credential.
  *   ablo login --project <slug> The same, but scopes and mints the pair to a
  *                               named project, which then becomes active.
+ *   ablo login --org <slug>     Preselects the organization on the approval
+ *                               page. The page is the authority — the browser
+ *                               choice decides what the credential is scoped
+ *                               to, and this flag only picks the default.
  *   ablo logout                 Clears the stored keys.
  *
  * With no `--project`, login targets the currently active project — so it
  * doubles as a refresh in place — and otherwise falls back to the
- * organization's default project. In a headless or CI environment you don't log
+ * organization's default project. With no `--org`, the approval page offers
+ * the session's active organization. In a headless or CI environment you don't log
  * in; you set `ABLO_MANAGEMENT_KEY` for control-plane commands and a
  * branch-bound `ABLO_API_KEY` for runtime commands.
  *
@@ -93,15 +98,15 @@ interface DeviceTokenResponse {
 // building it reads too — see `provisionKeyResponseSchema`.
 type ProvisionKey = ProvisionedKey;
 
-/** Pull `--project <slug>` out of the argv (the only login flag). */
-function parseProjectFlag(argv: readonly string[]): string | undefined {
-  const i = argv.indexOf('--project');
+/** Pull `--<flag> <slug>` (or `--<flag>=<slug>`) out of the argv. */
+function parseSlugFlag(argv: readonly string[], flag: string): string | undefined {
+  const i = argv.indexOf(flag);
   if (i >= 0) {
     const slug = argv[i + 1];
     if (slug && !slug.startsWith('-')) return slug;
   }
-  const eq = argv.find((a) => a.startsWith('--project='));
-  return eq ? eq.slice('--project='.length) || undefined : undefined;
+  const eq = argv.find((a) => a.startsWith(`${flag}=`));
+  return eq ? eq.slice(flag.length + 1) || undefined : undefined;
 }
 
 /** Injectable seam (tests capture the approval URL; default opens the OS browser). */
@@ -118,8 +123,12 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
   // org-default. The server resolves + verifies the slug against the org.
   // `--project default` means the org-default (no slug to resolve), mirroring
   // `ablo projects use default`.
-  const requested = parseProjectFlag(argv) ?? getActiveProject()?.slug;
+  const requested = parseSlugFlag(argv, '--project') ?? getActiveProject()?.slug;
   const targetProject = requested === DEFAULT_PROFILE ? undefined : requested;
+  // Which organization to preselect on the approval page. No stored fallback:
+  // the page defaults to the session's active organization, and its choice —
+  // not this flag — decides what the credential is scoped to.
+  const targetOrg = parseSlugFlag(argv, '--org');
 
   // Account choice — both paths finish in the browser; the command only opens
   // the right page (sign-in versus sign-up) and then the same /cli approval.
@@ -165,7 +174,9 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
   // the sign-up page, which returns to /cli after creating an organization;
   // log-in opens /cli directly, which falls back to sign-in when there's no
   // session.
-  const approvePath = `/cli?user_code=${code.user_code}`;
+  const approvePath = `/cli?user_code=${code.user_code}${
+    targetOrg ? `&org=${encodeURIComponent(targetOrg)}` : ''
+  }`;
   const url =
     account === 'signup'
       ? `${DASHBOARD_URL}/signup?next=${encodeURIComponent(approvePath)}`
@@ -291,8 +302,17 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
   const entry = (k: ProvisionKey): KeyEntry => ({
     apiKey: k.apiKey,
     ...(prov.organizationId ? { organizationId: prov.organizationId } : {}),
+    ...(prov.organizationSlug ? { organizationSlug: prov.organizationSlug } : {}),
     ...(k.expiresAt ? { expiresAt: k.expiresAt } : {}),
   });
+  // The browser approval is authoritative; a `--org` that names a different
+  // organization than the one approved deserves a line, not a silent surprise
+  // on the next push.
+  if (targetOrg && prov.organizationSlug && prov.organizationSlug !== targetOrg) {
+    log.warn(
+      `The approval chose ${pc.bold(prov.organizationSlug)}, not ${pc.bold(targetOrg)}. The credential is scoped to ${pc.bold(prov.organizationSlug)}.`,
+    );
+  }
   // Store the management credential under the project profile the server scoped
   // it to and make that project active. The
   // server's `project` field (null means the org-default) is authoritative — it
@@ -306,12 +326,16 @@ async function deviceLogin(argv: readonly string[], deps: LoginDeps = {}): Promi
     { mode: 'sandbox', activeProject: prov.project ?? undefined },
   );
   s.stop(`Saved project credential to ${path}`);
+  // Name what the credential is scoped to — the org in prose, the project
+  // dimmed beside it — so a wrong-org login is visible here, not on a later
+  // failing command.
+  const orgLabel = prov.organizationSlug ? ` to ${pc.bold(prov.organizationSlug)}` : '';
   const where = prov.project ? ` ${pc.dim(`(project ${prov.project.slug})`)}` : '';
   // One obvious next command. `ablo dev` is the local loop: it resolves your
   // branch, wires `.env.local`, pushes, and watches. The stored mode is not
   // named here because `dev` does not consult it.
   outro(
-    `${pc.green('✓')} Logged in${where}. Run ${pc.bold('npx ablo dev')} to create or resume your Git branch and start with an expiring runtime key.`,
+    `${pc.green('✓')} Logged in${orgLabel}${where}. Run ${pc.bold('npx ablo dev')} to create or resume your Git branch and start with an expiring runtime key.`,
   );
 }
 

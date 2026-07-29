@@ -152,20 +152,25 @@ export async function currentWalLevel(sql: postgres.Sql): Promise<string> {
 }
 
 /**
- * Whether `rotate` has a connection on THIS plane to re-key.
+ * Whether `rotate` has anything to re-key.
  *
  * Rotate re-keys the database and only then registers, because Ablo validates a
  * credential by dialling with it, so the password must exist first. That order
- * is safe when a registration is already there to update, and unsafe when there
- * is not: the run rotates the roles, registration is refused, and the database
- * is left on passwords Ablo does not hold.
+ * is safe when there is something to update, and unsafe when there is not: the
+ * run rotates the roles, registration is refused, and the database is left on
+ * passwords Ablo does not hold.
  *
- * The refusal that matters here is a database already streaming to a DIFFERENT
- * branch, which the control plane declines because one database serves one
- * branch. That is knowable before any `ALTER ROLE`, and this is the cheap
- * question that reveals it: a plane holding no registration for this host has
- * nothing to re-key, so a rotate against it is a first connect wearing the wrong
- * verb, and its registration is the one at risk of being declined.
+ * "Something to update" has TWO honest shapes, and conflating them built a
+ * loop. A plane with a registration has a credential to re-key — the ordinary
+ * rotate. A plane with NO registration but the scoped roles present in the
+ * database is the STRANDED state: an apply or rotate that re-keyed the roles
+ * and then failed to register, leaving passwords Ablo never received. Rotate
+ * is precisely the recovery there — fresh passwords, then a registration that
+ * this time can validate — and refusing it sent the reader to `apply`, whose
+ * own guard on existing roles sent them straight back here. Only when the
+ * plane has no registration AND the roles are absent is a rotate truly a
+ * first connect wearing the wrong verb. (A database held by a DIFFERENT plane
+ * is refused earlier, by the locate preflight, before this question is asked.)
  *
  * Returns the reason to refuse, or `null` when rotate has something to update.
  */
@@ -184,6 +189,10 @@ export function rotateWithoutConnection(input: {
    * prevent, arriving through the one input that was allowed to skip it.
    */
   readonly keyRejected: boolean;
+  /** The scoped role names already present in the database — the stranded
+   *  state's tell. Present roles mean rotate has passwords to replace even
+   *  when the plane holds no registration. */
+  readonly existingRoles: readonly string[];
 }): string | null {
   if (!input.rotating) return null;
   if (input.keyRejected) {
@@ -194,10 +203,11 @@ export function rotateWithoutConnection(input: {
     );
   }
   if (!input.known || input.planeHasConnection) return null;
+  if (input.existingRoles.length > 0) return null;
   return (
-    'This plane has no connected database, so there is no credential to re-key. ' +
-    'Rotate changes the password in your database before Ablo can be told about it, ' +
-    'so running it here would leave the database on a password Ablo never receives.'
+    "This plane has no connected database and Ablo's roles are not in this database, " +
+    'so there is no credential to re-key. Connecting for the first time is ' +
+    '`ablo connect apply`, which creates the roles and registers them in one run.'
   );
 }
 

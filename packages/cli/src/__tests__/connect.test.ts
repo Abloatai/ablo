@@ -16,6 +16,13 @@ import {
 import * as dbRole from '../dbRole';
 
 describe('parseConnectArgs', () => {
+  it('parses the locate subcommand — the who-holds-this question', () => {
+    const args = parseConnectArgs(['locate', '--url', 'postgres://u:p@h/db']);
+    expect(args.locate).toBe(true);
+    expect(args.url).toBe('postgres://u:p@h/db');
+    expect(args.apply).toBe(false);
+  });
+
   it('applies sensible defaults', () => {
     const a = parseConnectArgs([]);
     expect(a.check).toBe(false);
