@@ -393,7 +393,7 @@ export type ApiKeySource = 'env' | '.env.local' | '.env';
  * the key together with the source it came from, so a caller can name that
  * source in an error, or `null` when no key is set.
  *
- * Prefer {@link resolveEffectiveApiKey} over calling this directly: it is the
+ * Prefer {@link resolveRuntimeApiKey} over calling this directly: it is the
  * single resolution chain that `push`, `dev`, and `status` share, which keeps
  * the key reported by diagnostics identical to the key used to deploy.
  */

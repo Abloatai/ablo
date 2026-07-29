@@ -62,7 +62,7 @@ use a new key.
 
 ## Failures are not replayed: they re-run
 
-This is where Ablo deliberately differs from Stripe and from most payment APIs, and it is the
+This is where Ablo deliberately differs from most request/response APIs, and it is the
 behaviour most likely to surprise you.
 
 **Only successful writes are recorded.** A write that failed leaves no idempotency record, so

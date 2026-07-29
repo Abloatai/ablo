@@ -62,7 +62,7 @@ confirms it over the WAL. Application and agent code hold only `ABLO_API_KEY` �
 client never sees a connection string. [Connect Your Database](/data-sources)
 is the single source of truth for both paths.
 
-## Test With Sandboxes
+## Try the public sandbox demo
 
 Use the public `/sandbox` page to understand the state flow. It is a visual,
 deterministic demo; it does not call your API key or mutate hosted Ablo data.
@@ -72,7 +72,7 @@ Codex and ask it to wire one real model through the schema model API.
 Use `npx ablo dev` for real integration work. It derives an immutable branch
 from Git, inherits the parent schema, and writes a temporary branch credential
 to `.env.local`. Each developer or pull request gets independent schema, rows,
-claims, and logs. Use an explicit `sk_live_*` root credential only in the
+claims, and logs. Use an explicit `sk_*` root credential only in the
 reviewed production deployment.
 
 When handing this to a coding agent, give it a concrete target:
@@ -234,9 +234,9 @@ export async function POST() {
 
 ### Why two credential shapes
 
-`ABLO_API_KEY` is your long-lived account credential. Treat it like a
-Stripe secret key: it stays on trusted servers, never reaches a browser
-bundle, and signs server-to-server requests. It is the right credential
+`ABLO_API_KEY` is your long-lived account credential. It stays on trusted
+servers, never reaches a browser bundle, and signs server-to-server requests.
+It is the right credential
 for trusted runtimes (Next.js server actions, background workers,
 migration scripts) where the code reading it is yours.
 
@@ -253,10 +253,8 @@ ABLO_API_KEY ─exchange─►  scoped token ────────► narrow 
  server only)             revocable)
 ```
 
-This is the same shape as Stripe's
-ephemeral keys (Issuing Elements expires in 15 minutes) and AWS STS
-AssumeRole (returns time-bounded creds with the minimal needed scope).
-You never type that token into your app; the SDK mints one when it needs one and
+You never type that token into your app; the SDK mints a time-bounded,
+minimally scoped token when it needs one and
 refreshes before expiry.
 
 ## 3. Read State
@@ -443,7 +441,7 @@ Ablo needs your Data Source endpoint and API key. Your app
 stores one Ablo credential:
 
 ```bash
-ABLO_API_KEY=sk_live_...
+ABLO_API_KEY=sk_...
 ```
 
 The API key verifies Ablo's request. It is not a database credential.

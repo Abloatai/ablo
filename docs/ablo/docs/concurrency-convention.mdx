@@ -107,18 +107,37 @@ delivered **twice**, by design — once as a value, once as an event:
 - On the **event channel**: `conflict:notified` (mirrors `reconciliation:needed` /
   `sync:rollback`).
 
-Shape (canonical in `coordination/schema.ts`):
+Shape (canonical in `coordination/schema.ts`): one advisory in two scopes, told
+apart by `scope`, the same way `reads[]` entries come at two granularities.
+
+Both scopes carry:
 
 | field | meaning |
 |---|---|
-| `object` | Stripe-style type tag: `'stale_notification'` |
-| `model`, `id` | the conflicting row (for a group dep, both are the group key) |
-| `group?` | set when this is a group-scoped notification |
+| `object` | stable type tag: `'stale_notification'` |
+| `scope` | `'row'` or `'group'` — which premise granularity fired |
+| `target` | **the row that moved**, and which parts: `{ model, id, fields }`. The same locator a claim names its subject with |
 | `readAt` | the watermark the committer reasoned against |
 | `observedSyncId` | the newest delta on the premise: re-read at/after this |
-| `conflictingFields` | fields that moved (empty for group / whole-entity) |
-| `currentValues` | the live values of those fields: the premise to reconcile against (empty for group) |
 | `writtenBy` | `{ kind, id }` of the concurrent author, reported faithfully |
+
+`scope: 'row'` adds:
+
+| field | meaning |
+|---|---|
+| `currentValues` | the live values of `target.fields`: the premise to reconcile against |
+
+`scope: 'group'` adds:
+
+| field | meaning |
+|---|---|
+| `group` | the group premise that fired (`report:abc`) |
+| `propagation?` | how `target` reached `group`: `{ via, through }` |
+| `changed?` | how much of the group moved: `{ count, sample, truncated }` |
+
+`target` names the row that changed in **both** scopes. A group notification
+reports the moved row there and the premise it broke in `group`, so the two are
+never the same field.
 
 Only `notify` produces a notification (the write was held). `reject` throws and
 `overwrite` is silent — neither notifies.
@@ -137,18 +156,25 @@ const receipt = await ablo.task.update({
 });
 
 // Receive — pull: the held write surfaces on the receipt.
-for (const n of receipt.notifications ?? []) reconcile(n);
+for (const n of receipt.notifications ?? []) resolve(n);
 
 // Receive — push: the same StaleNotification[] fires ambiently on the socket.
-ws.subscribe('conflict:notified', ({ notifications }) => notifications.forEach(reconcile));
+ws.subscribe('conflict:notified', ({ notifications }) => notifications.forEach(resolve));
 
-function reconcile(n: StaleNotification) {
+function resolve(n: StaleNotification) {
+  // n.target     — the row that moved, and which fields (both scopes)
+  // n.writtenBy  — who moved it (e.g. { kind: 'agent', id: 'agent-b' })
+  if (n.scope === 'group') {
+    // "something in report:abc moved" — but `target` says WHICH row, so this is
+    // a one-row re-read, not a re-read of the group.
+    // n.propagation?.via — 'self' | 'parent' | 'transitive'
+    return refreshRow(n.target.model, n.target.id, n.observedSyncId);
+  }
   // n.currentValues — what's actually there now (e.g. { status: 'done' })
-  // n.writtenBy     — who moved it (e.g. { kind: 'agent', id: 'agent-b' })
   if (!stillValid(n.currentValues)) return;       // premise gone → drop the write
 
   return ablo.task.update({
-    id: n.id,
+    id: n.target.id,
     data: { status: 'blocked' },
     readAt: n.observedSyncId,   // adopt the new high-water mark — this is what terminates the loop
     onStale: 'notify',
@@ -158,8 +184,65 @@ function reconcile(n: StaleNotification) {
 
 The loop **terminates** because each retry advances `readAt` to `observedSyncId`;
 a peer that keeps writing only ever notifies you against a *newer* baseline, never
-the same one twice. A group premise reconciles identically, except `group` is set
-and `currentValues` is empty (re-read the group).
+the same one twice.
+
+### 5.2 Reading a group notification
+
+A group premise says "anything in this group", so the notification has to answer
+"what, exactly?" or the only correct response is to re-read the whole group —
+which on a busy group is how a reconcile loop turns into a large, repeated read.
+
+Four fields answer it:
+
+- **`target`** — the row that moved and the fields that changed on it. Usually a
+  one-row re-read.
+- **`group`** — the premise that fired.
+- **`propagation`** — how the row reached the group. `via: 'self'` means the row
+  *is* the group's scope root; `'parent'` means one containment edge below it;
+  `'transitive'` means further up, with `through` listing the intermediate
+  models (`['slides', 'decks']`).
+- **`changed`** — how much moved, in **distinct rows** rather than deltas.
+  `count` is the total, `sample` names the most recently changed (capped), and
+  `truncated` says whether the sample tells the whole story.
+
+`changed` is what lets an actor decline. One row moved, re-read one row; twelve
+thousand moved, stop reasoning and resync the group — or abandon:
+
+```ts
+if (n.changed && n.changed.count > 50) return null; // too much moved — abandon the write
+for (const row of n.changed?.sample ?? []) await refresh(row.model, row.id);
+```
+
+`propagation` is absent when the commit path has no record-group spec for the
+model, which is the one case where the server knows a group moved without
+knowing the route. Treat its absence as "re-read the group", the old behavior.
+
+### 5.3 Gating on what you know
+
+The notification tells you a belief moved. Whether that should *stop you writing*
+is a separate decision, and it belongs on the belief, not on the write.
+
+A `track` is a standing premise — what you are watching, with a watermark for
+when you last looked. Its disposition says what a move does to your next commit:
+
+```ts
+await ablo.documents.track({ id: 's-1' });                     // notify — report it
+await ablo.documents.track({ id: 's-1', onStale: 'reject' });  // reject — gate my next write
+```
+
+`reject` refuses your next commit while that belief is stale, **even if the
+commit writes an unrelated row**. The gate is on what you *know*, not on what you
+are touching — which is the case a read→reason→write agent actually has.
+
+It is enforced at the commit chokepoint, so it is a guarantee rather than a
+convention. And the gate takes a key: it does not reopen on its own, because an
+agent retrying blindly would land exactly the write `reject` was asked to
+prevent. Re-read, then re-register the track to say you have. See
+[Groups](/groups#reporting-or-gating-onstale).
+
+A row that goes stale twice is telling you something: the read→reason→write gap
+wants the *prospective* guard, not the in-flight one. Escalate to a claim
+(§1) rather than raising `retries`.
 
 ---
 
@@ -176,10 +259,18 @@ What the convention **guarantees**, and where it **stops**:
    detection time, inside the same transaction as the write. A notification is
    never speculative.
 
-3. **Termination (no livelock).** The monotonic `sync_id` landing order is the
-   serialization order. The stale committer always yields/recomputes — an
-   asymmetry that rules out the symmetric notify-rewrite livelock. Unbounded
-   retry is bounded by the client's reconciliation retry cap.
+3. **No livelock, which is not the same as termination.** The monotonic
+   `sync_id` landing order is the serialization order. The stale committer
+   always yields/recomputes — an asymmetry that rules out the symmetric
+   notify-rewrite livelock, because each round adopts a newer `observedSyncId`
+   and no baseline is ever reasoned against twice.
+
+   It does **not** rule out starvation. A peer writing faster than your
+   read→decide→write gap keeps winning, and the engine never re-issues on your
+   behalf, so the rounds are yours and they are unbounded. Progress in the
+   watermark is not progress in the work — and for an agent, each round is a
+   model call. `update(id, fn)` bounds it for you and hands the conflict to
+   your updater (§5.3); a hand-rolled loop must bound itself.
 
 4. **Scope: reversible DB state only.** The convention governs writes to the
    shared database, which are inherently reversible (prior value in

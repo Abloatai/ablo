@@ -109,11 +109,11 @@ the fresh row. Reads stay open; only acting on the row serializes.
 
 Every schema model is backed by your own database, and you write to it through
 `ablo.<model>`. There are three start states, all covered in [Connect Your
-Database](/data-sources) (the single source of truth): the sandbox (`apiKey`
-only, no database — Ablo keeps your rows in its own log), `npx ablo connect` (a
-scoped writer role plus logical replication, so Ablo writes your rows and confirms
-them over the WAL), or a signed Data Source endpoint when your database can't grant
-replication.
+Database](/data-sources) (the single source of truth): a development branch
+with no database yet (`apiKey` only — Ablo keeps that branch's rows in its own
+log), `npx ablo connect` (a scoped writer role plus logical replication, so Ablo
+writes your rows and confirms them over the WAL), or a signed Data Source
+endpoint when your database can't grant replication.
 
 Your database connects out of band, so the client holds only `ABLO_API_KEY` —
 never a connection string. Browser code goes through `<AbloProvider>` or a scoped

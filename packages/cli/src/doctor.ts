@@ -18,7 +18,7 @@
 import pc from 'picocolors';
 import { brand } from './theme';
 import { apiBaseUrl } from './controlPlane';
-import { resolveEffectiveApiKey, getActiveProject } from './config';
+import { resolveRuntimeApiKey, getActiveProject } from './config';
 import { resolveTarget } from './target';
 import {
   fetchRoutingState,
@@ -65,16 +65,16 @@ export async function doctor(): Promise<void> {
   console.log(`\n  ${brand('ablo')} ${pc.dim('doctor')}\n`);
 
   const apiUrl = apiBaseUrl();
-  const effective = resolveEffectiveApiKey();
+  const runtimeKey = resolveRuntimeApiKey();
   const checks: Check[] = [];
 
   // 1. A credential, and where it came from — the answer to most "it worked
   //    yesterday" reports, since a project env file silently outranks the login.
-  if (effective.key) {
+  if (runtimeKey.key) {
     checks.push({
       label: 'key',
       state: 'ok',
-      detail: `${effective.key.slice(0, 12)}… from ${effective.source}`,
+      detail: `${runtimeKey.key.slice(0, 12)}… from ${runtimeKey.source}`,
     });
   } else {
     checks.push({
@@ -101,8 +101,8 @@ export async function doctor(): Promise<void> {
   // 3. Who the key actually is. Naming the org and project is what separates
   //    "my setup is broken" from "I am signed in somewhere else" — `default`
   //    exists in every organization, so the project alone cannot tell them apart.
-  const target = effective.key
-    ? await resolveTarget({ url: apiUrl, apiKey: effective.key, keySource: effective.source ?? 'stored' })
+  const target = runtimeKey.key
+    ? await resolveTarget({ url: apiUrl, apiKey: runtimeKey.key, keySource: runtimeKey.source ?? 'stored' })
     : null;
   const confirmed = target?.confirmed ?? null;
   if (confirmed) {
@@ -126,11 +126,11 @@ export async function doctor(): Promise<void> {
     const local = getActiveProject();
     checks.push({
       label: 'identity',
-      state: effective.key && reachable ? 'fail' : 'skip',
-      detail: effective.key
+      state: runtimeKey.key && reachable ? 'fail' : 'skip',
+      detail: runtimeKey.key
         ? `the server did not resolve this key${local ? ` (locally selected: ${local.slug})` : ''}`
         : 'no key to resolve',
-      fix: effective.key ? 'check the key is valid and not expired — `ablo login` mints a fresh pair' : undefined,
+      fix: runtimeKey.key ? 'check the key is valid and not expired — `ablo login` mints a fresh pair' : undefined,
     });
   }
 
@@ -139,7 +139,7 @@ export async function doctor(): Promise<void> {
   //    One call answers both "is anything connected" and "can Ablo reach it",
   //    so the two rows below can never contradict each other.
   const { source: dataSource, validation } = reachable
-    ? await fetchRoutingState(apiUrl, effective.key)
+    ? await fetchRoutingState(apiUrl, runtimeKey.key)
     : { source: { kind: 'unknown', detail: 'unreachable' } as const, validation: null };
   if (dataSource.kind === 'connected') {
     const how = [...new Set(dataSource.connections)].join(' + ');
@@ -168,7 +168,7 @@ export async function doctor(): Promise<void> {
   }
 
   // 5. The schema the server runs, and whether this tree agrees with it.
-  const pushed = reachable ? await fetchPushedSchema(apiUrl, effective.key) : null;
+  const pushed = reachable ? await fetchPushedSchema(apiUrl, runtimeKey.key) : null;
   checks.push(
     pushed?.active
       ? {
@@ -176,7 +176,7 @@ export async function doctor(): Promise<void> {
           state: 'ok',
           detail: `${pushed.models.length} models active${pushed.hash ? `, hash ${pushed.hash}` : ''}`,
         }
-      : reachable && effective.key
+      : reachable && runtimeKey.key
         ? { label: 'schema', state: 'fail', detail: 'none active for this key', fix: 'run `ablo push`' }
         : { label: 'schema', state: 'skip', detail: 'not determined' },
   );
@@ -222,7 +222,7 @@ export async function doctor(): Promise<void> {
   // the two commands can never disagree about whether a write would land.
   const blocking = blockers({
     reachable,
-    hasKey: Boolean(effective.key),
+    hasKey: Boolean(runtimeKey.key),
     dataSource,
     schemaPushed: Boolean(pushed?.active),
     drift,

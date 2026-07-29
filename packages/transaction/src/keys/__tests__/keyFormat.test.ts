@@ -25,11 +25,11 @@ describe('apiKeySchema (Zod-modeled key format)', () => {
   it('parses a minted key into typed parts', () => {
     const { plaintext } = generateApiKey('production', 'restricted');
     const parsed = apiKeySchema.parse(plaintext);
-    expect(parsed).toMatchObject({ raw: plaintext, kind: 'restricted', env: 'production', checksummed: true });
+    expect(parsed).toMatchObject({ raw: plaintext, kind: 'restricted', env: null, checksummed: true });
     expect(parsed.body.length).toBe(36);
   });
 
-  it('mints the right prefix for every data kind/mode and self-validates', () => {
+  it('mints one branch-bound spelling for every data kind and self-validates', () => {
     const expected: Record<Exclude<ApiKeyKind, 'management'>, string> = {
       secret: 'sk',
       restricted: 'rk',
@@ -42,8 +42,8 @@ describe('apiKeySchema (Zod-modeled key format)', () => {
     )) {
       for (const env of API_KEY_ENVS) {
         const { plaintext, prefix } = generateApiKey(env, kind);
-        const prefixEnv = env === 'sandbox' ? 'test' : 'live';
-        expect(plaintext.startsWith(`${expected[kind]}_${prefixEnv}_`)).toBe(true);
+        expect(plaintext.startsWith(`${expected[kind]}_`)).toBe(true);
+        expect(plaintext).not.toMatch(/_(?:live|test)_/);
         expect(prefix.length).toBe(12);
         expect(keyChecksumMatches(plaintext)).toBe(true);
         expect(parseApiKey(plaintext)).not.toBeNull();
@@ -78,6 +78,7 @@ describe('apiKeySchema (Zod-modeled key format)', () => {
     const parsed = parseApiKey(legacy);
     expect(parsed).not.toBeNull();
     expect(parsed?.checksummed).toBe(false);
+    expect(parsed?.env).toBe('production');
     expect(isChecksummedKey(legacy)).toBe(false);
   });
 

@@ -228,8 +228,13 @@ function runAddScenario(
 
     const lastFrame = frames[frames.length - 1];
     const lastDelta = lastFrame[lastFrame.length - 1];
+    // A WeakRef-backed pool may legally have collected an unactivated row
+    // under memory pressure; when the row is resident it must carry the
+    // applied data. Only the strong-ref scenario can demand residency.
     const witness = pool.peek(lastDelta.modelId);
-    expect(witness?.title).toBe((lastDelta.data as { title: string }).title);
+    if (witness || poolConfig.useWeakRefs === false) {
+      expect(witness?.title).toBe((lastDelta.data as { title: string }).title);
+    }
 
     const totalDeltas = FRAMES * FRAME_DELTAS;
     return { scenario, totalDeltas, wallMs, perDeltaUs: (wallMs * 1000) / totalDeltas };

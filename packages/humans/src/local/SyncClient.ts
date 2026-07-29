@@ -1889,6 +1889,7 @@ export class SyncClient extends EventEmitter {
     dbResults: readonly AppliedChange[],
     enrichRelations: (modelName: string, data: Record<string, unknown>) => Record<string, unknown>,
   ): void {
+    const projectedResults = this.projectDeltaBatchForPool(dbResults);
     // The WHOLE batch — conflict resolution and model mutation included, not
     // just the pool bookkeeping at the end — runs in one MobX action.
     // `resolveConflicts` writes model fields via `updateFromData`; when those
@@ -1897,7 +1898,57 @@ export class SyncClient extends EventEmitter {
     // reaction pass per delta and an observer could see a partially applied
     // frame between them.
     runInAction(() => {
-      this.applyDeltaBatchToPoolInAction(dbResults, enrichRelations);
+      this.applyDeltaBatchToPoolInAction(projectedResults, enrichRelations);
+    });
+  }
+
+  /**
+   * Drop fresh adds beyond a headless cache's currently free capacity. The
+   * rows are already durable; with no row-level consumer there is no recency
+   * signal that makes replacing one cold resident with another useful, so the
+   * projection avoids constructing thousands of doomed Model/MobX objects.
+   *
+   * This must run before apply slicing. A 300k catch-up batch is revealed in
+   * ~600-delta slices, each smaller than the 10k cache cap; projecting each
+   * slice independently would therefore miss the redundant work entirely.
+   */
+  projectDeltaBatchForPool(
+    dbResults: readonly AppliedChange[],
+  ): readonly AppliedChange[] {
+    const idsBeingRemoved = new Set<string>();
+    const freshAddTypes = new Set<string>();
+    let freshAddCount = 0;
+    for (const result of dbResults) {
+      if (result.action === 'remove') idsBeingRemoved.add(result.modelId);
+    }
+    for (const result of dbResults) {
+      if (
+        result.action === 'add' &&
+        result.data &&
+        !idsBeingRemoved.has(result.modelId) &&
+        !this.objectPool.has(result.modelId)
+      ) {
+        freshAddTypes.add(result.modelName);
+        freshAddCount++;
+      }
+    }
+    const retentionLimit = this.objectPool.wireAddRetentionLimit(freshAddTypes);
+    let freshAddsToDiscard =
+      retentionLimit === undefined ? 0 : Math.max(0, freshAddCount - retentionLimit);
+    if (freshAddsToDiscard === 0) return dbResults;
+
+    return dbResults.filter((result) => {
+      if (
+        freshAddsToDiscard > 0 &&
+        result.action === 'add' &&
+        result.data &&
+        !idsBeingRemoved.has(result.modelId) &&
+        !this.objectPool.has(result.modelId)
+      ) {
+        freshAddsToDiscard--;
+        return false;
+      }
+      return true;
     });
   }
 

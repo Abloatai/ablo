@@ -1,12 +1,9 @@
 /**
  * What a credential can do, said in one place.
  *
- * `ablo login` provisions a pair: a secret sandbox key and a restricted,
- * observe-only production key, so a stolen CLI config cannot write to
- * production. The protection is deliberate. Its invisibility was not — the fact
- * lived in a comment beside a prefix table while `login`, `mode`, and `status`
- * each handed the reader that key and said nothing about it, so the first place
- * it surfaced was a 403 in the middle of a production deploy.
+ * `ablo login` stores a mode-free management key. Runtime keys state their
+ * capability class in the prefix, while the server-side row states their
+ * project and branch.
  *
  * Every command that puts a credential in front of a reader derives its wording
  * here. A key's capability cannot read one way in the command that stores it,
@@ -18,7 +15,6 @@ import {
   classifyCredentialKind,
   type CredentialKind,
 } from '@abloatai/transaction/auth/credentialPolicy';
-import { modeFromKey } from './config';
 
 export interface CredentialCapability {
   /** The kind this key's prefix names, or null when it carries no Ablo prefix. */
@@ -33,7 +29,8 @@ export interface CredentialCapability {
 
 /** The secret key that deploys on the same plane this one acts on. */
 function secretCounterpart(key: string): string {
-  return modeFromKey(key) === 'production' ? 'sk_live_' : 'sk_test_';
+  void key;
+  return 'sk_';
 }
 
 /**
@@ -45,9 +42,7 @@ function secretCounterpart(key: string): string {
  * secret key is true of all four kinds and is the server's own rule. That a key
  * cannot write ROWS is not: a restricted `rk_` minted by `sessions.create` may
  * write exactly the models its scopes name, and only the server knows which. So
- * the one key whose read-only-ness is certain — the production key `ablo login`
- * mints for itself — is named as that specific key rather than asserted of the
- * key in hand.
+ * authorization still comes from the persisted grants, not the prefix alone.
  */
 export function credentialCapability(key: string | undefined): CredentialCapability {
   const kind = key ? classifyCredentialKind(key) : null;
@@ -61,9 +56,8 @@ export function credentialCapability(key: string | undefined): CredentialCapabil
         kind,
         label: 'scoped',
         note:
-          'A scoped key does exactly what it was minted for. The production key `ablo login` ' +
-          'stores is for observing your live plane with `ablo status` and `ablo logs`; authoring ' +
-          `schema there takes a secret ${secret} key from the dashboard.`,
+          'A scoped key does exactly what it was minted for. Authoring schema requires a ' +
+          `branch-bound secret ${secret} key with schema:push.`,
       };
     case 'publishable':
       return {

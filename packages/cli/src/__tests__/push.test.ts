@@ -42,6 +42,11 @@ describe('parsePushArgs', () => {
     expect(args.apiKey).toBe('sk_test_123');
   });
 
+  it('parses an explicit env file without selecting one by default', () => {
+    expect(parsePushArgs(['--env-file', '.env.production']).envFile).toBe('.env.production');
+    expect(parsePushArgs([]).envFile).toBeUndefined();
+  });
+
   it('parses flags and repeated --rename', () => {
     const args = parsePushArgs([
       '--schema', 'db/s.ts',

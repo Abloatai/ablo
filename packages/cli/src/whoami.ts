@@ -15,9 +15,9 @@ import {
 } from '@abloatai/transaction/errors';
 import {
   ambientEnvKeyNote,
-  resolveApiKey,
+  resolveRuntimeApiKey,
   resolveManagementKey,
-  type EffectiveKeySource,
+  type ResolvedKeySource,
 } from './config';
 import { apiBaseUrl } from './controlPlane';
 import { credentialCapability } from './credentialCapability';
@@ -108,7 +108,7 @@ export function parseWhoamiArgs(argv: readonly string[]): WhoamiArgs {
 interface SelectedCredential {
   key: string;
   source: string;
-  targetSource: EffectiveKeySource;
+  targetSource: ResolvedKeySource;
 }
 
 /** Resolve only explicit process state and stored credentials. An env file
@@ -134,12 +134,16 @@ export function selectWhoamiCredential(
     };
   }
 
-  const dataKey = resolveApiKey();
+  const runtimeKey = resolveRuntimeApiKey();
+  const dataKey = runtimeKey.key;
   if (dataKey) {
     return {
       key: dataKey,
-      source: process.env.ABLO_API_KEY ? 'env:ABLO_API_KEY' : 'stored data key',
-      targetSource: process.env.ABLO_API_KEY ? 'env' : 'stored',
+      source:
+        runtimeKey.source === 'stored'
+          ? 'stored data key'
+          : `${runtimeKey.source ?? 'env'}:ABLO_API_KEY`,
+      targetSource: runtimeKey.source ?? 'stored',
     };
   }
 

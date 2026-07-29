@@ -30,6 +30,10 @@ export class ViewRegistry {
     }
   }
 
+  hasViews(typename: string): boolean {
+    return (this.views.get(typename)?.size ?? 0) > 0;
+  }
+
   /** Called by InstanceCache after a model is added to the pool. */
   notifyAdded(typename: string, model: Model): void {
     const set = this.views.get(typename);

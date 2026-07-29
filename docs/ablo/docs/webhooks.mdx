@@ -11,8 +11,8 @@ database; Ablo holds only the log. **Webhooks stream that log to your systems as
 signed events:** every committed change is POSTed to an endpoint in your app, and
 your handler decides what to do with it.
 
-It's the same two-sided shape as Stripe: you call Ablo to make changes (the
-client), and Ablo calls you with each change (this webhook). Webhooks are the
+You call Ablo to make changes through the client, and Ablo calls your webhook
+with each committed change. Webhooks are the
 *push* way to keep a store in step with the log — your own database, a warehouse,
 a search index, a background job. The *direct* alternative is `ablo connect`,
 where Ablo reads your write-ahead log and writes back through a scoped role. Either
@@ -33,18 +33,8 @@ There are two ways data flows out of Ablo, and they're for different jobs:
 Most apps use both: the realtime stream for the UI, the webhook stream to keep
 their database in sync. This page is the webhook stream.
 
-If you know Stripe, you already know the shape:
-
-| Stripe | Ablo |
-|---|---|
-| `stripe.x.create(...)`: make the change | the Ablo client: make the change (+ live sync) |
-| `/stripe-webhook`: confirm and persist | `/api/ablo/[...all]`: persist into your database |
-| Stripe owns the charges | Ablo owns the transaction log |
-| you mirror charges into your database | you mirror the log into your database |
-
-The difference in Ablo's favor: every event carries `syncId`, a monotonic log
-position, so you can both dedupe **and** apply in order — Ablo guarantees the
-order because it owns the log.
+Every event carries `syncId`, a monotonic log position, so you can both dedupe
+**and** apply in order. Ablo guarantees the order because it owns the log.
 
 ## The event object
 
@@ -55,7 +45,7 @@ Every delivery is a batch of events. Each event:
 | `type` | `"<model>.<verb>"` with the model name lowercased, e.g. `task.updated` |
 | `model` | the model name exactly as declared in your schema: the table to write |
 | `objectId` | the changed row's id |
-| `data` | the post-change row, or `null` on delete (like Stripe's `event.data.object`) |
+| `data` | the post-change row, or `null` on delete |
 | `syncId` | monotonic log position: **dedupe and order by this** |
 | `id` | `String(syncId)`: the event id |
 | `createdAt` | ISO commit timestamp |

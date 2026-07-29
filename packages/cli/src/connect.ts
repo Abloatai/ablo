@@ -49,7 +49,7 @@ import {
   readProjectReplicationUrlWithSource,
   readProjectAdminDatabaseUrl,
 } from './dbRole';
-import { ambientEnvKeyNote, resolveApiKey } from './config';
+import { ambientEnvKeyNote, resolveMutationApiKey, resolveRuntimeApiKey } from './config';
 import { apiBaseUrl, requestControlPlane } from './controlPlane';
 import { datasourceLocationResponseSchema } from '@abloatai/transaction/wire';
 import { brand } from './theme';
@@ -107,6 +107,8 @@ export interface ConnectArgs {
    * to `DATABASE_URL` when omitted. Used on this machine only; never persisted.
    */
   url?: string;
+  /** Explicit dotenv file to load before resolving DATABASE_URL and ABLO_API_KEY. */
+  envFile?: string;
   /** `--yes`: skip the `apply` confirmation (for non-interactive use). */
   yes: boolean;
   /** `--show-sql`: include the exact statements in the `apply` plan. */
@@ -147,7 +149,7 @@ export interface ConnectArgs {
  * Parse `connect` arguments. Pure — unit-tested without touching a database.
  *
  * The mode is a leading subcommand — `ablo connect register|check|apply|rotate|
- * scan` — matching the `<noun> <verb>` grammar of aws/gcloud/stripe. Modifiers
+ * scan` — matching the familiar `<noun> <verb>` CLI grammar. Modifiers
  * (`--url`, `--tables`, `--yes`, …) follow as flags. (`deregister`, the inverse of
  * `register`, is handled one level up in {@link connect} — it forwards to the
  * disconnect implementation.)
@@ -158,6 +160,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
   let apply = false;
   let rotate = false;
   let url: string | undefined;
+  let envFile: string | undefined;
   let yes = false;
   let showSql = false;
   let scan = false;
@@ -205,6 +208,9 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
     switch (arg) {
       case '--url':
         url = argv[++i] ?? url;
+        break;
+      case '--env-file':
+        envFile = argv[++i] ?? envFile;
         break;
       case '--yes':
       case '-y':
@@ -256,6 +262,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
     apply,
     rotate,
     url,
+    envFile,
     yes,
     showSql,
     scan,
@@ -732,11 +739,11 @@ async function runCheck(): Promise<void> {
     `\n  ${brand('ablo')} ${pc.dim('connect check')}  ${pc.dim('direct-write + WAL readiness')}\n`
   );
 
-  const apiKey = resolveApiKey();
+  const apiKey = resolveRuntimeApiKey().key;
   if (!apiKey) {
     const ambient = ambientEnvKeyNote();
     throw new AbloAuthenticationError(
-      `No API key found. Run \`ablo login\` (or set ABLO_API_KEY), then re-run \`ablo connect check\`.${ambient ? `\n\n${ambient}` : ''}`,
+      `No branch-bound runtime key found. Set ABLO_API_KEY to the sk_ key for the branch to check, or pass \`--env-file .env.local\` explicitly.${ambient ? `\n\n${ambient}` : ''}`,
       { code: 'cli_api_key_missing' }
     );
   }
@@ -808,11 +815,11 @@ async function runCheck(): Promise<void> {
 async function runRegister(args: ConnectArgs): Promise<void> {
   const dbUrl = requireScopedUrl('replication', 'register');
   const writeDbUrl = requireScopedUrl('write', 'register');
-  const apiKey = resolveApiKey();
+  const apiKey = resolveMutationApiKey();
   if (!apiKey) {
     const ambient = ambientEnvKeyNote();
     throw new AbloAuthenticationError(
-      `Not logged in. Run \`ablo login\` (or set ABLO_API_KEY) so Ablo knows which project to register this database for.${ambient ? `\n\n${ambient}` : ''}`,
+      `No branch-bound runtime key found. Set ABLO_API_KEY to the sk_ key for the branch to register, or pass \`--env-file .env.local\` explicitly.${ambient ? `\n\n${ambient}` : ''}`,
       { code: 'cli_api_key_missing' }
     );
   }
@@ -947,11 +954,11 @@ async function runLocate(args: ConnectArgs): Promise<void> {
       { code: 'cli_database_url_missing' }
     );
   }
-  const apiKey = resolveApiKey();
+  const apiKey = resolveRuntimeApiKey().key;
   if (!apiKey) {
     const ambient = ambientEnvKeyNote();
     throw new AbloAuthenticationError(
-      `No API key found. Run \`ablo login\` (or set ABLO_API_KEY), then re-run \`ablo connect locate\`.${ambient ? `\n\n${ambient}` : ''}`,
+      `No branch-bound runtime key found. Set ABLO_API_KEY to a key that can inspect this project, or pass \`--env-file .env.local\` explicitly.${ambient ? `\n\n${ambient}` : ''}`,
       { code: 'cli_api_key_missing' }
     );
   }
@@ -1010,6 +1017,16 @@ export async function connect(argv: readonly string[]): Promise<void> {
   // A parse failure propagates as the typed `cli_invalid_arguments` error it
   // already is; the dispatcher's renderer owns how failures look.
   const args = parseConnectArgs(argv);
+  if (args.envFile) {
+    try {
+      process.loadEnvFile(args.envFile);
+    } catch (error) {
+      throw new AbloValidationError(
+        `could not load --env-file ${args.envFile}: ${error instanceof Error ? error.message : String(error)}`,
+        { code: 'cli_invalid_arguments' },
+      );
+    }
+  }
 
   if (args.apply || args.rotate) {
     const { runConnectApply } = await import('./connectApply');
@@ -1091,6 +1108,7 @@ export const CONNECT_USAGE = `  ablo connect — connect your own database
 
   Modifiers:
     --url <admin-conn>   Admin connection used once to set up (else DATABASE_URL); never stored
+    --env-file <path>    Explicitly load DATABASE_URL and ABLO_API_KEY from this file
     --tables a,b,c       Publish only these tables (default: all tables)
     --role <name>        Name the replication role (default: ablo_replicator)
     --write-role <name>  Name the DML role (default: ablo_writer)

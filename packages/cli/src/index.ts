@@ -23,10 +23,8 @@ import { generate } from './generate';
 import { dev } from './dev';
 import { login, logout } from './login';
 import {
-  resolveApiKey,
+  resolveMutationApiKey,
   resolveManagementKey,
-  resolvePushPlan,
-  guardActiveProjectKey,
 } from './config';
 import { projects, ensureProject, projectSlugFromPackageName } from './projects';
 import { branches } from './branches';
@@ -114,42 +112,14 @@ async function runPull(argv: readonly string[]): Promise<void> {
 }
 
 /**
- * Two flows: the `ablo dev` watch loop (role check, env wiring, server-side
- * provisioning, optional --watch) and the raw one-shot pusher (production
- * deploys, advanced flags). The credential resolves an explicit `ABLO_API_KEY`
- * first, then the active mode's stored credential (`resolvePushPlan`), so
- * Production deploys use an explicit `sk_live_` ABLO_API_KEY; branch
- * development always goes through `ablo dev`. `--watch` routes to the dev
- * flow and a live key is pointed at the reviewed one-shot deploy.
+ * `ablo push` is always the one-shot pusher. `ablo dev` is the explicit
+ * branch-first watch workflow. Routing a command from a key's old live/test
+ * spelling is impossible for current keys and was the wrong abstraction: the
+ * server-confirmed branch decides the target.
  */
 async function runPush(argv: readonly string[]): Promise<void> {
   const rest = [...argv];
-  const advanced = rest.some((a) =>
-    ['--force', '--rename', '--backfill', '--url', '--dry-run', '--plan', '--yes', '-y', '--allow-dirty'].includes(a),
-  );
-  const watching = rest.includes('--watch');
-  // Project guard: if the active project has no key but other projects do, the
-  // user switched with `ablo projects use` and never minted here. Refuse rather
-  // than silently deploy with — or demand — the wrong project's key. (`--url`
-  // overrides the target entirely, so it bypasses the guard.)
-  const guard = guardActiveProjectKey();
-  if (!guard.ok && guard.available.length > 0 && !rest.includes('--url')) {
-    console.error(
-      `  ${pc.yellow('⚠')} active project ${pc.bold(guard.activeProfile)} has no stored key ${pc.dim(
-        `(you have keys for: ${guard.available.join(', ')})`,
-      )}`,
-    );
-    const loginCmd =
-      guard.activeProfile === 'default' ? 'ablo login' : `ablo login --project ${guard.activeProfile}`;
-    console.error(
-      pc.dim(`    Mint one with ${pc.bold(loginCmd)}, or switch with ${pc.bold('ablo projects use <slug>')}.`),
-    );
-    process.exitCode = 1;
-    return;
-  }
-  const plan = resolvePushPlan();
-  if (advanced || (plan.flow === 'production' && !watching)) await push(rest);
-  else await dev(rest);
+  await push(rest);
 }
 
 /** Renamed: `ablo schema push` → `ablo push` (flat-verb grammar). */
@@ -782,7 +752,7 @@ function generateEnv(storage: InitStorage, opts: { includeApiKey?: boolean } = {
       'ABLO_WEBHOOK_SECRET=whsec_your_endpoint_secret_here\n'
     : '';
   const apiKeyBlock = includeApiKey
-    ? '# Ablo: a sk_test_ key for local development (`npx ablo dev` wires this for you)\nABLO_API_KEY=sk_test_your_key_here\n'
+    ? '# Ablo: a branch-bound sk_ key (`npx ablo dev` wires a development branch for you)\nABLO_API_KEY=sk_your_key_here\n'
     : '';
   return `${apiKeyBlock}${webhookBlock}${databaseBlock}`;
 }
@@ -880,8 +850,8 @@ const WEBHOOK_DOC = `/**
  * signature, then write each change into YOUR database. The other half — your app
  * MAKING changes + live sync — is the Ablo client in \`ablo/index.ts\`.
  *
- * Just like Stripe: you call Ablo to make changes (client) and Ablo calls you to
- * persist them (this route). Reliability is built in — Ablo retries on any
+ * Your app calls Ablo to make changes, and Ablo calls this route to persist
+ * them. Reliability is built in — Ablo retries on any
  * non-2xx, and \`event.syncId\` is a monotonic log position, so apply in order and
  * dedupe (skip a \`syncId\` you've already stored).
  */`;

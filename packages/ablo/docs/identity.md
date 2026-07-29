@@ -318,7 +318,7 @@ session" glossed over. Concretely:
 
 1. **Your `ABLO_API_KEY` lives only on your trusted server**, scoped to your
    account. It signs your app's relationship with Ablo. It must never reach a
-   browser bundle — treat it like a Stripe secret key.
+   browser bundle.
 2. **Your server authenticates the user with your own system.** That's the
    request that knows "this is user `U`, org `O`, teams `[...]`".
 3. **Your server hands that authenticated identity to Ablo**, and the browser
@@ -342,9 +342,8 @@ server, never by the browser.**
 > the client could name its own org or sync groups, any user could read another
 > tenant's data by editing a request. By keeping the API key server-side and
 > deriving scope from the identity your server already authenticated, the trust
-> boundary lands in the one place you control. This is the same reason
-> Liveblocks resolves scope in `prepareSession` and Stripe mints ephemeral keys
-> server-side.
+> boundary lands in the one place you control. Scope resolution and session
+> minting therefore stay server-side.
 
 ## Wiring the provider
 

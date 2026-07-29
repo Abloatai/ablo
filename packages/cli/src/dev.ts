@@ -6,12 +6,9 @@
  * the SDK finds it without any copy-paste. With `--watch`, it re-pushes every
  * time you save the schema file, which is the inner-loop workflow.
  *
- * An `sk_test_` key reaches the same hosted API, the same engine, and the same
- * schema as a production key. Only the rows it acts on differ, and the default
- * endpoint (`wss://api.abloatai.com`) already routes there, so nothing in the
- * SDK changes but the key. {@link classifyKey} takes the `sk_test_` key here and
- * sends `sk_live_` to `ablo push`, because production schema changes land in one
- * reviewed step rather than on every keystroke.
+ * `ablo dev` prepares a child branch and supplies its branch-bound `sk_` key to
+ * this loop. The server resolves that key's branch; no live/test claim is
+ * encoded in the plaintext.
  *
  * Usage:
  *   ablo dev
@@ -34,7 +31,7 @@ import {
   DEFAULT_EXPORT,
 } from './push';
 import { apiBaseUrl, DEFAULT_URL } from './controlPlane';
-import { resolveEffectiveApiKey } from './config';
+import { resolveRuntimeApiKey } from './config';
 import { looksLikeCredentialRefusal, poolerExplanation } from './readiness';
 import { brand } from './theme';
 
@@ -94,22 +91,13 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
     url,
     apiKey: process.env.ABLO_API_KEY,
     watch: watchEnabled,
-    planeLabel: 'sandbox',
+    planeLabel: 'branch',
   };
 }
 
 /**
- * Decides which command the configured key belongs to. The watch loop runs on a
- * secret `sk_test_` key:
- *  - `sk_test_` is taken here.
- *  - `sk_live_` is sent to `ablo push`, the reviewed one-shot production deploy.
- *  - `rk_...` is a restricted key, which carries only its minted scopes.
- *  - anything else is not an Ablo key.
- *
- * Every message names both doors, the watch loop and the production deploy, so a
- * developer holding either key learns where it goes rather than only that this
- * command declined it. Returns `{ ok: true }` when the key is accepted, or
- * `{ ok: false, reason }` with text ready to print.
+ * Authoring requires a secret key. Branch safety comes from the key row's
+ * server-side branch binding, not its spelling.
  */
 export function classifyKey(
   apiKey: string | undefined,
@@ -118,41 +106,30 @@ export function classifyKey(
     return {
       ok: false,
       reason:
-        `No API key. Run ${pc.bold('npx ablo login')}, or set ${pc.bold('ABLO_API_KEY')}: ` +
-        `${pc.bold('sk_test_')} runs the ${pc.bold('npx ablo dev')} watch loop, ` +
-        `${pc.bold('sk_live_')} deploys production with ${pc.bold('npx ablo push')}.`,
+        `No API key. Run ${pc.bold('npx ablo login')}, or set a branch-bound ` +
+        `${pc.bold('ABLO_API_KEY')}. ${pc.bold('npx ablo dev')} prepares a development branch.`,
     };
   }
-  if (apiKey.startsWith('sk_test_')) return { ok: true };
-  if (apiKey.startsWith('sk_live_')) {
-    return {
-      ok: false,
-      reason:
-        `A ${pc.bold('sk_live_')} key deploys production schema in one reviewed step: ` +
-        `${pc.bold('npx ablo push')}. The ${pc.bold('--watch')} loop runs on a ${pc.bold('sk_test_')} ` +
-        `key, which reaches the same API and the same schema over its own rows.`,
-    };
-  }
+  if (classifyCredentialKind(apiKey) === 'secret') return { ok: true };
   if (classifyCredentialKind(apiKey) === 'restricted') {
     return {
       ok: false,
       reason:
-        `Authoring schema needs a secret key. ${pc.bold('sk_test_')} runs the ${pc.bold('npx ablo dev')} ` +
-        `watch loop, ${pc.bold('sk_live_')} deploys production with ${pc.bold('npx ablo push')}. ` +
+        `Authoring schema needs a branch-bound secret ${pc.bold('sk_')} key. ` +
+        `${pc.bold('npx ablo dev')} prepares a development branch. ` +
         `A restricted ${pc.bold('rk_')} key carries only the scopes it was minted with.`,
     };
   }
   return {
     ok: false,
     reason:
-      `${pc.bold('ABLO_API_KEY')} is not an Ablo key. Expected ${pc.bold('sk_test_…')} for the ` +
-      `${pc.bold('npx ablo dev')} watch loop, or ${pc.bold('sk_live_…')} for a production deploy ` +
-      `with ${pc.bold('npx ablo push')}.`,
+      `${pc.bold('ABLO_API_KEY')} is not a secret Ablo key. Expected a branch-bound ` +
+      `${pc.bold('sk_…')} credential. Run ${pc.bold('npx ablo dev')} to prepare a development branch.`,
   };
 }
 
 /**
- * Writes the resolved sandbox key into `.env.local` so the SDK finds it without
+ * Writes the resolved branch key into `.env.local` so the SDK finds it without
  * a copy-paste step (frameworks load `.env.local` automatically; with plain
  * Node, use `node --env-file=.env.local`). Safe to run repeatedly: it creates
  * the file, appends the key line, or updates a differing value, and returns a
@@ -277,7 +254,7 @@ async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; me
     const hint =
       body.code === 'database_role_cannot_enforce_rls'
         ? `Run ${pc.bold('npx ablo migrate')} — it creates the scoped role for you (your DB credential never leaves this machine).`
-        : `Schema authoring needs a ${pc.bold('sandbox')} key with ${pc.bold('schema:push')} — manage keys at ${pc.cyan('https://abloatai.com')}.`;
+        : `Schema authoring needs a branch-bound ${pc.bold('sk_')} key with ${pc.bold('schema:push')} — manage keys at ${pc.cyan('https://abloatai.com')}.`;
     return {
       ok: false,
       message:
@@ -312,12 +289,11 @@ export async function dev(
 
   // Resolve through the shared chain (environment variable, then `.env.local`,
   // then `.env`, then the stored login credential) so `dev` sees the same key
-  // that `push` and `status` report. `dev` is always the sandbox loop, so the
-  // stored fallback resolves the sandbox key regardless of the active mode; a
-  // production key found in a project env file is refused just below by
-  // `classifyKey`, which names the production path.
+  // that `push` and `status` report. Branch orchestration normally supplies a
+  // freshly minted child-bound key; the sandbox slot below is legacy storage
+  // fallback only.
   if (runtime.apiKey) args.apiKey = runtime.apiKey;
-  else if (!args.apiKey) args.apiKey = resolveEffectiveApiKey('sandbox').key;
+  else if (!args.apiKey) args.apiKey = resolveRuntimeApiKey('sandbox').key;
   if (runtime.branch) args.planeLabel = runtime.branch.slug;
 
   const key = classifyKey(args.apiKey);
@@ -352,7 +328,7 @@ export async function dev(
   console.log(`  ${pc.dim('api')}     ${args.url}\n`);
 
   const s = spinner();
-  s.start('Pushing schema definition (sandbox)');
+  s.start('Pushing schema definition (development branch)');
   const first = await runPush(schema, args);
   s.stop(first.message, first.ok ? 0 : 1);
   if (!first.ok) process.exit(1);
@@ -378,7 +354,7 @@ export async function dev(
     console.log(`\n  ${pc.green('✓')} ${wireEnvLocal(args.apiKey!)}`);
     console.log(`  ${pc.dim('Frameworks load it automatically; plain Node: node --env-file=.env.local app.ts')}`);
   }
-  console.log(`  Your app is wired for ${runtime.branch ? `branch ${runtime.branch.slug}` : 'the sandbox'}.`);
+  console.log(`  Your app is wired for ${runtime.branch ? `branch ${runtime.branch.slug}` : 'this branch'}.`);
 
   if (!args.watch) return;
 

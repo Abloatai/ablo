@@ -13,19 +13,74 @@ import Ablo from '@abloatai/ablo';
 const ablo = Ablo({ apiKey: process.env.ABLO_API_KEY });
 ```
 
-The key identifies the Ablo account. Application code does not pass an organization id; Ablo derives scope from the credential.
+The server resolves the organization, project, immutable branch, and authority
+from the key. Application code does not pass those targeting axes separately.
 
 "Trusted" means the runtime can hold a secret: a backend or other server-side environment a browser can't read. Browser and app clients use the same `@abloatai/ablo` import but authenticate differently — they never carry a secret key.
 
-## Which credential to use
+## Start here: the normal workflow
+
+Branches replace manual environment-key juggling. You should not normally keep
+`ABLO_STAGING_KEY`, `ABLO_DEV_KEY`, and `ABLO_API_KEY_LIVE` beside one another
+and remap them before each command.
+
+| Job | Credential | How you get it |
+|---|---|---|
+| Manage a project or its branches | `mk_` | `npx ablo login --project <slug>` stores it for the CLI. |
+| Develop locally | expiring `sk_` bound to the current branch | `npx ablo dev` writes it as `ABLO_API_KEY` in gitignored `.env.local`. |
+| Prepare a branch once, including CI | expiring `sk_` bound to that branch | `npx ablo dev --no-watch --branch <ref>`; CI supplies `ABLO_MANAGEMENT_KEY`. |
+| Run the production backend | `sk_` bound to the production root | Store it as the deployment's `ABLO_API_KEY`. |
+| Read in a browser | `pk_` | Publishable, read-only key. |
+| Write in a browser as a user | short-lived `ek_` | Your backend exposes `authEndpoint` and mints it. |
+
+The everyday loop is therefore:
+
+```bash
+npx ablo login --project <project>  # once per project
+npx ablo dev                        # follows Git, mints and wires this branch
+npx ablo status                     # broad readiness report
+```
+
+Application code and agents still read one variable:
+
+```ts
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+```
+
+Switching Git branches does not re-scope the old key. Run `ablo dev` again; it
+ensures the matching Ablo branch and replaces `.env.local` with a fresh key
+bound to it.
+
+## Three axes, not a key per environment name
+
+A credential answers three separate questions:
+
+1. **Project:** which application inside the organization.
+2. **Branch (plane):** the production root or one immutable development/preview
+   child. Rows, schema, claims, logs, and database registration are isolated
+   here.
+3. **Capability and audience:** management (`mk_`), trusted runtime (`sk_`),
+   restricted/delegated runtime (`rk_`), publishable browser read (`pk_`), or
+   ephemeral user session (`ek_`).
+
+The prefix identifies the credential's capability class, not its target.
+`sk_` means a trusted runtime secret. The server-side key row decides whether
+that secret is bound to the production root or to a specific child branch. A
+project selection or branch slug in a request cannot override that binding.
+
+That is why Ablo does not need an application-level `environment` argument and
+why `ablo projects use` cannot re-scope a credential. The bearer credential
+already carries the target.
+
+## Which credential to pass to the SDK
 
 There's **one field — `apiKey`** — and what you pass depends on **where the code runs**.
 Pick your row:
 
 | Where your code runs | What to pass | Example |
 |---|---|---|
-| **Server / worker / CLI** (can hold a secret) | your secret `sk_`: it defaults to `ABLO_API_KEY`, so usually pass **nothing** | `Ablo({ schema })` |
-| **Browser: read-only** | a publishable `pk_` (safe to ship, like a Stripe `pk_`) | `Ablo({ schema, apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY })` |
+| **Server / worker / agent** (can hold a secret) | your secret `sk_`: it defaults to `ABLO_API_KEY`, so usually pass **nothing** | `Ablo({ schema })` |
+| **Browser: read-only** | a publishable `pk_` (safe to ship) | `Ablo({ schema, apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY })` |
 | **Browser: writing as the signed-in user** | `authEndpoint`: the route on your own backend that mints a short-lived per-user token | `Ablo({ schema, authEndpoint: '/api/ablo-session' })` |
 
 That's the whole story: one knob, filled by audience.
@@ -35,24 +90,18 @@ control-plane credential, not an application API key. It can manage projects
 and branches and exchange for a branch-bound runtime key. Do not pass it to
 `Ablo(...)` or put it in `ABLO_API_KEY`.
 
-**Coming from Stripe? It's the same key model, same prefixes:**
+The credential class lives in the prefix:
 
-| Stripe | Ablo | Where it goes |
+| Prefix | Purpose | Stored where |
 |---|---|---|
-| publishable `pk_` (client-safe) | `pk_` | browser: read-only |
-| secret `sk_` (server, full) | `sk_` | server: full authority |
-| restricted `rk_` (granular) | `rk_` | scoped agents (`agents.create({ can })`) |
-| ephemeral key (client, customer-scoped) | `ek_` | per-user browser sessions (`sessions.create({ user, can })`) |
+| `mk_` | project and branch management | CLI credential store or `ABLO_MANAGEMENT_KEY` |
+| `sk_` | trusted runtime, full branch authority | server-side `ABLO_API_KEY` |
+| `rk_` | restricted runtime or agent | trusted runtime that needs the delegated scope |
+| `pk_` | publishable, browser-safe read access | browser bundle |
+| `ek_` | short-lived user session | browser memory |
 
-Ablo also has one credential class that Stripe does not need:
-
-| Prefix | Purpose | Mode | Stored where |
-|---|---|---|---|
-| `mk_` | project and branch management | none | CLI credential store or `ABLO_MANAGEMENT_KEY` |
-
-Trust class lives in the prefix too — `sk_test_` / `sk_live_` — exactly like Stripe.
-It does not select a branch; the immutable server-side binding does that. The
-`apiKey` resolver fetching an `ek_` is Ablo's ephemeral-key flow: server mints, client holds.
+The prefix does not select a branch; the immutable server-side binding does.
+For an `ek_`, the server mints and the client holds the short-lived result.
 
 **Why a function for browser writes?** Anything you ship to a browser must be public, and a
 public `pk_` is **read-only** — it can't carry one specific user's write authority. So when
@@ -60,8 +109,8 @@ the browser writes *as the logged-in user*, your backend (which holds the secret
 knows who's signed in) mints a short-lived per-user token with `sessions.create({ user, can })`,
 and the browser's `apiKey` function fetches it. You don't manage refresh — the SDK calls the
 function once before connecting and then keeps the token fresh (re-mint before expiry, and on
-tab-focus / network-online / device-wake). This is the Stripe ephemeral-key / Supabase
-session model. For a read-only app you don't need any of this — just the `pk_` above.
+tab-focus / network-online / device-wake). For a read-only app you don't need
+any of this — just the `pk_` above.
 
 Server-side, because `apiKey` defaults to `process.env.ABLO_API_KEY`, most backend and agent
 code passes nothing. The secret `sk_` is **server-only** — never in a
@@ -93,12 +142,12 @@ Never ship a secret API key to a browser bundle.
 ## Publishable key (`pk_`): browser-safe, read-only
 
 For a read-only browser experience, a publishable key is safe to ship in the
-bundle. Like a Stripe `pk_` or a Supabase anon key, it is long-lived,
-org-scoped, and used **directly as the bearer** — never exchanged, never
+bundle. It is long-lived, org-scoped, and used **directly as the bearer** —
+never exchanged, never
 expires, nothing to refresh:
 
 ```ts
-const ablo = Ablo({ apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY }); // pk_live_…
+const ablo = Ablo({ apiKey: process.env.NEXT_PUBLIC_ABLO_PUBLISHABLE_KEY }); // pk_…
 ```
 
 A `pk_` grants **read-only** access to the org's data plane: it cannot write and
@@ -115,25 +164,53 @@ Production is the project's root branch. Development branches are isolated
 children, and a key's immutable branch binding decides which rows, schema,
 claims, and log it can reach:
 
-- `sk_test_…` — a key bound to a development branch. Its reads and
-  writes are invisible to production and to other branches.
-- `sk_live_…` — a key against your live data.
+- an `sk_…` bound to a development branch reads and writes only that child;
+  its rows are invisible to production and to other branches.
+- an `sk_…` bound to the root reads and writes production.
 
 `npx ablo dev` derives a branch from Git, ensures the matching child, and mints
-an expiring `sk_test_` key for it. The credential carries the immutable branch
+an expiring `sk_` key for it. The credential carries the immutable branch
 id; changing a slug in a request cannot change its authority. A child receives
 the parent's active schema when it is created and owns its artifact after that.
-A schema change reaches production only through the reviewed live-key path in
+A schema change reaches production only through the reviewed root-branch path in
 [Deployment](/deployment).
 
 The shared default sandbox is no longer part of the development workflow.
 Branch identity is required for newly provisioned CLI and runtime credentials.
 
+## Inspecting a credential
+
+Use `status` for the whole setup and `whoami` for the narrow identity question:
+
+```bash
+npx ablo status
+npx ablo whoami
+```
+
+`whoami` succeeds only when the server confirms the credential's organization,
+project, and branch. It never prints the full secret. For CI or recovery, inspect
+an explicitly named value without remapping `ABLO_API_KEY`:
+
+```bash
+npx ablo whoami --key-env PREVIEW_ABLO_KEY
+npx ablo whoami --key-env ABLO_API_KEY_LIVE --json
+```
+
+`--key-env` reads that exact name from the process, `.env.local`, or `.env`; the
+name makes the choice explicit, while the secret stays out of argv and shell
+history. `--key <value>` exists for one-off use but is less safe because shells
+and process listings may retain the value.
+
+Multiple custom-named keys are reasonable at a CI secret boundary or during a
+one-time migration from the old environment model. They are not the normal
+local-development workflow. After a stranded-plane recovery, retire obsolete
+variables rather than keeping them as permanent branch selectors.
+
 ## Scopes
 
 Keys carry scopes following the principle of least privilege — each key gets
 only what its job needs. A secret key with **no scopes** has full org authority
-(the default for a `sk_live_` backend key); a key with a non-empty scope set is
+(the default for a `sk_` backend key); a key with a non-empty scope set is
 restricted to exactly those grants:
 
 - `schema:push` — author the schema artifact on the key's bound plane
@@ -151,6 +228,23 @@ credentials through an empty scope set or a CLI fallback.
 Branch binding remains an authority boundary even when a key has no granular
 scope strings: a temporary child key can act only inside that child. It cannot
 manage siblings or gain root authority.
+
+## Current and legacy key spellings
+
+New credentials use one spelling per capability class:
+
+```text
+sk_…  trusted runtime
+rk_…  restricted runtime
+pk_…  publishable read-only browser
+ek_…  ephemeral user session
+mk_…  project and branch management
+```
+
+Older `sk_live_…`, `sk_test_…`, `rk_live_…`, and related credentials continue
+to authenticate during migration. Their `live`/`test` segment is a legacy hint,
+not the source of truth. Rotation mints the current spelling, and `ablo whoami`
+shows the persisted branch that actually controls the key.
 
 ### `ablo dev`
 

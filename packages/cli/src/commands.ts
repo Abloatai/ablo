@@ -22,6 +22,7 @@ import { MIGRATE_USAGE } from './migrate';
 import { BRANCH_USAGE } from './branches';
 import { BRANCH_DEV_USAGE } from './branchDev';
 import { WHOAMI_USAGE } from './whoami';
+import { PUSH_USAGE } from './push';
 
 /** Headings in the short help — the core loop, in the order you meet it. */
 export const CORE_GROUPS = ['Start', 'Every day', 'More'] as const;
@@ -147,6 +148,7 @@ export const COMMANDS = [
   },
   {
     name: 'push',
+    usage: PUSH_USAGE,
     core: { group: 'Every day', does: 'Upload your schema — schema only; your rows stay in your database' },
     full: {
       group: 'Your schema',
@@ -238,7 +240,7 @@ export const COMMANDS = [
         { run: 'branch check [id|slug]', does: 'CI alias for branch status' },
         { run: 'branch create <slug>', does: 'Create a child of the production root' },
         { run: 'branch ensure <slug> --credential', does: 'Resolve a branch and mint its expiring CI key' },
-        { run: 'branch credential <id>', does: 'Mint an expiring branch-bound test key' },
+        { run: 'branch credential <id>', does: 'Mint an expiring branch-bound runtime key' },
         { run: 'branch delete <id>', does: 'Delete a non-root branch' },
       ],
     },

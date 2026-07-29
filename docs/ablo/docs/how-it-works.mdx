@@ -96,7 +96,7 @@ npx ablo connect apply --url postgres://admin:...@host:5432/db
 
 ```bash
 # Your app's environment holds only the API key — never a connection string.
-ABLO_API_KEY=sk_live_...
+ABLO_API_KEY=sk_...
 ```
 
 ```ts
@@ -130,8 +130,9 @@ here is the current, correct reading:
   It is not the write path. You write **through** Ablo.
 - **"Ablo is out of the write path."** Not anymore. Ablo is the write chokepoint;
   every write flows through its coordination and then into your database.
-- **"Ablo holds my rows."** Only in the no-database-yet sandbox. Once you connect a
-  database, your rows live in *your* Postgres — Ablo keeps just the log.
+- **"Ablo holds my rows."** Only on a development branch where you have not
+  connected a database yet. Once you connect one, your rows live in *your*
+  Postgres — Ablo keeps just the log.
 - **"Ablo migrates my schema."** No. Ablo writes rows through a scoped role and runs
   no DDL; your migrations own the shape of your database.
 

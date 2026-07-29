@@ -34,8 +34,7 @@ the raw agent token.
 It exists because of one rule: **the browser can never hold a secret.** Your
 `sk_` lives on the server; the browser only ever holds a minted session token
 (which already names your org). So the per-actor credential is minted
-server-side, scoped, and expires in minutes — the model Stripe uses for
-client-side SDKs.
+server-side, scoped, and expires in minutes.
 
 ## Why
 
@@ -93,7 +92,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 ```
 
 The client owns auth, the credential lifecycle, and the connection; the provider
-is the thin reactive binding over it (Stripe's `<Elements stripe={...}>` model).
+is only the thin reactive binding over it.
 Build the client **once** at module scope — a new instance per render tears down
 the socket. Need custom headers or a
 body on the exchange? `authEndpoint` also accepts an async resolver that

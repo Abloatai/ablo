@@ -29,7 +29,7 @@ import {
   modeFromKey,
   type Mode,
   type ActiveProject,
-  type EffectiveKeySource,
+  type ResolvedKeySource,
 } from './config';
 import { listProjects } from './projects';
 
@@ -53,7 +53,7 @@ export interface TargetProject {
 /** The plane the server confirms this credential acts on. */
 export interface ConfirmedTarget {
   organizationId: string;
-  /** From the server; falls back to the key prefix when the server omits it. */
+  /** Compatibility label derived from branchRoot; legacy-prefix fallback only. */
   environment: string | null;
   /** Named project, or null when the identity carried no project (human
    *  session, or a server too old to report one). */
@@ -84,11 +84,11 @@ export type TargetMismatch =
 export interface ResolvedTarget {
   /** The host every request goes to (honoring `--url` / `ABLO_API_URL`). */
   url: string;
-  /** Masked key — `sk_test_CEIM…`, never the full secret. */
+  /** Masked key — `sk_CEIM…`, never the full secret. */
   keyPrefix: string;
   /** Where the resolved key came from (env, a project env file, or login). */
-  keySource: EffectiveKeySource;
-  /** The environment the key's prefix implies — known offline, before any call. */
+  keySource: ResolvedKeySource;
+  /** Legacy `_live_`/`_test_` hint, or null for current branch-bound keys. */
   keyEnv: Mode | null;
   /** The server-confirmed plane, or null when the server didn't answer. */
   confirmed: ConfirmedTarget | null;
@@ -101,7 +101,7 @@ export interface ResolvedTarget {
 export interface ResolveTargetOptions {
   url: string;
   apiKey: string;
-  keySource: EffectiveKeySource;
+  keySource: ResolvedKeySource;
   /** Per-call network budget; defaults to a short, status-friendly 4s. */
   timeoutMs?: number;
   /**
@@ -152,7 +152,12 @@ async function confirmFromServer(opts: ResolveTargetOptions): Promise<ConfirmedT
       : null;
     return {
       organizationId: identity.accountScope,
-      environment: keyEnv,
+      environment:
+        identity.branchRoot === undefined
+          ? keyEnv
+          : identity.branchRoot
+            ? 'production'
+            : 'sandbox',
       project,
       projectId,
       branchId: identity.branchId ?? null,

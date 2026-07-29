@@ -38,7 +38,7 @@ root and a bare `quickstart.ts` won't be found.
 
 ```bash
 cd packages/ablo
-ABLO_API_KEY=sk_test_... npx tsx examples/quickstart.ts
+ABLO_API_KEY=sk_... npx tsx examples/quickstart.ts
 ```
 
 ## Data Source (customer-owned database)

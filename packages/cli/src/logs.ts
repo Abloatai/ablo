@@ -2,8 +2,8 @@
  * Tails your commit activity: the change events, or deltas, streaming by as
  * rows are written.
  *
- * The API key sets the scope — a test key streams its sandbox's deltas, a live
- * key the organization's — and the server enforces that scope from the key,
+ * The API key sets the scope: a child-bound key streams that branch and a
+ * root-bound key streams production. The server enforces that binding,
  * while the command simply polls forward from a cursor. It follows new activity
  * by default; `--no-follow` prints the recent entries and exits.
  *
@@ -20,7 +20,7 @@ import {
   FEED_CURSOR_START,
 } from '@abloatai/transaction/wire';
 import pc from 'picocolors';
-import { resolveApiKey, normalizeMode, type Mode } from './config';
+import { resolveRuntimeApiKey } from './config';
 import { brand } from './theme';
 import { apiBaseUrl } from './controlPlane';
 
@@ -40,7 +40,6 @@ interface LogsArgs {
   model: string | undefined;
   op: string | undefined;
   json: boolean;
-  mode: Mode | undefined;
 }
 
 export function parseLogsArgs(argv: readonly string[]): LogsArgs {
@@ -51,7 +50,6 @@ export function parseLogsArgs(argv: readonly string[]): LogsArgs {
     model: undefined,
     op: undefined,
     json: false,
-    mode: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -79,13 +77,11 @@ export function parseLogsArgs(argv: readonly string[]): LogsArgs {
       case '--json':
         args.json = true;
         break;
-      case '--mode': {
-        const raw = argv[++i];
-        const m = normalizeMode(raw);
-        if (!m) throw new AbloValidationError(`--mode expects "sandbox" or "production", got "${raw}"`, { code: 'cli_invalid_arguments' });
-        args.mode = m;
-        break;
-      }
+      case '--mode':
+        throw new AbloValidationError(
+          '--mode was removed. Logs follow the branch bound to ABLO_API_KEY; select a different branch by supplying its key.',
+          { code: 'cli_invalid_arguments' },
+        );
       default:
         throw new AbloValidationError(`unknown flag: ${arg}`, { code: 'cli_invalid_arguments' });
     }
@@ -135,7 +131,7 @@ export async function logs(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  const apiKey = resolveApiKey(args.mode);
+  const apiKey = resolveRuntimeApiKey().key;
   if (!apiKey) {
     console.error(
       pc.red(`  No API key.`) + pc.dim(` Run ${pc.bold('ablo login')} or set ${pc.bold('ABLO_API_KEY')}.`),
@@ -184,7 +180,7 @@ export async function logs(argv: readonly string[]): Promise<void> {
   }
 
   if (!args.json) {
-    console.log(`\n  ${brand('ablo')} ${pc.dim('logs')} ${pc.dim(`(${args.mode ?? 'active'} mode)`)}\n`);
+    console.log(`\n  ${brand('ablo')} ${pc.dim('logs')}\n`);
   }
 
   // Initial backfill (no `after` → recent N).

@@ -48,8 +48,8 @@ context, whether or not you map anything:
 | --- | --- |
 | `app.current_org_id` | The organization the credential acts for |
 | `app.current_project_id` | The project |
-| `app.current_environment` | The environment |
-| `app.current_sandbox_id` | The sandbox, when the write is in one |
+| `app.current_environment` | The key's test/live trust class (`sandbox`/`production` on this compatibility surface) |
+| `app.current_sandbox_id` | Legacy compatibility coordinate for older test planes; not a branch selector |
 | `app.current_participant_id` | The participant making the write |
 | `app.current_participant_kind` | Whether that participant is a person, an agent, or the system |
 | `app.current_user_id` | The person on whose behalf the write is made |
@@ -72,6 +72,11 @@ authenticated key and the plane:
 
 `orgId` · `projectId` · `environment` · `sandboxId` · `participantId` ·
 `participantKind`
+
+`environment` and `sandboxId` retain their published names for compatibility
+with existing RLS policies. Current development isolation comes from the
+credential's immutable branch binding; callers do not choose a sandbox or
+branch through session settings.
 
 Because none of them come from the caller, a mapping can forward the tenant
 identity Ablo already trusts, but cannot widen what a writer sees. A setting name

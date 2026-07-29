@@ -111,7 +111,7 @@ Both scopes carry:
 
 | field | meaning |
 |---|---|
-| `object` | Stripe-style type tag: `'stale_notification'` |
+| `object` | stable type tag: `'stale_notification'` |
 | `scope` | `'row'` or `'group'` — which premise granularity fired |
 | `target` | **the row that moved**, and which parts: `{ model, id, fields }`. The same locator a claim names its subject with |
 | `readAt` | the watermark the committer reasoned against |

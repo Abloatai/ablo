@@ -21,8 +21,7 @@ import { useAblo } from '@abloatai/ablo/react';
 You build the Ablo client once — that's where the schema, the session endpoint,
 and connection config live — then hand it to the provider. The provider takes
 the already-built `client`; it no longer takes `schema`, `url`, `apiKey`, etc.
-as props. This mirrors Stripe's `<Elements stripe={stripePromise}>`: construct
-the thing, then pass it.
+as props. Construct the client once, then pass that instance to the provider.
 
 ```ts
 // lib/ablo.ts

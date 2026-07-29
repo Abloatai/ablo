@@ -3,8 +3,8 @@
 Maintainer scoping doc. Closes the one real day-one DX gap in Data Source
 mode: the `commit`/`load`/`list` legs are inbound webhooks (Ablo → your
 endpoint), so on `localhost` they need a tunnel (ngrok/cloudflared). This
-scopes a built-in reverse channel so Data Source works on localhost the way
-managed mode already does — the Stripe-CLI `stripe listen` pattern.
+scopes a built-in reverse channel so Data Source works on localhost without a
+public tunnel.
 
 ## The gap, precisely
 
@@ -26,10 +26,9 @@ managed mode "just works" locally and Data Source doesn't.
 
 ## Prior art
 
-- **Stripe CLI `stripe listen`:** the canonical fix. The CLI opens an
-  *outbound* WebSocket to Stripe; Stripe drains webhook events down it and the
-  CLI forwards them to `localhost`. No public URL, no tunnel. We want the same
-  for the `commit`/`load`/`list` leg.
+- **Outbound relay:** the CLI opens a WebSocket to the hosted service, receives
+  events over that connection, and forwards them to `localhost`. No public URL
+  or tunnel is required. We want the same for the `commit`/`load`/`list` leg.
 - **Our own `createPushQueue`:** already proves the outbound-from-customer
   pattern for the `events` leg. The reverse channel is the symmetric primitive
   for the other direction.
@@ -78,7 +77,7 @@ import { dataSource, createSourceConnector } from '@abloatai/ablo';
 import { sourceOptions } from './ablo.source'; // shared with route.ts
 
 const connector = createSourceConnector({
-  apiKey: process.env.ABLO_API_KEY!,      // sk_test_*
+  apiKey: process.env.ABLO_API_KEY!,      // sk_* bound to a child branch
   handler: dataSource(sourceOptions),     // the unchanged (Request)=>Response
 });
 await connector.run(abortSignal);
@@ -90,8 +89,8 @@ await connector.run(abortSignal);
 ### Server side (sync-server)
 
 - New WS endpoint `/v1/source/listen`. Auth: project API key → resolves the
-  source. Reject if the key isn't `sk_test_*` unless the source explicitly
-  opts into reverse-channel for production (see "Production" below).
+  source. Reject if the persisted key binding is the root branch unless the
+  source explicitly opts into a production reverse channel (see below).
 - Per-source request queue. When a `commit`/`load`/`list` needs the customer
   and a connector is attached, enqueue + drain down the socket instead of
   POSTing the webhook URL. Reuse the same signed-envelope shape so the
@@ -106,18 +105,16 @@ await connector.run(abortSignal);
   project key, so the connector verifies them through the existing
   `verifyAbloSourceRequest` with no special-casing. The transport changes; the
   trust model does not.
-- Gate to `sk_test_*` by default. The DB still stays canonical in the
-  customer's process; nothing here gives Ablo the `DATABASE_URL`.
+- Gate to non-root branch bindings by default. The DB still stays canonical in
+  the customer's process; nothing here gives Ablo the `DATABASE_URL`.
 
-## Test-mode interplay
+## Development-branch interplay
 
-`SourceRequestContext.mode` (`src/source/types.ts`) already distinguishes
-`test`/`live`. The reverse channel is the natural home for `mode: 'test'`
-traffic: a local connector attached with an `sk_test_*` key receives the
-source's test commits, runs them against the customer's test DB, and the SDK
-sees confirmed rows + fan-out exactly as in production. This is the missing
-piece that makes `sk_test_*` a complete local loop rather than just a data
-namespace.
+The reverse channel is the natural home for child-branch traffic: a local
+connector attached with a child-bound `sk_*` receives that branch's commits,
+runs them against the customer's development DB, and the SDK sees confirmed
+rows and fan-out exactly as on the root. The server resolves child versus root
+from the persisted branch binding, never from the key spelling.
 
 ## Production stance
 

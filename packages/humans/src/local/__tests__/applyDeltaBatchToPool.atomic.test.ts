@@ -113,6 +113,42 @@ describe('SyncClient.applyDeltaBatchToPool — atomic reveal', () => {
     expect(emits).toBe(1);
   });
 
+  it('materializes only the newest cache-sized suffix of an oversized headless frame', () => {
+    const { pool, client } = setup();
+    const frame: DeltaResult[] = Array.from({ length: 150 }, (_, index) => ({
+      action: 'add',
+      modelName: 'Task',
+      modelId: `bulk-${index}`,
+      data: { id: `bulk-${index}`, title: `Bulk ${index}` },
+    }));
+
+    client.applyDeltaBatchToPool(frame, identityEnrich);
+
+    expect(pool.size).toBe(100);
+    expect(pool.peek('bulk-49')).toBeUndefined();
+    expect(pool.peek('bulk-50')).toBeDefined();
+    expect(pool.peek('bulk-149')).toBeDefined();
+  });
+
+  it('does not suffix-trim an oversized frame with an active row subscriber', () => {
+    const { pool, client } = setup();
+    let delivered = 0;
+    const unsubscribe = pool.subscribe(TaskModel, () => {
+      delivered++;
+    });
+    const frame: DeltaResult[] = Array.from({ length: 150 }, (_, index) => ({
+      action: 'add',
+      modelName: 'Task',
+      modelId: `subscribed-${index}`,
+      data: { id: `subscribed-${index}`, title: `Subscribed ${index}` },
+    }));
+
+    client.applyDeltaBatchToPool(frame, identityEnrich);
+
+    expect(delivered).toBe(150);
+    unsubscribe();
+  });
+
   it('control: applying the same ops as SEPARATE actions fires the reaction more than once', () => {
     // This is the pre-fix behaviour — proves the reaction is sensitive to
     // action boundaries, so the `toBe(1)` assertion above is meaningful and

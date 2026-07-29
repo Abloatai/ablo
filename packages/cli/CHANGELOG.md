@@ -1,5 +1,16 @@
 # @abloatai/cli
 
+## 0.43.0
+
+### Minor Changes
+
+- be1a806: Credential lookup follows the order mature CLIs use: the process `ABLO_API_KEY` first, then an explicit `--env-file <path>`, then the stored credential. Read-only diagnostics may inspect `.env.local`; mutations require explicit selection. `logs` follows the branch bound to the key it runs with, which removes `--mode`; `connect rotate` re-keys the existing database roles in place and reuses the replication slot, so recovering a connection never drops roles or touches the database by hand.
+
+### Patch Changes
+
+- @abloatai/transaction@0.43.0
+- @abloatai/humans@0.43.0
+
 ## 0.42.0
 
 ### Minor Changes

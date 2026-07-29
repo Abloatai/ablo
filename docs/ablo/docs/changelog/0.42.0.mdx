@@ -1,0 +1,33 @@
+---
+title: "v0.42.0"
+type: changelog
+date: 2026-07-29
+changelog:
+  version: "0.42.0"
+  category: "Fixes"
+---
+
+### `ablo whoami`: what does this key act on?
+
+`whoami` returns the server-confirmed organization, project, and branch a key
+acts on, or fails. Where `status` is the broad health report and deliberately
+degrades when an older or unreachable server cannot confirm identity, `whoami`
+is the strict form of the question, which makes it safe to run before a
+`connect` or `deregister` instead of inferring a key's scope from a failed
+mutation.
+
+### Bound sessions resolve their schema again
+
+Every read seam that honored a first-party schema binding substituted the
+owner's organization but kept the caller's own branch, a location where the
+owner's schema never lives. Bound sessions therefore resolved an empty schema:
+bootstraps returned no models and every query answered `unknown_model`. Reads
+and commits now resolve the model map on the owner's branch axis, and an
+absent branch resolves to the owner's root.
+
+### Re-pushing an unchanged schema no longer fails
+
+The unchanged-schema fast path skipped the provisioning deferral the real
+migration path has, so an identical `ablo push` was refused on any plane that
+had no DDL to run. The fast path now defers exactly like the real path, and a
+second push of the same schema succeeds with nothing left undone.

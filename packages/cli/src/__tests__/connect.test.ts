@@ -44,6 +44,11 @@ describe('parseConnectArgs', () => {
     expect(parseConnectArgs([]).manual).toBe(false);
   });
 
+  it('parses an explicit env file without silently loading one by default', () => {
+    expect(parseConnectArgs(['rotate', '--env-file', '.env.local']).envFile).toBe('.env.local');
+    expect(parseConnectArgs(['rotate']).envFile).toBeUndefined();
+  });
+
   it('selects modes by subcommand', () => {
     expect(parseConnectArgs(['register']).register).toBe(true);
     expect(parseConnectArgs(['check']).check).toBe(true);

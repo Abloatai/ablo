@@ -23,7 +23,7 @@ import { handleAbloSource, _inspectStore } from './customer-server';
 import { AbloDriver } from './ablo-driver';
 
 const API_KEY =
-  process.env.ABLO_API_KEY ?? 'sk_test_example_key_do_not_use_in_prod';
+  process.env.ABLO_API_KEY ?? 'sk_example_key_do_not_use';
 
 // `dataSource()` reads `options.apiKey` at request time; we re-export
 // the same value to the driver so signer and verifier agree.
@@ -70,7 +70,7 @@ async function main() {
   log('\n--- 5. signature failure (wrong API key) ---');
   const badDriver = new AbloDriver({
     handler: handleAbloSource,
-    apiKey: 'sk_test_wrong_key',
+    apiKey: 'sk_wrong_example_key',
   });
   try {
     await badDriver.load('tasks', 'task_seed');

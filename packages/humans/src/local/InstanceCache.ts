@@ -162,6 +162,29 @@ export class InstanceCache {
     }
   }
 
+  /**
+   * Maximum fresh wire rows worth constructing from one atomic apply batch.
+   *
+   * A headless cache has no recency signal: every never-read resident is
+   * equally useful, while the local database remains the authoritative full
+   * state. Once that cache is full, replacing cold rows with other cold rows
+   * is pure construction/eviction churn, so only currently free slots are
+   * admitted. Active row subscribers and incremental views are different:
+   * they must observe every addition even when the cache is bounded, so
+   * those batches opt out of admission limiting.
+   */
+  wireAddRetentionLimit(modelNames: ReadonlySet<string>): number | undefined {
+    for (const modelName of modelNames) {
+      if (
+        (this.subscriptions.get(modelName)?.size ?? 0) > 0 ||
+        this.viewRegistry.hasViews(modelName)
+      ) {
+        return undefined;
+      }
+    }
+    return Math.max(0, this.config.maxSize - this.entries.size);
+  }
+
   constructor(config: PoolConfig = {}, modelRegistry?: ModelRegistry) {
     this.config = {
       maxSize: config.maxSize ?? 10000,

@@ -150,7 +150,7 @@ https://api.example.com/api/ablo/source
 Store the Ablo API key in the Python server:
 
 ```bash
-ABLO_API_KEY=sk_live_...
+ABLO_API_KEY=sk_...
 ```
 
 Then expose one route that verifies the signed request and calls the existing

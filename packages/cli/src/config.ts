@@ -13,7 +13,7 @@
  * Credentials are organized into per-project profiles. A profile is named
  * `default` (the organization-default project) or a project slug. `ablo login`
  * stores one `mk_` management credential in the selected profile. `ablo dev`
- * exchanges it for an expiring, branch-bound `sk_test_` runtime key and never
+ * exchanges it for an expiring, branch-bound `sk_` runtime key and never
  * persists that runtime key in this store.
  * Selecting a project never re-scopes an existing key — a key's project is fixed
  * when it is minted — so each project keeps its own credential and the active
@@ -347,7 +347,7 @@ export interface KeyMismatchDiagnostic {
   message: string;
 }
 
-export interface EffectiveKeyDiagnostic {
+export interface ResolvedKeyDiagnostic {
   keyPrefix: string | null;
   keySource: 'env' | 'stored' | null;
   keyMode: Mode | null;
@@ -361,14 +361,14 @@ function prefix(key: string | undefined): string | null {
   return key ? key.slice(0, 12) : null;
 }
 
-export function describeEffectiveKey(
+export function describeResolvedKey(
   activeMode: Mode,
   envKey: string | undefined,
   storedEntry: KeyEntry | undefined,
-): EffectiveKeyDiagnostic {
-  const effectiveKey = envKey ?? storedEntry?.apiKey;
+): ResolvedKeyDiagnostic {
+  const resolvedKey = envKey ?? storedEntry?.apiKey;
   const keySource = envKey ? 'env' : storedEntry ? 'stored' : null;
-  const keyMode = effectiveKey ? modeFromKey(effectiveKey) ?? null : null;
+  const keyMode = resolvedKey ? modeFromKey(resolvedKey) ?? null : null;
   const keyMatchesActiveMode = keyMode ? keyMode === activeMode : null;
   const keyMatchesStoredActiveKey =
     envKey && storedEntry?.apiKey ? envKey === storedEntry.apiKey : null;
@@ -380,7 +380,7 @@ export function describeEffectiveKey(
       code: 'key_mode_mismatch',
       message:
         `${sourceLabel} is a ${keyMode} key but the CLI mode is ${activeMode}. ` +
-        `Requests use ${sourceLabel} (${prefix(effectiveKey)}...), not the active CLI mode.`,
+        `Requests use ${sourceLabel} (${prefix(resolvedKey)}...), not the active CLI mode.`,
     };
   } else if (envKey && storedEntry?.apiKey && envKey !== storedEntry.apiKey) {
     keyMismatch = {
@@ -392,7 +392,7 @@ export function describeEffectiveKey(
   }
 
   return {
-    keyPrefix: prefix(effectiveKey),
+    keyPrefix: prefix(resolvedKey),
     keySource,
     keyMode,
     storedKeyPrefix: prefix(storedEntry?.apiKey),
@@ -424,11 +424,10 @@ export function clearCredential(): boolean {
 /**
  * The key the CLI authenticates with: `ABLO_API_KEY` always wins, so continuous
  * integration and one-off overrides take precedence; otherwise the active
- * profile's key for the active environment, or for `modeOverride` when given
- * (`dev`, for instance, is always sandbox). A key past its `expiresAt` is treated
- * as absent, so the caller prompts for a fresh `ablo login`.
+ * profile's legacy key slot, or the explicitly requested compatibility slot.
+ * A key past its `expiresAt` is treated as absent.
  */
-export function resolveApiKey(modeOverride?: Mode): string | undefined {
+export function resolveMutationApiKey(modeOverride?: Mode): string | undefined {
   // Strict data-path preset: the active project's key only, no env-file scan.
   return resolveKey({ purpose: 'data', mode: modeOverride }).key;
 }
@@ -447,8 +446,8 @@ export function ambientEnvKeyNote(cwd?: string): string | null {
   if (!ambient || ambient.source === 'env') return null;
   return (
     `Note: ${ambient.source} in this directory holds an ABLO_API_KEY, which this command does not load — ` +
-    'it reads only the process environment and your stored login, so a file cannot silently choose the plane. ' +
-    'Export the variable (or prefix the command with it) to use that key.'
+    'it reads only the process environment and your stored login, so a file cannot silently choose a branch. ' +
+    'Export the variable, or pass `--env-file ' + ambient.source + '` to a connect command, to choose it explicitly.'
   );
 }
 
@@ -456,7 +455,7 @@ export function ambientEnvKeyNote(cwd?: string): string | null {
  * Resolves a key for an *organization-level* CLI operation — listing, creating,
  * renaming, or switching the active project — where any valid key for the
  * organization returns the same answer, and which project the key is scoped to
- * doesn't change the result. Unlike {@link resolveApiKey}, which reads only the
+ * doesn't change the result. Unlike {@link resolveMutationApiKey}, which reads only the
  * active project's profile so a data-touching command can never silently act
  * through the wrong project, this prefers the active profile but falls back to
  * the `default` profile and then any profile that still holds an unexpired key.
@@ -536,7 +535,7 @@ export function guardActiveProjectKey(): ProjectKeyGuard {
   // CLI resolves and reports as overriding the stored login. The guard then
   // refused a push that the key it could not see would have routed correctly,
   // and the only way through was to select a project the push would not use.
-  const { key, source } = resolveEffectiveApiKey();
+  const { key, source } = resolveRuntimeApiKey();
   if (key != null && source != null && source !== 'stored') {
     return { ok: true, activeProfile: DEFAULT_PROFILE, available: [] };
   }
@@ -549,16 +548,16 @@ export function guardActiveProjectKey(): ProjectKeyGuard {
   return { ok: hasKey(profiles[activeProfile]), activeProfile, available };
 }
 
-/** Where the effective CLI credential came from: the process environment, a
+/** Where the resolved CLI credential came from: the process environment, a
  *  project env file the application's framework would load, or the stored
  *  `ablo login` credential. */
-export type EffectiveKeySource = ApiKeySource | 'stored';
+export type ResolvedKeySource = ApiKeySource | 'stored' | 'explicit-file';
 
 /** The credential the CLI would present, plus its provenance. `source` is
  *  `null` exactly when `key` is `undefined` (nothing resolved). */
-export interface EffectiveApiKey {
+export interface ResolvedApiKey {
   key: string | undefined;
-  source: EffectiveKeySource | null;
+  source: ResolvedKeySource | null;
 }
 
 /**
@@ -574,8 +573,9 @@ export interface EffectiveApiKey {
  *    from stranding you on a project you never minted a key for.
  *  - `scanEnvFiles` decides whether an explicit key may come from the project
  *    env files a framework loads (`.env.local`, then `.env`), not just
- *    `ABLO_API_KEY` in the process. The push/dev/status chain sets it so the CLI
- *    presents the same key the app would; management commands leave it off.
+ *    `ABLO_API_KEY` in the process. Runtime diagnostics set it so they describe
+ *    the same key the app would; mutations leave it off unless a file is
+ *    explicitly selected.
  */
 export interface KeyPolicy {
   purpose: 'data' | 'org-read';
@@ -596,11 +596,11 @@ export interface KeyPolicy {
  *     → the stored key for the mode, searched by the `purpose` profile policy.
  *
  * Centralizing the env-check, expiry, and profile search here is deliberate: the
- * three preset entry points ({@link resolveApiKey}, {@link resolveOrgKey},
- * {@link resolveEffectiveApiKey}) are one-liners over this, so they can't drift
+ * three preset entry points ({@link resolveMutationApiKey}, {@link resolveOrgKey},
+ * {@link resolveRuntimeApiKey}) are one-liners over this, so they can't drift
  * apart the way three hand-written copies did.
  */
-export function resolveKey(policy: KeyPolicy): EffectiveApiKey {
+export function resolveKey(policy: KeyPolicy): ResolvedApiKey {
   // Phase 1 — an explicit key. With env-file scanning on, `readProjectApiKey`
   // already checks `process.env` before the files, so the two branches don't
   // double-read; without it, only the process environment is consulted.
@@ -630,42 +630,9 @@ export function resolveKey(policy: KeyPolicy): EffectiveApiKey {
   return { key: undefined, source: null };
 }
 
-/**
- * The credential-resolution chain `push`, `dev`, `status`, and
- * {@link resolvePushPlan} share — the `'data'` preset of {@link resolveKey} with
- * env-file scanning on, so the key a diagnostic reports is the key a deploy
- * would present. `cwd` is a test seam; commands use the process directory.
- */
-export function resolveEffectiveApiKey(modeOverride?: Mode, cwd?: string): EffectiveApiKey {
+/** Resolve the runtime key the application would see, including project dotenv
+ * files. Read-only diagnostics and the dev runtime use this policy. Mutations
+ * use {@link resolveMutationApiKey} unless the user explicitly loads a file. */
+export function resolveRuntimeApiKey(modeOverride?: Mode, cwd?: string): ResolvedApiKey {
   return resolveKey({ purpose: 'data', mode: modeOverride, scanEnvFiles: true, cwd });
-}
-
-/** What `ablo push` would do right now: which environment it deploys to and
- *  the credential it would present. */
-export interface PushPlan {
-  /** `production` → the raw one-shot pusher; `sandbox` → the dev flow
-   *  (role check, `.env.local` wiring, optional `--watch`). */
-  flow: Mode;
-  apiKey: string | undefined;
-  /** Where the credential came from — `null` when none resolves. */
-  source: EffectiveKeySource | null;
-}
-
-/**
- * Resolves the credential and flow `ablo push` uses, through the shared
- * {@link resolveEffectiveApiKey} chain: an explicit key — an environment variable
- * or a project env file, whose prefix names the environment — takes precedence
- * over the active mode's stored credential in the active project profile. The
- * active mode is honored even when no credential is stored for it, so a
- * production-mode push fails by asking for a production key rather than silently
- * running the sandbox flow.
- */
-export function resolvePushPlan(): PushPlan {
-  const { key, source } = resolveEffectiveApiKey();
-  if (key != null && source != null && source !== 'stored') {
-    // An explicit key (env var or project env file) wins — exactly what push
-    // presents — and its prefix names the environment it deploys to.
-    return { flow: modeFromKey(key) ?? getMode(), apiKey: key, source };
-  }
-  return { flow: getMode(), apiKey: key, source };
 }

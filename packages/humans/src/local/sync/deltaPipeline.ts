@@ -85,6 +85,8 @@ export interface DeltaPipelineContext {
   ): Promise<{ results: AppliedChange[]; persistedSyncId: number }>;
   /** Applies persisted delta results to the in-memory pool, with the host's relation enrichment bound. */
   applyDeltaBatchToPool(results: AppliedChange[]): void;
+  /** Optional whole-batch projection performed before bounded apply slicing. */
+  projectDeltaBatchForPool?(results: readonly AppliedChange[]): readonly AppliedChange[];
   /** Acknowledges a sync id back to the server; a no-op when the socket is down. */
   acknowledge(syncId: number): void;
 
@@ -572,7 +574,8 @@ async function flushDeltaBatchInner(
   // synchronous block. Each slice is still one MobX action (reactions fire
   // once per slice), and a transaction never splits across slices — the
   // commit remains the atomic unit of visibility.
-  const slices = sliceApplyChanges(dbResults, ctx.smartSyncOptions.applySliceDeltas);
+  const poolResults = ctx.projectDeltaBatchForPool?.(dbResults) ?? dbResults;
+  const slices = sliceApplyChanges(poolResults, ctx.smartSyncOptions.applySliceDeltas);
   await timeDrainStageAsync('apply', async () => {
     const hasApplyPlugins = pluginsForStage(stagePlugins, 'apply').length > 0;
     // Yield on a TIME budget, not per slice: a host yield costs milliseconds

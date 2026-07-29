@@ -9,16 +9,15 @@ import {
   getMode,
   getKeyEntry,
   modeFromKey,
-  describeEffectiveKey,
+  describeResolvedKey,
   normalizeMode,
   clearCredential,
-  resolveApiKey,
+  resolveMutationApiKey,
   resolveManagementKey,
   resolveOrgManagementKey,
   resolveOrgKey,
   resolveKey,
-  resolveEffectiveApiKey,
-  resolvePushPlan,
+  resolveRuntimeApiKey,
   setProfileKeys,
   setActiveProject,
   guardActiveProjectKey,
@@ -34,7 +33,7 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
     process.env = { ...OLD_ENV, ABLO_CONFIG_DIR: dir };
     delete process.env.ABLO_API_KEY;
     delete process.env.ABLO_MANAGEMENT_KEY;
-    // The effective-key chain reads ./.env.local and ./.env — pin cwd to the
+    // The runtime-key chain reads ./.env.local and ./.env — pin cwd to the
     // fresh temp dir so a real project's env files can never leak into tests.
     oldCwd = process.cwd();
     process.chdir(dir);
@@ -68,9 +67,9 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
     });
   });
 
-  describe('describeEffectiveKey', () => {
+  describe('describeResolvedKey', () => {
     it('flags an env key whose prefix disagrees with the active CLI mode', () => {
-      const diagnostic = describeEffectiveKey('sandbox', 'sk_live_env', {
+      const diagnostic = describeResolvedKey('sandbox', 'sk_live_env', {
         apiKey: 'sk_test_stored',
       });
 
@@ -88,7 +87,7 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
     });
 
     it('flags an env key that overrides a different stored key in the same mode', () => {
-      const diagnostic = describeEffectiveKey('sandbox', 'sk_test_env', {
+      const diagnostic = describeResolvedKey('sandbox', 'sk_test_env', {
         apiKey: 'sk_test_stored',
       });
 
@@ -106,7 +105,7 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
 
     it('reports a matching stored active key without a mismatch', () => {
       expect(
-        describeEffectiveKey('production', undefined, { apiKey: 'sk_live_stored' }),
+        describeResolvedKey('production', undefined, { apiKey: 'sk_live_stored' }),
       ).toEqual({
         keyPrefix: 'sk_live_stor',
         keySource: 'stored',
@@ -168,13 +167,13 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
       );
 
       // Active = war-room → its key resolves, not the default project's.
-      expect(resolveApiKey()).toBe('sk_test_warroom');
+      expect(resolveMutationApiKey()).toBe('sk_test_warroom');
       expect(getKeyEntry('sandbox')?.apiKey).toBe('sk_test_warroom');
 
       // Switching back to the org-default resolves the default profile's key —
       // neither key was re-scoped; both coexist.
       setActiveProject(undefined);
-      expect(resolveApiKey()).toBe('sk_test_default');
+      expect(resolveMutationApiKey()).toBe('sk_test_default');
 
       const cfg = readConfig();
       expect(Object.keys(cfg?.profiles ?? {}).sort()).toEqual(['default', 'war-room']);
@@ -274,29 +273,29 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
     });
   });
 
-  describe('resolveApiKey', () => {
+  describe('resolveMutationApiKey', () => {
     it('env var always wins', () => {
       setKey('sandbox', { apiKey: 'sk_test_stored' });
       process.env.ABLO_API_KEY = 'sk_test_env';
-      expect(resolveApiKey()).toBe('sk_test_env');
+      expect(resolveMutationApiKey()).toBe('sk_test_env');
     });
     it('returns the active environment key, or the override', () => {
       writeConfig({
         mode: 'sandbox',
         profiles: { default: { sandbox: { apiKey: 'sk_test_a' }, production: { apiKey: 'sk_live_b' } } },
       });
-      expect(resolveApiKey()).toBe('sk_test_a');
-      expect(resolveApiKey('production')).toBe('sk_live_b');
+      expect(resolveMutationApiKey()).toBe('sk_test_a');
+      expect(resolveMutationApiKey('production')).toBe('sk_live_b');
     });
     it('treats an expired key as absent', () => {
       const past = new Date(Date.now() - 1000).toISOString();
       setKey('sandbox', { apiKey: 'sk_test_old', expiresAt: past });
-      expect(resolveApiKey()).toBeUndefined();
+      expect(resolveMutationApiKey()).toBeUndefined();
     });
     it('honors a future expiry', () => {
       const future = new Date(Date.now() + 60_000).toISOString();
       setKey('sandbox', { apiKey: 'sk_test_fresh', expiresAt: future });
-      expect(resolveApiKey()).toBe('sk_test_fresh');
+      expect(resolveMutationApiKey()).toBe('sk_test_fresh');
     });
   });
 
@@ -335,9 +334,9 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
     it('the three presets are exactly their resolveKey policies', () => {
       setProfileKeys('default', { sandbox: { apiKey: 'sk_test_default' } }, { mode: 'sandbox', activeProject: undefined });
       setActiveProject({ id: 'p9', slug: 'mail' });
-      expect(resolveApiKey()).toBe(resolveKey({ purpose: 'data' }).key);
+      expect(resolveMutationApiKey()).toBe(resolveKey({ purpose: 'data' }).key);
       expect(resolveOrgKey()).toBe(resolveKey({ purpose: 'org-read' }).key);
-      expect(resolveEffectiveApiKey()).toEqual(resolveKey({ purpose: 'data', scanEnvFiles: true }));
+      expect(resolveRuntimeApiKey()).toEqual(resolveKey({ purpose: 'data', scanEnvFiles: true }));
     });
   });
 
@@ -354,11 +353,11 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
 
     it('falls back to the default profile when the active project has NO key — the lockout fix', () => {
       // Key minted only for `default`, then switched to a project we never logged
-      // into. resolveApiKey (strict, data path) returns nothing, which is what
+      // into. resolveMutationApiKey (strict, data path) returns nothing, which is what
       // used to strand `ablo projects use default`; resolveOrgKey still resolves.
       setProfileKeys('default', { sandbox: { apiKey: 'sk_test_default' } }, { mode: 'sandbox', activeProject: undefined });
       setActiveProject({ id: 'p9', slug: 'mail' });
-      expect(resolveApiKey()).toBeUndefined();
+      expect(resolveMutationApiKey()).toBeUndefined();
       expect(resolveOrgKey()).toBe('sk_test_default');
     });
 
@@ -436,96 +435,48 @@ describe('config (CLI credential store — AWS-style config/credentials split)',
     });
   });
 
-  describe('resolveEffectiveApiKey (the ONE chain push/dev/status/plan all share)', () => {
+  describe('resolveRuntimeApiKey (application/runtime lookup)', () => {
     it('resolves env → .env.local → .env → stored, naming the source at each step', () => {
       setKey('sandbox', { apiKey: 'sk_test_stored' });
       writeFileSync(join(dir, '.env'), 'ABLO_API_KEY=sk_test_dotenv\n');
       writeFileSync(join(dir, '.env.local'), 'ABLO_API_KEY=sk_test_envlocal\n');
       process.env.ABLO_API_KEY = 'sk_test_envvar';
 
-      expect(resolveEffectiveApiKey()).toEqual({ key: 'sk_test_envvar', source: 'env' });
+      expect(resolveRuntimeApiKey()).toEqual({ key: 'sk_test_envvar', source: 'env' });
 
       delete process.env.ABLO_API_KEY;
-      expect(resolveEffectiveApiKey()).toEqual({ key: 'sk_test_envlocal', source: '.env.local' });
+      expect(resolveRuntimeApiKey()).toEqual({ key: 'sk_test_envlocal', source: '.env.local' });
 
       rmSync(join(dir, '.env.local'));
-      expect(resolveEffectiveApiKey()).toEqual({ key: 'sk_test_dotenv', source: '.env' });
+      expect(resolveRuntimeApiKey()).toEqual({ key: 'sk_test_dotenv', source: '.env' });
 
       rmSync(join(dir, '.env'));
-      expect(resolveEffectiveApiKey()).toEqual({ key: 'sk_test_stored', source: 'stored' });
+      expect(resolveRuntimeApiKey()).toEqual({ key: 'sk_test_stored', source: 'stored' });
 
       clearCredential();
-      expect(resolveEffectiveApiKey()).toEqual({ key: undefined, source: null });
+      expect(resolveRuntimeApiKey()).toEqual({ key: undefined, source: null });
     });
 
-    it('honors the mode override for the stored fallback (dev is always sandbox)', () => {
+    it('honors the legacy-slot override for stored fallback compatibility', () => {
       writeConfig({
         mode: 'production',
         profiles: { default: { sandbox: { apiKey: 'sk_test_a' }, production: { apiKey: 'sk_live_b' } } },
       });
-      expect(resolveEffectiveApiKey('sandbox')).toEqual({ key: 'sk_test_a', source: 'stored' });
-      expect(resolveEffectiveApiKey()).toEqual({ key: 'sk_live_b', source: 'stored' });
+      expect(resolveRuntimeApiKey('sandbox')).toEqual({ key: 'sk_test_a', source: 'stored' });
+      expect(resolveRuntimeApiKey()).toEqual({ key: 'sk_live_b', source: 'stored' });
     });
 
     it('an explicit cwd routes the file lookups (test seam)', () => {
       const other = mkdtempSync(join(tmpdir(), 'ablo-proj-'));
       try {
         writeFileSync(join(other, '.env.local'), 'ABLO_API_KEY=sk_test_other\n');
-        expect(resolveEffectiveApiKey(undefined, other)).toEqual({
+        expect(resolveRuntimeApiKey(undefined, other)).toEqual({
           key: 'sk_test_other',
           source: '.env.local',
         });
       } finally {
         rmSync(other, { recursive: true, force: true });
       }
-    });
-  });
-
-  describe('resolvePushPlan (what `ablo push` routes to — the live-key incident)', () => {
-    it('a key in .env.local beats the stored login key; its prefix names the flow — status now reports exactly what push presents', () => {
-      // The 4-chains bug this pins: `ablo status`/`resolvePushPlan` used to skip
-      // the project env files that `ablo push` reads, so the diagnostic reported
-      // the stored sandbox key while push actually presented the production key
-      // sitting in .env.local.
-      writeConfig({ mode: 'sandbox', profiles: { default: { sandbox: { apiKey: 'sk_test_stored' } } } });
-      writeFileSync(join(dir, '.env.local'), 'ABLO_API_KEY=sk_live_filekey\n');
-      expect(resolvePushPlan()).toEqual({
-        flow: 'production',
-        apiKey: 'sk_live_filekey',
-        source: '.env.local',
-      });
-    });
-
-    it('explicit ABLO_API_KEY wins; its prefix names the flow', () => {
-      writeConfig({ mode: 'sandbox', profiles: { default: { sandbox: { apiKey: 'sk_test_stored' } } } });
-      process.env.ABLO_API_KEY = 'sk_live_env';
-      expect(resolvePushPlan()).toEqual({ flow: 'production', apiKey: 'sk_live_env', source: 'env' });
-    });
-    it('with no env var, the ACTIVE mode picks the stored credential — production mode deploys production', () => {
-      // The bug this pins: `ablo login` + `ablo mode production` + `npx ablo push`
-      // used to land in the sandbox flow (only the env var was consulted) and
-      // demand sk_test_ from a user holding a valid production key.
-      writeConfig({
-        mode: 'production',
-        profiles: { default: { sandbox: { apiKey: 'sk_test_a' }, production: { apiKey: 'sk_live_b' } } },
-      });
-      expect(resolvePushPlan()).toEqual({ flow: 'production', apiKey: 'sk_live_b', source: 'stored' });
-    });
-    it('sandbox mode resolves the sandbox credential', () => {
-      writeConfig({
-        mode: 'sandbox',
-        profiles: { default: { sandbox: { apiKey: 'sk_test_a' }, production: { apiKey: 'sk_live_b' } } },
-      });
-      expect(resolvePushPlan()).toEqual({ flow: 'sandbox', apiKey: 'sk_test_a', source: 'stored' });
-    });
-    it('keeps the active mode as the flow even with NO credential for it (never silently switches environment)', () => {
-      writeConfig({ mode: 'production', profiles: { default: { sandbox: { apiKey: 'sk_test_a' } } } });
-      expect(resolvePushPlan()).toEqual({ flow: 'production', apiKey: undefined, source: null });
-    });
-    it('an unrecognizable env key falls back to the active mode for the flow', () => {
-      writeConfig({ mode: 'sandbox', profiles: {} });
-      process.env.ABLO_API_KEY = 'not-an-ablo-key';
-      expect(resolvePushPlan()).toEqual({ flow: 'sandbox', apiKey: 'not-an-ablo-key', source: 'env' });
     });
   });
 

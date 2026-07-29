@@ -7,13 +7,13 @@
  * so a browser bundle never pulls in `node:crypto`.
  *
  * A data-plane key looks like
- * `<sk|rk|ek|pk>_<live|test>_<30 base62 chars><6-char base62 CRC32 checksum>`.
- * A control-plane management key is `mk_<body><checksum>` and deliberately has
- * no live/test segment: it cannot access application data. The recognizable prefix lets secret
+ * `<sk|rk|ek|pk>_<30 base62 chars><6-char base62 CRC32 checksum>`.
+ * A control-plane management key is `mk_<body><checksum>`. A key's project and
+ * branch are server-side bindings, not claims encoded in the plaintext. The recognizable prefix lets secret
  * scanners spot a leaked key, and the trailing checksum lets the format reject a
- * mistyped or forged key locally, without a database round-trip. Older keys
- * (roughly a 43-character base64url body with no checksum) still validate by hash
- * and parse here with `checksummed: false`.
+ * mistyped or forged key locally, without a database round-trip. Older
+ * `<kind>_<live|test>_…` keys remain valid compatibility inputs and expose their
+ * legacy environment hint when parsed.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -22,7 +22,6 @@ import {
   KEY_ENVIRONMENTS,
   KEY_PREFIX_ENVIRONMENTS,
   environmentFromKeyPrefix,
-  environmentToKeyPrefix,
   type KeyEnvironment,
   type KeyPrefixEnvironment,
 } from '../environment.js';
@@ -54,9 +53,8 @@ export const API_KEY_KINDS = [
 ] as const;
 export type ApiKeyKind = (typeof API_KEY_KINDS)[number];
 
-// A key's environment is the CREDENTIAL axis, not the plane axis: the format
-// below spells it as one of two prefixes, so a plane name outside those two has
-// no representation here and must not reach `generateApiKey`.
+// Retained as a compatibility vocabulary for old keys and APIs. New keys do not
+// encode an environment: the key row's branch binding is authoritative.
 export const API_KEY_ENVS = KEY_ENVIRONMENTS;
 export type ApiKeyEnv = KeyEnvironment;
 
@@ -83,8 +81,10 @@ const CHECKSUM_LEN = 6;
 /** A new checksummed body is exactly this long and pure base62. */
 const CHECKSUMMED_BODY_LEN = KEY_BODY_LEN + CHECKSUM_LEN;
 
-/** `<sk|rk|ek|pk>_<live|test>_<body>`; the body charset covers base62 as well as the legacy base64url form. */
-const DATA_KEY_RE = /^(sk|rk|ek|pk)_(live|test)_([0-9A-Za-z\-_]+)$/;
+/** Current `<sk|rk|ek|pk>_<body>` spelling. */
+const DATA_KEY_RE = /^(sk|rk|ek|pk)_([0-9A-Za-z\-_]+)$/;
+/** Compatibility spelling used before branches became the routing boundary. */
+const LEGACY_DATA_KEY_RE = /^(sk|rk|ek|pk)_(live|test)_([0-9A-Za-z\-_]+)$/;
 /** `mk_<body>`; management credentials have no data livemode segment. */
 const MANAGEMENT_KEY_RE = /^(mk)_([0-9A-Za-z\-_]+)$/;
 const BASE62_RE = /^[0-9A-Za-z]+$/;
@@ -142,7 +142,7 @@ export interface ParsedApiKey {
   /** The original plaintext. */
   raw: string;
   kind: ApiKeyKind;
-  /** Null for `mk_`, which has no data-plane livemode. */
+  /** Legacy hint for old `_live_`/`_test_` keys; null for all current keys. */
   env: ApiKeyEnv | null;
   /** The random body + checksum after the recognizable prefix. */
   body: string;
@@ -161,15 +161,16 @@ function bodyIsChecksummed(body: string): boolean {
  * `checksummed: false` and is left for the server to validate by hash.
  */
 export const apiKeySchema = z.string().transform((raw, ctx): ParsedApiKey => {
-  const dataMatch = DATA_KEY_RE.exec(raw);
+  const legacyDataMatch = LEGACY_DATA_KEY_RE.exec(raw);
+  const dataMatch = legacyDataMatch ? null : DATA_KEY_RE.exec(raw);
   const managementMatch = MANAGEMENT_KEY_RE.exec(raw);
-  if (!dataMatch && !managementMatch) {
+  if (!legacyDataMatch && !dataMatch && !managementMatch) {
     ctx.addIssue({ code: 'custom', message: 'not a valid Ablo API key format' });
     return z.NEVER;
   }
-  const prefix = dataMatch?.[1] ?? managementMatch?.[1];
-  const env = dataMatch?.[2];
-  const body = dataMatch?.[3] ?? managementMatch?.[2];
+  const prefix = legacyDataMatch?.[1] ?? dataMatch?.[1] ?? managementMatch?.[1];
+  const env = legacyDataMatch?.[2];
+  const body = legacyDataMatch?.[3] ?? dataMatch?.[2] ?? managementMatch?.[2];
   const kind = prefix === undefined ? undefined : KIND_BY_PREFIX[prefix];
   // Unreachable on a KEY_RE match (all three groups are non-optional and the
   // prefix alternation is exactly the KIND_BY_PREFIX key set) — narrows the
@@ -187,9 +188,7 @@ export const apiKeySchema = z.string().transform((raw, ctx): ParsedApiKey => {
     raw,
     kind,
     env:
-      kind === 'management'
-        ? null
-        : environmentFromKeyPrefix(env as KeyPrefixEnvironment),
+      env === undefined ? null : environmentFromKeyPrefix(env as KeyPrefixEnvironment),
     body,
     checksummed,
   };
@@ -207,10 +206,8 @@ export function parseApiKey(raw: string): ParsedApiKey | null {
  * Read the environment off a STORED display prefix (`keyPrefix`, the first 12
  * chars — `rk_test_abcd`), rather than off a full plaintext key.
  *
- * A key row records its environment nowhere but its prefix, so this is how a
- * server-side flow that only has the row — rotation, most importantly — recovers
- * the credential's own mode. Returns null when the prefix is not a recognizable
- * key spelling, so callers can fail closed rather than fall back to a default.
+ * Current keys return null because routing comes from their persisted branch.
+ * This helper exists only while stored legacy prefixes remain in circulation.
  */
 export function environmentFromStoredKeyPrefix(prefix: string): KeyEnvironment | null {
   const spelling = /^(?:sk|rk|ek|pk)_([a-z]+)_/.exec(prefix)?.[1];
@@ -220,13 +217,19 @@ export function environmentFromStoredKeyPrefix(prefix: string): KeyEnvironment |
 
 /** True when the key uses the new checksummed format (regardless of validity). */
 export function isChecksummedKey(raw: string): boolean {
-  const body = DATA_KEY_RE.exec(raw)?.[3] ?? MANAGEMENT_KEY_RE.exec(raw)?.[2];
+  const body =
+    LEGACY_DATA_KEY_RE.exec(raw)?.[3] ??
+    DATA_KEY_RE.exec(raw)?.[2] ??
+    MANAGEMENT_KEY_RE.exec(raw)?.[2];
   return body !== undefined && bodyIsChecksummed(body);
 }
 
 /** Verify the embedded checksum. Meaningful only for checksummed-format keys. */
 export function keyChecksumMatches(raw: string): boolean {
-  const body = DATA_KEY_RE.exec(raw)?.[3] ?? MANAGEMENT_KEY_RE.exec(raw)?.[2];
+  const body =
+    LEGACY_DATA_KEY_RE.exec(raw)?.[3] ??
+    DATA_KEY_RE.exec(raw)?.[2] ??
+    MANAGEMENT_KEY_RE.exec(raw)?.[2];
   if (body === undefined || !bodyIsChecksummed(body)) return false;
   return checksum6(raw.slice(0, -CHECKSUM_LEN)) === body.slice(KEY_BODY_LEN);
 }
@@ -234,24 +237,20 @@ export function keyChecksumMatches(raw: string): boolean {
 // ── Mint + hash (node:crypto) ───────────────────────────────────────────
 
 /**
- * Mint a key: `<prefix>_<env>_<body><checksum>`. Returns the plaintext (shown
- * once), its SHA-256 hash (persisted), and the 12-char display prefix.
+ * Mint a branch-bound key: `<prefix>_<body><checksum>`. Returns the plaintext
+ * (shown once), its SHA-256 hash (persisted), and the 12-char display prefix.
+ *
+ * `env` remains in the signature so older callers can upgrade independently,
+ * but it no longer changes the plaintext. The persisted branch binding decides
+ * where the key acts.
  */
 export function generateApiKey(
-  env: ApiKeyEnv | null = 'production',
+  env: ApiKeyEnv | null = null,
   kind: ApiKeyKind = 'secret',
 ): { plaintext: string; hash: string; prefix: string } {
   const body = randomBase62(KEY_BODY_LEN);
-  if (kind === 'management' && env !== null) {
-    throw new Error('management credentials do not have a live/test mode');
-  }
-  if (kind !== 'management' && env === null) {
-    throw new Error(`${kind} credentials require a live/test mode`);
-  }
-  const payload =
-    kind === 'management'
-      ? `${PREFIX_BY_KIND[kind]}_${body}`
-      : `${PREFIX_BY_KIND[kind]}_${environmentToKeyPrefix(env as ApiKeyEnv)}_${body}`;
+  void env;
+  const payload = `${PREFIX_BY_KIND[kind]}_${body}`;
   const plaintext = `${payload}${checksum6(payload)}`;
   return { plaintext, hash: hashApiKey(plaintext), prefix: plaintext.slice(0, 12) };
 }

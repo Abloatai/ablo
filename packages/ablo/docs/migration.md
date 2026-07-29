@@ -13,13 +13,14 @@ change when you upgrade.
 
 | Version | What changed | What to do |
 |---|---|---|
+| **Next** | New keys no longer encode `live`/`test`; branch binding is authoritative | Accept the new `sk_…`/`rk_…`/`pk_…`/`ek_…` spellings. Do not route or authorize from a key prefix. Old `_live_`/`_test_` keys continue to authenticate; rotate them to mint the current form |
 | **0.36.0** | `ttlSeconds` deprecated on the join surfaces in favour of `ttl` | `useJoin({ scope, ttlSeconds: '5m' })` → `useJoin({ scope, ttl: '5m' })`; same for `ParticipantJoinOptions`. Both spellings work until 0.37.0 |
 | **0.35.0** | Synchronous reads moved under `local`, mirroring the async verbs | `get(id)` → `local.get(id)`; `getAll(options)` → `local.list(options)`; `getCount(options)` → `local.count(options)` |
 | **0.35.0** | `causedByTaskId` write option + seven `turn_*` error codes removed | Delete the `causedByTaskId` argument from writes; a branch on `turn_validation_failed` was unreachable and can go with it |
 | **0.34.0** | Presence verb renamed `watch` → `join` | `ablo.<model>.watch(ids)` → `ablo.<model>.join(ids)`; `useWatch` → `useJoin`; the `WatchOptions` / `UseWatchOptions` / `UseWatchReturn` types → `JoinOptions` / `UseJoinOptions` / `UseJoinReturn`; error code `model_watch_not_configured` → `model_join_not_configured` |
 | **0.28.0** | Removed React placeholders that had no working runtime | `usePresence` → `usePeers` or `useJoin`; `useClaim` → `ablo.<model>.claim`; `SyncGroupProvider` / `useSyncGroup` → `useJoin({ scope })` |
 | **0.11.0** | Historical `intent` → `claim` rename | The hook renamed in that release was later removed in 0.28.0. Current code uses `ablo.<model>.claim` or `useJoin` |
-| **0.10.0** | Environment enum renamed `test`/`live` → `sandbox`/`production` | Update code that branches on the environment (e.g. source `mode`): `'test'`→`'sandbox'`, `'live'`→`'production'`. Key prefixes `sk_test_`/`sk_live_` are unchanged |
+| **0.10.0** | Environment enum renamed `test`/`live` → `sandbox`/`production` | Historical: update code that branches on the environment (`'test'`→`'sandbox'`, `'live'`→`'production'`). That release retained `sk_test_`/`sk_live_`; current releases mint mode-free, branch-bound keys |
 | **0.9.2** | `turn` primitive + agent-work `tasks` resource removed | Coordinate with `claim`; mint a scoped session instead of `agent().run()` |
 | **0.9.2** | `intents` deprecated in favor of `claim` | Use `ablo.<model>.claim`; `ablo.intents` is now `@internal` |
 | **0.9.0** | One options object per verb | `update(id, data, opts)` → `update({ id, data, ...opts })` |
@@ -29,6 +30,27 @@ change when you upgrade.
 | **0.6.0** | `subscribe` → `onChange`; `Resource` → `Model` rename | Rename listeners and `ablo.resource()` → `ablo.model()` |
 | **0.5.0** | Intent-handle method renames | `acquire`→`claim`, `acquireOrAwait`→`claimOrWait`, … |
 | **0.3.0** | `<SyncProvider>` / `createAbloContext()` / `withSync` removed | Use the umbrella `<AbloProvider>` |
+
+---
+
+## Next: key spelling follows capability, branch binding follows authority
+
+New runtime credentials have one prefix per capability class:
+
+```diff
+- sk_live_… / sk_test_…
++ sk_…
+```
+
+The same applies to `rk_`, `pk_`, and `ek_`. This does **not** merge branch
+data or weaken production safety. Every key row is still immutably bound to one
+project and one branch, and the server-confirmed `branchRoot` flag distinguishes
+the protected production root from a development child.
+
+Remove code that chooses an endpoint, environment, or confirmation policy by
+matching `_live_` or `_test_`. Use the resolved identity (`ablo whoami` in the
+CLI) instead. Existing suffixed credentials remain valid compatibility inputs,
+so rollout does not require an immediate rotation.
 
 ---
 
@@ -187,14 +209,18 @@ on presence and claim state.
 
 ## 0.10.0: environment enum `sandbox` / `production`; stateless HTTP transport
 
+> Historical migration note: current development uses immutable branches, not a
+> shared sandbox selector. The enum and compatibility fields below remain
+> relevant to integrations written against 0.10, but new applications let the
+> branch-bound credential select the plane.
+
 ### Environment enum rename (the only breaking change)
 
-The canonical environment values are now **`production`** and **`sandbox`** (was
-`live` and `test`). This is a *vocabulary* change at the type/API layer — the
-on-the-wire key prefixes are **unchanged**: keys are still `sk_test_…` /
-`sk_live_…` and parse exactly as before. What changed is the enum you see in
-code: `Environment`, the source-handler `mode` field, and `ApiKeyEnv` now read
-`production` / `sandbox`.
+In 0.10 the canonical environment values became **`production`** and
+**`sandbox`** (from `live` and `test`). At that release this was only a
+vocabulary change at the type/API layer: on-the-wire keys still used
+`sk_test_…` / `sk_live_…`. Current releases accept those legacy spellings but
+mint mode-free `sk_…` keys whose persisted branch binding is authoritative.
 
 You only need to act if your code branches on the environment value — most
 commonly a Data Source handler keyed on `mode`. The mapping is exactly

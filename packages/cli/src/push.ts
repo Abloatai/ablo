@@ -26,7 +26,7 @@ import { execFileSync } from 'child_process';
 import { confirm, text, isCancel, cancel } from '@clack/prompts';
 import { serializeSchema, schemaHash, type Schema } from '@abloatai/transaction/schema';
 import { apiBaseUrl, DEFAULT_URL } from './controlPlane';
-import { resolveEffectiveApiKey, type EffectiveKeySource } from './config';
+import { ambientEnvKeyNote, resolveMutationApiKey, type ResolvedKeySource } from './config';
 import { resolveTarget, describeMismatches, type ResolvedTarget } from './target';
 import { brand } from './theme';
 import { renderCliError } from './renderError';
@@ -37,6 +37,8 @@ export interface PushArgs {
   exportName: string;
   url: string;
   apiKey: string | undefined;
+  /** Explicit dotenv file selected by the caller for this mutation. */
+  envFile?: string;
   force: boolean;
   renames: { from: string; to: string }[];
   backfills: { model: string; field: string; value: string | number | boolean }[];
@@ -58,6 +60,27 @@ function coerceBackfill(raw: string): string | number | boolean {
 
 export const DEFAULT_SCHEMA_PATH = 'ablo/schema.ts';
 export const DEFAULT_EXPORT = 'schema';
+
+export const PUSH_USAGE = `  ablo push — upload a schema to one confirmed branch
+
+  Usage:
+    npx ablo push
+    npx ablo push --env-file .env.production --yes
+    npx ablo push --dry-run
+
+  Credential:
+    ABLO_API_KEY          Branch-bound sk_ key from the process environment
+    --env-file <path>     Explicitly load ABLO_API_KEY from a dotenv file
+
+  Safety:
+    --yes, -y             Confirm non-interactively (required for the production root)
+    --dry-run, --plan     Show target and schema diff without applying
+    --force               Allow destructive schema changes
+    --rename old:new      Record a model rename
+    --backfill m.f=value  Seed existing rows for a new required field
+
+  The server confirms the key's project and branch. Current keys do not encode
+  live/test state, and push never guesses a branch from their spelling.`;
 
 /** Formats a single migration signal — `{ model, field?, detail, shadowed? }` —
  *  for display. When `shadowed` is present, meaning a removal was diffed against
@@ -134,6 +157,7 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
   let force = false;
   let yes = false;
   let dryRun = false;
+  let envFile: string | undefined;
   const renames: { from: string; to: string }[] = [];
   const backfills: { model: string; field: string; value: string | number | boolean }[] = [];
 
@@ -148,6 +172,9 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
         break;
       case '--url':
         url = argv[++i] ?? url;
+        break;
+      case '--env-file':
+        envFile = argv[++i] ?? envFile;
         break;
       case '--force':
         force = true;
@@ -196,7 +223,18 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
 
   // Strip a trailing slash so `${url}/api/schema` is well-formed.
   url = url.replace(/\/+$/, '');
-  return { schemaPath, exportName, url, apiKey: process.env.ABLO_API_KEY, force, renames, backfills, yes, dryRun };
+  return {
+    schemaPath,
+    exportName,
+    url,
+    apiKey: process.env.ABLO_API_KEY,
+    ...(envFile ? { envFile } : {}),
+    force,
+    renames,
+    backfills,
+    yes,
+    dryRun,
+  };
 }
 
 /** Dynamically import the user's schema module (TS) and return the export. */
@@ -252,7 +290,7 @@ export async function loadSchema(schemaPath: string, exportName: string): Promis
   return schema as Schema;
 }
 
-/** Masked key for error output — `sk_test_CEIM…`, never the full secret. */
+/** Masked key for error output — `sk_CEIM…`, never the full secret. */
 function maskKey(key: string | undefined): string {
   return key ? `${key.slice(0, 12)}…` : '(none)';
 }
@@ -358,9 +396,9 @@ function printPlan(local: Map<string, string>, remote: RemoteSchema | null): voi
 
 /**
  * Pre-flight gate run after the banner + plan, before the write. Encodes the
- * sandbox/production separation: sandbox confirms interactively (and proceeds
- * silently when not a TTY, so the dev/CI loop never hangs); production
- * requires a typed confirmation (TTY) or an explicit `--yes` (CI).
+ * child/root separation: a child confirms interactively (and proceeds silently
+ * when not a TTY); the production root requires a typed confirmation (TTY) or
+ * an explicit `--yes` (CI).
  *
  * Deliberately NO git gate: Ablo blocks only on what it is authoritative
  * about — the DESTINATION (the typed project-name confirmation below). Whether
@@ -370,8 +408,22 @@ function printPlan(local: Map<string, string>, remote: RemoteSchema | null): voi
  * Calls `process.exit(1)` on refusal/cancel; returns when clear to apply.
  */
 async function confirmPush(args: PushArgs, target: ResolvedTarget): Promise<void> {
-  const env = target.confirmed?.environment ?? target.keyEnv;
-  const isProd = env === 'production';
+  const confirmedRoot = target.confirmed?.branchRoot;
+  const legacyEnv = target.keyEnv;
+  if (confirmedRoot === undefined && legacyEnv === null) {
+    console.error(
+      `  ${pc.red('✗')} Refusing to deploy because the server did not confirm which branch this key targets.`,
+    );
+    console.error(
+      pc.dim(
+        `    Current ${pc.bold('sk_')} keys do not encode live/test state. Check connectivity with ` +
+          `${pc.bold('ablo whoami')} and retry; the CLI will not guess for a write.`,
+      ),
+    );
+    process.exit(1);
+    return;
+  }
+  const isProd = confirmedRoot ?? legacyEnv === 'production';
   const tty = Boolean(process.stdout.isTTY && process.stdin.isTTY);
 
   if (isProd && !args.yes) {
@@ -409,10 +461,13 @@ async function confirmPush(args: PushArgs, target: ResolvedTarget): Promise<void
     return;
   }
 
-  // Sandbox: confirm interactively; proceed silently when not a TTY so the dev
-  // loop / scripted sandbox deploys don't hang on stdin.
+  // Child branch: confirm interactively; proceed silently when not a TTY so the
+  // dev loop and scripted branch deploys do not hang on stdin.
   if (!isProd && !args.yes && tty) {
-    const ok = await confirm({ message: `Apply to ${pc.bold('sandbox')}?` });
+    const branch = target.confirmed?.branchId;
+    const ok = await confirm({
+      message: `Apply to development branch${branch ? ` ${pc.bold(branch)}` : ''}?`,
+    });
     if (isCancel(ok) || !ok) {
       cancel('Aborted.');
       process.exit(1);
@@ -435,15 +490,16 @@ function printPushTarget(
   schema: { path: string; modelCount: number; hash: string },
 ): void {
   const confirmed = target.confirmed;
-  // Environment: the server's, else the key prefix. This is the real target,
-  // so a key whose environment disagrees with the CLI mode is flagged below.
-  const env = confirmed?.environment ?? target.keyEnv;
-  const envLabel =
-    env === 'production'
-      ? pc.bold('production')
-      : env === 'sandbox'
-        ? pc.bold('sandbox')
-        : pc.yellow('unknown env');
+  const branchLabel =
+    confirmed?.branchRoot === true
+      ? pc.bold('production root')
+      : confirmed?.branchId
+        ? `${pc.bold('branch')} ${pc.bold(confirmed.branchId)}`
+        : target.keyEnv === 'production'
+          ? `${pc.bold('production root')} ${pc.yellow('(legacy key; unconfirmed)')}`
+          : target.keyEnv === 'sandbox'
+            ? `${pc.bold('development branch')} ${pc.yellow('(legacy key; unconfirmed)')}`
+            : pc.red('unknown branch');
   // Project + org: server-confirmed when available, otherwise the local
   // preference with an explicit "unconfirmed" marker.
   let projectLabel: string;
@@ -468,7 +524,7 @@ function printPushTarget(
 
   // ONE statement of the target — never two truths on this line. A divergence
   // from the saved workspace selection is the note below, not a parenthetical.
-  console.log(`\n  ${brand('ablo')} ${pc.dim('push')} ${pc.dim('→')} ${envLabel}`);
+  console.log(`\n  ${brand('ablo')} ${pc.dim('push')} ${pc.dim('→')} ${branchLabel}`);
   if (confirmed?.organizationId) console.log(`  ${pc.dim('org')}      ${pc.dim(confirmed.organizationId)}`);
   console.log(`  ${pc.dim('project')}  ${projectLabel}`);
   console.log(`  ${pc.dim('target')}   ${pc.dim(target.url)}`);
@@ -491,7 +547,7 @@ function warnMismatches(target: ResolvedTarget): { projectDrift: boolean } {
 }
 
 /** Human label for where the resolved key came from. */
-function describeKeySource(source: EffectiveKeySource): string {
+function describeKeySource(source: ResolvedKeySource): string {
   switch (source) {
     case 'env':
       return 'ABLO_API_KEY';
@@ -501,6 +557,8 @@ function describeKeySource(source: EffectiveKeySource): string {
       return '.env';
     case 'stored':
       return 'ablo login';
+    case 'explicit-file':
+      return '--env-file';
   }
 }
 
@@ -513,29 +571,38 @@ export async function push(argv: readonly string[]): Promise<void> {
     process.exit(1);
   }
 
-  // Resolve the key through the one shared chain, `resolveEffectiveApiKey`:
-  // ABLO_API_KEY from the process environment (set by parsePushArgs), then
-  // `.env.local`, then `.env`, then the credential stored by `ablo login`. Run
-  // through `npx`, this command has no framework to load env files, so a key a
-  // developer put in `.env.local` — the natural place — would be invisible to
-  // the process environment without this step. `keySource` records where the key
-  // came from so a 403 can say exactly which key it used and where it was found.
-  let keySource: EffectiveKeySource = 'env';
+  if (args.envFile) {
+    try {
+      process.loadEnvFile(args.envFile);
+    } catch (error) {
+      throw new AbloValidationError(
+        `could not load --env-file ${args.envFile}: ${error instanceof Error ? error.message : String(error)}`,
+        { code: 'cli_invalid_arguments' },
+      );
+    }
+    args.apiKey = process.env.ABLO_API_KEY;
+  }
+
+  // Mutations use the process environment, an explicitly selected env file, or
+  // a legacy stored credential. An ambient dotenv file never silently chooses
+  // the branch.
+  let keySource: ResolvedKeySource = 'env';
   if (!args.apiKey) {
-    const resolved = resolveEffectiveApiKey();
-    args.apiKey = resolved.key;
-    keySource = resolved.source ?? 'stored';
+    args.apiKey = resolveMutationApiKey();
+    keySource = args.apiKey ? 'stored' : 'env';
+  } else if (args.envFile) {
+    keySource = 'explicit-file';
   }
 
   if (!args.apiKey) {
-    // Point at both environments, since either kind of key would work here.
-    // No mode talk: with no key there is no target, and the key is what picks
-    // one (sk_test_ → sandbox, sk_live_ → production).
+    const ambient = ambientEnvKeyNote();
     console.error(
       pc.red(`  No API key.`) +
         pc.dim(
-          ` Run ${pc.bold('npx ablo login')} — or set ${pc.bold('ABLO_API_KEY')} ` +
-            `(${pc.bold('sk_test_')} = sandbox; ${pc.bold('sk_live_')} = production).`,
+          ` Run ${pc.bold('ablo login')}, or set ${pc.bold('ABLO_API_KEY')} to a branch-bound ${pc.bold('sk_')} credential.` +
+            (ambient
+              ? ` A project env file contains one; select it explicitly with ${pc.bold('npx ablo push --env-file .env.local')}.`
+              : ''),
         ),
     );
     process.exit(1);
@@ -545,8 +612,8 @@ export async function push(argv: readonly string[]): Promise<void> {
   const hash = schemaHash(schema);
 
   // Resolve the true target from the key: the server-confirmed org, project, and
-  // environment it acts on, reconciled against the local `ablo projects use` /
-  // stored environment preference. Everything shown and confirmed below reads from
+  // branch it acts on, reconciled against the local `ablo projects use`
+  // preference. Everything shown and confirmed below reads from
   // this one resolution, so the banner can't say one thing while the push does
   // another.
   const target = await resolveTarget({ url: args.url, apiKey: args.apiKey, keySource });
@@ -566,7 +633,7 @@ export async function push(argv: readonly string[]): Promise<void> {
   // "wrong project" surprise happens here, before the write, not after.
   warnMismatches(target);
 
-  // Git state — warn about a deploy that won't match a commit (a warning on sandbox, not a block).
+  // Git state — warn about a deploy that won't match a commit; never block it.
   const git = schemaGitState(args.schemaPath);
   if (git?.dirty) {
     const what = git.untracked ? 'is untracked (not committed)' : 'has uncommitted changes';
@@ -578,8 +645,8 @@ export async function push(argv: readonly string[]): Promise<void> {
     return;
   }
 
-  // Sandbox/production separation + confirmation (exits on refusal). On
-  // production this now requires typing the key's real project name.
+  // Child/root branch separation + confirmation (exits on refusal). On the
+  // production root this requires typing the key's real project name.
   await confirmPush(args, target);
 
   const { ok: resOk, status, body, bodyText } = await pushSchema(schema, args);
@@ -689,7 +756,7 @@ export async function push(argv: readonly string[]): Promise<void> {
     const serverMsg = (body.message ?? body.reason) as string | undefined;
     console.error(pc.red(`  Forbidden${code ? ` [${code}]` : ''}: ${serverMsg ?? 'permission denied'}`));
     // Name which key the push used and where it came from, since the common
-    // confusion is a stored sandbox login key being used instead of a production
+    // confusion is a legacy stored runtime key being used instead of the intended
     // key placed in `.env.local`.
     console.error(pc.dim(`  Push used ${pc.bold(maskKey(args.apiKey))} from ${describeKeySource(keySource)}.`));
     if (code === 'database_role_cannot_enforce_rls') {
@@ -724,7 +791,7 @@ export async function push(argv: readonly string[]): Promise<void> {
     } else if (code === 'schema_provisioning_forbidden') {
       // The key authenticated and passed the schema:push gate — then the target
       // database refused the CREATE TABLE DDL (Postgres 42501). The engine's
-      // runtime role deliberately can't run DDL, so this is the environment's
+      // runtime role deliberately can't run DDL, so this is the branch's
       // storage shape, not a key scope: a different API key changes nothing
       // about what the database permits.
       console.error(
@@ -732,17 +799,16 @@ export async function push(argv: readonly string[]): Promise<void> {
           `  This is not a key problem — the push was authorized, but the target database refused ` +
             `to let the engine create tables (Postgres 42501). On the replication read path Ablo ` +
             `never runs DDL: register your database as a data source with ${pc.bold('npx ablo connect register')}, ` +
-            `and pushes to that environment record the schema as metadata only — no tables are created anywhere.`,
+            `and pushes to that branch record the schema as metadata only — no tables are created anywhere.`,
         ),
       );
     } else if (args.apiKey != null && classifyCredentialKind(args.apiKey) === 'restricted') {
-      // The production key minted by `ablo login` is a restricted, observe-only
-      // key (`rk_`) by design, so name a key that can push instead of leaving a
-      // dead end.
+      // A restricted key may authenticate without carrying schema:push. Name
+      // the branch-bound secret key that can push instead of leaving a dead end.
       console.error(
         pc.dim(
-          `  Schema pushes need a SECRET key: ${pc.bold('sk_test_')} (sandbox dev loop) or a dashboard ` +
-            `${pc.bold('sk_live_')} (production deploy: ${pc.bold('ABLO_API_KEY=sk_live_… npx ablo push')}).`,
+          `  Schema pushes need a branch-bound SECRET ${pc.bold('sk_')} key. ` +
+            `Use ${pc.bold('ablo dev')} for a development child or ${pc.bold('ablo push')} with a root-bound key for production.`,
         ),
       );
     } else {
@@ -753,16 +819,15 @@ export async function push(argv: readonly string[]): Promise<void> {
         pc.dim(
           `  This key isn't authorized to push schema (needs ${pc.bold('schema:push')}). ` +
             (keySource === 'stored'
-              ? `It's your stored ${pc.bold('ablo login')} sandbox key — a key in ${pc.bold('.env.local')} ` +
-                `or ${pc.bold('ABLO_API_KEY')} takes precedence, so put a schema:push key there ` +
-                `(sandbox ${pc.bold('sk_test_')} or production ${pc.bold('sk_live_')}) and re-push. `
-              : `Use a schema:push key — a sandbox ${pc.bold('sk_test_')} or production ${pc.bold('sk_live_')}. `) +
+              ? `The stored login is management-only. Put a branch-bound ${pc.bold('sk_')} key with ` +
+                `${pc.bold('schema:push')} in ${pc.bold('.env.local')} or ${pc.bold('ABLO_API_KEY')} and retry. `
+              : `Use a branch-bound ${pc.bold('sk_')} key with ${pc.bold('schema:push')}. `) +
             `Manage keys at https://abloatai.com`,
         ),
       );
     }
   } else {
-    // Everything the server rejects arrives as the Stripe-shaped envelope, so
+    // Everything the server rejects arrives as the standard error envelope, so
     // rebuild the typed error and let the ONE renderer lay it out — code, docs
     // link, recovery hint, request id. Printing `body.message` alone threw all
     // of that away: a stale plane registration reached the terminal as a bare

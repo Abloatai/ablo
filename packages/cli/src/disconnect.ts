@@ -1,10 +1,9 @@
 /**
  * `ablo connect deregister` — remove the active project's data-source registration so
- * Ablo stops reading and writing that database. Scoped to one plane: the active
- * project (`ablo projects use`) in the key's environment (its sk_test_/sk_live_
- * prefix), resolved and shown before the destructive call so a production
- * plane is never disconnected by surprise. The server derives the plane from the
- * key, so a key can only disconnect its own org/project/environment/sandbox. The
+ * Ablo stops reading and writing that database. Scoped to the project and branch
+ * persisted on the key, resolved and shown before the destructive call so the
+ * production root is never disconnected by surprise. A key can only disconnect
+ * its own branch. The
  * database is untouched; the registration and Ablo's replication state go away —
  * with one exception the server reports and this command must repeat: a
  * replication slot it could not release stays on the database, holding
@@ -26,21 +25,31 @@ import {
   datasourceDisconnectedResponseSchema,
   type DatasourceDisconnectedResponse,
 } from '@abloatai/transaction/wire';
-import { resolveEffectiveApiKey, type EffectiveKeySource } from './config';
+import { resolveMutationApiKey, type ResolvedKeySource } from './config';
+import { readProjectEnvVariable } from './dbRole';
 import { apiBaseUrl, requestControlPlane, type ControlPlaneFetch } from './controlPlane';
 import { brand } from './theme';
 import { resolveTarget, describeMismatches, type ResolvedTarget } from './target';
 
-/** The (project, environment) plane a disconnect will act on, for display. */
-function planeLabel(target: ResolvedTarget): { project: string; env: string } {
+/** The (project, branch) plane a disconnect will act on, for display. */
+function planeLabel(target: ResolvedTarget): { project: string; branch: string } {
   const confirmed = target.confirmed;
   const project =
     confirmed?.project?.name ??
     confirmed?.project?.slug ??
     confirmed?.projectId ??
     'the default project';
-  const env = confirmed?.environment ?? target.keyEnv ?? 'unknown environment';
-  return { project, env };
+  const branch =
+    confirmed?.branchRoot === true
+      ? 'production root'
+      : confirmed?.branchId
+        ? `branch ${confirmed.branchId}`
+        : target.keyEnv === 'production'
+          ? 'production root (legacy key; unconfirmed)'
+          : target.keyEnv === 'sandbox'
+            ? 'development branch (legacy key; unconfirmed)'
+            : 'unknown branch';
+  return { project, branch };
 }
 
 /** What a deregistration did, typed for rendering and for tests. */
@@ -76,7 +85,7 @@ export async function deregisterDataSource(opts: {
     if (err instanceof AbloError && err.code === 'entity_not_found') return { removed: false };
     if (err instanceof AbloError && err.code === 'forbidden') {
       throw new AbloPermissionError(
-        `${err.message}. Disconnecting needs a secret key (sk_…) — run \`ablo login\` to store one.`,
+        `${err.message}. Disconnecting needs a branch-bound secret key (sk_…).`,
         {
           code: 'forbidden',
           ...(err.requestId !== undefined ? { requestId: err.requestId } : {}),
@@ -92,7 +101,7 @@ export async function deregisterDataSource(opts: {
 function renderDisconnected(
   response: DatasourceDisconnectedResponse,
   project: string,
-  envLabel: string
+  branchLabel: string
 ): void {
   const parts: string[] = [];
   if (response.cleared.direct) parts.push('the direct database registration');
@@ -103,7 +112,7 @@ function renderDisconnected(
   }
   const what = parts.length > 0 ? parts.join(' and ') : 'the data source';
   console.log(
-    `\n  ${pc.green('✓')} Disconnected ${what} for ${pc.bold(project)} in ${envLabel}. Reconnect with ${pc.bold('ablo connect')}.\n`
+    `\n  ${pc.green('✓')} Disconnected ${what} for ${pc.bold(project)} on ${branchLabel}. Reconnect with ${pc.bold('ablo connect')}.\n`
   );
   const slot = response.replication_slot;
   if (slot && !slot.released) {
@@ -117,15 +126,29 @@ function renderDisconnected(
       }`
     );
     if (slot.detail) console.log(pc.dim(`      ${slot.detail}`));
-    if (slot.remove_with) console.log(`      ${pc.bold(slot.remove_with)}`);
+    console.log(
+      pc.dim(
+        `      Moving this database to another branch? Keep the roles and slot; run ` +
+          `${pc.bold('ablo connect rotate --env-file .env.local --yes')} to re-key and reuse them.`,
+      ),
+    );
+    if (slot.remove_with) {
+      console.log(pc.dim('      Not reconnecting this database? Remove the unused slot in your SQL editor:'));
+      console.log(`      ${pc.bold(slot.remove_with)}`);
+    }
     console.log();
   }
 }
 
 export async function disconnect(argv: readonly string[]): Promise<void> {
   let skipConfirm = false;
-  for (const arg of argv) {
+  let envFile: string | undefined;
+  let keyEnv: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
     if (arg === '--yes' || arg === '-y') skipConfirm = true;
+    else if (arg === '--env-file') envFile = argv[++i];
+    else if (arg === '--key-env') keyEnv = argv[++i];
     else if (arg === '--help' || arg === '-h') {
       console.log(DISCONNECT_USAGE);
       return;
@@ -141,12 +164,38 @@ export async function disconnect(argv: readonly string[]): Promise<void> {
     `\n  ${brand('ablo')} ${pc.dim('connect deregister')}  ${pc.dim("remove this project's data source")}\n`
   );
 
-  const resolved = resolveEffectiveApiKey();
+  if (envFile) {
+    try {
+      process.loadEnvFile(envFile);
+    } catch (error) {
+      throw new AbloValidationError(
+        `could not load --env-file ${envFile}: ${error instanceof Error ? error.message : String(error)}`,
+        { code: 'cli_invalid_arguments' },
+      );
+    }
+  }
+  const selected = keyEnv ? readProjectEnvVariable(keyEnv) : null;
+  if (keyEnv && !selected) {
+    throw new AbloAuthenticationError(
+      `No value named ${keyEnv} was found in the process environment, .env.local, or .env.`,
+      { code: 'cli_api_key_missing' },
+    );
+  }
+  const resolved = selected
+    ? { key: selected.value, source: selected.source }
+    : {
+        key: resolveMutationApiKey(),
+        source: envFile
+          ? ('explicit-file' as const)
+          : process.env.ABLO_API_KEY
+            ? ('env' as const)
+            : ('stored' as const),
+      };
   const apiKey = resolved.key;
-  const keySource: EffectiveKeySource = resolved.source ?? 'stored';
+  const keySource: ResolvedKeySource = resolved.source ?? 'stored';
   if (!apiKey) {
     throw new AbloAuthenticationError(
-      'Disconnecting needs an API key, and none was found. Run `ablo login` (or set ABLO_API_KEY), then re-run `ablo connect deregister`.',
+      'Disconnecting needs a branch-bound sk_ key. Set ABLO_API_KEY, pass `--env-file .env.local`, or select a named recovery key with `--key-env <NAME>`.',
       { code: 'cli_api_key_missing' }
     );
   }
@@ -158,8 +207,8 @@ export async function disconnect(argv: readonly string[]): Promise<void> {
   // resolution `ablo push` shows, so the banner can't say one plane while the
   // disconnect hits another.
   const target = await resolveTarget({ url: apiUrl, apiKey, keySource });
-  const { project, env } = planeLabel(target);
-  const envLabel = env === 'production' ? pc.yellow(env) : pc.dim(env);
+  const { project, branch } = planeLabel(target);
+  const branchLabel = target.confirmed?.branchRoot ? pc.yellow(branch) : pc.dim(branch);
 
   // Surface a saved-selection divergence before the call, not after — this is
   // the moment to catch acting on the wrong plane.
@@ -174,7 +223,7 @@ export async function disconnect(argv: readonly string[]): Promise<void> {
       );
     }
     const proceed = await confirm({
-      message: `Disconnect the data source for ${pc.bold(project)} in ${envLabel}?`,
+      message: `Disconnect the data source for ${pc.bold(project)} on ${branchLabel}?`,
       initialValue: true,
     });
     if (isCancel(proceed) || !proceed) {
@@ -185,10 +234,10 @@ export async function disconnect(argv: readonly string[]): Promise<void> {
 
   const outcome = await deregisterDataSource({ apiKey });
   if (!outcome.removed) {
-    console.log(pc.dim(`  No data source registered for ${project} in ${env}.\n`));
+    console.log(pc.dim(`  No data source registered for ${project} on ${branch}.\n`));
     return;
   }
-  renderDisconnected(outcome.response, project, envLabel);
+  renderDisconnected(outcome.response, project, branchLabel);
 }
 
 export const DISCONNECT_USAGE = `${brand('ablo')} connect deregister  ${pc.dim("remove this project's data source")}
@@ -196,8 +245,9 @@ export const DISCONNECT_USAGE = `${brand('ablo')} connect deregister  ${pc.dim("
   Usage
     npx ablo connect deregister          Remove the active project's data source (confirms first)
     npx ablo connect deregister --yes    Skip the confirmation
+    npx ablo connect deregister --key-env OLD_KEY_NAME --yes
 
-  Acts on one plane — the active project (${pc.bold('ablo projects use')}) in the key's
-  environment (its ${pc.bold('sk_test_')}/${pc.bold('sk_live_')} prefix), shown before it runs. Removes the registration and
+  Acts on exactly the server-confirmed project and branch bound to the key, shown
+  before it runs. Removes the registration and
   Ablo's replication state for that plane, so Ablo stops reading and writing the
   database. Reconnect with ${pc.bold('ablo connect')}.`;

@@ -4,20 +4,20 @@
 
 A **project** is the isolation unit inside your organization — the shape you
 know from Neon or Supabase. Each app you build gets its own project, and each
-project gets its own schema, its own sandbox/production data planes, and its
-own API keys. Two teams in one org can ship two apps that never see each
+project gets its own root and child branches, schemas, data planes, and API
+keys. Two teams in one org can ship two apps that never see each
 other's models, keys, or rows.
 
 ```text
 organization
 ├── project: default          ← every org has one; pre-project apps live here
-│   ├── schema (sandbox + production artifacts)
-│   ├── data planes (registered databases)
-│   └── keys (sk_/rk_/ek_/pk_)
+│   ├── production root
+│   ├── development/preview branches
+│   └── branch-bound schema, data plane, and credentials
 └── project: my-app           ← npx ablo init creates this for a new app
-    ├── schema
-    ├── data planes
-    └── keys
+    ├── production root
+    ├── development/preview branches
+    └── branch-bound schema, data plane, and credentials
 ```
 
 ## The default project
@@ -40,19 +40,23 @@ Schema pushes, database registrations, reads, and writes all act on the
 
 - `npx ablo push` activates the schema for the pushing key's project — it
   can never demote another project's schema.
-- Registering a database (`DATABASE_URL`) attaches it to the key's project
-  and environment.
+- Registering a database (`DATABASE_URL`) attaches it to the key's project and
+  immutable branch.
 - A write or read against a model that belongs to **another** project in
   your org fails with a typed `project_scope_denied` — never a silent empty
   result, and never the misleading "unknown model, run ablo push".
 
-## Sandboxes belong to a project
+## Branches belong to a project
 
-Production is singular per project; sandboxes are many. Each sandbox of a
-project gets its **own data plane** (its own registered dev database) but
-they all share the project's **one** sandbox schema — pushing the same
-schema from a second sandbox doesn't create a second artifact, it just
-provisions that sandbox's database.
+Production is the protected root branch; development and preview branches are
+children. Each branch has its own rows, active schema artifact, claims, log,
+credentials, and optional registered database. A child copies the parent's
+active schema when created and owns its history afterward, so a feature-branch
+push cannot change a sibling or production.
+
+`ablo dev` derives a child from Git and mints an expiring `sk_` credential
+bound to its immutable branch id. Production runtimes use `sk_` bound to
+the root. There is no shared sandbox schema and no runtime environment switch.
 
 ## CLI
 
@@ -68,15 +72,16 @@ npx ablo projects use default      # back to the org default
 npx ablo status                    # shows the active project
 ```
 
-The active project is a local targeting preference (stored next to `mode` in
-your CLI config): new keys you mint pick it up. It never changes what an
-existing key can reach — a key's project scope is decided server-side at
-mint.
+The active project is a local targeting preference in your CLI config: new
+management and branch credentials you mint pick it up. It never changes what
+an existing key can reach — project and branch scope are decided server-side at
+mint. Use `npx ablo whoami` to confirm the exact target of the active
+credential.
 
 ## API
 
-Projects are a Stripe-shaped control-plane resource, authenticated with a
-secret (`sk_`) key:
+Projects are a control-plane resource authenticated with a management (`mk_`)
+key:
 
 ```bash
 curl https://api.abloatai.com/api/v1/projects \

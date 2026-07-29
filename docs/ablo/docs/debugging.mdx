@@ -18,14 +18,30 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, debug: true });
 
 ## CLI environment and target
 
-The CLI checks an explicit credential in this order: exported `ABLO_API_KEY`,
-`.env.local`, `.env`, then the key saved by `ablo login`. An exported value wins
-over project files. If a stale shell export (for example `OPENAI_API_KEY`) is
-shadowing a value in `.env.local`, restart the shell or unset the stale variable.
+`push`, `dev`, and `status` follow the application-facing chain: exported
+`ABLO_API_KEY`, `.env.local`, `.env`, then the stored credential. An exported
+value wins over project files. Connect-family administration is intentionally
+stricter: it reads only the process environment and stored login, so an ambient
+file cannot silently choose the plane a database mutation acts on. When a file
+contains the missing key, the refusal names that rule and the remedy.
 
-When a command appears to use the wrong plane or project, run `ablo status`.
-It reports the credential source and, when reachable, the server-confirmed
-project and environment; that confirmed target is authoritative.
+Use the two diagnostics according to the question:
+
+```bash
+npx ablo whoami    # strict: which project + branch does this credential target?
+npx ablo status    # broad: target, database, schema, drift, and write blockers
+```
+
+For an old, CI, or recovery key stored under another variable name:
+
+```bash
+npx ablo whoami --key-env ABLO_API_KEY_LIVE
+```
+
+That explicit lookup checks the process, `.env.local`, and `.env` for the named
+variable, keeps the value out of argv, and either returns a server-confirmed
+identity or fails non-zero. Do not infer that a key is invalid from an older
+CLI's generic identity error; rerun with the current CLI.
 
 `debug: true` is the simple switch. For finer control use `logLevel`, or set it without touching code via the `ABLO_LOG_LEVEL` environment variable.
 

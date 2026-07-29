@@ -67,6 +67,7 @@ await ablo.documents.track({ id: 's-1' });
 | Who else is working here? | `join`, then `room.peers` and `room.claims` | As participants come and go, on the socket |
 | Did the premise for **this** write move? | `reads` on the write | On that write's receipt, before it applies |
 | Has anything I read moved since? | `track` | On your next commit's receipt |
+| Stop me writing if it has | `track` with `onStale: 'reject'` | Refuses that commit, at the chokepoint |
 
 Two distinctions do most of the work here.
 
@@ -234,10 +235,51 @@ await ablo.documents.update({
 ```
 
 So `reads` is the premise for the commit in hand; `track` is a standing
-subscription that outlives it. Both speak the same notification vocabulary, and
-both leave the resolution to you — the engine reports that the target moved and
-lets the actor decide what that means. Delivery is on your next commit's receipt;
-a track does not yet push out of band between commits.
+subscription that outlives it. Both speak the same notification vocabulary.
+Delivery is on your next commit's receipt; a track does not yet push out of band
+between commits.
+
+### Reporting, or gating: `onStale`
+
+A track says what a moved belief should do to your **next write**. Same enum the
+`reads` premise carries, minus the one mode that cannot apply:
+
+```ts
+await ablo.documents.track({ id: 's-1' });                        // notify (default)
+await ablo.documents.track({ id: 's-1', onStale: 'reject' });     // gate
+```
+
+- **`notify`** — the change rides your next receipt and the commit proceeds. You
+  decide what it means.
+- **`reject`** — your next commit is **refused** while that belief is stale, even
+  if it writes an unrelated row. The gate is on what you *know*, not on what you
+  are touching.
+
+`reject` is for an actor that must not act on a stale picture — an agent that
+read a row, reasoned for minutes, and is about to write based on what it
+believed. Ablo enforces it at the commit chokepoint, so it is a guarantee rather
+than a convention: the write cannot land.
+
+The gate takes a key. It does **not** reopen on its own, because an agent that
+retried blindly would land exactly the write `reject` was asked to prevent. You
+re-read, then re-register the track to say so:
+
+```ts
+try {
+  await ablo.tasks.update({ id, data });
+} catch (err) {
+  if (err.code === 'stale_context') {
+    const fresh = await ablo.documents.retrieve({ id: 's-1' });   // read
+    await ablo.documents.track({ id: 's-1', onStale: 'reject' }); // acknowledge
+    await ablo.tasks.update({ id, data: reconsider(fresh) });     // now it lands
+  }
+}
+```
+
+A track-only call is never gated, so acknowledging is always reachable.
+
+`overwrite` is not offered: it means "apply my write anyway", and a track guards
+no write of its own to apply.
 
 ---
 

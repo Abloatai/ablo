@@ -33,7 +33,7 @@ Ablo branch
     ├── active schema artifact
     ├── isolated transaction plane
     ├── immutable branch id
-    └── expiring sk_test_ credential
+    └── expiring sk_ credential
               │
               ▼
         gitignored .env.local
@@ -48,6 +48,13 @@ request parameter.
 
 Production is the root branch. Development branches are children; they do not
 inherit production write authority.
+
+The branch workflow replaces a hand-maintained collection of environment keys.
+Your application always reads `ABLO_API_KEY`; `ablo dev` changes which
+branch-bound value sits there. Do not select branches in application code or
+invent `ABLO_STAGING_KEY`/`ABLO_FEATURE_KEY` conventions. See
+[API Keys](/api-keys#start-here-the-normal-workflow) for the complete
+project → branch → credential model.
 
 ## Before the first run
 
@@ -116,7 +123,7 @@ branch.
 ### 3. Exchange for a temporary credential
 
 The stored `mk_` credential authorizes the branch-management call. The server then
-returns a new `sk_test_` credential bound only to the child branch.
+returns a new `sk_` credential bound only to the child branch.
 
 The default lifetime is eight hours:
 
@@ -138,7 +145,7 @@ The temporary credential is written to:
 
 ```dotenv
 # .env.local
-ABLO_API_KEY=sk_test_...
+ABLO_API_KEY=sk_...
 ```
 
 The CLI creates `.env.local` with owner-only permissions when possible and adds
@@ -159,6 +166,12 @@ value before starting the application:
 ```bash
 unset ABLO_API_KEY
 npm run dev
+```
+
+Confirm the branch the resulting key actually targets:
+
+```bash
+npx ablo whoami
 ```
 
 ### 5. Load and push the schema

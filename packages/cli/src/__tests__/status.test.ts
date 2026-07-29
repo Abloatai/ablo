@@ -1,9 +1,7 @@
 /**
- * `ablo status --json` — pins that the diagnostic reports the EFFECTIVE
- * credential through the ONE shared chain (env → .env.local → .env → stored),
- * i.e. exactly what `ablo push` would present. (The four-divergent-chains bug:
- * status used to skip the project env files push reads, so it could report the
- * stored sandbox key while push presented the production key in `.env.local`.)
+ * `ablo status --json` reports the runtime credential the application would
+ * resolve (env → .env.local → .env → legacy stored fallback), including its
+ * provenance.
  *
  * Network calls (ping / schema introspection) go through the jest-setup fetch
  * mock, which rejects — status degrades to `reachable: false` / `schema: null`,
@@ -17,12 +15,11 @@ import { writeConfig } from '../config';
 
 interface StatusJson {
   mode: string;
-  effectiveKey: { prefix: string | null; source: string | null; kind: string | null };
-  push: { flow: string; keyPrefix: string | null; keySource: string | null };
+  runtimeKey: { prefix: string | null; source: string | null; kind: string | null };
   reachable: boolean;
 }
 
-describe('ablo status --json (effective-key provenance)', () => {
+describe('ablo status --json (runtime-key provenance)', () => {
   const OLD_ENV = process.env;
   let dir: string;
   let oldCwd: string;
@@ -33,7 +30,7 @@ describe('ablo status --json (effective-key provenance)', () => {
     process.env = { ...OLD_ENV, ABLO_CONFIG_DIR: dir };
     delete process.env.ABLO_API_KEY;
     delete process.env.ABLO_API_URL;
-    // The effective-key chain reads ./.env.local and ./.env — pin cwd so a
+    // The runtime-key chain reads ./.env.local and ./.env — pin cwd so a
     // real project's env files can never leak into the test.
     oldCwd = process.cwd();
     process.chdir(dir);
@@ -50,7 +47,7 @@ describe('ablo status --json (effective-key provenance)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('reports the .env.local key as the effective credential — the same one push presents', async () => {
+  it('reports the .env.local key as the application runtime credential', async () => {
     writeConfig({
       mode: 'sandbox',
       profiles: { default: { sandbox: { apiKey: 'sk_test_stored' } } },
@@ -60,16 +57,10 @@ describe('ablo status --json (effective-key provenance)', () => {
     await status(['--json']);
 
     const out = JSON.parse(lines.join('\n')) as StatusJson;
-    expect(out.effectiveKey).toEqual({
+    expect(out.runtimeKey).toEqual({
       prefix: 'sk_live_file',
       source: '.env.local',
       kind: 'secret',
-    });
-    // resolvePushPlan agrees: same key, same source, flow named by its prefix.
-    expect(out.push).toEqual({
-      flow: 'production',
-      keyPrefix: 'sk_live_file',
-      keySource: '.env.local',
     });
   });
 
@@ -82,12 +73,11 @@ describe('ablo status --json (effective-key provenance)', () => {
     await status(['--json']);
 
     const out = JSON.parse(lines.join('\n')) as StatusJson;
-    expect(out.effectiveKey).toEqual({
+    expect(out.runtimeKey).toEqual({
       prefix: 'sk_test_stor',
       source: 'stored',
       kind: 'secret',
     });
-    expect(out.push.keySource).toBe('stored');
   });
 
   /**
@@ -105,13 +95,14 @@ describe('ablo status --json (effective-key provenance)', () => {
 
     await status(['--json']);
     const out = JSON.parse(lines.join('\n')) as StatusJson;
-    expect(out.effectiveKey.kind).toBe('restricted');
+    expect(out.runtimeKey.kind).toBe('restricted');
 
     lines = [];
     await status();
     const printed = lines.join('\n');
     expect(printed).toContain('scoped');
-    expect(printed).toContain('sk_live_');
+    expect(printed).toContain('sk_');
+    expect(printed).not.toContain('sk_live_');
   });
 
   /** A secret key is unremarkable, and status stays quiet about it. */

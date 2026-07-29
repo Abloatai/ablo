@@ -47,7 +47,7 @@ import {
 import { probeDirectWriteReadiness, type ConnectArgs } from './connect';
 import { detectPooler, detectProvider, logicalReplicationGuidance } from './dbProvider';
 import { generateRolePassword, rewriteDatabaseUrl, readProjectAdminDatabaseUrl } from './dbRole';
-import { ambientEnvKeyNote, resolveApiKey, resolveManagementKey, getMode } from './config';
+import { ambientEnvKeyNote, resolveMutationApiKey, resolveManagementKey } from './config';
 import { fetchDataSourceState } from './readiness';
 import { DEFAULT_SCHEMA_PATH } from './push';
 import { apiBaseUrl } from './controlPlane';
@@ -199,20 +199,21 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
 
   // Registration needs the project key. Resolve it before touching the database,
   // so we never provision roles we then can't hand to Ablo.
-  const apiKey = resolveApiKey();
+  const apiKey = resolveMutationApiKey();
   if (!apiKey) {
     // `ablo login` stores a MANAGEMENT credential; registering a database needs
-    // a DATA key for the active project and mode. Reporting "not logged in" when
+    // a branch-bound DATA key. Reporting "not logged in" when
     // a login is sitting on disk sends the reader back through the browser to
     // arrive exactly here again, which is the one instruction guaranteed not to
     // work. Tell them which credential is missing, not that they have none.
     const loggedIn = resolveManagementKey() !== undefined;
     const ambient = ambientEnvKeyNote();
+    const retry = `npx ablo connect ${rotating ? 'rotate' : 'apply'} --env-file .env.local --yes`;
     throw new AbloAuthenticationError(
       loggedIn
-        ? `You are logged in, but this project has no ${getMode()} data key.\n\n` +
-          `The key is looked for in ABLO_API_KEY, then in the credential stored for the active project in the active mode (${getMode()}). Logging in stores a management credential, which administers the project but cannot register a database — and a key for another mode is never used implicitly, so registering against production takes an explicit production key.\n\n` +
-          `Mint a sandbox key with \`npx ablo dev\`, or set ABLO_API_KEY to the key of the plane this database should join (its sk_live_ key for production).${ambient ? `\n\n${ambient}` : ''}`
+        ? `You are logged in, but connect needs a branch-bound runtime key.\n\n` +
+          `Logging in stores an mk_ management credential; it can manage branches but cannot read, write, or register a database. Set ABLO_API_KEY to the sk_ key for the exact branch this database should join. The server confirms whether that branch is the production root or a development child; the CLI does not infer it from the key spelling.` +
+          `${ambient ? `\n\n${ambient}\n\nUse it explicitly with:\n  ${retry}` : ''}`
         : `Not logged in, and no ABLO_API_KEY is set. Run \`ablo login\` (or set ABLO_API_KEY) so Ablo knows which project to register this database for.${ambient ? `\n\n${ambient}` : ''}`,
       { code: 'cli_api_key_missing' }
     );

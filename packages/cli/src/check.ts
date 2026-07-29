@@ -22,7 +22,7 @@ import { camelToSnake } from './schemaIr';
 import { BASE_COLUMNS } from './schemaSource';
 import { brand } from './theme';
 import { ADMIN_URL_VAR, readProjectAdminDatabaseUrl } from './dbRole';
-import { resolveEffectiveApiKey } from './config';
+import { resolveRuntimeApiKey } from './config';
 import { fetchDataSourceState } from './readiness';
 import { apiBaseUrl } from './controlPlane';
 
@@ -89,8 +89,8 @@ async function reportReadSubject(dbUrl: string): Promise<void> {
   const host = hostOf(dbUrl);
   console.log(`  ${pc.dim('reading')} ${pc.bold(host ?? 'your database')}`);
 
-  const effective = resolveEffectiveApiKey();
-  const state = await fetchDataSourceState(apiBaseUrl(), effective.key);
+  const runtimeKey = resolveRuntimeApiKey();
+  const state = await fetchDataSourceState(apiBaseUrl(), runtimeKey.key);
 
   if (state.kind === 'unknown') {
     console.log(

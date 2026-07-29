@@ -11,10 +11,9 @@ import {
   readConfig,
   getMode,
   getKeyEntry,
-  resolvePushPlan,
-  resolveEffectiveApiKey,
+  getManagementKeyEntry,
+  resolveRuntimeApiKey,
   getActiveProject,
-  describeEffectiveKey,
   type Mode,
   type ActiveProject,
 } from './config';
@@ -146,16 +145,16 @@ export async function status(args: string[] = []): Promise<void> {
   const cfg = readConfig();
   const mode = getMode();
 
-  // The shared credential chain (env → .env.local → .env → stored), the same key
-  // `ablo push` and `ablo dev` present — so status never reports a different
-  // credential than a deploy would use.
-  const effective = resolveEffectiveApiKey();
+  // Runtime diagnostics mirror the application's usual credential chain
+  // (process env → .env.local → .env → stored). Mutations use the same key only
+  // when the dotenv file is selected explicitly with --env-file.
+  const runtimeKey = resolveRuntimeApiKey();
   // The server-confirmed target this key acts on (org, project, branch),
   // reconciled against the local project preference.
   // Resolved once, shared by both the human and JSON views. Null when there's no
   // key to resolve; `.confirmed` is null when the server couldn't answer.
-  const target: ResolvedTarget | null = effective.key
-    ? await resolveTarget({ url: apiUrl, apiKey: effective.key, keySource: effective.source ?? 'stored' })
+  const target: ResolvedTarget | null = runtimeKey.key
+    ? await resolveTarget({ url: apiUrl, apiKey: runtimeKey.key, keySource: runtimeKey.source ?? 'stored' })
     : null;
 
   // Machine-readable output — `ablo status --json`. This is the supported way
@@ -164,13 +163,11 @@ export async function status(args: string[] = []): Promise<void> {
   // `ready()`.
   if (args.includes('--json')) {
     const entry = getKeyEntry(mode);
-    const key = describeEffectiveKey(mode, process.env.ABLO_API_KEY, entry);
-    const plan = resolvePushPlan();
     const activeProject = getActiveProject();
-    const pushed = await fetchPushedSchema(apiUrl, effective.key);
+    const pushed = await fetchPushedSchema(apiUrl, runtimeKey.key);
     const reachableForJson = await ping(apiUrl);
     const dataSource = reachableForJson
-      ? (await fetchRoutingState(apiUrl, effective.key)).source
+      ? (await fetchRoutingState(apiUrl, runtimeKey.key)).source
       : ({ kind: 'unknown', detail: 'unreachable' } as const);
     const driftForJson = schemaDrift(await readLocalSchemaHash(), pushed?.hash);
     const out = {
@@ -179,21 +176,14 @@ export async function status(args: string[] = []): Promise<void> {
       // The credential the CLI resolves for requests, with its source —
       // 'env' | '.env.local' | '.env' | 'stored'. Key confusion is a common
       // source of trouble, and the source is usually the answer.
-      effectiveKey: {
-        prefix: effective.key ? effective.key.slice(0, 12) : null,
-        source: effective.source,
+      runtimeKey: {
+        prefix: runtimeKey.key ? runtimeKey.key.slice(0, 12) : null,
+        source: runtimeKey.source,
         // What this credential can do. A pipeline that pushes can read it before
         // running the push, rather than learning from the 403 — the same fact
         // the human output prints, from the same place.
-        kind: credentialCapability(effective.key).kind,
+        kind: credentialCapability(runtimeKey.key).kind,
       },
-      keyPrefix: key.keyPrefix,
-      keySource: key.keySource,
-      keyMode: key.keyMode,
-      storedKeyPrefix: key.storedKeyPrefix,
-      keyMatchesActiveMode: key.keyMatchesActiveMode,
-      keyMatchesStoredActiveKey: key.keyMatchesStoredActiveKey,
-      keyMismatch: key.keyMismatch,
       organizationId: entry?.organizationId ?? null,
       // The SERVER-CONFIRMED plane this key resolves to — the authoritative
       // answer to "where does a push land", independent of the local
@@ -201,7 +191,6 @@ export async function status(args: string[] = []): Promise<void> {
       confirmedTarget: target?.confirmed
         ? {
             organizationId: target.confirmed.organizationId,
-            environment: target.confirmed.environment,
             project: target.confirmed.project,
             projectId: target.confirmed.projectId,
             branchId: target.confirmed.branchId,
@@ -210,14 +199,7 @@ export async function status(args: string[] = []): Promise<void> {
         : null,
       // Divergence between local project intent and the confirmed target.
       mismatches: target?.mismatches ?? [],
-      // What `ablo push` would do right now — the answer to "why did push
-      // demand a different key".
-      push: {
-        flow: plan.flow,
-        keyPrefix: plan.apiKey?.slice(0, 12) ?? null,
-        keySource: plan.source,
-      },
-      // The schema active for this key's environment — the typename and conflict
+      // The schema active for this key's branch — the typename and conflict
       // rules the engine enforces, which may differ from your local `schema.ts`.
       // null means the server did not answer (unreachable, too old, or no key).
       schema: pushed
@@ -239,7 +221,7 @@ export async function status(args: string[] = []): Promise<void> {
       drift: driftForJson,
       blockers: blockers({
         reachable: reachableForJson,
-        hasKey: Boolean(effective.key),
+        hasKey: Boolean(runtimeKey.key),
         dataSource,
         schemaPushed: Boolean(pushed?.active),
         drift: driftForJson,
@@ -253,21 +235,16 @@ export async function status(args: string[] = []): Promise<void> {
 
   // An explicit key (an env var or a project env file) overrides the stored
   // login key; when that happens, say so, with its source.
-  if (effective.key && effective.source && effective.source !== 'stored') {
-    const label = effective.source === 'env' ? 'ABLO_API_KEY env' : effective.source;
+  if (runtimeKey.key && runtimeKey.source && runtimeKey.source !== 'stored') {
+    const label = runtimeKey.source === 'env' ? 'ABLO_API_KEY env' : runtimeKey.source;
     console.log(
-      `  ${pc.dim('key')}     ${effective.key.slice(0, 12)}… ${pc.dim(`(${label} — overrides stored)`)}`,
+      `  ${pc.dim('key')}     ${runtimeKey.key.slice(0, 12)}… ${pc.dim(`(${label} — overrides stored)`)}`,
     );
   } else if (!cfg) {
     console.log(`  ${pc.yellow('!')} Not logged in — run ${pc.bold('ablo login')}.`);
   }
 
   const activeEntry = getKeyEntry(mode);
-  const key = describeEffectiveKey(mode, process.env.ABLO_API_KEY, activeEntry);
-  if (key.keyMismatch) {
-    console.log(`    ${pc.yellow(`! ${key.keyMismatch.message}`)}`);
-  }
-
   // Where a push actually lands — the server-confirmed org, project, and
   // environment the key resolves to. Falls back to the local `ablo projects
   // use` preference (marked unconfirmed) only when the server didn't answer.
@@ -279,12 +256,20 @@ export async function status(args: string[] = []): Promise<void> {
     activeEntry?.organizationSlug,
   );
 
-  // The stored pair. Each row carries what its key can DO, not just its prefix:
-  // `ablo login` stores an observe-only production key on purpose, and a reader
-  // who cannot see that from the inventory discovers it from a failed deploy.
+  const management = getManagementKeyEntry();
+  console.log(
+    `  ${pc.dim('○')} ${'management'.padEnd(12)}  ${
+      management
+        ? pc.dim(`${management.apiKey.slice(0, 12)}…${management.expiresAt ? ` · ${expiryLabel(management.expiresAt)}` : ''}`)
+        : pc.dim('— no key')
+    }`,
+  );
+
+  // Old credential-store slots remain visible only when populated, explicitly
+  // labeled as legacy. Current runtime branch keys live in ABLO_API_KEY.
   for (const { key: m, label } of [
-    { key: 'sandbox', label: 'management' },
-    { key: 'production', label: 'observer' },
+    { key: 'sandbox', label: 'legacy child' },
+    { key: 'production', label: 'legacy root' },
   ] as const) {
     const entry = getKeyEntry(m as Mode);
     if (entry) {
@@ -296,24 +281,33 @@ export async function status(args: string[] = []): Promise<void> {
       ].filter(Boolean);
       const trail = facts.length ? ` ${pc.dim('·')} ${facts.join(pc.dim(' · '))}` : '';
       console.log(
-        `  ${pc.dim('○')} ${label.padEnd(10)}  ${pc.dim(`${entry.apiKey.slice(0, 12)}…`)}${trail}`,
+        `  ${pc.dim('○')} ${label.padEnd(12)}  ${pc.dim(`${entry.apiKey.slice(0, 12)}…`)}${trail}`,
       );
-    } else {
-      console.log(`  ${pc.dim('○')} ${label.padEnd(10)}  ${pc.dim('— no key')}`);
     }
   }
 
-  // Which credential `ablo push` would present, and to which environment —
-  // the diagnostic for "push demanded sk_test_ but I have a live key".
-  const plan = resolvePushPlan();
+  // Which credential `ablo push` would present. The destination comes from the
+  // server-confirmed branch, never from the old local mode.
+  const pushBranch =
+    target?.confirmed?.branchRoot === true
+      ? 'production root'
+      : target?.confirmed?.branchId
+        ? `branch ${target.confirmed.branchId}`
+        : runtimeKey.key
+          ? 'unknown branch'
+          : 'no branch';
   console.log(
-    `  ${pc.dim('push')}    ${plan.apiKey ? `${pc.bold(plan.flow)} ${pc.dim(`with ${plan.apiKey.slice(0, 12)}… (${plan.source})`)}` : `${pc.bold(plan.flow)} ${pc.yellow('— no credential')} ${pc.dim(`(run ${pc.bold('ablo login')} or set ${pc.bold('ABLO_API_KEY')})`)}`}`,
+    `  ${pc.dim('push')}    ${
+      runtimeKey.key
+        ? `${pc.bold(pushBranch)} ${pc.dim(`with ${runtimeKey.key.slice(0, 12)}… (${runtimeKey.source})`)}`
+        : `${pc.bold(pushBranch)} ${pc.yellow('— no runtime key')} ${pc.dim(`(set ${pc.bold('ABLO_API_KEY')} or run ${pc.bold('ablo dev')})`)}`
+    }`,
   );
 
   // Directly under the push line, because that is the line it qualifies: this
   // is the state where the push returns 403, and the 403 used to be the first
   // notice of it.
-  const capability = credentialCapability(effective.key);
+  const capability = credentialCapability(runtimeKey.key);
   if (capability.note) console.log(`    ${pc.dim(capability.note)}`);
 
   process.stdout.write(`  ${pc.dim('api')}     ${apiUrl}  `);
@@ -323,7 +317,7 @@ export async function status(args: string[] = []): Promise<void> {
   // What the plane has connected. Asked directly rather than inferred from a
   // read: reads can route while writes are held, so a read probe stays silent
   // in exactly the state that refuses every write.
-  const introspectKey = effective.key;
+  const introspectKey = runtimeKey.key;
   const { source: dataSource, validation } = reachable
     ? await fetchRoutingState(apiUrl, introspectKey)
     : { source: { kind: 'unknown', detail: 'unreachable' } as const, validation: null };
@@ -400,7 +394,7 @@ export async function status(args: string[] = []): Promise<void> {
   // being asked.
   const found = blockers({
     reachable,
-    hasKey: Boolean(effective.key),
+    hasKey: Boolean(runtimeKey.key),
     dataSource,
     schemaPushed: Boolean(pushed?.active),
     drift,

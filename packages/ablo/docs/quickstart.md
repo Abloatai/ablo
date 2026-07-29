@@ -11,7 +11,7 @@ which stays the system of record. Ablo writes rows but **runs no DDL and owns no
 schema** — your migration tool stays in charge of the shape of your database.
 
 > No database yet? Pass an `apiKey` only and Ablo keeps your rows in its own log,
-> so you can build the whole app today — like Stripe test mode. Point it at a
+> so you can build the whole app today. Point it at a
 > separate or local Postgres for a development branch, or at your production
 > database when you're ready.
 
@@ -35,11 +35,17 @@ export ABLO_MANAGEMENT_KEY=mk_...
 
 Every runtime call needs a branch-bound API key. `ablo dev` exchanges the
 stored management credential for
-an expiring `sk_test_*` key bound to the current development branch.
-Production runtimes use `sk_live_*`. In production a key points at the database
+an expiring `sk_*` key bound to the current development branch.
+Production runtimes use `sk_*`. In production a key points at the database
 *you* own; on a development branch you can skip the database entirely and let
 Ablo host the rows (apiKey only). There is no keyless mode — a key is always
 required. (The public `/sandbox` page is a separate hosted demo, not your app.)
+
+You do not create a separate named variable per development environment.
+Application code always reads `ABLO_API_KEY`; `ablo dev` wires the value for the
+current branch. Run `npx ablo whoami` whenever you want the server-confirmed
+project and branch for that value. See [API Keys](./api-keys.md) for the full
+project → branch → credential model.
 
 ## 2. Your Ablo schema (init scaffolded it)
 
@@ -149,7 +155,7 @@ Your **app** holds only the API key — never a connection string:
 
 ```bash
 # .env — server runtime only, never the browser
-ABLO_API_KEY=sk_test_...
+ABLO_API_KEY=sk_...
 ```
 
 ```ts

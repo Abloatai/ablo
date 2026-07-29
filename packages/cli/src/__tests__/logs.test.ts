@@ -28,13 +28,12 @@ describe('parseLogsArgs', () => {
       model: undefined,
       op: undefined,
       json: false,
-      mode: undefined,
     });
   });
 
   it('parses all flags', () => {
     expect(
-      parseLogsArgs(['--no-follow', '-n', '100', '--since', '2h', '--model', 'task', '--op', 'create', '--json', '--mode', 'production']),
+      parseLogsArgs(['--no-follow', '-n', '100', '--since', '2h', '--model', 'task', '--op', 'create', '--json']),
     ).toEqual({
       follow: false,
       tail: 100,
@@ -42,11 +41,10 @@ describe('parseLogsArgs', () => {
       model: 'task',
       op: 'create',
       json: true,
-      mode: 'production',
     });
   });
 
-  it('rejects an invalid --mode', () => {
-    expect(() => parseLogsArgs(['--mode', 'prod'])).toThrow(/sandbox.*production/);
+  it('explains that branch selection replaced --mode', () => {
+    expect(() => parseLogsArgs(['--mode', 'production'])).toThrow(/branch bound to ABLO_API_KEY/);
   });
 });

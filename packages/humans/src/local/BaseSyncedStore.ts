@@ -1568,6 +1568,8 @@ export class BaseSyncedStore<
       advancePersisted: (syncId) => { this.syncClient.position.advancePersisted(syncId); },
       // Persistence + pool writes.
       processDeltaBatch: (deltas) => this.database.processDeltaBatch(deltas),
+      projectDeltaBatchForPool: (results) =>
+        this.syncClient.projectDeltaBatchForPool(results),
       applyDeltaBatchToPool: (results) => { this.applyChangesToPool(results); },
       acknowledge: (syncId) => { this.syncWebSocket.acknowledge(syncId); },
       get objectPool() { return store.objectPool; },

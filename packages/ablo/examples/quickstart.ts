@@ -3,7 +3,7 @@
  *
  * Run:
  *
- *   ABLO_API_KEY=sk_test_... npx tsx examples/quickstart.ts
+ *   ABLO_API_KEY=sk_... npx tsx examples/quickstart.ts
  */
 
 import Ablo from '@ablo/ablo';

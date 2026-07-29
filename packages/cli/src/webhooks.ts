@@ -16,7 +16,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import pc from 'picocolors';
 import { classifyCredentialKind } from '@abloatai/transaction/auth/credentialPolicy';
-import { resolveApiKey, normalizeMode, type Mode } from './config';
+import { resolveMutationApiKey, normalizeMode, type Mode } from './config';
 import { brand } from './theme';
 import { apiBaseUrl } from './controlPlane';
 
@@ -69,7 +69,7 @@ function positional(args: readonly string[]): string | undefined {
 }
 
 function requireKey(mode: Mode | undefined): string {
-  const apiKey = resolveApiKey(mode);
+  const apiKey = resolveMutationApiKey(mode);
   if (!apiKey) {
     console.error(
       pc.red('  No API key.') + pc.dim(` Run ${pc.bold('ablo login')} or set ${pc.bold('ABLO_API_KEY')}.`),
@@ -77,7 +77,7 @@ function requireKey(mode: Mode | undefined): string {
     process.exit(1);
   }
   if (classifyCredentialKind(apiKey) !== 'secret') {
-    console.error(pc.red('  Managing webhooks requires a secret key ') + pc.dim('(sk_test_ / sk_live_).'));
+    console.error(pc.red('  Managing webhooks requires a branch-bound secret key ') + pc.dim('(sk_).'));
     process.exit(1);
   }
   return apiKey;

@@ -35,36 +35,59 @@ resume a branch and exchanges it for a temporary branch-bound runtime key.
 | `ablo login`             | Authorize in the browser; store one project management credential.         |
 | `ablo login --project <slug>` | Same, scoped to a project, which becomes active.                     |
 | `ablo logout`            | Remove the stored credentials.                                             |
-| `ablo status`            | Show the active org/project, effective credential, branch target, and server health. |
+| `ablo whoami`            | Strictly confirm which project and branch a credential acts on.            |
+| `ablo status`            | Show the active org/project, resolved runtime credential, branch target, and server health. |
+
+Credential precedence is deliberately small:
+
+1. `ABLO_API_KEY` in the process environment.
+2. An explicitly selected file, for commands that support
+   `--env-file <path>`.
+3. A stored credential for legacy compatibility.
+
+Read-only orientation commands (`status`, `whoami`, `logs`, and `connect
+locate/check`) may inspect the application's `.env.local` so they describe what
+the app would use. Mutations (`push`, `connect apply/rotate/register`, and
+`connect deregister`) never let an ambient file silently choose a branch. Pass
+`--env-file .env.local` when that file is the intended source; the command
+reports the server-confirmed branch before it writes. For one-time recovery,
+`connect deregister --key-env <NAME>` selects that exact named value without
+putting the secret in argv.
 
 Keys live in `~/.config/ablo/credentials.json` (mode `0600`), keyed by project.
 The non-secret `config.json` holds the active project. In **CI**, don't log in —
 set the project management credential as `ABLO_MANAGEMENT_KEY`; it overrides the
 stored credential during branch bootstrap.
 
-## Development branches vs live
+## Development branches and the production root
 
 A branch is your project at full strength over its own rows: the same models,
 the same schema artifacts, the same claims and the same rules production runs.
 
 Production is the project root. `ablo dev` creates or reuses a child branch for
-your Git branch, then mints a temporary `sk_test_` key bound to that child.
+your Git branch, then mints a temporary `sk_` key bound to that child.
 Reads, writes, schema artifacts, claims, and credentials stay isolated from
 production and from other development branches, which is what makes a
 schema-changing pull request as routine as a code-only one.
 
 There is no local mode switch. Development selection comes from Git or
-`--branch`; production authority comes only from an explicit live credential.
+`--branch`; production authority comes only from an explicit root-bound
+credential.
 Production schema changes use the reviewed one-shot path in
 [Deployment](./deployment.md).
+
+`ABLO_API_KEY` is the one runtime variable in every environment. Branches
+replace manually switching between custom names such as `ABLO_STAGING_KEY` and
+`ABLO_DEV_KEY`: rerun `ablo dev` when Git branches change. Use `ablo whoami`
+for the narrow identity question, or `ablo whoami --key-env <NAME>` to inspect
+an explicitly named CI/legacy key without exposing its value in argv.
 
 ## Projects
 
 An org can have multiple **projects**, each with its own isolated keys, schema,
 and data. Keys are scoped to a project **at mint** and never re-scoped, so the
-CLI keeps a separate credential profile per project — Stripe's
-`login --project-name` model. The active project (set with `projects use`)
-selects which profile every command authenticates with.
+CLI keeps a separate credential profile per project. The active project (set
+with `projects use`) selects which profile every command authenticates with.
 
 | Command                       | What it does                                                                       |
 | ----------------------------- | ---------------------------------------------------------------------------------- |
@@ -97,11 +120,11 @@ bypasses profiles for project/branch administration; the runtime key remains
 | Command                            | What it does                                                                                                                                  | Flags                                                                                                  |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `ablo init`                        | Scaffold `ablo/` (`schema.ts`, client, optional Data Source / agent / component), write `.env`, install the SDK. Offers to log in at the end. |: |
-| `ablo login` / `logout` / `status` | Authentication & status (above).                                                                                                              |: |
+| `ablo login` / `logout` / `whoami` / `status` | Authentication, exact credential identity, and readiness (above).                                                                              | `whoami --key-env <NAME>`, `whoami --json`, `status --json` |
 | `ablo projects list\|create\|use\|rename` | Manage projects and the active one (see [Projects](#projects)). Each project's keys/schema/data are isolated.                          | `--name "<display>"` (create/rename)                                                                    |
 | `ablo dev`                         | **Hosted**: ensure an isolated Git branch, wire its temporary key, push, then watch `ablo/schema.ts`.                                        | `--branch <slug>`, `--branch-ttl-hours <1-168>`, `--no-watch`, `--schema`, `--export`, `--url` |
 | `ablo branch list\|status\|check\|create\|ensure\|credential\|delete` | Manage and diagnose immutable branch planes and expiring credentials.                          | Run `ablo branch --help`; use `--json` for automation.                                                   |
-| `ablo logs`                        | Tail the effective credential's branch activity. Follows by default.                                                                          | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow` |
+| `ablo logs`                        | Tail the resolved runtime credential's branch activity. Follows by default.                                                                          | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow` |
 | `ablo push`                        | **Hosted**: upload the schema to Ablo; the server diffs, migrates, and activates it.                                                         | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url`         |
 | `ablo migrate`                     | **Direct Postgres**: provision just the synced models (plus the adapter's `ablo_outbox` / `ablo_idempotency`) in your own `DATABASE_URL`. Leaves your other tables alone.                                                          | `--dry-run`, `--output <file>`, `--schema`, `--export`                                                 |
 | `ablo pull`                        | **Direct Postgres**: generate `defineSchema(...)` from your existing tables (read-only, like `prisma db pull`).                              | `--out <path>`, `--app-schema <name>`, `--import <pkg>`, `--force`                                     |
@@ -121,7 +144,7 @@ npx ablo docs --json           # the page list, machine-readable
 ```
 
 These pages ship inside the npm package, so they describe the code beside them
-and stay reachable with no network — the sandboxes and CI runners agents work in
+and stay reachable with no network — isolated agent environments and CI runners
 often have none. That matters most when a project is pinned: `get` / `getAll` /
 `getCount` became `retrieve` / `list` in 0.35.0, and a website always describes
 the newest release, so an agent on an earlier version reads the new name and
@@ -151,9 +174,10 @@ for the exact discovery order, CI flow, database boundary, and troubleshooting.
 
 ## `ablo logs`
 
-Tail commit activity, like `stripe logs tail`. Scope comes from the key — a test
-key streams only its sandbox's writes, a live key the org's — so you never pass
-an org. Follows by default; `--no-follow` prints recent and exits.
+Tail commit activity. Scope comes from the persisted key binding: a child-bound
+key streams only that child, while a root-bound key
+streams production. You never pass a project or branch. Follows by default;
+`--no-follow` prints recent and exits.
 
 ```bash
 npx ablo logs                      # last 50, then stream
