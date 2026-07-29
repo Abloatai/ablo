@@ -452,6 +452,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
   });
 
   it('the try-claim resolves null over HTTP when the server answers entity_claimed', async () => {
+    const onStatus = jest.fn();
     const c = Ablo({
       schema,
       apiKey: 'sk_test_tryclaim',
@@ -473,7 +474,16 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    await expect(c.tasks.claim({ id: 'task-1', queue: false })).resolves.toBeNull();
+    await expect(
+      c.tasks.claim({
+        id: 'task-1',
+        contention: { mode: 'skip', onStatus },
+      }),
+    ).resolves.toBeNull();
+    expect(onStatus).toHaveBeenCalledWith({
+      type: 'skipped',
+      error: expect.objectContaining({ code: 'entity_claimed' }),
+    });
   });
 
   it('claims.release gives a ticket back by id', async () => {

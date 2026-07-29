@@ -15,6 +15,7 @@
 
 import {
   AbloClaimedError,
+  AbloError,
   AbloValidationError,
   CapabilityError,
   formatClaimedErrorMessage,
@@ -88,6 +89,10 @@ export function awaitClaimGrant(
     signal?: AbortSignal;
     /** Where grant transitions are logged. Defaults to silent. */
     logger?: Logger;
+    /** Request-scoped lifecycle hooks; observer failures never alter admission. */
+    onQueued?: (info: { claimId: string; position: number }) => void;
+    onGranted?: (info: ClaimGrantInfo & { claimId: string }) => void;
+    onFailed?: (error: AbloError) => void;
   },
 ): Promise<ClaimGrantInfo> {
   const logger = options?.logger ?? noopLogger;
@@ -98,6 +103,19 @@ export function awaitClaimGrant(
       if (timer) clearTimeout(timer);
       for (const u of unsubs) u();
       fn();
+    };
+    const observe = (fn: (() => void) | undefined): void => {
+      try {
+        fn?.();
+      } catch {
+        // Admission is authoritative; telemetry/UI callbacks are not.
+      }
+    };
+    const fail = (error: AbloError): void => {
+      settle(() => {
+        observe(() => options?.onFailed?.(error));
+        reject(error);
+      });
     };
 
     // The target was free → `claim_acquired` (immediate); it was contended,
@@ -110,11 +128,13 @@ export function awaitClaimGrant(
           const fenceToken = readFenceToken(p);
           const readAt = readWatermark(p);
           settle(() => {
-            resolve({
+            const info: ClaimGrantInfo = {
               waited: false,
               ...(fenceToken !== undefined ? { fenceToken } : {}),
               ...(readAt !== undefined ? { readAt } : {}),
-            });
+            };
+            observe(() => options?.onGranted?.({ claimId, ...info }));
+            resolve(info);
           });
         }
       }),
@@ -128,34 +148,33 @@ export function awaitClaimGrant(
           const fenceToken = readFenceToken(p);
           const readAt = readWatermark(p);
           settle(() => {
-            resolve({
+            const info: ClaimGrantInfo = {
               waited: true,
               ...(fenceToken !== undefined ? { fenceToken } : {}),
               ...(readAt !== undefined ? { readAt } : {}),
-            });
+            };
+            observe(() => options?.onGranted?.({ claimId, ...info }));
+            resolve(info);
           });
         }
       }),
     );
-    if (options?.maxQueueDepth !== undefined) {
-      const max = options.maxQueueDepth;
-      unsubs.push(
-        transport.subscribe('claim_queued', (p) => {
-          if (p?.claimId !== claimId) return;
-          const position = typeof p.position === 'number' ? p.position : 0;
-          if (position >= max) {
-            settle(() =>
-              { reject(
-                new AbloClaimedError(
-                  `Claim queue for ${claimId} is ${position} deep (max ${max}).`,
-                  { code: 'queue_too_deep' },
-                ),
-              ); },
-            );
-          }
-        }),
-      );
-    }
+    unsubs.push(
+      transport.subscribe('claim_queued', (p) => {
+        if (p?.claimId !== claimId) return;
+        const position = typeof p.position === 'number' ? p.position : 0;
+        observe(() => options?.onQueued?.({ claimId, position }));
+        const max = options?.maxQueueDepth;
+        if (max !== undefined && position >= max) {
+          fail(
+            new AbloClaimedError(
+              `Claim queue for ${claimId} is ${position} deep (max ${max}).`,
+              { code: 'queue_too_deep' },
+            ),
+          );
+        }
+      }),
+    );
     unsubs.push(
       transport.subscribe('claim_rejected', (p) => {
         const rejection = p as ClaimRejection;
@@ -168,57 +187,53 @@ export function awaitClaimGrant(
           : claimId;
         if (rejection.reason === 'capability_denied') {
           settle(() => {
-            reject(
-              new CapabilityError(
-                'capability_scope_denied',
-                rejection.policyReason ??
-                  `This credential may not claim ${target}.`,
-              ),
+            const error = new CapabilityError(
+              'capability_scope_denied',
+              rejection.policyReason ??
+                `This credential may not claim ${target}.`,
             );
+            observe(() => options?.onFailed?.(error));
+            reject(error);
           });
           return;
         }
         if (rejection.reason === 'invalid_target') {
           settle(() => {
-            reject(
-              new AbloValidationError(
-                rejection.policyReason ?? `Invalid claim target ${target}.`,
-                { code: 'invalid_body' },
-              ),
+            const error = new AbloValidationError(
+              rejection.policyReason ?? `Invalid claim target ${target}.`,
+              { code: 'invalid_body' },
             );
+            observe(() => options?.onFailed?.(error));
+            reject(error);
           });
           return;
         }
-        settle(() =>
-          { reject(
-            new AbloClaimedError(
-              formatClaimedErrorMessage({
-                targetLabel: target,
-                heldBy: rejection.heldBy,
-                claim: rejection.heldByClaim,
-                policyReason: rejection.policyReason,
-                fallback: `Claim rejected for ${target}.`,
-              }),
-              {
-                code: rejection.reason === 'conflict'
-                  ? 'claim_conflict'
-                  : 'claim_lease_unavailable',
-                claims: rejection.heldByClaim ? [rejection.heldByClaim] : undefined,
-              },
-            ),
-          ); },
+        fail(
+          new AbloClaimedError(
+            formatClaimedErrorMessage({
+              targetLabel: target,
+              heldBy: rejection.heldBy,
+              claim: rejection.heldByClaim,
+              policyReason: rejection.policyReason,
+              fallback: `Claim rejected for ${target}.`,
+            }),
+            {
+              code: rejection.reason === 'conflict'
+                ? 'claim_conflict'
+                : 'claim_lease_unavailable',
+              claims: rejection.heldByClaim ? [rejection.heldByClaim] : undefined,
+            },
+          ),
         );
       }),
     );
     unsubs.push(
       transport.subscribe('claim_lost', (p) => {
         if (p?.claimId === claimId) {
-          settle(() =>
-            { reject(
-              new AbloClaimedError(`Claim lost while queued for ${claimId}.`, {
-                code: 'claim_lost',
-              }),
-            ); },
+          fail(
+            new AbloClaimedError(`Claim lost while queued for ${claimId}.`, {
+              code: 'claim_lost',
+            }),
           );
         }
       }),
@@ -226,15 +241,14 @@ export function awaitClaimGrant(
 
     if (options?.signal) {
       const signal = options.signal;
-      const abort = (): void =>
-        settle(() => {
-          reject(
-            new AbloClaimedError(
-              `The wait for claim ${claimId} was aborted before the grant arrived.`,
-              { code: 'claim_wait_aborted' },
-            ),
-          );
-        });
+      const abort = (): void => {
+        fail(
+          new AbloClaimedError(
+            `The wait for claim ${claimId} was aborted before the grant arrived.`,
+            { code: 'claim_wait_aborted' },
+          ),
+        );
+      };
       if (signal.aborted) {
         abort();
         return;
@@ -245,13 +259,11 @@ export function awaitClaimGrant(
 
     if (options?.timeoutMs && options.timeoutMs > 0) {
       timer = setTimeout(() => {
-        settle(() =>
-          { reject(
-            new AbloClaimedError(
-              `Timed out waiting for the queue grant on claim ${claimId}.`,
-              { code: 'grant_timeout' },
-            ),
-          ); },
+        fail(
+          new AbloClaimedError(
+            `Timed out waiting for the queue grant on claim ${claimId}.`,
+            { code: 'grant_timeout' },
+          ),
         );
       }, options.timeoutMs);
     }

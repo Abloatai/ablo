@@ -87,4 +87,23 @@ Claims live on a callable namespace beside `create` / `update` / `retrieve`. Eve
 - `ablo.<model>.claim.release({ id })` — release a claim early.
 - `ablo.<model>.claim.reorder({ id, order })` — reorder the waiting queue.
 
+Keep admission behavior together for anything beyond the default wait:
+
+```ts
+const claim = await ablo.tasks.claim({
+  id,
+  contention: {
+    mode: 'skip', // use 'wait' with maxDepth / timeoutMs when waiting is useful
+    onStatus(event) {
+      if (event.type === 'skipped') console.warn(event.error.message);
+    },
+  },
+});
+if (!claim) return; // another participant already owns the work
+```
+
+`onStatus` receives typed `queued`, `granted`, `skipped`, and `failed` events.
+It is request-scoped; use `claim.state` / `claim.queue` for the shared reactive
+view.
+
 Most users declare a schema and write through `ablo.<model>.update({ id, data })`.

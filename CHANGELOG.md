@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.45.0
+
+### Claim admission is authoritative
+
+A claim used to return a local handle immediately, before the server had
+granted anything, so two agents on different server instances could each
+believe they held the same row. Every claim now waits for the server's grant
+or rejection, and the server fails closed when the shared lease store is
+unavailable rather than admitting claims it cannot coordinate. A two-server
+end-to-end regression pins the behavior.
+
+### Contention has a lifecycle you can watch
+
+The new `contention` option names what happens when the row is already held:
+
+```ts
+const claim = await ablo.tasks.claim({
+  id,
+  contention: {
+    mode: 'skip',
+    onStatus(event) {
+      // queued | granted | skipped | failed
+    },
+  },
+});
+```
+
+`{ mode: 'skip' }` resolves `null` instead of waiting, and `onStatus` reports
+the attempt as it moves. `queue: true` and `queue: false` remain as
+compatible spellings of the two modes.
+
 ## 0.44.0
 
 ### A scope denial names the wall it hit

@@ -388,6 +388,12 @@ export namespace Ablo {
     export type Held<T = Record<string, unknown>> = import('@abloatai/transaction/types/streams').HeldClaim<T>;
     export type CreateOptions = import('./local/client/resourceTypes.js').ClaimCreateOptions;
     export type WaitOptions = import('./local/client/resourceTypes.js').ClaimWaitOptions;
+    export type ContentionOptions =
+      import('@abloatai/transaction/resources/modelOperations').ClaimContentionOptions;
+    export type AttemptEvent =
+      import('@abloatai/transaction/resources/modelOperations').ClaimAttemptEvent;
+    export type QueueView =
+      import('@abloatai/transaction/resources/modelOperations').ClaimQueueView;
     export type Client = import('./local/client/resourceTypes.js').ClaimResource;
   }
 

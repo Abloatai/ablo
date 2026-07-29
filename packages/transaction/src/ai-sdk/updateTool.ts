@@ -60,6 +60,7 @@
 import { tool, type ToolExecutionOptions } from 'ai';
 import type { z } from 'zod';
 import type {
+  ClaimSkipParams,
   ClaimParams,
   ModelUpdateParams,
 } from '../resources/modelOperations.js';
@@ -120,7 +121,7 @@ export interface UpdateToolModel<T> {
     options?: ContentionOptions,
   ): Promise<T | undefined>;
   claim(
-    params: ClaimParams<T> & { queue: false },
+    params: ClaimSkipParams<T>,
   ): Promise<HeldClaim<T> | null>;
   claim(params: ClaimParams<T>): Promise<HeldClaim<T>>;
 }

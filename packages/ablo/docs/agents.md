@@ -116,9 +116,9 @@ await ablo.tasks.claim.queue({ id: taskId });   // the FIFO wait-line behind the
 await ablo.tasks.claim.reorder({ id: taskId, order: line }); // re-rank the line (privileged)
 ```
 
-Think of it as a queue per row — a durable, inspectable, reorderable lease line
-("SQS for entity contention"). Use `{ queue: false }` for fail-fast dedup: *if
-someone else has this job, skip it.*
+Think of it as a queue per row — a durable, inspectable, reorderable lease
+line. Use `contention: { mode: 'skip' }` for fail-fast dedup: *if someone else
+has this job, skip it.*
 
 ## Messaging between agents
 

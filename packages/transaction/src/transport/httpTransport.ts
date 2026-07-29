@@ -8,6 +8,7 @@
 
 import {
   AbloClaimedError,
+  AbloError,
   AbloAuthenticationError,
   AbloConnectionError,
   AbloIdempotencyError,
@@ -113,10 +114,19 @@ import type {
   ClaimLookupParams,
   ClaimOptions,
   ClaimParams,
+  ClaimSkipParams,
   ClaimReorderParams,
   ModelTrackParams,
   ModelTrackResult,
   ServerReadOptions,
+  ResolvedClaimContentionOptions,
+  ClaimQueueView,
+} from '../resources/modelOperations.js';
+import {
+  claimAttemptFailure,
+  claimQueueView,
+  emitClaimStatus,
+  resolveClaimContentionOptions,
 } from '../resources/modelOperations.js';
 import type { Duration } from '../utils/duration.js';
 import type { TrackDependency } from '../coordination/schema.js';
@@ -1148,7 +1158,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   async function awaitGrantOverHttp(
     targetLabel: string,
     queued: ClaimQueuedResponse,
-    options: { maxQueueDepth?: number; waitTimeoutMs?: number; signal?: AbortSignal }
+    options: ResolvedClaimContentionOptions,
   ): Promise<{ id: string; fenceToken?: number }> {
     // The queued reply is a claim resource in its waiting state, so the
     // handle is its `id` — same rule as the 201 and the poll.
@@ -1161,17 +1171,24 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       throw error;
     };
 
-    if (options.maxQueueDepth !== undefined && queued.position >= options.maxQueueDepth) {
+    emitClaimStatus(options.onStatus, {
+      type: 'queued',
+      claimId,
+      position: queued.position,
+      ahead: queued.position + 1,
+    });
+
+    if (options.maxDepth !== undefined && queued.position >= options.maxDepth) {
       return rejectAndLeave(
         new AbloClaimedError(
-          `Claim queue for ${targetLabel} is ${queued.position} deep (max ${options.maxQueueDepth}).`,
+          `Claim queue for ${targetLabel} is ${queued.position} deep (max ${options.maxDepth}).`,
           { code: 'queue_too_deep' }
         )
       );
     }
 
     const deadline =
-      options.waitTimeoutMs !== undefined ? Date.now() + options.waitTimeoutMs : undefined;
+      options.timeoutMs !== undefined ? Date.now() + options.timeoutMs : undefined;
     let delay = GRANT_POLL_FIRST_MS;
     for (;;) {
       if (signal?.aborted) {
@@ -1185,7 +1202,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       if (deadline !== undefined && Date.now() >= deadline) {
         return rejectAndLeave(
           new AbloClaimedError(
-            `Timed out after ${options.waitTimeoutMs}ms waiting for the queue grant on ${targetLabel}.`,
+            `Timed out after ${options.timeoutMs}ms waiting for the queue grant on ${targetLabel}.`,
             { code: 'grant_timeout' }
           )
         );
@@ -1218,6 +1235,11 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           })
         );
       }
+      emitClaimStatus(options.onStatus, {
+        type: 'granted',
+        claimId,
+        waited: true,
+      });
       return state.fenceToken !== undefined
         ? { id: claimId, fenceToken: state.fenceToken }
         : { id: claimId };
@@ -1492,6 +1514,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     const acquireClaim = async (
       params: ClaimParams<Fields>
     ): Promise<{ id: string; fenceToken?: number }> => {
+      const contention = resolveClaimContentionOptions(params);
       // The row is named by the URL, so `target` carries only the narrowing a
       // claim adds below it. Sending it is what makes a field-scoped claim
       // actually field-scoped: the server's conflict rule reads `path`,
@@ -1512,13 +1535,25 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         ...(Object.keys(narrowing).length > 0 ? { target: narrowing } : {}),
         // `queue` (default true) → queue behind the holder; false → fail-fast
         // with AbloClaimedError (work-distribution dedup).
-        queue: params.queue ?? true,
+        queue: contention.wait,
       };
-      const body = await requestJson(
-        claimPath(params.id),
-        { method: 'POST', body: JSON.stringify(request) },
-        claimAcquireResponseSchema
-      );
+      let body: z.infer<typeof claimAcquireResponseSchema>;
+      try {
+        body = await requestJson(
+          claimPath(params.id),
+          { method: 'POST', body: JSON.stringify(request) },
+          claimAcquireResponseSchema
+        );
+      } catch (error) {
+        const normalized = error instanceof AbloError
+          ? error
+          : new AbloConnectionError(String(error));
+        emitClaimStatus(
+          contention.onStatus,
+          claimAttemptFailure(contention.wait, normalized),
+        );
+        throw error;
+      }
       // One resource, two states, discriminated by `status`. The queued arm
       // WAITS, exactly as the socket client does: `claim({ id })` means
       // "serialize me behind the holder" on every transport, and the grant
@@ -1527,8 +1562,28 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       // why it no longer surfaces as one here. The `claims` namespace remains
       // the manual ticket surface.)
       if (body.status === 'queued') {
-        return awaitGrantOverHttp(`${name}/${params.id}`, body, params);
+        try {
+          return await awaitGrantOverHttp(
+            `${name}/${params.id}`,
+            body,
+            contention,
+          );
+        } catch (error) {
+          const normalized = error instanceof AbloError
+            ? error
+            : new AbloConnectionError(String(error));
+          emitClaimStatus(
+            contention.onStatus,
+            claimAttemptFailure(contention.wait, normalized),
+          );
+          throw error;
+        }
       }
+      emitClaimStatus(contention.onStatus, {
+        type: 'granted',
+        claimId: body.id,
+        waited: false,
+      });
       // The lease's own fields are mirrored at the top level, the same place
       // the poll puts them — one reader for both answers.
       return body.fenceToken !== undefined
@@ -1566,7 +1621,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     };
 
     function claimImpl(
-      params: ClaimParams<Fields> & { queue: false }
+      params: ClaimSkipParams<Fields>
     ): Promise<HeldClaim<T> | null>;
     function claimImpl(params: ClaimParams<Fields>): Promise<HeldClaim<T>>;
     async function claimImpl(
@@ -1582,7 +1637,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         // and the write-site claim path calls `acquireClaim` directly, so a
         // write that could not claim still fails loudly.
         if (
-          params.queue === false &&
+          !resolveClaimContentionOptions(params).wait &&
           error instanceof AbloClaimedError &&
           (error.code === 'entity_claimed' || error.code === 'claim_conflict')
         ) {
@@ -1687,14 +1742,13 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       },
       queue: async (
         params: ClaimLookupParams<T>
-      ): Promise<{ readonly object: 'list'; readonly data: readonly Claim[] }> => {
+      ): Promise<ClaimQueueView> => {
         const res = await claimsForEntity(params);
-        return {
-          object: 'list',
-          data: res.data
+        return claimQueueView(
+          res.data
             .filter((row) => row.status === 'queued')
             .map(claimFromModelClaim),
-        };
+        );
       },
       reorder: async (params: ClaimReorderParams<T>): Promise<void> => {
         await requestRaw(`${claimPath(params.id)}/reorder`, {

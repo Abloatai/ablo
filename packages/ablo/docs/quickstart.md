@@ -304,8 +304,9 @@ await using handle = await ablo.weatherReports.claim({ id: 'weather_stockholm' }
 await ablo.weatherReports.update({ id: handle.data.id, data: { status: 'ready' } });
 ```
 
-Use `{ queue: false }` on `claim` when work should be skipped instead of queued
-behind an active holder.
+Use `contention: { mode: 'skip' }` when work should be skipped instead of
+queued behind an active holder. Add `onStatus` inside that object when the
+attempt should also update telemetry or UI.
 
 ## Next steps
 

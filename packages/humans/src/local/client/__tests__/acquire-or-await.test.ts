@@ -24,6 +24,7 @@ import {
 import type { SyncClient } from '../../SyncClient.js';
 import type { OnDemandLoader } from '../../sync/OnDemandLoader.js';
 import type { Claim, Snapshot } from '@abloatai/transaction/types/streams';
+import { AbloClaimedError } from '@abloatai/transaction/errors';
 
 interface TaskRow { id: string; title: string }
 
@@ -214,6 +215,13 @@ describe('ModelOperations.claim — the try-claim (queue: false)', () => {
           meta: { description: 'pricing table, about two minutes' },
         },
       })),
+      createClaim: jest.fn(() =>
+        Promise.reject(
+          new AbloClaimedError('held by the observed participant', {
+            code: 'claim_conflict',
+          }),
+        ),
+      ),
     });
     const { proxy } = makeProxy(collab, 't1');
 
@@ -221,8 +229,11 @@ describe('ModelOperations.claim — the try-claim (queue: false)', () => {
     // logic, not an error — dedup reads `if (!claim) return`, no try/catch.
     // Who holds it, and why, stays readable via `claim.state({ id })`.
     await expect(proxy.claim({ id: 't1', queue: false })).resolves.toBeNull();
-    // Never even attempts to acquire — no queue join.
-    expect(collab.createClaim).not.toHaveBeenCalled();
+    // Local presence is diagnostic only. Admission still goes to the server so
+    // stale snapshots cannot manufacture a false decline.
+    expect(collab.createClaim).toHaveBeenCalledWith(
+      expect.objectContaining({ queue: false }),
+    );
   });
 
   it('acquires without queuing when the target is free', async () => {
@@ -232,6 +243,25 @@ describe('ModelOperations.claim — the try-claim (queue: false)', () => {
     await proxy.claim({ id: 't1', queue: false });
 
     // Acquires, but NOT through the FIFO queue (queue: false).
+    expect(collab.createClaim).toHaveBeenCalledWith(
+      expect.objectContaining({ queue: false }),
+    );
+  });
+
+  it('resolves null when the server sees a holder missing from local state', async () => {
+    const collab = fakeCollaboration({
+      state: jest.fn(() => null),
+      createClaim: jest.fn(() =>
+        Promise.reject(
+          new AbloClaimedError('held on another instance', {
+            code: 'claim_conflict',
+          }),
+        ),
+      ),
+    });
+    const { proxy } = makeProxy(collab, 't1');
+
+    await expect(proxy.claim({ id: 't1', queue: false })).resolves.toBeNull();
     expect(collab.createClaim).toHaveBeenCalledWith(
       expect.objectContaining({ queue: false }),
     );

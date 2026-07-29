@@ -51,7 +51,9 @@ import type {
 import type { ModelUpdater, ContentionOptions } from './functionalUpdate.js';
 import type {
   ClaimOptions,
+  ClaimAttemptEvent,
   ClaimParams,
+  ClaimSkipParams,
   ClaimReadApi,
   AwaitedClaimMethod,
   ModelTrackParams,
@@ -147,6 +149,8 @@ export interface ClaimCreateOptions {
    * waiting if the queue is already `>= maxQueueDepth` when we join.
    */
   readonly maxQueueDepth?: number;
+  /** Request-scoped queued / granted / skipped / failed status events. */
+  readonly onStatus?: (event: ClaimAttemptEvent) => void;
 }
 
 export interface CommitOperationInput {
@@ -301,7 +305,7 @@ export type HttpClaimApi<
   // The try-claim first: `queue: false` resolves `null` on a held target —
   // an expected outcome, not an error — while the queued default always
   // resolves a held claim or rejects with a queue error.
-  ((params: ClaimParams<Fields> & { queue: false }) => Promise<HeldClaim<T> | null>) &
+  ((params: ClaimSkipParams<Fields>) => Promise<HeldClaim<T> | null>) &
   ((params: ClaimParams<Fields>) => Promise<HeldClaim<T>>) & {
     [K in keyof ClaimReadApi<T>]: AwaitedClaimMethod<ClaimReadApi<T>[K]>;
   };

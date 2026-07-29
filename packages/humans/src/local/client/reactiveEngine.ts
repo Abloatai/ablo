@@ -62,6 +62,10 @@ import type {
   CreateAgentSessionParams,
   CreateSessionParams,
 } from './resourceTypes.js';
+import {
+  claimAttemptFailure,
+  emitClaimStatus,
+} from '@abloatai/transaction/resources/modelOperations';
 import { createModelProxy, type ModelOperations } from './createModelProxy.js';
 import { assertWriteOptions } from '@abloatai/transaction/resources/writeOptionsSchema';
 import type { AbloClient as Ablo } from '../../client.js';
@@ -409,8 +413,8 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      return Promise.resolve();
 	    };
 	    // The token is server-stamped and arrives on the grant frame, so prefer
-	    // the one `awaitClaimGrant` read there; fall back to any the local handle
-	    // already carried (immediate, non-queued grants).
+	    // the one `awaitClaimGrant` read there; retain the handle fallback for
+	    // wire-compatible transports that already stamped it locally.
 	    const resolvedFenceToken = fenceToken ?? claim.fenceToken;
 	    return {
 	      object: 'claim',
@@ -433,6 +437,38 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	  const publicClaims: ClaimResource = Object.assign(claimStream, {
 	    async create(claimOptions: ClaimCreateOptions): Promise<Claim> {
 	      await ready();
+	      // Subscribe before announcing the claim. A fast rejection can arrive
+	      // in the same turn as `send` in tests and on a low-latency socket; if
+	      // the listener is installed afterwards, that authoritative answer is
+	      // lost and the locally minted handle looks like a grant.
+	      const claimId = crypto.randomUUID();
+	      const grant = awaitClaimGrant(transport, claimId, {
+	        timeoutMs: claimOptions.waitTimeoutMs,
+	        maxQueueDepth: claimOptions.maxQueueDepth,
+	        signal: claimOptions.signal,
+	        logger,
+	        onQueued: ({ position }) => {
+	          emitClaimStatus(claimOptions.onStatus, {
+	            type: 'queued',
+	            claimId,
+	            position,
+	            ahead: position + 1,
+	          });
+	        },
+	        onGranted: ({ waited }) => {
+	          emitClaimStatus(claimOptions.onStatus, {
+	            type: 'granted',
+	            claimId,
+	            waited,
+	          });
+	        },
+	        onFailed: (error) => {
+	          emitClaimStatus(
+	            claimOptions.onStatus,
+	            claimAttemptFailure(claimOptions.queue !== false, error),
+	          );
+	        },
+	      });
 	      const claim = claimStream.claim(
 	        {
 	          ...streamTarget(claimOptions.target),
@@ -443,31 +479,17 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	          ttl: claimOptions.ttl,
 	          queue: claimOptions.queue,
 	        },
+	        claimId,
 	      );
-	      // With `queue`, the claim is only really *ours* once the server says
-	      // so (`claim_acquired` if the target was free, `claim_granted` once
-	      // we reach the head of the FIFO line). Block here on that grant so
-	      // callers — chiefly `ablo.<model>.claim` — get a handle that already
-	      // holds the lease, never a half-claimed one racing the queue.
-	      let waited = false;
-	      let fenceToken: number | undefined;
-	      let readAt: number | undefined;
-	      if (claimOptions.queue) {
-	        try {
-	          ({ waited, fenceToken, readAt } = await awaitClaimGrant(transport, claim.id, {
-	            timeoutMs: claimOptions.waitTimeoutMs,
-	            maxQueueDepth: claimOptions.maxQueueDepth,
-	            signal: claimOptions.signal,
-	            logger,
-	          }));
-	        } catch (err) {
-	          // Gave up waiting (queue too deep, timed out, or lost) — abandon
-	          // the queued claim so we don't leave a phantom entry in the
-	          // line that would block or mislead other claimers.
-	          claim.revoke?.();
-	          throw err;
-	        }
-	      }
+	      // A claim is ours only after the server says so. This applies equally
+	      // to queued claims and try-claims (`queue: false`): the latter must
+	      // observe `claim_rejected` instead of returning a phantom handle.
+	      const { waited, fenceToken, readAt } = await grant.catch((err: unknown) => {
+	        // Give up the local/reconnect record after any rejection, timeout,
+	        // abort, or lost lease. For queued claims this also leaves the line.
+	        claim.revoke?.();
+	        throw err;
+	      });
 	      return wrapClaimHandle(claim, waited, fenceToken, readAt);
 	    },
 	    list(target?: Partial<ModelTarget>): readonly ModelClaim[] {

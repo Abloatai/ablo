@@ -12,7 +12,7 @@
 
 import type { ModelScope } from '../types/index.js';
 import type { ResolveClaimMeta } from '../types/global.js';
-import type { AbloClaimedError } from '../errors.js';
+import type { AbloError } from '../errors.js';
 import type { StaleNotification, TrackDependency } from '../coordination/schema.js';
 import type { FieldRef, FieldSelector } from '../schema/fieldRef.js';
 import type { BaseModelFields } from '../schema/schema.js';
@@ -28,6 +28,112 @@ import type {
 } from '../types/streams.js';
 import type { MutationOptions } from './mutationOptions.js';
 import type { LoadWhere } from './where.js';
+
+/**
+ * One authoritative status transition for a claim attempt. This is scoped
+ * to the request that supplied the callback, unlike `claim.state` / `queue`,
+ * which are reactive snapshots of everyone on the row.
+ */
+export type ClaimAttemptEvent =
+  | {
+      readonly type: 'queued';
+      readonly claimId: string;
+      /** Zero-based place in line (`0` means next behind the holder). */
+      readonly position: number;
+      /** Human-readable count of waiters ahead, including the current holder. */
+      readonly ahead: number;
+    }
+  | {
+      readonly type: 'granted';
+      readonly claimId: string;
+      /** True when this request waited in line before it was granted. */
+      readonly waited: boolean;
+    }
+  | {
+      readonly type: 'skipped';
+      /** The typed contention error behind the expected `null` result. */
+      readonly error: AbloError;
+    }
+  | {
+      readonly type: 'failed';
+      /** The same typed Ablo error the claim promise rejects with. */
+      readonly error: AbloError;
+    };
+
+export interface ClaimContentionOptions {
+  /**
+   * `wait` (default) joins the FIFO line. `skip` resolves the model try-claim
+   * as `null` when another participant holds the target.
+   */
+  readonly mode?: 'wait' | 'skip';
+  /** Fail instead of joining at or beyond this zero-based queue depth. */
+  readonly maxDepth?: number;
+  /** Maximum queue wait in milliseconds. */
+  readonly timeoutMs?: number;
+  /** Abort the pending wait. Ignored after the grant. */
+  readonly signal?: AbortSignal;
+  /**
+   * Request-scoped attempt statuses. The callback is observational:
+   * throwing from it never changes whether the claim is granted or skipped.
+   */
+  readonly onStatus?: (event: ClaimAttemptEvent) => void;
+}
+
+export interface ResolvedClaimContentionOptions {
+  readonly wait: boolean;
+  readonly maxDepth?: number;
+  readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
+  readonly onStatus?: (event: ClaimAttemptEvent) => void;
+}
+
+/** One compatibility boundary for structured contention and legacy queue options. */
+export function resolveClaimContentionOptions(options: {
+  readonly queue?: boolean;
+  readonly contention?: ClaimContentionOptions;
+  readonly maxQueueDepth?: number;
+  readonly waitTimeoutMs?: number;
+  readonly signal?: AbortSignal;
+}): ResolvedClaimContentionOptions {
+  const structured = options.contention;
+  const maxDepth = structured?.maxDepth ?? options.maxQueueDepth;
+  const timeoutMs = structured?.timeoutMs ?? options.waitTimeoutMs;
+  const signal = structured?.signal ?? options.signal;
+  return {
+    wait: structured
+      ? structured.mode !== 'skip'
+      : options.queue !== false,
+    ...(maxDepth !== undefined ? { maxDepth } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(signal !== undefined ? { signal } : {}),
+    ...(structured?.onStatus !== undefined
+      ? { onStatus: structured.onStatus }
+      : {}),
+  };
+}
+
+/** Emit a status without letting an observer alter the claim attempt. */
+export function emitClaimStatus(
+  listener: ((event: ClaimAttemptEvent) => void) | undefined,
+  event: ClaimAttemptEvent,
+): void {
+  try {
+    listener?.(event);
+  } catch {
+    // The claim attempt is authoritative; telemetry/UI callbacks are not.
+  }
+}
+
+/** Separate expected skipped work from an actual failed claim attempt. */
+export function claimAttemptFailure(
+  wait: boolean,
+  error: AbloError,
+): ClaimAttemptEvent {
+  const code = error.code;
+  return !wait && (code === 'claim_conflict' || code === 'entity_claimed')
+    ? { type: 'skipped', error }
+    : { type: 'failed', error };
+}
 
 /**
  * A lifecycle filter, accepted either as the enum or as its bare string. The
@@ -142,8 +248,7 @@ export type ClaimField<T> = FieldRef<
  * - **what you claim** — `fields`, selected from the model's Zod shape;
  *   narrowed below the row;
  * - **what others see** — `description` / `meta`, the presence half;
- * - **how you wait** — `queue` / `maxQueueDepth` / `waitTimeoutMs` /
- *   `signal`, admission to the line;
+ * - **how you wait** — structured `queue`, admission to the line;
  * - **how long you hold** — `ttl` / `heartbeat`, the lease.
  */
 export interface ClaimTargetOptions<T = Record<string, unknown>> {
@@ -175,18 +280,20 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    */
   meta?: ResolveClaimMeta;
 
-  // ── How you wait — admission to the line ───────────────────────────────
+  // ── How you handle contention ──────────────────────────────────────────
 
   /**
-   * Behavior under contention. `true` (the default) queues behind the current
-   * holder and resolves once the row is yours. `false` is fail-fast: if another
-   * participant already holds the row, it rejects immediately with
-   * {@link AbloClaimedError} instead of waiting. Use `false` to deduplicate
-   * distributed work ("if someone else has this job, skip it"), where waiting
-   * would mean double-processing.
+   * Behavior under contention. Prefer the structured form so the decision,
+   * bounds, cancellation, and request-scoped notifications stay together:
+   * `contention: { mode: 'wait', maxDepth, timeoutMs, signal, onStatus }`.
+   * `{ mode: 'skip' }` is claim-or-skip dedup.
    */
+  contention?: ClaimContentionOptions;
+  /** Concise compatibility shorthand: `true` waits and `false` skips. */
   queue?: boolean;
   /**
+   * @deprecated Prefer `contention: { maxDepth }`.
+   *
    * Backpressure: queue, but not behind too many others. If the server reports a
    * position at or beyond `maxQueueDepth` when the client joins the line, it
    * rejects with {@link AbloClaimedError} (`queue_too_deep`) instead of waiting.
@@ -194,6 +301,8 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    */
   maxQueueDepth?: number;
   /**
+   * @deprecated Prefer `contention: { timeoutMs }`.
+   *
    * Cap on how long a queued claim waits for its grant before rejecting with
    * {@link AbloClaimedError} (`grant_timeout`). Omit to wait as long as the
    * line takes. Same meaning on both transports; on the stateless HTTP client
@@ -201,6 +310,8 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    */
   waitTimeoutMs?: number;
   /**
+   * @deprecated Prefer `contention: { signal }`.
+   *
    * Abort a pending wait from outside — the same signal that cancels
    * everything else in the program, so a cancelled agent task or an unmounted
    * component takes its queued claim with it. Rejects with
@@ -234,6 +345,14 @@ export interface ClaimParams<T = Record<string, unknown>>
   readonly id: string;
 }
 
+/** The two fail-fast spellings, kept as one overload discriminator. */
+export type ClaimSkipParams<T = Record<string, unknown>> =
+  ClaimParams<T> & {
+    readonly queue: false;
+  } | ClaimParams<T> & {
+    readonly contention: ClaimContentionOptions & { readonly mode: 'skip' };
+  };
+
 export interface ClaimLookupParams<T = Record<string, unknown>> {
   readonly id: string;
 }
@@ -241,6 +360,32 @@ export interface ClaimLookupParams<T = Record<string, unknown>> {
 export interface ClaimReorderParams<T = Record<string, unknown>>
   extends ClaimLookupParams<T> {
   readonly order: readonly Claim[];
+}
+
+/**
+ * One wait-line snapshot. `data` preserves the standard list-envelope shape;
+ * the named aliases make coordination code read without unpacking conventions.
+ */
+export interface ClaimQueueView<M = ResolveClaimMeta> {
+  readonly object: 'list';
+  readonly data: readonly Claim<Record<string, unknown>, M>[];
+  /** The same ordered array as `data`, named for what it contains. */
+  readonly waiting: readonly Claim<Record<string, unknown>, M>[];
+  readonly size: number;
+  /** The next participant to receive the lease, or `null` when the line is empty. */
+  readonly next: Claim<Record<string, unknown>, M> | null;
+}
+
+export function claimQueueView<M = ResolveClaimMeta>(
+  waiting: readonly Claim<Record<string, unknown>, M>[],
+): ClaimQueueView<M> {
+  return {
+    object: 'list',
+    data: waiting,
+    waiting,
+    size: waiting.length,
+    next: waiting[0] ?? null,
+  };
 }
 
 /**
@@ -271,6 +416,13 @@ export interface ClaimReorderParams<T = Record<string, unknown>>
 export type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim, HeldLease };
 
 export type ClaimOptions<T = Record<string, unknown>> = ClaimTargetOptions<T>;
+
+export type ClaimSkipOptions<T = Record<string, unknown>> =
+  ClaimOptions<T> & {
+    readonly queue: false;
+  } | ClaimOptions<T> & {
+    readonly contention: ClaimContentionOptions & { readonly mode: 'skip' };
+  };
 
 /**
  * The coordination surface for a model, exposed as a callable namespace.
@@ -346,10 +498,7 @@ export interface ClaimReadApi<T = Record<string, unknown>> {
    */
   queue<M = ResolveClaimMeta>(
     params: ClaimLookupParams<T>,
-  ): {
-    readonly object: 'list';
-    readonly data: readonly Claim<Record<string, unknown>, M>[];
-  };
+  ): ClaimQueueView<M>;
 
   /**
    * Re-rank the wait line. Advanced and permission-gated.
@@ -376,14 +525,15 @@ export interface ClaimApi<
   Fields = T,
 > extends ClaimReadApi<T> {
   /**
-   * The try-claim: `queue: false` treats a held target as an expected outcome,
-   * not an error — it resolves `null`, so claim-or-skip dedup reads
+   * The try-claim: `contention: { mode: 'skip' }` (or `queue: false`)
+   * treats a held target as an expected outcome, not an error — it resolves
+   * `null`, so claim-or-skip dedup reads
    * `if (!claim) return` with no try/catch. Who holds it, and why, stays
    * readable through `claim.state({ id })`. (A write to a row someone else
    * holds still rejects with `entity_claimed` — a failed write is an error;
-   * a declined try is not.)
+   * a skipped try is not.)
    */
-  (params: ClaimParams<Fields> & { queue: false }): Promise<HeldClaim<T> | null>;
+  (params: ClaimSkipParams<Fields>): Promise<HeldClaim<T> | null>;
   /**
    * Takes a claim and returns an explicit held-work handle — a {@link HeldClaim}.
    * `data`, `release`, `revoke`, and the async disposer are always present (this
@@ -392,7 +542,7 @@ export interface ClaimApi<
    */
   (params: ClaimParams<Fields>): Promise<HeldClaim<T>>;
   /** The row-free try-claim — `null` when the key is already held. */
-  (id: string, opts: ClaimOptions<Fields> & { queue: false }): Promise<HeldLease | null>;
+  (id: string, opts: ClaimSkipOptions<Fields>): Promise<HeldLease | null>;
   /**
    * Takes a claim by id alone, for a row that lives only in the customer's own
    * database — Ablo has never seen it, so there is nothing to re-read. Returns a

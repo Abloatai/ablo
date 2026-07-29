@@ -78,6 +78,11 @@ export type {
   ServerRetrieveOptions,
   ClaimTargetOptions,
   ClaimParams,
+  ClaimContentionOptions,
+  ClaimAttemptEvent,
+  ClaimQueueView,
+  ClaimSkipOptions,
+  ClaimSkipParams,
   ClaimLookupParams,
   ClaimReorderParams,
   ClaimOptions,
@@ -97,6 +102,10 @@ import type {
   ClaimLookupParams,
   ClaimOptions,
   ClaimParams,
+  ClaimSkipOptions,
+  ClaimSkipParams,
+  ClaimAttemptEvent,
+  ClaimQueueView,
   ClaimReorderParams,
   JoinOptions,
   LocalCountOptions,
@@ -108,6 +117,10 @@ import type {
   ModelTrackResult,
   ModelUpdateParams,
   ServerReadOptions,
+} from '@abloatai/transaction/resources/modelOperations';
+import {
+  claimQueueView,
+  resolveClaimContentionOptions,
 } from '@abloatai/transaction/resources/modelOperations';
 import type { HttpModelClient } from '@abloatai/transaction/transport/httpClient';
 import type { ParticipantKind } from '@abloatai/transaction/types/participant';
@@ -160,6 +173,8 @@ export interface ModelCollaboration {
     waitTimeoutMs?: number;
     /** Abort the queued wait — rejects with `claim_wait_aborted`. */
     signal?: AbortSignal;
+    /** Request-scoped queued / granted / skipped / failed status events. */
+    onStatus?: (event: ClaimAttemptEvent) => void;
   }): Promise<Claim>;
   createSnapshot(modelKey: string, id: string): Snapshot;
   /**
@@ -557,23 +572,13 @@ export function createModelProxy<T, C>(
       );
     }
     const { id, ...options } = params;
-    // Is someone else already on this target? Read the local coordination
-    // snapshot up front — it decides whether a re-read is needed after the
-    // claim (a free or already-held target cannot have changed underneath us).
+    // Read the local snapshot only to decide whether a post-grant re-read may
+    // be needed. Admission itself always goes to the server: a local presence
+    // snapshot may be stale or incomplete across instances.
     const held = collaboration.state({ model: wireModel, id });
     const contended = !!held && held.heldBy !== collaboration.selfParticipantId;
-    const failFast = options.queue === false;
-
-    // The try-claim (`queue: false`): a held target is an expected outcome,
-    // not an error, so it resolves `null` — the caller reads `if (!claim)`
-    // and moves on; who holds it stays readable via `claim.state`. Best-effort
-    // at the client (a racing claim not yet synced into our snapshot slips
-    // through here) — the commit-time claim guard is the authoritative
-    // backstop that rejects the loser's first write. For work-distribution
-    // dedup that's exactly right: don't wait (that would double-process), skip.
-    if (failFast && contended) {
-      return null;
-    }
+    const contention = resolveClaimContentionOptions(options);
+    const failFast = !contention.wait;
 
     // Ensure the row exists locally before claiming.
     let model = ownRowOrThrow(id);
@@ -599,27 +604,41 @@ export function createModelProxy<T, C>(
 
     // Acquire the lease. By default (`queue` is not false) this goes through the
     // server's fair FIFO queue: `queue: true` resolves only once the lease is
-    // genuinely ours, blocking behind any current holder, with no check-then-act
-    // gap because the server orders contenders. Fail-fast skips the queue: an
-    // observed conflict was already rejected above, so this just records the lease.
-    const lease = await collaboration.createClaim({
-      target: {
-        model: wireModel,
-        id,
-        // The whole sub-entity locator in one move — listing its members here
-        // is what let `fields` die between the caller and the lease, so the
-        // claim covered the whole row while the caller believed it named parts.
-        ...subTarget(options, schemaKey),
-      },
-      description: claimDescription(options),
-      ttl: options.ttl,
-      queue: !failFast,
-      maxQueueDepth: options.maxQueueDepth,
-      // The one wait cap, declared once on ClaimTargetOptions — the socket
-      // wait and the HTTP poll-wait both honor it as `grant_timeout`.
-      waitTimeoutMs: options.waitTimeoutMs,
-      signal: options.signal,
-    });
+    // genuinely ours, blocking behind any current holder. Fail-fast skips the
+    // queue but still awaits the server: a conflict invisible in the local
+    // snapshot resolves `null`, never a speculative handle.
+    let lease: Claim;
+    try {
+      lease = await collaboration.createClaim({
+        target: {
+          model: wireModel,
+          id,
+          // The whole sub-entity locator in one move — listing its members here
+          // is what let `fields` die between the caller and the lease, so the
+          // claim covered the whole row while the caller believed it named parts.
+          ...subTarget(options, schemaKey),
+        },
+        description: claimDescription(options),
+        ttl: options.ttl,
+        queue: contention.wait,
+        maxQueueDepth: contention.maxDepth,
+        // The one wait cap, declared once on ClaimTargetOptions — the socket
+        // wait and the HTTP poll-wait both honor it as `grant_timeout`.
+        waitTimeoutMs: contention.timeoutMs,
+        signal: contention.signal,
+        onStatus: contention.onStatus,
+      });
+    } catch (err) {
+      const normalized = toAbloError(err);
+      if (
+        failFast &&
+        normalized instanceof AbloClaimedError &&
+        normalized.code === 'claim_conflict'
+      ) {
+        return null;
+      }
+      throw normalized;
+    }
 
     // Only when the claim actually waited behind another holder can the row have
     // changed underneath us — re-read so the claimed snapshot reflects what that
@@ -748,22 +767,8 @@ export function createModelProxy<T, C>(
         { code: 'model_claim_not_configured' },
       );
     }
-    // Is someone else already on this target? Read the local coordination
-    // snapshot up front so a `queue: false` caller can reject before announcing
-    // a claim the server would refuse.
-    const held = collaboration.state({ model: wireModel, id });
-    const contended = !!held && held.heldBy !== collaboration.selfParticipantId;
-    const failFast = options.queue === false;
-
-    // The try-claim (`queue: false`): resolve `null` if a holder is already
-    // visible — an expected outcome, not an error. Best-effort at the client —
-    // a row this participant never synced usually carries no local claim state
-    // either, so a peer gets the deterministic `null` only once it has
-    // observed the holder (entered the row's entity scope). The server's
-    // queue is the backstop for the queuing path.
-    if (failFast && contended) {
-      return null;
-    }
+    const contention = resolveClaimContentionOptions(options);
+    const failFast = !contention.wait;
 
     // Enter the entity scope before acquiring the lease so the holder's claim
     // presence broadcasts to everyone in this entity group — the same ordering
@@ -772,24 +777,38 @@ export function createModelProxy<T, C>(
     // to hydrate here and nothing to re-read after the grant.
     await collaboration.pinScope?.({ [schemaKey]: id });
 
-    const lease = await collaboration.createClaim({
-      target: {
-        model: wireModel,
-        id,
-        // The whole sub-entity locator in one move — listing its members here
-        // is what let `fields` die between the caller and the lease, so the
-        // claim covered the whole row while the caller believed it named parts.
-        ...subTarget(options, schemaKey),
-      },
-      description: claimDescription(options),
-      ttl: options.ttl,
-      queue: !failFast,
-      maxQueueDepth: options.maxQueueDepth,
-      // The one wait cap, declared once on ClaimTargetOptions — the socket
-      // wait and the HTTP poll-wait both honor it as `grant_timeout`.
-      waitTimeoutMs: options.waitTimeoutMs,
-      signal: options.signal,
-    });
+    let lease: Claim;
+    try {
+      lease = await collaboration.createClaim({
+        target: {
+          model: wireModel,
+          id,
+          // The whole sub-entity locator in one move — listing its members here
+          // is what let `fields` die between the caller and the lease, so the
+          // claim covered the whole row while the caller believed it named parts.
+          ...subTarget(options, schemaKey),
+        },
+        description: claimDescription(options),
+        ttl: options.ttl,
+        queue: contention.wait,
+        maxQueueDepth: contention.maxDepth,
+        // The one wait cap, declared once on ClaimTargetOptions — the socket
+        // wait and the HTTP poll-wait both honor it as `grant_timeout`.
+        waitTimeoutMs: contention.timeoutMs,
+        signal: contention.signal,
+        onStatus: contention.onStatus,
+      });
+    } catch (err) {
+      const normalized = toAbloError(err);
+      if (
+        failFast &&
+        normalized instanceof AbloClaimedError &&
+        normalized.code === 'claim_conflict'
+      ) {
+        return null;
+      }
+      throw normalized;
+    }
 
     // A watermark-only snapshot: `createSnapshot` still reads the engine's
     // current `lastSyncId` even though the pool holds no row (the bucket is
@@ -881,12 +900,12 @@ export function createModelProxy<T, C>(
   const guardedTakeClaim = guard(takeClaim);
   const guardedTakeRowFreeClaim = guard(takeRowFreeClaim);
   function claim(
-    params: ClaimParams<C> & { queue: false },
+    params: ClaimSkipParams<C>,
   ): Promise<HeldClaim<T> | null>;
   function claim(params: ClaimParams<C>): Promise<HeldClaim<T>>;
   function claim(
     id: string,
-    opts: ClaimOptions<C> & { queue: false },
+    opts: ClaimSkipOptions<C>,
   ): Promise<HeldLease | null>;
   function claim(id: string, opts?: ClaimOptions<C>): Promise<HeldLease>;
   function claim(
@@ -973,11 +992,10 @@ export function createModelProxy<T, C>(
       };
     },
 
-    queue(params: ClaimLookupParams<T>): { readonly object: 'list'; readonly data: readonly Claim[] } {
-      return {
-        object: 'list',
-        data: collaboration?.queue({ model: wireModel, id: params.id }) ?? [],
-      };
+    queue(params: ClaimLookupParams<T>): ClaimQueueView {
+      return claimQueueView(
+        collaboration?.queue({ model: wireModel, id: params.id }) ?? [],
+      );
     },
 
     reorder(params: ClaimReorderParams<T>): void {
@@ -1086,6 +1104,7 @@ export function createModelProxy<T, C>(
         // race — see `takeClaim`). Released with the lease in the `finally`
         // below. Awaited for broadcast ordering; still best-effort.
         await collaboration.pinScope?.({ [schemaKey]: id });
+        const contention = resolveClaimContentionOptions(claim);
         autoLease = await collaboration.createClaim({
           target: {
             model: wireModel,
@@ -1094,8 +1113,11 @@ export function createModelProxy<T, C>(
           },
           description: claimDescription(claim, 'creating'),
           ttl: claim.ttl,
-          queue: claim.queue !== false,
-          maxQueueDepth: claim.maxQueueDepth,
+          queue: contention.wait,
+          maxQueueDepth: contention.maxDepth,
+          waitTimeoutMs: contention.timeoutMs,
+          signal: contention.signal,
+          onStatus: contention.onStatus,
         });
       }
 
@@ -1200,7 +1222,7 @@ export function createModelProxy<T, C>(
           params.claim && !isClaimHandle(params.claim) ? params.claim : null;
         if (autoClaim) {
           const handle = await takeClaim({ ...autoClaim, id: params.id });
-          // A declined try-claim is `null` only on the standalone verb; a
+          // A skipped try-claim is `null` only on the standalone verb; a
           // write that could not take its claim is a failed write.
           if (!handle) {
             throw new AbloClaimedError(

@@ -248,8 +248,18 @@ The same stable code covers two different enforcement layers, so inspect
 - `database_row_level_security`: Ablo's capability gate allowed the operation,
   but Postgres rejected it under the customer table's RLS policy.
   `details.databaseSessionContext` shows the organization, project, branch,
-  participant kind, user principal, and custom session-setting values applied
-  to that transaction.
+  participant kind, user principal, and the complete built-in-plus-custom
+  session-setting values configured for that transaction.
+  `customSessionSettings` isolates only the mappings declared by the schema;
+  an empty object there does not mean built-in settings such as
+  `app.current_org_id` were absent.
+
+Do not respond by changing a tenant policy to `USING (true)` or granting
+`BYPASSRLS`. Compare the row's tenant value with
+`databaseSessionContext.sessionSettings.app.current_org_id`. On CREATE, Ablo
+server-stamps the authenticated organization into the model's row-local tenancy
+field; a missing value is a server/version fault to report with `requestId`, not
+a requirement to make the column nullable or open the policy.
 
 Every rejected live commit carries `requestId` on the thrown error and
 `request_id` in its JSON form and warning line:

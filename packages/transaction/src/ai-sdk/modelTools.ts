@@ -10,6 +10,7 @@ import { tool, type ToolExecutionOptions } from 'ai';
 import type { z } from 'zod';
 import type {
   ClaimParams,
+  ClaimSkipParams,
   ModelCreateParams,
   ModelDeleteParams,
   ModelRetrieveParams,
@@ -22,7 +23,7 @@ export interface ToolModel<T, CreateInput = Partial<T>, Fields = T> {
   create(params: ModelCreateParams<T, CreateInput>): Promise<T>;
   delete(params: ModelDeleteParams<T, Fields>): Promise<void>;
   claim(
-    params: ClaimParams<Fields> & { queue: false },
+    params: ClaimSkipParams<Fields>,
   ): Promise<HeldClaim<T> | null>;
   claim(params: ClaimParams<Fields>): Promise<HeldClaim<T>>;
 }

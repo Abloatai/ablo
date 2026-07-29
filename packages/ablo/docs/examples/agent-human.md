@@ -54,15 +54,17 @@ export async function markDone(taskId: string) {
   if (!task) return { status: 'not_found' };
 
   try {
-    // queue: false → don't queue behind a current holder. If someone already
-    // holds the row, claim rejects with AbloClaimedError (caught below), so the
-    // agent yields instead of waiting. Omit it, or pass queue: true, to queue
-    // behind them. description → the label observers see while we work.
-    await using claim = await ablo.tasks.claim({
+    // queue: false → don't queue behind a current holder. If another
+    // participant holds the row, claim resolves null, so the agent yields
+    // instead of waiting. Omit it, or pass queue: true, to queue behind them.
+    const acquired = await ablo.tasks.claim({
       id: taskId,
       queue: false,
       description: 'marking_done',
     });
+    if (!acquired) return { status: 'yielded' };
+
+    await using claim = acquired;
     if (claim.data.status === 'done') return { status: 'noop' };
 
     // Inside an active claim, `update` is stale-checked automatically: the SDK
@@ -89,7 +91,7 @@ export async function markDone(taskId: string) {
 
     return { status: 'done', task: updated };
   } catch (err) {
-    // Someone already holds the row — yield this run and let them finish.
+    // The lease was lost or a foreign holder rejected the write.
     if (err instanceof AbloClaimedError) return { status: 'yielded' };
     // A newer version was saved while we held the claim. The stale-check
     // rejected our commit, so nothing was overwritten — re-run on fresh data.

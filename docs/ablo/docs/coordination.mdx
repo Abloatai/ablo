@@ -97,6 +97,13 @@ claim](#writing-under-a-claim)), and the [errors](#errors) you can catch.
 >
 > Now `agent-0` holds while `agent-1`/`agent-2` queue in FIFO order and drain in
 > turn. See [sessions](/sessions#agent-sessions-rk_) for the minting flow.
+>
+> **Testing exclusion:** mint two sessions with different `agent.id` values,
+> assert those values differ, let A acquire the row, and inspect
+> `claim.state({ id })` before B calls `claim({ id, queue: false })`. B must
+> receive `null`. Creating two clients from the same key tests re-entrancy, not
+> contention. An empty `claim.state` is an observation/subscription issue; it
+> does not relax the authoritative lease check.
 
 ---
 

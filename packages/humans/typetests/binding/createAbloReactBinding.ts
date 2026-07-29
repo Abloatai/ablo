@@ -31,6 +31,21 @@ export function TypeProbe(): null {
     // The schema's model keys resolve on the bound client, and the claim
     // options read the model's fields.
     void ablo.tasks.claim({ id: 't_1', field: 'title', queue: false });
+    void ablo.tasks.claim({
+      id: 't_1',
+      contention: {
+        mode: 'skip',
+        onStatus(event) {
+          if (event.type === 'queued') {
+            event.ahead satisfies number;
+          } else if (event.type === 'granted') {
+            event.waited satisfies boolean;
+          } else {
+            event.error.code satisfies string;
+          }
+        },
+      },
+    });
   }
 
   // A selector's parameter is the typed reactive-read view: the model key

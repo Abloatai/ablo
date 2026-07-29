@@ -29,24 +29,43 @@ const schema = defineSchema({
   }),
 });
 
-const ablo = Ablo({
+const control = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
-  transport: 'http',
 });
 
-export async function completeTask(taskId: string) {
+async function clientForWorker(workerId: string) {
+  const { token } = await control.sessions.create({
+    agent: { id: workerId },
+    can: { tasks: ['read', 'update'] },
+  });
+  return Ablo({ schema, apiKey: token, transport: 'http' });
+}
+
+export async function completeTask(taskId: string, workerId: string) {
+  // Participant identity comes from this worker-specific session. Two clients
+  // made directly from the same root key are re-entrant, not contenders.
+  const ablo = await clientForWorker(workerId);
   await ablo.ready();
 
   const task = await ablo.tasks.get({ id: taskId });
   if (!task) return { status: 'not_found' };
 
-  await using claim = await ablo.tasks.claim({
+  const acquired = await ablo.tasks.claim({
     id: taskId,
-    queue: false,
+    contention: {
+      mode: 'skip',
+      onStatus(event) {
+        if (event.type === 'skipped') {
+          console.info('task already owned', event.error.code);
+        }
+      },
+    },
     description: 'completing',
   });
+  if (!acquired) return { status: 'already_claimed' };
 
+  await using claim = acquired;
   const updated = await ablo.tasks.update({
     id: claim.data.id,
     data: { status: 'done' },
@@ -67,7 +86,7 @@ The two options on the claim:
 
 - `queue: false` — skip this record if another claim is already in progress,
   rather than queueing behind it. Fail-fast dedup: *if someone else has this job,
-  skip it.* (The default queues.)
+  skip it.* It resolves `null`; it does not throw. (The default queues.)
 - `description: 'completing'` — a readable label for what your worker is doing,
   visible to anyone reading `claim.state({ id })`.
 

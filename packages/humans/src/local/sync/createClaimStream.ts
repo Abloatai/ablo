@@ -88,13 +88,18 @@ const HEARTBEAT_ACK_TIMEOUT_MS = 10_000;
 
 export interface AttachableClaimStream extends ClaimStream {
   /**
-   * Mints a lease directly: sends the `claim_begin` frame and returns a held
-   * {@link Claim} that carries no row `data` (the resource layer reads the row
-   * and stamps it). This is an internal entry point, not part of the public
+   * Mints the local handle and sends its `claim_begin` frame. The handle is a
+   * request until the resource layer observes the server's grant; it must never
+   * be returned to application code before that acknowledgement. This is an
+   * internal entry point, not part of the public
    * {@link ClaimStream}; application code takes a claim through
    * `ablo.<model>.claim({ id })`, which is built on this.
+   *
+   * `claimId` lets that resource layer subscribe for the acknowledgement before
+   * this method sends. Omitting it preserves the direct stream API's generated
+   * id for internal callers that do not await the grant.
    */
-  claim(target: PresenceTarget, opts?: ClaimOptions): Claim;
+  claim(target: PresenceTarget, opts?: ClaimOptions, claimId?: string): Claim;
   attach(transport: ClaimTransport): void;
   /**
    * Seeds the participant identity once the host resolves it. The stream can
@@ -523,8 +528,9 @@ export function createClaimStream(
       ttl?: ClaimLeaseOptions['ttl'];
       queue?: boolean;
     },
+    requestedClaimId?: string,
   ): Claim {
-    const claimId = crypto.randomUUID();
+    const claimId = requestedClaimId ?? crypto.randomUUID();
     const estimatedMs = args.ttl !== undefined ? toMs(args.ttl) : undefined;
     // The handle the caller reads back is a public claim, so its `meta` is the
     // declared shape; the `OwnClaim` below stays wire-typed, because that is
@@ -589,6 +595,7 @@ export function createClaimStream(
     claim(
       target: PresenceTarget,
       opts?: ClaimOptions,
+      claimId?: string,
     ): Claim {
       const resolved = resolveTarget(target);
       return mintHandle({
@@ -597,7 +604,7 @@ export function createClaimStream(
         description: claimDescription({ ...opts, meta: resolved.meta }),
         ttl: opts?.ttl,
         queue: opts?.queue,
-      });
+      }, claimId);
     },
     get others() {
       return claimsSnapshot;

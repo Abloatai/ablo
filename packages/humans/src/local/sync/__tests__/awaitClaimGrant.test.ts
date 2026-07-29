@@ -142,6 +142,52 @@ describe('awaitClaimGrant', () => {
     await expect(p).resolves.toEqual({ waited: true });
   });
 
+  it('reports queued then granted through request-scoped structured hooks', async () => {
+    const t = fakeTransport();
+    const onQueued = jest.fn();
+    const onGranted = jest.fn();
+    const p = awaitClaimGrant(t, 'i1', { onQueued, onGranted });
+
+    t.emit('claim_queued', { claimId: 'i1', position: 2 });
+    t.emit('claim_granted', { claimId: 'i1', fenceToken: 7 });
+
+    await expect(p).resolves.toEqual({ waited: true, fenceToken: 7 });
+    expect(onQueued).toHaveBeenCalledWith({ claimId: 'i1', position: 2 });
+    expect(onGranted).toHaveBeenCalledWith({
+      claimId: 'i1',
+      waited: true,
+      fenceToken: 7,
+    });
+  });
+
+  it('reports the same typed failure the promise rejects with', async () => {
+    const t = fakeTransport();
+    const onFailed = jest.fn();
+    const p = awaitClaimGrant(t, 'i1', { onFailed });
+
+    t.emit('claim_rejected', {
+      claimId: 'i1',
+      reason: 'conflict',
+      target: { entityType: 'Task', entityId: 't1' },
+    });
+
+    const error = await p.catch((caught: unknown) => caught);
+    expect(onFailed).toHaveBeenCalledWith(error);
+    expect(error).toMatchObject({ code: 'claim_conflict' });
+  });
+
+  it('isolates observer callback failures from admission', async () => {
+    const t = fakeTransport();
+    const p = awaitClaimGrant(t, 'i1', {
+      onGranted: () => {
+        throw new Error('UI callback failed');
+      },
+    });
+
+    t.emit('claim_acquired', { claimId: 'i1' });
+    await expect(p).resolves.toEqual({ waited: false });
+  });
+
   it('ignores queue depth for other claims', async () => {
     const t = fakeTransport();
     const p = awaitClaimGrant(t, 'i1', { maxQueueDepth: 1 });
