@@ -136,6 +136,17 @@ export const datasourceValidationResponseSchema = z.object({
   connection: z.enum(['direct', 'endpoint']).optional().catch(undefined),
   reachable: z.boolean(),
   ready: z.boolean(),
+  /**
+   * A direct connection is not fully readable until Ablo has copied the rows
+   * that predate its replication slot into the sync log. Optional so an older
+   * server remains readable by a newer CLI.
+   */
+  initial_snapshot: z
+    .object({
+      status: z.enum(['loading', 'retrying', 'complete']),
+      detail: z.string().optional(),
+    })
+    .optional(),
   reason: z.string().optional(),
   failures: z.array(readinessFailureSchema).readonly(),
   advisories: z.array(readinessAdvisorySchema).readonly().optional(),

@@ -7,7 +7,10 @@ import { extractStatusCode } from './commitPayload.js';
 
 export interface FailureHandlingContext {
   readonly runtime: RuntimeContext;
-  readonly config: Pick<MutationQueueConfig, 'enableOptimistic' | 'maxRetries' | 'retryBackoff'>;
+  readonly config: Pick<
+    MutationQueueConfig,
+    'enableOptimistic' | 'maxRetries' | 'retryBackoff' | 'availabilityRetryWindowMs'
+  >;
   readonly store: MutationStore;
   readonly isPermanentError: (error: Error) => boolean;
   readonly rollbackOptimistic: (transaction: QueuedMutation, reason: string, error?: Error) => Promise<void>;
@@ -15,6 +18,21 @@ export interface FailureHandlingContext {
   readonly getLastPermanentErrorSignature: () => string | undefined;
   readonly setLastPermanentErrorSignature: (signature: string) => void;
   readonly emit: (event: string, payload: object) => boolean;
+}
+
+export function transientRetryDelayMs(
+  error: Error,
+  attempt: number,
+  retryBackoff: MutationQueueConfig['retryBackoff'],
+): number {
+  const { baseMs, capMs } = retryBackoff;
+  let base = baseMs;
+  try {
+    const status = extractStatusCode(error);
+    if (status === 429 || status === 503) base = Math.max(baseMs, 1_000);
+  } catch {}
+  const ceiling = Math.min(capMs, base * Math.pow(2, Math.max(0, attempt - 1)));
+  return Math.floor(Math.random() * ceiling);
 }
 
 export async function handleFailure(ctx: FailureHandlingContext, transaction: QueuedMutation, error: Error): Promise<void> {
@@ -120,20 +138,17 @@ export async function handleFailure(ctx: FailureHandlingContext, transaction: Qu
       return;
     }
 
-    if (transaction.attempts < ctx.config.maxRetries) {
+    transaction.firstTransientFailureAt ??= Date.now();
+    const insideAvailabilityWindow =
+      Date.now() - transaction.firstTransientFailureAt < ctx.config.availabilityRetryWindowMs;
+
+    if (transaction.attempts < ctx.config.maxRetries || insideAvailabilityWindow) {
       // Exponential backoff with full jitter on every transient retry:
       // `sleep = random(0, min(cap, base * 2^attempt))`. Throttling responses
       // (429/503) use a longer base than other transient errors. The re-enqueue
       // is scheduled rather than awaited, so one backing-off transaction cannot
       // stall unrelated commits.
-      const { baseMs, capMs } = ctx.config.retryBackoff;
-      let base = baseMs;
-      try {
-        const status = extractStatusCode(error);
-        if (status === 429 || status === 503) base = Math.max(baseMs, 1_000);
-      } catch {}
-      const ceiling = Math.min(capMs, base * Math.pow(2, transaction.attempts - 1));
-      const delay = Math.floor(Math.random() * ceiling);
+      const delay = transientRetryDelayMs(error, transaction.attempts, ctx.config.retryBackoff);
 
       ctx.store.updateStatus(transaction.id, 'pending');
       setTimeout(() => {

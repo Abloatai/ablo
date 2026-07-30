@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.46.0
+
+### Pre-existing rows arrive on their own
+
+Connecting a database that already holds data no longer leaves those rows
+invisible until something touches them. Ablo snapshots the pre-existing rows
+automatically, `ablo connect check` refuses to report ready until that
+snapshot completes, and `ablo status --json` exposes the progress as
+`initialSnapshot.status`: `loading`, `retrying` with the underlying error, or
+`complete`. Keep an existing read fallback in place until the status reads
+`complete`. Row-touch backfill scripts are unnecessary; the snapshot is the
+engine's job.
+
 ## 0.45.0
 
 ### Claim admission is authoritative

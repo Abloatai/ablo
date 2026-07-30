@@ -108,6 +108,8 @@ export interface QueuedMutation {
   status: 'pending' | 'executing' | 'awaiting_delta' | 'completed' | 'failed' | 'rolled_back';
   createdAt: number;
   attempts: number;
+  /** First transient dispatch failure in the current availability incident. */
+  firstTransientFailureAt?: number;
   priority: 'normal' | 'high';
   priorityScore: number; // foreign-key-aware priority, derived, used for sorting
   writeOptions?: WriteOptions;

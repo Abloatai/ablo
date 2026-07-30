@@ -626,10 +626,9 @@ export async function auditTenantSyncInfra(
       artifact.kind === 'table' || artifact.kind === 'type'
         ? `public.${artifact.name}`
         : artifact.name;
-    const rows = await sql.unsafe<{ present: boolean | null }[]>(
-      FOOTPRINT_LOOKUP[artifact.kind],
-      [key] as never[]
-    );
+    const rows = await sql.unsafe<{ present: boolean | null }[]>(FOOTPRINT_LOOKUP[artifact.kind], [
+      key,
+    ] as never[]);
     artifacts.push({
       kind: artifact.kind,
       name: artifact.name,
@@ -790,12 +789,37 @@ async function runCheck(): Promise<void> {
     const { label, fix } = describeRemoteFailure(failure);
     printCheckItem({ ok: false, label, fix });
   }
+  if (result.initialSnapshot?.status === 'complete') {
+    printCheckItem({ ok: true, label: 'Rows that existed before connecting are loaded' });
+  } else if (result.initialSnapshot?.status === 'loading') {
+    printCheckItem({
+      ok: false,
+      label: 'Rows that existed before connecting are still loading',
+      fix: 'No SQL or row-touch script is needed. Ablo snapshots published tables automatically; wait a moment, then rerun `ablo connect check`.',
+    });
+  } else if (result.initialSnapshot?.status === 'retrying') {
+    printCheckItem({
+      ok: false,
+      label: 'Loading existing rows hit an error and Ablo is retrying',
+      fix: `${result.initialSnapshot.detail ?? 'The replication worker reported an error.'}\nNo row updates are needed. Fix the reported connection or database issue, then rerun \`ablo connect check\`.`,
+    });
+  }
   console.log();
   if (result.ready) {
     console.log(
       `  ${pc.green('✓')} Ready — checked from Ablo's infrastructure. Ablo can apply scoped DML and settle it from WAL.\n`
     );
     process.exit(0);
+  }
+  if (
+    (result.initialSnapshot?.status === 'loading' ||
+      result.initialSnapshot?.status === 'retrying') &&
+    result.failures.length === 0
+  ) {
+    console.log(
+      `  ${pc.yellow('—')} Not ready yet ${pc.dim(`— Ablo is loading existing rows. Re-run ${pc.bold('ablo connect check')} shortly.`)}\n`
+    );
+    process.exit(1);
   }
   const count = result.failures.length;
   console.log(
@@ -886,7 +910,7 @@ async function runScan(): Promise<void> {
   await sql.end({ timeout: 2 });
 
   console.log(
-    `\n  ${brand('ablo')} ${pc.dim('connect scan')}  ${pc.dim("what Ablo has in this database")}\n`
+    `\n  ${brand('ablo')} ${pc.dim('connect scan')}  ${pc.dim('what Ablo has in this database')}\n`
   );
   const present = artifacts.filter((a) => a.present);
   if (present.length === 0) {
@@ -921,7 +945,7 @@ async function runScan(): Promise<void> {
     }
     console.log(
       `\n  ${pc.dim('Nothing is dropped for you — removing any of it is your call. Once this ')}` +
-        `${pc.dim("database is disconnected, none of it is read again.")}\n`
+        `${pc.dim('database is disconnected, none of it is read again.')}\n`
     );
   }
 
@@ -1023,7 +1047,7 @@ export async function connect(argv: readonly string[]): Promise<void> {
     } catch (error) {
       throw new AbloValidationError(
         `could not load --env-file ${args.envFile}: ${error instanceof Error ? error.message : String(error)}`,
-        { code: 'cli_invalid_arguments' },
+        { code: 'cli_invalid_arguments' }
       );
     }
   }

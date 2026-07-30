@@ -97,10 +97,9 @@ claim](#writing-under-a-claim)), and the [errors](#errors) you can catch.
 >
 > **Testing exclusion:** mint two sessions with different `agent.id` values,
 > assert those values differ, let A acquire the row, and inspect
-> `claim.state({ id })` before B calls `claim({ id, queue: false })`. B must
-> receive `null`. Creating two clients from the same key tests re-entrancy, not
-> contention. An empty `claim.state` is an observation/subscription issue; it
-> does not relax the authoritative lease check.
+> `claim.state({ id })` before B calls
+> `claim({ id, contention: { mode: 'skip' } })`. B must receive `null`.
+> Creating two clients from the same key tests re-entrancy, not contention.
 
 ---
 
@@ -501,6 +500,13 @@ ablo.<model>.claim.state({ id })
 
 Read who's currently working on a row, for observers and UI. Synchronous and
 reactive (it reads the local coordination snapshot). Never blocks.
+
+The first call also starts row-scoped observation. Because that subscription is
+asynchronous, an imperative script may briefly read `null` before the reactive
+snapshot arrives; subscribe to changes or wait for the expected holder when the
+observation itself is the test. Late subscriptions are backfilled across server
+instances, and a skipped conflict attempt seeds its authoritative holder
+summary into the same snapshot immediately.
 
 **You don't subscribe to anything first.** Reading or claiming a row
 automatically enrolls you in that row's sync group: reading it (including

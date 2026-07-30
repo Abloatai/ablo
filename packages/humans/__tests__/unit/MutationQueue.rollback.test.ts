@@ -52,7 +52,7 @@ describe('MutationQueue Rollback', () => {
       config: {
       },
     });
-    queue = new MutationQueue({ batchDelay: 0, maxRetries: 1 });
+    queue = new MutationQueue({ batchDelay: 0, maxRetries: 1, availabilityRetryWindowMs: 0 });
   });
 
   afterEach(() => {
@@ -100,7 +100,11 @@ describe('MutationQueue Rollback', () => {
   describe('transient error retry', () => {
     it('should retry on network errors (transient) and eventually fail', async () => {
       // Use maxRetries: 1, so after 1 retry it fails
-      const localQueue = new MutationQueue({ batchDelay: 0, maxRetries: 2 });
+      const localQueue = new MutationQueue({
+        batchDelay: 0,
+        maxRetries: 2,
+        availabilityRetryWindowMs: 0,
+      });
       // 'transaction:failed' only fires once retries are EXHAUSTED — waiting on
       // it is the deterministic version of the old 500ms "hope retries finished"
       // sleep (the retries' backoff timers run at whatever pace they run).

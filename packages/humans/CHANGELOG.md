@@ -1,5 +1,12 @@
 # @abloatai/humans
 
+## 0.46.0
+
+### Patch Changes
+
+- Updated dependencies [534310b]
+  - @abloatai/transaction@0.46.0
+
 ## 0.45.0
 
 ### Patch Changes

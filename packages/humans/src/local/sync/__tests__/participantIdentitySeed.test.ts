@@ -102,4 +102,35 @@ describe('claim stream — setParticipant', () => {
     expect(stream.others).toHaveLength(1);
     expect(stream.others[0]?.heldBy).toBe('peer-2');
   });
+
+  it('hydrates foreign holder state from an authoritative conflict reply', () => {
+    const port = fakePort();
+    const stream = createClaimStream({ participantId: 'agent-b' }, port);
+    const now = Date.now();
+
+    expect(stream.others).toHaveLength(0);
+    port.emit('claim_rejected', {
+      claimId: 'attempt-b',
+      reason: 'conflict',
+      heldBy: 'agent-a',
+      heldByKind: 'agent',
+      heldByClaim: {
+        claimId: 'claim-a',
+        entityType: 'Task',
+        entityId: 't1',
+        description: 'editing',
+        declaredAt: now,
+        expiresAt: now + 60_000,
+      },
+    });
+
+    expect(stream.others).toHaveLength(1);
+    expect(stream.others[0]).toMatchObject({
+      id: 'claim-a',
+      heldBy: 'agent-a',
+      participantKind: 'agent',
+      status: 'active',
+      target: { type: 'Task', id: 't1' },
+    });
+  });
 });

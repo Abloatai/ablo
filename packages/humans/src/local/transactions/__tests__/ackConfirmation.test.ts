@@ -24,7 +24,11 @@ import type { TestContextResult } from '../../testing/mocks/MockSyncContext.js';
 import { createTaskFixture } from '../../testing/fixtures/models.js';
 import { waitFor } from '../../testing/helpers/wait.js';
 import type { StaleNotification } from '@abloatai/transaction/coordination/schema';
-import { AbloConnectionError, AbloNotFoundError } from '@abloatai/transaction/errors';
+import {
+  AbloConnectionError,
+  AbloError,
+  AbloNotFoundError,
+} from '@abloatai/transaction/errors';
 import type {
   DurableWriteStore,
   PendingWrite,
@@ -474,6 +478,53 @@ describe('ack-based transaction confirmation', () => {
       lastSyncId: 20_005,
     });
     expect(ctx.mocks.mutationExecutor.getCallsByMethod('commit')).toHaveLength(2);
+    await waitFor(
+      () => !outbox.records.has(commitEnvelopeRecordId(clientTxId)),
+    );
+  });
+
+  it('self-retries an atomic durable envelope throughout the availability window', async () => {
+    queue.dispose();
+    const outbox = new MemoryDurableWrites();
+    queue = new MutationQueue({
+      enablePersistence: true,
+      maxRetries: 1,
+      availabilityRetryWindowMs: 1_000,
+      retryBackoff: { baseMs: 1, capMs: 2 },
+    });
+    queue.setCommitOutbox(outbox);
+    ctx.mocks.mutationExecutor.failMethod(
+      'commit',
+      new AbloError('workspace route is being resolved', {
+        code: 'tenant_routing_failed',
+      }),
+    );
+
+    const clientTxId = 'aurora-promotion-retry';
+    await queue.enqueueCommit(clientTxId, [
+      {
+        type: 'UPDATE',
+        model: 'task',
+        id: 'task-1',
+        input: { title: 'exactly once' },
+      },
+    ]);
+
+    // More than maxRetries proves the lane is waking itself inside the
+    // failover-sized wall-clock window instead of waiting for another enqueue.
+    await waitFor(
+      () => ctx.mocks.mutationExecutor.getCallsByMethod('commit').length >= 3,
+    );
+    ctx.mocks.mutationExecutor.clearFailure('commit');
+    const receipt = await queue.waitForCommitReceipt(clientTxId);
+    expect(typeof receipt.lastSyncId).toBe('number');
+
+    const calls = ctx.mocks.mutationExecutor.getCallsByMethod('commit');
+    expect(calls.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(calls.map((call) => call.options?.idempotencyKey))).toEqual(
+      new Set([clientTxId]),
+    );
+    expect(calls.every((call) => call.operations?.[0]?.input?.title === 'exactly once')).toBe(true);
     await waitFor(
       () => !outbox.records.has(commitEnvelopeRecordId(clientTxId)),
     );

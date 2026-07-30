@@ -23,6 +23,7 @@ import { createTaskFixture } from '../../testing/fixtures/models.js';
 import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { model } from '@abloatai/transaction/schema/model';
 import { ModelScope } from '@abloatai/transaction/types';
+import { AbloError } from '@abloatai/transaction/errors';
 import type {
   DurableWriteStore,
   PendingWrite,
@@ -73,6 +74,7 @@ function memoryDatabase(): Database {
 
 interface CommitCall {
   ops: { type: string; id: string; input?: Record<string, unknown> }[];
+  idempotencyKey?: string;
 }
 
 /**
@@ -87,7 +89,7 @@ function scriptedExecutor(script: ('resolve' | 'reject' | 'hang')[]) {
   const unreachable = (method: string) =>
     Promise.reject(new Error(`scriptedExecutor: unexpected ${method} call`));
   const executor: import('../../interfaces/index.js').MutationExecutor = {
-    commit: (operations) => {
+    commit: (operations, options) => {
       const behavior = script[calls.length] ?? 'resolve';
       calls.push({
         ops: operations.map((op) => ({
@@ -95,6 +97,7 @@ function scriptedExecutor(script: ('resolve' | 'reject' | 'hang')[]) {
           id: op.id,
           ...(op.input !== undefined ? { input: op.input } : {}),
         })),
+        ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
       });
       if (behavior === 'hang') return new Promise(() => undefined);
       if (behavior === 'reject') {
@@ -298,6 +301,52 @@ describe('staged-batch drain liveness', () => {
       await eventually(() => pendingStagesOf(syncClient).size === 0, 15_000),
     ).toBe(true);
   }, 40_000);
+
+  it('retries the exact model-batch envelope throughout the availability window', async () => {
+    const { calls, executor } = scriptedExecutor([
+      'reject', 'reject', 'reject', 'resolve',
+    ]);
+    const queue = syncClient.getMutationQueue();
+    queue.setMutationExecutor(executor);
+    const config = Reflect.get(queue, 'config') as {
+      maxRetries: number;
+      availabilityRetryWindowMs: number;
+      retryBackoff: { baseMs: number; capMs: number };
+    };
+    config.maxRetries = 1;
+    config.availabilityRetryWindowMs = 1_000;
+    config.retryBackoff = { baseMs: 1, capMs: 2 };
+
+    // The scripted executor's generic rejection would be permanent by design.
+    // Replace only commit with the retryable server code observed during
+    // Aurora writer promotion.
+    let attempt = 0;
+    const originalCommit = executor.commit.bind(executor);
+    executor.commit = async (operations, options) => {
+      attempt += 1;
+      if (attempt <= 3) {
+        // Capture through the test double, then substitute the wire error.
+        try {
+          return await originalCommit(operations, options);
+        } catch {
+          throw new AbloError('workspace route is being resolved', {
+            code: 'tenant_routing_failed',
+          });
+        }
+      }
+      return originalCommit(operations, options);
+    };
+
+    const task = makeDirtyTask('survives promotion');
+    syncClient.update(task);
+
+    expect(await eventually(() => calls.length >= 4, 5_000)).toBe(true);
+    expect(
+      await eventually(() => pendingStagesOf(syncClient).size === 0, 5_000),
+    ).toBe(true);
+    expect(new Set(calls.map((call) => call.idempotencyKey)).size).toBe(1);
+    expect(calls.every((call) => call.ops[0]?.id === task.id)).toBe(true);
+  }, 15_000);
 
   it('a commit the transport never answers must not block writes to other rows', async () => {
     const { calls, executor } = scriptedExecutor(['hang']);

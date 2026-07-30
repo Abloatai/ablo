@@ -1,5 +1,18 @@
 # @abloatai/cli
 
+## 0.46.0
+
+### Patch Changes
+
+- 534310b: Connected Postgres databases now report their automatic initial-snapshot
+  progress through `ablo connect check`, `ablo status --json`, and `ablo doctor`.
+  A connection is not called ready while rows that predate its replication slot
+  are still loading, and the CLI and Data Source guide make clear that no manual
+  row-touch backfill is needed.
+- Updated dependencies [534310b]
+  - @abloatai/transaction@0.46.0
+  - @abloatai/humans@0.46.0
+
 ## 0.45.0
 
 ### Patch Changes

@@ -19,21 +19,21 @@ function codedError(code: string, message: string): Error {
 
 describe('dialFailureReason', () => {
   it('classifies DNS misses, refused/unrouteable connects, and dial timeouts', () => {
-    expect(dialFailureReason(codedError('ENOTFOUND', 'getaddrinfo ENOTFOUND db.x.supabase.co'))).toBe(
-      'getaddrinfo ENOTFOUND db.x.supabase.co',
-    );
+    expect(
+      dialFailureReason(codedError('ENOTFOUND', 'getaddrinfo ENOTFOUND db.x.supabase.co'))
+    ).toBe('getaddrinfo ENOTFOUND db.x.supabase.co');
     expect(dialFailureReason(codedError('ENETUNREACH', 'connect ENETUNREACH 2a05::1'))).toBe(
-      'connect ENETUNREACH 2a05::1',
+      'connect ENETUNREACH 2a05::1'
     );
     expect(dialFailureReason(codedError('CONNECT_TIMEOUT', 'write CONNECT_TIMEOUT'))).toBe(
-      'write CONNECT_TIMEOUT',
+      'write CONNECT_TIMEOUT'
     );
   });
 
   it('looks through AggregateError members (dual-stack connects report one error per family)', () => {
     const aggregate = new AggregateError(
       [codedError('ECONNREFUSED', 'connect ECONNREFUSED 1.2.3.4:5432')],
-      'All attempts failed',
+      'All attempts failed'
     );
     expect(dialFailureReason(aggregate)).toBe('connect ECONNREFUSED 1.2.3.4:5432');
   });
@@ -57,14 +57,16 @@ describe('describeRemoteFailure', () => {
     for (const item of READINESS_ITEMS) {
       const { label, fix } = describeRemoteFailure({ item, actual: 'public.users', fix: 'f' });
       expect(label).not.toBe(item);
-      expect(label).not.toMatch(/wal_level|\bpublication\b|REPLICATION attribute|DML|correlation marker|\blogical\b/i);
+      expect(label).not.toMatch(
+        /wal_level|\bpublication\b|REPLICATION attribute|DML|correlation marker|\blogical\b/i
+      );
       expect(fix).toBe('f');
     }
     expect(describeRemoteFailure({ item: 'wal_level', fix: 'f' }).label).toBe(
-      `your database isn't set up to share changes as they happen yet`,
+      `your database isn't set up to share changes as they happen yet`
     );
     expect(describeRemoteFailure({ item: 'replication_role', fix: 'f' }).label).toBe(
-      `the login Ablo reads with can't follow your changes yet`,
+      `the login Ablo reads with can't follow your changes yet`
     );
   });
 
@@ -114,7 +116,7 @@ describe('requestRemoteValidation', () => {
             reachable: true,
             ready: true,
             failures: [],
-          }),
+          })
         );
       },
     });
@@ -122,6 +124,59 @@ describe('requestRemoteValidation', () => {
     expect(seen.auth).toBe('Bearer sk_test_k');
     expect(seen.body).toEqual({ connectionString: 'postgres://u:p@db.x.supabase.co/db' });
     expect(result).toEqual({ ok: true, reachable: true, ready: true, failures: [] });
+  });
+
+  it('preserves initial-snapshot progress so connect check cannot hide missing historical rows', async () => {
+    const result = await requestRemoteValidation({
+      apiUrl: 'https://api.abloatai.com',
+      apiKey: 'sk_test_k',
+      fetchImpl: () =>
+        Promise.resolve(
+          jsonResponse(200, {
+            object: 'datasource_validation',
+            reachable: true,
+            ready: false,
+            initial_snapshot: { status: 'loading' },
+            failures: [],
+          })
+        ),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      reachable: true,
+      ready: false,
+      initialSnapshot: { status: 'loading' },
+      failures: [],
+    });
+  });
+
+  it('preserves the source error while an initial snapshot is retrying', async () => {
+    const result = await requestRemoteValidation({
+      apiUrl: 'https://api.abloatai.com',
+      apiKey: 'sk_test_k',
+      fetchImpl: () =>
+        Promise.resolve(
+          jsonResponse(200, {
+            object: 'datasource_validation',
+            reachable: true,
+            ready: false,
+            initial_snapshot: {
+              status: 'retrying',
+              detail: 'replication slot could not be created',
+            },
+            failures: [],
+          })
+        ),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      initialSnapshot: {
+        status: 'retrying',
+        detail: 'replication slot could not be created',
+      },
+    });
   });
 
   it('sends an empty body to validate the registered source — no credential, just the key', async () => {
@@ -138,7 +193,7 @@ describe('requestRemoteValidation', () => {
             reachable: true,
             ready: true,
             failures: [],
-          }),
+          })
         );
       },
     });
@@ -160,7 +215,7 @@ describe('requestRemoteValidation', () => {
               code: 'no_data_source_registered',
               message: 'No database is connected to this plane yet.',
             },
-          }),
+          })
         ),
     });
     expect(result.ok).toBe(false);
@@ -187,7 +242,7 @@ describe('requestRemoteValidation', () => {
               { item: 42, fix: 'nope' },
               'garbage',
             ],
-          }),
+          })
         ),
     });
     expect(result).toMatchObject({ ok: false, code: 'response_unrecognized' });
@@ -200,7 +255,7 @@ describe('requestRemoteValidation', () => {
       connectionString: 'postgres://u:p@h/db',
       fetchImpl: () =>
         Promise.resolve(
-          jsonResponse(200, { reachable: false, ready: false, reason: 'ENOTFOUND h', failures: [] }),
+          jsonResponse(200, { reachable: false, ready: false, reason: 'ENOTFOUND h', failures: [] })
         ),
     });
     expect(result).toEqual({
@@ -219,7 +274,7 @@ describe('requestRemoteValidation', () => {
       connectionString: 'postgres://u:p@h/db',
       fetchImpl: () =>
         Promise.resolve(
-          jsonResponse(403, { code: 'forbidden', message: 'forbidden: requires a secret API key' }),
+          jsonResponse(403, { code: 'forbidden', message: 'forbidden: requires a secret API key' })
         ),
     });
     expect(result).toEqual({

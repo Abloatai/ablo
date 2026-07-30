@@ -519,7 +519,8 @@ export async function registerDirectDataSource(opts: {
     console.log(
       `\n  ${pc.green('✓')} Registered${body.host ? ` ${pc.dim(body.host)}` : ''}${body.id ? ` ${pc.dim(`(${body.id})`)}` : ''} as a direct DataSource (${statusNote}).\n` +
         `  Your database is connected. Reads follow its replication stream; writes go through Ablo\n` +
-        `  and land in your own tables. Check the connection anytime with ${pc.cyan('ablo connect check')}.\n`
+        `  and land in your own tables. Rows that already exist load automatically — no manual\n` +
+        `  backfill or row updates. Check their progress with ${pc.cyan('ablo connect check')}.\n`
     );
     return true;
   }
@@ -529,7 +530,9 @@ export async function registerDirectDataSource(opts: {
   // here is rendering: the code-specific guidance a refusal deserves.
   const err = result.error;
   const detail = registerFailureDetailsSchema.safeParse(err.details ?? {});
-  const failures = detail.success ? (detail.data.failures ?? detail.data.details?.failures ?? []) : [];
+  const failures = detail.success
+    ? (detail.data.failures ?? detail.data.details?.failures ?? [])
+    : [];
   const reason = detail.success ? (detail.data.reason ?? detail.data.details?.reason) : undefined;
   console.error(pc.red(`\n  Registration failed: ${err.message}`));
   if (err.code === 'forbidden') {

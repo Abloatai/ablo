@@ -158,6 +158,15 @@ export interface MutationQueueConfig {
   maxBatchSize: number;
   batchDelay: number;
   maxRetries: number;
+  /**
+   * Minimum wall-clock window for retrying transient write failures with the
+   * same durable envelope and idempotency key. This absorbs managed-database
+   * promotion and brief regional network incidents without double-applying a
+   * write. Defaults to 120 seconds: the Aurora promotion drill recovered
+   * writes just beyond 60 seconds, so a one-minute boundary discarded exact
+   * envelopes at the instant the new writer became usable.
+   */
+  availabilityRetryWindowMs: number;
   conflictResolution: ConflictResolution;
   enablePersistence: boolean;
   enableOptimistic: boolean;
@@ -289,6 +298,7 @@ export class MutationQueue extends EventEmitter {
   private replicationLagTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
   private replicationLagErrors = new Map<string, AbloConnectionError>();
   private commitProcessing = false;
+  private commitRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private lastCommitSequence = 0;
   private durableReplayBlock: AbloIdempotencyError | null = null;
   /** Browser-backed strict outbox; absent for standalone/in-memory consumers. */
@@ -312,7 +322,11 @@ export class MutationQueue extends EventEmitter {
   private get commitLaneContext(): CommitLaneContext {
     return {
       runtime: this.runtime,
-      config: { maxRetries: this.config.maxRetries },
+      config: {
+        maxRetries: this.config.maxRetries,
+        availabilityRetryWindowMs: this.config.availabilityRetryWindowMs,
+        retryBackoff: this.config.retryBackoff,
+      },
       commitLane: this.commitLane,
       commitNotifications: this.commitNotifications,
       commitMissingIds: this.commitMissingIds,
@@ -336,6 +350,13 @@ export class MutationQueue extends EventEmitter {
       noteAck: (syncId) => this.noteAck(syncId),
       isDefinitiveRejection: (error) => this.isDefinitiveRejection(error),
       isPermanentError: (error) => this.isPermanentError(error),
+      scheduleRetry: (delayMs) => {
+        if (this.commitRetryTimer !== null) clearTimeout(this.commitRetryTimer);
+        this.commitRetryTimer = setTimeout(() => {
+          this.commitRetryTimer = null;
+          void this.processCommitLane();
+        }, delayMs);
+      },
       emitCommitLifecycle: (event, payload) => this.emitCommitLifecycle(event, payload),
     };
   }
@@ -782,6 +803,7 @@ export class MutationQueue extends EventEmitter {
     maxBatchSize: 50, // send up to this many operations per commit
     batchDelay: 150, // milliseconds to wait for more operations before sending
     maxRetries: 3,
+    availabilityRetryWindowMs: 120_000,
     conflictResolution: {
       strategy: 'last-write-wins',
     },
@@ -2003,6 +2025,10 @@ export class MutationQueue extends EventEmitter {
     if (this.commitOfflineGraceTimer !== null) {
       clearTimeout(this.commitOfflineGraceTimer);
       this.commitOfflineGraceTimer = null;
+    }
+    if (this.commitRetryTimer !== null) {
+      clearTimeout(this.commitRetryTimer);
+      this.commitRetryTimer = null;
     }
 
     // Clear store

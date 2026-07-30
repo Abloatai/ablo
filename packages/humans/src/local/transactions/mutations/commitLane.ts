@@ -1,12 +1,12 @@
 import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { ReadDependency, TrackDependency, OnStaleMode, StaleNotification } from '@abloatai/transaction/coordination/schema';
-import { AbloConnectionError } from '@abloatai/transaction/errors';
 import type { MutationCommitResult } from '@abloatai/transaction/wire/commit';
 import type {
   DurableCommitEnvelope,
   DurableCommitOperation,
 } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
 import type { SealDurableCommitInput } from './commitTransport.js';
+import { transientRetryDelayMs } from './failureHandling.js';
 
 export interface CommitTransaction {
   id: string;
@@ -26,6 +26,7 @@ export interface CommitTransaction {
   createdAt: number;
   attempts: number;
   transientAttempts?: number;
+  firstTransientFailureAt?: number;
   lastSyncId?: number;
   correlationId?: string;
   error?: Error;
@@ -38,7 +39,11 @@ export interface CommitTransaction {
 
 export interface CommitLaneContext {
   readonly runtime: RuntimeContext;
-  readonly config: { maxRetries: number };
+  readonly config: {
+    maxRetries: number;
+    availabilityRetryWindowMs: number;
+    retryBackoff: { baseMs: number; capMs: number };
+  };
   readonly commitLane: CommitTransaction[];
   readonly commitNotifications: Map<string, StaleNotification[]>;
   readonly commitMissingIds: Map<string, string[]>;
@@ -56,6 +61,7 @@ export interface CommitLaneContext {
   readonly noteAck: (syncId: number | undefined) => void;
   readonly isDefinitiveRejection: (error: Error) => boolean;
   readonly isPermanentError: (error: Error) => boolean;
+  readonly scheduleRetry: (delayMs: number) => void;
   readonly emitCommitLifecycle: (event: string, payload: object) => void;
 }
 
@@ -165,14 +171,24 @@ export async function processCommitLane(ctx: CommitLaneContext): Promise<void> {
       } catch (cause) {
         const error = cause instanceof Error ? cause : new Error(String(cause));
         if (dispatchStarted && ctx.isDefinitiveRejection(error)) await ctx.removeDurableCommit(tx.id);
-        if (!(error instanceof AbloConnectionError)) tx.transientAttempts = (tx.transientAttempts ?? 0) + 1;
-        const exhausted = (tx.transientAttempts ?? 0) > ctx.config.maxRetries;
+        tx.transientAttempts = (tx.transientAttempts ?? 0) + 1;
+        tx.firstTransientFailureAt ??= Date.now();
+        const outsideAvailabilityWindow =
+          Date.now() - tx.firstTransientFailureAt >= ctx.config.availabilityRetryWindowMs;
+        const exhausted =
+          tx.transientAttempts > ctx.config.maxRetries && outsideAvailabilityWindow;
         if (!ctx.isPermanentError(error) && !exhausted) {
           tx.status = 'pending';
+          const delayMs = transientRetryDelayMs(
+            error,
+            tx.transientAttempts,
+            ctx.config.retryBackoff,
+          );
           ctx.runtime.logger.debug('[MutationQueue] commit lane transient', {
             txId: tx.id.slice(0, 12), attempts: tx.attempts,
-            transientAttempts: tx.transientAttempts ?? 0, message: error.message,
+            transientAttempts: tx.transientAttempts, delayMs, message: error.message,
           });
+          ctx.scheduleRetry(delayMs);
           break;
         }
         tx.status = 'failed';

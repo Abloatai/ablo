@@ -44,6 +44,7 @@ import {
   claimDescription,
   descriptionFromMeta,
   participantKindFromWire,
+  type WireClaimSummary,
 } from '@abloatai/transaction/coordination/schema';
 import {
   isTargetTuple,
@@ -198,6 +199,38 @@ export function createClaimStream(
     }
   };
 
+  const observeForeignClaim = (
+    heldBy: string,
+    claim: WireClaimSummary,
+    participantKind?: 'user' | 'agent' | 'system',
+    isAgent?: boolean,
+  ): void => {
+    const description =
+      claim.description ??
+      descriptionFromMeta(claim.meta) ??
+      'editing';
+    const { meta, ...details } = subTarget(claim);
+    activeByClaimId.set(claim.claimId, {
+      object: 'claim',
+      id: claim.claimId,
+      status: 'active',
+      heldBy,
+      participantKind: participantKindFromWire(participantKind, isAgent),
+      target: {
+        ...streamTarget(claim),
+        ...details,
+        ...(meta !== undefined ? { meta: declaredMeta(meta) } : {}),
+      },
+      description,
+      ttlSeconds: Math.max(
+        0,
+        Math.floor((claim.expiresAt - Date.now()) / 1000),
+      ),
+      createdAt: claim.declaredAt,
+      expiresAt: claim.expiresAt,
+    });
+  };
+
   // ── Wire wiring ──────────────────────────────────────────────────
   let attached: ClaimTransport | null = null;
   const unsubs: (() => void)[] = [];
@@ -241,37 +274,12 @@ export function createClaimStream(
           // drops it from `others`, which is what resolves a contender's
           // `settled()`. Absent status means active (wire back-compat).
           if (claim.status && claim.status !== 'active') continue;
-          // Resolve the always-present public field, tolerating a frame that
-          // carries the value in `meta` rather than as an explicit description.
-          const description =
-            claim.description ??
-            descriptionFromMeta(claim.meta) ??
-            'editing';
-          // The frame is parsed permissively, on purpose; `declaredMeta` is where
-          // that wire value becomes the shape the program declared.
-          const { meta, ...details } = subTarget(claim);
-          activeByClaimId.set(claim.claimId, {
-            object: 'claim',
-            id: claim.claimId,
-            status: 'active',
-            heldBy: event.userId,
-            participantKind: participantKindFromWire(
-              event.participantKind,
-              event.isAgent,
-            ),
-            target: {
-              ...streamTarget(claim),
-              ...details,
-              ...(meta !== undefined ? { meta: declaredMeta(meta) } : {}),
-            },
-            description,
-            ttlSeconds: Math.max(
-              0,
-              Math.floor((claim.expiresAt - Date.now()) / 1000),
-            ),
-            createdAt: claim.declaredAt,
-            expiresAt: claim.expiresAt,
-          });
+          observeForeignClaim(
+            event.userId,
+            claim,
+            event.participantKind,
+            event.isAgent,
+          );
           mutated = true;
         }
         if (mutated) notifyListeners();
@@ -295,6 +303,22 @@ export function createClaimStream(
         // a claim the server already rejected (would just spam both
         // sides with conflicts).
         ownClaims.delete(rejection.claimId);
+        // A holder on another server may have claimed before this client joined
+        // the row group, so its one-shot presence frame was missed. A conflict
+        // reply carries the authoritative holder summary; seed the same local
+        // state immediately instead of continuing to report the row as free.
+        if (
+          rejection.reason === 'conflict' &&
+          rejection.heldBy &&
+          rejection.heldByClaim
+        ) {
+          observeForeignClaim(
+            rejection.heldBy,
+            rejection.heldByClaim,
+            rejection.heldByKind,
+          );
+          notifyListeners();
+        }
         for (const l of rejectionListeners) {
           try {
             l(rejection);

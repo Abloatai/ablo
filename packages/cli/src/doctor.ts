@@ -44,13 +44,17 @@ interface Check {
 function render(check: Check): void {
   const mark =
     check.state === 'ok' ? pc.green('✓') : check.state === 'fail' ? pc.red('✗') : pc.dim('–');
-  console.log(`  ${mark} ${check.label.padEnd(10)} ${check.state === 'fail' ? check.detail : pc.dim(check.detail)}`);
+  console.log(
+    `  ${mark} ${check.label.padEnd(10)} ${check.state === 'fail' ? check.detail : pc.dim(check.detail)}`
+  );
   if (check.fix) console.log(`    ${' '.repeat(11)}${pc.dim(`→ ${check.fix}`)}`);
 }
 
 async function ping(apiUrl: string): Promise<boolean> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => { ctrl.abort(); }, 3000);
+  const t = setTimeout(() => {
+    ctrl.abort();
+  }, 3000);
   try {
     const res = await fetch(`${apiUrl}/api/health`, { signal: ctrl.signal });
     return res.ok;
@@ -95,14 +99,18 @@ export async function doctor(): Promise<void> {
           state: 'fail',
           detail: `${apiUrl} unreachable`,
           fix: 'check your connection, then re-run `ablo doctor`',
-        },
+        }
   );
 
   // 3. Who the key actually is. Naming the org and project is what separates
   //    "my setup is broken" from "I am signed in somewhere else" — `default`
   //    exists in every organization, so the project alone cannot tell them apart.
   const target = runtimeKey.key
-    ? await resolveTarget({ url: apiUrl, apiKey: runtimeKey.key, keySource: runtimeKey.source ?? 'stored' })
+    ? await resolveTarget({
+        url: apiUrl,
+        apiKey: runtimeKey.key,
+        keySource: runtimeKey.source ?? 'stored',
+      })
     : null;
   const confirmed = target?.confirmed ?? null;
   if (confirmed) {
@@ -130,7 +138,9 @@ export async function doctor(): Promise<void> {
       detail: runtimeKey.key
         ? `the server did not resolve this key${local ? ` (locally selected: ${local.slug})` : ''}`
         : 'no key to resolve',
-      fix: runtimeKey.key ? 'check the key is valid and not expired — `ablo login` mints a fresh pair' : undefined,
+      fix: runtimeKey.key
+        ? 'check the key is valid and not expired — `ablo login` mints a fresh pair'
+        : undefined,
     });
   }
 
@@ -154,7 +164,7 @@ export async function doctor(): Promise<void> {
               ? `re-register with the direct host: ${pooled.direct}`
               : 're-register with the direct database host, not the pooled one',
           }
-        : { label: 'data', state: 'ok', detail: `database connected (${how})` },
+        : { label: 'data', state: 'ok', detail: `database connected (${how})` }
     );
   } else if (dataSource.kind === 'none') {
     checks.push({
@@ -177,8 +187,13 @@ export async function doctor(): Promise<void> {
           detail: `${pushed.models.length} models active${pushed.hash ? `, hash ${pushed.hash}` : ''}`,
         }
       : reachable && runtimeKey.key
-        ? { label: 'schema', state: 'fail', detail: 'none active for this key', fix: 'run `ablo push`' }
-        : { label: 'schema', state: 'skip', detail: 'not determined' },
+        ? {
+            label: 'schema',
+            state: 'fail',
+            detail: 'none active for this key',
+            fix: 'run `ablo push`',
+          }
+        : { label: 'schema', state: 'skip', detail: 'not determined' }
   );
 
   const drift = schemaDrift(await readLocalSchemaHash(), pushed?.hash);
@@ -198,19 +213,38 @@ export async function doctor(): Promise<void> {
     checks.push(
       validation.ok
         ? validation.ready
-          ? { label: 'database', state: 'ok', detail: 'reachable from Ablo, and ready to replicate' }
-          : {
+          ? {
               label: 'database',
-              state: 'fail',
-              detail: `reachable, but not ready (${validation.failures.length} check${validation.failures.length === 1 ? '' : 's'} failing)`,
-              fix: 'run `ablo connect check` for the full readiness list',
+              state: 'ok',
+              detail: 'reachable from Ablo, and ready to replicate',
             }
+          : validation.initialSnapshot?.status === 'loading' && validation.failures.length === 0
+            ? {
+                label: 'database',
+                state: 'fail',
+                detail: 'reachable; rows that predate the connection are still loading',
+                fix: 'wait a moment and rerun `ablo doctor` — Ablo snapshots them automatically; do not update every row or write a manual backfill',
+              }
+            : validation.initialSnapshot?.status === 'retrying' &&
+                validation.failures.length === 0
+              ? {
+                  label: 'database',
+                  state: 'fail',
+                  detail: `the initial row load is retrying${validation.initialSnapshot.detail ? ` — ${validation.initialSnapshot.detail}` : ''}`,
+                  fix: 'fix the reported connection or database issue, then rerun `ablo doctor`; no row-touch backfill is needed',
+                }
+            : {
+                label: 'database',
+                state: 'fail',
+                detail: `reachable, but not ready (${validation.failures.length} check${validation.failures.length === 1 ? '' : 's'} failing)`,
+                fix: 'run `ablo connect check` for the full readiness list',
+              }
         : {
             label: 'database',
             state: 'fail',
             detail: validation.message,
             fix: 'run `ablo connect check` for the full readiness list',
-          },
+          }
     );
   } else {
     checks.push({ label: 'database', state: 'skip', detail: 'nothing connected to check' });
@@ -234,16 +268,18 @@ export async function doctor(): Promise<void> {
   if (failed > 0) {
     console.log(
       `  ${pc.red('✗')} ${pc.bold(`${failed} problem${failed === 1 ? '' : 's'}`)}` +
-        pc.dim(skipped > 0 ? `, ${skipped} check${skipped === 1 ? '' : 's'} skipped` : ''),
+        pc.dim(skipped > 0 ? `, ${skipped} check${skipped === 1 ? '' : 's'} skipped` : '')
     );
-    console.log(pc.dim('    Fix them in the order above — an earlier one often explains a later one.'));
+    console.log(
+      pc.dim('    Fix them in the order above — an earlier one often explains a later one.')
+    );
   } else if (skipped > 0) {
     console.log(
-      `  ${pc.yellow('?')} ${pc.dim(`nothing is blocking a write, but ${skipped} check${skipped === 1 ? '' : 's'} could not be run`)}`,
+      `  ${pc.yellow('?')} ${pc.dim(`nothing is blocking a write, but ${skipped} check${skipped === 1 ? '' : 's'} could not be run`)}`
     );
   } else {
     console.log(
-      `  ${pc.green('✓')} ${pc.dim('write infrastructure is ready — your database constraints and row-level policies still apply')}`,
+      `  ${pc.green('✓')} ${pc.dim('write infrastructure is ready — your database constraints and row-level policies still apply')}`
     );
   }
   console.log();

@@ -85,11 +85,20 @@ export type RemoteValidation =
       readonly ok: true;
       readonly reachable: boolean;
       readonly ready: boolean;
+      readonly initialSnapshot?: {
+        readonly status: 'loading' | 'retrying' | 'complete';
+        readonly detail?: string;
+      };
       /** The driver's words when the engine couldn't reach the host either. */
       readonly reason?: string;
       readonly failures: readonly RemoteReadinessFailure[];
     }
-  | { readonly ok: false; readonly status: number; readonly code?: string; readonly message: string };
+  | {
+      readonly ok: false;
+      readonly status: number;
+      readonly code?: string;
+      readonly message: string;
+    };
 
 /** The observed value, parenthesized — only for items where it names the
  *  user's own objects (their tables, their Postgres version), never for a
@@ -115,19 +124,26 @@ const READINESS_LABELS: Readonly<Record<ReadinessItem, (f: RemoteReadinessFailur
   publication: () => `none of your tables are shared with Ablo yet`,
   replication_role: () => `the login Ablo reads with can't follow your changes yet`,
   replica_identity: (f) =>
-    withActual(`some shared tables don't record enough for Ablo to track edits and deletes`, f.actual),
-  table_select: (f) => withActual(`the login Ablo reads with can't read some shared tables`, f.actual),
+    withActual(
+      `some shared tables don't record enough for Ablo to track edits and deletes`,
+      f.actual
+    ),
+  table_select: (f) =>
+    withActual(`the login Ablo reads with can't read some shared tables`, f.actual),
   write_role: () => `the login Ablo writes with isn't set up yet`,
   row_security: () => `the writer login isn't set to honor your row-level security`,
   database_privileges: () => `the writer login can still create things in your database`,
   schema_privileges: () => `the writer login has broader access than it should`,
-  table_ownership: (f) => withActual(`the writer login owns tables it should only write to`, f.actual),
+  table_ownership: (f) =>
+    withActual(`the writer login owns tables it should only write to`, f.actual),
   idempotency_ledger: () => `Ablo's write-safety record is missing or misconfigured`,
   table_privileges: (f) => withActual(`the writer login can't write to your tables yet`, f.actual),
-  logical_marker: () => `the writer login can't send the signal Ablo uses to confirm a write landed`,
+  logical_marker: () =>
+    `the writer login can't send the signal Ablo uses to confirm a write landed`,
   // The tables you pushed but didn't share. A write to one of these would
   // land in your database and never confirm — the failure this names.
-  publication_drift: (f) => withActual(`some tables in your schema aren't shared with Ablo`, f.actual),
+  publication_drift: (f) =>
+    withActual(`some tables in your schema aren't shared with Ablo`, f.actual),
 };
 
 /**
@@ -193,6 +209,9 @@ export async function requestRemoteValidation(input: {
     ok: true,
     reachable: verdict.reachable,
     ready: verdict.ready,
+    ...(verdict.initial_snapshot !== undefined
+      ? { initialSnapshot: verdict.initial_snapshot }
+      : {}),
     ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}),
     failures: verdict.failures,
   };

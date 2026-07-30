@@ -50,6 +50,9 @@ describe('MutationQueue rejected-commit settlement', () => {
       batchDelay: 0,
       maxBatchSize: 50,
       maxRetries: 3,
+      // This suite pins the bounded attempt budget OUTSIDE an availability
+      // window; a zero window closes the failover grace immediately.
+      availabilityRetryWindowMs: 0,
       // Tiny backoff so transient-retry tests settle in real time.
       retryBackoff: { baseMs: 1, capMs: 2 },
     });

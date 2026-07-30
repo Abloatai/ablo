@@ -1,6 +1,6 @@
 ---
-title: "Connect Your Database"
-description: "Keep the rows in your own Postgres while Ablo coordinates and confirms every write."
+title: 'Connect Your Database'
+description: 'Keep the rows in your own Postgres while Ablo coordinates and confirms every write.'
 sidebar:
   icon: database
 ---
@@ -76,6 +76,19 @@ yourself. Rotate the scoped passwords any time with `ablo connect rotate`.
 
 The rest of this page is what that command sets up, step by step, for when you want
 to run it by hand or review exactly what changes.
+
+### Existing rows load automatically
+
+When Ablo creates the replication slot, it takes a consistent initial snapshot of
+every mapped table in the publication before following new changes. Rows that
+predate `ablo connect` therefore become available to `retrieve`, `list`, and
+reactive `local.*` reads without an application backfill.
+
+Run `ablo connect check` before removing an existing HTTP/database read fallback.
+It reports the initial load as `loading` until the snapshot is complete. Do not
+write a script that updates every row to make it visible: an Ablo update requires
+the row to be visible already, and touching application rows is neither necessary
+nor a safe bootstrap mechanism.
 
 ## The setup, step by step
 
@@ -175,6 +188,8 @@ checklist or the precise per-item fix:
   `REPLICA IDENTITY FULL`) so `UPDATE`/`DELETE` can replicate
 - the writer role is DML-ready — scoped, non-superuser, with the idempotency
   ledger in place
+- the initial snapshot is complete, so rows that existed before connecting are
+  available to Ablo reads
 
 Because Ablo checks from its own network, a database your own machine can't reach —
 IPv6-only, IP-allowlisted, behind a VPN — still verifies. Re-run it until every
@@ -198,8 +213,8 @@ export const ablo = Ablo({
 ```
 
 The Ablo schema describes **only your synced, collaborative models** — the rows
-Ablo coordinates and fans out in realtime. It is *not* your whole-database schema
-and does *not* replace your `schema.prisma` (or Drizzle schema). Your auth,
+Ablo coordinates and fans out in realtime. It is _not_ your whole-database schema
+and does _not_ replace your `schema.prisma` (or Drizzle schema). Your auth,
 billing, and other tables stay in your own ORM schema, owned by your own
 migrations. `ablo check` reflects this — it reports tables you didn't declare as
 "ignored / owned by you," which is exactly right.
@@ -229,13 +244,13 @@ state means and when to wait.
 
 This is the complete list. Nothing else.
 
-| Object | What it is | Owned by |
-|---|---|---|
-| `ablo_publication` | A publication naming the tables Ablo reads and confirms against. | You create it (step 2). |
-| `ablo_replicator` role | A `REPLICATION` + `SELECT` role Ablo reads and confirms through. | You create it (step 2). |
-| `ablo_writer` role | A scoped DML role Ablo writes your rows through: row DML + ledger, nothing more. | You create it (step 2). |
-| Replication slot | A logical slot Ablo subscribes through to track its WAL position. | Ablo's runtime creates it on first connect. |
-| `wal_level = logical` | A server setting that **requires a restart**. | You set it (step 1). |
+| Object                 | What it is                                                                       | Owned by                                    |
+| ---------------------- | -------------------------------------------------------------------------------- | ------------------------------------------- |
+| `ablo_publication`     | A publication naming the tables Ablo reads and confirms against.                 | You create it (step 2).                     |
+| `ablo_replicator` role | A `REPLICATION` + `SELECT` role Ablo reads and confirms through.                 | You create it (step 2).                     |
+| `ablo_writer` role     | A scoped DML role Ablo writes your rows through: row DML + ledger, nothing more. | You create it (step 2).                     |
+| Replication slot       | A logical slot Ablo subscribes through to track its WAL position.                | Ablo's runtime creates it on first connect. |
+| `wal_level = logical`  | A server setting that **requires a restart**.                                    | You set it (step 1).                        |
 
 Operational reality you should know up front:
 
@@ -257,7 +272,7 @@ have.
 
 ## What Ablo stores on its side
 
-Your schema *definition* (model names, fields, types — pushed with `ablo push`),
+Your schema _definition_ (model names, fields, types — pushed with `ablo push`),
 your hashed API keys, a safe projection of the connection registration (host,
 database, schema — the connection string itself is sealed and never echoed back),
 the replication slot position, and the ordered transaction log that drives sync and
