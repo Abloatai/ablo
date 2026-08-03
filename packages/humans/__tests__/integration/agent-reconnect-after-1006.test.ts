@@ -1,7 +1,7 @@
 /**
  * Agent-host WS recovery — end-to-end 1006 → reconnect.
  *
- * This is the safety-net integration test for the agent-worker class
+ * This is the safety-net integration test for the headless-agent class
  * of bugs we hit in production (see `feedback_node_ws_reconnect_and_http_auth.md`):
  *
  *  - WS dies abnormally (code 1006).

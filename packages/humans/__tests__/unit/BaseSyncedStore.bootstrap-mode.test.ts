@@ -1,7 +1,7 @@
 /**
  * BaseSyncedStore — `bootstrapMode: 'none'` skips baseline replication.
  *
- * The agent-worker (and any future transactional participant) opens
+ * A headless worker (or any future transactional participant) opens
  * the WS, authenticates, processes live deltas, but does NOT pull the
  * org's full tenant plane on startup. This test pins that contract:
  *

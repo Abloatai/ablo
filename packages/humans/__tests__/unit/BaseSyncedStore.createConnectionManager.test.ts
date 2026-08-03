@@ -3,7 +3,7 @@
  *
  * Background: ConnectionManager's FSM is built around browser events
  * (visibilitychange, online/offline, watchdog). On agent hosts (Node,
- * agent-worker) those listeners early-return because `window` is
+ * headless workers) those listeners early-return because `window` is
  * undefined, leaving the FSM with no way to drive recovery once it
  * enters `offline`. Worse, the `offline` entry action calls
  * `syncWebSocket.disconnect()` which cancels the reconnect that

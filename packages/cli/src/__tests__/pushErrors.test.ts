@@ -1,15 +1,16 @@
 import { describe, expect, it } from '@jest/globals';
-import { schemaPushPlaneHint } from '../push';
+import { schemaPushStorageHint } from '../push';
 
 describe('schema push 403 diagnostics', () => {
-  it('does not misreport a missing sandbox plane as a schema:push denial', () => {
-    const hint = schemaPushPlaneHint('test_database_not_registered');
-    expect(hint).toContain('already passed schema:push authorization');
-    expect(hint).toContain('storage-provisioning error');
-    expect(hint).not.toContain('needs schema:push');
+  it('leaves unrelated 403 codes to their specific renderer', () => {
+    expect(schemaPushStorageHint('forbidden')).toBeNull();
   });
 
-  it('leaves unrelated 403 codes to their specific renderer', () => {
-    expect(schemaPushPlaneHint('forbidden')).toBeNull();
+  it('explains an unconnected branch without internal storage vocabulary', () => {
+    const hint = schemaPushStorageHint('no_data_source_registered');
+    expect(hint).toContain('not connected to your database yet');
+    expect(hint).toContain('ablo connect');
+    expect(hint).not.toContain('unbound');
+    expect(hint).not.toContain('plane');
   });
 });

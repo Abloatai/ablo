@@ -164,7 +164,7 @@ async function readStatus(
 }
 
 function printStatus(status: BranchStatusResponse): void {
-  const { branch, schema, data_source: source } = status;
+  const { branch, schema, storage, data_source: source } = status;
   console.log(`  ${pc.bold(branch.slug)} ${pc.dim(branch.id)}`);
   console.log(
     `  ${pc.dim('state')}   ${branch.state === 'ready' ? pc.green(branch.state) : pc.yellow(branch.state)}`,
@@ -187,12 +187,17 @@ function printStatus(status: BranchStatusResponse): void {
       `  ${pc.dim('parent')}  ${pc.bold(schema.parent_compatibility)}${counts}`,
     );
   }
-  const sourceLabel =
-    source.kind === 'hosted'
-      ? 'hosted branch plane'
-      : `${source.kind} · ${source.host ?? 'unknown host'}${
+  const sourceLabel = source
+    ? `${source.connection} · ${source.host ?? 'unknown host'}${
           source.database ? `/${source.database}` : ''
-        } · ${source.status ?? 'unknown'}`;
+        } · ${source.status}`
+    : storage.kind === 'unbound'
+      ? 'not connected to a database'
+      : storage.kind === 'internal'
+        ? `Ablo internal product storage · ${storage.implementation}`
+        : storage.kind === 'blocked'
+          ? 'storage configuration needs attention'
+          : 'customer database connection unavailable';
   console.log(`  ${pc.dim('data')}    ${sourceLabel}`);
   if (status.ready) {
     console.log(`\n  ${pc.green('✓ ready')}`);

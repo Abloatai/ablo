@@ -22,6 +22,10 @@
 
 ---
 
+> **Reading the implementation?** Start with the
+> **[source code map](./CODEMAP.md)**. It shows which files own `create`,
+> `update`, `delete`, `claim`, schemas, transports, and the reactive client.
+
 Safely coordinate AI agents, humans, workflows, and services writing to the
 same database.
 
@@ -113,6 +117,22 @@ authority, commits, claims, and ordered changes.
 
 Read the [Quickstart](https://docs.abloatai.com/quickstart), browse
 [docs.abloatai.com](https://docs.abloatai.com), or run `npx ablo docs`.
+
+## Navigating the source
+
+This repository preserves the package ownership boundaries instead of
+flattening the implementation into `packages/ablo`:
+
+- `packages/ablo` is the branded public facade. Its files mostly re-export the
+  package that owns each API.
+- `packages/transaction` owns the shared model-operation contracts and the
+  stateless HTTP implementation.
+- `packages/humans` owns the reactive WebSocket/local/React implementation.
+
+That means searching only inside `packages/ablo/src` will not find the
+implementation of `create`, `update`, `delete`, or `claim`. Read the
+**[source code map](./CODEMAP.md)** for a verb-by-verb ownership table and
+guided call traces for both the default and reactive clients.
 
 ## Contributing
 

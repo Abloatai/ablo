@@ -21,7 +21,7 @@ const CREDS = { replicationClause: 'REPL_PW', writeClause: 'WRITE_PW' } as const
 
 /** The recipe statements that `--apply` must reuse verbatim (everything but the three heads it replaces). */
 function expectedGrants(input: { tables?: readonly string[]; role?: string; writeRole?: string }): readonly string[] {
-  return connectSetupSql(input).filter(
+  return connectSetupSql({ ...input, publication: ABLO_PUBLICATION }).filter(
     (s) => !s.startsWith('ALTER SYSTEM SET wal_level') && !s.startsWith('CREATE PUBLICATION') && !s.startsWith('CREATE ROLE '),
   );
 }

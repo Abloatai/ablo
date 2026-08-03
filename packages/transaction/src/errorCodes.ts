@@ -39,7 +39,7 @@ import { z } from 'zod';
  * error documentation and returned on the `Ablo-Version` response header, so a
  * consumer can detect when its expected contract has drifted from the server's.
  */
-export const ERROR_CONTRACT_VERSION = '2026-07-30';
+export const ERROR_CONTRACT_VERSION = '2026-08-03';
 
 /** A coarse grouping of error codes, used to organize metrics and documentation. */
 export type ErrorCategory =
@@ -319,6 +319,18 @@ export const ERROR_CODES = {
     false,
     'This deployment does not accept direct connection-string data sources. Register a signed Data Source endpoint instead.'
   ),
+  source_connector_localhost_required: wire(
+    'validation',
+    400,
+    false,
+    'A connector-only development Data Source must use a localhost descriptor. Use `ablo dev --local`; use the ordinary signed HTTPS endpoint registration for a deployed handler.'
+  ),
+  source_connector_unauthenticated: wire(
+    'auth',
+    401,
+    false,
+    'The localhost Data Source connector could not authenticate. Rerun `ablo dev --local` so it mints and uses a fresh branch-bound secret key.'
+  ),
 
   // ── permission / capability (403) ──────────────────────────────────
   capability_scope_denied: wire(
@@ -338,12 +350,6 @@ export const ERROR_CODES = {
     403,
     false,
     'This capability cannot be used — it is unknown, revoked, or expired. Request a fresh grant.'
-  ),
-  test_database_not_registered: wire(
-    'permission',
-    403,
-    false,
-    'Test mode requires a registered dev database for this org — run `npx ablo init` to register one for your test key.'
   ),
   tenant_routing_failed: wire(
     'server',
@@ -373,7 +379,7 @@ export const ERROR_CODES = {
     'permission',
     403,
     false,
-    "The database host resolves to a private, loopback, or link-local address, which Ablo's servers will not connect to. Use a publicly resolvable host."
+    "The database host resolves to a private, loopback, or link-local address, which Ablo's servers will not connect to directly. Use a publicly resolvable direct endpoint, private networking, or `ablo dev --local` with a signed Data Source reverse channel."
   ),
   connected_database_unreachable: wire(
     'tenant',
@@ -699,6 +705,18 @@ export const ERROR_CODES = {
     false,
     'The participant is not allowed to execute this mutator.'
   ),
+  source_connector_requires_secret_key: wire(
+    'permission',
+    403,
+    false,
+    'A Data Source reverse channel must authenticate with the branch-bound secret (`sk_`) key created by `ablo dev`; browser, ephemeral, restricted, and management keys cannot serve a database.'
+  ),
+  source_connector_production_not_enabled: wire(
+    'permission',
+    403,
+    false,
+    'This production Data Source has not opted into reverse-channel transport. `ablo dev --local` is for child branches; use a direct production endpoint or explicitly enable the supported production reverse-channel route.'
+  ),
 
   // ── not found (404) ────────────────────────────────────────────────
   entity_not_found: wire(
@@ -723,7 +741,13 @@ export const ERROR_CODES = {
     'not_found',
     404,
     false,
-    'No database is connected to this plane yet, so there is nothing to check. Connect one with `ablo connect apply`, then run the check again.'
+    'This branch is not connected to your database yet. Run `ablo connect` for a cloud-reachable direct Postgres endpoint, or `ablo dev --local` to register and serve a localhost Data Source, then retry.'
+  ),
+  source_connector_no_source_registered: wire(
+    'not_found',
+    404,
+    false,
+    'The branch has no endpoint Data Source for this connector to serve. Run `ablo dev --local` with the current CLI, which registers the connector-only source before opening the socket.'
   ),
   task_id_missing: wire(
     'server',
@@ -978,7 +1002,55 @@ export const ERROR_CODES = {
     'transport',
     503,
     true,
-    'A network error occurred while talking to the data source. Check connectivity and retry.'
+    'A network error occurred while talking to the data source. For localhost mode, keep `ablo dev --local` running and check its connector output; for a direct source, check database connectivity and retry.'
+  ),
+  source_request_failed: wire(
+    'transport',
+    502,
+    true,
+    'The signed Data Source returned a failure without a more specific code. Inspect the `ablo dev --local` process or deployed endpoint logs, then retry with the same idempotency key.'
+  ),
+  source_connector_not_attached: wire(
+    'transport',
+    503,
+    true,
+    'This branch uses localhost connector-only storage, but no connector is attached. Start or restart `ablo dev --local` and keep that process running.'
+  ),
+  source_connector_timeout: wire(
+    'transport',
+    504,
+    true,
+    'The local Data Source handler did not answer before the connector deadline. Check the local Postgres connection and handler logs; the same idempotent request may be retried.'
+  ),
+  source_connector_send_failed: wire(
+    'transport',
+    502,
+    true,
+    'The connector socket closed while Ablo was forwarding a signed Data Source request. Keep `ablo dev --local` running; Ablo retries after the connector reconnects.'
+  ),
+  source_connector_disconnected: wire(
+    'transport',
+    503,
+    true,
+    'The localhost Data Source connector disconnected with a request in flight. The connector reconnects automatically; retry after it reports ready.'
+  ),
+  source_connector_superseded: wire(
+    'transport',
+    503,
+    true,
+    'A newer localhost Data Source connector replaced this one. Stop duplicate `ablo dev --local` processes and use the newest process; in-flight requests are safe to retry.'
+  ),
+  source_connector_shutdown: wire(
+    'transport',
+    503,
+    true,
+    'The Ablo service shut down the connector while a request was in flight. The connector reconnects automatically after the service returns.'
+  ),
+  source_connector_protocol_error: wire(
+    'transport',
+    400,
+    false,
+    'The CLI and Ablo service disagreed on the Data Source connector frame protocol, or a malformed frame arrived. Upgrade the Ablo CLI and SDK together, then restart `ablo dev --local`.'
   ),
   source_unreachable: wire(
     'transport',
@@ -990,7 +1062,19 @@ export const ERROR_CODES = {
     'transport',
     503,
     false,
-    "The plane's data source is not in a verified, resolvable state. Fix its registration, secret, or configuration; Ablo will not fall through to hosted storage."
+    "This branch's database connection is not ready. Check its credentials and configuration; Ablo will not send reads or writes anywhere else."
+  ),
+  source_connector_handler_error: wire(
+    'server',
+    500,
+    true,
+    'The local signed Data Source handler threw while processing a request. Read the `ablo dev --local` error immediately above it, fix the database or adapter failure, and retry.'
+  ),
+  source_connector_internal_error: wire(
+    'server',
+    500,
+    true,
+    'Ablo could not establish the Data Source reverse channel because of an internal service failure. Retry; if it persists, report the request id.'
   ),
   identity_network_error: wire(
     'transport',
@@ -1140,7 +1224,7 @@ export const ERROR_CODES = {
   ),
   db_identity_mismatch: client(
     'client',
-    'The local database belongs to a different authenticated identity or data plane.'
+    'The local database is connected to a different organization, project, or branch.'
   ),
   db_cleanup_failed: client(
     'client',
@@ -1306,19 +1390,19 @@ export const ERROR_CODES = {
     'tenant',
     400,
     false,
-    "This model is scoped by its connected data source (`policy: { by: 'source' }`), so its tenant is resolved from the source registration rather than a row column. Enforcing that resolution requires the write-through connect path, which is not enabled on this plane yet — so the model cannot be served through the tenant-scoped read or bootstrap path without risking a cross-tenant read. If this model lives on a log plane, scope it with `by: 'column'` or `by: 'parent'` instead."
+    "This model gets its tenant identity from the connected Data Source, but that connection is not ready for scoped reads yet. Ablo refused the read to prevent data from crossing tenant boundaries. Connect the branch and retry; for internally logged models, use `by: 'column'` or `by: 'parent'`."
   ),
   user_scope_not_enforced: wire(
     'tenant',
     400,
     false,
-    "Rows in this model belong to one person rather than to the whole organization, and that boundary is kept where the rows are stored. This plane is currently served from its log, which carries the organization and the project on every row but not the owner — so the boundary cannot be applied here, and serving the read would show one member another member's private records. It was declined whole and nothing was returned. Serve the plane from its tables, or read with a credential that acts for the organization rather than for a person."
+    "Rows in this model belong to one person rather than the whole organization, but the current read source does not carry the owner identity needed to enforce that boundary. Ablo returned nothing to prevent one member from seeing another member's private records. Use a read source that preserves owner identity, or a credential that acts for the organization."
   ),
   model_not_provisioned: wire(
     'tenant',
     409,
     false,
-    "This model is in the plane's registered schema, but its table has not been provisioned yet. Registering a schema with `ablo push` records the model; a plane's physical tables are created separately, out of band, so a model can appear in the schema before its table exists. Provision the plane's tables, then retry the read."
+    "This model is in the branch's registered schema, but its table does not exist in the connected database yet. `ablo push` records the model but does not change a customer's database. Apply the table migration in your database, then retry the read."
   ),
   schema_table_invalid: wire('schema', 500, false, "The model's table identifier is invalid."),
   schema_scope_invalid: wire(
@@ -1492,7 +1576,7 @@ export const ERROR_CODES = {
     'not_found',
     404,
     false,
-    'No claim of yours exists with the given id. It was released, it expired, or it was never acquired on this plane.'
+    'No claim of yours exists with the given id. It was released, expired, or belongs to a different branch.'
   ),
   invalid_participant_kind: wire(
     'validation',
@@ -1559,7 +1643,7 @@ export const ERROR_CODES = {
     'conflict',
     409,
     false,
-    'A connected log plane has live rows for a mapped model that disappeared. Declare a rename or an explicit drop/reset before advancing the schema.'
+    'This branch has live replicated rows for a mapped model that disappeared. Declare a rename or an explicit drop/reset before advancing the schema.'
   ),
 } as const satisfies Record<string, ErrorCodeSpec>;
 

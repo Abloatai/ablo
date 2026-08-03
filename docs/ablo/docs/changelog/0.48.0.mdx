@@ -1,0 +1,58 @@
+---
+title: "v0.48.0"
+type: changelog
+date: 2026-08-03
+changelog:
+  version: "0.48.0"
+  category: "Fixes"
+---
+
+### A branch is unbound until you connect a database to it
+
+A branch keeps its own storage, and it does not quietly get Ablo's. Until a
+database is connected to that branch, a request needing one fails with
+`no_data_source_registered` and says what to do:
+
+```
+This branch is not connected to your database yet.
+Run `ablo connect` for this branch, then retry.
+```
+
+The old `test_database_not_registered` is gone. It described a sandbox that no
+longer exists, it arrived on requests that had nothing to do with a test
+database, and its advice pointed at options the SDK had already removed. A
+branch created by `ablo dev` now reports its state plainly rather than looking
+ready and then refusing the first schema push.
+
+**Action required.** Replace any handler matching `test_database_not_registered`
+with `no_data_source_registered`. The new code carries the same 4xx meaning and
+a recovery path a caller can act on.
+
+### Failures say which branch they happened on
+
+An unconnected branch previously returned its refusal with nothing written
+server-side, so a support question about one customer's branch could not be
+answered from logs at all. These now carry the request, organization, project,
+branch, key kind and storage state, indexed in Sentry, so a failure can be
+looked up by branch instead of reconstructed from database tables.
+
+### Replication uses your branch's own publication and slot
+
+Registration, validation, writer checks, replication, drift detection and
+`ablo connect` all require the branch-scoped names recorded when the source was
+registered. Nothing falls back to a shared `ablo_publication` or `ablo_slot`
+any more, so two branches on one database can never quietly share a stream.
+`ablo connect scan` reports legacy unsuffixed objects as retired.
+
+Once your engine is on this release and `ablo connect check` is clean, the
+temporary alias can go:
+
+```sql
+DROP PUBLICATION IF EXISTS "ablo_publication";
+```
+
+### Renamed
+
+`FootprintPlane` is now `DataSourceIdentity`, with the same three fields. The
+old name described an internal layout; the new one describes what it
+identifies.

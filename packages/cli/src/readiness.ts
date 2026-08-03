@@ -292,7 +292,7 @@ export function blockers(input: {
   }
   if (input.dataSource.kind === 'none') {
     found.push({
-      problem: 'no database is connected to this plane, so writes are held rather than routed',
+      problem: 'this branch is not connected to a database, so writes are held',
       fix: 'connect one with `ablo connect apply`',
     });
   }

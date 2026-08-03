@@ -68,7 +68,7 @@ On the reactive client, each model write changes local state optimistically
 before the call returns. Its promise always waits for authoritative
 confirmation, so `await update(...)` is the confirmation barrier.
 
-Call `retrieve`/`list` first — they fetch from the server and you `await` them.
+Call `get`/`list` first — they fetch from the server and you `await` them.
 After that, `local.get`/`local.list`/`local.count` read the already-synced data instantly with
 no `await`, and stay reactive in render. Use the async pair to load, the sync trio
 to read.

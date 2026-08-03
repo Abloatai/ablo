@@ -205,7 +205,7 @@ export function rotateWithoutConnection(input: {
   if (!input.known || input.planeHasConnection) return null;
   if (input.existingRoles.length > 0) return null;
   return (
-    "This plane has no connected database and Ablo's roles are not in this database, " +
+    "This branch has no connected database and Ablo's roles are not in this database, " +
     'so there is no credential to re-key. Connecting for the first time is ' +
     '`ablo connect apply`, which creates the roles and registers them in one run.'
   );

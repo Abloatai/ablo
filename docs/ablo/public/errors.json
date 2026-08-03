@@ -1,6 +1,6 @@
 {
   "$generated": "packages/ablo/scripts/generate-error-docs.mts",
-  "version": "2026-07-30",
+  "version": "2026-08-03",
   "envelope": [
     "type",
     "code",
@@ -140,6 +140,15 @@
       "retryable": true,
       "message": "The bootstrap response parsed but failed schema validation, so it was not applied. Retrying may succeed.",
       "docUrl": "https://docs.abloatai.com/errors#bootstrap_response_schema_invalid"
+    },
+    {
+      "code": "branch_scope_denied",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "The request targeted a branch the caller's key is not scoped to.",
+      "docUrl": "https://docs.abloatai.com/errors#branch_scope_denied"
     },
     {
       "code": "browser_apikey_blocked",
@@ -308,7 +317,7 @@
       "surface": "wire",
       "httpStatus": 404,
       "retryable": false,
-      "message": "No claim of yours exists with the given id. It was released, it expired, or it was never acquired on this plane.",
+      "message": "No claim of yours exists with the given id. It was released, expired, or belongs to a different branch.",
       "docUrl": "https://docs.abloatai.com/errors#claim_not_found"
     },
     {
@@ -509,7 +518,7 @@
       "surface": "wire",
       "httpStatus": 503,
       "retryable": false,
-      "message": "The plane's data source is not in a verified, resolvable state. Fix its registration, secret, or configuration; Ablo will not fall through to hosted storage.",
+      "message": "This branch's database connection is not ready. Check its credentials and configuration; Ablo will not send reads or writes anywhere else.",
       "docUrl": "https://docs.abloatai.com/errors#data_source_blocked"
     },
     {
@@ -527,7 +536,7 @@
       "surface": "wire",
       "httpStatus": 403,
       "retryable": false,
-      "message": "The database host resolves to a private, loopback, or link-local address, which Ablo's servers will not connect to. Use a publicly resolvable host.",
+      "message": "The database host resolves to a private, loopback, or link-local address, which Ablo's servers will not connect to directly. Use a publicly resolvable direct endpoint, private networking, or `ablo dev --local` with a signed Data Source reverse channel.",
       "docUrl": "https://docs.abloatai.com/errors#database_host_not_allowed"
     },
     {
@@ -597,7 +606,7 @@
       "category": "client",
       "surface": "client",
       "retryable": false,
-      "message": "The local database belongs to a different authenticated identity or data plane.",
+      "message": "The local database is connected to a different organization, project, or branch.",
       "docUrl": "https://docs.abloatai.com/errors#db_identity_mismatch"
     },
     {
@@ -1294,7 +1303,7 @@
       "surface": "wire",
       "httpStatus": 409,
       "retryable": false,
-      "message": "This model is in the plane's registered schema, but its table has not been provisioned yet. Registering a schema with `ablo push` records the model; a plane's physical tables are created separately, out of band, so a model can appear in the schema before its table exists. Provision the plane's tables, then retry the read.",
+      "message": "This model is in the branch's registered schema, but its table does not exist in the connected database yet. `ablo push` records the model but does not change a customer's database. Apply the table migration in your database, then retry the read.",
       "docUrl": "https://docs.abloatai.com/errors#model_not_provisioned"
     },
     {
@@ -1397,7 +1406,7 @@
       "surface": "wire",
       "httpStatus": 404,
       "retryable": false,
-      "message": "No database is connected to this plane yet, so there is nothing to check. Connect one with `ablo connect apply`, then run the check again.",
+      "message": "This branch is not connected to your database yet. Run `ablo connect` for a cloud-reachable direct Postgres endpoint, or `ablo dev --local` to register and serve a localhost Data Source, then retry.",
       "docUrl": "https://docs.abloatai.com/errors#no_data_source_registered"
     },
     {
@@ -1728,7 +1737,7 @@
       "surface": "wire",
       "httpStatus": 409,
       "retryable": false,
-      "message": "A connected log plane has live rows for a mapped model that disappeared. Declare a rename or an explicit drop/reset before advancing the schema.",
+      "message": "This branch has live replicated rows for a mapped model that disappeared. Declare a rename or an explicit drop/reset before advancing the schema.",
       "docUrl": "https://docs.abloatai.com/errors#replication_reset_required"
     },
     {
@@ -1942,6 +1951,132 @@
       "docUrl": "https://docs.abloatai.com/errors#source_api_key_unresolved"
     },
     {
+      "code": "source_connector_disconnected",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "The localhost Data Source connector disconnected with a request in flight. The connector reconnects automatically; retry after it reports ready.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_disconnected"
+    },
+    {
+      "code": "source_connector_handler_error",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": true,
+      "message": "The local signed Data Source handler threw while processing a request. Read the `ablo dev --local` error immediately above it, fix the database or adapter failure, and retry.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_handler_error"
+    },
+    {
+      "code": "source_connector_internal_error",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": true,
+      "message": "Ablo could not establish the Data Source reverse channel because of an internal service failure. Retry; if it persists, report the request id.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_internal_error"
+    },
+    {
+      "code": "source_connector_localhost_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A connector-only development Data Source must use a localhost descriptor. Use `ablo dev --local`; use the ordinary signed HTTPS endpoint registration for a deployed handler.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_localhost_required"
+    },
+    {
+      "code": "source_connector_no_source_registered",
+      "category": "not_found",
+      "surface": "wire",
+      "httpStatus": 404,
+      "retryable": false,
+      "message": "The branch has no endpoint Data Source for this connector to serve. Run `ablo dev --local` with the current CLI, which registers the connector-only source before opening the socket.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_no_source_registered"
+    },
+    {
+      "code": "source_connector_not_attached",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "This branch uses localhost connector-only storage, but no connector is attached. Start or restart `ablo dev --local` and keep that process running.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_not_attached"
+    },
+    {
+      "code": "source_connector_production_not_enabled",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "This production Data Source has not opted into reverse-channel transport. `ablo dev --local` is for child branches; use a direct production endpoint or explicitly enable the supported production reverse-channel route.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_production_not_enabled"
+    },
+    {
+      "code": "source_connector_protocol_error",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The CLI and Ablo service disagreed on the Data Source connector frame protocol, or a malformed frame arrived. Upgrade the Ablo CLI and SDK together, then restart `ablo dev --local`.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_protocol_error"
+    },
+    {
+      "code": "source_connector_requires_secret_key",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "A Data Source reverse channel must authenticate with the branch-bound secret (`sk_`) key created by `ablo dev`; browser, ephemeral, restricted, and management keys cannot serve a database.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_requires_secret_key"
+    },
+    {
+      "code": "source_connector_send_failed",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 502,
+      "retryable": true,
+      "message": "The connector socket closed while Ablo was forwarding a signed Data Source request. Keep `ablo dev --local` running; Ablo retries after the connector reconnects.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_send_failed"
+    },
+    {
+      "code": "source_connector_shutdown",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "The Ablo service shut down the connector while a request was in flight. The connector reconnects automatically after the service returns.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_shutdown"
+    },
+    {
+      "code": "source_connector_superseded",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "A newer localhost Data Source connector replaced this one. Stop duplicate `ablo dev --local` processes and use the newest process; in-flight requests are safe to retry.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_superseded"
+    },
+    {
+      "code": "source_connector_timeout",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 504,
+      "retryable": true,
+      "message": "The local Data Source handler did not answer before the connector deadline. Check the local Postgres connection and handler logs; the same idempotent request may be retried.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_timeout"
+    },
+    {
+      "code": "source_connector_unauthenticated",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 401,
+      "retryable": false,
+      "message": "The localhost Data Source connector could not authenticate. Rerun `ablo dev --local` so it mints and uses a fresh branch-bound secret key.",
+      "docUrl": "https://docs.abloatai.com/errors#source_connector_unauthenticated"
+    },
+    {
       "code": "source_event_invalid",
       "category": "validation",
       "surface": "wire",
@@ -1956,7 +2091,7 @@
       "surface": "wire",
       "httpStatus": 503,
       "retryable": true,
-      "message": "A network error occurred while talking to the data source. Check connectivity and retry.",
+      "message": "A network error occurred while talking to the data source. For localhost mode, keep `ablo dev --local` running and check its connector output; for a direct source, check database connectivity and retry.",
       "docUrl": "https://docs.abloatai.com/errors#source_network_error"
     },
     {
@@ -1968,12 +2103,21 @@
       "docUrl": "https://docs.abloatai.com/errors#source_operation_id_required"
     },
     {
+      "code": "source_request_failed",
+      "category": "transport",
+      "surface": "wire",
+      "httpStatus": 502,
+      "retryable": true,
+      "message": "The signed Data Source returned a failure without a more specific code. Inspect the `ablo dev --local` process or deployed endpoint logs, then retry with the same idempotency key.",
+      "docUrl": "https://docs.abloatai.com/errors#source_request_failed"
+    },
+    {
       "code": "source_tenancy_not_enforced",
       "category": "tenant",
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
-      "message": "This model is scoped by its connected data source (`policy: { by: 'source' }`), so its tenant is resolved from the source registration rather than a row column. Enforcing that resolution requires the write-through connect path, which is not enabled on this plane yet — so the model cannot be served through the tenant-scoped read or bootstrap path without risking a cross-tenant read. If this model lives on a log plane, scope it with `by: 'column'` or `by: 'parent'` instead.",
+      "message": "This model gets its tenant identity from the connected Data Source, but that connection is not ready for scoped reads yet. Ablo refused the read to prevent data from crossing tenant boundaries. Connect the branch and retry; for internally logged models, use `by: 'column'` or `by: 'parent'`.",
       "docUrl": "https://docs.abloatai.com/errors#source_tenancy_not_enforced"
     },
     {
@@ -2105,15 +2249,6 @@
       "docUrl": "https://docs.abloatai.com/errors#tenant_routing_failed"
     },
     {
-      "code": "test_database_not_registered",
-      "category": "permission",
-      "surface": "wire",
-      "httpStatus": 403,
-      "retryable": false,
-      "message": "Test mode requires a registered dev database for this org — run `npx ablo init` to register one for your test key.",
-      "docUrl": "https://docs.abloatai.com/errors#test_database_not_registered"
-    },
-    {
       "code": "transaction_mutate_unknown_model",
       "category": "client",
       "surface": "client",
@@ -2213,7 +2348,7 @@
       "surface": "wire",
       "httpStatus": 400,
       "retryable": false,
-      "message": "Rows in this model belong to one person rather than to the whole organization, and that boundary is kept where the rows are stored. This plane is currently served from its log, which carries the organization and the project on every row but not the owner — so the boundary cannot be applied here, and serving the read would show one member another member's private records. It was declined whole and nothing was returned. Serve the plane from its tables, or read with a credential that acts for the organization rather than for a person.",
+      "message": "Rows in this model belong to one person rather than the whole organization, but the current read source does not carry the owner identity needed to enforce that boundary. Ablo returned nothing to prevent one member from seeing another member's private records. Use a read source that preserves owner identity, or a credential that acts for the organization.",
       "docUrl": "https://docs.abloatai.com/errors#user_scope_not_enforced"
     },
     {

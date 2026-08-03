@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ablo API",
-    "version": "0.47.0",
+    "version": "0.48.0",
     "description": "The Ablo transaction layer: commit, read, and claim. `{model}` is any model from your pushed schema — the routes are the same whichever it is. Authenticate every request with your API key as a Bearer token.",
     "license": {
       "name": "Apache License 2.0",
@@ -5109,7 +5109,7 @@
         "tags": [
           "branches"
         ],
-        "summary": "Diagnose one branch plane",
+        "summary": "Diagnose one branch",
         "description": "Returns branch lifecycle, active schema, compatibility with the parent schema, safe datasource coordinates, and readiness blockers.",
         "parameters": [
           {
@@ -5311,20 +5311,105 @@
                       ],
                       "additionalProperties": false
                     },
-                    "data_source": {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": [
-                            "hosted",
-                            "direct",
-                            "endpoint"
-                          ]
+                    "storage": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "unbound"
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ],
+                          "additionalProperties": false
                         },
-                        "status": {
-                          "anyOf": [
-                            {
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "customer"
+                            },
+                            "transport": {
+                              "type": "string",
+                              "enum": [
+                                "direct",
+                                "endpoint"
+                              ]
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "unverified",
+                                "active",
+                                "rejected"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "transport",
+                            "status"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "internal"
+                            },
+                            "implementation": {
+                              "type": "string",
+                              "enum": [
+                                "log",
+                                "tables"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "implementation"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "blocked"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "const": "orphaned_external_marker"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "reason"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "data_source": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "connection": {
+                              "type": "string",
+                              "enum": [
+                                "direct",
+                                "endpoint"
+                              ]
+                            },
+                            "status": {
                               "type": "string",
                               "enum": [
                                 "unverified",
@@ -5332,84 +5417,84 @@
                                 "rejected"
                               ]
                             },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "host": {
-                          "anyOf": [
-                            {
-                              "type": "string"
+                            "host": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "database": {
-                          "anyOf": [
-                            {
-                              "type": "string"
+                            "database": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "cursor": {
-                          "anyOf": [
-                            {
-                              "type": "string"
+                            "cursor": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "event_lag": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "retry_count": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "last_success_at": {
-                          "anyOf": [
-                            {
-                              "type": "string"
+                            "event_lag": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
                             },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "last_error": {
-                          "anyOf": [
-                            {
-                              "type": "string"
+                            "retry_count": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
                             },
-                            {
-                              "type": "null"
+                            "last_success_at": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "last_error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
-                          ]
+                          },
+                          "required": [
+                            "connection",
+                            "status",
+                            "host",
+                            "database",
+                            "cursor",
+                            "event_lag",
+                            "retry_count",
+                            "last_success_at",
+                            "last_error"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
                         }
-                      },
-                      "required": [
-                        "kind",
-                        "status",
-                        "host",
-                        "database",
-                        "cursor",
-                        "event_lag",
-                        "retry_count",
-                        "last_success_at",
-                        "last_error"
-                      ],
-                      "additionalProperties": false
+                      ]
                     },
                     "blockers": {
                       "readOnly": true,
@@ -5446,6 +5531,7 @@
                     "branch",
                     "ready",
                     "schema",
+                    "storage",
                     "data_source",
                     "blockers"
                   ],
@@ -5928,7 +6014,7 @@
           "claims"
         ],
         "summary": "Heartbeat every lease you hold, in one request",
-        "description": "One round trip per cadence for a worker holding many rows, instead of one per row. Takes only `ttl`; the leases are whichever ones your credential holds on this plane.",
+        "description": "One round trip per cadence for a worker holding many rows, instead of one per row. Takes only `ttl`; the leases are whichever ones your credential holds on this branch.",
         "requestBody": {
           "required": false,
           "content": {
@@ -7358,7 +7444,7 @@
           "schema"
         ],
         "summary": "What the models look like",
-        "description": "The schema deployed on your credential's plane: every model with its fields, their types, and its relations. Read this when you have no local schema declaration to read types from — it is what makes a field typo a local check rather than a rejected write. Each model carries a content `hash` that moves only when its shape does, so read the shape once and poll the hashes after: a refetch only ever answers a push.",
+        "description": "The schema deployed on your credential's branch: every model with its fields, their types, and its relations. Read this when you have no local schema declaration to read types from — it is what makes a field typo a local check rather than a rejected write. Each model carries a content `hash` that moves only when its shape does, so read the shape once and poll the hashes after: a refetch only ever answers a push.",
         "responses": {
           "200": {
             "description": "The deployed schema, or `active: false` when nothing is pushed.",
@@ -7470,7 +7556,7 @@
           "logs"
         ],
         "summary": "Tail what changed",
-        "description": "How a caller without a socket learns what its peers did. Omit `after` for the most recent entries, then copy each page's `next_cursor` back as `after` to walk forward. Scope is taken from your key — organization, plane and sync groups — so a caller cannot widen what it sees by asking.",
+        "description": "How a caller without a socket learns what its peers did. Omit `after` for the most recent entries, then copy each page's `next_cursor` back as `after` to walk forward. Scope is taken from your key — organization, branch and sync groups — so a caller cannot widen what it sees by asking.",
         "parameters": [
           {
             "name": "after",

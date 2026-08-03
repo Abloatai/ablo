@@ -51,25 +51,14 @@ export interface FootprintArtifact {
 
 // ── The names, for the code that creates and reads these objects ────────────
 
-/**
- * The publication Ablo's replication reads from. Constant by design: a
- * publication declares what streams, and several readers are meant to share one
- * (`publication_names` is a per-stream option, not slot state).
- */
+/** Prefix used to derive a branch-scoped publication name. The exact unsuffixed
+ * name is retained only so `ablo connect scan` can identify an old installation. */
 export const ABLO_PUBLICATION = 'ablo_publication';
-/**
- * The replication slot that holds Ablo's position in the write-ahead log.
- *
- * Constant, and it should not be — a slot stores ONE position, so two
- * connections sharing this name compete for the same marker. It is why a
- * database can be connected to one plane at a time. ADR 0020 derives it per
- * connection; {@link isValidReplicationSlotName} is the check a derived name
- * has to pass.
- */
+/** Prefix used to derive the branch-scoped replication slot. */
 export const ABLO_REPLICATION_SLOT = 'ablo_slot';
-/** The least-privilege login Ablo reads with. Per-connection under ADR 0020. */
+/** Prefix used to derive the branch-scoped least-privilege replication login. */
 export const ABLO_REPLICATION_ROLE = 'ablo_replicator';
-/** The separate least-privilege login used only for row writes. */
+/** Prefix used to derive the branch-scoped login used only for row writes. */
 export const ABLO_WRITE_ROLE = 'ablo_writer';
 /** The bookkeeping table that makes a retried write land once. */
 export const ABLO_IDEMPOTENCY_TABLE = 'ablo_idempotency';
@@ -90,15 +79,15 @@ export function isValidReplicationSlotName(name: string): boolean {
 
 // ── Per-connection names (ADR 0020) ─────────────────────────────────────────
 
-/** The immutable branch coordinates a connection is identified by. */
-export interface FootprintPlane {
+/** The immutable branch coordinates that identify one customer Data Source. */
+export interface DataSourceIdentity {
   readonly organizationId: string;
   readonly branchId: string;
   /** Omitted for the organization-default project. */
   readonly projectId?: string;
 }
 
-/** The names one connection owns. Nothing here is shared with another plane. */
+/** The names one connection owns. Nothing here is shared with another Data Source. */
 export interface FootprintNames {
   readonly slot: string;
   readonly publication: string;
@@ -114,7 +103,7 @@ export interface FootprintNames {
 const SUFFIX_LENGTH = 16;
 
 /**
- * FNV-1a over the plane, in hex.
+ * FNV-1a over the Data Source identity, in hex.
  *
  * Deliberately not a cryptographic hash: this module is imported by the CLI,
  * which runs in environments without `node:crypto` guaranteed, and the property
@@ -123,13 +112,14 @@ const SUFFIX_LENGTH = 16;
  * over different seeds give the sixteen hex characters, which is ample for the
  * handful of planes any one database is ever connected to.
  */
-function planeDigest(plane: FootprintPlane): string {
+function dataSourceDigest(identity: DataSourceIdentity): string {
   // The organization-default project may be omitted or repeated as the
   // organization id; both spell the same branch coordinates.
-  const project = plane.projectId === plane.organizationId ? '' : (plane.projectId ?? '');
+  const project =
+    identity.projectId === identity.organizationId ? '' : (identity.projectId ?? '');
   // Delimit the coordinates. Concatenation alone makes structurally different
   // planes such as ("ab", "c") and ("a", "bc") hash the same input.
-  const key = [plane.organizationId, project, plane.branchId].join('\0');
+  const key = [identity.organizationId, project, identity.branchId].join('\0');
 
   const round = (seed: number): string => {
     let hash = seed;
@@ -148,16 +138,15 @@ function planeDigest(plane: FootprintPlane): string {
  * The objects this connection owns, named so no other connection can claim them.
  *
  * A slot stores ONE position, so two connections sharing a name compete for the
- * same marker and Postgres reports nothing — which is why the constants these
- * replace made a database connectable to one plane at a time. The publication
+ * same marker and Postgres reports nothing. The publication
  * and roles are derived from the same digest so a database's footprint reads as
  * one set per connection rather than a mix of shared and private objects.
  *
  * Stable: the same plane always derives the same names, so re-running setup is a
  * no-op rather than a second installation.
  */
-export function footprintNamesFor(plane: FootprintPlane): FootprintNames {
-  const suffix = planeDigest(plane);
+export function footprintNamesFor(identity: DataSourceIdentity): FootprintNames {
+  const suffix = dataSourceDigest(identity);
   const names: FootprintNames = {
     slot: `${ABLO_REPLICATION_SLOT}_${suffix}`,
     publication: `${ABLO_PUBLICATION}_${suffix}`,

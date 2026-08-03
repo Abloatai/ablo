@@ -263,9 +263,9 @@ Reads come in two flavors, and you pick based on whether you can wait.
 store) — they're async, so you `await` them. `local.get(id)`,
 `local.list({ where })`, and `local.count({ where })` read the already-synced local
 graph synchronously, so they're the ones you call in render — and the ones you
-use inside a `useAblo` selector, never the async `retrieve`/`list`.
+use inside a `useAblo` selector, never the async `get`/`list`.
 
-Use `retrieve` when the row may not be local yet — it fetches from the server
+Use `get` when the row may not be local yet — it fetches from the server
 and waits.
 
 ```ts

@@ -5,7 +5,7 @@ sidebar:
   icon: circle-alert
 ---
 
-Error contract version: `2026-07-30` (also sent on the `Ablo-Version` response header).
+Error contract version: `2026-08-03` (also sent on the `Ablo-Version` response header).
 
 Every error — over HTTP or WebSocket — carries the same envelope:
 
@@ -185,9 +185,21 @@ Your session has expired or is no longer valid. Sign in again to continue.
 
 The API key presented for this data source could not be resolved to a known key. Check the key and its environment.
 
+### source_connector_unauthenticated
+
+`HTTP 401` · not retryable
+
+The localhost Data Source connector could not authenticate. Rerun `ablo dev --local` so it mints and uses a fresh branch-bound secret key.
+
 ## Permission
 
 Credentials were valid but the action is forbidden for this caller.
+
+### branch_scope_denied
+
+`HTTP 403` · not retryable
+
+The request targeted a branch the caller's key is not scoped to.
 
 ### byo_host_not_allowed
 
@@ -217,7 +229,7 @@ Tenant tables do not have RLS forced under the direct Postgres connector role.
 
 `HTTP 403` · not retryable
 
-The database host resolves to a private, loopback, or link-local address, which Ablo's servers will not connect to. Use a publicly resolvable host.
+The database host resolves to a private, loopback, or link-local address, which Ablo's servers will not connect to directly. Use a publicly resolvable direct endpoint, private networking, or `ablo dev --local` with a signed Data Source reverse channel.
 
 ### database_role_cannot_enforce_rls
 
@@ -273,11 +285,17 @@ The request targeted a project the caller's key is not scoped to.
 
 Schema registration could not create tables in the target database: the engine is not permitted to run DDL there.
 
-### test_database_not_registered
+### source_connector_production_not_enabled
 
 `HTTP 403` · not retryable
 
-Test mode requires a registered dev database for this org — run `npx ablo init` to register one for your test key.
+This production Data Source has not opted into reverse-channel transport. `ablo dev --local` is for child branches; use a direct production endpoint or explicitly enable the supported production reverse-channel route.
+
+### source_connector_requires_secret_key
+
+`HTTP 403` · not retryable
+
+A Data Source reverse channel must authenticate with the branch-bound secret (`sk_`) key created by `ablo dev`; browser, ephemeral, restricted, and management keys cannot serve a database.
 
 ### wide_scope_forbidden
 
@@ -427,7 +445,7 @@ The schema change is incompatible with the schema currently deployed and cannot 
 
 `HTTP 409` · not retryable
 
-A connected log plane has live rows for a mapped model that disappeared. Declare a rename or an explicit drop/reset before advancing the schema.
+This branch has live replicated rows for a mapped model that disappeared. Declare a rename or an explicit drop/reset before advancing the schema.
 
 ### source_transport_pinned
 
@@ -805,6 +823,12 @@ The snapshot uses a key name that is reserved by the runtime. Rename the key and
 
 The data-source ORM adapter could not map a schema model onto the backing client — the client exposes no matching delegate or model. Check that the adapter and schema agree on model names.
 
+### source_connector_localhost_required
+
+`HTTP 400` · not retryable
+
+A connector-only development Data Source must use a localhost descriptor. Use `ablo dev --local`; use the ordinary signed HTTPS endpoint registration for a deployed handler.
+
 ### source_event_invalid
 
 `HTTP 400` · not retryable
@@ -873,7 +897,7 @@ No capability exists with the given id.
 
 `HTTP 404` · not retryable
 
-No claim of yours exists with the given id. It was released, it expired, or it was never acquired on this plane.
+No claim of yours exists with the given id. It was released, expired, or belongs to a different branch.
 
 ### entity_not_found
 
@@ -903,7 +927,13 @@ The row targeted by this update does not exist — it may have been deleted sinc
 
 `HTTP 404` · not retryable
 
-No database is connected to this plane yet, so there is nothing to check. Connect one with `ablo connect apply`, then run the check again.
+This branch is not connected to your database yet. Run `ablo connect` for a cloud-reachable direct Postgres endpoint, or `ablo dev --local` to register and serve a localhost Data Source, then retry.
+
+### source_connector_no_source_registered
+
+`HTTP 404` · not retryable
+
+The branch has no endpoint Data Source for this connector to serve. Run `ablo dev --local` with the current CLI, which registers the connector-only source before opening the socket.
 
 ## Tenant / schema resolution
 
@@ -919,7 +949,7 @@ Ablo could not reach the database connected to this environment: it refused the 
 
 `HTTP 409` · not retryable
 
-This model is in the plane's registered schema, but its table has not been provisioned yet. Registering a schema with `ablo push` records the model; a plane's physical tables are created separately, out of band, so a model can appear in the schema before its table exists. Provision the plane's tables, then retry the read.
+This model is in the branch's registered schema, but its table does not exist in the connected database yet. `ablo push` records the model but does not change a customer's database. Apply the table migration in your database, then retry the read.
 
 ### model_not_tenant_scoped
 
@@ -943,7 +973,7 @@ Wrote to a model the server does not know. The server keeps its own copy of the 
 
 `HTTP 400` · not retryable
 
-This model is scoped by its connected data source (`policy: { by: 'source' }`), so its tenant is resolved from the source registration rather than a row column. Enforcing that resolution requires the write-through connect path, which is not enabled on this plane yet — so the model cannot be served through the tenant-scoped read or bootstrap path without risking a cross-tenant read. If this model lives on a log plane, scope it with `by: 'column'` or `by: 'parent'` instead.
+This model gets its tenant identity from the connected Data Source, but that connection is not ready for scoped reads yet. Ablo refused the read to prevent data from crossing tenant boundaries. Connect the branch and retry; for internally logged models, use `by: 'column'` or `by: 'parent'`.
 
 ### tenant_model_columns_unknown
 
@@ -967,7 +997,7 @@ Named a model the server does not know. Run `ablo push` (or keep `ablo dev` runn
 
 `HTTP 400` · not retryable
 
-Rows in this model belong to one person rather than to the whole organization, and that boundary is kept where the rows are stored. This plane is currently served from its log, which carries the organization and the project on every row but not the owner — so the boundary cannot be applied here, and serving the read would show one member another member's private records. It was declined whole and nothing was returned. Serve the plane from its tables, or read with a credential that acts for the organization rather than for a person.
+Rows in this model belong to one person rather than the whole organization, but the current read source does not carry the owner identity needed to enforce that boundary. Ablo returned nothing to prevent one member from seeing another member's private records. Use a read source that preserves owner identity, or a credential that acts for the organization.
 
 ## Schema
 
@@ -1177,7 +1207,7 @@ The offline grace window expired before this commit could be sent, so it was not
 
 `HTTP 503` · not retryable
 
-The plane's data source is not in a verified, resolvable state. Fix its registration, secret, or configuration; Ablo will not fall through to hosted storage.
+This branch's database connection is not ready. Check its credentials and configuration; Ablo will not send reads or writes anywhere else.
 
 ### delivery_partition_mismatch
 
@@ -1251,11 +1281,59 @@ The data source accepted the write, but its correlated authoritative source delt
 
 The server answered successfully, but with a body this client does not recognize. The client may be older than the server — update it and retry.
 
+### source_connector_disconnected
+
+`HTTP 503` · retryable
+
+The localhost Data Source connector disconnected with a request in flight. The connector reconnects automatically; retry after it reports ready.
+
+### source_connector_not_attached
+
+`HTTP 503` · retryable
+
+This branch uses localhost connector-only storage, but no connector is attached. Start or restart `ablo dev --local` and keep that process running.
+
+### source_connector_protocol_error
+
+`HTTP 400` · not retryable
+
+The CLI and Ablo service disagreed on the Data Source connector frame protocol, or a malformed frame arrived. Upgrade the Ablo CLI and SDK together, then restart `ablo dev --local`.
+
+### source_connector_send_failed
+
+`HTTP 502` · retryable
+
+The connector socket closed while Ablo was forwarding a signed Data Source request. Keep `ablo dev --local` running; Ablo retries after the connector reconnects.
+
+### source_connector_shutdown
+
+`HTTP 503` · retryable
+
+The Ablo service shut down the connector while a request was in flight. The connector reconnects automatically after the service returns.
+
+### source_connector_superseded
+
+`HTTP 503` · retryable
+
+A newer localhost Data Source connector replaced this one. Stop duplicate `ablo dev --local` processes and use the newest process; in-flight requests are safe to retry.
+
+### source_connector_timeout
+
+`HTTP 504` · retryable
+
+The local Data Source handler did not answer before the connector deadline. Check the local Postgres connection and handler logs; the same idempotent request may be retried.
+
 ### source_network_error
 
 `HTTP 503` · retryable
 
-A network error occurred while talking to the data source. Check connectivity and retry.
+A network error occurred while talking to the data source. For localhost mode, keep `ablo dev --local` running and check its connector output; for a direct source, check database connectivity and retry.
+
+### source_request_failed
+
+`HTTP 502` · retryable
+
+The signed Data Source returned a failure without a more specific code. Inspect the `ablo dev --local` process or deployed endpoint logs, then retry with the same idempotency key.
 
 ### source_unreachable
 
@@ -1361,6 +1439,18 @@ The server could not load this organization's quota state, so the request was re
 
 The rate-limiter backend is unavailable and this endpoint is configured to fail closed; retry shortly.
 
+### source_connector_handler_error
+
+`HTTP 500` · retryable
+
+The local signed Data Source handler threw while processing a request. Read the `ablo dev --local` error immediately above it, fix the database or adapter failure, and retry.
+
+### source_connector_internal_error
+
+`HTTP 500` · retryable
+
+Ablo could not establish the Data Source reverse channel because of an internal service failure. Retry; if it persists, report the request id.
+
 ### task_id_missing
 
 `HTTP 502` · retryable
@@ -1393,7 +1483,7 @@ Authenticated local data could not be completely removed from this device.
 
 `client-only` · not sent over the network
 
-The local database belongs to a different authenticated identity or data plane.
+The local database is connected to a different organization, project, or branch.
 
 ### db_not_opened
 

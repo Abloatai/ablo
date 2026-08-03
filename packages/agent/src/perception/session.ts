@@ -38,7 +38,7 @@ interface AgentIdentity {
   readonly organizationId: string;
   /**
    * The kind of surface making the request, such as `'chat'`, `'mcp'`, or
-   * `'agent_worker'`. The cache keys on this value, so two surfaces never share a
+   * `'headless_worker'`. The cache keys on this value, so two surfaces never share a
    * token or a WebSocket connection.
    */
   readonly surfaceClass: string;

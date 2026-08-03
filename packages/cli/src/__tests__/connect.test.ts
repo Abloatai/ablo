@@ -1,7 +1,7 @@
 import { parseConnectArgs, auditTenantSyncInfra } from '../connect';
 import {
-  connectSetupSql,
-  reconcilePublicationPlan,
+  connectSetupSql as buildConnectSetupSql,
+  reconcilePublicationPlan as buildPublicationPlan,
   registerDirectDataSource,
   ABLO_PUBLICATION,
   ABLO_REPLICATION_ROLE,
@@ -14,6 +14,17 @@ import {
   ABLO_OUTBOX_TABLE,
 } from '@abloatai/transaction/footprint';
 import * as dbRole from '../dbRole';
+
+const connectSetupSql = (
+  input: Omit<Parameters<typeof buildConnectSetupSql>[0], 'publication'> & {
+    readonly publication?: string;
+  },
+) => buildConnectSetupSql({ ...input, publication: input.publication ?? ABLO_PUBLICATION });
+
+const reconcilePublicationPlan = (
+  current: PublicationState,
+  desiredTables: readonly string[],
+) => buildPublicationPlan(current, desiredTables, { publication: ABLO_PUBLICATION });
 
 describe('parseConnectArgs', () => {
   it('parses the locate subcommand — the who-holds-this question', () => {
@@ -231,7 +242,7 @@ describe('auditTenantSyncInfra', () => {
     const retired = artifacts.filter((a) => a.retired).map((a) => a.name);
 
     expect(retired).toContain('sync_deltas');
-    expect(retired).not.toContain(ABLO_PUBLICATION);
+    expect(retired).toContain(ABLO_PUBLICATION);
     // Every entry explains itself; the report is read by someone deciding
     // whether to drop it.
     expect(artifacts.every((a) => a.purpose.length > 0)).toBe(true);

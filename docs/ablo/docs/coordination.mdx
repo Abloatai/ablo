@@ -60,7 +60,7 @@ See [claiming part of a row](#claiming-part-of-a-row).
 > from outside with `signal` (an `AbortSignal`; rejects
 > `claim_wait_aborted`), bound the line you'll join with `maxQueueDepth`
 > (`queue_too_deep`), or skip waiting entirely with `queue: false` — the
-> try-claim, which resolves `null` when the target is held (a declined try
+> try-claim, which resolves `null` when the target is held (skipped work
 > is not an error) and takes no place in line. For
 > callers that manage the wait themselves, the ticket surface remains:
 > `ablo.claims.get({ claimId })` polls a ticket to its grant,
@@ -100,10 +100,9 @@ claim](#writing-under-a-claim)), and the [errors](#errors) you can catch.
 >
 > **Testing exclusion:** mint two sessions with different `agent.id` values,
 > assert those values differ, let A acquire the row, and inspect
-> `claim.state({ id })` before B calls `claim({ id, queue: false })`. B must
-> receive `null`. Creating two clients from the same key tests re-entrancy, not
-> contention. An empty `claim.state` is an observation/subscription issue; it
-> does not relax the authoritative lease check.
+> `claim.state({ id })` before B calls
+> `claim({ id, contention: { mode: 'skip' } })`. B must receive `null`.
+> Creating two clients from the same key tests re-entrancy, not contention.
 
 ---
 
@@ -317,7 +316,7 @@ four axes. `claim({ id })` alone is a complete call; each axis is opt-in.
 
 | name | type | required | description |
 |---|---|---|---|
-| `id` | `string` | yes | The row id: same id as `retrieve` / `update`. |
+| `id` | `string` | yes | The row id: same id as `get` / `update`. |
 | `options.fields` | field selector | no | Claim fields declared by the model's Zod schema instead of the whole row: `fields: (task) => task.status`, or `fields: (task) => [task.status, task.title]` for several. The model supplies its own fields, so autocomplete is exact, a typo does not compile, and a schema rename is a compile error at every use. Two sets conflict where they intersect, so holders of disjoint fields do not wait for each other; see [claiming part of a row](#claiming-part-of-a-row). |
 
 *What others see* — the presence half:
@@ -327,14 +326,15 @@ four axes. `claim({ id })` alone is a complete call; each axis is opt-in.
 | `options.description` | `string` | no | Peer-visible description of the work, shown to observers (default `'editing'`). |
 | `options.meta` | `object` | no | App-defined structured metadata, carried verbatim to every participant observing the claim. Declare its shape once on `Register`'s `ClaimMeta` slot. |
 
-*How you wait* — admission to the line:
+*How you handle contention*:
 
 | name | type | required | description |
 |---|---|---|---|
-| `options.queue` | `boolean` | no | `true` (default) queues and waits for the lease. `false` is the try-claim: if another participant holds the row it resolves `null`: an expected outcome, not an error, so claim-or-skip dedup reads `if (!claim) return` (waiting would double-process). Who holds it stays readable via `claim.state`. A *write* to a held row still rejects `entity_claimed`. |
-| `options.maxQueueDepth` | `number` | no | Backpressure: reject with `AbloClaimedError('queue_too_deep')` instead of joining a line already `>= maxQueueDepth` deep. Omit to wait however deep the queue is. |
-| `options.waitTimeoutMs` | `number` | no | Cap on how long a queued claim waits for its grant before rejecting with `AbloClaimedError('grant_timeout')`. Omit to wait as long as the line takes. Same meaning on both transports; over HTTP a timed-out wait also leaves the line. |
-| `options.signal` | `AbortSignal` | no | Abort a pending wait from outside: a cancelled agent task or an unmounted component takes its queued claim with it. Rejects with `AbloClaimedError('claim_wait_aborted')`; over HTTP the abort also leaves the line. Ignored once the grant has arrived, release a held lease instead. |
+| `options.contention` | `Claim.ContentionOptions` | no | Keeps the response to a busy target together: `{ mode: 'wait', maxDepth?, timeoutMs?, signal?, onStatus? }`. Use `mode: 'skip'` for claim-or-skip dedup; a foreign holder resolves the claim as `null`. |
+| `options.queue` | `boolean` | no | Compatibility shorthand: `true` waits and `false` skips. Prefer `contention` when configuring more than the mode. |
+| `options.maxQueueDepth` | `number` | no | Legacy flat spelling of `contention.maxDepth`. Prefer `contention` for new code. |
+| `options.waitTimeoutMs` | `number` | no | Legacy flat spelling of `contention.timeoutMs`. Prefer `contention` for new code. |
+| `options.signal` | `AbortSignal` | no | Legacy flat spelling of `contention.signal`. Prefer `contention` for new code. |
 
 *How long you hold* — the lease:
 
@@ -342,6 +342,53 @@ four axes. `claim({ id })` alone is a complete call; each axis is opt-in.
 |---|---|---|---|
 | `options.ttl` | `Duration` | no | Crash-cleanup floor. Rarely set: the lease renews while your connection is alive, so it only matters once you go silent. |
 | `options.heartbeat` | `true \| Duration \| { every?, onBeat?, onLost? }` | no | Keep the lease alive for work that outlives the TTL: `true` beats every third of the TTL, a duration sets the cadence, and the structured form carries the cadence and both callbacks in one place: `onBeat` fires after every successful beat (chiefly `queueDepth`, the pressure signal), `onLost` once if a beat learns the lease is gone. The loop stops on release. |
+
+The request-scoped `onStatus` callback receives one discriminated event. It is
+observational: an exception in UI or telemetry code never changes the claim
+attempt.
+
+| event | meaning | claim promise |
+|---|---|---|
+| `queued` | this request joined the wait line | remains pending |
+| `granted` | this request owns the lease | resolves with the claim |
+| `skipped` | `mode: 'skip'` found another participant holding the target | resolves `null` |
+| `failed` | the attempt could not complete, for example timeout, cancellation, authorization, or connectivity | rejects with `event.error` |
+
+```ts
+const claim = await ablo.tasks.claim({
+  id,
+  contention: {
+    mode: 'wait',
+    maxDepth: 3,
+    timeoutMs: 30_000,
+    onStatus(event) {
+      if (event.type === 'queued') {
+        console.log(`${event.ahead} participant(s) ahead`);
+      } else if (event.type === 'granted') {
+        console.log(event.waited ? 'your turn' : 'granted immediately');
+      } else {
+        console.warn(event.error.code, event.error.message);
+      }
+    },
+  },
+});
+```
+
+For claim-or-skip work, make the caller's intent explicit and keep its status
+observer beside the decision:
+
+```ts
+const claim = await ablo.tasks.claim({
+  id,
+  contention: {
+    mode: 'skip',
+    onStatus: (event) => {
+      if (event.type === 'skipped') metrics.increment('claim.skipped');
+    },
+  },
+});
+if (!claim) return;
+```
 
 The high-level `claim` queues by default, so on contention you either get the row
 when your turn arrives or one of the [queue errors](#errors) (`claim_lost`,
@@ -457,9 +504,16 @@ ablo.<model>.claim.state({ id })
 Read who's currently working on a row, for observers and UI. Synchronous and
 reactive (it reads the local coordination snapshot). Never blocks.
 
+The first call also starts row-scoped observation. Because that subscription is
+asynchronous, an imperative script may briefly read `null` before the reactive
+snapshot arrives; subscribe to changes or wait for the expected holder when the
+observation itself is the test. Late subscriptions are backfilled across server
+instances, and a skipped conflict attempt seeds its authoritative holder
+summary into the same snapshot immediately.
+
 **You don't subscribe to anything first.** Reading or claiming a row
 automatically enrolls you in that row's sync group: reading it (including
-`retrieve`/`get`, or `claim.state` itself) gives you **read-interest**, and
+`get`, or `claim.state` itself) gives you **read-interest**, and
 `claim`-ing it gives you a **pinned write-intent**. So `claim.state({ id })`
 observes co-participants on that row from **any** client — a browser, a Server
 Action, or a Node agent — and a holder sees its own claim, with no manual
@@ -562,16 +616,22 @@ decide the wait isn't worth it.
 |---|---|---|---|
 | `id` | `string` | yes | The row id. |
 
-**Returns** — a list envelope. `data` contains the queued
-[claim state objects](#the-claim-state-object) in promotion order (head first), excluding
-the active holder; `[]` when no one is waiting.
+**Returns** — a structured queue snapshot:
+
+- `waiting` — queued [claim state objects](#the-claim-state-object) in
+  promotion order, excluding the active holder;
+- `next` — the first waiter, or `null`;
+- `size` — how many participants are waiting;
+- `data` — the same array as `waiting`, retained as the standard list-envelope
+  member for compatibility.
 
 **Example**
 
 ```ts
-const { data: waiting } = ablo.weatherReports.claim.queue({ id: 'report_stockholm' });
-console.log(`${waiting.length} ahead of you`);
-console.log(waiting.map((i) => i.heldBy));
+const line = ablo.weatherReports.claim.queue({ id: 'report_stockholm' });
+console.log(`${line.size} waiting`);
+console.log(`next: ${line.next?.heldBy ?? 'nobody'}`);
+console.log(line.waiting.map((claim) => claim.heldBy));
 ```
 
 ### `claim.release`

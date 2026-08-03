@@ -1,6 +1,67 @@
 # Changelog
 
+## 0.48.0
+
+### A branch is unbound until you connect a database to it
+
+A branch keeps its own storage, and it does not quietly get Ablo's. Until a
+database is connected to that branch, a request needing one fails with
+`no_data_source_registered` and says what to do:
+
+```
+This branch is not connected to your database yet.
+Run `ablo connect` for this branch, then retry.
+```
+
+The old `test_database_not_registered` is gone. It described a sandbox that no
+longer exists, it arrived on requests that had nothing to do with a test
+database, and its advice pointed at options the SDK had already removed. A
+branch created by `ablo dev` now reports its state plainly rather than looking
+ready and then refusing the first schema push.
+
+**Action required.** Replace any handler matching `test_database_not_registered`
+with `no_data_source_registered`. The new code carries the same 4xx meaning and
+a recovery path a caller can act on.
+
+### Failures say which branch they happened on
+
+An unconnected branch previously returned its refusal with nothing written
+server-side, so a support question about one customer's branch could not be
+answered from logs at all. These now carry the request, organization, project,
+branch, key kind and storage state, indexed in Sentry, so a failure can be
+looked up by branch instead of reconstructed from database tables.
+
+### Replication uses your branch's own publication and slot
+
+Registration, validation, writer checks, replication, drift detection and
+`ablo connect` all require the branch-scoped names recorded when the source was
+registered. Nothing falls back to a shared `ablo_publication` or `ablo_slot`
+any more, so two branches on one database can never quietly share a stream.
+`ablo connect scan` reports legacy unsuffixed objects as retired.
+
+Once your engine is on this release and `ablo connect check` is clean, the
+temporary alias can go:
+
+```sql
+DROP PUBLICATION IF EXISTS "ablo_publication";
+```
+
+### Renamed
+
+`FootprintPlane` is now `DataSourceIdentity`, with the same three fields. The
+old name described an internal layout; the new one describes what it
+identifies.
+
 ## 0.47.0
+
+### Local Postgres works with Ablo Cloud
+
+Run `npx ablo dev --local` to serve the generated signed Data Source handler
+over an outbound, protocol-scoped connector. Postgres remains private on the
+developer's machine and its connection string never leaves the app process.
+The Data Source guide now explains exactly which writes are visible without
+WAL, and the public error reference includes actionable `source_connector_*`
+codes for every connector lifecycle failure.
 
 ### Awaiting a model write now means it is confirmed
 
@@ -23,15 +84,25 @@ separately.
 - `wait: 'queued'` on a call you did await now waits for confirmation. Move to
   `commits.create` if the queued receipt was the reason for the option.
 
-### Development branches accept their first schema push
+### Customer branches connect before accepting a schema
 
-A branch created by `ablo dev` now records its storage shape at creation, so a
-push lands against the transaction log Ablo already hosts for it. Such a branch
-previously reported itself ready and then refused that push with
-`test_database_not_registered`, which reads as a missing database on a branch
-that was never meant to have one. Branches created before this release are
-repaired in place, so an existing development branch starts accepting pushes
-without being recreated.
+A customer branch now remains in provisioning until it has an active Data
+Source. Ablo does not invent internal storage for customer data: it reads the
+customer's database through WAL and writes through the separately scoped DML
+credential (or uses the explicitly registered signed endpoint fallback).
+
+Database validation now uses the branch-scoped publication and replication slot
+persisted with that Data Source. It no longer falls back to the shared
+`ablo_publication` / `ablo_slot` names, so `ablo connect check` validates the
+same objects that `ablo connect apply` created.
+
+The sandbox-only `test_database_not_registered` error has been removed. An
+unconnected customer branch now consistently returns `no_data_source_registered`
+with the `ablo connect` recovery step.
+
+**Action required for type imports.** `FootprintPlane` has been removed. Import
+`DataSourceIdentity` from `@abloatai/ablo/source` instead; its fields remain
+`organizationId`, optional `projectId`, and `branchId`.
 
 ### The CLI names the problem it actually hit
 

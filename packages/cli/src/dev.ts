@@ -27,7 +27,7 @@ import {
   loadSchema,
   pushSchema,
   fmtSignal,
-  schemaPushPlaneHint,
+  schemaPushStorageHint,
   DEFAULT_SCHEMA_PATH,
   DEFAULT_EXPORT,
 } from './push';
@@ -35,6 +35,8 @@ import { apiBaseUrl, DEFAULT_URL } from './controlPlane';
 import { resolveRuntimeApiKey } from './config';
 import { looksLikeCredentialRefusal, poolerExplanation } from './readiness';
 import { brand } from './theme';
+import { readProjectEnvVariable } from './dbRole';
+import { createSourceConnector, type ConnectorStatus } from '@abloatai/transaction/source';
 
 export interface DevArgs {
   schemaPath: string;
@@ -42,6 +44,8 @@ export interface DevArgs {
   url: string;
   apiKey: string | undefined;
   watch: boolean;
+  local: boolean;
+  sourcePath: string;
   planeLabel: string;
 }
 
@@ -62,6 +66,8 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
   let exportName = DEFAULT_EXPORT;
   let url = process.env.ABLO_API_URL ?? DEFAULT_URL;
   let watchEnabled = false;
+  let local = false;
+  let sourcePath = 'ablo/data-source.ts';
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -81,6 +87,12 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
       case '--no-watch': // push once and exit; do not start the file watcher
         watchEnabled = false;
         break;
+      case '--local':
+        local = true;
+        break;
+      case '--source':
+        sourcePath = argv[++i] ?? sourcePath;
+        break;
       default:
         throw new AbloValidationError(`unknown flag: ${arg}`, { code: 'cli_invalid_arguments' });
     }
@@ -93,8 +105,62 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
     url,
     apiKey: process.env.ABLO_API_KEY,
     watch: watchEnabled,
+    local,
+    sourcePath,
     planeLabel: 'branch',
   };
+}
+
+/** Import the generated endpoint and return its ordinary Fetch handler. */
+export async function loadLocalSourceHandler(
+  sourcePath: string,
+): Promise<(request: Request) => Promise<Response>> {
+  const abs = resolve(process.cwd(), sourcePath);
+  if (!existsSync(abs)) {
+    throw new AbloValidationError(
+      `local Data Source not found at ${pc.bold(sourcePath)}. Add the signed Data Source handler described by ${pc.bold('npx ablo docs data-sources')}, or pass ${pc.bold('--source <path>')}.`,
+      { code: 'cli_invalid_arguments' },
+    );
+  }
+  const { createJiti } = await import('jiti');
+  const jiti = createJiti(process.cwd());
+  const mod = await jiti.import<Record<string, unknown>>(abs);
+  const nested = mod.default && typeof mod.default === 'object'
+    ? mod.default as Record<string, unknown>
+    : undefined;
+  const handler = mod.POST ?? nested?.POST;
+  if (typeof handler !== 'function') {
+    throw new AbloValidationError(
+      `${pc.bold(sourcePath)} must export a ${pc.bold('POST(request)')} Data Source handler.`,
+      { code: 'cli_invalid_arguments' },
+    );
+  }
+  return handler as (request: Request) => Promise<Response>;
+}
+
+/** Register a connector-only endpoint for this exact branch. */
+export async function registerLocalSource(args: Pick<DevArgs, 'url' | 'apiKey'>): Promise<void> {
+  const response = await fetch(`${args.url}/v1/datasources`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${args.apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      connection: 'endpoint',
+      endpoint: 'http://localhost/ablo-dev/reverse-channel',
+      signingKey: args.apiKey,
+      reverseChannel: true,
+      metadata: { managed_by: 'ablo dev --local' },
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new AbloValidationError(
+      `Could not register the local Data Source (${response.status}): ${body}`,
+      { code: 'cli_invalid_arguments' },
+    );
+  }
 }
 
 /**
@@ -271,9 +337,8 @@ async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; me
     return { ok: false, message: lines.join('\n') };
   }
   if (status === 403) {
-    // The server's error carries the actionable text in `message` (for example,
-    // `test_database_not_registered` tells you to register a development
-    // database). Print the server's words first and fall back to the scope hint
+    // The server's error carries the actionable text in `message`. Print the
+    // server's words first and fall back to the scope hint
     // only when they're absent, so a specific instruction isn't hidden behind a
     // guessed "missing scope".
     const serverSays = (body.message ?? body.reason) as string | undefined;
@@ -281,7 +346,7 @@ async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; me
     // rather than leaving the developer to hand-write SQL. It is triggered by any
     // connection string whose default role can bypass row-level security.
     const hint =
-      schemaPushPlaneHint(body.code) ??
+      schemaPushStorageHint(body.code) ??
       (body.code === 'database_role_cannot_enforce_rls'
         ? `Run ${pc.bold('npx ablo migrate')} — it creates the scoped role for you (your DB credential never leaves this machine).`
         : `Schema authoring needs a branch-bound ${pc.bold('sk_')} key with ${pc.bold('schema:push')} — manage keys at ${pc.cyan('https://abloatai.com')}.`);
@@ -292,6 +357,10 @@ async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; me
     };
   }
   const serverMessage = String(body.message ?? body.reason ?? bodyText);
+  const storageHint = schemaPushStorageHint(body.code);
+  if (storageHint) {
+    return { ok: false, message: `${serverMessage}\n${pc.dim(storageHint)}` };
+  }
   // A credential refusal from the database is the one failure here whose words
   // point away from its cause: the pooled host says "password authentication
   // failed" about a password that is correct and working elsewhere in the same
@@ -326,6 +395,13 @@ export async function dev(
   else if (!args.apiKey) args.apiKey = resolveRuntimeApiKey('sandbox').key;
   if (runtime.branch) args.planeLabel = runtime.branch.slug;
 
+  if (args.local && !args.watch) {
+    throw new AbloValidationError(
+      `${pc.bold('--local')} opens a long-lived secure connector and cannot be combined with ${pc.bold('--no-watch')}.`,
+      { code: 'cli_invalid_arguments' },
+    );
+  }
+
   const key = classifyKey(args.apiKey);
   if (!key.ok) {
     console.error(pc.red(`  ${key.reason}`));
@@ -340,6 +416,39 @@ export async function dev(
     console.log(
       `  ${pc.dim('key')}     temporary · expires ${runtime.branch.expiresAt}`,
     );
+  }
+
+  let localAbort: AbortController | null = null;
+  if (args.local) {
+    // The generated handler reads these at module evaluation time. The branch
+    // key must win over an exported parent/root key, while DATABASE_URL follows
+    // the same .env.local → .env convention as the application.
+    process.env.ABLO_API_KEY = args.apiKey!;
+    if (!process.env.DATABASE_URL) {
+      const databaseUrl = readProjectEnvVariable('DATABASE_URL', process.cwd(), false);
+      if (databaseUrl) process.env.DATABASE_URL = databaseUrl.value;
+    }
+    const handler = await loadLocalSourceHandler(args.sourcePath);
+    await registerLocalSource(args);
+    localAbort = new AbortController();
+    const connector = createSourceConnector({
+      apiKey: args.apiKey!,
+      handler,
+      baseURL: args.url,
+      client: 'ablo-dev',
+      onStatus(status: ConnectorStatus) {
+        if (status === 'ready') {
+          console.log(`  ${pc.green('✓')} local Postgres connected through the secure reverse channel`);
+        }
+      },
+      onError(error) {
+        console.error(pc.yellow(`  local connector: ${error instanceof Error ? error.message : String(error)}`));
+      },
+    });
+    void connector.run(localAbort.signal).catch((error) => {
+      console.error(pc.red(`  local connector stopped: ${error instanceof Error ? error.message : String(error)}`));
+    });
+    console.log(`  ${pc.dim('source')}  ${args.sourcePath} ${pc.dim('(outbound connector; no public URL)')}`);
   }
 
   // `ablo dev` does not touch your database — no role creation, no
@@ -361,7 +470,10 @@ export async function dev(
   s.start('Pushing schema definition (development branch)');
   const first = await runPush(schema, args);
   s.stop(first.message, first.ok ? 0 : 1);
-  if (!first.ok) process.exit(1);
+  if (!first.ok) {
+    localAbort?.abort();
+    process.exit(1);
+  }
 
   // Hand the key to the SDK without a copy-paste step. When ABLO_API_KEY is
   // already in the environment (CI / explicit export) it's flowing — don't
@@ -424,6 +536,7 @@ export async function dev(
 
   const stop = (): void => {
     watcher.close();
+    localAbort?.abort();
     console.log(`\n  ${pc.dim('stopped.')}`);
     process.exit(0);
   };

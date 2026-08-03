@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "display": "Node — for Node-runtime apps and packages (sync-server, agent-worker, scripts).",
+  "display": "Node — for Node-runtime apps and packages (sync-server, workers, scripts).",
   "extends": "./base.json",
   "compilerOptions": {
     "lib": ["ES2022"],

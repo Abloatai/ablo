@@ -142,6 +142,13 @@ prepare_release() {
     exit 1
   fi
   node "$SCRIPT_DIR/finalize-release-notes.mjs" "$new_version"
+  # Derive the published docs from the changelog this release just finalised.
+  # Must follow finalize-release-notes, which writes the version's body; the
+  # generator reads CHANGELOG.md and emits docs/ablo/docs/changelog/<version>.mdx.
+  # Nothing called it, so the docs site silently stopped at 0.44.0 while three
+  # further releases shipped — the derived-doc rule holds only if the derivation
+  # actually runs, and the release is the one moment it is guaranteed to matter.
+  npm run build:docs --workspace=@abloatai/ablo
   npm run generate:openapi --workspace=@abloatai/ablo
   bash "$SCRIPT_DIR/refresh-public-lock.sh"
   node scripts/typesafety/check-public-surface.mjs --update

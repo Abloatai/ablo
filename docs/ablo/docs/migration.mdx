@@ -330,7 +330,7 @@ modifier are named siblings. Reactive local reads stay on the synchronous
 + await ablo.tasks.update({ id, data: { status: 'done' } })
 
 - await ablo.tasks.retrieve(id)
-+ await ablo.tasks.retrieve({ id })
++ await ablo.tasks.get({ id })
 
 - useAblo((ablo) => ablo.tasks.retrieve(id)) ?? serverTask
 + useAblo((ablo) => ablo.tasks.local.get(id)) ?? serverTask

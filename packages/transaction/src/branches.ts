@@ -87,6 +87,28 @@ export const branchParentCompatibilitySchema = z.enum([
 ]);
 export type BranchParentCompatibility = z.infer<typeof branchParentCompatibilitySchema>;
 
+/**
+ * The one ownership/storage vocabulary for durable branch data.
+ * Missing configuration is explicit (`unbound`), never inferred as hosted.
+ */
+export const branchStorageSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('unbound') }).strict(),
+  z.object({
+    kind: z.literal('customer'),
+    transport: z.enum(['direct', 'endpoint']),
+    status: z.enum(['unverified', 'active', 'rejected']),
+  }).strict(),
+  z.object({
+    kind: z.literal('internal'),
+    implementation: z.enum(['log', 'tables']),
+  }).strict(),
+  z.object({
+    kind: z.literal('blocked'),
+    reason: z.literal('orphaned_external_marker'),
+  }).strict(),
+]);
+export type BranchStorage = z.infer<typeof branchStorageSchema>;
+
 export const branchStatusSchemaSummarySchema = z
   .object({
     active: z.boolean(),
@@ -101,8 +123,8 @@ export const branchStatusSchemaSummarySchema = z
 
 export const branchStatusDataSourceSchema = z
   .object({
-    kind: z.enum(['hosted', 'direct', 'endpoint']),
-    status: z.enum(['unverified', 'active', 'rejected']).nullable(),
+    connection: z.enum(['direct', 'endpoint']),
+    status: z.enum(['unverified', 'active', 'rejected']),
     host: z.string().nullable(),
     database: z.string().nullable(),
     cursor: z.string().nullable(),
@@ -111,7 +133,8 @@ export const branchStatusDataSourceSchema = z
     last_success_at: z.string().nullable(),
     last_error: z.string().nullable(),
   })
-  .strict();
+  .strict()
+  .nullable();
 
 export const branchStatusBlockerSchema = z
   .object({
@@ -127,6 +150,7 @@ export const branchStatusResponseSchema = z
     branch: branchResponseSchema,
     ready: z.boolean(),
     schema: branchStatusSchemaSummarySchema,
+    storage: branchStorageSchema,
     data_source: branchStatusDataSourceSchema,
     blockers: z.array(branchStatusBlockerSchema).readonly(),
   })

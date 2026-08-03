@@ -56,7 +56,14 @@ export async function completeTask(taskId: string, workerId: string) {
 
   const acquired = await ablo.tasks.claim({
     id: taskId,
-    queue: false,
+    contention: {
+      mode: 'skip',
+      onStatus(event) {
+        if (event.type === 'skipped') {
+          console.info('task already owned', event.error.code);
+        }
+      },
+    },
     description: 'completing',
   });
   if (!acquired) return { status: 'already_claimed' };

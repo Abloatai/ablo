@@ -1,10 +1,30 @@
 # @abloatai/transaction
 
+## 0.48.0
+
+### Minor Changes
+
+- 8151175: One answer for a branch that is not connected yet. A branch keeps its own storage until you connect a database to it, and a request that needs one now fails with `no_data_source_registered` and plain guidance to run `ablo connect` for that branch. The older `test_database_not_registered` code is removed: it described a sandbox that no longer exists, and it arrived on requests that had nothing to do with a test database.
+
+  `FootprintPlane` is now `DataSourceIdentity`, with the same three fields. The old name described an internal layout; the new one describes what it identifies.
+
+  Replace any handler matching on `test_database_not_registered` with `no_data_source_registered`, and any import of `FootprintPlane` with `DataSourceIdentity`.
+
 ## 0.47.0
 
 ### Minor Changes
 
+- Added stable `source_connector_*` error codes for localhost Data Source
+  authentication, attachment, protocol, timeout, handler, and lifecycle
+  failures. Connector-only responses now preserve canonical `code` envelopes.
+
 - 2e4be0a: Make schema model writes optimistic with one stable promise contract: local reactive state changes immediately, while awaiting `create`, `update`, or `delete` always waits for authoritative confirmation. Remove the model-level and client-level `wait` options; explicit queued-versus-confirmed receipt control remains on `commits.create`.
+
+- Direct customer database connections now require the branch-scoped publication
+  and replication slot everywhere. The legacy `FootprintPlane` type has been
+  removed; use `DataSourceIdentity` when deriving a Data Source's Postgres object
+  names. The legacy `test_database_not_registered` error code is also removed;
+  disconnected branches use `no_data_source_registered` consistently.
 
 ## 0.46.0
 

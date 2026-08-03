@@ -178,7 +178,7 @@ export interface UserContext {
    *  - `'none'`: open the WebSocket and process live deltas only.
    *    Reads go through `model.get()` / filtered subscriptions
    *    backfilled by `Covering` deltas. Suitable for transactional
-   *    participants — agent-worker, video-pipeline, routine runners —
+   *    participants — headless workers, video pipelines, routine runners —
    *    that don't need a local replica of the org's tenant plane.
    */
   bootstrapMode?: 'full' | 'none';

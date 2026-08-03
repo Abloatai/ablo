@@ -1,0 +1,78 @@
+---
+title: "v0.47.0"
+type: changelog
+date: 2026-08-03T10:07:24.398Z
+changelog:
+  version: "0.47.0"
+  category: "Fixes"
+---
+
+### Local Postgres works with Ablo Cloud
+
+Run `npx ablo dev --local` to serve the generated signed Data Source handler
+over an outbound, protocol-scoped connector. Postgres remains private on the
+developer's machine and its connection string never leaves the app process.
+The Data Source guide now explains exactly which writes are visible without
+WAL, and the public error reference includes actionable `source_connector_*`
+codes for every connector lifecycle failure.
+
+### Awaiting a model write now means it is confirmed
+
+`create`, `update`, and `delete` change local reactive state immediately and
+return a promise with a single meaning: the write reached authoritative
+confirmation. An interface stays responsive without awaiting anything, and code
+that needs to know a write survived can await the same call it already makes.
+
+The `wait` option is gone from the client and from individual model calls.
+Awaiting a model write always waits for confirmation, so there is nothing left
+to configure. Explicit control over a queued versus confirmed receipt remains on
+`commits.create`, which still hands back the receipt and its confirmation
+separately.
+
+**Action required.** Remove `wait` from `Ablo({ ... })` and from every
+`create`, `update`, and `delete` call.
+
+- `wait: 'confirmed'` behaves identically once removed.
+- `wait: 'queued'` on a call you never awaited behaves identically once removed.
+- `wait: 'queued'` on a call you did await now waits for confirmation. Move to
+  `commits.create` if the queued receipt was the reason for the option.
+
+### Customer branches connect before accepting a schema
+
+A customer branch now remains in provisioning until it has an active Data
+Source. Ablo does not invent internal storage for customer data: it reads the
+customer's database through WAL and writes through the separately scoped DML
+credential (or uses the explicitly registered signed endpoint fallback).
+
+Database validation now uses the branch-scoped publication and replication slot
+persisted with that Data Source. It no longer falls back to the shared
+`ablo_publication` / `ablo_slot` names, so `ablo connect check` validates the
+same objects that `ablo connect apply` created.
+
+The sandbox-only `test_database_not_registered` error has been removed. An
+unconnected customer branch now consistently returns `no_data_source_registered`
+with the `ablo connect` recovery step.
+
+**Action required for type imports.** `FootprintPlane` has been removed. Import
+`DataSourceIdentity` from `@abloatai/ablo/source` instead; its fields remain
+`organizationId`, optional `projectId`, and `branchId`.
+
+### The CLI names the problem it actually hit
+
+A refused push no longer reports every failure as a missing `schema:push`
+capability. That advice was wrong for most refusals: a database privilege error,
+a row-level security misconfiguration, and an unregistered development database
+each need a different fix, and none of them is a different API key. Each now
+leads with the server's own message and the remedy for that specific cause.
+
+Project names also resolve correctly under a branch-bound key. Listing projects
+is a management operation that such a key is deliberately not allowed to
+perform, so `ablo status` and `ablo push` reported a correctly minted key's
+project as `unnamed` alongside a permission error. The name now comes from the
+stored management credential.
+
+### Deprecations
+
+`METER_EVENT_COUNTS` is deprecated in favour of its per-surface members, and the
+`DatasourceResnapshotResponse` type and its schema are deprecated. All three
+still ship and still work; they will be removed in a later release.

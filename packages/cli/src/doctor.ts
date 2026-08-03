@@ -170,7 +170,7 @@ export async function doctor(): Promise<void> {
     checks.push({
       label: 'data',
       state: 'fail',
-      detail: 'no database connected to this plane — writes are held',
+      detail: 'this branch is not connected to a database — writes are held',
       fix: 'connect one with `ablo connect apply`',
     });
   } else {

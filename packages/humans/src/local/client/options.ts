@@ -154,7 +154,7 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * Ablo({
    *   schema,
    *   apiKey,
-   *   durableWrites: { store, namespace: 'agent-worker' },
+   *   durableWrites: { store, namespace: 'headless-worker' },
    * })
    * ```
    */

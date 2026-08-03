@@ -1,5 +1,20 @@
 # @abloatai/humans
 
+## 0.48.0
+
+### Minor Changes
+
+- 8151175: One answer for a branch that is not connected yet. A branch keeps its own storage until you connect a database to it, and a request that needs one now fails with `no_data_source_registered` and plain guidance to run `ablo connect` for that branch. The older `test_database_not_registered` code is removed: it described a sandbox that no longer exists, and it arrived on requests that had nothing to do with a test database.
+
+  `FootprintPlane` is now `DataSourceIdentity`, with the same three fields. The old name described an internal layout; the new one describes what it identifies.
+
+  Replace any handler matching on `test_database_not_registered` with `no_data_source_registered`, and any import of `FootprintPlane` with `DataSourceIdentity`.
+
+### Patch Changes
+
+- Updated dependencies [8151175]
+  - @abloatai/transaction@0.48.0
+
 ## 0.47.0
 
 ### Minor Changes

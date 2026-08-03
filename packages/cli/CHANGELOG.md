@@ -1,8 +1,24 @@
 # @abloatai/cli
 
+## 0.48.0
+
+### Patch Changes
+
+- Updated dependencies [8151175]
+  - @abloatai/transaction@0.48.0
+  - @abloatai/humans@0.48.0
+
 ## 0.47.0
 
 ### Patch Changes
+
+- `ablo dev --local` now registers a connector-only signed Data Source and
+  serves local Postgres over an outbound authenticated WebSocket. No public
+  tunnel or cloud-reachable `localhost` endpoint is required.
+
+- `ablo connect register`, `check`, `apply`, and the manual recipe now use the
+  authenticated branch's scoped publication and replication slot consistently.
+  The CLI no longer emits or validates the legacy shared publication by default.
 
 - Updated dependencies [2e4be0a]
   - @abloatai/transaction@0.47.0

@@ -45,7 +45,7 @@ echo confirms it → everyone connected sees it live.**
 | Primitive | Plane | Purpose |
 |---|---|---|
 | `Schema` | State | Declares typed models the app and agents can read and write. |
-| `Model` | State | The generated `ablo.<model>` model. Use `retrieve`/`list` (async reads), `local.get`/`local.list`/`local.count` (the same verbs, synchronous and local-only), `create`, `update`, and `delete`. |
+| `Model` | State | The generated `ablo.<model>` model. Use `get`/`list` (async reads), `local.get`/`local.list`/`local.count` (the same verbs, synchronous and local-only), `create`, `update`, and `delete`. |
 | `Claim` | Coordination | Who is working on a target. Taken via `ablo.<model>.claim({ id })` and read via `ablo.<model>.claim.state({ id })`. Ephemeral, never persisted. |
 | `Commit` | Protocol | The durable write underneath model updates. Most users do not call it directly. |
 | `Receipt` | Protocol | The lower-level durable result for custom runtimes. Awaiting a schema write waits for confirmation. |

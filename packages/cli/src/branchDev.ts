@@ -20,6 +20,7 @@ import { DEFAULT_URL } from './controlPlane';
 export const BRANCH_DEV_USAGE = `Usage:
   ablo dev [--branch <slug>] [--branch-ttl-hours <1-168>]
            [--schema <path>] [--export <name>] [--url <url>]
+           [--local] [--source <path>]
   ablo dev --no-watch [branch options]
 
 By default, dev discovers the Git/CI branch, ensures its isolated Ablo branch,

@@ -105,14 +105,14 @@ export function connectSetupSql(input: {
   readonly role?: string;
   readonly writeRole?: string;
   readonly schema?: string;
-  readonly publication?: string;
+  readonly publication: string;
 }): readonly string[] {
   const role = input.role && input.role.length > 0 ? input.role : ABLO_REPLICATION_ROLE;
   const writeRole =
     input.writeRole && input.writeRole.length > 0 ? input.writeRole : ABLO_WRITE_ROLE;
   const tables = input.tables ?? [];
   const schema = input.schema ?? 'public';
-  const publication = input.publication ?? ABLO_PUBLICATION;
+  const publication = input.publication;
   const qualifiedTables = tables.map((table) => `${quoteIdent(schema)}.${quoteIdent(table)}`);
   const publicationTarget =
     tables.length > 0 ? `FOR TABLE ${qualifiedTables.join(', ')}` : 'FOR ALL TABLES';
@@ -246,9 +246,9 @@ export interface PublicationReconcile {
 export function reconcilePublicationPlan(
   current: PublicationState,
   desiredTables: readonly string[],
-  opts: { readonly schema?: string; readonly publication?: string } = {}
+  opts: { readonly schema?: string; readonly publication: string }
 ): PublicationReconcile {
-  const pub = quoteIdent(opts.publication ?? ABLO_PUBLICATION);
+  const pub = quoteIdent(opts.publication);
   const schema = opts.schema ?? 'public';
   const qualified = (table: string): string => `${quoteIdent(schema)}.${quoteIdent(table)}`;
   const desiredAll = desiredTables.length === 0;
@@ -297,9 +297,9 @@ export function reconcilePublicationPlan(
 /** Read the current membership of `ablo_publication` so a re-run can reconcile it. */
 export async function readPublicationState(
   sql: postgres.Sql,
-  opts: { readonly schema?: string; readonly publication?: string } = {}
+  opts: { readonly schema?: string; readonly publication: string }
 ): Promise<PublicationState> {
-  const publication = opts.publication ?? ABLO_PUBLICATION;
+  const publication = opts.publication;
   const schema = opts.schema ?? 'public';
   const pubRows = await sql.unsafe<{ puballtables: boolean }[]>(
     `SELECT puballtables FROM pg_publication WHERE pubname = $1`,
@@ -354,7 +354,7 @@ export interface CheckItem {
 export async function probeReadiness(
   sql: postgres.Sql,
   opts: {
-    readonly publication?: string;
+    readonly publication: string;
     readonly schema?: string;
     /**
      * The tables Ablo actually coordinates — its schema's models. When given,
@@ -370,9 +370,9 @@ export async function probeReadiness(
      * reading, where no schema is in hand).
      */
     readonly coordinatedTables?: readonly string[];
-  } = {}
+  }
 ): Promise<readonly CheckItem[]> {
-  const publication = opts.publication ?? ABLO_PUBLICATION;
+  const publication = opts.publication;
   const schema = opts.schema ?? 'public';
   const coordinated =
     opts.coordinatedTables && opts.coordinatedTables.length > 0

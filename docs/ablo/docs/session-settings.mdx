@@ -57,6 +57,14 @@ context, whether or not you map anything:
 If your policies read these names directly, you need no mapping at all — this
 page is for the case where they read different ones.
 
+For a mutable model with row-local tenancy, Ablo also puts the authenticated
+organization into the CREATE operation as `organizationId`; the source adapter
+maps that field to the model's tenancy column (normally `organization_id`).
+Callers do not supply it, and the column does not need a SQL default. A default
+from `app.current_org_id` can be useful as defense in depth, but it is not a
+substitute for the tenant policy and you should never loosen RLS to make an
+Ablo write pass.
+
 `app.current_user_id` is worth reading twice, because it has three states rather
 than two. It carries a person's id when a person is behind the write. It carries
 `*` when a backend credential is acting as the organization itself, which is the

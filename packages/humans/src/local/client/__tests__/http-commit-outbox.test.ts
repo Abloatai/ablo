@@ -525,7 +525,7 @@ describe('stateless HTTP commit outbox', () => {
       apiKey: 'sk_test_outbox',
       baseURL: 'https://api.example.test',
       fetch: fetchImpl,
-      durableWrites: { store: outbox, namespace: 'agent-worker' },
+      durableWrites: { store: outbox, namespace: 'headless-worker' },
     });
 
     await client.commits.create({
@@ -540,7 +540,7 @@ describe('stateless HTTP commit outbox', () => {
       outbox.sealedRecords[0]?.type === 'http_commit_envelope'
         ? outbox.sealedRecords[0].scopeNamespace
         : '',
-    ).toContain('agent-worker');
+    ).toContain('headless-worker');
   });
 
   it('validates durable-write adapters at runtime with Zod', () => {

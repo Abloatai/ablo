@@ -378,11 +378,11 @@ export async function status(args: string[] = []): Promise<void> {
     }
   } else if (dataSource.kind === 'none') {
     console.log(
-      `  ${pc.dim('data')}    ${pc.red('✗ no database connected to this plane')} ${pc.dim('— writes are held')}`
+      `  ${pc.dim('data')}    ${pc.red('✗ this branch is not connected to a database')} ${pc.dim('— writes are held')}`
     );
   } else if (reachable) {
     console.log(
-      `  ${pc.dim('data')}    ${pc.yellow('?')} ${pc.dim(`could not read the plane's databases (${dataSource.detail})`)}`
+      `  ${pc.dim('data')}    ${pc.yellow('?')} ${pc.dim(`could not read this branch's database connection (${dataSource.detail})`)}`
     );
   }
 
@@ -450,7 +450,7 @@ export async function status(args: string[] = []): Promise<void> {
     }
   } else if (dataSource.kind === 'unknown') {
     console.log(
-      `  ${pc.yellow('?')} ${pc.dim("nothing is blocking a write, but this key could not read the plane's databases — some checks were skipped")}`
+      `  ${pc.yellow('?')} ${pc.dim("nothing is blocking a write, but this key could not read the branch's database connection — some checks were skipped")}`
     );
   } else {
     console.log(

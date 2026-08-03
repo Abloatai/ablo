@@ -8,9 +8,46 @@
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { wireEnvLocal, classifyKey } from '../dev';
+import { wireEnvLocal, classifyKey, parseDevArgs, registerLocalSource } from '../dev';
 
 const KEY = 'sk_abc123';
+
+describe('local connector flags', () => {
+  it('opts into the generated Data Source without changing the default dev path', () => {
+    expect(parseDevArgs(['--watch']).local).toBe(false);
+    expect(parseDevArgs(['--watch', '--local', '--source', 'src/ablo/source.ts'])).toMatchObject({
+      local: true,
+      sourcePath: 'src/ablo/source.ts',
+      watch: true,
+    });
+  });
+
+  it('registers a connector-only localhost descriptor, never a database URL', async () => {
+    const originalFetch = globalThis.fetch;
+    // Declare fetch's parameters on the mock. Without them jest infers a
+    // zero-arity call signature, `mock.calls[0]` is the empty tuple, and
+    // destructuring the arguments this test exists to inspect cannot typecheck.
+    const fetchMock = jest.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('{}', { status: 201 })
+    );
+    globalThis.fetch = fetchMock as typeof fetch;
+    try {
+      await registerLocalSource({ url: 'https://api.example', apiKey: KEY });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://api.example/v1/datasources');
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      endpoint: 'http://localhost/ablo-dev/reverse-channel',
+      signingKey: KEY,
+      reverseChannel: true,
+    });
+    expect(String(init?.body)).not.toContain('postgres://');
+  });
+});
 
 describe('classifyKey (branch-bound credential contract)', () => {
   function reasonOf(apiKey: string | undefined): string {

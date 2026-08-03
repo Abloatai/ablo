@@ -122,7 +122,7 @@ bypasses profiles for project/branch administration; the runtime key remains
 | `ablo init`                        | Scaffold `ablo/` (`schema.ts`, client, optional Data Source / agent / component), write `.env`, install the SDK. Offers to log in at the end. |: |
 | `ablo login` / `logout` / `whoami` / `status` | Authentication, exact credential identity, and readiness (above).                                                                              | `whoami --key-env <NAME>`, `whoami --json`, `status --json` |
 | `ablo projects list\|create\|use\|rename` | Manage projects and the active one (see [Projects](#projects)). Each project's keys/schema/data are isolated.                          | `--name "<display>"` (create/rename)                                                                    |
-| `ablo dev`                         | **Hosted**: ensure an isolated Git branch, wire its temporary key, push, then watch `ablo/schema.ts`.                                        | `--branch <slug>`, `--branch-ttl-hours <1-168>`, `--no-watch`, `--schema`, `--export`, `--url` |
+| `ablo dev`                         | Ensure an isolated Git branch, wire its temporary key, push, then watch `ablo/schema.ts`. `--local` also serves local Postgres over an outbound signed connector. | `--branch <slug>`, `--branch-ttl-hours <1-168>`, `--local`, `--source <path>`, `--no-watch`, `--schema`, `--export`, `--url` |
 | `ablo branch list\|status\|check\|create\|ensure\|credential\|delete` | Manage and diagnose immutable branch planes and expiring credentials.                          | Run `ablo branch --help`; use `--json` for automation.                                                   |
 | `ablo logs`                        | Tail the resolved runtime credential's branch activity. Follows by default.                                                                          | `-n, --tail <N>`, `--since <dur\|ts>`, `--model`, `--op`, `--json`, `--no-follow` |
 | `ablo push`                        | **Hosted**: upload the schema to Ablo; the server diffs, migrates, and activates it.                                                         | `--force`, `--rename old:new`, `--backfill model.field=value`, `--schema`, `--export`, `--url`         |
@@ -166,7 +166,15 @@ npx ablo dev                              # discover from Git, push + watch
 npx ablo dev --branch preview-pr-482      # explicit branch
 npx ablo dev --no-watch                   # prepare, push once, exit
 npx ablo dev --branch-ttl-hours 24        # change temporary-key lifetime
+npx ablo dev --local                      # keep Postgres private on localhost
 ```
+
+`--local` loads `ablo/data-source.ts` (override with `--source <path>`), registers
+the branch as connector-only, and opens an outbound authenticated WebSocket to
+Ablo. Commit, load, list, and outbox-event requests run through the same signed
+Data Source handler as production; no database credential leaves your process
+and no public tunnel is opened. Because the connector is long-lived, `--local`
+cannot be combined with `--no-watch`.
 
 It does not start your app, run migrations, create a database-provider branch,
 or copy production rows. Read [Branch-first development](./branch-development.md)

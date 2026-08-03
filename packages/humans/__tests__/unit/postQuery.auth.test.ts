@@ -1,6 +1,6 @@
 /**
- * postQuery auth threading — regression coverage for Node consumers
- * (agent-worker) that authenticate via Biscuit cap token instead of
+ * postQuery auth threading — regression coverage for headless Node consumers
+ * that authenticate via Biscuit cap token instead of
  * session cookies. Without this header, model-proxy HTTP queries return
  * 401 at startup because cookies aren't available off-browser.
  *
@@ -34,7 +34,7 @@ describe('postQuery — capability token auth', () => {
   it('attaches Authorization: Bearer when capabilityToken is provided', async () => {
     await postQuery(
       { baseUrl: 'https://api.example.com/api', capabilityToken: 'tok_abc123' },
-      { queries: [{ model: 'AgentJob', where: [['id', '=', 'job-1']], limit: 1 }] },
+      { queries: [{ model: 'Document', where: [['id', '=', 'doc-1']], limit: 1 }] },
     );
 
     const headers = lastInit?.headers as Record<string, string>;
@@ -45,7 +45,7 @@ describe('postQuery — capability token auth', () => {
   it('omits Authorization when no capabilityToken is provided (browser cookie path)', async () => {
     await postQuery(
       { baseUrl: 'https://api.example.com/api' },
-      { queries: [{ model: 'AgentJob', where: [['id', '=', 'job-1']], limit: 1 }] },
+      { queries: [{ model: 'Document', where: [['id', '=', 'doc-1']], limit: 1 }] },
     );
 
     const headers = lastInit?.headers as Record<string, string>;
@@ -58,7 +58,7 @@ describe('postQuery — capability token auth', () => {
   it('preserves credentials: include even when Bearer token is present (defense in depth)', async () => {
     await postQuery(
       { baseUrl: 'https://api.example.com/api', capabilityToken: 'tok_xyz' },
-      { queries: [{ model: 'AgentJob', where: [['id', '=', 'job-1']], limit: 1 }] },
+      { queries: [{ model: 'Document', where: [['id', '=', 'doc-1']], limit: 1 }] },
     );
 
     // Bearer-only CORS cutover (2026-06-05): SDK fetches no longer send
@@ -75,7 +75,7 @@ describe('postQuery — capability token auth', () => {
         capabilityToken: 'tok_stale',
         getAuthToken: () => token,
       },
-      { queries: [{ model: 'AgentJob', where: [['id', '=', 'job-1']], limit: 1 }] },
+      { queries: [{ model: 'Document', where: [['id', '=', 'doc-1']], limit: 1 }] },
     );
 
     let headers = lastInit?.headers as Record<string, string>;
@@ -88,7 +88,7 @@ describe('postQuery — capability token auth', () => {
         capabilityToken: 'tok_stale',
         getAuthToken: () => token,
       },
-      { queries: [{ model: 'AgentJob', where: [['id', '=', 'job-1']], limit: 1 }] },
+      { queries: [{ model: 'Document', where: [['id', '=', 'doc-1']], limit: 1 }] },
     );
 
     headers = lastInit?.headers as Record<string, string>;

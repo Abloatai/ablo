@@ -269,7 +269,7 @@ try {
   await ablo.tasks.update({ id, data });
 } catch (err) {
   if (err.code === 'stale_context') {
-    const fresh = await ablo.documents.retrieve({ id: 's-1' });   // read
+    const fresh = await ablo.documents.get({ id: 's-1' });   // read
     await ablo.documents.track({ id: 's-1', onStale: 'reject' }); // acknowledge
     await ablo.tasks.update({ id, data: reconsider(fresh) });     // now it lands
   }

@@ -1,5 +1,9 @@
 # Repository Structure
 
+For a verb-by-verb guide to declarations and implementations—including exactly
+where `create`, `update`, `delete`, and `claim` live—read the public
+[`CODEMAP.md`](../../CODEMAP.md).
+
 The public repository preserves the same ownership boundaries as the main
 monorepo. `@abloatai/ablo` is the product package; the packages beneath it are
 implementation owners and first-party extension surfaces.

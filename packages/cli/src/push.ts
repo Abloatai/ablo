@@ -296,18 +296,18 @@ function maskKey(key: string | undefined): string {
 }
 
 /**
- * A storage-plane rejection happens after the schema-authoring gate. Keep this
+ * A branch-storage rejection happens after the schema-authoring gate. Keep this
  * fact in one helper so both one-shot `push` and the `dev` watcher cannot turn
  * the same 403 into a fictitious missing-scope diagnosis.
  */
-export function schemaPushPlaneHint(code: unknown): string | null {
-  if (code !== 'test_database_not_registered') return null;
-  return (
-    `The key authenticated and already passed ${pc.bold('schema:push')} authorization. ` +
-    `This is a branch storage-provisioning error, not a key-scope error. Check the plane with ` +
-    `${pc.bold('npx ablo branch status <branch>')}; a branch reported as hosted should not need ` +
-    `a customer database.`
-  );
+export function schemaPushStorageHint(code: unknown): string | null {
+  if (code === 'no_data_source_registered') {
+    return (
+      `This branch is not connected to your database yet. Run ${pc.bold('ablo connect')} ` +
+      `for this branch, then retry the schema push.`
+    );
+  }
+  return null;
 }
 
 /**
@@ -774,9 +774,9 @@ export async function push(argv: readonly string[]): Promise<void> {
     // confusion is a legacy stored runtime key being used instead of the intended
     // key placed in `.env.local`.
     console.error(pc.dim(`  Push used ${pc.bold(maskKey(args.apiKey))} from ${describeKeySource(keySource)}.`));
-    const planeHint = schemaPushPlaneHint(code);
-    if (planeHint) {
-      console.error(pc.dim(`  ${planeHint}`));
+    const storageHint = schemaPushStorageHint(code);
+    if (storageHint) {
+      console.error(pc.dim(`  ${storageHint}`));
     } else if (code === 'database_role_cannot_enforce_rls') {
       console.error(
         pc.dim(

@@ -13,18 +13,22 @@ import {
 
 const CREDS = { replicationClause: 'REPL_PW', writeClause: 'WRITE_PW' } as const;
 
+const plan = (
+  input: Omit<Parameters<typeof connectApplyPlan>[0], 'publication'>,
+) => connectApplyPlan({ ...input, publication: ABLO_PUBLICATION });
+
 /** The recipe statements that `--apply` must reuse verbatim (everything but the three heads it replaces). */
 function expectedGrants(input: { tables?: readonly string[]; role?: string; writeRole?: string }): readonly string[] {
-  return connectSetupSql(input).filter(
+  return connectSetupSql({ ...input, publication: ABLO_PUBLICATION }).filter(
     (s) => !s.startsWith('ALTER SYSTEM SET wal_level') && !s.startsWith('CREATE PUBLICATION') && !s.startsWith('CREATE ROLE '),
   );
 }
 
 describe('connectApplyPlan — executable, idempotent, real-password plan', () => {
-  const plan = connectApplyPlan({ credentials: CREDS });
+  const defaultPlan = plan({ credentials: CREDS });
 
   it('is the five stages in dependency order', () => {
-    expect(plan.map((s) => s.key)).toEqual([
+    expect(defaultPlan.map((s) => s.key)).toEqual([
       'wal',
       'publication',
       'replication-role',
@@ -37,7 +41,7 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
     // The seamless path: when the admin can self-grant inheritance of an owning
     // role, apply runs it as the first stage rather than stopping to ask — the
     // grant must land before publish/grants, which Postgres reserves for the owner.
-    const withOwn = connectApplyPlan({
+    const withOwn = plan({
       credentials: CREDS,
       inheritGrants: ['GRANT "ablo_app" TO "neondb_owner" WITH INHERIT TRUE;'],
     });
@@ -47,13 +51,13 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
       withOwn.findIndex((s) => s.key === 'publication'),
     );
     // No inherit-grants → no ownership stage; the ordinary plan is unchanged.
-    expect(connectApplyPlan({ credentials: CREDS }).some((s) => s.key === 'own')).toBe(false);
+    expect(plan({ credentials: CREDS }).some((s) => s.key === 'own')).toBe(false);
   });
 
   it('reuses the recipe grants VERBATIM — the security-sensitive statements never drift', () => {
     // The whole point: `--apply` must grant exactly what `ablo connect` documents
     // and tests assert. If connectSetupSql changes a grant, this catches it.
-    const grantsStep = plan.find((s) => s.key === 'grants');
+    const grantsStep = defaultPlan.find((s) => s.key === 'grants');
     expect(grantsStep?.sql).toEqual(expectedGrants({}));
   });
 
@@ -63,7 +67,7 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
     // that connection's credential working — the earlier shape recovered from
     // `duplicate_object` with an unconditional `ALTER ROLE … PASSWORD`, which
     // silently invalidated it.
-    const roleSql = (key: 'replication-role' | 'write-role', p = plan) =>
+    const roleSql = (key: 'replication-role' | 'write-role', p = defaultPlan) =>
       p.find((s) => s.key === key)?.sql.join('\n') ?? '';
 
     for (const key of ['replication-role', 'write-role'] as const) {
@@ -82,7 +86,7 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
   });
 
   it('rotate is the one verb that re-keys an existing role', () => {
-    const rotating = connectApplyPlan({ credentials: CREDS, rotate: true });
+    const rotating = plan({ credentials: CREDS, rotate: true });
     for (const key of ['replication-role', 'write-role'] as const) {
       const sql = rotating.find((s) => s.key === key)?.sql.join('\n') ?? '';
       // Still creates when absent — rotate on a fresh database is a valid setup.
@@ -94,13 +98,13 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
   });
 
   it('makes publication creation idempotent', () => {
-    const pub = plan.find((s) => s.key === 'publication')?.sql.join('\n') ?? '';
+    const pub = defaultPlan.find((s) => s.key === 'publication')?.sql.join('\n') ?? '';
     expect(pub).toContain(`CREATE PUBLICATION "${ABLO_PUBLICATION}"`);
     expect(pub).toContain('EXCEPTION WHEN duplicate_object THEN NULL');
   });
 
   it('substitutes the real password clause — no `<password>` placeholder survives', () => {
-    const all = plan.flatMap((s) => s.sql).join('\n');
+    const all = defaultPlan.flatMap((s) => s.sql).join('\n');
     expect(all).not.toContain('<password>');
     expect(all).not.toContain('<write-password>');
     expect(all).toContain('REPL_PW');
@@ -108,7 +112,7 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
   });
 
   it('threads a table subset and custom role names through both heads and grants', () => {
-    const custom = connectApplyPlan({
+    const custom = plan({
       tables: ['tasks', 'projects'],
       role: 'my_reader',
       writeRole: 'my_writer',
@@ -126,8 +130,8 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
 
 describe('the write-ahead-log step per provider', () => {
   it('drops the WAL step entirely when the cluster is already logical', () => {
-    const plan = connectApplyPlan({ credentials: CREDS, walAlreadyLogical: true });
-    expect(plan.map((s) => s.key)).toEqual([
+    const result = plan({ credentials: CREDS, walAlreadyLogical: true });
+    expect(result.map((s) => s.key)).toEqual([
       'publication',
       'replication-role',
       'write-role',
@@ -136,15 +140,15 @@ describe('the write-ahead-log step per provider', () => {
   });
 
   it('shows a managed provider a console action, not an ALTER SYSTEM it cannot run', () => {
-    const plan = connectApplyPlan({ credentials: CREDS, provider: 'neon' });
-    const wal = plan.find((s) => s.key === 'wal');
+    const result = plan({ credentials: CREDS, provider: 'neon' });
+    const wal = result.find((s) => s.key === 'wal');
     expect(wal?.sql).toEqual([]); // no SQL — enabling it is a settings action
     expect(wal?.detail).toMatch(/Neon project settings/);
   });
 
   it('keeps the runnable ALTER SYSTEM for self-hosted (generic) Postgres', () => {
-    const plan = connectApplyPlan({ credentials: CREDS });
-    const wal = plan.find((s) => s.key === 'wal');
+    const result = plan({ credentials: CREDS });
+    const wal = result.find((s) => s.key === 'wal');
     expect(wal?.sql).toEqual([`ALTER SYSTEM SET wal_level = 'logical';`]);
   });
 });

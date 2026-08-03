@@ -1125,7 +1125,7 @@ export class Database {
     // ── inMemory short-circuit ───────────────────────────────────────
     //
     // The batched IDB transaction path below assumes `this.storeManager`
-    // and `workspaceDb`. In inMemory mode (agent-worker, tests) those
+    // and `workspaceDb`. In inMemory mode (headless workers, tests) those
     // don't exist. Without this branch, every live delta arriving over
     // the WebSocket is silently dropped — the local pool never updates,
     // `subscribe()` autoruns never re-fire, lazy-model dispatchers

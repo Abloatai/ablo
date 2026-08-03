@@ -1335,6 +1335,90 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "source_connector_disconnected": {
+      "category": "transport",
+      "httpStatus": 503,
+      "retryable": true,
+      "surface": "wire",
+    },
+    "source_connector_handler_error": {
+      "category": "server",
+      "httpStatus": 500,
+      "retryable": true,
+      "surface": "wire",
+    },
+    "source_connector_internal_error": {
+      "category": "server",
+      "httpStatus": 500,
+      "retryable": true,
+      "surface": "wire",
+    },
+    "source_connector_localhost_required": {
+      "category": "validation",
+      "httpStatus": 400,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "source_connector_no_source_registered": {
+      "category": "not_found",
+      "httpStatus": 404,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "source_connector_not_attached": {
+      "category": "transport",
+      "httpStatus": 503,
+      "retryable": true,
+      "surface": "wire",
+    },
+    "source_connector_production_not_enabled": {
+      "category": "permission",
+      "httpStatus": 403,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "source_connector_protocol_error": {
+      "category": "transport",
+      "httpStatus": 400,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "source_connector_requires_secret_key": {
+      "category": "permission",
+      "httpStatus": 403,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "source_connector_send_failed": {
+      "category": "transport",
+      "httpStatus": 502,
+      "retryable": true,
+      "surface": "wire",
+    },
+    "source_connector_shutdown": {
+      "category": "transport",
+      "httpStatus": 503,
+      "retryable": true,
+      "surface": "wire",
+    },
+    "source_connector_superseded": {
+      "category": "transport",
+      "httpStatus": 503,
+      "retryable": true,
+      "surface": "wire",
+    },
+    "source_connector_timeout": {
+      "category": "transport",
+      "httpStatus": 504,
+      "retryable": true,
+      "surface": "wire",
+    },
+    "source_connector_unauthenticated": {
+      "category": "auth",
+      "httpStatus": 401,
+      "retryable": false,
+      "surface": "wire",
+    },
     "source_event_invalid": {
       "category": "validation",
       "httpStatus": 400,
@@ -1352,6 +1436,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "httpStatus": null,
       "retryable": false,
       "surface": "client",
+    },
+    "source_request_failed": {
+      "category": "transport",
+      "httpStatus": 502,
+      "retryable": true,
+      "surface": "wire",
     },
     "source_tenancy_not_enforced": {
       "category": "tenant",
@@ -1447,12 +1537,6 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "category": "server",
       "httpStatus": 500,
       "retryable": true,
-      "surface": "wire",
-    },
-    "test_database_not_registered": {
-      "category": "permission",
-      "httpStatus": 403,
-      "retryable": false,
       "surface": "wire",
     },
     "transaction_mutate_unknown_model": {
@@ -1564,6 +1648,6 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "surface": "client",
     },
   },
-  "version": "2026-07-30",
+  "version": "2026-08-03",
 }
 `;

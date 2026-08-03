@@ -2,6 +2,71 @@
 
 > Keep the rows in your own Postgres while Ablo coordinates and confirms every write.
 
+## Localhost development
+
+Ablo Cloud cannot dial `localhost`: from a cloud server, that name means the
+cloud server itself, not your Mac or development container. A development child
+branch can still use Postgres that listens only on your machine by running a
+signed Data Source over Ablo's outbound reverse channel:
+
+```bash
+npx ablo migrate       # once: models + ablo_idempotency + ablo_outbox
+npx ablo dev --local
+```
+
+The command loads `ablo/data-source.ts`, registers the current child branch as
+connector-only, and dials out to Ablo over an authenticated WebSocket. Postgres
+continues listening only on your machine; `DATABASE_URL` never leaves the
+process. This is protocol-scoped, not a general-purpose tunnel: only signed
+Data Source load, list, commit, and event requests traverse it. Use
+`--source <path>` when the handler lives elsewhere.
+
+Keep `ablo dev --local` running alongside the application. It pushes schema
+changes and owns the database connector; stopping it deliberately makes the
+branch's database unavailable instead of silently writing somewhere else.
+
+### Is this full Ablo?
+
+Yes for the Ablo application path: model reads and lists, coordinated writes,
+claims, subscriptions, idempotency, confirmations, and transactional outbox
+settlement all work against localhost Postgres. The browser, server code, and
+agents still connect to Ablo Cloud; only database operations cross the narrow
+signed connector to your machine.
+
+It is not logical replication. Visibility depends on how a row is written:
+
+| Write origin | Visible to Ablo in localhost mode? | Why |
+|---|---:|---|
+| `ablo.<model>.create/update/delete` | Yes | Ablo coordinates the write, the local adapter commits it with idempotency + outbox, and the outbox event confirms it. |
+| Code using the signed Data Source adapter | Yes | The adapter records the row and authoritative event in one transaction. |
+| A supported source push/outbox integration | Yes | It explicitly publishes the authoritative event to Ablo. |
+| Raw SQL, `psql`, or an unrelated ORM write | No, not automatically | There is no WAL reader in signed-endpoint mode, and bypassing the adapter does not append `ablo_outbox`. |
+
+If Ablo must observe every arbitrary SQL/ORM write, use the direct logical-WAL
+path with a network-reachable Postgres endpoint, PrivateLink/peering/VPN, or a
+database-capable secure tunnel. Do not expose Postgres without TLS,
+authentication, and network restrictions.
+
+### Local connector errors
+
+Every stable code links to the generated [error reference](https://docs.abloatai.com/errors):
+
+| Code | Meaning and fix |
+|---|---|
+| `source_connector_not_attached` | The branch is connector-only but no process is attached. Start or restart `ablo dev --local`. |
+| `source_connector_unauthenticated` | The temporary branch key is missing, expired, or rejected. Rerun `ablo dev --local` to mint a fresh key. |
+| `source_connector_requires_secret_key` | The connector received the wrong key kind. Let `ablo dev` supply its branch-bound `sk_` key. |
+| `source_connector_no_source_registered` | No endpoint source exists for this branch. Upgrade/rerun the CLI so registration happens before socket attachment. |
+| `source_connector_localhost_required` | Connector-only registration used a non-local descriptor. Use `ablo dev --local`; deployed handlers use ordinary HTTPS endpoint registration. |
+| `source_connector_timeout` | The handler or local Postgres exceeded the request deadline. Inspect the local process and database. |
+| `source_connector_handler_error` | `ablo/data-source.ts` or its adapter threw. The local terminal contains the underlying error. |
+| `source_connector_protocol_error` | CLI/SDK and service connector protocols disagree. Upgrade the CLI and SDK together. |
+| `source_connector_production_not_enabled` | A root/production key attempted the development connector. Use a supported production route or explicitly enable production reverse-channel support. |
+
+Disconnects, service restarts, and connector replacement are retryable. Keep the
+same idempotency key: Ablo never falls back from this branch to hosted storage or
+another database.
+
 You write through Ablo, and Ablo writes to your Postgres. A call to
 `ablo.<model>.create / update / delete` enters Ablo's commit chokepoint — where
 claims, ordering, and idempotency are enforced — and Ablo applies the change to

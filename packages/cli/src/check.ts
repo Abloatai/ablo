@@ -100,7 +100,7 @@ async function reportReadSubject(dbUrl: string): Promise<void> {
   }
   if (state.kind === 'none') {
     console.log(
-      `  ${pc.dim('ablo')}    ${pc.yellow('!')} no database is registered for this plane, so Ablo does not read this one`,
+      `  ${pc.dim('ablo')}    ${pc.yellow('!')} this branch is not connected to a database, so Ablo does not read this one`,
     );
     console.log(
       `           ${pc.dim(`Connect it with ${pc.bold('ablo connect apply')}. Until then a table here is invisible to the engine.`)}\n`,

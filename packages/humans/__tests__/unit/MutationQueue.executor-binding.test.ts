@@ -4,7 +4,7 @@
  *
  * Before the fix: `mutationExecutor` was resolved via `getContext()`
  * on every commit. Since `initRuntime()` writes a module-level
- * `_context`, constructing a second Ablo (e.g. agent-worker's per-job
+ * `_context`, constructing a second Ablo (e.g. a headless worker's per-run
  * peer) overwrote the first Ablo's executor — and when the second Ablo
  * disposed, the first's commits routed through the second's dead
  * executor closure and threw `ws_not_ready` forever.
@@ -90,7 +90,7 @@ describe('MutationQueue — per-instance executor binding', () => {
     const queueA = new MutationQueue();
     queueA.setMutationExecutor(executorA);
 
-    // Simulate the agent-worker pattern: a second Ablo constructs and
+    // Simulate a headless-worker pattern: a second Ablo constructs and
     // calls initRuntime, overwriting the singleton. Queue A should
     // be unaffected because it holds its own binding.
     initRuntime({

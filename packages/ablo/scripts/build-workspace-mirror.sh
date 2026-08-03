@@ -62,6 +62,7 @@ copy_tree "docs/ablo" "docs/ablo"
 # Repository-level branding belongs at the public workspace root as well as in
 # the npm package. This is a monorepo landing page, not a flattened source tree.
 cp "$OUTPUT_DIR/packages/ablo/README.md" "$OUTPUT_DIR/README.md"
+cp "$OUTPUT_DIR/packages/ablo/CODEMAP.md" "$OUTPUT_DIR/CODEMAP.md"
 cp "$OUTPUT_DIR/packages/ablo/CHANGELOG.md" "$OUTPUT_DIR/CHANGELOG.md"
 cp "$OUTPUT_DIR/packages/ablo/LICENSE" "$OUTPUT_DIR/LICENSE"
 cp "$OUTPUT_DIR/packages/ablo/NOTICE" "$OUTPUT_DIR/NOTICE"

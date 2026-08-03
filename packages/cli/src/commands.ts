@@ -100,7 +100,7 @@ export const COMMANDS = [
         { run: 'connect check', does: 'Confirm your database is ready to share changes with Ablo' },
         { run: 'connect resnapshot', does: 'Reload existing rows without deregistering or rotating credentials' },
         { run: 'connect scan', does: 'List anything Ablo ever set up in your database (read-only)' },
-        { run: 'connect locate', does: 'See which plane holds a database before connecting it' },
+        { run: 'connect locate', does: 'See which branch is connected to a database before connecting it' },
         { run: 'connect deregister', does: "Disconnect this project's database — Ablo stops reading and writing it" },
       ],
     },

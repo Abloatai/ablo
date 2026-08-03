@@ -272,8 +272,43 @@ function escapeMdxBody(md) {
   return body.replace(/ FENCE(\d+) /g, (_, i) => fences[Number(i)]);
 }
 
+/** When each version was actually published, straight from the registry.
+ *
+ *  This is the authoritative answer and the only churn-free one. A release is
+ *  routinely prepared, reverted and re-prepared, so several
+ *  `release(ablo): X.Y.Z` commits exist per version with different dates and no
+ *  reliable way to tell which one shipped — 0.46.0 carried three across two
+ *  days and the commit heuristic picked a date npm disagrees with.
+ *
+ *  The FULL timestamp matters, not just the day. Blume's changelog index sorts
+ *  on this value alone, so day-granularity dates make same-day releases
+ *  compare equal; the sort is stable, the tie keeps collection order
+ *  (ascending), and four entries render oldest-first inside an otherwise
+ *  newest-first list. 0.42.0 through 0.45.0 all shipped on 2026-07-29, which is
+ *  exactly that case. Seconds break the tie and the rendered date is unchanged.
+ *
+ *  `version -> ISO 8601`; empty when the registry is unreachable, which drops
+ *  us to the git heuristic below rather than failing an offline docs build. */
+function npmPublishTimes() {
+  const map = {};
+  try {
+    const raw = execFileSync('npm', ['view', '@abloatai/ablo', 'time', '--json'], {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    for (const [version, when] of Object.entries(JSON.parse(raw))) {
+      if (/^\d+\.\d+\.\d+$/.test(version)) map[version] = when;
+    }
+  } catch {
+    return map; // offline or npm missing -> fall back to the commit heuristic
+  }
+  return map;
+}
+
 /** Release dates from the `release(ablo): X.Y.Z` commits (CHANGELOG.md
- *  carries no dates). `version -> "YYYY-MM-DD"`; absent when no such commit. */
+ *  carries no dates). `version -> "YYYY-MM-DD"`; absent when no such commit.
+ *  A fallback only: see {@link npmPublishTimes} for why it is not trusted. */
 function releaseDates() {
   const map = {};
   let log;
@@ -316,7 +351,10 @@ const CHANGELOG_AGENT_WINDOW = 12;
  *  `type: changelog`, and Blume assembles them into the `/changelog` timeline. */
 function buildChangelogPages() {
   const raw = readFileSync(resolve(packageRoot, 'CHANGELOG.md'), 'utf8');
-  const dates = releaseDates();
+  // Registry first, commits only when it is unreachable.
+  const published = npmPublishTimes();
+  const fromCommits = releaseDates();
+  const dates = { ...fromCommits, ...published };
   return raw
     .split(/^## (?=\d+\.\d+\.\d+)/m)
     .slice(1)

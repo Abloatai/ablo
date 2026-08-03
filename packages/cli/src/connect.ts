@@ -304,12 +304,15 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
  * (the required restart, and the RDS parameter group and `rds_replication`
  * grant) inline — the points where this setup most often trips people up.
  */
-export function printConnectRecipe(args: ConnectArgs): void {
+export function printConnectRecipe(args: ConnectArgs, footprint: FootprintNames): void {
+  const role = args.role === ABLO_REPLICATION_ROLE ? footprint.replicationRole : args.role;
+  const writeRole = args.writeRole === ABLO_WRITE_ROLE ? footprint.writeRole : args.writeRole;
   const sql = connectSetupSql({
     tables: args.tables,
-    role: args.role,
-    writeRole: args.writeRole,
+    role,
+    writeRole,
     schema: args.schema,
+    publication: footprint.publication,
   });
 
   console.log(
@@ -362,7 +365,7 @@ export function printConnectRecipe(args: ConnectArgs): void {
   console.log(
     pc.dim(
       `       On Amazon RDS, the REPLICATION attribute is granted, not set directly:\n` +
-        `       ${pc.bold(`GRANT rds_replication TO ${quoteIdent(args.role)};`)}`
+        `       ${pc.bold(`GRANT rds_replication TO ${quoteIdent(role)};`)}`
     )
   );
 
@@ -387,8 +390,8 @@ export function printConnectRecipe(args: ConnectArgs): void {
   console.log(
     `\n  ${pc.bold('5.')} Register the two roles with Ablo. Set them just long enough to register —\n` +
       `     Ablo holds them from here, so your app keeps only ${pc.bold('ABLO_API_KEY')}:\n` +
-      `       ${pc.bold('ABLO_REPLICATION_DATABASE_URL')}   ${pc.dim(`→ ${args.role} (replication only)`)}\n` +
-      `       ${pc.bold('ABLO_WRITE_DATABASE_URL')}         ${pc.dim(`→ ${args.writeRole} (DML only)`)}\n` +
+      `       ${pc.bold('ABLO_REPLICATION_DATABASE_URL')}   ${pc.dim(`→ ${role} (replication only)`)}\n` +
+      `       ${pc.bold('ABLO_WRITE_DATABASE_URL')}         ${pc.dim(`→ ${writeRole} (DML only)`)}\n` +
       `       ${pc.cyan('npx ablo connect register')}\n`
   );
   console.log(
@@ -459,10 +462,10 @@ function printCheckItem(item: CheckItem): void {
  */
 export async function probeDirectWriteReadiness(
   sql: postgres.Sql,
-  opts: { readonly schema?: string; readonly publication?: string } = {}
+  opts: { readonly schema?: string; readonly publication: string }
 ): Promise<readonly CheckItem[]> {
   const schema = opts.schema ?? 'public';
-  const publication = opts.publication ?? ABLO_PUBLICATION;
+  const publication = opts.publication;
   const items: CheckItem[] = [];
 
   const roleRows = await sql.unsafe<DirectWriteRoleRow[]>(
@@ -645,6 +648,12 @@ export async function auditTenantSyncInfra(
   opts: { readonly schema?: string; readonly names?: FootprintNames } = {}
 ): Promise<readonly SyncInfraArtifact[]> {
   const artifacts: SyncInfraArtifact[] = [];
+  const branchScopedTemplates = new Set([
+    ABLO_PUBLICATION,
+    ABLO_REPLICATION_SLOT,
+    ABLO_REPLICATION_ROLE,
+    ABLO_WRITE_ROLE,
+  ]);
   for (const artifact of ABLO_FOOTPRINT) {
     const name = opts.names
       ? artifact.name === ABLO_PUBLICATION
@@ -672,7 +681,9 @@ export async function auditTenantSyncInfra(
       present: rows[0]?.present === true,
       purpose: artifact.purpose,
       ...(artifact.hazard ? { hazard: artifact.hazard } : {}),
-      ...(artifact.retired ? { retired: true } : {}),
+      ...(artifact.retired || (!opts.names && branchScopedTemplates.has(artifact.name))
+        ? { retired: true }
+        : {}),
     });
   }
   return artifacts;
@@ -737,8 +748,8 @@ type LocalProbeOutcome =
  */
 async function probeAndReport(
   dbUrl: string,
-  kind: 'replication' | 'write' = 'replication',
-  opts: { readonly schema?: string; readonly publication?: string } = {}
+  kind: 'replication' | 'write',
+  opts: { readonly schema: string; readonly publication: string }
 ): Promise<LocalProbeOutcome> {
   // Bounded dial, mirroring the engine's own preflight: a black-holed host
   // must surface as a dial failure, not pin the command forever.
@@ -793,7 +804,7 @@ async function runCheck(): Promise<void> {
   if (!result.ok) {
     if (result.code === 'no_data_source_registered') {
       console.error(
-        `  ${pc.yellow('—')} No database is connected to this plane yet, so there's nothing to check.\n` +
+        `  ${pc.yellow('—')} This branch is not connected to a database yet, so there's nothing to check.\n` +
           pc.dim(
             `  Connect one with ${pc.bold('ablo connect apply')}, then re-run ${pc.bold('ablo connect check')}.\n`
           )
@@ -892,15 +903,35 @@ async function runRegister(args: ConnectArgs): Promise<void> {
     `\n  ${brand('ablo')} ${pc.dim('connect register')}  ${pc.dim('register a direct DataSource')}\n`
   );
 
+  const target = await resolveTarget({ url: apiBaseUrl(), apiKey, keySource: 'env' });
+  const confirmed = target.confirmed;
+  if (!confirmed?.branchId) {
+    throw new AbloValidationError(
+      'This key is not bound to a branch, so Ablo cannot validate isolated database objects safely.',
+      { code: 'cli_database_unreachable' }
+    );
+  }
+  const publication = footprintNamesFor({
+    organizationId: confirmed.organizationId,
+    branchId: confirmed.branchId,
+    ...(confirmed.projectId ? { projectId: confirmed.projectId } : {}),
+  }).publication;
+
   // The local probe is a fast pre-flight, not the gate. When this machine
   // can't dial the host at all, registration proceeds anyway: the server runs
   // the same readiness checks from Ablo's own network — the one replication
   // actually uses — and refuses with the full checklist if the database isn't
   // ready. Only a probe that CONNECTED and found failures stops us here.
   console.log(`  ${pc.bold('Replication role')}\n`);
-  const replication = await probeAndReport(dbUrl, 'replication', { schema: args.schema });
+  const replication = await probeAndReport(dbUrl, 'replication', {
+    schema: args.schema,
+    publication,
+  });
   console.log(`\n  ${pc.bold('Direct-write role')}\n`);
-  const write = await probeAndReport(writeDbUrl, 'write', { schema: args.schema });
+  const write = await probeAndReport(writeDbUrl, 'write', {
+    schema: args.schema,
+    publication,
+  });
   const noDial = [
     replication.kind === 'no-dial' ? `replication: ${replication.reason}` : null,
     write.kind === 'no-dial' ? `write: ${write.reason}` : null,
@@ -1018,7 +1049,7 @@ async function runScan(args: ConnectArgs): Promise<void> {
 }
 
 /**
- * `ablo connect locate` — which plane holds this database?
+ * `ablo connect locate` — which branch is connected to this database?
  *
  * The conflict guard has always known the holder and said so only while
  * refusing an apply. This asks the same question as a first-class answer, so
@@ -1034,7 +1065,7 @@ async function runScan(args: ConnectArgs): Promise<void> {
  */
 async function runLocate(args: ConnectArgs): Promise<void> {
   console.log(
-    `\n  ${brand('ablo')} ${pc.dim('connect locate')}  ${pc.dim('which plane holds this database')}\n`
+    `\n  ${brand('ablo')} ${pc.dim('connect locate')}  ${pc.dim('which branch is connected to this database')}\n`
   );
   const url = args.url ?? readProjectAdminDatabaseUrl();
   if (!url) {
@@ -1074,7 +1105,7 @@ async function runLocate(args: ConnectArgs): Promise<void> {
   }
   if (!answer.held) {
     console.log(
-      `  ${pc.green('✓')} No plane holds ${pc.bold(`${label}/${args.schema}`)} — ${pc.bold('ablo connect apply')} can register it here.\n`
+      `  ${pc.green('✓')} No branch is connected to ${pc.bold(`${label}/${args.schema}`)} — ${pc.bold('ablo connect apply')} can register it here.\n`
     );
     return;
   }
@@ -1085,11 +1116,11 @@ async function runLocate(args: ConnectArgs): Promise<void> {
   );
   console.log(
     pc.dim(
-      `    Ablo binds one plane to each database schema. To move this schema, disconnect it there\n` +
+      `    Ablo connects one branch to each database schema. To move this schema, disconnect it there\n` +
         `    first — run `
     ) +
       pc.cyan('ablo connect deregister') +
-      pc.dim(` with a key for that plane, then connect here.\n`) +
+      pc.dim(` with a key for that branch, then connect here.\n`) +
       pc.dim(`    Confirm a candidate key first with `) +
       pc.bold('ablo whoami --key-env <NAME>') +
       pc.dim(`.\n`) +
@@ -1213,7 +1244,29 @@ export async function connect(argv: readonly string[]): Promise<void> {
     await runConnectApply(args);
     return;
   }
-  printConnectRecipe(args);
+  const apiKey = resolveRuntimeApiKey().key;
+  if (!apiKey) {
+    throw new AbloAuthenticationError(
+      'Ablo needs the branch key to derive isolated database object names. Set ABLO_API_KEY for this branch, then re-run `ablo connect --manual`.',
+      { code: 'cli_api_key_missing' }
+    );
+  }
+  const target = await resolveTarget({ url: apiBaseUrl(), apiKey, keySource: 'env' });
+  const confirmed = target.confirmed;
+  if (!confirmed?.branchId) {
+    throw new AbloValidationError(
+      'This key is not bound to a branch, so Ablo cannot derive isolated database object names safely.',
+      { code: 'cli_database_unreachable' }
+    );
+  }
+  printConnectRecipe(
+    args,
+    footprintNamesFor({
+      organizationId: confirmed.organizationId,
+      branchId: confirmed.branchId,
+      ...(confirmed.projectId ? { projectId: confirmed.projectId } : {}),
+    })
+  );
 }
 
 /**
@@ -1234,7 +1287,7 @@ export const CONNECT_USAGE = `  ablo connect — connect your own database
     npx ablo connect rotate               New passwords for both logins, then re-register
     npx ablo connect resnapshot           Recreate only the slot and reload existing rows
     npx ablo connect scan                 List anything Ablo ever set up in your database (read-only, never drops)
-    npx ablo connect locate               See which plane holds this database (read-only; nothing is changed)
+    npx ablo connect locate               See which branch is connected to this database (read-only; nothing is changed)
 
   Running it: bare \`ablo connect\` sets everything up for you — creating the two
   scoped logins, sharing your tables, and registering — whenever it finds a

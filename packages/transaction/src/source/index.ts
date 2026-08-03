@@ -192,5 +192,5 @@ export {
   type FootprintArtifact,
   type FootprintKind,
   type FootprintNames,
-  type FootprintPlane,
+  type DataSourceIdentity,
 } from '../footprint.js';

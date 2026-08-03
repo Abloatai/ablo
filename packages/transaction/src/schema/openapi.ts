@@ -644,7 +644,7 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
     '/v1/branches/{id}/status': {
       get: {
         tags: ['branches'],
-        summary: 'Diagnose one branch plane',
+        summary: 'Diagnose one branch',
         description:
           'Returns branch lifecycle, active schema, compatibility with the parent schema, safe datasource coordinates, and readiness blockers.',
         parameters: [idParam()],
@@ -699,7 +699,7 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         description:
           'One round trip per cadence for a worker holding many rows, instead of ' +
           'one per row. Takes only `ttl`; the leases are whichever ones your ' +
-          'credential holds on this plane.',
+          'credential holds on this branch.',
         requestBody: optionalJsonBody(derive(claimHeartbeatRequestSchema, 'input')),
         responses: {
           '200': namedResp(
@@ -812,7 +812,7 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         tags: ['schema'],
         summary: 'What the models look like',
         description:
-          "The schema deployed on your credential's plane: every model with its " +
+          "The schema deployed on your credential's branch: every model with its " +
           'fields, their types, and its relations. Read this when you have no ' +
           'local schema declaration to read types from — it is what makes a ' +
           'field typo a local check rather than a rejected write. Each model ' +
@@ -835,7 +835,7 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
           'How a caller without a socket learns what its peers did. Omit ' +
           '`after` for the most recent entries, then copy each page\'s ' +
           '`next_cursor` back as `after` to walk forward. Scope is taken from ' +
-          'your key — organization, plane and sync groups — so a caller cannot ' +
+          'your key — organization, branch and sync groups — so a caller cannot ' +
           'widen what it sees by asking.',
         parameters: queryParams(logQuerySchema),
         responses: {

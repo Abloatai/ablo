@@ -1,7 +1,7 @@
 /**
- * The derivation is what makes a database connectable to more than one plane
- * (ADR 0020), so the properties that matter are: distinct planes never collide,
- * the SAME plane always derives the same names, and every derived name is one
+ * The derivation is what makes a database connectable to more than one branch
+ * (ADR 0020), so the properties that matter are: distinct Data Sources never collide,
+ * the SAME branch always derives the same names, and every derived name is one
  * Postgres will actually accept.
  */
 
@@ -10,12 +10,12 @@ import {
   isValidReplicationSlotName,
   ABLO_FOOTPRINT,
   ABLO_REPLICATION_SLOT,
-  type FootprintPlane,
+  type DataSourceIdentity,
   type FootprintArtifact,
 } from '@abloatai/transaction/footprint';
 
 const ORG = 'org_2b8f1c';
-const base: FootprintPlane = { organizationId: ORG, branchId: 'br_main' };
+const base: DataSourceIdentity = { organizationId: ORG, branchId: 'br_main' };
 
 describe('footprintNamesFor', () => {
   it('gives every object a name no other connection can claim', () => {
@@ -35,7 +35,7 @@ describe('footprintNamesFor', () => {
   });
 
   it('separates every branch coordinate', () => {
-    const planes: FootprintPlane[] = [
+    const identities: DataSourceIdentity[] = [
       base,
       { ...base, branchId: 'br_preview' },
       { ...base, projectId: 'proj_a' },
@@ -44,19 +44,19 @@ describe('footprintNamesFor', () => {
       { ...base, projectId: 'proj_a', branchId: 'br_b' },
       { ...base, organizationId: 'org_other' },
     ];
-    const slots = planes.map((p) => footprintNamesFor(p).slot);
-    expect(new Set(slots).size).toBe(planes.length);
+    const slots = identities.map((identity) => footprintNamesFor(identity).slot);
+    expect(new Set(slots).size).toBe(identities.length);
   });
 
-  it('delimits coordinates so structurally different planes cannot alias', () => {
+  it('delimits coordinates so structurally different Data Sources cannot alias', () => {
     const left = footprintNamesFor({ organizationId: 'ab', projectId: 'c', branchId: 'd' });
     const right = footprintNamesFor({ organizationId: 'a', projectId: 'bc', branchId: 'd' });
     expect(left).not.toEqual(right);
   });
 
-  it('treats the organization-default project as ONE plane however it is spelled', () => {
+  it('treats the organization-default project as one identity however it is spelled', () => {
     // A self-serve key stamps `projectId = organizationId`; the admin path omits
-    // it. They are the same plane, and deriving two names for it would install a
+    // it. They identify the same Data Source, and deriving two names would install a
     // second slot on the same database for the same connection.
     const stamped = footprintNamesFor({ ...base, projectId: ORG });
     const omitted = footprintNamesFor(base);
@@ -67,13 +67,13 @@ describe('footprintNamesFor', () => {
   });
 
   it('derives names Postgres accepts — lowercase, digits, underscore, under 63 bytes', () => {
-    const long: FootprintPlane = {
+    const long: DataSourceIdentity = {
       organizationId: 'org_' + 'x'.repeat(120),
       branchId: 'br_' + 'z'.repeat(120),
       projectId: 'proj_' + 'y'.repeat(120),
     };
-    for (const plane of [base, long]) {
-      const names = footprintNamesFor(plane);
+    for (const identity of [base, long]) {
+      const names = footprintNamesFor(identity);
       for (const name of Object.values(names) as string[]) {
         // The slot charset is the strictest of the four; holding every name to
         // it keeps the set uniform and safely inside the identifier ceiling.

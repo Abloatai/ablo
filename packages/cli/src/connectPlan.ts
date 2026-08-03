@@ -18,7 +18,6 @@
 
 import pc from 'picocolors';
 import {
-  ABLO_PUBLICATION,
   ABLO_REPLICATION_ROLE,
   ABLO_WRITE_ROLE,
   connectSetupSql,
@@ -150,7 +149,7 @@ export function connectApplyPlan(input: {
   readonly role?: string;
   readonly writeRole?: string;
   readonly schema?: string;
-  readonly publication?: string;
+  readonly publication: string;
   /**
    * Re-key roles that already exist. `apply` leaves an existing role's password
    * alone — another connection may be authenticating with it — so only `rotate`,
@@ -175,7 +174,7 @@ export function connectApplyPlan(input: {
     input.writeRole && input.writeRole.length > 0 ? input.writeRole : ABLO_WRITE_ROLE;
   const tables = input.tables ?? [];
   const schema = input.schema ?? 'public';
-  const publication = input.publication ?? ABLO_PUBLICATION;
+  const publication = input.publication;
   const provider = input.provider ?? 'generic';
 
   // The canonical recipe. We keep every statement except the three we must

@@ -9,6 +9,7 @@ const repoRoot = resolve(packageRoot, '..', '..');
 
 const publicDocRoots = [
   'README.md',
+  'CODEMAP.md',
   'AGENTS.md',
   'llms.txt',
   'docs',
