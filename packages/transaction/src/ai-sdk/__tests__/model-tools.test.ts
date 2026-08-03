@@ -96,7 +96,6 @@ describe('Ablo model AI SDK tools', () => {
     expect(create).toHaveBeenCalledWith({
       id: 'row-1',
       data: { title: 'New' },
-      wait: 'confirmed',
     });
   });
 
@@ -129,7 +128,6 @@ describe('Ablo model AI SDK tools', () => {
     expect(model.delete).toHaveBeenCalledWith({
       id: 'row-1',
       claim: held,
-      wait: 'confirmed',
     });
     expect(held.release).toHaveBeenCalledTimes(1);
   });

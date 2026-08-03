@@ -79,7 +79,7 @@ await ablo.weatherReports.update({
 
 ## Coordination surface
 
-Claims live on a callable namespace beside `create` / `update` / `retrieve`. Every member takes an options object:
+Claims live on a callable namespace beside `create` / `update` / `get`. Every member takes an options object:
 
 - `await using claim = await ablo.<model>.claim({ id })` — acquire the row (waits if held); read it via `claim.data`; auto-releases on scope exit (or call `claim.release()`).
 - `ablo.<model>.claim.state({ id })` — who is currently working on the row (synchronous; never blocks).

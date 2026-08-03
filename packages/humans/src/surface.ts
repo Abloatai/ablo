@@ -76,6 +76,8 @@ type _ListOptionKeysExact = Expect<
 export const PUBLIC_ABLO_OPTION_KEYS = [
   'schema',
   'apiKey',
+  'projectId',
+  'branchId',
   'authEndpoint',
   'authTimeoutMs',
   'allowCrossOriginAuthEndpoint',
@@ -94,7 +96,6 @@ export const PUBLIC_ABLO_OPTION_KEYS = [
   'dangerouslyAllowBrowser',
   'collaborationEvents',
   'plugins',
-  'wait',
 ] as const;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 type _AbloOptionKeysExact = Expect<

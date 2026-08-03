@@ -149,6 +149,8 @@ export function connectApplyPlan(input: {
   readonly tables?: readonly string[];
   readonly role?: string;
   readonly writeRole?: string;
+  readonly schema?: string;
+  readonly publication?: string;
   /**
    * Re-key roles that already exist. `apply` leaves an existing role's password
    * alone — another connection may be authenticating with it — so only `rotate`,
@@ -172,19 +174,23 @@ export function connectApplyPlan(input: {
   const writeRole =
     input.writeRole && input.writeRole.length > 0 ? input.writeRole : ABLO_WRITE_ROLE;
   const tables = input.tables ?? [];
+  const schema = input.schema ?? 'public';
+  const publication = input.publication ?? ABLO_PUBLICATION;
   const provider = input.provider ?? 'generic';
 
   // The canonical recipe. We keep every statement except the three we must
   // replace to run unattended, identified by their leading verb so a change to
   // the recipe's wording surfaces in the drift test rather than silently.
-  const recipe = connectSetupSql({ tables, role, writeRole });
+  const recipe = connectSetupSql({ tables, role, writeRole, schema, publication });
   const isWal = (s: string): boolean => s.startsWith('ALTER SYSTEM SET wal_level');
   const isPublication = (s: string): boolean => s.startsWith('CREATE PUBLICATION');
   const isRoleCreate = (s: string): boolean => s.startsWith('CREATE ROLE ');
   const grants = recipe.filter((s) => !isWal(s) && !isPublication(s) && !isRoleCreate(s));
 
   const publicationTarget =
-    tables.length > 0 ? `FOR TABLE ${tables.map(quoteIdent).join(', ')}` : 'FOR ALL TABLES';
+    tables.length > 0
+      ? `FOR TABLE ${tables.map((table) => `${quoteIdent(schema)}.${quoteIdent(table)}`).join(', ')}`
+      : 'FOR ALL TABLES';
   const affectsOthers = effectsOnOthers({ grants, allTables: tables.length === 0 });
 
   // The write-ahead-log step: nothing to do when the cluster is already
@@ -212,13 +218,13 @@ export function connectApplyPlan(input: {
   // Debezium-"filtered" style). Without it — the pure/fresh-DB path — create it if
   // absent; a re-run against a matching publication is then a no-op.
   const reconcile = input.existingPublication
-    ? reconcilePublicationPlan(input.existingPublication, tables)
+    ? reconcilePublicationPlan(input.existingPublication, tables, { schema, publication })
     : null;
   const publicationSql = reconcile
     ? reconcile.sql
     : [
         `DO $$ BEGIN
-  CREATE PUBLICATION ${quoteIdent(ABLO_PUBLICATION)} ${publicationTarget};
+  CREATE PUBLICATION ${quoteIdent(publication)} ${publicationTarget};
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;`,
       ];
@@ -257,14 +263,19 @@ END $$;`,
     {
       key: 'replication-role',
       title: 'Create the read-only login Ablo reads with',
-      detail: `${role} — it can follow your changes and read, nothing else`,
+      detail: `${role} — it can follow your changes and snapshot the same published rows, including through RLS`,
       sql: [
         idempotentRole(
           role,
-          'REPLICATION',
+          'NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE REPLICATION NOINHERIT',
           input.credentials.replicationClause,
           input.rotate === true,
         ),
+        // Unlike a password, this is a required invariant rather than secret
+        // material owned by one plane. Re-assert it for an existing pre-snapshot
+        // role so `connect apply` repairs the exact upgrade gap that otherwise
+        // certifies an RLS-filtered empty snapshot as complete.
+        `ALTER ROLE ${quoteIdent(role)} WITH BYPASSRLS;`,
       ],
     },
     {

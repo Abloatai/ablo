@@ -145,9 +145,9 @@ npx ablo docs --json           # the page list, machine-readable
 
 These pages ship inside the npm package, so they describe the code beside them
 and stay reachable with no network — isolated agent environments and CI runners
-often have none. That matters most when a project is pinned: `get` / `getAll` /
-`getCount` became `retrieve` / `list` in 0.35.0, and a website always describes
-the newest release, so an agent on an earlier version reads the new name and
+often have none. That matters most when a project is pinned: `claim` took a
+callback before it returned a disposable handle, and a website always describes
+the newest release, so an agent on an earlier version reads the new shape and
 writes a call its own package doesn't have.
 
 Pass a slug (`coordination`), a path (`docs/coordination.md`), or a file name
@@ -330,5 +330,5 @@ migration can't leave clients gated against tables that don't match.
 | ------------------------------------- | ------------------------------------------------------------------------ | -------------------------- |
 | `ABLO_API_KEY`                        | Authenticate without `ablo login` (CI). Always overrides the stored key. |: |
 | `ABLO_API_URL`                        | Control-plane / API host (`push`, `dev`, `status`).                      | `https://api.abloatai.com` |
-| `ABLO_AUTH_URL`                       | Dashboard origin for `ablo login`'s device flow.                         | `https://abloatai.com`     |
+| `ABLO_AUTH_URL`                       | Dashboard origin for `ablo login`'s device flow.                         | `https://www.abloatai.com` |
 | `ABLO_CONFIG_DIR` / `XDG_CONFIG_HOME` | Where the credential file lives.                                         | `~/.config/ablo`           |

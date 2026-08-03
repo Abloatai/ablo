@@ -558,15 +558,26 @@ export interface ModelRetrieveParams extends ServerRetrieveOptions {
   readonly id: string;
 }
 
+/**
+ * Options shared by schema model writes.
+ *
+ * Reactive clients apply the row change optimistically before returning from
+ * the call. The returned promise has one stable settlement contract across
+ * reactive and stateless clients: it resolves only after authoritative
+ * confirmation. Callers that need an earlier queued receipt use the lower-level
+ * `commits.create` resource instead.
+ */
+export type ModelWriteOptions = Omit<MutationOptions, 'wait'>;
+
 export interface ModelCreateParams<T, CreateInput>
-  extends MutationOptions {
+  extends ModelWriteOptions {
   readonly data: CreateInput;
   readonly id?: string | null;
   readonly claim?: Claim<T> | ClaimTargetOptions<CreateInput> | null;
 }
 
 export interface ModelUpdateParams<T, Fields = T>
-  extends MutationOptions {
+  extends ModelWriteOptions {
   readonly id: string;
   /**
    * Patch only fields declared by the model's Zod input shape. Hydrated rows
@@ -578,7 +589,7 @@ export interface ModelUpdateParams<T, Fields = T>
 }
 
 export interface ModelDeleteParams<T, Fields = T>
-  extends MutationOptions {
+  extends ModelWriteOptions {
   readonly id: string;
   readonly claim?: Claim<T> | ClaimTargetOptions<Fields> | null;
 }

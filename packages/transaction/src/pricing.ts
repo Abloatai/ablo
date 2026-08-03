@@ -23,7 +23,7 @@
  *     rather than billed.
  *
  * The allowance a tier advertises is DERIVED, never stored: "the floor covers
- * 49.5M operations" is {@link opsForUsd} applied to the floor. Storing it
+ * 10M operations" is {@link opsForUsd} applied to the floor. Storing it
  * alongside the floor is how a published price silently stops matching the
  * invoice, because raising one number does not fail anything that pins the
  * other.
@@ -47,7 +47,7 @@ export type { MeterEvent, PlanTier, RateBracket };
  * could observe the difference. It is emitted into the generated pricing
  * documentation so a stale copy is identifiable on sight.
  */
-export const PRICING_VERSION = '2026-07-27';
+export const PRICING_VERSION = '2026-07-31';
 
 /**
  * Resolve a stored plan string (`stripe_subscription.plan`) to a tier.
@@ -82,10 +82,38 @@ export const METER_EVENT_AXIS: Record<MeterEvent, BillableAxis | null> = {
 
 /** How each meter reads on an invoice line and in the pricing table. */
 export const METER_EVENT_LABEL: Record<MeterEvent, string> = {
-  'api.commit_ops': 'commit operations',
+  'api.commit_ops': 'writes',
   'api.model_reads': 'model reads',
   'api.claim_creates': 'claim creates',
   'api.bootstraps': 'bootstraps',
+};
+
+/**
+ * What each meter counts, in the words a customer is quoted. It lives beside
+ * the label because a meter's name and its definition are one fact: a page that
+ * renamed the line without restating what it counts would be describing a
+ * different meter.
+ *
+ * These say **write**, never *commit*. A commit is the protocol's atomic batch
+ * and it belongs in the protocol reference; the surface a customer buys against
+ * is `create` / `update` / `delete`, which the front door calls writing. Pricing
+ * copy is read by people who have never opened the protocol reference, and a
+ * word they have not met cannot clarify what they are paying for.
+ *
+ * All three read as "someone did something", because they are one price and a
+ * reader who has to hold three different shapes in mind will assume there are
+ * three different charges. Each line then answers the question that particular
+ * meter provokes: whether batching is cheaper, whether cached reads count, and
+ * whether holding a claim costs more than taking one.
+ */
+export const METER_EVENT_COUNTS: Record<MeterEvent, string> = {
+  'api.commit_ops':
+    'One every time someone changes something. Adding, editing, and removing all count the same, and changing 500 things is 500 operations however they are sent.',
+  'api.model_reads':
+    'One every time someone reads something the engine answers. Reads a client already has locally never reach us and never count.',
+  'api.claim_creates':
+    'One every time someone takes ownership of a row so others wait their turn. Holding it and releasing it are free.',
+  'api.bootstraps': 'Recorded, never charged. Connecting a client is free.',
 };
 
 /** The meters a customer is charged for, in declaration order. */
@@ -185,8 +213,8 @@ export const planDefinitionSchema = z.object({
   hardCapOps: z.number().int().positive().nullable(),
   /**
    * A hard daily stop, which is a burst guard rather than an allowance. A month
-   * of operations is a comfortable month of building and about ten minutes of
-   * one agent at full rate, so a monthly cap alone lets a runaway loop erase the
+   * of operations is a comfortable month of building and about a minute of one
+   * agent at full rate, so a monthly cap alone lets a runaway loop erase the
    * whole month before anyone notices. The daily figure is what turns that into
    * a floor on how fast the month can be spent. `null` on metered tiers, which
    * are billed rather than stopped.
@@ -214,8 +242,8 @@ export const PLANS = z
       label: 'Free',
       summary: 'Build against the real engine without a card.',
       monthlyMinimumUsd: 0,
-      hardCapOps: 1_000_000,
-      hardCapOpsPerDay: 100_000,
+      hardCapOps: 100_000,
+      hardCapOpsPerDay: 10_000,
       storageGib: 1,
       maxConcurrentConnections: 25,
       contractPriced: false,
@@ -225,7 +253,7 @@ export const PLANS = z
       tier: 'scale',
       label: 'Scale',
       summary: 'Production traffic, metered above a monthly floor.',
-      monthlyMinimumUsd: 99,
+      monthlyMinimumUsd: 20,
       hardCapOps: null,
       hardCapOpsPerDay: null,
       storageGib: 50,

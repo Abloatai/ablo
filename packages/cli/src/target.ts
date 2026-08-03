@@ -26,6 +26,7 @@ import { resolveIdentity } from '@abloatai/transaction/auth';
 import { resolveBootstrapBaseUrl } from '@abloatai/transaction/auth/apiKey';
 import {
   getActiveProject,
+  resolveOrgManagementKey,
   modeFromKey,
   type Mode,
   type ActiveProject,
@@ -188,7 +189,15 @@ async function nameProject(
   // bootstrap base asked for `…/api/api/v1/projects`, and the 404 degraded
   // every confirmed project to the fallback below — which is why `ablo status`
   // printed a project id where its slug belongs.
-  const listed = await listProjects(opts.apiKey, opts.url);
+  // Project listing is a management surface. A branch-bound runtime key can
+  // resolve its own immutable project id, but is intentionally forbidden from
+  // listing the organization's projects; using it here made every correctly
+  // minted branch key render its project as "unnamed". Name the already-
+  // confirmed id with the stored/org management credential when available.
+  // Falling back to the runtime key preserves the explicit failure reason for
+  // stateless CI, where no management credential is expected.
+  const namingKey = resolveOrgManagementKey() ?? opts.apiKey;
+  const listed = await listProjects(namingKey, opts.url);
   const match = listed.ok ? listed.projects.find((p) => p.id === projectId) : undefined;
   if (match) {
     return { id: match.id, slug: match.slug, name: match.name, isDefault: match.default };

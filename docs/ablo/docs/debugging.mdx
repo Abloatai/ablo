@@ -270,7 +270,6 @@ import { AbloError } from '@abloatai/ablo';
 try {
   await ablo.documents.create({
     data,
-    wait: 'confirmed',
   });
 } catch (error) {
   if (error instanceof AbloError) {
@@ -279,10 +278,10 @@ try {
 }
 ```
 
-With `wait: 'confirmed'`, the awaited call rejects with that complete typed
-error. `onMutationFailure` remains the notification channel for optimistic
-writes that return before the server answers; it is not required to recover
-details from a confirmed write.
+An awaited model write rejects with that complete typed error.
+`onMutationFailure` remains the notification channel for deliberately
+unawaited optimistic writes; it is not required to recover details from an
+awaited write.
 
 ### Local reads versus a confirmed server read
 

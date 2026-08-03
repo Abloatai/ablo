@@ -315,6 +315,7 @@ export {
   datasourceListResponseSchema,
   datasourceValidationResponseSchema,
   datasourceLocationResponseSchema,
+  datasourceResnapshotResponseSchema,
   datasourceDisconnectedResponseSchema,
 } from './dataSourceResponses.js';
 export type {
@@ -326,6 +327,7 @@ export type {
   DatasourceListResponse,
   DatasourceValidationResponse,
   DatasourceLocationResponse,
+  DatasourceResnapshotResponse,
   DatasourceDisconnectedResponse,
 } from './dataSourceResponses.js';
 

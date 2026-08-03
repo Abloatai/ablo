@@ -24,7 +24,6 @@ await ablo.agentJobs.create({
     kind: 'forecast_report',
     target: { model: 'weatherReports', id: 'report_stockholm', field: 'forecast' },
   },
-  wait: 'confirmed',
 });
 ```
 

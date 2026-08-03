@@ -41,7 +41,7 @@ await ablo.ready();
 const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
 if (!report) throw new Error('Row not found');
 
-await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' }, wait: 'confirmed' });
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' } });
 ```
 
 For end-to-end app setup across React, existing backends, Data Source, and
@@ -75,7 +75,7 @@ fallback removed — nothing to await, so they return a value.
 | `update({ id, data, ...options })` | `Promise<T>` | You want to update through the schema model. |
 | `delete({ id, ...options })` | `Promise<void>` | You want to delete through the schema model. |
 
-`retrieve`, `list`, `create`, `update`, and `delete` are the main path — they go
+`get`, `list`, `create`, `update`, and `delete` are the main path — they go
 through the server. The `local` reads work off the rows a session has already
 synced, so a cheap re-read needs no round-trip.
 
@@ -91,9 +91,11 @@ await ablo.weatherReports.update({
   data: { status: 'ready' },
   readAt: snap.stamp,
   onStale: 'reject',
-  wait: 'confirmed',
 });
 ```
+
+Reactive local state changes optimistically at call time; awaiting the model
+write waits for authoritative confirmation.
 
 Protected write options:
 
@@ -101,7 +103,6 @@ Protected write options:
 |---|---|
 | `readAt` | The state cursor the write was based on. |
 | `onStale` | Stale-state policy. Prefer `reject` for agent writes. |
-| `wait` | `queued` resolves after local queueing; `confirmed` waits for server acceptance. |
 | `idempotencyKey` | Stable key for retry-safe writes. The SDK generates one when omitted. |
 | `timeout` | Maximum time to wait for the write call. |
 
@@ -113,7 +114,7 @@ row, `claim` waits for them, re-reads the fresh row, then hands it to you — so
 two writers serialize instead of clobbering. A claim is temporary: it expires
 on its own if the holder stops, and is never saved as a row.
 
-You coordinate a row with calls on its model, beside `create`/`update`/`retrieve`:
+You coordinate a row with calls on its model, beside `create`/`update`/`get`:
 `ablo.<model>.claim({ id })` takes the claim and returns a handle,
 `ablo.<model>.claim.state({ id })` reads who currently holds it (synchronous, never
 blocks), and `ablo.<model>.claim.release({ id })` releases it early. The full

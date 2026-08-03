@@ -184,6 +184,7 @@ export async function runBranchDev(
     apiKey: result.credential.api_key,
     branch: {
       id: result.branch.id,
+      projectId: result.branch.project_id,
       slug: result.branch.slug,
       expiresAt: result.credential.expires_at,
     },

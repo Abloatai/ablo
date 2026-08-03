@@ -1,6 +1,41 @@
 # Changelog
 
+## 0.47.0
+
+### Minor Changes
+
+- 101ca2c: Make schema model writes optimistic with one stable promise contract: local reactive state changes immediately, while awaiting `create`, `update`, or `delete` always waits for authoritative confirmation. Remove the model-level and client-level `wait` options; explicit queued-versus-confirmed receipt control remains on `commits.create`.
+
+### Patch Changes
+
+- Updated dependencies [101ca2c]
+  - @abloatai/transaction@0.47.0
+  - @abloatai/humans@0.47.0
+
 ## 0.46.0
+
+### Provider branches isolate environments; schemas isolate projects
+
+Several Ablo projects can now share one physical Postgres database safely when
+each owns a separate schema. `ablo connect apply --schema mail` binds the
+authenticated project branch to `(database, mail)` and derives an independent
+slot, publication, replication role, and writer role. Publications enumerate
+schema-qualified mapped tables and the idempotency ledger lives in the selected
+schema. A provider branch's distinct direct URL remains the environment boundary
+for Neon, Supabase, and similar hosts.
+
+Registration enforces one owner per `(database, schema)` globally, without
+revealing another organization's coordinates, and refuses a new binding when
+`max_replication_slots` has no capacity. Runtime replication, rotate,
+resnapshot, disconnect, and scan use the binding's stored/derived footprint;
+legacy manual setups remain single-binding.
+
+New clients can pin their intended project and branch with `projectId` /
+`ABLO_PROJECT_ID` and `branchId` / `ABLO_BRANCH_ID`. `ablo dev` writes both
+immutable coordinates beside its branch-bound key, and `ready()` compares them
+with the key's server-resolved target before opening the sync connection. A mail
+deployment carrying a slides key now fails with `project_scope_denied`; a
+same-project key for the wrong environment fails with `branch_scope_denied`.
 
 ### Pre-existing rows arrive on their own
 
@@ -12,6 +47,19 @@ snapshot completes, and `ablo status --json` exposes the progress as
 `complete`. Keep an existing read fallback in place until the status reads
 `complete`. Row-touch backfill scripts are unnecessary; the snapshot is the
 engine's job.
+
+The snapshot reader now detects row-level security that would filter its
+ordinary `SELECT` even though WAL carries every published row. New setup plans
+give the read-only replication role `BYPASSRLS` (with `SELECT` still restricted
+to published tables), and readiness refuses to call an RLS-filtered snapshot
+safe. Existing connections can run `ablo connect resnapshot` after repairing
+the role; it recreates only the slot and keeps the DataSource and credentials.
+The same completion guard rejects an empty or partial snapshot mapping: if a
+pushed model's table is absent from the publication, completion stays pending
+until coverage is repaired and a fresh snapshot is requested. Snapshot and WAL
+mapping now use the DataSource's configured Postgres schema as part of relation
+identity, so an identically named table in another schema cannot be loaded into
+the model or falsely satisfy publication coverage.
 
 ## 0.45.0
 

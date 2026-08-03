@@ -127,7 +127,9 @@ function planeDigest(plane: FootprintPlane): string {
   // The organization-default project may be omitted or repeated as the
   // organization id; both spell the same branch coordinates.
   const project = plane.projectId === plane.organizationId ? '' : (plane.projectId ?? '');
-  const key = [plane.organizationId, project, plane.branchId].join('');
+  // Delimit the coordinates. Concatenation alone makes structurally different
+  // planes such as ("ab", "c") and ("a", "bc") hash the same input.
+  const key = [plane.organizationId, project, plane.branchId].join('\0');
 
   const round = (seed: number): string => {
     let hash = seed;

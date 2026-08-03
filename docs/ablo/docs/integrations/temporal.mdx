@@ -48,7 +48,6 @@ export async function approveOrder(input: ApproveOrderInput) {
       approvalNote: input.approvalNote,
     },
     idempotencyKey: input.idempotencyKey,
-    wait: 'confirmed',
   });
 }
 ```
@@ -137,7 +136,7 @@ For every mutating Activity:
 1. Create the key in deterministic Workflow code or accept a stable operation
    ID in the Workflow input.
 2. Reuse the key and mutation body for every retry of the same logical effect.
-3. Use `wait: 'confirmed'` when later Workflow steps depend on the
+3. Await each model write before later Workflow steps depend on the
    authoritative database result.
 4. Treat reuse of a key with a different body as an application bug.
 5. Keep the Temporal retry horizon within Ablo's documented
@@ -167,7 +166,6 @@ export async function applyReview(orderId: string, note: string) {
     id: claim.data.id,
     data: { approvalNote: note },
     claim,
-    wait: 'confirmed',
   });
 }
 ```

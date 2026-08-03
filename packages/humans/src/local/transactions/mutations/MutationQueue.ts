@@ -175,8 +175,8 @@ export interface MutationQueueConfig {
   maxExecutingTransactions: number;
   // How long to wait, in milliseconds, for a change's confirming sync delta
   // before the retry-and-reconciliation cycle begins. For a source-forwarded
-  // write this is also the public `wait: 'confirmed'` deadline: expiry rejects
-  // the waiter with `replication_lag_timeout` while the accepted write remains
+  // write this is also the awaited model-write deadline: expiry rejects the
+  // waiter with `replication_lag_timeout` while the accepted write remains
   // pending. Defaults to 30000 (30 seconds); raise it for slow networks.
   deltaConfirmationTimeout: number;
   /**
@@ -1087,7 +1087,7 @@ export class MutationQueue extends EventEmitter {
   }
 
   /**
-   * Bounds the public `wait: 'confirmed'` promise without changing the
+   * Bounds the public model-write confirmation promise without changing the
    * accepted write's lifecycle. A lag timeout is not a rejection from the
    * source database, so it must never emit `transaction:failed`, roll back
    * optimistic state, or remove the durable replay envelope.

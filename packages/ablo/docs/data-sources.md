@@ -36,6 +36,36 @@ npx ablo connect apply --env-file .env.local --yes
 The explicit flag makes the credential choice visible and loads both the
 branch-bound key and database URL. Shell environment variables take precedence.
 
+### One database, several projects
+
+Provider database URLs and Postgres schemas solve different isolation jobs:
+
+```text
+database URL = production, staging, or preview environment
+schema       = application/project inside that database
+ABLO_API_KEY = exact Ablo project branch to bind
+```
+
+It is safe to keep several apps in one production database when each app has its
+own schema:
+
+```bash
+ABLO_API_KEY="$MAIL_KEY" DATABASE_URL="$PRODUCTION_URL" \
+  npx ablo connect apply --schema mail --yes
+
+ABLO_API_KEY="$SLIDES_KEY" DATABASE_URL="$PRODUCTION_URL" \
+  npx ablo connect apply --schema slides --yes
+```
+
+For a Neon or Supabase preview branch, use that branch's direct URL and keep the
+schema name stable. Ablo binds one plane to `(database, schema)`: the same
+database may add `billing`, but a second project cannot also claim `mail`.
+Cross-organization conflicts reveal only that the binding is occupied.
+
+Push the Ablo schema before connecting, or pass `--tables`. The publication is
+an explicit list of schema-qualified mapped tables; Ablo never uses a
+database-wide `FOR ALL TABLES` publication for this multi-project path.
+
 If scoped roles already exist but their passwords are unavailable, do not drop
 them or run `DROP OWNED`. Rotate them in place and re-register the fresh
 credentials:
@@ -60,11 +90,12 @@ without printing the secret. Retire the old variable after the move.
 ## Connect in one command
 
 ```bash
-npx ablo connect apply --url postgres://admin:...@host:5432/db
+npx ablo connect apply --url postgres://admin:...@host:5432/db --schema mail
 ```
 
-Pass an admin connection string with `--url` and it creates the publication, the
-two scoped roles, and the grants, turns on logical decoding where it can, registers
+Pass an admin connection string with `--url` and select the application namespace
+with `--schema` (default `public`). It creates a per-binding publication, two
+per-binding scoped roles, and the grants, turns on logical decoding where it can, registers
 both scoped roles with Ablo, and proves the setup by reconnecting and reading back.
 The admin credential is used on this machine only and never persisted — nothing is
 written to your `.env`, which keeps holding only `ABLO_API_KEY`. Pass `--show-sql`
@@ -78,7 +109,7 @@ to run it by hand or review exactly what changes.
 
 When Ablo creates the replication slot, it takes a consistent initial snapshot of
 every mapped table in the publication before following new changes. Rows that
-predate `ablo connect` therefore become available to `retrieve`, `list`, and
+predate `ablo connect` therefore become available to `get`, `list`, and
 reactive `local.*` reads without an application backfill.
 
 Run `ablo connect check` before removing an existing HTTP/database read fallback.
@@ -86,6 +117,24 @@ It reports the initial load as `loading` until the snapshot is complete. Do not
 write a script that updates every row to make it visible: an Ablo update requires
 the row to be visible already, and touching application rows is neither necessary
 nor a safe bootstrap mechanism.
+
+If a connection was snapshotted with an older replication role whose row-level
+security hid historical rows, repair that role and request the load again without
+deregistering or rotating credentials:
+
+```bash
+npx ablo connect rotate      # reasserts BYPASSRLS and safely re-registers both roles
+npx ablo connect resnapshot  # recreates only the slot; the load is asynchronous
+npx ablo connect check       # repeat until the existing-row load is complete
+```
+
+Use the same `resnapshot` step after adding an existing populated table to the
+publication. Following its future WAL changes is not enough to load rows written
+before publication membership; the snapshot coverage guard therefore refuses to
+record completion when even one mapped table is absent. Relation matching is
+schema-qualified using the DataSource's configured `schema` (default `public`):
+an identically named table in another Postgres schema neither counts as coverage
+nor enters the snapshot or WAL stream for your model.
 
 ## The setup, step by step
 
@@ -112,23 +161,33 @@ npx ablo connect
 `ablo connect` prints the exact, copy-pasteable setup SQL for **your** Postgres.
 Run it against your database as a superuser or the DB owner. It creates:
 
-- **A publication** naming the tables Ablo reads and confirms against
-  (`ablo_publication`, the single canonical name the runtime subscribes to):
+- **A per-binding publication** naming only the schema-qualified mapped tables
+  Ablo reads and confirms against. Its suffix is derived from the authenticated
+  Ablo plane and is stable across re-runs:
 
   ```sql
-  CREATE PUBLICATION "ablo_publication" FOR ALL TABLES;
+  CREATE PUBLICATION "ablo_publication_<suffix>"
+    FOR TABLE "mail"."messages", "mail"."threads";
   ```
 
-  Scope it to a subset with `npx ablo connect --tables a,b,c`.
+  Override the pushed model set with `--tables a,b,c`.
 
 - **A replication role:** it streams the WAL and `SELECT`s, nothing more. This is
   the role Ablo reads and confirms through. You choose the password; it never
   passes through Ablo's CLI or servers:
 
   ```sql
-  CREATE ROLE "ablo_replicator" WITH REPLICATION LOGIN PASSWORD '<password>';
-  GRANT SELECT ON ALL TABLES IN SCHEMA public TO "ablo_replicator";
+  CREATE ROLE "ablo_replicator_<suffix>" WITH
+    NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE REPLICATION NOINHERIT
+    LOGIN PASSWORD '<password>';
+  GRANT SELECT ON TABLE "mail"."messages", "mail"."threads"
+    TO "ablo_replicator_<suffix>";
   ```
+
+  `BYPASSRLS` is required because the initial load is an ordinary `SELECT`,
+  while logical replication already exposes every row in the publication
+  independently of row-level-security policies. Keep this role's `SELECT`
+  grants scoped to the published tables; it has no write or DDL privileges.
 
   On Amazon RDS the `REPLICATION` attribute is granted, not set directly:
   `GRANT rds_replication TO "ablo_replicator";`.
@@ -139,15 +198,23 @@ Run it against your database as a superuser or the DB owner. It creates:
   can change rows in your tables; it cannot change your database:
 
   ```sql
-  CREATE ROLE "ablo_writer" WITH LOGIN PASSWORD '<write-password>'
+  CREATE ROLE "ablo_writer_<suffix>" WITH LOGIN PASSWORD '<write-password>'
     NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
-  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "ablo_writer";
+  GRANT SELECT, INSERT, UPDATE, DELETE
+    ON TABLE "mail"."messages", "mail"."threads"
+    TO "ablo_writer_<suffix>";
   ```
 
   Rename either role with `--role <name>` / `--write-role <name>`.
 
-The **replication slot** is created and owned by Ablo's runtime when it first
-subscribes — you don't pre-create it.
+The schema-local `ablo_idempotency` ledger lives beside that app's tables. The
+**replication slot** (`ablo_slot_<suffix>`) is created and owned by Ablo's runtime
+when it first subscribes — you don't pre-create it. Registration checks
+`max_replication_slots` first and explains how to free or add capacity.
+
+`ablo connect --manual` retains the legacy canonical object names for
+compatibility and is therefore single-binding within a physical database. Use
+`connect apply --schema …` when several projects share that database.
 
 ### 3. Register the database with Ablo
 
@@ -197,6 +264,8 @@ Your **app** holds only the API key — never a connection string:
 ```bash
 # .env — server runtime only, never the browser
 ABLO_API_KEY=sk_...
+ABLO_PROJECT_ID=proj_...
+ABLO_BRANCH_ID=br_...
 ```
 
 ```ts
@@ -206,8 +275,17 @@ import { schema } from './ablo/schema';
 export const ablo = Ablo({
   schema,
   apiKey: process.env.ABLO_API_KEY,
+  projectId: process.env.ABLO_PROJECT_ID,
+  branchId: process.env.ABLO_BRANCH_ID,
 });
 ```
+
+`ABLO_PROJECT_ID` and `ABLO_BRANCH_ID` are safety assertions, not routing inputs.
+The API key still selects the project and branch; during `ready()` Ablo asks the
+server what the key actually targets and refuses startup when either coordinate
+differs. `ablo dev` writes all three values together, so accidentally exporting
+a slides key into the mail app—or a mail development key into production—fails
+before any read, write, or subscription begins.
 
 The Ablo schema describes **only your synced, collaborative models** — the rows
 Ablo coordinates and fans out in realtime. It is _not_ your whole-database schema
@@ -227,7 +305,7 @@ landed:
 await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 } });
 
 // Block until your database has it and the WAL echo confirms.
-await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 }, wait: 'confirmed' });
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 } });
 
 // Reads are live off the same stream.
 const report = ablo.weatherReports.local.get('report_stockholm');

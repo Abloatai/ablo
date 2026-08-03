@@ -14,7 +14,6 @@ await using claim = await ablo.reports.claim({ id: reportId });
 await ablo.reports.update({
   id: claim.data.id,
   data: { forecast: await generateForecast(claim.data) },
-  wait: 'confirmed',
 });
 ```
 
@@ -90,7 +89,7 @@ based on a row that has since changed is turned away rather than applied.
     const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: 'http' });
     ```
 
-    Read with `list` / `retrieve`, coordinate with `claim`, write with `create` / `update` /
+    Read with `list` / `get`, coordinate with `claim`, write with `create` / `update` /
     `delete`. See [Agents](./agents.md) for the loop and [API Reference](./api.md) for the shape.
   </Step>
 

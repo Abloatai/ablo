@@ -69,8 +69,12 @@ export interface ClientPrelude<S extends SchemaRecord> {
 export function resolveClientPrelude<S extends SchemaRecord>(
   options: AbloOptions<S>,
 ): ClientPrelude<S> {
-  const internalOptions = options as InternalAbloOptions<S>;
   const env = readProcessEnv();
+  const internalOptions = {
+    ...options,
+    projectId: options.projectId ?? env.ABLO_PROJECT_ID,
+    branchId: options.branchId ?? env.ABLO_BRANCH_ID,
+  } as InternalAbloOptions<S>;
   const authInput = { options, env };
   const configuredApiKey = resolveApiKey(authInput);
   const configuredAuthToken = resolveAuthToken(authInput);

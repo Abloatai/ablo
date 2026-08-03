@@ -77,8 +77,7 @@ When handing this to a coding agent, give it a concrete target:
 ```txt
 Add Ablo to this app for one model your agents edit.
 Run npx ablo dev and use its branch-bound key. Declare schema, add the Ablo client, replace
-one write with ablo.<model>.update(..., { readAt, onStale: 'reject',
-wait: 'confirmed' }), and add a smoke test for two concurrent writers.
+one write with ablo.<model>.update(..., { readAt, onStale: 'reject' }), and add a smoke test for two concurrent writers.
 ```
 
 ## 1. Declare A Schema
@@ -261,9 +260,9 @@ Reads come in two flavors, and you pick based on whether you can wait.
 store) — they're async, so you `await` them. `local.get(id)`,
 `local.list({ where })`, and `local.count({ where })` read the already-synced local
 graph synchronously, so they're the ones you call in render — and the ones you
-use inside a `useAblo` selector, never the async `retrieve`/`list`.
+use inside a `useAblo` selector, never the async `get`/`list`.
 
-Use `retrieve` when the row may not be local yet — it fetches from the server
+Use `get` when the row may not be local yet — it fetches from the server
 and waits.
 
 ```ts
@@ -316,7 +315,7 @@ const ablo = useAblo();
 For simple writes:
 
 ```ts
-await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' }, wait: 'confirmed' });
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' } });
 ```
 
 For writes based on state the user or agent already read, snapshot first and
@@ -330,12 +329,12 @@ await ablo.weatherReports.update({
   data: { status: 'ready' },
   readAt: snap.stamp,
   onStale: 'reject',
-  wait: 'confirmed',
 });
 ```
 
-`wait: 'confirmed'` resolves after the server accepts the write. Rejections roll
-back optimistic local state and throw a typed `AbloError`.
+The local row changes optimistically at once. Awaiting the model write waits for
+authoritative confirmation; a rejection rolls the optimistic state back and
+throws a typed `AbloError`.
 
 ## 5. Multiplayer Is Automatic
 
@@ -468,7 +467,6 @@ if (!claimed) return;
 await ablo.weatherReports.update({
   id: claimed.id,
   data: { status: 'ready', forecast: await getForecast(claimed) },
-  wait: 'confirmed',
 });
 ```
 
@@ -489,7 +487,6 @@ const completeReport = tool({
       data: { status: 'ready', forecast },
       readAt: snap.stamp,
       onStale: 'reject',
-      wait: 'confirmed',
     });
   },
 });

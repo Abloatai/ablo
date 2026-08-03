@@ -296,6 +296,21 @@ function maskKey(key: string | undefined): string {
 }
 
 /**
+ * A storage-plane rejection happens after the schema-authoring gate. Keep this
+ * fact in one helper so both one-shot `push` and the `dev` watcher cannot turn
+ * the same 403 into a fictitious missing-scope diagnosis.
+ */
+export function schemaPushPlaneHint(code: unknown): string | null {
+  if (code !== 'test_database_not_registered') return null;
+  return (
+    `The key authenticated and already passed ${pc.bold('schema:push')} authorization. ` +
+    `This is a branch storage-provisioning error, not a key-scope error. Check the plane with ` +
+    `${pc.bold('npx ablo branch status <branch>')}; a branch reported as hosted should not need ` +
+    `a customer database.`
+  );
+}
+
+/**
  * Uncommitted-schema guard. A deploy should be traceable to a commit, so we
  * check whether the schema file differs from git HEAD. Returns `null` when not
  * in a git repo / git is unavailable — non-git users are never blocked.
@@ -759,7 +774,10 @@ export async function push(argv: readonly string[]): Promise<void> {
     // confusion is a legacy stored runtime key being used instead of the intended
     // key placed in `.env.local`.
     console.error(pc.dim(`  Push used ${pc.bold(maskKey(args.apiKey))} from ${describeKeySource(keySource)}.`));
-    if (code === 'database_role_cannot_enforce_rls') {
+    const planeHint = schemaPushPlaneHint(code);
+    if (planeHint) {
+      console.error(pc.dim(`  ${planeHint}`));
+    } else if (code === 'database_role_cannot_enforce_rls') {
       console.error(
         pc.dim(
           `  Your database role bypasses row-level security. Run ${pc.bold('npx ablo migrate')} to ` +

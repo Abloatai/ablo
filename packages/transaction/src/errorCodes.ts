@@ -39,7 +39,7 @@ import { z } from 'zod';
  * error documentation and returned on the `Ablo-Version` response header, so a
  * consumer can detect when its expected contract has drifted from the server's.
  */
-export const ERROR_CONTRACT_VERSION = '2026-07-23';
+export const ERROR_CONTRACT_VERSION = '2026-07-30';
 
 /** A coarse grouping of error codes, used to organize metrics and documentation. */
 export type ErrorCategory =
@@ -1046,6 +1046,12 @@ export const ERROR_CODES = {
     true,
     'The server is at connection capacity. Retry shortly — transient and not specific to your credentials.'
   ),
+  delivery_partition_mismatch: wire(
+    'transport',
+    503,
+    true,
+    'The connection reached a gateway that does not own its delivery partition. Retry through the cell router.'
+  ),
   fetch_unavailable: client(
     'transport',
     'This environment provides no `fetch` implementation, so HTTP requests cannot be made. Run on a platform with `fetch` (Node 18+, modern browsers) or supply a polyfill.'
@@ -1239,6 +1245,12 @@ export const ERROR_CODES = {
     403,
     false,
     "The request targeted a project the caller's key is not scoped to."
+  ),
+  branch_scope_denied: wire(
+    'permission',
+    403,
+    false,
+    "The request targeted a branch the caller's key is not scoped to."
   ),
   project_slug_taken: wire(
     'validation',

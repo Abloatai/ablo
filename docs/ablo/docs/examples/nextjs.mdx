@@ -171,7 +171,6 @@ export async function markDone(id: string) {
     id,
     data: { status: 'done' },
     claim,
-    wait: 'confirmed',
   });
 
   return { status: 'done', task };

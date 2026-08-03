@@ -230,7 +230,7 @@ landed:
 await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 } });
 
 // Block until your database has it and the WAL echo confirms.
-await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 }, wait: 'confirmed' });
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { high: 21 } });
 
 // Reads are live off the same stream.
 const report = ablo.weatherReports.local.get('report_stockholm');

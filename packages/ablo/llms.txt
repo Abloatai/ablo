@@ -61,11 +61,10 @@ await using claim = await ablo.weatherReports.claim({ id: 'report_stockholm' });
 const updated = await ablo.weatherReports.update({
   id: claim.data.id,
   data: { status: 'ready', forecast: await getForecast(claim.data) },
-  wait: 'confirmed',
 });
 ```
 
-That is the normal app path: declare models in a schema, then use `ablo.<model>.retrieve(...)`, `ablo.<model>.create(...)`, `ablo.<model>.update(...)`, and `ablo.<model>.delete(...)`.
+That is the normal app path: declare models in a schema, then use `ablo.<model>.get({ id })`, `ablo.<model>.create(...)`, `ablo.<model>.update(...)`, and `ablo.<model>.delete(...)`. Every verb takes a single options object.
 
 Treat the schema as the integration contract. It drives typed model clients,
 React selectors, server and agent writes, Data Source request/response shape,
@@ -137,7 +136,7 @@ frees. Use `ifClaimed: 'fail'` when you'd rather refuse to read a claimed row.
 
 ## Guarantees
 
-`wait: 'confirmed'` means the server accepted the write. Schema model writes are optimistic by default; server rejection rolls back local state. To prevent lost updates, read with `snapshot(...)` to capture a `readAt`, then write with `onStale: 'reject'` — the server rejects your update if someone else changed the row after that `readAt`.
+Schema model writes update local state optimistically, while their returned promise always waits for authoritative confirmation. Server rejection rolls back local state. To prevent lost updates, read with `snapshot(...)` to capture a `readAt`, then write with `onStale: 'reject'` — the server rejects your update if someone else changed the row after that `readAt`.
 
 Claims coordinate writers; they do not block readers. Most users should stay on
 schema-backed reads/writes and `claim(...)`; manual protocol bookkeeping is not

@@ -73,6 +73,7 @@ import type { PoolContext, RehydrationStats } from './sync/bootstrapApply.js';
 import * as deltaPipeline from './sync/deltaPipeline.js';
 import type { DeltaPipelineContext } from './sync/deltaPipeline.js';
 import type { ParticipantKind } from '@abloatai/transaction/types/participant';
+import type { DeliveryPartitionRoute } from '@abloatai/transaction/auth/deliveryPartition';
 import { queryByClass as runQueryByClass, countModels } from './store/queryApi.js';
 import type { QueuedMutation } from './transactions/mutations/MutationQueue.js';
 import type { CommitLatencySample } from './transactions/mutations/commitLatency.js';
@@ -150,6 +151,8 @@ export interface UserContext {
   branchId: string;
   /** True only when branchId is the project's production root. */
   branchRoot?: boolean;
+  /** Server-resolved WebSocket gateway route; never an authorization claim. */
+  deliveryPartition?: DeliveryPartitionRoute | null;
   role?: string;
   teamIds?: string[];
   /** Participant kind on the wire. Default 'user' for browser
@@ -1457,6 +1460,7 @@ export class BaseSyncedStore<
     }
     const syncGroups = this.resolveSyncGroups(context);
     this.syncWebSocket.setSyncGroups(syncGroups);
+    this.syncWebSocket.setDeliveryPartition(context.deliveryPartition ?? null);
     this.syncWebSocket.setLastSyncId(lastSyncId || 0);
     // The permanent base scopes for read interest — same set the connection
     // subscribes to at upgrade, so the two can never disagree.

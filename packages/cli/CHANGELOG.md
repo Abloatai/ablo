@@ -1,5 +1,13 @@
 # @abloatai/cli
 
+## 0.47.0
+
+### Patch Changes
+
+- Updated dependencies [101ca2c]
+  - @abloatai/transaction@0.47.0
+  - @abloatai/humans@0.47.0
+
 ## 0.46.0
 
 ### Patch Changes
@@ -58,6 +66,7 @@
 - 0030974: An unrecognized command now fails with the name it did not recognize and, when a plausible target exists, the command to use: a typo lands on the intended command, and a wrong-but-reasonable name like `disconnect` points at `ablo connect deregister`. It used to print the full help and exit zero.
 
   `connect apply` consults the locate preflight before touching the database: when another plane already holds the source it refuses with exit 1, names `ablo connect deregister` as the way out, and leaves the customer database untouched. Registering a connection string without a password is refused at the boundary with the field named, rather than failing later as a masked server error.
+
   - @abloatai/transaction@0.41.0
   - @abloatai/humans@0.41.0
 

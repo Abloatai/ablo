@@ -33,6 +33,7 @@ import type { Logger } from '../logger.js';
 import type { AuthCredentialSource } from '../auth/credentialSource.js';
 import type { CredentialProvider } from './credentialResult.js';
 import { resolveApiKeyValue, resolveBootstrapBaseUrl } from './apiKey.js';
+import type { DeliveryPartitionRoute } from './deliveryPartition.js';
 
 export interface IdentityResolveInput {
   readonly options: {
@@ -69,6 +70,7 @@ export interface ResolvedIdentity {
   readonly capabilityToken: string | undefined;
   readonly syncGroups: readonly string[] | undefined;
   readonly participantKind: ParticipantKind;
+  readonly deliveryPartition: DeliveryPartitionRoute | null;
   /** Set only on the hosted-cloud path; the caller keeps it to stop refreshes on shutdown. */
   readonly refreshScheduler: RefreshScheduler | null;
 }
@@ -192,6 +194,7 @@ export async function resolveParticipantIdentity(
         capabilityToken: cred.getBearer,
         syncGroups: options.syncGroups,
         participantKind: kind,
+        deliveryPartition: null,
         refreshScheduler: null,
       };
     }
@@ -242,6 +245,7 @@ async function resolveViaIdentity(
     capabilityToken: bearer,
     syncGroups: mergedSyncGroups,
     participantKind: identity.participantKind,
+    deliveryPartition: identity.deliveryPartition,
     refreshScheduler: null,
   };
 }
@@ -325,6 +329,7 @@ async function resolveHosted(input: HostedInput): Promise<ResolvedIdentity> {
     capabilityToken: exchange.token,
     syncGroups: exchange.scope.syncGroups,
     participantKind: input.kind,
+    deliveryPartition: exchange.scope.deliveryPartition,
     refreshScheduler,
   };
 }

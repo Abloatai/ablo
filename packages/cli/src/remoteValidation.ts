@@ -123,6 +123,8 @@ const READINESS_LABELS: Readonly<Record<ReadinessItem, (f: RemoteReadinessFailur
   wal_level: () => `your database isn't set up to share changes as they happen yet`,
   publication: () => `none of your tables are shared with Ablo yet`,
   replication_role: () => `the login Ablo reads with can't follow your changes yet`,
+  replication_slot_capacity: (f) =>
+    withActual(`this database has no remaining change-stream capacity for this binding`, f.actual),
   replica_identity: (f) =>
     withActual(
       `some shared tables don't record enough for Ablo to track edits and deletes`,
@@ -130,6 +132,8 @@ const READINESS_LABELS: Readonly<Record<ReadinessItem, (f: RemoteReadinessFailur
     ),
   table_select: (f) =>
     withActual(`the login Ablo reads with can't read some shared tables`, f.actual),
+  snapshot_row_security: (f) =>
+    withActual(`row-level security hides historical rows from Ablo's initial load`, f.actual),
   write_role: () => `the login Ablo writes with isn't set up yet`,
   row_security: () => `the writer login isn't set to honor your row-level security`,
   database_privileges: () => `the writer login can still create things in your database`,

@@ -63,7 +63,6 @@ if (!order) throw new Error('Order not found');
 await ablo.orders.update({
   id: order.id,
   data: { status: 'approved' },
-  wait: 'confirmed',
 });
 ```
 
@@ -82,7 +81,6 @@ await ablo.orders.update({
   id: claim.data.id,
   data: { total: priced.total, status: 'repriced' },
   claim,
-  wait: 'confirmed',
 });
 ```
 

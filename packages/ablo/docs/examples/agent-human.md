@@ -75,7 +75,6 @@ export async function markDone(taskId: string) {
     //   ablo.tasks.update({
     //     id: claim.data.id,
     //     data: { status: 'done' },
-    //     wait: 'confirmed',
     //     readAt: <claim snapshot version>,
     //     onStale: 'reject',
     //   });
@@ -86,7 +85,6 @@ export async function markDone(taskId: string) {
     const updated = await ablo.tasks.update({
       id: claim.data.id,
       data: { status: 'done' },
-      wait: 'confirmed',
     });
 
     return { status: 'done', task: updated };

@@ -28,11 +28,13 @@ describe('parseConnectArgs', () => {
     expect(a.check).toBe(false);
     expect(a.scan).toBe(false);
     expect(a.tables).toEqual([]);
+    expect(a.schema).toBe('public');
     expect(a.role).toBe(ABLO_REPLICATION_ROLE);
     expect(a.writeRole).toBe(ABLO_WRITE_ROLE);
     expect(a.route).toBe('public-allowlist');
     expect(a.apply).toBe(false);
     expect(a.rotate).toBe(false);
+    expect(a.resnapshot).toBe(false);
     expect(a.url).toBeUndefined();
     expect(a.manual).toBe(false);
   });
@@ -54,14 +56,23 @@ describe('parseConnectArgs', () => {
     expect(parseConnectArgs(['check']).check).toBe(true);
     expect(parseConnectArgs(['apply']).apply).toBe(true);
     expect(parseConnectArgs(['rotate']).rotate).toBe(true);
+    expect(parseConnectArgs(['resnapshot']).resnapshot).toBe(true);
     expect(parseConnectArgs(['scan']).scan).toBe(true);
   });
 
   it('accepts modifiers after a subcommand', () => {
-    const a = parseConnectArgs(['apply', '--url', 'postgres://admin@host:5432/db', '--yes']);
+    const a = parseConnectArgs([
+      'apply',
+      '--url',
+      'postgres://admin@host:5432/db',
+      '--schema',
+      'mail',
+      '--yes',
+    ]);
     expect(a.apply).toBe(true);
     expect(a.url).toBe('postgres://admin@host:5432/db');
     expect(a.yes).toBe(true);
+    expect(a.schema).toBe('mail');
   });
 
   it('rejects the retired mode flags — subcommands only now', () => {
@@ -242,16 +253,16 @@ describe('connectSetupSql — the one prescriptive recipe (logical replication)'
 
   it('creates a least-privilege REPLICATION LOGIN role with a placeholder password', () => {
     expect(joined).toContain(
-      `CREATE ROLE "${ABLO_REPLICATION_ROLE}" WITH REPLICATION LOGIN PASSWORD '<password>';`
+      `CREATE ROLE "${ABLO_REPLICATION_ROLE}" WITH NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE REPLICATION NOINHERIT LOGIN PASSWORD '<password>';`
     );
   });
 
   it('keeps the replication role SELECT-only', () => {
     expect(joined).toContain(
-      `GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${ABLO_REPLICATION_ROLE}";`
+      `GRANT SELECT ON ALL TABLES IN SCHEMA "public" TO "${ABLO_REPLICATION_ROLE}";`
     );
     expect(joined).toContain(
-      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO "${ABLO_REPLICATION_ROLE}";`
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA "public" GRANT SELECT ON TABLES TO "${ABLO_REPLICATION_ROLE}";`
     );
     expect(joined).not.toContain(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${ABLO_REPLICATION_ROLE}"`
@@ -264,7 +275,7 @@ describe('connectSetupSql — the one prescriptive recipe (logical replication)'
         `NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;`
     );
     expect(joined).toContain(`ALTER ROLE "${ABLO_WRITE_ROLE}" SET row_security = on;`);
-    expect(joined).toContain(`GRANT USAGE ON SCHEMA public TO "${ABLO_WRITE_ROLE}";`);
+    expect(joined).toContain(`GRANT USAGE ON SCHEMA "public" TO "${ABLO_WRITE_ROLE}";`);
     expect(joined).not.toContain(`GRANT CREATE ON SCHEMA public TO "${ABLO_WRITE_ROLE}"`);
     expect(joined).not.toContain('OWNER TO');
     // Ablo does not alter permissions of roles it doesn't own: it never revokes
@@ -286,12 +297,12 @@ describe('connectSetupSql — the one prescriptive recipe (logical replication)'
     const scoped = connectSetupSql({ tables: ['documents'] }).join('\n');
     // Replicator reads only the published table, and gains no default-privilege
     // grant that would reach tables added later.
-    expect(scoped).toContain(`GRANT SELECT ON TABLE "documents" TO "${ABLO_REPLICATION_ROLE}";`);
+    expect(scoped).toContain(`GRANT SELECT ON TABLE "public"."documents" TO "${ABLO_REPLICATION_ROLE}";`);
     expect(scoped).not.toContain('ON ALL TABLES IN SCHEMA public');
     expect(scoped).not.toContain('ALTER DEFAULT PRIVILEGES');
     // Writer DML is limited to the named table.
     expect(scoped).toContain(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "documents" TO "${ABLO_WRITE_ROLE}";`
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "public"."documents" TO "${ABLO_WRITE_ROLE}";`
     );
     // Sequences are the ones those tables own, resolved from the catalog — not
     // every sequence in the schema.
@@ -301,14 +312,14 @@ describe('connectSetupSql — the one prescriptive recipe (logical replication)'
   });
 
   it('provisions the permanent direct ledger but no endpoint outbox', () => {
-    expect(joined).toContain('CREATE TABLE IF NOT EXISTS ablo_idempotency');
+    expect(joined).toContain('CREATE TABLE IF NOT EXISTS "public"."ablo_idempotency"');
     expect(joined).toContain('request_hash TEXT');
     expect(joined).toContain("expires_at   TIMESTAMPTZ NOT NULL DEFAULT 'infinity'");
     expect(joined).toContain(
-      `GRANT SELECT, INSERT, UPDATE ON TABLE public.ablo_idempotency TO "${ABLO_WRITE_ROLE}";`
+      `GRANT SELECT, INSERT, UPDATE ON TABLE "public"."ablo_idempotency" TO "${ABLO_WRITE_ROLE}";`
     );
     expect(joined).toContain(
-      `REVOKE DELETE ON TABLE public.ablo_idempotency FROM "${ABLO_WRITE_ROLE}";`
+      `REVOKE DELETE ON TABLE "public"."ablo_idempotency" FROM "${ABLO_WRITE_ROLE}";`
     );
     expect(joined).not.toContain('ablo_outbox');
   });
@@ -316,18 +327,35 @@ describe('connectSetupSql — the one prescriptive recipe (logical replication)'
   it('scopes the publication to a subset with --tables', () => {
     const scoped = connectSetupSql({ tables: ['tasks', 'projects'] }).join('\n');
     expect(scoped).toContain(
-      `CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "tasks", "projects";`
+      `CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "public"."tasks", "public"."projects";`
     );
     expect(scoped).not.toContain('FOR ALL TABLES');
   });
 
+  it('keeps every per-project object inside the configured schema', () => {
+    const scoped = connectSetupSql({
+      schema: 'slides',
+      publication: 'ablo_publication_branch',
+      tables: ['documents'],
+    }).join('\n');
+    expect(scoped).toContain(
+      'CREATE PUBLICATION "ablo_publication_branch" FOR TABLE "slides"."documents";'
+    );
+    expect(scoped).toContain('GRANT USAGE ON SCHEMA "slides"');
+    expect(scoped).toContain('CREATE TABLE IF NOT EXISTS "slides"."ablo_idempotency"');
+    expect(scoped).not.toContain('"public"."documents"');
+    expect(scoped).not.toContain('"public"."ablo_idempotency"');
+  });
+
   it('honors a custom role name everywhere it appears', () => {
     const custom = connectSetupSql({ role: 'my_reader', writeRole: 'my_writer' }).join('\n');
-    expect(custom).toContain(`CREATE ROLE "my_reader" WITH REPLICATION LOGIN`);
-    expect(custom).toContain(`GRANT SELECT ON ALL TABLES IN SCHEMA public TO "my_reader";`);
+    expect(custom).toContain(
+      `CREATE ROLE "my_reader" WITH NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE REPLICATION NOINHERIT LOGIN`
+    );
+    expect(custom).toContain(`GRANT SELECT ON ALL TABLES IN SCHEMA "public" TO "my_reader";`);
     expect(custom).toContain(`CREATE ROLE "my_writer" WITH LOGIN`);
     expect(custom).toContain(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "my_writer";`
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "public" TO "my_writer";`
     );
     expect(custom).not.toContain(ABLO_REPLICATION_ROLE);
     expect(custom).not.toContain(ABLO_WRITE_ROLE);
@@ -356,7 +384,7 @@ describe('reconcilePublicationPlan — keep the publication equal to --tables', 
     const r = reconcilePublicationPlan({ exists: false, allTables: false, tables: [] }, [
       'documents',
     ]);
-    expect(r.sql).toEqual([`CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "documents";`]);
+    expect(r.sql).toEqual([`CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "public"."documents";`]);
     expect(r.added).toEqual(['documents']);
     expect(r.removed).toEqual([]);
     expect(r.recreated).toBe(false);
@@ -377,7 +405,7 @@ describe('reconcilePublicationPlan — keep the publication equal to --tables', 
 
   it('SET TABLEs the full desired list on a scoped→scoped change (add + drop at once)', () => {
     const r = reconcilePublicationPlan(scoped(['a', 'b']), ['a', 'c']);
-    expect(r.sql).toEqual([`ALTER PUBLICATION "${ABLO_PUBLICATION}" SET TABLE "a", "c";`]);
+    expect(r.sql).toEqual([`ALTER PUBLICATION "${ABLO_PUBLICATION}" SET TABLE "public"."a", "public"."c";`]);
     expect(r.added).toEqual(['c']);
     expect(r.removed).toEqual(['b']);
     expect(r.recreated).toBe(false);
@@ -389,7 +417,7 @@ describe('reconcilePublicationPlan — keep the publication equal to --tables', 
     const r = reconcilePublicationPlan(scoped(['cb_agent_runs', 'cb_documents', 'cb_tasks']), [
       'documents',
     ]);
-    expect(r.sql).toEqual([`ALTER PUBLICATION "${ABLO_PUBLICATION}" SET TABLE "documents";`]);
+    expect(r.sql).toEqual([`ALTER PUBLICATION "${ABLO_PUBLICATION}" SET TABLE "public"."documents";`]);
     expect(r.added).toEqual(['documents']);
     expect(r.removed).toEqual(['cb_agent_runs', 'cb_documents', 'cb_tasks']);
   });
@@ -398,7 +426,7 @@ describe('reconcilePublicationPlan — keep the publication equal to --tables', 
     const r = reconcilePublicationPlan({ exists: true, allTables: true, tables: [] }, ['documents']);
     expect(r.sql).toEqual([
       `DROP PUBLICATION IF EXISTS "${ABLO_PUBLICATION}";`,
-      `CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "documents";`,
+      `CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "public"."documents";`,
     ]);
     expect(r.recreated).toBe(true);
     expect(r.added).toEqual(['documents']);

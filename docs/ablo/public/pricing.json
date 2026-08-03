@@ -1,12 +1,12 @@
 {
   "$generated": "packages/ablo/scripts/generate-pricing-docs.mts",
-  "version": "2026-07-27",
+  "version": "2026-07-31",
   "currency": "USD",
   "billing": "monthly floor or metered usage, whichever is greater",
   "meters": [
     {
       "event": "api.commit_ops",
-      "label": "commit operations",
+      "label": "writes",
       "axis": "ops"
     },
     {
@@ -46,9 +46,9 @@
       "summary": "Build against the real engine without a card.",
       "monthlyMinimumUsd": 0,
       "contractPriced": false,
-      "hardCapOps": 1000000,
-      "hardCapOpsPerDay": 100000,
-      "monthlyOpsAllowance": 1000000,
+      "hardCapOps": 100000,
+      "hardCapOpsPerDay": 10000,
+      "monthlyOpsAllowance": 100000,
       "maxConcurrentConnections": 25,
       "storageGib": 1,
       "features": []
@@ -57,11 +57,11 @@
       "tier": "scale",
       "label": "Scale",
       "summary": "Production traffic, metered above a monthly floor.",
-      "monthlyMinimumUsd": 99,
+      "monthlyMinimumUsd": 20,
       "contractPriced": false,
       "hardCapOps": null,
       "hardCapOpsPerDay": null,
-      "monthlyOpsAllowance": 49500000,
+      "monthlyOpsAllowance": 10000000,
       "maxConcurrentConnections": 1000,
       "storageGib": 50,
       "features": [
@@ -92,7 +92,7 @@
     {
       "ops": 1000000,
       "billUsd": {
-        "scale": 99
+        "scale": 20
       }
     },
     {

@@ -23,7 +23,7 @@ app/
       route.ts              # mints a per-user ek_ token for the browser
   tasks/
     [id]/
-      page.tsx              # RSC: retrieve + render
+      page.tsx              # RSC: get + render
       actions.ts            # Server Action: claim, then write
       TaskEditor.tsx        # Client: live updates
 lib/
@@ -168,7 +168,6 @@ export async function markDone(id: string) {
     id,
     data: { status: 'done' },
     claim,
-    wait: 'confirmed',
   });
 
   return { status: 'done', task };

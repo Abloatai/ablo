@@ -1,5 +1,5 @@
 /**
- * Ack-based confirmation — the `wait: 'confirmed'` contract.
+ * Ack-based confirmation — the awaited model-write contract.
  *
  * A successful commit response carrying a real server watermark IS the
  * confirmation (the documented semantics, and how Replicache/Zero resolve

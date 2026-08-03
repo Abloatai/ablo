@@ -27,6 +27,7 @@ import {
   AbloConnectionError,
   AbloValidationError,
 } from '@abloatai/transaction/errors';
+import { footprintNamesFor } from '@abloatai/transaction/footprint';
 import {
   ABLO_PUBLICATION,
   ABLO_REPLICATION_ROLE,
@@ -296,13 +297,19 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // with seventeen published tables and four declared models it also silently
   // dropped thirteen from replication. The complaint was never caused by
   // publishing those tables; it was caused by CHECKING them.
-  const tables = args.tables;
   const coordinatedTables = (await schemaDeclaredTables()) ?? [];
+  const tables = args.tables.length > 0 ? args.tables : coordinatedTables;
+  if (tables.length === 0) {
+    throw new AbloValidationError(
+      `No mapped tables were found for schema ${args.schema}. Push the Ablo schema first, or pass --tables a,b,c. A project binding must enumerate its own schema-qualified tables; it cannot publish every table in a shared database.`,
+      { code: 'cli_invalid_arguments' }
+    );
+  }
   if (args.tables.length === 0) {
     console.log(
       pc.dim(
-        `  publishing every table${coordinatedTables.length > 0 ? `; readiness judged on the ${coordinatedTables.length} your schema declares` : ''} ` +
-          `(${pc.bold('--tables')} to publish only some)\n`
+        `  publishing the ${tables.length} table${tables.length === 1 ? '' : 's'} declared by your Ablo schema in ${pc.bold(args.schema)} ` +
+          `(${pc.bold('--tables')} to override)\n`
       )
     );
   }
@@ -323,11 +330,32 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     console.log(`  ${pc.yellow('!')} ${mismatch}\n`);
   }
 
+  const confirmed = connectTarget?.confirmed;
+  if (!confirmed?.branchId) {
+    throw new AbloConnectionError(
+      'Ablo could not confirm the branch this key targets, so it cannot derive an isolated database footprint safely. Check the API URL/key and re-run.',
+      { code: 'cli_database_unreachable' }
+    );
+  }
+  const footprint = footprintNamesFor({
+    organizationId: confirmed.organizationId,
+    branchId: confirmed.branchId,
+    ...(confirmed.projectId ? { projectId: confirmed.projectId } : {}),
+  });
+  const role = args.role === ABLO_REPLICATION_ROLE ? footprint.replicationRole : args.role;
+  const writeRole = args.writeRole === ABLO_WRITE_ROLE ? footprint.writeRole : args.writeRole;
+  const publication = footprint.publication;
+
   // Is this database already streaming to another plane? The registration guard
   // has always known, and only said so after a run had written two roles and a
   // publication. Asking first turns that into a refusal with nothing touched.
   const heldElsewhere = alreadyConnectedElsewhere(
-    await locateExistingConnection({ apiUrl: apiBaseUrl(), apiKey, connectionString: adminUrl })
+    await locateExistingConnection({
+      apiUrl: apiBaseUrl(),
+      apiKey,
+      connectionString: adminUrl,
+      schema: args.schema,
+    })
   );
   if (heldElsewhere) {
     console.error(`  ${pc.yellow('!')} ${heldElsewhere}\n`);
@@ -411,8 +439,8 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // membership (the common managed-Postgres shape), apply grants the admin that
   // inheritance itself, as the first stage of the plan, so the run proceeds with no
   // manual step. Only ownership it genuinely can't take over stops the run.
-  const ledger = await ledgerBlocker(admin).catch(() => null);
-  const foreignTables = await publishedTableBlockers(admin, tables).catch(() => []);
+  const ledger = await ledgerBlocker(admin, args.schema).catch(() => null);
+  const foreignTables = await publishedTableBlockers(admin, tables, args.schema).catch(() => []);
   const { inheritGrants, unresolved } = ownershipRemediation(
     [...(ledger ? [ledger] : []), ...foreignTables],
     capability.rolname
@@ -453,16 +481,20 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // different table set is the common cause of a "writer not ready" rejection: the
   // writer gets granted on the new tables while the publication still points at the
   // old ones. Reconciling keeps the two in step (see reconcilePublicationPlan).
-  const existingPublication = await readPublicationState(admin).catch(
+  const existingPublication = await readPublicationState(admin, {
+    schema: args.schema,
+    publication,
+  }).catch(
     (): PublicationState => ({ exists: false, allTables: false, tables: [] })
   );
-  const pubReconcile = reconcilePublicationPlan(existingPublication, tables);
+  const pubReconcile = reconcilePublicationPlan(existingPublication, tables, {
+    schema: args.schema,
+    publication,
+  });
 
   // 1e. The last read before anything is written: are the scoped roles already
   // here? `apply` creates roles and keeps an existing one's password, so it has
   // no new password to give Ablo for a role it finds. See reapplyBlocker.
-  const role = args.role && args.role.length > 0 ? args.role : ABLO_REPLICATION_ROLE;
-  const writeRole = args.writeRole && args.writeRole.length > 0 ? args.writeRole : ABLO_WRITE_ROLE;
   const existingRoles = await presentRoles(admin, [role, writeRole]).catch(() => []);
   // Rotate's nothing-to-re-key arm, now that the database has answered: no
   // registration AND no roles means a first connect wearing the wrong verb;
@@ -505,8 +537,10 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   const buildPlan = (mode: PasswordMode): readonly ApplyStep[] =>
     connectApplyPlan({
       tables,
-      role: args.role,
-      writeRole: args.writeRole,
+      role,
+      writeRole,
+      schema: args.schema,
+      publication,
       rotate: rotating,
       credentials: {
         replicationClause: passwordClause(replicationPassword, mode),
@@ -524,7 +558,7 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // operator sees the destructive part before confirming, not after.
   if (pubReconcile.removed.length > 0 || pubReconcile.recreated) {
     console.log(
-      `  ${pc.yellow('!')} ${pc.bold(ABLO_PUBLICATION)} already publishes a different set; reconciling to your ${pc.bold('--tables')}:`
+      `  ${pc.yellow('!')} ${pc.bold(publication)} already publishes a different set; reconciling to your mapped tables:`
     );
     for (const t of pubReconcile.added) console.log(`      ${pc.green('+')} ${t}`);
     for (const t of pubReconcile.removed)
@@ -617,9 +651,11 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // the engine would then refuse, with the refusal arriving later from Ablo's
   // network as a permission error against a role apply had just created.
   const replicationProbe = await probeAsRole(replicationUrl, (sql) =>
-    probeReadiness(sql, { coordinatedTables })
+    probeReadiness(sql, { coordinatedTables, schema: args.schema, publication })
   );
-  const writeProbe = await probeAsRole(writeUrl, probeDirectWriteReadiness);
+  const writeProbe = await probeAsRole(writeUrl, (sql) =>
+    probeDirectWriteReadiness(sql, { schema: args.schema, publication })
+  );
 
   // A refused credential is the one dial failure that says nothing about the
   // network: the database answered, and turned down the very password about to
@@ -689,6 +725,9 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
     replicationUrl,
     writeUrl,
     route: args.route,
+    schema: args.schema,
+    replicationSlot: footprint.slot,
+    publication,
   });
   // The stranded-credential window is over: from here the outcome itself says
   // whether recovery is needed, so the interrupt handler must not speak again.

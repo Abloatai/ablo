@@ -112,6 +112,7 @@ describe('runBranchDev', () => {
         apiKey: credential.api_key,
         branch: {
           id: branch.id,
+          projectId: branch.project_id,
           slug: branch.slug,
           expiresAt: credential.expires_at,
         },

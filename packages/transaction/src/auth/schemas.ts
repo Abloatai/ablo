@@ -7,6 +7,7 @@ import {
 } from './capability.js';
 import { AbloAuthenticationError } from '../errors.js';
 import { authTokenSchema } from './token.js';
+import { deliveryPartitionRouteSchema } from './deliveryPartition.js';
 
 // Not a second enum. The auth responses carry the same participant vocabulary
 // the coordination plane parses, so they validate against the same schema — a
@@ -24,6 +25,7 @@ export const IdentityResolveResponseSchema = z.object({
   branchId: z.string().min(1).nullable().default(null),
   branchRoot: z.boolean().default(false),
   syncGroups: z.array(z.string()),
+  deliveryPartition: deliveryPartitionRouteSchema.nullable().default(null),
   userMeta: z.record(z.string(), z.unknown()),
 });
 
@@ -46,6 +48,7 @@ export const EphemeralKeyResponseSchema = z.object({
   branchId: z.string().min(1).nullable().default(null),
   branchRoot: z.boolean().default(false),
   syncGroups: z.array(z.string()),
+  deliveryPartition: deliveryPartitionRouteSchema.nullable().default(null),
   /** Effective operation grant stored on the credential. Empty ONLY for a
    *  control-plane-only session, which grants no data operations by design. */
   operations: z.array(grantedOperationSchema),

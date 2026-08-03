@@ -607,8 +607,6 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
             ...(options?.ttl !== undefined ? { ttl: options.ttl } : {}),
           }),
       },
-      // The client-wide `wait` default; a per-call `wait` still wins.
-      internalOptions.wait,
     );
   }
 

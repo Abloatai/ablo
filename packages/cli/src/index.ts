@@ -705,6 +705,8 @@ import { schema } from './schema';
 // via the session route and never touches the key.
 export const sync = Ablo({
   apiKey: process.env.ABLO_API_KEY,${authLine}
+  projectId: process.env.ABLO_PROJECT_ID,
+  branchId: process.env.ABLO_BRANCH_ID,
   schema,
 });
 
@@ -752,7 +754,11 @@ function generateEnv(storage: InitStorage, opts: { includeApiKey?: boolean } = {
       'ABLO_WEBHOOK_SECRET=whsec_your_endpoint_secret_here\n'
     : '';
   const apiKeyBlock = includeApiKey
-    ? '# Ablo: a branch-bound sk_ key (`npx ablo dev` wires a development branch for you)\nABLO_API_KEY=sk_your_key_here\n'
+    ? '# Ablo: a branch-bound sk_ key (`npx ablo dev` wires both values for you).\n' +
+      '# Project + branch are assertions: the SDK rejects a key for another app or environment.\n' +
+      'ABLO_API_KEY=sk_your_key_here\n' +
+      'ABLO_PROJECT_ID=proj_your_project_id\n' +
+      'ABLO_BRANCH_ID=br_your_branch_id\n'
     : '';
   return `${apiKeyBlock}${webhookBlock}${databaseBlock}`;
 }
@@ -940,8 +946,7 @@ export async function POST(req: Request): Promise<Response> {
 }
 
 function generateAgent(): string {
-  return `import Ablo from '@abloatai/ablo';
-import { schema } from './schema';
+  return `import { sync as ablo } from './sync';
 
 /**
  * An AI "teammate" that works the same synced tasks a human does.
@@ -951,8 +956,6 @@ import { schema } from './schema';
  * \`npx ablo logs\`. That's the whole idea: agents and people on one typed,
  * synced dataset.
  */
-const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
-
 async function main() {
   await ablo.ready();
 
@@ -970,7 +973,6 @@ async function main() {
     data: { priority: 10 },
     readAt: snap.stamp,
     onStale: 'reject',
-    wait: 'confirmed',
   });
   console.log('prioritized:', urgent.title);
 

@@ -124,17 +124,18 @@ const OWNERSHIP_FROM = `
  */
 export async function publishedTableBlockers(
   sql: postgres.Sql,
-  tables: readonly string[]
+  tables: readonly string[],
+  schema = 'public'
 ): Promise<readonly OwnershipBlocker[]> {
   const scoped = tables.length > 0;
   const raw = await sql.unsafe(
     `SELECT format('%I.%I', n.nspname, c.relname) AS relation, ${OWNERSHIP_COLUMNS}
      ${OWNERSHIP_FROM}
       WHERE c.relkind = 'r'
-        AND n.nspname = 'public'
+        AND n.nspname = $${scoped ? '2' : '1'}
         AND c.relname <> 'ablo_idempotency'
         ${scoped ? 'AND c.relname = ANY($1)' : ''}`,
-    (scoped ? [tables] : []) as never[]
+    (scoped ? [tables, schema] : [schema]) as never[]
   );
   return ownershipBlockers(z.array(ownedRelationRowSchema).parse(raw));
 }
@@ -146,13 +147,17 @@ export async function publishedTableBlockers(
  * writer access to it and, on an upgrade, alters it — both reserved for the
  * owner — so surface it now rather than fail partway.
  */
-export async function ledgerBlocker(sql: postgres.Sql): Promise<OwnershipBlocker | null> {
+export async function ledgerBlocker(
+  sql: postgres.Sql,
+  schema = 'public'
+): Promise<OwnershipBlocker | null> {
   const raw = await sql.unsafe(
     `SELECT format('%I.%I', n.nspname, c.relname) AS relation, ${OWNERSHIP_COLUMNS}
      ${OWNERSHIP_FROM}
       WHERE c.relkind = 'r'
-        AND n.nspname = 'public'
-        AND c.relname = 'ablo_idempotency'`
+        AND n.nspname = $1
+        AND c.relname = 'ablo_idempotency'`,
+    [schema] as never[]
   );
   const rows = z.array(ownedRelationRowSchema).parse(raw);
   const row = rows[0];

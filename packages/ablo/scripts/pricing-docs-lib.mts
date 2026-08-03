@@ -14,6 +14,7 @@ import {
   BILLABLE_METER_EVENTS,
   ERROR_CODES,
   METER_EVENT_AXIS,
+  METER_EVENT_COUNTS,
   METER_EVENT_LABEL,
   OPS_RATE_CARD,
   PLANS,
@@ -162,7 +163,9 @@ export function renderPricingMdx(): string {
   );
   push('');
   push(
-    `The daily figure on ${PLANS.free.label} is a burst guard rather than an allowance. A month of operations is roughly ten minutes of one agent running flat out, so without it a single runaway loop could spend the month in an afternoon. Paid tiers have no daily limit, because they are metered rather than stopped.`,
+    `The daily figure on ${PLANS.free.label} is a burst guard rather than an allowance. A month of operations is a short burst for one agent running flat out, so a monthly cap alone would let a runaway loop spend it in an afternoon. The daily figure is what spreads the month over at least ${Math.ceil(
+      (PLANS.free.hardCapOps ?? 0) / (PLANS.free.hardCapOpsPerDay ?? 1),
+    )} days. Paid tiers have no daily limit, because they are metered rather than stopped.`,
   );
   push('');
 
@@ -188,31 +191,29 @@ export function renderPricingMdx(): string {
 
   push('## What counts as an operation');
   push('');
-  push('One number covers everything the engine does on your behalf.');
+  push(
+    'An operation is every time someone does something: changes something, reads something, or takes ownership of something. One number covers all three.',
+  );
   push('');
   push('| Meter | Counts |');
   push('| --- | --- |');
-  const meterCounts: Record<MeterEvent, string> = {
-    'api.commit_ops': 'One per operation inside a commit. A commit that writes 500 rows counts 500.',
-    'api.model_reads': 'One per read request served by the engine.',
-    'api.claim_creates': 'One per claim taken. Releasing a claim is free.',
-    'api.bootstraps': 'Recorded, never charged. Connecting a client is free.',
-  };
   for (const meter of BILLABLE_METER_EVENTS) {
-    push(`| ${METER_EVENT_LABEL[meter]} | ${meterCounts[meter]} |`);
+    push(`| ${METER_EVENT_LABEL[meter]} | ${METER_EVENT_COUNTS[meter]} |`);
   }
   push('');
   push(
-    'A commit counts the same whether it arrived over HTTP or over the WebSocket. The transport is not part of the price.',
+    'A write counts the same whether it arrived over HTTP or over the WebSocket. The transport is not part of the price.',
   );
   push('');
-  push('Three rules decide whether a request is counted at all:');
+  // The local-read rule used to sit here as a third bullet. It belongs on the
+  // read meter, which is the only place it applies, and stating it twice reads
+  // as two different rules.
+  push('Two rules decide whether a request is counted at all:');
   push('');
   push('1. Only successful requests count. A rejected or failed request is never metered.');
   push(
-    '2. A retry with the same `Idempotency-Key` counts once. The key the SDK puts on a commit is the same key the meter deduplicates on.',
+    '2. A retry with the same `Idempotency-Key` counts once. The key the SDK puts on a write is the same key the meter deduplicates on.',
   );
-  push('3. Reads a client answers from its own local copy never reach the engine, so they never count.');
   push('');
 
   push('## Rate card');

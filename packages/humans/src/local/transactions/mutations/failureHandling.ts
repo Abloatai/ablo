@@ -131,8 +131,8 @@ export async function handleFailure(ctx: FailureHandlingContext, transaction: Qu
       }
 
       ctx.emit('transaction:failed', { transaction, error, permanent: true });
-      // The id-suffixed event is what `waitForConfirmation` (the
-      // `wait:'confirmed'` path) listens on — without it a permanently
+      // The id-suffixed event is what the awaited model-write promise listens
+      // on through `waitForConfirmation` — without it a permanently
       // rejected write left the caller's promise hanging forever.
       ctx.emit(`transaction:failed:${transaction.id}`, { error });
       return;

@@ -52,7 +52,7 @@ describe('SyncClient model-write staging', () => {
 
     await Promise.all(
       models.map(async (model) => {
-        client.add(model, { wait: 'confirmed' });
+        client.add(model);
         await Promise.resolve();
         await client.syncNow();
         await client.waitForConfirmation('Task', model.id);

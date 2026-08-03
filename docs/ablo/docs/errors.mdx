@@ -5,7 +5,7 @@ sidebar:
   icon: circle-alert
 ---
 
-Error contract version: `2026-07-23` (also sent on the `Ablo-Version` response header).
+Error contract version: `2026-07-30` (also sent on the `Ablo-Version` response header).
 
 Every error — over HTTP or WebSocket — carries the same envelope:
 
@@ -1178,6 +1178,12 @@ The offline grace window expired before this commit could be sent, so it was not
 `HTTP 503` · not retryable
 
 The plane's data source is not in a verified, resolvable state. Fix its registration, secret, or configuration; Ablo will not fall through to hosted storage.
+
+### delivery_partition_mismatch
+
+`HTTP 503` · retryable
+
+The connection reached a gateway that does not own its delivery partition. Retry through the cell router.
 
 ### exchange_malformed_response
 

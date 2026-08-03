@@ -184,7 +184,6 @@ export function updateTool<
             id,
             data: options.apply(current, input),
             claim,
-            wait: 'confirmed',
           });
           return { status: 'written', row };
         } finally {

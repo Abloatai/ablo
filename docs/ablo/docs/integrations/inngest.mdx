@@ -60,7 +60,6 @@ export const approveOrder = inngest.createFunction(
         id: orderId,
         data: { status: 'approved', approvalNote },
         idempotencyKey: `${operationId}:approve-order:${orderId}`,
-        wait: 'confirmed',
       }),
     );
   },
@@ -101,7 +100,7 @@ For every mutating step:
 1. Accept a stable business operation ID in the triggering event.
 2. Derive a separate key for each logical effect.
 3. Reuse the key and mutation body for every retry.
-4. Use `wait: 'confirmed'` when later steps depend on the authoritative result.
+4. Await every model write before a later step depends on its authoritative result.
 5. Treat reuse of a key with another body as an application bug.
 6. Keep the complete retry horizon within Ablo's documented
    [idempotency retention window](/idempotency).
@@ -135,7 +134,6 @@ await step.run('apply-order-review', () =>
     id: orderId,
     data: { status: 'approved', approvalNote },
     idempotencyKey: `${operationId}:apply-order-review:${orderId}`,
-    wait: 'confirmed',
   }),
 );
 ```
@@ -169,7 +167,6 @@ await step.run('apply-review-with-claim', async () => {
       data: { status: 'approved', approvalNote },
       claim,
       idempotencyKey: `${operationId}:apply-review:${orderId}`,
-      wait: 'confirmed',
     });
   } finally {
     await claim.release();

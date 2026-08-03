@@ -445,7 +445,7 @@ describe('stateless HTTP commit outbox', () => {
     expect(outbox.records.size).toBe(0);
   });
 
-  it('applies queued-versus-confirmed durability to per-model HTTP writes', async () => {
+  it('always confirms per-model HTTP writes before resolving', async () => {
     const outbox = new MemoryCommitOutbox();
     let responseNumber = 0;
     const client = createHttpTransport({
@@ -477,13 +477,8 @@ describe('stateless HTTP commit outbox', () => {
 
     await expect(client.model('tasks').update({
       ...update,
-      wait: 'queued',
-    })).resolves.toMatchObject({ status: 'queued' });
-    expect(outbox.records.size).toBe(1);
-    await expect(client.model('tasks').update({
-      ...update,
-      wait: 'confirmed',
     })).resolves.toMatchObject({ status: 'confirmed', lastSyncId: 88 });
+    expect(responseNumber).toBe(3);
     expect(outbox.records.size).toBe(0);
   });
 

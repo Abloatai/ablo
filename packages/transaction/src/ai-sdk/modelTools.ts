@@ -100,7 +100,6 @@ export function createTool<TInput, T, CreateInput>(
       const row = await model.create({
         data: options.data(input),
         ...(id !== undefined ? { id } : {}),
-        wait: 'confirmed',
       });
       return { status: 'created', row };
     },
@@ -156,7 +155,7 @@ export function deleteTool<TInput, T, Fields = T>(
         };
       }
       try {
-        await model.delete({ id, claim, wait: 'confirmed' });
+        await model.delete({ id, claim });
         return { status: 'deleted', id };
       } finally {
         await claim.release();

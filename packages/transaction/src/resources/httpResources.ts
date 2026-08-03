@@ -276,7 +276,6 @@ export interface ModelMutationOptions extends ClaimedOptions {
   readonly idempotencyKey?: string | null;
   readonly readAt?: number | null;
   readonly onStale?: OnStaleMode | null;
-  readonly wait?: CommitWait;
   readonly claim?: Claim | ClaimOptions | null;
   /** Fencing token (Option B) from the claim; server-validated at commit. */
   readonly fenceToken?: number | null;

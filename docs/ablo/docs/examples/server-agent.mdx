@@ -65,7 +65,6 @@ export async function completeTask(taskId: string, workerId: string) {
   const updated = await ablo.tasks.update({
     id: claim.data.id,
     data: { status: 'done' },
-    wait: 'confirmed',
   });
 
   return { status: 'done', task: updated };
@@ -75,8 +74,8 @@ export async function completeTask(taskId: string, workerId: string) {
 
 `get({ id })` is an async server read — it hits the server and returns the
 row (or `undefined`, which the early `not_found` guard handles). The update runs
-while the claim is held, and `wait: 'confirmed'` makes it resolve only once your
-database has confirmed the row landed.
+while the claim is held; awaiting it resolves only once your database has
+confirmed the row landed.
 
 The two options on the claim:
 

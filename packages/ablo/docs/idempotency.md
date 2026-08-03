@@ -14,7 +14,6 @@ await ablo.tasks.update({
   id: taskId,
   data: { status: 'done' },
   idempotencyKey: `task:${taskId}:mark-done:v1`,
-  wait: 'confirmed',
 });
 ```
 

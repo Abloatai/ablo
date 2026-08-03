@@ -517,7 +517,7 @@ an agent pointed at the entities it's working on. You **never hand-write**
    const ablo = Ablo({ schema, apiKey: session.token });
    ```
 
-2. **Automatically, on read or claim.** Reading a row (`retrieve`/`get`/
+2. **Automatically, on read or claim.** Reading a row (`get`/
    `claim.state`) auto-enrolls the client in that row's entity group
    (**read-interest**), and `claim`-ing it pins a **write-intent** subscription.
    So an agent's reachable set **accretes** as it works — no extra subscribe call.

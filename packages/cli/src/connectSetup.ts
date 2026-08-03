@@ -66,7 +66,11 @@ function quoteLiteral(value: string): string {
  * new identity column on one of the same tables is covered without widening the
  * grant to sequences that belong to tables you did not publish.
  */
-function scopedSequenceGrant(tables: readonly string[], writeRole: string): string {
+function scopedSequenceGrant(
+  tables: readonly string[],
+  writeRole: string,
+  schema: string
+): string {
   const names = tables.map(quoteLiteral).join(', ');
   return `DO $$
 DECLARE seq regclass;
@@ -77,7 +81,7 @@ BEGIN
     JOIN pg_class s ON s.oid = d.objid AND s.relkind = 'S'
     JOIN pg_class t ON t.oid = d.refobjid
     JOIN pg_namespace n ON n.oid = t.relnamespace
-    WHERE d.deptype IN ('a', 'i') AND n.nspname = 'public' AND t.relname IN (${names})
+    WHERE d.deptype IN ('a', 'i') AND n.nspname = ${quoteLiteral(schema)} AND t.relname IN (${names})
   LOOP
     EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO ${quoteIdent(writeRole)}', seq);
   END LOOP;
@@ -100,20 +104,25 @@ export function connectSetupSql(input: {
   readonly tables?: readonly string[];
   readonly role?: string;
   readonly writeRole?: string;
+  readonly schema?: string;
+  readonly publication?: string;
 }): readonly string[] {
   const role = input.role && input.role.length > 0 ? input.role : ABLO_REPLICATION_ROLE;
   const writeRole =
     input.writeRole && input.writeRole.length > 0 ? input.writeRole : ABLO_WRITE_ROLE;
   const tables = input.tables ?? [];
+  const schema = input.schema ?? 'public';
+  const publication = input.publication ?? ABLO_PUBLICATION;
+  const qualifiedTables = tables.map((table) => `${quoteIdent(schema)}.${quoteIdent(table)}`);
   const publicationTarget =
-    tables.length > 0 ? `FOR TABLE ${tables.map(quoteIdent).join(', ')}` : 'FOR ALL TABLES';
+    tables.length > 0 ? `FOR TABLE ${qualifiedTables.join(', ')}` : 'FOR ALL TABLES';
 
-  const tableList = tables.map(quoteIdent).join(', ');
+  const tableList = qualifiedTables.join(', ');
   const scoped = tables.length > 0;
 
   const applicationGrant = scoped
     ? `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE ${tableList} TO ${quoteIdent(writeRole)};`
-    : `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${quoteIdent(writeRole)};`;
+    : `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${quoteIdent(schema)} TO ${quoteIdent(writeRole)};`;
 
   // The replication role reads the published tables for the initial snapshot.
   // Scoped to exactly those tables when you name them — no access to the rest of
@@ -122,26 +131,28 @@ export function connectSetupSql(input: {
   const replicationReadGrants = scoped
     ? [`GRANT SELECT ON TABLE ${tableList} TO ${quoteIdent(role)};`]
     : [
-        `GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${quoteIdent(role)};`,
-        `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO ${quoteIdent(role)};`,
+        `GRANT SELECT ON ALL TABLES IN SCHEMA ${quoteIdent(schema)} TO ${quoteIdent(role)};`,
+        `ALTER DEFAULT PRIVILEGES IN SCHEMA ${quoteIdent(schema)} GRANT SELECT ON TABLES TO ${quoteIdent(role)};`,
       ];
 
   // The writer needs each published table's owned sequences (SERIAL / identity
   // columns). Scoped to those tables' sequences when you name them.
   const writerSequenceGrants = scoped
-    ? [scopedSequenceGrant(tables, writeRole)]
-    : [`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${quoteIdent(writeRole)};`];
+    ? [scopedSequenceGrant(tables, writeRole, schema)]
+    : [`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${quoteIdent(schema)} TO ${quoteIdent(writeRole)};`];
 
-  const ledger = idempotencyLedgerMigrations().map((migration) => migration.up);
+  const ledger = idempotencyLedgerMigrations(schema).map((migration) => migration.up);
 
   return [
     // 1. Turn on logical decoding. Requires a restart (it's not reloadable).
     `ALTER SYSTEM SET wal_level = 'logical';`,
     // 2. Publish the tables Ablo should read.
-    `CREATE PUBLICATION ${quoteIdent(ABLO_PUBLICATION)} ${publicationTarget};`,
+    `CREATE PUBLICATION ${quoteIdent(publication)} ${publicationTarget};`,
     // 3. A least-privilege role: it can stream replication and SELECT the
-    // published tables, nothing more.
-    `CREATE ROLE ${quoteIdent(role)} WITH REPLICATION LOGIN PASSWORD '<password>';`,
+    // published tables, including the initial snapshot of RLS-protected tables.
+    // Logical decoding already exposes every published row independently of
+    // RLS; BYPASSRLS makes the ordinary SELECT snapshot match that same scope.
+    `CREATE ROLE ${quoteIdent(role)} WITH NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE REPLICATION NOINHERIT LOGIN PASSWORD '<password>';`,
     ...replicationReadGrants,
     // 4. A distinct DML role: no replication, role administration, ownership,
     // schema creation, or DDL. It runs NOBYPASSRLS with row_security on, so on a
@@ -162,7 +173,7 @@ export function connectSetupSql(input: {
 DO $$ BEGIN
   EXECUTE format('REVOKE TEMPORARY, CREATE ON DATABASE %I FROM PUBLIC', current_database());
 END $$;`,
-    `GRANT USAGE ON SCHEMA public TO ${quoteIdent(writeRole)};`,
+    `GRANT USAGE ON SCHEMA ${quoteIdent(schema)} TO ${quoteIdent(writeRole)};`,
     applicationGrant,
     ...writerSequenceGrants,
     ...(scoped
@@ -170,14 +181,14 @@ END $$;`,
       : [
           // "All tables" mode only: keep future tables/sequences writable so the
           // publication doesn't outgrow the grant.
-          `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${quoteIdent(writeRole)};`,
-          `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${quoteIdent(writeRole)};`,
+          `ALTER DEFAULT PRIVILEGES IN SCHEMA ${quoteIdent(schema)} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${quoteIdent(writeRole)};`,
+          `ALTER DEFAULT PRIVILEGES IN SCHEMA ${quoteIdent(schema)} GRANT USAGE, SELECT ON SEQUENCES TO ${quoteIdent(writeRole)};`,
         ]),
     // 5. Direct uses the durable replay ledger but deliberately no outbox.
     ...ledger,
-    `REVOKE ALL ON TABLE public.ablo_idempotency FROM PUBLIC;`,
-    `GRANT SELECT, INSERT, UPDATE ON TABLE public.ablo_idempotency TO ${quoteIdent(writeRole)};`,
-    `REVOKE DELETE ON TABLE public.ablo_idempotency FROM ${quoteIdent(writeRole)};`,
+    `REVOKE ALL ON TABLE ${quoteIdent(schema)}.${quoteIdent('ablo_idempotency')} FROM PUBLIC;`,
+    `GRANT SELECT, INSERT, UPDATE ON TABLE ${quoteIdent(schema)}.${quoteIdent('ablo_idempotency')} TO ${quoteIdent(writeRole)};`,
+    `REVOKE DELETE ON TABLE ${quoteIdent(schema)}.${quoteIdent('ablo_idempotency')} FROM ${quoteIdent(writeRole)};`,
     // The writer emits a transactional marker on your WAL so Ablo can correlate
     // the committed row back to the originating write and confirm it — this
     // EXECUTE grant is what makes that confirmation possible. Granted by lookup
@@ -234,13 +245,16 @@ export interface PublicationReconcile {
  */
 export function reconcilePublicationPlan(
   current: PublicationState,
-  desiredTables: readonly string[]
+  desiredTables: readonly string[],
+  opts: { readonly schema?: string; readonly publication?: string } = {}
 ): PublicationReconcile {
-  const pub = quoteIdent(ABLO_PUBLICATION);
+  const pub = quoteIdent(opts.publication ?? ABLO_PUBLICATION);
+  const schema = opts.schema ?? 'public';
+  const qualified = (table: string): string => `${quoteIdent(schema)}.${quoteIdent(table)}`;
   const desiredAll = desiredTables.length === 0;
   const target = desiredAll
     ? 'FOR ALL TABLES'
-    : `FOR TABLE ${desiredTables.map(quoteIdent).join(', ')}`;
+    : `FOR TABLE ${desiredTables.map(qualified).join(', ')}`;
 
   if (!current.exists) {
     return {
@@ -273,7 +287,7 @@ export function reconcilePublicationPlan(
     return { sql: [], added: [], removed: [], recreated: false };
   }
   return {
-    sql: [`ALTER PUBLICATION ${pub} SET TABLE ${desiredTables.map(quoteIdent).join(', ')};`],
+    sql: [`ALTER PUBLICATION ${pub} SET TABLE ${desiredTables.map(qualified).join(', ')};`],
     added,
     removed,
     recreated: false,
@@ -281,17 +295,22 @@ export function reconcilePublicationPlan(
 }
 
 /** Read the current membership of `ablo_publication` so a re-run can reconcile it. */
-export async function readPublicationState(sql: postgres.Sql): Promise<PublicationState> {
+export async function readPublicationState(
+  sql: postgres.Sql,
+  opts: { readonly schema?: string; readonly publication?: string } = {}
+): Promise<PublicationState> {
+  const publication = opts.publication ?? ABLO_PUBLICATION;
+  const schema = opts.schema ?? 'public';
   const pubRows = await sql.unsafe<{ puballtables: boolean }[]>(
     `SELECT puballtables FROM pg_publication WHERE pubname = $1`,
-    [ABLO_PUBLICATION] as never[]
+    [publication] as never[]
   );
   const pubRow = pubRows[0];
   if (!pubRow) return { exists: false, allTables: false, tables: [] };
   if (pubRow.puballtables) return { exists: true, allTables: true, tables: [] };
   const tableRows = await sql.unsafe<{ tablename: string }[]>(
-    `SELECT tablename FROM pg_publication_tables WHERE pubname = $1 AND schemaname = 'public' ORDER BY tablename`,
-    [ABLO_PUBLICATION] as never[]
+    `SELECT tablename FROM pg_publication_tables WHERE pubname = $1 AND schemaname = $2 ORDER BY tablename`,
+    [publication, schema] as never[]
   );
   return { exists: true, allTables: false, tables: tableRows.map((r) => r.tablename) };
 }
@@ -302,6 +321,7 @@ interface WalLevelRow {
 interface RoleReplRow {
   rolreplication: boolean;
   rolsuper: boolean;
+  rolbypassrls: boolean;
 }
 interface PublicationRow {
   puballtables: boolean;
@@ -335,6 +355,7 @@ export async function probeReadiness(
   sql: postgres.Sql,
   opts: {
     readonly publication?: string;
+    readonly schema?: string;
     /**
      * The tables Ablo actually coordinates — its schema's models. When given,
      * the replica-identity check considers only these.
@@ -352,6 +373,7 @@ export async function probeReadiness(
   } = {}
 ): Promise<readonly CheckItem[]> {
   const publication = opts.publication ?? ABLO_PUBLICATION;
+  const schema = opts.schema ?? 'public';
   const coordinated =
     opts.coordinatedTables && opts.coordinatedTables.length > 0
       ? new Set(opts.coordinatedTables)
@@ -401,7 +423,7 @@ export async function probeReadiness(
 
   // 3. The connected role must have REPLICATION (superuser implies it).
   const roleRows = await sql.unsafe<RoleReplRow[]>(
-    `SELECT rolreplication, rolsuper FROM pg_roles WHERE rolname = current_user`
+    `SELECT rolreplication, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
   );
   const role = roleRows[0];
   const hasReplication = Boolean(role && (role.rolreplication || role.rolsuper));
@@ -424,12 +446,37 @@ export async function probeReadiness(
   //    'd' (DEFAULT) is usable only when the table has a primary key; 'n'
   //    (NOTHING) is never usable; 'f' (FULL) and 'i' (USING INDEX) are always fine.
   if (pubRows.length > 0) {
+    const rlsRows = await sql.unsafe<{ table_name: string }[]>(
+      `SELECT DISTINCT pt.tablename AS table_name
+         FROM pg_publication_tables pt
+         JOIN pg_namespace n ON n.nspname = pt.schemaname
+         JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = pt.tablename
+        WHERE pt.pubname = $1 AND pt.schemaname = $2
+          AND row_security_active(c.oid)
+        ORDER BY table_name`,
+      [publication, schema] as never[]
+    );
+    const rlsRelevant = coordinated
+      ? rlsRows.filter((row) => coordinated.has(row.table_name))
+      : rlsRows;
+    items.push(
+      rlsRelevant.length === 0
+        ? { ok: true, label: 'the initial snapshot can read every published row' }
+        : {
+            ok: false,
+            label: `${rlsRelevant.length} published table${rlsRelevant.length === 1 ? '' : 's'} hide historical rows behind RLS`,
+            fix:
+              `ALTER ROLE current_user WITH BYPASSRLS;\n` +
+              `Logical replication already exposes every published row; this lets the ordinary initial SELECT read that same scope.`,
+          }
+    );
+
     const badRows = await sql.unsafe<BadReplicaIdentityRow[]>(
       `SELECT c.relname AS table_name, c.relreplident
          FROM pg_publication_tables pt
          JOIN pg_class c ON c.relname = pt.tablename
          JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = pt.schemaname
-        WHERE pt.pubname = $1
+        WHERE pt.pubname = $1 AND pt.schemaname = $2
           AND (
             c.relreplident = 'n'
             OR (
@@ -440,7 +487,7 @@ export async function probeReadiness(
               )
             )
           )`,
-      [publication] as never[]
+      [publication, schema] as never[]
     );
     const relevant = coordinated
       ? badRows.filter((row) => coordinated.has(row.table_name))
@@ -454,7 +501,7 @@ export async function probeReadiness(
             fix: relevant
               .map(
                 (r) =>
-                  `${r.table_name}: add a PRIMARY KEY, or ALTER TABLE ${quoteIdent(r.table_name)} REPLICA IDENTITY FULL;`
+                  `${r.table_name}: add a PRIMARY KEY, or ALTER TABLE ${quoteIdent(schema)}.${quoteIdent(r.table_name)} REPLICA IDENTITY FULL;`
               )
               .join('\n'),
           }
@@ -498,6 +545,9 @@ export async function registerDirectDataSource(opts: {
   readonly replicationUrl: string;
   readonly writeUrl: string;
   readonly route: DirectDataSourceRoute;
+  readonly schema?: string;
+  readonly replicationSlot?: string;
+  readonly publication?: string;
 }): Promise<boolean> {
   const result = await tryControlPlane({
     path: '/v1/datasources',
@@ -509,6 +559,9 @@ export async function registerDirectDataSource(opts: {
       connectionString: opts.replicationUrl,
       writeConnectionString: opts.writeUrl,
       route: opts.route,
+      ...(opts.schema ? { schema: opts.schema } : {}),
+      ...(opts.replicationSlot ? { replicationSlot: opts.replicationSlot } : {}),
+      ...(opts.publication ? { publication: opts.publication } : {}),
     },
     responseSchema: datasourceSummarySchema,
   });

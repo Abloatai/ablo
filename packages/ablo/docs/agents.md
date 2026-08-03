@@ -147,7 +147,7 @@ default caller here, not a bolt-on.
 
 ```text
 something happens ──▶ your agent (HTTP, no socket)
-  (a job, a webhook,     read context (list/retrieve)
+  (a job, a webhook,     read context (list/get)
    a queue message)      claim → work → commit
                          done — no held connection
 ```

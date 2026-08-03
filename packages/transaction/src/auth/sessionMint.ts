@@ -98,6 +98,7 @@ export async function mintSession<S extends SchemaRecord>(
         operations: res.operations,
         participantKind: 'user',
         participantId: res.participantId,
+        deliveryPartition: res.deliveryPartition,
       },
       userMeta: params.userMeta ?? { id: res.participantId },
     };

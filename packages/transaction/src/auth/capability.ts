@@ -27,6 +27,7 @@ import { z } from 'zod';
 import { participantKindSchema } from '../coordination/schema.js';
 import { syncGroupInputSchema } from '../schema/roles.js';
 import { authTokenSchema } from './token.js';
+import { deliveryPartitionRouteSchema } from './deliveryPartition.js';
 
 /**
  * The verbs a grant can name — the whole vocabulary, in one place. Every other
@@ -253,6 +254,7 @@ export const capabilityScopeSchema = z.object({
   operations: z.array(grantedOperationSchema),
   participantKind: participantKindSchema,
   participantId: z.string().min(1),
+  deliveryPartition: deliveryPartitionRouteSchema.nullable().default(null),
 });
 export type CapabilityScope = z.infer<typeof capabilityScopeSchema>;
 

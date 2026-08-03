@@ -313,7 +313,7 @@ four axes. `claim({ id })` alone is a complete call; each axis is opt-in.
 
 | name | type | required | description |
 |---|---|---|---|
-| `id` | `string` | yes | The row id: same id as `retrieve` / `update`. |
+| `id` | `string` | yes | The row id: same id as `get` / `update`. |
 | `options.fields` | field selector | no | Claim fields declared by the model's Zod schema instead of the whole row: `fields: (task) => task.status`, or `fields: (task) => [task.status, task.title]` for several. The model supplies its own fields, so autocomplete is exact, a typo does not compile, and a schema rename is a compile error at every use. Two sets conflict where they intersect, so holders of disjoint fields do not wait for each other; see [claiming part of a row](#claiming-part-of-a-row). |
 
 *What others see* — the presence half:
@@ -510,7 +510,7 @@ summary into the same snapshot immediately.
 
 **You don't subscribe to anything first.** Reading or claiming a row
 automatically enrolls you in that row's sync group: reading it (including
-`retrieve`/`get`, or `claim.state` itself) gives you **read-interest**, and
+`get`, or `claim.state` itself) gives you **read-interest**, and
 `claim`-ing it gives you a **pinned write-intent**. So `claim.state({ id })`
 observes co-participants on that row from **any** client — a browser, a Server
 Action, or a Node agent — and a holder sees its own claim, with no manual

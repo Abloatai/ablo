@@ -18,6 +18,7 @@ export type {
   ModelListScope,
   ServerReadOptions,
   ModelRetrieveParams,
+  ModelWriteOptions,
   ModelCreateParams,
   ModelUpdateParams,
   ModelDeleteParams,

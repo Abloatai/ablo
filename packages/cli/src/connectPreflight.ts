@@ -213,7 +213,9 @@ export function rotateWithoutConnection(input: {
 
 /** Where a database is already connected, as `POST /v1/datasources/locate`
  *  answers it — the wire contract's own `held` shape, never restated. */
-export type HeldElsewhere = NonNullable<DatasourceLocationResponse['held']>;
+export type HeldElsewhere =
+  | NonNullable<DatasourceLocationResponse['held']>
+  | { readonly private: true };
 
 /**
  * Ask Ablo whether this database is already streaming to another plane, before
@@ -230,13 +232,17 @@ export async function locateExistingConnection(input: {
   readonly apiUrl: string;
   readonly apiKey: string;
   readonly connectionString: string;
+  readonly schema?: string;
 }): Promise<HeldElsewhere | null> {
   const result = await tryControlPlane({
     path: '/v1/datasources/locate',
     method: 'POST',
     baseUrl: input.apiUrl,
     apiKey: input.apiKey,
-    body: { connectionString: input.connectionString },
+    body: {
+      connectionString: input.connectionString,
+      ...(input.schema ? { schema: input.schema } : {}),
+    },
     responseSchema: datasourceLocationResponseSchema,
   });
   // Every failure — an unreachable control plane, a deployment without the
@@ -244,18 +250,24 @@ export async function locateExistingConnection(input: {
   // absence of an answer is not evidence of a conflict, and registration
   // remains the authority either way.
   if (!result.ok) return null;
-  return result.value.held;
+  if (result.value.held) return result.value.held;
+  return result.value.available === false ? { private: true } : null;
 }
 
 /** The refusal for a database already streaming to another plane, or null. */
 export function alreadyConnectedElsewhere(held: HeldElsewhere | null): string | null {
   if (!held) return null;
+  if ('private' in held) {
+    return (
+      'This database schema is already connected to another Ablo organization. ' +
+      'Ablo does not reveal that organization’s project or branch.'
+    );
+  }
   const where = held.project
     ? `project ${held.project}, branch ${held.branch}`
     : `branch ${held.branch}`;
   return (
-    `This database is already connected to ${where}. Ablo streams a database from ` +
-    'one plane at a time, so registering it here would take the change stream over ' +
-    'from the plane that has it.'
+    `This database schema is already connected to ${where}. A (database, schema) ` +
+    'binding belongs to one plane at a time.'
   );
 }

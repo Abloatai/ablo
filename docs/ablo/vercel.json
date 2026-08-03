@@ -3,5 +3,12 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "framework": null,
+  "redirects": [
+    {
+      "source": "/examples",
+      "destination": "/examples/ai-sdk-tool",
+      "permanent": true
+    }
+  ],
   "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ."
 }

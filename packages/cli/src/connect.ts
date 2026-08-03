@@ -43,7 +43,13 @@ import {
 } from '@abloatai/transaction/errors';
 import pc from 'picocolors';
 import postgres from 'postgres';
-import { ABLO_FOOTPRINT, type FootprintKind } from '@abloatai/transaction/footprint';
+import {
+  ABLO_FOOTPRINT,
+  ABLO_REPLICATION_SLOT,
+  footprintNamesFor,
+  type FootprintKind,
+  type FootprintNames,
+} from '@abloatai/transaction/footprint';
 import {
   readProjectWriteDatabaseUrl,
   readProjectReplicationUrlWithSource,
@@ -51,8 +57,12 @@ import {
 } from './dbRole';
 import { ambientEnvKeyNote, resolveMutationApiKey, resolveRuntimeApiKey } from './config';
 import { apiBaseUrl, requestControlPlane } from './controlPlane';
-import { datasourceLocationResponseSchema } from '@abloatai/transaction/wire';
+import {
+  datasourceLocationResponseSchema,
+  datasourceResnapshotResponseSchema,
+} from '@abloatai/transaction/wire';
 import { brand } from './theme';
+import { resolveTarget } from './target';
 import {
   describeRemoteFailure,
   dialFailureReason,
@@ -101,6 +111,8 @@ export interface ConnectArgs {
    * answer to "what if a role credential leaks?"
    */
   rotate: boolean;
+  /** `resnapshot`: recreate only the replication slot and atomically reload current rows. */
+  resnapshot: boolean;
   /**
    * `--url <conn>`: the admin connection string `apply` / `rotate` provision
    * through, passed transiently rather than left in the environment. Falls back
@@ -130,6 +142,8 @@ export interface ConnectArgs {
    * empty (the default), the publication covers all tables.
    */
   tables: readonly string[];
+  /** `--schema <name>`: application schema bound to this Ablo project. */
+  schema: string;
   /** `--role <name>`: name for the replication role (default `ablo_replicator`). */
   role: string;
   /** `--write-role <name>`: scoped DML role (default `ablo_writer`). */
@@ -159,6 +173,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
   let register = false;
   let apply = false;
   let rotate = false;
+  let resnapshot = false;
   let url: string | undefined;
   let envFile: string | undefined;
   let yes = false;
@@ -167,6 +182,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
   let locate = false;
   let manual = false;
   let tables: readonly string[] = [];
+  let schema = 'public';
   let role = ABLO_REPLICATION_ROLE;
   let writeRole = ABLO_WRITE_ROLE;
   let route: DirectDataSourceRoute = 'public-allowlist';
@@ -188,6 +204,9 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
       case 'rotate':
         rotate = true;
         break;
+      case 'resnapshot':
+        resnapshot = true;
+        break;
       case 'scan':
         scan = true;
         break;
@@ -196,7 +215,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
         break;
       default:
         throw new AbloValidationError(
-          `unknown connect subcommand: ${lead} (expected register, deregister, check, apply, rotate, scan, locate)`,
+          `unknown connect subcommand: ${lead} (expected register, deregister, check, apply, rotate, resnapshot, scan, locate)`,
           { code: 'cli_invalid_arguments' }
         );
     }
@@ -230,6 +249,9 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
           .filter((t) => t.length > 0);
         break;
       }
+      case '--schema':
+        schema = argv[++i] ?? schema;
+        break;
       case '--role':
         role = argv[++i] ?? role;
         break;
@@ -261,6 +283,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
     register,
     apply,
     rotate,
+    resnapshot,
     url,
     envFile,
     yes,
@@ -268,6 +291,7 @@ export function parseConnectArgs(argv: readonly string[]): ConnectArgs {
     scan,
     locate,
     tables,
+    schema,
     role,
     writeRole,
     route,
@@ -285,6 +309,7 @@ export function printConnectRecipe(args: ConnectArgs): void {
     tables: args.tables,
     role: args.role,
     writeRole: args.writeRole,
+    schema: args.schema,
   });
 
   console.log(
@@ -616,22 +641,34 @@ const FOOTPRINT_LOOKUP: Readonly<Record<FootprintKind, string>> = {
  * bookkeeping table, or the replication slot that Ablo actually leaves behind.
  */
 export async function auditTenantSyncInfra(
-  sql: postgres.Sql
+  sql: postgres.Sql,
+  opts: { readonly schema?: string; readonly names?: FootprintNames } = {}
 ): Promise<readonly SyncInfraArtifact[]> {
   const artifacts: SyncInfraArtifact[] = [];
   for (const artifact of ABLO_FOOTPRINT) {
+    const name = opts.names
+      ? artifact.name === ABLO_PUBLICATION
+        ? opts.names.publication
+        : artifact.name === ABLO_REPLICATION_SLOT
+          ? opts.names.slot
+          : artifact.name === ABLO_REPLICATION_ROLE
+            ? opts.names.replicationRole
+            : artifact.name === ABLO_WRITE_ROLE
+              ? opts.names.writeRole
+              : artifact.name
+      : artifact.name;
     // Tables and types are resolved through the search path; a publication,
     // slot, or role is cluster- or database-wide and has no schema.
     const key =
       artifact.kind === 'table' || artifact.kind === 'type'
-        ? `public.${artifact.name}`
-        : artifact.name;
+        ? `${artifact.retired ? 'public' : (opts.schema ?? 'public')}.${name}`
+        : name;
     const rows = await sql.unsafe<{ present: boolean | null }[]>(FOOTPRINT_LOOKUP[artifact.kind], [
       key,
     ] as never[]);
     artifacts.push({
       kind: artifact.kind,
-      name: artifact.name,
+      name,
       present: rows[0]?.present === true,
       purpose: artifact.purpose,
       ...(artifact.hazard ? { hazard: artifact.hazard } : {}),
@@ -700,7 +737,8 @@ type LocalProbeOutcome =
  */
 async function probeAndReport(
   dbUrl: string,
-  kind: 'replication' | 'write' = 'replication'
+  kind: 'replication' | 'write' = 'replication',
+  opts: { readonly schema?: string; readonly publication?: string } = {}
 ): Promise<LocalProbeOutcome> {
   // Bounded dial, mirroring the engine's own preflight: a black-holed host
   // must surface as a dial failure, not pin the command forever.
@@ -708,7 +746,9 @@ async function probeAndReport(
   let items: readonly CheckItem[];
   try {
     items =
-      kind === 'replication' ? await probeReadiness(sql) : await probeDirectWriteReadiness(sql);
+      kind === 'replication'
+        ? await probeReadiness(sql, opts)
+        : await probeDirectWriteReadiness(sql, opts);
   } catch (err) {
     await sql.end({ timeout: 2 }).catch(() => undefined);
     const dial = dialFailureReason(err);
@@ -858,9 +898,9 @@ async function runRegister(args: ConnectArgs): Promise<void> {
   // actually uses — and refuses with the full checklist if the database isn't
   // ready. Only a probe that CONNECTED and found failures stops us here.
   console.log(`  ${pc.bold('Replication role')}\n`);
-  const replication = await probeAndReport(dbUrl, 'replication');
+  const replication = await probeAndReport(dbUrl, 'replication', { schema: args.schema });
   console.log(`\n  ${pc.bold('Direct-write role')}\n`);
-  const write = await probeAndReport(writeDbUrl, 'write');
+  const write = await probeAndReport(writeDbUrl, 'write', { schema: args.schema });
   const noDial = [
     replication.kind === 'no-dial' ? `replication: ${replication.reason}` : null,
     write.kind === 'no-dial' ? `write: ${write.reason}` : null,
@@ -889,16 +929,41 @@ async function runRegister(args: ConnectArgs): Promise<void> {
     replicationUrl: dbUrl,
     writeUrl: writeDbUrl,
     route: args.route,
+    schema: args.schema,
   });
   process.exit(registered ? 0 : 1);
 }
 
-async function runScan(): Promise<void> {
+async function runScan(args: ConnectArgs): Promise<void> {
   const dbUrl = requireScopedUrl('replication', 'scan');
   const sql = postgres(dbUrl, { max: 1, prepare: false, onnotice: () => {} });
   let artifacts: readonly SyncInfraArtifact[];
   try {
-    artifacts = await auditTenantSyncInfra(sql);
+    const apiKey = resolveRuntimeApiKey().key;
+    const target = apiKey
+      ? await resolveTarget({ url: apiBaseUrl(), apiKey, keySource: 'env' }).catch(() => null)
+      : null;
+    const confirmed = target?.confirmed;
+    const names = confirmed?.branchId
+      ? footprintNamesFor({
+          organizationId: confirmed.organizationId,
+          branchId: confirmed.branchId,
+          ...(confirmed.projectId ? { projectId: confirmed.projectId } : {}),
+        })
+      : undefined;
+    const isolated = await auditTenantSyncInfra(sql, {
+      schema: args.schema,
+      ...(names ? { names } : {}),
+    });
+    const legacy = names
+      ? await auditTenantSyncInfra(sql, { schema: args.schema })
+      : [];
+    artifacts = [...isolated, ...legacy].filter(
+      (artifact, index, all) =>
+        all.findIndex(
+          (candidate) => candidate.kind === artifact.kind && candidate.name === artifact.name
+        ) === index
+    );
   } catch (err) {
     const pg = (err ?? {}) as PgErrorLike;
     await sql.end({ timeout: 2 });
@@ -997,23 +1062,30 @@ async function runLocate(args: ConnectArgs): Promise<void> {
     path: '/v1/datasources/locate',
     method: 'POST',
     apiKey,
-    body: { connectionString: url },
+    body: { connectionString: url, schema: args.schema },
     responseSchema: datasourceLocationResponseSchema,
   });
+  if (answer.available === false && !answer.held) {
+    console.log(
+      `  ${pc.yellow('!')} ${pc.bold(label)} schema ${pc.bold(args.schema)} is connected to another organization.\n` +
+        pc.dim(`    Its project and branch are private. Use another schema or provider database URL.\n`)
+    );
+    return;
+  }
   if (!answer.held) {
     console.log(
-      `  ${pc.green('✓')} No plane holds ${pc.bold(label)} — ${pc.bold('ablo connect apply')} can register it here.\n`
+      `  ${pc.green('✓')} No plane holds ${pc.bold(`${label}/${args.schema}`)} — ${pc.bold('ablo connect apply')} can register it here.\n`
     );
     return;
   }
   console.log(
     `  ${pc.yellow('!')} ${pc.bold(label)} is connected to ${
       answer.held.project ? `project ${pc.bold(answer.held.project)}, ` : ''
-    }branch ${pc.bold(answer.held.branch)}.\n`
+    }branch ${pc.bold(answer.held.branch)}.\n`,
   );
   console.log(
     pc.dim(
-      `    Ablo streams a database from one plane at a time. To move it, disconnect it there\n` +
+      `    Ablo binds one plane to each database schema. To move this schema, disconnect it there\n` +
         `    first — run `
     ) +
       pc.cyan('ablo connect deregister') +
@@ -1025,6 +1097,42 @@ async function runLocate(args: ConnectArgs): Promise<void> {
       pc.bold('ablo projects list --json') +
       pc.dim('.') +
       '\n'
+  );
+}
+
+/** Recreate only the WAL slot and let the server's normal recovery path take a
+ * fresh atomic snapshot. The DataSource registration and both credentials stay
+ * in place; `connect check` is the asynchronous completion poll. */
+async function runResnapshot(): Promise<void> {
+  const apiKey = resolveMutationApiKey();
+  if (!apiKey) {
+    throw new AbloAuthenticationError(
+      'No branch-bound secret key found. Set ABLO_API_KEY to the sk_ key for the branch to resnapshot.',
+      { code: 'cli_api_key_missing' },
+    );
+  }
+  console.log(
+    `\n  ${brand('ablo')} ${pc.dim('connect resnapshot')}  ${pc.dim('reload existing rows')}\n`,
+  );
+  const result = await requestControlPlane({
+    path: '/v1/datasources/resnapshot',
+    method: 'POST',
+    apiKey,
+    body: {},
+    responseSchema: datasourceResnapshotResponseSchema,
+  });
+  if (result.replication_slot?.released === false) {
+    console.log(`  ${pc.yellow('—')} Snapshot reset recorded, but the old slot is still active.`);
+    if (result.replication_slot.detail) console.log(`  ${pc.dim(result.replication_slot.detail)}`);
+    if (result.replication_slot.remove_with) {
+      console.log(`  ${pc.dim('Remove it with:')} ${pc.bold(result.replication_slot.remove_with)}`);
+    }
+    console.log(`\n  Re-run ${pc.bold('ablo connect resnapshot')} after releasing it.\n`);
+    process.exit(1);
+  }
+  console.log(
+    `  ${pc.green('✓')} Fresh snapshot requested. The DataSource and credentials were kept.\n` +
+      `  ${pc.dim(`Run ${pc.bold('ablo connect check')} until the existing-row load is complete.`)}\n`,
   );
 }
 
@@ -1061,12 +1169,16 @@ export async function connect(argv: readonly string[]): Promise<void> {
     await runCheck();
     return;
   }
+  if (args.resnapshot) {
+    await runResnapshot();
+    return;
+  }
   if (args.register) {
     await runRegister(args);
     return;
   }
   if (args.scan) {
-    await runScan();
+    await runScan(args);
     return;
   }
   if (args.locate) {
@@ -1120,6 +1232,7 @@ export const CONNECT_USAGE = `  ablo connect — connect your own database
     npx ablo connect deregister           Disconnect this project's database — Ablo stops reading and writing it
     npx ablo connect check                Confirm the connected database is ready, from Ablo's side (needs only ABLO_API_KEY)
     npx ablo connect rotate               New passwords for both logins, then re-register
+    npx ablo connect resnapshot           Recreate only the slot and reload existing rows
     npx ablo connect scan                 List anything Ablo ever set up in your database (read-only, never drops)
     npx ablo connect locate               See which plane holds this database (read-only; nothing is changed)
 
@@ -1134,6 +1247,7 @@ export const CONNECT_USAGE = `  ablo connect — connect your own database
     --url <admin-conn>   Admin connection used once to set up (else DATABASE_URL); never stored
     --env-file <path>    Explicitly load DATABASE_URL and ABLO_API_KEY from this file
     --tables a,b,c       Publish only these tables (default: all tables)
+    --schema <name>      Bind this project to one database schema (default: public)
     --role <name>        Name the replication role (default: ablo_replicator)
     --write-role <name>  Name the DML role (default: ablo_writer)
     --route <route>      public-allowlist | privatelink | peering | vpn

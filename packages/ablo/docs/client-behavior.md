@@ -57,11 +57,15 @@ const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
 const local = ablo.weatherReports.local.get('report_stockholm');
 
 await ablo.weatherReports.create({ data: { location: 'Stockholm', status: 'pending' } });
-await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' }, wait: 'confirmed' });
-await ablo.weatherReports.delete({ id: 'report_stockholm', wait: 'confirmed' });
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' } });
+await ablo.weatherReports.delete({ id: 'report_stockholm' });
 ```
 
-Call `retrieve`/`list` first — they fetch from the server and you `await` them.
+On the reactive client, each model write changes local state optimistically
+before the call returns. Its promise always waits for authoritative
+confirmation, so `await update(...)` is the confirmation barrier.
+
+Call `get`/`list` first — they fetch from the server and you `await` them.
 After that, `local.get`/`local.list`/`local.count` read the already-synced data instantly with
 no `await`, and stay reactive in render. Use the async pair to load, the sync trio
 to read.
@@ -87,7 +91,6 @@ await ablo.weatherReports.update({
   data: patch,
   readAt: snap.stamp,
   onStale: 'reject',
-  wait: 'confirmed',
 });
 ```
 
@@ -109,7 +112,6 @@ it for reads, but it bypasses claims and ordering.
 await ablo.weatherReports.update({
   id: 'report_stockholm',
   data: { status: 'ready' },
-  wait: 'confirmed',
   readAt: snap.stamp,
   onStale: 'reject',
   idempotencyKey: 'report_stockholm:mark-ready:v1',
@@ -118,7 +120,6 @@ await ablo.weatherReports.update({
 
 | Option | Purpose |
 |---|---|
-| `wait` | `queued` resolves after local queueing; `confirmed` waits for server acceptance. |
 | `readAt` | State cursor the write was based on. |
 | `onStale` | Policy when the target changed after `readAt`. Prefer `reject`. |
 | `idempotencyKey` | Stable key for retry-safe writes. The SDK generates one when omitted. |
@@ -180,7 +181,7 @@ All SDK errors extend `AbloError` and carry a stable `type`.
 import { AbloClaimedError } from '@abloatai/ablo';
 
 try {
-  await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' }, wait: 'confirmed' });
+  await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' } });
 } catch (error) {
   if (error instanceof AbloClaimedError) {
     return { status: 'claimed' };

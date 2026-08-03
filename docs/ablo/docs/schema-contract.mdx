@@ -87,7 +87,7 @@ const pending = ablo.weatherReports.local.list({ where: { status: 'pending' } })
 Use model writes for every actor:
 
 ```ts
-await ablo.weatherReports.update({ id: reportId, data: { status: 'ready' }, wait: 'confirmed' });
+await ablo.weatherReports.update({ id: reportId, data: { status: 'ready' } });
 ```
 
 ## Coordination

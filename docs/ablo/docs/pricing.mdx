@@ -5,7 +5,7 @@ sidebar:
   icon: receipt
 ---
 
-Pricing version: `2026-07-27`.
+Pricing version: `2026-07-31`.
 
 You pay a monthly floor, or your metered usage, whichever is greater. Usage is charged **against** the floor rather than added to it, so an organization on Scale that sends nothing pays the floor, and one that sends four times the floor pays four times the floor. There is no separate subscription line.
 
@@ -13,8 +13,8 @@ You pay a monthly floor, or your metered usage, whichever is greater. Usage is c
 
 | | Monthly | Operations included | Per day | Connections | Storage |
 | --- | --- | --- | --- | --- | --- |
-| **Free** | $0 | 1M | 100K | 25 | 1 GiB |
-| **Scale** | $99 | 49.5M | No limit | 1,000 | 50 GiB |
+| **Free** | $0 | 100K | 10K | 25 | 1 GiB |
+| **Scale** | $20 | 10M | No limit | 1,000 | 50 GiB |
 | **Enterprise** | From $2,000 | Committed | No limit | Committed | Committed |
 
 **Free.** Build against the real engine without a card.
@@ -23,9 +23,9 @@ You pay a monthly floor, or your metered usage, whichever is greater. Usage is c
 
 **Enterprise.** Committed volume, private networking, and an uptime guarantee.
 
-On Free, 1M operations is a hard stop: requests past it are refused rather than billed, so there is no way to run up a bill without a card. On every paid tier the figure is what the floor already covers at the rate card below, and operations past it are metered.
+On Free, 100K operations is a hard stop: requests past it are refused rather than billed, so there is no way to run up a bill without a card. On every paid tier the figure is what the floor already covers at the rate card below, and operations past it are metered.
 
-The daily figure on Free is a burst guard rather than an allowance. A month of operations is roughly ten minutes of one agent running flat out, so without it a single runaway loop could spend the month in an afternoon. Paid tiers have no daily limit, because they are metered rather than stopped.
+The daily figure on Free is a burst guard rather than an allowance. A month of operations is a short burst for one agent running flat out, so a monthly cap alone would let a runaway loop spend it in an afternoon. The daily figure is what spreads the month over at least 10 days. Paid tiers have no daily limit, because they are metered rather than stopped.
 
 | Included | Free | Scale | Enterprise |
 | --- | --- | --- | --- |
@@ -37,21 +37,20 @@ The daily figure on Free is a burst guard rather than an allowance. A month of o
 
 ## What counts as an operation
 
-One number covers everything the engine does on your behalf.
+An operation is every time someone does something: changes something, reads something, or takes ownership of something. One number covers all three.
 
 | Meter | Counts |
 | --- | --- |
-| commit operations | One per operation inside a commit. A commit that writes 500 rows counts 500. |
-| model reads | One per read request served by the engine. |
-| claim creates | One per claim taken. Releasing a claim is free. |
+| writes | One every time someone changes something. Adding, editing, and removing all count the same, and changing 500 things is 500 operations however they are sent. |
+| model reads | One every time someone reads something the engine answers. Reads a client already has locally never reach us and never count. |
+| claim creates | One every time someone takes ownership of a row so others wait their turn. Holding it and releasing it are free. |
 
-A commit counts the same whether it arrived over HTTP or over the WebSocket. The transport is not part of the price.
+A write counts the same whether it arrived over HTTP or over the WebSocket. The transport is not part of the price.
 
-Three rules decide whether a request is counted at all:
+Two rules decide whether a request is counted at all:
 
 1. Only successful requests count. A rejected or failed request is never metered.
-2. A retry with the same `Idempotency-Key` counts once. The key the SDK puts on a commit is the same key the meter deduplicates on.
-3. Reads a client answers from its own local copy never reach the engine, so they never count.
+2. A retry with the same `Idempotency-Key` counts once. The key the SDK puts on a write is the same key the meter deduplicates on.
 
 ## Rate card
 
@@ -67,7 +66,8 @@ Rates are marginal. Crossing a band reprices the operations above it and leaves 
 
 | Monthly operations | Scale |
 | --- | --- |
-| 1M | $99 |
+| 100K | $20 |
+| 1M | $20 |
 | 50M | $100 |
 | 500M | $640 |
 | 1B | $940 |

@@ -27,6 +27,7 @@ import {
   loadSchema,
   pushSchema,
   fmtSignal,
+  schemaPushPlaneHint,
   DEFAULT_SCHEMA_PATH,
   DEFAULT_EXPORT,
 } from './push';
@@ -49,6 +50,7 @@ export interface DevRuntimeOptions {
   apiKey?: string;
   branch?: {
     id: string;
+    projectId: string;
     slug: string;
     expiresAt: string;
   };
@@ -136,13 +138,24 @@ export function classifyKey(
  * short description of which it did. It also adds `.env.local` to `.gitignore`
  * when nothing already covers it, so the secret can't be committed.
  */
-export function wireEnvLocal(apiKey: string, cwd: string = process.cwd()): string {
+export function wireEnvLocal(
+  apiKey: string,
+  cwd: string = process.cwd(),
+  projectId?: string,
+  branchId?: string
+): string {
   const envPath = resolve(cwd, '.env.local');
   const line = `ABLO_API_KEY=${apiKey}`;
+  const projectLine = projectId ? `ABLO_PROJECT_ID=${projectId}` : null;
+  const branchLine = branchId ? `ABLO_BRANCH_ID=${branchId}` : null;
 
   let action: string;
   if (!existsSync(envPath)) {
-    writeFileSync(envPath, `${line}\n`, { mode: 0o600 });
+    writeFileSync(
+      envPath,
+      `${line}\n${projectLine ? `${projectLine}\n` : ''}${branchLine ? `${branchLine}\n` : ''}`,
+      { mode: 0o600 }
+    );
     action = `Created ${pc.bold('.env.local')} with ${pc.bold('ABLO_API_KEY')}`;
   } else {
     const content = readFileSync(envPath, 'utf8');
@@ -157,6 +170,22 @@ export function wireEnvLocal(apiKey: string, cwd: string = process.cwd()): strin
     } else {
       writeFileSync(envPath, content.replace(/^ABLO_API_KEY=.*$/m, line));
       action = `Updated ${pc.bold('ABLO_API_KEY')} in ${pc.bold('.env.local')} ${pc.dim(`(was ${existing.slice(0, 12)}…)`)}`;
+    }
+    if (projectLine) {
+      const next = readFileSync(envPath, 'utf8');
+      if (/^ABLO_PROJECT_ID=.*$/m.test(next)) {
+        writeFileSync(envPath, next.replace(/^ABLO_PROJECT_ID=.*$/m, projectLine));
+      } else {
+        appendFileSync(envPath, `${next.endsWith('\n') || next.length === 0 ? '' : '\n'}${projectLine}\n`);
+      }
+    }
+    if (branchLine) {
+      const next = readFileSync(envPath, 'utf8');
+      if (/^ABLO_BRANCH_ID=.*$/m.test(next)) {
+        writeFileSync(envPath, next.replace(/^ABLO_BRANCH_ID=.*$/m, branchLine));
+      } else {
+        appendFileSync(envPath, `${next.endsWith('\n') || next.length === 0 ? '' : '\n'}${branchLine}\n`);
+      }
     }
   }
 
@@ -252,9 +281,10 @@ async function runPush(schema: Schema, args: DevArgs): Promise<{ ok: boolean; me
     // rather than leaving the developer to hand-write SQL. It is triggered by any
     // connection string whose default role can bypass row-level security.
     const hint =
-      body.code === 'database_role_cannot_enforce_rls'
+      schemaPushPlaneHint(body.code) ??
+      (body.code === 'database_role_cannot_enforce_rls'
         ? `Run ${pc.bold('npx ablo migrate')} — it creates the scoped role for you (your DB credential never leaves this machine).`
-        : `Schema authoring needs a branch-bound ${pc.bold('sk_')} key with ${pc.bold('schema:push')} — manage keys at ${pc.cyan('https://abloatai.com')}.`;
+        : `Schema authoring needs a branch-bound ${pc.bold('sk_')} key with ${pc.bold('schema:push')} — manage keys at ${pc.cyan('https://abloatai.com')}.`);
     return {
       ok: false,
       message:
@@ -337,7 +367,9 @@ export async function dev(
   // already in the environment (CI / explicit export) it's flowing — don't
   // touch the developer's files.
   if (runtime.branch) {
-    console.log(`\n  ${pc.green('✓')} ${wireEnvLocal(args.apiKey!)}`);
+    console.log(
+      `\n  ${pc.green('✓')} ${wireEnvLocal(args.apiKey!, process.cwd(), runtime.branch.projectId, runtime.branch.id)}`
+    );
     console.log(
       `  ${pc.dim(`Temporary branch credential expires ${runtime.branch.expiresAt}; rerun ablo dev to rotate it.`)}`,
     );

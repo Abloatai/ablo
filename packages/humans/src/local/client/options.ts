@@ -88,6 +88,21 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
   apiKey?: string | CredentialProvider | null | undefined;
 
   /**
+   * Pins this client to one Ablo project. During `ready()` the server resolves
+   * the API key's actual project and the client refuses to start when it differs.
+   * Defaults to `ABLO_PROJECT_ID`; `ablo dev` writes that value beside the key.
+   * This is an assertion, never a routing selector — the key remains authoritative.
+   */
+  projectId?: string | null | undefined;
+
+  /**
+   * Pins this client to one immutable Ablo branch. Defaults to
+   * `ABLO_BRANCH_ID`; `ablo dev` writes it beside the branch key. Like
+   * `projectId`, this is a startup assertion and never selects a branch.
+   */
+  branchId?: string | null | undefined;
+
+  /**
    * The session-mint endpoint — the browser-side auth field, and the named
    * endpoint for the route that mints the signed-in user's short-lived token:
    *
@@ -230,34 +245,6 @@ export interface AbloOptions<S extends SchemaRecord = SchemaRecord> {
    * session token (`ek_`/`rk_`) or you route through a controlled server proxy.
    */
   dangerouslyAllowBrowser?: boolean | undefined;
-
-  /**
-   * How far a write goes before its promise settles, for every model write on
-   * this client. The same word each write already takes per call
-   * (`create({ …, wait: 'confirmed' })`); setting it here makes it the default
-   * instead of repeating it.
-   *
-   * A write resolves as soon as it is applied locally and queued. That is what
-   * makes the UI immediate, and it is right for most writes — but it means a
-   * write the server later REFUSES has no caller left to tell. The rejection
-   * reverts the local row and reaches `ablo.onMutationFailure(…)`, and an
-   * application that subscribes to neither shows the change, then loses it,
-   * with nothing thrown anywhere.
-   *
-   * ```ts
-   * const ablo = new Ablo({ schema, apiKey, wait: 'confirmed' });
-   * try {
-   *   await ablo.documents.update({ id, data });   // throws if refused
-   * } catch (err) {
-   *   if (err instanceof AbloError) show(err.message);
-   * }
-   * ```
-   *
-   * The cost is real: each write now waits for the server's answer, so it is a
-   * choice between immediacy and certainty rather than a strict improvement.
-   * A per-call `wait` still wins over this.
-   */
-  wait?: 'queued' | 'confirmed' | undefined;
 }
 
 export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
@@ -273,6 +260,9 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
    * the original available as `cause`.
    */
   apiKey?: string | CredentialProvider | null | undefined;
+
+  /** Expected project assertion; see {@link AbloOptions.projectId}. */
+  projectId?: string | null | undefined;
 
   /**
    * Session-mint endpoint (string or async resolver) — see
@@ -521,15 +511,11 @@ export interface InternalAbloOptions<S extends SchemaRecord = SchemaRecord> {
   organizationId?: string;
 
   /**
-   * Immutable branch selected by a self-hosted credential. Hosted clients
-   * receive this from the credential exchange.
+   * Expected immutable branch. Hosted clients compare it with the credential
+   * exchange; self-hosted clients use it as their locally selected branch.
    */
   branchId?: string;
 
   /** Whether the selected self-hosted branch is the project's root branch. */
   branchRoot?: boolean;
-
-  /** The client-wide write default — see {@link AbloOptions.wait}. Projected
-   *  from the public option rather than restated, so the two cannot diverge. */
-  wait?: AbloOptions['wait'];
 }

@@ -35,7 +35,7 @@ export default defineConfig({
 
   logo: {
     image: { light: "/logo/light.svg", dark: "/logo/dark.svg", alt: "Ablo" },
-    href: "https://abloatai.com",
+    href: "https://www.abloatai.com",
   },
 
   theme: {

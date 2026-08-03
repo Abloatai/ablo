@@ -44,7 +44,7 @@ await ablo.ready();
 const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
 if (!report) throw new Error('Row not found');
 
-await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' }, wait: 'confirmed' });
+await ablo.weatherReports.update({ id: 'report_stockholm', data: { status: 'ready' } });
 ```
 
 For end-to-end app setup across React, existing backends, Data Source, and
@@ -94,9 +94,11 @@ await ablo.weatherReports.update({
   data: { status: 'ready' },
   readAt: snap.stamp,
   onStale: 'reject',
-  wait: 'confirmed',
 });
 ```
+
+Reactive local state changes optimistically at call time; awaiting the model
+write waits for authoritative confirmation.
 
 Protected write options:
 
@@ -104,7 +106,6 @@ Protected write options:
 |---|---|
 | `readAt` | The state cursor the write was based on. |
 | `onStale` | Stale-state policy. Prefer `reject` for agent writes. |
-| `wait` | `queued` resolves after local queueing; `confirmed` waits for server acceptance. |
 | `idempotencyKey` | Stable key for retry-safe writes. The SDK generates one when omitted. |
 | `timeout` | Maximum time to wait for the write call. |
 

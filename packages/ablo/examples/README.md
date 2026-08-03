@@ -21,7 +21,7 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 Then:
 
 - create with `ablo.weatherReports.create`
-- read with `ablo.weatherReports.retrieve` or `ablo.weatherReports.list`
+- read with `ablo.weatherReports.get` or `ablo.weatherReports.list`
 - coordinate long-running work with `ablo.weatherReports.claim`
 - write with `ablo.weatherReports.update`
 - dispose the client when the worker finishes

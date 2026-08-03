@@ -46,7 +46,7 @@ Sort any action you're about to take into one of these, and the right move
 follows.
 
 **Run freely — read-only or reversible.**
-Reads (`retrieve`, `list`, `get`), `ablo check`, and `ablo pull` observe and
+Reads (`get`, `list`), `ablo check`, and `ablo pull` observe and
 never change anything. Previews — `--show-sql`, `--dry-run` — print the exact
 SQL a command would run without executing it. Model writes through
 `ablo.<model>.create` / `update` are claim-checked, optimistic, rolled back if
@@ -95,7 +95,7 @@ read-only checks:
   Read-only, like `prisma db pull`.
 - `--show-sql` / `--dry-run` on `connect` and `migrate` — the exact statements,
   printed and unexecuted, so you approve the SQL before it runs.
-- Read the row and its claim state before you write — `retrieve` / `list`, and
+- Read the row and its claim state before you write — `get` / `list`, and
   `ablo.<model>.claim.state({ id })` for who is already working on it.
 
 The pattern underneath all of it is steady: reads and model writes flow freely

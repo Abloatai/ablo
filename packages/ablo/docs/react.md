@@ -143,7 +143,7 @@ const reports = useAblo((ablo) =>
 const report = await ablo.weatherReports.get({ id });
 ```
 
-Use `retrieve` in Server Components when the row may not be in the local pool
+Use `get` in Server Components when the row may not be in the local pool
 yet — it hydrates from the local store and the server, and returns a Promise, so
 `await` it. (Server reads come in two shapes: `get({ id })` for one row and
 `list({ where })` for many; both are async. The synchronous local reads are
@@ -162,7 +162,6 @@ await ablo.weatherReports.update({
   data: patch,
   readAt: snap.stamp,
   onStale: 'reject',
-  wait: 'confirmed',
 });
 ```
 
@@ -180,7 +179,6 @@ async function markReady() {
     data: { status: 'ready' },
     readAt: snap.stamp,
     onStale: 'reject',
-    wait: 'confirmed',
   });
 }
 ```

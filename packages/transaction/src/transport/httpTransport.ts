@@ -1433,7 +1433,6 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         idempotencyKey: options.idempotencyKey,
         readAt: options.readAt,
         onStale: options.onStale,
-        wait: options.wait,
         claim: options.claim,
       },
       `${modelName} ${action}`
@@ -1476,7 +1475,10 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           method,
           idempotencyKey: clientTxId,
           body: requestBody,
-          wait: options?.wait ?? 'confirmed',
+          // Model methods have one promise contract: authoritative
+          // confirmation. Early queued receipts remain available through the
+          // lower-level `commits.create` lifecycle surface.
+          wait: 'confirmed',
         },
         beforeSettlement
       );
@@ -1837,7 +1839,6 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
             mutateModel('update', name, id, patch, {
               readAt,
               onStale: 'reject',
-              wait: 'confirmed',
             }),
         });
       }
@@ -1879,13 +1880,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
             name,
             id,
             params.data,
-            {
-              ...options,
-              // This method returns the authoritative row, not a receipt. A
-              // queued source acceptance cannot satisfy that return contract,
-              // even when the caller supplied `wait: 'queued'`.
-              wait: 'confirmed',
-            },
+            options,
             async () => {
               const read = await retrieveModel<T>(name, { id });
               if (read.data === undefined) {

@@ -17,7 +17,7 @@ let the claim release when your callback returns:
 const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
 
 await using claim = await ablo.weatherReports.claim({ id: 'report_stockholm' });
-await ablo.weatherReports.update({ id: claim.data.id, data: { status: 'ready' }, wait: 'confirmed' });
+await ablo.weatherReports.update({ id: claim.data.id, data: { status: 'ready' } });
 ```
 
 Claims don't lock. If another writer holds the row, `claim` waits for them,
@@ -32,7 +32,7 @@ of clobbering.
 | `Model` | State | The generated `ablo.<model>` model. Use `retrieve`/`list` (async reads), `local.get`/`local.list`/`local.count` (the same verbs, synchronous and local-only), `create`, `update`, and `delete`. |
 | `Claim` | Coordination | Who is working on a target. Taken via `ablo.<model>.claim({ id })` and read via `ablo.<model>.claim.state({ id })`. Ephemeral — never persisted. |
 | `Commit` | Protocol | The durable write underneath model updates. Most users do not call it directly. |
-| `Receipt` | Protocol | The lower-level durable result for custom runtimes. Schema writes use `wait: 'confirmed'`. |
+| `Receipt` | Protocol | The lower-level durable result for custom runtimes. Awaiting a schema write waits for confirmation. |
 
 ### Why each primitive is separate
 
@@ -57,7 +57,7 @@ A normal schema-backed run is:
 const report = await ablo.weatherReports.get({ id });
 const active = ablo.weatherReports.claim.state({ id });
 await using claim = await ablo.weatherReports.claim({ id });
-await ablo.weatherReports.update({ id: claim.data.id, data: patch, wait: 'confirmed' });
+await ablo.weatherReports.update({ id: claim.data.id, data: patch });
 ```
 
 `get({ id })` is an async server read (await it). `claim.state({ id })` is a

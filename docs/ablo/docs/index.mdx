@@ -17,7 +17,6 @@ await using claim = await ablo.reports.claim({ id: reportId });
 await ablo.reports.update({
   id: claim.data.id,
   data: { forecast: await generateForecast(claim.data) },
-  wait: 'confirmed',
 });
 ```
 

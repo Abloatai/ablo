@@ -57,7 +57,7 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
     expect(grantsStep?.sql).toEqual(expectedGrants({}));
   });
 
-  it('creates a role that is absent, and re-running never touches one that exists', () => {
+  it('creates a role that is absent, and re-running never changes an existing password', () => {
     // `apply` is safe to re-run, which is NOT the same as "re-running re-keys".
     // A second apply against a database another connection is using must leave
     // that connection's credential working — the earlier shape recovered from
@@ -70,9 +70,15 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
       const sql = roleSql(key);
       expect(sql).toContain('IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname =');
       expect(sql).toContain('CREATE ROLE');
-      expect(sql).not.toContain('ALTER ROLE');
+      expect(sql).not.toMatch(/ALTER ROLE[^;]*PASSWORD/);
     }
-    expect(roleSql('replication-role')).toContain('WITH REPLICATION LOGIN');
+    expect(roleSql('replication-role')).toContain('REPLICATION NOINHERIT LOGIN');
+    // Required on an existing pre-snapshot role: WAL already sees every
+    // published row, and the ordinary initial SELECT must see the same scope.
+    expect(roleSql('replication-role')).toContain(
+      'ALTER ROLE "ablo_replicator" WITH BYPASSRLS',
+    );
+    expect(roleSql('write-role')).not.toContain('ALTER ROLE');
   });
 
   it('rotate is the one verb that re-keys an existing role', () => {
@@ -109,7 +115,7 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
       credentials: CREDS,
     });
     const pub = custom.find((s) => s.key === 'publication')?.sql.join('\n') ?? '';
-    expect(pub).toContain('FOR TABLE "tasks", "projects"');
+    expect(pub).toContain('FOR TABLE "public"."tasks", "public"."projects"');
     expect(custom.find((s) => s.key === 'replication-role')?.sql.join('\n')).toContain('"my_reader"');
     expect(custom.find((s) => s.key === 'write-role')?.sql.join('\n')).toContain('"my_writer"');
     expect(custom.find((s) => s.key === 'grants')?.sql).toEqual(

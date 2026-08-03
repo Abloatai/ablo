@@ -6,7 +6,7 @@ Ablo's schema is the integration contract. Define it once, pass it to `Ablo(...)
 and every actor gets the same typed model surface:
 
 ```txt
-defineSchema(...) -> ablo.<model>.create/retrieve/update/claim(...)
+defineSchema(...) -> ablo.<model>.create/get/update/claim(...)
 ```
 
 That one object drives:
@@ -84,7 +84,7 @@ const pending = ablo.weatherReports.local.list({ where: { status: 'pending' } })
 Use model writes for every actor:
 
 ```ts
-await ablo.weatherReports.update({ id: reportId, data: { status: 'ready' }, wait: 'confirmed' });
+await ablo.weatherReports.update({ id: reportId, data: { status: 'ready' } });
 ```
 
 ## Coordination

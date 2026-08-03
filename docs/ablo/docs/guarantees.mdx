@@ -17,14 +17,13 @@ of clobbering.
 
 ## Confirmed Writes
 
-`wait: 'confirmed'` resolves only after the server accepts the write and returns
-the authoritative sync cursor.
+Awaiting a schema model write resolves only after authoritative confirmation
+and returns the updated row.
 
 ```ts
 const updated = await ablo.weatherReports.update({
   id: 'report_stockholm',
   data: { status: 'ready' },
-  wait: 'confirmed',
 });
 ```
 
@@ -40,9 +39,8 @@ Schema model writes return the updated model row.
 Schema model writes update local state optimistically. This keeps UI and agent
 tools responsive while the commit is sent to the server.
 
-- With `wait: 'queued'` or omitted, the promise resolves after the local mutation
-  is queued.
-- With `wait: 'confirmed'`, the promise waits for server confirmation.
+- The local model changes immediately, before the promise settles.
+- The promise always waits for authoritative confirmation.
 - If the server rejects the write, the SDK rolls back the optimistic change and
   raises a typed error.
 
@@ -61,7 +59,6 @@ await ablo.weatherReports.update({
   data: { status: 'ready' },
   readAt: snap.stamp,
   onStale: 'reject',
-  wait: 'confirmed',
 });
 ```
 

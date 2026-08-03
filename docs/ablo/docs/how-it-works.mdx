@@ -10,7 +10,7 @@ whole model — everything below explains what it means and how to use it.
 
 ```ts
 // You call Ablo. Ablo lands the change in your database and confirms it.
-await ablo.tasks.update({ id: 'task_42', data: { status: 'done' }, wait: 'confirmed' });
+await ablo.tasks.update({ id: 'task_42', data: { status: 'done' } });
 
 // Reads come back live, kept current from your database.
 const task = ablo.tasks.local.get('task_42');
@@ -48,7 +48,7 @@ echo confirms it → everyone connected sees it live.**
 | `Model` | State | The generated `ablo.<model>` model. Use `retrieve`/`list` (async reads), `local.get`/`local.list`/`local.count` (the same verbs, synchronous and local-only), `create`, `update`, and `delete`. |
 | `Claim` | Coordination | Who is working on a target. Taken via `ablo.<model>.claim({ id })` and read via `ablo.<model>.claim.state({ id })`. Ephemeral, never persisted. |
 | `Commit` | Protocol | The durable write underneath model updates. Most users do not call it directly. |
-| `Receipt` | Protocol | The lower-level durable result for custom runtimes. Schema writes use `wait: 'confirmed'`. |
+| `Receipt` | Protocol | The lower-level durable result for custom runtimes. Awaiting a schema write waits for confirmation. |
 
 ### Why each primitive is separate
 
@@ -105,9 +105,9 @@ import Ablo from '@abloatai/ablo';
 import { schema } from './ablo/schema';
 export const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 
-// 5. Write through Ablo. It lands in your Postgres; wait: 'confirmed' blocks
-//    until the WAL echo proves the row is there.
-await ablo.tasks.update({ id: 'task_42', data: { status: 'done' }, wait: 'confirmed' });
+// 5. Write through Ablo. Local state changes immediately; await blocks until
+//    the authoritative feed proves the row is there.
+await ablo.tasks.update({ id: 'task_42', data: { status: 'done' } });
 
 // 6. Read — live, no fetch loop.
 const task = ablo.tasks.local.get('task_42');

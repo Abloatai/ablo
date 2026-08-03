@@ -70,6 +70,7 @@ import {
   noopSocketObservability,
   type SocketObservability,
 } from '../observability.js';
+import type { DeliveryPartitionRoute } from '../auth/deliveryPartition.js';
 
 /**
  * Ceiling for the exponential reconnect backoff (`reconnectDelay * 2^n`,
@@ -95,6 +96,11 @@ export interface WsTransportOptions {
    */
   userId?: string;
   organizationId?: string;
+  /**
+   * Opaque server-resolved delivery route. The transport echoes it on every
+   * WebSocket upgrade; the receiving gateway authenticates and verifies it.
+   */
+  deliveryPartition?: DeliveryPartitionRoute | null;
   lastSyncId?: number;
   syncGroups?: string[];
   capabilities?: SyncCapabilities;
@@ -450,6 +456,7 @@ export class WsTransport<
       lastSyncId: 0,
       userId: '',
       organizationId: '',
+      deliveryPartition: null,
       capabilities: {
         partialBootstrap: true,
         compressedDeltas: true,
@@ -672,6 +679,12 @@ export class WsTransport<
     this.options.syncGroups.forEach((group) => {
       params.append('syncGroups', group);
     });
+    if (this.options.deliveryPartition) {
+      params.set(
+        'deliveryPartition',
+        `${this.options.deliveryPartition.index}-${this.options.deliveryPartition.count}`,
+      );
+    }
 
     const wsUrl = `${this.options.url}?${params.toString()}`;
 
@@ -1487,5 +1500,10 @@ export class WsTransport<
    */
   setSyncGroups(syncGroups: readonly string[]): void {
     this.options.syncGroups = [...syncGroups];
+  }
+
+  /** Seeds the server-resolved route before the held first connection opens. */
+  setDeliveryPartition(deliveryPartition: DeliveryPartitionRoute | null): void {
+    this.options.deliveryPartition = deliveryPartition;
   }
 }

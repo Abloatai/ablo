@@ -106,7 +106,6 @@ try {
       aboutEntityId: workItemId,
       aboutIntentId: claim.claimId,
     },
-    wait: "confirmed",
   });
 } finally {
   await claim.release();

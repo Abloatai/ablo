@@ -22,15 +22,28 @@ import type { Migration } from './contract.js';
  * block resolves the ledger through the search path and runs the `ALTER` only
  * when the column is absent — a true no-op on a table that already has it.
  */
-function addColumnIfAbsent(column: string, definition: string): string {
+function quoteIdent(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function quoteLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function qualified(schema: string, relation: string): string {
+  return `${quoteIdent(schema)}.${quoteIdent(relation)}`;
+}
+
+function addColumnIfAbsent(schema: string, column: string, definition: string): string {
+  const ledger = qualified(schema, 'ablo_idempotency');
   return `DO $$
-DECLARE ledger regclass := to_regclass('ablo_idempotency');
+DECLARE ledger regclass := to_regclass(${quoteLiteral(ledger)});
 BEGIN
   IF ledger IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM pg_attribute
     WHERE attrelid = ledger AND attname = '${column}' AND attnum > 0 AND NOT attisdropped
   ) THEN
-    ALTER TABLE ablo_idempotency ADD COLUMN ${column} ${definition};
+    ALTER TABLE ${ledger} ADD COLUMN ${quoteIdent(column)} ${definition};
   END IF;
 END $$;`;
 }
@@ -39,11 +52,12 @@ END $$;`;
  *  rows carry a bounded `expires_at` (set by the adapter at write time) so the
  *  customer can prune them; the `infinity` column default is only a fallback for
  *  a row inserted without one. */
-export function idempotencyLedgerMigrations(): readonly Migration[] {
+export function idempotencyLedgerMigrations(schema = 'public'): readonly Migration[] {
+  const ledger = qualified(schema, 'ablo_idempotency');
   return [
     {
       name: 'ablo_idempotency',
-      up: `CREATE TABLE IF NOT EXISTS ablo_idempotency (
+      up: `CREATE TABLE IF NOT EXISTS ${ledger} (
   client_tx_id TEXT PRIMARY KEY,
   response     JSONB NOT NULL,
   request_hash TEXT,
@@ -64,11 +78,11 @@ export function idempotencyLedgerMigrations(): readonly Migration[] {
       // setup — owned by another role — the no-op still errors "must be owner".
       // Guard on the catalog (readable regardless of ownership) so the ALTER
       // runs only when the column is genuinely absent, keeping re-runs safe.
-      up: addColumnIfAbsent('request_hash', 'TEXT'),
+      up: addColumnIfAbsent(schema, 'request_hash', 'TEXT'),
     },
     {
       name: 'ablo_idempotency_permanent_retention',
-      up: addColumnIfAbsent('expires_at', `TIMESTAMPTZ NOT NULL DEFAULT 'infinity'`),
+      up: addColumnIfAbsent(schema, 'expires_at', `TIMESTAMPTZ NOT NULL DEFAULT 'infinity'`),
     },
   ];
 }

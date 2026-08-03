@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ablo API",
-    "version": "0.46.0",
+    "version": "0.47.0",
     "description": "The Ablo transaction layer: commit, read, and claim. `{model}` is any model from your pushed schema — the routes are the same whichever it is. Authenticate every request with your API key as a Bearer token.",
     "license": {
       "name": "Apache License 2.0",
@@ -3832,6 +3832,34 @@
                         "type": "string"
                       }
                     },
+                    "deliveryPartition": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "index": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "count": {
+                              "type": "integer",
+                              "minimum": 2,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "index",
+                            "count"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "operations": {
                       "type": "array",
                       "items": {
@@ -3854,6 +3882,7 @@
                     "branchId",
                     "branchRoot",
                     "syncGroups",
+                    "deliveryPartition",
                     "operations"
                   ],
                   "additionalProperties": false
@@ -6608,6 +6637,34 @@
                         "participantId": {
                           "type": "string",
                           "minLength": 1
+                        },
+                        "deliveryPartition": {
+                          "default": null,
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "index": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": 2,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "index",
+                                "count"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -6618,7 +6675,8 @@
                         "syncGroups",
                         "operations",
                         "participantKind",
-                        "participantId"
+                        "participantId",
+                        "deliveryPartition"
                       ],
                       "additionalProperties": false
                     },
@@ -7124,6 +7182,34 @@
                         "participantId": {
                           "type": "string",
                           "minLength": 1
+                        },
+                        "deliveryPartition": {
+                          "default": null,
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "index": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": 2,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "index",
+                                "count"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -7134,7 +7220,8 @@
                         "syncGroups",
                         "operations",
                         "participantKind",
-                        "participantId"
+                        "participantId",
+                        "deliveryPartition"
                       ],
                       "additionalProperties": false
                     },

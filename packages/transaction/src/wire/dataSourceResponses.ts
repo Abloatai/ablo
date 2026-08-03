@@ -42,8 +42,10 @@ export const READINESS_ITEMS = [
   'wal_level',
   'publication',
   'replication_role',
+  'replication_slot_capacity',
   'replica_identity',
   'table_select',
+  'snapshot_row_security',
   'write_role',
   'row_security',
   'database_privileges',
@@ -153,6 +155,22 @@ export const datasourceValidationResponseSchema = z.object({
 });
 export type DatasourceValidationResponse = z.infer<typeof datasourceValidationResponseSchema>;
 
+/** `POST /v1/datasources/resnapshot` — accepted reset of the direct source's
+ * initial load. The replacement snapshot completes asynchronously. */
+export const datasourceResnapshotResponseSchema = z.object({
+  object: z.literal('datasource_resnapshot'),
+  initial_snapshot: z.object({ status: z.literal('loading') }),
+  replication_slot: z
+    .object({
+      slot: z.string(),
+      released: z.boolean(),
+      detail: z.string().optional(),
+      remove_with: z.string().optional(),
+    })
+    .optional(),
+});
+export type DatasourceResnapshotResponse = z.infer<typeof datasourceResnapshotResponseSchema>;
+
 /**
  * `POST /v1/datasources/locate` — which plane already holds a database.
  * A targeted lookup, not an enumeration: the caller must hold the connection
@@ -161,6 +179,8 @@ export type DatasourceValidationResponse = z.infer<typeof datasourceValidationRe
  */
 export const datasourceLocationResponseSchema = z.object({
   object: z.literal('datasource_location').optional(),
+  /** False with held=null means another organization owns the binding. */
+  available: z.boolean().optional(),
   held: z
     .object({
       project: z.string().nullable(),

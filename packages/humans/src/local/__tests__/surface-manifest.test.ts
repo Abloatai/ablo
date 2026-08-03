@@ -51,8 +51,9 @@ describe('public surface manifest matches the real exported types', () => {
     const sample: Record<keyof AbloOptions, true> = {
       schema: true,
       plugins: true,
-      wait: true,
       apiKey: true,
+      projectId: true,
+      branchId: true,
       authEndpoint: true,
       authTimeoutMs: true,
       allowCrossOriginAuthEndpoint: true,

@@ -29,7 +29,9 @@ describe('idempotencyLedgerMigrations', () => {
 
   it('creates the table with every current column, so a fresh setup needs no upgrade', () => {
     const create = byName('ablo_idempotency');
-    expect(create).toContain('CREATE TABLE IF NOT EXISTS ablo_idempotency');
+    // Schema-qualified and quoted: the generator targets an explicit schema so
+    // the DDL is correct outside `public` and safe against reserved words.
+    expect(create).toContain('CREATE TABLE IF NOT EXISTS "public"."ablo_idempotency"');
     expect(create).toContain('request_hash TEXT');
     expect(create).toContain("expires_at   TIMESTAMPTZ NOT NULL DEFAULT 'infinity'");
   });
@@ -44,11 +46,11 @@ describe('idempotencyLedgerMigrations', () => {
     const up = byName('ablo_idempotency_request_hash');
     // Resolves the ledger through the search path and reads pg_attribute, which
     // is legible regardless of table ownership.
-    expect(up).toContain("to_regclass('ablo_idempotency')");
+    expect(up).toContain(`to_regclass('"public"."ablo_idempotency"')`);
     expect(up).toContain('pg_attribute');
     expect(up).toContain("attname = 'request_hash'");
     // The ALTER runs only inside the "column absent" branch.
-    expect(up).toContain('ALTER TABLE ablo_idempotency ADD COLUMN request_hash TEXT');
+    expect(up).toContain('ALTER TABLE "public"."ablo_idempotency" ADD COLUMN "request_hash" TEXT');
     expect(up).toMatch(/IF ledger IS NOT NULL AND NOT EXISTS/);
   });
 
@@ -56,7 +58,7 @@ describe('idempotencyLedgerMigrations', () => {
     const up = byName('ablo_idempotency_permanent_retention');
     expect(up).toContain("attname = 'expires_at'");
     expect(up).toContain(
-      "ALTER TABLE ablo_idempotency ADD COLUMN expires_at TIMESTAMPTZ NOT NULL DEFAULT 'infinity'",
+      `ALTER TABLE "public"."ablo_idempotency" ADD COLUMN "expires_at" TIMESTAMPTZ NOT NULL DEFAULT 'infinity'`,
     );
   });
 

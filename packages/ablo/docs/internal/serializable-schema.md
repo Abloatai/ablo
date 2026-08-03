@@ -69,7 +69,7 @@ FNV-1a content hash used for connect-time gating. Round-trip tested in
   error, createdBy, createdAt, activatedAt)`, unique `(orgId, version)`. State
   `pending|validated|active|overwritten|failed`, ≤1 active per tenant (Convex
   `_schemas` machine; Zero's "row in the operational DB"). *Migration written,
-  not applied — 0 users, Neon direct-endpoint rule.*
+  not applied — 0 users at the time.*
 - **`pgSchemaStore` / `memorySchemaStore`** (`schemaStore.ts`) — mirrors
   `pgApiKeyStore`. `insertPending` assigns `MAX(version)+1`; `activate` is a
   transaction that demotes the current active → `overwritten` then promotes the

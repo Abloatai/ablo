@@ -27,6 +27,13 @@ export const validUpdate: ModelUpdateParams<TaskRow, TaskInput> = {
   claim: { fields: (task) => task.title },
 };
 
+export const modelWritesHaveOneSettlementContract: ModelUpdateParams<TaskRow, TaskInput> = {
+  id: 't_1',
+  data: { title: 'Done' },
+  // @ts-expect-error — awaiting a model write always means authoritative confirmation.
+  wait: 'confirmed',
+};
+
 export const computedIsNotWritable: ModelUpdateParams<TaskRow, TaskInput> = {
   id: 't_1',
   // @ts-expect-error — computed row values are not in the Zod input shape.

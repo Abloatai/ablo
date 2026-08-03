@@ -48,6 +48,12 @@ describe('footprintNamesFor', () => {
     expect(new Set(slots).size).toBe(planes.length);
   });
 
+  it('delimits coordinates so structurally different planes cannot alias', () => {
+    const left = footprintNamesFor({ organizationId: 'ab', projectId: 'c', branchId: 'd' });
+    const right = footprintNamesFor({ organizationId: 'a', projectId: 'bc', branchId: 'd' });
+    expect(left).not.toEqual(right);
+  });
+
   it('treats the organization-default project as ONE plane however it is spelled', () => {
     // A self-serve key stamps `projectId = organizationId`; the admin path omits
     // it. They are the same plane, and deriving two names for it would install a

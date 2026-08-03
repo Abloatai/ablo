@@ -405,8 +405,6 @@ export function createModelProxy<T, C>(
    */
   hydration: Pick<OnDemandLoader, 'fetch'>,
   collaboration?: ModelCollaboration,
-  /** The client-wide `wait` default; a per-call `wait` still wins over it. */
-  defaultWait?: 'queued' | 'confirmed',
 ): ModelOperations<T, C> {
   /**
    * Resolve a row **this** resource owns.
@@ -471,20 +469,34 @@ export function createModelProxy<T, C>(
     };
   };
 
+  const guardWrite = <A extends unknown[], R>(
+    fn: (...args: A) => Promise<R>,
+  ): ((...args: A) => Promise<R>) => {
+    const guarded = guard(fn);
+    return (...args: A): Promise<R> => {
+      const confirmation = guarded(...args);
+      // Optimistic writes are intentionally useful without awaiting them. The
+      // transaction pipeline already reports a later refusal through
+      // `onMutationFailure`; attach an observer here as well so choosing not to
+      // await does not create an unhandled-rejection process error. Returning
+      // the original promise preserves normal rejection for callers that do
+      // await or attach their own catch handler.
+      void confirmation.catch(() => undefined);
+      return confirmation;
+    };
+  };
+
   const load = async (options?: ServerReadOptions<T>): Promise<T[]> => {
     const rows = await hydration.fetch<T>(schemaKey, options);
     return rows.map((row) => modelAsRow<T>(row));
   };
 
-  const waitForMutation = async (
-    model: Model,
-    options?: MutationOptions,
-  ): Promise<void> => {
-    // A per-call `wait` wins; otherwise the client-wide default decides. This
-    // is the single point that turns "confirmed" into actually waiting, so a
-    // client configured that way rejects on a refused write everywhere rather
-    // than in the one place a caller remembered to ask.
-    if ((options?.wait ?? defaultWait) !== 'confirmed') return;
+  const waitForMutation = async (model: Model): Promise<void> => {
+    // Model writes are optimistic locally, but their promise has one stable
+    // meaning: authoritative confirmation. Callers that do not need the
+    // barrier can keep using the row immediately and leave the promise to the
+    // global mutation-failure handler; awaiting the promise never means merely
+    // "placed in the local queue".
     // Let sibling writes from the same synchronous burst enter the mutation
     // queue before forcing a drain. Without this yield, every confirmed
     // create/update calls syncNow() alone, defeating the queue's microtask
@@ -540,7 +552,6 @@ export function createModelProxy<T, C>(
         ? { idempotencyKey: params.idempotencyKey }
         : {}),
       ...(params.label !== undefined ? { label: params.label } : {}),
-      ...(params.wait !== undefined ? { wait: params.wait } : {}),
       ...(params.readAt !== undefined ? { readAt: params.readAt } : {}),
       ...(params.onStale !== undefined ? { onStale: params.onStale } : {}),
       ...(params.fenceToken !== undefined ? { fenceToken: params.fenceToken } : {}),
@@ -1086,7 +1097,7 @@ export function createModelProxy<T, C>(
     // unbounded set of rows' entity groups.
     list: guard(load),
 
-    create: guard(async (params: ModelCreateParams<T, C>): Promise<T> => {
+    create: guardWrite(async (params: ModelCreateParams<T, C>): Promise<T> => {
       const id = params.id ?? Model.generateId();
       const opts = mutationOptions(params);
       const claim = params.claim;
@@ -1142,7 +1153,7 @@ export function createModelProxy<T, C>(
       };
       try {
         syncClient.add(model, effective);
-        await waitForMutation(model, effective);
+        await waitForMutation(model);
         return modelAsRow<T>(model);
       } finally {
         await autoLease?.release?.().catch(() => {});
@@ -1154,7 +1165,7 @@ export function createModelProxy<T, C>(
     // wrapping while exposing the two public signatures (a plain `guard(...)`
     // would collapse them to one).
     update: ((): ModelOperations<T, C>['update'] => {
-      const updateImpl = guard(
+      const updateImpl = guardWrite(
         async (
           arg: ModelUpdateParams<T, C> | string,
           updater?: ModelUpdater<T>,
@@ -1206,13 +1217,12 @@ export function createModelProxy<T, C>(
                 );
               }
               const effective: MutationOptions = {
-                wait: 'confirmed',
                 readAt,
                 onStale: 'reject',
               };
               model.applyChanges(patch);
               syncClient.update(model, effective);
-              await waitForMutation(model, effective);
+              await waitForMutation(model);
               return modelAsRow<T>(model);
             },
           });
@@ -1250,7 +1260,6 @@ export function createModelProxy<T, C>(
         const handle = isClaimHandle(params.claim) ? params.claim : undefined;
         const effective: MutationOptions | undefined = claimed
           ? {
-              wait: 'confirmed',
               readAt: claimed.lease.readAt ?? claimed.snapshot.stamp,
               onStale: 'reject',
               claimRef: { id: claimed.lease.id },
@@ -1262,7 +1271,6 @@ export function createModelProxy<T, C>(
               // works across clients (HTTP-minted handles included).
               ...(handle?.readAt !== undefined
                 ? {
-                    wait: 'confirmed' as const,
                     readAt: handle.readAt,
                     onStale: 'reject' as const,
                     ...(handle.fenceToken !== undefined
@@ -1279,7 +1287,7 @@ export function createModelProxy<T, C>(
         // the tracking, producing an empty `input: {}` no-op mutation.)
         model.applyChanges(params.data);
         syncClient.update(model, effective);
-        await waitForMutation(model, effective);
+        await waitForMutation(model);
         return modelAsRow<T>(model);
         },
       );
@@ -1299,7 +1307,7 @@ export function createModelProxy<T, C>(
       return update;
     })(),
 
-    delete: guard(async (params: ModelDeleteParams<T, C>): Promise<void> => {
+    delete: guardWrite(async (params: ModelDeleteParams<T, C>): Promise<void> => {
       const autoClaim =
         params.claim && !isClaimHandle(params.claim) ? params.claim : null;
       if (autoClaim) {
@@ -1334,7 +1342,6 @@ export function createModelProxy<T, C>(
       const handle = isClaimHandle(params.claim) ? params.claim : undefined;
       const effective: MutationOptions | undefined = claimed
         ? {
-            wait: 'confirmed',
             readAt: claimed.lease.readAt ?? claimed.snapshot.stamp,
             onStale: 'reject',
             claimRef: { id: claimed.lease.id },
@@ -1346,7 +1353,6 @@ export function createModelProxy<T, C>(
         : {
             ...(handle?.readAt !== undefined
               ? {
-                  wait: 'confirmed' as const,
                   readAt: handle.readAt,
                   onStale: 'reject' as const,
                 }
@@ -1355,7 +1361,7 @@ export function createModelProxy<T, C>(
             ...(handle ? { claim: { id: handle.id } } : {}),
           };
       syncClient.delete(model, effective);
-      await waitForMutation(model, effective);
+      await waitForMutation(model);
     }),
 
     // `claim` is a callable namespace (take a claim) carrying the coordination

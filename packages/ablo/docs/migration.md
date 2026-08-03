@@ -293,7 +293,7 @@ helper, and the agent/task type family (`Agent`, `AgentOptions`,
 + const { token } = await server.sessions.create({ agent: { id: agentId } });
 + const agent = Ablo({ schema, apiKey: token });
 + await using claim = await agent.tasks.claim({ id });
-+ await agent.tasks.update({ id, data: { status: 'done' }, wait: 'confirmed' });
++ await agent.tasks.update({ id, data: { status: 'done' } });
 ```
 
 Per-run token/cost now lives in Langfuse, not an `agent_tasks` table. The only
@@ -324,10 +324,10 @@ modifier are named siblings. Reactive local reads stay on the synchronous
 
 ```diff
 - await ablo.tasks.update(id, { status: 'done' }, { wait: 'confirmed' })
-+ await ablo.tasks.update({ id, data: { status: 'done' }, wait: 'confirmed' })
++ await ablo.tasks.update({ id, data: { status: 'done' } })
 
 - await ablo.tasks.retrieve(id)
-+ await ablo.tasks.retrieve({ id })
++ await ablo.tasks.get({ id })
 
 - useAblo((ablo) => ablo.tasks.retrieve(id)) ?? serverTask
 + useAblo((ablo) => ablo.tasks.local.get(id)) ?? serverTask

@@ -93,6 +93,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": true,
       "surface": "wire",
     },
+    "branch_scope_denied": {
+      "category": "permission",
+      "httpStatus": 403,
+      "retryable": false,
+      "surface": "wire",
+    },
     "browser_apikey_blocked": {
       "category": "auth",
       "httpStatus": null,
@@ -428,6 +434,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "httpStatus": null,
       "retryable": false,
       "surface": "client",
+    },
+    "delivery_partition_mismatch": {
+      "category": "transport",
+      "httpStatus": 503,
+      "retryable": true,
+      "surface": "wire",
     },
     "drop_field": {
       "category": "schema",
@@ -1552,6 +1564,6 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "surface": "client",
     },
   },
-  "version": "2026-07-23",
+  "version": "2026-07-30",
 }
 `;

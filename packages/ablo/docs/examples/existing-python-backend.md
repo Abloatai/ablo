@@ -255,7 +255,6 @@ await ablo.weatherReports.update({
   data: { status: 'ready' },
   readAt: snap.stamp,
   onStale: 'reject',
-  wait: 'confirmed',
 });
 ```
 
@@ -294,7 +293,6 @@ await ablo.weatherReports.update({
   data: { status: 'ready' },
   readAt: snap.stamp,
   onStale: 'reject',
-  wait: 'confirmed',
 });
 ```
 

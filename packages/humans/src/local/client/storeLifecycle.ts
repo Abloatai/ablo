@@ -63,6 +63,44 @@ export interface StoreLifecycleDeps<S extends SchemaRecord> {
   readonly onIdentityResolved: (seed: IdentitySeed) => void;
 }
 
+/** Refuse a credential for another project before the store opens its socket. */
+export function assertExpectedProject(
+  expectedProjectId: string | null | undefined,
+  actualProjectId: string | null
+): void {
+  const expected = expectedProjectId?.trim();
+  if (!expected || actualProjectId === expected) return;
+  throw new AbloAuthenticationError(
+    `ABLO_API_KEY belongs to project ${actualProjectId ?? '(none)'}, but this app is pinned to ${expected} by projectId/ABLO_PROJECT_ID.`,
+    {
+      code: 'project_scope_denied',
+      details: {
+        expectedProjectId: expected,
+        actualProjectId,
+      },
+    }
+  );
+}
+
+/** Refuse a credential for another branch before the store opens its socket. */
+export function assertExpectedBranch(
+  expectedBranchId: string | null | undefined,
+  actualBranchId: string | null
+): void {
+  const expected = expectedBranchId?.trim();
+  if (!expected || actualBranchId === expected) return;
+  throw new AbloAuthenticationError(
+    `ABLO_API_KEY belongs to branch ${actualBranchId ?? '(none)'}, but this app is pinned to ${expected} by branchId/ABLO_BRANCH_ID.`,
+    {
+      code: 'branch_scope_denied',
+      details: {
+        expectedBranchId: expected,
+        actualBranchId,
+      },
+    }
+  );
+}
+
 /**
  * Wires the credential machinery onto the cluster and returns the `ready`
  * the client exposes. Wiring happens now — the refresh lifecycle, the
@@ -200,7 +238,11 @@ export function startStoreLifecycle<S extends SchemaRecord>(
           capabilityToken,
           syncGroups,
           participantKind,
+          deliveryPartition,
         } = resolved;
+
+        assertExpectedProject(internalOptions.projectId, projectId);
+        assertExpectedBranch(internalOptions.branchId, branchId);
 
         // Fail-loud guard: detect the degenerate "no real sync groups
         // resolved" state before opening the socket. It is the same class of bug as
@@ -274,6 +316,7 @@ export function startStoreLifecycle<S extends SchemaRecord>(
           kind: participantKind,
           capabilityToken,
           syncGroups,
+          deliveryPartition,
           bootstrapMode: resolvedBootstrapMode,
         });
         let current = gen.next();
