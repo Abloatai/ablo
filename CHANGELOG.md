@@ -2,15 +2,56 @@
 
 ## 0.47.0
 
-### Minor Changes
+### Awaiting a model write now means it is confirmed
 
-- 101ca2c: Make schema model writes optimistic with one stable promise contract: local reactive state changes immediately, while awaiting `create`, `update`, or `delete` always waits for authoritative confirmation. Remove the model-level and client-level `wait` options; explicit queued-versus-confirmed receipt control remains on `commits.create`.
+`create`, `update`, and `delete` change local reactive state immediately and
+return a promise with a single meaning: the write reached authoritative
+confirmation. An interface stays responsive without awaiting anything, and code
+that needs to know a write survived can await the same call it already makes.
 
-### Patch Changes
+The `wait` option is gone from the client and from individual model calls.
+Awaiting a model write always waits for confirmation, so there is nothing left
+to configure. Explicit control over a queued versus confirmed receipt remains on
+`commits.create`, which still hands back the receipt and its confirmation
+separately.
 
-- Updated dependencies [101ca2c]
-  - @abloatai/transaction@0.47.0
-  - @abloatai/humans@0.47.0
+**Action required.** Remove `wait` from `Ablo({ ... })` and from every
+`create`, `update`, and `delete` call.
+
+- `wait: 'confirmed'` behaves identically once removed.
+- `wait: 'queued'` on a call you never awaited behaves identically once removed.
+- `wait: 'queued'` on a call you did await now waits for confirmation. Move to
+  `commits.create` if the queued receipt was the reason for the option.
+
+### Development branches accept their first schema push
+
+A branch created by `ablo dev` now records its storage shape at creation, so a
+push lands against the transaction log Ablo already hosts for it. Such a branch
+previously reported itself ready and then refused that push with
+`test_database_not_registered`, which reads as a missing database on a branch
+that was never meant to have one. Branches created before this release are
+repaired in place, so an existing development branch starts accepting pushes
+without being recreated.
+
+### The CLI names the problem it actually hit
+
+A refused push no longer reports every failure as a missing `schema:push`
+capability. That advice was wrong for most refusals: a database privilege error,
+a row-level security misconfiguration, and an unregistered development database
+each need a different fix, and none of them is a different API key. Each now
+leads with the server's own message and the remedy for that specific cause.
+
+Project names also resolve correctly under a branch-bound key. Listing projects
+is a management operation that such a key is deliberately not allowed to
+perform, so `ablo status` and `ablo push` reported a correctly minted key's
+project as `unnamed` alongside a permission error. The name now comes from the
+stored management credential.
+
+### Deprecations
+
+`METER_EVENT_COUNTS` is deprecated in favour of its per-surface members, and the
+`DatasourceResnapshotResponse` type and its schema are deprecated. All three
+still ship and still work; they will be removed in a later release.
 
 ## 0.46.0
 

@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- Updated dependencies [101ca2c]
+- Updated dependencies [2e4be0a]
   - @abloatai/transaction@0.47.0
   - @abloatai/humans@0.47.0
 
