@@ -30,7 +30,7 @@ import type { ModelScope } from './types/index.js';
 
 /**
  * A commit's durable acceptance — `{ status: 'queued' }` with the correlation
- * the settlement feed later confirms. The wire layer owns the receipt fields;
+ * the confirmation feed later confirms. The wire layer owns the receipt fields;
  * the seam adds the client idempotency identity needed for a safe wait/retry.
  */
 export type CommitReceipt = ClientCommitReceipt & {

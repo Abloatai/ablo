@@ -68,7 +68,7 @@ const config: Config = {
     '^react/(.*)$': `${reactRoot}/$1`,
     '^react-dom$': reactDomRoot,
     '^react-dom/(.*)$': `${reactDomRoot}/$1`,
-    // @abloatai/transaction (the extracted settlement core, ADR 0013) resolves to
+    // @abloatai/transaction (the extracted confirmation core, ADR 0013) resolves to
     // its src — jest doesn't follow the package's `@ablo/source` export
     // condition, so map it explicitly, mirroring tsc/dep-cruiser. Directory
     // barrels need their own line: the generic pattern appends `.ts` and

@@ -28,7 +28,11 @@ describe('SyncEngine Context', () => {
       const ctx = getContext();
       const result = await ctx.mutationExecutor.commit([]);
 
-      expect(result).toEqual({ lastSyncId: 0, status: 'confirmed' });
+      expect(result).toEqual({
+        lastSyncId: 0,
+        status: 'confirmed',
+        statusAt: '1970-01-01T00:00:00.000Z',
+      });
     });
   });
 

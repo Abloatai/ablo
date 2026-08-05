@@ -1,5 +1,9 @@
 import { defineConfig } from 'tsup';
 
+const embeddedDsn = process.env.ABLO_CLI_SENTRY_DSN ?? '';
+const embeddedRelease =
+  process.env.ABLO_CLI_RELEASE ?? `@abloatai/cli@${process.env.npm_package_version ?? 'development'}`;
+
 /**
  * Bundles the `ablo` CLI into a single self-contained `dist/cli.cjs` — this
  * package's `bin`. The goal is a Stripe-style self-contained executable:
@@ -64,4 +68,11 @@ export default defineConfig({
   // crashes with `createRequire(undefined)` — `ablo dev`/`push` die on every
   // fresh project. `shims: true` injects a `__filename`-based shim.
   shims: true,
+  // Sentry DSNs are ingestion coordinates, not credentials. Embedding the
+  // public DSN is how browser and desktop SDKs ship enabled telemetry. The
+  // prepublishOnly gate refuses to publish when the release job omitted it.
+  define: {
+    'process.env.ABLO_CLI_EMBEDDED_SENTRY_DSN': JSON.stringify(embeddedDsn),
+    'process.env.ABLO_CLI_EMBEDDED_RELEASE': JSON.stringify(embeddedRelease),
+  },
 });

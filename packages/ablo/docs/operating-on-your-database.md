@@ -1,14 +1,12 @@
 # Operating on Your Database
 
-> Which actions run freely, which to verify first, and which belong to a human.
+> Which actions are read-only, which writes need a guard, and which changes belong to a human.
 
 Ablo sits over your database as a coordination layer, not an owner. It reads
-your Postgres replication stream and routes each write through a claim-checked
-commit that lands in your own tables. It never runs DDL, never migrates, never
-drops. That single boundary is why almost everything you do through Ablo is
-either read-only or reversible — and why the few actions that aren't are easy to
-name. This page is how to tell them apart, so you can work on a real database
-without guessing which move is the dangerous one.
+your Postgres replication stream and routes model writes into your own tables.
+The hosted service does not run application DDL, migrations, or drops. That
+boundary keeps model operations attributable while your migration tool remains
+responsible for the database shape.
 
 The habit that makes it easy is to look before you act. One command shows you
 the real shape of your database measured against your schema, and changes
@@ -32,26 +30,27 @@ radius of anything you do through the model API:
   action, run with your admin credential — never Ablo's.
 - It **never owns your rows.** Canonical data stays in your tables; Ablo hosts
   only the transaction log and the coordination state.
-- Every model write is **claim-checked and recorded.** A write based on a row
-  that moved under you is rejected rather than applied, and the prior value is
-  retained in the log, so a confirmed change is attributable and
-  reconstructable.
+- Every model write is **checked against active claims and recorded.** A plain
+  write is last-write-wins when no claim applies. A functional update, held
+  claim, or explicit `readAt` guard protects a write that depends on an earlier
+  value.
 
-So a normal `ablo.<model>.update(...)` cannot silently corrupt your database:
-the worst case is a clean rejection and a re-read, not a lost row.
+Ablo prevents a non-holder from writing through another participant's claim by
+default. It does not infer that every plain update is a read-modify-write
+operation; use the guarded forms when lost-update protection matters.
 
 ## Three kinds of action
 
 Sort any action you're about to take into one of these, and the right move
 follows.
 
-**Run freely — read-only or reversible.**
+**Normal application operations.**
 Reads (`get`, `list`), `ablo check`, and `ablo pull` observe and
 never change anything. Previews — `--show-sql`, `--dry-run` — print the exact
 SQL a command would run without executing it. Model writes through
-`ablo.<model>.create` / `update` are claim-checked, optimistic, rolled back if
-the server rejects them, and recorded in the log with the prior value. All of
-these are safe to run on your own initiative.
+`ablo.<model>.create` / `update` are authorized, checked against active claims,
+optimistic locally, rolled back locally if the server rejects them, and
+recorded. Review their data effects as you would any application write.
 
 **Verify first — needs one look at the live database.**
 Routing an existing table's writes through a model requires the model to match
@@ -61,28 +60,23 @@ line in the report rather than a surprise at commit time. Decide the model shape
 from what `check` tells you, then proceed. Nothing here is risky — it just reads
 better after you've seen the ground truth.
 
-**Hand to a human — irreversible, outside the log's protection.**
+**Hand to a human — database administration.**
 Raw DDL on the live database — `ALTER TABLE … OWNER TO`, adding or dropping a
-column, changing a constraint — changes the database itself and is not covered
-by the reversible log, so it belongs to a person with their hand on it. So does
+column, changing a constraint — changes the database itself, so it belongs to a
+person with their hand on it. So does
 a `connect` cutover run with its confirmation skipped (`--yes`): the prompt
 exists because the step provisions real roles and reconciles publication on a
 live database, and on a shared or production database that confirmation is the
-human's to give. Removing a model from your schema belongs here too — for the
-reason below.
+human's to give. Removing a model from your pushed schema also deserves review
+because clients will lose that typed API surface.
 
 ## The one action that isn't what it looks like
 
-Deleting a model from `ablo/schema.ts` reads like a code cleanup, but it is a
-schema change. Your schema is a desired-state declaration: `ablo push` diffs it
-against the server's copy, and a model that has vanished from the schema can be
-read as a table that should no longer exist. "Nothing imports it" answers a
-code question. The question that governs safety is *does removing this drop a
-real table on the next push* — and that one is answered against the database,
-not the codebase. Before removing a model that maps a live table, confirm the
-table is gone or empty and that your push path is additive; otherwise keep the
-model until the data is dealt with. A `load: 'lazy'` mapping is often present
-precisely to hold a table in place, so treat its comment as load-bearing.
+Deleting a model from `ablo/schema.ts` removes it from the API contract the next
+time you push the schema. Existing clients can no longer access that model
+through Ablo. It does **not** drop the underlying table or its rows; database DDL
+remains your migration tool's responsibility. Review client usage first, then
+remove the model and push the schema as a normal application change.
 
 ## The verification loop
 
@@ -98,10 +92,9 @@ read-only checks:
 - Read the row and its claim state before you write — `get` / `list`, and
   `ablo.<model>.claim.state({ id })` for who is already working on it.
 
-The pattern underneath all of it is steady: reads and model writes flow freely
-because the boundary and the log make them safe, DDL and cutovers pause for a
-human because they change the database itself, and the space between the two is
-one `ablo check` away from certain.
+The pattern underneath all of it is steady: observe first, use guarded writes
+when a change depends on prior state, and review DDL and cutovers separately
+because they change the database itself.
 
 ## See also
 

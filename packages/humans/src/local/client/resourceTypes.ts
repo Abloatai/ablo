@@ -1,7 +1,7 @@
 /**
  * The interactive resource-type surface.
  *
- * The transport-facing half of these types moved down into the settlement core
+ * The transport-facing half of these types moved down into the confirmation core
  * (ADR 0016). This module keeps the
  * consumer-facing import path intact and rejoins it with the model-proxy types
  * that stay here — `ModelOperations` chief among them, because it returns the

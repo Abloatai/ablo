@@ -84,7 +84,11 @@ function scriptedExecutor(holdFirst: boolean) {
       const index = calls.length;
       calls.push({ ops: operations.map((op) => ({ type: op.type, id: op.id })) });
       syncId += 1;
-      const result = { lastSyncId: syncId, status: 'confirmed' as const };
+      const result = {
+        lastSyncId: syncId,
+        status: 'confirmed' as const,
+        statusAt: '2026-08-05T10:00:00.058Z',
+      };
       if (holdFirst && index === 0) {
         // Held in flight until the test releases it — the window in which the
         // user's delete arrives in the field.

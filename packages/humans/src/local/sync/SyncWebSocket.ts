@@ -1,5 +1,5 @@
 /**
- * The reactive engine's connection to the sync server: the settlement core's
+ * The reactive engine's connection to the sync server: the confirmation core's
  * duplex transport ({@link WsTransport}, ADR 0016) plus everything that turns
  * the stream into a local, watchable copy — wire-delta validation, the resume
  * cursor and its persistence-gated ack discipline, incremental sync and

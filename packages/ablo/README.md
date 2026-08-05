@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>The transaction layer for AI agents.</strong>
+  <strong>Collaboration infrastructure for AI agents.</strong>
 </p>
 
 <p align="center">
@@ -22,17 +22,12 @@
 
 ---
 
-> **Reading the implementation?** Start with the
-> **[source code map](./CODEMAP.md)**. It shows which files own `create`,
-> `update`, `delete`, `claim`, schemas, transports, and the reactive client.
+Ablo is collaboration infrastructure for AI agents: one API for agents, apps,
+and services to claim, change, and confirm the same rows.
 
-Safely coordinate AI agents, humans, workflows, and services writing to the
-same database.
-
-Ablo is an authoritative transaction layer for shared application state. Every
-write goes through one typed API where authority, idempotency, conflicts,
-ordering, and confirmation can be enforced. Your Postgres remains the source
-of truth.
+Every write goes through it, so authority, idempotency, conflicts, ordering,
+and confirmation are enforced in one place. Your Postgres remains the source of
+truth.
 
 ## Why Ablo
 
@@ -58,7 +53,7 @@ npx ablo dev
 temporary credential to gitignored `.env.local`, pushes the schema, and watches
 for changes.
 
-Read and write through the transaction layer:
+Read and write through one typed API:
 
 ```ts
 const order = await ablo.orders.get({ id: orderId });

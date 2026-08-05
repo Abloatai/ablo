@@ -53,8 +53,8 @@ describe('docs catalog', () => {
     const temporal = findDoc(catalog, 'integrations/temporal');
     const inngest = findDoc(catalog, 'integrations/inngest');
 
-    expect(coordination?.title).toBe('Coordination Reference');
-    expect(coordination?.description).toMatch(/^Claim mechanics/);
+    expect(coordination?.title).toBe('Coordination');
+    expect(coordination?.description).toMatch(/^Choose plain writes/);
     expect(branchDevelopment?.title).toBe('Branch-first development');
     expect(branchDevelopment?.description).toMatch(/^Understand exactly what `ablo dev` prepares/);
     expect(integrations?.title).toBe('Integrations');

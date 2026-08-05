@@ -39,7 +39,8 @@ describe('MutationQueue commit lane', () => {
   });
 
   afterEach(() => {
-    queue.removeAllListeners();
+    queue.dispose();
+    jest.restoreAllMocks();
     cleanup();
   });
 
@@ -66,6 +67,10 @@ describe('MutationQueue commit lane', () => {
   });
 
   it('holds at head-of-queue on transient (AbloConnectionError); reconnect kick drains it', async () => {
+    // The production lane also schedules an automatic jittered retry. Pin the
+    // jitter beyond this test's reconnect kick so the assertion proves the
+    // reconnect path instead of racing a legitimate timer-driven attempt.
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
     const connErr = new AbloConnectionError('SyncWebSocket not connected');
     mocks.mutationExecutor.failMethod('commit', connErr);
 

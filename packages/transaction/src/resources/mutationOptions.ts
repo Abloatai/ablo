@@ -3,7 +3,7 @@
  *
  * Every field here defines, orders, settles, or authorises *the change itself*
  * — request identity, commit disposition, fencing, and the premise it rests on.
- * None of it touches a local copy of rows, so it belongs with the settlement
+ * None of it touches a local copy of rows, so it belongs with the commit
  * core rather than the reactive consumer (ADR 0013 §4, ADR 0016).
  */
 

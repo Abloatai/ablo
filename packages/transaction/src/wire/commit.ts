@@ -1,12 +1,12 @@
 /**
- * Canonical runtime contracts for commit settlement.
+ * Canonical runtime contracts for commit status.
  *
  * A commit crosses several boundaries during its lifetime: the server's
  * execution cache, the HTTP/WS receipt, and the client's acknowledgement
  * tracker. Those boundaries intentionally have different envelopes, but they
- * all compose the same settlement vocabulary from this module:
+ * all compose the same lifecycle vocabulary from this module:
  *
- *   - `confirmed` — the authoritative change is visible at a sync watermark.
+ *   - `confirmed` — the authoritative change is visible through `lastSyncId`.
  *   - `queued` — a connected source durably accepted the write and only its
  *     correlated authoritative source delta (WAL for direct, endpoint event
  *     for endpoint-only), identified by `correlationId`, may promote it.
@@ -20,12 +20,19 @@
 import { z } from 'zod';
 import {
   onStaleModeSchema,
-  readDependencySchema,
+  MAX_READ_SET_ENTRIES,
+  readDependencyListSchema,
+  readSetRowTargetSchema,
+  readSetProjectionEntryCount,
+  readSetSchema,
+  readSetWatermarkSchema,
+  participantKindSchema,
   staleNotificationSchema,
-  trackDependencySchema,
+  trackDependencyListSchema,
 } from '../coordination/schema.js';
 import type { ErrorCode } from '../errorCodes.js';
 import { requiredCapabilityWireSchema } from '../errors.js';
+import { effectiveAuthoritySchema } from '../auth/capability.js';
 
 /** Matches the permanent source/idempotency-key ceiling. */
 export const COMMIT_CORRELATION_ID_MAX_LENGTH = 255;
@@ -34,47 +41,107 @@ export const COMMIT_CORRELATION_ID_MAX_LENGTH = 255;
 export const correlationIdSchema = z.string().min(1).max(COMMIT_CORRELATION_ID_MAX_LENGTH);
 export type CorrelationId = z.infer<typeof correlationIdSchema>;
 
-export const commitStatusSchema = z.enum(['queued', 'confirmed']);
-export type CommitStatus = z.infer<typeof commitStatusSchema>;
+/** Public, server-authored commit timestamps. */
+export const commitTimestampSchema = z.iso.datetime({ offset: true });
+
+// These are the only lifecycle-literal declarations in transaction source.
+// Every boundary below composes these schemas instead of spelling a status.
+export const queuedStatusSchema = z.literal('queued');
+export const confirmedStatusSchema = z.literal('confirmed');
+export const rejectedStatusSchema = z.literal('rejected');
+
+export const queuedCommitStatusSchema = z.strictObject({
+  status: queuedStatusSchema,
+  statusAt: commitTimestampSchema,
+  lastSyncId: z.literal(0),
+  correlationId: correlationIdSchema,
+});
+
+export const confirmedCommitStatusSchema = z
+  .strictObject({
+    status: confirmedStatusSchema,
+    statusAt: commitTimestampSchema,
+    lastSyncId: readSetWatermarkSchema,
+    correlationId: correlationIdSchema.optional(),
+  })
+  .refine(({ correlationId, lastSyncId }) => correlationId === undefined || lastSyncId > 0, {
+    path: ['lastSyncId'],
+    message: 'A source-confirmed commit requires a positive lastSyncId',
+  });
+
+export const rejectedCommitStatusSchema = z.strictObject({
+  status: rejectedStatusSchema,
+  statusAt: commitTimestampSchema,
+});
+
+/** The single semantic owner of the complete commit lifecycle fact. */
+export const commitStatusSchema = z.discriminatedUnion('status', [
+  queuedCommitStatusSchema,
+  confirmedCommitStatusSchema,
+  rejectedCommitStatusSchema,
+]);
+export type CommitStatusValue = z.infer<typeof commitStatusSchema>;
+export type CommitStatus = CommitStatusValue['status'];
 
 /**
- * The settlement states a write may block on — extracted from the reported
+ * The lifecycle states a write may block on — extracted from the reported
  * vocabulary above, never restated beside it. `commitStatusSchema` is every
  * state a server can report; this is the subset a caller can usefully wait for,
  * and the two are not the same question: one describes an outcome, the other a
  * request.
  *
  * `.extract` keeps the relationship mechanical in both directions. Renaming a
- * settlement state breaks this line at build time, and adding one that nobody
+ * lifecycle state breaks this line at build time, and adding one that nobody
  * can block on — a commit parked for a human, say — does not become a legal
  * `wait` merely by being added above. Both the `wait` option's runtime
  * validator and its interface derive from here, so they cannot disagree.
  */
-export const commitWaitSchema = commitStatusSchema.extract(['queued', 'confirmed']);
+export const commitWaitSchema = z.union([queuedStatusSchema, confirmedStatusSchema]);
 export type CommitWait = z.infer<typeof commitWaitSchema>;
-
-const queuedSettlementShape = {
-  status: z.literal('queued'),
-  correlationId: correlationIdSchema,
-} as const;
-
-const confirmedSettlementShape = {
-  status: z.literal('confirmed'),
-  correlationId: correlationIdSchema.optional(),
-} as const;
-
-const queuedSettlementSchema = z.strictObject(queuedSettlementShape);
-const confirmedSettlementSchema = z.strictObject(confirmedSettlementShape);
-
-/** The one settlement discriminant shared by every commit boundary. */
-export const commitSettlementSchema = z.discriminatedUnion('status', [
-  queuedSettlementSchema,
-  confirmedSettlementSchema,
-]);
-export type CommitSettlement = z.infer<typeof commitSettlementSchema>;
 
 const missingIdsSchema = z.array(z.string().min(1));
 const notificationsSchema = z.array(staleNotificationSchema);
+
+export const commitActorSchema = z.strictObject({
+  kind: participantKindSchema,
+  id: z.string().min(1),
+});
+export type CommitActor = z.infer<typeof commitActorSchema>;
+
+export const commitAttemptSchema = z.strictObject({
+  id: z.string().min(1),
+  observedAt: commitTimestampSchema,
+  transport: z.enum(['http', 'websocket', 'internal']),
+  kind: z.enum(['execution', 'replay']),
+});
+export type CommitAttempt = z.infer<typeof commitAttemptSchema>;
+
+export const commitClaimReferenceSchema = z.strictObject({
+  id: z.string().min(1),
+  target: readSetRowTargetSchema,
+  fenceToken: z.number().int().nonnegative(),
+});
+export type CommitClaimReference = z.infer<typeof commitClaimReferenceSchema>;
+
+const commitEvidenceShape = {
+  attempts: z.array(commitAttemptSchema).min(1).readonly(),
+  actor: commitActorSchema,
+  authority: effectiveAuthoritySchema,
+  claims: z.array(commitClaimReferenceSchema).readonly(),
+} as const;
+
+function requireNonnegativeStatusLatency(
+  value: { readonly createdAt: string; readonly statusAt: string },
+  context: z.RefinementCtx,
+): void {
+  if (Date.parse(value.statusAt) < Date.parse(value.createdAt)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['statusAt'],
+      message: 'Commit statusAt cannot precede createdAt',
+    });
+  }
+}
 
 const successfulReceiptCommonShape = {
   object: z.literal('commit_receipt'),
@@ -82,53 +149,31 @@ const successfulReceiptCommonShape = {
   id: z.string().min(1).optional(),
   clientTxId: z.string().min(1),
   serverTxId: z.string().min(1),
+  createdAt: commitTimestampSchema,
   success: z.literal(true),
-  lastSyncId: z.number().int().nonnegative(),
   ops: z.number().int().nonnegative(),
+  authority: effectiveAuthoritySchema,
   notifications: notificationsSchema.optional(),
   missingIds: missingIdsSchema.optional(),
 } as const;
 
-const queuedCommitReceiptSchema = z
-  .object({
-    ...successfulReceiptCommonShape,
-    ...queuedSettlementShape,
-  })
-  .superRefine((receipt, context) => {
-    if (receipt.lastSyncId !== 0) {
-      context.addIssue({
-        code: 'custom',
-        path: ['lastSyncId'],
-        message: 'A queued source receipt cannot claim a confirmed sync watermark',
-      });
-    }
-  });
+const queuedCommitReceiptSchema = queuedCommitStatusSchema.safeExtend(
+  successfulReceiptCommonShape,
+);
 
-const confirmedCommitReceiptSchema = z
-  .object({
-    ...successfulReceiptCommonShape,
-    ...confirmedSettlementShape,
-  })
-  .superRefine((receipt, context) => {
-    if (receipt.correlationId && receipt.lastSyncId <= 0) {
-      context.addIssue({
-        code: 'custom',
-        path: ['lastSyncId'],
-        message: 'A source-confirmed receipt requires a positive sync watermark',
-      });
-    }
-  });
+const confirmedCommitReceiptSchema = confirmedCommitStatusSchema.safeExtend(
+  successfulReceiptCommonShape,
+);
 
 /**
  * Successful HTTP/WS receipt. This schema is deliberately strict about the
- * settlement discriminant. Zod's default object behavior strips additive
+ * lifecycle discriminant. Zod's default object behavior strips additive
  * fields, which is forward compatible without allowing server-internal
  * recovery evidence to leak through a parsed wire receipt.
  */
-export const commitReceiptSchema = z.discriminatedUnion('status', [
-  queuedCommitReceiptSchema,
-  confirmedCommitReceiptSchema,
-]);
+export const commitReceiptSchema = z
+  .discriminatedUnion('status', [queuedCommitReceiptSchema, confirmedCommitReceiptSchema])
+  .superRefine(requireNonnegativeStatusLatency);
 export type CommitReceiptWire = z.infer<typeof commitReceiptSchema>;
 
 /**
@@ -139,29 +184,31 @@ export type CommitReceiptWire = z.infer<typeof commitReceiptSchema>;
  * single boundary cast; every code *producer* is constrained at the
  * `AbloError` constructor instead.
  */
-const errorCodeSchema = z.custom<ErrorCode>(
-  (value) => typeof value === 'string' && value.length > 0,
-  { message: 'commit rejection code must be a non-empty string' }
-);
+const errorCodeSchema = z.string().min(1) as z.ZodType<ErrorCode>;
+const commitErrorSchema = z.object({
+  code: errorCodeSchema,
+  message: z.string(),
+  field: z.string().optional(),
+  request_id: z.string().optional(),
+  event_id: z.string().optional(),
+  requiredCapability: requiredCapabilityWireSchema.optional(),
+  details: z.record(z.string(), z.unknown()).optional(),
+});
 
 /** The failure arm is separate: queued/confirmed always imply `success:true`. */
-export const rejectedCommitReceiptSchema = z.object({
-  object: z.literal('commit_receipt'),
-  clientTxId: z.string(),
-  serverTxId: z.string(),
-  success: z.literal(false),
-  status: z.literal('rejected'),
-  lastSyncId: z.number().int().nonnegative().optional(),
-  ops: z.number().int().nonnegative().optional(),
-  error: z.object({
-    code: errorCodeSchema,
-    message: z.string(),
-    field: z.string().optional(),
-    request_id: z.string().optional(),
-    requiredCapability: requiredCapabilityWireSchema.optional(),
-    details: z.record(z.string(), z.unknown()).optional(),
-  }),
-});
+export const rejectedCommitReceiptSchema = rejectedCommitStatusSchema
+  .safeExtend({
+    object: z.literal('commit_receipt'),
+    clientTxId: z.string(),
+    serverTxId: z.string(),
+    createdAt: commitTimestampSchema,
+    success: z.literal(false),
+    ops: z.number().int().nonnegative().optional(),
+    /** Server-stamped authority; request bodies have no authority field. */
+    authority: effectiveAuthoritySchema,
+    error: commitErrorSchema,
+  })
+  .superRefine(requireNonnegativeStatusLatency);
 export type RejectedCommitReceiptWire = z.infer<typeof rejectedCommitReceiptSchema>;
 
 export const mutationResultPayloadSchema = z.union([
@@ -184,24 +231,32 @@ const confirmationTransactionIdsSchema = z
   });
 
 /**
- * Server-internal execution result persisted in `mutation_log`.
- *
- * `status` remains optional only for pre-settlement hosted rows. At runtime an
- * omitted value has the established meaning `confirmed`; new source-forwarded
- * rows must use the explicit queued arm with both public correlation and exact
- * internal storage ids.
+ * Server-internal execution result persisted in `mutation_log`. It composes
+ * the same required status fact as the public boundaries plus internal sync
+ * range and recovery evidence.
  */
-const rawCommitExecutionResultSchema = z
-  .strictObject({
-    lastSyncId: z.number().int().nonnegative(),
+const executionEvidenceShape = {
     firstSyncId: z.number().int().nonnegative(),
-    status: commitStatusSchema.optional(),
-    correlationId: correlationIdSchema.optional(),
+    createdAt: commitTimestampSchema,
     confirmationTransactionIds: confirmationTransactionIdsSchema.optional(),
     notifications: notificationsSchema.optional(),
     missingIds: missingIdsSchema.optional(),
-  })
+} as const;
+
+const queuedCommitExecutionResultSchema = queuedCommitStatusSchema.safeExtend(
+  executionEvidenceShape,
+);
+const confirmedCommitExecutionResultSchema = confirmedCommitStatusSchema.safeExtend(
+  executionEvidenceShape,
+);
+
+const canonicalCommitExecutionResultSchema = z
+  .discriminatedUnion('status', [
+    queuedCommitExecutionResultSchema,
+    confirmedCommitExecutionResultSchema,
+  ])
   .superRefine((result, context) => {
+    requireNonnegativeStatusLatency(result, context);
     const validRange =
       (result.firstSyncId === 0 && result.lastSyncId === 0) ||
       (result.firstSyncId > 0 && result.firstSyncId <= result.lastSyncId);
@@ -213,14 +268,7 @@ const rawCommitExecutionResultSchema = z
       });
     }
 
-    if (result.status === 'queued') {
-      if (!result.correlationId) {
-        context.addIssue({
-          code: 'custom',
-          path: ['correlationId'],
-          message: 'A queued source result requires a correlationId',
-        });
-      }
+    if (result.status === queuedStatusSchema.value) {
       if (!result.confirmationTransactionIds) {
         context.addIssue({
           code: 'custom',
@@ -251,18 +299,7 @@ const rawCommitExecutionResultSchema = z
         message: 'A source correlation requires exact confirmation transaction ids',
       });
     }
-    if (result.correlationId && result.status === undefined) {
-      context.addIssue({
-        code: 'custom',
-        path: ['status'],
-        message: 'Source-correlated results require explicit settlement status',
-      });
-    }
-    if (
-      result.status === 'confirmed' &&
-      result.correlationId &&
-      (result.firstSyncId <= 0 || result.lastSyncId <= 0)
-    ) {
+    if (result.status === confirmedStatusSchema.value && result.correlationId && result.firstSyncId <= 0) {
       context.addIssue({
         code: 'custom',
         path: ['lastSyncId'],
@@ -270,45 +307,27 @@ const rawCommitExecutionResultSchema = z
       });
     }
   });
-export const commitExecutionResultSchema = rawCommitExecutionResultSchema.transform((result) => ({
-  ...result,
-  status: result.status ?? ('confirmed' as const),
-}));
+
+/** Canonical storage contract. Status is never optional or reconstructed. */
+export const commitExecutionResultSchema = canonicalCommitExecutionResultSchema;
 export type CommitExecutionResultInput = z.input<typeof commitExecutionResultSchema>;
 export type CommitExecutionResult = z.infer<typeof commitExecutionResultSchema>;
 
 const ackCommonShape = {
-  lastSyncId: z.number().int().nonnegative(),
   notifications: notificationsSchema.optional(),
   missingIds: missingIdsSchema.optional(),
 } as const;
 
 /** Normalized acknowledgement handed from a mutation transport to the queue. */
 export const commitAckSchema = z.discriminatedUnion('status', [
-  z
-    .strictObject({
-      ...ackCommonShape,
-      ...queuedSettlementShape,
-    })
-    .refine(({ lastSyncId }) => lastSyncId === 0, {
-      path: ['lastSyncId'],
-      message: 'A queued acknowledgement cannot claim a sync watermark',
-    }),
-  z
-    .strictObject({
-      ...ackCommonShape,
-      ...confirmedSettlementShape,
-    })
-    .refine(({ correlationId, lastSyncId }) => correlationId === undefined || lastSyncId > 0, {
-      path: ['lastSyncId'],
-      message: 'A source-confirmed acknowledgement requires a sync watermark',
-    }),
+  queuedCommitStatusSchema.safeExtend(ackCommonShape),
+  confirmedCommitStatusSchema.safeExtend(ackCommonShape),
 ]);
 export type CommitAck = z.infer<typeof commitAckSchema>;
 
 /**
  * The boundary an injected mutation executor returns through. It is the
- * acknowledgement schema itself: settlement is declared, never inferred from
+ * acknowledgement schema itself: status is declared, never inferred from
  * an omission, so a transport cannot report a write as landed by staying
  * silent about how it landed.
  */
@@ -319,16 +338,16 @@ export type MutationCommitResult = z.infer<typeof mutationCommitResultSchema>;
 /**
  * Public SDK projection returned by `ablo.commits` and model mutations.
  *
- * This intentionally does not compose `commitSettlementSchema`: on the WS
+ * This intentionally carries only the status name: on the WS
  * facade, `wait:'queued'` currently means locally sealed/enqueued, before a
  * server has necessarily accepted the write. Renaming that public state to
- * `enqueued` is a separate protocol change; the authoritative settlement
+ * `enqueued` is a separate protocol change; the authoritative status
  * union above is reserved for server acknowledgements.
  */
 export const clientCommitReceiptSchema = z.strictObject({
   id: z.string().min(1),
-  status: commitStatusSchema,
-  lastSyncId: z.number().int().nonnegative().optional(),
+  status: z.union([queuedStatusSchema, confirmedStatusSchema]),
+  lastSyncId: readSetWatermarkSchema.optional(),
   notifications: notificationsSchema.optional(),
   missingIds: missingIdsSchema.optional(),
 });
@@ -351,7 +370,8 @@ export type ClientCommitReceipt = z.infer<typeof clientCommitReceiptSchema>;
 export const commitOperationControlShape = {
   id: z.string().nullish(),
   transactionId: z.string().nullish(),
-  readAt: z.number().nullish(),
+  claimId: z.string().min(1).nullish(),
+  readAt: readSetWatermarkSchema.nullish(),
   onStale: onStaleModeSchema.nullish(),
   fenceToken: z.number().nullish(),
 };
@@ -365,6 +385,24 @@ export const commitOperationBodySchema = z.object({
 });
 export type CommitOperationBody = z.infer<typeof commitOperationBodySchema>;
 
+/** Commit records retain intent metadata but never copy customer mutation data. */
+export const COMMIT_OPERATION_DATA_RETENTION = 'redacted' as const;
+export const commitRecordOperationSchema = commitOperationBodySchema
+  .omit({ data: true })
+  .safeExtend({ data: z.strictObject({ retention: z.literal(COMMIT_OPERATION_DATA_RETENTION) }) });
+export type CommitRecordOperation = z.infer<typeof commitRecordOperationSchema>;
+
+/** Transport/result evidence nested beneath the canonical record status. */
+export const commitReceiptEvidenceSchema = z.strictObject({
+  clientTxId: z.string().min(1),
+  serverTxId: z.string(),
+  ops: z.number().int().nonnegative().optional(),
+  notifications: notificationsSchema.optional(),
+  missingIds: missingIdsSchema.optional(),
+  error: commitErrorSchema.optional(),
+});
+export type CommitReceiptEvidence = z.infer<typeof commitReceiptEvidenceSchema>;
+
 /**
  * The `POST /v1/commits` request body.
  *
@@ -373,9 +411,72 @@ export type CommitOperationBody = z.infer<typeof commitOperationBodySchema>;
  * `operations` is how a caller starts watching a row without writing to it.
  * Request identity travels in the `Idempotency-Key` header.
  */
-export const commitRequestSchema = z.object({
+export const commitRequestSchema = z.strictObject({
   operations: z.array(commitOperationBodySchema).min(1).optional(),
-  reads: z.array(readDependencySchema).nullish(),
-  track: z.array(trackDependencySchema).nullish(),
+  reads: readDependencyListSchema.nullish(),
+  track: trackDependencyListSchema.nullish(),
+}).refine((value) => readSetProjectionEntryCount(value) <= MAX_READ_SET_ENTRIES, {
+  path: ['reads'],
+  message: `reads and track may contain at most ${MAX_READ_SET_ENTRIES} entries combined`,
 });
 export type CommitRequest = z.infer<typeof commitRequestSchema>;
+
+/**
+ * Current canonical commit projection. Status, time, lastSyncId, and source
+ * correlation occur once at the top level; receipt retains transport evidence.
+ */
+const commitRecordEvidenceShape = {
+    id: z.string().min(1),
+    ...commitEvidenceShape,
+    createdAt: commitTimestampSchema,
+    readSet: readSetSchema,
+    operations: z.array(commitRecordOperationSchema).readonly(),
+    receipt: commitReceiptEvidenceSchema,
+} as const;
+
+export const commitRecordSchema = z
+  .discriminatedUnion('status', [
+    queuedCommitStatusSchema.safeExtend(commitRecordEvidenceShape),
+    confirmedCommitStatusSchema.safeExtend(commitRecordEvidenceShape),
+    rejectedCommitStatusSchema.safeExtend({
+      ...commitRecordEvidenceShape,
+      lastSyncId: z.literal(0),
+    }),
+  ])
+  .superRefine((record, context) => {
+    requireNonnegativeStatusLatency(record, context);
+    if (record.status === rejectedStatusSchema.value && !record.receipt.error) {
+      context.addIssue({
+        code: 'custom',
+        path: ['receipt', 'error'],
+        message: 'A rejected CommitRecord requires rejection evidence',
+      });
+    }
+    if (record.status !== rejectedStatusSchema.value && record.receipt.error) {
+      context.addIssue({
+        code: 'custom',
+        path: ['receipt', 'error'],
+        message: 'An accepted CommitRecord cannot carry rejection evidence',
+      });
+    }
+  });
+export type CommitRecord = z.infer<typeof commitRecordSchema>;
+
+export const commitRecordWhereSchema = z.strictObject({
+  actorId: z.string().min(1).optional(),
+  status: z.union([queuedStatusSchema, confirmedStatusSchema, rejectedStatusSchema]).optional(),
+});
+export type CommitRecordWhere = z.infer<typeof commitRecordWhereSchema>;
+
+export const commitRecordListOptionsSchema = z.strictObject({
+  where: commitRecordWhereSchema.optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+});
+export type CommitRecordListOptions = z.infer<typeof commitRecordListOptionsSchema>;
+
+export const commitRecordListSchema = z.strictObject({
+  data: z.array(commitRecordSchema).readonly(),
+  nextCursor: z.string().min(1).nullable(),
+});
+export type CommitRecordList = z.infer<typeof commitRecordListSchema>;

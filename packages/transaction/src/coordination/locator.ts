@@ -198,3 +198,20 @@ export function fenceTokenFor(
     ? fence.token
     : null;
 }
+
+/**
+ * The claim identity an operation carries when it writes the row named by a
+ * held claim. Like the fence token, a claim id cannot travel to another row.
+ */
+export function claimIdFor(
+  source: EntityLocator | null | undefined,
+  claimId: string | null | undefined,
+  model: string,
+  id: string | null,
+): string | null {
+  if (source == null || claimId == null || id === null) return null;
+  const target = modelTarget(source);
+  return model.toLowerCase() === target.model.toLowerCase() && id === target.id
+    ? claimId
+    : null;
+}

@@ -275,6 +275,6 @@ export {
 
 // The OpenAPI generator describes the language-agnostic `/v1` surface — the
 // primitive itself, which a Python or Go caller consumes with no TypeScript
-// anywhere — so it lives in the settlement core (ADR 0016). Re-exported here so
+// anywhere — so it lives in the confirmation core (ADR 0016). Re-exported here so
 // the `@abloatai/ablo/schema` import path keeps resolving.
 export { abloOpenApi, schemaToOpenApi, type SchemaToOpenApiOptions } from './openapi.js';

@@ -33,7 +33,7 @@ import type {
   DurableWriteStore,
   PendingWrite,
 } from '../mutations/durableWriteStore.js';
-import { commitEnvelopeRecordId } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import { commitEnvelopeRecordId } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 
 class MemoryDurableWrites implements DurableWriteStore {
   readonly records = new Map<string, PendingWrite>();

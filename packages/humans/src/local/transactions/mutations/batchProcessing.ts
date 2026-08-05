@@ -6,7 +6,7 @@ import type { OptimisticUpdateEntry } from './localMutation.js';
 import type { StaleNotification } from '@abloatai/transaction/coordination/schema';
 import type { DeltaConfirmationTracker } from './deltaConfirmation.js';
 import type { MutationCommitResult } from '@abloatai/transaction/wire/commit';
-import type { DurableCommitEnvelope } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import type { DurableCommitEnvelope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import { AbloError, AbloNotFoundError } from '@abloatai/transaction/errors';
 import { applyWriteOptions, normalizeModelKey, TX_TYPE_TO_MUTATION_OP, type WriteOperationFields } from './commitPayload.js';
 import type { MutationOperationType } from '@abloatai/transaction/types';

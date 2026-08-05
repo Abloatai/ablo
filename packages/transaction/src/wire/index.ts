@@ -83,15 +83,21 @@ export type {
   MutationResultMessage,
 } from './frames.js';
 
-// Commit settlement backbone. The transport receipt, server execution cache,
+// Commit lifecycle backbone. The transport receipt, server execution cache,
 // and normalized client acknowledgement are different envelopes composed from
-// this one discriminated settlement vocabulary.
+// this one discriminated status vocabulary.
 export {
   COMMIT_CORRELATION_ID_MAX_LENGTH,
   correlationIdSchema,
+  commitTimestampSchema,
+  queuedStatusSchema,
+  confirmedStatusSchema,
+  rejectedStatusSchema,
+  queuedCommitStatusSchema,
+  confirmedCommitStatusSchema,
+  rejectedCommitStatusSchema,
   commitStatusSchema,
   commitWaitSchema,
-  commitSettlementSchema,
   commitReceiptSchema,
   rejectedCommitReceiptSchema,
   mutationResultPayloadSchema,
@@ -102,15 +108,33 @@ export {
   // OpenAPI reference derives from rather than describing separately.
   commitOperationControlShape,
   commitOperationBodySchema,
+  commitActorSchema,
+  commitAttemptSchema,
+  commitClaimReferenceSchema,
+  commitRecordOperationSchema,
+  commitReceiptEvidenceSchema,
   commitRequestSchema,
+  commitRecordSchema,
+  commitRecordWhereSchema,
+  commitRecordListOptionsSchema,
+  commitRecordListSchema,
 } from './commit.js';
 export type {
   CommitOperationBody,
+  CommitActor,
+  CommitAttempt,
+  CommitClaimReference,
+  CommitRecordOperation,
+  CommitReceiptEvidence,
   CommitRequest,
+  CommitRecord,
+  CommitRecordWhere,
+  CommitRecordListOptions,
+  CommitRecordList,
   CorrelationId,
   CommitStatus,
+  CommitStatusValue,
   CommitWait,
-  CommitSettlement,
   CommitReceiptWire,
   RejectedCommitReceiptWire,
   MutationResultPayload,
@@ -119,6 +143,10 @@ export type {
   MutationCommitResultInput,
   MutationCommitResult,
 } from './commit.js';
+export {
+  effectiveAuthoritySchema,
+} from '../auth/capability.js';
+export type { EffectiveAuthority } from '../auth/capability.js';
 
 // The read-path delta contract: the shape the server broadcasts to clients as the
 // payload of a `delta` or `sync_response` frame, together with the shared
@@ -237,8 +265,13 @@ export type {
 export {
   modelReadResponseSchema,
   modelListResponseSchema,
+  modelListEvidenceSchema,
 } from './modelResponses.js';
-export type { ModelReadResponse, ModelListResponse } from './modelResponses.js';
+export type {
+  ModelReadResponse,
+  ModelListResponse,
+  ModelListEvidence,
+} from './modelResponses.js';
 
 // What a model is made of — the artifact's own field and relation shapes, which
 // the schema read reports and every other layer derives its types from.

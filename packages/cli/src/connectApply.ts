@@ -297,23 +297,6 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
   // with seventeen published tables and four declared models it also silently
   // dropped thirteen from replication. The complaint was never caused by
   // publishing those tables; it was caused by CHECKING them.
-  const coordinatedTables = (await schemaDeclaredTables()) ?? [];
-  const tables = args.tables.length > 0 ? args.tables : coordinatedTables;
-  if (tables.length === 0) {
-    throw new AbloValidationError(
-      `No mapped tables were found for schema ${args.schema}. Push the Ablo schema first, or pass --tables a,b,c. A project binding must enumerate its own schema-qualified tables; it cannot publish every table in a shared database.`,
-      { code: 'cli_invalid_arguments' }
-    );
-  }
-  if (args.tables.length === 0) {
-    console.log(
-      pc.dim(
-        `  publishing the ${tables.length} table${tables.length === 1 ? '' : 's'} declared by your Ablo schema in ${pc.bold(args.schema)} ` +
-          `(${pc.bold('--tables')} to override)\n`
-      )
-    );
-  }
-
   // Which plane is this actually acting on? `push` has asked since it shipped;
   // `connect` never has, so a key from an ambient `.env.local` could target a
   // different project than the one selected and nothing said so. That silence
@@ -368,6 +351,27 @@ export async function runConnectApply(args: ConnectArgs): Promise<void> {
         '\n'
     );
     process.exit(1);
+  }
+
+  // A known ownership conflict is more fundamental than the local schema
+  // selection: report it before asking the caller for tables. Both checks are
+  // read-only, but only the conflict explains why this plane cannot proceed at
+  // all. This also preserves the preflight guarantee for an empty project.
+  const coordinatedTables = (await schemaDeclaredTables()) ?? [];
+  const tables = args.tables.length > 0 ? args.tables : coordinatedTables;
+  if (tables.length === 0) {
+    throw new AbloValidationError(
+      `No mapped tables were found for schema ${args.schema}. Push the Ablo schema first, or pass --tables a,b,c. A project binding must enumerate its own schema-qualified tables; it cannot publish every table in a shared database.`,
+      { code: 'cli_invalid_arguments' }
+    );
+  }
+  if (args.tables.length === 0) {
+    console.log(
+      pc.dim(
+        `  publishing the ${tables.length} table${tables.length === 1 ? '' : 's'} declared by your Ablo schema in ${pc.bold(args.schema)} ` +
+          `(${pc.bold('--tables')} to override)\n`
+      )
+    );
   }
 
   // Rotate re-keys before it registers, so a rotate that cannot register strands

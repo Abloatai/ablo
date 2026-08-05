@@ -1,7 +1,7 @@
 /**
  * The resume position for `GET /v1/logs`.
  *
- * The feed merges two independently-sequenced sources — the settlement log and
+ * The feed merges two independently-sequenced sources — the commit log and
  * the claim-event log — so one opaque cursor has to carry two positions. They
  * cannot share a sequence: allocating claim positions from `next_sync_id` would
  * put ephemeral leases into the log that clients materialize rows from and that

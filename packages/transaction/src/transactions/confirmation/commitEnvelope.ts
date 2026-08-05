@@ -8,7 +8,12 @@
  */
 
 import { z } from 'zod';
-import { readDependencySchema, trackDependencySchema } from '../../coordination/schema.js';
+import {
+  MAX_READ_SET_ENTRIES,
+  readDependencyListSchema,
+  readSetProjectionEntryCount,
+  trackDependencyListSchema,
+} from '../../coordination/schema.js';
 import { wireCommitOperationSchema } from '../../wire/frames.js';
 import { correlationIdSchema } from '../../wire/commit.js';
 import { idempotencyKeySchema } from './idempotencyKey.js';
@@ -41,6 +46,7 @@ export const durableCommitOperationSchema = wireCommitOperationSchema
     id: true,
     input: true,
     transactionId: true,
+    claimId: true,
     readAt: true,
     onStale: true,
     fenceToken: true,
@@ -50,6 +56,7 @@ export const durableCommitOperationSchema = wireCommitOperationSchema
     id: z.string().min(1),
     input: z.record(z.string(), z.unknown()).optional(),
     transactionId: z.string().min(1).optional(),
+    claimId: z.string().min(1).optional(),
     options: z
       .strictObject({
         idempotencyKey: z.string().min(1).max(255).nullable().optional(),
@@ -62,8 +69,11 @@ export type DurableCommitOperation = z.infer<typeof durableCommitOperationSchema
 export type DurableCommitOperationInput = z.input<typeof durableCommitOperationSchema>;
 
 const durableCommitOptionsSchema = z.strictObject({
-  reads: z.array(readDependencySchema).nullable().optional(),
-  track: z.array(trackDependencySchema).nullable().optional(),
+  reads: readDependencyListSchema.nullable().optional(),
+  track: trackDependencyListSchema.nullable().optional(),
+}).refine((value) => readSetProjectionEntryCount(value) <= MAX_READ_SET_ENTRIES, {
+  path: ['reads'],
+  message: `reads and track may contain at most ${MAX_READ_SET_ENTRIES} entries combined`,
 });
 
 export const commitOutboxScopeSchema = z.strictObject({

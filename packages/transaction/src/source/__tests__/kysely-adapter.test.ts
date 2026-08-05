@@ -451,9 +451,9 @@ describe('kyselyDataSource', () => {
     // carry the typename; the mutation operations carry the wire key; the
     // adapter translates through the schema when comparing the two.
     const typedSchema = defineSchema({
-      docs: model(
+      collaborationWorkItems: model(
         { title: field.string() },
-        { typename: 'Doc', tableName: 'docs' }),
+        { typename: 'CollaborationWorkItem', tableName: 'collaboration_work_items' }),
     });
 
     const db = new FakeKysely([
@@ -472,14 +472,20 @@ describe('kyselyDataSource', () => {
           version: 1,
           correlationId: 'corr_typename',
           operations: [
-            { model: 'Doc', id: 'd1', action: 'I', transactionId: 'op_typename' },
+            {
+              model: 'CollaborationWorkItem',
+              id: 'd1',
+              action: 'I',
+              transactionId: 'op_typename',
+            },
           ],
         }),
       },
       operations: [
         {
           type: 'CREATE',
-          model: 'docs',
+          // The client wire path lowercases camelCase schema resource keys.
+          model: 'collaborationworkitems',
           id: 'd1',
           input: { title: 'T' },
           transactionId: 'op_typename',
@@ -501,14 +507,19 @@ describe('kyselyDataSource', () => {
             version: 1,
             correlationId: 'corr_wirekey',
             operations: [
-              { model: 'docs', id: 'd1', action: 'I', transactionId: 'op_wirekey' },
+              {
+                model: 'collaborationworkitems',
+                id: 'd1',
+                action: 'I',
+                transactionId: 'op_wirekey',
+              },
             ],
           }),
         },
         operations: [
           {
             type: 'CREATE',
-            model: 'docs',
+            model: 'collaborationworkitems',
             id: 'd1',
             input: { title: 'T' },
             transactionId: 'op_wirekey',

@@ -1,5 +1,5 @@
 /**
- * Moved to the settlement core with the duplex transport (ADR 0016): the
+ * Moved to the confirmation core with the duplex transport (ADR 0016): the
  * connection state machine is plain, mobx-free plumbing an agent needs as much
  * as a browser does. This path re-exports it so existing importers stay
  * unchanged; the reactive store mirrors its transitions through

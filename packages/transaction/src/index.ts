@@ -1,5 +1,5 @@
 /**
- * The Ablo settlement core (ADR 0013).
+ * The Ablo confirmation core (ADR 0013).
  *
  * The transaction layer that the reactive client is a consumer of, not the
  * other way round. The root barrel is deliberate: it exports the seam —
@@ -31,8 +31,15 @@ export { Ablo } from './ablo.js';
 export type {
   AbloHttpClient,
   AbloHttpClientOptions,
+  CapturedRow,
   HttpModelClient,
+  HttpModelMutationParams,
 } from './transport/httpClient.js';
+export type {
+  FunctionalUpdateOptions,
+  /** @deprecated Use `FunctionalUpdateOptions`. */
+  ContentionOptions,
+} from './resources/functionalUpdate.js';
 
 // The types the seam's signatures reference.
 export type {

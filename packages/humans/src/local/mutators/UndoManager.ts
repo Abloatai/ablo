@@ -365,7 +365,7 @@ export class UndoScope<S extends Schema> {
    * Run `work` after every previously-enqueued scope operation has settled,
    * in invocation order. The internal `tail` always resolves (failures are
    * swallowed *for the chain only*) so one rejected mutator can't wedge the
-   * queue; the original settlement is still surfaced to this call's caller.
+   * queue; the original confirmation is still surfaced to this call's caller.
    */
   private enqueue<T>(work: () => Promise<T>): Promise<T> {
     const result = this.tail.then(work, work);

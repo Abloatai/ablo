@@ -1,7 +1,7 @@
 import { AbloIdempotencyError } from '@abloatai/transaction/errors';
 import type { ReadDependency, TrackDependency } from '@abloatai/transaction/coordination/schema';
 import { stableStringify } from '@abloatai/transaction/utils/json';
-import type { DurableCommitEnvelope } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import type { DurableCommitEnvelope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import type { CommitTransaction } from './commitLane.js';
 import type { SealDurableCommitInput } from './commitTransport.js';
 

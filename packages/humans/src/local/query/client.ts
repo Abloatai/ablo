@@ -13,6 +13,7 @@
  */
 
 import { z } from 'zod';
+import { modelListEvidenceSchema } from '@abloatai/transaction/wire';
 import type { QueryBatch, QueryBatchResult } from './types.js';
 import { translateHttpError } from '@abloatai/transaction/errors';
 import { classifyRecovery, type RecoveryClass } from '@abloatai/transaction/errorCodes';
@@ -37,6 +38,16 @@ const QueryResultSchema = z
 const QueryBatchResultSchema = z
   .object({
     results: z.array(QueryResultSchema),
+    evidence: z.array(z.array(modelListEvidenceSchema)).optional(),
+    errors: z.array(z.object({
+      index: z.number().int().nonnegative(),
+      model: z.string(),
+      type: z.string(),
+      code: z.string(),
+      message: z.string(),
+      request_id: z.string().optional(),
+      event_id: z.string(),
+    })).optional(),
   })
   .loose();
 
@@ -188,6 +199,12 @@ export async function postQuery(
           issues: parsed.error.issues,
         });
         return { results: batch.queries.map(() => []) };
+      }
+      for (const failure of parsed.data.errors ?? []) {
+        runtime.logger.warn(
+          `Could not load ${failure.model} — ${failure.message} (code: ${failure.code}, ref: ${failure.request_id ?? failure.event_id}). No results were returned for slot ${failure.index}.`,
+        );
+        runtime.logger.debug('[postQuery.error] query slot failure', failure);
       }
       return parsed.data;
     } finally {

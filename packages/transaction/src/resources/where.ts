@@ -10,7 +10,7 @@
  * key — for example, fetching every block whose `sectionId` falls in a set of ids.
  *
  * These types describe the *request*, not any local copy of the rows it returns,
- * so they live with the settlement core rather than the reactive consumer.
+ * so they live with the commit core rather than the reactive consumer.
  */
 
 import { z } from 'zod';

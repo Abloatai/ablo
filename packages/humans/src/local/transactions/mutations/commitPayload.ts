@@ -15,7 +15,7 @@ import { MutationOperationType } from '@abloatai/transaction/types';
 import { snapshotJsonValue } from '@abloatai/transaction/utils/json';
 import type { OnStaleMode } from '@abloatai/transaction/coordination/schema';
 import type { MutationOptions, WriteOptions } from '../../interfaces/index.js';
-import type { CommitEnvelopeMember } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import type { CommitEnvelopeMember } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 
 export interface UserContext {
   userId: string;
@@ -208,6 +208,8 @@ export function hasStaleWriteOptions(options?: WriteOptions): boolean {
 export function hasCommitCoalescingBarrier(options?: WriteOptions): boolean {
   return (
     hasStaleWriteOptions(options) ||
+    options?.claimRef != null ||
+    options?.fenceToken != null ||
     typeof options?.idempotencyKey === 'string' ||
     typeof options?.label === 'string'
   );
@@ -217,6 +219,7 @@ export interface WriteOperationFields {
   readAt?: number | null;
   onStale?: OnStaleMode | null;
   fenceToken?: number | null;
+  claimId?: string;
   options?: Pick<MutationOptions, 'idempotencyKey' | 'label'>;
 }
 
@@ -242,6 +245,12 @@ export function applyWriteOptions<T extends object>(
   }
   if (writeOptions.fenceToken !== undefined) {
     operation.fenceToken = writeOptions.fenceToken;
+  }
+  if (writeOptions.claimRef != null) {
+    operation.claimId =
+      typeof writeOptions.claimRef === 'string'
+        ? writeOptions.claimRef
+        : writeOptions.claimRef.id;
   }
   if (writeOptions.idempotencyKey != null || writeOptions.label !== undefined) {
     operation.options = {

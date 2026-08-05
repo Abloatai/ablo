@@ -1,6 +1,6 @@
 {
   "$generated": "packages/ablo/scripts/generate-error-docs.mts",
-  "version": "2026-08-03",
+  "version": "2026-08-04",
   "envelope": [
     "type",
     "code",
@@ -87,6 +87,24 @@
       "retryable": false,
       "message": "The client has no base URL configured, so it cannot address the server. Set the base URL when constructing the client.",
       "docUrl": "https://docs.abloatai.com/errors#base_url_missing"
+    },
+    {
+      "code": "better_auth_request_failed",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The authentication request was rejected. Check the submitted credentials or request and try again.",
+      "docUrl": "https://docs.abloatai.com/errors#better_auth_request_failed"
+    },
+    {
+      "code": "better_auth_upstream_failed",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 500,
+      "retryable": true,
+      "message": "The authentication service could not complete the request. Retry the request; if it continues to fail, contact support.",
+      "docUrl": "https://docs.abloatai.com/errors#better_auth_upstream_failed"
     },
     {
       "code": "bootstrap_cancelled",
@@ -513,6 +531,15 @@
       "docUrl": "https://docs.abloatai.com/errors#contention_exhausted"
     },
     {
+      "code": "data_session_unsupported",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "This sign-in host cannot create the requested data session.",
+      "docUrl": "https://docs.abloatai.com/errors#data_session_unsupported"
+    },
+    {
       "code": "data_source_blocked",
       "category": "transport",
       "surface": "wire",
@@ -536,8 +563,17 @@
       "surface": "wire",
       "httpStatus": 403,
       "retryable": false,
-      "message": "The database host resolves to a private, loopback, or link-local address, which Ablo's servers will not connect to directly. Use a publicly resolvable direct endpoint, private networking, or `ablo dev --local` with a signed Data Source reverse channel.",
+      "message": "The database host did not resolve exclusively to an allowed address for this route. Use a publicly resolvable direct endpoint, or configure the matching PrivateLink, peering, or VPN route. Localhost has its own `database_loopback_requires_connector` workflow.",
       "docUrl": "https://docs.abloatai.com/errors#database_host_not_allowed"
+    },
+    {
+      "code": "database_loopback_requires_connector",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "Ablo Cloud cannot open a direct PostgreSQL connection to localhost on your machine. For localhost-first development, run `ablo migrate` once and keep `ablo dev --local` running; use a network-reachable direct route only when Ablo must observe arbitrary SQL writes through WAL.",
+      "docUrl": "https://docs.abloatai.com/errors#database_loopback_requires_connector"
     },
     {
       "code": "database_not_replication_ready",
@@ -751,7 +787,7 @@
       "surface": "wire",
       "httpStatus": 409,
       "retryable": false,
-      "message": "This write carried a fencing token below the row’s current high-water: a later holder claimed the row, wrote, and moved on while this claim was lapsed, so applying the write would silently overwrite their work. The claim is gone — re-claim the row and retry from the current state.",
+      "message": "This claim is no longer current because another participant completed newer work on the row. Re-claim the row and retry from the fresh state.",
       "docUrl": "https://docs.abloatai.com/errors#fence_token_stale"
     },
     {
@@ -1206,6 +1242,15 @@
       "docUrl": "https://docs.abloatai.com/errors#migration_failed"
     },
     {
+      "code": "mint_failed",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 502,
+      "retryable": true,
+      "message": "Ablo could not mint the requested runtime credential. Retry shortly.",
+      "docUrl": "https://docs.abloatai.com/errors#mint_failed"
+    },
+    {
       "code": "mock_mutation_failed",
       "category": "client",
       "surface": "client",
@@ -1226,7 +1271,7 @@
       "category": "claim",
       "surface": "client",
       "retryable": false,
-      "message": "Claiming requires the collaboration runtime, which the standard Ablo({ schema, apiKey }) client wires up for every model automatically — there is no per-model claim configuration to add. This appears only when a model proxy is constructed directly without that runtime (an internal/advanced path).",
+      "message": "Claiming is unavailable on this model client. Construct it through the standard Ablo({ schema, apiKey }) client and retry.",
       "docUrl": "https://docs.abloatai.com/errors#model_claim_not_configured"
     },
     {
@@ -1401,6 +1446,15 @@
       "docUrl": "https://docs.abloatai.com/errors#no_ablo_provider"
     },
     {
+      "code": "no_active_organization",
+      "category": "tenant",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "Select an active organization before continuing.",
+      "docUrl": "https://docs.abloatai.com/errors#no_active_organization"
+    },
+    {
       "code": "no_data_source_registered",
       "category": "not_found",
       "surface": "wire",
@@ -1425,6 +1479,14 @@
       "retryable": false,
       "message": "The database rejected the write because a required column was left empty — a not-null constraint. The error details name the column; supply a value and retry.",
       "docUrl": "https://docs.abloatai.com/errors#not_null_violation"
+    },
+    {
+      "code": "operational_warning",
+      "category": "server",
+      "surface": "client",
+      "retryable": false,
+      "message": "Ablo handled an operational degradation that remains searchable for diagnosis.",
+      "docUrl": "https://docs.abloatai.com/errors#operational_warning"
     },
     {
       "code": "org_id_required",
@@ -1916,6 +1978,24 @@
       "docUrl": "https://docs.abloatai.com/errors#server_execute_unknown_model"
     },
     {
+      "code": "server_side_only",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "This endpoint is available only to trusted server-side callers.",
+      "docUrl": "https://docs.abloatai.com/errors#server_side_only"
+    },
+    {
+      "code": "session_check_failed",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 503,
+      "retryable": true,
+      "message": "Ablo could not verify the current login session. Retry shortly.",
+      "docUrl": "https://docs.abloatai.com/errors#session_check_failed"
+    },
+    {
       "code": "session_expired",
       "category": "auth",
       "surface": "wire",
@@ -2288,6 +2368,15 @@
       "retryable": false,
       "message": "The write duplicates a value that must be unique — another row already holds it. Choose a different value, or update the existing row.",
       "docUrl": "https://docs.abloatai.com/errors#unique_violation"
+    },
+    {
+      "code": "unknown_auth_host",
+      "category": "auth",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "The authentication host is not recognized.",
+      "docUrl": "https://docs.abloatai.com/errors#unknown_auth_host"
     },
     {
       "code": "unknown_model",

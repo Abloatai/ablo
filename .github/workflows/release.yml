@@ -10,6 +10,10 @@ permissions:
 jobs:
   verify-and-publish:
     runs-on: ubuntu-latest
+    env:
+      # Public ingestion DSN, distinct from npm provenance credentials. The CLI
+      # build embeds it and prepublishOnly refuses an empty value.
+      ABLO_CLI_SENTRY_DSN: ${{ vars.ABLO_CLI_SENTRY_DSN }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

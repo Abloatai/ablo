@@ -4,7 +4,7 @@
  * Rows read back from the on-disk transaction store may have been written by an
  * earlier run — possibly by an older version of this package, possibly
  * corrupted. Rather than trust them, the schemas here validate exactly the
- * fields the settlement queue and the local journal restore read during
+ * fields the confirmation queue and the local journal restore read during
  * replay. A row that fails to parse is dropped and reported, never replayed as
  * a malformed commit.
  *
@@ -23,7 +23,7 @@ import type { RuntimeContext } from '../../RuntimeContext.js';
 import {
   commitEnvelopeMemberSchema,
   commitOutboxScopeSchema,
-} from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+} from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import { onStaleModeSchema } from '@abloatai/transaction/coordination/schema';
 
 /** The subset of a write's options that is stored with each transaction or queued mutation. */
@@ -39,6 +39,7 @@ const persistedWriteOptionsSchema = z
     // write. Declared (not just loose-passthrough) so it is validated as a
     // number on rehydration.
     fenceToken: z.number().nullable().optional(),
+    claimRef: z.union([z.string().min(1), z.object({ id: z.string().min(1) })]).nullable().optional(),
   })
   .loose();
 

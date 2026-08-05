@@ -111,7 +111,6 @@ export default defineConfig({
             "/identity",
             "/groups",
             "/coordination",
-            "/concurrency-convention",
             "/interaction-model",
             "/schema-contract",
             "/guarantees",

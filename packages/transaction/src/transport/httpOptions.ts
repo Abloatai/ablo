@@ -13,7 +13,8 @@
 import type { Schema, SchemaRecord } from '../schema/schema.js';
 import type { AuthClientOptions } from '../auth/apiKey.js';
 import type { CoordinationObservability } from '../observability.js';
-import type { CommitOutboxScope } from '../transactions/settlement/commitEnvelope.js';
+import type { CommitOutboxScope } from '../transactions/confirmation/commitEnvelope.js';
+import type { CommitReceiptWire } from '../wire/commit.js';
 import type {
   DurableWriteStore,
   DurableWritesConfig,
@@ -38,4 +39,11 @@ export interface HttpClientConfig<S extends SchemaRecord = SchemaRecord>
   commitOutboxScope?: CommitOutboxScope;
   /** Which transport carries this client's traffic. */
   transport?: 'websocket' | 'http' | undefined;
+  /** @internal Exact receipt phases observed while dispatching one HTTP commit. */
+  onCommitReceipt?: (observation: {
+    readonly receipt: CommitReceiptWire;
+    readonly method: string;
+    readonly path: string;
+    readonly body: unknown;
+  }) => void;
 }

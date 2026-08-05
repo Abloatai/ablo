@@ -1,207 +1,264 @@
+import { z } from 'zod';
 import {
   commitAckSchema,
+  commitClaimReferenceSchema,
   commitExecutionResultSchema,
+  commitRecordSchema,
   commitReceiptSchema,
+  commitRequestSchema,
+  commitStatusSchema,
+  commitWaitSchema,
   mutationResultPayloadSchema,
 } from '@abloatai/transaction/wire/commit';
 
+const CREATED_AT = '2026-08-05T10:00:00.000Z';
+const STATUS_AT = '2026-08-05T10:00:00.058Z';
+const authority = {
+  organizationId: 'org-1', projectId: 'project-1', branchId: 'branch-1',
+  syncGroups: ['org:org-1'], operations: [],
+  participantKind: 'agent' as const, participantId: 'researcher-1', deliveryPartition: null,
+};
+
+const confirmedStatus = {
+  status: 'confirmed' as const,
+  statusAt: STATUS_AT,
+  lastSyncId: 41,
+};
+
 const confirmedReceipt = {
+  ...confirmedStatus,
   object: 'commit_receipt' as const,
   clientTxId: 'client-1',
   serverTxId: '41',
+  createdAt: CREATED_AT,
   success: true as const,
-  status: 'confirmed' as const,
-  lastSyncId: 41,
   ops: 1,
+  authority,
 };
 
-describe('canonical commit settlement receipts', () => {
-  it('accepts hosted and source-confirmed receipts through the same schema', () => {
-    expect(commitReceiptSchema.parse(confirmedReceipt)).toEqual(confirmedReceipt);
-
-    expect(
-      commitReceiptSchema.parse({
-        ...confirmedReceipt,
-        correlationId: 'corr-source-1',
-      })
-    ).toMatchObject({
-      status: 'confirmed',
-      correlationId: 'corr-source-1',
-      lastSyncId: 41,
+describe('canonical commit status', () => {
+  it('records a claim as identity, exact row target, and fence evidence', () => {
+    expect(commitClaimReferenceSchema.parse({
+      id: 'claim-1',
+      target: { scope: 'row', model: 'tasks', id: 'task-1' },
+      fenceToken: 7,
+    })).toEqual({
+      id: 'claim-1',
+      target: { scope: 'row', model: 'tasks', id: 'task-1' },
+      fenceToken: 7,
     });
+    expect(commitClaimReferenceSchema.safeParse({
+      id: 'claim-1',
+      target: { scope: 'row', model: 'tasks', id: 'task-1' },
+    }).success).toBe(false);
   });
 
-  it('requires zero watermark plus a non-empty correlation for queued receipts', () => {
-    const queued = {
-      ...confirmedReceipt,
-      serverTxId: '0',
-      status: 'queued' as const,
-      correlationId: 'corr-source-queued',
-      lastSyncId: 0,
-      confirmationTransactionIds: ['server-internal-must-not-cross-wire'],
-    };
-    expect(commitReceiptSchema.parse(queued)).toEqual({
-      object: 'commit_receipt',
-      clientTxId: 'client-1',
-      serverTxId: '0',
-      success: true,
+  it('owns all three lifecycle variants and derives the status name type', () => {
+    expect(commitStatusSchema.parse({
       status: 'queued',
-      correlationId: 'corr-source-queued',
+      statusAt: STATUS_AT,
       lastSyncId: 0,
-      ops: 1,
-    });
-
-    expect(
-      commitReceiptSchema.safeParse({
-        ...queued,
-        correlationId: undefined,
-      }).success
-    ).toBe(false);
-    expect(
-      commitReceiptSchema.safeParse({
-        ...queued,
-        correlationId: '',
-      }).success
-    ).toBe(false);
-    expect(
-      commitReceiptSchema.safeParse({
-        ...queued,
-        lastSyncId: 1,
-      }).success
-    ).toBe(false);
-  });
-
-  it('does not allow source confirmation without a durable watermark', () => {
-    expect(
-      commitReceiptSchema.safeParse({
-        ...confirmedReceipt,
-        correlationId: 'corr-source-zero',
-        lastSyncId: 0,
-      }).success
-    ).toBe(false);
-  });
-
-  it('keeps success and rejection arms contradictory by construction', () => {
-    expect(
-      mutationResultPayloadSchema.safeParse({
-        ...confirmedReceipt,
-        success: false,
-      }).success
-    ).toBe(false);
-    expect(
-      mutationResultPayloadSchema.safeParse({
-        ...confirmedReceipt,
-        status: 'rejected',
-      }).success
-    ).toBe(false);
-  });
-
-  it('preserves actionable diagnostics on a rejected WebSocket commit', () => {
-    const rejected = mutationResultPayloadSchema.parse({
-      object: 'commit_receipt',
-      clientTxId: 'client-1',
-      serverTxId: '',
-      success: false,
+      correlationId: 'corr-1',
+    })).toMatchObject({ status: 'queued', lastSyncId: 0 });
+    expect(commitStatusSchema.parse(confirmedStatus)).toEqual(confirmedStatus);
+    expect(commitStatusSchema.parse({ status: 'rejected', statusAt: STATUS_AT })).toEqual({
       status: 'rejected',
-      error: {
-        code: 'capability_scope_denied',
-        message: 'Postgres row-level security rejected this write.',
-        request_id: 'req_ws_123',
-        requiredCapability: { scope: 'documents.create' },
-        details: {
-          origin: 'database_row_level_security',
-          resolvedCapability: 'allowed',
-        },
-      },
-    });
-    expect(rejected.error).toMatchObject({
-      request_id: 'req_ws_123',
-      requiredCapability: { scope: 'documents.create' },
-      details: {
-        origin: 'database_row_level_security',
-        resolvedCapability: 'allowed',
-      },
+      statusAt: STATUS_AT,
     });
   });
 
-  it('requires every settlement field a receipt claims, inventing none', () => {
-    // Settlement is declared, not inferred. A receipt that omits `status`,
-    // `object`, `serverTxId`, or `ops` is refused rather than back-filled, so a
-    // producer cannot report a write as confirmed by staying silent.
-    for (const omitted of ['object', 'status', 'serverTxId', 'ops'] as const) {
-      const { [omitted]: _dropped, ...partial } = confirmedReceipt;
-      expect(commitReceiptSchema.safeParse(partial).success).toBe(false);
-    }
+  it('derives the wait subset without allowing rejected', () => {
+    expect(commitWaitSchema.parse('queued')).toBe('queued');
+    expect(commitWaitSchema.parse('confirmed')).toBe('confirmed');
+    expect(commitWaitSchema.safeParse('rejected').success).toBe(false);
+  });
 
-    // A stringly-typed watermark is a different shape, not a spelling of this
-    // one — it is refused rather than coerced.
-    expect(
-      commitReceiptSchema.safeParse({ ...confirmedReceipt, lastSyncId: '9' }).success
-    ).toBe(false);
+  it('requires queued correlation at lastSyncId zero', () => {
+    const queued = { status: 'queued', statusAt: STATUS_AT, lastSyncId: 0, correlationId: 'corr' };
+    expect(commitStatusSchema.parse(queued)).toEqual(queued);
+    expect(commitStatusSchema.safeParse({ ...queued, correlationId: undefined }).success).toBe(false);
+    expect(commitStatusSchema.safeParse({ ...queued, lastSyncId: 1 }).success).toBe(false);
+  });
+
+  it('requires a positive lastSyncId for source-correlated confirmation', () => {
+    expect(commitStatusSchema.safeParse({
+      ...confirmedStatus,
+      lastSyncId: 0,
+      correlationId: 'corr',
+    }).success).toBe(false);
+    expect(commitStatusSchema.parse({
+      ...confirmedStatus,
+      correlationId: 'corr',
+    })).toMatchObject({ correlationId: 'corr', lastSyncId: 41 });
+  });
+
+  it('derives JSON Schema for every exported commit boundary', () => {
+    for (const schema of [
+      commitStatusSchema,
+      commitWaitSchema,
+      commitReceiptSchema,
+      mutationResultPayloadSchema,
+      commitExecutionResultSchema,
+      commitAckSchema,
+      commitRecordSchema,
+    ]) {
+      expect(() => z.toJSONSchema(schema)).not.toThrow();
+    }
   });
 });
 
-describe('server execution and client acknowledgement projections', () => {
-  const confirmationTransactionIds = ['ablo_echo_tx_v1:["corr-source","op-1"]'];
-
-  it('normalizes legacy hosted cache rows to explicit confirmed status', () => {
-    expect(commitExecutionResultSchema.parse({ firstSyncId: 1, lastSyncId: 2 })).toEqual({
-      firstSyncId: 1,
-      lastSyncId: 2,
-      status: 'confirmed',
-    });
+describe('derived boundary projections', () => {
+  it('accepts hosted and source-confirmed receipts', () => {
+    expect(commitReceiptSchema.parse(confirmedReceipt)).toEqual(confirmedReceipt);
+    expect(commitReceiptSchema.parse({
+      ...confirmedReceipt,
+      correlationId: 'corr-source',
+    })).toMatchObject({ status: 'confirmed', lastSyncId: 41, correlationId: 'corr-source' });
   });
 
-  it('requires complete coupled recovery evidence for queued and confirmed source rows', () => {
+  it('rejects old and contradictory receipt fields', () => {
+    expect(commitReceiptSchema.safeParse({ ...confirmedReceipt, watermark: 41 }).success).toBe(false);
+    expect(commitReceiptSchema.safeParse({ ...confirmedReceipt, status: 'rejected' }).success).toBe(false);
+  });
+
+  it('keeps rejection free of confirmation evidence', () => {
+    const rejected = {
+      object: 'commit_receipt' as const,
+      clientTxId: 'client-1',
+      serverTxId: '',
+      createdAt: CREATED_AT,
+      success: false as const,
+      status: 'rejected' as const,
+      statusAt: STATUS_AT,
+      authority,
+      error: { code: 'write_options_invalid', message: 'invalid write' },
+    };
+    expect(mutationResultPayloadSchema.parse(rejected)).toEqual(rejected);
+    expect(mutationResultPayloadSchema.safeParse({ ...rejected, lastSyncId: 1 }).success).toBe(false);
+    expect(mutationResultPayloadSchema.safeParse({ ...rejected, correlationId: 'corr' }).success).toBe(false);
+  });
+
+  it('stores explicit status and canonical acknowledgement evidence', () => {
     const queued = {
-      firstSyncId: 0,
-      lastSyncId: 0,
       status: 'queued' as const,
+      statusAt: STATUS_AT,
+      lastSyncId: 0 as const,
       correlationId: 'corr-source',
-      confirmationTransactionIds,
+      createdAt: CREATED_AT,
+      firstSyncId: 0,
+      confirmationTransactionIds: ['ablo_echo_tx_v1:["corr-source","op-1"]'],
     };
     expect(commitExecutionResultSchema.parse(queued)).toEqual(queued);
-    expect(
-      commitExecutionResultSchema.safeParse({
-        ...queued,
-        correlationId: undefined,
-      }).success
-    ).toBe(false);
-    expect(
-      commitExecutionResultSchema.safeParse({
-        ...queued,
-        confirmationTransactionIds: undefined,
-      }).success
-    ).toBe(false);
-
-    const confirmed = {
-      ...queued,
-      firstSyncId: 51,
-      lastSyncId: 52,
-      status: 'confirmed' as const,
-    };
-    expect(commitExecutionResultSchema.parse(confirmed)).toEqual(confirmed);
-    expect(
-      commitExecutionResultSchema.safeParse({
-        ...confirmed,
-        firstSyncId: 0,
-        lastSyncId: 0,
-      }).success
-    ).toBe(false);
+    expect(commitExecutionResultSchema.safeParse({
+      firstSyncId: 1,
+      lastSyncId: 2,
+    }).success).toBe(false);
+    expect(commitAckSchema.parse({
+      status: 'queued',
+      statusAt: STATUS_AT,
+      lastSyncId: 0,
+      correlationId: 'corr-source',
+    })).toMatchObject({ status: 'queued', lastSyncId: 0 });
   });
 
-  it('uses the same queued invariant for normalized client acknowledgements', () => {
-    expect(
-      commitAckSchema.parse({
-        status: 'queued',
-        correlationId: 'corr-ack',
-        lastSyncId: 0,
-      })
-    ).toEqual({
+  it('requires server authority on every receipt', () => {
+    const { authority: _authority, ...withoutAuthority } = confirmedReceipt;
+    expect(commitReceiptSchema.safeParse(withoutAuthority).success).toBe(false);
+  });
+
+  it('does not accept client-claimed authority on a commit request', () => {
+    expect(commitRequestSchema.safeParse({
+      operations: [{ action: 'update', model: 'Task', data: {} }],
+      authority,
+    }).success).toBe(false);
+  });
+});
+
+describe('flattened commit record', () => {
+  const evidence = {
+    id: 'commit-1',
+    attempts: [{ id: 'request-1', observedAt: CREATED_AT, transport: 'http' as const, kind: 'execution' as const }],
+    actor: { kind: 'agent' as const, id: 'researcher-1' },
+    authority,
+    claims: [],
+    createdAt: CREATED_AT,
+    readSet: [{
+      target: { scope: 'row' as const, model: 'Task', id: 'task-1' },
+      watermark: 17,
+      lifetime: 'commit' as const,
+      onStale: 'reject' as const,
+    }],
+    operations: [{ action: 'UPDATE', model: 'Task', id: 'task-1', data: { retention: 'redacted' } }],
+    receipt: { clientTxId: 'commit-1', serverTxId: 'server-1', ops: 1 },
+  };
+
+  it('has one status location, one status time, and one confirmation position', () => {
+    const record = commitRecordSchema.parse({ ...evidence, ...confirmedStatus });
+    expect(record).toMatchObject({ status: 'confirmed', statusAt: STATUS_AT, lastSyncId: 41 });
+    expect(record).not.toHaveProperty('confirmation');
+    expect(record.receipt).not.toHaveProperty('status');
+    expect(record.receipt).not.toHaveProperty('lastSyncId');
+    expect(record.receipt).not.toHaveProperty('correlationId');
+  });
+
+  it('retains createdAt while a queued projection advances to confirmed', () => {
+    const queued = commitRecordSchema.parse({
+      ...evidence,
       status: 'queued',
-      correlationId: 'corr-ack',
+      statusAt: CREATED_AT,
       lastSyncId: 0,
+      correlationId: 'corr-1',
     });
-    expect(commitAckSchema.safeParse({ status: 'queued', lastSyncId: 0 }).success).toBe(false);
+    const confirmed = commitRecordSchema.parse({
+      ...queued,
+      status: 'confirmed',
+      statusAt: STATUS_AT,
+      lastSyncId: 41,
+    });
+    expect(confirmed.createdAt).toBe(queued.createdAt);
+    expect(Date.parse(confirmed.statusAt)).toBeGreaterThan(Date.parse(queued.statusAt));
+  });
+
+  it('retains physical attempts without replacing earlier evidence', () => {
+    expect(commitRecordSchema.parse({
+      ...evidence,
+      ...confirmedStatus,
+      attempts: [...evidence.attempts, {
+        id: 'request-2', observedAt: STATUS_AT, transport: 'http', kind: 'replay',
+      }],
+    })).toMatchObject({
+      id: 'commit-1',
+      attempts: [{ id: 'request-1' }, { id: 'request-2' }],
+    });
+  });
+
+  it('rejects customer operation data from a durable record', () => {
+    expect(commitRecordSchema.safeParse({
+      ...evidence,
+      ...confirmedStatus,
+      operations: [{
+        action: 'UPDATE',
+        model: 'Task',
+        id: 'task-1',
+        data: { prompt: 'do not retain me' },
+      }],
+    }).success).toBe(false);
+  });
+
+  it('retains only a compact claim reference with its target and fence token', () => {
+    const record = commitRecordSchema.parse({
+      ...evidence,
+      ...confirmedStatus,
+      claims: [{
+        id: 'claim-1',
+        target: { scope: 'row', model: 'Task', id: 'task-1' },
+        fenceToken: 12,
+      }],
+    });
+    expect(record.claims).toEqual([{
+      id: 'claim-1',
+      target: { scope: 'row', model: 'Task', id: 'task-1' },
+      fenceToken: 12,
+    }]);
   });
 });

@@ -86,7 +86,11 @@ const _fallback: RuntimeContext = {
   config: emptyConfig,
   getModelMetadata: () => undefined,
   mutationExecutor: {
-    commit: () => Promise.resolve({ lastSyncId: 0, status: 'confirmed' as const }),
+    commit: () => Promise.resolve({
+      status: 'confirmed' as const,
+      statusAt: '1970-01-01T00:00:00.000Z',
+      lastSyncId: 0,
+    }),
     executeCreate: () => Promise.resolve(),
     executeUpdate: () => Promise.resolve(null),
     executeDelete: () => Promise.resolve(),

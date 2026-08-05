@@ -1,7 +1,7 @@
 /**
  * Human-side reconnect adapter.
  *
- * The settlement callback owns ordering and receipts. This adapter owns the
+ * The confirmation callback owns ordering and receipts. This adapter owns the
  * local client's reconnect concurrency: repeated online/connect signals join
  * the same drain instead of starting competing local recovery passes.
  */

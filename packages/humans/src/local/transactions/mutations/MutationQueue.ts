@@ -87,7 +87,7 @@ import {
   type DurableCommitOperation,
   type DurableCommitOperationInput,
   type CommitOutboxScope,
-} from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+} from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import type { DurableWriteStore } from './durableWriteStore.js';
 import { stableStringify } from '@abloatai/transaction/utils/json';
 import {
@@ -126,7 +126,7 @@ import { handleConflict as resolveConflict, isPermanentError as classifyPermanen
 import { takeNextExecutionBatch as selectExecutionBatch, takePendingDrainBatch as selectPendingDrainBatch } from './executionSelection.js';
 import { scheduleProcessing as scheduleProcessingExternal, type ProcessingSchedulerContext } from './processingScheduler.js';
 import {
-  drainPendingSettlements,
+  drainPendingConfirmations,
   type PendingDrainContext,
 } from './pendingDrain.js';
 import { restoreDurableCommits as restoreDurableCommitsExternal, type DurableCommitRestoreContext } from './durableCommitRestore.js';
@@ -286,7 +286,7 @@ export class MutationQueue extends EventEmitter {
   /**
    * Small race buffer for authoritative echoes that arrive before the queued
    * mutation receipt. The forward and WAL stream are independent channels, so
-   * either can win without changing the settlement result.
+   * either can win without changing the confirmation result.
    */
   private recentDeltaCorrelations = new Map<string, number>();
   /**
@@ -1472,7 +1472,7 @@ export class MutationQueue extends EventEmitter {
     if (this.isProcessing) return;
     this.isProcessing = true;
     try {
-      await drainPendingSettlements(this.pendingDrainContext);
+      await drainPendingConfirmations(this.pendingDrainContext);
     } finally {
       this.isProcessing = false;
       if (this.executionQueue.length > 0) this.scheduleProcessing(true);

@@ -2,7 +2,7 @@
  * Drain liveness — the staged-batch lock must never wedge the pipeline.
  *
  * `SyncClient.processPendingMutations` waits for every in-progress durability
- * stage before draining settlement. Those stage promises must always settle,
+ * stage before draining confirmation. Those stage promises must always settle,
  * or every later write in the session queues silently forever (the "moves stop
  * persisting but nothing errors" field bug).
  *
@@ -104,7 +104,11 @@ function scriptedExecutor(script: ('resolve' | 'reject' | 'hang')[]) {
         return Promise.reject(new Error('server rejected this commit'));
       }
       syncId += 1;
-      return Promise.resolve({ lastSyncId: syncId, status: 'confirmed' as const });
+      return Promise.resolve({
+        lastSyncId: syncId,
+        status: 'confirmed' as const,
+        statusAt: '2026-08-05T10:00:00.058Z',
+      });
     },
     executeCreate: () => unreachable('executeCreate'),
     executeUpdate: () => unreachable('executeUpdate'),

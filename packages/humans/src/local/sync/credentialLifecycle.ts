@@ -1,5 +1,5 @@
 /**
- * Moved to the settlement core with the duplex transport (ADR 0016): keeping
+ * Moved to the confirmation core with the duplex transport (ADR 0016): keeping
  * a long-lived socket's credential fresh is connection plumbing an agent needs
  * as much as a browser does. This path re-exports it so existing importers
  * stay unchanged.

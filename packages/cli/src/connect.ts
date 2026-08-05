@@ -829,8 +829,9 @@ async function runCheck(): Promise<void> {
     );
     console.error(
       pc.dim(
-        `  Direct needs a route Ablo's servers can dial — public allowlist, PrivateLink, peering,\n` +
-          `  or VPN. Only when no inbound route can exist, use the signed ${pc.bold('dataSource()')} endpoint fallback.\n`
+        `  For localhost-first development, run ${pc.bold('ablo dev --local')} and keep it beside the app.\n` +
+          `  The direct WAL path needs a route Ablo's servers can dial — public allowlist,\n` +
+          `  PrivateLink, peering, VPN, or a database-capable secure tunnel.\n`
       )
     );
     process.exit(1);

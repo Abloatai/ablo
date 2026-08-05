@@ -44,6 +44,7 @@ export const errorEnvelopeSchema = z
     message: z.string(),
     doc_url: z.string().optional(),
     request_id: z.string().optional(),
+    event_id: z.string().optional(),
     errors: z.array(errorEnvelopeItemSchema).readonly().optional(),
   })
   .catchall(z.unknown());

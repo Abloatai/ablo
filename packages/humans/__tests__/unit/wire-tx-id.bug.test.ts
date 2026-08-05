@@ -69,12 +69,12 @@ interface DbResult {
 }
 
 // Wait for the MutationQueue's batchDelay-scheduled commit to fire —
-// DETERMINISTICALLY, by waiting for the transaction's own settlement events
+// DETERMINISTICALLY, by waiting for the transaction's own confirmation events
 // (`transaction:completed:<id>` / `transaction:failed:<id>`, emitted once the
 // batch is dispatched and the executor ack lands) instead of the old fixed
 // 300ms sleep that guessed at the SyncClient queue's `batchDelay: 150` timer.
 // The MockMutationExecutor acks every commit with an incrementing lastSyncId,
-// so settlement is ack-based and always arrives; a hang here is a real queue
+// so confirmation is ack-based and always arrives; a hang here is a real queue
 // bug and fails via the jest timeout.
 async function waitForCommit(
   queue: MutationQueue,

@@ -22,6 +22,7 @@ import pc from 'picocolors';
 import { AbloError, classifyRecovery, toAbloError } from '@abloatai/transaction/errors';
 import { terminalWidth } from './terminalWidth.js';
 import { brand } from './theme.js';
+import { observeCliError } from './observeCliError.js';
 
 export interface RenderErrorOptions {
   /** Show the stack + raw details. Defaults to `--verbose`/`ABLO_VERBOSE=1`. */
@@ -98,6 +99,19 @@ function renderKnownDetails(
   if (!details) return;
   const { retryAfterSeconds, missingIds, requiredCapability, unexecutable, errors, target } =
     details;
+  if (details.topology === 'localhost') {
+    const commands = isStringArray(details.recommended_commands)
+      ? details.recommended_commands
+      : ['ablo migrate', 'ablo dev --local'];
+    line(`    ${pc.dim('setup')}  ${commands.join('  →  ')}`);
+    if (typeof details.mode === 'string') line(`    ${pc.dim('mode')}   ${details.mode}`);
+    if (typeof details.limitation === 'string') {
+      line(`    ${pc.dim('note')}   ${details.limitation}`);
+    }
+    if (isStringArray(details.alternatives)) {
+      line(`    ${pc.dim('other')}  ${details.alternatives.join(' · ')}`);
+    }
+  }
   // What Ablo dialled, for the errors that dial something. Recognising the wrong
   // host on sight is most of the diagnosis, so it earns a line of its own rather
   // than sitting behind `--verbose`.
@@ -130,6 +144,7 @@ function renderKnownDetails(
  * `process.exitCode = 1`. Safe on `AbloError`, plain `Error`, and non-errors.
  */
 export function renderCliError(err: unknown, opts: RenderErrorOptions = {}): void {
+  const observedEventId = observeCliError(err);
   const line = opts.write ?? ((l: string) => { console.error(l); });
   const verbose =
     opts.verbose ?? (process.argv.includes('--verbose') || process.env.ABLO_VERBOSE === '1');
@@ -168,6 +183,9 @@ export function renderCliError(err: unknown, opts: RenderErrorOptions = {}): voi
     if (hint) field(`    ${pc.dim(hint)}`);
     if (err.docUrl) field(`    ${pc.dim('docs')}   ${err.docUrl}`);
     if (err.requestId) field(`    ${pc.dim('ref')}    ${err.requestId}`);
+    if (err.eventId ?? observedEventId) {
+      field(`    ${pc.dim('event')}  ${err.eventId ?? observedEventId}`);
+    }
     if (fields.length > 0) {
       line('');
       for (const f of fields) line(f);

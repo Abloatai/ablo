@@ -1,7 +1,7 @@
 ---
 title: "v0.48.0"
 type: changelog
-date: 2026-08-03
+date: 2026-08-03T18:08:50.380Z
 changelog:
   version: "0.48.0"
   category: "Fixes"
@@ -50,6 +50,26 @@ temporary alias can go:
 ```sql
 DROP PUBLICATION IF EXISTS "ablo_publication";
 ```
+
+### `ablo dev --local` connects a branch to the database on your machine
+
+The rule above raises a fair question: if a branch is unbound until a database
+is connected, what connects one during development? `--local` does.
+
+```bash
+npx ablo dev --local
+```
+
+It registers a connector-only endpoint for that exact branch and opens a
+long-lived secure connector. Your database stays where it is: Ablo receives an
+endpoint descriptor and a signing key, never a connection string, and reaches
+your source back through the connector rather than dialling it. `DATABASE_URL`
+is read from `.env.local` into the handler running on your machine and goes no
+further.
+
+The branch is then connected like any other, so schema pushes, reads and writes
+behave the way they will in production. Because the connector is long-lived,
+`--local` cannot be combined with `--no-watch`.
 
 ### Renamed
 

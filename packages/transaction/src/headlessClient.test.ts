@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { defineSchema } from './schema/schema.js';
 import { model } from './schema/model.js';
 import { createTransactionClient } from './headlessClient.js';
-import type { PendingWrite } from './transactions/settlement/pendingWrite.js';
+import type { PendingWrite } from './transactions/confirmation/pendingWrite.js';
 
 const schema = defineSchema({
   orders: model({
@@ -26,8 +26,20 @@ function receipt(
     object: 'commit_receipt',
     clientTxId,
     serverTxId: 'server-1',
+    createdAt: '2026-08-05T10:00:00.000Z',
     success: true,
     status,
+    statusAt: '2026-08-05T10:00:00.058Z',
+    authority: {
+      organizationId: 'org-1',
+      projectId: 'project-1',
+      branchId: 'branch-1',
+      syncGroups: ['org:org-1'],
+      operations: [],
+      participantKind: 'agent',
+      participantId: 'agent-1',
+      deliveryPartition: null,
+    },
     correlationId: 'source-1',
     lastSyncId: status === 'confirmed' ? 12 : 0,
     ops: 1,

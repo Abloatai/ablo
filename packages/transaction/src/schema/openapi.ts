@@ -29,7 +29,13 @@ import { ABLO_HOSTED_HTTP_BASE_URL } from '../auth/hostedEndpoints.js';
 // one definition site, so the documented surface cannot drift from the
 // enforced one.
 import { z } from 'zod';
-import { commitRequestSchema, commitReceiptSchema } from '../wire/commit.js';
+import {
+  commitRequestSchema,
+  commitReceiptSchema,
+  commitRecordSchema,
+  commitRecordListSchema,
+  commitRecordWhereSchema,
+} from '../wire/commit.js';
 import {
   claimRequestSchema,
   claimHeartbeatRequestSchema,
@@ -154,7 +160,9 @@ const ABLO_OPERATION_IDS: Readonly<Record<string, string>> = {
   'POST /v1/capabilities/{id}/rotate': 'rotateCapability',
   'GET /v1/schema': 'getSchema',
   'GET /v1/logs': 'listLogEntries',
+  'GET /v1/commits': 'listCommits',
   'POST /v1/commits': 'commit',
+  'GET /v1/commits/{id}': 'getCommit',
 };
 
 function fieldSchema(f: FieldMeta): Json {
@@ -316,6 +324,11 @@ function queryParams(schema: z.ZodType): Json[] {
       : s,
   }));
 }
+
+const commitRecordListQuerySchema = commitRecordWhereSchema.safeExtend({
+  cursor: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+});
 
 /**
  * Both release routes answer in one shape. `released` distinguishes "this call
@@ -736,11 +749,9 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         tags: ['claims'],
         summary: 'Heartbeat a claim by id — held or queued',
         description:
-          'The beat a waiter needs: a queued caller holds nothing but the ' +
-          '`claimId` it was handed at enqueue, and an entry that stops beating ' +
-          'drops out of the line on TTL. The reply doubles as the wait poll — ' +
-          '`queued` means still in line, `held` means the grant landed, at which ' +
-          'point `GET /v1/claims/{claimId}` carries the fence token.',
+          'Keep a held or queued claim active. Branch on the returned status: ' +
+          '`queued` is still waiting and `held` has been granted. Retrieve the ' +
+          'claim after a grant before writing.',
         parameters: [claimIdParam()],
         requestBody: optionalJsonBody(derive(claimHeartbeatRequestSchema, 'input')),
         responses: {
@@ -849,12 +860,26 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
       },
     },
     '/v1/commits': {
+      get: {
+        tags: ['commits'],
+        summary: 'List commit records',
+        parameters: queryParams(commitRecordListQuerySchema),
+        responses: { '200': jsonResp('Tenant-scoped commit records', derive(commitRecordListSchema, 'output')) },
+      },
       post: {
         tags: ['commits'],
         summary: 'Commit a batch of operations atomically, and/or register durable premises',
         parameters: [{ name: 'Idempotency-Key', in: 'header', schema: { type: 'string' }, description: 'Replay-safe key; the server returns the cached receipt on retry.' }],
         requestBody: commitBody(),
         responses: { '200': commitReceipt() },
+      },
+    },
+    '/v1/commits/{id}': {
+      get: {
+        tags: ['commits'],
+        summary: 'Retrieve a commit record',
+        parameters: [idParam()],
+        responses: { '200': jsonResp('The commit record, or null when absent', derive(commitRecordSchema.nullable(), 'output')) },
       },
     },
   };
@@ -864,7 +889,7 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
 
   return envelope(
     options,
-    'The Ablo transaction layer: commit, read, and claim. `{model}` is any model ' +
+    'Ablo collaboration infrastructure: commit, read, and claim. `{model}` is any model ' +
       'from your pushed schema — the routes are the same whichever it is. ' +
       'Authenticate every request with your API key as a Bearer token.',
     paths,
@@ -962,6 +987,12 @@ export function schemaToOpenApi<S extends SchemaRecord>(
   }
 
   paths['/v1/commits'] = {
+    get: {
+      tags: ['commits'],
+      summary: 'List commit records',
+      parameters: queryParams(commitRecordListQuerySchema),
+      responses: { '200': jsonResp('Tenant-scoped commit records', derive(commitRecordListSchema, 'output')) },
+    },
     post: {
       tags: ['commits'],
       summary: 'Commit a batch of operations atomically, and/or register durable premises',
@@ -970,7 +1001,17 @@ export function schemaToOpenApi<S extends SchemaRecord>(
       responses: { '200': commitReceipt() },
     },
   };
+  paths['/v1/commits/{id}'] = {
+    get: {
+      tags: ['commits'],
+      summary: 'Retrieve a commit record',
+      parameters: [idParam()],
+      responses: { '200': jsonResp('The commit record, or null when absent', derive(commitRecordSchema.nullable(), 'output')) },
+    },
+  };
+  operationIds['GET /v1/commits'] = 'listCommits';
   operationIds['POST /v1/commits'] = 'commit';
+  operationIds['GET /v1/commits/{id}'] = 'getCommit';
   applyOperationIds(paths, operationIds);
   attachCanonicalErrors(paths);
 

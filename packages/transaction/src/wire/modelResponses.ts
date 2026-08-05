@@ -13,13 +13,21 @@ import { z } from 'zod';
 import { modelClaimSchema } from '../coordination/schema.js';
 import { listEnvelopeSchema } from './listEnvelope.js';
 
+/** Evidence for one row returned by a collection snapshot. */
+export const modelListEvidenceSchema = z.object({
+  id: z.string().min(1),
+  stamp: z.number().int().nonnegative(),
+});
+export type ModelListEvidence = z.infer<typeof modelListEvidenceSchema>;
+
 /**
  * `GET /v1/models/{model}/{id}`.
  *
  * `stamp` is the row's watermark: the log position the read reflects. A write
  * that guards on this premise (`readAt`) is rejected if the row moved on in
  * between, which is what makes a read→decide→write sequence safe without a
- * lock. A missing row answers 404, so `data` is always present here.
+ * lock. A missing row carries `data: null` so its absence watermark survives
+ * the transport boundary.
  */
 export const modelReadResponseSchema = z.object({
   object: z.literal('model'),
@@ -44,5 +52,10 @@ export type ModelReadResponse = z.infer<typeof modelReadResponseSchema>;
 export const modelListResponseSchema = listEnvelopeSchema(z.unknown()).extend({
   model: z.string(),
   stamp: z.number(),
+  /**
+   * Per-row watermarks captured no later than the collection snapshot. Optional
+   * only so a newer client can diagnose an older server explicitly.
+   */
+  evidence: z.array(modelListEvidenceSchema).readonly().optional(),
 });
 export type ModelListResponse = z.infer<typeof modelListResponseSchema>;

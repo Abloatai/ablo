@@ -108,4 +108,28 @@ describe('postQuery — failures are legible across both log registers', () => {
 
     expect(texts(logger.debug) + '\n' + details(logger.debug)).toContain('AbloServerError');
   });
+
+  it('surfaces a successful-response slot failure with request/event correlation', async () => {
+    mockFetchOnce(200, {
+      results: [[], []],
+      errors: [{
+        index: 1,
+        model: 'Folder',
+        type: 'AbloServerError',
+        code: 'internal_error',
+        message: 'An internal error occurred.',
+        request_id: 'req_query_1',
+        event_id: 'evt_query_1',
+      }],
+    });
+
+    const result = await postQuery({ baseUrl: 'https://x.example/api' }, batch);
+    expect(result.errors?.[0]).toMatchObject({
+      index: 1,
+      request_id: 'req_query_1',
+      event_id: 'evt_query_1',
+    });
+    expect(texts(logger.warn)).toContain('req_query_1');
+    expect(details(logger.debug)).toContain('evt_query_1');
+  });
 });

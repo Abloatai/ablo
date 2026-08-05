@@ -1,6 +1,6 @@
 # Transaction-core conventions
 
-`@abloatai/transaction` is the settlement core. It defines, authorizes, orders, and
+`@abloatai/transaction` is the confirmation core. It defines, authorizes, orders, and
 settles changes; it does not materialize a local copy of rows or reconcile an
 optimistic client. Apply ADR 0013's five-second test before adding or moving a
 module:
@@ -27,16 +27,16 @@ equality assertion to justify two otherwise independent definitions.
 
 Handwritten interfaces remain appropriate for behavior contracts (methods) and
 in-process options that are neither parsed from the wire nor persisted. Those
-belong outside `src/wire/` and `src/transactions/settlement/`, so the two
+belong outside `src/wire/` and `src/transactions/confirmation/`, so the two
 enforced directories keep a zero baseline rather than an exception list. When a
 port and the records crossing it are discovered together, split them: the shape
-stays in `settlement/`, the methods move out.
+stays in `confirmation/`, the methods move out.
 
 Good definition sites include:
 
 - `src/wire/delta.ts` for the shared, client, and server delta projections.
-- `src/transactions/settlement/commitEnvelope.ts` for durable commit identity.
-- `src/transactions/settlement/pendingWrite.ts` for the persisted union a
+- `src/transactions/confirmation/commitEnvelope.ts` for durable commit identity.
+- `src/transactions/confirmation/pendingWrite.ts` for the persisted union a
   durable-write adapter stores.
 - `src/durableWrites.ts` for the port that stores them — methods, so it lives
   outside the enforced directories.
@@ -57,7 +57,7 @@ that the schema already makes visible.
 ## Enforcement
 
 CI rejects exported interfaces in `src/wire/` and
-`src/transactions/settlement/`. Those directories have a zero baseline: add a
+`src/transactions/confirmation/`. Those directories have a zero baseline: add a
 schema and infer the type instead of adding an exception. The import boundary is
 enforced separately by dependency-cruiser.
 
@@ -75,7 +75,7 @@ Run the focused checks from the repository root:
 grep -RInE --include='*.ts' \
   '^[[:space:]]*export[[:space:]]+interface[[:space:]]' \
   packages/transaction/src/wire \
-  packages/transaction/src/transactions/settlement
+  packages/transaction/src/transactions/confirmation
 npm run check:locator-copies
 npm run graph:deps
 ```

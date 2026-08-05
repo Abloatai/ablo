@@ -2,7 +2,7 @@
  * Public human-facing local-state capability.
  *
  * The plugin and its local-state runtime belong to @abloatai/humans. The
- * shared settlement package supplies only the handoff identity and wire
+ * shared confirmation package supplies only the handoff identity and wire
  * contracts.
  */
 import type { AbloPlugin, PluginContext, AppliedChange } from './plugin.js';

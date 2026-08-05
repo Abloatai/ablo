@@ -64,7 +64,7 @@ import type {
   ClaimParams,
   ModelUpdateParams,
 } from '../resources/modelOperations.js';
-import type { ModelUpdater, ContentionOptions } from '../resources/functionalUpdate.js';
+import type { ModelUpdater, FunctionalUpdateOptions } from '../resources/functionalUpdate.js';
 import type { HeldClaim } from '../types/streams.js';
 import type { ModelToolOptions } from './toolOptions.js';
 
@@ -118,7 +118,7 @@ export interface UpdateToolModel<T> {
   update(
     id: string,
     updater: ModelUpdater<T>,
-    options?: ContentionOptions,
+    options?: FunctionalUpdateOptions,
   ): Promise<T | undefined>;
   claim(
     params: ClaimSkipParams<T>,

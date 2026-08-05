@@ -100,11 +100,23 @@ function buildColumnMaps(schema: Schema): ReadonlyMap<string, ModelColumns> {
     }
     const orgColumn = tenancyColumn(model.tenancy);
     if (orgColumn) register('organizationId', orgColumn);
-    out.set(key, {
+    const columns = {
       table: model.tableName ?? key,
       fieldToColumn,
       columnToField,
-    });
+    };
+    // The public clients normalize operation model names to lowercase before
+    // they cross the wire. Preserve the authored key for direct adapter users,
+    // but resolve the same lowercase key/typename aliases as the server's
+    // schema-derived ModelMap. Without these aliases, a camelCase schema key
+    // such as `collaborationWorkItems` validates at the server boundary and
+    // then fails here as an unknown customer model.
+    out.set(key, columns);
+    out.set(key.toLowerCase(), columns);
+    if (model.typename) {
+      out.set(model.typename, columns);
+      out.set(model.typename.toLowerCase(), columns);
+    }
   }
   return out;
 }

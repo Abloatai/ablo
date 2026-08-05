@@ -19,12 +19,12 @@ const TEST_USER_CONTEXT = {
 };
 
 /**
- * Deterministic settlement wait — resolves on the FIRST emission of `event`.
+ * Deterministic confirmation wait — resolves on the FIRST emission of `event`.
  * Replaces the old fixed sleeps (100–500ms), which guessed at how long batch
- * processing + retries take: the queue emits its settlement events
+ * processing + retries take: the queue emits its confirmation events
  * ('optimistic:rollback', 'transaction:failed', 'transaction:completed:<id>'),
  * so the test can wait for the actual event instead of a wall-clock estimate.
- * A hang here is a real settlement bug and fails via the jest timeout.
+ * A hang here is a real confirmation bug and fails via the jest timeout.
  */
 function onceEvent<T>(queue: MutationQueue, event: string): Promise<T> {
   return new Promise<T>((resolve) => {
@@ -62,7 +62,7 @@ describe('MutationQueue Rollback', () => {
 
   describe('permanent error rollback', () => {
     it('should emit optimistic:rollback on permanent failure', async () => {
-      // Attach the settlement wait BEFORE enqueuing so the event can't race it.
+      // Attach the confirmation wait BEFORE enqueuing so the event can't race it.
       const firstRollback = onceEvent<{ model: unknown; reason: string }>(
         queue,
         'optimistic:rollback',
@@ -138,7 +138,7 @@ describe('MutationQueue Rollback', () => {
       // Then delete — should cancel the pending update
       const txDelete = await queue.delete(task, TEST_USER_CONTEXT);
 
-      // The delete should take priority; wait for ITS settlement rather than
+      // The delete should take priority; wait for ITS confirmation rather than
       // sleeping an arbitrary 50ms.
       await settled(queue, txDelete.id);
     });

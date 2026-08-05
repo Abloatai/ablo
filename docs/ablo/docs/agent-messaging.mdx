@@ -15,7 +15,7 @@ HTTP, or be replayed from the sync cursor.
 | Need | Use | Why |
 | --- | --- | --- |
 | "I am holding this row because..." | `claim({ description, meta })` | Live and low-latency. Peers see it through presence while the claim exists. |
-| "Remember this handoff/status/request" | A `messages` model | Durable row. Ordered in `sync_deltas`, replayed after reconnect, readable by HTTP agents. |
+| "Remember this handoff/status/request" | A `messages` model | Durable row, replayed after reconnect and readable by HTTP agents. |
 
 Claim context is ephemeral. If a participant was offline, reconnected later, or
 only uses `transport: "http"`, it can miss claim/presence frames. Message rows
@@ -144,6 +144,6 @@ their cursor and see the rows they missed while offline.
 ## Retention
 
 Deleting or archiving old `messages` rows is your app's policy. The sync log is
-still durable audit/history: `sync_deltas` has no message-specific TTL. That is
+still durable audit/history: messages have no message-specific TTL. That is
 useful for coordination and compliance, but a chat-scale product should plan
 retention before writing high-volume conversation traffic.

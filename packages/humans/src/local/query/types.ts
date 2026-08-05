@@ -15,7 +15,7 @@
  */
 
 // The where grammar describes the *request*, not any local copy of the rows it
-// returns, so it lives in the settlement core (ADR 0016). Re-exported here so
+// returns, so it lives in the confirmation core (ADR 0016). Re-exported here so
 // the existing `query/types` import path keeps resolving.
 export type {
   WherePrimitive,
@@ -24,6 +24,7 @@ export type {
   LoadWhere,
 } from '@abloatai/transaction/resources/where';
 import type { WhereClause } from '@abloatai/transaction/resources/where';
+import type { ModelListEvidence } from '@abloatai/transaction/wire';
 
 /** A single structured fetch request. */
 export interface Query {
@@ -93,6 +94,18 @@ export interface QueryBatchResult {
    * before use.
    */
   results: unknown[];
+  /** Per-result-slot evidence for the primary rows in that slot. */
+  evidence?: readonly (readonly QueryReadEvidence[])[];
+  /** Per-slot failures that previously looked identical to an empty result. */
+  errors?: readonly {
+    index: number;
+    model: string;
+    type: string;
+    code: string;
+    message: string;
+    request_id?: string;
+    event_id: string;
+  }[];
   /**
    * The server watermark observed after the batch ran. Model reads expose this
    * as `stamp`, and callers thread it into `commits.create({ readAt })` so the
@@ -100,3 +113,5 @@ export interface QueryBatchResult {
    */
   lastSyncId?: number;
 }
+
+export type QueryReadEvidence = ModelListEvidence;

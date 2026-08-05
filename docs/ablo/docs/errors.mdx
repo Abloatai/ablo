@@ -5,7 +5,7 @@ sidebar:
   icon: circle-alert
 ---
 
-Error contract version: `2026-08-03` (also sent on the `Ablo-Version` response header).
+Error contract version: `2026-08-04` (also sent on the `Ablo-Version` response header).
 
 Every error — over HTTP or WebSocket — carries the same envelope:
 
@@ -64,6 +64,12 @@ This API key has been revoked and can no longer be used. Mint a new key from the
 `HTTP 401` · not retryable
 
 No recognized authentication credential was presented — no API key and no bearer JWT. Send `Authorization: Bearer <token>`.
+
+### better_auth_request_failed
+
+`HTTP 400` · not retryable
+
+The authentication request was rejected. Check the submitted credentials or request and try again.
 
 ### browser_apikey_blocked
 
@@ -191,6 +197,12 @@ The API key presented for this data source could not be resolved to a known key.
 
 The localhost Data Source connector could not authenticate. Rerun `ablo dev --local` so it mints and uses a fresh branch-bound secret key.
 
+### unknown_auth_host
+
+`HTTP 400` · not retryable
+
+The authentication host is not recognized.
+
 ## Permission
 
 Credentials were valid but the action is forbidden for this caller.
@@ -229,7 +241,7 @@ Tenant tables do not have RLS forced under the direct Postgres connector role.
 
 `HTTP 403` · not retryable
 
-The database host resolves to a private, loopback, or link-local address, which Ablo's servers will not connect to directly. Use a publicly resolvable direct endpoint, private networking, or `ablo dev --local` with a signed Data Source reverse channel.
+The database host did not resolve exclusively to an allowed address for this route. Use a publicly resolvable direct endpoint, or configure the matching PrivateLink, peering, or VPN route. Localhost has its own `database_loopback_requires_connector` workflow.
 
 ### database_role_cannot_enforce_rls
 
@@ -284,6 +296,12 @@ The request targeted a project the caller's key is not scoped to.
 `HTTP 403` · not retryable
 
 Schema registration could not create tables in the target database: the engine is not permitted to run DDL there.
+
+### server_side_only
+
+`HTTP 403` · not retryable
+
+This endpoint is available only to trusted server-side callers.
 
 ### source_connector_production_not_enabled
 
@@ -369,7 +387,7 @@ This row is currently claimed by another participant, so the write was blocked. 
 
 `HTTP 409` · not retryable
 
-This write carried a fencing token below the row’s current high-water: a later holder claimed the row, wrote, and moved on while this claim was lapsed, so applying the write would silently overwrite their work. The claim is gone — re-claim the row and retry from the current state.
+This claim is no longer current because another participant completed newer work on the row. Re-claim the row and retry from the fresh state.
 
 ### grant_timeout
 
@@ -381,7 +399,7 @@ The wait for the claim grant timed out before your turn arrived (`waitTimeoutMs`
 
 `client-only` · not sent over the network
 
-Claiming requires the collaboration runtime, which the standard Ablo(&#123; schema, apiKey &#125;) client wires up for every model automatically — there is no per-model claim configuration to add. This appears only when a model proxy is constructed directly without that runtime (an internal/advanced path).
+Claiming is unavailable on this model client. Construct it through the standard Ablo(&#123; schema, apiKey &#125;) client and retry.
 
 ### model_claimed
 
@@ -564,6 +582,18 @@ A commit exceeded the per-commit operation limit; split it into smaller batches.
 `HTTP 400` · not retryable
 
 The database rejected the write on an integrity constraint. The error details identify the specific constraint.
+
+### data_session_unsupported
+
+`HTTP 400` · not retryable
+
+This sign-in host cannot create the requested data session.
+
+### database_loopback_requires_connector
+
+`HTTP 400` · not retryable
+
+Ablo Cloud cannot open a direct PostgreSQL connection to localhost on your machine. For localhost-first development, run `ablo migrate` once and keep `ablo dev --local` running; use a network-reachable direct route only when Ablo must observe arbitrary SQL writes through WAL.
 
 ### database_not_replication_ready
 
@@ -962,6 +992,12 @@ This model is not tenant-scoped, so it cannot be queried through the tenant-scop
 `HTTP 400` · not retryable
 
 Created a model the server does not know. Run `ablo push` (or keep `ablo dev` running) to upload `ablo/schema.ts` first — the server keeps its own copy of the schema.
+
+### no_active_organization
+
+`HTTP 400` · not retryable
+
+Select an active organization before continuing.
 
 ### server_execute_unknown_model
 
@@ -1385,6 +1421,12 @@ This API key is sending requests faster than its rate limit allows. Slow down an
 
 Server-side failures. Generally retryable with backoff.
 
+### better_auth_upstream_failed
+
+`HTTP 500` · retryable
+
+The authentication service could not complete the request. Retry the request; if it continues to fail, contact support.
+
 ### capability_auth_disabled
 
 `HTTP 503` · not retryable
@@ -1415,6 +1457,18 @@ Something went wrong on Ablo's side — an unexpected server error. It is safe t
 
 The schema migration failed while applying and did not complete.
 
+### mint_failed
+
+`HTTP 502` · retryable
+
+Ablo could not mint the requested runtime credential. Retry shortly.
+
+### operational_warning
+
+`client-only` · not sent over the network
+
+Ablo handled an operational degradation that remains searchable for diagnosis.
+
 ### presigned_url_failed
 
 `HTTP 500` · retryable
@@ -1438,6 +1492,12 @@ The server could not load this organization's quota state, so the request was re
 `HTTP 503` · retryable
 
 The rate-limiter backend is unavailable and this endpoint is configured to fail closed; retry shortly.
+
+### session_check_failed
+
+`HTTP 503` · retryable
+
+Ablo could not verify the current login session. Retry shortly.
 
 ### source_connector_handler_error
 

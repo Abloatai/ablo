@@ -33,7 +33,7 @@ export interface MockMutationExecutorOptions {
   shouldSucceed?: boolean;
   /** A delay applied before each call resolves, in milliseconds, to simulate a slow network. */
   latencyMs?: number;
-  /** The settlement status each commit reports. Defaults to `'confirmed'`. */
+  /** The confirmation status each commit reports. Defaults to `'confirmed'`. */
   status?: CommitResult['status'];
   /** Optional server-issued source/WAL correlation returned with queued receipts. */
   correlationId?: string;
@@ -86,7 +86,7 @@ export class MockMutationExecutor implements MutationExecutor {
     this._syncId = id;
   }
 
-  /** Sets the settlement status returned by subsequent commit calls. */
+  /** Sets the confirmation status returned by subsequent commit calls. */
   setStatus(status: CommitResult['status']): void {
     this._status = status;
   }
@@ -168,21 +168,24 @@ export class MockMutationExecutor implements MutationExecutor {
     this._maybeThrow('commit');
 
     const syncId = this._syncId++;
+    const statusAt = new Date().toISOString();
     if (this._status === 'queued') {
       if (!this._correlationId) {
         throw new Error('Mock queued commits require a correlationId');
       }
       return {
-        lastSyncId: 0,
         status: 'queued',
+        statusAt,
+        lastSyncId: 0,
         correlationId: this._correlationId,
         ...(this._notifications ? { notifications: this._notifications } : {}),
         ...(this._missingIds ? { missingIds: this._missingIds } : {}),
       };
     }
     return {
-      lastSyncId: syncId,
       status: 'confirmed',
+      statusAt,
+      lastSyncId: syncId,
       ...(this._correlationId ? { correlationId: this._correlationId } : {}),
       ...(this._notifications ? { notifications: this._notifications } : {}),
       ...(this._missingIds ? { missingIds: this._missingIds } : {}),
@@ -212,7 +215,11 @@ export class MockMutationExecutor implements MutationExecutor {
     await this._maybeDelay();
     this._maybeThrow('executeUpdate');
 
-    return { lastSyncId: this._syncId++, status: 'confirmed' };
+    return {
+      status: 'confirmed',
+      statusAt: new Date().toISOString(),
+      lastSyncId: this._syncId++,
+    };
   }
 
   async executeDelete(

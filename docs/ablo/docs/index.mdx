@@ -143,7 +143,7 @@ default caller, not a special one.
 
 - [How Ablo Works](/how-it-works) — the mental model in one page: you write through Ablo, it lands in your Postgres, the write-ahead log confirms it. **Read this first.**
 - [Coordination](/coordination) — `claim`, `claim.state`, and `claim.queue`: who holds a row, and who is waiting.
-- [Concurrency Convention](/concurrency-convention) — the governing rule for how concurrent writes resolve.
+- [Concurrency Convention](/concurrency-convention) — the precise rule for guarded and unguarded writes.
 - [Guarantees](/guarantees) — what a confirmed write, a stale-write rejection, and a claim each promise.
 - [Idempotency](/idempotency) — make a retried write safe; what replays, what re-runs, and for how long.
 - [Schema Contract](/schema-contract) — one schema becomes typed clients, agent writes, React reads, and the push.
@@ -178,7 +178,7 @@ default caller, not a special one.
 
 - [API Reference](/api) — model-by-model method shape.
 - [Errors](/errors) — the code registry, its categories, and what to do about each.
-- [Version History & Migration](/migration) — every breaking change and its migration.
+- [Upgrade Guide](/migration) — upgrade a pinned pre-1.0 SDK safely.
 - [Changelog](/changelog) — what shipped recently.
 
 ## Examples

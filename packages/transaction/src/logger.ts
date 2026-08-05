@@ -3,7 +3,7 @@
  *
  * A contract with no framework and no local state: credential exchange, commit,
  * and claim all need to log with no UI and no offline store present, so the port
- * belongs to the settlement core (ADR 0016). The consumer supplies the
+ * belongs to the confirmation core (ADR 0016). The consumer supplies the
  * implementation; the SDK ships a no-op default.
  */
 export interface Logger {

@@ -12,6 +12,10 @@
  * row". These pin the body it sends and the notifications it hands back.
  */
 import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
+import {
+  COMMIT_FIXTURE_TIMES,
+  EFFECTIVE_AUTHORITY_FIXTURE,
+} from '@abloatai/transaction/testing/fixtures/httpResponses';
 
 type Json = Record<string, unknown>;
 
@@ -66,7 +70,9 @@ function receipt(init: RequestInit | undefined, extra: Json = {}): Json {
     object: 'commit_receipt',
     clientTxId: headers?.['Idempotency-Key'],
     serverTxId: 'tx_track',
+    ...COMMIT_FIXTURE_TIMES,
     success: true,
+    authority: EFFECTIVE_AUTHORITY_FIXTURE,
     status: 'confirmed',
     lastSyncId: 0,
     ops: 0,

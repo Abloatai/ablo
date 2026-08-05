@@ -29,7 +29,7 @@ branch's database unavailable instead of silently writing somewhere else.
 
 Yes for the Ablo application path: model reads and lists, coordinated writes,
 claims, subscriptions, idempotency, confirmations, and transactional outbox
-settlement all work against localhost Postgres. The browser, server code, and
+confirmation all work against localhost Postgres. The browser, server code, and
 agents still connect to Ablo Cloud; only database operations cross the narrow
 signed connector to your machine.
 
@@ -47,12 +47,43 @@ path with a network-reachable Postgres endpoint, PrivateLink/peering/VPN, or a
 database-capable secure tunnel. Do not expose Postgres without TLS,
 authentication, and network restrictions.
 
+### For localhost-first open-source projects
+
+Do not require contributors to buy hosted Postgres or expose port 5432 merely to
+run the project. Treat the connector as the default contributor topology:
+
+```json
+{
+  "scripts": {
+    "ablo:setup": "ablo migrate",
+    "ablo:dev": "ablo dev --local"
+  }
+}
+```
+
+Keep `DATABASE_URL=postgres://…@localhost:5432/…` in `.env.example`, commit the
+generated `ablo/data-source.ts` handler, and document two long-running processes:
+the application and `npm run ablo:dev`. Contributors provide their own Ablo
+branch credential through `ablo login`; the repository never contains it.
+
+For collaborative models, route mutations through Ablo or the signed Data Source
+adapter. If the existing project intentionally writes those same tables through
+raw SQL or an unrelated ORM path, choose one explicitly:
+
+- add the supported transactional outbox/source-push integration for those writes;
+- state that only Ablo-mediated changes participate in live coordination locally; or
+- make WAL integration tests opt-in through a secure direct tunnel or hosted test database.
+
+That keeps the zero-cost localhost quickstart honest without weakening Ablo's
+coordination boundary or pretending endpoint mode can see WAL.
+
 ### Local connector errors
 
 Every stable code links to the generated [error reference](https://docs.abloatai.com/errors):
 
 | Code | Meaning and fix |
 |---|---|
+| `database_loopback_requires_connector` | A direct connection was configured with localhost. For the normal OSS/dev path, run `ablo migrate` and `ablo dev --local`; use a direct network route only when arbitrary SQL writes need WAL observation. |
 | `source_connector_not_attached` | The branch is connector-only but no process is attached. Start or restart `ablo dev --local`. |
 | `source_connector_unauthenticated` | The temporary branch key is missing, expired, or rejected. Rerun `ablo dev --local` to mint a fresh key. |
 | `source_connector_requires_secret_key` | The connector received the wrong key kind. Let `ablo dev` supply its branch-bound `sk_` key. |

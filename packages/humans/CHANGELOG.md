@@ -1,5 +1,21 @@
 # @abloatai/humans
 
+## 0.49.0
+
+### Minor Changes
+
+- a409395: Release the coordination core as one versioned SDK cut: exact returned rows as
+  explicit write dependencies, fenced claims for expensive turns, durable
+  paginated commit records, server-derived effective authority, and actionable
+  capability denials. No execution enclosure or Node-only client entry point is
+  introduced.
+
+### Patch Changes
+
+- Updated dependencies [a409395]
+- Updated dependencies [3f145a3]
+  - @abloatai/transaction@0.49.0
+
 ## 0.48.0
 
 ### Minor Changes
@@ -95,7 +111,7 @@
 
   Add runnable Temporal and Inngest integration examples that keep durable
   workflow execution in those systems while routing shared-data reads, claims,
-  idempotent writes, settlement, and observation through Ablo.
+  idempotent writes, confirmation, and observation through Ablo.
 
   Add `@abloatai/ablo/ai-sdk` model tools for authoritative reads, idempotent
   creates, concurrency-safe updates, and claimed deletes. Remove the previous

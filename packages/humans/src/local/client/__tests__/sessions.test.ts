@@ -180,7 +180,6 @@ describe('ablo.sessions.create', () => {
       organizationId: 'org_1',
       projectId: null,
       branchId: null,
-      branchRoot: false,
       deliveryPartition: null,
       syncGroups: ['org:org_1', 'user:user_42'],
       operations: ['chat.read', 'chat.create', 'chat.update', 'chat.delete'],

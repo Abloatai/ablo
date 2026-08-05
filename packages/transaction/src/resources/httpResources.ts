@@ -15,14 +15,19 @@ import type { ClaimHeartbeatReply, ClaimState } from '../wire/claims.js';
 import type {
   ClientCommitReceipt,
   CommitWait,
+  CommitRecord,
+  CommitRecordList,
+  CommitRecordListOptions,
+  CommitRecordWhere,
 } from '../wire/commit.js';
 import type { LogListResponse, LogQuery } from '../wire/feedEvent.js';
-// Re-exported, not redeclared. `wire/commit.ts` owns the settlement vocabulary
+import type { ModelListEvidence } from '../wire/modelResponses.js';
+// Re-exported, not redeclared. `wire/commit.ts` owns the commit-status vocabulary
 // and derives the waitable subset from it; this module serves that name to SDK
 // consumers. Restating the subset here as its own union produced a type that
 // matched the canonical one only by both happening to list the same two
 // strings — and would have silently disagreed with the runtime `wait`
-// validator the moment a third settlement state existed.
+// validator the moment a third commit status existed.
 export type { CommitWait };
 // `ModelTarget` (the `model` and `id` locator) and `ModelClaim` (the resolved
 // claim view) are defined in `../coordination/schema`, derived from a single
@@ -39,7 +44,7 @@ import type { SyncGroupInput } from '../schema/roles.js';
 import type {
   CapabilityCan,
   CapabilityOperation,
-  CapabilityScope,
+  EffectiveAuthority,
 } from '../auth/capability.js';
 import type {
   Claim,
@@ -48,7 +53,7 @@ import type {
   Duration,
   HeldClaim,
 } from '../types/streams.js';
-import type { ModelUpdater, ContentionOptions } from './functionalUpdate.js';
+import type { ModelUpdater, FunctionalUpdateOptions } from './functionalUpdate.js';
 import type {
   ClaimOptions,
   ClaimAttemptEvent,
@@ -91,6 +96,12 @@ export interface HttpTransportRead<T = Record<string, unknown>> {
   readonly data: T | undefined;
   readonly stamp: number;
   readonly claims: readonly ModelClaim[];
+}
+
+/** @internal Exact collection envelope retained until the typed facade captures evidence. */
+export interface HttpTransportList<T = Record<string, unknown>> {
+  readonly data: readonly T[];
+  readonly evidence?: readonly ModelListEvidence[];
 }
 
 export type IfClaimedPolicy = 'return' | 'fail';
@@ -160,6 +171,8 @@ export interface CommitOperationInput {
   readonly id?: string | null;
   readonly data?: Record<string, unknown> | null;
   readonly transactionId?: string | null;
+  /** Claim identity derived from a held claim; not an application id. */
+  readonly claimId?: string | null;
   readonly readAt?: number | null;
   readonly onStale?: OnStaleMode | null;
   /** Fencing token (Option B) from the batch's claim handle; server-validated. */
@@ -207,6 +220,8 @@ export type CommitReceipt = ClientCommitReceipt;
 
 export interface CommitResource {
   create(options: CommitCreateOptions): Promise<CommitReceipt>;
+  get(options: { readonly id: string }): Promise<CommitRecord | null>;
+  list(options?: CommitRecordListOptions): Promise<CommitRecordList>;
 }
 
 export interface HttpLogListOptions
@@ -276,6 +291,10 @@ export interface ModelMutationOptions extends ClaimedOptions {
   readonly idempotencyKey?: string | null;
   readonly readAt?: number | null;
   readonly onStale?: OnStaleMode | null;
+  /** Commit-lifetime read dependencies checked before this mutation lands. */
+  readonly reads?: readonly ReadDependency[] | null;
+  /** Persisted read dependencies registered by this mutation. */
+  readonly track?: readonly TrackDependency[] | null;
   readonly claim?: Claim | ClaimOptions | null;
   /** Fencing token (Option B) from the claim; server-validated at commit. */
   readonly fenceToken?: number | null;
@@ -332,7 +351,7 @@ export interface HttpTransportModel<
    * and `limit`. The typed public client always exposes `ablo.<model>.list`;
    * this protocol shape is private transport machinery.
    */
-  list(options?: ServerReadOptions<T>): Promise<T[]>;
+  list(options?: ServerReadOptions<T>): Promise<HttpTransportList<T>>;
   /**
    * Creates a row and returns the confirmed server row, including framework
    * defaults such as `createdAt` and `createdBy`. Matches the stateful client's
@@ -354,7 +373,7 @@ export interface HttpTransportModel<
   update(
     id: string,
     updater: ModelUpdater<T>,
-    options?: ContentionOptions,
+    options?: FunctionalUpdateOptions,
   ): Promise<CommitReceipt | undefined>;
   delete(params: ModelMutationOptions & { readonly id: string }): Promise<CommitReceipt>;
   /**
@@ -475,7 +494,7 @@ export interface AbloSession {
   organizationId: string;
   /** The grant this token carries, on both axes — the same shape the key row
    *  stores and the gates enforce. */
-  scope: CapabilityScope;
+  scope: EffectiveAuthority;
   userMeta: Record<string, unknown>;
 }
 
@@ -492,7 +511,7 @@ export interface SessionRotation {
   token: string;
   expiresAt: string | null;
   organizationId: string;
-  scope: CapabilityScope;
+  scope: EffectiveAuthority;
   rotatedFrom: {
     id: string;
     expiresAt: string;

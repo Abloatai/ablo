@@ -1,5 +1,5 @@
 /**
- * The observability the settlement core reports on its own behalf.
+ * The observability the confirmation core reports on its own behalf.
  *
  * Coordination outcomes — a claim changing state, a stale-write collision that
  * notified instead of aborting — happen with no UI and no local store anywhere,

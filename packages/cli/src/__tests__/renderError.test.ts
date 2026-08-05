@@ -1,4 +1,9 @@
 import { renderCliError } from '../renderError';
+import {
+  CliFailureExit,
+  installCliExitObservationBoundary,
+  restoreCliExitObservationBoundary,
+} from '../observeCliError';
 import { AbloError } from '@abloatai/transaction/errors';
 
 /** Strip ANSI so assertions match regardless of picocolors' TTY detection. */
@@ -14,6 +19,20 @@ function capture(err: unknown, verbose = false): string {
 }
 
 describe('renderCliError', () => {
+  it('routes legacy non-zero exits through the top-level observation boundary', () => {
+    installCliExitObservationBoundary();
+    try {
+      expect(() => process.exit(7)).toThrow(CliFailureExit);
+      try {
+        process.exit(7);
+      } catch (error) {
+        expect(error).toMatchObject({ exitCode: 7 });
+      }
+    } finally {
+      restoreCliExitObservationBoundary();
+    }
+  });
+
   it('renders an AbloError as a structured block — code, message, field, docs, ref — and NO stack', () => {
     const err = new AbloError('Your API key is invalid.', {
       code: 'apikey_invalid',
@@ -38,6 +57,17 @@ describe('renderCliError', () => {
     renderCliError(new AbloError('boom', { code: 'apikey_invalid' }), { write: () => {} });
     expect(process.exitCode).toBe(1);
     process.exitCode = prev;
+  });
+
+  it('shows both request and exact event correlation returned by the server', () => {
+    const err = new AbloError('Schema provisioning failed.', {
+      code: 'schema_provisioning_forbidden',
+      requestId: 'req_schema_1',
+      details: { event_id: 'evt_schema_1' },
+    });
+    const out = capture(err);
+    expect(out).toContain('req_schema_1');
+    expect(out).toContain('evt_schema_1');
   });
 
   it('shows the stack only under verbose', () => {
@@ -69,6 +99,26 @@ describe('renderCliError', () => {
     expect(out).toContain('(+2 more)');
     // not the raw array dump
     expect(out).not.toContain('"missingIds"');
+  });
+
+  it('renders localhost topology as commands, mode, limitation, and alternatives', () => {
+    const err = new AbloError('Ablo Cloud cannot dial localhost directly.', {
+      code: 'database_loopback_requires_connector',
+      details: {
+        topology: 'localhost',
+        recommended_commands: ['ablo migrate', 'ablo dev --local'],
+        mode: 'signed Data Source + transactional outbox (no WAL)',
+        limitation: 'Raw SQL writes are not observed automatically.',
+        alternatives: ['secure tunnel', 'hosted Postgres'],
+      },
+    });
+    const out = capture(err);
+    expect(out).toContain('setup');
+    expect(out).toContain('ablo migrate');
+    expect(out).toContain('ablo dev --local');
+    expect(out).toContain('no WAL');
+    expect(out).toContain('Raw SQL writes');
+    expect(out).toContain('secure tunnel');
   });
 });
 

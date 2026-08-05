@@ -45,7 +45,7 @@ const TITLES = {
   'how-it-works': 'How Ablo Works',
   react: 'React',
   guarantees: 'Guarantees',
-  migration: 'Version History & Migration Guide',
+  migration: 'Upgrade Guide',
   'client-behavior': 'Client Behavior',
   cli: 'CLI',
   'branch-development': 'Branch-first development',
@@ -415,16 +415,43 @@ function validateHrefs(mdx, label, routes) {
 /**
  * The product line has ONE definition site: the promise line under the H1 of
  * `docs/index.md`. The site config derives it from the generated frontmatter;
- * `llms.txt` opens with the same line as a sentence. Neither may drift.
+ * `llms.txt` opens with the same line as a sentence, and the README carries it
+ * twice, as the banner under the logo and as the paragraph that opens the page.
+ * None of them may drift.
+ *
+ * The README was the copy this check did not cover, and it is the copy npm and
+ * GitHub show first. It went on calling Ablo "the transaction layer for AI
+ * agents" long after the docs had settled on collaboration infrastructure,
+ * because nothing compared the two. Adding a carrier to the list below is how a
+ * new copy of the line earns the right to exist.
  */
 function validateTagline(promise) {
   if (!promise) throw new Error('docs/index.md has no promise line under its H1');
-  const expected = `Ablo is ${promise[0].toLowerCase()}${promise.slice(1)}`;
-  if (!readFileSync(resolve(packageRoot, 'llms.txt'), 'utf8').includes(expected)) {
+
+  // The README wraps its prose at the column, so the sentence it carries has a
+  // line break in the middle. Comparing raw text fails on the wrap and teaches
+  // the next reader to unwrap one paragraph to appease the build.
+  const flatten = (text) => text.replace(/\s+/g, ' ');
+
+  const sentence = `Ablo is ${promise[0].toLowerCase()}${promise.slice(1)}`;
+  // The banner states the category on its own: the promise up to the colon,
+  // which is the clause naming what Ablo IS rather than what it does.
+  const banner = `${promise.split(':')[0].trim()}.`;
+
+  /** Every file that restates the line, and the form it restates it in. */
+  const carriers = [
+    { file: 'llms.txt', form: 'sentence', expected: sentence },
+    { file: 'README.md', form: 'opening paragraph', expected: sentence },
+    { file: 'README.md', form: 'banner', expected: banner },
+  ];
+
+  for (const { file, form, expected } of carriers) {
+    const text = flatten(readFileSync(resolve(packageRoot, file), 'utf8'));
+    if (text.includes(flatten(expected))) continue;
     throw new Error(
-      `llms.txt does not carry the landing page's promise line.\n` +
+      `${file} does not carry the landing page's promise line as its ${form}.\n` +
         `       expected: ${expected}\n` +
-        `       Edit docs/index.md if the line itself should change; llms.txt follows it.`,
+        `       Edit docs/index.md if the line itself should change; ${file} follows it.`,
     );
   }
 }

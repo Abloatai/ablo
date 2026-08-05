@@ -3,7 +3,7 @@
  *
  * The AI SDK owns the agent loop. These helpers only expose Ablo's
  * authoritative model operations as tools, preserving the same credential,
- * validation, idempotency, claims, and settlement behavior as direct SDK use.
+ * validation, idempotency, claims, and confirmation behavior as direct SDK use.
  */
 
 import { tool, type ToolExecutionOptions } from 'ai';

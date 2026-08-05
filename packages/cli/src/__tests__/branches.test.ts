@@ -156,9 +156,14 @@ describe('ablo branch', () => {
               warnings: 0,
               blockers: 0,
             },
+            storage: {
+              kind: 'customer',
+              transport: 'direct',
+              status: 'active',
+            },
             data_source: {
-              kind: 'hosted',
-              status: null,
+              connection: 'direct',
+              status: 'active',
               host: null,
               database: null,
               cursor: null,

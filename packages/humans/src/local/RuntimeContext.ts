@@ -48,7 +48,7 @@ export interface RuntimeContext {
 
   /**
    * Model metadata lookup. Injected by the client (it wires this from its
-   * `ModelRegistry`) so the settlement core can resolve a model's metadata
+   * `ModelRegistry`) so the confirmation core can resolve a model's metadata
    * without importing the registry — the dependency inversion that keeps the
    * core free of the client's `Model` layer (ADR 0013).
    */

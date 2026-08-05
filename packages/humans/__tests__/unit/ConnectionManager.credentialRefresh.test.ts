@@ -19,7 +19,7 @@ import type { ConnectionCallbacks } from '../../src/local/sync/ConnectionManager
 
 // Keep the post-refresh re-probe off the network. 'unreachable' → PROBE_FAILED
 // → waiting_for_network, a deterministic resting state we don't assert on.
-// The probe moved into the settlement core with the transport (ADR 0016);
+// The probe moved into the confirmation core with the transport (ADR 0016);
 // mock the core module — the sync-engine path re-exports it, so both the
 // manager's internal import and this test's import resolve to this mock.
 jest.mock('@abloatai/transaction/transport/networkProbe', () => ({

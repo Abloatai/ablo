@@ -4,7 +4,7 @@ import {
   hasWireCode,
   translateHttpError,
 } from '../errors.js';
-import { capabilityScopeSchema } from './capability.js';
+import { effectiveAuthoritySchema } from './capability.js';
 import type {
   RotateSessionParams,
   SessionRevocation,
@@ -27,7 +27,8 @@ export const capabilityRotationResponseSchema = z.object({
   token: z.string().trim().min(1),
   expiresAt: z.iso.datetime().nullable(),
   organizationId: z.string().min(1),
-  scope: capabilityScopeSchema,
+  branchRoot: z.boolean().default(false),
+  scope: effectiveAuthoritySchema,
   rotatedFrom: z.object({
     capabilityId: z.string().min(1),
     expiresAt: z.iso.datetime(),

@@ -12,6 +12,7 @@ import {
   commitMessageSchema,
 } from '@abloatai/transaction/wire/frames';
 import { buildCommitFrame } from '../commitFrames.js';
+import { MAX_READ_SET_ENTRIES } from '@abloatai/transaction/coordination/schema';
 
 describe('wireCommitOperationSchema', () => {
   it('accepts every op shape the SDK sends today (buildCommitFrame output)', () => {
@@ -51,6 +52,23 @@ describe('wireCommitOperationSchema', () => {
         onStale: null,
       }).success,
     ).toBe(true);
+  });
+
+  it('preserves claim identity beside its fencing token', () => {
+    const frame = buildCommitFrame([{
+      type: 'UPDATE',
+      model: 'tasks',
+      id: 't1',
+      input: { status: 'done' },
+      claimId: 'claim-1',
+      fenceToken: 7,
+    }], 'tx-claimed');
+
+    expect(frame.payload.operations[0]).toMatchObject({
+      claimId: 'claim-1',
+      fenceToken: 7,
+    });
+    expect(commitMessageSchema.safeParse(frame).success).toBe(true);
   });
 
   it('declares the previously-undeclared `bypass` (boolean | null)', () => {
@@ -101,7 +119,7 @@ describe('wireCommitOperationSchema', () => {
 });
 
 describe('commitPayloadSchema', () => {
-  it('accepts the full payload the SDK sends (reads)', () => {
+  it('preserves the full ReadSet projections the SDK sends', () => {
     const frame = buildCommitFrame(
       [{ type: 'UPDATE', model: 'tasks', id: 't1', input: { a: 1 }, readAt: 7 }],
       'tx_batch',
@@ -109,8 +127,52 @@ describe('commitPayloadSchema', () => {
         { model: 'tasks', id: 't2', readAt: 5, onStale: 'reject' },
         { group: 'deck:abc', readAt: 5 },
       ],
+      [
+        { model: 'reports', id: 'r1', readAt: 4, onStale: 'notify' },
+        { group: 'report:abc', readAt: 4, onStale: 'reject' },
+      ],
     );
     expect(commitPayloadSchema.safeParse(frame.payload).success).toBe(true);
+    expect(frame.payload.reads).toEqual([
+      { model: 'tasks', id: 't2', readAt: 5, onStale: 'reject' },
+      { group: 'deck:abc', readAt: 5 },
+    ]);
+    expect(frame.payload.track).toEqual([
+      { model: 'reports', id: 'r1', readAt: 4, onStale: 'notify' },
+      { group: 'report:abc', readAt: 4, onStale: 'reject' },
+    ]);
+  });
+
+  it('does not collapse explicit empty or null projections into omission', () => {
+    const empty = buildCommitFrame([], 'tx-empty', [], []);
+    expect(empty.payload).toMatchObject({ reads: [], track: [] });
+
+    const cleared = buildCommitFrame([], 'tx-null', null, null);
+    expect(cleared.payload).toMatchObject({ reads: null, track: null });
+  });
+
+  it('caps the combined ReadSet projection at one canonical limit', () => {
+    const dependency = (index: number) => ({
+      model: 'tasks',
+      id: `task-${index}`,
+      readAt: index,
+    });
+    const reads = Array.from(
+      { length: MAX_READ_SET_ENTRIES / 2 },
+      (_, index) => dependency(index),
+    );
+    const track = Array.from(
+      { length: MAX_READ_SET_ENTRIES / 2 },
+      (_, index) => dependency(index + reads.length),
+    );
+    expect(commitPayloadSchema.safeParse({
+      operations: [], clientTxId: 'at-limit', reads, track,
+    }).success).toBe(true);
+    expect(commitPayloadSchema.safeParse({
+      operations: [], clientTxId: 'over-limit',
+      reads: [...reads, dependency(MAX_READ_SET_ENTRIES)],
+      track,
+    }).success).toBe(false);
   });
 
   it('rejects a payload without clientTxId and names the offending op index', () => {

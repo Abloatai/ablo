@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/cli",
-  "version": "0.48.0",
+  "version": "0.49.0",
   "description": "The ablo command line: set up Ablo, connect your database, and push your schema from the terminal.",
   "license": "Apache-2.0",
   "type": "module",
@@ -20,6 +20,7 @@
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsup --config tsup.config.ts",
     "prepack": "npm run build",
+    "prepublishOnly": "node scripts/verify-observability-build.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "test": "jest",
     "test:quickstart": "node scripts/test-quickstart.mjs"
@@ -30,10 +31,11 @@
     "directory": "packages/cli"
   },
   "dependencies": {
-    "@abloatai/transaction": "^0.48.0",
+    "@sentry/node": "^10.18.0",
+    "@abloatai/transaction": "^0.49.0",
     "jiti": "^2.7.0",
     "zod": "^4.4.3",
-    "@abloatai/humans": "^0.48.0"
+    "@abloatai/humans": "^0.49.0"
   },
   "devDependencies": {
     "@clack/prompts": "^0.11.0",

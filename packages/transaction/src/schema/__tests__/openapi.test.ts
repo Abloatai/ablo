@@ -75,6 +75,7 @@ describe('abloOpenApi (protocol reference)', () => {
     expect(Object.keys(paths).sort()).toEqual(
       [
         '/v1/commits',
+        '/v1/commits/{id}',
         '/v1/ephemeral_keys',
         // The whole coordination surface, not only the model-scoped half: a
         // socketless caller waits its turn by beating `{claimId}/heartbeat` and
@@ -130,7 +131,7 @@ describe('abloOpenApi (protocol reference)', () => {
     expect(Object.keys(schemaToOpenApi(few).paths as object).length).toBeLessThan(
       Object.keys(schemaToOpenApi(many).paths as object).length,
     );
-    expect(referencePaths).toBeLessThan(21);
+    expect(referencePaths).toBeLessThan(22);
   });
 
   it('is byte-identical no matter whose schema is pushed', () => {

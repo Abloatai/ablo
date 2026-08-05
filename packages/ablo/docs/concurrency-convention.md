@@ -1,305 +1,119 @@
 # Concurrency Convention
 
-> The governing rule for how Ablo resolves concurrent writes to shared state.
+> What Ablo checks when a guarded write depends on earlier state.
 
-This page is the contract: the `onStale` dispositions, what a conflict is
-checked against, and where the convention stops. The three-layer mechanics of
-claiming live in [Coordination](./coordination.md).
+Ablo never infers whether a write depends on earlier state. You decide, in two
+places. The model's `conflict` setting in the schema says what each kind of
+participant does when it hits a conflict, and it is the policy for that model.
+A per-write `onStale` states the disposition for one write. Ablo enforces what
+you declared and nothing else.
 
----
+## Unguarded writes
 
-## 1. The principle: non-coercion
-
-**The engine surfaces the truthful current state and lets the intelligent actor —
-agent or human — decide what to do. It does not force a resolution.**
-
-That is the whole convention. Everything below is a consequence of it.
-
-Classical concurrency control is *coercive*: it imposes the remedy. Two-phase
-locking forces a block; optimistic concurrency forces an abort. Ablo's wager is
-that the actor in the loop (an agent reasoning over the change, or a human
-watching the row) is better placed to resolve a conflict than a fixed rule baked
-into the storage layer. So the engine's job narrows to one thing: **report what
-is true, on time, and get out of the way.**
-
-There are two forms of non-coercion, and they are the same principle at two
-moments in time:
-
-| form | when | mechanism |
-|---|---|---|
-| **Claim** | *prospective*: before you act | reserve the row; others queue. Coordinate so the conflict never forms. |
-| **Notification** | *in-flight*: after a concurrent change | surface the changed value; the actor resolves and re-issues. |
-
-Use a claim when you will hold the row across a slow read→reason→write gap. Use a
-notification when you didn't, and the premise moved under you.
-
----
-
-## 2. The dispositions (`onStale`)
-
-Every guarded write (and every premise declared in §4) says what should happen
-when it goes stale. Three modes, split by whether they **force** an outcome:
-
-| mode | coercive? | what the engine does | who resolves | use when |
-|---|---|---|---|---|
-| `notify` | **No**: surface + delegate | Holds the write (does **not** apply it); returns a `StaleNotification` with the current value. | The actor (agent or human) reconciles and re-issues. | The aligned mode: tell the actor what changed, let it solve. |
-| `reject` | **Yes**: force-abort | Throws `AbloStaleContextError`; the batch is discarded. | The caller retries from scratch. | Hard invariants; legacy/strict callers. The current default. |
-| `overwrite` | **Yes**: force-clobber | Overwrites blindly last-writer-wins; **no** signal. | Nobody. | You genuinely own the field and concurrent values are noise. |
-
-> `notify` is the convention. `reject` and `overwrite` are escape hatches for the
-> two ends — "never let this be wrong" and "never bother me." They are not the
-> spirit; they are the boundary of it.
-
----
-
-## 3. What is checked: two premises
-
-A conflict is a **premise intersection** — what your operation was based on
-overlaps a concurrent delta. Ablo checks two premises, and they are independent.
-They differ only in what declared them:
-
-| premise | declared by | question | scope |
-|---|---|---|---|
-| **Write-target** | per-op `readAt` | "did a row I'm **writing** change since I read it?" | the rows in `operations[]` |
-| **Batch** | batch-level `reads[]` | "did anything I **looked at** change since I read it?" | rows/groups in `reads[]`, even if not written |
-
-The write-target check alone is the narrow case the canary anomaly defeats: an
-agent reads `deal.stage`, writes `task.status`, and a peer moves `deal.stage` —
-`task` never changed, so a write-target-only check waves it through. The batch
-premise closes that gap.
-
----
-
-## 4. The batch premise (`reads[]`)
-
-A commit may declare, at the batch level, what its writes were based on.
-Two granularities, developer's choice per entry:
+A plain write has no stale premise:
 
 ```ts
-reads: [
-  { model: 'Document', id: 's-1', readAt: N, fields?: ['title'] }, // ROW premise
-  { group: 'workspace:abc', readAt: N, onStale: 'notify' },          // GROUP premise
-]
+await ablo.tasks.update({ id, data: { status: 'done' } });
 ```
 
-- **Row:** did this specific row (optionally these fields) change? The literal
-  per-object premise.
-- **Group:** did *anything* in this sync group change? `group` is a sync-group
-  key (`workspace:abc`, `document:s1`, `org:X`) — the same unit a participant **watches
-  and claims**. This is the more Ablo-native granularity.
+If no active claim conflicts with it, the write is last-write-wins. That is a
+choice rather than a fallback: use it for independent assignments where the
+latest value should win. When a model's writes are never independent, say so
+once in its `conflict` setting instead of at every call site.
 
-**Boundary — a stale premise fires over the whole batch.** Each entry covers
-*all* the writes in the commit, so its disposition governs the batch:
-`reject` aborts it, `notify` holds **every** write and notifies, `overwrite`
-lets them land. Per-entry `onStale` defaults to `reject`.
+## Guarded writes
 
----
-
-## 5. The notification (`StaleNotification`)
-
-The non-coercive modes hand back data instead of throwing. The signal is
-delivered **twice**, by design — once as a value, once as an event:
-
-- On the **commit receipt**: `receipt.notifications` (and `CommitResult.notifications`).
-- On the **event channel**: `conflict:notified` (mirrors `reconciliation:needed` /
-  `sync:rollback`).
-
-Shape (canonical in `coordination/schema.ts`): one advisory in two scopes, told
-apart by `scope`, the same way `reads[]` entries come at two granularities.
-
-Both scopes carry:
-
-| field | meaning |
-|---|---|
-| `object` | stable type tag: `'stale_notification'` |
-| `scope` | `'row'` or `'group'` — which premise granularity fired |
-| `target` | **the row that moved**, and which parts: `{ model, id, fields }`. The same locator a claim names its subject with |
-| `readAt` | the watermark the committer reasoned against |
-| `observedSyncId` | the newest delta on the premise: re-read at/after this |
-| `writtenBy` | `{ kind, id }` of the concurrent author, reported faithfully |
-
-`scope: 'row'` adds:
-
-| field | meaning |
-|---|---|
-| `currentValues` | the live values of `target.fields`: the premise to reconcile against |
-
-`scope: 'group'` adds:
-
-| field | meaning |
-|---|---|
-| `group` | the group premise that fired (`report:abc`) |
-| `propagation?` | how `target` reached `group`: `{ via, through }` |
-| `changed?` | how much of the group moved: `{ count, sample, truncated }` |
-
-`target` names the row that changed in **both** scopes. A group notification
-reports the moved row there and the premise it broke in `group`, so the two are
-never the same field.
-
-Only `notify` produces a notification (the write was held). `reject` throws and
-`overwrite` is silent — neither notifies.
-
-### 5.1 The receive → reconcile loop
-
-You receive the signal two ways (same payload), then re-commit against the fresh
-watermark. The engine never re-issues for you — the actor decides.
+Pass the exact returned rows when a write is based on values previously read:
 
 ```ts
-// Trigger: a guarded write under the non-coercive mode.
-const receipt = await ablo.task.update({
-  id, data: { status: 'blocked' },
-  readAt: myWatermark,
-  onStale: 'notify',
+const task = await ablo.tasks.get({ id });
+const policy = await ablo.policies.get({ id: policyId });
+if (!task || !policy) throw new Error('required input is missing');
+
+await ablo.tasks.update({
+  id: task.id,
+  data: { status: 'done' },
+  reads: [task, policy],
 });
-
-// Receive — pull: the held write surfaces on the receipt.
-for (const n of receipt.notifications ?? []) resolve(n);
-
-// Receive — push: the same StaleNotification[] fires ambiently on the socket.
-ws.subscribe('conflict:notified', ({ notifications }) => notifications.forEach(resolve));
-
-function resolve(n: StaleNotification) {
-  // n.target     — the row that moved, and which fields (both scopes)
-  // n.writtenBy  — who moved it (e.g. { kind: 'agent', id: 'agent-b' })
-  if (n.scope === 'group') {
-    // "something in report:abc moved" — but `target` says WHICH row, so this is
-    // a one-row re-read, not a re-read of the group.
-    // n.propagation?.via — 'self' | 'parent' | 'transitive'
-    return refreshRow(n.target.model, n.target.id, n.observedSyncId);
-  }
-  // n.currentValues — what's actually there now (e.g. { status: 'done' })
-  if (!stillValid(n.currentValues)) return;       // premise gone → drop the write
-
-  return ablo.task.update({
-    id: n.target.id,
-    data: { status: 'blocked' },
-    readAt: n.observedSyncId,   // adopt the new high-water mark — this is what terminates the loop
-    onStale: 'notify',
-  });
-}
 ```
 
-The loop **terminates** because each retry advances `readAt` to `observedSyncId`;
-a peer that keeps writing only ever notifies you against a *newer* baseline, never
-the same one twice.
+Ablo privately resolves each exact object to its model, id, and read watermark,
+then compares those premises with current state when the write is accepted.
+Clones, fabrications, and rows returned by another client are rejected locally.
 
-### 5.2 Reading a group notification
+| Disposition | If the premise is stale |
+|---|---|
+| `reject` | Reject the write with `AbloStaleContextError`. |
+| `notify` | Keep the current row, return a `StaleNotification`, and let the caller reconcile. |
+| `overwrite` | Apply the new value without enforcing the stale premise. |
 
-A group premise says "anything in this group", so the notification has to answer
-"what, exactly?" or the only correct response is to re-read the whole group —
-which on a busy group is how a reconcile loop turns into a large, repeated read.
+`notify` is useful when an agent or human can merge the new information.
+`reject` is useful when the caller should restart from fresh state. Use
+`overwrite` only when the newer assignment should unconditionally win.
 
-Four fields answer it:
+## Functional updates
 
-- **`target`** — the row that moved and the fields that changed on it. Usually a
-  one-row re-read.
-- **`group`** — the premise that fired.
-- **`propagation`** — how the row reached the group. `via: 'self'` means the row
-  *is* the group's scope root; `'parent'` means one containment edge below it;
-  `'transitive'` means further up, with `through` listing the intermediate
-  models (`['slides', 'decks']`).
-- **`changed`** — how much moved, in **distinct rows** rather than deltas.
-  `count` is the total, `sample` names the most recently changed (capped), and
-  `truncated` says whether the sample tells the whole story.
-
-`changed` is what lets an actor decline. One row moved, re-read one row; twelve
-thousand moved, stop reasoning and resync the group — or abandon:
+For a pure read-modify-write calculation, use the functional update form:
 
 ```ts
-if (n.changed && n.changed.count > 50) return null; // too much moved — abandon the write
-for (const row of n.changed?.sample ?? []) await refresh(row.model, row.id);
+await ablo.counters.update(counterId, (current) => ({
+  value: current.value + 1,
+}));
 ```
 
-`propagation` is absent when the commit path has no record-group spec for the
-model, which is the one case where the server knows a group moved without
-knowing the route. Treat its absence as "re-read the group", the old behavior.
+It performs the read, guarded write, and bounded reconciliation loop for you.
+See [Coordination](./coordination.md#functional-updates).
 
-### 5.3 Gating on what you know
+## Claims
 
-The notification tells you a belief moved. Whether that should *stop you writing*
-is a separate decision, and it belongs on the belief, not on the write.
+A claim protects a target across a longer interval. By default, other
+participants cannot write the claimed target, while contenders that claim it
+wait their turn. Reads remain open. A model's explicit conflict policy can
+choose a different disposition for a participant kind.
 
-A `track` is a standing premise — what you are watching, with a watermark for
-when you last looked. Its disposition says what a move does to your next commit:
+Claims and stale guards protect different things:
 
-```ts
-await ablo.documents.track({ id: 's-1' });                     // notify — report it
-await ablo.documents.track({ id: 's-1', onStale: 'reject' });  // reject — gate my next write
-```
+- A claim excludes other participants while it is held.
+- A stale guard proves that the state a write depended on has not changed.
+- A write made under a claim is still rejected if its own claimed snapshot has
+  become stale.
 
-`reject` refuses your next commit while that belief is stale, **even if the
-commit writes an unrelated row**. The gate is on what you *know*, not on what you
-are touching — which is the case a read→reason→write agent actually has.
+See [Coordination](./coordination.md#claims) for the API.
 
-It is enforced at the commit chokepoint, so it is a guarantee rather than a
-convention. And the gate takes a key: it does not reopen on its own, because an
-agent retrying blindly would land exactly the write `reject` was asked to
-prevent. Re-read, then re-register the track to say you have. See
-[Groups](./groups.md#reporting-or-gating-onstale).
+## Cross-row and batch premises
 
-A row that goes stale twice is telling you something: the read→reason→write gap
-wants the *prospective* guard, not the in-flight one. Escalate to a claim
-(§1) rather than raising `retries`.
+Model writes and lower-level commits can declare rows they read even when the
+write targets somewhere else. This protects decisions such as “update the task
+only if the deal I inspected has not changed.” A stale batch premise applies to
+the whole batch so atomicity is preserved.
 
----
+Use the high-level model methods unless you are building a custom runtime. When
+you do use batch premises, declare only the rows or groups that materially
+influenced the decision; overly broad premises create unnecessary contention.
 
-## 6. Boundaries & invariants
+## Notifications
 
-What the convention **guarantees**, and where it **stops**:
+A `StaleNotification` identifies the stale premise and provides the current
+state needed to reconcile. The original write has not been applied.
 
-1. **Engine surfaces, actor decides.** Under `notify` the engine never
-   repairs, merges, or re-plans. It reports `currentValues` and the actor (agent
-   or human) owns the resolution. The engine does not distinguish them — it is
-   actor-neutral by design.
+A typical loop is:
 
-2. **Truthfulness:** `currentValues` / `observedSyncId` reflect committed state at
-   detection time, inside the same transaction as the write. A notification is
-   never speculative.
+1. Inspect the current value in the notification.
+2. Recompute the intended change.
+3. Submit a new guarded write with a fresh premise.
 
-3. **No livelock, which is not the same as termination.** The monotonic
-   `sync_id` landing order is the serialization order. The stale committer
-   always yields/recomputes — an asymmetry that rules out the symmetric
-   notify-rewrite livelock, because each round adopts a newer `observedSyncId`
-   and no baseline is ever reasoned against twice.
+Give this loop a retry budget. Continuous contention should surface to the
+caller rather than retry forever.
 
-   It does **not** rule out starvation. A peer writing faster than your
-   read→decide→write gap keeps winning, and the engine never re-issues on your
-   behalf, so the rounds are yours and they are unbounded. Progress in the
-   watermark is not progress in the work — and for an agent, each round is a
-   model call. `update(id, fn)` bounds it for you and hands the conflict to
-   your updater (§5.3); a hand-rolled loop must bound itself.
+## Boundaries
 
-4. **Scope: reversible DB state only.** The convention governs writes to the
-   shared database, which are inherently reversible (prior value in
-   `sync_deltas`). **Irreversible external side-effects** (emails, payments,
-   third-party calls) are *out of scope* — the engine cannot hold or undo them,
-   so they must not be gated by `notify`.
+Concurrency control does not replace:
 
-5. **Defaults.** A plain write (no `readAt`) is last-writer-wins with **no**
-   check. A guarded write with `readAt` but no `onStale` defaults to `reject`.
+- database constraints and transactions for application invariants;
+- authorization for deciding who may read or write;
+- idempotency for safely replaying the same request;
+- claims for exclusivity across slow, side-effecting work.
 
-6. **Policy seam.** Custom `ConflictPolicy` functions see **write-target**
-   conflicts (`stale_context` / `claim_held`). **Batch-premise** conflicts are
-   resolved directly via each entry's `onStale`, not through the policy seam.
-
-7. **Claims win when held.** A non-holder writing to a claimed row is rejected
-   (`AbloClaimedError`) regardless of `readAt` — the prospective form takes
-   precedence over the in-flight form. Only `user`/`system` principals may
-   `bypass` a foreign claim; agents may not.
-
----
-
-## 7. What this convention does not cover
-
-Three limits worth knowing before you rely on it.
-
-- **Irreversible external side-effects.** Emails, payments, and third-party
-  calls are not gated by this convention (§6.4). The engine cannot hold or undo
-  them, so never place one behind `notify`.
-- **A caller that declares nothing gets no check.** The batch premise catches
-  only what you declared. Write-target checking needs a `readAt` to compare
-  against, so a plain write with neither is last-writer-wins (§6.5). What you
-  declare is what is protected.
-- **`writtenBy.kind` reports what authenticated, not what you meant.** An `sk_`
-  key resolves to `system`, not `agent`. How identities map to participant kinds
-  is a separate concern from this convention.
+The rule is simple: the model's `conflict` setting is the policy, and each write
+declares what it read. Plain writes are last-write-wins because declaring
+nothing is itself a decision, so make it deliberately.

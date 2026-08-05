@@ -133,7 +133,7 @@ describe('Property: MutationQueue Invariants', () => {
           // Drain deterministically: wait until every created transaction has
           // settled (completed or failed) instead of the old fixed 200ms sleep
           // inside the fast-check loop — the MockMutationExecutor acks each
-          // commit with an incrementing lastSyncId, so settlement is ack-based
+          // commit with an incrementing lastSyncId, so confirmation is ack-based
           // and event-driven. If a transaction never settles (the very bug this
           // invariant hunts), the wait hangs and the jest timeout fails the run.
           await flushMicrotasks();
@@ -153,7 +153,7 @@ describe('Property: MutationQueue Invariants', () => {
           });
 
           // Confirm all via delta (belt-and-braces from the original test —
-          // ack-based settlement above already resolved everything).
+          // ack-based confirmation above already resolved everything).
           queue.onDeltaReceived(ctx.mocks.mutationExecutor.currentSyncId + 100);
 
           // INVARIANT: every created transaction resolved

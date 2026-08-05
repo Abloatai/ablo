@@ -57,6 +57,18 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "client",
     },
+    "better_auth_request_failed": {
+      "category": "auth",
+      "httpStatus": 400,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "better_auth_upstream_failed": {
+      "category": "server",
+      "httpStatus": 500,
+      "retryable": true,
+      "surface": "wire",
+    },
     "bootstrap_cancelled": {
       "category": "bootstrap",
       "httpStatus": null,
@@ -345,6 +357,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "client",
     },
+    "data_session_unsupported": {
+      "category": "validation",
+      "httpStatus": 400,
+      "retryable": false,
+      "surface": "wire",
+    },
     "data_source_blocked": {
       "category": "transport",
       "httpStatus": 503,
@@ -360,6 +378,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
     "database_host_not_allowed": {
       "category": "permission",
       "httpStatus": 403,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "database_loopback_requires_connector": {
+      "category": "validation",
+      "httpStatus": 400,
       "retryable": false,
       "surface": "wire",
     },
@@ -819,6 +843,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "mint_failed": {
+      "category": "server",
+      "httpStatus": 502,
+      "retryable": true,
+      "surface": "wire",
+    },
     "mock_mutation_failed": {
       "category": "client",
       "httpStatus": null,
@@ -957,6 +987,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "client",
     },
+    "no_active_organization": {
+      "category": "tenant",
+      "httpStatus": 400,
+      "retryable": false,
+      "surface": "wire",
+    },
     "no_data_source_registered": {
       "category": "not_found",
       "httpStatus": 404,
@@ -974,6 +1010,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "httpStatus": 400,
       "retryable": false,
       "surface": "wire",
+    },
+    "operational_warning": {
+      "category": "server",
+      "httpStatus": null,
+      "retryable": false,
+      "surface": "client",
     },
     "org_id_required": {
       "category": "validation",
@@ -1311,6 +1353,18 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "server_side_only": {
+      "category": "permission",
+      "httpStatus": 403,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "session_check_failed": {
+      "category": "server",
+      "httpStatus": 503,
+      "retryable": true,
+      "surface": "wire",
+    },
     "session_expired": {
       "category": "auth",
       "httpStatus": 401,
@@ -1569,6 +1623,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "unknown_auth_host": {
+      "category": "auth",
+      "httpStatus": 400,
+      "retryable": false,
+      "surface": "wire",
+    },
     "unknown_model": {
       "category": "tenant",
       "httpStatus": 400,
@@ -1648,6 +1708,6 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "surface": "client",
     },
   },
-  "version": "2026-08-03",
+  "version": "2026-08-04",
 }
 `;

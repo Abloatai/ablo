@@ -20,11 +20,12 @@ import {
 import {
   reconcileFunctionalUpdate,
   type ModelUpdater,
-  type ContentionOptions,
+  type FunctionalUpdateOptions,
 } from '@abloatai/transaction/resources/functionalUpdate';
 import type { MutationOptions } from '../interfaces/index.js';
 import {
   claimDescription,
+  type ReadDependency,
   type TrackDependency,
 } from '@abloatai/transaction/coordination/schema';
 import { Model, modelAsRow } from '../Model.js';
@@ -63,7 +64,7 @@ import type {
 } from '@abloatai/transaction/types/streams';
 
 // The request contract — every option and parameter shape a caller passes to a
-// read, a write, or a claim — lives in the settlement core (ADR 0016). This
+// read, a write, or a claim — lives in the confirmation core (ADR 0016). This
 // factory binds it to reactive model instances; the shapes themselves are
 // transport- and consumer-agnostic. Re-exported so `./createModelProxy` stays a
 // working import path for the whole surface.
@@ -122,8 +123,19 @@ import {
   claimQueueView,
   resolveClaimContentionOptions,
 } from '@abloatai/transaction/resources/modelOperations';
-import type { HttpModelClient } from '@abloatai/transaction/transport/httpClient';
+import type {
+  CapturedRow,
+  HttpModelClient,
+} from '@abloatai/transaction/transport/httpClient';
 import type { ParticipantKind } from '@abloatai/transaction/types/participant';
+import {
+  abortReadSetCommit,
+  capturePointRead,
+  consumeReadSet,
+  prepareReadSet,
+  type PreparedReadSet,
+  type ReadSetContext,
+} from '@abloatai/transaction/internal/read-set';
 
 export interface ModelClientMeta {
   readonly key: string;
@@ -150,6 +162,8 @@ type EntityHalf = Pick<ModelTarget, 'model' | 'id'>;
 // `ModelCollaboration<Task>` and `ModelCollaboration<Invoice>` the same type
 // while reading as though they differed.
 export interface ModelCollaboration {
+  /** Exact point evidence from the HTTP read boundary (stamp captured before data). */
+  readPoint(model: string, id: string): Promise<{ data: unknown; stamp: number }>;
   createClaim(options: {
     /**
      * The locator, in the spelling the SDK surface and the HTTP routes use.
@@ -403,9 +417,12 @@ export function createModelProxy<T, C>(
    * collaborator, a test most of all, is pushed into a cast through `unknown`
    * to supply the one method that is actually read.
    */
-  hydration: Pick<OnDemandLoader, 'fetch'>,
+  hydration: Pick<OnDemandLoader, 'fetch'> &
+    Partial<Pick<OnDemandLoader, 'getReadEvidence'>>,
   collaboration?: ModelCollaboration,
+  readSetContext?: ReadSetContext,
 ): ModelOperations<T, C> {
+  const readSetClientIdentity = syncClient as object;
   /**
    * Resolve a row **this** resource owns.
    *
@@ -541,29 +558,56 @@ export function createModelProxy<T, C>(
     typeof (value as { id?: unknown }).id === 'string' &&
     typeof (value as { release?: unknown }).release === 'function';
 
-  const mutationOptions = (
+  const preparedMutation = (
     params:
       | ModelCreateParams<T, C>
       | ModelUpdateParams<T, C>
       | ModelDeleteParams<T, C>,
-  ): MutationOptions => {
+  ): { options: MutationOptions; prepared: PreparedReadSet } => {
+    const prepared = prepareReadSet(
+      readSetContext,
+      readSetClientIdentity,
+      params.readAt,
+      params.onStale,
+      params.idempotencyKey,
+      params.reads,
+    );
     const rest: MutationOptions = {
-      ...(params.idempotencyKey !== undefined
-        ? { idempotencyKey: params.idempotencyKey }
+      ...(prepared.idempotencyKey !== undefined
+        ? { idempotencyKey: prepared.idempotencyKey }
+        : params.idempotencyKey !== undefined
+          ? { idempotencyKey: params.idempotencyKey }
         : {}),
       ...(params.label !== undefined ? { label: params.label } : {}),
-      ...(params.readAt !== undefined ? { readAt: params.readAt } : {}),
-      ...(params.onStale !== undefined ? { onStale: params.onStale } : {}),
+      ...(prepared.readAt !== undefined
+        ? { readAt: prepared.readAt }
+        : params.readAt !== undefined
+          ? { readAt: params.readAt }
+          : {}),
+      ...(prepared.onStale !== undefined
+        ? { onStale: prepared.onStale }
+        : params.onStale !== undefined
+          ? { onStale: params.onStale }
+          : {}),
       ...(params.fenceToken !== undefined ? { fenceToken: params.fenceToken } : {}),
       ...(params.claimRef !== undefined ? { claimRef: params.claimRef } : {}),
-      ...(params.reads !== undefined ? { reads: params.reads } : {}),
+      ...(prepared.reads !== undefined
+        ? { reads: prepared.reads === null ? null : [...prepared.reads] }
+        : params.reads !== undefined
+          ? { reads: params.reads }
+          : {}),
       ...(params.track !== undefined ? { track: params.track } : {}),
     };
     // The write-options schema — the runtime twin of the compile-time params.
     // Catches plain-JavaScript callers (for example `onStale: 'rejct'`) at the
     // call site with a typed error instead of a silent no-op or a server 400.
-    assertWriteOptions(rest, `${schemaKey} write`);
-    return rest;
+    try {
+      assertWriteOptions(rest, `${schemaKey} write`);
+    } catch (error) {
+      abortReadSetCommit(readSetContext, prepared.automaticCommit);
+      throw error;
+    }
+    return { options: rest, prepared };
   };
 
   const releaseClaim = async (id: string): Promise<void> => {
@@ -1074,7 +1118,7 @@ export function createModelProxy<T, C>(
   };
 
   const get = guard(
-    async (params: ModelRetrieveParams): Promise<T | undefined> => {
+    async (params: ModelRetrieveParams): Promise<CapturedRow<T> | undefined> => {
       // Read-interest enrolment: authoritative point reads enter the same
       // entity scope as the claim stream, while remaining settled reads.
       void collaboration?.enterScope?.({ [schemaKey]: params.id });
@@ -1083,9 +1127,55 @@ export function createModelProxy<T, C>(
         where: [['id', params.id]],
         limit: 1,
       });
-      return rows[0];
+      if (readSetContext?.getStore() && collaboration) {
+        const read = await collaboration.readPoint(schemaKey, params.id);
+        const data = (read.data ?? undefined) as T | undefined;
+        capturePointRead(
+          readSetContext,
+          readSetClientIdentity,
+          wireModel,
+          params.id,
+          data,
+          read.stamp,
+        );
+        return data as CapturedRow<T> | undefined;
+      }
+      return rows[0] as CapturedRow<T> | undefined;
     },
   );
+
+  const list = guard(async (
+    options?: ServerReadOptions<T>,
+  ): Promise<CapturedRow<T>[]> => {
+    const registry = readSetContext?.getStore();
+    const rows = await load(options);
+    if (!registry) return rows as CapturedRow<T>[];
+    for (const row of rows) {
+      const stamp = hydration.getReadEvidence?.(row as object);
+      if (stamp === undefined) {
+        // Local-first/lazy rows remain valid reads, but cannot later be used as
+        // guarded dependencies. `prepareReadSet` rejects them if supplied in
+        // `reads`; authoritative complete reads carry evidence here.
+        continue;
+      }
+      const id = (row as { id?: unknown }).id;
+      if (typeof id !== 'string' || id.length === 0) {
+        throw new AbloValidationError(
+          `${registeredModelName}.list returned a row without an id.`,
+          { code: 'commit_no_result' },
+        );
+      }
+      capturePointRead(
+        readSetContext,
+        readSetClientIdentity,
+        wireModel,
+        id,
+        row,
+        stamp,
+      );
+    }
+    return rows as CapturedRow<T>[];
+  });
 
   const operations: ModelOperations<T, C> = {
     local,
@@ -1095,11 +1185,10 @@ export function createModelProxy<T, C>(
 
     // No automatic scope enrolment on bulk `list`: that would subscribe to an
     // unbounded set of rows' entity groups.
-    list: guard(load),
+    list,
 
     create: guardWrite(async (params: ModelCreateParams<T, C>): Promise<T> => {
       const id = params.id ?? Model.generateId();
-      const opts = mutationOptions(params);
       const claim = params.claim;
       let autoLease: Claim | undefined;
       if (claim && !isClaimHandle(claim)) {
@@ -1146,15 +1235,41 @@ export function createModelProxy<T, C>(
         createdAt: new Date(),
         updatedAt: new Date(),
       });
-      const effective: MutationOptions = {
-        ...opts,
-        ...(autoLease ? { claim: autoLease } : {}),
-        ...(isClaimHandle(claim) ? { claim: { id: claim.id } } : {}),
-      };
+      let prepared: PreparedReadSet | undefined;
       try {
+        const resolved = preparedMutation(params);
+        prepared = resolved.prepared;
+        const effective: MutationOptions = {
+          ...resolved.options,
+          ...(autoLease
+            ? {
+                claimRef: { id: autoLease.id },
+                ...(autoLease.fenceToken !== undefined
+                  ? { fenceToken: autoLease.fenceToken }
+                  : {}),
+              }
+            : {}),
+          ...(isClaimHandle(claim)
+            ? {
+                claimRef: { id: claim.id },
+                ...(claim.fenceToken !== undefined
+                  ? { fenceToken: claim.fenceToken }
+                  : {}),
+              }
+            : {}),
+        };
         syncClient.add(model, effective);
         await waitForMutation(model);
+        consumeReadSet(
+          readSetContext,
+          readSetClientIdentity,
+          prepared.consumed,
+          prepared.automaticCommit,
+        );
         return modelAsRow<T>(model);
+      } catch (error) {
+        abortReadSetCommit(readSetContext, prepared?.automaticCommit ?? false);
+        throw error;
       } finally {
         await autoLease?.release?.().catch(() => {});
       }
@@ -1169,7 +1284,7 @@ export function createModelProxy<T, C>(
         async (
           arg: ModelUpdateParams<T, C> | string,
           updater?: ModelUpdater<T>,
-          contention?: ContentionOptions,
+          contention?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
         ): Promise<T | undefined> => {
         // Functional form: update(id, current => next). Same guarantee as the
         // HTTP client (shared reconcile loop), implemented with this transport's
@@ -1194,18 +1309,29 @@ export function createModelProxy<T, C>(
               { code: 'model_claim_not_configured' },
             );
           }
-          return reconcileFunctionalUpdate<T, T>(updater, contention, {
+          return reconcileFunctionalUpdate<
+            T,
+            T,
+            ReadDependency | CapturedRow
+          >(updater, contention, {
             model: registeredModelName,
             id,
             readFresh: async () => {
               // `type: 'complete'` forces the round-trip — the hydration ledger
               // would otherwise serve a possibly-stale local row for a hydrated id.
               await load({ where: [['id', id]], type: 'complete' });
-              const fresh = ownRowOrThrow(id);
-              const snapshot = collaboration.createSnapshot(schemaKey, id);
+              const exact = await collaboration.readPoint(wireModel, id);
+              capturePointRead(
+                readSetContext,
+                readSetClientIdentity,
+                wireModel,
+                id,
+                exact.data,
+                exact.stamp,
+              );
               return {
-                data: fresh ? modelAsRow<T>(fresh) : undefined,
-                stamp: snapshot.stamp,
+                data: exact.data as T | undefined,
+                stamp: exact.stamp,
               };
             },
             writeNext: async (patch, readAt) => {
@@ -1216,14 +1342,39 @@ export function createModelProxy<T, C>(
                   { code: 'entity_not_found' },
                 );
               }
-              const effective: MutationOptions = {
-                readAt,
-                onStale: 'reject',
-              };
-              model.applyChanges(patch);
-              syncClient.update(model, effective);
-              await waitForMutation(model);
-              return modelAsRow<T>(model);
+              const prepared = prepareReadSet(
+                readSetContext,
+                readSetClientIdentity,
+                undefined,
+                'reject',
+                undefined,
+                contention?.reads,
+              );
+              try {
+                const effective: MutationOptions = {
+                  readAt: prepared.readAt ?? readAt,
+                  onStale: prepared.onStale ?? 'reject',
+                  ...(prepared.idempotencyKey
+                    ? { idempotencyKey: prepared.idempotencyKey }
+                    : {}),
+                  ...(prepared.reads !== undefined
+                    ? { reads: prepared.reads === null ? null : [...prepared.reads] }
+                    : {}),
+                };
+                model.applyChanges(patch);
+                syncClient.update(model, effective);
+                await waitForMutation(model);
+                consumeReadSet(
+                  readSetContext,
+                  readSetClientIdentity,
+                  prepared.consumed,
+                  prepared.automaticCommit,
+                );
+                return modelAsRow<T>(model);
+              } catch (error) {
+                abortReadSetCommit(readSetContext, prepared.automaticCommit);
+                throw error;
+              }
             },
           });
         }
@@ -1256,13 +1407,17 @@ export function createModelProxy<T, C>(
         // If we hold a claim on this row, guard the write with its snapshot
         // watermark + lease so it's stale-rejected and attributed to the claim.
         const claimed = activeClaims.get(id);
-        const opts = mutationOptions(params);
+        const resolved = preparedMutation(params);
+        const opts = resolved.options;
         const handle = isClaimHandle(params.claim) ? params.claim : undefined;
         const effective: MutationOptions | undefined = claimed
           ? {
               readAt: claimed.lease.readAt ?? claimed.snapshot.stamp,
               onStale: 'reject',
               claimRef: { id: claimed.lease.id },
+              ...(claimed.lease.fenceToken !== undefined
+                ? { fenceToken: claimed.lease.fenceToken }
+                : {}),
               ...opts,
             }
           : {
@@ -1279,28 +1434,39 @@ export function createModelProxy<T, C>(
                   }
                 : {}),
               ...opts,
-              ...(handle ? { claim: { id: handle.id } } : {}),
+              ...(handle ? { claimRef: { id: handle.id } } : {}),
             };
         // Local user update: `applyChanges` keeps change tracking on so the
         // edited fields land in `modifiedProperties` and are actually sent to
         // the server. (`updateFromData` is the hydration path and would discard
         // the tracking, producing an empty `input: {}` no-op mutation.)
-        model.applyChanges(params.data);
-        syncClient.update(model, effective);
-        await waitForMutation(model);
-        return modelAsRow<T>(model);
+        try {
+          model.applyChanges(params.data);
+          syncClient.update(model, effective);
+          await waitForMutation(model);
+          consumeReadSet(
+            readSetContext,
+            readSetClientIdentity,
+            resolved.prepared.consumed,
+            resolved.prepared.automaticCommit,
+          );
+          return modelAsRow<T>(model);
+        } catch (error) {
+          abortReadSetCommit(readSetContext, resolved.prepared.automaticCommit);
+          throw error;
+        }
         },
       );
       function update(params: ModelUpdateParams<T, C>): Promise<T>;
       function update(
         id: string,
         updater: ModelUpdater<T>,
-        options?: ContentionOptions,
+        options?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
       ): Promise<T | undefined>;
       function update(
         arg: ModelUpdateParams<T, C> | string,
         updater?: ModelUpdater<T>,
-        contention?: ContentionOptions,
+        contention?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
       ): Promise<T | undefined> {
         return updateImpl(arg, updater, contention);
       }
@@ -1338,7 +1504,8 @@ export function createModelProxy<T, C>(
       // the same row).
       if (!model) return;
       const claimed = activeClaims.get(id);
-      const opts = mutationOptions(params);
+      const resolved = preparedMutation(params);
+      const opts = resolved.options;
       const handle = isClaimHandle(params.claim) ? params.claim : undefined;
       const effective: MutationOptions | undefined = claimed
         ? {
@@ -1351,17 +1518,31 @@ export function createModelProxy<T, C>(
             ...opts,
           }
         : {
-            ...(handle?.readAt !== undefined
-              ? {
-                  readAt: handle.readAt,
-                  onStale: 'reject' as const,
-                }
-              : {}),
-            ...opts,
-            ...(handle ? { claim: { id: handle.id } } : {}),
+              ...(handle?.readAt !== undefined
+                ? {
+                    readAt: handle.readAt,
+                    onStale: 'reject' as const,
+                    ...(handle.fenceToken !== undefined
+                      ? { fenceToken: handle.fenceToken }
+                      : {}),
+                  }
+                : {}),
+              ...opts,
+              ...(handle ? { claimRef: { id: handle.id } } : {}),
           };
-      syncClient.delete(model, effective);
-      await waitForMutation(model);
+      try {
+        syncClient.delete(model, effective);
+        await waitForMutation(model);
+        consumeReadSet(
+          readSetContext,
+          readSetClientIdentity,
+          resolved.prepared.consumed,
+          resolved.prepared.automaticCommit,
+        );
+      } catch (error) {
+        abortReadSetCommit(readSetContext, resolved.prepared.automaticCommit);
+        throw error;
+      }
     }),
 
     // `claim` is a callable namespace (take a claim) carrying the coordination

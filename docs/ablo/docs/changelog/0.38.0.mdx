@@ -41,7 +41,7 @@ through the same transaction API as every other caller.
 
 The integrations keep each product in its proper role: Temporal and Inngest
 own durable execution, scheduling, retries, and workflow history; Ablo owns
-shared-data authority, claims, conflicts, idempotency, settlement, and ordered
+shared-data authority, claims, conflicts, idempotency, confirmation, and ordered
 observation. Workflow code does not open WebSockets or hold live client state.
 
 ### Database adapter foundation, starting with PostgreSQL

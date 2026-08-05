@@ -53,6 +53,7 @@ export interface CommitFrameOperation {
   readonly id: string;
   readonly input?: Record<string, unknown>;
   readonly transactionId?: string;
+  readonly claimId?: string | null;
   readonly readAt?: number | null;
   readonly onStale?: OnStaleMode | null;
   readonly fenceToken?: number | null;
@@ -80,17 +81,18 @@ export function buildCommitFrame(
       id: op.id,
       input: op.input,
       transactionId: op.transactionId,
+      claimId: op.claimId,
       readAt: op.readAt,
       onStale: op.onStale,
       fenceToken: op.fenceToken,
     })),
     clientTxId,
   };
-  // The batch premise: the rows or groups the writer read before committing.
-  if (reads && reads.length > 0) payload.reads = [...reads];
-  // Durable premises the writer is registering: the rows or groups it
-  // wants to keep hearing about after this commit, delivered on a future receipt.
-  if (track && track.length > 0) payload.track = [...track];
+  // Preserve declaration at the wire boundary. `null`, an explicit empty list,
+  // and omission are distinct inputs even when today's server treats each as
+  // "none"; the WebSocket path must not silently erase a field the caller set.
+  if (reads !== undefined) payload.reads = reads === null ? null : [...reads];
+  if (track !== undefined) payload.track = track === null ? null : [...track];
   return { type: 'commit', payload };
 }
 

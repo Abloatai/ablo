@@ -5,11 +5,10 @@ sidebar:
   icon: shield-check
 ---
 
-When an Ablo write succeeds, the server has accepted it — and when two agents
-touch the same row, Ablo coordinates them instead of letting one silently
-overwrite the other. This page is the precise list of what you can count on:
-confirmed writes, stale-write protection, claims, and the audit trail behind
-every change.
+When an Ablo write succeeds, the server has confirmed it. Concurrency behavior
+depends on the write form you choose: plain writes are last-write-wins;
+functional updates, stale guards, and claims add protection when a write depends
+on earlier state. This page is the precise list of what each form promises.
 
 Claims don't lock. If another writer holds the row, `claim` waits for them,
 re-reads the fresh row, then hands it to you — so two writers serialize instead
@@ -52,18 +51,18 @@ Use `snapshot(...)` and `readAt` when a write depends on state the agent already
 read:
 
 ```ts
-const snap = ablo.snapshot({ weatherReports: 'report_stockholm' });
+const report = await ablo.weatherReports.get({ id: 'report_stockholm' });
+if (!report) throw new Error('report missing');
 
 await ablo.weatherReports.update({
-  id: 'report_stockholm',
+  id: report.id,
   data: { status: 'ready' },
-  readAt: snap.stamp,
-  onStale: 'reject',
+  reads: [report],
 });
 ```
 
-`onStale: 'reject'` prevents lost updates. If the target changed after the
-snapshot, the server rejects the write instead of applying stale reasoning.
+The returned row carries opaque evidence. If it changed after the read, the
+server rejects the write instead of applying stale reasoning.
 
 Two other dispositions exist. `overwrite` applies the write with no stale check
 at all. `notify` **holds** the write, so the row is left as it stands, and hands
@@ -72,6 +71,11 @@ and re-issue; the rest of the batch still commits.
 
 See [Concurrency Convention](/concurrency-convention) for the full taxonomy,
 what each disposition is checked against, and where the convention stops.
+
+A plain `update({ id, data })` carries no stale premise. If no one holds a claim
+on the target, it is last-write-wins. That is appropriate for independent values
+such as status flags, but not for a read-modify-write calculation. For the latter,
+use the functional update form or pass exact returned rows through `reads`.
 
 ## Claim Coordination
 
@@ -89,10 +93,12 @@ error out, when it should not return a row while someone else is mid-edit. Reads
 never block on a claim — to wait for a row to free up, `claim({ id })` it (the
 claim queues fairly behind the holder).
 
-A claim does not reject or block other writers; it announces work so peers
-serialize behind it rather than racing. While you hold a claim, the matching
-`ablo.<model>.update({ id, ... })` is rejected with `AbloStaleContextError` if the row
-changed underneath you after your claim point.
+By default, a held claim rejects writes from other participants to the claimed
+target. Contenders that call `claim` wait their turn; ordinary reads remain
+open. An explicit model conflict policy can choose another disposition for a
+participant kind. While you hold a claim, the matching
+`ablo.<model>.update({ id, ... })` is rejected with `AbloStaleContextError` if
+the row changed underneath you after your claim point.
 
 ## Agent Runs
 
@@ -175,12 +181,10 @@ separates workflow or deployment lanes sharing the same store.
 
 ## Storage Boundary
 
-Your rows live in your database; Ablo holds only the transaction log and the
-coordination state. Writes enter Ablo's commit chokepoint and land in your
-Postgres through a scoped writer role, and the WAL echo confirms them
-(`queued` → `confirmed`). For a database that can't grant replication, Ablo
-forwards the write to a signed Data Source endpoint instead — the marked
-fallback. Either way Ablo never holds a database connection string. See
+Your rows live in your database; Ablo holds change history and coordination
+state. Writes land in your Postgres through a scoped writer role and are
+confirmed from its authoritative change feed. For a database that cannot grant
+replication, Ablo uses a signed Data Source endpoint instead. See
 [Connect Your Database](/data-sources).
 
 ## Writes

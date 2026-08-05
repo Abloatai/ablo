@@ -338,15 +338,23 @@ export function kyselyDirectMutation<S extends SchemaRecord>(
   db: KyselyLike,
   schema: Schema<S>,
 ): MutationAdapter {
+  const markerModels = new Map<string, string>();
+  for (const [key, definition] of Object.entries(schema.models)) {
+    const typename = definition.typename || key;
+    markerModels.set(key, typename);
+    markerModels.set(key.toLowerCase(), typename);
+    markerModels.set(typename, typename);
+    markerModels.set(typename.toLowerCase(), typename);
+  }
   return createKyselyMutationAdapter(
     db,
     createKyselyMutationCore(db, schema),
     'direct',
     {
-      markerModelFor: (operationModel) => {
-        const typename = schema.models[operationModel]?.typename;
-        return typename && typename.length > 0 ? typename : operationModel;
-      },
+      markerModelFor: (operationModel) =>
+        markerModels.get(operationModel) ??
+        markerModels.get(operationModel.toLowerCase()) ??
+        operationModel,
     },
   );
 }

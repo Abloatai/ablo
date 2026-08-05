@@ -2,11 +2,11 @@ import { Database } from '../../Database.js';
 import {
   createDurableCommitEnvelope,
   durableCommitEnvelopeSchema,
-} from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+} from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import {
   createDurableHttpCommitEnvelope,
   durableHttpCommitEnvelopeSchema,
-} from '@abloatai/transaction/transactions/settlement/httpCommitEnvelope';
+} from '@abloatai/transaction/transactions/confirmation/httpCommitEnvelope';
 
 const DB_NAME = 'commit-outbox-test';
 

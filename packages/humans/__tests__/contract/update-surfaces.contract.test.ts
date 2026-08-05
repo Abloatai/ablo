@@ -19,7 +19,7 @@ import type {
 import type { HttpModelClient } from '@abloatai/transaction/transport/httpClient';
 import type {
   ModelUpdater,
-  ContentionOptions,
+  FunctionalUpdateOptions,
 } from '@abloatai/transaction/resources/functionalUpdate';
 import type { CoordinatedModel } from '@abloatai/transaction/ai-sdk/coordinatedTool';
 import { defineSchema, model, z } from '@abloatai/transaction/schema';
@@ -41,7 +41,7 @@ interface RowCreate {
 type _WsFunctionalParams = Expect<
   Equal<
     Parameters<ModelOperations<Row, RowCreate>['update']>,
-    [id: string, updater: ModelUpdater<Row>, options?: ContentionOptions]
+    [id: string, updater: ModelUpdater<Row>, options?: FunctionalUpdateOptions]
   >
 >;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -53,7 +53,7 @@ type _WsFunctionalReturn = Expect<
 type _HttpFunctionalParams = Expect<
   Equal<
     Parameters<HttpModelClient<Row, RowCreate>['update']>,
-    [id: string, updater: ModelUpdater<Row>, options?: ContentionOptions]
+    [id: string, updater: ModelUpdater<Row>, options?: FunctionalUpdateOptions]
   >
 >;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -80,7 +80,7 @@ function _compileOnlyUpdateProbes(
   const wsFunctional: (
     id: string,
     updater: ModelUpdater<Row>,
-    options?: ContentionOptions,
+    options?: FunctionalUpdateOptions,
   ) => Promise<Row | undefined> = wsModel.update;
 
   const httpObject: (params: ModelUpdateParams<Row>) => Promise<Row> =
@@ -88,7 +88,7 @@ function _compileOnlyUpdateProbes(
   const httpFunctional: (
     id: string,
     updater: ModelUpdater<Row>,
-    options?: ContentionOptions,
+    options?: FunctionalUpdateOptions,
   ) => Promise<Row | undefined> = httpModel.update;
 
   // @ts-expect-error — functional form requires an updater function

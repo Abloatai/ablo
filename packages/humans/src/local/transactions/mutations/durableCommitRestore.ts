@@ -1,9 +1,9 @@
 import { AbloIdempotencyError, AbloValidationError } from '@abloatai/transaction/errors';
 import type { RuntimeContext } from '../../RuntimeContext.js';
 import type { CommitTransaction } from './commitLane.js';
-import type { DurableCommitEnvelope, CommitOutboxScope } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import type { DurableCommitEnvelope, CommitOutboxScope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import type { DurableWriteStore } from './durableWriteStore.js';
-import { durableCommitEnvelopeSchema } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import { durableCommitEnvelopeSchema } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 
 export interface DurableCommitRestoreContext {
   readonly config: { enablePersistence: boolean };

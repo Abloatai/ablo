@@ -329,7 +329,7 @@
       "count": 6
     }
   },
-  "__tests__/unit/MutationQueue.rejection-settlement.test.ts": {
+  "__tests__/unit/MutationQueue.rejection-confirmation.test.ts": {
     "@typescript-eslint/no-floating-promises": {
       "count": 1
     }

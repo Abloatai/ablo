@@ -10,7 +10,7 @@ type EmitLocalMutation = (event: string, payload: unknown) => void;
 /**
  * Human-side optimistic-write adapter.
  *
- * Settlement retains ordering and receipts; this adapter owns the local
+ * Confirmation retains ordering and receipts; this adapter owns the local
  * pre-image ledger and announces apply/rollback work to the materialiser.
  */
 export function createLocalMutationPort(

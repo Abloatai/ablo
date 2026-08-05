@@ -3,7 +3,7 @@
  * the account scope and the sync groups everything downstream should read under.
  *
  * The core defines the port; the consumer supplies the implementation. That
- * keeps identity resolution — which is settlement's business — from depending on
+ * keeps identity resolution — which is confirmation's business — from depending on
  * whatever happens to materialise rows on the other side of it (ADR 0016). The
  * reactive engine's `BootstrapFetcher` satisfies this structurally.
  */

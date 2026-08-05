@@ -8,7 +8,7 @@
 
 The canonical transaction contracts and headless HTTP runtime behind Ablo.
 
-Authoritative reads, atomic commits, idempotency, settlement, claims, and
+Authoritative reads, atomic commits, idempotency, confirmation, claims, and
 durable observation share one typed protocol here. The package has no React,
 MobX, IndexedDB, or WebSocket runtime.
 

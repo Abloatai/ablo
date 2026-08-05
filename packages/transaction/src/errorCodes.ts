@@ -39,7 +39,7 @@ import { z } from 'zod';
  * error documentation and returned on the `Ablo-Version` response header, so a
  * consumer can detect when its expected contract has drifted from the server's.
  */
-export const ERROR_CONTRACT_VERSION = '2026-08-03';
+export const ERROR_CONTRACT_VERSION = '2026-08-04';
 
 /** A coarse grouping of error codes, used to organize metrics and documentation. */
 export type ErrorCategory =
@@ -129,6 +129,36 @@ export interface ErrorCodeSpec {
    * this field can be left unset.
    */
   readonly recovery?: RecoveryClass;
+  /** Exhaustive sink and alert policy for this code. */
+  readonly observability: ErrorObservabilityPolicy;
+}
+
+export interface ErrorObservabilityPolicy {
+  readonly severity: 'info' | 'warning' | 'error' | 'fatal';
+  readonly sentry: 'log' | 'issue';
+  readonly pagingEligible: boolean;
+  readonly expectedVolume: 'low' | 'normal' | 'high';
+  readonly owner: 'platform' | 'product';
+}
+
+function observabilityPolicy(
+  category: ErrorCategory,
+  httpStatus: number | undefined,
+  operational = false,
+): ErrorObservabilityPolicy {
+  if ((httpStatus ?? 0) >= 500) {
+    return { severity: 'error', sentry: 'issue', pagingEligible: true, expectedVolume: 'low', owner: 'platform' };
+  }
+  if (operational) {
+    return { severity: 'warning', sentry: 'issue', pagingEligible: false, expectedVolume: 'low', owner: 'platform' };
+  }
+  return {
+    severity: category === 'auth' ? 'info' : 'warning',
+    sentry: 'log',
+    pagingEligible: false,
+    expectedVolume: category === 'auth' ? 'high' : 'normal',
+    owner: 'product',
+  };
 }
 
 const wire = (
@@ -136,8 +166,17 @@ const wire = (
   httpStatus: number,
   retryable: boolean,
   message: string,
-  recovery?: RecoveryClass
-): ErrorCodeSpec => ({ category, surface: 'wire', httpStatus, retryable, message, recovery });
+  recovery?: RecoveryClass,
+  operational = false,
+): ErrorCodeSpec => ({
+  category,
+  surface: 'wire',
+  httpStatus,
+  retryable,
+  message,
+  recovery,
+  observability: observabilityPolicy(category, httpStatus, operational),
+});
 
 const client = (
   category: ErrorCategory,
@@ -147,6 +186,7 @@ const client = (
   category,
   surface: 'client',
   retryable: false,
+  observability: observabilityPolicy(category, undefined),
   message,
   ...(recovery !== undefined ? { recovery } : {}),
 });
@@ -233,6 +273,18 @@ export const ERROR_CODES = {
     false,
     'Your session has expired or is no longer valid. Sign in again to continue.',
     'session_expiry'
+  ),
+  better_auth_request_failed: wire(
+    'auth',
+    400,
+    false,
+    'The authentication request was rejected. Check the submitted credentials or request and try again.'
+  ),
+  better_auth_upstream_failed: wire(
+    'server',
+    500,
+    true,
+    'The authentication service could not complete the request. Retry the request; if it continues to fail, contact support.'
   ),
   // `jwt_invalid` is the general fallback; the codes below it split out specific
   // failure modes, so an integrator can tell a wrong JWKS registration from a
@@ -361,25 +413,37 @@ export const ERROR_CODES = {
     'permission',
     403,
     false,
-    'The database role Ablo connects with is a superuser or has `BYPASSRLS`, so Postgres will not enforce row-level security for it. Connect with a role that is subject to RLS.'
+    'The database role Ablo connects with is a superuser or has `BYPASSRLS`, so Postgres will not enforce row-level security for it. Connect with a role that is subject to RLS.',
+    undefined,
+    true,
   ),
   database_role_unreadable: wire(
     'permission',
     403,
     false,
-    'Ablo could not introspect the database role it connects with, so it cannot verify that row-level security is enforced.'
+    'Ablo could not introspect the database role it connects with, so it cannot verify that row-level security is enforced.',
+    undefined,
+    true,
   ),
   database_tables_unforced_rls: wire(
     'permission',
     403,
     false,
-    'Some synced tables do not have `FORCE ROW LEVEL SECURITY` applied, so the table owner can bypass row isolation. Run `ALTER TABLE ... FORCE ROW LEVEL SECURITY` on each synced table.'
+    'Some synced tables do not have `FORCE ROW LEVEL SECURITY` applied, so the table owner can bypass row isolation. Run `ALTER TABLE ... FORCE ROW LEVEL SECURITY` on each synced table.',
+    undefined,
+    true,
   ),
   database_host_not_allowed: wire(
     'permission',
     403,
     false,
-    "The database host resolves to a private, loopback, or link-local address, which Ablo's servers will not connect to directly. Use a publicly resolvable direct endpoint, private networking, or `ablo dev --local` with a signed Data Source reverse channel."
+    "The database host did not resolve exclusively to an allowed address for this route. Use a publicly resolvable direct endpoint, or configure the matching PrivateLink, peering, or VPN route. Localhost has its own `database_loopback_requires_connector` workflow."
+  ),
+  database_loopback_requires_connector: wire(
+    'validation',
+    400,
+    false,
+    'Ablo Cloud cannot open a direct PostgreSQL connection to localhost on your machine. For localhost-first development, run `ablo migrate` once and keep `ablo dev --local` running; use a network-reachable direct route only when Ablo must observe arbitrary SQL writes through WAL.'
   ),
   connected_database_unreachable: wire(
     'tenant',
@@ -436,7 +500,7 @@ export const ERROR_CODES = {
     'claim',
     409,
     false,
-    'This write carried a fencing token below the row’s current high-water: a later holder claimed the row, wrote, and moved on while this claim was lapsed, so applying the write would silently overwrite their work. The claim is gone — re-claim the row and retry from the current state.'
+    'This claim is no longer current because another participant completed newer work on the row. Re-claim the row and retry from the fresh state.'
   ),
   entity_claimed: wire(
     'claim',
@@ -492,7 +556,7 @@ export const ERROR_CODES = {
   ),
   model_claim_not_configured: client(
     'claim',
-    'Claiming requires the collaboration runtime, which the standard Ablo({ schema, apiKey }) client wires up for every model automatically — there is no per-model claim configuration to add. This appears only when a model proxy is constructed directly without that runtime (an internal/advanced path).'
+    'Claiming is unavailable on this model client. Construct it through the standard Ablo({ schema, apiKey }) client and retry.'
   ),
   model_join_not_configured: client(
     'claim',
@@ -741,7 +805,9 @@ export const ERROR_CODES = {
     'not_found',
     404,
     false,
-    'This branch is not connected to your database yet. Run `ablo connect` for a cloud-reachable direct Postgres endpoint, or `ablo dev --local` to register and serve a localhost Data Source, then retry.'
+    'This branch is not connected to your database yet. Run `ablo connect` for a cloud-reachable direct Postgres endpoint, or `ablo dev --local` to register and serve a localhost Data Source, then retry.',
+    undefined,
+    true,
   ),
   source_connector_no_source_registered: wire(
     'not_found',
@@ -1187,6 +1253,30 @@ export const ERROR_CODES = {
   ),
 
   // ── server (5xx) ───────────────────────────────────────────────────
+  session_check_failed: wire(
+    'server',
+    503,
+    true,
+    'Ablo could not verify the current login session. Retry shortly.'
+  ),
+  mint_failed: wire(
+    'server',
+    502,
+    true,
+    'Ablo could not mint the requested runtime credential. Retry shortly.'
+  ),
+  server_side_only: wire(
+    'permission', 403, false, 'This endpoint is available only to trusted server-side callers.'
+  ),
+  unknown_auth_host: wire(
+    'auth', 400, false, 'The authentication host is not recognized.'
+  ),
+  no_active_organization: wire(
+    'tenant', 400, false, 'Select an active organization before continuing.'
+  ),
+  data_session_unsupported: wire(
+    'validation', 400, false, 'This sign-in host cannot create the requested data session.'
+  ),
   internal_error: wire(
     'server',
     500,
@@ -1439,7 +1529,9 @@ export const ERROR_CODES = {
     'permission',
     403,
     false,
-    'Schema registration could not create tables in the target database: the engine is not permitted to run DDL there.'
+    'Schema registration could not create tables in the target database: the engine is not permitted to run DDL there.',
+    undefined,
+    true,
   ),
   model_query_failed: wire(
     'validation',
@@ -1633,6 +1725,10 @@ export const ERROR_CODES = {
   ),
   request_too_large: wire('validation', 413, false, 'The request body exceeds the maximum size.'),
   invalid_schema: wire('validation', 400, false, 'The submitted schema could not be parsed.'),
+  operational_warning: client(
+    'server',
+    'Ablo handled an operational degradation that remains searchable for diagnosis.'
+  ),
   incompatible_change: wire(
     'conflict',
     409,

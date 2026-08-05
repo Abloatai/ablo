@@ -15,7 +15,7 @@
  * first successful connect and disposed on teardown.
  *
  * This is a plain state machine, not a reactive object: it lives in the
- * settlement core, which carries no reactivity runtime (ADR 0016). A consumer
+ * confirmation core, which carries no reactivity runtime (ADR 0016). A consumer
  * that wants to render recovery progress mirrors the transitions through
  * {@link ConnectionCallbacks.onStateChange} into its own observable state —
  * which is what the reactive engine's store does.

@@ -64,7 +64,7 @@ export type {
 } from './local/client/options.js';
 export type { AbloReads } from './client.js';
 // `ModelTarget` (the model/id locator) and `ModelClaim` (the resolved claim
-// view) are defined once in the settlement core, derived from a single zod
+// view) are defined once in the confirmation core, derived from a single zod
 // schema so the typed client, the HTTP client, and the server share one
 // definition. They reach consumers through `./resourceTypes` with the rest of
 // the resource surface; re-exported here so `ablo.ModelTarget` and

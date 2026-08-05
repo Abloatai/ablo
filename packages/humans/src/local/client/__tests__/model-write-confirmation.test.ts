@@ -57,7 +57,9 @@ describe('schema model write confirmation', () => {
       add(model) {
         pool.add(model, ModelScope.live);
       },
-      delete() {},
+      delete() {
+        return undefined;
+      },
       getMutationQueue() {
         throw new Error('not used by this test');
       },
@@ -67,14 +69,16 @@ describe('schema model write confirmation', () => {
       syncNow() {
         return syncGate;
       },
-      update() {},
+      update() {
+        return undefined;
+      },
       waitForConfirmation() {
         confirmationChecks += 1;
         return Promise.resolve();
       },
     };
     const hydration: Pick<OnDemandLoader, 'fetch'> = {
-      fetch: async () => [],
+      fetch: () => Promise.resolve([]),
     };
     const tasks = createModelProxy<TaskRow, Omit<TaskRow, 'id'>>(
       'tasks',

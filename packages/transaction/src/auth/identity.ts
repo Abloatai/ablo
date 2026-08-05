@@ -34,6 +34,7 @@ import type { AuthCredentialSource } from '../auth/credentialSource.js';
 import type { CredentialProvider } from './credentialResult.js';
 import { resolveApiKeyValue, resolveBootstrapBaseUrl } from './apiKey.js';
 import type { DeliveryPartitionRoute } from './deliveryPartition.js';
+import type { EffectiveAuthority } from './capability.js';
 
 export interface IdentityResolveInput {
   readonly options: {
@@ -71,6 +72,8 @@ export interface ResolvedIdentity {
   readonly syncGroups: readonly string[] | undefined;
   readonly participantKind: ParticipantKind;
   readonly deliveryPartition: DeliveryPartitionRoute | null;
+  /** Effective authority confirmed by the server (or explicit self-hosted configuration). */
+  readonly authority: EffectiveAuthority;
   /** Set only on the hosted-cloud path; the caller keeps it to stop refreshes on shutdown. */
   readonly refreshScheduler: RefreshScheduler | null;
 }
@@ -195,6 +198,16 @@ export async function resolveParticipantIdentity(
         syncGroups: options.syncGroups,
         participantKind: kind,
         deliveryPartition: null,
+        authority: {
+          organizationId: accountScope,
+          projectId: accountScope,
+          branchId: internalOptions.branchId ?? null,
+          participantKind: kind,
+          participantId: userId,
+          operations: [],
+          syncGroups: options.syncGroups ?? [],
+          deliveryPartition: null,
+        },
         refreshScheduler: null,
       };
     }
@@ -246,6 +259,7 @@ async function resolveViaIdentity(
     syncGroups: mergedSyncGroups,
     participantKind: identity.participantKind,
     deliveryPartition: identity.deliveryPartition,
+    authority: identity.authority,
     refreshScheduler: null,
   };
 }
@@ -322,7 +336,7 @@ async function resolveHosted(input: HostedInput): Promise<ResolvedIdentity> {
     accountScope: exchange.scope.organizationId,
     projectId: exchange.scope.projectId ?? exchange.scope.organizationId,
     branchId: exchange.scope.branchId,
-    branchRoot: exchange.scope.branchRoot,
+    branchRoot: exchange.branchRoot,
     // teamIds isn't needed because the server already encoded
     // team-level access into scope.syncGroups.
     teamIds: undefined,
@@ -330,6 +344,7 @@ async function resolveHosted(input: HostedInput): Promise<ResolvedIdentity> {
     syncGroups: exchange.scope.syncGroups,
     participantKind: input.kind,
     deliveryPartition: exchange.scope.deliveryPartition,
+    authority: exchange.scope,
     refreshScheduler,
   };
 }

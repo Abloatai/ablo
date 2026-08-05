@@ -1,7 +1,7 @@
 /** @jest-environment node */
 
 import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
-import { idempotencyKeySchema } from '@abloatai/transaction/transactions/settlement/idempotencyKey';
+import { idempotencyKeySchema } from '@abloatai/transaction/transactions/confirmation/idempotencyKey';
 import type {
   DurableWriteStore,
   PendingWrite,
@@ -11,12 +11,16 @@ import {
   HTTP_COMMIT_REPLAY_WINDOW_MS,
   httpCommitEnvelopeRecordId,
   type DurableHttpCommitEnvelope,
-} from '@abloatai/transaction/transactions/settlement/httpCommitEnvelope';
+} from '@abloatai/transaction/transactions/confirmation/httpCommitEnvelope';
 import {
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
 } from '@abloatai/transaction/wire/protocolVersion';
-import { modelReadResponse } from '@abloatai/transaction/testing/fixtures/httpResponses';
+import {
+  COMMIT_FIXTURE_TIMES,
+  EFFECTIVE_AUTHORITY_FIXTURE,
+  modelReadResponse,
+} from '@abloatai/transaction/testing/fixtures/httpResponses';
 
 const OUTBOX_SCOPE = {
   organizationId: 'org_test',
@@ -86,7 +90,12 @@ class MemoryCommitOutbox implements DurableWriteStore {
 }
 
 function response(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
+  const canonicalBody =
+    typeof body === 'object' && body !== null &&
+    (body as { object?: unknown }).object === 'commit_receipt'
+      ? { ...COMMIT_FIXTURE_TIMES, authority: EFFECTIVE_AUTHORITY_FIXTURE, ...body }
+      : body;
+  return new Response(JSON.stringify(canonicalBody), {
     status,
     statusText: status >= 200 && status < 300 ? 'OK' : 'Error',
   });
@@ -517,6 +526,14 @@ describe('stateless HTTP commit outbox', () => {
           branchRoot: false,
           syncGroups: [],
           userMeta: {},
+          authority: {
+            ...EFFECTIVE_AUTHORITY_FIXTURE,
+            organizationId: OUTBOX_SCOPE.organizationId,
+            projectId: null,
+            branchId: null,
+            syncGroups: [],
+            participantId: OUTBOX_SCOPE.participantId,
+          },
         }));
       }
       return Promise.resolve(commitResponse(init, 7));
@@ -910,7 +927,7 @@ describe('stateless HTTP commit outbox', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('does not report a remote success until local settlement succeeds', async () => {
+  it('does not report a remote success until local confirmation succeeds', async () => {
     const outbox = new MemoryCommitOutbox();
     outbox.failRemove = true;
     const client = createHttpTransport({

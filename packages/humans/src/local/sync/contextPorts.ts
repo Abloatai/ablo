@@ -1,5 +1,5 @@
 /**
- * The runtime context, sliced into the ports the settlement core's transport
+ * The runtime context, sliced into the ports the confirmation core's transport
  * takes. The core is injected, never service-located (ADR 0016), while this
  * package resolves its shared dependencies through `getContext()` — so these
  * adapters bridge the two: each method reads the context at call time, which

@@ -5,7 +5,11 @@
  * re-create of an existing id it is the EXISTING row, not the caller's input.
  */
 import { createHttpTransport } from '@abloatai/transaction/transport/httpTransport';
-import { modelReadResponse } from '@abloatai/transaction/testing/fixtures/httpResponses';
+import {
+  COMMIT_FIXTURE_TIMES,
+  EFFECTIVE_AUTHORITY_FIXTURE,
+  modelReadResponse,
+} from '@abloatai/transaction/testing/fixtures/httpResponses';
 
 type Json = Record<string, unknown>;
 
@@ -41,7 +45,9 @@ function confirmed(init: RequestInit | undefined, serverTxId: string): Json {
     object: 'commit_receipt',
     clientTxId: headers?.['Idempotency-Key'],
     serverTxId,
+    ...COMMIT_FIXTURE_TIMES,
     success: true,
+    authority: EFFECTIVE_AUTHORITY_FIXTURE,
     status: 'confirmed',
     lastSyncId: 1,
     ops: 1,

@@ -8,6 +8,10 @@
 
 import {
   onStaleModeSchema,
+  commitReadSetEntrySchema,
+  persistedReadSetEntrySchema,
+  readSetEntrySchema,
+  readSetSchema,
   readDependencySchema,
   staleNotificationSchema,
   trackDependencySchema,
@@ -33,6 +37,84 @@ describe('coordination wire schema', () => {
       expect(onStaleModeSchema.safeParse('flag').success).toBe(false); // old name, renamed → notify
       expect(onStaleModeSchema.safeParse('force').success).toBe(false); // old name, renamed → overwrite
       expect(onStaleModeSchema.safeParse('merge').success).toBe(false); // removed
+    });
+
+    describe('ReadSet is the canonical decision-input structure', () => {
+      it('models an exact commit-lifetime row or group read', () => {
+        expect(commitReadSetEntrySchema.parse({
+          target: { scope: 'row', model: 'Task', id: 't1', fields: ['status'] },
+          watermark: 17,
+          lifetime: 'commit',
+          onStale: 'reject',
+        })).toEqual({
+          target: { scope: 'row', model: 'Task', id: 't1', fields: ['status'] },
+          watermark: 17,
+          lifetime: 'commit',
+          onStale: 'reject',
+        });
+        expect(commitReadSetEntrySchema.safeParse({
+          target: { scope: 'group', group: 'report:abc' },
+          watermark: 18,
+          lifetime: 'commit',
+          onStale: 'notify',
+        }).success).toBe(true);
+      });
+
+      it('makes persisted lifetime and narrowed disposition explicit', () => {
+        expect(persistedReadSetEntrySchema.safeParse({
+          target: { scope: 'row', model: 'Task', id: 't1' },
+          watermark: 17,
+          lifetime: 'persisted',
+          onStale: 'notify',
+        }).success).toBe(true);
+        expect(persistedReadSetEntrySchema.safeParse({
+          target: { scope: 'row', model: 'Task', id: 't1' },
+          watermark: 17,
+          lifetime: 'persisted',
+          onStale: 'overwrite',
+        }).success).toBe(false);
+      });
+
+      it('requires resolved watermarks internally while track keeps its wire default', () => {
+        expect(persistedReadSetEntrySchema.safeParse({
+          target: { scope: 'group', group: 'report:abc' },
+          lifetime: 'persisted',
+          onStale: 'notify',
+        }).success).toBe(false);
+        expect(trackDependencySchema.safeParse({ group: 'report:abc' }).success).toBe(true);
+      });
+
+      it('forms one lifetime-discriminated collection', () => {
+        const entries = [
+          {
+            target: { scope: 'row' as const, model: 'Task', id: 't1' },
+            watermark: 17,
+            lifetime: 'commit' as const,
+            onStale: 'reject' as const,
+          },
+          {
+            target: { scope: 'group' as const, group: 'report:abc' as const },
+            watermark: 17,
+            lifetime: 'persisted' as const,
+            onStale: 'notify' as const,
+          },
+        ];
+        expect(readSetSchema.parse(entries)).toEqual(entries);
+        expect(entries.every((entry) => readSetEntrySchema.safeParse(entry).success)).toBe(true);
+      });
+
+      it('uses one nonnegative integer watermark domain for every entry', () => {
+        const entry = {
+          target: { scope: 'row' as const, model: 'Task', id: 't1' },
+          lifetime: 'commit' as const,
+          onStale: 'reject' as const,
+        };
+        expect(commitReadSetEntrySchema.safeParse({ ...entry, watermark: 0 }).success).toBe(true);
+        expect(commitReadSetEntrySchema.safeParse({ ...entry, watermark: -1 }).success).toBe(false);
+        expect(commitReadSetEntrySchema.safeParse({ ...entry, watermark: 1.5 }).success).toBe(false);
+        expect(readDependencySchema.safeParse({ model: 'Task', id: 't1', readAt: -1 }).success)
+          .toBe(false);
+      });
     });
 
     it('staleNotificationSchema validates a notify-instead-of-abort signal', () => {

@@ -12,7 +12,7 @@ import type { ClaimTargetDetails } from './locator.js';
  * two places to land and no way to notice when it landed in one. It is one
  * definition here, and both authorities import it.
  *
- * It lives in the settlement core rather than the server because it is the rule
+ * It lives in the confirmation core rather than the server because it is the rule
  * itself, not a deployment of it: a claim authority running against a
  * developer's own database has to answer this question exactly the same way,
  * and a client that wants to predict a refusal before paying for the round trip

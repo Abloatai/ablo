@@ -64,6 +64,8 @@ export class AbloError extends Error {
    *  `x-request-id` header or a live commit's rejection frame. Include it in
    *  support requests. */
   readonly requestId?: string;
+  /** Opaque id of the exact private observation associated with this error. */
+  readonly eventId?: string;
   /** The specific input that caused the error, as a model or field path such as
    *  `'dataroomMember.grants.subject'`, so tooling can point at the exact
    *  offending value. */
@@ -96,6 +98,7 @@ export class AbloError extends Error {
     if (options?.requestId !== undefined) this.requestId = options.requestId;
     if (options?.param !== undefined) this.param = options.param;
     if (options?.details !== undefined) this.details = options.details;
+    if (typeof options?.details?.event_id === 'string') this.eventId = options.details.event_id;
     const docUrl = options?.docUrl ?? (options?.code ? docUrlForCode(options.code) : undefined);
     if (docUrl !== undefined) this.docUrl = docUrl;
     if (options?.cause !== undefined) {
@@ -142,7 +145,8 @@ export class AbloError extends Error {
     const code = this.code ? ` [${this.code}]` : '';
     const docs = this.docUrl ? ` (see ${this.docUrl})` : '';
     const req = this.requestId ? ` [request_id: ${this.requestId}]` : '';
-    return `${this.name}${code}: ${this.message}${docs}${req}`;
+    const event = this.eventId ? ` [event_id: ${this.eventId}]` : '';
+    return `${this.name}${code}: ${this.message}${docs}${req}${event}`;
   }
 }
 

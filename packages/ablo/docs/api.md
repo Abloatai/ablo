@@ -2,8 +2,8 @@
 
 > The per-method reference for every model call an agent or an interface can make.
 
-> **Upgrading?** Every breaking change and its migration is on the
-> [Version History & Migration Guide](./migration.md).
+> **Upgrading?** Follow the version-matched workflow in the
+> [Upgrade Guide](./migration.md), then read the intervening changelog entries.
 
 This is the per-method reference for reading and writing rows that stay in
 sync across sessions. You declare your models once, then call the same

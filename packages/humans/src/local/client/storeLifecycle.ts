@@ -11,6 +11,7 @@
 
 import type { SchemaRecord, Schema } from '@abloatai/transaction/schema/schema';
 import type { ParticipantKind } from '@abloatai/transaction/types/participant';
+import type { EffectiveAuthority } from '@abloatai/transaction/auth';
 import type { Logger } from '@abloatai/transaction/logger';
 import type { AuthCredentialSource } from '@abloatai/transaction/auth/credentialSource';
 import type { RefreshScheduler } from '@abloatai/transaction/auth';
@@ -32,6 +33,7 @@ export interface IdentitySeed {
   /** The resolved account scope; null until known. */
   readonly accountScope: string | null;
   readonly syncGroups: readonly string[];
+  readonly authority: EffectiveAuthority;
 }
 
 export interface StoreLifecycle {
@@ -282,6 +284,7 @@ export function startStoreLifecycle<S extends SchemaRecord>(
           participantKind,
           accountScope,
           syncGroups: resolvedSyncGroups,
+          authority: resolved.authority,
         });
 
         if (resolved.refreshScheduler) {

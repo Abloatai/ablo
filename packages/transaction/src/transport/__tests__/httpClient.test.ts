@@ -19,16 +19,29 @@ import { Ablo } from '../../ablo.js';
 import { defineSchema, model, selectModels, z } from '../../schema/index.js';
 import { AbloError } from '../../errors.js';
 import {
+  claimAcquiredResponse,
   claimHeartbeatReply,
   claimListResponse,
   claimQueuedResponse,
+  confirmedCommitReceiptResponse,
   modelClaim,
+  modelListResponse,
   modelReadResponse,
 } from '../../testing/fixtures/httpResponses.js';
 
 const schema = defineSchema({
   tasks: model({ title: z.string(), status: z.string() }),
 });
+
+const COMMIT_TIMES = {
+  createdAt: '2026-08-05T10:00:00.000Z',
+  statusAt: '2026-08-05T10:00:00.058Z',
+} as const;
+const TEST_AUTHORITY = {
+  organizationId: 'org-1', projectId: 'project-1', branchId: 'branch-1',
+  syncGroups: ['org:org-1'], operations: [],
+  participantKind: 'agent' as const, participantId: 'researcher-1', deliveryPartition: null,
+};
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -62,6 +75,86 @@ describe("Ablo({ transport: 'http' }) facade shape", () => {
     expect(typeof c.ready).toBe('function');
     expect(typeof c.dispose).toBe('function');
     expect(Reflect.get(c, 'model')).toBeUndefined();
+  });
+
+  it('exposes the server-confirmed effective authority after readiness', async () => {
+    const c = Ablo({
+      schema,
+      apiKey: 'rk_test_authority',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: () => Promise.resolve(jsonResponse({
+        participantKind: 'agent',
+        participantId: 'researcher-1',
+        accountScope: 'org-1',
+        projectId: 'project-1',
+        branchId: 'branch-1',
+        branchRoot: false,
+        syncGroups: ['org:org-1'],
+        deliveryPartition: null,
+        authority: TEST_AUTHORITY,
+        userMeta: {},
+      })),
+    });
+
+    expect(c.identity).toBeNull();
+    await c.ready();
+    expect(c.identity).toEqual(TEST_AUTHORITY);
+  });
+
+  it('reads complete commit records through ordinary get/list methods', async () => {
+    const record = {
+      id: 'execution-1',
+      attempts: [{
+        id: 'request-1',
+        observedAt: COMMIT_TIMES.createdAt,
+        transport: 'http' as const,
+        kind: 'execution' as const,
+      }],
+      actor: { kind: 'agent' as const, id: 'researcher-1' },
+      authority: TEST_AUTHORITY,
+      claims: [],
+      createdAt: COMMIT_TIMES.createdAt,
+      status: 'confirmed' as const,
+      statusAt: COMMIT_TIMES.statusAt,
+      lastSyncId: 41,
+      readSet: [],
+      operations: [{
+        action: 'update',
+        model: 'tasks',
+        id: 'task-1',
+        data: { retention: 'redacted' as const },
+      }],
+      receipt: { clientTxId: 'execution-1', serverTxId: '41', ops: 1 },
+    };
+    const requested: string[] = [];
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_commit_reads',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        requested.push(url);
+        return Promise.resolve(jsonResponse(
+          url.includes('/execution-1')
+            ? record
+            : { data: [record], nextCursor: 'execution-0' },
+        ));
+      },
+    });
+
+    await expect(c.commits.get({ id: 'execution-1' })).resolves.toEqual(record);
+    await expect(c.commits.list({
+      where: { actorId: 'researcher-1', status: 'confirmed' },
+      cursor: 'execution-2',
+      limit: 25,
+    })).resolves.toEqual({ data: [record], nextCursor: 'execution-0' });
+    expect(requested[0]).toContain('/v1/commits/execution-1');
+    expect(requested[1]).toContain('actorId=researcher-1');
+    expect(requested[1]).toContain('status=confirmed');
+    expect(requested[1]).toContain('cursor=execution-2');
+    expect(requested[1]).toContain('limit=25');
   });
 
   it('does NOT expose turn/task primitives on the type — the surface is ablo.<model> + claim', () => {
@@ -144,6 +237,545 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     expect(c.commits).toBeDefined();
     expect(typeof c.ready).toBe('function');
     expect(typeof c.dispose).toBe('function');
+  });
+
+  it('forwards reads and track through a per-model update', async () => {
+    let mutationBody: unknown;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_read_dependencies',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        const method = init?.method ?? 'GET';
+        if (method === 'PATCH' && path === '/api/v1/models/tasks/task-1') {
+          mutationBody = JSON.parse(String(init?.body));
+          return Promise.resolve(jsonResponse({
+            object: 'commit_receipt',
+            clientTxId: 'client-tx-1',
+            serverTxId: 'server-tx-1',
+            success: true,
+            authority: TEST_AUTHORITY,
+            status: 'confirmed',
+            ...COMMIT_TIMES, lastSyncId: 18,
+            ops: 1,
+          }));
+        }
+        if (method === 'GET' && path === '/api/v1/models/tasks/task-1') {
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks',
+            id: 'task-1',
+            data: { id: 'task-1', title: 'Ship it', status: 'done' },
+            stamp: 18,
+          })));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    await c.tasks.update({
+      id: 'task-1',
+      data: { status: 'done' },
+      idempotencyKey: 'client-tx-1',
+      reads: [{ model: 'runs', id: 'run-1', readAt: 16 }],
+      track: [{ model: 'reports', id: 'report-1', readAt: 15 }],
+    });
+
+    expect(mutationBody).toMatchObject({
+      reads: [{ model: 'runs', id: 'run-1', readAt: 16 }],
+      track: [{ model: 'reports', id: 'report-1', readAt: 15 }],
+    });
+  });
+
+  it('guards an update with the exact returned row passed through reads', async () => {
+    const mutationBodies: Record<string, unknown>[] = [];
+    let reads = 0;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_automatic_read_set',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && path === '/api/v1/models/tasks/task-1') {
+          reads += 1;
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks',
+            id: 'task-1',
+            data: { id: 'task-1', title: 'Ship it', status: reads === 1 ? 'todo' : 'done' },
+            stamp: reads === 1 ? 17 : 18,
+          })));
+        }
+        if (method === 'PATCH' && path === '/api/v1/models/tasks/task-1') {
+          mutationBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          return Promise.resolve(jsonResponse({
+            object: 'commit_receipt',
+            clientTxId: 'guarded-update',
+            serverTxId: 'server-guarded-update',
+            success: true,
+            authority: TEST_AUTHORITY,
+            status: 'confirmed',
+            ...COMMIT_TIMES, lastSyncId: 18,
+            ops: 1,
+          }));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    const task = await c.tasks.get({ id: 'task-1' });
+    expect(task).toEqual({ id: 'task-1', title: 'Ship it', status: 'todo' });
+    expect(task).not.toHaveProperty('stamp');
+    await c.tasks.update({
+      id: 'task-1',
+      data: { status: 'done' },
+      idempotencyKey: 'guarded-update',
+      reads: [task!],
+    });
+
+    expect(mutationBodies).toEqual([
+      expect.objectContaining({
+        reads: [{ model: 'tasks', id: 'task-1', readAt: 17 }],
+      }),
+    ]);
+  });
+
+  it('keeps explicit dependencies on every functional CAS attempt', async () => {
+    const attemptKeys: string[] = [];
+    const mutationBodies: Record<string, unknown>[] = [];
+    let pointReads = 0;
+    let attempts = 0;
+    const updater = jest.fn((current: { status: string }) => ({
+      status: current.status === 'todo' ? 'review' : 'done',
+    }));
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_functional_bracket',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && path.endsWith('/task-2')) {
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks', id: 'task-2',
+            data: { id: 'task-2', title: 'Run dependency', status: 'ready' },
+            stamp: 99,
+          })));
+        }
+        if (method === 'GET' && path.endsWith('/task-1')) {
+          pointReads += 1;
+          const final = pointReads >= 3;
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks', id: 'task-1',
+            data: {
+              id: 'task-1', title: 'Functional',
+              status: final ? 'done' : pointReads === 1 ? 'todo' : 'blocked',
+            },
+            stamp: final ? 103 : pointReads === 1 ? 100 : 101,
+          })));
+        }
+        if (method === 'PATCH' && path.endsWith('/task-1')) {
+          attempts += 1;
+          const key = new Headers(init?.headers).get('Idempotency-Key');
+          if (!key) return Promise.reject(new Error('missing attempt key'));
+          attemptKeys.push(key);
+          mutationBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          if (attempts === 1) {
+            return Promise.resolve(jsonResponse({
+              error: { code: 'stale_context', message: 'row moved' },
+            }, 409));
+          }
+          return Promise.resolve(jsonResponse({
+            object: 'commit_receipt', clientTxId: key,
+            serverTxId: 'server-functional', success: true, authority: TEST_AUTHORITY,
+            status: 'confirmed', ...COMMIT_TIMES, lastSyncId: 103, ops: 1,
+          }));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    const dependency = await c.tasks.get({ id: 'task-2' });
+    if (!dependency) throw new Error('expected cross-target dependency');
+    await expect(c.tasks.update('task-1', updater, {
+      retries: 1,
+      reads: [dependency],
+    })).resolves.toMatchObject({ status: 'done' });
+
+    expect(updater).toHaveBeenCalledTimes(2);
+    expect(attemptKeys).toHaveLength(2);
+    expect(attemptKeys[0]).not.toBe(attemptKeys[1]);
+    expect(attemptKeys.every((key) => !key.startsWith('readset:v1:'))).toBe(true);
+    expect(mutationBodies).toEqual([
+      expect.objectContaining({
+        readAt: 100,
+        data: { status: 'review' },
+        reads: [{ model: 'tasks', id: 'task-2', readAt: 99 }],
+      }),
+      expect.objectContaining({
+        readAt: 101,
+        data: { status: 'done' },
+        reads: [{ model: 'tasks', id: 'task-2', readAt: 99 }],
+      }),
+    ]);
+  });
+
+  it('does not invent guarded-absence evidence for an undefined result', async () => {
+    let reads = 0;
+    let createBody: Record<string, unknown> | undefined;
+    let automaticKey: string | null = null;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_absence_read_set',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && path === '/api/v1/models/tasks/task-new') {
+          reads += 1;
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks',
+            id: 'task-new',
+            data: reads === 1
+              ? null
+              : { id: 'task-new', title: 'Created', status: 'todo' },
+            stamp: reads === 1 ? 71 : 72,
+          })));
+        }
+        if (method === 'POST' && path === '/api/v1/models/tasks') {
+          createBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          automaticKey = new Headers(init?.headers).get('Idempotency-Key');
+          return Promise.resolve(jsonResponse({
+            object: 'commit_receipt',
+            clientTxId: automaticKey,
+            serverTxId: 'server-created',
+            success: true,
+            authority: TEST_AUTHORITY,
+            status: 'confirmed',
+            ...COMMIT_TIMES, lastSyncId: 72,
+            ops: 1,
+          }));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    await expect(c.tasks.get({ id: 'task-new' })).resolves.toBeUndefined();
+    await c.tasks.create({
+      id: 'task-new',
+      data: { title: 'Created', status: 'todo' },
+      idempotencyKey: 'create-if-absent:task-new',
+    });
+
+    expect(automaticKey).toBe('create-if-absent:task-new');
+    expect(createBody).toMatchObject({
+      id: 'task-new',
+      data: { title: 'Created', status: 'todo' },
+    });
+    expect(createBody).not.toHaveProperty('readAt');
+    expect(createBody).not.toHaveProperty('reads');
+  });
+
+  it('accepts an exact list row through explicit reads without a point reread', async () => {
+    let mutationBody: Record<string, unknown> | undefined;
+    let listReads = 0;
+    let pointReads = 0;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_list_read_set',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && path === '/api/v1/models/tasks') {
+          listReads += 1;
+          return Promise.resolve(jsonResponse(modelListResponse({
+            model: 'tasks',
+            data: [{ id: 'task-1', title: 'Listed', status: 'todo' }],
+            stamp: 9_999,
+            evidence: [{ id: 'task-1', stamp: 80 }],
+          })));
+        }
+        if (method === 'GET' && path === '/api/v1/models/tasks/task-1') {
+          pointReads += 1;
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks',
+            id: 'task-1',
+            // The row stopped matching the original filter after the list.
+            data: { id: 'task-1', title: 'Refreshed', status: 'done' },
+            stamp: 81,
+          })));
+        }
+        if (method === 'PATCH' && path === '/api/v1/models/tasks/task-1') {
+          mutationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          const key = new Headers(init?.headers).get('Idempotency-Key');
+          return Promise.resolve(jsonResponse({
+            object: 'commit_receipt', clientTxId: key,
+            serverTxId: 'server-list-update', success: true, authority: TEST_AUTHORITY,
+            status: 'confirmed', ...COMMIT_TIMES, lastSyncId: 82, ops: 1,
+          }));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    const [task] = await c.tasks.list({ where: { status: 'todo' } });
+    expect(task).toEqual({ id: 'task-1', title: 'Listed', status: 'todo' });
+    if (!task) throw new Error('expected listed task');
+    await c.tasks.update({
+      id: task.id,
+      data: { status: 'done' },
+      reads: [task],
+      idempotencyKey: 'list-update:task-1',
+    });
+
+    // The only point read is the update's established result readback.
+    expect({ listReads, pointReads }).toEqual({ listReads: 1, pointReads: 1 });
+    expect(mutationBody).toMatchObject({
+      reads: [{ model: 'tasks', id: 'task-1', readAt: 80 }],
+    });
+    expect(mutationBody).not.toMatchObject({
+      reads: [{ model: 'tasks', id: 'task-1', readAt: 9_999 }],
+    });
+  });
+
+  it('does not turn an incidental read into a write dependency', async () => {
+    let mutationBody: Record<string, unknown> | undefined;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_incidental_read',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && path.endsWith('/task-2')) {
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks', id: 'task-2',
+            data: { id: 'task-2', title: 'Incidental', status: 'todo' }, stamp: 31,
+          })));
+        }
+        if (method === 'PATCH' && path.endsWith('/task-1')) {
+          mutationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return Promise.resolve(jsonResponse({
+            object: 'commit_receipt', clientTxId: 'incidental-update',
+            serverTxId: 'server-incidental-update', success: true, authority: TEST_AUTHORITY,
+            status: 'confirmed', ...COMMIT_TIMES, lastSyncId: 32, ops: 1,
+          }));
+        }
+        if (method === 'GET' && path.endsWith('/task-1')) {
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks', id: 'task-1',
+            data: { id: 'task-1', title: 'Target', status: 'done' }, stamp: 32,
+          })));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    await c.tasks.get({ id: 'task-2' });
+    await c.tasks.update({
+      id: 'task-1', data: { status: 'done' }, idempotencyKey: 'incidental-update',
+    });
+
+    expect(mutationBody).not.toHaveProperty('readAt');
+    expect(mutationBody).not.toHaveProperty('reads');
+  });
+
+  it('resolves an exact captured row in reads and rejects a clone', async () => {
+    let mutationBody: Record<string, unknown> | undefined;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_row_reference',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && path.endsWith('/task-2')) {
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks', id: 'task-2',
+            data: { id: 'task-2', title: 'Dependency', status: 'ready' }, stamp: 41,
+          })));
+        }
+        if (method === 'PATCH' && path.endsWith('/task-1')) {
+          mutationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return Promise.resolve(jsonResponse({
+            object: 'commit_receipt', clientTxId: 'cross-target-update',
+            serverTxId: 'server-cross-target-update', success: true, authority: TEST_AUTHORITY,
+            status: 'confirmed', ...COMMIT_TIMES, lastSyncId: 42, ops: 1,
+          }));
+        }
+        if (method === 'GET' && path.endsWith('/task-1')) {
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks', id: 'task-1',
+            data: { id: 'task-1', title: 'Target', status: 'done' }, stamp: 42,
+          })));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    const dependency = await c.tasks.get({ id: 'task-2' });
+    expect(dependency).toBeDefined();
+    await expect(c.tasks.update({
+      id: 'task-1', data: { status: 'done' },
+      idempotencyKey: 'clone-must-fail', reads: [{ ...dependency! }],
+    })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'reads' });
+    const otherClient = Ablo({
+      schema,
+      apiKey: 'sk_test_other_client',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: () => Promise.reject(new Error('cross-client row reached the network')),
+    });
+    await expect(otherClient.tasks.update({
+      id: 'task-1', data: { status: 'done' },
+      idempotencyKey: 'cross-client-must-fail', reads: [dependency!],
+    })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'reads' });
+    await c.tasks.update({
+      id: 'task-1', data: { status: 'done' },
+      idempotencyKey: 'cross-target-update', reads: [dependency!],
+    });
+
+    expect(mutationBody).toMatchObject({
+      reads: [{ model: 'tasks', id: 'task-2', readAt: 41 }],
+    });
+    expect(mutationBody).not.toHaveProperty('readAt');
+  });
+
+  it('carries a claim independently without adding an implicit read dependency', async () => {
+    let mutationBody: Record<string, unknown> | undefined;
+    let rowReads = 0;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_claim_read_set',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        const method = init?.method ?? 'GET';
+        if (method === 'POST' && path.endsWith('/task-1/claim')) {
+          return Promise.resolve(jsonResponse(claimAcquiredResponse(modelClaim({
+            id: 'claim-read-set', model: 'tasks', entityId: 'task-1', fenceToken: 9,
+          }))));
+        }
+        if (method === 'GET' && path.endsWith('/task-1')) {
+          rowReads += 1;
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks', id: 'task-1',
+            data: { id: 'task-1', title: 'Claimed', status: rowReads === 1 ? 'todo' : 'done' },
+            stamp: rowReads === 1 ? 51 : 52,
+          })));
+        }
+        if (method === 'PATCH' && path.endsWith('/task-1')) {
+          mutationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return Promise.resolve(jsonResponse(confirmedCommitReceiptResponse({
+            clientTxId: 'claimed-update',
+            serverTxId: 'server-claimed-update',
+            lastSyncId: 52,
+          })));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    const held = await c.tasks.claim({ id: 'task-1' });
+    await c.tasks.update({
+      id: 'task-1', data: { status: 'done' }, claim: held,
+      idempotencyKey: 'claimed-update',
+    });
+
+    expect(mutationBody).toMatchObject({
+      claim: 'claim-read-set',
+      fenceToken: 9,
+    });
+    expect(mutationBody).not.toHaveProperty('readAt');
+    expect(mutationBody).not.toHaveProperty('reads');
+  });
+
+  it('rejects cloned rows and leaves idempotency identity explicit', async () => {
+    const observedKeys: string[] = [];
+    const rowStamp = 61;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_execution_identity',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const path = new URL(url).pathname;
+        const method = init?.method ?? 'GET';
+        if (method === 'GET' && path.endsWith('/task-1')) {
+          return Promise.resolve(jsonResponse(modelReadResponse({
+            model: 'tasks', id: 'task-1',
+            data: { id: 'task-1', title: 'Stable', status: 'done' }, stamp: rowStamp,
+          })));
+        }
+        if (method === 'PATCH' && path.endsWith('/task-1')) {
+          const idempotencyKey = new Headers(init?.headers).get('Idempotency-Key');
+          if (!idempotencyKey) return Promise.reject(new Error('missing Idempotency-Key'));
+          observedKeys.push(idempotencyKey);
+          return Promise.resolve(jsonResponse({
+            object: 'commit_receipt', clientTxId: idempotencyKey,
+            serverTxId: `server-${idempotencyKey}`, success: true, authority: TEST_AUTHORITY,
+            status: 'confirmed', ...COMMIT_TIMES, lastSyncId: rowStamp, ops: 1,
+          }));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
+      },
+    });
+
+    const run = async () => {
+      const task = await c.tasks.get({ id: 'task-1' });
+      if (!task) throw new Error('expected task read');
+      const cloned = { ...task } as typeof task;
+      await expect(
+        c.tasks.update({
+          id: 'task-1',
+          data: { status: 'done' },
+          reads: [cloned],
+        }),
+      ).rejects.toMatchObject({
+        code: 'write_options_invalid',
+        param: 'reads',
+      });
+      await c.tasks.update({
+        id: 'task-1', data: { status: 'done' },
+        reads: [task], idempotencyKey: 'turn-stable-1',
+      });
+      await c.tasks.update({
+        id: 'task-1',
+        data: { status: 'done' },
+        idempotencyKey: 'explicit-second-operation',
+      });
+    };
+
+    await run();
+
+    expect(observedKeys).toEqual(['turn-stable-1', 'explicit-second-operation']);
   });
 
   it('narrows the TYPE to AbloHttpClient — stateful-only members are compile errors', () => {

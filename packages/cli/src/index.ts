@@ -44,6 +44,13 @@ import { drizzlePull } from './drizzlePull';
 import { brand } from './theme';
 import { renderCliError } from './renderError';
 import {
+  CliFailureExit,
+  flushCliErrors,
+  installCliExitObservationBoundary,
+  observeCliError,
+  restoreCliExitObservationBoundary,
+} from './observeCliError';
+import {
   generateProviders,
   generateSessionRoute,
 } from './generators/authScaffold';
@@ -1048,9 +1055,22 @@ function detectPackageManager(): string {
   return 'npm';
 }
 
-main().catch((err) => {
+installCliExitObservationBoundary();
+
+main().catch(async (err: unknown) => {
+  if (err instanceof CliFailureExit) {
+    // Legacy commands may already have printed a tailored explanation before
+    // exiting. Observe and flush that originating call site without printing a
+    // second generic error block over it.
+    observeCliError(err);
+    await flushCliErrors();
+    restoreCliExitObservationBoundary();
+    process.exit(err.exitCode);
+  }
   // Structured terminal block instead of `console.error(err)`'s wall of text
   // (stack + every field). Sets process.exitCode = 1 so failures signal non-zero.
   renderCliError(err);
+  await flushCliErrors();
+  restoreCliExitObservationBoundary();
   process.exit(process.exitCode ?? 1);
 });

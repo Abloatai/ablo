@@ -106,7 +106,11 @@ describe('BaseSyncedStore.subscribe — durable across inner-socket churn', () =
       sessionErrorDetector: defaultSessionErrorDetector,
       config: emptyConfig,
       mutationExecutor: {
-        commit: () => Promise.resolve({ lastSyncId: 0 }),
+        commit: () => Promise.resolve({
+          lastSyncId: 0,
+          status: 'confirmed' as const,
+          statusAt: '2026-08-05T10:00:00.058Z',
+        }),
         executeCreate: () => Promise.resolve(),
         executeUpdate: () => Promise.resolve(null),
         executeDelete: () => Promise.resolve(),

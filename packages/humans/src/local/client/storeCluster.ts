@@ -38,6 +38,10 @@ import { registerModelsFromSchema } from './modelRegistration.js';
 import { deriveConfigFromSchema } from './schemaConfig.js';
 import { createDefaultMutationExecutor } from './wsMutationExecutor.js';
 import type { InternalAbloOptions } from './options.js';
+import {
+  createReadSetContext,
+  type ReadSetContext,
+} from '@abloatai/transaction/internal/read-set';
 export type { InternalAbloOptions } from './options.js';
 
 /**
@@ -55,6 +59,8 @@ export interface StoreCluster {
   readonly components: InternalComponents;
   /** The store orchestrating the graph, holding the host-built connection. */
   readonly store: BaseSyncedStore;
+  /** Client-local opaque evidence registry; never an ambient execution scope. */
+  readonly readSetContext: ReadSetContext;
 }
 
 /**
@@ -99,6 +105,7 @@ export function buildStoreCluster(
     return null;
   }
   const schema = options.schema;
+  const readSetContext = createReadSetContext();
 
   // Config derives from the schema; caller-supplied overrides layer on top,
   // caller winning per key.
@@ -112,7 +119,10 @@ export function buildStoreCluster(
   // error and the MutationQueue owns the retry. A caller-supplied executor
   // still wins (test mocks, alternative transports).
   const executor: MutationExecutor =
-    options.mutationExecutor ?? createDefaultMutationExecutor(() => transport);
+    options.mutationExecutor ?? createDefaultMutationExecutor(
+      () => transport,
+      readSetContext,
+    );
 
   // This client's runtime — the instance the whole graph is constructed
   // with, so two clients in one process never read each other's logger,
@@ -168,5 +178,5 @@ export function buildStoreCluster(
     { collaborationEvents: options.collaborationEvents ?? [] },
   );
 
-  return { runtime, components, store };
+  return { runtime, components, store, readSetContext };
 }

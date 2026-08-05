@@ -7,7 +7,8 @@
  *      (the CI-source-resolution failure class must never ship to npm);
  *   2. the DEV package.json still contains it (postpack restored);
  *   3. the prepack backup file neither lingers in the tree nor shipped
- *      in the tarball.
+ *      in the tarball;
+ *   4. internal design notes do not ship with the public SDK.
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
@@ -99,9 +100,15 @@ try {
   if (shippedTestSource) {
     fail(`test-only source shipped in the SDK tarball: ${shippedTestSource.path}`);
   }
+  const shippedInternalDoc = report.files.find((file) =>
+    file.path.startsWith('docs/internal/')
+  );
+  if (shippedInternalDoc) {
+    fail(`internal design note shipped in the SDK tarball: ${shippedInternalDoc.path}`);
+  }
 
   console.log(
-    `[pack:check] OK: ${report.filename} is '${CONDITION}'-free, CLI-bundle-free, dev tree intact`
+    `[pack:check] OK: ${report.filename} is '${CONDITION}'-free, internal-doc-free, CLI-bundle-free, dev tree intact`
   );
 } finally {
   rmSync(workDir, { recursive: true, force: true });

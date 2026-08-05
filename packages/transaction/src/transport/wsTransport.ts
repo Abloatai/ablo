@@ -56,6 +56,7 @@ import {
   type AuthTokenGetter,
 } from '../auth/credentialSource.js';
 import { buildCommitFrame, type CommitAck, type CommitFrameOperation } from './commitFrames.js';
+import type { CommitReceiptWire } from '../wire/commit.js';
 import {
   dispatchWsFrame,
   readWsInboundFrame,
@@ -1040,7 +1041,47 @@ export class WsTransport<
           ),
         );
       }, timeoutMs);
-      this.pendingMutations.set(clientTxId, { resolve, reject, timeout });
+      this.pendingMutations.set(clientTxId, {
+        resolve: (value) => resolve(value as CommitAck),
+        reject,
+        timeout,
+      });
+      try {
+        const frame = buildCommitFrame(operations, clientTxId, reads, track);
+        this.ws!.send(JSON.stringify(frame));
+      } catch (error) {
+        clearTimeout(timeout);
+        this.pendingMutations.delete(clientTxId);
+        reject(toAbloError(error));
+      }
+    });
+  }
+
+  /** @internal Exact wire receipt used to correlate a logical commit record. */
+  sendCommitReceipt(
+    operations: readonly CommitFrameOperation[],
+    clientTxId: string,
+    timeoutMs = 15_000,
+    reads?: readonly ReadDependency[] | null,
+    track?: readonly TrackDependency[] | null,
+  ): Promise<CommitReceiptWire> {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      return Promise.reject(this.notConnectedError('commit'));
+    }
+    return new Promise<CommitReceiptWire>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingMutations.delete(clientTxId);
+        reject(new AbloConnectionError(
+          `commit timed out after ${timeoutMs}ms (clientTxId=${clientTxId})`,
+          { code: 'commit_no_result' },
+        ));
+      }, timeoutMs);
+      this.pendingMutations.set(clientTxId, {
+        resolve: (value) => resolve(value as CommitReceiptWire),
+        reject,
+        timeout,
+        returnReceipt: true,
+      });
       try {
         const frame = buildCommitFrame(operations, clientTxId, reads, track);
         this.ws!.send(JSON.stringify(frame));

@@ -542,4 +542,22 @@ describe('registerDirectDataSource — renders the server readiness checklist (e
     expect(out).toContain('confirm a write landed');
     expect(out).toContain('pg_logical_emit_message');
   });
+
+  it('treats localhost-first projects as supported connector development, not as an exposure demand', async () => {
+    stubFetch({
+      code: 'database_loopback_requires_connector',
+      message: 'Ablo Cloud cannot open a direct PostgreSQL connection to localhost.',
+      topology: 'localhost',
+      recommended_commands: ['ablo migrate', 'ablo dev --local'],
+    });
+    const ok = await register();
+    const out = errors.join('\n');
+    expect(ok).toBe(false);
+    expect(out).toContain('Recommended for this localhost-first project');
+    expect(out).toContain('npx ablo migrate');
+    expect(out).toContain('npx ablo dev --local');
+    expect(out).toContain('raw SQL');
+    expect(out).toContain('not a transaction pooler');
+    expect(out).not.toContain('expose Postgres');
+  });
 });

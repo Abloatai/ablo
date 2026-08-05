@@ -23,6 +23,12 @@ import {
   defaultSessionErrorDetector,
   emptyConfig,
 } from '../../RuntimeContext.js';
+import { EFFECTIVE_AUTHORITY_FIXTURE } from '@abloatai/transaction/testing/fixtures/httpResponses';
+
+const COMMIT_TIMES = {
+  createdAt: '2026-08-05T10:00:00.000Z',
+  statusAt: '2026-08-05T10:00:00.058Z',
+} as const;
 
 class FakeWebSocket {
   static readonly CONNECTING = 0;
@@ -56,7 +62,11 @@ function installContext(log: ClaimLog): void {
     config: emptyConfig,
     getModelMetadata: () => undefined,
     mutationExecutor: {
-      commit: () => Promise.resolve({ lastSyncId: 0, status: 'confirmed' as const }),
+      commit: () => Promise.resolve({
+        status: 'confirmed' as const,
+        statusAt: COMMIT_TIMES.statusAt,
+        lastSyncId: 0,
+      }),
       executeCreate: () => Promise.resolve(),
       executeUpdate: () => Promise.resolve(null),
       executeDelete: () => Promise.resolve(),
@@ -77,7 +87,11 @@ function receiveAck(
   payload: Record<string, unknown>,
 ): void {
   if (!socket.onmessage) throw new Error('expected a WebSocket message handler');
-  socket.onmessage(ackFrame(payload));
+  socket.onmessage(ackFrame(
+    payload.object === 'commit_receipt'
+      ? { authority: EFFECTIVE_AUTHORITY_FIXTURE, ...payload }
+      : payload,
+  ));
 }
 
 describe('WS transport observability wiring', () => {
@@ -153,6 +167,7 @@ describe('WS transport observability wiring', () => {
       object: 'commit_receipt',
       clientTxId: txId,
       serverTxId: '42',
+      ...COMMIT_TIMES,
       success: true,
       status: 'confirmed',
       lastSyncId: 42,
@@ -172,6 +187,7 @@ describe('WS transport observability wiring', () => {
 
     await expect(pending).resolves.toMatchObject({
       status: 'confirmed',
+      statusAt: COMMIT_TIMES.statusAt,
       lastSyncId: 42,
     });
     expect(log.collisions()).toHaveLength(1);
@@ -187,6 +203,7 @@ describe('WS transport observability wiring', () => {
       object: 'commit_receipt',
       clientTxId: txId,
       serverTxId: '0',
+      ...COMMIT_TIMES,
       success: true,
       status: 'queued',
       correlationId: 'corr-forwarded-1',
@@ -197,9 +214,45 @@ describe('WS transport observability wiring', () => {
 
     await expect(pending).resolves.toEqual({
       status: 'queued',
+      statusAt: COMMIT_TIMES.statusAt,
       correlationId: 'corr-forwarded-1',
       lastSyncId: 0,
       missingIds: ['missing-row'],
+    });
+  });
+
+  it('can return the exact authoritative receipt for logical commit correlation', async () => {
+    const log = new ClaimLog();
+    const { ws, fake } = connectFake(log);
+    const txId = 'tx-exact-receipt';
+    const pending = ws.sendCommitReceipt([OP], txId);
+
+    receiveAck(fake, {
+      object: 'commit_receipt',
+      clientTxId: txId,
+      serverTxId: 'server-exact',
+      ...COMMIT_TIMES,
+      success: true,
+      authority: EFFECTIVE_AUTHORITY_FIXTURE,
+      status: 'confirmed',
+      correlationId: 'corr-exact',
+      lastSyncId: 43,
+      ops: 1,
+    });
+
+    await expect(pending).resolves.toEqual({
+      object: 'commit_receipt',
+      clientTxId: txId,
+      serverTxId: 'server-exact',
+      ...COMMIT_TIMES,
+      success: true,
+      authority: EFFECTIVE_AUTHORITY_FIXTURE,
+      status: 'confirmed',
+      correlationId: 'corr-exact',
+      lastSyncId: 43,
+      ops: 1,
+      notifications: undefined,
+      missingIds: undefined,
     });
   });
 
@@ -210,10 +263,14 @@ describe('WS transport observability wiring', () => {
     const pending = ws.sendCommit([OP], txId);
 
     receiveAck(fake, {
+      object: 'commit_receipt',
       clientTxId: txId,
+      serverTxId: '0',
+      ...COMMIT_TIMES,
       success: true,
       status: 'queued',
       lastSyncId: 0,
+      ops: 1,
     });
 
     await expect(pending).rejects.toMatchObject({ code: 'commit_no_result' });

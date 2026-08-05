@@ -41,7 +41,7 @@
 import { ConnectionManager, type ConnectionCallbacks } from '../../src/local/sync/ConnectionManager';
 import { probeNetwork } from '@abloatai/transaction/transport/networkProbe';
 
-// The probe moved into the settlement core with the transport (ADR 0016);
+// The probe moved into the confirmation core with the transport (ADR 0016);
 // mock the core module — the sync-engine path re-exports it, so both the
 // manager's internal import and this test's import resolve to this mock.
 jest.mock('@abloatai/transaction/transport/networkProbe', () => ({

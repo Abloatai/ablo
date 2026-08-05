@@ -15,8 +15,10 @@ import { z } from 'zod';
 // schema module to keep this file's runtime dependencies limited to Zod.
 import {
   commitOperationSchema as coordinationCommitOperationSchema,
-  readDependencySchema,
-  trackDependencySchema,
+  MAX_READ_SET_ENTRIES,
+  readDependencyListSchema,
+  readSetProjectionEntryCount,
+  trackDependencyListSchema,
 } from '../coordination/schema.js';
 import type { MutationResultMessageWire } from './commit.js';
 
@@ -56,8 +58,11 @@ export const commitOperationSchema = wireCommitOperationSchema;
 export const commitPayloadSchema = z.object({
   operations: z.array(wireCommitOperationSchema),
   clientTxId: z.string(),
-  reads: z.array(readDependencySchema).nullish(),
-  track: z.array(trackDependencySchema).nullish(),
+  reads: readDependencyListSchema.nullish(),
+  track: trackDependencyListSchema.nullish(),
+}).refine((value) => readSetProjectionEntryCount(value) <= MAX_READ_SET_ENTRIES, {
+  path: ['reads'],
+  message: `reads and track may contain at most ${MAX_READ_SET_ENTRIES} entries combined`,
 });
 
 /** A client-to-server frame that asks the server to commit a batch atomically. */

@@ -17,6 +17,7 @@ import type { ParticipantKind, ConfirmationState } from '../log/syncDeltaRow.js'
 import type { ParticipantRef } from '../wire/delta.js';
 import type { CommitExecutionResultInput } from '../wire/commit.js';
 import type { ReadDependency, TrackDependency } from '../coordination/schema.js';
+import type { EffectiveAuthority } from '../auth/capability.js';
 
 export interface CommitContext {
   participantId: string;
@@ -25,6 +26,11 @@ export interface CommitContext {
    * structured attribution rather than a string-prefix convention.
    */
   participantKind: ParticipantKind;
+  /** Effective data grant resolved from the authenticated identity at commit time. */
+  authority?: EffectiveAuthority;
+  /** Server request identity and ingress used for physical-attempt evidence. */
+  requestId?: string;
+  transport?: 'http' | 'websocket' | 'internal';
   organizationId: string;
   /** Immutable branch selected by the authenticated credential. */
   branchId: string;
@@ -90,7 +96,7 @@ export interface CommitContext {
 
 /**
  * The server execution receipt persisted in `mutation_log`. Its runtime schema
- * lives with the HTTP/WS settlement contract so queued correlation cannot drift
+ * lives with the HTTP/WS confirmation contract so queued correlation cannot drift
  * between cache, transport, and client.
  */
 export type CommitExecutionResult = CommitExecutionResultInput;

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { participantKindSchema } from '../coordination/schema.js';
 import {
   capabilityMintResponseSchema,
+  effectiveAuthoritySchema,
   grantedOperationSchema,
   type CapabilityMintResponse,
 } from './capability.js';
@@ -26,6 +27,8 @@ export const IdentityResolveResponseSchema = z.object({
   branchRoot: z.boolean().default(false),
   syncGroups: z.array(z.string()),
   deliveryPartition: deliveryPartitionRouteSchema.nullable().default(null),
+  /** Canonical server-confirmed authority of the authenticated credential. */
+  authority: effectiveAuthoritySchema,
   userMeta: z.record(z.string(), z.unknown()),
 });
 

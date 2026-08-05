@@ -30,7 +30,7 @@ export interface OptimisticEmitter {
   emit(event: string, payload: unknown): void;
 }
 
-/** Materializer capability consumed by settlement; implementation belongs to the local layer. */
+/** Materializer capability consumed by confirmation; implementation belongs to the local layer. */
 export interface LocalMutationPort {
   readonly updates: Map<string, OptimisticUpdateEntry>;
   applyCreate(model: Model, transaction: QueuedMutation): void;

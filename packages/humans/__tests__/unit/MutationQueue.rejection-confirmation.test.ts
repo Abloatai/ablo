@@ -1,5 +1,5 @@
 /**
- * Rejected-commit settlement — pins the 2026-06-10 retry-storm fix.
+ * Rejected-commit confirmation — pins the 2026-06-10 retry-storm fix.
  *
  * Invariant (Replicache / Zero / Linear): a PERMANENTLY-rejected mutation is
  * SETTLED — removed from the retry path, optimistic effect rolled back, the
@@ -36,7 +36,7 @@ async function settle(ms = 60): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-describe('MutationQueue rejected-commit settlement', () => {
+describe('MutationQueue rejected-commit confirmation', () => {
   let queue: MutationQueue;
   let executor: MockMutationExecutor;
   let cleanup: () => void;

@@ -28,6 +28,7 @@ import {
   AbloClaimedError,
   AbloContentionError,
 } from '../errors.js';
+import type { ReadDependency } from '../coordination/schema.js';
 
 /**
  * The functional form of an update: given the freshly-read row, return the
@@ -38,8 +39,8 @@ export type ModelUpdater<T> = (
   current: T,
 ) => Partial<T> | null | undefined | Promise<Partial<T> | null | undefined>;
 
-/** Tuning for the functional update's internal reconcile loop. */
-export interface ContentionOptions {
+/** Options for the functional `update(id, reducer, options)` form. */
+export interface FunctionalUpdateOptions<Dependency = ReadDependency> {
   /**
    * Max reconcile rounds under contention before throwing
    * {@link AbloContentionError}. Each round re-reads the latest row and re-runs
@@ -48,7 +49,18 @@ export interface ContentionOptions {
   readonly retries?: number;
   /** Abort the reconcile loop (e.g. the request was cancelled). */
   readonly signal?: AbortSignal;
+  /**
+   * Cross-target state this reducer decision depends on. Captured point rows
+   * are resolved by the public client; canonical dependencies remain the
+   * low-level escape hatch. Dependencies survive reconcilable CAS failures and
+   * are consumed only with the successful attempt.
+   */
+  readonly reads?: readonly Dependency[] | null;
 }
+
+/** @deprecated Use {@link FunctionalUpdateOptions}. */
+export type ContentionOptions<Dependency = ReadDependency> =
+  FunctionalUpdateOptions<Dependency>;
 
 /** Reconcile rounds before a hot row is declared permanently contended. */
 export const DEFAULT_CONTENTION_RETRIES = 16;
@@ -104,9 +116,9 @@ export interface ReconcileTransport<T, R> {
  * both transports so the guarantee is provably identical. Returns the write's
  * result, or `undefined` when the updater opted out of writing.
  */
-export async function reconcileFunctionalUpdate<T, R>(
+export async function reconcileFunctionalUpdate<T, R, Read = ReadDependency>(
   updater: ModelUpdater<T>,
-  options: ContentionOptions | undefined,
+  options: FunctionalUpdateOptions<Read> | undefined,
   transport: ReconcileTransport<T, R>,
 ): Promise<R | undefined> {
   const retries = options?.retries ?? DEFAULT_CONTENTION_RETRIES;

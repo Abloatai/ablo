@@ -26,6 +26,28 @@ Then:
 - write with `ablo.weatherReports.update`
 - dispose the client when the worker finishes
 
+For read-reason-write work, pass the exact returned rows that informed the
+decision. Their watermarks stay opaque:
+
+```ts
+const task = await ablo.tasks.get({ id: taskId });
+const policy = await ablo.policies.get({ id: policyId });
+const result = await model({ task, policy });
+await ablo.tasks.update({
+  id: task.id,
+  data: result,
+  reads: [task, policy],
+});
+```
+
+This means: apply the update only if the rows used to produce it have not
+changed. Incidental reads do nothing, and cloned or fabricated rows are
+rejected locally.
+
+`agent-turn.ts` is the cheap read/write path. `expensive-agent-turn.ts` adds a
+heartbeating claim, post-grant model input, durable commit inspection, automatic
+release, and a released-claim fencing check.
+
 Import the same schema in every runtime. Use `commits.create` only when several
 typed row operations must land atomically; ordinary writes stay on
 `ablo.<model>.create/update/delete`.
@@ -39,6 +61,8 @@ root and a bare `quickstart.ts` won't be found.
 ```bash
 cd packages/ablo
 ABLO_API_KEY=sk_... npx tsx examples/quickstart.ts
+ABLO_API_KEY=sk_... TASK_ID=task_... npx tsx examples/agent-turn.ts
+ABLO_API_KEY=sk_... JOB_ID=job_... npx tsx examples/expensive-agent-turn.ts
 ```
 
 ## Data Source (customer-owned database)

@@ -84,6 +84,21 @@ describe('MutationQueue write-options threading', () => {
     });
   });
 
+  it('carries claim identity beside the fencing token on the queued operation', async () => {
+    const task = createTaskFixture();
+
+    await queue.create(task, userContext, {
+      claimRef: { id: 'claim_1' },
+      fenceToken: 7,
+    });
+
+    await waitFor(() => committedOperations().length > 0);
+    const [op] = committedOperations();
+    if (!op) throw new Error('expected a committed operation');
+    expect(op.claimId).toBe('claim_1');
+    expect(op.fenceToken).toBe(7);
+  });
+
   it('omits the options slot entirely when no idempotency fields are set', async () => {
     const task = createTaskFixture();
 
@@ -119,6 +134,9 @@ describe('writeOptionsSchema — THE runtime write-options contract', () => {
         readAt: 42,
         onStale: 'reject',
         claim: { id: 'claim_1' },
+        claimRef: { id: 'claim_1' },
+        reads: [{ model: 'tasks', id: 'task_1', readAt: 42 }],
+        track: [{ group: 'report:abc', readAt: 42 }],
       }); },
     ).not.toThrow();
   });

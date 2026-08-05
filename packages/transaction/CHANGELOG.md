@@ -1,5 +1,35 @@
 # @abloatai/transaction
 
+## 0.49.0
+
+### Minor Changes
+
+- a409395: Release the coordination core as one versioned SDK cut: exact returned rows as
+  explicit write dependencies, fenced claims for expensive turns, durable
+  paginated commit records, server-derived effective authority, and actionable
+  capability denials. No execution enclosure or Node-only client entry point is
+  introduced.
+
+### Patch Changes
+
+- 3f145a3: Resolve lowercased wire model aliases in direct Postgres mutations so camelCase schema keys correlate with their canonical typenames.
+
+## Unreleased — coordination core
+
+- Make returned rows opaque read-evidence handles. Attach dependencies directly
+  to a write with `reads: [task, policy]`; no execution enclosure or async
+  context is required, and clones or fabricated rows fail locally.
+- Add durable `CommitRecord` retrieval, cursor-paginated `commits.list`, exact
+  ReadSet evidence, compact validated claim references, attempt evidence, and
+  canonical confirmation timing.
+- Expose the server-derived `EffectiveAuthority` as `ablo.identity` on the
+  stateless client after `ready()`. Permission denials retain their structured
+  `requiredCapability` grant.
+- Requires the matching sync-server deployment and the
+  `20260805120000_canonical_commit_status` then
+  `20260805130000_complete_commit_ledger` database migrations. There is no
+  runtime decoder for pre-migration execution receipts.
+
 ## 0.48.0
 
 ### Minor Changes
@@ -70,7 +100,7 @@
 
   Add runnable Temporal and Inngest integration examples that keep durable
   workflow execution in those systems while routing shared-data reads, claims,
-  idempotent writes, settlement, and observation through Ablo.
+  idempotent writes, confirmation, and observation through Ablo.
 
   Add `@abloatai/ablo/ai-sdk` model tools for authoritative reads, idempotent
   creates, concurrency-safe updates, and claimed deletes. Remove the previous

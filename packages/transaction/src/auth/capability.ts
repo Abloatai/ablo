@@ -238,12 +238,11 @@ export function grantedOperations(
  * and the gates read it — so a session's reported scope and its enforced scope
  * are the same shape by construction.
  */
-export const capabilityScopeSchema = z.object({
+export const effectiveAuthoritySchema = z.object({
   organizationId: z.string().min(1),
   /** Credential target. Branch id is authoritative; null supports self-hosted identities. */
   projectId: z.string().min(1).nullable().default(null),
   branchId: z.string().min(1).nullable().default(null),
-  branchRoot: z.boolean().default(false),
   /**
    * The ROW axis — which sync groups this credential may act within. Read back
    * as plain strings rather than the branded form the request enforces: this is
@@ -256,7 +255,15 @@ export const capabilityScopeSchema = z.object({
   participantId: z.string().min(1),
   deliveryPartition: deliveryPartitionRouteSchema.nullable().default(null),
 });
-export type CapabilityScope = z.infer<typeof capabilityScopeSchema>;
+export type EffectiveAuthority = z.infer<typeof effectiveAuthoritySchema>;
+
+/**
+ * @deprecated Use {@link effectiveAuthoritySchema}. Kept through 0.48.x as
+ * the source-compatible name for the same canonical contract.
+ */
+export const capabilityScopeSchema = effectiveAuthoritySchema;
+/** @deprecated Use {@link EffectiveAuthority}. */
+export type CapabilityScope = EffectiveAuthority;
 
 /**
  * What `POST /v1/capabilities` answers with — **201**, the credential is minted.
@@ -279,7 +286,9 @@ export const capabilityMintResponseSchema = z.object({
   token: authTokenSchema,
   expiresAt: z.iso.datetime(),
   organizationId: z.string().min(1),
-  scope: capabilityScopeSchema,
+  /** Plane metadata used by startup; not part of effective authority. */
+  branchRoot: z.boolean().default(false),
+  scope: effectiveAuthoritySchema,
   userMeta: z.record(z.string(), z.unknown()),
 });
 export type CapabilityMintResponse = z.infer<typeof capabilityMintResponseSchema>;

@@ -17,12 +17,13 @@ import { omittedModelError } from '@abloatai/transaction/schema/select';
 import {
   durableCommitOperationSchema,
   type DurableCommitOperation,
-} from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+} from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import { AbloAuthenticationError, AbloConnectionError, AbloValidationError, claimedError } from '@abloatai/transaction/errors';
 import type { ModelTarget, ModelClaim } from '@abloatai/transaction/coordination/schema';
 import type { BatchFence } from '@abloatai/transaction/coordination';
 import {
 	batchFence,
+	claimIdFor,
 	fenceTokenFor,
 	modelTarget,
 	streamTarget,
@@ -69,6 +70,13 @@ import {
 import { createModelProxy, type ModelOperations } from './createModelProxy.js';
 import { assertWriteOptions } from '@abloatai/transaction/resources/writeOptionsSchema';
 import type { AbloClient as Ablo } from '../../client.js';
+import {
+  modelReadResponseSchema,
+  commitRecordSchema,
+  commitRecordListSchema,
+  commitRecordWhereSchema,
+} from '@abloatai/transaction/wire';
+import { translateHttpError } from '@abloatai/transaction/errors';
 
 /**
  * What the reactive build is fed: the factory's pass over the options bag
@@ -123,12 +131,39 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     createSibling,
   } = inputs;
   const schema = options.schema;
+  const pointReadBaseUrl = resolveBootstrapBaseUrl({
+    url,
+    bootstrapBaseUrl: internalOptions.bootstrapBaseUrl,
+  });
+
+  async function readPoint(model: string, id: string): Promise<{ data: unknown; stamp: number }> {
+    const fetchImpl = internalOptions.fetch ?? globalThis.fetch;
+    const response = await fetchImpl(
+      `${pointReadBaseUrl}/v1/models/${encodeURIComponent(model)}/${encodeURIComponent(id)}`,
+      { headers: authCredentials.withAuthHeaders() },
+    );
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      body = null;
+    }
+    if (!response.ok) throw translateHttpError(response.status, body);
+    const parsed = modelReadResponseSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new AbloConnectionError('Model point-read response failed validation.', {
+        code: 'commit_no_result',
+        cause: parsed.error,
+      });
+    }
+    return { data: parsed.data.data, stamp: parsed.data.stamp };
+  }
 
   // The store cluster — this client's runtime, the component graph, the
   // registered models, and the store — was constructed by `humans().init`
   // from the widened plugin context (see `./storeCluster.ts`). The engine
   // assembles around it.
-  const { components, store } = cluster;
+  const { components, store, readSetContext } = cluster;
   const {
     modelRegistry,
     objectPool,
@@ -198,6 +233,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
   /** Resolved account scope — seeded once identity resolution completes;
    *  exposed as the readonly `ablo.organizationId` accessor. */
   let _resolvedOrganizationId: string | null = null;
+  let _resolvedIdentity: import('@abloatai/transaction/auth').EffectiveAuthority | null = null;
   const lifecycle = startStoreLifecycle({
     cluster,
     schema,
@@ -210,10 +246,11 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     kind,
     logger,
     validationError: _validationError,
-    onIdentityResolved: ({ userId, participantKind, accountScope, syncGroups }) => {
+    onIdentityResolved: ({ userId, participantKind, accountScope, syncGroups, authority }) => {
       selfParticipantId = userId;
       selfParticipantKind = participantKind;
       _resolvedOrganizationId = accountScope;
+      _resolvedIdentity = authority;
       presenceStream.setParticipant({
         id: userId,
         kind: participantKind,
@@ -260,6 +297,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	    op: CommitOperationInput,
 	    defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
 	    fence: BatchFence | null,
+	    claim: Claim | null,
 	  ): DurableCommitOperation {
 	    const type = op.action.toUpperCase();
 	    const id = op.id ?? '';
@@ -269,6 +307,8 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      id,
 	      input: op.data ?? undefined,
 	      transactionId: op.transactionId ?? undefined,
+	      claimId:
+	        op.claimId ?? claimIdFor(claim?.target, claim?.id, op.model, op.id ?? null) ?? undefined,
 	      readAt: op.readAt ?? defaults.readAt ?? undefined,
 	      onStale: op.onStale ?? defaults.onStale ?? undefined,
 	      fenceToken:
@@ -287,7 +327,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	      );
 	    }
 	    return commitOptions.operations.map((op) =>
-	      normalizeCommitOperation(op, commitOptions, fence),
+	      normalizeCommitOperation(op, commitOptions, fence, commitOptions.claim ?? null),
 	    );
 	  }
 
@@ -548,6 +588,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
       hydration,
       {
         createClaim: (claimOptions) => publicClaims.create(claimOptions),
+        readPoint,
         createSnapshot: (modelKey, id) =>
           createSnapshot({
             pool: objectPool,
@@ -607,6 +648,7 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
             ...(options?.ttl !== undefined ? { ttl: options.ttl } : {}),
           }),
       },
+      readSetContext,
     );
   }
 
@@ -667,6 +709,31 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
 	        ...(notifications && notifications.length > 0 ? { notifications } : {}),
 	        ...(missingIds && missingIds.length > 0 ? { missingIds } : {}),
 	      };
+	    },
+	    async get({ id }) {
+	      await ready();
+	      const response = await (internalOptions.fetch ?? globalThis.fetch)(
+	        `${pointReadBaseUrl}/v1/commits/${encodeURIComponent(id)}`,
+	        { headers: authCredentials.withAuthHeaders() },
+	      );
+	      const body: unknown = await response.json().catch(() => null);
+	      if (!response.ok) throw translateHttpError(response.status, body);
+	      return commitRecordSchema.nullable().parse(body);
+	    },
+	    async list(listOptions = {}) {
+	      await ready();
+	      const where = commitRecordWhereSchema.parse(listOptions.where ?? {});
+	      const params = new URLSearchParams();
+	      if (where.actorId) params.set('actorId', where.actorId);
+	      if (where.status) params.set('status', where.status);
+	      const query = params.size > 0 ? `?${params.toString()}` : '';
+	      const response = await (internalOptions.fetch ?? globalThis.fetch)(
+	        `${pointReadBaseUrl}/v1/commits${query}`,
+	        { headers: authCredentials.withAuthHeaders() },
+	      );
+	      const body: unknown = await response.json().catch(() => null);
+	      if (!response.ok) throw translateHttpError(response.status, body);
+	      return commitRecordListSchema.parse(body);
 	    },
 	  };
 
@@ -765,6 +832,10 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
     // as a property so integrators can read it programmatically.
     get organizationId(): string | null {
       return _resolvedOrganizationId;
+    },
+
+    get identity() {
+      return _resolvedIdentity;
     },
 
     nudgeReconnect() {

@@ -140,7 +140,7 @@ default caller, not a special one.
 
 - [How Ablo Works](./how-it-works.md) — the mental model in one page: you write through Ablo, it lands in your Postgres, the write-ahead log confirms it. **Read this first.**
 - [Coordination](./coordination.md) — `claim`, `claim.state`, and `claim.queue`: who holds a row, and who is waiting.
-- [Concurrency Convention](./concurrency-convention.md) — the governing rule for how concurrent writes resolve.
+- [Concurrency Convention](./concurrency-convention.md) — the precise rule for guarded and unguarded writes.
 - [Guarantees](./guarantees.md) — what a confirmed write, a stale-write rejection, and a claim each promise.
 - [Idempotency](./idempotency.md) — make a retried write safe; what replays, what re-runs, and for how long.
 - [Schema Contract](./schema-contract.md) — one schema becomes typed clients, agent writes, React reads, and the push.
@@ -175,7 +175,7 @@ default caller, not a special one.
 
 - [API Reference](./api.md) — model-by-model method shape.
 - [Errors](./errors.md) — the code registry, its categories, and what to do about each.
-- [Version History & Migration](./migration.md) — every breaking change and its migration.
+- [Upgrade Guide](./migration.md) — upgrade a pinned pre-1.0 SDK safely.
 - [Changelog](../CHANGELOG.md) — what shipped recently.
 
 ## Examples

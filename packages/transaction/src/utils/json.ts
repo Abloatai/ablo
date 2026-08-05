@@ -38,7 +38,7 @@ import type { JsonValue } from '../types/streams.js';
  * Traversal intentionally creates fresh objects and arrays instead of relying
  * on a framework-specific unwrapping API. That makes Proxy-wrapped plain data
  * (including MobX observables) safe for IndexedDB's structured-clone algorithm
- * while keeping the settlement core independent of any reactive framework.
+ * while keeping the confirmation core independent of any reactive framework.
  *
  * The accepted contract is deliberately narrower than `JSON.stringify`:
  * values that JSON would silently corrupt (`NaN` to `null`, `Map` to `{}`) or

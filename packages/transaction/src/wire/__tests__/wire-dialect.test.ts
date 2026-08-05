@@ -23,31 +23,11 @@ import * as wire from '@abloatai/transaction/wire';
 const isZodSchema = (value: unknown): value is z.ZodType =>
   typeof value === 'object' && value !== null && '_zod' in value;
 
-/**
- * Known-unpublishable schemas, frozen at their current count.
- *
- * All three fail for one remaining reason: `wire/commit.ts` types a commit
- * rejection's `code` with `z.custom<ErrorCode>()`, which carries no runtime
- * shape for JSON Schema to emit. It is really the 246-entry `ERROR_CODES`
- * registry, so it could become a `z.enum` derived from that source and publish
- * the code list to clients as a side effect (see §8 of the Python-readiness
- * brief) — the open question being how such an enum keeps accepting a code
- * from a newer server, which the current escape hatch does by construction.
- *
- * Shrink this list, never grow it. A new entry means a new shape that no
- * non-TypeScript client can be told about.
- */
-const UNPUBLISHABLE = new Set([
-  'rejectedCommitReceiptSchema',
-  'mutationResultPayloadSchema',
-  'mutationResultMessageSchema',
-]);
-
 const schemas: [string, z.ZodType][] = Object.entries(
   wire as Record<string, unknown>,
 )
   .flatMap(([name, value]) =>
-    isZodSchema(value) && !UNPUBLISHABLE.has(name) ? [[name, value] as [string, z.ZodType]] : [],
+    isZodSchema(value) ? [[name, value] as [string, z.ZodType]] : [],
   )
   .sort(([a], [b]) => a.localeCompare(b));
 
@@ -70,18 +50,5 @@ describe('wire schemas derive to a publishable contract', () => {
       const meaningful = Object.keys(derived).filter((k) => k !== '$schema');
       expect(meaningful.length).toBeGreaterThan(0);
     });
-  });
-});
-
-/**
- * The exemption list is itself a ratchet: it must stay accurate, or it silently
- * grants a pass to a schema that has since been fixed — or hides one that never
- * failed.
- */
-describe('the unpublishable list is honest', () => {
-  it.each([...UNPUBLISHABLE])('%s still fails to derive, so the exemption is earned', (name) => {
-    const schema = (wire as Record<string, unknown>)[name];
-    if (!isZodSchema(schema)) throw new Error(`${name} is exempted but not exported`);
-    expect(() => z.toJSONSchema(schema, { io: 'output' })).toThrow();
   });
 });

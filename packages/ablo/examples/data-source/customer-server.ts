@@ -15,7 +15,12 @@
  * inside a transaction. The shape of the handlers stays identical.
  */
 
-import Ablo, { dataSource, sourceEventForOperation } from '@ablo/ablo';
+import {
+  dataSource,
+  sourceEventForOperation,
+  type SourceEvent,
+  type SourceOperation,
+} from '@abloatai/ablo/source';
 import { schema } from './schema';
 
 type TaskRow = {
@@ -32,7 +37,7 @@ const taskStore = new Map<string, TaskRow>();
 // populated in the same transaction as the app-row write. Ablo polls `events`
 // to fan out changes that bypassed Ablo, and to repair SDK-origin writes if
 // Ablo's immediate post-commit append failed.
-const outbox: Ablo.Source.Event[] = [];
+const outbox: SourceEvent[] = [];
 let outboxSequence = 0;
 
 // Seed one row so the example's first `load` returns something.
@@ -138,7 +143,7 @@ export const handleAbloSource = dataSource({
 });
 
 function applyOperation(
-  op: Ablo.Source.Operation,
+  op: SourceOperation,
   clientTxId: string | undefined,
 ): TaskRow | null {
   if (op.model !== 'tasks') return null;
@@ -180,7 +185,7 @@ function applyOperation(
 }
 
 function appendOutbox(input: {
-  operation: Ablo.Source.Operation;
+  operation: SourceOperation;
   entityId: string;
   data: TaskRow | null;
   clientTxId: string | undefined;

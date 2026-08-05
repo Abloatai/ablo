@@ -14,7 +14,11 @@ import {
   errorFromWire,
   type RequiredCapability,
 } from '../errors.js';
-import { commitAckSchema, commitReceiptSchema } from '../wire/commit.js';
+import {
+  commitAckSchema,
+  commitReceiptSchema,
+  type CommitReceiptWire,
+} from '../wire/commit.js';
 import { subscriptionAckPayloadSchema } from '../coordination/schema.js';
 import {
   WS_INBOUND_FRAMES,
@@ -35,9 +39,10 @@ import type { SocketObservability } from '../observability.js';
  * server, or rejected on timeout / disconnect.
  */
 export interface PendingCommit {
-  resolve: (value: CommitAck) => void;
+  resolve: (value: CommitAck | CommitReceiptWire) => void;
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
+  readonly returnReceipt?: boolean;
 }
 
 /**
@@ -202,11 +207,14 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
       });
     }
     pending.resolve(
-      commitAckSchema.parse({
+      pending.returnReceipt
+        ? receipt
+        : commitAckSchema.parse({
         status: receipt.status,
         ...(receipt.correlationId
           ? { correlationId: receipt.correlationId }
           : {}),
+        statusAt: receipt.statusAt,
         lastSyncId: receipt.lastSyncId,
         ...(receipt.notifications && receipt.notifications.length > 0
           ? { notifications: receipt.notifications }
@@ -214,7 +222,7 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
         ...(receipt.missingIds && receipt.missingIds.length > 0
           ? { missingIds: receipt.missingIds }
           : {}),
-      }),
+          }),
     );
   } else {
     // Capture the full server error so the caller can see what actually
@@ -233,6 +241,7 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
         code?: unknown;
         message?: unknown;
         request_id?: unknown;
+        event_id?: unknown;
         requiredCapability?: unknown;
         details?: unknown;
       };
@@ -261,6 +270,9 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
         !Array.isArray(obj.details)
           ? (obj.details as Readonly<Record<string, unknown>>)
           : undefined;
+      if (typeof obj.event_id === 'string') {
+        details = { ...(details ?? {}), event_id: obj.event_id };
+      }
     } else {
       errorMessage = 'mutation failed on server';
     }
@@ -341,7 +353,12 @@ const handleClaimAck: WsFrameHandler = (session, message) => {
     });
   } else {
     const err = error as
-      | { code?: unknown; message?: unknown }
+      | {
+          code?: unknown;
+          message?: unknown;
+          request_id?: unknown;
+          event_id?: unknown;
+        }
       | undefined;
     const code =
       err?.code && typeof err.code === 'string'
@@ -351,6 +368,11 @@ const handleClaimAck: WsFrameHandler = (session, message) => {
       err?.message && typeof err.message === 'string'
         ? err.message
         : 'claim rejected by server';
+    const requestId =
+      typeof err?.request_id === 'string' ? err.request_id : undefined;
+    const eventId =
+      typeof err?.event_id === 'string' ? err.event_id : undefined;
+    const details = eventId === undefined ? undefined : { event_id: eventId };
     // Capability denials get the typed CapabilityError so
     // callers can read `.requiredCapability` and attenuate-
     // and-retry the claim with a narrower token.
@@ -366,12 +388,23 @@ const handleClaimAck: WsFrameHandler = (session, message) => {
         typeof (rc as { scope?: unknown }).scope === 'string'
           ? (rc as RequiredCapability)
           : undefined;
-      pending.reject(new CapabilityError(code, msg, requiredCapability));
+      pending.reject(
+        new CapabilityError(code, msg, requiredCapability, {
+          ...(requestId !== undefined ? { requestId } : {}),
+          ...(details !== undefined ? { details } : {}),
+        }),
+      );
     } else {
       // Route through the shared factory so a failed claim_ack is a
       // typed AbloError (registry code → right subclass), symmetric
       // with the commit `mutation_result` path — never a bare Error.
-      pending.reject(errorFromWire(msg, { code }));
+      pending.reject(
+        errorFromWire(msg, {
+          code,
+          requestId,
+          details,
+        }),
+      );
     }
   }
 };
@@ -405,10 +438,15 @@ const handleSubscriptionAck: WsFrameHandler = (session, message) => {
     session.options.syncGroups = ack.syncGroups;
     pending.resolve({ syncGroups: ack.syncGroups });
   } else {
+    const eventId = ack.error?.event_id;
     pending.reject(
       errorFromWire(
         ack.error?.message ?? 'update_subscription rejected by server',
-        { code: ack.error?.code ?? 'malformed_subscription' },
+        {
+          code: ack.error?.code ?? 'malformed_subscription',
+          requestId: ack.error?.request_id,
+          ...(eventId !== undefined ? { details: { event_id: eventId } } : {}),
+        },
       ),
     );
   }

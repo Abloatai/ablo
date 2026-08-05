@@ -22,6 +22,17 @@ export {
   targetRefSchema,
   // Layer 3 — optimistic stale-context
   onStaleModeSchema,
+  MAX_READ_SET_ENTRIES,
+  readSetWatermarkSchema,
+  readSetRowTargetSchema,
+  readSetGroupTargetSchema,
+  commitReadSetTargetSchema,
+  persistedReadSetRowTargetSchema,
+  persistedReadSetTargetSchema,
+  commitReadSetEntrySchema,
+  persistedReadSetEntrySchema,
+  readSetEntrySchema,
+  readSetSchema,
   writeGuardSchema,
   staleNotificationSchema,
   rowStaleNotificationSchema,
@@ -29,7 +40,10 @@ export {
   stalePropagationSchema,
 
   readDependencySchema,
+  readDependencyListSchema,
+  readSetProjectionEntryCount,
   trackDependencySchema,
+  trackDependencyListSchema,
   // Layer 2 — pessimistic claim / claim-lease
   claimStatusSchema,
   wireClaimStatusSchema,
@@ -103,6 +117,15 @@ export type {
   TargetRef,
   // Layer 3 — optimistic stale-context
   OnStaleMode,
+  ReadSetWatermark,
+  ReadSetRowTarget,
+  ReadSetGroupTarget,
+  CommitReadSetTarget,
+  PersistedReadSetTarget,
+  CommitReadSetEntry,
+  PersistedReadSetEntry,
+  ReadSetEntry,
+  ReadSet,
   WriteGuard,
   StaleNotification,
   RowStaleNotification,
@@ -179,6 +202,7 @@ export type {
 } from './locator.js';
 export {
   batchFence,
+  claimIdFor,
   fenceTokenFor,
   isTargetTuple,
   subTarget,
@@ -186,4 +210,3 @@ export {
   modelTarget,
   streamTarget,
 } from './locator.js';
-

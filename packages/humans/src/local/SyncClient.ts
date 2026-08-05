@@ -1280,7 +1280,7 @@ export class SyncClient extends EventEmitter {
     if (this.pendingStages.size > 0) {
       await Promise.all([...this.pendingStages]);
     }
-    await this.drainPendingSettlements();
+    await this.drainPendingConfirmations();
   }
 
   /**
@@ -1511,7 +1511,7 @@ export class SyncClient extends EventEmitter {
     // Browser online state may have marked the client connected before the
     // WebSocket itself was ready. Always kick both durable lanes on the real
     // socket event, even when the high-level state did not change.
-    void this.drainPendingSettlements().catch((error: unknown) => {
+    void this.drainPendingConfirmations().catch((error: unknown) => {
       this.runtime.observability.captureMutationFailure({
         context: 'restore-commit-outbox',
         error: error instanceof Error ? error : new Error(String(error)),
@@ -1520,7 +1520,7 @@ export class SyncClient extends EventEmitter {
     void this.processPendingMutations();
   }
 
-  private drainPendingSettlements(): Promise<void> {
+  private drainPendingConfirmations(): Promise<void> {
     return this.reconnectDrain.drain(() => this.mutationQueue.drainPending());
   }
 

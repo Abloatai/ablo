@@ -6,8 +6,8 @@
  *   ABLO_API_KEY=sk_... npx tsx examples/quickstart.ts
  */
 
-import Ablo from '@ablo/ablo';
-import { defineSchema, model, z } from '@ablo/ablo/schema';
+import Ablo from '@abloatai/ablo';
+import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
 const schema = defineSchema({
   weatherReports: model({
@@ -29,13 +29,15 @@ async function main() {
     await ablo.ready();
 
     const created = await ablo.weatherReports.create({
-      location,
-      status: 'pending',
+      data: { location, status: 'pending' },
     });
 
-    const updated = await ablo.weatherReports.update(created.id, {
-      status: 'ready',
-      forecast: await getWeather(created.location),
+    const updated = await ablo.weatherReports.update({
+      id: created.id,
+      data: {
+        status: 'ready',
+        forecast: await getWeather(created.location),
+      },
     });
 
     console.log('updated', {

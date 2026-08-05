@@ -600,6 +600,18 @@ export async function registerDirectDataSource(opts: {
         `  This deployment can’t accept connection strings — use a self-hosted/hosted engine, or the signed endpoint fallback.`
       )
     );
+  } else if (err.code === 'database_loopback_requires_connector') {
+    console.error(`
+  ${pc.cyan('Recommended for this localhost-first project')}
+    1. ${pc.bold('npx ablo migrate')} ${pc.dim('(once: models + idempotency + outbox)')}
+    2. ${pc.bold('npx ablo dev --local')} ${pc.dim('(keep running beside the app)')}
+
+  ${pc.dim('This keeps Postgres private and supports reads, coordinated writes, claims,')}
+  ${pc.dim('subscriptions, and confirmations through the signed Data Source connector.')}
+  ${pc.yellow('Note:')} ${pc.dim('raw SQL or unrelated ORM writes are not automatically observed without WAL.')}
+
+  ${pc.dim('If every arbitrary database write must be observed, use a secure database-capable')}
+  ${pc.dim('tunnel, hosted direct Postgres, PrivateLink, peering, or VPN—not a transaction pooler.')}`);
   } else if (err.code === 'database_not_replication_ready' || err.code === 'data_source_blocked') {
     // The server re-ran the readiness probes from its own side and found failures.
     // It can see a different picture than the local --check — for example a
@@ -638,9 +650,9 @@ export async function registerDirectDataSource(opts: {
     }
     console.error(
       pc.dim(
-        `  Ablo's servers must be able to reach this database — a localhost or private-network\n` +
-          `  Postgres can't use the direct path. Establish an allowlist, PrivateLink, peering, or VPN.\n` +
-          `  Only when no inbound route is possible, register the signed ${pc.bold('dataSource()')} endpoint fallback.`
+        `  Ablo's servers must be able to reach this database for the direct WAL path.\n` +
+          `  For localhost development, run ${pc.bold('ablo dev --local')}. For private deployments,\n` +
+          `  establish an allowlist, PrivateLink, peering, or VPN.`
       )
     );
   }

@@ -152,7 +152,7 @@ export interface SourceEvent {
    */
   readonly organizationId?: string;
   /**
-   * @deprecated Legacy echo identity. It is not trusted for queued settlement;
+   * @deprecated Legacy echo identity. It is not trusted for queued confirmation;
    * use `correlationId` and `transactionId` for mediated endpoint writes.
    */
   readonly clientTxId?: string;

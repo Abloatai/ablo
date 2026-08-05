@@ -66,11 +66,11 @@ describe('resolveParticipantIdentity — hosted-cloud branch (apiKey)', () => {
       token: 'biscuit_abc',
       expiresAt: new Date(Date.now() + 3600_000).toISOString(),
       organizationId: 'org_acme',
+      branchRoot: false,
       scope: {
         organizationId: 'org_acme',
         projectId: 'project_orders',
         branchId: 'br_feature_orders',
-        branchRoot: false,
         // A user scope carries no operation grants (those are the agent axis);
         // the wire form is now `model.verb`, and the old `'*'` wildcard is not a
         // member of it. Empty, like every other scope mock in this file.
@@ -116,6 +116,11 @@ describe('resolveParticipantIdentity — hosted-cloud branch (apiKey)', () => {
       capabilityToken: 'biscuit_abc',
       participantKind: 'user',
     });
+    expect(result.authority).toMatchObject({
+      organizationId: 'org_acme',
+      participantKind: 'user',
+      participantId: 'u1',
+    });
     expect(result.refreshScheduler).not.toBeNull();
   });
 
@@ -125,6 +130,7 @@ describe('resolveParticipantIdentity — hosted-cloud branch (apiKey)', () => {
       token: 'biscuit_abc',
       expiresAt: new Date(Date.now() + 3600_000).toISOString(),
       organizationId: 'org_acme',
+      branchRoot: false,
       scope: {
         organizationId: 'org_acme',
         syncGroups: [],
@@ -164,6 +170,7 @@ describe('resolveParticipantIdentity — hosted-cloud branch (apiKey)', () => {
       token: 'biscuit_abc',
       expiresAt,
       organizationId: 'org_acme',
+      branchRoot: false,
       scope: {
         organizationId: 'org_acme',
         syncGroups: [],
@@ -203,6 +210,7 @@ describe('resolveParticipantIdentity — hosted-cloud branch (apiKey)', () => {
         token: 'biscuit_initial',
         expiresAt: new Date(Date.now() + 3600_000).toISOString(),
         organizationId: 'org_acme',
+        branchRoot: false,
         scope: {
           organizationId: 'org_acme',
           syncGroups: [],
@@ -217,6 +225,7 @@ describe('resolveParticipantIdentity — hosted-cloud branch (apiKey)', () => {
         token: 'biscuit_next',
         expiresAt: new Date(Date.now() + 7200_000).toISOString(),
         organizationId: 'org_acme',
+        branchRoot: false,
         scope: {
           organizationId: 'org_acme',
           syncGroups: [],
@@ -263,6 +272,16 @@ describe('resolveParticipantIdentity — hosted-cloud branch (apiKey)', () => {
       branchId: null,
       branchRoot: false,
       syncGroups: [],
+      authority: {
+        organizationId: 'org_self',
+        projectId: null,
+        branchId: null,
+        syncGroups: [],
+        operations: [],
+        participantKind: 'user',
+        participantId: 'u_self',
+        deliveryPartition: null,
+      },
       userMeta: {},
     });
 
@@ -296,6 +315,16 @@ describe('resolveParticipantIdentity — self-derived branch (cap token, unknown
       branchId: null,
       branchRoot: false,
       syncGroups: ['org:org_acme'],
+      authority: {
+        organizationId: 'org_acme',
+        projectId: null,
+        branchId: null,
+        syncGroups: ['org:org_acme'],
+        operations: ['task.read', 'task.update'],
+        participantKind: 'agent',
+        participantId: 'agent_research',
+        deliveryPartition: null,
+      },
       userMeta: {},
     });
 
@@ -325,6 +354,10 @@ describe('resolveParticipantIdentity — self-derived branch (cap token, unknown
       userId: 'agent_research',
       accountScope: 'org_acme',
       participantKind: 'agent',
+    });
+    expect(result.authority).toMatchObject({
+      operations: ['task.read', 'task.update'],
+      participantId: 'agent_research',
     });
     expect(result.refreshScheduler).toBeNull();
   });

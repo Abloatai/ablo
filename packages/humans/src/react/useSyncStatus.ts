@@ -15,7 +15,7 @@ export type SyncStatusSnapshot =
   | { readonly name: 'disconnected'; readonly reason?: string }
   | { readonly name: 'needs-auth' };
 
-/** Reactively exposes the local store's connection and settlement status. */
+/** Reactively exposes the local store's connection and confirmation status. */
 export function useSyncStatus(): SyncStatusSnapshot {
   const { store } = useSyncContext();
   const compute = useCallback(() => deriveStatus(store), [store]);

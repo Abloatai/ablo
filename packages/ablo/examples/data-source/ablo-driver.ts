@@ -18,8 +18,8 @@
 
 import {
   signAbloSourceRequest,
-  type Ablo,
-} from '@ablo/ablo';
+  type SourceOperation,
+} from '@abloatai/ablo/source';
 
 export interface AbloDriverOptions {
   /**
@@ -40,11 +40,11 @@ export class AbloDriver {
     return this.send({ type: 'load', model, id });
   }
 
-  async list(model: string, query?: Ablo.Source.Operation['input']) {
+  async list(model: string, query?: SourceOperation['input']) {
     return this.send({ type: 'list', model, query: query ?? {} });
   }
 
-  async commit(operations: readonly Ablo.Source.Operation[], clientTxId?: string) {
+  async commit(operations: readonly SourceOperation[], clientTxId?: string) {
     return this.send({
       type: 'commit',
       operations,

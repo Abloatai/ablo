@@ -18,7 +18,7 @@ export type { CoordinationObservability } from '@abloatai/transaction/observabil
 // ─────────────────────────────────────────────
 
 // The logging port carries no framework and no local state, so it lives in the
-// settlement core (ADR 0016). Re-exported here so `interfaces` stays the single
+// confirmation core (ADR 0016). Re-exported here so `interfaces` stays the single
 // place a consumer looks for the contracts it implements. The `import type` is
 // load-bearing: `SyncLogger = Logger` below needs the name bound in this module.
 export type { Logger } from '@abloatai/transaction/logger';
@@ -29,7 +29,7 @@ import type { Logger } from '@abloatai/transaction/logger';
 // ─────────────────────────────────────────────
 
 // The transport-facing slice — breadcrumbs and socket errors — moved to the
-// settlement core with the duplex transport (ADR 0016): a socket held for
+// confirmation core with the duplex transport (ADR 0016): a socket held for
 // claim push must report its lifecycle with no store present. Re-exported
 // here so `interfaces` stays the single place a consumer looks; the `import
 // type` is load-bearing for `ObservabilityProvider extends` below.
@@ -143,7 +143,7 @@ export interface ObservabilityProvider
   captureSelfHealing(details: SelfHealingDetails): void;
 
   // `captureClaim` and `captureConflict` are inherited from
-  // `CoordinationObservability` in the core — the settlement layer reports those
+  // `CoordinationObservability` in the core — the confirmation layer reports those
   // two on its own behalf, with no store present.
 
   /** Capture commit returning lastSyncId: 0 */
@@ -225,7 +225,7 @@ export type MutationCommitResult = MutationCommitResultInput;
 // `MutationOptions` describes how a write is issued — request identity, commit
 // disposition, and the premise it rests on (optimistic via `readAt`/`reads`, or
 // claim-protected via `claimRef`/`fenceToken`) — and holds no local row state,
-// so it lives in the settlement core (ADR 0016). Re-exported here so the
+// so it lives in the confirmation core (ADR 0016). Re-exported here so the
 // existing `interfaces` import path keeps resolving.
 // The `import type` is load-bearing, not redundant: `export type { X } from`
 // re-exports without binding X in this module's scope, and `Pick<X, K>` on an
@@ -243,7 +243,7 @@ import type { MutationOptions } from '@abloatai/transaction/resources/mutationOp
  */
 export type WriteOptions = Pick<
   MutationOptions,
-  'readAt' | 'onStale' | 'idempotencyKey' | 'label' | 'fenceToken'
+  'readAt' | 'onStale' | 'idempotencyKey' | 'label' | 'fenceToken' | 'claimRef'
 >;
 
 /** A single mutation within a batch. Its `options` travel with it so the server
@@ -265,6 +265,8 @@ export interface MutationOperation {
    * the wire at once.
    */
   transactionId?: string;
+  /** Server-issued claim identity the operation is attributed to. */
+  claimId?: string | null;
   readAt?: number | null;
   onStale?: OnStaleMode | null;
   /**

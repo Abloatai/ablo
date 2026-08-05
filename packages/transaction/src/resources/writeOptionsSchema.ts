@@ -20,7 +20,15 @@ import { z } from 'zod';
 import type { MutationOptions } from '../resources/mutationOptions.js';
 import { AbloValidationError } from '../errors.js';
 import { commitWaitSchema } from '../wire/commit.js';
-import { onStaleModeSchema } from '../coordination/schema.js';
+import {
+  onStaleModeSchema,
+  MAX_READ_SET_ENTRIES,
+  readDependencyListSchema,
+  readSetWatermarkSchema,
+  readSetProjectionEntryCount,
+  trackDependencyListSchema,
+} from '../coordination/schema.js';
+import type { AssertExact } from '../types/assertExact.js';
 
 // Re-exported, not redeclared. `coordination/schema.ts` owns this enum — it is
 // what the wire schemas and the server validate against — while the published
@@ -38,7 +46,7 @@ export const writeOptionsSchema = z.object({
   /** Resolve when queued locally (default) or once the server confirms. */
   wait: commitWaitSchema.optional(),
   /** Stale guard: the sync watermark the caller's reasoning was based on. */
-  readAt: z.number().int().nonnegative().nullish(),
+  readAt: readSetWatermarkSchema.nullish(),
   /** What the server does when the target moved past `readAt`. */
   onStale: onStaleModeSchema.nullish(),
   /** The held claim's fencing token (Option B), sourced from the claim handle
@@ -49,6 +57,15 @@ export const writeOptionsSchema = z.object({
   /** The claim this write belongs to — either a claim id, or a live claim
    *  handle whose `release`/`revoke` functions are preserved untouched. */
   claim: z.union([z.string(), z.looseObject({ id: z.string() })]).nullish(),
+  /** Low-level claim identity carried after a live handle is normalized. */
+  claimRef: z.union([z.string(), z.object({ id: z.string() })]).nullish(),
+  /** Commit-lifetime entries in the write's ReadSet. */
+  reads: readDependencyListSchema.nullish(),
+  /** Persisted entries projected from the write's ReadSet. */
+  track: trackDependencyListSchema.nullish(),
+}).refine((value) => readSetProjectionEntryCount(value) <= MAX_READ_SET_ENTRIES, {
+  path: ['reads'],
+  message: `reads and track may contain at most ${MAX_READ_SET_ENTRIES} entries combined`,
 });
 
 export type WriteOptionsInput = z.infer<typeof writeOptionsSchema>;
@@ -78,14 +95,15 @@ export function assertWriteOptions(value: unknown, context?: string): void {
 }
 
 // ── Drift guard ──────────────────────────────────────────────────────────────
-// Compile-time proof that `writeOptionsSchema` stays assignment-compatible
-// with the canonical `MutationOptions` interface. If either side changes
-// shape, this stops compiling — the schema and the interface can never
-// silently diverge.
-type _AssertOptionsMatchSchema = MutationOptions extends WriteOptionsInput ? true : never;
-type _AssertSchemaMatchesOptions = WriteOptionsInput extends MutationOptions ? true : never;
-const _writeOptionsContractInSync: [_AssertOptionsMatchSchema, _AssertSchemaMatchesOptions] = [
-  true,
-  true,
-];
+// `claim` is the one high-level handle normalized before MutationOptions. Every
+// other key is the canonical interface itself. Compare keys exactly: mutual
+// assignment between all-optional objects is vacuous and failed to catch three
+// missing members in this schema.
+type WriteOptionsContract = MutationOptions & {
+  readonly claim?: string | { readonly id: string } | null;
+};
+const _writeOptionsContractInSync: AssertExact<
+  keyof WriteOptionsInput,
+  keyof WriteOptionsContract
+> = true;
 void _writeOptionsContractInSync;

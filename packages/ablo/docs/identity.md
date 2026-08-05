@@ -14,6 +14,54 @@ NextAuth, WorkOS, your own session table. Ablo's job begins **after** you've
 authenticated the user: you hand Ablo the already-authenticated identity, and
 Ablo decides which **sync groups** that identity may read and write.
 
+## Inspect the credential the application is actually using
+
+`ablo whoami` describes the developer running the CLI. Runtime code should
+inspect `ablo.identity`, which is the server-confirmed `EffectiveAuthority` of
+the credential attached to that client. It is never decoded or reconstructed
+locally.
+
+```ts
+import { Ablo } from '@abloatai/ablo';
+import { CapabilityError } from '@abloatai/ablo';
+
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+await ablo.ready();
+
+console.log(ablo.identity?.operations);
+console.log(ablo.identity?.syncGroups);
+```
+
+The HTTP and stateful clients expose the same value after `ready()`. A denied
+scoped operation throws `CapabilityError`; compare its
+`requiredCapability.scope` directly with `ablo.identity.operations`.
+
+```ts
+try {
+  await ablo.tasks.update({ id, data: { status: 'done' } });
+} catch (error) {
+  if (error instanceof CapabilityError) {
+    console.error('missing grant', error.requiredCapability);
+  }
+}
+```
+
+Do not broaden the credential in the client. A backend holding the project
+secret mints a replacement, least-privilege agent credential with the schema-
+typed grant:
+
+```ts
+const session = await control.sessions.create({
+  agent: { id: agentId },
+  can: { tasks: ['read', 'update'] },
+  syncGroups: [syncGroup('workspace', workspaceId)],
+});
+```
+
+Install `session.token` in the agent process and call `ready()` again. The next
+`ablo.identity` is the authority the server will enforce; no automatic grant
+escalation occurs.
+
 So the integration question is never "how do I log into Ablo?" It's: *"My app
 already knows this request is user `U` in org `O`. How do I tell Ablo, so it
 scopes their realtime data correctly?"* The rest of this doc answers exactly

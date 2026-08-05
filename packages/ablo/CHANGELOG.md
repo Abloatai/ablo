@@ -1,5 +1,92 @@
 # Changelog
 
+## 0.49.0
+
+### An agent can tell Ablo what it read before it writes
+
+An agent reads a row, spends a model call deciding what to do, and then writes.
+Another agent can change that row while the model is still thinking, and the
+write lands anyway, on top of a decision that is no longer true. Pass the rows
+the decision was based on:
+
+```ts
+const task = await ablo.tasks.get({ id: taskId });
+await ablo.tasks.update({
+  id: task.id,
+  data: { status: 'done', result: `Completed: ${task.title}` },
+  reads: [task],
+});
+```
+
+If either row moved while the agent was thinking, the write is refused instead
+of overwriting. The rows carry that evidence themselves, so there is nothing to
+set up around your agent and no wrapper to run it inside. One row or several,
+the same row you are writing or a different one, all use `reads`. Rows an agent
+read without passing stay out of it, so `reads` says what the decision rested on
+rather than everything the agent happened to look at.
+
+`idempotencyKey` stays a separate option. It gives a write one stable identity if
+the agent retries, which is a different question from what the write assumed.
+
+### A claim holds while an agent thinks
+
+Agents that take minutes per turn can now hold work safely. A claim waits its
+turn or skips, expires on its own, and keeps itself alive with a heartbeat while
+the agent works.
+
+If an agent loses its claim during a model call, its final write is refused. Two
+agents cannot both believe they own the same task and both write, and a slow
+agent cannot land its answer on top of whoever picked the work up after it. Ablo
+decides who holds the claim, so an agent cannot assert one it does not have.
+
+### An agent can read back what it committed
+
+Ask what happened to a write, using the same key the agent wrote with:
+
+```ts
+const record = await ablo.commits.get({ id: commitId });
+```
+
+The answer says who committed, what they intended, whether it is confirmed, and
+which claim protected it. `commits.list` walks the history a page at a time, so
+one agent can review what another already did before repeating it.
+
+What an agent sent is not kept. Prompts, reasoning, and your customers' row
+values are removed before the record is stored, so reading history back never
+replays an agent's inputs. Records are kept for 90 days, and permanently for a
+database you connected.
+
+### An agent can check what its key allows before it acts
+
+An agent holding a key can now ask what that key permits and get the answer from
+Ablo, whether it keeps a connection open or calls over HTTP for a single turn.
+An agent that mints a narrower key for a sub-task can confirm what it handed
+over.
+
+### A refused action says which permission was missing
+
+When Ablo refuses, the error names the permission the agent needed. An agent can
+report exactly what it lacked, or request it, instead of retrying a call that
+will never succeed.
+
+### Models named in camelCase resolve when writing to your own database
+
+A model whose key mixes capital letters did not match its declared name when the
+write went to your database directly, so those writes could not find their
+target. They resolve now.
+
+### `ablo connect apply` says when a database is already connected
+
+Connecting a database that another project already owns reported a missing table
+mapping, which described a symptom rather than the reason the command could not
+continue. It now says the database is already connected. Nothing is written
+while it checks, and a project with no models still gets its preflight.
+
+**Action required.** Install this version rather than a tarball or a Git
+dependency. This release pairs the SDK with the engine running behind
+`api.abloatai.com`, which is already serving it, so there is nothing to
+coordinate on your side.
+
 ## 0.48.0
 
 ### A branch is unbound until you connect a database to it
@@ -45,6 +132,26 @@ temporary alias can go:
 ```sql
 DROP PUBLICATION IF EXISTS "ablo_publication";
 ```
+
+### `ablo dev --local` connects a branch to the database on your machine
+
+The rule above raises a fair question: if a branch is unbound until a database
+is connected, what connects one during development? `--local` does.
+
+```bash
+npx ablo dev --local
+```
+
+It registers a connector-only endpoint for that exact branch and opens a
+long-lived secure connector. Your database stays where it is: Ablo receives an
+endpoint descriptor and a signing key, never a connection string, and reaches
+your source back through the connector rather than dialling it. `DATABASE_URL`
+is read from `.env.local` into the handler running on your machine and goes no
+further.
+
+The branch is then connected like any other, so schema pushes, reads and writes
+behave the way they will in production. Because the connector is long-lived,
+`--local` cannot be combined with `--no-watch`.
 
 ### Renamed
 
@@ -433,7 +540,7 @@ through the same transaction API as every other caller.
 
 The integrations keep each product in its proper role: Temporal and Inngest
 own durable execution, scheduling, retries, and workflow history; Ablo owns
-shared-data authority, claims, conflicts, idempotency, settlement, and ordered
+shared-data authority, claims, conflicts, idempotency, confirmation, and ordered
 observation. Workflow code does not open WebSockets or hold live client state.
 
 ### Database adapter foundation, starting with PostgreSQL
@@ -537,7 +644,7 @@ Install `@abloatai/ablo` as the single public SDK:
 - `@abloatai/ablo/react` provides the React bindings.
 
 Every entrypoint uses the same schema, capabilities, commits, claims,
-idempotency, settlement, and ordered changes. Authoritative reads use
+idempotency, confirmation, and ordered changes. Authoritative reads use
 `model.get({ id })`; local reactive snapshots use `model.local.get(id)`.
 
 ### Coordination now matches the unit applications can safely write

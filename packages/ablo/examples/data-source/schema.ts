@@ -12,7 +12,7 @@
  * side without the other is a compile error.
  */
 
-import { defineSchema, model, z } from '@ablo/ablo/schema';
+import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
 export const schema = defineSchema({
   tasks: model({

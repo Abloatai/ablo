@@ -17,6 +17,8 @@
 
 import { listEnvelope } from '@abloatai/transaction/wire';
 import type {
+  CommitAck,
+  CommitReceiptWire,
   ModelReadResponse,
   ModelListResponse,
   ClaimAcquiredResponse,
@@ -25,6 +27,55 @@ import type {
   ClaimHeartbeatReply,
 } from '@abloatai/transaction/wire';
 import type { ModelClaim } from '@abloatai/transaction/coordination';
+import type { EffectiveAuthority } from '@abloatai/transaction/auth';
+
+/** Stable server-authored times shared by commit boundary fixtures. */
+export const COMMIT_FIXTURE_TIMES = {
+  createdAt: '2026-08-05T10:00:00.000Z',
+  statusAt: '2026-08-05T10:00:00.058Z',
+} as const;
+
+/** Canonical authenticated authority for transport-boundary test responses. */
+export const EFFECTIVE_AUTHORITY_FIXTURE = {
+  organizationId: 'org-1',
+  projectId: 'project-1',
+  branchId: 'branch-1',
+  syncGroups: ['org:org-1'],
+  operations: [],
+  participantKind: 'agent',
+  participantId: 'agent-1',
+  deliveryPartition: null,
+} satisfies EffectiveAuthority;
+
+/** A canonical hosted confirmation returned by HTTP or WebSocket. */
+export function confirmedCommitReceiptResponse(args: {
+  clientTxId: string;
+  lastSyncId?: number;
+  serverTxId?: string;
+  ops?: number;
+}): CommitReceiptWire {
+  const lastSyncId = args.lastSyncId ?? 0;
+  return {
+    object: 'commit_receipt',
+    clientTxId: args.clientTxId,
+    serverTxId: args.serverTxId ?? String(lastSyncId),
+    ...COMMIT_FIXTURE_TIMES,
+    success: true,
+    authority: EFFECTIVE_AUTHORITY_FIXTURE,
+    status: 'confirmed',
+    lastSyncId,
+    ops: args.ops ?? 1,
+  } satisfies CommitReceiptWire;
+}
+
+/** Canonical normalized acknowledgement for mutation-executor test doubles. */
+export function confirmedCommitAck(lastSyncId = 0): CommitAck {
+  return {
+    status: 'confirmed',
+    statusAt: COMMIT_FIXTURE_TIMES.statusAt,
+    lastSyncId,
+  } satisfies CommitAck;
+}
 
 /** `GET /v1/models/{model}/{id}`. Pass `data: null` for a miss. */
 export function modelReadResponse(args: {
@@ -51,14 +102,22 @@ export function modelListResponse(args: {
   hasMore?: boolean;
   nextCursor?: string | null;
   stamp?: number;
+  evidence?: readonly { id: string; stamp: number }[];
 }): ModelListResponse {
+  const stamp = args.stamp ?? 0;
+  const inferredEvidence = args.data.flatMap((row): { id: string; stamp: number }[] => {
+    if (typeof row !== 'object' || row === null) return [];
+    const id = (row as { id?: unknown }).id;
+    return typeof id === 'string' ? [{ id, stamp }] : [];
+  });
   return {
     object: 'list',
     model: args.model,
     data: [...args.data],
     has_more: args.hasMore ?? false,
     next_cursor: args.nextCursor ?? null,
-    stamp: args.stamp ?? 0,
+    stamp,
+    evidence: [...(args.evidence ?? inferredEvidence)],
   } satisfies ModelListResponse;
 }
 

@@ -278,7 +278,7 @@ export function renderPricingMdx(): string {
   );
   push('');
   push(
-    'Requests authenticated by a browser session are never counted against a quota. Only API key traffic is metered and gated.',
+    'Metering follows successful product API operations regardless of transport. Short-lived browser and agent credentials do not create a separate free allowance.',
   );
   push('');
 

@@ -30,6 +30,7 @@ import type {
   CreateAgentClientParams,
   SessionResource,
 } from '@abloatai/transaction/resources/httpResources';
+import type { EffectiveAuthority } from '@abloatai/transaction/auth';
 export type { LocalReadOptions } from './local/client/resourceTypes.js';
 
 /** The typed sync engine client — one property per model in the schema */
@@ -181,6 +182,12 @@ export type AbloClient<S extends SchemaRecord> = {
    * ```
    */
   readonly organizationId: string | null;
+
+  /**
+   * The effective authority of this running participant, confirmed by the
+   * server credential exchange/identity endpoint. `null` until `ready()`.
+   */
+  readonly identity: EffectiveAuthority | null;
 
   /**
    * Destroy every IndexedDB database owned by this engine. Disconnects

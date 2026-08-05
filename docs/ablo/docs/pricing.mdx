@@ -91,4 +91,4 @@ X-Usage-Reset: 2026-08-01T00:00:00.000Z
 
 Ablo emails the organization at 80 percent of a limit and again when it is reached. Past the limit the engine returns [`quota_exceeded`](/errors#quota_exceeded), and past the connection cap [`connection_limit_exceeded`](/errors#connection_limit_exceeded). Both are retryable, once the period rolls over, the limit is raised, or other connections drain.
 
-Requests authenticated by a browser session are never counted against a quota. Only API key traffic is metered and gated.
+Metering follows successful product API operations regardless of transport. Short-lived browser and agent credentials do not create a separate free allowance.

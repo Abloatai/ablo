@@ -3,7 +3,7 @@
  *
  * Owns the persistence contract behind `Ablo({ durableWrites })` — a behavior
  * contract of methods, not a serialized shape, which is why it lives here
- * rather than in `transactions/settlement/`. The records that cross this port
+ * rather than in `transactions/confirmation/`. The records that cross this port
  * are owned by `pendingWriteSchema` there; this module never redescribes them.
  *
  * The engine consumes the port through `commitOutboxStore`, and the HTTP client
@@ -12,8 +12,8 @@
 
 import { z } from 'zod';
 import { AbloValidationError } from './errors.js';
-import type { CommitOutboxScope } from './transactions/settlement/commitEnvelope.js';
-import type { PendingWrite } from './transactions/settlement/pendingWrite.js';
+import type { CommitOutboxScope } from './transactions/confirmation/commitEnvelope.js';
+import type { PendingWrite } from './transactions/confirmation/pendingWrite.js';
 
 /**
  * Persistence port used by `Ablo({ durableWrites })`.

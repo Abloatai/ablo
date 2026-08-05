@@ -4,7 +4,7 @@ import type { MutationCommitResult } from '@abloatai/transaction/wire/commit';
 import type {
   DurableCommitEnvelope,
   DurableCommitOperation,
-} from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+} from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import type { SealDurableCommitInput } from './commitTransport.js';
 import { transientRetryDelayMs } from './failureHandling.js';
 

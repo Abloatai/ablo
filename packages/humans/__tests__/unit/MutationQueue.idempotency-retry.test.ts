@@ -16,12 +16,13 @@ import {
   MutationQueue,
   type QueuedMutation,
 } from '../../src/local/transactions/mutations/MutationQueue';
-import { createDurableCommitEnvelope } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import { createDurableCommitEnvelope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import {
   createTaskFixture,
   createTestContext,
   resetFixtureCounter,
 } from '../../src/local/testing';
+import { confirmedCommitAck } from '@abloatai/transaction/testing/fixtures/httpResponses';
 
 const USER_CONTEXT = {
   userId: 'user-1',
@@ -102,7 +103,7 @@ function failFirstCommitAfterCapturing(
         new AbloConnectionError('connection closed before commit ack'),
       );
     }
-    return Promise.resolve({ lastSyncId: 42, status: 'confirmed' as const });
+    return Promise.resolve(confirmedCommitAck(42));
   };
   queue.setMutationExecutor({
     commit,
@@ -205,7 +206,7 @@ describe('MutationQueue retry idempotency', () => {
           operations: operations.map((operation) => ({ ...operation })),
           ...(options ? { options: { ...options } } : {}),
         });
-        return Promise.resolve({ lastSyncId: 42, status: 'confirmed' as const });
+        return Promise.resolve(confirmedCommitAck(42));
       },
       executeCreate: jest.fn(),
       executeUpdate: jest.fn(),
@@ -236,7 +237,7 @@ describe('MutationQueue retry idempotency', () => {
           operations: operations.map((operation) => ({ ...operation })),
           ...(options ? { options: { ...options } } : {}),
         });
-        return Promise.resolve({ lastSyncId: attempts.length, status: 'confirmed' as const });
+        return Promise.resolve(confirmedCommitAck(attempts.length));
       },
       executeCreate: jest.fn(),
       executeUpdate: jest.fn(),
@@ -281,7 +282,7 @@ describe('MutationQueue retry idempotency', () => {
           operations: operations.map((operation) => ({ ...operation })),
           ...(options ? { options: { ...options } } : {}),
         });
-        return Promise.resolve({ lastSyncId: attempts.length, status: 'confirmed' as const });
+        return Promise.resolve(confirmedCommitAck(attempts.length));
       },
       executeCreate: jest.fn(),
       executeUpdate: jest.fn(),
@@ -331,7 +332,7 @@ describe('MutationQueue retry idempotency', () => {
     });
     queue.setCommitOutbox(outbox.store);
     const commit = jest.fn<Promise<CommitResult>, [MutationOperation[], MutationOptions?]>(
-      () => Promise.resolve({ lastSyncId: 12, status: 'confirmed' as const }),
+      () => Promise.resolve(confirmedCommitAck(12)),
     );
     queue.setMutationExecutor({
       commit,
@@ -381,7 +382,7 @@ describe('MutationQueue retry idempotency', () => {
     });
     queue.setCommitOutbox(outbox.store);
     const commit = jest.fn<Promise<CommitResult>, [MutationOperation[], MutationOptions?]>(
-      () => Promise.resolve({ lastSyncId: 7, status: 'confirmed' as const }),
+      () => Promise.resolve(confirmedCommitAck(7)),
     );
     queue.setMutationExecutor({
       commit,
@@ -409,7 +410,7 @@ describe('MutationQueue retry idempotency', () => {
       beforeSeal: () => Promise.reject(new Error('quota exceeded')),
     });
     queue.setCommitOutbox(outbox.store);
-    const commit = jest.fn(() => Promise.resolve({ lastSyncId: 7, status: 'confirmed' as const }));
+    const commit = jest.fn(() => Promise.resolve(confirmedCommitAck(7)));
     queue.setMutationExecutor({
       commit,
       executeCreate: jest.fn(),
@@ -453,7 +454,7 @@ describe('MutationQueue retry idempotency', () => {
           operations: operations.map((operation) => ({ ...operation })),
           ...(options ? { options: { ...options } } : {}),
         });
-        return Promise.resolve({ lastSyncId: 99, status: 'confirmed' as const });
+        return Promise.resolve(confirmedCommitAck(99));
       },
       executeCreate: jest.fn(),
       executeUpdate: jest.fn(),
@@ -475,7 +476,7 @@ describe('MutationQueue retry idempotency', () => {
     const outbox = createMemoryOutbox({ failCleanup: true });
     queue = new MutationQueue({ batchDelay: 0 });
     queue.setCommitOutbox(outbox.store);
-    const commit = jest.fn(() => Promise.resolve({ lastSyncId: 8, status: 'confirmed' as const }));
+    const commit = jest.fn(() => Promise.resolve(confirmedCommitAck(8)));
     queue.setMutationExecutor({
       commit,
       executeCreate: jest.fn(),
@@ -494,7 +495,7 @@ describe('MutationQueue retry idempotency', () => {
   });
 
   it('rejects one atomic key reused for a different request', async () => {
-    const commit = jest.fn(() => Promise.resolve({ lastSyncId: 8, status: 'confirmed' as const }));
+    const commit = jest.fn(() => Promise.resolve(confirmedCommitAck(8)));
     queue.setMutationExecutor({
       commit,
       executeCreate: jest.fn(),
@@ -518,7 +519,7 @@ describe('MutationQueue retry idempotency', () => {
   it('isolates throwing lifecycle observers from durable dispatch', async () => {
     const outbox = createMemoryOutbox();
     queue.setCommitOutbox(outbox.store);
-    const commit = jest.fn(() => Promise.resolve({ lastSyncId: 9, status: 'confirmed' as const }));
+    const commit = jest.fn(() => Promise.resolve(confirmedCommitAck(9)));
     queue.setMutationExecutor({
       commit,
       executeCreate: jest.fn(),
@@ -543,7 +544,7 @@ describe('MutationQueue retry idempotency', () => {
   it('drains past a throwing transaction:completed observer', async () => {
     const outbox = createMemoryOutbox();
     queue.setCommitOutbox(outbox.store);
-    const commit = jest.fn(() => Promise.resolve({ lastSyncId: 11, status: 'confirmed' as const }));
+    const commit = jest.fn(() => Promise.resolve(confirmedCommitAck(11)));
     queue.setMutationExecutor({
       commit,
       executeCreate: jest.fn(),
@@ -593,7 +594,7 @@ describe('MutationQueue retry idempotency', () => {
     });
     outbox.records.set(envelope.id, envelope);
     queue.setCommitOutbox(outbox.store);
-    const commit = jest.fn(() => Promise.resolve({ lastSyncId: 10, status: 'confirmed' as const }));
+    const commit = jest.fn(() => Promise.resolve(confirmedCommitAck(10)));
     queue.setMutationExecutor({
       commit,
       executeCreate: jest.fn(),

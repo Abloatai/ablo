@@ -3,7 +3,7 @@
  * caller passes to a read, a write, or a claim.
  *
  * These types describe the *change or the query being requested*, never a local
- * copy of the rows it touches, so they sit in the settlement core and are shared
+ * copy of the rows it touches, so they sit in the commit core and are shared
  * by every transport and every caller (ADR 0013 §4, ADR 0016). The factory that
  * binds them to reactive model instances — `createModelProxy` — stays with the
  * reactive consumer, along with `ModelOperations` and `ModelCollaboration`,
@@ -562,7 +562,7 @@ export interface ModelRetrieveParams extends ServerRetrieveOptions {
  * Options shared by schema model writes.
  *
  * Reactive clients apply the row change optimistically before returning from
- * the call. The returned promise has one stable settlement contract across
+ * the call. The returned promise has one stable confirmation contract across
  * reactive and stateless clients: it resolves only after authoritative
  * confirmation. Callers that need an earlier queued receipt use the lower-level
  * `commits.create` resource instead.

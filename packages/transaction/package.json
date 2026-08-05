@@ -1,7 +1,7 @@
 {
   "name": "@abloatai/transaction",
-  "version": "0.48.0",
-  "description": "The headless Ablo transaction client and canonical contracts for reads, commits, settlement, claims, and durable observation.",
+  "version": "0.49.0",
+  "description": "The headless Ablo transaction client and canonical contracts for reads, commits, confirmation, claims, and durable observation.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -19,6 +19,12 @@
       "import": "./dist/errorCodes.js",
       "default": "./dist/errorCodes.js"
     },
+    "./errorObservation": {
+      "@ablo/source": "./src/errorObservation.ts",
+      "types": "./dist/errorObservation.d.ts",
+      "import": "./dist/errorObservation.js",
+      "default": "./dist/errorObservation.js"
+    },
     "./pricing": {
       "@ablo/source": "./src/pricing.ts",
       "types": "./dist/pricing.d.ts",
@@ -30,6 +36,12 @@
       "types": "./dist/environment.d.ts",
       "import": "./dist/environment.js",
       "default": "./dist/environment.js"
+    },
+    "./internal/read-set": {
+      "@ablo/source": "./src/internal/read-set.ts",
+      "types": "./dist/internal/read-set.d.ts",
+      "import": "./dist/internal/read-set.js",
+      "default": "./dist/internal/read-set.js"
     },
     "./branches": {
       "@ablo/source": "./src/branches.ts",

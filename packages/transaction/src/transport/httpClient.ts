@@ -25,6 +25,7 @@ import { modelWireNames } from '../auth/capability.js';
 import type { HttpClientConfig } from './httpOptions.js';
 import type {
   CommitResource,
+  CommitReceipt,
   HttpClaimApi,
   HttpClaimsResource,
   HttpLogsResource,
@@ -46,8 +47,24 @@ import type {
 } from '../resources/modelOperations.js';
 import type { Schema, SchemaRecord, InferModel, InferCreate } from '../schema/schema.js';
 import { omittedModelError } from '../schema/select.js';
-import type { ModelUpdater, ContentionOptions } from '../resources/functionalUpdate.js';
+import {
+  reconcileFunctionalUpdate,
+  type ModelUpdater,
+  type FunctionalUpdateOptions,
+} from '../resources/functionalUpdate.js';
+import type { HeldClaim } from '../types/streams.js';
 import { AbloConnectionError, AbloValidationError } from '../errors.js';
+import type { OnStaleMode, ReadDependency } from '../coordination/schema.js';
+import {
+  abortReadSetCommit,
+  capturePointRead,
+  createReadSetContext,
+  consumeReadSet,
+  prepareReadSet,
+  type ReadSetContext,
+} from '../readSetContext.js';
+import { recordHttpCommitReceipt } from '../commitRecordRuntime.js';
+import type { EffectiveAuthority } from '../auth/capability.js';
 
 export interface AbloHttpClientOptions<S extends SchemaRecord>
   extends HttpClientConfig<S> {
@@ -58,6 +75,18 @@ export interface AbloHttpClientOptions<S extends SchemaRecord>
    */
   readonly timeoutMs?: number;
 }
+
+declare const capturedRowBrand: unique symbol;
+
+/** A point-read row whose exact watermark is privately retained by its client. */
+export type CapturedRow<T = unknown> = T & {
+  readonly [capturedRowBrand]: true;
+};
+
+/** Exact returned rows or low-level canonical dependencies accepted by `reads`. */
+export type HttpModelMutationParams<P> = Omit<P, 'reads'> & {
+  readonly reads?: readonly (ReadDependency | CapturedRow)[] | null;
+};
 
 /**
  * The per-model surface of the stateless HTTP client — everything reachable over
@@ -91,14 +120,14 @@ export interface HttpModelClient<T, C = T> {
    * to what is already here.
    */
   /** Canonical authoritative point lookup. A miss resolves to `undefined`. */
-  get(params: ModelRetrieveParams & ModelReadOptions): Promise<T | undefined>;
+  get(params: ModelRetrieveParams & ModelReadOptions): Promise<CapturedRow<T> | undefined>;
   /** @deprecated Use `get({ id })` for an authoritative point lookup. */
-  retrieve(params: ModelRetrieveParams & ModelReadOptions): Promise<T | undefined>;
+  retrieve(params: ModelRetrieveParams & ModelReadOptions): Promise<CapturedRow<T> | undefined>;
   /**
    * Reads the rows matching a filter. Same resolution as `get`, in bulk,
    * and deduplicated so concurrent identical calls share one request.
    */
-  list(options?: ServerReadOptions<T>): Promise<T[]>;
+  list(options?: ServerReadOptions<T>): Promise<CapturedRow<T>[]>;
   /**
    * Creates a row and returns it, including any framework-applied defaults.
    * Passing an id that already exists is idempotent: the existing row is
@@ -110,8 +139,8 @@ export interface HttpModelClient<T, C = T> {
    * back, so it resolves on the server's confirmation instead. The same is true
    * of `update` and `delete`.
    */
-  create(params: ModelCreateParams<T, C>): Promise<T>;
-  update(params: ModelUpdateParams<T, C>): Promise<T>;
+  create(params: HttpModelMutationParams<ModelCreateParams<T, C>>): Promise<T>;
+  update(params: HttpModelMutationParams<ModelUpdateParams<T, C>>): Promise<T>;
   /**
    * Updates a row with a function of its latest value — `update(id, current =>
    * next)`, the data-layer equivalent of a `setState(prev => next)` reducer. The
@@ -124,9 +153,9 @@ export interface HttpModelClient<T, C = T> {
   update(
     id: string,
     updater: ModelUpdater<T>,
-    options?: ContentionOptions,
+    options?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
   ): Promise<T | undefined>;
-  delete(params: ModelDeleteParams<T, C>): Promise<void>;
+  delete(params: HttpModelMutationParams<ModelDeleteParams<T, C>>): Promise<void>;
   claim: HttpClaimApi<T, C>;
   /**
    * Registers a durable premise on a row — "keep telling me about this one".
@@ -164,7 +193,7 @@ export type AbloHttpClient<S extends SchemaRecord> = {
 } & {
   /** Runs one-time setup (durable-outbox scope resolution and replay) before the client is used. It also runs lazily ahead of the first request, so calling it yourself is optional. */
   ready(): Promise<void>;
-  /** Replays every pending durable HTTP write in seal order and waits for settlement. */
+  /** Replays every pending durable HTTP write in seal order and waits for confirmation. */
   waitForFlush(): Promise<void>;
   readonly commits: CommitResource;
   /**
@@ -177,6 +206,8 @@ export type AbloHttpClient<S extends SchemaRecord> = {
   readonly claims: HttpClaimsResource;
   /** Durable, credential-scoped authoritative event pages. */
   readonly logs: HttpLogsResource;
+  /** Server-confirmed authority of the credential, populated by `ready()`. */
+  readonly identity: EffectiveAuthority | null;
   dispose(): Promise<void>;
   /** Resolves the bearer credential this client authenticates with, or `null` if none is set. */
   getAuthToken(): Promise<string | null>;
@@ -200,6 +231,7 @@ const PROTOCOL_MEMBERS = new Set<string>([
   'commits',
   'claims',
   'logs',
+  'identity',
   'getAuthToken',
   'sessions',
 ]);
@@ -217,9 +249,13 @@ function isProtocolMember(prop: string): prop is keyof HttpTransport {
  */
 function createHttpModelClient<T, C = T>(
   protocol: HttpTransportModel<T, C>,
+  modelName: string,
+  clientIdentity: object,
+  readSetContext: ReadSetContext | undefined,
 ): HttpModelClient<T, C> {
   async function readRow(id: string): Promise<T | undefined> {
     const read = await protocol.get({ id });
+    capturePointRead(readSetContext, clientIdentity, modelName, id, read.data, read.stamp);
     return read.data;
   }
 
@@ -248,16 +284,48 @@ function createHttpModelClient<T, C = T>(
     };
   }
 
-  function update(params: ModelUpdateParams<T, C>): Promise<T>;
+  function preparedMutation<P extends {
+    readonly claim?: unknown;
+    readonly idempotencyKey?: string | null;
+    readonly readAt?: number | null;
+    readonly onStale?: OnStaleMode | null;
+    readonly reads?: readonly unknown[] | null;
+  }>(
+    params: P,
+  ) {
+    const prepared = prepareReadSet(
+      readSetContext,
+      clientIdentity,
+      params.readAt,
+      params.onStale,
+      params.idempotencyKey,
+      params.reads,
+    );
+    return {
+      options: {
+        ...mutationOptions(params),
+        ...(prepared.readAt !== undefined ? { readAt: prepared.readAt } : {}),
+        ...(prepared.onStale !== undefined ? { onStale: prepared.onStale } : {}),
+        ...(prepared.reads !== undefined ? { reads: prepared.reads } : {}),
+        ...(prepared.idempotencyKey !== undefined
+          ? { idempotencyKey: prepared.idempotencyKey }
+          : {}),
+      },
+      consumed: prepared.consumed,
+      automaticCommit: prepared.automaticCommit,
+    };
+  }
+
+  function update(params: HttpModelMutationParams<ModelUpdateParams<T, C>>): Promise<T>;
   function update(
     id: string,
     updater: ModelUpdater<T>,
-    options?: ContentionOptions,
+    options?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
   ): Promise<T | undefined>;
   async function update(
-    arg: ModelUpdateParams<T, C> | string,
+    arg: HttpModelMutationParams<ModelUpdateParams<T, C>> | string,
     updater?: ModelUpdater<T>,
-    options?: ContentionOptions,
+    options?: FunctionalUpdateOptions<ReadDependency | CapturedRow>,
   ): Promise<T | undefined> {
     if (typeof arg === 'string') {
       if (!updater) {
@@ -266,38 +334,186 @@ function createHttpModelClient<T, C = T>(
           { code: 'write_options_invalid' },
         );
       }
-      const receipt = await protocol.update(arg, updater, options);
+      const receipt = await reconcileFunctionalUpdate<
+        T,
+        CommitReceipt,
+        ReadDependency | CapturedRow
+      >(
+        updater,
+        options,
+        {
+          model: modelName,
+          id: arg,
+          readFresh: async () => {
+            const read = await protocol.get({ id: arg });
+            capturePointRead(
+              readSetContext,
+              clientIdentity,
+              modelName,
+              arg,
+              read.data,
+              read.stamp,
+            );
+            return { data: read.data, stamp: read.stamp };
+          },
+          writeNext: async (patch, readAt) => {
+            const prepared = preparedMutation(
+              {
+                readAt,
+                onStale: 'reject' as const,
+                reads: options?.reads,
+              },
+            );
+            try {
+              const result = await protocol.update({
+                ...prepared.options,
+                id: arg,
+                data: patch,
+              });
+              consumeReadSet(
+                readSetContext,
+                clientIdentity,
+                prepared.consumed,
+                prepared.automaticCommit,
+              );
+              return result;
+            } catch (error) {
+              abortReadSetCommit(readSetContext, prepared.automaticCommit);
+              throw error;
+            }
+          },
+        },
+      );
       return receipt === undefined ? undefined : requireUpdatedRow(arg);
     }
 
-    await protocol.update({
-      ...mutationOptions(arg),
-      data: arg.data,
-    });
+    const prepared = preparedMutation(arg);
+    try {
+      await protocol.update({
+        ...prepared.options,
+        id: arg.id,
+        data: arg.data,
+      });
+    } catch (error) {
+      abortReadSetCommit(readSetContext, prepared.automaticCommit);
+      throw error;
+    }
+    consumeReadSet(
+      readSetContext,
+      clientIdentity,
+      prepared.consumed,
+      prepared.automaticCommit,
+    );
     return requireUpdatedRow(arg.id);
   }
 
-  const get = async (params: ModelRetrieveParams & ModelReadOptions): Promise<T | undefined> => {
+  const get = async (
+    params: ModelRetrieveParams & ModelReadOptions,
+  ): Promise<CapturedRow<T> | undefined> => {
     const read = await protocol.get(params);
-    return read.data;
+    capturePointRead(
+      readSetContext,
+      clientIdentity,
+      modelName,
+      params.id,
+      read.data,
+      read.stamp,
+    );
+    return read.data as CapturedRow<T> | undefined;
   };
+
+  const list = async (options?: ServerReadOptions<T>): Promise<CapturedRow<T>[]> => {
+    const snapshot = await protocol.list(options);
+    const registry = readSetContext?.getStore();
+    if (!registry) return [...snapshot.data] as CapturedRow<T>[];
+    if (!snapshot.evidence) {
+      throw new AbloConnectionError(
+        `${modelName}.list did not return row evidence. Upgrade the Ablo server or use get({ id }).`,
+        { code: 'commit_no_result' },
+      );
+    }
+    const byId = new Map(snapshot.evidence.map((entry) => [entry.id, entry.stamp]));
+    for (const row of snapshot.data) {
+      const id = typeof row === 'object' && row !== null
+        ? Reflect.get(row as object, 'id')
+        : undefined;
+      const stamp = typeof id === 'string' ? byId.get(id) : undefined;
+      if (typeof id !== 'string' || stamp === undefined) {
+        throw new AbloConnectionError(
+          `${modelName}.list returned a row without matching evidence.`,
+          { code: 'commit_no_result' },
+        );
+      }
+      capturePointRead(readSetContext, clientIdentity, modelName, id, row, stamp);
+    }
+    return [...snapshot.data] as CapturedRow<T>[];
+  };
+
+  // Claim acquisition performs its authoritative read only after the grant.
+  // Preserve that exact post-grant watermark while retaining the callable
+  // namespace and all of its state/queue/release members through the proxy.
+  const claim = new Proxy(protocol.claim, {
+    apply(target, thisArg, argArray) {
+      const result = Reflect.apply(target, thisArg, argArray) as Promise<HeldClaim<T> | null>;
+      return result.then((held) => {
+        if (held && held.readAt !== undefined) {
+          capturePointRead(
+            readSetContext,
+            clientIdentity,
+            modelName,
+            held.target.id,
+            held.data,
+            held.readAt,
+          );
+        }
+        return held;
+      });
+    },
+  });
 
   return {
     get,
     retrieve: get,
-    list: (options) => protocol.list(options),
+    list,
     async create(params): Promise<T> {
-      const row = await protocol.create({
-        ...mutationOptions(params),
-        data: params.data as Record<string, unknown>,
-      });
+      const id = params.id ?? '';
+      const prepared = preparedMutation(params);
+      let row: T;
+      try {
+        row = await protocol.create({
+          ...prepared.options,
+          ...(params.id !== undefined ? { id: params.id } : {}),
+          data: params.data as Record<string, unknown>,
+        });
+      } catch (error) {
+        abortReadSetCommit(readSetContext, prepared.automaticCommit);
+        throw error;
+      }
+      consumeReadSet(
+        readSetContext,
+        clientIdentity,
+        prepared.consumed,
+        prepared.automaticCommit,
+      );
       return row;
     },
     update,
     async delete(params): Promise<void> {
-      await protocol.delete(mutationOptions(params));
+      const prepared = preparedMutation(params);
+      try {
+        await protocol.delete({ ...prepared.options, id: params.id });
+      } catch (error) {
+        abortReadSetCommit(readSetContext, prepared.automaticCommit);
+        throw error;
+      }
+      consumeReadSet(
+        readSetContext,
+        clientIdentity,
+        prepared.consumed,
+        prepared.automaticCommit,
+      );
     },
-    claim: protocol.claim,
+    claim,
     track: (params) => protocol.track(params),
   };
 }
@@ -312,14 +528,20 @@ function createHttpModelClient<T, C = T>(
 export function createAbloHttpClient<S extends SchemaRecord>(
   options: AbloHttpClientOptions<S>,
 ): AbloHttpClient<S> {
-  const { schema, ...rest } = options;
+  const { schema, onCommitReceipt, ...rest } = options;
+  const readSetContext = createReadSetContext();
   const transport: HttpTransport = createHttpTransport({
     ...rest,
     // Derived from the schema this client is bound to, never assembled by hand
     // — see `auth/capability.ts`.
     modelTypenames: modelWireNames(schema.models),
+    onCommitReceipt: (observation) => {
+      recordHttpCommitReceipt(readSetContext, observation);
+      onCommitReceipt?.(observation);
+    },
   });
   const schemaModels = new Set(Object.keys(schema.models));
+  const clientIdentity = {};
   const omittedModels = new Set(schema.omittedModels ?? []);
   const models = new Map<
     string,
@@ -331,7 +553,12 @@ export function createAbloHttpClient<S extends SchemaRecord>(
   ): HttpModelClient<Record<string, unknown>, Record<string, unknown>> => {
     const cached = models.get(name);
     if (cached) return cached;
-    const created = createHttpModelClient(transport.model(name));
+    const created = createHttpModelClient(
+      transport.model(name),
+      name,
+      clientIdentity,
+      readSetContext,
+    );
     models.set(name, created);
     return created;
   };

@@ -16,7 +16,14 @@
  */
 
 import { z } from 'zod';
-import { onStaleModeSchema } from '../coordination/schema.js';
+import {
+  onStaleModeSchema,
+  MAX_READ_SET_ENTRIES,
+  readDependencyListSchema,
+  readSetProjectionEntryCount,
+  readSetWatermarkSchema,
+  trackDependencyListSchema,
+} from '../coordination/schema.js';
 
 export const modelMutationRequestSchema = z.object({
   /** The record. Its shape is your schema's; everything around it is protocol. */
@@ -43,7 +50,11 @@ export const modelMutationRequestSchema = z.object({
    * the read. Ablo rejects the write if the row moved in between, which is
    * what makes read → decide → write safe without a lock across the deciding.
    */
-  readAt: z.number().nullish(),
+  readAt: readSetWatermarkSchema.nullish(),
+  /** Commit-lifetime dependencies checked with the single model operation. */
+  reads: readDependencyListSchema.nullish(),
+  /** Durable dependencies registered with the single model operation. */
+  track: trackDependencyListSchema.nullish(),
   /**
    * The fencing token from the claim's grant. Closes the window `readAt` alone
    * cannot: a lease that lapsed and whose successor came and went.
@@ -51,5 +62,8 @@ export const modelMutationRequestSchema = z.object({
   fenceToken: z.number().nullish(),
   /** @compat HTTP idempotency belongs in the `Idempotency-Key` header. */
   idempotencyKey: z.string().optional(),
+}).refine((value) => readSetProjectionEntryCount(value) <= MAX_READ_SET_ENTRIES, {
+  path: ['reads'],
+  message: `reads and track may contain at most ${MAX_READ_SET_ENTRIES} entries combined`,
 });
 export type ModelMutationRequest = z.infer<typeof modelMutationRequestSchema>;

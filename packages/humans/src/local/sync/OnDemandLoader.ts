@@ -121,6 +121,7 @@ function snapshotDoesNotAdvanceModel(data: Record<string, unknown>, model: Model
 }
 
 export class OnDemandLoader {
+  private readonly readEvidence = new WeakMap<object, number>();
   private readonly inFlight = new Map<string, Promise<Model[]>>();
   /**
    * Query keys with a background confirm currently in flight. Distinct from
@@ -222,6 +223,11 @@ export class OnDemandLoader {
       })
       .catch(() => undefined);
     return work;
+  }
+
+  /** Exact evidence retained for a row returned by a server-confirmed fetch. */
+  getReadEvidence(row: object): number | undefined {
+    return this.readEvidence.get(row);
   }
 
   private async runFetch(
@@ -337,7 +343,8 @@ export class OnDemandLoader {
     clauses: readonly WhereClause[],
     options: FetchOptions<unknown> | undefined,
   ): Promise<Model[]> {
-    const networkRows = await this.queryNetwork(modelName, clauses, options);
+    const network = await this.queryNetwork(modelName, clauses, options);
+    const networkRows = network.rows;
     const networkModels = networkRows
       // Strict: a row the server returned whose type name this client never
       // registered is a genuine schema collision (the pushed schema differs
@@ -345,6 +352,12 @@ export class OnDemandLoader {
       // dropping the row and failing downstream as `entity_not_found`.
       .map((raw) => this.hydrateOne(raw, typename, { strict: true }))
       .filter((m): m is Model => m !== null);
+
+    const evidenceById = new Map(network.evidence.map((entry) => [entry.id, entry.stamp]));
+    for (const model of networkModels) {
+      const stamp = evidenceById.get(model.id);
+      if (stamp !== undefined) this.readEvidence.set(model, stamp);
+    }
 
     if (networkModels.length > 0) {
       this.opts.objectPool.addBatch(networkModels, ModelScope.live);
@@ -558,7 +571,10 @@ export class OnDemandLoader {
     modelName: string,
     clauses: readonly WhereClause[],
     options: FetchOptions<unknown> | undefined,
-  ): Promise<unknown[]> {
+  ): Promise<{
+    rows: unknown[];
+    evidence: readonly { id: string; stamp: number }[];
+  }> {
     const typename = this.resolveTypename(modelName);
     const orderEntries = options?.orderBy ? Object.entries(options.orderBy) : [];
     const firstOrder = orderEntries[0];
@@ -586,6 +602,7 @@ export class OnDemandLoader {
       { queries: [query] },
     );
     const rows: unknown[] = Array.isArray(result.results[0]) ? result.results[0] : [];
+    const evidence = result.evidence?.[0] ?? [];
     // Normalize: wire rows lack `__typename` when the server elides it.
     const normalized = rows.map((row) => {
       if (row && typeof row === 'object' && !('__typename' in row)) {
@@ -605,7 +622,7 @@ export class OnDemandLoader {
     if (options?.expand && options.expand.length > 0) {
       this.hydrateExpanded(modelName, normalized, options.expand);
     }
-    return normalized;
+    return { rows: normalized, evidence };
   }
 
   /**

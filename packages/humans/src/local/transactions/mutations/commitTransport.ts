@@ -17,7 +17,7 @@ import {
   type CommitOutboxScope,
   type DurableCommitEnvelope,
   type DurableCommitOperation,
-} from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+} from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import type { DurableWriteStore } from './durableWriteStore.js';
 
 export interface CommitTransportContext {

@@ -1,5 +1,14 @@
 # @abloatai/cli
 
+## 0.49.0
+
+### Patch Changes
+
+- Updated dependencies [a409395]
+- Updated dependencies [3f145a3]
+  - @abloatai/transaction@0.49.0
+  - @abloatai/humans@0.49.0
+
 ## 0.48.0
 
 ### Patch Changes
@@ -124,7 +133,7 @@
 
   Add runnable Temporal and Inngest integration examples that keep durable
   workflow execution in those systems while routing shared-data reads, claims,
-  idempotent writes, settlement, and observation through Ablo.
+  idempotent writes, confirmation, and observation through Ablo.
 
   Add `@abloatai/ablo/ai-sdk` model tools for authoritative reads, idempotent
   creates, concurrency-safe updates, and claimed deletes. Remove the previous

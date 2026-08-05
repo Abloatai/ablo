@@ -3,7 +3,7 @@ import type { QueuedMutation } from './commitPayload.js';
 import type { MutationStore } from './MutationStore.js';
 import type { OptimisticUpdateEntry } from './localMutation.js';
 import type { MutationCommitResult } from '@abloatai/transaction/wire/commit';
-import type { DurableCommitEnvelope } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import type { DurableCommitEnvelope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import { applyWriteOptions, TX_TYPE_TO_MUTATION_OP } from './commitPayload.js';
 
 export interface PendingDrainContext {
@@ -31,7 +31,7 @@ export interface PendingDrainContext {
   readonly emit: (event: string, payload: object) => boolean;
 }
 
-export async function drainPendingSettlements(ctx: PendingDrainContext): Promise<void> {
+export async function drainPendingConfirmations(ctx: PendingDrainContext): Promise<void> {
     ctx.assertDurableReplayOpen();
     // Kick the commit lane too: atomic envelopes from `commits.create()` may
     // have been left at the head of the lane while the connection was down.

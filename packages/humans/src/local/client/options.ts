@@ -20,7 +20,7 @@ import type {
   DurableWriteStore,
   DurableWritesConfig,
 } from '@abloatai/transaction/durableWrites';
-import type { CommitOutboxScope } from '@abloatai/transaction/transactions/settlement/commitEnvelope';
+import type { CommitOutboxScope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 
 // ── Options ───────────────────────────────────────────────────────────────
 

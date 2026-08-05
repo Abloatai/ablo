@@ -22,7 +22,7 @@ import { z } from 'zod';
 import {
   reconcileFunctionalUpdate,
   type ModelUpdater,
-  type ContentionOptions,
+  type FunctionalUpdateOptions,
 } from '../resources/functionalUpdate.js';
 import {
   assertBrowserSafety,
@@ -36,7 +36,14 @@ import {
   warnIfCliKeyMismatch,
 } from '../auth/apiKey.js';
 import { PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER } from '../wire/protocolVersion.js';
-import { commitReceiptSchema, type CommitReceiptWire } from '../wire/commit.js';
+import {
+  commitReceiptSchema,
+  commitRecordSchema,
+  commitRecordListSchema,
+  commitRecordListOptionsSchema,
+  commitRecordWhereSchema,
+  type CommitReceiptWire,
+} from '../wire/commit.js';
 import { logListResponseSchema } from '../wire/feedEvent.js';
 import {
   claimAcquireResponseSchema,
@@ -89,6 +96,7 @@ import {
   rotateCapability,
 } from '../auth/capabilityLifecycle.js';
 import { parseIdentityResolveResponse } from '../auth/schemas.js';
+import type { EffectiveAuthority } from '../auth/capability.js';
 
 /**
  * Interpret a heartbeat reply for a lease this handle HOLDS: anything other
@@ -136,6 +144,7 @@ import {
   subTarget,
   streamTarget,
   batchFence,
+  claimIdFor,
   fenceTokenFor,
 } from '../coordination/locator.js';
 import { declaredMeta, wireMeta } from '../coordination/claimMeta.js';
@@ -150,8 +159,8 @@ import {
   isHttpCommitReplayExpired,
   type DurableHttpCommitEnvelope,
   type DurableHttpCommitMethod,
-} from '../transactions/settlement/httpCommitEnvelope.js';
-import type { CommitOutboxScope } from '../transactions/settlement/commitEnvelope.js';
+} from '../transactions/confirmation/httpCommitEnvelope.js';
+import type { CommitOutboxScope } from '../transactions/confirmation/commitEnvelope.js';
 import { resolveDurableWrites } from '../durableWrites.js';
 
 /** @internal Private options for the schema-agnostic HTTP protocol transport. */
@@ -204,6 +213,8 @@ export interface HttpTransport {
    */
   readonly claims: HttpClaimsResource;
   readonly logs: HttpLogsResource;
+  /** Server-confirmed authority of the active bearer, populated by `ready()`. */
+  readonly identity: EffectiveAuthority | null;
   model<T = Record<string, unknown>, Fields = T>(
     name: string,
   ): HttpTransportModel<T, Fields>;
@@ -348,6 +359,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   let httpOutboxScopeNamespace: string | null = null;
 
   let readyPromise: Promise<void> | null = null;
+  let effectiveAuthority: EffectiveAuthority | null = null;
   let httpCommitLane: Promise<void> = Promise.resolve();
 
   function runInHttpCommitLane<T>(work: () => Promise<T>): Promise<T> {
@@ -385,7 +397,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     return httpOutboxScopeNamespace;
   }
 
-  async function ready(): Promise<void> {
+  async function prepare(): Promise<void> {
     if (readyPromise) return readyPromise;
 
     readyPromise = (async () => {
@@ -398,6 +410,14 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     } catch (error) {
       readyPromise = null;
       throw error;
+    }
+  }
+
+  async function ready(): Promise<void> {
+    await prepare();
+    if (!effectiveAuthority) {
+      const rawIdentity = await requestRaw('/auth/identity', { method: 'GET' }, true);
+      effectiveAuthority = parseIdentityResolveResponse(rawIdentity).authority;
     }
   }
 
@@ -463,7 +483,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     },
     skipReady = false
   ): Promise<unknown> {
-    if (!skipReady) await ready();
+    if (!skipReady) await prepare();
     const { idempotencyKey, sealedProtocolVersion, ...requestInit } = init;
     const headers = await authHeaders(sealedProtocolVersion);
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
@@ -589,7 +609,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     try {
       await commitOutbox.remove(recordId);
     } catch (cause) {
-      // Do not report the remote outcome until local settlement is durable.
+      // Do not report the remote outcome until local confirmation is durable.
       // The retained record can still be replayed inside the safe window.
       throw new AbloConnectionError(
         'The server settled the commit, but its local outbox record could not be cleared.',
@@ -650,6 +670,33 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     readonly path: string;
     readonly body: string;
     readonly sealedProtocolVersion?: number;
+  }
+
+  function observeCommitReceipt(
+    request: ExactHttpCommitRequest,
+    receipt: CommitResponse,
+  ): void {
+    // A successful receipt carries the same server-authored authority as the
+    // identity exchange. Reuse it so startup replay does not add a redundant
+    // auth request before callers can inspect `identity`.
+    effectiveAuthority = receipt.authority;
+    if (!options.onCommitReceipt) return;
+    let body: unknown = request.body;
+    try {
+      body = JSON.parse(request.body) as unknown;
+    } catch {
+      // Preserve the exact opaque body for observability if it is not JSON.
+    }
+    try {
+      options.onCommitReceipt({
+        receipt,
+        method: request.method,
+        path: request.path,
+        body,
+      });
+    } catch {
+      // Receipt observation must never change the commit outcome.
+    }
   }
 
   function replicationLagTimeout(
@@ -713,6 +760,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           true
         );
         const next = parseSuccessfulCommitResponse(raw, request.idempotencyKey);
+        observeCommitReceipt(request, next);
         if (next.correlationId !== correlationId) {
           throw new AbloIdempotencyError(
             'The same HTTP commit replay returned different source correlation evidence.',
@@ -794,6 +842,16 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           true
         );
         const response = parseSuccessfulCommitResponse(raw, envelope.idempotencyKey);
+        observeCommitReceipt(
+          {
+            idempotencyKey: envelope.idempotencyKey,
+            method: envelope.request.method,
+            path: envelope.request.path,
+            body: envelope.request.body,
+            sealedProtocolVersion: envelope.protocolVersion,
+          },
+          response,
+        );
         if (
           envelope.correlationId !== undefined &&
           response.correlationId !== envelope.correlationId
@@ -929,11 +987,11 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       body: unknown;
       wait: CommitWait;
     },
-    beforeSettlement?: (response: CommitResponse) => Promise<void>
+    beforeConfirmation?: (response: CommitResponse) => Promise<void>
   ): Promise<CommitResponse> {
     return runInHttpCommitLane(async () => {
-      await ready();
-      // `ready()` covers startup. Re-draining here makes every later write wait
+      await prepare();
+      // Startup preparation covers replay. Re-draining here makes every later write wait
       // behind an ambiguous predecessor from this same process.
       const replayed = await replayHttpCommitOutbox();
       const prior = replayed.get(input.idempotencyKey);
@@ -970,7 +1028,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           }
         }
         if (priorResponse.status === 'confirmed') {
-          await beforeSettlement?.(priorResponse);
+          await beforeConfirmation?.(priorResponse);
           await settleHttpEnvelope(prior.envelope.id);
         }
         return priorResponse;
@@ -1000,6 +1058,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           true
         );
         response = parseSuccessfulCommitResponse(raw, input.idempotencyKey);
+        observeCommitReceipt(exactRequest, response);
         if (durableEnvelope && response.status === 'queued') {
           await persistHttpAcceptance(durableEnvelope, response);
         }
@@ -1013,12 +1072,12 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         throw error;
       }
 
-      // A model-create readback can participate in settlement: if it fails,
+      // A model-create readback can participate in confirmation: if it fails,
       // retain the exact write so a same-key retry recovers the generated id.
       // A queued source receipt cannot be read back from the log yet and stays
       // durable until a later confirmed replay.
       if (response.status === 'confirmed') {
-        await beforeSettlement?.(response);
+        await beforeConfirmation?.(response);
         if (durableEnvelope) await settleHttpEnvelope(durableEnvelope.id);
       }
       return response;
@@ -1044,7 +1103,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   function normalizeCommitOperation(
     op: CommitOperationInput,
     defaults: Pick<CommitCreateOptions, 'readAt' | 'onStale'>,
-    fence: BatchFence | null
+    fence: BatchFence | null,
+    claim: Claim | null,
   ): CommitOperationInput {
     return {
       action: op.action,
@@ -1052,6 +1112,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       id: op.id ?? null,
       data: op.data ?? null,
       transactionId: op.transactionId ?? null,
+      claimId:
+        op.claimId ?? claimIdFor(claim?.target, claim?.id, op.model, op.id ?? null),
       readAt: op.readAt ?? defaults.readAt ?? null,
       onStale: op.onStale ?? defaults.onStale ?? null,
       fenceToken: op.fenceToken ?? fenceTokenFor(fence, op.model, op.id ?? null),
@@ -1068,7 +1130,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       });
     }
     return commitOptions.operations.map((op) =>
-      normalizeCommitOperation(op, commitOptions, fence)
+      normalizeCommitOperation(op, commitOptions, fence, commitOptions.claim ?? null)
     );
   }
 
@@ -1270,6 +1332,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           onStale: commitOptions.onStale,
           wait: commitOptions.wait,
           claim: commitOptions.claim,
+          reads: commitOptions.reads,
+          track: commitOptions.track,
         },
         'commits.create'
       );
@@ -1318,7 +1382,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       // `requestJson` throws via `translateHttpError` on any non-2xx, so
       // reaching here implies success and `body` is already the success-only
       // receipt union — a rejection is a separate type that never arrives here.
-      // The settlement status therefore passes through verbatim: no branch may
+      // The confirmation status therefore passes through verbatim: no branch may
       // collapse a state the server reported into a different one.
       return {
         id: body.id ?? body.clientTxId,
@@ -1329,6 +1393,34 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           : {}),
         ...(body.missingIds && body.missingIds.length > 0 ? { missingIds: body.missingIds } : {}),
       };
+    },
+    get({ id }) {
+      if (!id) {
+        throw new AbloValidationError('commits.get requires a non-empty id.', {
+          code: 'write_options_invalid',
+          param: 'id',
+        });
+      }
+      return requestJson(
+        `/v1/commits/${encodeURIComponent(id)}`,
+        { method: 'GET' },
+        commitRecordSchema.nullable(),
+      );
+    },
+    list(options = {}) {
+      const parsed = commitRecordListOptionsSchema.parse(options);
+      const where = commitRecordWhereSchema.parse(parsed.where ?? {});
+      const params = new URLSearchParams();
+      if (where.actorId) params.set('actorId', where.actorId);
+      if (where.status) params.set('status', where.status);
+      if (parsed.cursor) params.set('cursor', parsed.cursor);
+      if (parsed.limit !== undefined) params.set('limit', String(parsed.limit));
+      const query = params.size > 0 ? `?${params.toString()}` : '';
+      return requestJson(
+        `/v1/commits${query}`,
+        { method: 'GET' },
+        commitRecordListSchema,
+      );
     },
   };
 
@@ -1352,7 +1444,10 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     },
   };
 
-  async function listModel<T>(modelName: string, options?: ServerReadOptions<T>): Promise<T[]> {
+  async function listModel<T>(
+    modelName: string,
+    options?: ServerReadOptions<T>,
+  ): Promise<{ readonly data: readonly T[]; readonly evidence?: readonly { id: string; stamp: number }[] }> {
     const params = new URLSearchParams();
     if (options?.limit !== undefined) params.set('limit', String(options.limit));
     if (options?.orderBy) {
@@ -1380,7 +1475,10 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     // transport is schema-agnostic — it moves rows for whatever schema the
     // caller declared, and `T` is that declaration. Row validation belongs to
     // the typed facade above, which holds the model's schema.
-    return res.data as T[];
+    return {
+      data: res.data as T[],
+      ...(res.evidence ? { evidence: res.evidence } : {}),
+    };
   }
 
   async function retrieveModel<T>(
@@ -1426,7 +1524,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     id: string,
     data: Record<string, unknown> | undefined,
     options: ModelMutationOptions | undefined,
-    beforeSettlement?: (response: CommitResponse) => Promise<void>
+    beforeConfirmation?: (response: CommitResponse) => Promise<void>
   ): Promise<CommitReceipt> {
     assertWriteOptions(
       options && {
@@ -1434,6 +1532,10 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         readAt: options.readAt,
         onStale: options.onStale,
         claim: options.claim,
+        claimRef: options.claimRef,
+        fenceToken: options.fenceToken,
+        reads: options.reads,
+        track: options.track,
       },
       `${modelName} ${action}`
     );
@@ -1460,6 +1562,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       claim: normalizeClaimId(options?.claimRef) ?? claimHandle?.id,
       onStale: options?.onStale ?? (claimHandle?.readAt !== undefined ? 'reject' : undefined),
       readAt,
+      reads: options?.reads,
+      track: options?.track,
       // The claim's fencing token (Option B), so the per-model HTTP write door
       // fences the same as the WS proxy and `commits.create`.
       fenceToken: options?.fenceToken ?? claimHandle?.fenceToken,
@@ -1480,7 +1584,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           // lower-level `commits.create` lifecycle surface.
           wait: 'confirmed',
         },
-        beforeSettlement
+        beforeConfirmation
       );
     } catch (error) {
       // The per-model write door (`ablo.<model>.update/create/delete`). Capture
@@ -1490,7 +1594,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     }
 
     // Same contract as `commits.create` above: a non-2xx already threw, so
-    // `body` is the success-only receipt union and its settlement status passes
+    // `body` is the success-only receipt union and its confirmation status passes
     // through verbatim rather than through a catch-all branch.
     return {
       id: body.serverTxId,
@@ -1773,7 +1877,14 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       if (!claimInput) return run(input);
 
       if (isClaimHandle(claimInput)) {
-        return run({ ...input, claimRef: { id: claimInput.id }, claim: undefined });
+        return run({
+          ...input,
+          claimRef: { id: claimInput.id },
+          ...(claimInput.fenceToken !== undefined
+            ? { fenceToken: claimInput.fenceToken }
+            : {}),
+          claim: undefined,
+        });
       }
 
       // `isClaimHandle` ruled out the handle form above; the generic mismatch
@@ -1806,14 +1917,14 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     function updateModel(
       id: string,
       updater: ModelUpdater<T>,
-      options?: ContentionOptions
+      options?: FunctionalUpdateOptions
     ): Promise<CommitReceipt | undefined>;
     function updateModel(
       arg:
         | (ModelMutationOptions & { readonly id: string; readonly data: Record<string, unknown> })
         | string,
       updater?: ModelUpdater<T>,
-      contention?: ContentionOptions
+      contention?: FunctionalUpdateOptions
     ): Promise<CommitReceipt | undefined> {
       // Functional form: update(id, current => next). The SDK owns the
       // read-fresh → compute → compare-and-swap → reconcile loop; correctness
@@ -1857,7 +1968,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       retrieve(params: ModelReadOptions & { readonly id: string }): Promise<HttpTransportRead<T>> {
         return retrieveModel<T>(name, params);
       },
-      list(options?: ServerReadOptions<T>): Promise<T[]> {
+      list(options?: ServerReadOptions<T>): ReturnType<typeof listModel<T>> {
         return listModel<T>(name, options);
       },
       async create(
@@ -1893,7 +2004,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
             }
           );
           if (created === undefined) {
-            throw new AbloConnectionError('Create settlement did not return its row.', {
+            throw new AbloConnectionError('Create confirmation did not return its row.', {
               code: 'commit_no_result',
             });
           }
@@ -1935,9 +2046,10 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
 
   return {
     ready,
+    get identity() { return effectiveAuthority; },
     waitForFlush: () =>
       runInHttpCommitLane(async () => {
-        await ready();
+        await prepare();
         const replayed = await replayHttpCommitOutbox();
         await confirmReplayedHttpCommits(replayed);
       }),

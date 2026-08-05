@@ -1,7 +1,7 @@
 /**
  * The persisted local action record consumed by `SyncActionStore`. It is a
  * client materialization artifact, not a transaction-layer wire shape: the
- * authoritative broadcast vocabulary is the settlement core's delta wire
+ * authoritative broadcast vocabulary is the confirmation core's delta wire
  * schema, while this one adds the local `__class` discriminator IndexedDB uses.
  */
 

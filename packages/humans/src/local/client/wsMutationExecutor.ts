@@ -12,6 +12,12 @@ import type {
   MutationOptions,
 } from '../interfaces/index.js';
 import type { CommitAck } from '../sync/commitFrames.js';
+import type { CommitReceiptWire } from '@abloatai/transaction/wire/commit';
+import {
+  recordWebSocketCommitReceipt,
+  type ReadSetContext,
+} from '@abloatai/transaction/internal/read-set';
+import { commitAckSchema } from '@abloatai/transaction/wire/commit';
 import { AbloError, AbloConnectionError } from '@abloatai/transaction/errors';
 
 // ── Default mutation executor (wire: `commit` frame over WebSocket) ──────
@@ -33,6 +39,13 @@ import { AbloError, AbloConnectionError } from '@abloatai/transaction/errors';
  */
 	export function createDefaultMutationExecutor(
 	  getWs: () => {
+	    sendCommitReceipt?: (
+	      operations: readonly MutationOperation[],
+	      clientTxId: string,
+	      timeoutMs?: number,
+	      reads?: readonly ReadDependency[] | null,
+	      track?: readonly TrackDependency[] | null,
+	    ) => Promise<CommitReceiptWire>;
 	    sendCommit?: (
 	      operations: readonly MutationOperation[],
 	      clientTxId: string,
@@ -41,13 +54,14 @@ import { AbloError, AbloConnectionError } from '@abloatai/transaction/errors';
 	      track?: readonly TrackDependency[] | null,
 	    ) => Promise<CommitAck>;
 	  } | null,
+	  readSetContext?: ReadSetContext,
 	): MutationExecutor {
 	  async function commit(
 	    operations: MutationOperation[],
 	    options?: MutationOptions,
 	  ) {
     const ws = getWs();
-    if (!ws?.sendCommit) {
+    if (!ws || (!ws.sendCommit && !ws.sendCommitReceipt)) {
       throw new AbloConnectionError(
         'SyncWebSocket not ready for commit. The engine must finish bootstrap ' +
           'before mutations can be sent.',
@@ -60,6 +74,34 @@ import { AbloError, AbloConnectionError } from '@abloatai/transaction/errors';
 	        ? crypto.randomUUID()
 	        : `tx_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`);
 	    try {
+	      if (ws.sendCommitReceipt) {
+	        const receipt = await ws.sendCommitReceipt(
+	          operations,
+	          clientTxId,
+	          undefined,
+	          options?.reads,
+	          options?.track,
+	        );
+	        recordWebSocketCommitReceipt(readSetContext, {
+	          receipt,
+	          operations,
+	          reads: options?.reads,
+	          track: options?.track,
+	        });
+	        return commitAckSchema.parse({
+	          status: receipt.status,
+	          statusAt: receipt.statusAt,
+	          lastSyncId: receipt.lastSyncId,
+	          ...(receipt.correlationId ? { correlationId: receipt.correlationId } : {}),
+	          ...(receipt.notifications ? { notifications: receipt.notifications } : {}),
+	          ...(receipt.missingIds ? { missingIds: receipt.missingIds } : {}),
+	        });
+	      }
+	      if (!ws.sendCommit) {
+	        throw new AbloConnectionError('SyncWebSocket commit transport is unavailable.', {
+	          code: 'ws_not_ready',
+	        });
+	      }
 	      return await ws.sendCommit(
 	        operations,
 	        clientTxId,
