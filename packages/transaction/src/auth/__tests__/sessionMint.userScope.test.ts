@@ -6,6 +6,9 @@ describe('user session scope', () => {
     const fetcher = jest.fn<typeof fetch>(async (_url, init) => {
       expect(JSON.parse(String(init?.body))).toMatchObject({
         user: { id: 'user-1' },
+        organizationId: 'org-customer',
+        schemaOwnerOrgId: 'org-platform',
+        schemaProjectId: 'project-platform',
         operations: ['task.read', 'task.update'],
       });
       return {
@@ -28,6 +31,11 @@ describe('user session scope', () => {
     const session = await mintSession(
       {
         user: { id: 'user-1' },
+        organizationId: 'org-customer',
+        schemaProject: {
+          organizationId: 'org-platform',
+          projectId: 'project-platform',
+        },
         can: { tasks: ['read', 'update'] },
       },
       {

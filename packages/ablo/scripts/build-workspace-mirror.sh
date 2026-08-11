@@ -130,11 +130,13 @@ jobs:
       - run: npm ci
       - name: Verify release workspace
         run: bash packages/ablo/scripts/verify-release-workspace.sh
+      # npm exchanges this workflow's short-lived OIDC identity during publish.
+      # Each public package trusts Abloatai/ablo's release.yml on npm; no
+      # long-lived registry credential belongs in GitHub secrets.
+      #
       # The loop itself lives in the script, not here, so the local fallback
       # used while Actions is unavailable runs the same publish.
       - name: Publish unpublished package versions
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: bash packages/ablo/scripts/publish-packages.sh
 EOF
 

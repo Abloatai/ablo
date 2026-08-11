@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.50.0",
+  "version": "0.51.0",
   "description": "The public Ablo SDK for coordinated reads, commits, claims, observation, and reactive applications.",
   "license": "Apache-2.0",
   "type": "module",
@@ -153,8 +153,8 @@
     "directory": "packages/ablo"
   },
   "dependencies": {
-    "@abloatai/humans": "^0.50.0",
-    "@abloatai/transaction": "^0.50.0",
+    "@abloatai/humans": "^0.51.0",
+    "@abloatai/transaction": "^0.51.0",
     "zod": "^4.4.3"
   },
   "peerDependencies": {

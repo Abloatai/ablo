@@ -408,6 +408,14 @@ export interface CreateUserSessionParams<S extends SchemaRecord> {
    *  carry the `ephemeral:mint-any-org` scope; omit it for the normal
    *  single-tenant case. */
   organizationId?: string;
+  /** Resolve this session's schema from a shared project while its data stays
+   *  scoped to `organizationId`. Cross-organization mints default to the
+   *  platform key's own project, so most platforms can omit this. Specify it
+   *  only to override that default. Requires `ephemeral:mint-any-org`. */
+  schemaProject?: {
+    organizationId: string;
+    projectId: string;
+  };
   /** Sync groups this session may subscribe to — typed (`'default'` or
    *  `<namespace>:<id>`; build with `syncGroup(kind, id)` from
    *  `@abloatai/transaction/schema`). Omit for the server default:

@@ -40,9 +40,10 @@ export const ephemeralKeyRequestSchema = z.object({
    */
   organizationId: z.string().min(1).optional(),
   /**
-   * Resolve this session's schema from a shared project rather than from the
-   * target organization, while its data stays scoped to that organization.
-   * Both fields are set together, and both require `ephemeral:mint-any-org`.
+   * Override the shared project used to resolve this session's schema while
+   * its data stays scoped to the target organization. A cross-organization
+   * mint defaults both coordinates to the caller key's own project. Both
+   * fields are set together, and both require `ephemeral:mint-any-org`.
    */
   schemaProjectId: z.string().min(1).optional(),
   schemaOwnerOrgId: z.string().min(1).optional(),

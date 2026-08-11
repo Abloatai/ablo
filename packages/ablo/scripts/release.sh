@@ -5,6 +5,7 @@
 #   bash packages/ablo/scripts/release.sh prepare
 #   # Review ../ablo-mirror/packages/ablo/README.md and CHANGELOG.md.
 #   bash packages/ablo/scripts/release.sh publish
+#   bash packages/ablo/scripts/release.sh publish-manual
 #
 # `prepare` versions and validates the exact public mirror without pushing it.
 # `publish` resumes that reviewed state, pushes once, waits for GitHub, verifies
@@ -28,6 +29,7 @@ usage() {
 Usage:
   bash packages/ablo/scripts/release.sh prepare
   bash packages/ablo/scripts/release.sh publish
+  bash packages/ablo/scripts/release.sh publish-manual
   bash packages/ablo/scripts/release.sh publish-local [otp]
 
 prepare  Version, commit, build, and fully validate the public mirror locally.
@@ -36,11 +38,15 @@ prepare  Version, commit, build, and fully validate the public mirror locally.
 publish  Publish the already-prepared state through GitHub Actions, verify npm,
          create the GitHub Release, and push the monorepo release commit.
 
-publish-local
-         Same outcome without GitHub Actions, for when the release workflow
-         cannot run. Publishes from this machine, so the version carries no npm
-         provenance attestation and that cannot be added later. Prefer `publish`
-         whenever Actions is available.
+publish-manual
+         Same outcome without GitHub Actions. Run it in an interactive terminal;
+         npm may ask you to press Enter, authenticate in the browser, and touch
+         your security key. No numeric OTP is required. A manual publish carries
+         no npm provenance attestation, and one cannot be added afterwards.
+
+publish-local [otp]
+         Compatibility alias for publish-manual. The optional numeric OTP is
+         retained for maintainers who use an authenticator app.
 EOF
 }
 
@@ -311,6 +317,13 @@ publish_local() {
   require_clean_main
   ensure_mirror
 
+  if [[ -z "$otp" && ! -t 0 ]]; then
+    echo "error: manual publishing needs an interactive terminal" >&2
+    echo "       npm opens a browser challenge for your security key." >&2
+    echo "       run: bash packages/ablo/scripts/release.sh publish-manual" >&2
+    exit 1
+  fi
+
   echo ">>> publish-local 1/5: validating the prepared state"
   command -v gh >/dev/null 2>&1 || { echo "error: gh not installed" >&2; exit 1; }
   gh auth status >/dev/null 2>&1 || { echo "error: gh not authenticated" >&2; exit 1; }
@@ -338,6 +351,10 @@ publish_local() {
   # Publishing runs INSIDE the mirror, against the same script release.yml runs,
   # so the local path cannot drift from the CI one.
   echo ">>> publish-local 3/5: publishing to npm from the mirror"
+  if [[ -z "$otp" ]]; then
+    echo "    npm may pause for each unpublished package. Press Enter to open"
+    echo "    its authentication page, then approve with your security key."
+  fi
   if [[ -n "$otp" ]]; then
     (cd "$MIRROR_DIR" && bash packages/ablo/scripts/publish-packages.sh --local --otp "$otp")
   else
@@ -366,6 +383,7 @@ cd "$MONOREPO_ROOT"
 case "${1:-}" in
   prepare) prepare_release ;;
   publish) publish_release ;;
+  publish-manual) publish_local ;;
   publish-local) publish_local "${2:-}" ;;
   -h|--help|help) usage ;;
   *)

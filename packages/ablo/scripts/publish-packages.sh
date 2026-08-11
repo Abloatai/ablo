@@ -4,7 +4,7 @@
 # ONE definition of what publishing does; run from the workspace root.
 #
 #   bash packages/ablo/scripts/publish-packages.sh            # CI: with provenance
-#   bash packages/ablo/scripts/publish-packages.sh --local    # no provenance
+#   bash packages/ablo/scripts/publish-packages.sh --local    # browser/security-key auth
 #   bash packages/ablo/scripts/publish-packages.sh --local --otp 123456
 #
 # The mirror's release.yml calls this, and so does `release.sh publish-local`
@@ -48,14 +48,21 @@ VERSION="$(node -p "require('./packages/ablo/package.json').version")"
 # ── Preconditions ───────────────────────────────────────────────────────
 # Each of these failed a real release in a way that pointed somewhere else.
 
-# An expired npm token does NOT report 401 on publish. The registry answers a
-# PUT from an unauthenticated caller with 404, which reads as a missing package
-# or a revoked permission and sends you looking in the wrong place. `whoami` is
-# the one call that names it.
-if ! npm whoami >/dev/null 2>&1; then
+# Trusted publishing does not create an npm session: npm exchanges GitHub's
+# short-lived OIDC identity only when `npm publish` runs, and `npm whoami` cannot
+# test that relationship. Assert that Actions exposed the identity endpoint;
+# npm will then validate each package's configured trust at the publish boundary.
+# The local recovery path still needs an interactive npm session.
+if [ "$PROVENANCE" = "1" ]; then
+  if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+    echo "error: GitHub Actions did not provide an OIDC identity" >&2
+    echo "       release.yml needs permissions: id-token: write." >&2
+    exit 1
+  fi
+elif ! npm whoami >/dev/null 2>&1; then
   echo "error: not authenticated to the npm registry" >&2
-  echo "       run \`npm login\`. An expired token surfaces later as" >&2
-  echo "       'E404 Not Found - PUT', which looks like a missing package." >&2
+  echo "       run \`npm login\`, complete its browser/security-key challenge," >&2
+  echo "       then run the manual release again." >&2
   exit 1
 fi
 

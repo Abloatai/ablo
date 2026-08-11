@@ -243,24 +243,36 @@ Some apps need each customer to be its **own** tenant — a hard data boundary
 scoping. The law-firm shape (Legora): every firm is its own org, many users
 inside it.
 
+Choose the boundary before minting sessions:
+
+| Customer model | Isolation guarantee | Use when |
+|---|---|---|
+| One Ablo organization, customer scope roots | Every model's declared `policy` | Cross-customer access is intentional or every model explicitly partitions by the customer root |
+| One Ablo organization per customer | Structural organization filtering and RLS on every row | Customers must be isolated even when a model has no customer policy |
+
+Sync-group routing controls which changes are delivered; it does not grant or
+deny reads. Do not use scope roots as a tenant security boundary unless every
+model declares the matching policy. If that invariant is difficult to audit,
+use one organization per customer.
+
 The problem that creates: if each customer is a separate org, a naïve setup would
 make you re-push your schema into every new customer's org. You don't have to.
-Keep **one** project as the home of your schema, and point each customer's
-session's *schema* at it while its *data* stays in the customer's own org:
+Keep **one** project as the home of your schema. When its key mints into another
+organization, Ablo automatically resolves the session's *schema* from that key's
+project while its *data* stays in the customer's own org:
 
 ```ts
-const { token } = await mintUserSessionKey({
-  apiKey: process.env.ABLO_PLATFORM_KEY, // sk_ with the ephemeral:mint-any-org scope
-  userId,
-  organizationId,                  // DATA → this customer's org (its own isolated tenant)
-  schemaProject: {                 // SCHEMA → the project that owns your schema
-    organizationId: schemaOwnerOrgId,
-    projectId: schemaProjectId,
-  },
-  operations: ['task.read', 'task.update'],
+const ablo = Ablo({ schema, apiKey: process.env.ABLO_PLATFORM_KEY });
+const { token } = await ablo.sessions.create({
+  user: { id: userId },
+  organizationId, // DATA → this customer's isolated org
+  can: { tasks: ['read', 'update'] },
   ttlSeconds: 3600,
 });
 ```
+
+For migrations or advanced routing, `sessions.create` also accepts an explicit
+`schemaProject: { organizationId, projectId }` override.
 
 Server-side the split is clean: the model **shape** loads from your schema
 project, but column enrichment and the tenant connection target the customer's
@@ -270,9 +282,9 @@ can't leak data across orgs.
 
 <Note>
 This requires a platform `sk_` carrying the `ephemeral:mint-any-org` scope —
-only a trusted first-party key can mint a session into another org and bind its
-schema to your project. Omit these fields and you get the default above: one
-project, one schema, all your users.
+only a trusted platform key can mint a session into another org. Omit
+`organizationId` and you get the default above: one project, one schema, all
+your users in the key's own organization.
 </Note>
 
 ## Security

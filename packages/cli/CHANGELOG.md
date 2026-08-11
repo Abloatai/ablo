@@ -1,5 +1,13 @@
 # @abloatai/cli
 
+## 0.51.0
+
+### Patch Changes
+
+- Updated dependencies [3a25ab4]
+  - @abloatai/transaction@0.51.0
+  - @abloatai/humans@0.51.0
+
 ## 0.50.0
 
 ### Patch Changes

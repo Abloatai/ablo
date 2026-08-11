@@ -1,5 +1,18 @@
 # @abloatai/transaction
 
+## 0.51.0
+
+### Minor Changes
+
+- 3a25ab4: Default cross-organization user sessions to the platform key's schema project.
+  Customer data remains isolated in the target organization, while one pushed
+  schema can describe every customer tenant. `sessions.create` also accepts an
+  explicit `schemaProject` override for migrations and advanced routing.
+
+  The sessions guide now distinguishes policy-scoped customers from structurally
+  isolated customer organizations and makes clear that sync-group routing is not
+  read authorization.
+
 ## 0.50.0
 
 - Make returned rows opaque read-evidence handles. Attach dependencies directly

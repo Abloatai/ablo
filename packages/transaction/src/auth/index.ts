@@ -222,8 +222,9 @@ interface MintUserSessionBase {
    *  they all share one schema: keep a single schema project, and every customer's
    *  session resolves its schema from it instead of pushing the schema into each
    *  organization separately. Requires the secret key to carry the
-   *  `ephemeral:mint-any-org` capability. Omit to resolve the schema from the
-   *  session's own organization. */
+   *  `ephemeral:mint-any-org` capability. Cross-organization mints default to
+   *  the secret key's own project; pass this only to override that binding.
+   *  Same-organization mints continue to resolve the session's own project. */
   readonly schemaProject?: {
     /** The organization that owns the shared schema project. */
     readonly organizationId: string;
