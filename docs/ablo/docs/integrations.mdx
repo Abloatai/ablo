@@ -9,6 +9,10 @@ Integrations live at the application edge. Ablo continues to own typed reads
 and writes, idempotency, claims, and authoritative confirmation; the external
 runtime keeps owning the job it was designed for.
 
+[Context](/context) is the small composition point for values returned by
+those systems. It carries Ablo read evidence without turning an external result
+into authoritative application state.
+
 | Category | Integration | Status | Use it for |
 |---|---|---|---|
 | Long-running tasks | [Temporal](/integrations/temporal) | Available | Durable Workflows, Activity retries, timers, cancellation, and durable AI SDK calls |

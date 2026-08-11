@@ -24,21 +24,9 @@ jobs:
       - run: npm ci
       - name: Verify release workspace
         run: bash packages/ablo/scripts/verify-release-workspace.sh
+      # The loop itself lives in the script, not here, so the local fallback
+      # used while Actions is unavailable runs the same publish.
       - name: Publish unpublished package versions
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: "true"
-        run: |
-          set -euo pipefail
-          for package_name in transaction humans agent cli ablo tsconfig; do
-            dir="packages/$package_name"
-            name=$(node -p "require('./$dir/package.json').name")
-            version=$(node -p "require('./$dir/package.json').version")
-            private=$(node -p "require('./$dir/package.json').private === true")
-            [ "$private" = "true" ] && continue
-            if npm view "$name@$version" version >/dev/null 2>&1; then
-              echo "$name@$version already published"
-            else
-              (cd "$dir" && npm publish --access public --provenance)
-            fi
-          done
+        run: bash packages/ablo/scripts/publish-packages.sh

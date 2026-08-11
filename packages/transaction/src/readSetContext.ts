@@ -16,6 +16,9 @@ import type { CommitRecord } from './wire/commit.js';
 
 type ClientIdentity = object;
 
+/** @internal Symbol-keyed bridge used by additive SDK structures. */
+export const kReadEvidence = Symbol.for('ablo.transaction.read-evidence');
+
 /** @internal One exact returned-row assertion. */
 export interface CapturedReadEvidence {
   readonly client: ClientIdentity;
@@ -33,6 +36,34 @@ export interface ReadRegistry {
 /** @internal Client-local evidence registry handle. */
 export interface ReadSetContext {
   getStore(): ReadRegistry;
+}
+
+/** @internal The two client-local values needed to inspect captured reads. */
+export interface ReadEvidenceBinding {
+  readonly context: ReadSetContext;
+  readonly client: ClientIdentity;
+}
+
+/** @internal Reads the private evidence binding without occupying a model name. */
+export function readEvidenceBinding(client: unknown): ReadEvidenceBinding | undefined {
+  if ((typeof client !== 'object' && typeof client !== 'function') || client === null) {
+    return undefined;
+  }
+  const binding = Reflect.get(client, kReadEvidence) as ReadEvidenceBinding | undefined;
+  if (!binding || typeof binding !== 'object') return undefined;
+  if (!binding.context || typeof binding.context.getStore !== 'function') return undefined;
+  if (!binding.client || typeof binding.client !== 'object') return undefined;
+  return binding;
+}
+
+/** @internal Returns evidence only for an exact row from the bound client. */
+export function evidenceForRow(
+  binding: ReadEvidenceBinding,
+  row: unknown,
+): CapturedReadEvidence | undefined {
+  if (typeof row !== 'object' || row === null) return undefined;
+  const evidence = binding.context.getStore().byRow.get(row);
+  return evidence?.client === binding.client ? evidence : undefined;
 }
 
 export interface PreparedReadSet {

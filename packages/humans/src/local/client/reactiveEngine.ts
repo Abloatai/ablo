@@ -77,6 +77,7 @@ import {
   commitRecordWhereSchema,
 } from '@abloatai/transaction/wire';
 import { translateHttpError } from '@abloatai/transaction/errors';
+import { kReadEvidence } from '@abloatai/transaction/internal/read-set';
 
 /**
  * What the reactive build is fed: the factory's pass over the options bag
@@ -1025,6 +1026,11 @@ export function buildReactiveEngine<const S extends SchemaRecord>(
       });
     },
   } as Ablo<S>;
+
+  Object.defineProperty(engine, kReadEvidence, {
+    value: { context: cluster.readSetContext, client: syncClient as object },
+    enumerable: false,
+  });
 
   // A model the schema projection left out answers with an error naming the
   // model and the fix, not `undefined`. An app can compile against the full

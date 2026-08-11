@@ -64,6 +64,10 @@ await ablo.weatherReports.update({
 The returned row carries opaque evidence. If it changed after the read, the
 server rejects the write instead of applying stale reasoning.
 
+[Context](/context) collects the same exact-row evidence when an action
+depends on several awaited values. External values remain informational and do
+not acquire this guarantee.
+
 Two other dispositions exist. `overwrite` applies the write with no stale check
 at all. `notify` **holds** the write, so the row is left as it stands, and hands
 back a `StaleNotification` carrying the current value for the actor to reconcile

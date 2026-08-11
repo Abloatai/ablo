@@ -60,6 +60,7 @@ import {
   capturePointRead,
   createReadSetContext,
   consumeReadSet,
+  kReadEvidence,
   prepareReadSet,
   type ReadSetContext,
 } from '../readSetContext.js';
@@ -565,6 +566,9 @@ export function createAbloHttpClient<S extends SchemaRecord>(
 
   const facade = new Proxy<Partial<AbloHttpClient<S>>>({}, {
     get(_target, prop) {
+      if (prop === kReadEvidence) {
+        return { context: readSetContext, client: clientIdentity };
+      }
       if (typeof prop !== 'string') return undefined;
       // Real protocol members pass through unchanged.
       if (isProtocolMember(prop)) {

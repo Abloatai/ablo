@@ -28,12 +28,19 @@ usage() {
 Usage:
   bash packages/ablo/scripts/release.sh prepare
   bash packages/ablo/scripts/release.sh publish
+  bash packages/ablo/scripts/release.sh publish-local [otp]
 
 prepare  Version, commit, build, and fully validate the public mirror locally.
          Nothing is pushed. Review the rendered README and release notes.
 
 publish  Publish the already-prepared state through GitHub Actions, verify npm,
          create the GitHub Release, and push the monorepo release commit.
+
+publish-local
+         Same outcome without GitHub Actions, for when the release workflow
+         cannot run. Publishes from this machine, so the version carries no npm
+         provenance attestation and that cannot be added later. Prefer `publish`
+         whenever Actions is available.
 EOF
 }
 
@@ -270,11 +277,96 @@ publish_release() {
   echo "    release: https://github.com/$MIRROR_REPO/releases/tag/v$version"
 }
 
+# Does the mirror still equal a snapshot of the CURRENT tree? `prepare` builds the
+# mirror at the moment it runs, so any commit landing afterwards leaves the public
+# artifact stale while the monorepo looks perfectly correct. 0.49.0 came within one
+# command of publishing that way: two later fixes touched published packages, so the
+# prepared mirror held an SDK that differed from the server already in production.
+#
+# This replaces asking whether HEAD's subject reads `release(ablo): x.y.z`. That
+# check is a proxy, and it fails in both directions: it blocks a legitimate publish
+# once any commit lands on top, and it passes a stale mirror so long as the subject
+# matches. The property worth enforcing is that what ships equals what was built.
+require_mirror_matches_tip() {
+  local tmp drift
+  tmp="$(mktemp -d)"
+  bash "$SCRIPT_DIR/build-workspace-mirror.sh" "$tmp/snapshot" >/dev/null
+  drift="$(diff -rq \
+    --exclude '.git' --exclude 'node_modules' --exclude 'dist' \
+    --exclude '.turbo' --exclude '*.tgz' \
+    "$tmp/snapshot" "$MIRROR_DIR" 2>&1 || true)"
+  rm -rf "$tmp"
+  if [[ -n "$drift" ]]; then
+    echo "error: the mirror is not a snapshot of the current tree" >&2
+    printf '%s\n' "$drift" | head -20 >&2
+    echo "" >&2
+    echo "       Commits landed after the mirror was built, so publishing now would" >&2
+    echo "       ship a public artifact missing them. Re-run prepare." >&2
+    exit 1
+  fi
+}
+
+publish_local() {
+  local otp="${1:-}"
+  require_clean_main
+  ensure_mirror
+
+  echo ">>> publish-local 1/5: validating the prepared state"
+  command -v gh >/dev/null 2>&1 || { echo "error: gh not installed" >&2; exit 1; }
+  gh auth status >/dev/null 2>&1 || { echo "error: gh not authenticated" >&2; exit 1; }
+
+  local version mirror_version mirror_sha
+  version="$(release_version)"
+  mirror_version="$(node -p "require('$MIRROR_DIR/packages/ablo/package.json').version")"
+  if [[ "$mirror_version" != "$version" ]]; then
+    echo "error: monorepo version $version and mirror version $mirror_version differ" >&2
+    echo "       run prepare before publishing" >&2
+    exit 1
+  fi
+  require_mirror_matches_tip
+  echo "    mirror matches the current tree at $version"
+
+  echo ">>> publish-local 2/5: pushing the reviewed mirror"
+  git -C "$MIRROR_DIR" fetch origin main --quiet
+  mirror_sha="$(git -C "$MIRROR_DIR" rev-parse HEAD)"
+  if [[ "$(git -C "$MIRROR_DIR" rev-parse origin/main)" != "$mirror_sha" ]]; then
+    git -C "$MIRROR_DIR" push origin main
+  else
+    echo "    mirror commit is already on origin"
+  fi
+
+  # Publishing runs INSIDE the mirror, against the same script release.yml runs,
+  # so the local path cannot drift from the CI one.
+  echo ">>> publish-local 3/5: publishing to npm from the mirror"
+  if [[ -n "$otp" ]]; then
+    (cd "$MIRROR_DIR" && bash packages/ablo/scripts/publish-packages.sh --local --otp "$otp")
+  else
+    (cd "$MIRROR_DIR" && bash packages/ablo/scripts/publish-packages.sh --local)
+  fi
+
+  echo ">>> publish-local 4/5: creating the GitHub Release"
+  verify_npm_versions "$version"
+  bash "$SCRIPT_DIR/publish-release.sh" "$version" "$mirror_sha"
+
+  echo ">>> publish-local 5/5: pushing the monorepo release commit"
+  if [[ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]]; then
+    git push origin main
+  else
+    echo "    monorepo release commit is already on origin"
+  fi
+
+  echo ""
+  echo ">>> DONE: @abloatai/ablo@$version (published locally, no provenance)"
+  echo "    npm:     https://www.npmjs.com/package/@abloatai/ablo"
+  echo "    release: https://github.com/$MIRROR_REPO/releases/tag/v$version"
+}
+
 cd "$MONOREPO_ROOT"
 
 case "${1:-}" in
   prepare) prepare_release ;;
   publish) publish_release ;;
+  publish-local) publish_local "${2:-}" ;;
   -h|--help|help) usage ;;
   *)
     usage >&2

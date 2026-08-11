@@ -18,6 +18,7 @@ import {
   readTool,
   updateTool,
 } from '../src/ai-sdk.js';
+import { context } from '../src/context.js';
 
 describe('@abloatai/ablo public entry points', () => {
   it('publishes the intentional branded subpaths', () => {
@@ -25,7 +26,9 @@ describe('@abloatai/ablo public entry points', () => {
       '.',
       './ai-sdk',
       './auth',
+      './batching',
       './client',
+      './context',
       './coordination',
       './react',
       './schema',
@@ -70,5 +73,9 @@ describe('@abloatai/ablo public entry points', () => {
     expect(typeof createTool).toBe('function');
     expect(typeof updateTool).toBe('function');
     expect(typeof deleteTool).toBe('function');
+  });
+
+  it('serves context assembly without occupying the model namespace', () => {
+    expect(typeof context).toBe('function');
   });
 });

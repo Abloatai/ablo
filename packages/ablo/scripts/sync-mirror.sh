@@ -40,11 +40,16 @@ trap 'rm -rf "$TMP"' EXIT
 bash "$SCRIPT_DIR/build-workspace-mirror.sh" "$TMP/snapshot"
 
 # 2. Reset the clone to the published main, then overlay the snapshot. `--delete`
-#    drops files no longer in the workspace; `.git` alone stays untouched.
+#    drops files no longer in the workspace; `.git` and `node_modules` stay.
+#    `node_modules` is not part of the snapshot, so without excluding it every
+#    re-sync deleted the clone's install, and the next publish died with
+#    `sh: tsc: command not found` after prepack's own `clean` had removed dist.
+#    Dependency correctness stays with `npm ci`, which publish-packages.sh runs
+#    when the install is missing; rsync has no business managing it.
 git -C "$MIRROR_DIR" fetch origin main --quiet
 git -C "$MIRROR_DIR" checkout main --quiet 2>/dev/null || git -C "$MIRROR_DIR" checkout -B main origin/main --quiet
 git -C "$MIRROR_DIR" reset --hard origin/main --quiet
-rsync -a --delete --exclude '.git' "$TMP/snapshot/" "$MIRROR_DIR/"
+rsync -a --delete --exclude '.git' --exclude 'node_modules' "$TMP/snapshot/" "$MIRROR_DIR/"
 
 # 3. Commit if anything changed. The version gate lives in the mirror's
 #    release.yml, so a normal commit publishes only when the version is new.

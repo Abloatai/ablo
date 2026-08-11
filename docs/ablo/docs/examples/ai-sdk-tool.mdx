@@ -85,3 +85,7 @@ model should skip work already owned by someone else, or `strategy: 'queue'`
 when it should wait in Ablo's server-owned FIFO claim queue. The same entrypoint
 also exports `readTool`, `createTool`, and `deleteTool`; deletes require AI SDK
 approval unless the application explicitly disables it.
+
+When the model call needs several current reads rather than one model tool,
+[Context](/context) assembles them and formats an optional user message
+without taking ownership of the AI SDK loop.

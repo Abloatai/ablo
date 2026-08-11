@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.50.0
+
+### Context can travel from reads to a model and back to a write
+
+`context({ ablo, data })` brings together the information an action needs. It
+awaits the values the application selected, returns them as typed `ctx.data`,
+and carries exact Ablo rows into `ctx.reads` for the write that follows.
+
+```ts
+const ctx = await context({
+  ablo,
+  data: {
+    task: ablo.tasks.get({ id: taskId }),
+    documents: ablo.documents.list({ where: { taskId } }),
+    memory: loadMemories(taskId),
+  },
+});
+
+await ablo.tasks.update({
+  id: taskId,
+  data: result,
+  reads: ctx.reads,
+});
+```
+
+If an included Ablo row moved while the caller was thinking, the write is
+refused. External memory, retrieval, extraction, and conversation values pass
+through without acquiring that guarantee. `ctx.sources` keeps the difference
+visible, including a `mixed` result when one value contains both kinds.
+
+The optional `contextMessage()` formatter produces a user message for AI SDK.
+Ablo does not take over the model loop, history, token policy, search, or memory.
+The helper is a standalone `@abloatai/ablo/context` export, so `context` remains
+available as a schema model name.
+
 ## 0.49.0
 
 ### An agent can tell Ablo what it read before it writes

@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/ablo",
-  "version": "0.49.0",
+  "version": "0.50.0",
   "description": "The public Ablo SDK for coordinated reads, commits, claims, observation, and reactive applications.",
   "license": "Apache-2.0",
   "type": "module",
@@ -82,11 +82,23 @@
       "import": "./dist/coordination.js",
       "default": "./dist/coordination.js"
     },
+    "./batching": {
+      "@ablo/source": "./src/batching.ts",
+      "types": "./dist/batching.d.ts",
+      "import": "./dist/batching.js",
+      "default": "./dist/batching.js"
+    },
     "./ai-sdk": {
       "@ablo/source": "./src/ai-sdk.ts",
       "types": "./dist/ai-sdk.d.ts",
       "import": "./dist/ai-sdk.js",
       "default": "./dist/ai-sdk.js"
+    },
+    "./context": {
+      "@ablo/source": "./src/context.ts",
+      "types": "./dist/context.d.ts",
+      "import": "./dist/context.js",
+      "default": "./dist/context.js"
     },
     "./wire": {
       "@ablo/source": "./src/wire.ts",
@@ -116,7 +128,7 @@
     "prepack": "npm run build && node scripts/strip-source-condition.mjs",
     "postpack": "node scripts/restore-source-condition.mjs",
     "pack:check": "node scripts/pack-check.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p typetests/tsconfig.json",
     "test": "vitest run",
     "generate:errors": "tsx scripts/generate-error-docs.mts",
     "lint:errors": "tsx scripts/check-error-docs.mts",
@@ -141,8 +153,9 @@
     "directory": "packages/ablo"
   },
   "dependencies": {
-    "@abloatai/humans": "^0.49.0",
-    "@abloatai/transaction": "^0.49.0"
+    "@abloatai/humans": "^0.50.0",
+    "@abloatai/transaction": "^0.50.0",
+    "zod": "^4.4.3"
   },
   "peerDependencies": {
     "ai": "^6.0.0 || ^7.0.0",

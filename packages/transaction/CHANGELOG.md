@@ -1,20 +1,6 @@
 # @abloatai/transaction
 
-## 0.49.0
-
-### Minor Changes
-
-- a409395: Release the coordination core as one versioned SDK cut: exact returned rows as
-  explicit write dependencies, fenced claims for expensive turns, durable
-  paginated commit records, server-derived effective authority, and actionable
-  capability denials. No execution enclosure or Node-only client entry point is
-  introduced.
-
-### Patch Changes
-
-- 3f145a3: Resolve lowercased wire model aliases in direct Postgres mutations so camelCase schema keys correlate with their canonical typenames.
-
-## Unreleased — coordination core
+## 0.50.0
 
 - Make returned rows opaque read-evidence handles. Attach dependencies directly
   to a write with `reads: [task, policy]`; no execution enclosure or async
@@ -29,6 +15,20 @@
   `20260805120000_canonical_commit_status` then
   `20260805130000_complete_commit_ledger` database migrations. There is no
   runtime decoder for pre-migration execution receipts.
+
+## 0.49.0
+
+### Minor Changes
+
+- a409395: Release the coordination core as one versioned SDK cut: exact returned rows as
+  explicit write dependencies, fenced claims for expensive turns, durable
+  paginated commit records, server-derived effective authority, and actionable
+  capability denials. No execution enclosure or Node-only client entry point is
+  introduced.
+
+### Patch Changes
+
+- 3f145a3: Resolve lowercased wire model aliases in direct Postgres mutations so camelCase schema keys correlate with their canonical typenames.
 
 ## 0.48.0
 

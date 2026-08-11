@@ -37,7 +37,25 @@ for (const packageName of packageNames) {
   const file = resolve(packagesDir, packageName, 'CHANGELOG.md');
   const source = readFileSync(file, 'utf8');
   const { prefix, sections } = parseChangelog(source, file);
-  const unreleased = sections.find((section) => section.title === 'Unreleased');
+  // The heading carries an optional trailing label, as in
+  // `## Unreleased — coordination core`. Comparing the title for exact equality
+  // with 'Unreleased' skipped those, and because a missing section is a normal
+  // release rather than an error, the skip was silent: the hand-written note
+  // stayed in the file and Changesets' generated body shipped in its place.
+  // Absence still means "no hand-written note for this release" and is fine;
+  // two of them is not, because only the first would be consumed and the other
+  // would publish as its own changelog entry.
+  const candidates = sections.filter((section) =>
+    /^Unreleased\b/.test(section.title),
+  );
+  if (candidates.length > 1) {
+    throw new Error(
+      `${file}: found ${candidates.length} Unreleased sections ` +
+        `(${candidates.map((section) => `"${section.title}"`).join(', ')}); ` +
+        'keep exactly one so the release body is unambiguous',
+    );
+  }
+  const unreleased = candidates[0];
 
   if (!unreleased) continue;
   if (!unreleased.body) {

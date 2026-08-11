@@ -105,6 +105,11 @@ Ablo supplies `readTool`, `createTool`, `updateTool`, and `deleteTool` over the
 same authoritative resources. AI SDK keeps ownership of the model loop and tool
 execution.
 
+For a model call that needs several reads plus application-owned retrieval or
+memory, [`context()`](./docs/context.md) awaits the selected values and carries
+the exact Ablo rows into the write's `reads` option. It does not add search,
+memory, or a model runtime.
+
 Use `@abloatai/ablo` for agents and backend code,
 `@abloatai/ablo/client` for live applications, and
 `@abloatai/ablo/react` for React. All entrypoints share the same schema,

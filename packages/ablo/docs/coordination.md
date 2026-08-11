@@ -43,6 +43,10 @@ changed.” The exact returned objects carry opaque evidence; no watermark is
 exposed. Same-row and cross-row dependencies use one shape. Incidental reads do
 nothing, and cloned, fabricated, or cross-client rows fail locally.
 
+When one decision needs several Ablo reads plus application-owned memory or
+retrieval results, [Context](./context.md) assembles those values and returns
+the exact authoritative rows as `ctx.reads`.
+
 An `undefined` result cannot carry evidence. Guarded absence therefore remains
 a separate low-level design; do not treat a missing read as an automatic
 create-if-absent condition.

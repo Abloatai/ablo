@@ -8,11 +8,16 @@ export {
   createReadSetContext,
   commitRecordIdentity,
   consumeReadSet,
+  evidenceForRow,
+  kReadEvidence,
   prepareReadSet,
   publishCommitRecord,
+  readEvidenceBinding,
 } from '../readSetContext.js';
 export { recordWebSocketCommitReceipt } from '../commitRecordRuntime.js';
 export type {
+  CapturedReadEvidence,
   PreparedReadSet,
+  ReadEvidenceBinding,
   ReadSetContext,
 } from '../readSetContext.js';

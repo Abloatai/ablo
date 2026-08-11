@@ -326,12 +326,9 @@ interface RoleReplRow {
 interface PublicationRow {
   puballtables: boolean;
 }
-/**
- * A published table whose REPLICA IDENTITY can't carry a stable key for
- * UPDATE/DELETE (`relreplident = 'n'` NOTHING, or `'d'` DEFAULT on a table
- * with no primary key). `'f'` (FULL) and `'i'` (USING INDEX) are usable, as is
- * `'d'` when a primary key exists — the SQL below already excludes those.
- */
+/** A published table and its non-FULL REPLICA IDENTITY. This consumer folds
+ * complete rows, so a key-only DEFAULT/INDEX identity is insufficient when
+ * Postgres omits an unchanged large/TOASTed value from an UPDATE. */
 interface BadReplicaIdentityRow {
   table_name: string;
   relreplident: string;
@@ -477,16 +474,7 @@ export async function probeReadiness(
          JOIN pg_class c ON c.relname = pt.tablename
          JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = pt.schemaname
         WHERE pt.pubname = $1 AND pt.schemaname = $2
-          AND (
-            c.relreplident = 'n'
-            OR (
-              c.relreplident = 'd'
-              AND NOT EXISTS (
-                SELECT 1 FROM pg_index i
-                 WHERE i.indrelid = c.oid AND i.indisprimary
-              )
-            )
-          )`,
+          AND c.relreplident <> 'f'`,
       [publication, schema] as never[]
     );
     const relevant = coordinated
@@ -494,14 +482,14 @@ export async function probeReadiness(
       : badRows;
     items.push(
       relevant.length === 0
-        ? { ok: true, label: `all published tables have a usable REPLICA IDENTITY` }
+        ? { ok: true, label: `all published tables use REPLICA IDENTITY FULL` }
         : {
             ok: false,
             label: `${relevant.length} published table${relevant.length === 1 ? '' : 's'} cannot replicate UPDATE/DELETE`,
             fix: relevant
               .map(
                 (r) =>
-                  `${r.table_name}: add a PRIMARY KEY, or ALTER TABLE ${quoteIdent(schema)}.${quoteIdent(r.table_name)} REPLICA IDENTITY FULL;`
+                  `${r.table_name}: ALTER TABLE ${quoteIdent(schema)}.${quoteIdent(r.table_name)} REPLICA IDENTITY FULL;`
               )
               .join('\n'),
           }

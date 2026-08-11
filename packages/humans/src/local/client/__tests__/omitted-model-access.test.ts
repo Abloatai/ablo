@@ -16,6 +16,7 @@ import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { model } from '@abloatai/transaction/schema/model';
 import { selectModels } from '@abloatai/transaction/schema/select';
 import { AbloError } from '@abloatai/transaction/errors';
+import { kReadEvidence } from '@abloatai/transaction/internal/read-set';
 import { z } from 'zod';
 
 const full = defineSchema({
@@ -69,6 +70,20 @@ describe('a model the schema projection left out', () => {
       expect(() => Object.keys(ablo)).not.toThrow();
       expect(() => ({ ...(ablo as object) })).not.toThrow();
       expect(Object.keys(ablo)).not.toContain('invoices');
+    } finally {
+      await ablo.dispose();
+    }
+  });
+
+  it('exposes read evidence only through the private non-enumerable symbol', async () => {
+    const ablo = makeProjected();
+    try {
+      expect(Reflect.get(ablo, kReadEvidence)).toMatchObject({
+        context: expect.objectContaining({ getStore: expect.any(Function) }),
+        client: expect.any(Object),
+      });
+      expect(Object.getOwnPropertyDescriptor(ablo, kReadEvidence)?.enumerable).toBe(false);
+      expect(Object.keys(ablo)).not.toContain(String(kReadEvidence));
     } finally {
       await ablo.dispose();
     }

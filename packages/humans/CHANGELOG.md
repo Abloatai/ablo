@@ -1,5 +1,19 @@
 # @abloatai/humans
 
+## 0.50.0
+
+### Minor Changes
+
+- 6864853: Add the standalone `context()` structure for recursively awaited application
+  values, exact Ablo read evidence, honest source guarantees, and optional AI SDK
+  formatting. Search, memory, model execution, and conversation lifecycle remain
+  application or provider concerns.
+
+### Patch Changes
+
+- Updated dependencies [6864853]
+  - @abloatai/transaction@0.50.0
+
 ## 0.49.0
 
 ### Minor Changes

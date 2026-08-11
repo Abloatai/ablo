@@ -285,6 +285,37 @@ describe('kyselyDataSource', () => {
     expect(update?.wheres).toEqual([['id', '=', 't1']]);
   });
 
+  it.each(['UPDATE', 'DELETE'] as const)(
+    'rolls back a %s that matched no row before emitting correlation evidence',
+    async (type) => {
+      const db = new FakeKysely([[{ client_tx_id: `corr_missing_${type}` }], []]);
+      const adapter = kyselyDataSource(db, schema);
+
+      await expect(
+        adapter.commit({
+          correlationId: `corr_missing_${type}`,
+          operations: [
+            {
+              type,
+              model: 'task',
+              id: 'missing',
+              ...(type === 'UPDATE' ? { input: { title: 'never written' } } : {}),
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({
+        code: type === 'UPDATE' ? 'mutate_update_entity_not_found' : 'entity_not_found',
+      });
+      expect(
+        db.calls.some(
+          (call) =>
+            call.kind === 'raw' &&
+            String(call.table).includes('pg_logical_emit_message'),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it('replays a cached response after losing the ledger reservation', async () => {
     const cachedRows = [{ id: 't1', title: 'A' }];
     const db = new FakeKysely([

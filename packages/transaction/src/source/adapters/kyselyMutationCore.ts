@@ -203,7 +203,13 @@ export function createKyselyMutationCore<S extends SchemaRecord>(
           .where('id', '=', id)
           .returningAll()
           .execute();
-        return deleted[0] ? toFields(columns, deleted[0]) : { id };
+        if (!deleted[0]) {
+          throw new AbloValidationError(
+            `${operation.type} on "${operation.model}/${id}" matched no source row`,
+            { code: 'entity_not_found' },
+          );
+        }
+        return toFields(columns, deleted[0]);
       }
 
       if (operation.type === 'CREATE') {
@@ -226,7 +232,13 @@ export function createKyselyMutationCore<S extends SchemaRecord>(
         .where('id', '=', id)
         .returningAll()
         .execute();
-      return updated[0] ? toFields(columns, updated[0]) : { id, ...input };
+      if (!updated[0]) {
+        throw new AbloValidationError(
+          `${operation.type} on "${operation.model}/${id}" matched no source row`,
+          { code: 'mutate_update_entity_not_found' },
+        );
+      }
+      return toFields(columns, updated[0]);
     },
   };
 }
