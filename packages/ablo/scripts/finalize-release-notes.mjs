@@ -33,6 +33,47 @@ function parseChangelog(source, file) {
   return { prefix, sections };
 }
 
+function renderChangelog(prefix, sections) {
+  return `${[
+    prefix,
+    ...sections.map(
+      (section) => `## ${section.title}\n\n${section.body}`.trimEnd(),
+    ),
+  ].join('\n\n')}\n`;
+}
+
+/** Changesets writes maintainer provenance into package changelogs. Keep useful
+ * package-local notes, but remove commit IDs and lockstep dependency sections:
+ * neither belongs in customer-facing prose. */
+function cleanGeneratedBody(body) {
+  const withoutIds = body
+    .replace(/^(\s*-\s+)[0-9a-f]{7,40}:\s+/gm, '$1')
+    .replace(/^(\s*- Updated dependencies) \[[0-9a-f, ]+\]$/gm, '$1');
+  const matches = [...withoutIds.matchAll(/^### (.+)$/gm)];
+  if (matches.length === 0) return withoutIds.trim();
+
+  const prefix = withoutIds.slice(0, matches[0].index).trim();
+  const sections = matches.map((match, index) => {
+    const start = match.index + match[0].length;
+    const end = matches[index + 1]?.index ?? withoutIds.length;
+    return { title: match[1], body: withoutIds.slice(start, end).trim() };
+  });
+  const useful = sections.filter((section) => {
+    if (section.title !== 'Patch Changes') return true;
+    const lines = section.body.split('\n').filter((line) => line.trim());
+    return !(
+      lines.length > 0 &&
+      lines.every((line) =>
+        /^- Updated dependencies$/.test(line) || /^\s+- @[^\s]+@\S+$/.test(line),
+      )
+    );
+  });
+  return [
+    prefix,
+    ...useful.map((section) => `### ${section.title}\n\n${section.body}`),
+  ].filter(Boolean).join('\n\n').trim();
+}
+
 for (const packageName of packageNames) {
   const file = resolve(packagesDir, packageName, 'CHANGELOG.md');
   const source = readFileSync(file, 'utf8');
@@ -57,25 +98,29 @@ for (const packageName of packageNames) {
   }
   const unreleased = candidates[0];
 
-  if (!unreleased) continue;
-  if (!unreleased.body) {
-    throw new Error(`${file}: Unreleased section is empty`);
-  }
-
   const release = sections.find((section) => section.title === version);
   if (!release) {
     throw new Error(`${file}: Changesets did not create a ${version} section`);
   }
 
+  if (!unreleased) {
+    if (packageName === 'ablo') {
+      throw new Error(
+        `${file}: missing an Unreleased section for ${version}; ` +
+          'write the public release note before prepare so Changesets metadata ' +
+          'cannot become customer-facing prose',
+      );
+    }
+    release.body = cleanGeneratedBody(release.body);
+    writeFileSync(file, renderChangelog(prefix, sections));
+    continue;
+  }
+  if (!unreleased.body) {
+    throw new Error(`${file}: Unreleased section is empty`);
+  }
+
   release.body = unreleased.body;
   const finalized = sections.filter((section) => section !== unreleased);
-  const rendered = [
-    prefix,
-    ...finalized.map(
-      (section) => `## ${section.title}\n\n${section.body}`.trimEnd(),
-    ),
-  ].join('\n\n');
-
-  writeFileSync(file, `${rendered}\n`);
+  writeFileSync(file, renderChangelog(prefix, finalized));
   console.log(`finalized ${packageName} release notes for ${version}`);
 }

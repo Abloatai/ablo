@@ -1,24 +1,30 @@
 ---
 title: "v0.51.0"
 type: changelog
+date: 2026-08-11T16:57:36.625Z
 changelog:
   version: "0.51.0"
-  category: "Features"
+  category: "Fixes"
 ---
 
-### Minor Changes
+### One platform schema can serve every customer organization
 
-- 3a25ab4: Default cross-organization user sessions to the platform key's schema project.
-  Customer data remains isolated in the target organization, while one pushed
-  schema can describe every customer tenant. `sessions.create` also accepts an
-  explicit `schemaProject` override for migrations and advanced routing.
+Platforms no longer need to copy the same schema into every customer
+organization. When a platform key creates a session for another organization,
+Ablo now reads the schema from the platform's project while keeping every row
+inside the customer's organization.
 
-  The sessions guide now distinguishes policy-scoped customers from structurally
-  isolated customer organizations and makes clear that sync-group routing is not
-  read authorization.
+```ts
+const { token } = await ablo.sessions.create({
+  user: { id: userId },
+  organizationId: customerOrganizationId,
+  can: { tasks: ['read', 'update'] },
+});
+```
 
-### Patch Changes
+Most platforms need no schema option at all. Migrations and advanced routing can
+still select one explicitly with `schemaProject`.
 
-- Updated dependencies [3a25ab4]
-  - @abloatai/transaction@0.51.0
-  - @abloatai/humans@0.51.0
+The sessions guide now draws a firm line between policy-scoped customers and
+separate customer organizations. Sync groups decide which changes travel; they
+do not authorize reads.

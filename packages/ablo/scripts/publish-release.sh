@@ -40,10 +40,19 @@ if [ -z "${NOTES//[$'\n\t ']/}" ]; then
   exit 1
 fi
 
-# Release creation is idempotent so a publish interrupted after this point can
-# be resumed safely.
+# Release creation is idempotent, and its prose is convergent: rerunning after a
+# changelog correction updates the existing body instead of preserving stale
+# generated notes forever.
 if gh release view "$TAG" --repo "$MIRROR_REPO" >/dev/null 2>&1; then
-  echo "Release $TAG already exists on $MIRROR_REPO."
+  CURRENT_NOTES="$(gh release view "$TAG" --repo "$MIRROR_REPO" --json body -q .body)"
+  if [ "$CURRENT_NOTES" != "$NOTES" ]; then
+    echo "Updating release $TAG on $MIRROR_REPO from the current changelog..."
+    printf '%s\n' "$NOTES" | gh release edit "$TAG" \
+      --repo "$MIRROR_REPO" \
+      --notes-file -
+  else
+    echo "Release $TAG already matches the current changelog."
+  fi
   echo "Done: https://github.com/$MIRROR_REPO/releases/tag/$TAG"
   exit 0
 fi
