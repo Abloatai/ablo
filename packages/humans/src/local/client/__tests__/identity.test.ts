@@ -320,7 +320,7 @@ describe('resolveParticipantIdentity — self-derived branch (cap token, unknown
         projectId: null,
         branchId: null,
         syncGroups: ['org:org_acme'],
-        operations: ['task.read', 'task.update'],
+        operations: ['item.read', 'item.update'],
         participantKind: 'agent',
         participantId: 'agent_research',
         deliveryPartition: null,
@@ -356,7 +356,7 @@ describe('resolveParticipantIdentity — self-derived branch (cap token, unknown
       participantKind: 'agent',
     });
     expect(result.authority).toMatchObject({
-      operations: ['task.read', 'task.update'],
+      operations: ['item.read', 'item.update'],
       participantId: 'agent_research',
     });
     expect(result.refreshScheduler).toBeNull();

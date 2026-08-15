@@ -28,10 +28,10 @@ export interface TestWrapperOptions {
  * import { createReactTestWrapper, createMockSyncStore } from '../../src/testing';
  *
  * const mockStore = createMockSyncStore();
- * mockStore.setModels(Task, [task1, task2]);
+ * mockStore.setModels(Item, [item1, item2]);
  *
  * const { result } = renderHook(
- *   () => useModels(Task),
+ *   () => useModels(Item),
  *   { wrapper: createReactTestWrapper({ store: mockStore }) }
  * );
  */
@@ -52,20 +52,20 @@ export function createReactTestWrapper(
  * wraps the hook in the package's `SyncProvider` and a mock store for you,
  * so you don't build the wrapper by hand.
  *
- * `@testing-library/react` is loaded lazily, so projects that don't use
+ * `@testing-library/react` is loaded lazily, so workspaces that don't use
  * these helpers never have to install it.
  *
  * @example
  * import { renderSyncHook, createMockSyncStore } from '../../src/testing';
  *
  * const mockStore = createMockSyncStore();
- * mockStore.addModel(Task, myTask);
+ * mockStore.addModel(Item, myItem);
  *
  * const { result } = renderSyncHook(
- *   () => useModel(Task, myTask.id),
+ *   () => useModel(Item, myItem.id),
  *   { store: mockStore }
  * );
- * expect(result.current?.id).toBe(myTask.id);
+ * expect(result.current?.id).toBe(myItem.id);
  */
 export function renderSyncHook<TProps, TResult>(
   callback: (props: TProps) => TResult,
@@ -75,7 +75,7 @@ export function renderSyncHook<TProps, TResult>(
   rerender: (props?: TProps) => void;
   unmount: () => void;
 } {
-  // Load @testing-library/react lazily so projects that never call these
+  // Load @testing-library/react lazily so workspaces that never call these
   // helpers don't have to install it.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const rtl = require('@testing-library/react') as typeof import('@testing-library/react');

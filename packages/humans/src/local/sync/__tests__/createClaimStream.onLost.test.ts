@@ -76,7 +76,7 @@ describe('createClaimStream.onLost', () => {
     ws.emit('claim_lost', {
       claimId: 'i1',
       reason: 'preempted',
-      target: { entityType: 'task', entityId: 't1' },
+      target: { entityType: 'item', entityId: 't1' },
     });
 
     expect(seen).toHaveLength(1);
@@ -97,7 +97,7 @@ describe('createClaimStream.onLost', () => {
     ws.emit('claim_lost', {
       claimId: 'i2',
       reason: 'expired',
-      target: { entityType: 'task', entityId: 't2' },
+      target: { entityType: 'item', entityId: 't2' },
     });
 
     expect(seen).toHaveLength(1);
@@ -137,7 +137,7 @@ describe('createClaimStream.onLost', () => {
         payload: {
           claimId: 'i-invalid-reason',
           reason: 'disappeared',
-          target: { entityType: 'task', entityId: 't1' },
+          target: { entityType: 'item', entityId: 't1' },
         },
       });
     }).toThrow(/does not match the protocol/);
@@ -149,7 +149,7 @@ describe('createClaimStream.onLost', () => {
         payload: {
           claimId: 'i-incomplete-target',
           reason: 'expired',
-          target: { entityType: 'task' },
+          target: { entityType: 'item' },
         },
       });
     }).toThrow(/does not match the protocol/);
@@ -168,7 +168,7 @@ describe('createClaimStream.onLost', () => {
     ws.emit('claim_lost', {
       claimId: 'i3',
       reason: 'preempted',
-      target: { entityType: 'task', entityId: 't3' },
+      target: { entityType: 'item', entityId: 't3' },
     });
 
     expect(seen).toHaveLength(0);

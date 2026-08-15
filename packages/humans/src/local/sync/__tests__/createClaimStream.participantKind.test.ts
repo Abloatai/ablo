@@ -38,7 +38,7 @@ function presenceFrameWithClaim(overrides: Record<string, unknown>) {
     activeClaims: [
       {
         claimId: 'i1',
-        entityType: 'Task',
+        entityType: 'Item',
         entityId: 't1',
         description: 'editing',
         declaredAt: Date.now(),

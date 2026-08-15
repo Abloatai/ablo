@@ -46,7 +46,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const { token, expiresAt } = await sync.sessions.create({
     user: { id: user.id },
-    can: { tasks: ['read', 'create', 'update'] },
+    can: { records: ['read', 'create', 'update'] },
   });
   return Response.json(
     credentialEndpointSuccessSchema.parse({

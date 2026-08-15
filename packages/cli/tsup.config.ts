@@ -3,6 +3,7 @@ import { defineConfig } from 'tsup';
 const embeddedDsn = process.env.ABLO_CLI_SENTRY_DSN ?? '';
 const embeddedRelease =
   process.env.ABLO_CLI_RELEASE ?? `@abloatai/cli@${process.env.npm_package_version ?? 'development'}`;
+const embeddedVersion = process.env.npm_package_version ?? 'development';
 
 /**
  * Bundles the `ablo` CLI into a single self-contained `dist/cli.cjs` — this
@@ -74,5 +75,6 @@ export default defineConfig({
   define: {
     'process.env.ABLO_CLI_EMBEDDED_SENTRY_DSN': JSON.stringify(embeddedDsn),
     'process.env.ABLO_CLI_EMBEDDED_RELEASE': JSON.stringify(embeddedRelease),
+    'process.env.ABLO_CLI_EMBEDDED_VERSION': JSON.stringify(embeddedVersion),
   },
 });

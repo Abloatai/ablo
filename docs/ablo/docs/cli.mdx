@@ -192,7 +192,7 @@ streams production. You never pass a project or branch. Follows by default;
 
 ```bash
 npx ablo logs                      # last 50, then stream
-npx ablo logs -n 100 --model task  # backfill 100, one model
+npx ablo logs -n 100 --model record  # backfill 100, one model
 npx ablo logs --since 15m --json   # last 15m as NDJSON, then stream
 ```
 
@@ -240,7 +240,7 @@ DATABASE_URL=postgres://… npx ablo check
 ```
 
 ```text
-  ✓ tasks     → tasks (id, organization_id ok)
+  ✓ records     → records (id, organization_id ok)
   ✗ projects  → projects
       • missing "organization_id" — add it, or move this model behind a Data Source
   2 models · 1 ok · 1 error
@@ -311,7 +311,7 @@ that broke and the Postgres SQLSTATE, not just "migration failed".
 ```txt
 [migrate] migration plan failed {
   code: 'migration_failed',
-  failedStatement: 'ALTER TABLE "public"."tasks" RENAME COLUMN a TO b;',
+  failedStatement: 'ALTER TABLE "public"."records" RENAME COLUMN a TO b;',
   failedStatementIndex: 4,
   pgCode: '42P01',
   durationMs: 133

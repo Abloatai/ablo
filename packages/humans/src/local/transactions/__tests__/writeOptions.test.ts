@@ -17,7 +17,7 @@ import {
 } from '../mutations/MutationQueue.js';
 import { createTestContext } from '../../testing/mocks/MockSyncContext.js';
 import type { TestContextResult } from '../../testing/mocks/MockSyncContext.js';
-import { createTaskFixture } from '../../testing/fixtures/models.js';
+import { createItemFixture } from '../../testing/fixtures/models.js';
 import { waitFor } from '../../testing/helpers/wait.js';
 import type { MutationOperation } from '../../interfaces/index.js';
 import { assertWriteOptions } from '@abloatai/transaction/resources/writeOptionsSchema';
@@ -47,9 +47,9 @@ describe('MutationQueue write-options threading', () => {
       .flatMap((call) => call.operations ?? []);
 
   it('carries idempotencyKey and label onto the wire operation options', async () => {
-    const task = createTaskFixture();
+    const item = createItemFixture();
 
-    await queue.create(task, userContext, {
+    await queue.create(item, userContext, {
       idempotencyKey: 'idem_test_1',
       label: 'nightly cleanup',
     });
@@ -64,9 +64,9 @@ describe('MutationQueue write-options threading', () => {
   });
 
   it('carries the stale guard (readAt/onStale) alongside idempotency on one op', async () => {
-    const task = createTaskFixture();
+    const item = createItemFixture();
 
-    await queue.create(task, userContext, {
+    await queue.create(item, userContext, {
       idempotencyKey: 'idem_test_2',
       label: 'claimed write',
       readAt: 42,
@@ -85,9 +85,9 @@ describe('MutationQueue write-options threading', () => {
   });
 
   it('carries claim identity beside the fencing token on the queued operation', async () => {
-    const task = createTaskFixture();
+    const item = createItemFixture();
 
-    await queue.create(task, userContext, {
+    await queue.create(item, userContext, {
       claimRef: { id: 'claim_1' },
       fenceToken: 7,
     });
@@ -100,9 +100,9 @@ describe('MutationQueue write-options threading', () => {
   });
 
   it('omits the options slot entirely when no idempotency fields are set', async () => {
-    const task = createTaskFixture();
+    const item = createItemFixture();
 
-    await queue.create(task, userContext, { readAt: 7, onStale: 'notify' });
+    await queue.create(item, userContext, { readAt: 7, onStale: 'notify' });
 
     await waitFor(() => committedOperations().length > 0);
     const [op] = committedOperations();
@@ -113,9 +113,9 @@ describe('MutationQueue write-options threading', () => {
   });
 
   it('opting out with idempotencyKey: null does not stamp an options slot', async () => {
-    const task = createTaskFixture();
+    const item = createItemFixture();
 
-    await queue.create(task, userContext, { idempotencyKey: null });
+    await queue.create(item, userContext, { idempotencyKey: null });
 
     await waitFor(() => committedOperations().length > 0);
     const [op] = committedOperations();
@@ -135,7 +135,7 @@ describe('writeOptionsSchema — THE runtime write-options contract', () => {
         onStale: 'reject',
         claim: { id: 'claim_1' },
         claimRef: { id: 'claim_1' },
-        reads: [{ model: 'tasks', id: 'task_1', readAt: 42 }],
+        reads: [{ model: 'items', id: 'item_1', readAt: 42 }],
         track: [{ group: 'report:abc', readAt: 42 }],
       }); },
     ).not.toThrow();
@@ -154,14 +154,14 @@ describe('writeOptionsSchema — THE runtime write-options contract', () => {
 
   it('rejects a misspelled onStale with a typed, param-targeted error', () => {
     try {
-      assertWriteOptions({ onStale: 'rejct' }, 'task write');
+      assertWriteOptions({ onStale: 'rejct' }, 'item write');
       throw new Error('expected assertWriteOptions to throw');
     } catch (err) {
       expect(err).toBeInstanceOf(AbloValidationError);
       const abloErr = err as AbloValidationError;
       expect(abloErr.code).toBe('write_options_invalid');
       expect(abloErr.param).toBe('onStale');
-      expect(abloErr.message).toContain('task write');
+      expect(abloErr.message).toContain('item write');
     }
   });
 

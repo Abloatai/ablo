@@ -44,7 +44,7 @@
  *    the factory and defers the cross-reference check to schema assembly.
  *
  *  - A query carries no `name` until `defineQueries()` assigns one from its
- *    record key — the same pattern `defineSchema({ tasks: model(...) })`
+ *    record key — the same pattern `defineSchema({ items: model(...) })`
  *    uses, where the model's name is the record key rather than a field on
  *    the factory.
  *

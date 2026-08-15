@@ -170,6 +170,7 @@ export interface CommitOperationInput {
   readonly model: string;
   readonly id?: string | null;
   readonly data?: Record<string, unknown> | null;
+  readonly where?: Record<string, unknown> | null;
   readonly transactionId?: string | null;
   /** Claim identity derived from a held claim; not an application id. */
   readonly claimId?: string | null;
@@ -432,8 +433,8 @@ export interface CreateUserSessionParams<S extends SchemaRecord> {
 
 /** Mint params for a scoped **agent** session — mints a restricted `rk_` token
  *  gated to exactly the operations named in `can`. `can` is typed off your
- *  schema (no magic `'task.update'` strings): `{ Task: ['update'], Report: ['read'] }`
- *  — the SDK serializes each entry to the wire allowlist (`task.update`). */
+ *  schema (no magic `'item.update'` strings): `{ Item: ['update'], Report: ['read'] }`
+ *  — the SDK serializes each entry to the wire allowlist (`item.update`). */
 export interface CreateAgentSessionParams<S extends SchemaRecord> {
   /** Your agent. `id` becomes the token's `participantId`. */
   agent: { id: string };

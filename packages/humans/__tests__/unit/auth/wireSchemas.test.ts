@@ -33,7 +33,7 @@ describe('auth wire schemas', () => {
           scope: {
             organizationId: 'org_1',
             syncGroups: ['org:org_1'],
-            operations: ['slides.read'],
+            operations: ['entries.read'],
             participantKind: 'user',
             participantId: 'user_1',
             extraScopeField: true,

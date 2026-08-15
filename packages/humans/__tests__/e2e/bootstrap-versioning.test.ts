@@ -92,12 +92,12 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
       const currentSyncId = fullData.lastSyncId as number;
 
       // Create a few mutations to build a small delta gap
-      const taskIds: string[] = [];
+      const itemIds: string[] = [];
       for (let i = 0; i < 3; i++) {
         const id = uuid();
-        taskIds.push(id);
+        itemIds.push(id);
         await batchAck([{
-          type: 'CREATE', model: 'task', id,
+          type: 'CREATE', model: 'item', id,
           input: { title: `Versioning ${i}`, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
         }]);
       }
@@ -127,7 +127,7 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
         }
 
         // Bootstrap deltas have the model ID in data.id (not modelId like WS deltas)
-        const foundIds = taskIds.filter((id) =>
+        const foundIds = itemIds.filter((id) =>
           deltas.some((d) =>
             d.modelId === id ||
             d.model_id === id ||
@@ -160,16 +160,16 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
 
         // Create a mutation between bootstraps
         await batchAck([{
-          type: 'CREATE', model: 'task', id: uuid(),
+          type: 'CREATE', model: 'item', id: uuid(),
           input: { title: `Mono ${i}`, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
         }]);
       }
     });
 
     it('lastSyncId from batchAck should match next bootstrap', async () => {
-      // Create a task and capture its syncId
+      // Create a item and capture its syncId
       const syncId = await batchAck([{
-        type: 'CREATE', model: 'task', id: uuid(),
+        type: 'CREATE', model: 'item', id: uuid(),
         input: { title: 'SyncId check', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
@@ -190,7 +190,7 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
       // Create 5 mutations
       for (let i = 0; i < 5; i++) {
         await batchAck([{
-          type: 'CREATE', model: 'task', id: uuid(),
+          type: 'CREATE', model: 'item', id: uuid(),
           input: { title: `Gap ${i}`, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
         }]);
       }
@@ -222,17 +222,17 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
 
   describe('mutation visibility in bootstrap', () => {
     it('UPDATE should be visible in next bootstrap', async () => {
-      const taskId = uuid();
+      const itemId = uuid();
 
       // Create
       await batchAck([{
-        type: 'CREATE', model: 'task', id: taskId,
+        type: 'CREATE', model: 'item', id: itemId,
         input: { title: 'Before update', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
       // Update
       await batchAck([{
-        type: 'UPDATE', model: 'task', id: taskId,
+        type: 'UPDATE', model: 'item', id: itemId,
         input: { title: 'After update' },
       }]);
 
@@ -240,32 +240,32 @@ describeE2E('E2E: Bootstrap Versioning (Full vs Partial)', () => {
 
       const data = await bootstrap();
       if (data.models) {
-        const tasks = (data.models as Record<string, unknown[]>).Task;
-        if (tasks && Array.isArray(tasks)) {
-          const task = tasks.find((t: unknown) => (t as Record<string, unknown>).id === taskId);
-          if (task) {
-            expect((task as Record<string, unknown>).title).toBe('After update');
+        const items = (data.models as Record<string, unknown[]>).Item;
+        if (items && Array.isArray(items)) {
+          const item = items.find((t: unknown) => (t as Record<string, unknown>).id === itemId);
+          if (item) {
+            expect((item as Record<string, unknown>).title).toBe('After update');
           }
         }
       }
     });
 
     it('DELETE should remove entity from next bootstrap', async () => {
-      const taskId = uuid();
+      const itemId = uuid();
 
       await batchAck([{
-        type: 'CREATE', model: 'task', id: taskId,
+        type: 'CREATE', model: 'item', id: itemId,
         input: { title: 'Will be deleted', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
-      await batchAck([{ type: 'DELETE', model: 'task', id: taskId }]);
+      await batchAck([{ type: 'DELETE', model: 'item', id: itemId }]);
 
       await new Promise((r) => setTimeout(r, 300));
 
       const data = await bootstrap();
       if (data.models) {
-        const tasks = (data.models as Record<string, unknown[]>).Task;
-        if (tasks && Array.isArray(tasks)) {
-          const found = tasks.find((t: unknown) => (t as Record<string, unknown>).id === taskId);
+        const items = (data.models as Record<string, unknown[]>).Item;
+        if (items && Array.isArray(items)) {
+          const found = items.find((t: unknown) => (t as Record<string, unknown>).id === itemId);
           expect(found).toBeUndefined();
         }
       }

@@ -75,7 +75,7 @@ export function mutationConformanceChecks(
         const adapter = await make();
         const result = await adapter.commit(
           request('corr_create', [
-            { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+            { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
           ]),
         );
         assert.equal(result.rows.length, 1, 'one row returned');
@@ -90,12 +90,12 @@ export function mutationConformanceChecks(
       run: async () => {
         const adapter = await make();
         await adapter.commit(request('corr_load', [
-          { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+          { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
         ]));
-        const found = await adapter.read({ kind: 'load', model: 'task', id: 't1' });
+        const found = await adapter.read({ kind: 'load', model: 'item', id: 't1' });
         assert.equal(found.length, 1);
         assert.equal(found[0]?.title, 'A');
-        const missing = await adapter.read({ kind: 'load', model: 'task', id: 'nope' });
+        const missing = await adapter.read({ kind: 'load', model: 'item', id: 'nope' });
         assert.equal(missing.length, 0, 'unknown id reads empty');
       },
     },
@@ -104,10 +104,10 @@ export function mutationConformanceChecks(
       run: async () => {
         const adapter = await make();
         await adapter.commit(request('corr_list', [
-          { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
-          { type: 'CREATE', model: 'task', id: 't2', input: { title: 'B' } },
+          { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
+          { type: 'CREATE', model: 'item', id: 't2', input: { title: 'B' } },
         ]));
-        const rows = await adapter.read({ kind: 'list', model: 'task' });
+        const rows = await adapter.read({ kind: 'list', model: 'item' });
         assert.deepEqual(rows.map((row) => row.id).sort(), ['t1', 't2']);
       },
     },
@@ -116,12 +116,12 @@ export function mutationConformanceChecks(
       run: async () => {
         const adapter = await make();
         const commitRequest = request('corr_replay', [
-          { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A', n: 1 } },
+          { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A', n: 1 } },
         ]);
         const first = await adapter.commit(commitRequest);
         const second = await adapter.commit(commitRequest);
         assert.deepEqual(second.rows, first.rows, 'replay returns the original rows');
-        const rows = await adapter.read({ kind: 'list', model: 'task' });
+        const rows = await adapter.read({ kind: 'list', model: 'item' });
         assert.equal(rows.length, 1, 'no duplicate row');
       },
     },
@@ -131,13 +131,13 @@ export function mutationConformanceChecks(
         const adapter = await make();
         await adapter.commit(request(
           'corr_conflict',
-          [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }],
+          [{ type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } }],
           'a'.repeat(64),
         ));
         await assert.rejects(
           adapter.commit(request(
             'corr_conflict',
-            [{ type: 'UPDATE', model: 'task', id: 't1', input: { title: 'B' } }],
+            [{ type: 'UPDATE', model: 'item', id: 't1', input: { title: 'B' } }],
             'b'.repeat(64),
           )),
           (error: unknown) =>
@@ -153,14 +153,14 @@ export function mutationConformanceChecks(
       run: async () => {
         const adapter = await make();
         const commitRequest = request('corr_concurrent', [
-          { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+          { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
         ]);
         const [first, second] = await Promise.all([
           adapter.commit(commitRequest),
           adapter.commit(commitRequest),
         ]);
         assert.deepEqual(second.rows, first.rows);
-        const rows = await adapter.read({ kind: 'list', model: 'task' });
+        const rows = await adapter.read({ kind: 'list', model: 'item' });
         assert.equal(rows.length, 1, 'concurrent retries produced one row');
       },
     },
@@ -169,12 +169,12 @@ export function mutationConformanceChecks(
       run: async () => {
         const adapter = await make();
         await adapter.commit(request('corr_create_2', [
-          { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+          { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
         ]));
         await adapter.commit(request('corr_update_2', [
-          { type: 'UPDATE', model: 'task', id: 't1', input: { title: 'B' } },
+          { type: 'UPDATE', model: 'item', id: 't1', input: { title: 'B' } },
         ]));
-        const found = await adapter.read({ kind: 'load', model: 'task', id: 't1' });
+        const found = await adapter.read({ kind: 'load', model: 'item', id: 't1' });
         assert.equal(found[0]?.title, 'B', 'update applied');
       },
     },
@@ -200,7 +200,7 @@ export function endpointConformanceChecks(make: MakeAdapter): ConformanceCheck[]
         const request = change('corr_outbox_replay', [
           {
             type: 'CREATE',
-            model: 'task',
+            model: 'item',
             id: 't1',
             input: { title: 'A' },
             transactionId: 'op_outbox_replay',
@@ -223,7 +223,7 @@ export function endpointConformanceChecks(make: MakeAdapter): ConformanceCheck[]
         await adapter.commit(change('corr_event', [
           {
             type: 'CREATE',
-            model: 'task',
+            model: 'item',
             id: 't1',
             input: { title: 'A' },
             transactionId: 'op_event',
@@ -232,7 +232,7 @@ export function endpointConformanceChecks(make: MakeAdapter): ConformanceCheck[]
         const page = await adapter.events(null, 100);
         const event = page.events.find((candidate) => candidate.entityId === 't1');
         assert.ok(event, 'event for the committed row');
-        assert.equal(event.model, 'task');
+        assert.equal(event.model, 'item');
         assert.equal(event.type, 'CREATE');
         assert.equal(event.correlationId, 'corr_event');
         assert.equal(event.transactionId, 'op_event');
@@ -244,10 +244,10 @@ export function endpointConformanceChecks(make: MakeAdapter): ConformanceCheck[]
       run: async () => {
         const adapter = await make();
         await adapter.commit(change('corr_page_a', [
-          { type: 'CREATE', model: 'task', id: 't1', input: {} },
+          { type: 'CREATE', model: 'item', id: 't1', input: {} },
         ]));
         await adapter.commit(change('corr_page_b', [
-          { type: 'CREATE', model: 'task', id: 't2', input: {} },
+          { type: 'CREATE', model: 'item', id: 't2', input: {} },
         ]));
 
         const first = await adapter.events(null, 1);

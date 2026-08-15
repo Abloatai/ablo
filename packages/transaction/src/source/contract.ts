@@ -79,6 +79,40 @@ export const sourceCommitEchoOperationSchema = z.strictObject({
   transactionId: z.string().min(1).max(ABLO_SOURCE_CLIENT_TX_ID_MAX_LENGTH),
 });
 
+/**
+ * Pre-write correlation evidence. A database-generated CREATE has no row id
+ * until its INSERT returns, so the adapter receives the same operation shape
+ * with that one value absent and finalizes it inside the writing transaction.
+ */
+const sourceCommitEchoIntentOperationSchema = sourceCommitEchoOperationSchema.extend({
+  id: z.string().min(1).nullish(),
+});
+
+export const sourceCommitEchoIntentSchema = z
+  .strictObject({
+    version: z.literal(1),
+    correlationId: correlationIdSchema,
+    operations: z
+      .array(sourceCommitEchoIntentOperationSchema)
+      .min(1)
+      .max(ABLO_SOURCE_ECHO_MAX_OPERATIONS)
+      .readonly(),
+  })
+  .superRefine(({ operations }, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, operation] of operations.entries()) {
+      if (seen.has(operation.transactionId)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['operations', index, 'transactionId'],
+          message: 'WAL echo operation transactionIds must be unique',
+        });
+      }
+      seen.add(operation.transactionId);
+    }
+  });
+export type SourceCommitEchoIntent = z.infer<typeof sourceCommitEchoIntentSchema>;
+
 export const sourceCommitEchoMarkerSchema = z
   .strictObject({
     version: z.literal(1),

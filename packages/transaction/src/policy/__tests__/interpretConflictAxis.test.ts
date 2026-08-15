@@ -87,7 +87,7 @@ describe('interpretConflictAxis', () => {
     expect(interpretConflictAxis(axis, stale('system'))).toEqual(defaultPolicy(stale('system')));
   });
 
-  it('the slides stance { user: overwrite, agent: reject }: human wins, agent yields', () => {
+  it('the entries stance { user: overwrite, agent: reject }: human wins, agent yields', () => {
     const axis: ConflictAxis = { user: 'overwrite', agent: 'reject' };
     // human editing → an agent write to the same claimed row yields
     expect(interpretConflictAxis(axis, claimHeld('agent'))).toMatchObject({ action: 'reject' });

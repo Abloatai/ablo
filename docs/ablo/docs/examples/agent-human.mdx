@@ -5,16 +5,16 @@ sidebar:
   icon: users
 ---
 
-A task-writing agent that yields when a person is editing the same task.
+A record-writing agent that yields when a person is editing the same record.
 
 ## Scenario
 
-The same tasks are edited by agents and by the people watching them. They must
+The same records are edited by agents and by the people watching them. They must
 not collide:
 
 - If a person already holds the row, the agent yields instead of fighting for it.
 - While the agent is updating, the UI can show who is active.
-- If the task changes mid-run, the commit is rejected instead of overwriting the
+- If the record changes mid-run, the commit is rejected instead of overwriting the
   newer edit.
 
 A **claim** does both jobs. Claims don't lock — if another writer holds the row,
@@ -27,9 +27,9 @@ a typed error if the row moved underneath you while the agent was busy.
 
 ## Schema-Backed Worker
 
-The worker uses the same schema client the app uses. It reads the task from the
+The worker uses the same schema client the app uses. It reads the record from the
 server with `get({ id })`, claims the row, and writes through
-`ablo.tasks.update(...)` with a stale-check so a concurrent edit can't be
+`ablo.records.update(...)` with a stale-check so a concurrent edit can't be
 overwritten.
 
 ```ts
@@ -37,7 +37,7 @@ import Ablo, { AbloClaimedError, AbloStaleContextError } from '@abloatai/ablo';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
 const schema = defineSchema({
-  tasks: model({
+  records: model({
     title: z.string(),
     status: z.enum(['todo', 'doing', 'done']),
   }),
@@ -49,19 +49,19 @@ const ablo = Ablo({
   transport: 'http',
 });
 
-export async function markDone(taskId: string) {
+export async function markDone(recordId: string) {
   await ablo.ready();
 
   // get({ id }) is an async server read — await it.
-  const task = await ablo.tasks.get({ id: taskId });
-  if (!task) return { status: 'not_found' };
+  const record = await ablo.records.get({ id: recordId });
+  if (!record) return { status: 'not_found' };
 
   try {
     // queue: false → don't queue behind a current holder. If another
     // participant holds the row, claim resolves null, so the agent yields
     // instead of waiting. Omit it, or pass queue: true, to queue behind them.
-    const acquired = await ablo.tasks.claim({
-      id: taskId,
+    const acquired = await ablo.records.claim({
+      id: recordId,
       queue: false,
       description: 'marking_done',
     });
@@ -75,7 +75,7 @@ export async function markDone(taskId: string) {
     // `onStale: 'reject'`. The write below is therefore equivalent to passing
     // those options yourself:
     //
-    //   ablo.tasks.update({
+    //   ablo.records.update({
     //     id: claim.data.id,
     //     data: { status: 'done' },
     //     readAt: <claim snapshot version>,
@@ -85,12 +85,12 @@ export async function markDone(taskId: string) {
     // If a newer version landed mid-run, the row no longer matches `readAt`, so
     // the server rejects this commit with AbloStaleContextError (caught below)
     // instead of clobbering that edit.
-    const updated = await ablo.tasks.update({
+    const updated = await ablo.records.update({
       id: claim.data.id,
       data: { status: 'done' },
     });
 
-    return { status: 'done', task: updated };
+    return { status: 'done', record: updated };
   } catch (err) {
     // The lease was lost or a foreign holder rejected the write.
     if (err instanceof AbloClaimedError) return { status: 'yielded' };
@@ -111,9 +111,9 @@ Keep workers on the same schema-backed client as the app.
 
 import { useAblo } from '@abloatai/ablo/react';
 
-export function TaskRow({ task: serverTask }: Props) {
-  const data = useAblo((ablo) => ablo.tasks.local.get(serverTask.id)) ?? serverTask;
-  const holder = useAblo((ablo) => ablo.tasks.claim.state({ id: serverTask.id }));
+export function RecordRow({ record: serverTask }: Props) {
+  const data = useAblo((ablo) => ablo.records.local.get(serverTask.id)) ?? serverTask;
+  const holder = useAblo((ablo) => ablo.records.claim.state({ id: serverTask.id }));
   const agentActive = holder?.participantKind === 'agent';
 
   return (

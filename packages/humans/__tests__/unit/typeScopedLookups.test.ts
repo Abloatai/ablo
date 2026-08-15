@@ -10,8 +10,8 @@
  *
  * Before this, `ablo.<model>.local.get(id)` returned whatever row carried that id and
  * cast it to the asking model's type. Three product bugs came from that, the
- * last being a slide resize that reverted after every commit because
- * `slideLayoutLayers.local.get(<a SlideLayer id>)` answered truthy and was read as
+ * last being a entry resize that reverted after every commit because
+ * `entryLayoutLayers.local.get(<a EntryDetail id>)` answered truthy and was read as
  * "this is a layout layer".
  *
  * Reads scope to `undefined` (from this model's view the id is absent). Writes

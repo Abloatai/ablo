@@ -9,7 +9,7 @@ describe('user session scope', () => {
         organizationId: 'org-customer',
         schemaOwnerOrgId: 'org-platform',
         schemaProjectId: 'project-platform',
-        operations: ['task.read', 'task.update'],
+        operations: ['item.read', 'item.update'],
       });
       return {
         ok: true,
@@ -22,7 +22,7 @@ describe('user session scope', () => {
           organizationId: 'org-1',
           participantId: 'user-1',
           syncGroups: ['org:org-1'],
-          operations: ['task.read', 'task.update'],
+          operations: ['item.read', 'item.update'],
         }),
         headers: new Headers(),
       } as Response;
@@ -36,16 +36,16 @@ describe('user session scope', () => {
           organizationId: 'org-platform',
           projectId: 'project-platform',
         },
-        can: { tasks: ['read', 'update'] },
+        can: { items: ['read', 'update'] },
       },
       {
         apiKey: 'sk_test_secret',
         baseUrl: 'https://api.test',
         fetch: fetcher,
-        modelTypenames: { tasks: 'Task' },
+        modelTypenames: { items: 'Item' },
       },
     );
 
-    expect(session.scope.operations).toEqual(['task.read', 'task.update']);
+    expect(session.scope.operations).toEqual(['item.read', 'item.update']);
   });
 });

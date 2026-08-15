@@ -19,7 +19,7 @@ const current: DatabaseInfo = {
   userId: 'Aa',
   workspaceId: 'org',
   participantKind: 'user',
-  projectId: 'org',
+  workspaceId: 'org',
   branchId: 'br_production',
   branchRoot: true,
   schemaHash: 'schema',

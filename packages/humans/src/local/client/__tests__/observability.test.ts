@@ -85,10 +85,10 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
   it('fires a MobX reaction when an observable field is set', () => {
     const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
     setActiveRegistry(registry);
-    const Cls = buildObservableModelClass('TestSlide', true);
-    registerType(registry, 'TestSlide', Cls);
+    const Cls = buildObservableModelClass('TestEntry', true);
+    registerType(registry, 'TestEntry', Cls);
 
-    const instance = new Cls({ id: 'slide-1', title: 'Initial' });
+    const instance = new Cls({ id: 'entry-1', title: 'Initial' });
     const reads: string[] = [];
     const dispose = autorun(() => reads.push(instance.title!));
 
@@ -159,8 +159,8 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
     // test confirms the field survives construction + makeObservable.
     const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
     setActiveRegistry(registry);
-    const Cls = buildObservableModelClass('SlideLayer', true);
-    registerType(registry, 'SlideLayer', Cls);
+    const Cls = buildObservableModelClass('EntryDetail', true);
+    registerType(registry, 'EntryDetail', Cls);
 
     const doc = {
       type: 'doc',
@@ -184,8 +184,8 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
     const { InstanceCache } = await import('../../InstanceCache.js');
     const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
     setActiveRegistry(registry);
-    const Cls = buildObservableModelClass('SlideLayer', true);
-    registerType(registry, 'SlideLayer', Cls);
+    const Cls = buildObservableModelClass('EntryDetail', true);
+    registerType(registry, 'EntryDetail', Cls);
 
     const pool = new InstanceCache({ maxSize: 100 }, registry);
     const doc = {
@@ -194,7 +194,7 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
     };
 
     const m = pool.createFromData({
-      __typename: 'SlideLayer',
+      __typename: 'EntryDetail',
       id: 'l1',
       contentJSON: doc,
     });
@@ -215,8 +215,8 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
     const { InstanceCache } = await import('../../InstanceCache.js');
     const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
     setActiveRegistry(registry);
-    const Cls = buildObservableModelClass('SlideLayer', true);
-    registerType(registry, 'SlideLayer', Cls);
+    const Cls = buildObservableModelClass('EntryDetail', true);
+    registerType(registry, 'EntryDetail', Cls);
 
     const pool = new InstanceCache({ maxSize: 100 }, registry);
     const serialized = JSON.stringify({
@@ -225,7 +225,7 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
     });
 
     const m = pool.createFromData({
-      __typename: 'SlideLayer',
+      __typename: 'EntryDetail',
       id: 'l1',
       contentJSON: serialized,
     });
@@ -244,12 +244,12 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
     // would echo forever.
     const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
     setActiveRegistry(registry);
-    const Cls = buildObservableModelClass('HydrationDeck', true);
-    registerType(registry, 'HydrationDeck', Cls);
+    const Cls = buildObservableModelClass('HydrationCollection', true);
+    registerType(registry, 'HydrationCollection', Cls);
 
-    const instance = new Cls({ id: 'deck-1', title: 'Old' });
+    const instance = new Cls({ id: 'collection-1', title: 'Old' });
 
-    instance.updateFromData({ id: 'deck-1', title: 'FromServer' });
+    instance.updateFromData({ id: 'collection-1', title: 'FromServer' });
 
     expect(instance.title).toBe('FromServer'); // value applied locally
     expect(instance.getChanges()).toEqual({}); // but NOT tracked for outbound sync
@@ -261,16 +261,16 @@ describe('Dynamic model observability (lazyObservable opt-in)', () => {
     // `applyChanges`. The edited fields MUST land in `modifiedProperties` so
     // `getChanges()` / the transaction queue send them to the server.
     // Previously the proxy used `updateFromData`, producing an empty
-    // `input: {}` no-op mutation — e.g. a deck theme change that reverted on
+    // `input: {}` no-op mutation — e.g. a collection theme change that reverted on
     // reopen.
     const registry = new ModelRegistry({ validateOnRegister: false, allowLateReferences: true });
     setActiveRegistry(registry);
-    const Cls = buildObservableModelClass('LocalDeck', true);
-    registerType(registry, 'LocalDeck', Cls);
+    const Cls = buildObservableModelClass('LocalCollection', true);
+    registerType(registry, 'LocalCollection', Cls);
 
-    const instance = new Cls({ id: 'deck-2', title: 'Original' });
+    const instance = new Cls({ id: 'collection-2', title: 'Original' });
 
-    instance.applyChanges({ id: 'deck-2', title: 'Edited' });
+    instance.applyChanges({ id: 'collection-2', title: 'Edited' });
 
     expect(instance.title).toBe('Edited'); // value applied locally
     expect(instance.getChanges()).toEqual({ title: 'Edited' }); // AND tracked for outbound sync

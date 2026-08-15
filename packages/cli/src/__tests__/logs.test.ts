@@ -33,12 +33,12 @@ describe('parseLogsArgs', () => {
 
   it('parses all flags', () => {
     expect(
-      parseLogsArgs(['--no-follow', '-n', '100', '--since', '2h', '--model', 'task', '--op', 'create', '--json']),
+      parseLogsArgs(['--no-follow', '-n', '100', '--since', '2h', '--model', 'record', '--op', 'create', '--json']),
     ).toEqual({
       follow: false,
       tail: 100,
       since: '2h',
-      model: 'task',
+      model: 'record',
       op: 'create',
       json: true,
     });

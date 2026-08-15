@@ -356,4 +356,44 @@ describe('createTransactionClient', () => {
       'Bearer rk_second',
     ]);
   });
+
+  it('waits for active requests before disposal completes', async () => {
+    let requestStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      requestStarted = resolve;
+    });
+    let finishRequest!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => {
+      finishRequest = resolve;
+    });
+    const client = createTransactionClient({
+      schema,
+      apiKey: 'sk_test',
+      baseURL: 'https://api.example.test',
+      fetch: async () => {
+        requestStarted();
+        return response;
+      },
+    });
+
+    const listing = client.logs.list();
+    await started;
+    let disposed = false;
+    const disposal = client.dispose().then(() => {
+      disposed = true;
+    });
+    await Promise.resolve();
+
+    expect(disposed).toBe(false);
+    finishRequest(json({
+      object: 'list',
+      data: [],
+      has_more: false,
+      next_cursor: null,
+    }));
+    await listing;
+    await disposal;
+
+    expect(disposed).toBe(true);
+  });
 });

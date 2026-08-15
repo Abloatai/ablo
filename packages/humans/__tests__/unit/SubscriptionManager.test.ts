@@ -50,10 +50,10 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('deck:a');
+    await m.enter('collection:a');
 
-    expect(transport.calls).toEqual([['deck:a', 'org:1']]);
-    expect(m.effectiveGroups().sort()).toEqual(['deck:a', 'org:1']);
+    expect(transport.calls).toEqual([['collection:a', 'org:1']]);
+    expect(m.effectiveGroups().sort()).toEqual(['collection:a', 'org:1']);
   });
 
   it('leave keeps the group warm — no unsubscribe round-trip', async () => {
@@ -61,11 +61,11 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('deck:a'); // call #1
-    await m.leave('deck:a'); // still in effective set (warm) → no new call
+    await m.enter('collection:a'); // call #1
+    await m.leave('collection:a'); // still in effective set (warm) → no new call
 
     expect(transport.calls).toHaveLength(1);
-    expect(m.effectiveGroups().sort()).toEqual(['deck:a', 'org:1']);
+    expect(m.effectiveGroups().sort()).toEqual(['collection:a', 'org:1']);
   });
 
   it('sweep past the TTL drops the warm group', async () => {
@@ -73,14 +73,14 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('deck:a'); // call #1
-    await m.leave('deck:a'); // warm until t=2_000
+    await m.enter('collection:a'); // call #1
+    await m.leave('collection:a'); // warm until t=2_000
 
     clock.t = 2_001; // past the warm TTL
-    await m.sweep(); // call #2 — drops deck:a
+    await m.sweep(); // call #2 — drops collection:a
 
     expect(transport.calls).toEqual([
-      ['deck:a', 'org:1'],
+      ['collection:a', 'org:1'],
       ['org:1'],
     ]);
     expect(m.effectiveGroups()).toEqual(['org:1']);
@@ -91,10 +91,10 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('deck:a'); // call #1
-    await m.leave('deck:a'); // warm
+    await m.enter('collection:a'); // call #1
+    await m.leave('collection:a'); // warm
     clock.t = 1_500; // still inside the window
-    await m.enter('deck:a'); // back in view — effective set unchanged
+    await m.enter('collection:a'); // back in view — effective set unchanged
 
     expect(transport.calls).toHaveLength(1);
 
@@ -102,7 +102,7 @@ describe('SubscriptionManager', () => {
     clock.t = 3_000;
     await m.sweep();
     expect(transport.calls).toHaveLength(1);
-    expect(m.effectiveGroups().sort()).toEqual(['deck:a', 'org:1']);
+    expect(m.effectiveGroups().sort()).toEqual(['collection:a', 'org:1']);
   });
 
   it('pin keeps a group across leave and never expires while pinned', async () => {
@@ -110,15 +110,15 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('deck:a'); // call #1
-    await m.pin('deck:a'); // prominence (active claim) — no change to set
-    await m.leave('deck:a'); // pinned → not warmed, stays subscribed
+    await m.enter('collection:a'); // call #1
+    await m.pin('collection:a'); // prominence (active claim) — no change to set
+    await m.leave('collection:a'); // pinned → not warmed, stays subscribed
 
     clock.t = 1_000_000; // far past any TTL
     await m.sweep(); // pinned group survives
 
     expect(transport.calls).toHaveLength(1);
-    expect(m.effectiveGroups().sort()).toEqual(['deck:a', 'org:1']);
+    expect(m.effectiveGroups().sort()).toEqual(['collection:a', 'org:1']);
   });
 
   it('unpinning an out-of-view group warms it, then sweep drops it', async () => {
@@ -126,18 +126,18 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('deck:a');
-    await m.pin('deck:a');
-    await m.leave('deck:a'); // still present via pin
+    await m.enter('collection:a');
+    await m.pin('collection:a');
+    await m.leave('collection:a'); // still present via pin
     expect(transport.calls).toHaveLength(1);
 
-    await m.unpin('deck:a'); // not active → goes warm (hysteresis), no call yet
+    await m.unpin('collection:a'); // not active → goes warm (hysteresis), no call yet
     expect(transport.calls).toHaveLength(1);
 
     clock.t = 2_001; // past warm TTL from unpin
     await m.sweep(); // drops it now
     expect(transport.calls).toEqual([
-      ['deck:a', 'org:1'],
+      ['collection:a', 'org:1'],
       ['org:1'],
     ]);
   });
@@ -149,7 +149,7 @@ describe('SubscriptionManager', () => {
 
     transport.offline = true;
     // Must resolve, not reject — interest is soft state.
-    await expect(m.enter('deck:a')).resolves.toBeUndefined();
+    await expect(m.enter('collection:a')).resolves.toBeUndefined();
     expect(transport.calls).toHaveLength(0); // nothing landed
     expect(m.effectiveGroups()).toEqual([]); // lastSent unchanged
   });
@@ -159,29 +159,29 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('deck:a'); // online → call #1 = [deck:a, org:1]
+    await m.enter('collection:a'); // online → call #1 = [collection:a, org:1]
     expect(transport.calls).toHaveLength(1);
 
-    // Go offline, then navigate deck:a → deck:b while disconnected.
+    // Go offline, then navigate collection:a → collection:b while disconnected.
     transport.offline = true;
-    await m.leave('deck:a');
-    await m.enter('deck:b');
+    await m.leave('collection:a');
+    await m.enter('collection:b');
     expect(transport.calls).toHaveLength(1); // nothing sent while offline
 
     // Reconnect: the new socket's URL carried the stale set; resync()
-    // re-pushes the now-current desired set so deck:b actually subscribes.
+    // re-pushes the now-current desired set so collection:b actually subscribes.
     transport.offline = false;
     await m.resync();
 
     expect(transport.calls).toHaveLength(2);
-    // deck:a is warm (left at t=1_000, TTL 1_000 → still < 2_000), so the
-    // re-push includes base + the still-warm deck:a + the active deck:b.
-    expect(transport.calls[1]).toEqual(['deck:a', 'deck:b', 'org:1']);
+    // collection:a is warm (left at t=1_000, TTL 1_000 → still < 2_000), so the
+    // re-push includes base + the still-warm collection:a + the active collection:b.
+    expect(transport.calls[1]).toEqual(['collection:a', 'collection:b', 'org:1']);
 
-    // After the warm TTL lapses, a sweep drops deck:a, leaving deck:b.
+    // After the warm TTL lapses, a sweep drops collection:a, leaving collection:b.
     clock.t = 2_001;
     await m.sweep();
-    expect(transport.calls[2]).toEqual(['deck:b', 'org:1']);
+    expect(transport.calls[2]).toEqual(['collection:b', 'org:1']);
   });
 
   it('evicts the least-recently-warmed group immediately when maxWarm is exceeded', async () => {
@@ -197,16 +197,16 @@ describe('SubscriptionManager', () => {
       scheduler: () => () => {/* no-op disposer */},
     });
 
-    await m.enter('deck:a');
-    await m.enter('deck:b');
-    await m.enter('deck:c');
+    await m.enter('collection:a');
+    await m.enter('collection:b');
+    await m.enter('collection:c');
 
-    await m.leave('deck:a'); // warm {a}
-    await m.leave('deck:b'); // warm {a,b}
-    await m.leave('deck:c'); // warm {a,b,c} → over cap → evict a
+    await m.leave('collection:a'); // warm {a}
+    await m.leave('collection:b'); // warm {a,b}
+    await m.leave('collection:c'); // warm {a,b,c} → over cap → evict a
 
-    // deck:a was dropped immediately (not waiting for its TTL); b and c stay.
-    expect(m.effectiveGroups().sort()).toEqual(['deck:b', 'deck:c', 'org:1']);
+    // collection:a was dropped immediately (not waiting for its TTL); b and c stay.
+    expect(m.effectiveGroups().sort()).toEqual(['collection:b', 'collection:c', 'org:1']);
   });
 
   it('refreshes LRU recency on re-warm — a touched group survives eviction', async () => {
@@ -222,22 +222,22 @@ describe('SubscriptionManager', () => {
       scheduler: () => () => {/* no-op disposer */},
     });
 
-    await m.enter('deck:a');
-    await m.enter('deck:b');
-    await m.leave('deck:a'); // warm {a}
-    await m.leave('deck:b'); // warm {a,b}
+    await m.enter('collection:a');
+    await m.enter('collection:b');
+    await m.leave('collection:a'); // warm {a}
+    await m.leave('collection:b'); // warm {a,b}
 
     // Touch a: re-enter then re-leave → a becomes most-recently-warmed.
-    await m.enter('deck:a'); // warm {b}, a active
-    await m.leave('deck:a'); // warm {b,a}  (a now newest)
+    await m.enter('collection:a'); // warm {b}, a active
+    await m.leave('collection:a'); // warm {b,a}  (a now newest)
 
-    await m.enter('deck:c');
-    await m.leave('deck:c'); // warm {b,a,c} → evict oldest = b (a was refreshed)
+    await m.enter('collection:c');
+    await m.leave('collection:c'); // warm {b,a,c} → evict oldest = b (a was refreshed)
 
     const groups = m.effectiveGroups().sort();
-    expect(groups).toContain('deck:a'); // survived — refreshed
-    expect(groups).toContain('deck:c');
-    expect(groups).not.toContain('deck:b'); // evicted — least recent
+    expect(groups).toContain('collection:a'); // survived — refreshed
+    expect(groups).toContain('collection:c');
+    expect(groups).not.toContain('collection:b'); // evicted — least recent
   });
 
   it('base groups are always present and survive every sweep', async () => {
@@ -245,8 +245,8 @@ describe('SubscriptionManager', () => {
     const clock = { t: 1_000 };
     const m = makeManager(transport, clock);
 
-    await m.enter('deck:a');
-    await m.leave('deck:a');
+    await m.enter('collection:a');
+    await m.leave('collection:a');
     clock.t = 10_000;
     await m.sweep();
 

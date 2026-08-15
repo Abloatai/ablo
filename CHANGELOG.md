@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.52.0
+
+### Models carry only `id`
+
+`createdAt`, `updatedAt`, `organizationId`, and `createdBy` are no longer added
+to every model. Declare them as ordinary fields wherever you want them, and
+declare them to keep reading and writing them if you relied on Ablo supplying
+them. Ablo still records who made each change in its own transaction log, and
+still owns the tenancy value on every write.
+
+A model can point at a table Ablo did not create, naming the columns that
+differ:
+
+```ts
+import { defineSchema, field, model } from '@abloatai/ablo/schema';
+
+export const schema = defineSchema({
+  itemEvents: model(
+    {
+      itemId: field.string().from('item_id'),
+      createdAt: field.number().from('created_at'),
+    },
+    { tableName: 'item_events' }
+  ),
+});
+```
+
+Database adapters accept identifiers the database generates and return them as
+canonical string ids, taking the id type from the connection rather than from
+the model.
+
+### Updates can carry a precondition
+
+An update operation accepts `where`. The database changes the row only while its
+current values still match. On a mismatch the commit fails with
+`precondition_failed` and the whole batch declines, leaving every operation in it
+unapplied. The Kysely source adapter supports preconditions; the Drizzle,
+Prisma, and memory adapters report `source_adapter_misconfigured`.
+
+### Commit receipts return the rows the database wrote
+
+Receipts carry `operationResults`, pairing each operation's `transactionId` with
+its outcome and the authoritative row the database transaction returned,
+including identifiers and timestamps the database generated.
+
+### Two error codes renamed
+
+`task_id_missing` is now `item_id_missing`, and `task_id_required` is now
+`item_id_required`. Neither old code was ever returned by a request, so a caller
+matching on error codes has nothing to change unless it names one directly.
+
+### CLI
+
+`ablo setup` reads the repository and the current Ablo target, then prints the
+decisions, actions, blockers, and postconditions a verified setup requires. It
+reports and leaves the project untouched.
+
+`ablo init --plan` shows every file action before any of it happens.
+
+`ablo telemetry` controls limited CLI usage analytics. Collection is on by
+default and stays off in continuous integration and whenever `DO_NOT_TRACK=1` or
+`ABLO_TELEMETRY_DISABLED=1` is set. Run `ablo telemetry status` to see the
+current state, `ablo telemetry disable` to turn collection off, and
+`ablo telemetry reset` to rotate the local installation identity.
+
 ## 0.51.0
 
 ### One platform schema can serve every customer organization
@@ -13,7 +78,7 @@ inside the customer's organization.
 const { token } = await ablo.sessions.create({
   user: { id: userId },
   organizationId: customerOrganizationId,
-  can: { tasks: ['read', 'update'] },
+  can: { records: ['read', 'update'] },
 });
 ```
 
@@ -36,14 +101,14 @@ and carries exact Ablo rows into `ctx.reads` for the write that follows.
 const ctx = await context({
   ablo,
   data: {
-    task: ablo.tasks.get({ id: taskId }),
-    documents: ablo.documents.list({ where: { taskId } }),
-    memory: loadMemories(taskId),
+    record: ablo.records.get({ id: recordId }),
+    records: ablo.records.list({ where: { recordId } }),
+    memory: loadMemories(recordId),
   },
 });
 
-await ablo.tasks.update({
-  id: taskId,
+await ablo.records.update({
+  id: recordId,
   data: result,
   reads: ctx.reads,
 });
@@ -69,11 +134,11 @@ write lands anyway, on top of a decision that is no longer true. Pass the rows
 the decision was based on:
 
 ```ts
-const task = await ablo.tasks.get({ id: taskId });
-await ablo.tasks.update({
-  id: task.id,
-  data: { status: 'done', result: `Completed: ${task.title}` },
-  reads: [task],
+const record = await ablo.records.get({ id: recordId });
+await ablo.records.update({
+  id: record.id,
+  data: { status: 'done', result: `Completed: ${record.title}` },
+  reads: [record],
 });
 ```
 
@@ -94,7 +159,7 @@ turn or skips, expires on its own, and keeps itself alive with a heartbeat while
 the agent works.
 
 If an agent loses its claim during a model call, its final write is refused. Two
-agents cannot both believe they own the same task and both write, and a slow
+agents cannot both believe they own the same record and both write, and a slow
 agent cannot land its answer on top of whoever picked the work up after it. Ablo
 decides who holds the claim, so an agent cannot assert one it does not have.
 
@@ -119,7 +184,7 @@ database you connected.
 
 An agent holding a key can now ask what that key permits and get the answer from
 Ablo, whether it keeps a connection open or calls over HTTP for a single turn.
-An agent that mints a narrower key for a sub-task can confirm what it handed
+An agent that mints a narrower key for a sub-record can confirm what it handed
 over.
 
 ### A refused action says which permission was missing
@@ -312,7 +377,7 @@ New clients can pin their intended project and branch with `projectId` /
 `ABLO_PROJECT_ID` and `branchId` / `ABLO_BRANCH_ID`. `ablo dev` writes both
 immutable coordinates beside its branch-bound key, and `ready()` compares them
 with the key's server-resolved target before opening the sync connection. A mail
-deployment carrying a slides key now fails with `project_scope_denied`; a
+deployment carrying an unrelated key now fails with `project_scope_denied`; a
 same-project key for the wrong environment fails with `branch_scope_denied`.
 
 ### Pre-existing rows arrive on their own
@@ -355,7 +420,7 @@ end-to-end regression pins the behavior.
 The new `contention` option names what happens when the row is already held:
 
 ```ts
-const claim = await ablo.tasks.claim({
+const claim = await ablo.records.claim({
   id,
   contention: {
     mode: 'skip',

@@ -44,11 +44,11 @@ function pendingMutationRow(options: {
     mutation: {
       mutationId: options.mutationId,
       type: 'update',
-      modelName: 'SlideLayer',
+      modelName: 'EntryDetail',
       modelData: {
-        __typename: 'SlideLayer',
+        __typename: 'EntryDetail',
         id: `layer-${options.mutationId}`,
-        slideId: 'slide-1',
+        entryId: 'entry-1',
       },
       timestamp: new Date(options.writtenAt).toISOString(),
     },
@@ -124,11 +124,11 @@ describe('SyncClient pending-mutation restore window', () => {
         mutations: [
           {
             type: 'update',
-            modelName: 'SlideLayer',
+            modelName: 'EntryDetail',
             modelData: {
-              __typename: 'SlideLayer',
+              __typename: 'EntryDetail',
               id: 'layer-legacy-stale',
-              slideId: 'slide-1',
+              entryId: 'entry-1',
             },
             timestamp: new Date(
               Date.now() - PENDING_MUTATION_REPLAY_WINDOW_MS - 1,
@@ -151,11 +151,11 @@ describe('SyncClient pending-mutation restore window', () => {
         mutations: [
           {
             type: 'update',
-            modelName: 'SlideLayer',
+            modelName: 'EntryDetail',
             modelData: {
-              __typename: 'SlideLayer',
+              __typename: 'EntryDetail',
               id: 'layer-legacy-fresh',
-              slideId: 'slide-1',
+              entryId: 'entry-1',
             },
             timestamp: new Date().toISOString(),
           },

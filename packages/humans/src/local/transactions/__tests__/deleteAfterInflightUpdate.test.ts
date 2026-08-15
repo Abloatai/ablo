@@ -8,7 +8,7 @@
  * A delete that lists them anyway poisons its own seal: the durable store's
  * new-envelope guard finds the sources missing and rejects with
  * `idempotency_conflict`, the optimistic delete reverts, and the user watches
- * their deleted layer come back ("Your delete to SlideLayer was not saved" in
+ * their deleted layer come back ("Your delete to EntryDetail was not saved" in
  * the field). Edit a row, then delete it while the edit is on the wire —
  * that's the whole reproduction.
  *
@@ -22,7 +22,7 @@ import { SyncClient } from '../../SyncClient.js';
 import type { Database } from '../../Database.js';
 import { createTestHarness } from '../../testing/helpers/syncEngineHarness.js';
 import type { TestHarness } from '../../testing/helpers/syncEngineHarness.js';
-import { createTaskFixture } from '../../testing/fixtures/models.js';
+import { createItemFixture } from '../../testing/fixtures/models.js';
 import { ModelScope } from '@abloatai/transaction/types';
 import type {
   DurableWriteStore,
@@ -146,15 +146,15 @@ describe('delete after an in-flight update on the same row', () => {
     const { calls, executor, releaseFirst } = scriptedExecutor(true);
     syncClient.getMutationQueue().setMutationExecutor(executor);
 
-    const task = createTaskFixture({ title: 'before' });
-    task.markAsPersisted();
-    task.clearChanges();
-    harness.pool.add(task, ModelScope.live);
+    const item = createItemFixture({ title: 'before' });
+    item.markAsPersisted();
+    item.clearChanges();
+    harness.pool.add(item, ModelScope.live);
 
     // The edit: dispatched and HELD in flight — its envelope is sealed, so
     // its journal sources are consumed and belong to it.
-    task.applyChanges({ title: 'after' });
-    syncClient.update(task);
+    item.applyChanges({ title: 'after' });
+    syncClient.update(item);
     expect(await eventually(() => calls.length >= 1, 3_000)).toBe(true);
 
     expect(outbox.sealed).toHaveLength(1);
@@ -172,7 +172,7 @@ describe('delete after an in-flight update on the same row', () => {
     syncClient.getMutationQueue().on('transaction:created', (tx: { type?: string }) => {
       if (tx.type === 'delete') deleteStaged = true;
     });
-    syncClient.delete(task);
+    syncClient.delete(item);
     expect(await eventually(() => deleteStaged, 3_000)).toBe(true);
 
     // The edit settles; the delete may now dispatch — in the field this is

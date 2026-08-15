@@ -1,0 +1,32 @@
+{
+  "name": "@ablo/product-analytics",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./events": {
+      "default": "./src/events.ts"
+    },
+    "./privacy": {
+      "default": "./src/privacy.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@ablo/tsconfig": "*",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vitest": "^4.1.4"
+  }
+}

@@ -396,14 +396,14 @@ export interface RuntimeConfig {
    * Fields to preserve when merging a partial update into the local store. A
    * change usually carries only the fields that changed; listing a model's
    * essential fields here keeps them from being dropped during that merge.
-   * For example: `{ Task: ['title', 'projectId'], Section: ['reportId', 'order'] }`.
+   * For example: `{ Item: ['title', 'projectId'], Section: ['reportId', 'order'] }`.
    */
   essentialFields: Readonly<Record<string, readonly string[]>>;
 
   /**
    * A fallback map from class name to model name, used to resolve a model's name
    * when the usual lookup fails — for instance, when a bundler has minified the
-   * class names. For example: `{ TaskModel: 'Task', ProjectModel: 'Project' }`.
+   * class names. For example: `{ ItemModel: 'Item', ProjectModel: 'Project' }`.
    */
   classNameFallbackMap: Readonly<Record<string, string>>;
 
@@ -430,7 +430,7 @@ export interface RuntimeConfig {
 
   /**
    * Per-model content hashes of the schema this client was built against,
-   * keyed by schema key (`tasks` → hash of that model's serialized JSON). The
+   * keyed by schema key (`items` → hash of that model's serialized JSON). The
    * semantic layer of the drift check: on a whole-schema mismatch the client
    * compares only the models IT declares against the server's per-model
    * surface, so a purely additive server-side change (new models this build

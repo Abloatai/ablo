@@ -23,14 +23,14 @@ import type { Model } from '../../src/local/Model';
 const DEFAULT_SETTINGS = { width: 1920, height: 1080 };
 
 const schema = defineSchema({
-  slides: model(
+  entries: model(
     {
       title: z.string().optional(),
       settings: z.string().optional(),
       metadata: z.object({ icon: z.string().default('presentation') }).optional(),
     },
     {
-      typename: 'SnapshotTestSlide',
+      typename: 'SnapshotTestEntry',
       computed: {
         settingsObject: (self: { settings?: string }) => {
           try {
@@ -69,50 +69,50 @@ describe('toReactiveSnapshot — derived getters', () => {
     cleanup();
   });
 
-  function makeSlide(data: Record<string, unknown>): Model {
-    const ModelClass = getActiveRegistry().getModelByName('SnapshotTestSlide');
-    if (!ModelClass) throw new Error('SnapshotTestSlide is not registered');
+  function makeEntry(data: Record<string, unknown>): Model {
+    const ModelClass = getActiveRegistry().getModelByName('SnapshotTestEntry');
+    if (!ModelClass) throw new Error('SnapshotTestEntry is not registered');
     return new ModelClass(data);
   }
 
   it('materializes computed getters with the model getter value', () => {
-    const slide = makeSlide({
+    const entry = makeEntry({
       id: 's1',
       title: 'Roadmap',
       settings: JSON.stringify({ width: 800, height: 600 }),
     });
 
-    const snapshot = slide.toReactiveSnapshot<SnapshotRow>();
+    const snapshot = entry.toReactiveSnapshot<SnapshotRow>();
 
     expect(snapshot.settingsObject).toEqual({ width: 800, height: 600 });
     expect(snapshot.displayTitle).toBe('Roadmap');
   });
 
   it('computed getters resolve defaults for rows without the raw field', () => {
-    const slide = makeSlide({ id: 's2' });
+    const entry = makeEntry({ id: 's2' });
 
-    const snapshot = slide.toReactiveSnapshot<SnapshotRow>();
+    const snapshot = entry.toReactiveSnapshot<SnapshotRow>();
 
     expect(snapshot.settingsObject).toEqual(DEFAULT_SETTINGS);
     expect(snapshot.displayTitle).toBe('Untitled');
   });
 
   it('materializes ${field}Json getters', () => {
-    const slide = makeSlide({ id: 's3', metadata: { icon: 'chart' } });
+    const entry = makeEntry({ id: 's3', metadata: { icon: 'chart' } });
 
-    const snapshot = slide.toReactiveSnapshot<SnapshotRow>();
+    const snapshot = entry.toReactiveSnapshot<SnapshotRow>();
 
     expect(snapshot.metadataJson).toEqual({ icon: 'chart' });
   });
 
   it('keeps derived getters out of spreads and JSON — write-path parity with model instances', () => {
-    const slide = makeSlide({
+    const entry = makeEntry({
       id: 's4',
       title: 'Spread me',
       settings: JSON.stringify({ width: 100, height: 100 }),
     });
 
-    const snapshot = slide.toReactiveSnapshot<SnapshotRow>();
+    const snapshot = entry.toReactiveSnapshot<SnapshotRow>();
     const spread = { ...snapshot } as Record<string, unknown>;
     const json = JSON.parse(JSON.stringify(snapshot)) as Record<string, unknown>;
 
@@ -135,24 +135,24 @@ describe('toReactiveSnapshot — derived getters', () => {
 
   it('still excludes relation getters from snapshots', () => {
     const relSchema = defineSchema({
-      decks: model(
+      collections: model(
         { title: z.string().optional() },
         {
-          relations: { slides: relation.hasMany('relSlides', 'deckId') },
-          typename: 'SnapshotTestDeck',
+          relations: { entries: relation.hasMany('relEntrys', 'collectionId') },
+          typename: 'SnapshotTestCollection',
         }),
-      relSlides: model(
-        { deckId: z.string() },
-        { typename: 'SnapshotTestRelSlide' }),
+      relEntrys: model(
+        { collectionId: z.string() },
+        { typename: 'SnapshotTestRelEntry' }),
     });
     registerModelsFromSchema(relSchema, getActiveRegistry());
 
-    const DeckClass = getActiveRegistry().getModelByName('SnapshotTestDeck');
-    if (!DeckClass) throw new Error('SnapshotTestDeck is not registered');
-    const deck = new DeckClass({ id: 'd1', title: 'Deck' });
+    const CollectionClass = getActiveRegistry().getModelByName('SnapshotTestCollection');
+    if (!CollectionClass) throw new Error('SnapshotTestCollection is not registered');
+    const collection = new CollectionClass({ id: 'd1', title: 'Collection' });
 
-    const snapshot = deck.toReactiveSnapshot<Record<string, unknown>>();
+    const snapshot = collection.toReactiveSnapshot<Record<string, unknown>>();
 
-    expect('slides' in snapshot).toBe(false);
+    expect('entries' in snapshot).toBe(false);
   });
 });

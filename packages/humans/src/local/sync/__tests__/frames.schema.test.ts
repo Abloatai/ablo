@@ -18,19 +18,19 @@ describe('wireCommitOperationSchema', () => {
   it('accepts every op shape the SDK sends today (buildCommitFrame output)', () => {
     const frame = buildCommitFrame(
       [
-        { type: 'CREATE', model: 'tasks', id: 't1', input: { title: 'x' } },
+        { type: 'CREATE', model: 'items', id: 't1', input: { title: 'x' } },
         {
           type: 'UPDATE',
-          model: 'tasks',
+          model: 'items',
           id: 't1',
           input: { title: 'y' },
           transactionId: 'mut_1',
           readAt: 42,
           onStale: 'notify',
         },
-        { type: 'DELETE', model: 'tasks', id: 't1' },
-        { type: 'ARCHIVE', model: 'tasks', id: 't2' },
-        { type: 'UNARCHIVE', model: 'tasks', id: 't2' },
+        { type: 'DELETE', model: 'items', id: 't1' },
+        { type: 'ARCHIVE', model: 'items', id: 't2' },
+        { type: 'UNARCHIVE', model: 'items', id: 't2' },
       ],
       'tx_batch',
     );
@@ -44,7 +44,7 @@ describe('wireCommitOperationSchema', () => {
     expect(
       wireCommitOperationSchema.safeParse({
         type: 'UPDATE',
-        model: 'tasks',
+        model: 'items',
         id: 't1',
         input: { status: 'done' },
         transactionId: null,
@@ -57,7 +57,7 @@ describe('wireCommitOperationSchema', () => {
   it('preserves claim identity beside its fencing token', () => {
     const frame = buildCommitFrame([{
       type: 'UPDATE',
-      model: 'tasks',
+      model: 'items',
       id: 't1',
       input: { status: 'done' },
       claimId: 'claim-1',
@@ -73,15 +73,15 @@ describe('wireCommitOperationSchema', () => {
 
   it('declares the previously-undeclared `bypass` (boolean | null)', () => {
     expect(
-      wireCommitOperationSchema.safeParse({ type: 'UPDATE', model: 'tasks', id: 't1', bypass: true })
+      wireCommitOperationSchema.safeParse({ type: 'UPDATE', model: 'items', id: 't1', bypass: true })
         .success,
     ).toBe(true);
     expect(
-      wireCommitOperationSchema.safeParse({ type: 'UPDATE', model: 'tasks', id: 't1', bypass: null })
+      wireCommitOperationSchema.safeParse({ type: 'UPDATE', model: 'items', id: 't1', bypass: null })
         .success,
     ).toBe(true);
     expect(
-      wireCommitOperationSchema.safeParse({ type: 'UPDATE', model: 'tasks', id: 't1', bypass: 'yes' })
+      wireCommitOperationSchema.safeParse({ type: 'UPDATE', model: 'items', id: 't1', bypass: 'yes' })
         .success,
     ).toBe(false);
   });
@@ -89,7 +89,7 @@ describe('wireCommitOperationSchema', () => {
   it('rejects a string readAt and names the field path', () => {
     const parsed = wireCommitOperationSchema.safeParse({
       type: 'UPDATE',
-      model: 'tasks',
+      model: 'items',
       id: 't1',
       readAt: '42',
     });
@@ -101,7 +101,7 @@ describe('wireCommitOperationSchema', () => {
 
   it('rejects unknown op types and missing model', () => {
     expect(
-      wireCommitOperationSchema.safeParse({ type: 'create', model: 'tasks' }).success,
+      wireCommitOperationSchema.safeParse({ type: 'create', model: 'items' }).success,
     ).toBe(false);
     expect(wireCommitOperationSchema.safeParse({ type: 'CREATE' }).success).toBe(false);
   });
@@ -110,7 +110,7 @@ describe('wireCommitOperationSchema', () => {
     expect(
       wireCommitOperationSchema.safeParse({
         type: 'UPDATE',
-        model: 'tasks',
+        model: 'items',
         id: 't1',
         onStale: 'clobber',
       }).success,
@@ -121,11 +121,11 @@ describe('wireCommitOperationSchema', () => {
 describe('commitPayloadSchema', () => {
   it('preserves the full ReadSet projections the SDK sends', () => {
     const frame = buildCommitFrame(
-      [{ type: 'UPDATE', model: 'tasks', id: 't1', input: { a: 1 }, readAt: 7 }],
+      [{ type: 'UPDATE', model: 'items', id: 't1', input: { a: 1 }, readAt: 7 }],
       'tx_batch',
       [
-        { model: 'tasks', id: 't2', readAt: 5, onStale: 'reject' },
-        { group: 'deck:abc', readAt: 5 },
+        { model: 'items', id: 't2', readAt: 5, onStale: 'reject' },
+        { group: 'collection:abc', readAt: 5 },
       ],
       [
         { model: 'reports', id: 'r1', readAt: 4, onStale: 'notify' },
@@ -134,8 +134,8 @@ describe('commitPayloadSchema', () => {
     );
     expect(commitPayloadSchema.safeParse(frame.payload).success).toBe(true);
     expect(frame.payload.reads).toEqual([
-      { model: 'tasks', id: 't2', readAt: 5, onStale: 'reject' },
-      { group: 'deck:abc', readAt: 5 },
+      { model: 'items', id: 't2', readAt: 5, onStale: 'reject' },
+      { group: 'collection:abc', readAt: 5 },
     ]);
     expect(frame.payload.track).toEqual([
       { model: 'reports', id: 'r1', readAt: 4, onStale: 'notify' },
@@ -153,8 +153,8 @@ describe('commitPayloadSchema', () => {
 
   it('caps the combined ReadSet projection at one canonical limit', () => {
     const dependency = (index: number) => ({
-      model: 'tasks',
-      id: `task-${index}`,
+      model: 'items',
+      id: `item-${index}`,
       readAt: index,
     });
     const reads = Array.from(
@@ -181,8 +181,8 @@ describe('commitPayloadSchema', () => {
     ).toBe(false);
     const parsed = commitPayloadSchema.safeParse({
       operations: [
-        { type: 'CREATE', model: 'tasks', id: 't1' },
-        { type: 'UPDATE', model: 'tasks', id: 't1', readAt: 'stale-string' },
+        { type: 'CREATE', model: 'items', id: 't1' },
+        { type: 'UPDATE', model: 'items', id: 't1', readAt: 'stale-string' },
       ],
       clientTxId: 'tx',
     });
@@ -198,7 +198,7 @@ describe('commitPayloadSchema', () => {
 describe('commitMessageSchema', () => {
   it('accepts the complete frame produced by the SDK serialize boundary', () => {
     const frame = buildCommitFrame(
-      [{ type: 'UPDATE', model: 'tasks', id: 't1', input: { title: 'done' } }],
+      [{ type: 'UPDATE', model: 'items', id: 't1', input: { title: 'done' } }],
       'tx_1',
     );
 
@@ -207,7 +207,7 @@ describe('commitMessageSchema', () => {
 
   it('rejects the wrong frame type and reports nested payload failures', () => {
     const frame = buildCommitFrame(
-      [{ type: 'UPDATE', model: 'tasks', id: 't1' }],
+      [{ type: 'UPDATE', model: 'items', id: 't1' }],
       'tx_1',
     );
     expect(commitMessageSchema.safeParse({ ...frame, type: 'mutation' }).success).toBe(false);

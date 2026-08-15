@@ -5,9 +5,9 @@
 
 import {
   createTestContext,
-  TestTask,
-  TestProject,
-  createTaskFixture,
+  TestItem,
+  TestWorkspace,
+  createItemFixture,
   resetFixtureCounter,
 } from '../../src/local/testing';
 import { Model, ValidationError } from '../../src/local/Model';
@@ -37,242 +37,242 @@ describe('Model', () => {
     });
 
     it('should use provided id in constructor', () => {
-      const task = new TestTask({ id: 'custom-id' });
-      expect(task.id).toBe('custom-id');
+      const item = new TestItem({ id: 'custom-id' });
+      expect(item.id).toBe('custom-id');
     });
 
     it('should auto-generate id if not provided', () => {
-      const task = new TestTask({});
-      expect(task.id).toBeDefined();
-      expect(task.id.length).toBeGreaterThan(0);
+      const item = new TestItem({});
+      expect(item.id).toBeDefined();
+      expect(item.id.length).toBeGreaterThan(0);
     });
 
     it('should set clientId equal to id (no temp IDs)', () => {
-      const task = new TestTask({ id: 'my-id' });
-      expect(task.clientId).toBe('my-id');
+      const item = new TestItem({ id: 'my-id' });
+      expect(item.clientId).toBe('my-id');
     });
   });
 
   describe('dirty tracking', () => {
     it('should start with no changes', () => {
-      const task = createTaskFixture();
-      expect(task.hasChanges).toBe(false);
-      expect(task.getChanges()).toEqual({});
+      const item = createItemFixture();
+      expect(item.hasChanges).toBe(false);
+      expect(item.getChanges()).toEqual({});
     });
 
     it('should track property changes', () => {
-      const task = createTaskFixture({ title: 'Old' });
-      task.propertyChanged('title', 'Old', 'New');
+      const item = createItemFixture({ title: 'Old' });
+      item.propertyChanged('title', 'Old', 'New');
 
-      expect(task.hasChanges).toBe(true);
-      expect(task.getChanges()).toEqual({ title: 'New' });
+      expect(item.hasChanges).toBe(true);
+      expect(item.getChanges()).toEqual({ title: 'New' });
     });
 
     it('should skip no-op changes (same value)', () => {
-      const task = createTaskFixture({ title: 'Same' });
-      task.propertyChanged('title', 'Same', 'Same');
+      const item = createItemFixture({ title: 'Same' });
+      item.propertyChanged('title', 'Same', 'Same');
 
-      expect(task.hasChanges).toBe(false);
+      expect(item.hasChanges).toBe(false);
     });
 
     it('should clear changes on clearChanges()', () => {
-      const task = createTaskFixture({ title: 'Old' });
-      task.propertyChanged('title', 'Old', 'New');
-      expect(task.hasChanges).toBe(true);
+      const item = createItemFixture({ title: 'Old' });
+      item.propertyChanged('title', 'Old', 'New');
+      expect(item.hasChanges).toBe(true);
 
-      task.clearChanges();
-      expect(task.hasChanges).toBe(false);
+      item.clearChanges();
+      expect(item.hasChanges).toBe(false);
     });
   });
 
   describe('isNew / markAsPersisted', () => {
     it('should start as new', () => {
-      const task = createTaskFixture();
-      expect(task.isNew()).toBe(true);
+      const item = createItemFixture();
+      expect(item.isNew()).toBe(true);
     });
 
     it('should not be new after markAsPersisted()', () => {
-      const task = createTaskFixture();
-      task.markAsPersisted();
-      expect(task.isNew()).toBe(false);
+      const item = createItemFixture();
+      item.markAsPersisted();
+      expect(item.isNew()).toBe(false);
     });
   });
 
   describe('dispose', () => {
     it('should mark model as disposed', () => {
-      const task = createTaskFixture();
-      expect(task.disposed).toBe(false);
+      const item = createItemFixture();
+      expect(item.disposed).toBe(false);
 
-      task.dispose();
-      expect(task.disposed).toBe(true);
+      item.dispose();
+      expect(item.disposed).toBe(true);
     });
 
     it('should be idempotent', () => {
-      const task = createTaskFixture();
-      task.dispose();
-      task.dispose(); // Should not throw
-      expect(task.disposed).toBe(true);
+      const item = createItemFixture();
+      item.dispose();
+      item.dispose(); // Should not throw
+      expect(item.disposed).toBe(true);
     });
 
     it('should throw on updateFromData after dispose', () => {
-      const task = createTaskFixture();
-      task.dispose();
+      const item = createItemFixture();
+      item.dispose();
 
-      expect(() => { task.updateFromData({ title: 'Nope' }); }).toThrow('Cannot update disposed model');
+      expect(() => { item.updateFromData({ title: 'Nope' }); }).toThrow('Cannot update disposed model');
     });
 
     it('should throw on validate after dispose', () => {
-      const task = createTaskFixture();
-      task.dispose();
+      const item = createItemFixture();
+      item.dispose();
 
-      expect(() => task.validate()).toThrow('Cannot validate disposed model');
+      expect(() => item.validate()).toThrow('Cannot validate disposed model');
     });
 
     it('should throw on prepareSave after dispose', () => {
-      const task = createTaskFixture();
-      task.dispose();
+      const item = createItemFixture();
+      item.dispose();
 
-      expect(() => task.prepareSave()).toThrow('Cannot prepare save for disposed model');
+      expect(() => item.prepareSave()).toThrow('Cannot prepare save for disposed model');
     });
 
     it('should throw on prepareDelete after dispose', () => {
-      const task = createTaskFixture();
-      task.dispose();
+      const item = createItemFixture();
+      item.dispose();
 
-      expect(() => task.prepareDelete()).toThrow('Cannot prepare delete for disposed model');
+      expect(() => item.prepareDelete()).toThrow('Cannot prepare delete for disposed model');
     });
   });
 
   describe('updateFromData', () => {
     it('should update fields from data object', () => {
-      const task = createTaskFixture({ title: 'Old', status: 'todo' });
-      task.updateFromData({ title: 'New', status: 'done' });
+      const item = createItemFixture({ title: 'Old', status: 'todo' });
+      item.updateFromData({ title: 'New', status: 'done' });
 
-      expect(task.title).toBe('New');
-      expect(task.status).toBe('done');
+      expect(item.title).toBe('New');
+      expect(item.status).toBe('done');
     });
 
     it('should not override id', () => {
-      const task = createTaskFixture();
-      const originalId = task.id;
-      task.updateFromData({ id: 'should-be-ignored' });
+      const item = createItemFixture();
+      const originalId = item.id;
+      item.updateFromData({ id: 'should-be-ignored' });
 
-      expect(task.id).toBe(originalId);
+      expect(item.id).toBe(originalId);
     });
 
     it('should convert date strings to Date objects', () => {
-      const task = createTaskFixture();
+      const item = createItemFixture();
       const dateStr = '2025-06-15T10:00:00.000Z';
-      task.updateFromData({ createdAt: dateStr });
+      item.updateFromData({ createdAt: dateStr });
 
-      expect(task.createdAt).toBeInstanceOf(Date);
-      expect(task.createdAt?.toISOString()).toBe(dateStr);
+      expect(item.createdAt).toBeInstanceOf(Date);
+      expect(item.createdAt?.toISOString()).toBe(dateStr);
     });
   });
 
   describe('prepareSave', () => {
     it('should return create operation for new model', () => {
-      const task = createTaskFixture({ title: 'New task' });
-      const changes = task.prepareSave();
+      const item = createItemFixture({ title: 'New item' });
+      const changes = item.prepareSave();
 
       expect(changes).toBeDefined();
       expect(changes!.type).toBe('create');
-      expect(changes!.modelName).toBe('Task');
-      expect(changes!.modelId).toBe(task.id);
+      expect(changes!.modelName).toBe('Item');
+      expect(changes!.modelId).toBe(item.id);
     });
 
     it('should return update operation for persisted model with changes', () => {
-      const task = createTaskFixture({ title: 'Old' });
-      task.markAsPersisted();
-      task.propertyChanged('title', 'Old', 'New');
+      const item = createItemFixture({ title: 'Old' });
+      item.markAsPersisted();
+      item.propertyChanged('title', 'Old', 'New');
 
-      const changes = task.prepareSave();
+      const changes = item.prepareSave();
 
       expect(changes).toBeDefined();
       expect(changes!.type).toBe('update');
     });
 
     it('should return null for persisted model without changes', () => {
-      const task = createTaskFixture();
-      task.markAsPersisted();
+      const item = createItemFixture();
+      item.markAsPersisted();
 
-      const changes = task.prepareSave();
+      const changes = item.prepareSave();
       expect(changes).toBeNull();
     });
   });
 
   describe('prepareDelete', () => {
     it('should return delete operation', () => {
-      const task = createTaskFixture();
-      const changes = task.prepareDelete();
+      const item = createItemFixture();
+      const changes = item.prepareDelete();
 
       expect(changes.type).toBe('delete');
-      expect(changes.modelName).toBe('Task');
-      expect(changes.modelId).toBe(task.id);
+      expect(changes.modelName).toBe('Item');
+      expect(changes.modelId).toBe(item.id);
     });
   });
 
   describe('prepareArchive / prepareUnarchive', () => {
     it('should return archive operation and set archivedAt', () => {
-      const task = createTaskFixture();
-      const changes = task.prepareArchive();
+      const item = createItemFixture();
+      const changes = item.prepareArchive();
 
       expect(changes.type).toBe('archive');
-      expect(task.archivedAt).toBeInstanceOf(Date);
+      expect(item.archivedAt).toBeInstanceOf(Date);
     });
 
     it('should return unarchive operation and clear archivedAt', () => {
-      const task = createTaskFixture();
-      task.archivedAt = new Date();
-      const changes = task.prepareUnarchive();
+      const item = createItemFixture();
+      item.archivedAt = new Date();
+      const changes = item.prepareUnarchive();
 
       expect(changes.type).toBe('unarchive');
-      expect(task.archivedAt).toBeNull();
+      expect(item.archivedAt).toBeNull();
     });
   });
 
   describe('getModelName', () => {
     it('should return registered model name', () => {
-      const task = createTaskFixture();
-      expect(task.getModelName()).toBe('Task');
+      const item = createItemFixture();
+      expect(item.getModelName()).toBe('Item');
     });
 
     it('should return correct name for each test model', () => {
-      expect(new TestTask({}).getModelName()).toBe('Task');
-      expect(new TestProject({}).getModelName()).toBe('Project');
+      expect(new TestItem({}).getModelName()).toBe('Item');
+      expect(new TestWorkspace({}).getModelName()).toBe('Workspace');
     });
   });
 
   describe('equals', () => {
     it('should return true for same id and constructor', () => {
-      const task1 = new TestTask({ id: 'same-id' });
-      const task2 = new TestTask({ id: 'same-id' });
+      const item1 = new TestItem({ id: 'same-id' });
+      const item2 = new TestItem({ id: 'same-id' });
 
-      expect(task1.equals(task2)).toBe(true);
+      expect(item1.equals(item2)).toBe(true);
     });
 
     it('should return false for different ids', () => {
-      const task1 = createTaskFixture();
-      const task2 = createTaskFixture();
+      const item1 = createItemFixture();
+      const item2 = createItemFixture();
 
-      expect(task1.equals(task2)).toBe(false);
+      expect(item1.equals(item2)).toBe(false);
     });
   });
 
   describe('toJSON', () => {
     it('should include __class and __typename', () => {
-      const task = createTaskFixture();
-      const json = task.toJSON();
+      const item = createItemFixture();
+      const json = item.toJSON();
 
-      expect(json.__class).toBe('Task');
-      expect(json.__typename).toBe('Task');
+      expect(json.__class).toBe('Item');
+      expect(json.__typename).toBe('Item');
     });
 
     it('should include id and timestamps', () => {
-      const task = createTaskFixture();
-      const json = task.toJSON();
+      const item = createItemFixture();
+      const json = item.toJSON();
 
-      expect(json.id).toBe(task.id);
+      expect(json.id).toBe(item.id);
       expect(json.createdAt).toBeDefined();
       expect(json.updatedAt).toBeDefined();
     });
@@ -280,30 +280,30 @@ describe('Model', () => {
 
   describe('syncStatus', () => {
     it('should start as pending', () => {
-      const task = createTaskFixture();
-      expect(task.getSyncStatus()).toBe('pending');
+      const item = createItemFixture();
+      expect(item.getSyncStatus()).toBe('pending');
     });
 
     it('should update via markAsSynced', () => {
-      const task = createTaskFixture();
-      task.markAsSynced();
-      expect(task.getSyncStatus()).toBe('synced');
+      const item = createItemFixture();
+      item.markAsSynced();
+      expect(item.getSyncStatus()).toBe('synced');
     });
 
     it('should update via markAsPending', () => {
-      const task = createTaskFixture();
-      task.markAsSynced();
-      task.markAsPending();
-      expect(task.getSyncStatus()).toBe('pending');
+      const item = createItemFixture();
+      item.markAsSynced();
+      item.markAsPending();
+      expect(item.getSyncStatus()).toBe('pending');
     });
   });
 
   describe('getFieldChanges', () => {
     it('should return field changes with types', () => {
-      const task = createTaskFixture({ title: 'Old' });
-      task.propertyChanged('title', 'Old', 'New');
+      const item = createItemFixture({ title: 'Old' });
+      item.propertyChanged('title', 'Old', 'New');
 
-      const changes = task.getFieldChanges();
+      const changes = item.getFieldChanges();
       expect(changes).toHaveLength(1);
       const change = changes[0];
       if (!change) throw new Error('expected one field change');

@@ -19,7 +19,7 @@ describe('coordination()', () => {
     });
   });
 
-  it('the slides stance reads "humans overwrite, agents reject"', () => {
+  it('the entries stance reads "humans overwrite, agents reject"', () => {
     expect(coordination(humansOverwrite(), agentsReject())).toEqual({
       user: 'overwrite',
       agent: 'reject',

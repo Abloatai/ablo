@@ -29,7 +29,7 @@ import { z } from 'zod';
 export const runtime = 'nodejs';
 
 const schema = defineSchema({
-  tasks: model({
+  records: model({
     title: schemaZ.string(),
     status: schemaZ.enum(['todo', 'doing', 'done']),
     summary: schemaZ.string().optional(),
@@ -42,15 +42,15 @@ const ablo = Ablo({
   transport: 'http',
 });
 
-const updateTask = updateTool(ablo.tasks, {
-  title: 'Update task',
-  description: 'Update a task without overwriting concurrent work.',
+const updateTask = updateTool(ablo.records, {
+  title: 'Update record',
+  description: 'Update a record without overwriting concurrent work.',
   inputSchema: z.object({
-    taskId: z.string(),
+    recordId: z.string(),
     status: z.enum(['todo', 'doing', 'done']).optional(),
     summary: z.string().optional(),
   }),
-  id: ({ taskId }) => taskId,
+  id: ({ recordId }) => recordId,
   apply: (current, { status, summary }) => ({
     status: status ?? current.status,
     summary: summary ?? current.summary,

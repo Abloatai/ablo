@@ -1,20 +1,16 @@
 /**
- * Base-field hydration regression test.
+ * Attribution hydration regression test.
  *
- * `organizationId` and `createdBy` live in `baseFieldsSchema`, NOT in a
- * model's per-field `shape` (e.g. the real `slideDecks` model only declares
- * `title`/`layoutId`/`themeId`/`metadata`). The server stamps + emits these
- * base fields (camelCased on the wire), but hydration only assigns keys that
- * already exist as a property on the instance.
+ * `id` is the only field every model carries. Tenancy and attribution are
+ * ordinary application fields, so a model that reads `createdBy` declares it
+ * like any other. Hydration assigns only keys that already exist as a property
+ * on the instance.
  *
- * The bug this guards: the dynamic-model factory seeded property slots ONLY
- * from `shape`, so `deck.createdBy` was never given a slot → every inbound
- * `createdBy` was silently dropped → `deck.createdBy === undefined`. The
- * profile decks tab filters `decks.filter(d => d.createdBy === userId)`, so it
- * could NEVER surface a person's decks.
- *
- * These models deliberately do NOT declare base fields in `shape`, mirroring
- * the real schema, so the test fails on the pre-fix code and passes after.
+ * The bug this guards: the dynamic-model factory has to seed a property slot
+ * for every declared field. Miss one and each inbound `createdBy` is silently
+ * dropped → `collection.createdBy === undefined`. A profile page filtering
+ * `collections.filter(d => d.createdBy === userId)` could then never surface a
+ * person's collections.
  */
 
 import { z } from 'zod';
@@ -24,16 +20,18 @@ import { Ablo, type InternalAbloOptions } from '../../src/Ablo';
 import { Model } from '../../src/local/Model';
 import type { InstanceCache as ObjectPool } from '../../src/local/InstanceCache';
 
-// Mirrors `slideDecks`: base fields are intentionally absent from `shape`.
-interface Deck extends Model {
+// A model that wants to read its tenancy and author declares them itself.
+interface Collection extends Model {
   title: string;
   organizationId?: string;
   createdBy?: string;
 }
 
 const schema = defineSchema({
-  decks: model({
+  collections: model({
     title: z.string(),
+    organizationId: z.string().optional(),
+    createdBy: z.string().optional(),
   }),
 });
 
@@ -53,58 +51,58 @@ function getPool(sync: ReturnType<typeof createEngine>): ObjectPool {
   return sync._pool;
 }
 
-describe('base-field hydration (createdBy / organizationId)', () => {
-  it('hydrates createdBy on create even though it is not in the model shape', () => {
+describe('attribution hydration (createdBy / organizationId)', () => {
+  it('hydrates createdBy on create', () => {
     const pool = getPool(createEngine());
     if (!pool) return;
 
-    const deck = pool.create('decks', {
-      id: 'deck-1',
+    const collection = pool.create('collections', {
+      id: 'collection-1',
       title: 'Quarterly review',
       organizationId: 'org-1',
       createdBy: 'user-42',
-    }) as Deck | null;
+    }) as Collection | null;
 
-    expect(deck).not.toBeNull();
-    expect(deck!.createdBy).toBe('user-42');
-    expect(deck!.organizationId).toBe('org-1');
+    expect(collection).not.toBeNull();
+    expect(collection!.createdBy).toBe('user-42');
+    expect(collection!.organizationId).toBe('org-1');
   });
 
   it('hydrates createdBy from an inbound delta (updateFromData)', () => {
     const pool = getPool(createEngine());
     if (!pool) return;
 
-    const deck = pool.create('decks', {
-      id: 'deck-2',
+    const collection = pool.create('collections', {
+      id: 'collection-2',
       title: 'Draft',
-    }) as Deck | null;
-    expect(deck).not.toBeNull();
+    }) as Collection | null;
+    expect(collection).not.toBeNull();
 
     // Simulate a server delta carrying the stamped provenance.
-    deck!.updateFromData({ createdBy: 'user-99', organizationId: 'org-2' });
+    collection!.updateFromData({ createdBy: 'user-99', organizationId: 'org-2' });
 
-    expect(deck!.createdBy).toBe('user-99');
-    expect(deck!.organizationId).toBe('org-2');
+    expect(collection!.createdBy).toBe('user-99');
+    expect(collection!.organizationId).toBe('org-2');
   });
 
-  it('supports the profile-page filter: decks.filter(d => d.createdBy === userId)', () => {
+  it('supports the profile-page filter: collections.filter(d => d.createdBy === userId)', () => {
     const pool = getPool(createEngine());
     if (!pool) return;
 
-    const mine = pool.create('decks', {
-      id: 'deck-mine',
+    const mine = pool.create('collections', {
+      id: 'collection-mine',
       title: 'Mine',
       createdBy: 'user-1',
-    }) as Deck;
-    const theirs = pool.create('decks', {
-      id: 'deck-theirs',
+    }) as Collection;
+    const theirs = pool.create('collections', {
+      id: 'collection-theirs',
       title: 'Theirs',
       createdBy: 'user-2',
-    }) as Deck;
+    }) as Collection;
 
     const all = [mine, theirs];
-    const userDecks = all.filter((d) => d.createdBy === 'user-1');
+    const userCollections = all.filter((d) => d.createdBy === 'user-1');
 
-    expect(userDecks.map((d) => d.id)).toEqual(['deck-mine']);
+    expect(userCollections.map((d) => d.id)).toEqual(['collection-mine']);
   });
 });

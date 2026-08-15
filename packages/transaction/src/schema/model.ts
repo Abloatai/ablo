@@ -8,7 +8,7 @@
  *   import { z } from 'zod';
  *   import { model, relation } from '@abloatai/transaction/schema';
  *
- *   const tasks = model({
+ *   const items = model({
  *     title: z.string(),
  *     status: z.enum(['todo', 'doing', 'done']).default('todo'),
  *     projectId: z.string().optional(),
@@ -90,13 +90,13 @@ export interface ModelOptions {
    * Edges from this model to others, keyed by the accessor name they create. The
    * engine reads them to index foreign keys, to order inserts so a parent row lands
    * before the rows referencing it, and to generate the accessors that let you read
-   * `task.project` or `project.tasks` directly. Built with the {@link relation}
+   * `item.project` or `project.items` directly. Built with the {@link relation}
    * factories.
    *
    * ```ts
    * relations: {
    *   project: relation.belongsTo('projects', 'projectId'),
-   *   comments: relation.hasMany('comments', 'taskId'),
+   *   comments: relation.hasMany('comments', 'itemId'),
    * }
    * ```
    */
@@ -110,8 +110,8 @@ export interface ModelOptions {
   /**
    * The wire type name for this model — the value that identifies its rows on the
    * wire (the `__typename`). The loader stamps it onto incoming rows and uses it to
-   * find the matching model class. It defaults to the schema key (`tasks` →
-   * `'tasks'`); set it explicitly when the wire shape uses different casing, such as
+   * find the matching model class. It defaults to the schema key (`items` →
+   * `'items'`); set it explicitly when the wire shape uses different casing, such as
    * schema key `block` mapping to typename `'Block'`.
    *
    * This is the one value that identifies the model on the wire; the client-side
@@ -178,7 +178,7 @@ export interface ModelOptions {
    *   inbox. Accepts one role or many.
    *
    * ```ts
-   * // dataroomMember: { userId, dataroomId }
+   * // archiveMember: { userId, archiveId }
    * groups: { grants: { subject: 'user', scope: 'workspace' } }
    * // a message → its addressee's inbox, keyed on `toId`
    * groups: { roles: [entityRole({ kind: 'inbox', source: 'toId' })] }
@@ -395,7 +395,7 @@ export interface ModelDef<
  * const tags = model({ label: z.string() });
  *
  * // Loaded at bootstrap (the default), with an edge to its project
- * const tasks = model({
+ * const items = model({
  *   title: z.string(),
  *   status: z.enum(['todo', 'doing', 'done']).default('todo'),
  *   projectId: z.string().optional(),

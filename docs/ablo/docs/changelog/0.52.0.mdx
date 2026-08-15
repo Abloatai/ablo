@@ -1,0 +1,71 @@
+---
+title: "v0.52.0"
+type: changelog
+date: 2026-08-15
+changelog:
+  version: "0.52.0"
+  category: "Fixes"
+---
+
+### Models carry only `id`
+
+`createdAt`, `updatedAt`, `organizationId`, and `createdBy` are no longer added
+to every model. Declare them as ordinary fields wherever you want them, and
+declare them to keep reading and writing them if you relied on Ablo supplying
+them. Ablo still records who made each change in its own transaction log, and
+still owns the tenancy value on every write.
+
+A model can point at a table Ablo did not create, naming the columns that
+differ:
+
+```ts
+import { defineSchema, field, model } from '@abloatai/ablo/schema';
+
+export const schema = defineSchema({
+  itemEvents: model(
+    {
+      itemId: field.string().from('item_id'),
+      createdAt: field.number().from('created_at'),
+    },
+    { tableName: 'item_events' }
+  ),
+});
+```
+
+Database adapters accept identifiers the database generates and return them as
+canonical string ids, taking the id type from the connection rather than from
+the model.
+
+### Updates can carry a precondition
+
+An update operation accepts `where`. The database changes the row only while its
+current values still match. On a mismatch the commit fails with
+`precondition_failed` and the whole batch declines, leaving every operation in it
+unapplied. The Kysely source adapter supports preconditions; the Drizzle,
+Prisma, and memory adapters report `source_adapter_misconfigured`.
+
+### Commit receipts return the rows the database wrote
+
+Receipts carry `operationResults`, pairing each operation's `transactionId` with
+its outcome and the authoritative row the database transaction returned,
+including identifiers and timestamps the database generated.
+
+### Two error codes renamed
+
+`task_id_missing` is now `item_id_missing`, and `task_id_required` is now
+`item_id_required`. Neither old code was ever returned by a request, so a caller
+matching on error codes has nothing to change unless it names one directly.
+
+### CLI
+
+`ablo setup` reads the repository and the current Ablo target, then prints the
+decisions, actions, blockers, and postconditions a verified setup requires. It
+reports and leaves the project untouched.
+
+`ablo init --plan` shows every file action before any of it happens.
+
+`ablo telemetry` controls limited CLI usage analytics. Collection is on by
+default and stays off in continuous integration and whenever `DO_NOT_TRACK=1` or
+`ABLO_TELEMETRY_DISABLED=1` is set. Run `ablo telemetry status` to see the
+current state, `ablo telemetry disable` to turn collection off, and
+`ablo telemetry reset` to rotate the local installation identity.

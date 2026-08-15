@@ -17,7 +17,7 @@ export function resetDeltaCounter(): void {
 export interface CreateDeltaOptions {
   /** Sync ID (auto-increments if not provided) */
   id?: number;
-  /** Model name (e.g., 'Task', 'Slide') */
+  /** Model name (e.g., 'Item', 'Entry') */
   modelName: string;
   /** Model ID */
   modelId: string;

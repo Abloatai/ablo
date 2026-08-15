@@ -96,7 +96,7 @@ function verbRewrite(call: CallExpression, verb: string): string | null {
   const args = call.getArguments();
   const first = args[0];
   if (first === undefined) return null;
-  const calleeText = call.getExpression().getText(); // e.g. "ablo.tasks.update"
+  const calleeText = call.getExpression().getText(); // e.g. "ablo.records.update"
 
   if (verb === 'create') {
     // create(data, opts?) becomes create({ data, ...opts }). The old `data`
@@ -116,7 +116,7 @@ function verbRewrite(call: CallExpression, verb: string): string | null {
 function loadRewrite(call: CallExpression): string | null {
   const callee = call.getExpression();
   if (!Node.isPropertyAccessExpression(callee)) return null;
-  const base = callee.getExpression().getText(); // "ablo.tasks"
+  const base = callee.getExpression().getText(); // "ablo.records"
   const arg = call.getArguments()[0];
   if (arg && Node.isObjectLiteralExpression(arg)) {
     const where = arg.getProperty('where');

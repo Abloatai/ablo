@@ -21,7 +21,7 @@ end-to-end regression pins the behavior.
 The new `contention` option names what happens when the row is already held:
 
 ```ts
-const claim = await ablo.tasks.claim({
+const claim = await ablo.records.claim({
   id,
   contention: {
     mode: 'skip',

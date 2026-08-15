@@ -40,7 +40,7 @@ import {
   registerTestModels,
   createTestConfig,
   createTestContext,
-  TestSlideLayer,
+  TestEntryLayer,
   type TestContextResult,
 } from '../../src/local/testing';
 
@@ -106,7 +106,7 @@ describe('SyncClient echo detection (architectural)', () => {
     const txDeleteId = 'tx-delete-flicker';
     const layerData = {
       id: layerId,
-      slideId: 'slide-1',
+      entryId: 'entry-1',
       type: 'rect',
       zIndex: 0,
       organizationId: 'org-1',
@@ -114,7 +114,7 @@ describe('SyncClient echo detection (architectural)', () => {
 
     // Step 1: optimistic create. The mutation hasn't reached the server
     // yet, but the pool already reflects it.
-    const created = pool.createFromData({ __typename: 'SlideLayer', ...layerData });
+    const created = pool.createFromData({ __typename: 'EntryDetail', ...layerData });
     expect(created).not.toBeNull();
     pool.add(created!, ModelScope.live);
     expect(pool.get(layerId)).toBeDefined();
@@ -136,7 +136,7 @@ describe('SyncClient echo detection (architectural)', () => {
     // recognized as a confirmation of `txCreateId` and the pool stays
     // empty.
     const createEchoBatch: DbResult[] = [
-      { action: 'add', modelName: 'SlideLayer', modelId: layerId, data: layerData, transactionId: txCreateId },
+      { action: 'add', modelName: 'EntryDetail', modelId: layerId, data: layerData, transactionId: txCreateId },
     ];
     client.applyDeltaBatchToPool(createEchoBatch, ENRICH_NOOP);
 
@@ -145,7 +145,7 @@ describe('SyncClient echo detection (architectural)', () => {
     // Step 4: server's confirming DELETE delta arrives. Pool already
     // empty; the remove is a no-op.
     const deleteEchoBatch: DbResult[] = [
-      { action: 'remove', modelName: 'SlideLayer', modelId: layerId, transactionId: txDeleteId },
+      { action: 'remove', modelName: 'EntryDetail', modelId: layerId, transactionId: txDeleteId },
     ];
     client.applyDeltaBatchToPool(deleteEchoBatch, ENRICH_NOOP);
 
@@ -160,7 +160,7 @@ describe('SyncClient echo detection (architectural)', () => {
     const layerId = 'layer-foreign';
     const layerData = {
       id: layerId,
-      slideId: 'slide-1',
+      entryId: 'entry-1',
       type: 'rect',
       zIndex: 0,
       organizationId: 'org-1',
@@ -169,7 +169,7 @@ describe('SyncClient echo detection (architectural)', () => {
     // No local transaction was staged for this id — the delta is from
     // another client/agent. Pool should gain the row.
     const foreignBatch: DbResult[] = [
-      { action: 'add', modelName: 'SlideLayer', modelId: layerId, data: layerData, transactionId: 'tx-from-other-client' },
+      { action: 'add', modelName: 'EntryDetail', modelId: layerId, data: layerData, transactionId: 'tx-from-other-client' },
     ];
     client.applyDeltaBatchToPool(foreignBatch, ENRICH_NOOP);
 
@@ -180,14 +180,14 @@ describe('SyncClient echo detection (architectural)', () => {
     const layerId = 'layer-legacy';
     const layerData = {
       id: layerId,
-      slideId: 'slide-1',
+      entryId: 'entry-1',
       type: 'rect',
       zIndex: 0,
       organizationId: 'org-1',
     };
 
     const legacyBatch: DbResult[] = [
-      { action: 'add', modelName: 'SlideLayer', modelId: layerId, data: layerData /* no transactionId */ },
+      { action: 'add', modelName: 'EntryDetail', modelId: layerId, data: layerData /* no transactionId */ },
     ];
     client.applyDeltaBatchToPool(legacyBatch, ENRICH_NOOP);
 
@@ -203,7 +203,7 @@ describe('SyncClient echo detection (architectural)', () => {
     const txId = 'tx-once';
     const layerData = {
       id: layerId,
-      slideId: 'slide-1',
+      entryId: 'entry-1',
       type: 'rect',
       zIndex: 0,
       organizationId: 'org-1',
@@ -213,7 +213,7 @@ describe('SyncClient echo detection (architectural)', () => {
 
     // Echo arrives — pool unchanged (was empty), pending drained.
     client.applyDeltaBatchToPool(
-      [{ action: 'add', modelName: 'SlideLayer', modelId: layerId, data: layerData, transactionId: txId }],
+      [{ action: 'add', modelName: 'EntryDetail', modelId: layerId, data: layerData, transactionId: txId }],
       ENRICH_NOOP,
     );
     expect(pool.get(layerId)).toBeUndefined();
@@ -222,7 +222,7 @@ describe('SyncClient echo detection (architectural)', () => {
     // longer in the pending set — should apply (defensive: a re-broadcast
     // shouldn't permanently silence a row).
     client.applyDeltaBatchToPool(
-      [{ action: 'add', modelName: 'SlideLayer', modelId: layerId, data: layerData, transactionId: txId }],
+      [{ action: 'add', modelName: 'EntryDetail', modelId: layerId, data: layerData, transactionId: txId }],
       ENRICH_NOOP,
     );
     expect(pool.get(layerId)).toBeDefined();
@@ -237,14 +237,14 @@ describe('SyncClient echo detection (architectural)', () => {
     const otherId = 'layer-other';
     const ownTx = 'tx-own';
     const layerOwn = {
-      id: ownId, slideId: 's', type: 'rect', zIndex: 0, organizationId: 'org-1',
+      id: ownId, entryId: 's', type: 'rect', zIndex: 0, organizationId: 'org-1',
     };
     const layerOther = {
-      id: otherId, slideId: 's', type: 'rect', zIndex: 0, organizationId: 'org-1',
+      id: otherId, entryId: 's', type: 'rect', zIndex: 0, organizationId: 'org-1',
     };
 
     // Optimistic create + delete locally — own row should NOT be in pool.
-    const created = pool.createFromData({ __typename: 'SlideLayer', ...layerOwn });
+    const created = pool.createFromData({ __typename: 'EntryDetail', ...layerOwn });
     pool.add(created!, ModelScope.live);
     pool.remove(ownId);
 
@@ -253,8 +253,8 @@ describe('SyncClient echo detection (architectural)', () => {
     // Mixed batch: echo for own + foreign add.
     client.applyDeltaBatchToPool(
       [
-        { action: 'add', modelName: 'SlideLayer', modelId: ownId, data: layerOwn, transactionId: ownTx },
-        { action: 'add', modelName: 'SlideLayer', modelId: otherId, data: layerOther, transactionId: 'tx-other-client' },
+        { action: 'add', modelName: 'EntryDetail', modelId: ownId, data: layerOwn, transactionId: ownTx },
+        { action: 'add', modelName: 'EntryDetail', modelId: otherId, data: layerOther, transactionId: 'tx-other-client' },
       ],
       ENRICH_NOOP,
     );
@@ -273,7 +273,7 @@ describe('SyncClient echo detection (architectural)', () => {
 
     // Initial state via foreign delta (or assume bootstrap).
     client.applyDeltaBatchToPool(
-      [{ action: 'add', modelName: 'SlideLayer', modelId: layerId, data: { id: layerId, slideId: 's', type: 'rect', zIndex: 1, organizationId: 'org-1' }, transactionId: 'tx-from-bootstrap' }],
+      [{ action: 'add', modelName: 'EntryDetail', modelId: layerId, data: { id: layerId, entryId: 's', type: 'rect', zIndex: 1, organizationId: 'org-1' }, transactionId: 'tx-from-bootstrap' }],
       ENRICH_NOOP,
     );
     expect(pool.get(layerId)).toBeDefined();
@@ -297,7 +297,7 @@ describe('SyncClient echo detection (architectural)', () => {
     // when staging tx-update-1). Without echo detection this would
     // clobber the user's newer zIndex=10 back to zIndex=5.
     client.applyDeltaBatchToPool(
-      [{ action: 'update', modelName: 'SlideLayer', modelId: layerId, data: { id: layerId, slideId: 's', type: 'rect', zIndex: 5, organizationId: 'org-1' }, transactionId: txUpdate1 }],
+      [{ action: 'update', modelName: 'EntryDetail', modelId: layerId, data: { id: layerId, entryId: 's', type: 'rect', zIndex: 5, organizationId: 'org-1' }, transactionId: txUpdate1 }],
       ENRICH_NOOP,
     );
 

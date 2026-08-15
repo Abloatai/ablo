@@ -51,7 +51,7 @@ export interface DefaultSyncShape {
   // `models` is a `SchemaRecord` (not `Record<string, unknown>`) so that
   // `ResolveSchema['models']` still satisfies the `R extends SchemaRecord`
   // bound on the SDK hooks when no `Register` is present — e.g. a shared
-  // package (`@ablo/documents`, `@ablo/teams`) typechecked standalone, with no
+  // package (`feature packages`) typechecked standalone, with no
   // app registration in scope. Without this the fallback wouldn't type-check
   // against `useAblo<R>()`/`AbloProvider<R>` and every such package would need
   // its own ambient registration.

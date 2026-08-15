@@ -73,12 +73,12 @@ describe('describeRemoteFailure', () => {
   it('names a publication-coverage gap by the tables, and never leaks "publication"', () => {
     const drift = describeRemoteFailure({
       item: 'publication_drift',
-      actual: 'tasks, notes',
-      fix: 'ALTER PUBLICATION "ablo_publication" ADD TABLE public."tasks", public."notes";',
+      actual: 'records, notes',
+      fix: 'ALTER PUBLICATION "ablo_publication" ADD TABLE public."records", public."notes";',
     });
     // The reader learns WHICH tables aren't shared and the exact statement to run,
     // without the word "publication" in the plain-language label.
-    expect(drift.label).toContain('tasks, notes');
+    expect(drift.label).toContain('records, notes');
     expect(drift.label).not.toMatch(/\bpublication\b/i);
     expect(drift.fix).toContain('ALTER PUBLICATION');
   });

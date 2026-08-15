@@ -58,26 +58,26 @@ function sch(models: Record<string, ModelJSON>): SchemaJSON {
 describe('diffSchema — models', () => {
   it('first push (prev = null) creates every model, no per-field steps', () => {
     const next = sch({
-      tasks: mdl({ title: fld('string') }, 'tasks'),
-      projects: mdl({ name: fld('string') }, 'projects'),
+      items: mdl({ title: fld('string') }, 'items'),
+      workspaces: mdl({ name: fld('string') }, 'workspaces'),
     });
     expect(diffSchema(null, next)).toStrictEqual<MigrationStep[]>([
-      { kind: 'create_model', model: 'tasks', tableName: 'tasks' },
-      { kind: 'create_model', model: 'projects', tableName: 'projects' },
+      { kind: 'create_model', model: 'items', tableName: 'items' },
+      { kind: 'create_model', model: 'workspaces', tableName: 'workspaces' },
     ]);
   });
 
   it('falls back to the model key when tableName is unset', () => {
-    const next = sch({ tasks: mdl({ title: fld('string') }) });
+    const next = sch({ items: mdl({ title: fld('string') }) });
     expect(diffSchema(null, next)).toStrictEqual([
-      { kind: 'create_model', model: 'tasks', tableName: 'tasks' },
+      { kind: 'create_model', model: 'items', tableName: 'items' },
     ]);
   });
 
   it('adds a new model', () => {
-    const prev = sch({ tasks: mdl({ title: fld('string') }, 'tasks') });
+    const prev = sch({ items: mdl({ title: fld('string') }, 'items') });
     const next = sch({
-      tasks: mdl({ title: fld('string') }, 'tasks'),
+      items: mdl({ title: fld('string') }, 'items'),
       notes: mdl({ body: fld('string') }, 'notes'),
     });
     expect(diffSchema(prev, next)).toStrictEqual([
@@ -87,38 +87,38 @@ describe('diffSchema — models', () => {
 
   it('drops a removed model', () => {
     const prev = sch({
-      tasks: mdl({ title: fld('string') }, 'tasks'),
+      items: mdl({ title: fld('string') }, 'items'),
       legacy: mdl({ x: fld('string') }, 'legacy_table'),
     });
-    const next = sch({ tasks: mdl({ title: fld('string') }, 'tasks') });
+    const next = sch({ items: mdl({ title: fld('string') }, 'items') });
     expect(diffSchema(prev, next)).toStrictEqual([
       { kind: 'drop_model', model: 'legacy', tableName: 'legacy_table' },
     ]);
   });
 
   it('treats an unhinted removed+added pair as drop + create (not a rename)', () => {
-    const prev = sch({ task: mdl({ title: fld('string') }, 'task') });
+    const prev = sch({ item: mdl({ title: fld('string') }, 'item') });
     const next = sch({ todo: mdl({ title: fld('string') }, 'todo') });
     const steps = diffSchema(prev, next);
     expect(steps).toStrictEqual([
       { kind: 'create_model', model: 'todo', tableName: 'todo' },
-      { kind: 'drop_model', model: 'task', tableName: 'task' },
+      { kind: 'drop_model', model: 'item', tableName: 'item' },
     ]);
   });
 
   it('honours a model rename hint (no drop/create)', () => {
-    const prev = sch({ task: mdl({ title: fld('string') }, 'task') });
+    const prev = sch({ item: mdl({ title: fld('string') }, 'item') });
     const next = sch({ todo: mdl({ title: fld('string') }, 'todo') });
-    const steps = diffSchema(prev, next, { models: [{ from: 'task', to: 'todo' }] });
-    expect(steps).toStrictEqual([{ kind: 'rename_model', from: 'task', to: 'todo' }]);
+    const steps = diffSchema(prev, next, { models: [{ from: 'item', to: 'todo' }] });
+    expect(steps).toStrictEqual([{ kind: 'rename_model', from: 'item', to: 'todo' }]);
   });
 
   it('diffs fields across a renamed model', () => {
-    const prev = sch({ task: mdl({ title: fld('string') }, 'task') });
+    const prev = sch({ item: mdl({ title: fld('string') }, 'item') });
     const next = sch({ todo: mdl({ title: fld('string'), done: fld('boolean', { optional: true }) }, 'todo') });
-    const steps = diffSchema(prev, next, { models: [{ from: 'task', to: 'todo' }] });
+    const steps = diffSchema(prev, next, { models: [{ from: 'item', to: 'todo' }] });
     expect(steps).toStrictEqual([
-      { kind: 'rename_model', from: 'task', to: 'todo' },
+      { kind: 'rename_model', from: 'item', to: 'todo' },
       { kind: 'add_field', model: 'todo', field: 'done', meta: fld('boolean', { optional: true }) },
     ]);
   });
@@ -257,18 +257,18 @@ describe('diffSchema — fields', () => {
 describe('diffSchema — ordering', () => {
   it('orders creates → renames → field changes → drops', () => {
     const prev = sch({
-      task: mdl({ title: fld('string'), old: fld('string') }, 'task'),
+      item: mdl({ title: fld('string'), old: fld('string') }, 'item'),
       gone: mdl({ x: fld('string') }, 'gone'),
     });
     const next = sch({
       todo: mdl({ title: fld('string'), extra: fld('number', { optional: true }) }, 'todo'),
       fresh: mdl({ y: fld('string') }, 'fresh'),
     });
-    const steps = diffSchema(prev, next, { models: [{ from: 'task', to: 'todo' }] });
+    const steps = diffSchema(prev, next, { models: [{ from: 'item', to: 'todo' }] });
     const kinds = steps.map((s) => s.kind);
     expect(kinds).toStrictEqual([
       'create_model', // fresh
-      'rename_model', // task → todo
+      'rename_model', // item → todo
       'add_field', // todo.extra
       'drop_field', // todo.old
       'drop_model', // gone
@@ -382,9 +382,9 @@ describe('classifyMigration', () => {
 
   it('treats creates, renames, and pure relaxations as auto-applicable', () => {
     const steps = diffSchema(
-      sch({ task: mdl({ name: fld('string') }, 'task') }),
+      sch({ item: mdl({ name: fld('string') }, 'item') }),
       sch({ todo: mdl({ label: fld('string', { optional: true }) }, 'todo') }),
-      { models: [{ from: 'task', to: 'todo' }], fields: [{ model: 'todo', from: 'name', to: 'label' }] },
+      { models: [{ from: 'item', to: 'todo' }], fields: [{ model: 'todo', from: 'name', to: 'label' }] },
     );
     const c = classifyMigration(steps);
     expect(isAutoApplicable(c)).toBe(true);

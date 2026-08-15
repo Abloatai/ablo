@@ -10,9 +10,8 @@
  * that same schema, so the types you code against, the rows the database stores, and
  * the entities the sync layer moves all describe the same thing.
  *
- * The generated interface covers the base columns plus each declared field, with
- * enums emitted as string-literal unions. Relations are not expanded here — the
- * runtime SDK resolves those through its typed accessors.
+ * The generated interface covers storage-mode fields plus each declared field,
+ * with enums emitted as string-literal unions. Relations are not expanded here.
  */
 
 import type { FieldMeta } from './field.js';
@@ -70,12 +69,7 @@ export function generateTypes(schema: SchemaJSON): string {
   for (const [key, model] of Object.entries(schema.models)) {
     lines.push(`export interface ${nameByKey.get(key)!} {`);
     lines.push('  id: string;');
-    lines.push('  createdAt: Date;');
-    lines.push('  updatedAt: Date;');
-    lines.push('  organizationId?: string;');
-    lines.push('  createdBy?: string;');
     for (const [fieldName, meta] of Object.entries(model.fields)) {
-      // A model that redeclares a base column doesn't double-emit it.
       if ((BASE_FIELDS as readonly string[]).includes(fieldName)) continue;
       lines.push(`  ${fieldName}${meta.isOptional ? '?' : ''}: ${tsType(meta)};`);
     }

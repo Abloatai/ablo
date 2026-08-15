@@ -23,7 +23,7 @@ import { SyncClient } from '../../SyncClient.js';
 import { InstanceCache } from '../../InstanceCache.js';
 import { ModelRegistry, setActiveRegistry } from '../../ModelRegistry.js';
 import {
-  createTaskFixture,
+  createItemFixture,
   fakeDatabase,
   registerTestModels,
   createTestConfig,
@@ -40,8 +40,8 @@ import { noopObservability } from '../../RuntimeContext.js';
 const VALID_ROW = {
   id: 'tx_1',
   type: 'update' as const,
-  modelName: 'Task',
-  modelId: 'task_1',
+  modelName: 'Item',
+  modelId: 'item_1',
   data: { title: 'hello' },
   context: { userId: 'user_1', organizationId: 'org_1' },
 };
@@ -61,7 +61,7 @@ describe('deserializePersistedTransaction', () => {
     const tx = deserializePersistedTransaction(VALID_ROW);
     if (tx === null) throw new Error('expected VALID_ROW to rehydrate into a transaction');
     expect(tx.status).toBe('pending');
-    expect(tx.modelKey).toBe('task');
+    expect(tx.modelKey).toBe('item');
     expect(tx.attempts).toBe(0);
     expect(tx.priority).toBe('normal');
     expect(typeof tx.createdAt).toBe('number');
@@ -201,17 +201,17 @@ describe('SyncClient.restoreMutationQueue (via initialize)', () => {
         mutations: [
           {
             type: 'update',
-            modelName: 'Task',
-            modelData: { __typename: 'Task', id: 'task_1', title: 'restored' },
+            modelName: 'Item',
+            modelData: { __typename: 'Item', id: 'item_1', title: 'restored' },
             timestamp: new Date().toISOString(),
           },
           // Corrupt: no modelData at all — must be dropped, not crash restore.
-          { type: 'update', modelName: 'Task', timestamp: new Date().toISOString() },
+          { type: 'update', modelName: 'Item', timestamp: new Date().toISOString() },
           // Corrupt: unknown mutation type.
           {
             type: 'explode',
-            modelName: 'Task',
-            modelData: { __typename: 'Task', id: 'task_2' },
+            modelName: 'Item',
+            modelData: { __typename: 'Item', id: 'item_2' },
             timestamp: new Date().toISOString(),
           },
         ],
@@ -267,7 +267,7 @@ describe('SyncClient.restoreMutationQueue (via initialize)', () => {
     });
     const client = new SyncClient(pool, database);
 
-    client.add(createTaskFixture({ title: 'queued before auth' }));
+    client.add(createItemFixture({ title: 'queued before auth' }));
     await Promise.resolve();
     await Promise.resolve();
     expect(saved).toEqual([]);
@@ -299,8 +299,8 @@ describe('SyncClient.restoreMutationQueue (via initialize)', () => {
       mutation: {
         mutationId: 'legacy-1',
         type: 'update',
-        modelName: 'Task',
-        modelData: { __typename: 'Task', id: 'task-legacy', title: 'restored' },
+        modelName: 'Item',
+        modelData: { __typename: 'Item', id: 'item-legacy', title: 'restored' },
         timestamp: new Date().toISOString(),
       },
       timestamp: Date.now(),
@@ -340,7 +340,7 @@ describe('persistedMutationSchema', () => {
     const parsed = persistedMutationSchema.safeParse({
       type: 'create',
       modelData: { id: 'x' },
-      modelName: 'Task',
+      modelName: 'Item',
       timestamp: new Date().toISOString(),
       writeOptions: { readAt: 12, onStale: 'reject' },
     });

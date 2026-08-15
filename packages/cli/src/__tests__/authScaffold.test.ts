@@ -18,7 +18,7 @@ describe('auth scaffold', () => {
     expect(source).toContain("'Cache-Control': 'no-store'");
     expect(source).toContain("code: 'session_expired'");
     expect(source).toContain("credentialKind: 'ephemeral'");
-    expect(source).toContain("can: { tasks: ['read', 'create', 'update'] }");
+    expect(source).toContain("can: { records: ['read', 'create', 'update'] }");
     expect(source).toContain('isSameOrigin(request)');
   });
 });

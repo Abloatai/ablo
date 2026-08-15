@@ -13,7 +13,7 @@ you declared and nothing else.
 A plain write has no stale premise:
 
 ```ts
-await ablo.tasks.update({ id, data: { status: 'done' } });
+await ablo.records.update({ id, data: { status: 'done' } });
 ```
 
 If no active claim conflicts with it, the write is last-write-wins. That is a
@@ -26,14 +26,14 @@ once in its `conflict` setting instead of at every call site.
 Pass the exact returned rows when a write is based on values previously read:
 
 ```ts
-const task = await ablo.tasks.get({ id });
+const record = await ablo.records.get({ id });
 const policy = await ablo.policies.get({ id: policyId });
-if (!task || !policy) throw new Error('required input is missing');
+if (!record || !policy) throw new Error('required input is missing');
 
-await ablo.tasks.update({
-  id: task.id,
+await ablo.records.update({
+  id: record.id,
   data: { status: 'done' },
-  reads: [task, policy],
+  reads: [record, policy],
 });
 ```
 
@@ -83,7 +83,7 @@ See [Coordination](./coordination.md#claims) for the API.
 ## Cross-row and batch premises
 
 Model writes and lower-level commits can declare rows they read even when the
-write targets somewhere else. This protects decisions such as “update the task
+write targets somewhere else. This protects decisions such as “update the record
 only if the deal I inspected has not changed.” A stale batch premise applies to
 the whole batch so atomicity is preserved.
 

@@ -67,7 +67,7 @@ function runtimeWith(logger: Logger): RuntimeContext {
   };
 }
 
-const schema = defineSchema({ tasks: model({ title: z.string() }) });
+const schema = defineSchema({ items: model({ title: z.string() }) });
 
 describe('runtime isolation between clients', () => {
   it('component graphs built with different runtimes log through their own', () => {
@@ -116,7 +116,7 @@ describe('runtime isolation between clients', () => {
       // InstanceCache and MutationQueue, both constructed with A's instance.
       const aBefore = a.lines.length;
       const bBefore = b.lines.length;
-      void clientA.tasks.create({ data: { title: 'isolated' } }).catch(() => undefined);
+      void clientA.items.create({ data: { title: 'isolated' } }).catch(() => undefined);
       // The staging path is asynchronous; give it a beat to run.
       await new Promise((resolve) => setTimeout(resolve, 50));
 

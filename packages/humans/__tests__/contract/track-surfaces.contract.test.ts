@@ -65,7 +65,7 @@ function _compileOnlyTrackProbes(
 void _compileOnlyTrackProbes;
 
 const schema = defineSchema({
-  tasks: model({ title: z.string() }, { typename: 'Task' }),
+  items: model({ title: z.string() }, { typename: 'Item' }),
 });
 
 const silentLogger = {
@@ -84,7 +84,7 @@ describe('CONTRACT: track has one shape across both transports', () => {
       dangerouslyAllowBrowser: true,
       transport: 'http',
     });
-    expect(typeof http.tasks.track).toBe('function');
+    expect(typeof http.items.track).toBe('function');
   });
 
   it('exposes track on the typed WebSocket model', async () => {
@@ -96,7 +96,7 @@ describe('CONTRACT: track has one shape across both transports', () => {
       logger: silentLogger,
     } as InternalAbloOptions<(typeof schema)['models']>);
     try {
-      expect(typeof stateful.tasks.track).toBe('function');
+      expect(typeof stateful.items.track).toBe('function');
     } finally {
       await stateful.dispose();
     }

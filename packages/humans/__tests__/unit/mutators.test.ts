@@ -23,34 +23,34 @@ import { defineMutators } from '../../src/local/mutators/defineMutators';
 // ── Test schema ────────────────────────────────────────────────────────
 
 const testSchema = defineSchema({
-  tasks: model(
+  items: model(
     {
       title: z.string(),
       status: z.enum(['todo', 'in_progress', 'done']).default('todo'),
       priority: z.string().optional(),
       order: z.number().default(0),
-      projectId: z.string().optional(),
+      workspaceId: z.string().optional(),
       parentId: z.string().optional(),
     },
-    { typename: 'Task' }),
-  projects: model(
+    { typename: 'Item' }),
+  workspaces: model(
     {
       name: z.string(),
       description: z.string().optional(),
     },
-    { typename: 'Project' }),
+    { typename: 'Workspace' }),
 });
 
 type TestSchema = typeof testSchema;
 
 // ── Test model classes ────────────────────────────────────────────────
 
-class TestTask extends Model {
+class TestItem extends Model {
   title!: string;
   status!: 'todo' | 'in_progress' | 'done';
   priority?: string;
   order!: number;
-  projectId?: string;
+  workspaceId?: string;
   parentId?: string;
   organizationId!: string;
 
@@ -60,13 +60,13 @@ class TestTask extends Model {
     this.status = (data.status as 'todo' | 'in_progress' | 'done') ?? 'todo';
     this.priority = data.priority as string | undefined;
     this.order = (data.order as number) ?? 0;
-    this.projectId = data.projectId as string | undefined;
+    this.workspaceId = data.workspaceId as string | undefined;
     this.parentId = data.parentId as string | undefined;
     this.organizationId = data.organizationId as string;
   }
 }
 
-class TestProject extends Model {
+class TestWorkspace extends Model {
   name!: string;
   description?: string;
   organizationId!: string;
@@ -150,14 +150,14 @@ let cleanupCtx: () => void;
 
 beforeEach(() => {
   registry = new ModelRegistry();
-  registry.registerModel('Task', TestTask);
-  registry.registerModel('Project', TestProject);
+  registry.registerModel('Item', TestItem);
+  registry.registerModel('Workspace', TestWorkspace);
   setActiveRegistry(registry);
   const ctx = createTestContext();
   cleanupCtx = ctx.cleanup;
   pool = new ObjectPool({ maxSize: 100, gcInterval: 0, useWeakRefs: false }, registry);
-  pool.registerForeignKey('Task', 'projectId');
-  pool.registerForeignKey('Task', 'parentId');
+  pool.registerForeignKey('Item', 'workspaceId');
+  pool.registerForeignKey('Item', 'parentId');
   store = createStore(pool);
 });
 
@@ -168,28 +168,28 @@ afterEach(() => {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-interface TaskShape {
+interface ItemShape {
   id: string;
   title: string;
   status: 'todo' | 'in_progress' | 'done';
-  projectId?: string;
+  workspaceId?: string;
   parentId?: string;
   organizationId: string;
 }
 
-interface ProjectShape {
+interface WorkspaceShape {
   id: string;
   name: string;
   description?: string;
   organizationId: string;
 }
 
-function asTask(m: unknown): TaskShape {
-  return m as TaskShape;
+function asItem(m: unknown): ItemShape {
+  return m as ItemShape;
 }
 
-function asProject(m: unknown): ProjectShape {
-  return m as ProjectShape;
+function asWorkspace(m: unknown): WorkspaceShape {
+  return m as WorkspaceShape;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -199,7 +199,7 @@ function asProject(m: unknown): ProjectShape {
 describe('defineMutators', () => {
   it('returns the same mutators object (pass-through)', () => {
     const defs = {
-      tasks: {
+      items: {
         myMutator: async ({ args }: { tx: Transaction<TestSchema>; args: { x: number } }) =>
           args.x,
       },
@@ -208,23 +208,23 @@ describe('defineMutators', () => {
     const result = defineMutators(testSchema, defs);
 
     // Pass-through: either same reference or structurally identical
-    expect(result.tasks.myMutator).toBe(defs.tasks.myMutator);
+    expect(result.items.myMutator).toBe(defs.items.myMutator);
   });
 
   it('preserves all declared mutator groups and names', () => {
     const mutators = defineMutators(testSchema, {
-      tasks: {
+      items: {
         a: async () => 1,
         b: async () => 2,
       },
-      projects: {
+      workspaces: {
         c: async () => 3,
       },
     });
 
-    expect(Object.keys(mutators)).toEqual(expect.arrayContaining(['tasks', 'projects']));
-    expect(Object.keys(mutators.tasks)).toEqual(expect.arrayContaining(['a', 'b']));
-    expect(Object.keys(mutators.projects)).toEqual(['c']);
+    expect(Object.keys(mutators)).toEqual(expect.arrayContaining(['items', 'workspaces']));
+    expect(Object.keys(mutators.items)).toEqual(expect.arrayContaining(['a', 'b']));
+    expect(Object.keys(mutators.workspaces)).toEqual(['c']);
   });
 
   it('empty mutators is a no-op — defineMutators(schema, {}) works', () => {
@@ -238,12 +238,12 @@ describe('defineMutators', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('Transaction.mutate.create/update/delete/archive', () => {
-  it('tx.mutations.tasks.create adds to pool + calls store.save', async () => {
+  it('tx.mutations.items.create adds to pool + calls store.save', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
 
-    const created = await tx.mutations.tasks.create({ title: 'Hello' });
+    const created = await tx.mutations.items.create({ title: 'Hello' });
 
-    const t = asTask(created);
+    const t = asItem(created);
     expect(t.id).toMatch(/^[0-9a-f-]+$/);
     expect(t.title).toBe('Hello');
     expect(t.status).toBe('todo');
@@ -252,39 +252,39 @@ describe('Transaction.mutate.create/update/delete/archive', () => {
     expect(pool.get(t.id)).toBeDefined();
   });
 
-  it('tx.mutations.tasks.update applies partial changes + calls store.save', async () => {
+  it('tx.mutations.items.update applies partial changes + calls store.save', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
-    const created = await tx.mutations.tasks.create({ title: 'Original' });
-    const id = asTask(created).id;
+    const created = await tx.mutations.items.create({ title: 'Original' });
+    const id = asItem(created).id;
 
-    const updated = await tx.mutations.tasks.update({ id, title: 'Updated', status: 'done' });
+    const updated = await tx.mutations.items.update({ id, title: 'Updated', status: 'done' });
 
-    expect(asTask(updated).title).toBe('Updated');
-    expect(asTask(updated).status).toBe('done');
+    expect(asItem(updated).title).toBe('Updated');
+    expect(asItem(updated).status).toBe('done');
     expect(store.saveCalls).toHaveLength(2);
 
-    const fromPool = asTask(pool.get(id));
+    const fromPool = asItem(pool.get(id));
     expect(fromPool.title).toBe('Updated');
     expect(fromPool.status).toBe('done');
   });
 
-  it('tx.mutations.tasks.delete removes from pool + calls store.delete', async () => {
+  it('tx.mutations.items.delete removes from pool + calls store.delete', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
-    const created = await tx.mutations.tasks.create({ title: 'Task' });
-    const id = asTask(created).id;
+    const created = await tx.mutations.items.create({ title: 'Item' });
+    const id = asItem(created).id;
 
-    await tx.mutations.tasks.delete(id);
+    await tx.mutations.items.delete(id);
 
     expect(store.deleteCalls).toHaveLength(1);
     expect(pool.get(id)).toBeUndefined();
   });
 
-  it('tx.mutations.tasks.archive calls store.archive', async () => {
+  it('tx.mutations.items.archive calls store.archive', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
-    const created = await tx.mutations.tasks.create({ title: 'Task' });
-    const id = asTask(created).id;
+    const created = await tx.mutations.items.create({ title: 'Item' });
+    const id = asItem(created).id;
 
-    await tx.mutations.tasks.archive(id);
+    await tx.mutations.items.archive(id);
 
     expect(store.archiveCalls).toHaveLength(1);
     expect(store.archiveCalls[0]?.id).toBe(id);
@@ -311,7 +311,7 @@ describe('Transaction.mutate batch operations', () => {
   it('createMany creates N models and saves them all', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
 
-    const created = await tx.mutations.tasks.create([
+    const created = await tx.mutations.items.create([
       { title: 'A' },
       { title: 'B' },
       { title: 'C' },
@@ -320,40 +320,40 @@ describe('Transaction.mutate batch operations', () => {
     expect(created).toHaveLength(3);
     expect(store.saveCalls).toHaveLength(3);
     for (const entity of created) {
-      expect(pool.get(asTask(entity).id)).toBeDefined();
+      expect(pool.get(asItem(entity).id)).toBeDefined();
     }
   });
 
   it('updateMany applies patches to N models', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
-    const c = await tx.mutations.tasks.create([
+    const c = await tx.mutations.items.create([
       { title: 'A' },
       { title: 'B' },
       { title: 'C' },
     ]);
-    const ids = c.map((e) => asTask(e).id);
+    const ids = c.map((e) => asItem(e).id);
     store.saveCalls.length = 0;
 
-    await tx.mutations.tasks.update(
+    await tx.mutations.items.update(
       ids.map((id) => ({ id, status: 'done' as const })),
     );
 
     expect(store.saveCalls).toHaveLength(3);
     for (const id of ids) {
-      expect(asTask(pool.get(id)).status).toBe('done');
+      expect(asItem(pool.get(id)).status).toBe('done');
     }
   });
 
   it('deleteMany removes N models', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
-    const c = await tx.mutations.tasks.create([
+    const c = await tx.mutations.items.create([
       { title: 'A' },
       { title: 'B' },
       { title: 'C' },
     ]);
-    const ids = c.map((e) => asTask(e).id);
+    const ids = c.map((e) => asItem(e).id);
 
-    await tx.mutations.tasks.delete(ids);
+    await tx.mutations.items.delete(ids);
 
     expect(store.deleteCalls).toHaveLength(3);
     for (const id of ids) {
@@ -364,9 +364,9 @@ describe('Transaction.mutate batch operations', () => {
   it('empty array is a no-op for createMany/updateMany/deleteMany', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
 
-    const createdEmpty = await tx.mutations.tasks.create([]);
-    await tx.mutations.tasks.update([]);
-    await tx.mutations.tasks.delete([]);
+    const createdEmpty = await tx.mutations.items.create([]);
+    await tx.mutations.items.update([]);
+    await tx.mutations.items.delete([]);
 
     expect(createdEmpty).toEqual([]);
     expect(store.saveCalls).toHaveLength(0);
@@ -375,17 +375,17 @@ describe('Transaction.mutate batch operations', () => {
 
   it('V1 does not rollback: mid-batch failure leaves preceding ops applied', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
-    const c = await tx.mutations.tasks.create([
+    const c = await tx.mutations.items.create([
       { title: 'A' },
       { title: 'B' },
     ]);
-    const [a, b] = c.map((e) => asTask(e).id);
-    if (a === undefined || b === undefined) throw new Error('expected two created task ids');
+    const [a, b] = c.map((e) => asItem(e).id);
+    if (a === undefined || b === undefined) throw new Error('expected two created item ids');
     store.saveCalls.length = 0;
 
     // Patch b with a nonexistent id to force failure on the second item
     await expect(
-      tx.mutations.tasks.update([
+      tx.mutations.items.update([
         { id: a, title: 'A-updated' },
         { id: 'nonexistent', title: 'fail' },
         { id: b, title: 'B-updated' },
@@ -393,8 +393,8 @@ describe('Transaction.mutate batch operations', () => {
     ).rejects.toThrow();
 
     // First update went through; last did not. This documents V1 no-rollback behavior.
-    expect(asTask(pool.get(a)).title).toBe('A-updated');
-    expect(asTask(pool.get(b)).title).toBe('B');
+    expect(asItem(pool.get(a)).title).toBe('A-updated');
+    expect(asItem(pool.get(b)).title).toBe('B');
   });
 });
 
@@ -403,48 +403,48 @@ describe('Transaction.mutate batch operations', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('Transaction.read', () => {
-  it('tx.read.tasks.retrieve returns the typed model', async () => {
+  it('tx.read.items.retrieve returns the typed model', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
-    const created = await tx.mutations.tasks.create({ title: 'Find me' });
-    const id = asTask(created).id;
+    const created = await tx.mutations.items.create({ title: 'Find me' });
+    const id = asItem(created).id;
 
-    const found = tx.read.tasks.retrieve(id);
+    const found = tx.read.items.retrieve(id);
 
     expect(found).toBeDefined();
-    expect(asTask(found).title).toBe('Find me');
+    expect(asItem(found).title).toBe('Find me');
   });
 
-  it('tx.read.tasks.list({ where }) uses FK index for registered field', async () => {
+  it('tx.read.items.list({ where }) uses FK index for registered field', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
-    await tx.mutations.tasks.create({ title: 'a', projectId: 'p1' });
-    await tx.mutations.tasks.create({ title: 'b', projectId: 'p2' });
-    await tx.mutations.tasks.create({ title: 'c', projectId: 'p1' });
+    await tx.mutations.items.create({ title: 'a', workspaceId: 'p1' });
+    await tx.mutations.items.create({ title: 'b', workspaceId: 'p2' });
+    await tx.mutations.items.create({ title: 'c', workspaceId: 'p1' });
 
-    const p1Tasks = tx.read.tasks.list({ where: { projectId: 'p1' } });
+    const p1Items = tx.read.items.list({ where: { workspaceId: 'p1' } });
 
-    expect(p1Tasks).toHaveLength(2);
-    expect(p1Tasks.every((t) => asTask(t).projectId === 'p1')).toBe(true);
+    expect(p1Items).toHaveLength(2);
+    expect(p1Items.every((t) => asItem(t).workspaceId === 'p1')).toBe(true);
   });
 
-  it('tx.read.tasks.findFirst returns the first match', async () => {
+  it('tx.read.items.findFirst returns the first match', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
-    await tx.mutations.tasks.create({ title: 'todo-1', status: 'todo' });
-    await tx.mutations.tasks.create({ title: 'done-1', status: 'done' });
+    await tx.mutations.items.create({ title: 'todo-1', status: 'todo' });
+    await tx.mutations.items.create({ title: 'done-1', status: 'done' });
 
-    const first = tx.read.tasks.list({ where: { status: 'done' }, limit: 1 })[0];
+    const first = tx.read.items.list({ where: { status: 'done' }, limit: 1 })[0];
 
     expect(first).toBeDefined();
-    expect(asTask(first).title).toBe('done-1');
+    expect(asItem(first).title).toBe('done-1');
   });
 
-  it('tx.read.tasks.count returns the count', async () => {
+  it('tx.read.items.count returns the count', async () => {
     const tx = createTransaction(testSchema, store, 'org-1');
-    await tx.mutations.tasks.create({ title: 'a', projectId: 'p1' });
-    await tx.mutations.tasks.create({ title: 'b', projectId: 'p1' });
-    await tx.mutations.tasks.create({ title: 'c', projectId: 'p2' });
+    await tx.mutations.items.create({ title: 'a', workspaceId: 'p1' });
+    await tx.mutations.items.create({ title: 'b', workspaceId: 'p1' });
+    await tx.mutations.items.create({ title: 'c', workspaceId: 'p2' });
 
-    expect(tx.read.tasks.count({ where: { projectId: 'p1' } })).toBe(2);
-    expect(tx.read.tasks.count()).toBe(3);
+    expect(tx.read.items.count({ where: { workspaceId: 'p1' } })).toBe(2);
+    expect(tx.read.items.count()).toBe(3);
   });
 });
 
@@ -453,73 +453,73 @@ describe('Transaction.read', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('Custom mutator end-to-end', () => {
-  it('creates task + subtask — both land in pool, 2 saves', async () => {
+  it('creates item + subitem — both land in pool, 2 saves', async () => {
     const mutators = defineMutators(testSchema, {
-      tasks: {
-        createWithSubtask: async ({
+      items: {
+        createWithSubitem: async ({
           tx,
           args,
         }: {
           tx: Transaction<TestSchema>;
           args: { title: string };
         }) => {
-          const task = await tx.mutations.tasks.create({ title: args.title, status: 'todo' });
-          const parentId = asTask(task).id;
-          await tx.mutations.tasks.create({
+          const item = await tx.mutations.items.create({ title: args.title, status: 'todo' });
+          const parentId = asItem(item).id;
+          await tx.mutations.items.create({
             title: `${args.title} (sub)`,
             parentId,
           });
-          return task;
+          return item;
         },
       },
     });
 
     const tx = createTransaction(testSchema, store, 'org-1');
-    const parent = await mutators.tasks.createWithSubtask({
+    const parent = await mutators.items.createWithSubitem({
       tx,
       args: { title: 'Parent' },
     });
 
     expect(store.saveCalls).toHaveLength(2);
-    const parentId = asTask(parent).id;
-    const subtasks = pool.getByForeignKey('Task', 'parentId', parentId);
-    expect(subtasks).toHaveLength(1);
-    expect(asTask(subtasks[0]).title).toBe('Parent (sub)');
+    const parentId = asItem(parent).id;
+    const subitems = pool.getByForeignKey('Item', 'parentId', parentId);
+    expect(subitems).toHaveLength(1);
+    expect(asItem(subitems[0]).title).toBe('Parent (sub)');
   });
 
   it('reads then creates — reader sees pool state before create', async () => {
     const mutators = defineMutators(testSchema, {
-      tasks: {
-        createInProject: async ({
+      items: {
+        createInWorkspace: async ({
           tx,
           args,
         }: {
           tx: Transaction<TestSchema>;
-          args: { projectId: string; title: string };
+          args: { workspaceId: string; title: string };
         }) => {
-          const existing = tx.read.tasks.count({ where: { projectId: args.projectId } });
-          return tx.mutations.tasks.create({
+          const existing = tx.read.items.count({ where: { workspaceId: args.workspaceId } });
+          return tx.mutations.items.create({
             title: `${args.title} #${existing + 1}`,
-            projectId: args.projectId,
+            workspaceId: args.workspaceId,
           });
         },
       },
     });
 
     const tx = createTransaction(testSchema, store, 'org-1');
-    await tx.mutations.tasks.create({ title: 'seed', projectId: 'p1' });
+    await tx.mutations.items.create({ title: 'seed', workspaceId: 'p1' });
 
-    const next = await mutators.tasks.createInProject({
+    const next = await mutators.items.createInWorkspace({
       tx,
-      args: { projectId: 'p1', title: 'New' },
+      args: { workspaceId: 'p1', title: 'New' },
     });
 
-    expect(asTask(next).title).toBe('New #2');
+    expect(asItem(next).title).toBe('New #2');
   });
 
   it('returns a value — value flows back to caller', async () => {
     const mutators = defineMutators(testSchema, {
-      tasks: {
+      items: {
         makeSummary: async ({
           tx,
           args,
@@ -529,8 +529,8 @@ describe('Custom mutator end-to-end', () => {
         }) => {
           const created: string[] = [];
           for (const title of args.titles) {
-            const t = await tx.mutations.tasks.create({ title });
-            created.push(asTask(t).id);
+            const t = await tx.mutations.items.create({ title });
+            created.push(asItem(t).id);
           }
           return { count: created.length, ids: created };
         },
@@ -538,7 +538,7 @@ describe('Custom mutator end-to-end', () => {
     });
 
     const tx = createTransaction(testSchema, store, 'org-1');
-    const result = await mutators.tasks.makeSummary({
+    const result = await mutators.items.makeSummary({
       tx,
       args: { titles: ['a', 'b', 'c'] },
     });
@@ -552,7 +552,7 @@ describe('Custom mutator end-to-end', () => {
 
   it('throws mid-mutator — no rollback, partial state visible (V1 behavior)', async () => {
     const mutators = defineMutators(testSchema, {
-      tasks: {
+      items: {
         failHalfway: async ({
           tx,
           args,
@@ -560,7 +560,7 @@ describe('Custom mutator end-to-end', () => {
           tx: Transaction<TestSchema>;
           args: { title: string };
         }) => {
-          await tx.mutations.tasks.create({ title: args.title });
+          await tx.mutations.items.create({ title: args.title });
           throw new Error('boom');
         },
       },
@@ -569,13 +569,13 @@ describe('Custom mutator end-to-end', () => {
     const tx = createTransaction(testSchema, store, 'org-1');
 
     await expect(
-      mutators.tasks.failHalfway({ tx, args: { title: 'partial' } }),
+      mutators.items.failHalfway({ tx, args: { title: 'partial' } }),
     ).rejects.toThrow(/boom/);
 
     // The first create was NOT rolled back — it sits in the pool.
-    const partial = pool.getByTypeName('Task');
+    const partial = pool.getByTypeName('Item');
     expect(partial).toHaveLength(1);
-    expect(asTask(partial[0]).title).toBe('partial');
+    expect(asItem(partial[0]).title).toBe('partial');
     expect(store.saveCalls).toHaveLength(1);
   });
 });
@@ -585,59 +585,59 @@ describe('Custom mutator end-to-end', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('Cross-model mutators', () => {
-  it('creates a project + 3 tasks attached to it — all 4 entities land', async () => {
+  it('creates a workspace + 3 items attached to it — all 4 entities land', async () => {
     const mutators = defineMutators(testSchema, {
-      projects: {
-        createWithTasks: async ({
+      workspaces: {
+        createWithItems: async ({
           tx,
           args,
         }: {
           tx: Transaction<TestSchema>;
-          args: { name: string; taskTitles: string[] };
+          args: { name: string; itemTitles: string[] };
         }) => {
-          const project = await tx.mutations.projects.create({ name: args.name });
-          const projectId = asProject(project).id;
-          for (const title of args.taskTitles) {
-            await tx.mutations.tasks.create({ title, projectId });
+          const workspace = await tx.mutations.workspaces.create({ name: args.name });
+          const workspaceId = asWorkspace(workspace).id;
+          for (const title of args.itemTitles) {
+            await tx.mutations.items.create({ title, workspaceId });
           }
-          return project;
+          return workspace;
         },
       },
     });
 
     const tx = createTransaction(testSchema, store, 'org-1');
-    const project = await mutators.projects.createWithTasks({
+    const workspace = await mutators.workspaces.createWithItems({
       tx,
-      args: { name: 'Launch', taskTitles: ['spec', 'build', 'ship'] },
+      args: { name: 'Launch', itemTitles: ['spec', 'build', 'ship'] },
     });
 
-    const projectId = asProject(project).id;
-    expect(pool.get(projectId)).toBeDefined();
-    const tasks = pool.getByForeignKey('Task', 'projectId', projectId);
-    expect(tasks).toHaveLength(3);
-    expect(tasks.map((t) => asTask(t).title).sort()).toEqual(['build', 'ship', 'spec']);
-    // 1 project save + 3 task saves = 4
+    const workspaceId = asWorkspace(workspace).id;
+    expect(pool.get(workspaceId)).toBeDefined();
+    const items = pool.getByForeignKey('Item', 'workspaceId', workspaceId);
+    expect(items).toHaveLength(3);
+    expect(items.map((t) => asItem(t).title).sort()).toEqual(['build', 'ship', 'spec']);
+    // 1 workspace save + 3 item saves = 4
     expect(store.saveCalls).toHaveLength(4);
   });
 
-  it('uses tx.read.tasks.list({ where: { projectId } }) to compute before create', async () => {
+  it('uses tx.read.items.list({ where: { workspaceId } }) to compute before create', async () => {
     const mutators = defineMutators(testSchema, {
-      tasks: {
-        appendToProject: async ({
+      items: {
+        appendToWorkspace: async ({
           tx,
           args,
         }: {
           tx: Transaction<TestSchema>;
-          args: { projectId: string; title: string };
+          args: { workspaceId: string; title: string };
         }) => {
-          const siblings = tx.read.tasks.list({ where: { projectId: args.projectId } });
+          const siblings = tx.read.items.list({ where: { workspaceId: args.workspaceId } });
           const nextOrder = siblings.reduce(
             (max, t) => Math.max(max, (t as unknown as { order: number }).order ?? 0),
             0,
           ) + 1;
-          return tx.mutations.tasks.create({
+          return tx.mutations.items.create({
             title: args.title,
-            projectId: args.projectId,
+            workspaceId: args.workspaceId,
             order: nextOrder,
           });
         },
@@ -645,12 +645,12 @@ describe('Cross-model mutators', () => {
     });
 
     const tx = createTransaction(testSchema, store, 'org-1');
-    await tx.mutations.tasks.create({ title: 'first', projectId: 'p1', order: 1 });
-    await tx.mutations.tasks.create({ title: 'second', projectId: 'p1', order: 2 });
+    await tx.mutations.items.create({ title: 'first', workspaceId: 'p1', order: 1 });
+    await tx.mutations.items.create({ title: 'second', workspaceId: 'p1', order: 2 });
 
-    const third = await mutators.tasks.appendToProject({
+    const third = await mutators.items.appendToWorkspace({
       tx,
-      args: { projectId: 'p1', title: 'third' },
+      args: { workspaceId: 'p1', title: 'third' },
     });
 
     expect((third as unknown as { order: number }).order).toBe(3);

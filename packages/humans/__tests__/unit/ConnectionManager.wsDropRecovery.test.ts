@@ -1,8 +1,8 @@
 /**
  * ConnectionManager — recovery after a WebSocket drop on a HEALTHY network.
  *
- * Reproduces the production incident (deck editor, 2026-06-16): a deck's
- * `SlideLayer` DELETE rolled back with `ws_not_ready (manual_close)` ~8.5s
+ * Reproduces the production incident (collection editor, 2026-06-16): a collection's
+ * `EntryDetail` DELETE rolled back with `ws_not_ready (manual_close)` ~8.5s
  * after the socket dropped with code 1006, and the connection did not come
  * back on its own.
  *

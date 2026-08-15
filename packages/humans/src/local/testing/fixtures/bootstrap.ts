@@ -65,22 +65,22 @@ export function createPartialBootstrapResponse(
  * snapshot.
  */
 export function createTestBootstrapResponse(options: {
-  tasks?: Record<string, unknown>[];
-  projects?: Record<string, unknown>[];
-  slideDecks?: Record<string, unknown>[];
-  slides?: Record<string, unknown>[];
-  slideLayers?: Record<string, unknown>[];
+  items?: Record<string, unknown>[];
+  workspaces?: Record<string, unknown>[];
+  collections?: Record<string, unknown>[];
+  entries?: Record<string, unknown>[];
+  entryDetails?: Record<string, unknown>[];
   comments?: Record<string, unknown>[];
   lastSyncId?: number;
   failedModels?: string[];
 } = {}): BootstrapResponse {
   const models: BootstrapModelData = {};
 
-  if (options.tasks) models.Task = options.tasks;
-  if (options.projects) models.Project = options.projects;
-  if (options.slideDecks) models.SlideDeck = options.slideDecks;
-  if (options.slides) models.Slide = options.slides;
-  if (options.slideLayers) models.SlideLayer = options.slideLayers;
+  if (options.items) models.Item = options.items;
+  if (options.workspaces) models.Workspace = options.workspaces;
+  if (options.collections) models.Collection = options.collections;
+  if (options.entries) models.Entry = options.entries;
+  if (options.entryDetails) models.EntryDetail = options.entryDetails;
   if (options.comments) models.Comment = options.comments;
 
   return {

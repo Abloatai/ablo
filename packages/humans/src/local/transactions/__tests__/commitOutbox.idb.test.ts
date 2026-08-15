@@ -66,8 +66,8 @@ function envelope(idempotencyKey: string, title: string) {
     operations: [
       {
         type: 'UPDATE',
-        model: 'task',
-        id: 'task-1',
+        model: 'item',
+        id: 'item-1',
         input: { title },
         transactionId: 'operation-1',
       },
@@ -134,7 +134,7 @@ describe('Database commit outbox handoff', () => {
         path: '/v1/commits',
         body: {
           operations: [
-            { action: 'delete', model: 'tasks', id: 'task-1' },
+            { action: 'delete', model: 'items', id: 'item-1' },
           ],
         },
       },

@@ -18,7 +18,7 @@ inside the customer's organization.
 const { token } = await ablo.sessions.create({
   user: { id: userId },
   organizationId: customerOrganizationId,
-  can: { tasks: ['read', 'update'] },
+  can: { records: ['read', 'update'] },
 });
 ```
 

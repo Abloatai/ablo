@@ -106,7 +106,7 @@ function _compileOnlyUpdateProbes(
 void _compileOnlyUpdateProbes;
 
 const schema = defineSchema({
-  tasks: model({ title: z.string() }, { typename: 'Task' }),
+  items: model({ title: z.string() }, { typename: 'Item' }),
 });
 
 const silentLogger = {
@@ -125,7 +125,7 @@ describe('CONTRACT: update has one shape across both transports', () => {
       dangerouslyAllowBrowser: true,
       transport: 'http',
     });
-    expect(typeof http.tasks.update).toBe('function');
+    expect(typeof http.items.update).toBe('function');
     expect('model' in http).toBe(false);
   });
 
@@ -138,7 +138,7 @@ describe('CONTRACT: update has one shape across both transports', () => {
       logger: silentLogger,
     } as InternalAbloOptions<(typeof schema)['models']>);
     try {
-      expect(typeof stateful.tasks.update).toBe('function');
+      expect(typeof stateful.items.update).toBe('function');
       expect('model' in stateful).toBe(false);
     } finally {
       await stateful.dispose();

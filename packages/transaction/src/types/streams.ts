@@ -629,12 +629,12 @@ export interface Claim<T = Record<string, unknown>, M = ResolveClaimMeta> {
   revoke?: () => void;
   /**
    * Extend the lease past the liveness window — the "still working" signal
-   * for long-running tasks. Resolving means the lease is still yours, now
+   * for long-running items. Resolving means the lease is still yours, now
    * good until the returned `expiresAt`; a lease that lapsed (and may have
    * been granted to the next in line) rejects with an
    * {@link ../errors.js AbloClaimedError} carrying code `claim_lost`, so the
    * failed beat doubles as the loss notification. Each beat's extension is
-   * clamped server-side — hold a long task by beating on a cadence (pass
+   * clamped server-side — hold a long item by beating on a cadence (pass
    * `heartbeat` when claiming to have the SDK do this for you), not by
    * asking once for a huge window. Present only on a claim you hold.
    */

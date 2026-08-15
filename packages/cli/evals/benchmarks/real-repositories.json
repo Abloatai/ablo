@@ -1,0 +1,39 @@
+[
+  {
+    "schemaVersion": 1,
+    "kind": "ablo_setup_repository_benchmark_case",
+    "caseId": "cline-kanban",
+    "repository": {
+      "url": "https://github.com/cline/kanban.git",
+      "commit": "14e371ffcaa8a929b4d4b2d23843f17506ecd2aa"
+    },
+    "expectations": {
+      "applicationRoot": ".",
+      "persistenceIncludes": ["filesystem"],
+      "requiredMutationPaths": [],
+      "forbiddenMutationPathPrefixes": ["web-ui/", "packages/desktop/", "test/", "scripts/"],
+      "coordinationAdoption": "model_migration_required"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "kind": "ablo_setup_repository_benchmark_case",
+    "caseId": "yc-software-qm",
+    "repository": {
+      "url": "https://github.com/yc-software/qm.git",
+      "commit": "9ff90fc770d60658ae6c350b691204b5a5b3e394"
+    },
+    "expectations": {
+      "applicationRoot": ".",
+      "persistenceIncludes": ["postgres"],
+      "requiredMutationPaths": [
+        "src/tasks/postgres-task-store.ts",
+        "src/memory/postgres-memory-service.ts",
+        "src/runs/postgres-run-store.ts",
+        "src/sessions/postgres-session-store.ts"
+      ],
+      "forbiddenMutationPathPrefixes": ["plugins/", "test/", "scripts/"],
+      "coordinationAdoption": "existing_state_reuse_candidate"
+    }
+  }
+]

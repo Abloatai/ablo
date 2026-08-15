@@ -7,11 +7,11 @@ describe('ephemeralKeyRequestSchema', () => {
     expect(
       ephemeralKeyRequestSchema.parse({
         user: { id: 'user-1' },
-        operations: ['task.read', 'task.update'],
+        operations: ['item.read', 'item.update'],
       }),
     ).toMatchObject({
       user: { id: 'user-1' },
-      operations: ['task.read', 'task.update'],
+      operations: ['item.read', 'item.update'],
     });
   });
 
@@ -19,7 +19,7 @@ describe('ephemeralKeyRequestSchema', () => {
     { user: { id: 'user-1' } },
     { user: { id: 'user-1' }, operations: [] },
     { user: { id: 'user-1' }, operations: ['*.*'] },
-    { userId: 'user-1', operations: ['task.read'] },
+    { userId: 'user-1', operations: ['item.read'] },
   ])('rejects an absent, empty, or wildcard grant: %o', (request) => {
     expect(ephemeralKeyRequestSchema.safeParse(request).success).toBe(false);
   });
@@ -28,7 +28,7 @@ describe('ephemeralKeyRequestSchema', () => {
     expect(
       ephemeralKeyRequestSchema.safeParse({
         user: { id: 'user-1' },
-        operations: ['task.read'],
+        operations: ['item.read'],
         schemaProjectId: 'project-1',
       }).success,
     ).toBe(false);
@@ -44,7 +44,7 @@ describe('ephemeralKeyRequestSchema', () => {
   });
 
   it.each([
-    { user: { id: 'user-1' }, controlPlaneOnly: true, operations: ['task.read'] },
+    { user: { id: 'user-1' }, controlPlaneOnly: true, operations: ['item.read'] },
     { user: { id: 'user-1' }, controlPlaneOnly: true, activeSchemaOperations: ['read'] },
     { user: { id: 'user-1' }, controlPlaneOnly: false },
   ])('rejects control-plane-only combined with a data grant, or false: %o', (request) => {

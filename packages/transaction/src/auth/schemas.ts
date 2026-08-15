@@ -9,6 +9,7 @@ import {
 import { AbloAuthenticationError } from '../errors.js';
 import { authTokenSchema } from './token.js';
 import { deliveryPartitionRouteSchema } from './deliveryPartition.js';
+import { opaqueSessionFingerprintSchema } from './sessionIssuanceProtocol.js';
 
 // Not a second enum. The auth responses carry the same participant vocabulary
 // the coordination plane parses, so they validate against the same schema — a
@@ -40,10 +41,9 @@ export type IdentityResolveResponse = z.infer<typeof IdentityResolveResponseSche
  * block. It still echoes the effective operations stored on the key so the
  * client reports enforced authority rather than reconstructing it from input.
  */
-export const EphemeralKeyResponseSchema = z.object({
+export const SessionCredentialMetadataSchema = z.object({
   object: z.literal('ephemeral_key').optional(),
   id: z.string().min(1),
-  token: authTokenSchema,
   expiresAt: z.string().min(1),
   organizationId: z.string().min(1),
   participantId: z.string().min(1),
@@ -66,6 +66,20 @@ export const EphemeralKeyResponseSchema = z.object({
     path: ['operations'],
   },
 );
+
+/** Persistable/replayable projection of the canonical mint response. */
+export type SessionCredentialMetadata = z.infer<typeof SessionCredentialMetadataSchema>;
+
+export const SessionCredentialRevocationRequestSchema = z.object({
+  parentSessionHash: opaqueSessionFingerprintSchema,
+});
+export type SessionCredentialRevocationRequest = z.infer<
+  typeof SessionCredentialRevocationRequestSchema
+>;
+
+export const EphemeralKeyResponseSchema = SessionCredentialMetadataSchema.safeExtend({
+  token: authTokenSchema,
+});
 
 export type EphemeralKeyResponse = z.infer<typeof EphemeralKeyResponseSchema>;
 

@@ -183,7 +183,7 @@ describe('BootstrapFetcher — sharing and cancellation', () => {
       const url = urlOf(input);
       requested.push(url);
       // The scoped hydrate is the one carrying an explicit sync group.
-      if (syncGroupsOf(url).includes('deck:1')) {
+      if (syncGroupsOf(url).includes('collection:1')) {
         scopedStarted();
         return new Promise<Response>((resolve, reject) => {
           releaseScoped = () => { resolve(okResponse(snapshot('Scoped'))); };
@@ -206,7 +206,7 @@ describe('BootstrapFetcher — sharing and cancellation', () => {
       retryDelay: 1,
     });
 
-    const scoped = helper.fetchBootstrap(undefined, ['deck:1']);
+    const scoped = helper.fetchBootstrap(undefined, ['collection:1']);
     await scopedInFlight;
 
     await expect(helper.fetchBootstrap()).rejects.toBeDefined();

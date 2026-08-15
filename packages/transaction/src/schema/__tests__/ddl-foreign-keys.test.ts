@@ -17,24 +17,24 @@ import { toSchemaJSON } from '../serialize.js';
 import { generateProvisionPlan, generateMigrationPlan } from '../ddl.js';
 
 const schema = defineSchema({
-  projects: model({ name: z.string() }, { tableName: 'projects' }),
-  tasks: model(
+  workspaces: model({ name: z.string() }, { tableName: 'workspaces' }),
+  items: model(
     {
       title: z.string(),
-      projectId: z.string().optional(),
+      workspaceId: z.string().optional(),
       parentId: z.string().optional(),
       ownerId: z.string().optional(),
       sourceId: z.string().optional(),
     },
     {
       relations: {
-        project: relation.belongsTo('projects', 'projectId', { fk: true }), // fk only
-        self: relation.belongsTo('tasks', 'parentId', { fk: true, parent: true }), // both axes
-        owner: relation.belongsTo('projects', 'ownerId', { parent: true }), // parent ONLY → NO fk
-        source: relation.belongsTo('tasks', 'sourceId'), // soft reference — neither
-        comments: relation.hasMany('comments', 'taskId'), // inverse — FK lives on the other table
+        workspace: relation.belongsTo('workspaces', 'workspaceId', { fk: true }), // fk only
+        self: relation.belongsTo('items', 'parentId', { fk: true, parent: true }), // both axes
+        owner: relation.belongsTo('workspaces', 'ownerId', { parent: true }), // parent ONLY → NO fk
+        source: relation.belongsTo('items', 'sourceId'), // soft reference — neither
+        comments: relation.hasMany('comments', 'itemId'), // inverse — FK lives on the other table
       },
-      tableName: 'tasks',
+      tableName: 'items',
     }),
 });
 const json = toSchemaJSON(schema);
@@ -51,10 +51,10 @@ describe('foreign-key emission (marker-driven, lock-safe, opt-in)', () => {
     const fks = plan.statements.filter((s) => s.includes('FOREIGN KEY'));
 
     expect(
-      fks.some((s) => s.includes('"tasks_project_id_fkey"') && s.includes('REFERENCES "public"."projects" ("id")')),
+      fks.some((s) => s.includes('"items_workspace_id_fkey"') && s.includes('REFERENCES "public"."workspaces" ("id")')),
     ).toBe(true);
     expect(
-      fks.some((s) => s.includes('"tasks_parent_id_fkey"') && s.includes('REFERENCES "public"."tasks" ("id")')),
+      fks.some((s) => s.includes('"items_parent_id_fkey"') && s.includes('REFERENCES "public"."items" ("id")')),
     ).toBe(true);
 
     // DECOUPLING: `parent: true` WITHOUT `fk` (owner) must NOT emit; soft ref + hasMany never do
@@ -77,9 +77,9 @@ describe('foreign-key emission (marker-driven, lock-safe, opt-in)', () => {
     const concurrent = plan.concurrent ?? [];
 
     // existing-row validation + child index live in the post-commit, non-tx pass
-    expect(concurrent.some((s) => s.includes('VALIDATE CONSTRAINT "tasks_project_id_fkey"'))).toBe(true);
+    expect(concurrent.some((s) => s.includes('VALIDATE CONSTRAINT "items_workspace_id_fkey"'))).toBe(true);
     expect(
-      concurrent.some((s) => s.includes('CREATE INDEX CONCURRENTLY IF NOT EXISTS "tasks_project_id_idx"')),
+      concurrent.some((s) => s.includes('CREATE INDEX CONCURRENTLY IF NOT EXISTS "items_workspace_id_idx"')),
     ).toBe(true);
     // 2 FKs × (validate + index)
     expect(concurrent.length).toBe(4);
@@ -112,12 +112,12 @@ describe('foreign-key emission (marker-driven, lock-safe, opt-in)', () => {
 
   it('reconciles the FULL next schema even with no create_model step (relation added later)', () => {
     const plan = generateMigrationPlan([], { prev: json, next: json, targetSchema: 'public', foreignKeys: true });
-    expect(plan.statements.some((s) => s.includes('"tasks_project_id_fkey"') && s.includes('FOREIGN KEY'))).toBe(true);
-    expect((plan.concurrent ?? []).some((s) => s.includes('VALIDATE CONSTRAINT "tasks_project_id_fkey"'))).toBe(true);
+    expect(plan.statements.some((s) => s.includes('"items_workspace_id_fkey"') && s.includes('FOREIGN KEY'))).toBe(true);
+    expect((plan.concurrent ?? []).some((s) => s.includes('VALIDATE CONSTRAINT "items_workspace_id_fkey"'))).toBe(true);
   });
 
   it('migration emits no FKs when not opted in', () => {
-    const steps = [{ kind: 'create_model', model: 'projects', tableName: 'projects' }] as const;
+    const steps = [{ kind: 'create_model', model: 'workspaces', tableName: 'workspaces' }] as const;
     const plan = generateMigrationPlan(steps, { prev: null, next: json, targetSchema: 'public' });
     expect(plan.statements.some((s) => s.includes('FOREIGN KEY'))).toBe(false);
     expect((plan.concurrent ?? []).length).toBe(0);

@@ -121,7 +121,7 @@ export default defineConfig({
         {
           label: "Authority",
           icon: "shield",
-          items: ["/projects", "/api-keys", "/sessions", "/audit"],
+          items: ["/projects", "/api-keys", "/sessions", "/customer-organizations", "/audit"],
         },
         {
           label: "Storage",

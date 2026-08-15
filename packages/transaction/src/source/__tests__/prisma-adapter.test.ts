@@ -8,7 +8,7 @@ import {
 } from '../adapters/prisma.js';
 
 const schema = defineSchema({
-  task: model({ title: field.string() }),
+  item: model({ title: field.string() }),
 });
 
 class FakePrisma implements PrismaLike {
@@ -16,7 +16,7 @@ class FakePrisma implements PrismaLike {
   transactionCount = 0;
   inTransaction = false;
 
-  readonly task: PrismaDelegate = {
+  readonly item: PrismaDelegate = {
     findUnique: ({ where }) => Promise.resolve({ id: where.id, title: 'A' }),
     findMany: () => Promise.resolve([]),
     create: ({ data }) => Promise.resolve(data),
@@ -57,7 +57,7 @@ describe('prismaDataSource', () => {
       intentHash: 'a'.repeat(64),
       echo: { kind: 'postgres-wal', payload: 'echo-payload' },
       operations: [
-        { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+        { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
       ],
     });
 
@@ -82,7 +82,7 @@ describe('prismaDataSource', () => {
       intentHash: 'a'.repeat(64),
       echo: { kind: 'postgres-wal', payload: 'echo-payload' },
       operations: [
-        { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+        { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
       ],
     });
 

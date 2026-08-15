@@ -18,7 +18,7 @@ import {
 } from '../../src/local/transactions/mutations/MutationQueue';
 import { createDurableCommitEnvelope } from '@abloatai/transaction/transactions/confirmation/commitEnvelope';
 import {
-  createTaskFixture,
+  createItemFixture,
   createTestContext,
   resetFixtureCounter,
 } from '../../src/local/testing';
@@ -141,11 +141,11 @@ describe('MutationQueue retry idempotency', () => {
     const attempts = failFirstCommitAfterCapturing(queue);
 
     const firstPromise = queue.create(
-      createTaskFixture({ title: 'first' }),
+      createItemFixture({ title: 'first' }),
       USER_CONTEXT,
     );
     const secondPromise = queue.create(
-      createTaskFixture({ title: 'second' }),
+      createItemFixture({ title: 'second' }),
       USER_CONTEXT,
     );
     const transactions: QueuedMutation[] = await Promise.all([
@@ -178,7 +178,7 @@ describe('MutationQueue retry idempotency', () => {
     const attempts = failFirstCommitAfterCapturing(queue);
 
     const transaction = await queue.create(
-      createTaskFixture({ title: 'offline write' }),
+      createItemFixture({ title: 'offline write' }),
       USER_CONTEXT,
     );
     // Let the staging microtask move the transaction behind the long batch
@@ -216,7 +216,7 @@ describe('MutationQueue retry idempotency', () => {
     });
 
     const transaction = await queue.create(
-      createTaskFixture({ title: 'drain once' }),
+      createItemFixture({ title: 'drain once' }),
       USER_CONTEXT,
     );
     await Promise.resolve();
@@ -247,12 +247,12 @@ describe('MutationQueue retry idempotency', () => {
     });
 
     const first = await queue.create(
-      createTaskFixture({ title: 'first explicit key' }),
+      createItemFixture({ title: 'first explicit key' }),
       USER_CONTEXT,
       { idempotencyKey: 'caller-key-1' },
     );
     const second = await queue.create(
-      createTaskFixture({ title: 'second explicit key' }),
+      createItemFixture({ title: 'second explicit key' }),
       USER_CONTEXT,
       { idempotencyKey: 'caller-key-2' },
     );
@@ -290,15 +290,15 @@ describe('MutationQueue retry idempotency', () => {
       executeArchive: jest.fn(),
       executeUnarchive: jest.fn(),
     });
-    const task = createTaskFixture({ title: 'before' });
+    const item = createItemFixture({ title: 'before' });
     const first = await queue.update(
-      task,
+      item,
       USER_CONTEXT,
       { title: 'first' },
       { idempotencyKey: 'update-key-1' },
     );
     const second = await queue.update(
-      task,
+      item,
       USER_CONTEXT,
       { title: 'second' },
       { idempotencyKey: 'update-key-2' },
@@ -342,16 +342,16 @@ describe('MutationQueue retry idempotency', () => {
       executeArchive: jest.fn(),
       executeUnarchive: jest.fn(),
     });
-    const task = createTaskFixture({ title: 'before delete' });
+    const item = createItemFixture({ title: 'before delete' });
     await queue.update(
-      task,
+      item,
       USER_CONTEXT,
       { title: 'will be canceled' },
       undefined,
       'source-update',
     );
     const deleted = await queue.delete(
-      task,
+      item,
       USER_CONTEXT,
       undefined,
       'source-delete',
@@ -394,7 +394,7 @@ describe('MutationQueue retry idempotency', () => {
     });
 
     const transaction = await queue.create(
-      createTaskFixture({ title: 'write-ahead' }),
+      createItemFixture({ title: 'write-ahead' }),
       USER_CONTEXT,
     );
     await waitFor(() => sealStarted);
@@ -422,7 +422,7 @@ describe('MutationQueue retry idempotency', () => {
 
     await expect(
       queue.enqueueCommit('caller-durable-key', [
-        { type: 'UPDATE', model: 'task', id: 'task-1', input: { title: 'safe' } },
+        { type: 'UPDATE', model: 'item', id: 'item-1', input: { title: 'safe' } },
       ]),
     ).rejects.toThrow('Could not persist the durable write before dispatch');
     expect(commit).not.toHaveBeenCalled();
@@ -435,8 +435,8 @@ describe('MutationQueue retry idempotency', () => {
     queue.setCommitOutbox(outbox.store);
     const firstAttempts = failFirstCommitAfterCapturing(queue);
 
-    await queue.create(createTaskFixture({ title: 'crash-a' }), USER_CONTEXT);
-    await queue.create(createTaskFixture({ title: 'crash-b' }), USER_CONTEXT);
+    await queue.create(createItemFixture({ title: 'crash-a' }), USER_CONTEXT);
+    await queue.create(createItemFixture({ title: 'crash-b' }), USER_CONTEXT);
     await Promise.resolve();
     await queue.drainPending();
     expect(firstAttempts).toHaveLength(1);
@@ -486,7 +486,7 @@ describe('MutationQueue retry idempotency', () => {
       executeUnarchive: jest.fn(),
     });
     const transaction = await queue.create(
-      createTaskFixture({ title: 'cleanup-safe' }),
+      createItemFixture({ title: 'cleanup-safe' }),
       USER_CONTEXT,
     );
     await transaction.confirmation;
@@ -506,10 +506,10 @@ describe('MutationQueue retry idempotency', () => {
     });
 
     await queue.enqueueCommit('same-key', [
-      { type: 'UPDATE', model: 'task', id: 'task-1', input: { title: 'first' } },
+      { type: 'UPDATE', model: 'item', id: 'item-1', input: { title: 'first' } },
     ]);
     await expect(queue.enqueueCommit('same-key', [
-      { type: 'UPDATE', model: 'task', id: 'task-1', input: { title: 'different' } },
+      { type: 'UPDATE', model: 'item', id: 'item-1', input: { title: 'different' } },
     ])).rejects.toMatchObject({
       code: 'idempotency_conflict',
       type: 'AbloIdempotencyError',
@@ -536,7 +536,7 @@ describe('MutationQueue retry idempotency', () => {
     });
 
     await expect(queue.enqueueCommit('observer-safe', [
-      { type: 'DELETE', model: 'task', id: 'task-1' },
+      { type: 'DELETE', model: 'item', id: 'item-1' },
     ])).resolves.toBeUndefined();
     await waitFor(() => commit.mock.calls.length === 1);
   });
@@ -564,10 +564,10 @@ describe('MutationQueue retry idempotency', () => {
 
     await Promise.all([
       queue.enqueueCommit('first-commit', [
-        { type: 'DELETE', model: 'task', id: 'task-1' },
+        { type: 'DELETE', model: 'item', id: 'item-1' },
       ]),
       queue.enqueueCommit('second-commit', [
-        { type: 'DELETE', model: 'task', id: 'task-2' },
+        { type: 'DELETE', model: 'item', id: 'item-2' },
       ]),
     ]);
 
@@ -585,7 +585,7 @@ describe('MutationQueue retry idempotency', () => {
       idempotencyKey: 'too-old-to-replay',
       origin: 'atomic_commit',
       operations: [
-        { type: 'DELETE', model: 'task', id: 'task-old' },
+        { type: 'DELETE', model: 'item', id: 'item-old' },
       ],
       sourceMutationIds: [],
       commitOptions: {},

@@ -14,7 +14,7 @@ describe('buildSchemaSourceFromPrisma', () => {
   it('returns the emitted source alongside what was adopted and declined', () => {
     const result = buildSchemaSourceFromPrisma({ src: PRISMA_SCHEMA, importPath: '@abloatai/ablo/schema' });
     expect(result.source).toContain("import { defineSchema, model, relation, field } from '@abloatai/ablo/schema';");
-    expect(result.models.sort()).toEqual(['projects', 'tasks']);
+    expect(result.models.sort()).toEqual(['records', 'workspaces']);
     expect(result.skipped.map((s) => s.name)).toEqual(['Settings']);
   });
 });

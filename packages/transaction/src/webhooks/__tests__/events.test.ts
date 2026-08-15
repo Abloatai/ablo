@@ -8,7 +8,7 @@ import { deltaToWebhookEvent, type WebhookSourceDelta } from '../events.js';
 const base: WebhookSourceDelta = {
   id: 42,
   actionType: 'U',
-  modelName: 'Slide',
+  modelName: 'Entry',
   modelId: 's1',
   data: { id: 's1', title: 'hello' },
   createdAt: '2026-06-04T00:00:00.000Z',
@@ -17,11 +17,11 @@ const base: WebhookSourceDelta = {
 describe('deltaToWebhookEvent', () => {
   it('maps action chars to customer verbs (I/U/D/A/V)', () => {
     const cases: [string, string][] = [
-      ['I', 'slide.created'],
-      ['U', 'slide.updated'],
-      ['D', 'slide.deleted'],
-      ['A', 'slide.archived'],
-      ['V', 'slide.unarchived'],
+      ['I', 'entry.created'],
+      ['U', 'entry.updated'],
+      ['D', 'entry.deleted'],
+      ['A', 'entry.archived'],
+      ['V', 'entry.unarchived'],
     ];
     for (const [actionType, type] of cases) {
       expect(deltaToWebhookEvent({ ...base, actionType })?.type).toBe(type);
@@ -32,8 +32,8 @@ describe('deltaToWebhookEvent', () => {
     const ev = deltaToWebhookEvent(base)!;
     expect(ev).toEqual({
       id: '42',
-      type: 'slide.updated',
-      model: 'Slide',
+      type: 'entry.updated',
+      model: 'Entry',
       objectId: 's1',
       syncId: 42,
       data: { id: 's1', title: 'hello' },
@@ -56,7 +56,7 @@ describe('deltaToWebhookEvent', () => {
 
   it('carries null data on a delete', () => {
     const ev = deltaToWebhookEvent({ ...base, actionType: 'D', data: null })!;
-    expect(ev.type).toBe('slide.deleted');
+    expect(ev.type).toBe('entry.deleted');
     expect(ev.data).toBeNull();
   });
 
@@ -67,8 +67,8 @@ describe('deltaToWebhookEvent', () => {
   });
 
   it('lowercases only the type, preserving the wire model name', () => {
-    const ev = deltaToWebhookEvent({ ...base, modelName: 'SlideLayer' })!;
-    expect(ev.type).toBe('slidelayer.updated');
-    expect(ev.model).toBe('SlideLayer');
+    const ev = deltaToWebhookEvent({ ...base, modelName: 'EntryDetail' })!;
+    expect(ev.type).toBe('entrydetail.updated');
+    expect(ev.model).toBe('EntryDetail');
   });
 });

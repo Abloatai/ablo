@@ -101,7 +101,7 @@ export const conflictAxisWireSchema = z.object({
 
 /** One model in the deployed schema, as the schema read reports it. */
 export const schemaModelResponseSchema = z.object({
-  /** The key local code addresses (`ablo.documents`). */
+  /** The key local code addresses (`ablo.records`). */
   key: z.string(),
   /** The wire typename the engine routes and gates on. */
   typename: z.string(),
@@ -122,7 +122,7 @@ export const schemaModelResponseSchema = z.object({
    *
    * The schema artifact has always carried these and this response dropped
    * them, so a caller with no local schema declaration — which is every caller
-   * that is not TypeScript — had no way to learn that `task.title` is a
+   * that is not TypeScript — had no way to learn that `item.title` is a
    * required string. It found out from a 400 at the end of a round trip.
    *
    * For an agent that is not merely slow, it is a reasoning detour: a typo

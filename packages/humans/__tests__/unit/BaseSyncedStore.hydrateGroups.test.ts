@@ -52,26 +52,26 @@ describe('BaseSyncedStore.hydrateGroups (P4b)', () => {
   afterEach(() => { ctx.cleanup(); });
 
   it('fetches a scoped snapshot and applies it via the scoped path, marking hydrated', async () => {
-    const data = { models: { Task: [] } };
+    const data = { models: { Item: [] } };
     const shell = makeShell({
       database: { fetchScopedBootstrapData: jest.fn().mockResolvedValue(data) },
     });
 
-    await shell.hydrateGroups(['deck:a']);
+    await shell.hydrateGroups(['collection:a']);
 
-    expect(shell.database.fetchScopedBootstrapData).toHaveBeenCalledWith(['deck:a']);
+    expect(shell.database.fetchScopedBootstrapData).toHaveBeenCalledWith(['collection:a']);
     expect(shell.syncClient.applyBootstrapDataToPool).toHaveBeenCalledWith(
       data,
       undefined,
       { scoped: true },
     );
-    expect(shell.hydratedGroups.has('deck:a')).toBe(true);
+    expect(shell.hydratedGroups.has('collection:a')).toBe(true);
   });
 
   it('is idempotent — an already-hydrated group is not re-fetched', async () => {
     const shell = makeShell();
-    await shell.hydrateGroups(['deck:a']);
-    await shell.hydrateGroups(['deck:a']);
+    await shell.hydrateGroups(['collection:a']);
+    await shell.hydrateGroups(['collection:a']);
     expect(shell.database.fetchScopedBootstrapData).toHaveBeenCalledTimes(1);
   });
 
@@ -82,8 +82,8 @@ describe('BaseSyncedStore.hydrateGroups (P4b)', () => {
     );
     const shell = makeShell({ database: { fetchScopedBootstrapData: fetch } });
 
-    const p1 = shell.hydrateGroups(['deck:a']);
-    const p2 = shell.hydrateGroups(['deck:a']);
+    const p1 = shell.hydrateGroups(['collection:a']);
+    const p2 = shell.hydrateGroups(['collection:a']);
     release({ models: {} });
     await Promise.all([p1, p2]);
 
@@ -97,12 +97,12 @@ describe('BaseSyncedStore.hydrateGroups (P4b)', () => {
       .mockResolvedValueOnce({ models: {} });
     const shell = makeShell({ database: { fetchScopedBootstrapData: fetch } });
 
-    await shell.hydrateGroups(['deck:a']); // fails — must not throw
-    expect(shell.hydratedGroups.has('deck:a')).toBe(false);
+    await shell.hydrateGroups(['collection:a']); // fails — must not throw
+    expect(shell.hydratedGroups.has('collection:a')).toBe(false);
 
-    await shell.hydrateGroups(['deck:a']); // retries
+    await shell.hydrateGroups(['collection:a']); // retries
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(shell.hydratedGroups.has('deck:a')).toBe(true);
+    expect(shell.hydratedGroups.has('collection:a')).toBe(true);
   });
 });
 
@@ -120,9 +120,9 @@ describe('BaseSyncedStore.enterScope({ hydrate }) (P4b)', () => {
       database: { fetchScopedBootstrapData: fetch },
     });
 
-    await shell.enterScope('deck:a', { hydrate: true });
+    await shell.enterScope('collection:a', { hydrate: true });
 
-    expect(order).toEqual(['enter:deck:a', 'fetch']);
+    expect(order).toEqual(['enter:collection:a', 'fetch']);
   });
 
   it('does NOT fetch when hydrate is not requested', async () => {
@@ -130,7 +130,7 @@ describe('BaseSyncedStore.enterScope({ hydrate }) (P4b)', () => {
       areaOfInterest: { enter: jest.fn().mockResolvedValue(undefined) },
     });
 
-    await shell.enterScope('deck:a');
+    await shell.enterScope('collection:a');
 
     expect(shell.database.fetchScopedBootstrapData).not.toHaveBeenCalled();
   });

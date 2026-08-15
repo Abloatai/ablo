@@ -83,7 +83,7 @@ describeE2E('E2E: WebSocket Sync (real server)', () => {
 
   describe('batchAck mutation', () => {
     it('should POST batchAck and receive lastSyncId > 0', async () => {
-      const taskId = `e2e-task-${Date.now()}`;
+      const itemId = `e2e-item-${Date.now()}`;
       const res = await fetch(GRAPHQL_URL, {
         method: 'POST',
         headers: {
@@ -100,10 +100,10 @@ describeE2E('E2E: WebSocket Sync (real server)', () => {
           variables: {
             operations: [{
               type: 'CREATE',
-              model: 'task',
-              id: taskId,
+              model: 'item',
+              id: itemId,
               input: {
-                title: 'E2E Test Task',
+                title: 'E2E Test Item',
                 status: 'todo',
                 organizationId: ORG_ID,
                 createdBy: USER_ID,
@@ -132,7 +132,7 @@ describeE2E('E2E: WebSocket Sync (real server)', () => {
         },
       });
 
-      const taskId = `e2e-delta-${Date.now()}`;
+      const itemId = `e2e-delta-${Date.now()}`;
       const timeout = setTimeout(() => {
         ws.close();
         done(new Error('Delta delivery timed out'));
@@ -145,10 +145,10 @@ describeE2E('E2E: WebSocket Sync (real server)', () => {
             const msg = JSON.parse(data.toString());
             if (msg.type === 'delta') {
               const delta = msg.payload;
-              if (delta?.modelId === taskId) {
+              if (delta?.modelId === itemId) {
                 clearTimeout(timeout);
                 expect(delta.actionType).toBe('I');
-                expect(delta.modelName).toBe('Task');
+                expect(delta.modelName).toBe('Item');
                 ws.close();
                 done();
               }
@@ -158,7 +158,7 @@ describeE2E('E2E: WebSocket Sync (real server)', () => {
           }
         });
 
-        // Create a task — delta should arrive on WS
+        // Create a item — delta should arrive on WS
         await fetch(GRAPHQL_URL, {
           method: 'POST',
           headers: {
@@ -173,8 +173,8 @@ describeE2E('E2E: WebSocket Sync (real server)', () => {
             variables: {
               operations: [{
                 type: 'CREATE',
-                model: 'task',
-                id: taskId,
+                model: 'item',
+                id: itemId,
                 input: {
                   title: 'E2E Delta Test',
                   status: 'todo',

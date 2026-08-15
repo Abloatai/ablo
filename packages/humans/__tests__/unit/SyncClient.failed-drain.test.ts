@@ -24,7 +24,7 @@ import {
   registerTestModels,
   createTestConfig,
   createTestContext,
-  createSlideLayerFixture,
+  createEntryLayerFixture,
   MockMutationExecutor,
   type TestContextResult,
 } from '../../src/local/testing';
@@ -87,7 +87,7 @@ describe('SyncClient transaction:failed drain', () => {
   it('releases claims and journal rows on terminal failure, so later writes still stage', async () => {
     await client.initialize('user-1', 'org-1');
 
-    const layerA = createSlideLayerFixture({ id: 'layer-a', slideId: 'slide-1' });
+    const layerA = createEntryLayerFixture({ id: 'layer-a', entryId: 'entry-1' });
     client.delete(layerA);
     await client.syncNow();
     expect(client.getSyncStats().pendingMutations).toBe(1);
@@ -108,7 +108,7 @@ describe('SyncClient transaction:failed drain', () => {
     // forever and this syncNow() hangs on the unstaged write.
     const staged: QueuedMutation[] = [];
     const off = client.onLocalTransaction((tx) => staged.push(tx));
-    const layerB = createSlideLayerFixture({ id: 'layer-b', slideId: 'slide-1' });
+    const layerB = createEntryLayerFixture({ id: 'layer-b', entryId: 'entry-1' });
     client.delete(layerB);
     await client.syncNow();
     off();
@@ -119,7 +119,7 @@ describe('SyncClient transaction:failed drain', () => {
   it('ignores failures that carry no journal-sourced mutations', async () => {
     await client.initialize('user-1', 'org-1');
 
-    const layer = createSlideLayerFixture({ id: 'layer-c', slideId: 'slide-1' });
+    const layer = createEntryLayerFixture({ id: 'layer-c', entryId: 'entry-1' });
     client.delete(layer);
     await client.syncNow();
     expect(client.getSyncStats().pendingMutations).toBe(1);

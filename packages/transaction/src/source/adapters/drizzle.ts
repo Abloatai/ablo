@@ -151,6 +151,11 @@ export function drizzleDataSource<S extends SchemaRecord>(
   };
 
   const applyOperation = async (tx: DrizzleLike, op: Operation): Promise<Row> => {
+    if (op.where) {
+      throw new AbloValidationError('The Drizzle adapter does not support conditional operations', {
+        code: 'source_adapter_misconfigured',
+      });
+    }
     const mc = modelColumns(op.model);
     const table = sql.identifier(mc.table);
     const id = rowId(op);

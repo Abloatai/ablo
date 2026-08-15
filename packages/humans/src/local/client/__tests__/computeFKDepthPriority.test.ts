@@ -5,7 +5,7 @@
  * The contract these tests pin down:
  *
  *   1. Acyclic schemas: deeper-FK nodes get higher priority numbers.
- *   2. 2-cycle (the slideDecks ↔ layouts case): both members share a
+ *   2. 2-cycle (the collections ↔ layouts case): both members share a
  *      priority, so commit order is decided by insertion order — never
  *      by which node DFS happened to enter first.
  *   3. Larger SCCs: same rule generalises to any cycle size.
@@ -51,22 +51,22 @@ describe('computeFKDepthPriority', () => {
   });
 
   it('2-cycle A ↔ B: members share a priority (the user-reported bug)', () => {
-    // Mirrors the slideDecks ↔ layouts cycle in ablo.schema.ts:
-    //   slideDecks.layoutId  → layouts
-    //   layouts.deckId       → slideDecks
+    // Mirrors the collections ↔ layouts cycle in ablo.schema.ts:
+    //   collections.layoutId  → layouts
+    //   layouts.collectionId       → collections
     const schema = defineSchema({
-      slideDecks: model({ layoutId: z.string().nullish() }, { relations: {
+      collections: model({ layoutId: z.string().nullish() }, { relations: {
         layout: relation.belongsTo('layouts', 'layoutId'),
       }, }),
-      layouts: model({ deckId: z.string().nullish() }, { relations: {
-        deck: relation.belongsTo('slideDecks', 'deckId'),
+      layouts: model({ collectionId: z.string().nullish() }, { relations: {
+        collection: relation.belongsTo('collections', 'collectionId'),
       }, }),
     });
 
     const p = priorities(schema);
-    expect(p.get('slideDecks')).toBe(p.get('layouts'));
+    expect(p.get('collections')).toBe(p.get('layouts'));
     // And they got *some* priority — not silently dropped.
-    expect(p.get('slideDecks')).toBeGreaterThan(0);
+    expect(p.get('collections')).toBeGreaterThan(0);
   });
 
   it('priorities are iteration-order-independent across cycles', () => {
@@ -99,23 +99,23 @@ describe('computeFKDepthPriority', () => {
   });
 
   it('downstream-of-cycle nodes get higher priority than the cycle', () => {
-    // Mirrors the real Ablo schema: slides depends on the
-    // {slideDecks, layouts} SCC, so slides must commit after.
+    // Mirrors the real Ablo schema: entries depends on the
+    // {collections, layouts} SCC, so entries must commit after.
     const schema = defineSchema({
-      slideDecks: model({ layoutId: z.string().nullish() }, { relations: {
+      collections: model({ layoutId: z.string().nullish() }, { relations: {
         layout: relation.belongsTo('layouts', 'layoutId'),
       }, }),
-      layouts: model({ deckId: z.string().nullish() }, { relations: {
-        deck: relation.belongsTo('slideDecks', 'deckId'),
+      layouts: model({ collectionId: z.string().nullish() }, { relations: {
+        collection: relation.belongsTo('collections', 'collectionId'),
       }, }),
-      slides: model({ deckId: z.string() }, { relations: {
-        deck: relation.belongsTo('slideDecks', 'deckId'),
+      entries: model({ collectionId: z.string() }, { relations: {
+        collection: relation.belongsTo('collections', 'collectionId'),
       }, }),
     });
 
     const p = priorities(schema);
-    expect(p.get('slides')).toBeGreaterThan(p.get('slideDecks')!);
-    expect(p.get('slides')).toBeGreaterThan(p.get('layouts')!);
+    expect(p.get('entries')).toBeGreaterThan(p.get('collections')!);
+    expect(p.get('entries')).toBeGreaterThan(p.get('layouts')!);
   });
 
   it('three-node cycle A → B → C → A: all three share a priority', () => {
@@ -137,18 +137,18 @@ describe('computeFKDepthPriority', () => {
   });
 
   it('self-loop is a single-node SCC, not a depth-2 tower', () => {
-    // `slides.sourceSlideId → slides` in the real schema. Old code's
+    // `entries.sourceEntryId → entries` in the real schema. Old code's
     // depth heuristic would try to recurse into the cycle and bail at
     // depth 0 — which gave depth 1 for a self-loop. Tarjan correctly
     // treats it as one node.
     const schema = defineSchema({
-      slides: model({ sourceSlideId: z.string().nullish() }, { relations: {
-        sourceSlide: relation.belongsTo('slides', 'sourceSlideId'),
+      entries: model({ sourceEntryId: z.string().nullish() }, { relations: {
+        sourceEntry: relation.belongsTo('entries', 'sourceEntryId'),
       }, }),
     });
 
     const p = priorities(schema);
-    expect(p.get('slides')).toBe(10); // first (and only) emit → 10
+    expect(p.get('entries')).toBe(10); // first (and only) emit → 10
   });
 
   it('sibling DAG branches: A → B, A → C, B and C unrelated', () => {
@@ -201,79 +201,79 @@ describe('computeFKDepthPriority', () => {
 
   it('keys the result by typename, not schema key', () => {
     const schema = defineSchema({
-      slideDecks: model({ name: z.string() }, { typename: 'SlideDeck' }),
+      collections: model({ name: z.string() }, { typename: 'Collection' }),
     });
 
     const p = priorities(schema);
-    expect(p.get('SlideDeck')).toBe(10);
-    expect(p.get('slideDecks')).toBeUndefined();
+    expect(p.get('Collection')).toBe(10);
+    expect(p.get('collections')).toBeUndefined();
   });
 
   it('reproduces the user-reported failing batch correctly', () => {
-    // Reduced version of the Ablo schema's deck-creation cycle:
-    //   layouts ↔ slideDecks (via layouts.deckId / slideDecks.layoutId)
-    //   layouts ↔ slideLayouts (via layouts.masterId / slideLayouts.layoutId)
-    //   slides → {slideDecks, slideLayouts} (FKs to both)
-    //   slideLayers → slides
+    // Reduced version of the Ablo schema's collection-creation cycle:
+    //   layouts ↔ collections (via layouts.collectionId / collections.layoutId)
+    //   layouts ↔ entryLayouts (via layouts.masterId / entryLayouts.layoutId)
+    //   entries → {collections, entryLayouts} (FKs to both)
+    //   entryDetails → entries
     const schema = defineSchema({
       layouts: model(
-        { masterId: z.string().nullish(), deckId: z.string().nullish() },
+        { masterId: z.string().nullish(), collectionId: z.string().nullish() },
         {
           relations: {
-            deck: relation.belongsTo('slideDecks', 'deckId'),
-            master: relation.belongsTo('slideLayouts', 'masterId'),
+            collection: relation.belongsTo('collections', 'collectionId'),
+            master: relation.belongsTo('entryLayouts', 'masterId'),
           },
           typename: 'Layout',
         }),
-      slideDecks: model(
+      collections: model(
         { layoutId: z.string().nullish() },
         {
           relations: {
             activeLayout: relation.belongsTo('layouts', 'layoutId'),
           },
-          typename: 'SlideDeck',
+          typename: 'Collection',
         }),
-      slides: model(
-        { deckId: z.string(), templateId: z.string().nullish() },
+      entries: model(
+        { collectionId: z.string(), templateId: z.string().nullish() },
         {
           relations: {
-            deck: relation.belongsTo('slideDecks', 'deckId'),
-            template: relation.belongsTo('slideLayouts', 'templateId'),
+            collection: relation.belongsTo('collections', 'collectionId'),
+            template: relation.belongsTo('entryLayouts', 'templateId'),
           },
-          typename: 'Slide',
+          typename: 'Entry',
         }),
-      slideLayers: model(
-        { slideId: z.string() },
+      entryDetails: model(
+        { entryId: z.string() },
         {
           relations: {
-            slide: relation.belongsTo('slides', 'slideId'),
+            entry: relation.belongsTo('entries', 'entryId'),
           },
-          typename: 'SlideLayer',
+          typename: 'EntryDetail',
         }),
-      slideLayouts: model(
+      entryLayouts: model(
         { layoutId: z.string() },
         {
           relations: {
             layout: relation.belongsTo('layouts', 'layoutId'),
           },
-          typename: 'SlideLayout',
+          typename: 'EntryLayout',
         }),
     });
 
     const p = priorities(schema);
-    // The three-node SCC {Layout, SlideDeck, SlideLayout} gets a single
-    // priority — which fixes the bug. Previously SlideDeck=20 and
+    // The three-node SCC {Layout, Collection, EntryLayout} gets a single
+    // priority — which fixes the bug. Previously Collection=20 and
     // Layout=30, putting children before parents.
     const layoutP = p.get('Layout')!;
-    const deckP = p.get('SlideDeck')!;
-    const slideLayoutP = p.get('SlideLayout')!;
-    expect(layoutP).toBe(deckP);
-    expect(layoutP).toBe(slideLayoutP);
+    const collectionP = p.get('Collection')!;
+    const entryLayoutP = p.get('EntryLayout')!;
+    expect(layoutP).toBe(collectionP);
+    expect(layoutP).toBe(entryLayoutP);
 
-    // Slide is downstream of the SCC.
-    expect(p.get('Slide')!).toBeGreaterThan(layoutP);
-    // SlideLayer is downstream of Slide.
-    expect(p.get('SlideLayer')!).toBeGreaterThan(p.get('Slide')!);
+    // Entry is downstream of the SCC.
+    expect(p.get('Entry')!).toBeGreaterThan(layoutP);
+    // EntryDetail is downstream of Entry.
+    expect(p.get('EntryDetail')!).toBeGreaterThan(p.get('Entry')!);
   });
 
   // ── defer: true escape hatch ──────────────────────────────────────────

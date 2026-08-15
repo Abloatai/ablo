@@ -20,7 +20,7 @@ import type { QueuedMutation } from '../mutations/MutationQueue.js';
 import type { Database } from '../../Database.js';
 import { createTestHarness } from '../../testing/helpers/syncEngineHarness.js';
 import type { TestHarness } from '../../testing/helpers/syncEngineHarness.js';
-import { createTaskFixture } from '../../testing/fixtures/models.js';
+import { createItemFixture } from '../../testing/fixtures/models.js';
 import { ModelScope } from '@abloatai/transaction/types';
 import type {
   DurableWriteStore,
@@ -71,29 +71,29 @@ describe('commit-lane writes reach the undo stream', () => {
   });
 
   it('surfaces an UPDATE with previousData restricted to the written keys', async () => {
-    const task = createTaskFixture({ title: 'Before', status: 'todo' });
-    harness.pool.add(task, ModelScope.live);
+    const item = createItemFixture({ title: 'Before', status: 'todo' });
+    harness.pool.add(item, ModelScope.live);
 
     await syncClient.getMutationQueue().enqueueCommit('ctx_update', [
-      { type: 'UPDATE', model: 'task', id: task.id, input: { title: 'After' } },
+      { type: 'UPDATE', model: 'item', id: item.id, input: { title: 'After' } },
     ]);
 
     expect(seen).toHaveLength(1);
     const tx = seen[0];
     if (!tx) throw new Error('expected one surfaced transaction');
     expect(tx.type).toBe('update');
-    expect(tx.modelId).toBe(task.id);
+    expect(tx.modelId).toBe(item.id);
     expect(tx.data).toEqual({ title: 'After' });
     // Only the patched key — NOT the full row.
     expect(tx.previousData).toEqual({ title: 'Before' });
   });
 
   it('surfaces a DELETE of a resident row with the full previous row', async () => {
-    const task = createTaskFixture({ title: 'Doomed' });
-    harness.pool.add(task, ModelScope.live);
+    const item = createItemFixture({ title: 'Doomed' });
+    harness.pool.add(item, ModelScope.live);
 
     await syncClient.getMutationQueue().enqueueCommit('ctx_delete', [
-      { type: 'DELETE', model: 'task', id: task.id },
+      { type: 'DELETE', model: 'item', id: item.id },
     ]);
 
     expect(seen).toHaveLength(1);
@@ -107,19 +107,19 @@ describe('commit-lane writes reach the undo stream', () => {
 
   it('skips a DELETE of a row the local graph never saw', async () => {
     await syncClient.getMutationQueue().enqueueCommit('ctx_ghost', [
-      { type: 'DELETE', model: 'task', id: 'task-never-seen' },
+      { type: 'DELETE', model: 'item', id: 'item-never-seen' },
     ]);
 
     expect(seen).toHaveLength(0);
   });
 
   it('surfaces a CREATE with null previousData and groups multi-op envelopes in one tick', async () => {
-    const task = createTaskFixture({ title: 'Sibling' });
-    harness.pool.add(task, ModelScope.live);
+    const item = createItemFixture({ title: 'Sibling' });
+    harness.pool.add(item, ModelScope.live);
 
     await syncClient.getMutationQueue().enqueueCommit('ctx_multi', [
-      { type: 'CREATE', model: 'task', id: 'task-new', input: { title: 'Born' } },
-      { type: 'UPDATE', model: 'task', id: task.id, input: { title: 'Renamed' } },
+      { type: 'CREATE', model: 'item', id: 'item-new', input: { title: 'Born' } },
+      { type: 'UPDATE', model: 'item', id: item.id, input: { title: 'Renamed' } },
     ]);
 
     // Both ops are emitted together after the envelope is durably sealed, so
@@ -135,7 +135,7 @@ describe('commit-lane writes reach the undo stream', () => {
   it('stops surfacing commit-lane writes after unsubscribe', async () => {
     unsubscribe();
     await syncClient.getMutationQueue().enqueueCommit('ctx_after_off', [
-      { type: 'CREATE', model: 'task', id: 'task-x', input: { title: 'x' } },
+      { type: 'CREATE', model: 'item', id: 'item-x', input: { title: 'x' } },
     ]);
     expect(seen).toHaveLength(0);
     // afterEach calls unsubscribe again — make that a no-op double call.
@@ -156,14 +156,14 @@ describe('commit-lane writes reach the undo stream', () => {
     );
     seen = [];
     unsubscribe = syncClient.onLocalTransaction((tx) => seen.push(tx));
-    const task = createTaskFixture({ title: 'Before seal' });
-    harness.pool.add(task, ModelScope.live);
+    const item = createItemFixture({ title: 'Before seal' });
+    harness.pool.add(item, ModelScope.live);
 
     const pending = syncClient.getMutationQueue().enqueueCommit('ctx_snapshot', [
-      { type: 'UPDATE', model: 'task', id: task.id, input: { title: 'Committed' } },
+      { type: 'UPDATE', model: 'item', id: item.id, input: { title: 'Committed' } },
     ]);
     await Promise.resolve();
-    Object.assign(task, { title: 'Changed while sealing' });
+    Object.assign(item, { title: 'Changed while sealing' });
     releaseSeal();
     await pending;
 

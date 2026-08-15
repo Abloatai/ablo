@@ -5,7 +5,7 @@ import { SyncClient } from '../../src/local/SyncClient';
 import {
   createTestConfig,
   createTestContext,
-  createTaskFixture,
+  createItemFixture,
   fakeDatabase,
   MockMutationExecutor,
   registerTestModels,
@@ -48,14 +48,14 @@ describe('SyncClient model-write staging', () => {
 
   it('batches concurrent confirmed model drains into one commit', async () => {
     await client.initialize('user-1', 'org-1');
-    const models = ['a', 'b', 'c'].map((id) => createTaskFixture({ id }));
+    const models = ['a', 'b', 'c'].map((id) => createItemFixture({ id }));
 
     await Promise.all(
       models.map(async (model) => {
         client.add(model);
         await Promise.resolve();
         await client.syncNow();
-        await client.waitForConfirmation('Task', model.id);
+        await client.waitForConfirmation('Item', model.id);
       }),
     );
 

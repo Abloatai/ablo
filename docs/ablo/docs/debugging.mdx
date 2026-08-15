@@ -75,12 +75,12 @@ Precedence: an explicit `logLevel` wins, then `debug: true` (⇒ `debug`), then 
 These lines (all at `info`) let you watch the handover you built:
 
 ```
-[Ablo] claim: requesting documents:doc_42 for "editing" (will queue if contended)
-[Ablo] claim: queued for documents:doc_42 — position 2 of 3, waiting
+[Ablo] claim: requesting records:doc_42 for "editing" (will queue if contended)
+[Ablo] claim: queued for records:doc_42 — position 2 of 3, waiting
 [Ablo] claim: granted 7f3c… — your turn (waited in queue)
-[Ablo] claim: rejected documents:doc_42 — held by agent_writer
-[Ablo] claim: lost documents:doc_42 (preempted or expired)
-[Ablo] claim: released documents:doc_42
+[Ablo] claim: rejected records:doc_42 — held by agent_writer
+[Ablo] claim: lost records:doc_42 (preempted or expired)
+[Ablo] claim: released records:doc_42
 ```
 
 Read it as the lifecycle of one claim:
@@ -192,7 +192,7 @@ function ActivityFeed({ log }: { log: ClaimLog }) {
 For **"who holds *this* row right now"** (a badge, not a feed), don't use `ClaimLog` — read the reactive claim state directly. It re-renders on change with no extra wiring:
 
 ```tsx
-const holder = useAblo((ablo) => ablo.documents.claim.state({ id }));   // Claim | null
+const holder = useAblo((ablo) => ablo.records.claim.state({ id }));   // Claim | null
 ```
 
 See [React](/react) and [Coordination](/coordination) for the claim-read APIs.
@@ -268,7 +268,7 @@ Every rejected live commit carries `requestId` on the thrown error and
 import { AbloError } from '@abloatai/ablo';
 
 try {
-  await ablo.documents.create({
+  await ablo.records.create({
     data,
   });
 } catch (error) {
@@ -292,7 +292,7 @@ evidence that the replication source has no history.
 Use:
 
 ```ts
-await ablo.documents.list({ type: 'complete' });
+await ablo.records.list({ type: 'complete' });
 ```
 
 `type: 'complete'` waits for a server round trip and returns the confirmed

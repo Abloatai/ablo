@@ -29,13 +29,13 @@ const silentLogger = {
 };
 
 const schema = defineSchema({
-  // No typename override: the `can` key already IS the wire token → `documents.*`.
-  documents: model({ title: z.string() }, {}),
-  // Typename override: `can` is keyed by the schema key (`slideLayer`) but the
-  // capability must be scoped by the lowercased TYPENAME (`slidelayer`), else
+  // No typename override: the `can` key already IS the wire token → `records.*`.
+  records: model({ title: z.string() }, {}),
+  // Typename override: `can` is keyed by the schema key (`entryDetail`) but the
+  // capability must be scoped by the lowercased TYPENAME (`entrydetail`), else
   // the Hub denies it (`capability_scope_denied`). Proves the mapping carries
   // through `agents.create`, not just `sessions.create`.
-  slideLayer: model({ text: z.string() }, { typename: 'SlideLayer' }),
+  entryDetail: model({ text: z.string() }, { typename: 'EntryDetail' }),
 });
 
 interface RecordedRequest {
@@ -101,7 +101,7 @@ describe('ablo.agents.create', () => {
 
     const agent = await ablo.agents.create({
       id: 'draft-7',
-      can: { documents: ['read', 'update'] },
+      can: { records: ['read', 'update'] },
     });
 
     // Exactly ONE mint up front (fail-fast on a bad key); the child client is
@@ -114,8 +114,8 @@ describe('ablo.agents.create', () => {
     expect(mintCall.body).toMatchObject({
       participantKind: 'agent',
       participantId: 'draft-7',
-      // No typename override on `documents` → key === wire token.
-      operations: ['documents.read', 'documents.update'],
+      // No typename override on `records` → key === wire token.
+      operations: ['records.read', 'records.update'],
     });
 
     await agent.dispose();
@@ -125,11 +125,11 @@ describe('ablo.agents.create', () => {
     const { fetch: recordingFetch } = makeRecordingFetch();
     const ablo = makeEngine({ apiKey: 'sk_test_backend', fetch: recordingFetch });
 
-    const agent = await ablo.agents.create({ id: 'draft-7', can: { documents: ['update'] } });
+    const agent = await ablo.agents.create({ id: 'draft-7', can: { records: ['update'] } });
 
     // It's a full client, not an AbloSession: the model surface + lifecycle are present.
-    expect(typeof agent.documents.update).toBe('function');
-    expect(typeof agent.documents.claim).toBe('function');
+    expect(typeof agent.records.update).toBe('function');
+    expect(typeof agent.records.claim).toBe('function');
     expect(typeof agent.dispose).toBe('function');
     // A distinct engine from the parent (its own rk_ / connection).
     expect(agent).not.toBe(ablo);
@@ -141,8 +141,8 @@ describe('ablo.agents.create', () => {
     const { fetch: recordingFetch, calls } = makeRecordingFetch();
     const ablo = makeEngine({ apiKey: 'sk_test_backend', fetch: recordingFetch });
 
-    const a = await ablo.agents.create({ name: 'drafter', can: { documents: ['update'] } });
-    const b = await ablo.agents.create({ name: 'drafter', can: { documents: ['update'] } });
+    const a = await ablo.agents.create({ name: 'drafter', can: { records: ['update'] } });
+    const b = await ablo.agents.create({ name: 'drafter', can: { records: ['update'] } });
 
     const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const mintA = calls[0];
@@ -164,7 +164,7 @@ describe('ablo.agents.create', () => {
     const { fetch: recordingFetch, calls } = makeRecordingFetch();
     const ablo = makeEngine({ apiKey: 'sk_test_backend', fetch: recordingFetch });
 
-    const agent = await ablo.agents.create({ name: 'researcher', can: { documents: ['read'] } });
+    const agent = await ablo.agents.create({ name: 'researcher', can: { records: ['read'] } });
 
     const mintCall = calls[0];
     if (!mintCall) throw new Error('expected a capability mint request');
@@ -181,13 +181,13 @@ describe('ablo.agents.create', () => {
 
     const agent = await ablo.agents.create({
       name: 'layer-bot',
-      can: { slideLayer: ['update'] },
+      can: { entryDetail: ['update'] },
     });
 
-    // `slideLayer` (schema key) → typename `SlideLayer` → wire token `slidelayer`,
+    // `entryDetail` (schema key) → typename `EntryDetail` → wire token `entrydetail`,
     // plus the read the write implies.
     expect(calls[0]?.body).toMatchObject({
-      operations: ['slidelayer.update', 'slidelayer.read'],
+      operations: ['entrydetail.update', 'entrydetail.read'],
     });
 
     await agent.dispose();
@@ -196,7 +196,7 @@ describe('ablo.agents.create', () => {
   it('refuses to mint without a secret key (never from the browser)', async () => {
     const ablo = makeEngine({ apiKey: null });
     await expect(
-      ablo.agents.create({ id: 'draft-7', can: { documents: ['update'] } }),
+      ablo.agents.create({ id: 'draft-7', can: { records: ['update'] } }),
     ).rejects.toMatchObject({ code: 'apikey_missing' });
   });
 });

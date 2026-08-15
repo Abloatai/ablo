@@ -675,10 +675,10 @@ export function usePeers(scope?: ParticipantScope): readonly Peer[] {
 /**
  * Returns the raw `SyncEngine` proxy. Typically you want the typed
  * hooks (`useQuery`, `useOne`, `useMutate`) — this is for rare cases
- * where you need direct access (e.g., `sync.tasks.onChange(cb)`).
+ * where you need direct access (e.g., `sync.items.onChange(cb)`).
  *
  * The generic parameter narrows the return type to your schema's
- * model record so call sites get typed `sync.tasks.findMany()` /
+ * model record so call sites get typed `sync.items.findMany()` /
  * `sync.sections.create(...)` without a cast at the call site:
  *
  * ```ts

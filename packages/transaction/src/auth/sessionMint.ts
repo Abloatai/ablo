@@ -13,8 +13,8 @@
  *                 participant with `invalid_participant_kind`.
  *   `{ agent }` → POST /v1/capabilities, returning an `rk_` key scoped to exactly
  *                 the operations named in `can`. For example
- *                 `can: { tasks: ['update'] }` becomes the wire allowlist entry
- *                 `tasks.update`, which the server matches against the model's
+ *                 `can: { items: ['update'] }` becomes the wire allowlist entry
+ *                 `items.update`, which the server matches against the model's
  *                 registered names.
  *
  * The caller supplies the already-resolved secret key and base URL in

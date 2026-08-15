@@ -77,7 +77,7 @@ export function M1<T extends M1Target>(
   };
 
   // Skip if target has its own observability setup
-  // This allows models like Task to handle their own MobX setup
+  // This allows models like Item to handle their own MobX setup
   if (target.setupObservability || target._hasCustomObservability) {
     getContext().modelDebugLogger?.logDebug(`${target.constructor.name} has custom observability, skipping M1`);
     return;

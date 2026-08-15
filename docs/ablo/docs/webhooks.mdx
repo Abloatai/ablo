@@ -42,7 +42,7 @@ Every delivery is a batch of events. Each event:
 
 | field | meaning |
 |---|---|
-| `type` | `"<model>.<verb>"` with the model name lowercased, e.g. `task.updated` |
+| `type` | `"<model>.<verb>"` with the model name lowercased, e.g. `record.updated` |
 | `model` | the model name exactly as declared in your schema: the table to write |
 | `objectId` | the changed row's id |
 | `data` | the post-change row, or `null` on delete |
@@ -130,7 +130,7 @@ Scope which models fire and label the endpoint at creation with `--events` and
 
 ```bash
 npx ablo webhooks create https://yourapp.com/api/ablo/[...all] \
-  --events task,project --description "prod mirror"
+  --events record,project --description "prod mirror"
 ```
 
 Manage and inspect endpoints:

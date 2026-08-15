@@ -711,6 +711,18 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "item_id_missing": {
+      "category": "server",
+      "httpStatus": 502,
+      "retryable": true,
+      "surface": "wire",
+    },
+    "item_id_required": {
+      "category": "validation",
+      "httpStatus": 400,
+      "retryable": false,
+      "surface": "wire",
+    },
     "jwt_audience_mismatch": {
       "category": "auth",
       "httpStatus": 401,
@@ -1062,6 +1074,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
     "position_unknown_sibling": {
       "category": "validation",
       "httpStatus": 400,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "precondition_failed": {
+      "category": "conflict",
+      "httpStatus": 409,
       "retryable": false,
       "surface": "wire",
     },
@@ -1562,18 +1580,6 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "httpStatus": null,
       "retryable": false,
       "surface": "client",
-    },
-    "task_id_missing": {
-      "category": "server",
-      "httpStatus": 502,
-      "retryable": true,
-      "surface": "wire",
-    },
-    "task_id_required": {
-      "category": "validation",
-      "httpStatus": 400,
-      "retryable": false,
-      "surface": "wire",
     },
     "tenant_model_columns_unknown": {
       "category": "tenant",

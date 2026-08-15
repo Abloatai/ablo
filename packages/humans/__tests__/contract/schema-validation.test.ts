@@ -23,24 +23,24 @@ describe('Contract: Schema DSL', () => {
   describe('defineSchema()', () => {
     it('should return a schema object with models keyed by name', () => {
       const schema = defineSchema({
-        tasks: model({
+        items: model({
           title: field.string(),
           status: field.string(),
         }),
-        projects: model({
+        workspaces: model({
           name: field.string(),
         }),
       });
 
       expect(schema).toBeDefined();
       expect(schema.models).toBeDefined();
-      expect(schema.models.tasks).toBeDefined();
-      expect(schema.models.projects).toBeDefined();
+      expect(schema.models.items).toBeDefined();
+      expect(schema.models.workspaces).toBeDefined();
     });
 
     it('should preserve field runtime metadata', () => {
       const schema = defineSchema({
-        tasks: model({
+        items: model({
           title: field.string(),
           count: field.number(),
           active: field.boolean(),
@@ -48,7 +48,7 @@ describe('Contract: Schema DSL', () => {
         }),
       });
 
-      const fields = schema.models.tasks.fields;
+      const fields = schema.models.items.fields;
       expect(fields.title?.type).toBe('string');
       expect(fields.count?.type).toBe('number');
       expect(fields.active?.type).toBe('boolean');
@@ -57,27 +57,27 @@ describe('Contract: Schema DSL', () => {
 
     it('should handle optional fields', () => {
       const schema = defineSchema({
-        tasks: model({
+        items: model({
           title: field.string(),
           description: field.string().optional(),
         }),
       });
 
-      const fields = schema.models.tasks.fields;
+      const fields = schema.models.items.fields;
       expect(fields.title?.isOptional).toBe(false);
       expect(fields.description?.isOptional).toBe(true);
     });
 
     it('should handle indexed fields', () => {
       const schema = defineSchema({
-        tasks: model({
+        items: model({
           title: field.string(),
-          projectId: field.string().indexed(),
+          workspaceId: field.string().indexed(),
         }),
       });
 
-      const fields = schema.models.tasks.fields;
-      expect(fields.projectId?.isIndexed).toBe(true);
+      const fields = schema.models.items.fields;
+      expect(fields.workspaceId?.isIndexed).toBe(true);
     });
 
     it('should handle physical column overrides', () => {
@@ -100,7 +100,7 @@ describe('Contract: Schema DSL', () => {
     });
 
     describe('sessionSettings (ADR 0011)', () => {
-      const oneModel = { tasks: model({ title: field.string() }) };
+      const oneModel = { items: model({ title: field.string() }) };
 
       it('accepts valid mappings and exposes them on the schema, defaulting to empty', () => {
         expect(defineSchema(oneModel).sessionSettings).toEqual({});
@@ -142,29 +142,29 @@ describe('Contract: Schema DSL', () => {
   describe('relation()', () => {
     it('should preserve relation runtime metadata', () => {
       const schema = defineSchema({
-        tasks: model(
+        items: model(
           {
             title: field.string(),
-            projectId: field.string().optional(),
+            workspaceId: field.string().optional(),
           },
           {
             relations: {
-              project: relation.belongsTo('projects', 'projectId'),
+              workspace: relation.belongsTo('workspaces', 'workspaceId'),
             },
           }
         ),
-        projects: model({
+        workspaces: model({
           name: field.string(),
         }),
       });
 
-      const relations = schema.models.tasks.relations;
+      const relations = schema.models.items.relations;
       expect(relations).toBeDefined();
-      expect(relations?.project).toBeDefined();
-      if (relations?.project) {
-        expect(relations.project.type).toBe('belongsTo');
-        expect(relations.project.target).toBe('projects');
-        expect(relations.project.foreignKey).toBe('projectId');
+      expect(relations?.workspace).toBeDefined();
+      if (relations?.workspace) {
+        expect(relations.workspace.type).toBe('belongsTo');
+        expect(relations.workspace.target).toBe('workspaces');
+        expect(relations.workspace.foreignKey).toBe('workspaceId');
       }
     });
   });

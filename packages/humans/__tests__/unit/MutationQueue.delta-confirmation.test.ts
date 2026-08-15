@@ -6,7 +6,7 @@
 import { MutationQueue } from '../../src/local/transactions/mutations/MutationQueue';
 import {
   createTestContext,
-  createTaskFixture,
+  createItemFixture,
   resetFixtureCounter,
   flushMicrotasks,
 } from '../../src/local/testing';
@@ -44,8 +44,8 @@ describe('MutationQueue Delta Confirmation', () => {
       const completedEvents: unknown[] = [];
       queue.on('transaction:completed', (tx) => completedEvents.push(tx));
 
-      const task = createTaskFixture();
-      await queue.create(task, TEST_USER_CONTEXT);
+      const item = createItemFixture();
+      await queue.create(item, TEST_USER_CONTEXT);
 
       // Wait for batch processing
       await flushMicrotasks();
@@ -65,8 +65,8 @@ describe('MutationQueue Delta Confirmation', () => {
       const completedViaConfirm: unknown[] = [];
       queue.on('transaction:completed', (tx) => completedViaConfirm.push(tx));
 
-      const task = createTaskFixture();
-      await queue.create(task, TEST_USER_CONTEXT);
+      const item = createItemFixture();
+      await queue.create(item, TEST_USER_CONTEXT);
 
       await flushMicrotasks();
       await new Promise((r) => setTimeout(r, 50));
@@ -85,8 +85,8 @@ describe('MutationQueue Delta Confirmation', () => {
       const completedEvents: unknown[] = [];
       queue.on('transaction:completed', (tx) => completedEvents.push(tx));
 
-      const task = createTaskFixture();
-      await queue.create(task, TEST_USER_CONTEXT);
+      const item = createItemFixture();
+      await queue.create(item, TEST_USER_CONTEXT);
 
       // Wait for batch processing
       await flushMicrotasks();
@@ -115,8 +115,8 @@ describe('MutationQueue Delta Confirmation', () => {
       // reconciliation timeout — exercise THAT path.
       ctx.mocks.mutationExecutor.setSyncId(0);
 
-      const task = createTaskFixture();
-      await queue.create(task, TEST_USER_CONTEXT);
+      const item = createItemFixture();
+      await queue.create(item, TEST_USER_CONTEXT);
 
       // Process the batch
       await jest.advanceTimersByTimeAsync(10);
@@ -140,8 +140,8 @@ describe('MutationQueue Delta Confirmation', () => {
       // Zero-watermark anomaly path (real acks confirm immediately now).
       ctx.mocks.mutationExecutor.setSyncId(0);
 
-      const task = createTaskFixture();
-      await queue.create(task, TEST_USER_CONTEXT);
+      const item = createItemFixture();
+      await queue.create(item, TEST_USER_CONTEXT);
 
       // Process batch
       await jest.advanceTimersByTimeAsync(10);
@@ -168,8 +168,8 @@ describe('MutationQueue Delta Confirmation', () => {
       const completedEvents: unknown[] = [];
       queue.on('transaction:completed', (tx) => completedEvents.push(tx));
 
-      const task = createTaskFixture();
-      await queue.delete(task, TEST_USER_CONTEXT);
+      const item = createItemFixture();
+      await queue.delete(item, TEST_USER_CONTEXT);
 
       // Wait for processing
       await flushMicrotasks();

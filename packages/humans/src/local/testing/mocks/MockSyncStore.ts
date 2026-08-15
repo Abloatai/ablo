@@ -51,7 +51,7 @@ export class MockSyncStore implements SyncStoreContract {
    * Seed the store with models of a specific class.
    *
    * @example
-   * mockStore.setModels(Task, [task1, task2]);
+   * mockStore.setModels(Item, [item1, item2]);
    */
   setModels<T extends Model>(modelClass: ModelCtor<T>, models: T[]): void {
     const map = new Map<string, Model>();

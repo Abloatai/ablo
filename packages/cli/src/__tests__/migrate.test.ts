@@ -26,9 +26,9 @@ describe('parseMigrateArgs', () => {
 });
 
 const schema = defineSchema({
-  tasks: model(
+  records: model(
     { title: z.string(), priority: z.number(), status: z.enum(['todo', 'done']) },
-    { typename: 'Task', tableName: 'tasks', mutable: true }),
+    { typename: 'Record', tableName: 'records', mutable: true }),
 });
 
 describe('planFor — the shared schema-SQL engine (same as hosted)', () => {
@@ -40,7 +40,7 @@ describe('planFor — the shared schema-SQL engine (same as hosted)', () => {
   });
 
   it('creates the table with platform base columns', () => {
-    expect(sql).toContain('CREATE TABLE IF NOT EXISTS "public"."tasks"');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS "public"."records"');
     expect(sql).toContain('"organization_id" TEXT NOT NULL');
   });
 
@@ -62,15 +62,15 @@ describe('planFor — schema without an explicit tableName (the `ablo init` star
   // The init template defines models with no `tableName`; the table must
   // default to the model key, or `ablo migrate` provisions zero tables.
   const starter = defineSchema({
-    projects: model({ name: z.string() }),
-    tasks: model({ title: z.string(), projectId: z.string().optional() }),
+    workspaces: model({ name: z.string() }),
+    records: model({ title: z.string(), workspaceId: z.string().optional() }),
   });
 
   it('still provisions a table per model, named after the model key', () => {
     const plan = planFor(starter, 'public');
     expect(plan.statements.length).toBeGreaterThan(0);
     const sql = plan.statements.join('\n');
-    expect(sql).toContain('CREATE TABLE IF NOT EXISTS "public"."projects"');
-    expect(sql).toContain('CREATE TABLE IF NOT EXISTS "public"."tasks"');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS "public"."workspaces"');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS "public"."records"');
   });
 });

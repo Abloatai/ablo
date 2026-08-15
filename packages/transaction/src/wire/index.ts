@@ -99,6 +99,8 @@ export {
   commitStatusSchema,
   commitWaitSchema,
   commitReceiptSchema,
+  commitOperationOutcomeSchema,
+  commitOperationResultSchema,
   rejectedCommitReceiptSchema,
   mutationResultPayloadSchema,
   mutationResultMessageSchema,
@@ -121,6 +123,7 @@ export {
 } from './commit.js';
 export type {
   CommitOperationBody,
+  CommitOperationResult,
   CommitActor,
   CommitAttempt,
   CommitClaimReference,

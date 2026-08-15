@@ -21,7 +21,7 @@ import { drizzleDataSource, type DrizzleLike, type DrizzleExecuteResult } from '
 //   - legacyName      → display_label    (explicit `field.from()` override)
 //   - organizationId  → organization_id  (base tenancy column)
 const schema = defineSchema({
-  task: model({
+  item: model({
     title: field.string(),
     operatorId: field.string().optional(),
     legacyName: field.string().from('display_label').optional(),
@@ -76,7 +76,7 @@ describe('drizzleDataSource', () => {
 
     const result = await adapter.commit({
       correlationId: 'corr1',
-      operations: [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A', operatorId: 'op1' } }],
+      operations: [{ type: 'CREATE', model: 'item', id: 't1', input: { title: 'A', operatorId: 'op1' } }],
     });
 
     // Rows handed back to Ablo are FIELD-keyed (camelCase), not the raw DB columns.
@@ -94,7 +94,7 @@ describe('drizzleDataSource', () => {
       intentHash: 'a'.repeat(64),
       echo: { kind: 'postgres-wal', payload: 'echo-payload' },
       operations: [
-        { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+        { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
       ],
     });
 
@@ -110,11 +110,11 @@ describe('drizzleDataSource', () => {
     await adapter.commit({
       correlationId: 'corr1',
       operations: [
-        { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A', operatorId: 'op1', legacyName: 'L' } },
+        { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A', operatorId: 'op1', legacyName: 'L' } },
       ],
     });
 
-    const insert = db.sqls.find((s) => s.startsWith('INSERT INTO "task"'));
+    const insert = db.sqls.find((s) => s.startsWith('INSERT INTO "item"'));
     expect(insert).toBeDefined();
     // Default rule: operatorId → operator_id. Explicit override: legacyName → display_label.
     expect(insert).toContain('"operator_id"');
@@ -129,10 +129,10 @@ describe('drizzleDataSource', () => {
 
     await adapter.commit({
       correlationId: 'corr2',
-      operations: [{ type: 'ARCHIVE', model: 'task', id: 't1', input: { operatorId: 'op2' } }],
+      operations: [{ type: 'ARCHIVE', model: 'item', id: 't1', input: { operatorId: 'op2' } }],
     });
 
-    const update = db.sqls.find((s) => s.startsWith('UPDATE "task"'));
+    const update = db.sqls.find((s) => s.startsWith('UPDATE "item"'));
     expect(update).toBeDefined();
     expect(update).toContain('"operator_id"');
     expect(update).toContain('"archived_at"'); // lifecycle column, same casing as the provisioner
@@ -149,7 +149,7 @@ describe('drizzleDataSource', () => {
     const result = await adapter.commit({
       correlationId: 'corr1',
       intentHash: 'b'.repeat(64),
-      operations: [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }],
+      operations: [{ type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } }],
     });
 
     expect(result.rows).toEqual(cachedRows);
@@ -159,7 +159,7 @@ describe('drizzleDataSource', () => {
   it('reads a row via load and maps snake_case columns back to camelCase fields', async () => {
     const db = new FakeDrizzle([[{ id: 't1', title: 'A', operator_id: 'op1', display_label: 'L' }]]);
     const adapter = drizzleDataSource(db, schema);
-    const rows = await adapter.read({ kind: 'load', model: 'task', id: 't1' });
+    const rows = await adapter.read({ kind: 'load', model: 'item', id: 't1' });
     // operator_id → operatorId (default), display_label → legacyName (override).
     expect(rows[0]).toEqual({ id: 't1', title: 'A', operatorId: 'op1', legacyName: 'L' });
   });
@@ -171,7 +171,7 @@ describe('drizzleDataSource', () => {
           {
             cursor: 1,
             id: 'tx1:0',
-            model: 'task',
+            model: 'item',
             entity_id: 't1',
             type: 'CREATE',
             data: { id: 't1', title: 'A' },
@@ -189,7 +189,7 @@ describe('drizzleDataSource', () => {
     expect(page.events[0]).toMatchObject({
       id: 'tx1:0',
       entityId: 't1',
-      model: 'task',
+      model: 'item',
       type: 'CREATE',
       correlationId: 'corr1',
       transactionId: 'op1',

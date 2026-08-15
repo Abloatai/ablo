@@ -38,7 +38,7 @@ scoped operation throws `CapabilityError`; compare its
 
 ```ts
 try {
-  await ablo.tasks.update({ id, data: { status: 'done' } });
+  await ablo.records.update({ id, data: { status: 'done' } });
 } catch (error) {
   if (error instanceof CapabilityError) {
     console.error('missing grant', error.requiredCapability);
@@ -53,7 +53,7 @@ typed grant:
 ```ts
 const session = await control.sessions.create({
   agent: { id: agentId },
-  can: { tasks: ['read', 'update'] },
+  can: { records: ['read', 'update'] },
   syncGroups: [syncGroup('workspace', workspaceId)],
 });
 ```
@@ -106,7 +106,7 @@ export const schema = defineSchema(
     ),
     // A child: it has no group of its own; it inherits its workspace's group via the
     // `parent` edge. A write to a document reaches everyone viewing the workspace.
-    documents: model(
+    records: model(
       { workspaceId: z.string() },
       { relations: { workspace: relation.belongsTo('workspaces', 'workspaceId', { parent: true }) } },
     ),
@@ -158,7 +158,7 @@ things:
 - **Membership groups:** named after *who you are*: `org:{id}`, `team:{id}`,
   `user:{id}`. Produced from **identity** (`identityRoles`, Half 1). They're
   standing and durable — they don't change as you work.
-- **Entity groups:** named after *a thing*: `dataroom:{id}`, `workspace:{id}`,
+- **Entity groups:** named after *a thing*: `archive:{id}`, `workspace:{id}`,
   `document:{id}`. Produced from a **row's id** (a model's entity scope, Half 2).
   They're granular — one per record — and any participant can be pointed at a
   specific set of them.
@@ -171,7 +171,7 @@ they are, so you declare them once in the schema.
 | | Subscribed by | Declared where | Gets |
 | --- | --- | --- | --- |
 | **Human** | *who they are*: membership | **the schema** (`identityRoles`): a rule, written once | every `org` / `team` / `user` group their identity implies: their whole standing world |
-| **Agent** | *what it's been given*: entities | **code, at the spawn site**: chosen per run | a handful of entity groups: the dataroom it's in, the documents it has read: never beyond what its user's membership could reach |
+| **Agent** | *what it's been given*: entities | **code, at the spawn site**: chosen per run | a handful of entity groups: the archive it's in, the documents it has read: never beyond what its user's membership could reach |
 
 > **One line:** humans subscribe by who they are; agents subscribe by what
 > they've been given.
@@ -210,25 +210,24 @@ The default is simple: your schema lives in a **project**, you push it once, and
 every session you mint resolves against it. Your end-users **don't have Ablo
 accounts** — your server's `sk_` mints an `ek_` per user, and by default that
 session lands in your project's own org. All your users share one schema, one
-data tenant, isolated from each other by sync-groups. That's the whole story for
-most apps.
+data tenant, and receive targeted realtime changes through sync-groups. Model
+`policy` declarations govern which rows they may read; sync-groups are delivery
+routing, not read authorization. That's the whole story for most apps.
 
 **Add-on — org-per-customer isolation.** If you need each customer to be its own
 hard tenant (separate row-level isolation, optionally a separate database) you'd
-otherwise have to re-push your schema into every customer's org. Instead, keep one
-project as the home of your schema and point each customer's session's *schema*
-at it while its *data* stays in the customer's org:
+otherwise have to re-push your schema into every customer's org. Instead, keep
+one project as the home of your schema. A cross-organization mint automatically
+uses the owning key's project for the session's *schema* while its *data*
+stays in the customer's org:
 
 ```ts
-await mintUserSessionKey({
-  apiKey: platformKey,   // sk_ with the `ephemeral:mint-any-org` scope
-  userId,
-  organizationId,                  // DATA → this customer's org (RLS-isolated tenant)
-  schemaProject: {                 // SCHEMA → the project that owns your schema
-    organizationId: schemaOwnerOrgId,
-    projectId: schemaProjectId,
-  },
-  operations: ['task.read', 'task.update'],
+const server = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
+
+await server.sessions.create({
+  user: { id: userId },
+  organizationId, // DATA → this customer's RLS-isolated organization
+  can: { records: ['read', 'update'] },
   ttlSeconds: 3600,
 });
 ```
@@ -236,15 +235,23 @@ await mintUserSessionKey({
 Server-side, the model **shape** loads from your schema project but column
 enrichment and the tenant connection still target `organizationId` — so the
 shared schema only *describes* the shape; the data plane stays the customer's and
-can't cross-leak. Omit these fields for the default above. Requires a platform
-`sk_` with `ephemeral:mint-any-org`.
+can't cross-leak. `schemaProject: { organizationId, projectId }` remains
+available as an explicit override for migrations or advanced routing. Omit
+`organizationId` for the single-organization default above. Requires a dedicated
+`sk_` with `ephemeral:mint-any-org`; see
+[Customer Organizations](./customer-organizations.md).
 
 ## The two halves of scoping
 
-Scoping is two declarations that meet in the middle. One describes the
+Delivery scoping is two declarations that meet in the middle. One describes the
 **participant** (what may I subscribe to?), the other describes each **row**
-(which group does this row belong to?). A participant sees a row **iff** the
-row's sync group is in the participant's allowed set.
+(which group does this row belong to?). A participant receives a row's realtime
+changes when the row's sync groups intersect the participant's allowed set.
+
+That intersection does not itself authorize an HTTP read. A model's `policy`
+governs read access. Treat sync-groups as change routing and `policy` (plus the
+organization boundary beneath it) as authorization; declaring one never
+silently creates the other.
 
 ### Half 1 (`identityRoles`): identity → allowed groups
 
@@ -296,7 +303,7 @@ declarations, in order of how often you reach for them:
 **`groups.root` — this model is a scope root.** Its rows form a group of their
 own. The kind comes from the model's `typename` by default, or pass a string to
 set it explicitly (use the string form when the wire kind differs from the
-typename, e.g. typename `SlideDeck` but group `workspace:<id>`):
+typename, e.g. typename `EntryCollection` but group `workspace:<id>`):
 
 ```ts
 workspaces: model({ title: z.string() }, { groups: { root: 'workspace' } });
@@ -311,24 +318,24 @@ viewing the root. A *reference* (a provenance/template pointer, not ownership)
 must **not** be marked `parent`, or the row would leak into an unrelated scope:
 
 ```ts
-documents: model(
-  { workspaceId: z.string(), sourceSlideId: z.string().optional() },
+records: model(
+  { workspaceId: z.string(), sourceEntryId: z.string().optional() },
   {
     // default policy: row-local organization_id
     relations: {
       workspace: relation.belongsTo('workspaces', 'workspaceId', { parent: true }),  // ownership → inherit workspace:<id>
-      sourceSlide: relation.belongsTo('documents', 'sourceSlideId'),     // reference → NOT routed
+      sourceEntry: relation.belongsTo('documents', 'sourceEntryId'),     // reference → NOT routed
     },
   },
 );
 ```
 
 > **Declare the parent edge — don't infer it.** Optionality is not a proxy for
-> ownership: many `parent` FKs are optional (a root folder, an inbox task), and
+> ownership: many `parent` FKs are optional (a root folder, an inbox record), and
 > some required FKs are mere references. Containment is a fact only you know, so
 > it's declared, exactly as it is in OpenFGA/Zanzibar.
 
-**`groups.grants` — a membership edge.** On a join model (e.g. `dataroomMember`),
+**`groups.grants` — a membership edge.** On a join model (e.g. `archiveMember`),
 it says "this row grants a *subject* access to a *scope root*." Both are relation
 names on the model. The server resolves it at connect time — for user `U`, it
 finds the scope-root groups `U` is a member of and adds them to `U`'s allowed
@@ -336,12 +343,12 @@ set (Linear's `/sync/user_sync_groups`). Use this for sub-org sharing; plain
 org membership is already covered by the `org:` identity role.
 
 ```ts
-dataroomMember: model(
-  { userId: z.string(), dataroomId: z.string() },
+archiveMember: model(
+  { userId: z.string(), archiveId: z.string() },
   {
     relations: {
       member: relation.belongsTo('users', 'userId'),
-      room: relation.belongsTo('datarooms', 'dataroomId'),
+      room: relation.belongsTo('archives', 'archiveId'),
     },
     groups: { grants: { subject: 'member', scope: 'room' } },
   },
@@ -485,7 +492,7 @@ an entity anchor on the models an agent operates on:
 
 ```ts
 // each scope-root model an agent edits forms a per-entity group
-documents: model({ /* … */ }, { groups: { root: 'document' } }),
+records: model({ /* … */ }, { groups: { root: 'document' } }),
 workspaces:     model({ /* … */ }, { groups: { root: 'workspace' } }),
 ```
 
@@ -499,7 +506,7 @@ subset of what its user could see:
 const session = await server.sessions.create({
   agent: { id: agentId },
   can: { Document: ['read', 'update'], Workspace: ['read', 'update'] },
-  syncGroups: [syncGroup('document', documentId), syncGroup('workspace', workspaceId)],
+  syncGroups: [syncGroup('document', recordId), syncGroup('workspace', workspaceId)],
 });
 // identity (the ceiling) is inherited from the triggering user via your
 // session-mint logic; the agent runtime connects with the minted token.
@@ -526,7 +533,7 @@ than needing a separate agent permission system:
 - **Inherit the user, and no more:** the OAuth
   [on-behalf-of](https://workos.com/blog/oauth-on-behalf-of-ai-agents) model: the
   agent's reach is tied to the consenting user, never the org.
-- **Least privilege, just-in-time:** scoped to the task's entities, not standing
+- **Least privilege, just-in-time:** scoped to the record's entities, not standing
   org-wide access (the over-privilege pattern
   [OWASP's NHI Top 10](https://www.token.security/assets/the-ultimate-non-human-identity-security-guide)
   flags as the dominant agent risk).
@@ -557,8 +564,8 @@ an agent pointed at the entities it's working on. You **never hand-write**
      agent: { id: agentId },
      can: { Workspace: ['read', 'update'], Document: ['read'] },
      syncGroups: [
-       syncGroup('workspace', deckA),
-       syncGroup('workspace', deckB),
+       syncGroup('workspace', collectionA),
+       syncGroup('workspace', collectionB),
        syncGroup('document', docId),
      ],
    });

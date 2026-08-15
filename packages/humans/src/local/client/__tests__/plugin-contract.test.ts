@@ -151,7 +151,7 @@ describe('plugin contract', () => {
     });
 
     runStage([a, b, c], 'apply', {
-      changes: [{ action: 'add', modelName: 'tasks', modelId: 't1' }],
+      changes: [{ action: 'add', modelName: 'items', modelId: 't1' }],
     });
 
     expect(applied).toEqual(['a:1', 'c']);
@@ -332,10 +332,10 @@ describe('humans() constructs the store cluster', () => {
   });
 
   it('the declared apply handler lands changes in this client\'s pool', async () => {
-    const taskSchema = defineSchema({ tasks: model({ title: z.string() }) });
+    const itemSchema = defineSchema({ items: model({ title: z.string() }) });
     const installed = humans();
     const client = Ablo({
-      schema: taskSchema,
+      schema: itemSchema,
       authEndpoint: '/api/ablo-session',
       plugins: [installed],
     });
@@ -344,10 +344,10 @@ describe('humans() constructs the store cluster', () => {
       // declared handler. The change must land in THIS client's pool.
       runStage([installed], 'apply', {
         changes: [
-          { action: 'add', modelName: 'tasks', modelId: 'row-1', data: { id: 'row-1', title: 'landed' } },
+          { action: 'add', modelName: 'items', modelId: 'row-1', data: { id: 'row-1', title: 'landed' } },
         ],
       });
-      const row = client.tasks.local.get('row-1');
+      const row = client.items.local.get('row-1');
       expect(row).toMatchObject({ title: 'landed' });
     } finally {
       await client.dispose();

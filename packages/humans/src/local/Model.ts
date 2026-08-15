@@ -1108,26 +1108,6 @@ export abstract class Model {
     // Try to get model class by identifier
     let ModelClass = getActiveRegistry().getModelByName(modelIdentifier);
 
-    // If not found by registered name, try mapping to the class name
-    if (!ModelClass) {
-      const classNameMap: Record<string, string> = {
-        Task: 'TaskModel',
-        Project: 'Project',
-        Comment: 'CommentModel',
-        User: 'UserModel',
-        Organization: 'OrganizationModel',
-        StatusGroup: 'StatusGroupModel',
-        Team: 'TeamModel',
-        Member: 'MemberModel',
-        Role: 'RoleModel',
-      };
-
-      const className = classNameMap[modelIdentifier];
-      if (className) {
-        ModelClass = getActiveRegistry().getModelByName(className);
-      }
-    }
-
     if (!ModelClass) {
       throw new AbloValidationError(
         `Model class not found for: ${modelIdentifier}`,

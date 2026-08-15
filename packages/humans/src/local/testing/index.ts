@@ -31,22 +31,22 @@ export type { TestContextOptions, TestContextResult } from './mocks/MockSyncCont
 // ─────────────────────────────────────────────
 
 export {
-  TestProject,
-  TestTask,
+  TestWorkspace,
+  TestItem,
   TestComment,
-  TestSlideDeck,
-  TestSlide,
-  TestSlideLayer,
+  TestEntryCollection,
+  TestEntry,
+  TestEntryLayer,
   TEST_MODEL_PRIORITIES,
   registerTestModels,
   createTestConfig,
   resetFixtureCounter,
-  createProjectFixture,
-  createTaskFixture,
+  createWorkspaceFixture,
+  createItemFixture,
   createCommentFixture,
-  createSlideDeckFixture,
-  createSlideFixture,
-  createSlideLayerFixture,
+  createEntryCollectionFixture,
+  createEntryFixture,
+  createEntryLayerFixture,
 } from './fixtures/models.js';
 
 // ─────────────────────────────────────────────

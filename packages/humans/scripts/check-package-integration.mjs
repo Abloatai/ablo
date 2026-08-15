@@ -4,11 +4,11 @@ import { createReconnectDrain } from '../dist/local/transactions/reconnectDrain.
 
 const localEvents = [];
 const localMutation = createLocalMutationPort((event) => localEvents.push(event));
-const localModel = { id: 'task_local', getModelName: () => 'Task' };
+const localModel = { id: 'record_local', getModelName: () => 'SyncRecord' };
 const localTransaction = {
   id: 'tx_local',
   type: 'update',
-  modelName: 'Task',
+  modelName: 'SyncRecord',
   modelId: localModel.id,
   status: 'pending',
   createdAt: Date.now(),

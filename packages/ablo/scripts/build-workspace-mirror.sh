@@ -9,13 +9,19 @@
 #   packages/cli          scaffolding and operations
 #   packages/tsconfig     private shared compiler configuration
 #
+# `packages/product-analytics` is private and unpublished, and it is here for
+# the same reason `packages/tsconfig` is: the CLI needs it to build. It owns the
+# telemetry event contract the CLI produces and the engine ingests, so the CLI
+# cannot bundle its telemetry without it. Being private, it reaches the public
+# repository but never npm.
+#
 # No source flattening or generated compatibility package is involved.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MONOREPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OUTPUT_DIR="${1:-$(mktemp -d)/ablo-public-workspace}"
-PACKAGES=(transaction humans agent ablo cli tsconfig)
+PACKAGES=(transaction humans agent ablo cli tsconfig product-analytics)
 
 if [[ "$OUTPUT_DIR" == "/" || "$OUTPUT_DIR" == "$HOME" || -z "$OUTPUT_DIR" ]]; then
   echo "Refusing to clean suspicious output dir: $OUTPUT_DIR" >&2
@@ -24,7 +30,7 @@ fi
 
 DIRTY="$(git -C "$MONOREPO_ROOT" status --porcelain -- \
   packages/ablo packages/transaction packages/humans packages/agent packages/cli \
-  docs/ablo | grep -v '^??' || true)"
+  packages/product-analytics docs/ablo | grep -v '^??' || true)"
 if [[ -n "$DIRTY" && "${ALLOW_DIRTY:-}" != "1" ]]; then
   echo "error: refusing to build a public snapshot from a dirty tree" >&2
   echo "$DIRTY" | sed 's/^/  /' >&2

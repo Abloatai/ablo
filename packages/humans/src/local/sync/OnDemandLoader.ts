@@ -556,7 +556,7 @@ export class OnDemandLoader {
     // that disagrees with the schema's: these rows were returned FOR this
     // model's query, so the schema typename is correct by construction — and
     // without stripping it, the spread would put the row's variant (a server
-    // echoing the schema KEY `tasks` instead of the typename `Task`) back on
+    // echoing the schema KEY `items` instead of the typename `Item`) back on
     // top of the stamp, sending hydration to the strict unknown-model error.
     const { _Typename: _dropMangled, __typename: _dropRowVariant, ...rest } = obj as Record<
       string,

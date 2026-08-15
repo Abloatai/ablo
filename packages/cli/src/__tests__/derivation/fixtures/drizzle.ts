@@ -19,13 +19,13 @@ import { pgTable, pgEnum, text, integer, bigint, boolean, timestamp, jsonb } fro
 
 export const status = pgEnum('status', ['todo', 'doing', 'done']);
 
-export const projects = pgTable('projects', {
+export const workspaces = pgTable('workspaces', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   organizationId: text('organization_id').notNull(),
 });
 
-export const tasks = pgTable('tasks', {
+export const records = pgTable('records', {
   id: text('id').primaryKey(),
   title: text('title').notNull(),
   status: status('status'),
@@ -35,7 +35,7 @@ export const tasks = pgTable('tasks', {
   meta: jsonb('meta'),
   labels: text('labels').array().notNull(),
   deadline: timestamp('due_at'),
-  projectId: text('project_id').references(() => projects.id),
+  workspaceId: text('workspace_id').references(() => workspaces.id),
   organizationId: text('organization_id').notNull(),
   createdBy: text('created_by').notNull(),
   createdAt: timestamp('created_at').notNull(),

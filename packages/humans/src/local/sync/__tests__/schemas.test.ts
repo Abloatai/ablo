@@ -10,8 +10,8 @@ describe('ServerDeltaSchema', () => {
     const fromTheServer = {
       id: 42,
       actionType: 'U',
-      modelName: 'Task',
-      modelId: 'task_1',
+      modelName: 'Item',
+      modelId: 'item_1',
       data: { title: 'renamed' },
       syncGroups: ['org:org_1'],
       createdAt: '2026-07-21T00:00:00.000Z',
@@ -25,15 +25,15 @@ describe('ServerDeltaSchema', () => {
       ServerDeltaSchema.parse({
         id: 10,
         actionType: 'D',
-        modelName: 'Task',
-        modelId: 'task_1',
+        modelName: 'Item',
+        modelId: 'item_1',
         data: null,
       }),
     ).toMatchObject({
       id: 10,
       actionType: 'D',
-      modelName: 'Task',
-      modelId: 'task_1',
+      modelName: 'Item',
+      modelId: 'item_1',
       data: null,
     });
   });
@@ -42,14 +42,14 @@ describe('ServerDeltaSchema', () => {
     const parsed = ServerDeltaSchema.parse({
       id: 11,
       actionType: 'I',
-      modelName: 'Task',
-      modelId: 'task_2',
+      modelName: 'Item',
+      modelId: 'item_2',
       data: { title: 'new' },
-      projectId: 'proj_1',
+      workspaceId: 'proj_1',
       actor: { kind: 'user', id: 'u1' },
     });
 
-    expect(parsed).toMatchObject({ projectId: 'proj_1', actor: { kind: 'user', id: 'u1' } });
+    expect(parsed).toMatchObject({ workspaceId: 'proj_1', actor: { kind: 'user', id: 'u1' } });
   });
 
   it('refuses a delta missing the fields the applier reads', () => {
@@ -59,8 +59,8 @@ describe('ServerDeltaSchema', () => {
       const complete: Record<string, unknown> = {
         id: 12,
         actionType: 'U',
-        modelName: 'Task',
-        modelId: 'task_3',
+        modelName: 'Item',
+        modelId: 'item_3',
         data: null,
       };
       // Built without the field rather than mutated to drop it, so `complete`
@@ -76,8 +76,8 @@ describe('ServerDeltaSchema', () => {
       ServerDeltaSchema.safeParse({
         id: 12,
         actionType: 'M',
-        modelName: 'Task',
-        modelId: 'task_3',
+        modelName: 'Item',
+        modelId: 'item_3',
         data: null,
       }).success,
     ).toBe(false);
@@ -93,8 +93,8 @@ describe('BootstrapResponseSchema', () => {
         {
           id: 20,
           actionType: 'V',
-          modelName: 'Task',
-          modelId: 'task_4',
+          modelName: 'Item',
+          modelId: 'item_4',
           data: null,
         },
       ],
@@ -102,7 +102,7 @@ describe('BootstrapResponseSchema', () => {
 
     expect(parsed.deltas?.[0]).toMatchObject({
       actionType: 'V',
-      modelId: 'task_4',
+      modelId: 'item_4',
       data: null,
     });
   });

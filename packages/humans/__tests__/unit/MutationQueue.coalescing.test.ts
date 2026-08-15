@@ -6,8 +6,8 @@
 import { MutationQueue } from '../../src/local/transactions/mutations/MutationQueue';
 import {
   createTestContext,
-  TestTask,
-  createTaskFixture,
+  TestItem,
+  createItemFixture,
   resetFixtureCounter,
   flushMicrotasks,
 } from '../../src/local/testing';
@@ -38,16 +38,16 @@ describe('MutationQueue Coalescing', () => {
 
   describe('update coalescing in execution queue', () => {
     it('should merge two UPDATE transactions to same model in execution queue', async () => {
-      const task = createTaskFixture({ title: 'Original', status: 'todo' });
-      task.markAsPersisted();
+      const item = createItemFixture({ title: 'Original', status: 'todo' });
+      item.markAsPersisted();
 
       // First update
-      task.propertyChanged('title', 'Original', 'Updated');
-      await queue.update(task, TEST_USER_CONTEXT, { title: 'Updated' });
+      item.propertyChanged('title', 'Original', 'Updated');
+      await queue.update(item, TEST_USER_CONTEXT, { title: 'Updated' });
 
       // Second update to same model (before batch processes)
-      task.propertyChanged('status', 'todo', 'doing');
-      await queue.update(task, TEST_USER_CONTEXT, { status: 'doing' });
+      item.propertyChanged('status', 'todo', 'doing');
+      await queue.update(item, TEST_USER_CONTEXT, { status: 'doing' });
 
       // Both should be staged in the same microtask
       await flushMicrotasks();
@@ -67,8 +67,8 @@ describe('MutationQueue Coalescing', () => {
       // Testing the internal mergeUpdateData logic via public API
       // When two updates have metadata fields, they should be merged as JSON objects
 
-      const task = createTaskFixture();
-      task.markAsPersisted();
+      const item = createItemFixture();
+      item.markAsPersisted();
 
       // We can test this by creating updates with metadata fields
       // The merge happens internally during coalescing

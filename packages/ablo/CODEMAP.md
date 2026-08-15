@@ -44,12 +44,12 @@ transport.
 The example below refers to calls such as:
 
 ```ts
-await ablo.tasks.get({ id });
-await ablo.tasks.list({ where: { status: 'open' } });
-await ablo.tasks.create({ data: { title: 'Review' } });
-await ablo.tasks.update({ id, data: { status: 'done' } });
-await ablo.tasks.delete({ id });
-await ablo.tasks.claim({ id });
+await ablo.records.get({ id });
+await ablo.records.list({ where: { status: 'open' } });
+await ablo.records.create({ data: { title: 'Review' } });
+await ablo.records.update({ id, data: { status: 'done' } });
+await ablo.records.delete({ id });
+await ablo.records.claim({ id });
 ```
 
 | Public surface | Canonical declaration | Stateless HTTP implementation | Reactive implementation |

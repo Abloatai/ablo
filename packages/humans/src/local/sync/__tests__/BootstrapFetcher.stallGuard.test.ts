@@ -58,7 +58,7 @@ describe('BootstrapFetcher download watchdog', () => {
     const payload = JSON.stringify({
       type: 'full',
       lastSyncId: 7,
-      models: { SlideLayer: [{ id: 'a' }, { id: 'b' }] },
+      models: { EntryDetail: [{ id: 'a' }, { id: 'b' }] },
     });
     // 8 chunks, 20ms apart: total time (~160ms) far exceeds the 50ms stall
     // allowance, proving the guard measures chunk gaps, not total duration.
@@ -74,7 +74,7 @@ describe('BootstrapFetcher download watchdog', () => {
 
     expect(data.type).toBe('full');
     expect(data.lastSyncId).toBe(7);
-    expect(data.models?.SlideLayer).toHaveLength(2);
+    expect(data.models?.EntryDetail).toHaveLength(2);
   });
 
   it('aborts a download whose stream goes silent and surfaces a retryable timeout', async () => {

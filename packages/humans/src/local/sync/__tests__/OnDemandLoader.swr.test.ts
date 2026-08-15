@@ -1,7 +1,7 @@
 /**
  * OnDemandLoader — local-first lazy reads + durable expand children.
  *
- * Covers the structural fix that stops lazy relations (e.g. SlideLayer) being
+ * Covers the structural fix that stops lazy relations (e.g. EntryDetail) being
  * re-fetched from the network on every mount:
  *
  *  1. `expand`-fetched children are hydrated into the pool AND persisted to
@@ -39,15 +39,15 @@ const silentLogger = {
 
 function makeSchema() {
   return defineSchema({
-    slides: model(
-      { deckId: z.string() },
+    entries: model(
+      { collectionId: z.string() },
       {
-        relations: { layers: relation.hasMany('slideLayers', 'slideId') },
-        typename: 'Slide', load: 'instant',
+        relations: { layers: relation.hasMany('entryDetails', 'entryId') },
+        typename: 'Entry', load: 'instant',
       }),
-    slideLayers: model(
+    entryDetails: model(
       {
-        slideId: z.string(),
+        entryId: z.string(),
         type: z.string(),
         zIndex: z.number().default(0),
         position: z
@@ -60,8 +60,8 @@ function makeSchema() {
           .optional(),
       },
       {
-        relations: { slide: relation.belongsTo('slides', 'slideId', { index: true }) },
-        typename: 'SlideLayer', load: 'lazy',
+        relations: { entry: relation.belongsTo('entries', 'entryId', { index: true }) },
+        typename: 'EntryDetail', load: 'lazy',
       }),
   });
 }
@@ -93,33 +93,33 @@ describe('OnDemandLoader — local-first lazy + durable expand', () => {
   it('persists expand children to their own store and re-serves them locally', async () => {
     const ablo = makeAblo();
     try {
-      // Server returns the slide with its layers nested under `layers`.
+      // Server returns the entry with its layers nested under `layers`.
       postQueryMock.mockResolvedValueOnce({
         results: [
           [
             {
-              __typename: 'Slide',
+              __typename: 'Entry',
               id: 's1',
-              deckId: 'd1',
+              collectionId: 'd1',
               layers: [
-                { __typename: 'SlideLayer', id: 'l1', slideId: 's1', type: 'text', zIndex: 0 },
-                { __typename: 'SlideLayer', id: 'l2', slideId: 's1', type: 'shape', zIndex: 1 },
+                { __typename: 'EntryDetail', id: 'l1', entryId: 's1', type: 'text', zIndex: 0 },
+                { __typename: 'EntryDetail', id: 'l2', entryId: 's1', type: 'shape', zIndex: 1 },
               ],
             },
           ],
         ],
       });
 
-      await ablo.slides.list({ where: { deckId: 'd1' }, expand: ['layers'] });
+      await ablo.entries.list({ where: { collectionId: 'd1' }, expand: ['layers'] });
 
-      // Children landed in the SlideLayer pool via the FK index.
-      const inPool = ablo.slideLayers.local.list({ where: { slideId: 's1' } });
+      // Children landed in the EntryDetail pool via the FK index.
+      const inPool = ablo.entryDetails.local.list({ where: { entryId: 's1' } });
       expect(inPool.map((l) => l.id).sort()).toEqual(['l1', 'l2']);
 
       // Now the network "goes away". A lazy read must still resolve from the
       // warm local cache rather than hanging on the network.
       postQueryMock.mockImplementation(() => hangingNetwork());
-      const served = await ablo.slideLayers.list({ where: { slideId: 's1' } });
+      const served = await ablo.entryDetails.list({ where: { entryId: 's1' } });
       expect(served.map((l) => l.id).sort()).toEqual(['l1', 'l2']);
     } finally {
       await ablo.dispose();
@@ -131,15 +131,15 @@ describe('OnDemandLoader — local-first lazy + durable expand', () => {
     try {
       // First fetch seeds the pool + IDB from the server.
       postQueryMock.mockResolvedValueOnce({
-        results: [[{ __typename: 'SlideLayer', id: 'l9', slideId: 's2', type: 'text', zIndex: 0 }]],
+        results: [[{ __typename: 'EntryDetail', id: 'l9', entryId: 's2', type: 'text', zIndex: 0 }]],
       });
-      const first = await ablo.slideLayers.list({ where: { slideId: 's2' } });
+      const first = await ablo.entryDetails.list({ where: { entryId: 's2' } });
       expect(first.map((l) => l.id)).toEqual(['l9']);
 
-      // Network now hangs forever. Because slideLayers is lazy, the default is
+      // Network now hangs forever. Because entryDetails is lazy, the default is
       // local-first: this resolves from the pool instead of awaiting the hang.
       postQueryMock.mockImplementation(() => hangingNetwork());
-      const second = await ablo.slideLayers.list({ where: { slideId: 's2' } });
+      const second = await ablo.entryDetails.list({ where: { entryId: 's2' } });
       expect(second.map((l) => l.id)).toEqual(['l9']);
     } finally {
       await ablo.dispose();
@@ -150,17 +150,17 @@ describe('OnDemandLoader — local-first lazy + durable expand', () => {
     const ablo = makeAblo();
     try {
       postQueryMock.mockResolvedValue({
-        results: [[{ __typename: 'SlideLayer', id: 'l1', slideId: 's1', type: 'text', zIndex: 0 }]],
+        results: [[{ __typename: 'EntryDetail', id: 'l1', entryId: 's1', type: 'text', zIndex: 0 }]],
       });
 
       // First read: cold cache → one network fetch, marks the query hydrated.
-      await ablo.slideLayers.list({ where: { slideId: 's1' } });
+      await ablo.entryDetails.list({ where: { entryId: 's1' } });
       expect(postQueryMock).toHaveBeenCalledTimes(1);
 
       // Second identical read: the WS stream owns freshness now, so this must
       // be served purely from the pool with NO additional query — exactly the
       // "I just had it open and nothing changed" case.
-      const again = await ablo.slideLayers.list({ where: { slideId: 's1' } });
+      const again = await ablo.entryDetails.list({ where: { entryId: 's1' } });
       expect(again.map((l) => l.id)).toEqual(['l1']);
       expect(postQueryMock).toHaveBeenCalledTimes(1);
     } finally {
@@ -168,33 +168,33 @@ describe('OnDemandLoader — local-first lazy + durable expand', () => {
     }
   });
 
-  it('does not re-query an already-opened deck (instant primary + expand)', async () => {
+  it('does not re-query an already-opened collection (instant primary + expand)', async () => {
     const ablo = makeAblo();
     try {
       postQueryMock.mockResolvedValue({
         results: [
           [
             {
-              __typename: 'Slide',
+              __typename: 'Entry',
               id: 's1',
-              deckId: 'd1',
+              collectionId: 'd1',
               layers: [
-                { __typename: 'SlideLayer', id: 'l1', slideId: 's1', type: 'text', zIndex: 0 },
+                { __typename: 'EntryDetail', id: 'l1', entryId: 's1', type: 'text', zIndex: 0 },
               ],
             },
           ],
         ],
       });
 
-      // Mirrors the deck-open path: slides (instant) listed with expand:layers.
-      await ablo.slides.list({ where: { deckId: 'd1' }, expand: ['layers'] });
+      // Mirrors the collection-open path: entries (instant) listed with expand:layers.
+      await ablo.entries.list({ where: { collectionId: 'd1' }, expand: ['layers'] });
       expect(postQueryMock).toHaveBeenCalledTimes(1);
 
-      // Re-opening the same deck must not issue another query.
-      await ablo.slides.list({ where: { deckId: 'd1' }, expand: ['layers'] });
+      // Re-opening the same collection must not issue another query.
+      await ablo.entries.list({ where: { collectionId: 'd1' }, expand: ['layers'] });
       expect(postQueryMock).toHaveBeenCalledTimes(1);
       // And the layers are still resolvable from the local store.
-      expect(ablo.slideLayers.local.list({ where: { slideId: 's1' } }).map((l) => l.id)).toEqual(['l1']);
+      expect(ablo.entryDetails.local.list({ where: { entryId: 's1' } }).map((l) => l.id)).toEqual(['l1']);
     } finally {
       await ablo.dispose();
     }
@@ -208,9 +208,9 @@ describe('OnDemandLoader — local-first lazy + durable expand', () => {
         results: [
           [
             {
-              __typename: 'SlideLayer',
+              __typename: 'EntryDetail',
               id: 'lA',
-              slideId: 's3',
+              entryId: 's3',
               type: 'text',
               zIndex: 0,
               updatedAt: '2026-07-18T08:00:00.000Z',
@@ -218,7 +218,7 @@ describe('OnDemandLoader — local-first lazy + durable expand', () => {
           ],
         ],
       });
-      await ablo.slideLayers.list({ where: { slideId: 's3' } });
+      await ablo.entryDetails.list({ where: { entryId: 's3' } });
 
       // A complete read must reflect what the server returns now — here the
       // server adds a second layer that local doesn't have yet.
@@ -226,23 +226,23 @@ describe('OnDemandLoader — local-first lazy + durable expand', () => {
         results: [
           [
             {
-              __typename: 'SlideLayer',
+              __typename: 'EntryDetail',
               id: 'lA',
-              slideId: 's3',
+              entryId: 's3',
               type: 'text',
               zIndex: 4,
               updatedAt: '2026-07-18T08:01:00.000Z',
             },
-            { __typename: 'SlideLayer', id: 'lB', slideId: 's3', type: 'shape', zIndex: 1 },
+            { __typename: 'EntryDetail', id: 'lB', entryId: 's3', type: 'shape', zIndex: 1 },
           ],
         ],
       });
-      const complete = await ablo.slideLayers.list({
-        where: { slideId: 's3' },
+      const complete = await ablo.entryDetails.list({
+        where: { entryId: 's3' },
         type: 'complete',
       });
       expect(complete.map((l) => l.id).sort()).toEqual(['lA', 'lB']);
-      expect(ablo.slideLayers.local.get('lA')?.zIndex).toBe(4);
+      expect(ablo.entryDetails.local.get('lA')?.zIndex).toBe(4);
     } finally {
       await ablo.dispose();
     }
@@ -255,16 +255,16 @@ describe('OnDemandLoader — local-first lazy + durable expand', () => {
     const initialUpdatedAt = '2000-01-01T00:00:00.000Z';
 
     try {
-      // Seed the live layer, then begin the deck-level expand used by the
+      // Seed the live layer, then begin the collection-level expand used by the
       // editor. Its response represents a snapshot taken before the resize,
       // but is deliberately held until after the optimistic write.
       postQueryMock.mockResolvedValueOnce({
         results: [
           [
             {
-              __typename: 'SlideLayer',
+              __typename: 'EntryDetail',
               id: 'l-resize',
-              slideId: 's-resize',
+              entryId: 's-resize',
               type: 'shape',
               zIndex: 0,
               position: initialPosition,
@@ -273,7 +273,7 @@ describe('OnDemandLoader — local-first lazy + durable expand', () => {
           ],
         ],
       });
-      await ablo.slideLayers.list({ where: { slideId: 's-resize' } });
+      await ablo.entryDetails.list({ where: { entryId: 's-resize' } });
 
       let releaseExpand!: (value: Awaited<ReturnType<typeof queryClient.postQuery>>) => void;
       let markExpandStarted!: () => void;
@@ -290,30 +290,30 @@ describe('OnDemandLoader — local-first lazy + durable expand', () => {
         return delayedExpand;
       });
 
-      const expanding = ablo.slides.list({
-        where: { deckId: 'd-resize' },
+      const expanding = ablo.entries.list({
+        where: { collectionId: 'd-resize' },
         expand: ['layers'],
       });
       await expandStarted;
 
-      await ablo.slideLayers.update({
+      await ablo.entryDetails.update({
         id: 'l-resize',
         data: { position: resizedPosition },
       });
-      expect(ablo.slideLayers.local.get('l-resize')?.position).toEqual(resizedPosition);
+      expect(ablo.entryDetails.local.get('l-resize')?.position).toEqual(resizedPosition);
 
       releaseExpand({
         results: [
           [
             {
-              __typename: 'Slide',
+              __typename: 'Entry',
               id: 's-resize',
-              deckId: 'd-resize',
+              collectionId: 'd-resize',
               layers: [
                 {
-                  __typename: 'SlideLayer',
+                  __typename: 'EntryDetail',
                   id: 'l-resize',
-                  slideId: 's-resize',
+                  entryId: 's-resize',
                   type: 'shape',
                   zIndex: 0,
                   position: initialPosition,
@@ -329,7 +329,7 @@ describe('OnDemandLoader — local-first lazy + durable expand', () => {
       // The query started first, so its row is only an old server baseline.
       // The local optimistic position must remain visible while its commit is
       // being journaled/confirmed.
-      expect(ablo.slideLayers.local.get('l-resize')?.position).toEqual(resizedPosition);
+      expect(ablo.entryDetails.local.get('l-resize')?.position).toEqual(resizedPosition);
     } finally {
       await ablo.dispose();
     }

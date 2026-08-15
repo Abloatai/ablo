@@ -18,8 +18,13 @@
 import pc from 'picocolors';
 import { brand } from './theme';
 import { apiBaseUrl } from './controlPlane';
-import { resolveRuntimeApiKey, getActiveProject } from './config';
-import { resolveTarget } from './target';
+import {
+  resolveRuntimeApiKey,
+  resolveRuntimeApiKeyReadOnly,
+  getActiveProject,
+  getActiveProjectReadOnly,
+} from './config';
+import { resolveTarget, type ResolvedTarget } from './target';
 import {
   fetchRoutingState,
   fetchPushedSchema,
@@ -27,21 +32,49 @@ import {
   schemaDrift,
   blockers,
   detectPoolerIn,
+  type DataSourceState,
+  type PushedSchema,
+  type SchemaDrift,
 } from './readiness';
 
 /** `ok` passed, `fail` is a real problem, `skip` could not be determined. */
-type CheckState = 'ok' | 'fail' | 'skip';
+export type DoctorCheckState = 'ok' | 'fail' | 'skip';
 
-interface Check {
+export interface DoctorCheck {
   readonly label: string;
-  readonly state: CheckState;
+  readonly state: DoctorCheckState;
   /** What was found, in a few words. */
   readonly detail: string;
   /** The next command or change, when there is one to give. */
   readonly fix?: string;
 }
 
-function render(check: Check): void {
+export interface DoctorReport {
+  readonly checks: readonly DoctorCheck[];
+  readonly blockers: ReturnType<typeof blockers>;
+  readonly reachable: boolean;
+  readonly hasKey: boolean;
+  readonly failed: number;
+  readonly skipped: number;
+  readonly ready: boolean;
+  readonly target: ResolvedTarget | null;
+  readonly dataSource: DataSourceState;
+  readonly pushedSchema: PushedSchema | null;
+  readonly schemaDrift: SchemaDrift | null;
+}
+
+export interface InspectDoctorOptions {
+  /** Never persist legacy config migrations while collecting the verdict. */
+  readonly readOnlyConfig?: boolean;
+  /** Explicit schema path for callers inspecting a repository other than cwd. */
+  readonly schemaPath?: string;
+  /** Directory used for project-local credential resolution. */
+  readonly cwd?: string;
+  /** Disable runtime importing of the user's schema for bounded discovery. */
+  readonly readLocalSchema?: boolean;
+}
+
+function render(check: DoctorCheck): void {
   const mark =
     check.state === 'ok' ? pc.green('✓') : check.state === 'fail' ? pc.red('✗') : pc.dim('–');
   console.log(
@@ -65,12 +98,13 @@ async function ping(apiUrl: string): Promise<boolean> {
   }
 }
 
-export async function doctor(): Promise<void> {
-  console.log(`\n  ${brand('ablo')} ${pc.dim('doctor')}\n`);
-
+/** Collect the complete doctor verdict without rendering or changing process state. */
+export async function inspectDoctor(options: InspectDoctorOptions = {}): Promise<DoctorReport> {
   const apiUrl = apiBaseUrl();
-  const runtimeKey = resolveRuntimeApiKey();
-  const checks: Check[] = [];
+  const runtimeKey = options.readOnlyConfig
+    ? resolveRuntimeApiKeyReadOnly(undefined, options.cwd)
+    : resolveRuntimeApiKey();
+  const checks: DoctorCheck[] = [];
 
   // 1. A credential, and where it came from — the answer to most "it worked
   //    yesterday" reports, since a project env file silently outranks the login.
@@ -106,10 +140,11 @@ export async function doctor(): Promise<void> {
   //    "my setup is broken" from "I am signed in somewhere else" — `default`
   //    exists in every organization, so the project alone cannot tell them apart.
   const target = runtimeKey.key
-    ? await resolveTarget({
+      ? await resolveTarget({
         url: apiUrl,
         apiKey: runtimeKey.key,
         keySource: runtimeKey.source ?? 'stored',
+        readOnlyConfig: options.readOnlyConfig,
       })
     : null;
   const confirmed = target?.confirmed ?? null;
@@ -131,7 +166,7 @@ export async function doctor(): Promise<void> {
       detail: `org ${confirmed.organizationId}, project ${project}, ${confirmed.environment ?? 'unknown environment'}`,
     });
   } else {
-    const local = getActiveProject();
+    const local = options.readOnlyConfig ? getActiveProjectReadOnly() : getActiveProject();
     checks.push({
       label: 'identity',
       state: runtimeKey.key && reachable ? 'fail' : 'skip',
@@ -196,7 +231,10 @@ export async function doctor(): Promise<void> {
         : { label: 'schema', state: 'skip', detail: 'not determined' }
   );
 
-  const drift = schemaDrift(await readLocalSchemaHash(), pushed?.hash);
+  const drift = schemaDrift(
+    options.readLocalSchema === false ? null : await readLocalSchemaHash(options.schemaPath),
+    pushed?.hash,
+  );
   if (drift) {
     checks.push({
       label: 'drift',
@@ -250,8 +288,6 @@ export async function doctor(): Promise<void> {
     checks.push({ label: 'database', state: 'skip', detail: 'nothing connected to check' });
   }
 
-  for (const check of checks) render(check);
-
   // The verdict comes from the same classifier `ablo status` closes with, so
   // the two commands can never disagree about whether a write would land.
   const blocking = blockers({
@@ -264,18 +300,38 @@ export async function doctor(): Promise<void> {
   const failed = checks.filter((c) => c.state === 'fail').length;
   const skipped = checks.filter((c) => c.state === 'skip').length;
 
+  return {
+    checks,
+    blockers: blocking,
+    reachable,
+    hasKey: Boolean(runtimeKey.key),
+    failed,
+    skipped,
+    ready: blocking.length === 0 && failed === 0,
+    target,
+    dataSource,
+    pushedSchema: pushed,
+    schemaDrift: drift,
+  };
+}
+
+/** Render a previously collected report. Kept separate for setup and CI consumers. */
+export function renderDoctorReport(report: DoctorReport): void {
+  console.log(`\n  ${brand('ablo')} ${pc.dim('doctor')}\n`);
+  for (const check of report.checks) render(check);
+
   console.log();
-  if (failed > 0) {
+  if (report.failed > 0) {
     console.log(
-      `  ${pc.red('✗')} ${pc.bold(`${failed} problem${failed === 1 ? '' : 's'}`)}` +
-        pc.dim(skipped > 0 ? `, ${skipped} check${skipped === 1 ? '' : 's'} skipped` : '')
+      `  ${pc.red('✗')} ${pc.bold(`${report.failed} problem${report.failed === 1 ? '' : 's'}`)}` +
+        pc.dim(report.skipped > 0 ? `, ${report.skipped} check${report.skipped === 1 ? '' : 's'} skipped` : '')
     );
     console.log(
       pc.dim('    Fix them in the order above — an earlier one often explains a later one.')
     );
-  } else if (skipped > 0) {
+  } else if (report.skipped > 0) {
     console.log(
-      `  ${pc.yellow('?')} ${pc.dim(`nothing is blocking a write, but ${skipped} check${skipped === 1 ? '' : 's'} could not be run`)}`
+      `  ${pc.yellow('?')} ${pc.dim(`nothing is blocking a write, but ${report.skipped} check${report.skipped === 1 ? '' : 's'} could not be run`)}`
     );
   } else {
     console.log(
@@ -283,6 +339,10 @@ export async function doctor(): Promise<void> {
     );
   }
   console.log();
+}
 
-  if (blocking.length > 0 || failed > 0) process.exitCode = 1;
+export async function doctor(): Promise<void> {
+  const report = await inspectDoctor();
+  renderDoctorReport(report);
+  if (!report.ready) process.exitCode = 1;
 }

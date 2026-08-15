@@ -40,16 +40,16 @@ describe('canonical commit status', () => {
   it('records a claim as identity, exact row target, and fence evidence', () => {
     expect(commitClaimReferenceSchema.parse({
       id: 'claim-1',
-      target: { scope: 'row', model: 'tasks', id: 'task-1' },
+      target: { scope: 'row', model: 'items', id: 'item-1' },
       fenceToken: 7,
     })).toEqual({
       id: 'claim-1',
-      target: { scope: 'row', model: 'tasks', id: 'task-1' },
+      target: { scope: 'row', model: 'items', id: 'item-1' },
       fenceToken: 7,
     });
     expect(commitClaimReferenceSchema.safeParse({
       id: 'claim-1',
-      target: { scope: 'row', model: 'tasks', id: 'task-1' },
+      target: { scope: 'row', model: 'items', id: 'item-1' },
     }).success).toBe(false);
   });
 
@@ -116,6 +116,29 @@ describe('derived boundary projections', () => {
     })).toMatchObject({ status: 'confirmed', lastSyncId: 41, correlationId: 'corr-source' });
   });
 
+  it('returns transaction-bound rows without adding them to the durable execution result', () => {
+    const operationResults = [
+      {
+        transactionId: 'record-transition',
+        outcome: 'updated' as const,
+        row: { id: 'record-1', status: 'running' },
+      },
+    ];
+    expect(commitReceiptSchema.parse({
+      ...confirmedReceipt,
+      operationResults,
+    })).toMatchObject({ operationResults });
+
+    expect(commitExecutionResultSchema.safeParse({
+      status: 'confirmed',
+      createdAt: CREATED_AT,
+      statusAt: STATUS_AT,
+      firstSyncId: 41,
+      lastSyncId: 41,
+      operationResults,
+    }).success).toBe(false);
+  });
+
   it('rejects old and contradictory receipt fields', () => {
     expect(commitReceiptSchema.safeParse({ ...confirmedReceipt, watermark: 41 }).success).toBe(false);
     expect(commitReceiptSchema.safeParse({ ...confirmedReceipt, status: 'rejected' }).success).toBe(false);
@@ -168,7 +191,7 @@ describe('derived boundary projections', () => {
 
   it('does not accept client-claimed authority on a commit request', () => {
     expect(commitRequestSchema.safeParse({
-      operations: [{ action: 'update', model: 'Task', data: {} }],
+      operations: [{ action: 'update', model: 'Item', data: {} }],
       authority,
     }).success).toBe(false);
   });
@@ -183,12 +206,12 @@ describe('flattened commit record', () => {
     claims: [],
     createdAt: CREATED_AT,
     readSet: [{
-      target: { scope: 'row' as const, model: 'Task', id: 'task-1' },
+      target: { scope: 'row' as const, model: 'Item', id: 'item-1' },
       watermark: 17,
       lifetime: 'commit' as const,
       onStale: 'reject' as const,
     }],
-    operations: [{ action: 'UPDATE', model: 'Task', id: 'task-1', data: { retention: 'redacted' } }],
+    operations: [{ action: 'UPDATE', model: 'Item', id: 'item-1', data: { retention: 'redacted' } }],
     receipt: { clientTxId: 'commit-1', serverTxId: 'server-1', ops: 1 },
   };
 
@@ -238,8 +261,8 @@ describe('flattened commit record', () => {
       ...confirmedStatus,
       operations: [{
         action: 'UPDATE',
-        model: 'Task',
-        id: 'task-1',
+        model: 'Item',
+        id: 'item-1',
         data: { prompt: 'do not retain me' },
       }],
     }).success).toBe(false);
@@ -251,13 +274,13 @@ describe('flattened commit record', () => {
       ...confirmedStatus,
       claims: [{
         id: 'claim-1',
-        target: { scope: 'row', model: 'Task', id: 'task-1' },
+        target: { scope: 'row', model: 'Item', id: 'item-1' },
         fenceToken: 12,
       }],
     });
     expect(record.claims).toEqual([{
       id: 'claim-1',
-      target: { scope: 'row', model: 'Task', id: 'task-1' },
+      target: { scope: 'row', model: 'Item', id: 'item-1' },
       fenceToken: 12,
     }]);
   });

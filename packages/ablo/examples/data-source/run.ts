@@ -36,7 +36,7 @@ async function main() {
   });
 
   log('--- 1. load (existing seeded row) ---');
-  const seeded = await driver.load('tasks', 'task_seed');
+  const seeded = await driver.load('records', 'record_seed');
   log('loaded:', seeded);
 
   log('\n--- 2. commit (CREATE + UPDATE in one batch) ---');
@@ -44,14 +44,14 @@ async function main() {
     [
       {
         type: 'CREATE',
-        model: 'tasks',
-        id: 'task_new',
+        model: 'records',
+        id: 'record_new',
         input: { title: 'Wire the data source', status: 'todo' },
       },
       {
         type: 'UPDATE',
-        model: 'tasks',
-        id: 'task_seed',
+        model: 'records',
+        id: 'record_seed',
         input: { status: 'doing', assignee: 'alice' },
       },
     ],
@@ -59,8 +59,8 @@ async function main() {
   );
   log('committed rows:', committed);
 
-  log('\n--- 3. list (all tasks after commit) ---');
-  const listed = await driver.list('tasks');
+  log('\n--- 3. list (all records after commit) ---');
+  const listed = await driver.list('records');
   log('listed:', listed);
 
   log('\n--- 4. events (outbox feed for cross-channel writes) ---');
@@ -73,7 +73,7 @@ async function main() {
     apiKey: 'sk_wrong_example_key',
   });
   try {
-    await badDriver.load('tasks', 'task_seed');
+    await badDriver.load('records', 'record_seed');
     throw new Error('expected signature failure');
   } catch (err) {
     log('rejected as expected:', (err as Error).message);

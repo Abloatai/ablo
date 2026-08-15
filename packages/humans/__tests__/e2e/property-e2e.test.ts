@@ -77,14 +77,14 @@ describeE2E('Property-Based E2E: Random Operations', () => {
           fc.record({ title: fc.string({ minLength: 1, maxLength: 30 }) }),
           { minLength: 1, maxLength: 5 }
         ),
-        async (tasks) => {
+        async (items) => {
           let prevSyncId = 0;
-          for (const task of tasks) {
+          for (const item of items) {
             const syncId = await callBatchAck([{
               type: 'CREATE',
-              model: 'task',
+              model: 'item',
               id: uuid(),
-              input: { title: task.title, organizationId: ORG_ID, createdBy: USER_ID },
+              input: { title: item.title, organizationId: ORG_ID, createdBy: USER_ID },
             }]);
             expect(syncId).toBeGreaterThan(0);
             expect(syncId).toBeGreaterThanOrEqual(prevSyncId);
@@ -109,14 +109,14 @@ describeE2E('Property-Based E2E: Random Operations', () => {
       } catch { /* ignore */ }
     });
 
-    // Create several tasks
+    // Create several items
     const createdIds: string[] = [];
     for (let i = 0; i < 3; i++) {
       const id = uuid();
       createdIds.push(id);
       await callBatchAck([{
         type: 'CREATE',
-        model: 'task',
+        model: 'item',
         id,
         input: { title: `Delta prop ${i}`, organizationId: ORG_ID, createdBy: USER_ID },
       }]);
@@ -125,7 +125,7 @@ describeE2E('Property-Based E2E: Random Operations', () => {
     // Wait for deltas
     await new Promise((r) => setTimeout(r, 3000));
 
-    // Every created task should have produced a delta
+    // Every created item should have produced a delta
     for (const id of createdIds) {
       expect(receivedModelIds.has(id)).toBe(true);
     }
@@ -138,7 +138,7 @@ describeE2E('Property-Based E2E: Random Operations', () => {
     const promises = Array.from({ length: 10 }, () =>
       callBatchAck([{
         type: 'CREATE',
-        model: 'task',
+        model: 'item',
         id: uuid(),
         input: { title: 'Rapid', organizationId: ORG_ID, createdBy: USER_ID },
       }])

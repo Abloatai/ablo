@@ -1302,8 +1302,7 @@ export class SyncClient extends EventEmitter {
     const shouldForceAcceptServer =
       (serverData.deletedAt !== undefined && serverData.deletedAt !== null) ||
       (serverData.archivedAt !== undefined && serverData.archivedAt !== null) ||
-      serverData.isActive === false ||
-      (serverData.unassignedAt !== undefined && serverData.unassignedAt !== null);
+      serverData.isActive === false;
 
     if (shouldForceAcceptServer) {
       this.runtime.logger.debug('Accepting server update - critical state change detected', {
@@ -1378,14 +1377,10 @@ export class SyncClient extends EventEmitter {
       critical.archivedAt = serverData.archivedAt;
     }
 
-    // Deactivation states - critical for assignments and similar entities
+    // Deactivation states are always critical.
     if (serverData.isActive !== undefined && serverData.isActive === false) {
       critical.isActive = false;
     }
-    if (serverData.unassignedAt !== undefined) {
-      critical.unassignedAt = serverData.unassignedAt;
-    }
-
     return critical;
   }
 
@@ -1822,27 +1817,6 @@ export class SyncClient extends EventEmitter {
       pendingMutationsCount: this.mutationQueue.getOutstandingTransactionCount(),
       mutationQueue: this.mutationQueue.getDebugInfo(),
     };
-  }
-
-  // --- Best-practice assignment ops ---
-  async unassignEntity(entityType: string, entityId: string): Promise<void> {
-    // Call server-side unassign to avoid per-id races
-    await this.mutationExecutor.executeDelete('Assignment', entityId);
-  }
-
-  async reassignEntity(
-    entityType: string,
-    entityId: string,
-    assigneeType: string,
-    assigneeId: string,
-    id?: string
-  ): Promise<void> {
-    await this.mutationExecutor.executeCreate('Assignment', id || '', {
-      entityType,
-      entityId,
-      assigneeType,
-      assigneeId,
-    });
   }
 
   // ── Delta + Bootstrap application (owns InstanceCache writes) ──────────────

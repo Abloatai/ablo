@@ -75,15 +75,15 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
       // by holding mutations then sending them all at once (like flush does)
 
       const queuedOps: Record<string, unknown>[] = [];
-      const taskIds: string[] = [];
+      const itemIds: string[] = [];
 
       // Queue 3 creates "offline"
       for (let i = 0; i < 3; i++) {
         const id = uuid();
-        taskIds.push(id);
+        itemIds.push(id);
         queuedOps.push({
-          type: 'CREATE', model: 'task', id,
-          input: { title: `Offline task ${i}`, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
+          type: 'CREATE', model: 'item', id,
+          input: { title: `Offline item ${i}`, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
         });
       }
 
@@ -91,26 +91,26 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
       const syncId = await batchAck(queuedOps);
       expect(syncId).toBeGreaterThan(0);
 
-      // Verify all tasks exist via bootstrap
+      // Verify all items exist via bootstrap
       await new Promise((r) => setTimeout(r, 300));
       const data = await bootstrap();
-      const tasks = (data.models as Record<string, unknown[]>)?.Task;
+      const items = (data.models as Record<string, unknown[]>)?.Item;
 
-      if (tasks && Array.isArray(tasks)) {
-        for (const id of taskIds) {
-          const found = tasks.find((t: unknown) => (t as Record<string, unknown>).id === id);
+      if (items && Array.isArray(items)) {
+        for (const id of itemIds) {
+          const found = items.find((t: unknown) => (t as Record<string, unknown>).id === id);
           expect(found).toBeDefined();
         }
       }
     });
 
-    it('should handle ordered batch flush (multiple tasks in one call)', async () => {
+    it('should handle ordered batch flush (multiple items in one call)', async () => {
       // Simulate flushing multiple queued offline mutations in a single batchAck
       // This is what OfflineMutationStore.flush() does after topological sort
       const ids = [uuid(), uuid(), uuid(), uuid(), uuid()];
 
       const syncId = await batchAck(ids.map((id, i) => ({
-        type: 'CREATE', model: 'task', id,
+        type: 'CREATE', model: 'item', id,
         input: { title: `Batch flush ${i}`, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       })));
 
@@ -119,11 +119,11 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
       // All 5 should exist
       await new Promise((r) => setTimeout(r, 300));
       const data = await bootstrap();
-      const tasks = (data.models as Record<string, unknown[]>)?.Task;
+      const items = (data.models as Record<string, unknown[]>)?.Item;
 
-      if (tasks && Array.isArray(tasks)) {
+      if (items && Array.isArray(items)) {
         for (const id of ids) {
-          expect(tasks.find((t: unknown) => (t as Record<string, unknown>).id === id)).toBeDefined();
+          expect(items.find((t: unknown) => (t as Record<string, unknown>).id === id)).toBeDefined();
         }
       }
     });
@@ -143,9 +143,9 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
       await new Promise((r) => setTimeout(r, 300));
 
       // Make mutations while disconnected (simulating another tab or server-side change)
-      const offlineTaskId = uuid();
+      const offlineItemId = uuid();
       await batchAck([{
-        type: 'CREATE', model: 'task', id: offlineTaskId,
+        type: 'CREATE', model: 'item', id: offlineItemId,
         input: { title: 'During disconnect', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
@@ -164,7 +164,7 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
       // Make another mutation after reconnect — this should definitely arrive
       const postReconnectId = uuid();
       await batchAck([{
-        type: 'CREATE', model: 'task', id: postReconnectId,
+        type: 'CREATE', model: 'item', id: postReconnectId,
         input: { title: 'After reconnect', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
@@ -183,22 +183,22 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
 
   describe('conflict scenarios', () => {
     it('should handle update to entity that was updated by another user during offline', async () => {
-      // Create a task
-      const taskId = uuid();
+      // Create a item
+      const itemId = uuid();
       await batchAck([{
-        type: 'CREATE', model: 'task', id: taskId,
+        type: 'CREATE', model: 'item', id: itemId,
         input: { title: 'Conflict base', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
       // "User B" updates while "User A" is offline
       await batchAck([{
-        type: 'UPDATE', model: 'task', id: taskId,
+        type: 'UPDATE', model: 'item', id: itemId,
         input: { title: 'User B update' },
       }]);
 
       // "User A" comes online and sends their stale update
       const syncId = await batchAck([{
-        type: 'UPDATE', model: 'task', id: taskId,
+        type: 'UPDATE', model: 'item', id: itemId,
         input: { title: 'User A offline update' },
       }]);
 
@@ -207,26 +207,26 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
 
       await new Promise((r) => setTimeout(r, 300));
       const data = await bootstrap();
-      const tasks = (data.models as Record<string, unknown[]>)?.Task;
-      if (tasks && Array.isArray(tasks)) {
-        const task = tasks.find((t: unknown) => (t as Record<string, unknown>).id === taskId);
-        if (task) {
+      const items = (data.models as Record<string, unknown[]>)?.Item;
+      if (items && Array.isArray(items)) {
+        const item = items.find((t: unknown) => (t as Record<string, unknown>).id === itemId);
+        if (item) {
           // Last write wins — User A's update is latest
-          expect((task as Record<string, unknown>).title).toBe('User A offline update');
+          expect((item as Record<string, unknown>).title).toBe('User A offline update');
         }
       }
     });
 
     it('should handle update to entity that was deleted during offline', async () => {
-      // Create a task
-      const taskId = uuid();
+      // Create a item
+      const itemId = uuid();
       await batchAck([{
-        type: 'CREATE', model: 'task', id: taskId,
+        type: 'CREATE', model: 'item', id: itemId,
         input: { title: 'Will be deleted', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
       // Delete it (simulating another user's action during offline)
-      await batchAck([{ type: 'DELETE', model: 'task', id: taskId }]);
+      await batchAck([{ type: 'DELETE', model: 'item', id: itemId }]);
 
       // User comes online, tries to update the deleted entity
       const res = await fetch(GRAPHQL_URL, {
@@ -234,7 +234,7 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
         headers: { 'Content-Type': 'application/json', 'X-User-Id': USER_ID, 'X-Organization-Id': ORG_ID },
         body: JSON.stringify({
           query: `mutation BatchAck($operations: [MutationOperation!]!) { batchAck(operations: $operations) { lastSyncId } }`,
-          variables: { operations: [{ type: 'UPDATE', model: 'task', id: taskId, input: { title: 'Ghost update' } }] },
+          variables: { operations: [{ type: 'UPDATE', model: 'item', id: itemId, input: { title: 'Ghost update' } }] },
         }),
       });
 
@@ -252,32 +252,32 @@ describeE2E('E2E: Offline → Reconnect → Reconciliation', () => {
 
   describe('offline queue ordering', () => {
     it('should handle create → update → delete sequence from offline queue', async () => {
-      const taskId = uuid();
+      const itemId = uuid();
 
       // Simulate the full lifecycle queued offline, flushed at once:
       // Create → Update → Delete (all in one batchAck)
       const syncId = await batchAck([
         {
-          type: 'CREATE', model: 'task', id: taskId,
+          type: 'CREATE', model: 'item', id: itemId,
           input: { title: 'Lifecycle', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
         },
         {
-          type: 'UPDATE', model: 'task', id: taskId,
+          type: 'UPDATE', model: 'item', id: itemId,
           input: { title: 'Updated lifecycle' },
         },
         {
-          type: 'DELETE', model: 'task', id: taskId,
+          type: 'DELETE', model: 'item', id: itemId,
         },
       ]);
 
       expect(syncId).toBeGreaterThan(0);
 
-      // Task should NOT exist after full lifecycle
+      // Item should NOT exist after full lifecycle
       await new Promise((r) => setTimeout(r, 300));
       const data = await bootstrap();
-      const tasks = (data.models as Record<string, unknown[]>)?.Task;
-      if (tasks && Array.isArray(tasks)) {
-        const found = tasks.find((t: unknown) => (t as Record<string, unknown>).id === taskId);
+      const items = (data.models as Record<string, unknown[]>)?.Item;
+      if (items && Array.isArray(items)) {
+        const found = items.find((t: unknown) => (t as Record<string, unknown>).id === itemId);
         expect(found).toBeUndefined();
       }
     });

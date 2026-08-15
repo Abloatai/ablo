@@ -70,17 +70,17 @@ describe('BaseSyncedStore — area-of-interest forwarding', () => {
     const transport = new FakeTransport();
     const shell = makeShell(makeManager(transport));
 
-    await shell.enterScope('deck:a');
+    await shell.enterScope('collection:a');
 
-    expect(transport.calls).toEqual([['deck:a', 'org:1']]);
+    expect(transport.calls).toEqual([['collection:a', 'org:1']]);
   });
 
   it('leaveScope warms the group (no unsubscribe round-trip)', async () => {
     const transport = new FakeTransport();
     const shell = makeShell(makeManager(transport));
 
-    await shell.enterScope('deck:a'); // call #1
-    await shell.leaveScope('deck:a'); // warm → no new call
+    await shell.enterScope('collection:a'); // call #1
+    await shell.leaveScope('collection:a'); // warm → no new call
 
     expect(transport.calls).toHaveLength(1);
   });
@@ -90,12 +90,12 @@ describe('BaseSyncedStore — area-of-interest forwarding', () => {
     const manager = makeManager(transport);
     const shell = makeShell(manager);
 
-    await shell.enterScope('deck:a'); // call #1
-    await shell.pinScope('deck:a');
-    await shell.leaveScope('deck:a'); // pinned → still subscribed
+    await shell.enterScope('collection:a'); // call #1
+    await shell.pinScope('collection:a');
+    await shell.leaveScope('collection:a'); // pinned → still subscribed
 
     expect(transport.calls).toHaveLength(1);
-    expect(manager.effectiveGroups().sort()).toEqual(['deck:a', 'org:1']);
+    expect(manager.effectiveGroups().sort()).toEqual(['collection:a', 'org:1']);
   });
 
   it('all four methods resolve safely while the connection is down (pre-connect)', async () => {
@@ -108,9 +108,9 @@ describe('BaseSyncedStore — area-of-interest forwarding', () => {
     });
     const shell = makeShell(manager);
 
-    await expect(shell.enterScope('deck:a')).resolves.toBeUndefined();
-    await expect(shell.leaveScope('deck:a')).resolves.toBeUndefined();
-    await expect(shell.pinScope('deck:a')).resolves.toBeUndefined();
-    await expect(shell.unpinScope('deck:a')).resolves.toBeUndefined();
+    await expect(shell.enterScope('collection:a')).resolves.toBeUndefined();
+    await expect(shell.leaveScope('collection:a')).resolves.toBeUndefined();
+    await expect(shell.pinScope('collection:a')).resolves.toBeUndefined();
+    await expect(shell.unpinScope('collection:a')).resolves.toBeUndefined();
   });
 });

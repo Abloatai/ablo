@@ -23,124 +23,16 @@ import type { BootstrapFetcher, BootstrapData } from './sync/BootstrapFetcher.js
 import { InMemoryObjectStore } from './adapters/inMemoryStorage.js';
 import { logPositionSchema } from './logPosition.js';
 import type { SyncDeltaAction } from '@abloatai/transaction/wire/delta';
-import type { OnStaleMode } from '@abloatai/transaction/coordination/schema';
 import type { BootstrapType } from '@abloatai/transaction/types';
 import { highestPersistedPrefixSyncId } from './sync/persistedPrefix.js';
+import {
+  isAcceptedOutboxPromotion,
+  isSameOutboxRecord,
+  type PersistedTransaction,
+} from './transactions/persistedTransaction.js';
 
 /** Generic record type for model data */
 type ModelData = Record<string, unknown>;
-
-/** Persisted mutation in a transaction */
-interface PersistedMutation {
-  type: 'create' | 'update' | 'delete' | 'archive';
-  modelData: ModelData;
-  modelName: string;
-  timestamp: string;
-  writeOptions?: {
-    readAt?: number | null;
-    onStale?: OnStaleMode | null;
-  };
-}
-
-/** Persisted transaction for offline/retry support.
- *
- *  Index signature is part of the contract: this interface targets
- *  the generic record-shaped storage layer (`InMemoryObjectStore.put`
- *  + the IDB ObjectStore equivalent), both of which take
- *  `Record<string, unknown>`. Every declared field below already
- *  satisfies `unknown`; the index signature just makes the
- *  interface assignable to the storage parameter without a cast. */
-interface PersistedTransaction {
-  id: string;
-  type?: string;
-  timestamp?: number;
-  createdAt?: number;
-  mutations?: PersistedMutation[];
-  // Persist awaiting-delta transactions so they survive a tab close. On the
-  // next session, WebSocket reconnect plus delta catch-up confirms them.
-  awaitingDelta?: {
-    syncIdNeeded: number;
-    modelName: string;
-    modelId: string;
-    operationType: string;
-  };
-  [key: string]: unknown;
-}
-
-/**
- * Request identity excludes local timing metadata for re-entrant seals: a
- * retry rebuilds its envelope with a fresh `sequence`/seal clock, so comparing
- * those volatile fields would reject every legitimate same-request re-seal as
- * an idempotency conflict. Only the fields that define the wire request count.
- */
-function isSameOutboxRecord(
-  existing: PersistedTransaction,
-  candidate: PersistedTransaction,
-): boolean {
-  if (
-    existing.type === 'http_commit_envelope' &&
-    candidate.type === 'http_commit_envelope'
-  ) {
-    const identity = (record: PersistedTransaction): unknown => ({
-      id: record.id,
-      type: record.type,
-      storageVersion: record.storageVersion,
-      idempotencyKey: record.idempotencyKey,
-      // HTTP outbox rows written before protocol versioning are v1. Normalize
-      // them so a same-request re-seal remains idempotent after an upgrade.
-      protocolVersion: record.protocolVersion ?? 1,
-      request: record.request,
-      scopeNamespace: record.scopeNamespace,
-    });
-    if (
-      existing.correlationId !== undefined &&
-      candidate.correlationId !== undefined &&
-      existing.correlationId !== candidate.correlationId
-    ) {
-      return false;
-    }
-    return JSON.stringify(identity(existing)) === JSON.stringify(identity(candidate));
-  }
-  if (
-    existing.type === 'commit_envelope' &&
-    candidate.type === 'commit_envelope'
-  ) {
-    const identity = (record: PersistedTransaction): unknown => ({
-      id: record.id,
-      type: record.type,
-      storageVersion: record.storageVersion,
-      origin: record.origin,
-      idempotencyKey: record.idempotencyKey,
-      operations: record.operations,
-      sourceMutationIds: record.sourceMutationIds,
-      commitOptions: record.commitOptions,
-      scope: record.scope,
-    });
-    if (
-      existing.correlationId !== undefined &&
-      candidate.correlationId !== undefined &&
-      existing.correlationId !== candidate.correlationId
-    ) {
-      return false;
-    }
-    return JSON.stringify(identity(existing)) === JSON.stringify(identity(candidate));
-  }
-  return JSON.stringify(existing) === JSON.stringify(candidate);
-}
-
-function isAcceptedOutboxPromotion(
-  existing: PersistedTransaction | undefined,
-  candidate: PersistedTransaction,
-): boolean {
-  return (
-    existing !== undefined &&
-    (existing.type === 'commit_envelope' ||
-      existing.type === 'http_commit_envelope') &&
-    existing.type === candidate.type &&
-    existing.acceptedAt === undefined &&
-    candidate.acceptedAt !== undefined
-  );
-}
 
 // Re-exported, not redeclared. `@abloatai/transaction`'s `types` module owns this
 // vocabulary and documents what each mode does; this package held a byte-identical

@@ -26,6 +26,7 @@ import { resolveIdentity } from '@abloatai/transaction/auth';
 import { resolveBootstrapBaseUrl } from '@abloatai/transaction/auth/apiKey';
 import {
   getActiveProject,
+  getActiveProjectReadOnly,
   resolveOrgManagementKey,
   modeFromKey,
   type Mode,
@@ -111,6 +112,8 @@ export interface ResolveTargetOptions {
    * the identity resolver's typed failure instead.
    */
   strict?: boolean;
+  /** A dry-run target resolver must not migrate legacy local credential files. */
+  readOnlyConfig?: boolean;
 }
 
 /** Slug used to describe "the organization-default project" everywhere. */
@@ -123,7 +126,7 @@ const DEFAULT_PROJECT_SLUG = 'default';
  */
 export async function resolveTarget(opts: ResolveTargetOptions): Promise<ResolvedTarget> {
   const keyEnv = modeFromKey(opts.apiKey) ?? null;
-  const localProject = getActiveProject();
+  const localProject = opts.readOnlyConfig ? getActiveProjectReadOnly() : getActiveProject();
 
   const confirmed = await confirmFromServer(opts);
 
@@ -196,7 +199,9 @@ async function nameProject(
   // confirmed id with the stored/org management credential when available.
   // Falling back to the runtime key preserves the explicit failure reason for
   // stateless CI, where no management credential is expected.
-  const namingKey = resolveOrgManagementKey() ?? opts.apiKey;
+  const namingKey = resolveOrgManagementKey({
+    persistConfigMigrations: opts.readOnlyConfig ? false : undefined,
+  }) ?? opts.apiKey;
   const listed = await listProjects(namingKey, opts.url);
   const match = listed.ok ? listed.projects.find((p) => p.id === projectId) : undefined;
   if (match) {

@@ -30,7 +30,7 @@ class TestResponse {
   TestResponse as unknown as typeof Response;
 
 const schema = defineSchema({
-  task: model({
+  item: model({
     title: z.string(),
     status: z.string().optional(),
   }),
@@ -60,7 +60,7 @@ async function signedPost(
 describe('dataSourceNext + adapter (end to end)', () => {
   it('rejects an unsigned / wrong-key request before the adapter', async () => {
     const handler = makeHandler();
-    const res = await signedPost(handler, { type: 'load', model: 'task', id: 't1' }, 'sk_wrong_key');
+    const res = await signedPost(handler, { type: 'load', model: 'item', id: 't1' }, 'sk_wrong_key');
     expect(res.status).toBe(401);
   });
 
@@ -72,7 +72,7 @@ describe('dataSourceNext + adapter (end to end)', () => {
       operations: [
         {
           type: 'CREATE',
-          model: 'task',
+          model: 'item',
           id: 't1',
           input: { title: 'A' },
           transactionId: 'op1',
@@ -89,7 +89,7 @@ describe('dataSourceNext + adapter (end to end)', () => {
       type: 'commit',
       correlationId: 'corr_explicit',
       operations: [
-        { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+        { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
       ],
     });
     expect(res.status).toBe(200);
@@ -99,7 +99,7 @@ describe('dataSourceNext + adapter (end to end)', () => {
     const handler = makeHandler();
     const res = await signedPost(handler, {
       type: 'commit',
-      operations: [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }],
+      operations: [{ type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } }],
     });
     expect(res.status).toBe(400);
   });
@@ -110,7 +110,7 @@ describe('dataSourceNext + adapter (end to end)', () => {
       type: 'commit',
       clientTxId: 'x'.repeat(ABLO_SOURCE_CLIENT_TX_ID_MAX_LENGTH + 1),
       operations: [
-        { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+        { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
       ],
     });
 
@@ -126,7 +126,7 @@ describe('dataSourceNext + adapter (end to end)', () => {
       intentHash: 'a'.repeat(64),
       echo: { kind: 'postgres-wal', payload: 'echo-payload' },
       operations: [
-        { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+        { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
       ],
     });
 
@@ -142,15 +142,15 @@ describe('dataSourceNext + adapter (end to end)', () => {
       type: 'commit',
       clientTxId: 'tx1',
       operations: [
-        { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
-        { type: 'CREATE', model: 'task', id: 't2', input: { title: 'B' } },
+        { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
+        { type: 'CREATE', model: 'item', id: 't2', input: { title: 'B' } },
       ],
     });
 
-    const load = await signedPost(handler, { type: 'load', model: 'task', id: 't1' });
+    const load = await signedPost(handler, { type: 'load', model: 'item', id: 't1' });
     expect((load.body.row as Record<string, unknown>).title).toBe('A');
 
-    const list = await signedPost(handler, { type: 'list', model: 'task' });
+    const list = await signedPost(handler, { type: 'list', model: 'item' });
     expect((list.body.rows as Record<string, unknown>[]).length).toBe(2);
   });
 
@@ -162,7 +162,7 @@ describe('dataSourceNext + adapter (end to end)', () => {
       operations: [
         {
           type: 'CREATE',
-          model: 'task',
+          model: 'item',
           id: 't1',
           input: { title: 'A' },
           transactionId: 'op1',
@@ -174,7 +174,7 @@ describe('dataSourceNext + adapter (end to end)', () => {
     const list = events.body.events as Record<string, unknown>[];
     expect(list[0]).toMatchObject({
       entityId: 't1',
-      model: 'task',
+      model: 'item',
       type: 'CREATE',
       correlationId: 'tx1',
       transactionId: 'op1',
@@ -188,11 +188,11 @@ describe('dataSourceNext + adapter (end to end)', () => {
     const commit = {
       type: 'commit',
       clientTxId: 'tx_dup',
-      operations: [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }],
+      operations: [{ type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } }],
     };
     await signedPost(handler, commit);
     await signedPost(handler, commit);
-    const list = await signedPost(handler, { type: 'list', model: 'task' });
+    const list = await signedPost(handler, { type: 'list', model: 'item' });
     expect((list.body.rows as unknown[]).length).toBe(1);
   });
 });

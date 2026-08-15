@@ -24,7 +24,7 @@
  * `string`.
  *
  * `model` rides along so a reference carries where it came from. Claiming
- * `users.email` through `ablo.tasks` is a mistake nothing can currently see.
+ * `users.email` through `ablo.items` is a mistake nothing can currently see.
  */
 export interface FieldRef<
   Model extends string = string,

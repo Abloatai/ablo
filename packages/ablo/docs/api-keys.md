@@ -119,9 +119,9 @@ knobs, and you set exactly one.
 
 | Mint | Call | Result |
 |---|---|---|
-| Human end-user session | `await server.sessions.create({ user: { id }, can: { tasks: ['read'] } })` | `ek_` (scoped to `can`) |
-| Ready agent client | `await server.agents.create({ can: { tasks: ['update'] } })` | Auto-refreshing client scoped to `can` |
-| Raw delegated agent token | `await server.sessions.create({ agent: { id }, can: { tasks: ['update'] } })` | `rk_` for another runtime |
+| Human end-user session | `await server.sessions.create({ user: { id }, can: { records: ['read'] } })` | `ek_` (scoped to `can`) |
+| Ready agent client | `await server.agents.create({ can: { records: ['update'] } })` | Auto-refreshing client scoped to `can` |
+| Raw delegated agent token | `await server.sessions.create({ agent: { id }, can: { records: ['update'] } })` | `rk_` for another runtime |
 
 The principal kind comes from *which* shape you pass — `{ user, can }` → `user`, `{ agent, can }` → `agent`.
 
@@ -217,6 +217,12 @@ restricted to exactly those grants:
 - `project:manage` — list, create, and rename projects.
 - `branch:manage` — list, create, and delete child branches and mint their
   temporary credentials.
+- `ephemeral:mint-any-org` — cross-organization authority to mint a short-lived
+  user session into a customer organization. It follows the Stripe Connect shape:
+  the request names the customer organization, but the resulting session is
+  still bounded by its `can` grant and expiry. A key restricted to this scope
+  cannot directly read or write customer organizations' rows, push schema, or
+  manage projects.
 
 Both management scopes are explicit grants on `mk_` credentials. Runtime
 `sk_`, `rk_`, `pk_`, and `ek_` credentials cannot become management
@@ -225,6 +231,27 @@ credentials through an empty scope set or a CLI fallback.
 Branch binding remains an authority boundary even when a key has no granular
 scope strings: a temporary child key can act only inside that child. It cannot
 manage siblings or gain root authority.
+
+### Cross-organization mint keys
+
+Most applications do not need `ephemeral:mint-any-org`: their backend key mints
+users into its own organization. A multi-organization backend needs it only
+when each customer is a separate Ablo organization and one trusted service
+mints sessions for all of them.
+
+Treat that key as a dedicated minting credential:
+
+- keep it in a server-side secret manager, never a browser or repository;
+- grant only `ephemeral:mint-any-org`, with no data or schema scopes;
+- mint short-lived sessions with the smallest typed `can` grant;
+- rotate it on a schedule and revoke it immediately after suspected exposure;
+- log the target `organizationId`, minted session id, and request id for audit.
+
+The scope's broad name describes the cross-organization check it passes, not
+the authority of each resulting session. The session can act only inside the
+named customer organization and only for the models/verbs in `can`. See
+[Customer Organizations](./customer-organizations.md) for the complete
+integration.
 
 ## Current and legacy key spellings
 

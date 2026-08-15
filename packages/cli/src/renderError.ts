@@ -12,7 +12,7 @@
  *   ✗ Validation error  [model_required_field_missing]
  *
  *     A required field was absent from the model payload.
- *     field  task.title
+ *     field  record.title
  *     docs   https://docs.abloatai.com/errors#model_required_field_missing
  *     ref    req_abc123
  */

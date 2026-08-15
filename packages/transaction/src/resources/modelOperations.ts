@@ -256,7 +256,7 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
 
   /**
    * Narrow the claim to Zod-declared fields of the row. Return one field
-   * directly or an array for several: `fields: (task) => task.status`.
+   * directly or an array for several: `fields: (item) => item.status`.
    *
    * Exclusion follows the target: claims on the same row conflict only where
    * their sets intersect, so a holder on `['title']` and a holder on
@@ -313,7 +313,7 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
    * @deprecated Prefer `contention: { signal }`.
    *
    * Abort a pending wait from outside — the same signal that cancels
-   * everything else in the program, so a cancelled agent task or an unmounted
+   * everything else in the program, so a cancelled agent item or an unmounted
    * component takes its queued claim with it. Rejects with
    * {@link AbloClaimedError} (`claim_wait_aborted`); over HTTP the abort also
    * leaves the line. Ignored once the grant has arrived — a held lease is
@@ -327,7 +327,7 @@ export interface ClaimTargetOptions<T = Record<string, unknown>> {
   ttl?: Duration;
   /**
    * Keep the lease alive for the duration of real work by beating on a
-   * cadence — the pattern for background workers whose task outlives the
+   * cadence — the pattern for background workers whose item outlives the
    * crash-cleanup TTL. `true` beats every third of the TTL (so two beats can
    * fail before the lease is at risk, and a crashed worker's lease still
    * lapses within one beat window); a duration such as `'2m'` sets the
@@ -431,12 +431,12 @@ export type ClaimSkipOptions<T = Record<string, unknown>> =
  * write and the SDK acquires/releases around that one mutation:
  *
  * ```ts
- * await ablo.tasks.update({
+ * await ablo.items.update({
  *   id,
  *   data: { title },
  *   claim: {
- *     fields: (task) => task.title,
- *     description: 'Renaming the task to match the project brief.',
+ *     fields: (item) => item.title,
+ *     description: 'Renaming the item to match the project brief.',
  *   },
  * });
  * ```

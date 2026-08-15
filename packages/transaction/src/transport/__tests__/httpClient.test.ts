@@ -30,7 +30,7 @@ import {
 } from '../../testing/fixtures/httpResponses.js';
 
 const schema = defineSchema({
-  tasks: model({ title: z.string(), status: z.string() }),
+  items: model({ title: z.string(), status: z.string() }),
 });
 
 const COMMIT_TIMES = {
@@ -61,12 +61,12 @@ const make = () =>
 
 describe("Ablo({ transport: 'http' }) facade shape", () => {
   it('exposes typed model proxies with the full HTTP surface', () => {
-    const tasks = make().tasks;
+    const items = make().items;
     for (const m of ['get', 'list', 'create', 'update', 'delete'] as const) {
-      expect(typeof Reflect.get(tasks, m)).toBe('function');
+      expect(typeof Reflect.get(items, m)).toBe('function');
     }
-    expect(typeof tasks.claim).toBe('function'); // claim is callable
-    expect(typeof tasks.claim.release).toBe('function'); // …with .release
+    expect(typeof items.claim).toBe('function'); // claim is callable
+    expect(typeof items.claim.release).toBe('function'); // …with .release
   });
 
   it('passes lifecycle and commit members through without exposing the protocol accessor', () => {
@@ -121,8 +121,8 @@ describe("Ablo({ transport: 'http' }) facade shape", () => {
       readSet: [],
       operations: [{
         action: 'update',
-        model: 'tasks',
-        id: 'task-1',
+        model: 'items',
+        id: 'item-1',
         data: { retention: 'redacted' as const },
       }],
       receipt: { clientTxId: 'execution-1', serverTxId: '41', ops: 1 },
@@ -157,9 +157,9 @@ describe("Ablo({ transport: 'http' }) facade shape", () => {
     expect(requested[1]).toContain('limit=25');
   });
 
-  it('does NOT expose turn/task primitives on the type — the surface is ablo.<model> + claim', () => {
+  it('does NOT expose turn/item primitives on the type — the surface is ablo.<model> + claim', () => {
     const c = make();
-    // Turns and the agent-work task resource were removed; coordination +
+    // Turns and the agent-work item resource were removed; coordination +
     // attribution ride on `claim`. The @ts-expect-error lines ARE the
     // assertion — these members no longer exist on the type, so re-adding
     // `beginTurn` or `protocol` makes the directive unused and breaks this
@@ -182,10 +182,10 @@ describe("Ablo({ transport: 'http' }) facade shape", () => {
     // The HTTP model client implements only the request/response subset; the
     // stateful pool reads + live subscription have no HTTP analog and must be
     // absent so a stray dynamic access returns undefined, not a half-working stub.
-    const tasks = make().tasks;
-    expect(Reflect.get(tasks, 'onChange')).toBeUndefined();
-    expect(Reflect.get(tasks, 'getAll')).toBeUndefined();
-    expect(Reflect.get(tasks, 'getCount')).toBeUndefined();
+    const items = make().items;
+    expect(Reflect.get(items, 'onChange')).toBeUndefined();
+    expect(Reflect.get(items, 'getAll')).toBeUndefined();
+    expect(Reflect.get(items, 'getCount')).toBeUndefined();
   });
 
   it('a model the schema projection left out throws the error that names it', () => {
@@ -194,11 +194,11 @@ describe("Ablo({ transport: 'http' }) facade shape", () => {
     // must answer with the model's name and the fix, not undefined (which
     // crashes one property later as a bare TypeError).
     const full = defineSchema({
-      tasks: model({ title: z.string() }),
+      items: model({ title: z.string() }),
       invoices: model({ total: z.number() }),
     });
     const projected = Ablo({
-      schema: selectModels(full, ['tasks']),
+      schema: selectModels(full, ['items']),
       apiKey: 'sk_test_facadeunit',
       baseURL: 'https://api.example.test',
       dangerouslyAllowBrowser: true,
@@ -231,9 +231,9 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
   it('returns the stateless HTTP facade (typed model proxies + protocol members)', () => {
     const c = makeViaAblo();
     for (const m of ['get', 'list', 'create', 'update', 'delete'] as const) {
-      expect(typeof Reflect.get(c.tasks, m)).toBe('function');
+      expect(typeof Reflect.get(c.items, m)).toBe('function');
     }
-    expect(typeof c.tasks.claim).toBe('function');
+    expect(typeof c.items.claim).toBe('function');
     expect(c.commits).toBeDefined();
     expect(typeof c.ready).toBe('function');
     expect(typeof c.dispose).toBe('function');
@@ -251,7 +251,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const path = new URL(url).pathname;
         const method = init?.method ?? 'GET';
-        if (method === 'PATCH' && path === '/api/v1/models/tasks/task-1') {
+        if (method === 'PATCH' && path === '/api/v1/models/items/item-1') {
           mutationBody = JSON.parse(String(init?.body));
           return Promise.resolve(jsonResponse({
             object: 'commit_receipt',
@@ -264,11 +264,11 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
             ops: 1,
           }));
         }
-        if (method === 'GET' && path === '/api/v1/models/tasks/task-1') {
+        if (method === 'GET' && path === '/api/v1/models/items/item-1') {
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks',
-            id: 'task-1',
-            data: { id: 'task-1', title: 'Ship it', status: 'done' },
+            model: 'items',
+            id: 'item-1',
+            data: { id: 'item-1', title: 'Ship it', status: 'done' },
             stamp: 18,
           })));
         }
@@ -276,8 +276,8 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    await c.tasks.update({
-      id: 'task-1',
+    await c.items.update({
+      id: 'item-1',
       data: { status: 'done' },
       idempotencyKey: 'client-tx-1',
       reads: [{ model: 'runs', id: 'run-1', readAt: 16 }],
@@ -303,16 +303,16 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const path = new URL(url).pathname;
         const method = init?.method ?? 'GET';
-        if (method === 'GET' && path === '/api/v1/models/tasks/task-1') {
+        if (method === 'GET' && path === '/api/v1/models/items/item-1') {
           reads += 1;
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks',
-            id: 'task-1',
-            data: { id: 'task-1', title: 'Ship it', status: reads === 1 ? 'todo' : 'done' },
+            model: 'items',
+            id: 'item-1',
+            data: { id: 'item-1', title: 'Ship it', status: reads === 1 ? 'todo' : 'done' },
             stamp: reads === 1 ? 17 : 18,
           })));
         }
-        if (method === 'PATCH' && path === '/api/v1/models/tasks/task-1') {
+        if (method === 'PATCH' && path === '/api/v1/models/items/item-1') {
           mutationBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
           return Promise.resolve(jsonResponse({
             object: 'commit_receipt',
@@ -329,19 +329,19 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    const task = await c.tasks.get({ id: 'task-1' });
-    expect(task).toEqual({ id: 'task-1', title: 'Ship it', status: 'todo' });
-    expect(task).not.toHaveProperty('stamp');
-    await c.tasks.update({
-      id: 'task-1',
+    const item = await c.items.get({ id: 'item-1' });
+    expect(item).toEqual({ id: 'item-1', title: 'Ship it', status: 'todo' });
+    expect(item).not.toHaveProperty('stamp');
+    await c.items.update({
+      id: 'item-1',
       data: { status: 'done' },
       idempotencyKey: 'guarded-update',
-      reads: [task!],
+      reads: [item!],
     });
 
     expect(mutationBodies).toEqual([
       expect.objectContaining({
-        reads: [{ model: 'tasks', id: 'task-1', readAt: 17 }],
+        reads: [{ model: 'items', id: 'item-1', readAt: 17 }],
       }),
     ]);
   });
@@ -364,26 +364,26 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const path = new URL(url).pathname;
         const method = init?.method ?? 'GET';
-        if (method === 'GET' && path.endsWith('/task-2')) {
+        if (method === 'GET' && path.endsWith('/item-2')) {
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks', id: 'task-2',
-            data: { id: 'task-2', title: 'Run dependency', status: 'ready' },
+            model: 'items', id: 'item-2',
+            data: { id: 'item-2', title: 'Run dependency', status: 'ready' },
             stamp: 99,
           })));
         }
-        if (method === 'GET' && path.endsWith('/task-1')) {
+        if (method === 'GET' && path.endsWith('/item-1')) {
           pointReads += 1;
           const final = pointReads >= 3;
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks', id: 'task-1',
+            model: 'items', id: 'item-1',
             data: {
-              id: 'task-1', title: 'Functional',
+              id: 'item-1', title: 'Functional',
               status: final ? 'done' : pointReads === 1 ? 'todo' : 'blocked',
             },
             stamp: final ? 103 : pointReads === 1 ? 100 : 101,
           })));
         }
-        if (method === 'PATCH' && path.endsWith('/task-1')) {
+        if (method === 'PATCH' && path.endsWith('/item-1')) {
           attempts += 1;
           const key = new Headers(init?.headers).get('Idempotency-Key');
           if (!key) return Promise.reject(new Error('missing attempt key'));
@@ -404,9 +404,9 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    const dependency = await c.tasks.get({ id: 'task-2' });
+    const dependency = await c.items.get({ id: 'item-2' });
     if (!dependency) throw new Error('expected cross-target dependency');
-    await expect(c.tasks.update('task-1', updater, {
+    await expect(c.items.update('item-1', updater, {
       retries: 1,
       reads: [dependency],
     })).resolves.toMatchObject({ status: 'done' });
@@ -419,12 +419,12 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       expect.objectContaining({
         readAt: 100,
         data: { status: 'review' },
-        reads: [{ model: 'tasks', id: 'task-2', readAt: 99 }],
+        reads: [{ model: 'items', id: 'item-2', readAt: 99 }],
       }),
       expect.objectContaining({
         readAt: 101,
         data: { status: 'done' },
-        reads: [{ model: 'tasks', id: 'task-2', readAt: 99 }],
+        reads: [{ model: 'items', id: 'item-2', readAt: 99 }],
       }),
     ]);
   });
@@ -443,18 +443,18 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const path = new URL(url).pathname;
         const method = init?.method ?? 'GET';
-        if (method === 'GET' && path === '/api/v1/models/tasks/task-new') {
+        if (method === 'GET' && path === '/api/v1/models/items/item-new') {
           reads += 1;
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks',
-            id: 'task-new',
+            model: 'items',
+            id: 'item-new',
             data: reads === 1
               ? null
-              : { id: 'task-new', title: 'Created', status: 'todo' },
+              : { id: 'item-new', title: 'Created', status: 'todo' },
             stamp: reads === 1 ? 71 : 72,
           })));
         }
-        if (method === 'POST' && path === '/api/v1/models/tasks') {
+        if (method === 'POST' && path === '/api/v1/models/items') {
           createBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
           automaticKey = new Headers(init?.headers).get('Idempotency-Key');
           return Promise.resolve(jsonResponse({
@@ -472,16 +472,16 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    await expect(c.tasks.get({ id: 'task-new' })).resolves.toBeUndefined();
-    await c.tasks.create({
-      id: 'task-new',
+    await expect(c.items.get({ id: 'item-new' })).resolves.toBeUndefined();
+    await c.items.create({
+      id: 'item-new',
       data: { title: 'Created', status: 'todo' },
-      idempotencyKey: 'create-if-absent:task-new',
+      idempotencyKey: 'create-if-absent:item-new',
     });
 
-    expect(automaticKey).toBe('create-if-absent:task-new');
+    expect(automaticKey).toBe('create-if-absent:item-new');
     expect(createBody).toMatchObject({
-      id: 'task-new',
+      id: 'item-new',
       data: { title: 'Created', status: 'todo' },
     });
     expect(createBody).not.toHaveProperty('readAt');
@@ -502,26 +502,26 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const path = new URL(url).pathname;
         const method = init?.method ?? 'GET';
-        if (method === 'GET' && path === '/api/v1/models/tasks') {
+        if (method === 'GET' && path === '/api/v1/models/items') {
           listReads += 1;
           return Promise.resolve(jsonResponse(modelListResponse({
-            model: 'tasks',
-            data: [{ id: 'task-1', title: 'Listed', status: 'todo' }],
+            model: 'items',
+            data: [{ id: 'item-1', title: 'Listed', status: 'todo' }],
             stamp: 9_999,
-            evidence: [{ id: 'task-1', stamp: 80 }],
+            evidence: [{ id: 'item-1', stamp: 80 }],
           })));
         }
-        if (method === 'GET' && path === '/api/v1/models/tasks/task-1') {
+        if (method === 'GET' && path === '/api/v1/models/items/item-1') {
           pointReads += 1;
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks',
-            id: 'task-1',
+            model: 'items',
+            id: 'item-1',
             // The row stopped matching the original filter after the list.
-            data: { id: 'task-1', title: 'Refreshed', status: 'done' },
+            data: { id: 'item-1', title: 'Refreshed', status: 'done' },
             stamp: 81,
           })));
         }
-        if (method === 'PATCH' && path === '/api/v1/models/tasks/task-1') {
+        if (method === 'PATCH' && path === '/api/v1/models/items/item-1') {
           mutationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
           const key = new Headers(init?.headers).get('Idempotency-Key');
           return Promise.resolve(jsonResponse({
@@ -534,23 +534,23 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    const [task] = await c.tasks.list({ where: { status: 'todo' } });
-    expect(task).toEqual({ id: 'task-1', title: 'Listed', status: 'todo' });
-    if (!task) throw new Error('expected listed task');
-    await c.tasks.update({
-      id: task.id,
+    const [item] = await c.items.list({ where: { status: 'todo' } });
+    expect(item).toEqual({ id: 'item-1', title: 'Listed', status: 'todo' });
+    if (!item) throw new Error('expected listed item');
+    await c.items.update({
+      id: item.id,
       data: { status: 'done' },
-      reads: [task],
-      idempotencyKey: 'list-update:task-1',
+      reads: [item],
+      idempotencyKey: 'list-update:item-1',
     });
 
     // The only point read is the update's established result readback.
     expect({ listReads, pointReads }).toEqual({ listReads: 1, pointReads: 1 });
     expect(mutationBody).toMatchObject({
-      reads: [{ model: 'tasks', id: 'task-1', readAt: 80 }],
+      reads: [{ model: 'items', id: 'item-1', readAt: 80 }],
     });
     expect(mutationBody).not.toMatchObject({
-      reads: [{ model: 'tasks', id: 'task-1', readAt: 9_999 }],
+      reads: [{ model: 'items', id: 'item-1', readAt: 9_999 }],
     });
   });
 
@@ -566,13 +566,13 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const path = new URL(url).pathname;
         const method = init?.method ?? 'GET';
-        if (method === 'GET' && path.endsWith('/task-2')) {
+        if (method === 'GET' && path.endsWith('/item-2')) {
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks', id: 'task-2',
-            data: { id: 'task-2', title: 'Incidental', status: 'todo' }, stamp: 31,
+            model: 'items', id: 'item-2',
+            data: { id: 'item-2', title: 'Incidental', status: 'todo' }, stamp: 31,
           })));
         }
-        if (method === 'PATCH' && path.endsWith('/task-1')) {
+        if (method === 'PATCH' && path.endsWith('/item-1')) {
           mutationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
           return Promise.resolve(jsonResponse({
             object: 'commit_receipt', clientTxId: 'incidental-update',
@@ -580,19 +580,19 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
             status: 'confirmed', ...COMMIT_TIMES, lastSyncId: 32, ops: 1,
           }));
         }
-        if (method === 'GET' && path.endsWith('/task-1')) {
+        if (method === 'GET' && path.endsWith('/item-1')) {
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks', id: 'task-1',
-            data: { id: 'task-1', title: 'Target', status: 'done' }, stamp: 32,
+            model: 'items', id: 'item-1',
+            data: { id: 'item-1', title: 'Target', status: 'done' }, stamp: 32,
           })));
         }
         return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
       },
     });
 
-    await c.tasks.get({ id: 'task-2' });
-    await c.tasks.update({
-      id: 'task-1', data: { status: 'done' }, idempotencyKey: 'incidental-update',
+    await c.items.get({ id: 'item-2' });
+    await c.items.update({
+      id: 'item-1', data: { status: 'done' }, idempotencyKey: 'incidental-update',
     });
 
     expect(mutationBody).not.toHaveProperty('readAt');
@@ -611,13 +611,13 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const path = new URL(url).pathname;
         const method = init?.method ?? 'GET';
-        if (method === 'GET' && path.endsWith('/task-2')) {
+        if (method === 'GET' && path.endsWith('/item-2')) {
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks', id: 'task-2',
-            data: { id: 'task-2', title: 'Dependency', status: 'ready' }, stamp: 41,
+            model: 'items', id: 'item-2',
+            data: { id: 'item-2', title: 'Dependency', status: 'ready' }, stamp: 41,
           })));
         }
-        if (method === 'PATCH' && path.endsWith('/task-1')) {
+        if (method === 'PATCH' && path.endsWith('/item-1')) {
           mutationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
           return Promise.resolve(jsonResponse({
             object: 'commit_receipt', clientTxId: 'cross-target-update',
@@ -625,20 +625,20 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
             status: 'confirmed', ...COMMIT_TIMES, lastSyncId: 42, ops: 1,
           }));
         }
-        if (method === 'GET' && path.endsWith('/task-1')) {
+        if (method === 'GET' && path.endsWith('/item-1')) {
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks', id: 'task-1',
-            data: { id: 'task-1', title: 'Target', status: 'done' }, stamp: 42,
+            model: 'items', id: 'item-1',
+            data: { id: 'item-1', title: 'Target', status: 'done' }, stamp: 42,
           })));
         }
         return Promise.reject(new Error(`unexpected fetch: ${method} ${url}`));
       },
     });
 
-    const dependency = await c.tasks.get({ id: 'task-2' });
+    const dependency = await c.items.get({ id: 'item-2' });
     expect(dependency).toBeDefined();
-    await expect(c.tasks.update({
-      id: 'task-1', data: { status: 'done' },
+    await expect(c.items.update({
+      id: 'item-1', data: { status: 'done' },
       idempotencyKey: 'clone-must-fail', reads: [{ ...dependency! }],
     })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'reads' });
     const otherClient = Ablo({
@@ -648,17 +648,17 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       transport: 'http',
       fetch: () => Promise.reject(new Error('cross-client row reached the network')),
     });
-    await expect(otherClient.tasks.update({
-      id: 'task-1', data: { status: 'done' },
+    await expect(otherClient.items.update({
+      id: 'item-1', data: { status: 'done' },
       idempotencyKey: 'cross-client-must-fail', reads: [dependency!],
     })).rejects.toMatchObject({ code: 'write_options_invalid', param: 'reads' });
-    await c.tasks.update({
-      id: 'task-1', data: { status: 'done' },
+    await c.items.update({
+      id: 'item-1', data: { status: 'done' },
       idempotencyKey: 'cross-target-update', reads: [dependency!],
     });
 
     expect(mutationBody).toMatchObject({
-      reads: [{ model: 'tasks', id: 'task-2', readAt: 41 }],
+      reads: [{ model: 'items', id: 'item-2', readAt: 41 }],
     });
     expect(mutationBody).not.toHaveProperty('readAt');
   });
@@ -676,20 +676,20 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const path = new URL(url).pathname;
         const method = init?.method ?? 'GET';
-        if (method === 'POST' && path.endsWith('/task-1/claim')) {
+        if (method === 'POST' && path.endsWith('/item-1/claim')) {
           return Promise.resolve(jsonResponse(claimAcquiredResponse(modelClaim({
-            id: 'claim-read-set', model: 'tasks', entityId: 'task-1', fenceToken: 9,
+            id: 'claim-read-set', model: 'items', entityId: 'item-1', fenceToken: 9,
           }))));
         }
-        if (method === 'GET' && path.endsWith('/task-1')) {
+        if (method === 'GET' && path.endsWith('/item-1')) {
           rowReads += 1;
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks', id: 'task-1',
-            data: { id: 'task-1', title: 'Claimed', status: rowReads === 1 ? 'todo' : 'done' },
+            model: 'items', id: 'item-1',
+            data: { id: 'item-1', title: 'Claimed', status: rowReads === 1 ? 'todo' : 'done' },
             stamp: rowReads === 1 ? 51 : 52,
           })));
         }
-        if (method === 'PATCH' && path.endsWith('/task-1')) {
+        if (method === 'PATCH' && path.endsWith('/item-1')) {
           mutationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
           return Promise.resolve(jsonResponse(confirmedCommitReceiptResponse({
             clientTxId: 'claimed-update',
@@ -701,9 +701,9 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    const held = await c.tasks.claim({ id: 'task-1' });
-    await c.tasks.update({
-      id: 'task-1', data: { status: 'done' }, claim: held,
+    const held = await c.items.claim({ id: 'item-1' });
+    await c.items.update({
+      id: 'item-1', data: { status: 'done' }, claim: held,
       idempotencyKey: 'claimed-update',
     });
 
@@ -728,13 +728,13 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const path = new URL(url).pathname;
         const method = init?.method ?? 'GET';
-        if (method === 'GET' && path.endsWith('/task-1')) {
+        if (method === 'GET' && path.endsWith('/item-1')) {
           return Promise.resolve(jsonResponse(modelReadResponse({
-            model: 'tasks', id: 'task-1',
-            data: { id: 'task-1', title: 'Stable', status: 'done' }, stamp: rowStamp,
+            model: 'items', id: 'item-1',
+            data: { id: 'item-1', title: 'Stable', status: 'done' }, stamp: rowStamp,
           })));
         }
-        if (method === 'PATCH' && path.endsWith('/task-1')) {
+        if (method === 'PATCH' && path.endsWith('/item-1')) {
           const idempotencyKey = new Headers(init?.headers).get('Idempotency-Key');
           if (!idempotencyKey) return Promise.reject(new Error('missing Idempotency-Key'));
           observedKeys.push(idempotencyKey);
@@ -749,12 +749,12 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     });
 
     const run = async () => {
-      const task = await c.tasks.get({ id: 'task-1' });
-      if (!task) throw new Error('expected task read');
-      const cloned = { ...task } as typeof task;
+      const item = await c.items.get({ id: 'item-1' });
+      if (!item) throw new Error('expected item read');
+      const cloned = { ...item } as typeof item;
       await expect(
-        c.tasks.update({
-          id: 'task-1',
+        c.items.update({
+          id: 'item-1',
           data: { status: 'done' },
           reads: [cloned],
         }),
@@ -762,12 +762,12 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
         code: 'write_options_invalid',
         param: 'reads',
       });
-      await c.tasks.update({
-        id: 'task-1', data: { status: 'done' },
-        reads: [task], idempotencyKey: 'turn-stable-1',
+      await c.items.update({
+        id: 'item-1', data: { status: 'done' },
+        reads: [item], idempotencyKey: 'turn-stable-1',
       });
-      await c.tasks.update({
-        id: 'task-1',
+      await c.items.update({
+        id: 'item-1',
         data: { status: 'done' },
         idempotencyKey: 'explicit-second-operation',
       });
@@ -781,11 +781,11 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
   it('narrows the TYPE to AbloHttpClient — stateful-only members are compile errors', () => {
     const c = makeViaAblo();
     // @ts-expect-error — `onChange` needs the stateful plane; absent on the HTTP type
-    void c.tasks.onChange;
+    void c.items.onChange;
     // @ts-expect-error — local synced-pool reads have no HTTP analog
-    void c.tasks.getAll;
-    expect(Reflect.get(c.tasks, 'onChange')).toBeUndefined();
-    expect(Reflect.get(c.tasks, 'getAll')).toBeUndefined();
+    void c.items.getAll;
+    expect(Reflect.get(c.items, 'onChange')).toBeUndefined();
+    expect(Reflect.get(c.items, 'getAll')).toBeUndefined();
   });
 
   it('decodes HTTP claim state into the public Claim shape', async () => {
@@ -805,8 +805,8 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
               claims: [
                 modelClaim({
                   id: 'claim-1',
-                  model: 'tasks',
-                  entityId: 'task-1',
+                  model: 'items',
+                  entityId: 'item-1',
                   actor: 'agent-2',
                   participantKind: 'agent',
                   description: 'editing',
@@ -822,7 +822,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
 
     // The server response carries the claim's `description`, which the client
     // surfaces as the always-present `description`.
-    await expect(c.tasks.claim.state({ id: 'task-1' })).resolves.toEqual({
+    await expect(c.items.claim.state({ id: 'item-1' })).resolves.toEqual({
       object: 'claim',
       id: 'claim-1',
       status: 'active',
@@ -830,7 +830,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       heldBy: 'agent-2',
       participantKind: 'agent',
       expiresAt: 1234,
-      target: { type: 'tasks', id: 'task-1' },
+      target: { type: 'items', id: 'item-1' },
     });
   });
 
@@ -850,7 +850,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
         const method = init?.method ?? 'GET';
         const path = new URL(url).pathname;
         calls.push(`${method} ${path}`);
-        if (method === 'POST' && path === '/api/v1/models/tasks/task-1/claim') {
+        if (method === 'POST' && path === '/api/v1/models/items/item-1/claim') {
           return Promise.resolve(
             jsonResponse(
               claimQueuedResponse({ id: 'claim-q1', position: 0, heldBy: 'agent-2' }),
@@ -882,13 +882,13 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
             }),
           );
         }
-        if (method === 'GET' && path === '/api/v1/models/tasks/task-1') {
+        if (method === 'GET' && path === '/api/v1/models/items/item-1') {
           return Promise.resolve(
             jsonResponse(
               modelReadResponse({
-                model: 'tasks',
-                id: 'task-1',
-                data: { id: 'task-1', title: 'Report', status: 'open' },
+                model: 'items',
+                id: 'item-1',
+                data: { id: 'item-1', title: 'Report', status: 'open' },
                 stamp: 41,
               }),
             ),
@@ -898,12 +898,12 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    const held = await c.tasks.claim({ id: 'task-1' });
+    const held = await c.items.claim({ id: 'item-1' });
     expect(held.id).toBe('claim-q1');
     expect(held.fenceToken).toBe(7);
     // The snapshot was read AFTER the grant, so it reflects what the previous
     // holder committed before releasing.
-    expect(held.data).toEqual({ id: 'task-1', title: 'Report', status: 'open' });
+    expect(held.data).toEqual({ id: 'item-1', title: 'Report', status: 'open' });
     expect(calls.filter((c) => c.endsWith('/claims/claim-q1/heartbeat')).length).toBe(2);
   }, 10_000);
 
@@ -920,7 +920,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
         const method = init?.method ?? 'GET';
         const path = new URL(url).pathname;
         calls.push(`${method} ${path}`);
-        if (method === 'POST' && path === '/api/v1/models/tasks/task-1/claim') {
+        if (method === 'POST' && path === '/api/v1/models/items/item-1/claim') {
           return Promise.resolve(
             jsonResponse(claimQueuedResponse({ id: 'claim-q1', position: 5 }), 202),
           );
@@ -932,7 +932,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
       },
     });
 
-    await expect(c.tasks.claim({ id: 'task-1', maxQueueDepth: 2 })).rejects.toMatchObject({
+    await expect(c.items.claim({ id: 'item-1', maxQueueDepth: 2 })).rejects.toMatchObject({
       code: 'queue_too_deep',
     });
     // Backpressure leaves the line rather than letting the slot TTL out over
@@ -953,7 +953,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
         const method = init?.method ?? 'GET';
         const path = new URL(url).pathname;
         calls.push(`${method} ${path}`);
-        if (method === 'POST' && path === '/api/v1/models/tasks/task-1/claim') {
+        if (method === 'POST' && path === '/api/v1/models/items/item-1/claim') {
           return Promise.resolve(
             jsonResponse(claimQueuedResponse({ id: 'claim-q1', position: 1 }), 202),
           );
@@ -973,7 +973,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     });
 
     await expect(
-      c.tasks.claim({ id: 'task-1', waitTimeoutMs: 500 }),
+      c.items.claim({ id: 'item-1', waitTimeoutMs: 500 }),
     ).rejects.toMatchObject({ code: 'grant_timeout' });
     expect(calls).toContain('DELETE /api/v1/claims/claim-q1');
   }, 10_000);
@@ -991,7 +991,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
         const method = init?.method ?? 'GET';
         const path = new URL(url).pathname;
         calls.push(`${method} ${path}`);
-        if (method === 'POST' && path === '/api/v1/models/tasks/task-1/claim') {
+        if (method === 'POST' && path === '/api/v1/models/items/item-1/claim') {
           return Promise.resolve(
             jsonResponse(claimQueuedResponse({ id: 'claim-q1', position: 1 }), 202),
           );
@@ -1011,7 +1011,7 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     });
 
     const controller = new AbortController();
-    const wait = c.tasks.claim({ id: 'task-1', signal: controller.signal });
+    const wait = c.items.claim({ id: 'item-1', signal: controller.signal });
     const assertion = expect(wait).rejects.toMatchObject({ code: 'claim_wait_aborted' });
     controller.abort();
     await assertion;
@@ -1094,10 +1094,10 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
         const url =
           typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const method = init?.method ?? 'GET';
-        if (method === 'POST' && new URL(url).pathname === '/api/v1/models/tasks/task-1/claim') {
+        if (method === 'POST' && new URL(url).pathname === '/api/v1/models/items/item-1/claim') {
           return Promise.resolve(
             jsonResponse(
-              { error: { code: 'entity_claimed', message: 'Claimed by agent:other on tasks/task-1.' } },
+              { error: { code: 'entity_claimed', message: 'Claimed by agent:other on items/item-1.' } },
               409,
             ),
           );
@@ -1107,8 +1107,8 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     });
 
     await expect(
-      c.tasks.claim({
-        id: 'task-1',
+      c.items.claim({
+        id: 'item-1',
         contention: { mode: 'skip', onStatus },
       }),
     ).resolves.toBeNull();

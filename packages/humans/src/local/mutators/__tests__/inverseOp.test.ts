@@ -17,12 +17,12 @@ import {
 describe('inverseOpSchema', () => {
   it('accepts every op kind with its required shape', () => {
     const ops = [
-      { kind: 'create', modelKey: 'slideLayers', data: { id: 'a', x: 1 } },
-      { kind: 'update', modelKey: 'slideLayers', patch: { id: 'a', x: 2 } },
-      { kind: 'delete', modelKey: 'slideLayers', id: 'a' },
-      { kind: 'createMany', modelKey: 'slideLayers', data: [{ id: 'a' }, { id: 'b' }] },
-      { kind: 'updateMany', modelKey: 'slideLayers', patches: [{ id: 'a', x: 1 }] },
-      { kind: 'deleteMany', modelKey: 'slideLayers', ids: ['a', 'b'] },
+      { kind: 'create', modelKey: 'entryDetails', data: { id: 'a', x: 1 } },
+      { kind: 'update', modelKey: 'entryDetails', patch: { id: 'a', x: 2 } },
+      { kind: 'delete', modelKey: 'entryDetails', id: 'a' },
+      { kind: 'createMany', modelKey: 'entryDetails', data: [{ id: 'a' }, { id: 'b' }] },
+      { kind: 'updateMany', modelKey: 'entryDetails', patches: [{ id: 'a', x: 1 }] },
+      { kind: 'deleteMany', modelKey: 'entryDetails', ids: ['a', 'b'] },
     ];
     for (const op of ops) {
       expect(inverseOpSchema.safeParse(op).success).toBe(true);
@@ -38,7 +38,7 @@ describe('inverseOpSchema', () => {
   it('requires patch.id on update ops', () => {
     const result = inverseOpSchema.safeParse({
       kind: 'update',
-      modelKey: 'slideLayers',
+      modelKey: 'entryDetails',
       patch: { x: 1 }, // missing id
     });
     expect(result.success).toBe(false);
@@ -54,7 +54,7 @@ describe('parseUndoEntry', () => {
   it('throws AbloValidationError with the failing path in details', () => {
     const bad = {
       label: 'broken',
-      inverses: [{ kind: 'update', modelKey: 'slideLayers', patch: { x: 1 } }],
+      inverses: [{ kind: 'update', modelKey: 'entryDetails', patch: { x: 1 } }],
       forwards: [],
     };
     try {
@@ -77,8 +77,8 @@ describe('parseUndoEntry', () => {
   it('round-trips through undoEntrySchema', () => {
     const entry: UndoEntry = {
       label: 'Move layer',
-      inverses: [{ kind: 'update', modelKey: 'slideLayers', patch: { id: 'a', x: 0 } }],
-      forwards: [{ kind: 'update', modelKey: 'slideLayers', patch: { id: 'a', x: 10 } }],
+      inverses: [{ kind: 'update', modelKey: 'entryDetails', patch: { id: 'a', x: 0 } }],
+      forwards: [{ kind: 'update', modelKey: 'entryDetails', patch: { id: 'a', x: 10 } }],
     };
     expect(undoEntrySchema.parse(entry)).toEqual(entry);
   });

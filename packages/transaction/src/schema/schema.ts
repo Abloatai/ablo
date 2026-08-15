@@ -8,20 +8,20 @@
  *   import { defineSchema, model, relation } from '@abloatai/transaction/schema';
  *
  *   const schema = defineSchema({
- *     tasks: model({
+ *     items: model({
  *       title: z.string(),
  *       status: z.enum(['todo', 'doing', 'done']).default('todo'),
- *       projectId: z.string().optional(),
+ *       workspaceId: z.string().optional(),
  *     }, {
- *       project: relation.belongsTo('projects', 'projectId'),
+ *       workspace: relation.belongsTo('workspaces', 'workspaceId'),
  *     }),
  *   });
  *
- *   type Task = InferModel<typeof schema, 'tasks'>;
+ *   type Item = InferModel<typeof schema, 'items'>;
  */
 
 import { z } from 'zod';
-import type { ModelDef, RelationRecord } from './model.js';
+import type { ComputedRecord, ModelDef, RelationRecord } from './model.js';
 import type { RelationDef } from './relation.js';
 import { AbloValidationError } from '../errors.js';
 import type { IdentityRole } from './roles.js';
@@ -210,7 +210,7 @@ export interface DefineSchemaOptions {
 export type SchemaRecord = Record<string, ModelDef>;
 
 /**
- * Base fields every synced model gets automatically.
+ * The logical identity every model gets automatically.
  *
  * Exported (internal) so `parseSchema` can rebuild a model's validator the
  * same way `defineSchema` does — `baseFieldsSchema.merge(modelSchema)` — when
@@ -218,26 +218,14 @@ export type SchemaRecord = Record<string, ModelDef>;
  */
 export const baseFieldsSchema = z.object({
   id: z.string(),
-  createdAt: z.date(),
-  updatedAt: z.date(),
-  organizationId: z.string().optional(),
-  createdBy: z.string().optional(),
 });
 
 /**
- * The base-column names every model carries automatically — the keys of
- * {@link baseFieldsSchema}, kept here as the single source of truth. Code
- * generation reads it to avoid emitting a base column twice, and
- * {@link defineSchema} uses it to reject a model that redeclares one, since
- * merging the user's field over the base field would produce a `string & Date`
- * type and break the build.
+ * The universal model field names. Audit and application metadata is declared
+ * by the application or carried by the commit record, never injected here.
  */
 export const BASE_FIELDS = [
   'id',
-  'createdAt',
-  'updatedAt',
-  'organizationId',
-  'createdBy',
 ] as const;
 
 /** The base fields type — pure data columns. */
@@ -262,15 +250,15 @@ export interface Schema<S extends SchemaRecord = SchemaRecord> {
 
   /**
    * Every declared field as a {@link FieldRef} — the field as a value rather
-   * than a quoted name: `schema.fields.tasks.status`.
+   * than a quoted name: `schema.fields.items.status`.
    *
    * A surface that names a field takes one of these instead of a string, so a
    * name that does not exist stops compiling and a rename is a compile error at
    * every use. Claims are the first caller; anything else that has to say
    * "which field" should take a reference for the same reason.
    *
-   * Base fields (`id`, `createdAt`, …) are not here: the schema does not
-   * declare them, and a caller naming one means the row, not a part of it.
+   * Automatically supplied `id` is not here. Every application-declared field
+   * does appear here.
    */
   readonly fields: {
     readonly [K in keyof S & string]: S[K] extends ModelDef<infer Shape>
@@ -281,7 +269,7 @@ export interface Schema<S extends SchemaRecord = SchemaRecord> {
       : never;
   };
 
-  /** Zod schemas with base fields merged in */
+  /** Zod schemas with logical identity merged into each declared model shape. */
   readonly validators: {
     readonly [K in keyof S]: S[K] extends ModelDef<infer Shape>
       ? z.ZodObject<Shape & typeof baseFieldsSchema.shape>
@@ -339,7 +327,7 @@ export interface Schema<S extends SchemaRecord = SchemaRecord> {
  * Includes base fields (id, createdAt, updatedAt, etc.)
  *
  * ```ts
- * type Task = InferModel<typeof schema, 'tasks'>;
+ * type Item = InferModel<typeof schema, 'items'>;
  * ```
  */
 /** The schema bound via `declare module … interface Register { Schema: … }`
@@ -351,15 +339,15 @@ type RegisteredSchema = import('../types/global.js').Register extends {
   : never;
 
 /**
- * The primary model-type helper. Once your project's `ablo/register.ts`
+ * The primary model-type helper. Once your workspace's `ablo/register.ts`
  * registers the schema, a single argument is all it takes:
  *
  * ```ts
- * type Task = Model<'tasks'>;
+ * type Item = Model<'items'>;
  * ```
  *
  * Without that registration, or for a second schema, pass the schema
- * explicitly: `Model<typeof schema, 'tasks'>`.
+ * explicitly: `Model<typeof schema, 'items'>`.
  */
 export type Model<A, B = never> = [B] extends [never]
   ? A extends keyof RegisteredSchema['models']
@@ -371,21 +359,14 @@ export type Model<A, B = never> = [B] extends [never]
 
 /**
  * The row type {@link Model} resolves to. Internal: `Model<typeof schema,
- * 'tasks'>` is the published spelling, because it reads as the domain rather
+ * 'items'>` is the published spelling, because it reads as the domain rather
  * than the machinery. This one is no longer exported from any subpath — it
  * stays because `Model` is defined in terms of it, not as a second name for
  * the same idea.
  */
 export type InferModel<S extends Schema, ModelName extends keyof S['models']> =
   S['models'][ModelName] extends ModelDef<infer Shape, infer R, infer C>
-    ? // `Omit<…, keyof BaseModelFields>` so a model that (wrongly) redeclares a
-      // reserved field degrades to "framework field wins" (e.g. `createdAt: Date`)
-      // instead of intersecting to `never` (`string & Date`, which then surfaces
-      // as a baffling "missing field" error three layers away). defineSchema also
-      // throws on such a redeclaration at runtime (code `schema_reserved_field`);
-      // this is the type-level belt to that runtime suspenders. No-op for correct
-      // schemas — they never carry a base-field key, so nothing is omitted.
-      Omit<z.infer<z.ZodObject<Shape>>, keyof BaseModelFields>
+    ? Omit<z.infer<z.ZodObject<Shape>>, 'id'>
         & BaseModelFields
         & BaseModelMethods
         & InferComputed<C>
@@ -452,14 +433,13 @@ export type InferRelations<S extends Schema, R extends RelationRecord> =
  */
 export type InferRow<S extends Schema, ModelName extends keyof S['models']> =
   S['models'][ModelName] extends ModelDef<infer Shape, RelationRecord, infer C>
-    ? // Same reserved-field guard as InferModel — see the comment there.
-      Omit<z.infer<z.ZodObject<Shape>>, keyof BaseModelFields>
+    ? Omit<z.infer<z.ZodObject<Shape>>, 'id'>
         & BaseModelFields
         & InferComputed<C>
     : never;
 
 /**
- * The reactive-row companion to {@link Model}. Once your project's
+ * The reactive-row companion to {@link Model}. Once your workspace's
  * `ablo/register.ts` registers the schema, a single argument is all it takes:
  *
  * ```ts
@@ -500,26 +480,22 @@ export type InferComputed<C> =
     : { readonly [K in keyof C]: C[K] extends (...args: any[]) => infer R ? R : never };
 
 /**
- * Infer the create input type. Only schema-defined fields are accepted —
- * base fields (id, createdAt, updatedAt) are auto-generated by the SDK
- * and cannot be passed by the consumer.
+ * Infer the create input type. Application fields retain their declared input
+ * requirements and types.
  *
  * The only exception is `id`: consumers can optionally provide one for
  * client-generated IDs (useful for optimistic UI that needs to reference
  * the entity before the server confirms).
  *
  * ```ts
- * type CreateTask = InferCreate<typeof schema, 'tasks'>;
+ * type CreateItem = InferCreate<typeof schema, 'items'>;
  * // { title: string; status?: 'todo' | 'doing' | 'done'; id?: string }
- * // createdAt, updatedAt are NOT accepted — they're auto-generated
  * ```
  */
 export type InferCreate<S extends Schema, ModelName extends keyof S['models']> =
   S['models'][ModelName] extends ModelDef<infer Shape>
-    ? // Same reserved-field guard as InferModel: drop any (wrongly) redeclared
-      // base field so the input degrades to "framework field wins" rather than
-      // collapsing to `never`. No-op for correct schemas.
-      Omit<z.input<z.ZodObject<Shape>>, keyof BaseModelFields> & Partial<BaseModelFields>
+    ? Omit<z.input<z.ZodObject<Shape>>, 'id'>
+        & Partial<Pick<BaseModelFields, 'id'>>
     : never;
 
 /**
@@ -570,8 +546,8 @@ export interface DeleteId<S extends Schema, ModelName extends keyof S['models']>
  *
  * ```ts
  * const schema = defineSchema({
- *   tasks: model({ title: z.string(), status: z.string().default('todo') }),
- *   projects: model({ name: z.string() }),
+ *   items: model({ title: z.string(), status: z.string().default('todo') }),
+ *   workspaces: model({ name: z.string() }),
  * });
  * ```
  */
@@ -682,16 +658,15 @@ export function defineSchema<const S extends SchemaRecord>(
     // failure immediate and unambiguous.
     for (const fieldName of Object.keys(def.shape)) {
       assertRoundTrippableCamelCase(name, fieldName);
-      // Reserved base columns are merged in below via `baseFieldsSchema.merge`,
-      // and Zod `.merge` silently OVERWRITES the base field with the user's —
-      // e.g. a model declaring `createdAt: z.string()` ends up with a field
-      // typed `string & Date`, which breaks the build. Reject the collision at
-      // definition time so the author sees an unambiguous error instead.
-      if ((BASE_FIELDS as readonly string[]).includes(fieldName)) {
+      // Logical identity is the only universal model field. Application
+      // timestamps, tenancy columns and attribution columns are ordinary
+      // fields when an application declares them.
+      const reservedFields = ['id'];
+      if ((reservedFields as readonly string[]).includes(fieldName)) {
         throw new AbloValidationError(
           `[defineSchema] ${name}.${fieldName}: field \`${fieldName}\` collides with a ` +
             `reserved field that the SDK provides automatically ` +
-            `(${BASE_FIELDS.join(', ')}). Remove it from your model — redeclaring it ` +
+            `(${reservedFields.join(', ')}). Remove it from your model — redeclaring it ` +
             `produces a \`string & Date\` type and breaks the build.`,
           { code: 'schema_reserved_field', param: `${name}.${fieldName}` },
         );

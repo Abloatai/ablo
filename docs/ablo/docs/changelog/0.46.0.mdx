@@ -27,7 +27,7 @@ New clients can pin their intended project and branch with `projectId` /
 `ABLO_PROJECT_ID` and `branchId` / `ABLO_BRANCH_ID`. `ablo dev` writes both
 immutable coordinates beside its branch-bound key, and `ready()` compares them
 with the key's server-resolved target before opening the sync connection. A mail
-deployment carrying a slides key now fails with `project_scope_denied`; a
+deployment carrying an unrelated key now fails with `project_scope_denied`; a
 same-project key for the wrong environment fails with `branch_scope_denied`.
 
 ### Pre-existing rows arrive on their own

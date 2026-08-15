@@ -568,7 +568,7 @@ describe('dataSource', () => {
         participantKind: 'user',
         organizationId: 'org_99',
         branchId: 'br_preview',
-        projectId: 'proj_docs',
+        workspaceId: 'proj_docs',
         requiredSyncGroups: ['org:org_99', 'user:user_42'],
       },
     });
@@ -581,7 +581,7 @@ describe('dataSource', () => {
       participantKind: 'user',
       organizationId: 'org_99',
       branchId: 'br_preview',
-      projectId: 'proj_docs',
+      workspaceId: 'proj_docs',
     });
   });
 

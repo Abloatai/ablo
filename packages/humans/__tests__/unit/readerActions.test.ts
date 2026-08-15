@@ -19,26 +19,26 @@ import { createTestContext } from '../../src/local/testing';
 // ── Test schema ────────────────────────────────────────────────────────
 
 const testSchema = defineSchema({
-  tasks: model(
+  items: model(
     {
       title: z.string(),
       status: z.enum(['todo', 'in_progress', 'done']).default('todo'),
       priority: z.string().optional(),
       order: z.number().default(0),
-      projectId: z.string().optional(),
+      workspaceId: z.string().optional(),
       teamId: z.string().optional(),
     },
-    { typename: 'Task' }),
+    { typename: 'Item' }),
 });
 
 // ── Test model class ──────────────────────────────────────────────────
 
-class TestTask extends Model {
+class TestItem extends Model {
   title!: string;
   status!: 'todo' | 'in_progress' | 'done';
   priority?: string;
   order!: number;
-  projectId?: string;
+  workspaceId?: string;
   teamId?: string;
 
   constructor(data: Record<string, unknown>) {
@@ -47,7 +47,7 @@ class TestTask extends Model {
     this.status = (data.status as 'todo' | 'in_progress' | 'done') ?? 'todo';
     this.priority = data.priority as string | undefined;
     this.order = (data.order as number) ?? 0;
-    this.projectId = data.projectId as string | undefined;
+    this.workspaceId = data.workspaceId as string | undefined;
     this.teamId = data.teamId as string | undefined;
   }
 }
@@ -96,15 +96,15 @@ let registry: ModelRegistry;
 let store: SyncStoreContract;
 let cleanupCtx: () => void;
 
-function seed(task: Record<string, unknown>): Model {
+function seed(item: Record<string, unknown>): Model {
   const full: Record<string, unknown> = {
-    __typename: 'Task',
-    id: (task.id) ?? Model.generateId(),
+    __typename: 'Item',
+    id: (item.id) ?? Model.generateId(),
     organizationId: 'org-1',
     createdAt: new Date(),
     updatedAt: new Date(),
-    title: (task.title) ?? 'Task',
-    ...task,
+    title: (item.title) ?? 'Item',
+    ...item,
   };
   const m = pool.createFromData(full);
   if (!m) throw new Error('seed: createFromData returned null');
@@ -114,12 +114,12 @@ function seed(task: Record<string, unknown>): Model {
 
 beforeEach(() => {
   registry = new ModelRegistry();
-  registry.registerModel('Task', TestTask);
+  registry.registerModel('Item', TestItem);
   setActiveRegistry(registry);
   const ctx = createTestContext();
   cleanupCtx = ctx.cleanup;
   pool = new ObjectPool({ maxSize: 100, gcInterval: 0, useWeakRefs: false }, registry);
-  pool.registerForeignKey('Task', 'projectId');
+  pool.registerForeignKey('Item', 'workspaceId');
   store = createStore(pool);
 });
 
@@ -132,27 +132,27 @@ afterEach(() => {
 
 describe('useReader.retrieve', () => {
   it('returns the entity by ID', () => {
-    const task = seed({ id: 'task-1', title: 'Hello' });
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const item = seed({ id: 'item-1', title: 'Hello' });
+    const reader = createReaderActions(testSchema, 'items', store);
 
-    const found = reader.retrieve('task-1');
+    const found = reader.retrieve('item-1');
 
-    expect(found).toBe(task);
+    expect(found).toBe(item);
   });
 
   it('returns undefined for unknown id', () => {
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
     expect(reader.retrieve('nonexistent')).toBeUndefined();
   });
 });
 
 describe('useReader.findMany', () => {
-  it('returns all tasks when no options provided', () => {
+  it('returns all items when no options provided', () => {
     seed({ id: 't1' });
     seed({ id: 't2' });
     seed({ id: 't3' });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
     expect(reader.list()).toHaveLength(3);
   });
 
@@ -161,31 +161,31 @@ describe('useReader.findMany', () => {
     seed({ id: 't2', status: 'done' });
     seed({ id: 't3', status: 'todo' });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
     const todos = reader.list({ where: { status: 'todo' } });
 
     expect(todos).toHaveLength(2);
-    expect(todos.every((t) => (t as unknown as TestTask).status === 'todo')).toBe(true);
+    expect(todos.every((t) => (t as unknown as TestItem).status === 'todo')).toBe(true);
   });
 
   it('uses FK index for single-field where on indexed field', () => {
-    seed({ id: 't1', projectId: 'p1' });
-    seed({ id: 't2', projectId: 'p2' });
-    seed({ id: 't3', projectId: 'p1' });
-    seed({ id: 't4', projectId: undefined });
+    seed({ id: 't1', workspaceId: 'p1' });
+    seed({ id: 't2', workspaceId: 'p2' });
+    seed({ id: 't3', workspaceId: 'p1' });
+    seed({ id: 't4', workspaceId: undefined });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
-    const p1Tasks = reader.list({ where: { projectId: 'p1' } });
+    const reader = createReaderActions(testSchema, 'items', store);
+    const p1Items = reader.list({ where: { workspaceId: 'p1' } });
 
-    expect(p1Tasks).toHaveLength(2);
-    expect(p1Tasks.map((t) => (t as unknown as TestTask).id).sort()).toEqual(['t1', 't3']);
+    expect(p1Items).toHaveLength(2);
+    expect(p1Items.map((t) => (t as unknown as TestItem).id).sort()).toEqual(['t1', 't3']);
   });
 
   it('falls back to full scan when where field is not indexed', () => {
     seed({ id: 't1', teamId: 'team-1' });
     seed({ id: 't2', teamId: 'team-2' });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
     // teamId is not FK-indexed — should still work via scan
     const result = reader.list({ where: { teamId: 'team-1' } });
 
@@ -193,14 +193,14 @@ describe('useReader.findMany', () => {
   });
 
   it('applies filter predicate after where', () => {
-    seed({ id: 't1', projectId: 'p1', status: 'todo' });
-    seed({ id: 't2', projectId: 'p1', status: 'done' });
-    seed({ id: 't3', projectId: 'p1', status: 'todo' });
+    seed({ id: 't1', workspaceId: 'p1', status: 'todo' });
+    seed({ id: 't2', workspaceId: 'p1', status: 'done' });
+    seed({ id: 't3', workspaceId: 'p1', status: 'todo' });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
     const result = reader.list({
-      where: { projectId: 'p1' },
-      filter: (t) => (t as unknown as TestTask).status === 'todo',
+      where: { workspaceId: 'p1' },
+      filter: (t) => (t as unknown as TestItem).status === 'todo',
     });
 
     expect(result).toHaveLength(2);
@@ -211,10 +211,10 @@ describe('useReader.findMany', () => {
     seed({ id: 't2', order: 1 });
     seed({ id: 't3', order: 2 });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
     const sorted = reader.list({ orderBy: 'order', order: 'asc' });
 
-    expect(sorted.map((t) => (t as unknown as TestTask).order)).toEqual([1, 2, 3]);
+    expect(sorted.map((t) => (t as unknown as TestItem).order)).toEqual([1, 2, 3]);
   });
 
   it('sorts by orderBy desc', () => {
@@ -222,16 +222,16 @@ describe('useReader.findMany', () => {
     seed({ id: 't2', order: 3 });
     seed({ id: 't3', order: 2 });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
     const sorted = reader.list({ orderBy: 'order', order: 'desc' });
 
-    expect(sorted.map((t) => (t as unknown as TestTask).order)).toEqual([3, 2, 1]);
+    expect(sorted.map((t) => (t as unknown as TestItem).order)).toEqual([3, 2, 1]);
   });
 
   it('applies limit', () => {
     for (let i = 0; i < 10; i++) seed({ id: `t${i}`, order: i });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
     const result = reader.list({ orderBy: 'order', limit: 3 });
 
     expect(result).toHaveLength(3);
@@ -240,15 +240,15 @@ describe('useReader.findMany', () => {
   it('applies offset + limit', () => {
     for (let i = 0; i < 10; i++) seed({ id: `t${i}`, order: i });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
     const result = reader.list({ orderBy: 'order', offset: 3, limit: 3 });
 
-    expect(result.map((t) => (t as unknown as TestTask).order)).toEqual([3, 4, 5]);
+    expect(result.map((t) => (t as unknown as TestItem).order)).toEqual([3, 4, 5]);
   });
 
   it('returns snapshot (not reactive to later changes)', () => {
     seed({ id: 't1' });
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
 
     const first = reader.list();
     expect(first).toHaveLength(1);
@@ -267,7 +267,7 @@ describe('useReader.findFirst', () => {
     seed({ id: 't1', status: 'todo', order: 2 });
     seed({ id: 't2', status: 'todo', order: 1 });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
     const first = reader.list({
       where: { status: 'todo' },
       orderBy: 'order',
@@ -275,13 +275,13 @@ describe('useReader.findFirst', () => {
       limit: 1,
     })[0];
 
-    expect((first as unknown as TestTask).id).toBe('t2');
+    expect((first as unknown as TestItem).id).toBe('t2');
   });
 
   it('returns undefined if no match', () => {
     seed({ id: 't1', status: 'todo' });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
+    const reader = createReaderActions(testSchema, 'items', store);
     const first = reader.list({ where: { status: 'done' }, limit: 1 })[0];
 
     expect(first).toBeUndefined();
@@ -290,12 +290,12 @@ describe('useReader.findFirst', () => {
 
 describe('useReader.count', () => {
   it('returns number of matching entities', () => {
-    seed({ id: 't1', projectId: 'p1' });
-    seed({ id: 't2', projectId: 'p1' });
-    seed({ id: 't3', projectId: 'p2' });
+    seed({ id: 't1', workspaceId: 'p1' });
+    seed({ id: 't2', workspaceId: 'p1' });
+    seed({ id: 't3', workspaceId: 'p2' });
 
-    const reader = createReaderActions(testSchema, 'tasks', store);
-    expect(reader.count({ where: { projectId: 'p1' } })).toBe(2);
+    const reader = createReaderActions(testSchema, 'items', store);
+    expect(reader.count({ where: { workspaceId: 'p1' } })).toBe(2);
     expect(reader.count()).toBe(3);
   });
 });

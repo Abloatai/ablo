@@ -23,7 +23,7 @@ import {
 } from '@abloatai/ablo/source';
 import { schema } from './schema';
 
-type TaskRow = {
+type RecordRow = {
   id: string;
   title: string;
   status: 'todo' | 'doing' | 'done';
@@ -31,9 +31,9 @@ type TaskRow = {
 };
 
 // Stand-in for the customer's real database. Map keyed by row id.
-const taskStore = new Map<string, TaskRow>();
+const recordStore = new Map<string, RecordRow>();
 
-// Outbox table. In production this is a `tasks_outbox` Postgres table
+// Outbox table. In production this is a `records_outbox` Postgres table
 // populated in the same transaction as the app-row write. Ablo polls `events`
 // to fan out changes that bypassed Ablo, and to repair SDK-origin writes if
 // Ablo's immediate post-commit append failed.
@@ -41,8 +41,8 @@ const outbox: SourceEvent[] = [];
 let outboxSequence = 0;
 
 // Seed one row so the example's first `load` returns something.
-taskStore.set('task_seed', {
-  id: 'task_seed',
+recordStore.set('record_seed', {
+  id: 'record_seed',
   title: 'Seeded by customer database',
   status: 'todo',
 });
@@ -91,13 +91,13 @@ export const handleAbloSource = dataSource({
     return {};
   },
 
-  tasks: {
+  records: {
     load({ id }) {
-      return taskStore.get(id) ?? null;
+      return recordStore.get(id) ?? null;
     },
 
     list({ query }) {
-      const all = Array.from(taskStore.values());
+      const all = Array.from(recordStore.values());
       const start = query.cursor ? Number(query.cursor) : 0;
       const limit = query.limit ?? 50;
       const page = all.slice(start, start + limit);
@@ -115,7 +115,7 @@ export const handleAbloSource = dataSource({
     // update; the surrounding `apply` helper shows where you would
     // open `db.transaction(async (tx) => { ... })`.
     commit({ operations, clientTxId }) {
-      const rows: TaskRow[] = [];
+      const rows: RecordRow[] = [];
       for (const op of operations) {
         const row = applyOperation(op, clientTxId);
         if (row) rows.push(row);
@@ -145,38 +145,38 @@ export const handleAbloSource = dataSource({
 function applyOperation(
   op: SourceOperation,
   clientTxId: string | undefined,
-): TaskRow | null {
-  if (op.model !== 'tasks') return null;
-  const id = op.id ?? `task_${Math.random().toString(36).slice(2, 10)}`;
+): RecordRow | null {
+  if (op.model !== 'records') return null;
+  const id = op.id ?? `record_${Math.random().toString(36).slice(2, 10)}`;
 
   if (op.type === 'CREATE') {
-    const row: TaskRow = {
+    const row: RecordRow = {
       id,
       title: String(op.input?.title ?? ''),
       status:
-        (op.input?.status as TaskRow['status'] | undefined) ?? 'todo',
+        (op.input?.status as RecordRow['status'] | undefined) ?? 'todo',
       ...(op.input?.assignee
         ? { assignee: String(op.input.assignee) }
         : {}),
     };
-    taskStore.set(id, row);
+    recordStore.set(id, row);
     appendOutbox({ operation: op, entityId: id, data: row, clientTxId });
     return row;
   }
 
   if (op.type === 'UPDATE') {
-    const existing = taskStore.get(id);
+    const existing = recordStore.get(id);
     if (!existing) return null;
-    const next: TaskRow = { ...existing, ...(op.input as Partial<TaskRow>) };
-    taskStore.set(id, next);
+    const next: RecordRow = { ...existing, ...(op.input as Partial<RecordRow>) };
+    recordStore.set(id, next);
     appendOutbox({ operation: op, entityId: id, data: next, clientTxId });
     return next;
   }
 
   if (op.type === 'DELETE') {
-    const existing = taskStore.get(id);
+    const existing = recordStore.get(id);
     if (!existing) return null;
-    taskStore.delete(id);
+    recordStore.delete(id);
     appendOutbox({ operation: op, entityId: id, data: null, clientTxId });
     return existing;
   }
@@ -187,7 +187,7 @@ function applyOperation(
 function appendOutbox(input: {
   operation: SourceOperation;
   entityId: string;
-  data: TaskRow | null;
+  data: RecordRow | null;
   clientTxId: string | undefined;
 }): void {
   outboxSequence += 1;
@@ -205,11 +205,11 @@ function appendOutbox(input: {
 // Exposed for the orchestrator's `run.ts`. A real customer doesn't
 // need this — it's a back door for the demo to verify state.
 export function _inspectStore(): {
-  rows: TaskRow[];
+  rows: RecordRow[];
   outboxSize: number;
 } {
   return {
-    rows: Array.from(taskStore.values()),
+    rows: Array.from(recordStore.values()),
     outboxSize: outbox.length,
   };
 }

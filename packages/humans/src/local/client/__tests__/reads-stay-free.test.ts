@@ -5,7 +5,7 @@
  * otherwise pass silently, since every other coordination test exercises
  * writes.
  *
- * Against a fake fetch where an claim is ALWAYS held on Task/t1:
+ * Against a fake fetch where an claim is ALWAYS held on Item/t1:
  *   - retrieve() resolves with the row by default (free);
  *   - retrieve({ ifClaimed: 'fail' }) DOES throw — proving the held claim is
  *     genuinely detected (the free read above isn't a false pass) and that
@@ -24,14 +24,14 @@ import {
 
 const HELD_INTENT = modelClaim({
   id: 'int_held',
-  model: 'Task',
+  model: 'Item',
   entityId: 't1',
   actor: 'agent:other',
   participantKind: 'agent',
   description: 'editing',
 });
 
-/** A fetch that always reports Task/t1 as claimed, and serves its row. */
+/** A fetch that always reports Item/t1 as claimed, and serves its row. */
 function fakeFetch(): typeof fetch {
   const json = (body: unknown) =>
     ({
@@ -49,7 +49,7 @@ function fakeFetch(): typeof fetch {
     }
     if (url.includes('/v1/models/')) {
       return json(
-        modelReadResponse({ model: 'Task', id: 't1', data: { id: 't1', title: 'hello' } }),
+        modelReadResponse({ model: 'Item', id: 't1', data: { id: 't1', title: 'hello' } }),
       );
     }
     if (url.includes('/v1/commits')) {
@@ -74,21 +74,21 @@ function makeClient() {
 describe('reads stay free under a claim', () => {
   it('retrieve resolves by default even when the row is claimed', async () => {
     const client = makeClient();
-    const read = await client.model('Task').retrieve({ id: 't1' });
+    const read = await client.model('Item').retrieve({ id: 't1' });
     expect(read.data).toMatchObject({ id: 't1', title: 'hello' });
   });
 
   it('retrieve gates only when the caller opts in (ifClaimed: fail)', async () => {
     const client = makeClient();
     await expect(
-      client.model('Task').retrieve({ id: 't1', ifClaimed: 'fail' }),
+      client.model('Item').retrieve({ id: 't1', ifClaimed: 'fail' }),
     ).rejects.toBeInstanceOf(AbloClaimedError);
   });
 
   it('writes to the same claimed row gate (ifClaimed: fail)', async () => {
     const client = makeClient();
     await expect(
-      client.model('Task').update({
+      client.model('Item').update({
         id: 't1',
         data: { title: 'x' },
         ifClaimed: 'fail',

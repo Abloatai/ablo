@@ -33,6 +33,6 @@ warning and does not attempt a deployment.
 `blume build`) and wraps `dist/` into `.vercel/output`; `vercel deploy --prebuilt`
 ships exactly that, so the site never rebuilds on Vercel's side.
 
-> The decks docs (`docs/decks/`) deploy the same way from their own repo/project —
-> give them a separate Vercel project (Root Directory `docs/decks`) and a distinct
+> The collections docs (`docs/collections/`) deploy the same way from their own repo/project —
+> give them a separate Vercel project (Root Directory `docs/collections`) and a distinct
 > domain or path, since two projects can't both own `docs.abloatai.com`.

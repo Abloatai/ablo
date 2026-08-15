@@ -16,7 +16,7 @@
  * The lease is three ping intervals long and is renewed on every ping, so a
  * live holder always has at least two intervals of runway and a silent one
  * lapses about two missed pings after it stops renewing. The window measures
- * liveness, not how long a task may run: widening the lease without also
+ * liveness, not how long a item may run: widening the lease without also
  * widening the ping makes holders flap, and neither value should be redefined
  * anywhere else.
  */

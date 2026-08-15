@@ -131,10 +131,10 @@ export type AbloClient<S extends SchemaRecord> = {
    * server verifies it. The browser must never see the `sk_` key, only the
    * per-user session token.
    *
-   * Pass `{ user: { id }, can: { tasks: ['read', 'update'] } }` for an end-user
+   * Pass `{ user: { id }, can: { items: ['read', 'update'] } }` for an end-user
    * session. It mints an `ek_` and attributes writes to a user (recorded as
    * `actor_kind` on the delta row). Pass `{ agent: { id }, can: {
-   * tasks: ['update'] } }` for a scoped agent session, which mints an `rk_`.
+   * items: ['update'] } }` for a scoped agent session, which mints an `rk_`.
    * Both kinds require `can`, typed against your schema's model names. This
    * always authenticates with the original `sk_`, never the client's exchanged
    * sync credential.
@@ -150,10 +150,10 @@ export type AbloClient<S extends SchemaRecord> = {
    * ```ts
    * const agent = await ablo.agents.create({
    *   name: 'researcher',                  // readable label (optional)
-   *   can: { documents: ['read', 'update'] },
+   *   can: { records: ['read', 'update'] },
    *   // id omitted → a fresh uuid: a distinct, independent participant
    * });
-   * await agent.documents.update({ id, data, claim });
+   * await agent.records.update({ id, data, claim });
    * await agent.dispose(); // when the agent is done
    * ```
    *

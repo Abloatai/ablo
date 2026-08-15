@@ -102,6 +102,31 @@ export type CommitWait = z.infer<typeof commitWaitSchema>;
 const missingIdsSchema = z.array(z.string().min(1));
 const notificationsSchema = z.array(staleNotificationSchema);
 
+export const commitOperationOutcomeSchema = z.enum([
+  'created',
+  'updated',
+  'deleted',
+  'archived',
+  'unarchived',
+]);
+
+export const commitOperationResultSchema = z.strictObject({
+  transactionId: z.string().min(1),
+  outcome: commitOperationOutcomeSchema,
+  row: z.record(z.string(), z.unknown()),
+});
+export type CommitOperationResult<
+  Row extends Record<string, unknown> = Record<string, unknown>,
+> = Omit<z.infer<typeof commitOperationResultSchema>, 'row'> & { readonly row: Row };
+
+const operationResultsSchema = z
+  .array(commitOperationResultSchema)
+  .min(1)
+  .refine(
+    (results) => new Set(results.map((result) => result.transactionId)).size === results.length,
+    'operation result transactionIds must be unique',
+  );
+
 export const commitActorSchema = z.strictObject({
   kind: participantKindSchema,
   id: z.string().min(1),
@@ -155,6 +180,8 @@ const successfulReceiptCommonShape = {
   authority: effectiveAuthoritySchema,
   notifications: notificationsSchema.optional(),
   missingIds: missingIdsSchema.optional(),
+  /** Exact rows returned by the writing transaction; absent on durable replay. */
+  operationResults: operationResultsSchema.optional(),
 } as const;
 
 const queuedCommitReceiptSchema = queuedCommitStatusSchema.safeExtend(
@@ -316,6 +343,7 @@ export type CommitExecutionResult = z.infer<typeof commitExecutionResultSchema>;
 const ackCommonShape = {
   notifications: notificationsSchema.optional(),
   missingIds: missingIdsSchema.optional(),
+  operationResults: operationResultsSchema.optional(),
 } as const;
 
 /** Normalized acknowledgement handed from a mutation transport to the queue. */
@@ -350,6 +378,7 @@ export const clientCommitReceiptSchema = z.strictObject({
   lastSyncId: readSetWatermarkSchema.optional(),
   notifications: notificationsSchema.optional(),
   missingIds: missingIdsSchema.optional(),
+  operationResults: operationResultsSchema.optional(),
 });
 export type ClientCommitReceipt = z.infer<typeof clientCommitReceiptSchema>;
 
@@ -382,13 +411,14 @@ export const commitOperationBodySchema = z.object({
   action: z.string(),
   model: z.string(),
   data: z.record(z.string(), z.unknown()).nullish(),
+  where: z.record(z.string().min(1), z.unknown()).nullish(),
 });
 export type CommitOperationBody = z.infer<typeof commitOperationBodySchema>;
 
 /** Commit records retain intent metadata but never copy customer mutation data. */
 export const COMMIT_OPERATION_DATA_RETENTION = 'redacted' as const;
 export const commitRecordOperationSchema = commitOperationBodySchema
-  .omit({ data: true })
+  .omit({ data: true, where: true })
   .safeExtend({ data: z.strictObject({ retention: z.literal(COMMIT_OPERATION_DATA_RETENTION) }) });
 export type CommitRecordOperation = z.infer<typeof commitRecordOperationSchema>;
 

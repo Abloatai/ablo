@@ -28,21 +28,21 @@ import type { Identical } from './typeEquality.js';
 // `Register['Schema']` to this fixture's `typeof schema` so downstream
 // resolvers produce the fixture's concrete model types.
 const fixtureSchema = defineSchema({
-  tasks: model(
+  items: model(
     {
       title: z.string(),
       status: z.enum(['todo', 'done']).default('todo'),
     },
     {
       relations: {
-        comments: relation.hasMany('comments', 'taskId'),
+        comments: relation.hasMany('comments', 'itemId'),
       },
-      typename: 'Task',
+      typename: 'Item',
     }),
   comments: model(
-    { taskId: z.string(), body: z.string() },
+    { itemId: z.string(), body: z.string() },
     {
-      relations: { task: relation.belongsTo('tasks', 'taskId') },
+      relations: { item: relation.belongsTo('items', 'itemId') },
       typename: 'Comment',
     }),
 });
@@ -128,11 +128,11 @@ type _AssertHeldClaimKeepsTheOverride =
     : false;
 const _heldOverrideOk: _AssertHeldClaimKeepsTheOverride = true;
 
-// Model key union should be the literal 'tasks' | 'comments' — anything
+// Model key union should be the literal 'items' | 'comments' — anything
 // else would mean the key narrowing leaked to `string`, which would break
-// the call-site ergonomics (`useQuery('tasks')` auto-completing to the
+// the call-site ergonomics (`useQuery('items')` auto-completing to the
 // schema's keys).
-type _AssertModelKeyIsNarrowed = ResolveModelKey extends 'tasks' | 'comments'
+type _AssertModelKeyIsNarrowed = ResolveModelKey extends 'items' | 'comments'
   ? true
   : false;
 const _modelKeyOk: _AssertModelKeyIsNarrowed = true;
@@ -151,7 +151,7 @@ describe('typed-global resolvers', () => {
     // The real test is the `_...Ok` const declarations above — they
     // fail `tsc` if the resolver chain regresses. At runtime we just
     // confirm the fixture schema was actually built.
-    expect(fixtureSchema.models.tasks).toBeDefined();
+    expect(fixtureSchema.models.items).toBeDefined();
     expect(fixtureSchema.models.comments).toBeDefined();
     expect(_schemaOk).toBe(true);
     expect(_userMetaOk).toBe(true);

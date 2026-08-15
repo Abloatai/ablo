@@ -12,11 +12,11 @@ import { MutationQueue } from '../../src/local/transactions/mutations/MutationQu
 import {
   createTestContext,
   createTestConfig,
-  TestTask,
-  TestProject,
-  TestSlideDeck,
-  TestSlide,
-  TestSlideLayer,
+  TestItem,
+  TestWorkspace,
+  TestEntryCollection,
+  TestEntry,
+  TestEntryLayer,
   TestComment,
   resetFixtureCounter,
   flushMicrotasks,
@@ -26,15 +26,15 @@ import { Model } from '../../src/local/Model';
 
 const USER_CTX = { userId: 'user-1', organizationId: 'org-1' };
 
-type ModelClassName = 'Task' | 'Project' | 'SlideDeck' | 'Slide' | 'SlideLayer' | 'Comment';
+type ModelClassName = 'Item' | 'Workspace' | 'Collection' | 'Entry' | 'EntryDetail' | 'Comment';
 
 const ModelClasses: Record<ModelClassName, new (data: Record<string, unknown>) => Model> = {
-  Project: TestProject,
-  Task: TestTask,
+  Workspace: TestWorkspace,
+  Item: TestItem,
   Comment: TestComment,
-  SlideDeck: TestSlideDeck,
-  Slide: TestSlide,
-  SlideLayer: TestSlideLayer,
+  Collection: TestEntryCollection,
+  Entry: TestEntry,
+  EntryDetail: TestEntryLayer,
 };
 
 describe('Property: MutationQueue Invariants', () => {
@@ -51,10 +51,10 @@ describe('Property: MutationQueue Invariants', () => {
 
   it('CREATE priority scores respect FK ordering: parent ≤ child', () => {
     const parentChild: [ModelClassName, ModelClassName][] = [
-      ['Project', 'Comment'],
-      ['SlideDeck', 'SlideLayer'],
-      ['SlideDeck', 'Slide'],
-      ['Slide', 'SlideLayer'],
+      ['Workspace', 'Comment'],
+      ['Collection', 'EntryDetail'],
+      ['Collection', 'Entry'],
+      ['Entry', 'EntryDetail'],
     ];
 
     fc.assert(
@@ -81,7 +81,7 @@ describe('Property: MutationQueue Invariants', () => {
 
   it('non-CREATE operations always get DEFAULT_NON_CREATE_PRIORITY (50)', () => {
     const opTypes = ['update', 'delete', 'archive', 'unarchive'] as const;
-    const modelNames: ModelClassName[] = ['Task', 'Project', 'SlideDeck', 'Slide', 'SlideLayer', 'Comment'];
+    const modelNames: ModelClassName[] = ['Item', 'Workspace', 'Collection', 'Entry', 'EntryDetail', 'Comment'];
 
     fc.assert(
       fc.asyncProperty(
@@ -122,7 +122,7 @@ describe('Property: MutationQueue Invariants', () => {
           queue.on('transaction:failed', () => resolvedCount++);
 
           for (const op of opSequence) {
-            const model = new ModelClasses.Task({ id: `t-${Math.random()}` });
+            const model = new ModelClasses.Item({ id: `t-${Math.random()}` });
             if (op === 'create') {
               await queue.create(model, USER_CTX);
             } else {
@@ -177,12 +177,12 @@ describe('Property: MutationQueue Invariants', () => {
         }),
         async (data) => {
           const queue = new MutationQueue({ batchDelay: 0 });
-          const task = new TestTask({ id: `idem-${Math.random()}`, ...data });
-          task.markAsPersisted();
-          task.propertyChanged('title', 'old', data.title);
+          const item = new TestItem({ id: `idem-${Math.random()}`, ...data });
+          item.markAsPersisted();
+          item.propertyChanged('title', 'old', data.title);
 
-          await queue.update(task, USER_CTX, data);
-          await queue.update(task, USER_CTX, data);
+          await queue.update(item, USER_CTX, data);
+          await queue.update(item, USER_CTX, data);
 
           await flushMicrotasks();
           await new Promise((r) => setTimeout(r, 50));

@@ -16,7 +16,7 @@ describe('buildSchemaSourceFromDrizzle', () => {
       importPath: '@abloatai/ablo/schema',
     });
     expect(result.source).toContain("import { defineSchema, model, relation, field } from '@abloatai/ablo/schema';");
-    expect(result.models.sort()).toEqual(['projects', 'tasks']);
+    expect(result.models.sort()).toEqual(['records', 'workspaces']);
     expect(result.skipped.map((s) => s.name)).toEqual(['settings']);
   });
 });

@@ -22,7 +22,7 @@ const staleConflict: Conflict = {
   organizationId: 'org_acme',
   delegationChainRootUserId: 'user_abc',
   operation: {
-    model: 'Slide',
+    model: 'Entry',
     id: 's1',
     type: 'UPDATE',
     input: { title: 'new' },
@@ -38,7 +38,7 @@ const claimConflict: Conflict = {
   delegationChainRootUserId: 'user_abc',
   heldBy: { kind: 'agent', id: 'agent_y' },
   claimId: 'claim_999',
-  entityType: 'Slide',
+  entityType: 'Entry',
   entityId: 's1',
   expiresAt: Date.now() + 60_000,
   committerOperations: [],
@@ -130,7 +130,7 @@ describe('capabilityPreemptPolicy', () => {
   it('preempts a claim_held conflict when the committer holds claim.preempt', async () => {
     const decision = await capabilityPreemptPolicy({
       ...claimConflict,
-      committerOperations: ['task.update', 'claim.preempt'],
+      committerOperations: ['item.update', 'claim.preempt'],
     });
     expect(decision).toEqual({ action: 'preempt', reason: 'capability:claim.preempt' });
   });
@@ -138,7 +138,7 @@ describe('capabilityPreemptPolicy', () => {
   it('falls through to reject when the committer lacks claim.preempt', async () => {
     const decision = await capabilityPreemptPolicy({
       ...claimConflict,
-      committerOperations: ['task.update'],
+      committerOperations: ['item.update'],
     });
     expect(decision).toEqual({ action: 'reject', reason: 'claim_conflict' });
   });

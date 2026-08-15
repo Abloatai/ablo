@@ -85,7 +85,7 @@ describe('cross-source equivalence', () => {
     // Guards the comparison itself: two empty lowerings are trivially equal,
     // so a fixture that silently stopped adopting anything would pass above.
     const shape = adopted(prisma);
-    expect(shape.map((m) => m.key)).toEqual(['projects', 'tasks']);
+    expect(shape.map((m) => m.key)).toEqual(['records', 'workspaces']);
     expect(shape.flatMap((m) => m.fields).length).toBeGreaterThan(5);
     expect(shape.flatMap((m) => m.relations)).toHaveLength(1);
   });

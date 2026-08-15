@@ -83,7 +83,7 @@ export function runConformance(opts: {
 export const adoptSuite: ConformanceSuite = (ctx) => {
   describe('adopt contract', () => {
     it('adopts exactly the tenant-scoped tables', () => {
-      expect(ctx.ir().models.map((m) => m.key).sort()).toEqual(['projects', 'tasks']);
+      expect(ctx.ir().models.map((m) => m.key).sort()).toEqual(['records', 'workspaces']);
     });
 
     it('skips a table with no tenancy column, and says so', () => {
@@ -98,14 +98,14 @@ export const adoptSuite: ConformanceSuite = (ctx) => {
 export const baseColumnsSuite: ConformanceSuite = (ctx) => {
   describe('base columns', () => {
     it('never surfaces an engine-owned column as a declared field', () => {
-      const declared = ctx.model('tasks').fields.map((f) => f.name);
+      const declared = ctx.model('records').fields.map((f) => f.name);
       for (const owned of ['id', 'organizationId', 'createdBy', 'createdAt', 'updatedAt']) {
         expect(declared).not.toContain(owned);
       }
     });
 
     it('leaves a model that is only base columns plus one field with just that field', () => {
-      expect(ctx.model('projects').fields.map((f) => f.name)).toEqual(['name']);
+      expect(ctx.model('workspaces').fields.map((f) => f.name)).toEqual(['name']);
     });
   });
 };
@@ -119,20 +119,20 @@ export const scalarsSuite: ConformanceSuite = (ctx) => {
     { field: 'done', kind: 'boolean', optional: true },
     { field: 'meta', kind: 'json', optional: true },
     { field: 'deadline', kind: 'date', optional: true },
-    { field: 'projectId', kind: 'string', optional: true },
+    { field: 'workspaceId', kind: 'string', optional: true },
   ];
 
   describe('scalars', () => {
     for (const { field, kind, optional } of expected) {
       it(`lowers ${field} to ${kind}${optional ? ', optional' : ''}`, () => {
-        const f = ctx.field('tasks', field);
+        const f = ctx.field('records', field);
         expect(f.kind).toBe(kind);
         expect(f.optional).toBe(optional);
       });
     }
 
     it('covers every kind the IR can carry', () => {
-      const kinds = new Set(ctx.model('tasks').fields.map((f) => f.kind));
+      const kinds = new Set(ctx.model('records').fields.map((f) => f.kind));
       expect([...kinds].sort()).toEqual(['boolean', 'date', 'enum', 'json', 'number', 'string']);
     });
   });
@@ -142,7 +142,7 @@ export const scalarsSuite: ConformanceSuite = (ctx) => {
 export const enumsSuite: ConformanceSuite = (ctx) => {
   describe('enums', () => {
     it('preserves the member list and its order', () => {
-      const f = ctx.field('tasks', 'status');
+      const f = ctx.field('records', 'status');
       expect(f.kind).toBe('enum');
       expect(f.enumValues).toEqual(['todo', 'doing', 'done']);
     });
@@ -153,13 +153,13 @@ export const enumsSuite: ConformanceSuite = (ctx) => {
 export const relationsSuite: ConformanceSuite = (ctx) => {
   describe('relations', () => {
     it('lowers a single-column foreign key to one belongsTo', () => {
-      expect(ctx.model('tasks').relations).toEqual([
-        { name: 'project', target: 'projects', fkField: 'projectId' },
+      expect(ctx.model('records').relations).toEqual([
+        { name: 'workspace', target: 'workspaces', fkField: 'workspaceId' },
       ]);
     });
 
     it('gives a model with no foreign key no relations', () => {
-      expect(ctx.model('projects').relations).toEqual([]);
+      expect(ctx.model('workspaces').relations).toEqual([]);
     });
 
     it('points every relation at an adopted model, through a declared field', () => {
@@ -178,21 +178,21 @@ export const relationsSuite: ConformanceSuite = (ctx) => {
 export const namingSuite: ConformanceSuite = (ctx) => {
   const columns: readonly { field: string; column: string }[] = [
     { field: 'title', column: 'title' },
-    { field: 'projectId', column: 'project_id' },
+    { field: 'workspaceId', column: 'workspace_id' },
     { field: 'deadline', column: 'due_at' },
   ];
 
   describe('naming', () => {
     for (const { field, column } of columns) {
       it(`resolves ${field} to column ${column}`, () => {
-        expect(effectiveColumn(ctx.field('tasks', field))).toBe(column);
+        expect(effectiveColumn(ctx.field('records', field))).toBe(column);
       });
     }
 
     it('records the column when it would not be derivable from the field name', () => {
       // `deadline` → `due_at` cannot be recovered by camelToSnake, so the
       // source has to have carried it explicitly for `.from()` to be emitted.
-      expect(ctx.field('tasks', 'deadline').column).toBe('due_at');
+      expect(ctx.field('records', 'deadline').column).toBe('due_at');
     });
   });
 };
@@ -201,7 +201,7 @@ export const namingSuite: ConformanceSuite = (ctx) => {
 export const lossySuite: ConformanceSuite = (ctx) => {
   describe('lossy lowering', () => {
     it('stores a scalar list as json and flags it for review', () => {
-      const f = ctx.field('tasks', 'labels');
+      const f = ctx.field('records', 'labels');
       expect(f.kind).toBe('json');
       // The wording is the source's own; that it warns at all is the contract.
       expect(f.note).toMatch(/JSON/i);
@@ -219,14 +219,14 @@ export const emitSuite: ConformanceSuite = (ctx) => {
     });
 
     it('carries the relation', () => {
-      expect(emit()).toContain("relation.belongsTo('projects', 'projectId')");
+      expect(emit()).toContain("relation.belongsTo('workspaces', 'workspaceId')");
     });
 
     it('overrides only the column that needs it', () => {
       const source = emit();
       expect(source).toContain(".from('due_at')");
       expect(source).not.toContain(".from('title')");
-      expect(source).not.toContain(".from('project_id')");
+      expect(source).not.toContain(".from('workspace_id')");
     });
 
     it('marks the lossy field for review', () => {
@@ -235,7 +235,7 @@ export const emitSuite: ConformanceSuite = (ctx) => {
 
     it('emits models in a stable order', () => {
       const source = emit();
-      expect(source.indexOf('projects:')).toBeLessThan(source.indexOf('tasks:'));
+      expect(source.indexOf('records:')).toBeLessThan(source.indexOf('workspaces:'));
     });
   });
 };

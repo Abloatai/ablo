@@ -93,9 +93,9 @@ createServer(async (req, res) => {
 Replace the `Map`-based store in `customer-server.ts` with your real
 data layer. The handler shape stays the same:
 
-- `tasks.load({ id })` -> `db.task.findUnique({ where: { id } })`
-- `tasks.list({ query })` -> `db.task.findMany({ take, cursor })`
-- `tasks.commit({ operations, clientTxId })` -> `db.$transaction` that
+- `records.load({ id })` -> `db.record.findUnique({ where: { id } })`
+- `records.list({ query })` -> `db.record.findMany({ take, cursor })`
+- `records.commit({ operations, clientTxId })` -> `db.$transaction` that
   applies each `op` and writes an outbox marker with `clientTxId` before commit
 - `events({ cursor, limit })` -> read from your outbox table, return
   rows with their `clientTxId` (Ablo dedupes its own commits) and the

@@ -42,12 +42,12 @@ describe('coordination wire schema', () => {
     describe('ReadSet is the canonical decision-input structure', () => {
       it('models an exact commit-lifetime row or group read', () => {
         expect(commitReadSetEntrySchema.parse({
-          target: { scope: 'row', model: 'Task', id: 't1', fields: ['status'] },
+          target: { scope: 'row', model: 'Item', id: 't1', fields: ['status'] },
           watermark: 17,
           lifetime: 'commit',
           onStale: 'reject',
         })).toEqual({
-          target: { scope: 'row', model: 'Task', id: 't1', fields: ['status'] },
+          target: { scope: 'row', model: 'Item', id: 't1', fields: ['status'] },
           watermark: 17,
           lifetime: 'commit',
           onStale: 'reject',
@@ -62,13 +62,13 @@ describe('coordination wire schema', () => {
 
       it('makes persisted lifetime and narrowed disposition explicit', () => {
         expect(persistedReadSetEntrySchema.safeParse({
-          target: { scope: 'row', model: 'Task', id: 't1' },
+          target: { scope: 'row', model: 'Item', id: 't1' },
           watermark: 17,
           lifetime: 'persisted',
           onStale: 'notify',
         }).success).toBe(true);
         expect(persistedReadSetEntrySchema.safeParse({
-          target: { scope: 'row', model: 'Task', id: 't1' },
+          target: { scope: 'row', model: 'Item', id: 't1' },
           watermark: 17,
           lifetime: 'persisted',
           onStale: 'overwrite',
@@ -87,7 +87,7 @@ describe('coordination wire schema', () => {
       it('forms one lifetime-discriminated collection', () => {
         const entries = [
           {
-            target: { scope: 'row' as const, model: 'Task', id: 't1' },
+            target: { scope: 'row' as const, model: 'Item', id: 't1' },
             watermark: 17,
             lifetime: 'commit' as const,
             onStale: 'reject' as const,
@@ -105,14 +105,14 @@ describe('coordination wire schema', () => {
 
       it('uses one nonnegative integer watermark domain for every entry', () => {
         const entry = {
-          target: { scope: 'row' as const, model: 'Task', id: 't1' },
+          target: { scope: 'row' as const, model: 'Item', id: 't1' },
           lifetime: 'commit' as const,
           onStale: 'reject' as const,
         };
         expect(commitReadSetEntrySchema.safeParse({ ...entry, watermark: 0 }).success).toBe(true);
         expect(commitReadSetEntrySchema.safeParse({ ...entry, watermark: -1 }).success).toBe(false);
         expect(commitReadSetEntrySchema.safeParse({ ...entry, watermark: 1.5 }).success).toBe(false);
-        expect(readDependencySchema.safeParse({ model: 'Task', id: 't1', readAt: -1 }).success)
+        expect(readDependencySchema.safeParse({ model: 'Item', id: 't1', readAt: -1 }).success)
           .toBe(false);
       });
     });
@@ -121,7 +121,7 @@ describe('coordination wire schema', () => {
       const parsed = staleNotificationSchema.safeParse({
         object: 'stale_notification',
         scope: 'row',
-        target: { model: 'task', id: 't1', fields: ['status'] },
+        target: { model: 'item', id: 't1', fields: ['status'] },
         readAt: 10,
         observedSyncId: 12,
         currentValues: { status: 'done' },
@@ -136,9 +136,9 @@ describe('coordination wire schema', () => {
         scope: 'group',
         // The moved row, two hops below the group's scope root — NOT the group
         // key restated as a row, which is what this used to carry.
-        target: { model: 'SlideLayer', id: 'L-9', fields: ['fill'] },
-        group: 'deck:d-1',
-        propagation: { via: 'transitive', through: ['slides', 'decks'] },
+        target: { model: 'EntryDetail', id: 'L-9', fields: ['fill'] },
+        group: 'collection:d-1',
+        propagation: { via: 'transitive', through: ['entries', 'collections'] },
         readAt: 10,
         observedSyncId: 12,
         writtenBy: { kind: 'agent', id: 'agent-1' },
@@ -146,7 +146,7 @@ describe('coordination wire schema', () => {
       expect(parsed.success).toBe(true);
       // Narrowing on `scope` is what makes the group-only fields reachable.
       if (parsed.success && parsed.data.scope === 'group') {
-        expect(parsed.data.group).toBe('deck:d-1');
+        expect(parsed.data.group).toBe('collection:d-1');
         expect(parsed.data.propagation?.via).toBe('transitive');
         expect(parsed.data.target.id).toBe('L-9');
       }
@@ -156,13 +156,13 @@ describe('coordination wire schema', () => {
       const parsed = staleNotificationSchema.safeParse({
         object: 'stale_notification',
         scope: 'group',
-        target: { model: 'SlideLayer', id: 'L-9', fields: ['fill'] },
-        group: 'deck:d-1',
+        target: { model: 'EntryDetail', id: 'L-9', fields: ['fill'] },
+        group: 'collection:d-1',
         // The signal that lets an actor decline to re-read: 12k rows moved and
         // the sample names only the newest few.
         changed: {
           count: 12_403,
-          sample: [{ model: 'SlideLayer', id: 'L-9' }],
+          sample: [{ model: 'EntryDetail', id: 'L-9' }],
           truncated: true,
         },
         readAt: 10,
@@ -180,7 +180,7 @@ describe('coordination wire schema', () => {
       const parsed = staleNotificationSchema.safeParse({
         object: 'stale_notification',
         scope: 'group',
-        target: { model: 'SlideLayer', id: 'L-9', fields: [] },
+        target: { model: 'EntryDetail', id: 'L-9', fields: [] },
         group: 'not-a-group-key', // no `kind:id` — matches nothing, so it is rejected
         readAt: 10,
         observedSyncId: 12,
@@ -193,7 +193,7 @@ describe('coordination wire schema', () => {
       const parsed = staleNotificationSchema.safeParse({
         object: 'stale_notification',
         scope: 'row',
-        target: { model: 'task', id: 't1', fields: [] },
+        target: { model: 'item', id: 't1', fields: [] },
         readAt: 10,
         observedSyncId: 12,
         currentValues: {},
@@ -205,7 +205,7 @@ describe('coordination wire schema', () => {
     it('the write-guard fields live ON the commit operation', () => {
       const parsed = commitOperationSchema.safeParse({
         type: 'UPDATE',
-        model: 'Task',
+        model: 'Item',
         id: 't1',
         input: { status: 'done' },
         readAt: 1748160000000,
@@ -217,7 +217,7 @@ describe('coordination wire schema', () => {
 
     it('a bare operation (no guard) is valid — unguarded writes are allowed', () => {
       expect(
-        commitOperationSchema.safeParse({ type: 'CREATE', model: 'Task' }).success,
+        commitOperationSchema.safeParse({ type: 'CREATE', model: 'Item' }).success,
       ).toBe(true);
     });
 
@@ -226,7 +226,7 @@ describe('coordination wire schema', () => {
     // the two shapes, which would only prove the copy matches itself.
     describe('track is the durable projection of reads', () => {
       it('names its target the same way, at both grains', () => {
-        expect(trackDependencySchema.safeParse({ model: 'Task', id: 't1' }).success).toBe(true);
+        expect(trackDependencySchema.safeParse({ model: 'Item', id: 't1' }).success).toBe(true);
         expect(trackDependencySchema.safeParse({ group: 'report:abc' }).success).toBe(true);
       });
 
@@ -237,7 +237,7 @@ describe('coordination wire schema', () => {
 
       it('carries a NARROWED disposition and no field grain', () => {
         const parsed = trackDependencySchema.parse({
-          model: 'Task',
+          model: 'Item',
           id: 't1',
           onStale: 'reject',
           fields: ['status'],
@@ -251,19 +251,19 @@ describe('coordination wire schema', () => {
       });
 
       it('defaults to notify, so an existing track is unchanged', () => {
-        const parsed = trackDependencySchema.parse({ model: 'Task', id: 't1' });
+        const parsed = trackDependencySchema.parse({ model: 'Item', id: 't1' });
         expect(parsed).not.toHaveProperty('onStale'); // server default: 'notify'
       });
 
       it('excludes overwrite — a track guards no write of its own to apply', () => {
         expect(
-          trackDependencySchema.safeParse({ model: 'Task', id: 't1', onStale: 'overwrite' })
+          trackDependencySchema.safeParse({ model: 'Item', id: 't1', onStale: 'overwrite' })
             .success,
         ).toBe(false);
         // The read premise, which DOES guard a write, still accepts it.
         expect(
           readDependencySchema.safeParse({
-            model: 'Task',
+            model: 'Item',
             id: 't1',
             readAt: 7,
             onStale: 'overwrite',
@@ -273,7 +273,7 @@ describe('coordination wire schema', () => {
 
       it('a read premise keeps both', () => {
         const parsed = readDependencySchema.parse({
-          model: 'Task',
+          model: 'Item',
           id: 't1',
           readAt: 7,
           onStale: 'reject',
@@ -290,7 +290,7 @@ describe('coordination wire schema', () => {
       expect(
         claimBeginPayloadSchema.safeParse({
           claimId: 'i1',
-          entityType: 'Task',
+          entityType: 'Item',
           entityId: 't1',
           description: 'rewriting the risk section',
           queue: true,
@@ -301,7 +301,7 @@ describe('coordination wire schema', () => {
       expect(
         claimBeginPayloadSchema.safeParse({
           claimId: 'i1',
-          entityType: 'Task',
+          entityType: 'Item',
           entityId: 't1',
           description: 'editing',
         }).success,
@@ -311,14 +311,14 @@ describe('coordination wire schema', () => {
       expect(
         claimBeginPayloadSchema.safeParse({
           claimId: 'i1',
-          entityType: 'Task',
+          entityType: 'Item',
           entityId: 't1',
         }).success,
       ).toBe(true);
 
       // claimId is still required.
       expect(
-        claimBeginPayloadSchema.safeParse({ entityType: 'Task', entityId: 't1' })
+        claimBeginPayloadSchema.safeParse({ entityType: 'Item', entityId: 't1' })
           .success,
       ).toBe(false);
     });
@@ -329,7 +329,7 @@ describe('coordination wire schema', () => {
       );
       const withTarget = claimAbandonPayloadSchema.safeParse({
         claimId: 'i1',
-        entityType: 'Task',
+        entityType: 'Item',
         entityId: 't1',
       });
       expect(withTarget.success).toBe(true);
@@ -347,7 +347,7 @@ describe('coordination wire schema', () => {
       // SDK-shaped (no status/error), description-first, parses…
       const view = wireClaimSchema.safeParse({
         claimId: 'i1',
-        entityType: 'Task',
+        entityType: 'Item',
         entityId: 't1',
         description: 'editing',
         declaredAt: 1,
@@ -357,7 +357,7 @@ describe('coordination wire schema', () => {
       // …another frame carrying its work text in `description` still parses…
       const legacy = wireClaimSchema.safeParse({
         claimId: 'i1',
-        entityType: 'Task',
+        entityType: 'Item',
         entityId: 't1',
         description: 'editing',
         declaredAt: 1,
@@ -367,7 +367,7 @@ describe('coordination wire schema', () => {
       // …and so does the full server shape with lifecycle fields.
       const full = wireClaimSchema.safeParse({
         claimId: 'i1',
-        entityType: 'Task',
+        entityType: 'Item',
         entityId: 't1',
         description: 'editing',
         declaredAt: 1,
@@ -396,7 +396,7 @@ describe('coordination wire schema', () => {
         policyReason: 'same row is already being reformatted',
         heldByClaim: {
           claimId: 'claim-a',
-          entityType: 'Task',
+          entityType: 'Item',
           entityId: 't1',
           description: 'reformatting the pricing table',
           declaredAt: 1748160000000,
@@ -474,13 +474,13 @@ describe('coordination wire schema', () => {
       const parsed = claimRejectionSchema.safeParse({
         claimId: 'claim-b',
         reason: 'conflict',
-        target: { entityType: 'Task', entityId: 't1' },
+        target: { entityType: 'Item', entityId: 't1' },
         heldBy: 'agent:pulse',
         heldByClaimId: 'claim-a',
         heldByExpiresAt: 1748160300000,
         heldByClaim: {
           claimId: 'claim-a',
-          entityType: 'Task',
+          entityType: 'Item',
           entityId: 't1',
           description: 'reformatting',
           declaredAt: 1748160000000,
@@ -501,7 +501,7 @@ describe('coordination wire schema', () => {
         activeClaims: [
           {
             claimId: 'i1',
-            entityType: 'Task',
+            entityType: 'Item',
             entityId: 't1',
             description: 'editing',
             declaredAt: 1,

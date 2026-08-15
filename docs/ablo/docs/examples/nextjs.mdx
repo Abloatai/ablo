@@ -24,11 +24,11 @@ app/
   api/
     ablo-session/
       route.ts              # mints a per-user ek_ token for the browser
-  tasks/
+  records/
     [id]/
       page.tsx              # RSC: get + render
       actions.ts            # Server Action: claim, then write
-      TaskEditor.tsx        # Client: live updates
+      RecordEditor.tsx        # Client: live updates
 lib/
   ablo.ts                   # Server Ablo client (holds ABLO_API_KEY)
   ablo.schema.ts            # shared schema
@@ -85,7 +85,7 @@ export async function POST() {
 
   const { token, expiresAt } = await ablo.sessions.create({
     user: { id: user.id },
-    can: { tasks: ['read', 'create', 'update'] },
+    can: { records: ['read', 'create', 'update'] },
   });
   return Response.json(
     credentialEndpointSuccessSchema.parse({
@@ -140,40 +140,40 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 ## RSC Initial Render
 
 ```tsx
-// app/tasks/[id]/page.tsx
+// app/records/[id]/page.tsx
 import { ablo } from '@/lib/ablo';
 
-export default async function TaskPage({
+export default async function RecordPage({
   params,
 }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   await ablo.ready();
-  const task = await ablo.tasks.get({ id });
-  if (!task) return null;
+  const record = await ablo.records.get({ id });
+  if (!record) return null;
 
-  return <TaskEditor task={task} />;
+  return <RecordEditor record={record} />;
 }
 ```
 
 ## Server Action Commit
 
 ```ts
-// app/tasks/[id]/actions.ts
+// app/records/[id]/actions.ts
 'use server';
 
 import { ablo } from '@/lib/ablo';
 
 export async function markDone(id: string) {
   // Claim grants exclusive, ordered access and hands back the fresh row.
-  await using claim = await ablo.tasks.claim({ id });
+  await using claim = await ablo.records.claim({ id });
 
-  const task = await ablo.tasks.update({
+  const record = await ablo.records.update({
     id,
     data: { status: 'done' },
     claim,
   });
 
-  return { status: 'done', task };
+  return { status: 'done', record };
   // claim auto-releases as the action returns
 }
 ```
@@ -189,9 +189,9 @@ you — re-fetch and retry.
 
 import { useAblo } from '@abloatai/ablo/react';
 
-export function TaskEditor({ task: serverTask }: Props) {
-  const data = useAblo((ablo) => ablo.tasks.local.get(serverTask.id)) ?? serverTask;
-  const holder = useAblo((ablo) => ablo.tasks.claim.state({ id: serverTask.id }));
+export function RecordEditor({ record: serverTask }: Props) {
+  const data = useAblo((ablo) => ablo.records.local.get(serverTask.id)) ?? serverTask;
+  const holder = useAblo((ablo) => ablo.records.claim.state({ id: serverTask.id }));
   const busy = Boolean(holder);
 
   return (

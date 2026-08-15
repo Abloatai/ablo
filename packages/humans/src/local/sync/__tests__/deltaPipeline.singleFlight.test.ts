@@ -9,9 +9,9 @@ function delta(id: number): SyncDelta {
   return {
     id,
     actionType: 'I',
-    modelName: 'Task',
-    modelId: `task-${id}`,
-    data: { id: `task-${id}` },
+    modelName: 'Item',
+    modelId: `item-${id}`,
+    data: { id: `item-${id}` },
     syncGroups: [],
     createdAt: new Date().toISOString(),
   };

@@ -10,12 +10,12 @@ import { COMMIT_CORRELATION_ID_MAX_LENGTH } from '@abloatai/transaction/wire/com
 describe('source WAL storage correlation envelope', () => {
   it('round-trips the shared correlation plus original operation identity', () => {
     const encoded = encodeSourceEchoTransactionId(
-      'corr:/project-a?participant=user-1',
+      'corr:/workspace-a?participant=user-1',
       'operation:[doc/1]'
     );
 
     expect(decodeSourceEchoTransactionId(encoded)).toEqual({
-      correlationId: 'corr:/project-a?participant=user-1',
+      correlationId: 'corr:/workspace-a?participant=user-1',
       transactionId: 'operation:[doc/1]',
     });
   });

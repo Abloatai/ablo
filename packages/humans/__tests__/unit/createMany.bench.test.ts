@@ -20,7 +20,7 @@
 import { MutationQueue } from '../../src/local/transactions/mutations/MutationQueue';
 import {
   createTestContext,
-  createTaskFixture,
+  createItemFixture,
   resetFixtureCounter,
   flushMicrotasks,
 } from '../../src/local/testing';
@@ -55,15 +55,15 @@ async function bench(
     origCommit();
   };
 
-  const tasks = Array.from({ length: n }, (_, i) =>
-    createTaskFixture({ title: `task-${i}`, status: 'todo' }),
+  const items = Array.from({ length: n }, (_, i) =>
+    createItemFixture({ title: `item-${i}`, status: 'todo' }),
   );
 
   const start = performance.now();
   if (pattern === 'sequential') {
-    for (const t of tasks) await queue.create(t, TEST_USER_CONTEXT);
+    for (const t of items) await queue.create(t, TEST_USER_CONTEXT);
   } else {
-    await Promise.all(tasks.map((t) => queue.create(t, TEST_USER_CONTEXT)));
+    await Promise.all(items.map((t) => queue.create(t, TEST_USER_CONTEXT)));
   }
   await flushMicrotasks();
   const wallMs = performance.now() - start;

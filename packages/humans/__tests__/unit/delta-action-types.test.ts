@@ -99,11 +99,11 @@ describe('CRUD delta fixtures', () => {
   });
 
   it('createInsertDelta produces { action: "I", ... }', () => {
-    const delta = createInsertDelta('Task', 'task_1', { title: 'hello' }, 42);
+    const delta = createInsertDelta('Item', 'item_1', { title: 'hello' }, 42);
     expect(delta).toMatchObject({
       id: 42,
-      modelName: 'Task',
-      modelId: 'task_1',
+      modelName: 'Item',
+      modelId: 'item_1',
       action: 'I',
       data: { title: 'hello' },
       __class: 'SyncAction',
@@ -111,32 +111,32 @@ describe('CRUD delta fixtures', () => {
   });
 
   it('createUpdateDelta produces { action: "U", ... }', () => {
-    const delta = createUpdateDelta('Task', 'task_1', { title: 'renamed' });
+    const delta = createUpdateDelta('Item', 'item_1', { title: 'renamed' });
     expect(delta.action).toBe('U');
     expect(delta.data).toEqual({ title: 'renamed' });
   });
 
   it('createDeleteDelta produces { action: "D", ... }', () => {
-    const delta = createDeleteDelta('Task', 'task_1');
+    const delta = createDeleteDelta('Item', 'item_1');
     expect(delta.action).toBe('D');
   });
 
   it('createArchiveDelta produces { action: "A", data: { archivedAt } }', () => {
-    const delta = createArchiveDelta('Task', 'task_1');
+    const delta = createArchiveDelta('Item', 'item_1');
     expect(delta.action).toBe('A');
     expect((delta.data as Record<string, unknown>).archivedAt).toBeDefined();
   });
 
   it('createUnarchiveDelta produces { action: "V", data: { archivedAt: null } }', () => {
-    const delta = createUnarchiveDelta('Task', 'task_1');
+    const delta = createUnarchiveDelta('Item', 'item_1');
     expect(delta.action).toBe('V');
     expect((delta.data as Record<string, unknown>).archivedAt).toBeNull();
   });
 
   it('auto-increments sync IDs across factory calls', () => {
-    const a = createInsertDelta('Task', 't1', {});
-    const b = createUpdateDelta('Task', 't1', {});
-    const c = createDeleteDelta('Task', 't1');
+    const a = createInsertDelta('Item', 't1', {});
+    const b = createUpdateDelta('Item', 't1', {});
+    const c = createDeleteDelta('Item', 't1');
     expect(b.id).toBe(a.id + 1);
     expect(c.id).toBe(b.id + 1);
   });
@@ -152,18 +152,18 @@ describe('createCoveringDelta', () => {
   });
 
   it('produces action="C" with the entity payload intact', () => {
-    const delta = createCoveringDelta('Task', 'task_1', { title: 'Now Visible' });
+    const delta = createCoveringDelta('Item', 'item_1', { title: 'Now Visible' });
     expect(delta.action).toBe('C');
-    expect(delta.modelName).toBe('Task');
-    expect(delta.modelId).toBe('task_1');
+    expect(delta.modelName).toBe('Item');
+    expect(delta.modelId).toBe('item_1');
     expect(delta.data).toEqual({ title: 'Now Visible' });
     expect(delta.__class).toBe('SyncAction');
   });
 
   it('supports explicit sync IDs for ordered playback', () => {
-    const a = createCoveringDelta('Task', 'task_a', {}, 100);
-    const b = createCoveringDelta('Task', 'task_b', {}, 101);
-    const c = createCoveringDelta('Task', 'task_c', {}, 102);
+    const a = createCoveringDelta('Item', 'item_a', {}, 100);
+    const b = createCoveringDelta('Item', 'item_b', {}, 101);
+    const c = createCoveringDelta('Item', 'item_c', {}, 102);
     expect([a.id, b.id, c.id]).toEqual([100, 101, 102]);
   });
 });
@@ -192,7 +192,7 @@ describe('createGroupAddedDelta (incremental shape)', () => {
     // The Go writer emits { group: <string>, userId: <string> }.
     // The client detects this shape to dispatch to handleGroupAdded
     // (no re-bootstrap) instead of the legacy handleSyncGroupChange path.
-    const delta = createGroupAddedDelta('user_alpha', 'project:proj_xyz');
+    const delta = createGroupAddedDelta('user_alpha', 'workspace:proj_xyz');
     const data = delta.data as Record<string, unknown>;
 
     expect(typeof data.group).toBe('string');
@@ -295,14 +295,14 @@ describe('Incremental sync flow fixtures', () => {
   it('constructs a GroupAdded + N Covering sequence with sequential sync IDs', () => {
     const userId = 'user_123';
     const teamGroup = 'team:team_456';
-    const taskIds = ['task_1', 'task_2', 'task_3'];
+    const itemIds = ['item_1', 'item_2', 'item_3'];
 
     // 1. User is added to the team
     const groupAdded = createGroupAddedDelta(userId, teamGroup, 1);
 
     // 2. Push the entities the user can now see
-    const coverings = taskIds.map((id, i) =>
-      createCoveringDelta('Task', id, { id, teamId: 'team_456' }, 2 + i)
+    const coverings = itemIds.map((id, i) =>
+      createCoveringDelta('Item', id, { id, teamId: 'team_456' }, 2 + i)
     );
 
     const sequence = [groupAdded, ...coverings];
@@ -317,13 +317,13 @@ describe('Incremental sync flow fixtures', () => {
     expect(first.action).toBe('G');
     expect((first.data as Record<string, unknown>).group).toBe(teamGroup);
 
-    // Remaining deltas are coverings, one per task, in order
-    for (let i = 0; i < taskIds.length; i++) {
+    // Remaining deltas are coverings, one per item, in order
+    for (let i = 0; i < itemIds.length; i++) {
       const covering = sequence[i + 1];
       if (!covering) throw new Error(`expected a covering delta at index ${i + 1}`);
       expect(covering.action).toBe('C');
-      expect(covering.modelName).toBe('Task');
-      expect(covering.modelId).toBe(taskIds[i]);
+      expect(covering.modelName).toBe('Item');
+      expect(covering.modelId).toBe(itemIds[i]);
     }
   });
 });
@@ -348,8 +348,8 @@ describe('createDelta (generic factory)', () => {
     ['S'],
   ])('accepts action letter %s', (action) => {
     const delta = createDelta({
-      modelName: 'Task',
-      modelId: 'task_1',
+      modelName: 'Item',
+      modelId: 'item_1',
       action,
     });
     expect(delta.action).toBe(action);

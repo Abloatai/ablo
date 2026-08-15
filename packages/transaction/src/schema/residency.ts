@@ -27,4 +27,3 @@ export type ModelResidency = z.infer<typeof residencySchema>;
 
 /** Default residency for a model that doesn't declare one — the tenant data plane. */
 export const DEFAULT_RESIDENCY: ModelResidency = 'tenant';
-

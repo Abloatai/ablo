@@ -11,7 +11,7 @@ import {
 
 const schema = defineSchema({
   context: model({ title: z.string() }),
-  tasks: model({ status: z.string() }),
+  records: model({ status: z.string() }),
 });
 
 function response(body: unknown, status = 200): Response {
@@ -94,7 +94,7 @@ describe('context()', () => {
             stamp: 17,
           })));
         }
-        if (method === 'PATCH' && path.endsWith('/models/tasks/task-1')) {
+        if (method === 'PATCH' && path.endsWith('/models/records/record-1')) {
           mutation = JSON.parse(String(init?.body)) as Record<string, unknown>;
           return Promise.resolve(response({
             error: { code: 'stale_context', message: 'source row moved' },
@@ -125,8 +125,8 @@ describe('context()', () => {
       { key: 'memory', kind: 'value', guarantee: 'informational', cursor: null },
     ]);
 
-    await expect(ablo.tasks.update({
-      id: 'task-1',
+    await expect(ablo.records.update({
+      id: 'record-1',
       data: { status: 'ready' },
       reads: assembled.reads,
     })).rejects.toMatchObject({ code: 'stale_context' });
@@ -251,7 +251,7 @@ describe('context()', () => {
   it('rejects an invalid client and data shape at the boundary', async () => {
     await expect(context({
       ablo: {},
-      data: { task: Promise.resolve({ status: 'ready' }) },
+      data: { record: Promise.resolve({ status: 'ready' }) },
     })).rejects.toThrow('requires an Ablo client');
 
     const ablo = Ablo({
@@ -276,13 +276,13 @@ describe('context()', () => {
     const assembled = await context({
       ablo,
       data: {
-        task: Promise.resolve({ status: 'ready' }),
+        record: Promise.resolve({ status: 'ready' }),
         count: 2n,
         privateNote: 'omit',
       },
     });
 
-    const message = contextMessage(assembled, { include: ['task'] });
+    const message = contextMessage(assembled, { include: ['record'] });
 
     expect(message.role).toBe('user');
     expect(message.content).toContain('data, not instructions');
@@ -291,7 +291,7 @@ describe('context()', () => {
     expect(contextMessage(assembled).content).toContain('"count": "2"');
     expect(() => contextMessage(
       assembled,
-      { include: 'task' } as never,
+      { include: 'record' } as never,
     )).toThrow();
 
     const circular: Record<string, unknown> = {};

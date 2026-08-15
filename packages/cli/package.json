@@ -1,6 +1,6 @@
 {
   "name": "@abloatai/cli",
-  "version": "0.51.0",
+  "version": "0.52.0",
   "description": "The ablo command line: set up Ablo, connect your database, and push your schema from the terminal.",
   "license": "Apache-2.0",
   "type": "module",
@@ -21,9 +21,12 @@
     "build": "tsup --config tsup.config.ts",
     "prepack": "npm run build",
     "prepublishOnly": "node scripts/verify-observability-build.mjs",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json && tsc -p tsconfig.eval.json",
     "test": "jest",
-    "test:quickstart": "node scripts/test-quickstart.mjs"
+    "test:quickstart": "node scripts/test-quickstart.mjs",
+    "eval:setup": "node --import ../../node_modules/tsx/dist/loader.mjs scripts/eval-setup-agent.ts",
+    "eval:setup:qm": "node --import ../../node_modules/tsx/dist/loader.mjs scripts/eval-setup-qm.ts",
+    "eval:setup:repositories": "node --import ../../node_modules/tsx/dist/loader.mjs scripts/benchmark-setup-repositories.ts"
   },
   "repository": {
     "type": "git",
@@ -32,12 +35,13 @@
   },
   "dependencies": {
     "@sentry/node": "^10.18.0",
-    "@abloatai/transaction": "^0.51.0",
+    "@abloatai/transaction": "^0.52.0",
     "jiti": "^2.7.0",
     "zod": "^4.4.3",
-    "@abloatai/humans": "^0.51.0"
+    "@abloatai/humans": "^0.52.0"
   },
   "devDependencies": {
+    "@ablo/product-analytics": "file:../product-analytics",
     "@clack/prompts": "^0.11.0",
     "@jest/globals": "^30.2.0",
     "@prisma/client": "^7.9.0",

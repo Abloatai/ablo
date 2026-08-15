@@ -52,7 +52,7 @@ to work, it can see the area is already taken. This is advisory: it informs, it
 forces nothing.
 
 ```ts
-const who = ablo.tasks.claim.state({ id: 'task_123' }); // holder or null
+const who = ablo.records.claim.state({ id: 'record_123' }); // holder or null
 // who.heldBy      === 'agent:forecaster'
 // who.description === 'rewriting the risk section to match Q3'
 ```
@@ -65,8 +65,8 @@ sentence a peer reads to decide whether to wait, work elsewhere, or move on. It
 defaults to `'editing'` when a claim is taken without one.
 
 ```ts
-await using claim = await ablo.tasks.claim({
-  id: 'task_123',
+await using claim = await ablo.records.claim({
+  id: 'record_123',
   description: 'rewriting the risk section to match Q3 numbers',
 });
 ```
@@ -92,7 +92,7 @@ A bare "taken" forces a blind retry. The rejection carries the holder's
 `description`, and the SDK renders it into the `AbloClaimedError` message:
 *"Claimed by agent:forecaster: rewriting the risk section to match Q3."* So the
 blocked agent reasons on real information: wait for the turn, go work somewhere
-else, or drop the task because the work is already being done. "No, because
+else, or drop the record because the work is already being done. "No, because
 someone is rewriting the risk section" is actionable in a way "no" is not.
 
 ### 5. Queue: take a turn, with an opt-out if the line is long
@@ -105,8 +105,8 @@ bound, an agent is told the area is too busy and moves on rather than joining a
 long line.
 
 ```ts
-await using claim = await ablo.tasks.claim({
-  id: 'task_123',
+await using claim = await ablo.records.claim({
+  id: 'record_123',
   description: '...',
   maxQueueDepth: 3, // don't join a line deeper than this
 });

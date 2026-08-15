@@ -41,11 +41,11 @@ export interface PresenceAnnouncer {
  * import { generateText, tool } from 'ai';
  * import { Agent, type AgentContext } from '@ablo/agent/perception';
  *
- * const updateSlideTool = () => tool({
+ * const updateEntryTool = () => tool({
  *   inputSchema: z.object({ id: z.string(), title: z.string() }),
  *   execute: async (args, { experimental_context }) => {
  *     const perception = Agent.fromContext(experimental_context);
- *     const check = await perception.checkFreshness('Slide', args.id, Date.now() - 5000);
+ *     const check = await perception.checkFreshness('Entry', args.id, Date.now() - 5000);
  *     if (check.stale) return check.summary;
  *     // ... actual mutation
  *   },
@@ -53,7 +53,7 @@ export interface PresenceAnnouncer {
  *
  * await generateText({
  *   model: 'anthropic/claude-sonnet-4.5',
- *   tools: { updateSlide: updateSlideTool() },
+ *   tools: { updateSlide: updateEntryTool() },
  *   experimental_context: { perception, organizationId, userId } satisfies AgentContext,
  * });
  * ```

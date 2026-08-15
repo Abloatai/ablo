@@ -102,8 +102,8 @@ function makeRecordingFetch(): { fetch: typeof fetch; calls: RecordedRequest[] }
           organizationId: 'org_1',
           scope: {
             organizationId: 'org_1',
-            syncGroups: ['deck:d1'],
-            operations: ['slide.update'],
+            syncGroups: ['collection:d1'],
+            operations: ['entry.update'],
             participantKind: 'agent',
             participantId: 'agent_7',
           },
@@ -142,7 +142,7 @@ describe('ablo.sessions.create', () => {
     const session = await ablo.sessions.create({
       user: { id: 'user_42' },
       can: { chats: ['read', 'create', 'update', 'delete'] },
-      syncGroups: ['deck:d1'],
+      syncGroups: ['collection:d1'],
       ttlSeconds: 900,
       userMeta: { id: 'user_42', name: 'Ada' },
     });
@@ -156,7 +156,7 @@ describe('ablo.sessions.create', () => {
     expect(mintCall.authorization).toBe('Bearer sk_test_backend');
     expect(mintCall.body).toMatchObject({
       user: { id: 'user_42' },
-      syncGroups: ['deck:d1'],
+      syncGroups: ['collection:d1'],
       ttlSeconds: 900,
     });
     expect(mintCall.body.operations).toEqual([

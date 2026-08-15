@@ -31,6 +31,7 @@ import { resolveTarget, describeMismatches, type ResolvedTarget } from './target
 import { brand } from './theme';
 import { renderCliError } from './renderError';
 import { participantKindSchema } from '@abloatai/transaction/coordination/schema';
+import { flushProductAnalytics, trackCliSchemaPushAttempted } from './telemetry';
 
 export interface PushArgs {
   schemaPath: string;
@@ -125,6 +126,8 @@ export async function pushSchema(
   schema: Schema,
   args: Pick<PushArgs, 'url' | 'apiKey' | 'force' | 'renames' | 'backfills'>,
 ): Promise<PushResult> {
+  trackCliSchemaPushAttempted();
+  void flushProductAnalytics();
   const schemaJson = JSON.parse(serializeSchema(schema)) as unknown;
   const res = await fetch(`${args.url}/api/schema`, {
     method: 'POST',

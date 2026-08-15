@@ -18,7 +18,7 @@ import {
   registerTestModels,
   createTestConfig,
   createTestContext,
-  TestTask,
+  TestItem,
   type TestContextResult,
 } from '../../src/local/testing';
 
@@ -32,7 +32,7 @@ describe('SyncClient scoped bootstrap apply (hydrate-on-enter)', () => {
   beforeEach(() => {
     registry = new ModelRegistry();
     setActiveRegistry(registry);
-    registerTestModels(registry); // TestTask registered under typename 'Task'
+    registerTestModels(registry); // TestItem registered under typename 'Item'
     ctx = createTestContext({ config: createTestConfig() });
     pool = new ObjectPool({ maxSize: 1000, gcInterval: 0, useWeakRefs: false }, registry);
     database = {
@@ -50,46 +50,46 @@ describe('SyncClient scoped bootstrap apply (hydrate-on-enter)', () => {
     ctx.cleanup();
   });
 
-  const titleOf = (id: string) => pool.get<TestTask>(id)?.title;
+  const titleOf = (id: string) => pool.get<TestItem>(id)?.title;
 
   it('scoped apply does NOT evict other groups’ rows of the same type', () => {
-    // Two Tasks already loaded (think: two other open decks' slides).
-    pool.add(new TestTask({ id: 'keep-1', title: 'deck-A', updatedAt: new Date('2026-01-01T00:00:00Z') }));
-    pool.add(new TestTask({ id: 'keep-2', title: 'deck-B', updatedAt: new Date('2026-01-01T00:00:00Z') }));
+    // Two Items already loaded (think: two other open collections' entries).
+    pool.add(new TestItem({ id: 'keep-1', title: 'collection-A', updatedAt: new Date('2026-01-01T00:00:00Z') }));
+    pool.add(new TestItem({ id: 'keep-2', title: 'collection-B', updatedAt: new Date('2026-01-01T00:00:00Z') }));
 
-    // A SCOPED snapshot for a third deck returns only its own row.
+    // A SCOPED snapshot for a third collection returns only its own row.
     const stats = client.applyBootstrapDataToPool(
-      { models: { Task: [{ id: 'new-1', title: 'deck-C', updatedAt: '2026-01-01T00:00:00Z' }] } },
+      { models: { Item: [{ id: 'new-1', title: 'collection-C', updatedAt: '2026-01-01T00:00:00Z' }] } },
       undefined,
       { scoped: true },
     );
 
     expect(stats.added).toBe(1);
     expect(stats.removed).toBe(0); // no ghost sweep
-    expect(titleOf('keep-1')).toBe('deck-A'); // survived
-    expect(titleOf('keep-2')).toBe('deck-B'); // survived
-    expect(titleOf('new-1')).toBe('deck-C'); // hydrated
+    expect(titleOf('keep-1')).toBe('collection-A'); // survived
+    expect(titleOf('keep-2')).toBe('collection-B'); // survived
+    expect(titleOf('new-1')).toBe('collection-C'); // hydrated
   });
 
   it('FULL apply (scoped unset) DOES ghost-remove — confirms the contrast', () => {
-    pool.add(new TestTask({ id: 'keep-1', title: 'deck-A', updatedAt: new Date('2026-01-01T00:00:00Z') }));
+    pool.add(new TestItem({ id: 'keep-1', title: 'collection-A', updatedAt: new Date('2026-01-01T00:00:00Z') }));
 
     const stats = client.applyBootstrapDataToPool(
-      { models: { Task: [{ id: 'new-1', title: 'deck-C', updatedAt: '2026-01-01T00:00:00Z' }] } },
+      { models: { Item: [{ id: 'new-1', title: 'collection-C', updatedAt: '2026-01-01T00:00:00Z' }] } },
       // no options → full bootstrap semantics
     );
 
     expect(stats.removed).toBe(1); // 'keep-1' swept as a ghost
     expect(titleOf('keep-1')).toBeUndefined();
-    expect(titleOf('new-1')).toBe('deck-C');
+    expect(titleOf('new-1')).toBe('collection-C');
   });
 
   it('scoped apply does NOT clobber a newer live row with an older snapshot row', () => {
     // A live delta already advanced the row.
-    pool.add(new TestTask({ id: 'x', title: 'live-edit', updatedAt: new Date('2026-01-02T00:00:00Z') }));
+    pool.add(new TestItem({ id: 'x', title: 'live-edit', updatedAt: new Date('2026-01-02T00:00:00Z') }));
 
     const stats = client.applyBootstrapDataToPool(
-      { models: { Task: [{ id: 'x', title: 'stale-snapshot', updatedAt: '2026-01-01T00:00:00Z' }] } },
+      { models: { Item: [{ id: 'x', title: 'stale-snapshot', updatedAt: '2026-01-01T00:00:00Z' }] } },
       undefined,
       { scoped: true },
     );

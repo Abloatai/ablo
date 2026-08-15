@@ -13,7 +13,7 @@ import { ModelRegistry, setActiveRegistry } from '../../src/local/ModelRegistry'
 import {
   createTestContext,
   registerTestModels,
-  TestTask,
+  TestItem,
   resetFixtureCounter,
 } from '../../src/local/testing';
 
@@ -46,7 +46,7 @@ describe('Property: Delta Ordering Invariants', () => {
           // Add the same model with the same syncId multiple times
           for (let i = 0; i < repeatCount; i++) {
             pool.add(
-              new TestTask({ id: modelId, title: `Attempt ${i}` }),
+              new TestItem({ id: modelId, title: `Attempt ${i}` }),
               ModelScope.live,
               { action: 'I', syncId }
             );
@@ -77,15 +77,15 @@ describe('Property: Delta Ordering Invariants', () => {
           const pool = new ObjectPool({ maxSize: 100, gcInterval: 0, useWeakRefs: false }, registry);
 
           // INSERT
-          const model = new TestTask({ id: modelId, title: title1 });
+          const model = new TestItem({ id: modelId, title: title1 });
           pool.add(model, ModelScope.live, { action: 'I', syncId: baseSyncId });
 
           // UPDATE with higher syncId — should update in place via upsert
-          const updatedModel = new TestTask({ id: modelId, title: title2 });
+          const updatedModel = new TestItem({ id: modelId, title: title2 });
           pool.upsert(updatedModel, ModelScope.live);
 
           // INVARIANT: model is still present and was updated
-          const retrieved = pool.get<TestTask>(modelId);
+          const retrieved = pool.get<TestItem>(modelId);
           expect(retrieved).toBeDefined();
           expect(retrieved!.title).toBe(title2);
 
@@ -119,7 +119,7 @@ describe('Property: Delta Ordering Invariants', () => {
           for (const op of ops) {
             if (op.type === 'insert') {
               pool.add(
-                new TestTask({ id: op.id }),
+                new TestItem({ id: op.id }),
                 ModelScope.live,
                 { action: 'I', syncId: op.syncId }
               );
@@ -131,8 +131,8 @@ describe('Property: Delta Ordering Invariants', () => {
           }
 
           // INVARIANT: type index should be consistent
-          const typeIds = pool.getIdsByModelType('Task');
-          const poolTasks = pool.getByType(TestTask, ModelScope.all);
+          const typeIds = pool.getIdsByModelType('Item');
+          const poolItems = pool.getByType(TestItem, ModelScope.all);
 
           if (typeIds) {
             // Every ID in type index should be gettable
@@ -142,7 +142,7 @@ describe('Property: Delta Ordering Invariants', () => {
             }
 
             // getByType count should match type index size (minus disposed/GC'd)
-            expect(poolTasks.length).toBeLessThanOrEqual(typeIds.size);
+            expect(poolItems.length).toBeLessThanOrEqual(typeIds.size);
           }
 
           pool.clear();
@@ -171,13 +171,13 @@ describe('Property: Delta Ordering Invariants', () => {
           for (const op of priorOps) {
             if (op === 'insert') {
               pool.add(
-                new TestTask({ id: modelId }),
+                new TestItem({ id: modelId }),
                 ModelScope.live,
                 { action: 'I', syncId: syncId++ }
               );
             } else {
               pool.upsert(
-                new TestTask({ id: modelId, title: `Update ${syncId}` }),
+                new TestItem({ id: modelId, title: `Update ${syncId}` }),
                 ModelScope.live
               );
               syncId++;
@@ -191,7 +191,7 @@ describe('Property: Delta Ordering Invariants', () => {
           expect(pool.get(modelId)).toBeUndefined();
 
           // Type index should not contain the ID
-          const typeIds = pool.getIdsByModelType('Task');
+          const typeIds = pool.getIdsByModelType('Item');
           if (typeIds) {
             expect(typeIds.has(modelId)).toBe(false);
           }

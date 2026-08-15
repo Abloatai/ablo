@@ -12,12 +12,12 @@ import { ViewRegistry } from '../../src/local/views/ViewRegistry';
 import {
   createTestContext,
   registerTestModels,
-  TestSlide,
-  TestSlideLayer,
-  TestTask,
-  createSlideFixture,
-  createSlideLayerFixture,
-  createTaskFixture,
+  TestEntry,
+  TestEntryLayer,
+  TestItem,
+  createEntryFixture,
+  createEntryLayerFixture,
+  createItemFixture,
   resetFixtureCounter,
 } from '../../src/local/testing';
 
@@ -28,9 +28,9 @@ import {
 // that keep autocomplete working in the tests.
 // ---------------------------------------------------------------------------
 
-type TaskRecord = TestTask & Record<string, unknown>;
-type SlideRecord = TestSlide & Record<string, unknown>;
-type SlideLayerRecord = TestSlideLayer & Record<string, unknown>;
+type ItemRecord = TestItem & Record<string, unknown>;
+type EntryRecord = TestEntry & Record<string, unknown>;
+type EntryLayerRecord = TestEntryLayer & Record<string, unknown>;
 
 // ---------------------------------------------------------------------------
 // Shared setup
@@ -65,44 +65,44 @@ describe('QueryView initial scan', () => {
   });
 
   it('returns all models of a type', () => {
-    const tasks = Array.from({ length: 5 }, () => createTaskFixture());
-    tasks.forEach((t) => { pool.add(t); });
+    const items = Array.from({ length: 5 }, () => createItemFixture());
+    items.forEach((t) => { pool.add(t); });
 
-    const view = pool.createView<TaskRecord>('Task');
+    const view = pool.createView<ItemRecord>('Item');
     expect(view.results).toHaveLength(5);
   });
 
   it('filters with where clause', () => {
-    pool.add(createTaskFixture({ projectId: 'p1' }));
-    pool.add(createTaskFixture({ projectId: 'p1' }));
-    pool.add(createTaskFixture({ projectId: 'p2' }));
+    pool.add(createItemFixture({ workspaceId: 'p1' }));
+    pool.add(createItemFixture({ workspaceId: 'p1' }));
+    pool.add(createItemFixture({ workspaceId: 'p2' }));
 
-    const view = pool.createView<TaskRecord>('Task', {
-      where: { projectId: 'p1' },
+    const view = pool.createView<ItemRecord>('Item', {
+      where: { workspaceId: 'p1' },
     });
 
     expect(view.results).toHaveLength(2);
-    view.results.forEach((t) => { expect(t.projectId).toBe('p1'); });
+    view.results.forEach((t) => { expect(t.workspaceId).toBe('p1'); });
   });
 
   it('filters with filter predicate', () => {
-    pool.add(createTaskFixture({ status: 'done' }));
-    pool.add(createTaskFixture({ status: 'done' }));
-    pool.add(createTaskFixture({ status: 'todo' }));
+    pool.add(createItemFixture({ status: 'done' }));
+    pool.add(createItemFixture({ status: 'done' }));
+    pool.add(createItemFixture({ status: 'todo' }));
 
-    const view = pool.createView<TaskRecord>('Task', {
-      filter: (t: TaskRecord) => t.status === 'done',
+    const view = pool.createView<ItemRecord>('Item', {
+      filter: (t: ItemRecord) => t.status === 'done',
     });
 
     expect(view.results).toHaveLength(2);
   });
 
   it('sorts by orderBy', () => {
-    pool.add(createSlideFixture({ order: 3 }));
-    pool.add(createSlideFixture({ order: 1 }));
-    pool.add(createSlideFixture({ order: 2 }));
+    pool.add(createEntryFixture({ order: 3 }));
+    pool.add(createEntryFixture({ order: 1 }));
+    pool.add(createEntryFixture({ order: 2 }));
 
-    const view = pool.createView<SlideRecord>('Slide', {
+    const view = pool.createView<EntryRecord>('Entry', {
       orderBy: 'order',
       order: 'asc',
     });
@@ -111,19 +111,19 @@ describe('QueryView initial scan', () => {
   });
 
   it('applies limit', () => {
-    Array.from({ length: 10 }, () => createTaskFixture()).forEach((t) => { pool.add(t); });
+    Array.from({ length: 10 }, () => createItemFixture()).forEach((t) => { pool.add(t); });
 
-    const view = pool.createView<TaskRecord>('Task', { limit: 3 });
+    const view = pool.createView<ItemRecord>('Item', { limit: 3 });
     expect(view.results).toHaveLength(3);
   });
 
   it('applies offset + limit', () => {
-    const slides = Array.from({ length: 10 }, (_, i) =>
-      createSlideFixture({ order: i + 1 })
+    const entries = Array.from({ length: 10 }, (_, i) =>
+      createEntryFixture({ order: i + 1 })
     );
-    slides.forEach((s) => { pool.add(s); });
+    entries.forEach((s) => { pool.add(s); });
 
-    const view = pool.createView<SlideRecord>('Slide', {
+    const view = pool.createView<EntryRecord>('Entry', {
       orderBy: 'order',
       order: 'asc',
       offset: 2,
@@ -135,20 +135,20 @@ describe('QueryView initial scan', () => {
   });
 
   it('uses FK index when available and returns correct results', () => {
-    pool.registerForeignKey('SlideLayer', 'slideId');
+    pool.registerForeignKey('EntryDetail', 'entryId');
 
-    const slide = createSlideFixture();
-    pool.add(slide);
-    pool.add(createSlideLayerFixture({ slideId: slide.id }));
-    pool.add(createSlideLayerFixture({ slideId: slide.id }));
-    pool.add(createSlideLayerFixture({ slideId: 'other-slide' }));
+    const entry = createEntryFixture();
+    pool.add(entry);
+    pool.add(createEntryLayerFixture({ entryId: entry.id }));
+    pool.add(createEntryLayerFixture({ entryId: entry.id }));
+    pool.add(createEntryLayerFixture({ entryId: 'other-entry' }));
 
-    const view = pool.createView<SlideLayerRecord>('SlideLayer', {
-      where: { slideId: slide.id },
+    const view = pool.createView<EntryLayerRecord>('EntryDetail', {
+      where: { entryId: entry.id },
     });
 
     expect(view.results).toHaveLength(2);
-    view.results.forEach((l) => { expect(l.slideId).toBe(slide.id); });
+    view.results.forEach((l) => { expect(l.entryId).toBe(entry.id); });
   });
 });
 
@@ -177,51 +177,51 @@ describe('QueryView incremental add', () => {
   });
 
   it('adding a matching model updates view results', () => {
-    pool.add(createTaskFixture({ status: 'done' }));
+    pool.add(createItemFixture({ status: 'done' }));
 
-    const view = pool.createView<TaskRecord>('Task', {
-      filter: (t: TaskRecord) => t.status === 'done',
+    const view = pool.createView<ItemRecord>('Item', {
+      filter: (t: ItemRecord) => t.status === 'done',
     });
     expect(view.results).toHaveLength(1);
 
-    pool.add(createTaskFixture({ status: 'done' }));
+    pool.add(createItemFixture({ status: 'done' }));
     expect(view.results).toHaveLength(2);
   });
 
   it('adding a non-matching model does NOT update view results', () => {
-    pool.add(createTaskFixture({ status: 'done' }));
+    pool.add(createItemFixture({ status: 'done' }));
 
-    const view = pool.createView<TaskRecord>('Task', {
-      filter: (t: TaskRecord) => t.status === 'done',
+    const view = pool.createView<ItemRecord>('Item', {
+      filter: (t: ItemRecord) => t.status === 'done',
     });
     expect(view.results).toHaveLength(1);
 
-    pool.add(createTaskFixture({ status: 'todo' }));
+    pool.add(createItemFixture({ status: 'todo' }));
     expect(view.results).toHaveLength(1);
   });
 
   it('added model is inserted in correct sort position', () => {
-    pool.add(createSlideFixture({ order: 1 }));
-    pool.add(createSlideFixture({ order: 3 }));
-    pool.add(createSlideFixture({ order: 5 }));
+    pool.add(createEntryFixture({ order: 1 }));
+    pool.add(createEntryFixture({ order: 3 }));
+    pool.add(createEntryFixture({ order: 5 }));
 
-    const view = pool.createView<SlideRecord>('Slide', {
+    const view = pool.createView<EntryRecord>('Entry', {
       orderBy: 'order',
       order: 'asc',
     });
     expect(view.results.map((s) => s.order)).toEqual([1, 3, 5]);
 
-    pool.add(createSlideFixture({ order: 2 }));
+    pool.add(createEntryFixture({ order: 2 }));
     expect(view.results.map((s) => s.order)).toEqual([1, 2, 3, 5]);
     expect(view.results[1]?.order).toBe(2);
   });
 
   it('added model respects limit', () => {
     Array.from({ length: 3 }, (_, i) =>
-      createSlideFixture({ order: i + 1 })
+      createEntryFixture({ order: i + 1 })
     ).forEach((s) => { pool.add(s); });
 
-    const view = pool.createView<SlideRecord>('Slide', {
+    const view = pool.createView<EntryRecord>('Entry', {
       orderBy: 'order',
       order: 'asc',
       limit: 3,
@@ -229,7 +229,7 @@ describe('QueryView incremental add', () => {
     expect(view.results).toHaveLength(3);
 
     // Add a model that would sort first — it enters the window, last one drops out
-    pool.add(createSlideFixture({ order: 0 }));
+    pool.add(createEntryFixture({ order: 0 }));
     expect(view.results).toHaveLength(3);
     expect(view.results[0]?.order).toBe(0);
   });
@@ -260,17 +260,17 @@ describe('QueryView incremental update', () => {
   });
 
   it('updating model that enters filter range adds it to view', () => {
-    const task = createTaskFixture({ status: 'todo' });
-    pool.add(task);
+    const item = createItemFixture({ status: 'todo' });
+    pool.add(item);
 
-    const view = pool.createView<TaskRecord>('Task', {
-      filter: (t: TaskRecord) => t.status === 'done',
+    const view = pool.createView<ItemRecord>('Item', {
+      filter: (t: ItemRecord) => t.status === 'done',
     });
     expect(view.results).toHaveLength(0);
 
     // Mutate via upsert — upsert calls updateFromData on existing model
-    const updated = new TestTask({ ...task, status: 'done' });
-    updated.id = task.id;
+    const updated = new TestItem({ ...item, status: 'done' });
+    updated.id = item.id;
     pool.upsert(updated, ModelScope.live);
 
     expect(view.results).toHaveLength(1);
@@ -278,37 +278,37 @@ describe('QueryView incremental update', () => {
   });
 
   it('updating model that exits filter range removes it from view', () => {
-    const task = createTaskFixture({ status: 'done' });
-    pool.add(task);
+    const item = createItemFixture({ status: 'done' });
+    pool.add(item);
 
-    const view = pool.createView<TaskRecord>('Task', {
-      filter: (t: TaskRecord) => t.status === 'done',
+    const view = pool.createView<ItemRecord>('Item', {
+      filter: (t: ItemRecord) => t.status === 'done',
     });
     expect(view.results).toHaveLength(1);
 
-    const updated = new TestTask({ ...task, status: 'todo' });
-    updated.id = task.id;
+    const updated = new TestItem({ ...item, status: 'todo' });
+    updated.id = item.id;
     pool.upsert(updated, ModelScope.live);
 
     expect(view.results).toHaveLength(0);
   });
 
   it('updating sort field repositions model', () => {
-    const s1 = createSlideFixture({ order: 1 });
-    const s2 = createSlideFixture({ order: 2 });
-    const s3 = createSlideFixture({ order: 3 });
+    const s1 = createEntryFixture({ order: 1 });
+    const s2 = createEntryFixture({ order: 2 });
+    const s3 = createEntryFixture({ order: 3 });
     pool.add(s1);
     pool.add(s2);
     pool.add(s3);
 
-    const view = pool.createView<SlideRecord>('Slide', {
+    const view = pool.createView<EntryRecord>('Entry', {
       orderBy: 'order',
       order: 'asc',
     });
     expect(view.results.map((s) => s.order)).toEqual([1, 2, 3]);
 
     // Move s1 to the end
-    const updated = new TestSlide({ ...s1, order: 10 });
+    const updated = new TestEntry({ ...s1, order: 10 });
     updated.id = s1.id;
     pool.upsert(updated, ModelScope.live);
 
@@ -316,17 +316,17 @@ describe('QueryView incremental update', () => {
   });
 
   it('updating non-relevant field does not change view order or membership', () => {
-    const task = createTaskFixture({ status: 'done', title: 'Original' });
-    pool.add(task);
+    const item = createItemFixture({ status: 'done', title: 'Original' });
+    pool.add(item);
 
-    const view = pool.createView<TaskRecord>('Task', {
-      filter: (t: TaskRecord) => t.status === 'done',
+    const view = pool.createView<ItemRecord>('Item', {
+      filter: (t: ItemRecord) => t.status === 'done',
     });
     expect(view.results).toHaveLength(1);
 
     // Update title (not filtered/sorted on)
-    const updated = new TestTask({ ...task, title: 'Updated' });
-    updated.id = task.id;
+    const updated = new TestItem({ ...item, title: 'Updated' });
+    updated.id = item.id;
     pool.upsert(updated, ModelScope.live);
 
     expect(view.results).toHaveLength(1);
@@ -359,14 +359,14 @@ describe('QueryView incremental remove', () => {
   });
 
   it('removing a model from pool removes it from view', () => {
-    const t1 = createTaskFixture();
-    const t2 = createTaskFixture();
-    const t3 = createTaskFixture();
+    const t1 = createItemFixture();
+    const t2 = createItemFixture();
+    const t3 = createItemFixture();
     pool.add(t1);
     pool.add(t2);
     pool.add(t3);
 
-    const view = pool.createView<TaskRecord>('Task');
+    const view = pool.createView<ItemRecord>('Item');
     expect(view.results).toHaveLength(3);
 
     pool.remove(t2.id);
@@ -375,13 +375,13 @@ describe('QueryView incremental remove', () => {
   });
 
   it('removing a model not in view does not affect view', () => {
-    const matching = createTaskFixture({ status: 'done' });
-    const nonMatching = createTaskFixture({ status: 'todo' });
+    const matching = createItemFixture({ status: 'done' });
+    const nonMatching = createItemFixture({ status: 'todo' });
     pool.add(matching);
     pool.add(nonMatching);
 
-    const view = pool.createView<TaskRecord>('Task', {
-      filter: (t: TaskRecord) => t.status === 'done',
+    const view = pool.createView<ItemRecord>('Item', {
+      filter: (t: ItemRecord) => t.status === 'done',
     });
     expect(view.results).toHaveLength(1);
 
@@ -416,41 +416,41 @@ describe('ViewRegistry', () => {
   });
 
   it('notifies correct views by typename', () => {
-    const taskView = pool.createView<TaskRecord>('Task');
-    const slideView = pool.createView<SlideRecord>('Slide');
+    const itemView = pool.createView<ItemRecord>('Item');
+    const entryView = pool.createView<EntryRecord>('Entry');
 
-    pool.add(createTaskFixture());
+    pool.add(createItemFixture());
 
-    expect(taskView.results).toHaveLength(1);
-    expect(slideView.results).toHaveLength(0);
+    expect(itemView.results).toHaveLength(1);
+    expect(entryView.results).toHaveLength(0);
   });
 
   it('disposed view stops receiving notifications', () => {
-    const view = pool.createView<TaskRecord>('Task');
-    pool.add(createTaskFixture());
+    const view = pool.createView<ItemRecord>('Item');
+    pool.add(createItemFixture());
     expect(view.results).toHaveLength(1);
 
     view.dispose();
 
-    pool.add(createTaskFixture());
+    pool.add(createItemFixture());
     // After dispose, results should not update
     expect(view.results).toHaveLength(1);
   });
 
   it('multiple views on same typename both get notified', () => {
-    const doneView = pool.createView<TaskRecord>('Task', {
-      filter: (t: TaskRecord) => t.status === 'done',
+    const doneView = pool.createView<ItemRecord>('Item', {
+      filter: (t: ItemRecord) => t.status === 'done',
     });
-    const todoView = pool.createView<TaskRecord>('Task', {
-      filter: (t: TaskRecord) => t.status === 'todo',
+    const todoView = pool.createView<ItemRecord>('Item', {
+      filter: (t: ItemRecord) => t.status === 'todo',
     });
 
-    pool.add(createTaskFixture({ status: 'done' }));
+    pool.add(createItemFixture({ status: 'done' }));
 
     expect(doneView.results).toHaveLength(1);
     expect(todoView.results).toHaveLength(0);
 
-    pool.add(createTaskFixture({ status: 'todo' }));
+    pool.add(createItemFixture({ status: 'todo' }));
 
     expect(doneView.results).toHaveLength(1);
     expect(todoView.results).toHaveLength(1);
@@ -482,44 +482,44 @@ describe('QueryView ObjectPool integration', () => {
   });
 
   it('pool.add() notifies views', () => {
-    const view = pool.createView<TaskRecord>('Task');
+    const view = pool.createView<ItemRecord>('Item');
     expect(view.results).toHaveLength(0);
 
-    pool.add(createTaskFixture());
+    pool.add(createItemFixture());
     expect(view.results).toHaveLength(1);
   });
 
   it('pool.addBatch() notifies views', () => {
-    const view = pool.createView<TaskRecord>('Task');
+    const view = pool.createView<ItemRecord>('Item');
 
-    const tasks = Array.from({ length: 5 }, () => createTaskFixture());
-    pool.addBatch(tasks);
+    const items = Array.from({ length: 5 }, () => createItemFixture());
+    pool.addBatch(items);
 
     expect(view.results).toHaveLength(5);
   });
 
   it('pool.remove() notifies views', () => {
-    const task = createTaskFixture();
-    pool.add(task);
+    const item = createItemFixture();
+    pool.add(item);
 
-    const view = pool.createView<TaskRecord>('Task');
+    const view = pool.createView<ItemRecord>('Item');
     expect(view.results).toHaveLength(1);
 
-    pool.remove(task.id);
+    pool.remove(item.id);
     expect(view.results).toHaveLength(0);
   });
 
   it('pool.upsertBatch() notifies views for updates', () => {
-    const task = createTaskFixture({ status: 'todo' });
-    pool.add(task);
+    const item = createItemFixture({ status: 'todo' });
+    pool.add(item);
 
-    const view = pool.createView<TaskRecord>('Task', {
-      filter: (t: TaskRecord) => t.status === 'done',
+    const view = pool.createView<ItemRecord>('Item', {
+      filter: (t: ItemRecord) => t.status === 'done',
     });
     expect(view.results).toHaveLength(0);
 
-    const updated = new TestTask({ ...task, status: 'done' });
-    updated.id = task.id;
+    const updated = new TestItem({ ...item, status: 'done' });
+    updated.id = item.id;
     pool.upsertBatch([updated], ModelScope.live);
 
     expect(view.results).toHaveLength(1);
@@ -551,25 +551,25 @@ describe('QueryView edge cases', () => {
   });
 
   it('view with no options returns all models of type', () => {
-    pool.add(createTaskFixture());
-    pool.add(createTaskFixture());
-    pool.add(createTaskFixture());
+    pool.add(createItemFixture());
+    pool.add(createItemFixture());
+    pool.add(createItemFixture());
 
-    const view = pool.createView<TaskRecord>('Task');
+    const view = pool.createView<ItemRecord>('Item');
     expect(view.results).toHaveLength(3);
   });
 
   it('view on empty pool returns empty array', () => {
-    const view = pool.createView<TaskRecord>('Task');
+    const view = pool.createView<ItemRecord>('Item');
     expect(view.results).toHaveLength(0);
     expect(Array.from(view.results)).toEqual([]);
   });
 
   it('results reference is stable across mutations', () => {
-    const view = pool.createView<TaskRecord>('Task');
+    const view = pool.createView<ItemRecord>('Item');
     const ref = view.results;
 
-    pool.add(createTaskFixture());
+    pool.add(createItemFixture());
     // The results reference should be the same object (important for React)
     expect(view.results).toBe(ref);
     expect(ref).toHaveLength(1);

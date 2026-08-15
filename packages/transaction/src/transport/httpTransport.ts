@@ -203,6 +203,7 @@ const DEFAULT_CLAIM_TTL_MS = 60_000;
 export interface HttpTransport {
   ready(): Promise<void>;
   waitForFlush(): Promise<void>;
+  /** Drains scheduled commits and active requests. */
   dispose(): Promise<void>;
   purge(): Promise<void>;
   readonly commits: CommitResource;
@@ -361,6 +362,26 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   let readyPromise: Promise<void> | null = null;
   let effectiveAuthority: EffectiveAuthority | null = null;
   let httpCommitLane: Promise<void> = Promise.resolve();
+  let activeRequests = 0;
+  let requestIdleWaiters: Array<() => void> = [];
+  let disposePromise: Promise<void> | null = null;
+
+  function requestStarted(): void {
+    activeRequests += 1;
+  }
+
+  function requestFinished(): void {
+    activeRequests -= 1;
+    if (activeRequests !== 0) return;
+    const waiters = requestIdleWaiters;
+    requestIdleWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  function waitForRequestIdle(): Promise<void> {
+    if (activeRequests === 0) return Promise.resolve();
+    return new Promise((resolve) => requestIdleWaiters.push(resolve));
+  }
 
   function runInHttpCommitLane<T>(work: () => Promise<T>): Promise<T> {
     const result = httpCommitLane.then(work);
@@ -475,7 +496,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
    * the commit paths do with their receipt schema. Everywhere else, go through
    * {@link requestJson}, which will not let a response past unvalidated.
    */
-  async function requestRaw(
+  async function performRequest(
     path: string,
     init: RequestInit & {
       readonly idempotencyKey?: string | null;
@@ -555,6 +576,22 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     }
 
     return body;
+  }
+
+  async function requestRaw(
+    path: string,
+    init: RequestInit & {
+      readonly idempotencyKey?: string | null;
+      readonly sealedProtocolVersion?: number;
+    },
+    skipReady = false
+  ): Promise<unknown> {
+    requestStarted();
+    try {
+      return await performRequest(path, init, skipReady);
+    } finally {
+      requestFinished();
+    }
   }
 
   /**
@@ -729,6 +766,11 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     initial: CommitResponse
   ): Promise<CommitResponse> {
     let current = initial;
+    const operationResults = initial.operationResults;
+    const withOperationResults = (receipt: CommitResponse): CommitResponse =>
+      operationResults?.length
+        ? { ...receipt, operationResults }
+        : receipt;
     const correlationId = initial.correlationId;
     const deadlineAt = requestTimeoutMs > 0 ? Date.now() + requestTimeoutMs : null;
 
@@ -780,7 +822,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         if (confirmationDeadline) clearTimeout(confirmationDeadline);
       }
 
-      if (current.status === 'confirmed') return current;
+      if (current.status === 'confirmed') return withOperationResults(current);
       const delayMs =
         deadlineAt === null
           ? HTTP_CONFIRMATION_POLL_INTERVAL_MS
@@ -791,7 +833,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         });
       }
     }
-    return current;
+    return withOperationResults(current);
   }
 
   async function replayHttpCommitOutbox(): Promise<Map<string, ReplayedHttpCommit>> {
@@ -1111,6 +1153,7 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
       model: op.model,
       id: op.id ?? null,
       data: op.data ?? null,
+      where: op.where ?? null,
       transactionId: op.transactionId ?? null,
       claimId:
         op.claimId ?? claimIdFor(claim?.target, claim?.id, op.model, op.id ?? null),
@@ -1392,6 +1435,9 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
           ? { notifications: body.notifications }
           : {}),
         ...(body.missingIds && body.missingIds.length > 0 ? { missingIds: body.missingIds } : {}),
+        ...(body.operationResults && body.operationResults.length > 0
+          ? { operationResults: body.operationResults }
+          : {}),
       };
     },
     get({ id }) {
@@ -2053,7 +2099,16 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         const replayed = await replayHttpCommitOutbox();
         await confirmReplayedHttpCommits(replayed);
       }),
-    async dispose() {},
+    dispose() {
+      if (!disposePromise) {
+        const scheduledCommits = httpCommitLane;
+        disposePromise = (async () => {
+          await scheduledCommits;
+          await waitForRequestIdle();
+        })();
+      }
+      return disposePromise;
+    },
     async purge() {},
     commits,
     claims,

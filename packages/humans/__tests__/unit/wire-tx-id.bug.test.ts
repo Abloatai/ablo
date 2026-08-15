@@ -44,7 +44,7 @@ import {
   registerTestModels,
   createTestConfig,
   createTestContext,
-  createSlideLayerFixture,
+  createEntryLayerFixture,
   resetFixtureCounter,
   flushMicrotasks,
   type TestContextResult,
@@ -145,13 +145,13 @@ describe('wire-level transactionId roundtrip (chart-delete flicker root cause)',
   it('attaches per-op transactionId to each operation in commit(...)', async () => {
     const queue = client.getMutationQueue();
 
-    const layer1 = createSlideLayerFixture({
-      slideId: 'slide-1',
+    const layer1 = createEntryLayerFixture({
+      entryId: 'entry-1',
       type: 'rect',
       zIndex: 0,
     });
-    const layer2 = createSlideLayerFixture({
-      slideId: 'slide-1',
+    const layer2 = createEntryLayerFixture({
+      entryId: 'entry-1',
       type: 'rect',
       zIndex: 1,
     });
@@ -196,22 +196,22 @@ describe('wire-level transactionId roundtrip (chart-delete flicker root cause)',
 
     // Step 1: optimistic CREATE via the queue (publishes
     // 'transaction:created' → SyncClient.markTransactionPending).
-    const layer = createSlideLayerFixture({
-      slideId: 'slide-1',
+    const layer = createEntryLayerFixture({
+      entryId: 'entry-1',
       type: 'rect',
       zIndex: 0,
     });
     const layerId = layer.id;
     const layerData = {
       id: layerId,
-      slideId: 'slide-1',
+      entryId: 'entry-1',
       type: 'rect',
       zIndex: 0,
       organizationId: 'org-1',
     };
 
     // Mirror what the optimistic-add path does: pool reflects the
-    // create immediately. (TestSlideLayer fixtures don't auto-add to
+    // create immediately. (TestEntryLayer fixtures don't auto-add to
     // pool; we add manually so the test is hermetic.)
     pool.add(layer, ModelScope.live);
     expect(pool.get(layerId)).toBeDefined();
@@ -238,7 +238,7 @@ describe('wire-level transactionId roundtrip (chart-delete flicker root cause)',
     const createEchoBatch: DbResult[] = [
       {
         action: 'add',
-        modelName: 'SlideLayer',
+        modelName: 'EntryDetail',
         modelId: layerId,
         data: layerData,
         transactionId: txCreate.id,
@@ -256,7 +256,7 @@ describe('wire-level transactionId roundtrip (chart-delete flicker root cause)',
     const deleteEchoBatch: DbResult[] = [
       {
         action: 'remove',
-        modelName: 'SlideLayer',
+        modelName: 'EntryDetail',
         modelId: layerId,
         transactionId: txDelete.id,
       },
@@ -277,15 +277,15 @@ describe('wire-level transactionId roundtrip (chart-delete flicker root cause)',
   it('row resurrects (the bug) when delta echo carries a wrong transactionId — proves the wire identity must match', async () => {
     const queue = client.getMutationQueue();
 
-    const layer = createSlideLayerFixture({
-      slideId: 'slide-1',
+    const layer = createEntryLayerFixture({
+      entryId: 'entry-1',
       type: 'rect',
       zIndex: 0,
     });
     const layerId = layer.id;
     const layerData = {
       id: layerId,
-      slideId: 'slide-1',
+      entryId: 'entry-1',
       type: 'rect',
       zIndex: 0,
       organizationId: 'org-1',
@@ -306,7 +306,7 @@ describe('wire-level transactionId roundtrip (chart-delete flicker root cause)',
     const buggyEchoBatch: DbResult[] = [
       {
         action: 'add',
-        modelName: 'SlideLayer',
+        modelName: 'EntryDetail',
         modelId: layerId,
         data: layerData,
         transactionId: wrongBatchHash,

@@ -62,10 +62,10 @@ describeE2E('E2E: Reconnection & Auth', () => {
       // First connection
       const ws1 = await connectWS(USER_ID, ORG_ID);
 
-      // Create a task while connected
-      const taskBefore = uuid();
+      // Create a item while connected
+      const itemBefore = uuid();
       await batchAck([{
-        type: 'CREATE', model: 'task', id: taskBefore,
+        type: 'CREATE', model: 'item', id: itemBefore,
         input: { title: 'Before disconnect', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
@@ -75,10 +75,10 @@ describeE2E('E2E: Reconnection & Auth', () => {
       ws1.close();
       await new Promise((r) => setTimeout(r, 500));
 
-      // Create a task while disconnected
-      const taskDuring = uuid();
+      // Create a item while disconnected
+      const itemDuring = uuid();
       await batchAck([{
-        type: 'CREATE', model: 'task', id: taskDuring,
+        type: 'CREATE', model: 'item', id: itemDuring,
         input: { title: 'During disconnect', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
@@ -94,17 +94,17 @@ describeE2E('E2E: Reconnection & Auth', () => {
         } catch { /* ignore */ }
       });
 
-      // Create another task after reconnect
-      const taskAfter = uuid();
+      // Create another item after reconnect
+      const itemAfter = uuid();
       await batchAck([{
-        type: 'CREATE', model: 'task', id: taskAfter,
+        type: 'CREATE', model: 'item', id: itemAfter,
         input: { title: 'After reconnect', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
       await new Promise((r) => setTimeout(r, 2000));
 
       // Should receive the post-reconnect delta
-      expect(deltasAfterReconnect.has(taskAfter)).toBe(true);
+      expect(deltasAfterReconnect.has(itemAfter)).toBe(true);
 
       ws2.close();
     }, 15000);
@@ -117,7 +117,7 @@ describeE2E('E2E: Reconnection & Auth', () => {
         headers: { 'Content-Type': 'application/json' },
         // No X-User-Id or X-Organization-Id
         body: JSON.stringify({
-          query: `mutation { batchAck(operations: [{type: CREATE, model: "task", id: "no-auth"}]) { lastSyncId } }`,
+          query: `mutation { batchAck(operations: [{type: CREATE, model: "item", id: "no-auth"}]) { lastSyncId } }`,
         }),
       });
 
@@ -154,7 +154,7 @@ describeE2E('E2E: Reconnection & Auth', () => {
 
   describe('org isolation', () => {
     it('should not leak data across organizations via batchAck', async () => {
-      // Try to create a task in a different org (one that exists but user doesn't belong to)
+      // Try to create a item in a different org (one that exists but user doesn't belong to)
       const otherOrgId = '8d1a7282-bc8e-4715-b53e-843dba785576'; // Ablossss org from DB
 
       const res = await fetch(GRAPHQL_URL, {
@@ -168,7 +168,7 @@ describeE2E('E2E: Reconnection & Auth', () => {
           query: `mutation BatchAck($operations: [MutationOperation!]!) { batchAck(operations: $operations) { lastSyncId } }`,
           variables: {
             operations: [{
-              type: 'CREATE', model: 'task', id: uuid(),
+              type: 'CREATE', model: 'item', id: uuid(),
               input: { title: 'Cross-org test', organizationId: otherOrgId, createdBy: USER_ID },
             }],
           },

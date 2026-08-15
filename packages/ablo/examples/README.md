@@ -30,13 +30,13 @@ For read-reason-write work, pass the exact returned rows that informed the
 decision. Their watermarks stay opaque:
 
 ```ts
-const task = await ablo.tasks.get({ id: taskId });
+const record = await ablo.records.get({ id: recordId });
 const policy = await ablo.policies.get({ id: policyId });
-const result = await model({ task, policy });
-await ablo.tasks.update({
-  id: task.id,
+const result = await model({ record, policy });
+await ablo.records.update({
+  id: record.id,
   data: result,
-  reads: [task, policy],
+  reads: [record, policy],
 });
 ```
 
@@ -61,7 +61,7 @@ root and a bare `quickstart.ts` won't be found.
 ```bash
 cd packages/ablo
 ABLO_API_KEY=sk_... npx tsx examples/quickstart.ts
-ABLO_API_KEY=sk_... TASK_ID=task_... npx tsx examples/agent-turn.ts
+ABLO_API_KEY=sk_... RECORD_ID=record_... npx tsx examples/agent-turn.ts
 ABLO_API_KEY=sk_... JOB_ID=job_... npx tsx examples/expensive-agent-turn.ts
 ```
 

@@ -12,6 +12,8 @@
 import {
   type EphemeralKeyResponse,
   type IdentityResolveResponse,
+  type SessionCredentialMetadata,
+  type SessionCredentialRevocationRequest,
   parseCapabilityMintResponse,
   parseEphemeralKeyResponse,
   parseIdentityResolveResponse,
@@ -39,6 +41,26 @@ export type CapabilityExchangeResponse = CapabilityMintResponse;
 export type {
   EphemeralKeyResponse,
   IdentityResolveResponse,
+  SessionCredentialMetadata,
+  SessionCredentialRevocationRequest,
+} from './schemas.js';
+export {
+  buildSessionIssuanceMacMessage,
+  canonicalizeSessionIssuanceBody,
+  opaqueSessionFingerprintSchema,
+  sha256HexSchema,
+  SESSION_ISSUANCE_HEADERS,
+  SESSION_ISSUANCE_MAC_VERSION,
+  SESSION_ISSUANCE_PATHS,
+  SESSION_ISSUANCE_SLOT_VERSION,
+  sessionIssuanceMacHeadersSchema,
+  sessionIssuanceMacMessageSchema,
+  type SessionIssuanceMacHeaders,
+  type SessionIssuanceMacMessage,
+} from './sessionIssuanceProtocol.js';
+export {
+  SessionCredentialMetadataSchema,
+  SessionCredentialRevocationRequestSchema,
 } from './schemas.js';
 export { parseCapabilityMintResponse } from './schemas.js';
 export {
@@ -99,6 +121,10 @@ export type {
 // A re-export does not bind the name in this module, and the mint request type
 // below needs it.
 import type { CapabilityOperation } from './capability.js';
+import {
+  ephemeralKeyRequestSchema,
+  type EphemeralKeyRequest,
+} from '../wire/auth.js';
 
 export interface ExchangeApiKeyRequest {
   readonly apiKey: string;
@@ -265,6 +291,30 @@ export type MintUserSessionRequest = MintUserSessionBase & {
   readonly controlPlaneOnly?: true;
 };
 
+/** Canonical wire projection shared by the SDK and first-party issuer. */
+export function buildMintUserSessionRequest(
+  options: MintUserSessionRequest,
+): EphemeralKeyRequest {
+  return ephemeralKeyRequestSchema.parse({
+    user: { id: options.userId },
+    ...(options.organizationId ? { organizationId: options.organizationId } : {}),
+    ...(options.schemaProject
+      ? {
+          schemaProjectId: options.schemaProject.projectId,
+          schemaOwnerOrgId: options.schemaProject.organizationId,
+        }
+      : {}),
+    ...(options.syncGroups ? { syncGroups: options.syncGroups } : {}),
+    ...(options.controlPlaneOnly
+      ? { controlPlaneOnly: true }
+      : options.operations
+        ? { operations: options.operations }
+        : { activeSchemaOperations: options.activeSchemaOperations }),
+    ttlSeconds: options.ttlSeconds,
+    ...(options.label ? { label: options.label } : {}),
+  });
+}
+
 /**
  * Mints an end-user session key (an `ek_` key) by calling
  * `POST /v1/ephemeral_keys`, using your secret key as authorization. Your
@@ -322,26 +372,7 @@ export async function mintUserSessionKey(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${options.apiKey}`,
       },
-      body: JSON.stringify({
-        user: { id: options.userId },
-        ...(options.organizationId ? { organizationId: options.organizationId } : {}),
-        // The public option is project-centric; map it to the flat wire keys the
-        // endpoint expects.
-        ...(options.schemaProject
-          ? {
-              schemaProjectId: options.schemaProject.projectId,
-              schemaOwnerOrgId: options.schemaProject.organizationId,
-            }
-          : {}),
-        ...(options.syncGroups ? { syncGroups: options.syncGroups } : {}),
-        ...(options.controlPlaneOnly
-          ? { controlPlaneOnly: true }
-          : options.operations
-            ? { operations: options.operations }
-            : { activeSchemaOperations: options.activeSchemaOperations }),
-        ttlSeconds: options.ttlSeconds,
-        ...(options.label ? { label: options.label } : {}),
-      }),
+      body: JSON.stringify(buildMintUserSessionRequest(options)),
       signal: controller.signal,
     });
   } catch (err) {

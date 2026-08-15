@@ -13,8 +13,8 @@ into authoritative application state.
 
 | Category | Integration | Status | Use it for |
 |---|---|---|---|
-| Long-running tasks | [Temporal](./integrations/temporal.md) | Available | Durable Workflows, Activity retries, timers, cancellation, and durable AI SDK calls |
-| Long-running tasks | [Inngest](./integrations/inngest.md) | Available | Event-driven durable functions, retriable steps, flow control, and checkpointed AI SDK calls |
+| Long-running records | [Temporal](./integrations/temporal.md) | Available | Durable Workflows, Activity retries, timers, cancellation, and durable AI SDK calls |
+| Long-running records | [Inngest](./integrations/inngest.md) | Available | Event-driven durable functions, retriable steps, flow control, and checkpointed AI SDK calls |
 | Data ingestion | Connector runtimes | Planned | Bringing external data into Ablo-backed models without creating a second write authority |
 
 An integration gets its own guide when there is runnable application code and
@@ -22,7 +22,7 @@ the boundary has been tested. A dedicated package comes later still: only
 repeated production integrations that reveal substantial reusable behavior
 justify adding another public runtime dependency.
 
-## Long-running tasks
+## Long-running records
 
 Use [Temporal](./integrations/temporal.md) when work must survive process
 failure, retry Activities, wait on timers, or preserve a durable model loop.

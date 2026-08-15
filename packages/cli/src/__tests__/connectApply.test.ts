@@ -28,7 +28,7 @@ function expectedGrants(input: { tables?: readonly string[]; role?: string; writ
 
 describe('ownershipBlockers — the shared ownership preflight decision', () => {
   const row = (over: Partial<OwnedRelationRow>): OwnedRelationRow => ({
-    relation: 'public.documents',
+    relation: 'public.records',
     owner: 'ablo_app',
     can_manage: false,
     is_superuser: false,
@@ -41,7 +41,7 @@ describe('ownershipBlockers — the shared ownership preflight decision', () => 
   });
 
   it('passes when the admin INHERITs the owning role (managed-Postgres common case)', () => {
-    // The throwaway case: `documents` is owned by `ablo_app`, but the admin is an
+    // The throwaway case: `records` is owned by `ablo_app`, but the admin is an
     // inheriting member of it, so `pg_has_role(…, 'USAGE')` is true and the grant
     // succeeds. This must NOT be flagged, or a working setup would be blocked.
     expect(ownershipBlockers([row({ can_manage: true, can_grant_inherit: true })])).toEqual([]);
@@ -52,18 +52,18 @@ describe('ownershipBlockers — the shared ownership preflight decision', () => 
   });
 
   it('reports relations the admin can neither own nor act as owner for, carrying the self-grant flag', () => {
-    // The adopter case: `documents` owned by a legacy `ablo_app` the admin reaches
+    // The adopter case: `records` owned by a legacy `ablo_app` the admin reaches
     // only through a NOINHERIT membership, so the writer grants fail with
-    // `must be owner of table documents`. `canGrantInherit` rides along so the
+    // `must be owner of table records`. `canGrantInherit` rides along so the
     // caller can print the fix that runs.
     expect(
       ownershipBlockers([
-        row({ relation: 'public.documents', can_grant_inherit: true }),
-        row({ relation: 'public.tasks', owner: 'neondb_owner', can_manage: true }),
+        row({ relation: 'public.records', can_grant_inherit: true }),
+        row({ relation: 'public.records', owner: 'neondb_owner', can_manage: true }),
         row({ relation: 'public.projects', can_grant_inherit: true }),
       ]),
     ).toEqual([
-      { relation: 'public.documents', owner: 'ablo_app', canGrantInherit: true },
+      { relation: 'public.records', owner: 'ablo_app', canGrantInherit: true },
       { relation: 'public.projects', owner: 'ablo_app', canGrantInherit: true },
     ]);
   });
@@ -80,12 +80,12 @@ describe('ownershipBlockers — the shared ownership preflight decision', () => 
 
 describe('ownershipRemediation — the fix that actually runs', () => {
   it('emits one inherit-grant per owning role, not per table, when the admin can self-grant', () => {
-    // The adopter case, now with the correct fix: `documents` and `projects` are
+    // The adopter case, now with the correct fix: `records` and `projects` are
     // both owned by `ablo_app`, so one `GRANT ablo_app … WITH INHERIT TRUE`
     // unblocks both — reassigning ownership could never run from a non-owner.
     const { inheritGrants, unresolved } = ownershipRemediation(
       [
-        { relation: 'public.documents', owner: 'ablo_app', canGrantInherit: true },
+        { relation: 'public.records', owner: 'ablo_app', canGrantInherit: true },
         { relation: 'public.projects', owner: 'ablo_app', canGrantInherit: true },
       ],
       'neondb_owner',
@@ -98,19 +98,19 @@ describe('ownershipRemediation — the fix that actually runs', () => {
     // No admin option on `legacy_app`: the admin can't grant itself inheritance,
     // so there is no runnable one-liner — it must reconnect as an authorized role.
     const { inheritGrants, unresolved } = ownershipRemediation(
-      [{ relation: 'public.documents', owner: 'legacy_app', canGrantInherit: false }],
+      [{ relation: 'public.records', owner: 'legacy_app', canGrantInherit: false }],
       'neondb_owner',
     );
     expect(inheritGrants).toEqual([]);
     expect(unresolved).toEqual([
-      { relation: 'public.documents', owner: 'legacy_app', canGrantInherit: false },
+      { relation: 'public.records', owner: 'legacy_app', canGrantInherit: false },
     ]);
   });
 
   it('splits a mixed set — grants what it can, defers what it cannot', () => {
     const { inheritGrants, unresolved } = ownershipRemediation(
       [
-        { relation: 'public.documents', owner: 'ablo_app', canGrantInherit: true },
+        { relation: 'public.records', owner: 'ablo_app', canGrantInherit: true },
         { relation: 'public.audit', owner: 'legacy_app', canGrantInherit: false },
       ],
       'neondb_owner',
@@ -125,7 +125,7 @@ describe('ownershipRemediation — the fix that actually runs', () => {
 describe('formatUnresolvedOwnership — the only ownership error, for what apply cannot fix', () => {
   it('names the concrete grant an authorized role must run', () => {
     const text = formatUnresolvedOwnership(
-      [{ relation: 'public.documents', owner: 'legacy_app', canGrantInherit: false }],
+      [{ relation: 'public.records', owner: 'legacy_app', canGrantInherit: false }],
       'neondb_owner',
       'db.example.com/app',
     );
@@ -142,7 +142,7 @@ describe('formatUnresolvedOwnership — the only ownership error, for what apply
     expect(withLedger).toContain('DROP TABLE ablo_idempotency;');
 
     const tableOnly = formatUnresolvedOwnership(
-      [{ relation: 'public.documents', owner: 'legacy_app', canGrantInherit: false }],
+      [{ relation: 'public.records', owner: 'legacy_app', canGrantInherit: false }],
       'neondb_owner',
       'db.example.com/app',
     );

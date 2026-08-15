@@ -3,7 +3,7 @@
  *
  * The schema is the contract between three sides:
  *
- *   1. The application UI — `ablo.tasks.update(...)`.
+ *   1. The application UI — `ablo.records.update(...)`.
  *   2. The Ablo Cloud — translates writes into signed POSTs.
  *   3. The customer's Data Source endpoint — applies them to its own
  *      database.
@@ -15,7 +15,7 @@
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
 export const schema = defineSchema({
-  tasks: model({
+  records: model({
     title: z.string(),
     status: z.enum(['todo', 'doing', 'done']),
     assignee: z.string().optional(),

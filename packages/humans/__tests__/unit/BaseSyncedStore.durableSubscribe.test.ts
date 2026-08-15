@@ -52,7 +52,7 @@ class FakeWebSocket {
 }
 
 interface CursorEvents {
-  'slide:cursor': [{ deckId: string; slideId: string; x: number; y: number }];
+  'entry:cursor': [{ collectionId: string; entryId: string; x: number; y: number }];
 }
 
 type Store = BaseSyncedStore<CursorEvents>;
@@ -70,7 +70,7 @@ const liveConnections: SyncWebSocket<CursorEvents>[] = [];
 function makeStore(): { store: StoreShell; ws: SyncWebSocket<CursorEvents> } {
   const ws = new SyncWebSocket<CursorEvents>({
     baseUrl: 'http://localhost:8080',
-    collaborationEvents: ['slide:cursor'],
+    collaborationEvents: ['entry:cursor'],
   });
   liveConnections.push(ws);
   const store = Object.create(BaseSyncedStore.prototype) as StoreShell;
@@ -89,8 +89,8 @@ function openInnerSocket(ws: SyncWebSocket<CursorEvents>): FakeWebSocket {
 function deliverCursorFrame(socket: FakeWebSocket, x: number): void {
   socket.onmessage?.({
     data: JSON.stringify({
-      type: 'slide_cursor',
-      payload: { deckId: 'd1', slideId: 's1', x, y: 0 },
+      type: 'entry_cursor',
+      payload: { collectionId: 'd1', entryId: 's1', x, y: 0 },
     }),
   });
 }
@@ -130,20 +130,20 @@ describe('BaseSyncedStore.subscribe — durable across inner-socket churn', () =
     const { store, ws } = makeStore();
     const handler = jest.fn();
 
-    store.subscribe('slide:cursor', handler);
+    store.subscribe('entry:cursor', handler);
     const socket = openInnerSocket(ws);
     deliverCursorFrame(socket, 10);
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ deckId: 'd1', x: 10 }),
+      expect.objectContaining({ collectionId: 'd1', x: 10 }),
     );
   });
 
   it('survives the inner socket being replaced, and the dead socket stops delivering', () => {
     const { store, ws } = makeStore();
     const handler = jest.fn();
-    store.subscribe('slide:cursor', handler);
+    store.subscribe('entry:cursor', handler);
 
     const first = openInnerSocket(ws);
     deliverCursorFrame(first, 1);
@@ -166,7 +166,7 @@ describe('BaseSyncedStore.subscribe — durable across inner-socket churn', () =
   it('unsubscribing stops delivery and survives no reconnect', () => {
     const { store, ws } = makeStore();
     const handler = jest.fn();
-    const unsubscribe = store.subscribe('slide:cursor', handler);
+    const unsubscribe = store.subscribe('entry:cursor', handler);
 
     const first = openInnerSocket(ws);
     deliverCursorFrame(first, 1);
@@ -188,22 +188,22 @@ describe('BaseSyncedStore.subscribe — durable across inner-socket churn', () =
 
     // No socket yet — must not throw (state frames drop, per the
     // send-during-reconnect contract).
-    store.sendCollaborationEvent('slide:cursor', {
-      deckId: 'd1',
-      slideId: 's1',
+    store.sendCollaborationEvent('entry:cursor', {
+      collectionId: 'd1',
+      entryId: 's1',
       x: 5,
       y: 6,
     });
 
     const socket = openInnerSocket(ws);
-    store.sendCollaborationEvent('slide:cursor', {
-      deckId: 'd1',
-      slideId: 's1',
+    store.sendCollaborationEvent('entry:cursor', {
+      collectionId: 'd1',
+      entryId: 's1',
       x: 5,
       y: 6,
     });
 
     const frames = socket.sent.map((raw) => JSON.parse(raw) as { type: string });
-    expect(frames.some((f) => f.type === 'slide_cursor')).toBe(true);
+    expect(frames.some((f) => f.type === 'entry_cursor')).toBe(true);
   });
 });

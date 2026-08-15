@@ -6,7 +6,7 @@
 import { MutationQueue } from '../../src/local/transactions/mutations/MutationQueue';
 import {
   createTestContext,
-  createTaskFixture,
+  createItemFixture,
   resetFixtureCounter,
   flushMicrotasks,
   MockMutationExecutor,
@@ -71,13 +71,13 @@ describe('MutationQueue Rollback', () => {
       // Make mutation fail with permanent error (not network error)
       ctx.mocks.mutationExecutor.failAll(new Error('Validation failed'));
 
-      const task = createTaskFixture();
-      await queue.create(task, TEST_USER_CONTEXT);
+      const item = createItemFixture();
+      await queue.create(item, TEST_USER_CONTEXT);
 
       // Deterministic: the rollback event IS batch-processing completion.
       const rollback = await firstRollback;
 
-      expect(rollback.model).toBe(task);
+      expect(rollback.model).toBe(item);
       expect(rollback.reason).toBe('permanent_error');
     });
 
@@ -89,8 +89,8 @@ describe('MutationQueue Rollback', () => {
 
       ctx.mocks.mutationExecutor.failAll(new Error('Constraint violation'));
 
-      const task = createTaskFixture();
-      await queue.create(task, TEST_USER_CONTEXT);
+      const item = createItemFixture();
+      await queue.create(item, TEST_USER_CONTEXT);
 
       const failure = await firstFailure;
       expect(failure.permanent).toBe(true);
@@ -113,8 +113,8 @@ describe('MutationQueue Rollback', () => {
       // Network errors are transient — should retry before failing
       ctx.mocks.mutationExecutor.failAll(new Error('Failed to fetch'));
 
-      const task = createTaskFixture();
-      await localQueue.create(task, TEST_USER_CONTEXT);
+      const item = createItemFixture();
+      await localQueue.create(item, TEST_USER_CONTEXT);
 
       await firstFailure;
 
@@ -128,15 +128,15 @@ describe('MutationQueue Rollback', () => {
 
   describe('delete cancels pending updates', () => {
     it('should cancel pending update transactions when delete is issued', async () => {
-      const task = createTaskFixture();
-      task.markAsPersisted();
-      task.propertyChanged('title', 'Old', 'New');
+      const item = createItemFixture();
+      item.markAsPersisted();
+      item.propertyChanged('title', 'Old', 'New');
 
       // Create an update first
-      await queue.update(task, TEST_USER_CONTEXT, { title: 'New' });
+      await queue.update(item, TEST_USER_CONTEXT, { title: 'New' });
 
       // Then delete — should cancel the pending update
-      const txDelete = await queue.delete(task, TEST_USER_CONTEXT);
+      const txDelete = await queue.delete(item, TEST_USER_CONTEXT);
 
       // The delete should take priority; wait for ITS confirmation rather than
       // sleeping an arbitrary 50ms.

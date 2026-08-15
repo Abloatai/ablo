@@ -222,6 +222,9 @@ const handleMutationResult: WsFrameHandler = (session, message) => {
         ...(receipt.missingIds && receipt.missingIds.length > 0
           ? { missingIds: receipt.missingIds }
           : {}),
+        ...(receipt.operationResults && receipt.operationResults.length > 0
+          ? { operationResults: receipt.operationResults }
+          : {}),
           }),
     );
   } else {

@@ -396,7 +396,7 @@ async function drainPendingDeltas(ctx: DeltaPipelineContext): Promise<void> {
       // A sustained stream can refill the detached queue before every
       // persistence promise settles. Promise-only looping then forms an
       // unbounded microtask chain that starves WebSocket reads, timers and
-      // replication keepalives. Give the host one macrotask turn between
+      // replication keepalives. Give the host one macroitem turn between
       // owned batches; Node has setImmediate, browsers fall back to a timer.
       await yieldToHost();
     }

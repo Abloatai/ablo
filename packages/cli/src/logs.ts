@@ -8,7 +8,7 @@
  * by default; `--no-follow` prints the recent entries and exits.
  *
  *   ablo logs                     # last 50, then stream
- *   ablo logs -n 100 --model task # backfill 100, filter to one model
+ *   ablo logs -n 100 --model record # backfill 100, filter to one model
  *   ablo logs --since 15m --json  # last 15m as NDJSON, then stream
  */
 

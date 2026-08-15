@@ -20,7 +20,7 @@ import { kReadEvidence } from '@abloatai/transaction/internal/read-set';
 import { z } from 'zod';
 
 const full = defineSchema({
-  tasks: model({ title: z.string() }, { typename: 'OmitAccessTask' }),
+  items: model({ title: z.string() }, { typename: 'OmitAccessItem' }),
   invoices: model({ total: z.number() }, { typename: 'OmitAccessInvoice' }),
 });
 
@@ -32,7 +32,7 @@ const silentLogger = {
 };
 
 const makeProjected = () => {
-  const schema = selectModels(full, ['tasks']);
+  const schema = selectModels(full, ['items']);
   return Ablo({
     schema,
     baseURL: 'ws://localhost:1234',
@@ -46,7 +46,7 @@ describe('a model the schema projection left out', () => {
   it('throws the named error on access while kept models still answer', async () => {
     const ablo = makeProjected();
     try {
-      expect(ablo.tasks.local.list()).toEqual([]);
+      expect(ablo.items.local.list()).toEqual([]);
 
       let thrown: unknown;
       try {

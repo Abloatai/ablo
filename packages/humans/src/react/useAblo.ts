@@ -138,13 +138,13 @@ function snapshotValue<T>(value: T): T {
  * // With the Register augmentation (recommended):
  * const ablo = useAblo();
  * if (!ablo) return <Loading />;
- * const doc = await ablo.documents.get({ id }); // async server read
+ * const doc = await ablo.records.get({ id }); // async server read
  *
  * // Reactive selector (a synchronous local snapshot). The selector's reads
  * // are typed as snapshot rows — data fields + computeds, no relation
  * // accessors — matching what the hook actually returns:
- * const doc = useAblo((ablo) => ablo.documents.local.get(id)) ?? serverDoc;
- * const active = useAblo((ablo) => ablo.documents.claim.state({ id }));
+ * const doc = useAblo((ablo) => ablo.records.local.get(id)) ?? serverDoc;
+ * const active = useAblo((ablo) => ablo.records.claim.state({ id }));
  *
  * // Without the augmentation, pass the schema as a type argument:
  * const ablo = useAblo<(typeof schema)['models']>();

@@ -6,19 +6,19 @@ import type { SyncClient } from '../../SyncClient.js';
 import type { OnDemandLoader } from '../../sync/OnDemandLoader.js';
 import { createModelProxy } from '../createModelProxy.js';
 
-interface TaskRow {
+interface ItemRow {
   id: string;
   title: string;
 }
 
-class TaskModel extends Model {
+class ItemModel extends Model {
   constructor(data?: Record<string, unknown>) {
     super(data);
     Object.assign(this, data);
   }
 
   override getModelName(): string {
-    return 'Task';
+    return 'Item';
   }
 }
 
@@ -28,10 +28,10 @@ describe('schema model write confirmation', () => {
       validateOnRegister: false,
       allowLateReferences: true,
     });
-    registry.registerModel('Task', TaskModel, {
+    registry.registerModel('Item', ItemModel, {
       loadStrategy: LoadStrategy.instant,
     });
-    registry.registerProperty('Task', 'title', {
+    registry.registerProperty('Item', 'title', {
       type: 'property' as never,
       indexed: false,
       optional: false,
@@ -80,9 +80,9 @@ describe('schema model write confirmation', () => {
     const hydration: Pick<OnDemandLoader, 'fetch'> = {
       fetch: () => Promise.resolve([]),
     };
-    const tasks = createModelProxy<TaskRow, Omit<TaskRow, 'id'>>(
-      'tasks',
-      'Task',
+    const items = createModelProxy<ItemRow, Omit<ItemRow, 'id'>>(
+      'items',
+      'Item',
       pool,
       syncClient,
       registry,
@@ -90,20 +90,20 @@ describe('schema model write confirmation', () => {
     );
 
     let settled = false;
-    const confirmation = tasks.create({
-      id: 'task-1',
+    const confirmation = items.create({
+      id: 'item-1',
       data: { title: 'Optimistic immediately' },
     });
     void confirmation.then(() => {
       settled = true;
     });
 
-    expect(tasks.local.get('task-1')?.title).toBe('Optimistic immediately');
+    expect(items.local.get('item-1')?.title).toBe('Optimistic immediately');
     expect(settled).toBe(false);
 
     releaseSync();
     await expect(confirmation).resolves.toMatchObject({
-      id: 'task-1',
+      id: 'item-1',
       title: 'Optimistic immediately',
     });
     expect(confirmationChecks).toBe(1);

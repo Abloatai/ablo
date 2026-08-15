@@ -645,7 +645,7 @@ export class MutationQueue extends EventEmitter {
   /**
    * Relates stale notifications back to write targets without assuming the
    * server's canonical model name uses the same spelling as the public schema
-   * key (`Task` versus `tasks`). Exact `(model,id)` wins; a globally unique id
+   * key (`Item` versus `items`). Exact `(model,id)` wins; a globally unique id
    * is the compatibility fallback. An ambiguous same-id cross-model mismatch
    * is deliberately left unclassified, so it cannot falsely settle a queued
    * write. A notification with no write-target id (or an explicit group) is a

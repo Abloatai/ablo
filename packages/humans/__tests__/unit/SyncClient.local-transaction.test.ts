@@ -31,7 +31,7 @@ import {
   registerTestModels,
   createTestConfig,
   createTestContext,
-  createSlideLayerFixture,
+  createEntryLayerFixture,
   type TestContextResult,
 } from '../../src/local/testing';
 
@@ -74,13 +74,13 @@ describe('SyncClient.onLocalTransaction (undo stream relay)', () => {
     const received: QueuedMutation[] = [];
     const off = client.onLocalTransaction((tx) => received.push(tx));
 
-    const layer = createSlideLayerFixture({ id: 'layer-relay-1', slideId: 'slide-1' });
+    const layer = createEntryLayerFixture({ id: 'layer-relay-1', entryId: 'entry-1' });
     await internalQueue(client).create(layer, TEST_USER_CONTEXT);
 
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({
       type: 'create',
-      modelName: 'SlideLayer',
+      modelName: 'EntryDetail',
       modelId: 'layer-relay-1',
     });
     // `data` must be present — undo derives the inverse from it.
@@ -95,7 +95,7 @@ describe('SyncClient.onLocalTransaction (undo stream relay)', () => {
     off();
 
     await internalQueue(client).create(
-      createSlideLayerFixture({ id: 'layer-relay-2', slideId: 'slide-1' }),
+      createEntryLayerFixture({ id: 'layer-relay-2', entryId: 'entry-1' }),
       TEST_USER_CONTEXT,
     );
 
@@ -111,7 +111,7 @@ describe('SyncClient.onLocalTransaction (undo stream relay)', () => {
     const offSub = client.subscribe('transaction:created', () => viaSubscribe.push(true));
 
     await internalQueue(client).create(
-      createSlideLayerFixture({ id: 'layer-relay-3', slideId: 'slide-1' }),
+      createEntryLayerFixture({ id: 'layer-relay-3', entryId: 'entry-1' }),
       TEST_USER_CONTEXT,
     );
 

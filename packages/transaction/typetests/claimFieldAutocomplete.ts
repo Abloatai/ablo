@@ -18,7 +18,7 @@ type Identical<A, B> =
   (<T>() => T extends A ? 1 : 2) extends
   (<T>() => T extends B ? 1 : 2) ? true : false;
 
-interface Task {
+interface Item {
   id: string;
   title: string;
   status: string;
@@ -27,7 +27,7 @@ interface Task {
 // ── The model's fields survive as literals (autocomplete's raw material) ──
 
 export const fieldLiteralsSurvive: Identical<
-  ClaimField<Task>['field'],
+  ClaimField<Item>['field'],
   'title' | 'status'
 > = true;
 
@@ -36,25 +36,25 @@ export const fieldLiteralsSurvive: Identical<
 export const bareStringWouldNot: Identical<Extract<string, 'title'>, never> =
   true;
 
-export const schemaField: ClaimParams<Task> = {
+export const schemaField: ClaimParams<Item> = {
   id: 't_1',
-  fields: (task) => task.title,
+  fields: (item) => item.title,
 };
 
-export const typo: ClaimParams<Task> = {
+export const typo: ClaimParams<Item> = {
   id: 't_1',
-  // @ts-expect-error — typo: the field is not declared by Task's Zod shape.
-  fields: (task) => [task.titel],
+  // @ts-expect-error — typo: the field is not declared by Item's Zod shape.
+  fields: (item) => [item.titel],
 };
 
-export const stringField: ClaimParams<Task> = {
+export const stringField: ClaimParams<Item> = {
   id: 't_1',
   // @ts-expect-error — model claims cannot accept unstructured field strings.
   fields: ['title'],
 };
 
-export const frameworkField: ClaimParams<Task> = {
+export const frameworkField: ClaimParams<Item> = {
   id: 't_1',
   // @ts-expect-error — framework identity is not a Zod-declared claim field.
-  fields: (task) => task.id,
+  fields: (item) => item.id,
 };

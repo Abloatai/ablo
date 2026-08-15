@@ -8,7 +8,7 @@
  * republishes it on the local-mutation stream exactly as `BaseSyncedStore` does,
  * and the scope replays through a real transaction against a real pool.
  *
- * The shapes are the slide editor's, because that is where reversal is reported
+ * The shapes are the entry editor's, because that is where reversal is reported
  * broken: a nested `position` object replaced wholesale on every drag commit
  * (`{ ...layer.position, x, y }`), a paste that creates rows, and a second drag
  * landing before the first is acknowledged.
@@ -39,7 +39,7 @@ interface Position {
 const layerSchema = defineSchema({
   layers: model(
     {
-      slideId: z.string(),
+      entryId: z.string(),
       zIndex: z.number().default(0),
       position: z.object({
         x: z.number(),
@@ -53,14 +53,14 @@ const layerSchema = defineSchema({
 });
 
 class TestLayer extends Model {
-  slideId!: string;
+  entryId!: string;
   zIndex!: number;
   position!: Position;
   organizationId!: string;
 
   constructor(data: Record<string, unknown>) {
     super(data);
-    this.slideId = (data.slideId as string | undefined) ?? 'slide-1';
+    this.entryId = (data.entryId as string | undefined) ?? 'entry-1';
     this.zIndex = (data.zIndex as number | undefined) ?? 0;
     this.position = (data.position as Position | undefined) ?? { x: 0, y: 0, width: 100, height: 100 };
     this.organizationId = (data.organizationId as string | undefined) ?? 'org-1';
@@ -70,7 +70,7 @@ class TestLayer extends Model {
     return {
       __typename: 'Layer',
       id: this.id,
-      slideId: this.slideId,
+      entryId: this.entryId,
       zIndex: this.zIndex,
       position: this.position,
       organizationId: this.organizationId,
@@ -184,7 +184,7 @@ const layer = (id: string): TestLayer => {
 
 /** Seed a persisted row the way bootstrap does: pooled, acked, untracked. */
 function seedLayer(id: string, position: Position): TestLayer {
-  const m = new TestLayer({ id, slideId: 'slide-1', position, organizationId: 'org-1' });
+  const m = new TestLayer({ id, entryId: 'entry-1', position, organizationId: 'org-1' });
   pool.add(m);
   m.markAsPersisted();
   return m;
@@ -258,7 +258,7 @@ describe('paste (create) → stream → undo', () => {
   it('removes the pasted row and puts it back on redo', async () => {
     const pasted = new TestLayer({
       id: 'p1',
-      slideId: 'slide-1',
+      entryId: 'entry-1',
       position: { x: 5, y: 5, width: 100, height: 50 },
       organizationId: 'org-1',
     });
@@ -279,7 +279,7 @@ describe('paste (create) → stream → undo', () => {
     for (const id of ['p1', 'p2', 'p3']) {
       const m = new TestLayer({
         id,
-        slideId: 'slide-1',
+        entryId: 'entry-1',
         position: { x: 5, y: 5, width: 100, height: 50 },
         organizationId: 'org-1',
       });
@@ -301,7 +301,7 @@ describe('paste then drag — the stack the editor actually produces', () => {
   it('undoes the move first, then the creation', async () => {
     const m = new TestLayer({
       id: 'p1',
-      slideId: 'slide-1',
+      entryId: 'entry-1',
       position: { x: 5, y: 5, width: 100, height: 50 },
       organizationId: 'org-1',
     });

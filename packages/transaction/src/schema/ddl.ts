@@ -117,7 +117,7 @@ export function sqlType(fieldType: ModelJSON['fields'][string]['type']): string 
   }
 }
 
-const BASE_COLUMNS = new Set(['id', 'organization_id', 'created_by', 'created_at', 'updated_at']);
+const BASE_COLUMNS = new Set(['id']);
 
 // ── Foreign keys (relation-driven, sync-safe) ────────────────────────────────
 
@@ -154,11 +154,11 @@ interface ForeignKeyDdl {
  * in by setting `{ fk: true }`.
  *
  * The `fk` marker is deliberately separate from `parent`: `parent` controls
- * sync-group fan-out and visibility, while `fk` requests physical referential
+ * sync-group fan-out and visibility, while `fk` requests database referential
  * integrity in the database. A relation sets `fk` only when its target lives in
  * the same database, is written in the same commit, and is a strong, contained
  * entity. Soft references — provenance or template pointers such as
- * `sourceSlideId` or `templateId` — stay plain columns; a hard foreign key there
+ * `sourceDocumentId` or `templateId` — stay plain columns; a hard foreign key there
  * would reject a write that points across scopes or at an absent row and break
  * sync.
  *
@@ -204,7 +204,7 @@ function foreignKeyStatements(
   // The model's provisioned column set — guard so a relation whose FK field
   // isn't actually declared (no column) never produces a broken ALTER.
   const orgCol = tenancyColumn(resolveTenancy(model));
-  const columns = new Set<string>(['id', 'created_by', 'created_at', 'updated_at']);
+  const columns = new Set<string>(['id']);
   if (orgCol) columns.add(orgCol);
   for (const [fieldName, meta] of Object.entries(model.fields)) {
     columns.add(meta.column ?? camelToSnake(fieldName));
@@ -275,8 +275,7 @@ export function generateProvisionPlan(
     // declared boundary is what makes the set of tables a customer's own
     // database receives derivable instead of hand-coded.
     if ((model.plane ?? 'tenant') === 'control') continue;
-
-    // Default the physical table to the model key when `tableName` is omitted —
+    // Default the database table to the model key when `tableName` is omitted —
     // same fallback the migration path uses (`tableOfModel: m.tableName ?? key`).
     // Without this, a schema that doesn't set `tableName` (e.g. the `ablo init`
     // starter) provisions zero tables.
@@ -294,13 +293,10 @@ export function generateProvisionPlan(
     // no tenancy column — they're scoped via a parent FK or not at all.
     const orgCol = tenancyColumn(resolveTenancy(model));
     const baseColumns = [
-      `  ${q('id')} TEXT PRIMARY KEY,`,
-      ...(orgCol ? [`  ${q(orgCol)} TEXT NOT NULL,`] : []),
-      `  ${q('created_by')} TEXT,`,
-      `  ${q('created_at')} TIMESTAMPTZ NOT NULL DEFAULT NOW(),`,
-      `  ${q('updated_at')} TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+      `  ${q('id')} TEXT PRIMARY KEY`,
+      ...(orgCol ? [`  ${q(orgCol)} TEXT NOT NULL`] : []),
     ];
-    statements.push(`CREATE TABLE IF NOT EXISTS ${qt} (\n${baseColumns.join('\n')}\n);`);
+    statements.push(`CREATE TABLE IF NOT EXISTS ${qt} (\n${baseColumns.join(',\n')}\n);`);
 
     for (const [fieldName, meta] of Object.entries(model.fields)) {
       const col = meta.column ?? camelToSnake(fieldName);
@@ -458,7 +454,7 @@ export function generateMigrationPlan(
       case 'rename_model': {
         const fromTable = tableOfModel(prev, step.from);
         const toTable = tableOfModel(next, step.to);
-        // A logical model rename only needs SQL when the physical table name
+        // A logical model rename only needs SQL when the database table name
         // actually changes; if tableName is unchanged the rename is metadata.
         if (fromTable && toTable && fromTable !== toTable) {
           statements.push(`ALTER TABLE ${qtFor(fromTable)} RENAME TO ${q(toTable)};`);

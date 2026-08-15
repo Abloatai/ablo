@@ -31,17 +31,17 @@ const testSchema = {
       organizationId: z.string(),
     }, { typename: 'Chat' }),
 
-    slideDecks: model({
+    collections: model({
       id: z.string(),
       title: z.string(),
       organizationId: z.string(),
-    }, { typename: 'SlideDeck' }),
+    }, { typename: 'Collection' }),
 
-    slideLayers: model({
+    entryDetails: model({
       id: z.string(),
-      slideId: z.string(),
+      entryId: z.string(),
       type: z.string(),
-    }, { typename: 'SlideLayer', load: 'lazy' }),
+    }, { typename: 'EntryDetail', load: 'lazy' }),
   },
 };
 
@@ -62,9 +62,9 @@ function requireValue<T>(value: T | null | undefined, label: string): T {
 describe('Ablo model proxy naming', () => {
   it('defers wire-model observability until the cache exposes the row', () => {
     const schema = defineSchema({
-      tasks: model({
+      items: model({
         title: z.string(),
-      }, { typename: 'DeferredTask' }),
+      }, { typename: 'DeferredItem' }),
     });
     const registry = new ModelRegistry({
       validateOnRegister: false,
@@ -75,7 +75,7 @@ describe('Ablo model proxy naming', () => {
     const pool = new InstanceCache({ maxSize: 100 }, registry);
 
     const hydratedModel = pool.createFromData(
-      { __typename: 'DeferredTask', id: 'cold-1', title: 'cold' },
+      { __typename: 'DeferredItem', id: 'cold-1', title: 'cold' },
       undefined,
       { deferObservability: true },
     );
@@ -92,9 +92,9 @@ describe('Ablo model proxy naming', () => {
 
   it('uses schema keys for public proxies and typenames for pool lookups', async () => {
     const schema = defineSchema({
-      slideDecks: model({
+      collections: model({
         title: z.string(),
-      }, { typename: 'SlideDeck' }),
+      }, { typename: 'Collection' }),
     });
 
     // Test uses advanced internal options (`user`, `inMemory`,
@@ -109,18 +109,18 @@ describe('Ablo model proxy naming', () => {
     } as InternalAbloOptions<typeof schema['models']>);
 
     try {
-      expect(ablo.slideDecks.local.list()).toEqual([]);
-      expect(ablo.slideDecks.local.count()).toBe(0);
-      expect(typeof ablo.slideDecks.list).toBe('function');
+      expect(ablo.collections.local.list()).toEqual([]);
+      expect(ablo.collections.local.count()).toBe(0);
+      expect(typeof ablo.collections.list).toBe('function');
     } finally {
       await ablo.dispose();
     }
   });
 
   it('lists live rows by default and accepts filter plus lifecycle scope', () => {
-    interface TaskRow {
+    interface ItemRow {
       id: string;
-      projectId: string;
+      workspaceId: string;
       status: 'todo' | 'done';
       title: string;
     }
@@ -129,57 +129,57 @@ describe('Ablo model proxy naming', () => {
       validateOnRegister: false,
       allowLateReferences: true,
     });
-    const TaskModel = createDynamicClass('Task');
-    registry.registerModel('Task', TaskModel, {
+    const ItemModel = createDynamicClass('Item');
+    registry.registerModel('Item', ItemModel, {
       loadStrategy: LoadStrategy.instant,
     });
     const pool = new InstanceCache({ maxSize: 1000 }, registry);
 
-    const task = (
+    const item = (
       id: string,
-      data: Omit<TaskRow, 'id'>,
-    ): Model => Object.assign(new TaskModel({ id }), data);
+      data: Omit<ItemRow, 'id'>,
+    ): Model => Object.assign(new ItemModel({ id }), data);
 
-    pool.add(task('task_live_done', {
-      projectId: 'project_1',
+    pool.add(item('item_live_done', {
+      workspaceId: 'workspace_1',
       status: 'done',
       title: 'Done',
     }), ModelScope.live);
-    pool.add(task('task_live_todo', {
-      projectId: 'project_2',
+    pool.add(item('item_live_todo', {
+      workspaceId: 'workspace_2',
       status: 'todo',
       title: 'Todo',
     }), ModelScope.live);
-    pool.add(task('task_archived_done', {
-      projectId: 'project_1',
+    pool.add(item('item_archived_done', {
+      workspaceId: 'workspace_1',
       status: 'done',
       title: 'Archived',
     }), ModelScope.archived);
 
-    const tasks = createModelProxy<TaskRow, Omit<TaskRow, 'id'>>(
-      'tasks',
-      'Task',
+    const items = createModelProxy<ItemRow, Omit<ItemRow, 'id'>>(
+      'items',
+      'Item',
       pool,
       {} as SyncClient,
       registry,
       {} as OnDemandLoader,
     );
 
-    expect(tasks.local.list().map((row) => row.id)).toEqual([
-      'task_live_done',
-      'task_live_todo',
+    expect(items.local.list().map((row) => row.id)).toEqual([
+      'item_live_done',
+      'item_live_todo',
     ]);
     expect(
-      tasks
+      items
         .local.list({
-          where: { projectId: 'project_1' },
+          where: { workspaceId: 'workspace_1' },
           filter: (row) => row.status === 'done',
         })
         .map((row) => row.id),
-    ).toEqual(['task_live_done']);
-    expect(tasks.local.count({ where: { projectId: 'project_1' }, state: 'all' })).toBe(2);
-    expect(tasks.local.list({ state: 'archived' }).map((row) => row.id)).toEqual([
-      'task_archived_done',
+    ).toEqual(['item_live_done']);
+    expect(items.local.count({ where: { workspaceId: 'workspace_1' }, state: 'all' })).toBe(2);
+    expect(items.local.list({ state: 'archived' }).map((row) => row.id)).toEqual([
+      'item_archived_done',
     ]);
   });
 });
@@ -232,16 +232,16 @@ describe('Hydration chain: schema → registry → createFromData → pool', () 
 
     const allNames = registry.getRegisteredModelNames();
     expect(allNames).toContain('Chat');
-    expect(allNames).toContain('SlideDeck');
-    expect(allNames).toContain('SlideLayer');
+    expect(allNames).toContain('Collection');
+    expect(allNames).toContain('EntryDetail');
   });
 
   it('stores correct load strategy from schema', () => {
     const { registry } = setupRegistryAndPool();
 
     expect(registry.getMetadata('Chat')?.loadStrategy).toBe(LoadStrategy.instant);
-    expect(registry.getMetadata('SlideDeck')?.loadStrategy).toBe(LoadStrategy.instant);
-    expect(registry.getMetadata('SlideLayer')?.loadStrategy).toBe(LoadStrategy.lazy);
+    expect(registry.getMetadata('Collection')?.loadStrategy).toBe(LoadStrategy.instant);
+    expect(registry.getMetadata('EntryDetail')?.loadStrategy).toBe(LoadStrategy.lazy);
   });
 
   it('createFromData produces a model when __typename matches', () => {
@@ -279,8 +279,8 @@ describe('Hydration chain: schema → registry → createFromData → pool', () 
         'second chat model',
       ),
       requireValue(
-        pool.createFromData({ __typename: 'SlideDeck', id: 'd1', title: 'Deck', organizationId: 'o1' }),
-        'slide deck model',
+        pool.createFromData({ __typename: 'Collection', id: 'd1', title: 'Collection', organizationId: 'o1' }),
+        'entry collection model',
       ),
     ];
 
@@ -290,7 +290,7 @@ describe('Hydration chain: schema → registry → createFromData → pool', () 
     expect(added).toBe(3);
 
     expect(pool.getByTypeName('Chat')).toHaveLength(2);
-    expect(pool.getByTypeName('SlideDeck')).toHaveLength(1);
+    expect(pool.getByTypeName('Collection')).toHaveLength(1);
   });
 
   it('getModelByName returns usable constructor', () => {
@@ -309,8 +309,8 @@ describe('Hydration chain: schema → registry → createFromData → pool', () 
 
     const instant = registry.getModelsByLoadStrategy(LoadStrategy.instant);
     expect(instant).toContain('Chat');
-    expect(instant).toContain('SlideDeck');
-    expect(instant).not.toContain('SlideLayer');
+    expect(instant).toContain('Collection');
+    expect(instant).not.toContain('EntryDetail');
   });
 
   it('createFromData works when dynamic class calls makeObservable()', () => {

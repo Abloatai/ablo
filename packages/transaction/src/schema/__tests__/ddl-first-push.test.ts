@@ -17,8 +17,8 @@ import { toSchemaJSON } from '../serialize.js';
 import { diffSchema, generateMigrationPlan } from '../index.js';
 
 const schema = defineSchema({
-  projects: model({ name: field.string() }),
-  tasks: model({ title: field.string() }),
+  workspaces: model({ name: field.string() }),
+  items: model({ title: field.string() }),
 });
 const next = toSchemaJSON(schema);
 
@@ -36,12 +36,20 @@ describe('generateMigrationPlan — first push (prev = null)', () => {
     const creates = plan.statements.filter((s) => s.startsWith('CREATE SCHEMA'));
     expect(creates).toHaveLength(1);
     // Every table statement targets the now-existing schema.
-    expect(plan.statements.some((s) => s.includes('"app_org_fresh_1"."projects"'))).toBe(true);
+    expect(plan.statements.some((s) => s.includes('"app_org_fresh_1"."workspaces"'))).toBe(true);
   });
 
   it('never emits CREATE SCHEMA for a dedicated tenant on `public`', () => {
     const plan = generateMigrationPlan(steps, { prev: null, next, targetSchema: 'public' });
     expect(plan.statements.some((s) => s.startsWith('CREATE SCHEMA'))).toBe(false);
+  });
+
+  it('provisions no application audit columns unless the model declares them', () => {
+    const plan = generateMigrationPlan(steps, { prev: null, next, targetSchema: 'public' });
+    const sql = plan.statements.join('\n');
+    expect(sql).not.toContain('"created_by"');
+    expect(sql).not.toContain('"created_at"');
+    expect(sql).not.toContain('"updated_at"');
   });
 
   it('emits nothing for an empty step list', () => {

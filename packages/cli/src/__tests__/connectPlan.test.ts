@@ -55,7 +55,7 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
   });
 
   it('reuses the recipe grants VERBATIM — the security-sensitive statements never drift', () => {
-    // The whole point: `--apply` must grant exactly what `ablo connect` documents
+    // The whole point: `--apply` must grant exactly what `ablo connect` records
     // and tests assert. If connectSetupSql changes a grant, this catches it.
     const grantsStep = defaultPlan.find((s) => s.key === 'grants');
     expect(grantsStep?.sql).toEqual(expectedGrants({}));
@@ -113,17 +113,17 @@ describe('connectApplyPlan — executable, idempotent, real-password plan', () =
 
   it('threads a table subset and custom role names through both heads and grants', () => {
     const custom = plan({
-      tables: ['tasks', 'projects'],
+      tables: ['records', 'projects'],
       role: 'my_reader',
       writeRole: 'my_writer',
       credentials: CREDS,
     });
     const pub = custom.find((s) => s.key === 'publication')?.sql.join('\n') ?? '';
-    expect(pub).toContain('FOR TABLE "public"."tasks", "public"."projects"');
+    expect(pub).toContain('FOR TABLE "public"."records", "public"."projects"');
     expect(custom.find((s) => s.key === 'replication-role')?.sql.join('\n')).toContain('"my_reader"');
     expect(custom.find((s) => s.key === 'write-role')?.sql.join('\n')).toContain('"my_writer"');
     expect(custom.find((s) => s.key === 'grants')?.sql).toEqual(
-      expectedGrants({ tables: ['tasks', 'projects'], role: 'my_reader', writeRole: 'my_writer' }),
+      expectedGrants({ tables: ['records', 'projects'], role: 'my_reader', writeRole: 'my_writer' }),
     );
   });
 });

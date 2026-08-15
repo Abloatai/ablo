@@ -306,8 +306,10 @@ require_mirror_matches_tip() {
     echo "error: the mirror is not a snapshot of the current tree" >&2
     printf '%s\n' "$drift" | head -20 >&2
     echo "" >&2
-    echo "       Commits landed after the mirror was built, so publishing now would" >&2
-    echo "       ship a public artifact missing them. Re-run prepare." >&2
+    echo "       A path present only in the mirror is usually a file the verification" >&2
+    echo "       run left behind, and deleting it is enough. Anything else means" >&2
+    echo "       commits landed after the mirror was built, so publishing now would" >&2
+    echo "       ship a public artifact missing them: re-run prepare." >&2
     exit 1
   fi
 }

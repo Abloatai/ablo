@@ -73,15 +73,15 @@ describeE2E('E2E: Multi-Tab Sync', () => {
 
     const deltasB = collectDeltas(wsB);
 
-    const taskId = uuid();
+    const itemId = uuid();
     await batchAck(USER_ID, ORG_ID, [{
-      type: 'CREATE', model: 'task', id: taskId,
+      type: 'CREATE', model: 'item', id: itemId,
       input: { title: 'Tab A created', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
     }]);
 
     await new Promise((r) => setTimeout(r, 2000));
 
-    expect(deltasB.has(taskId)).toBe(true);
+    expect(deltasB.has(itemId)).toBe(true);
 
     wsA.close();
     wsB.close();
@@ -94,28 +94,28 @@ describeE2E('E2E: Multi-Tab Sync', () => {
     const deltasA = collectDeltas(wsA);
     const deltasB = collectDeltas(wsB);
 
-    const taskA = uuid();
-    const taskB = uuid();
+    const itemA = uuid();
+    const itemB = uuid();
 
     // Tab A creates
     await batchAck(USER_ID, ORG_ID, [{
-      type: 'CREATE', model: 'task', id: taskA,
+      type: 'CREATE', model: 'item', id: itemA,
       input: { title: 'From A', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
     }]);
 
     // Tab B creates
     await batchAck(USER_ID, ORG_ID, [{
-      type: 'CREATE', model: 'task', id: taskB,
+      type: 'CREATE', model: 'item', id: itemB,
       input: { title: 'From B', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
     }]);
 
     await new Promise((r) => setTimeout(r, 3000));
 
-    // Both tabs should see both tasks
-    expect(deltasA.has(taskA)).toBe(true);
-    expect(deltasA.has(taskB)).toBe(true);
-    expect(deltasB.has(taskA)).toBe(true);
-    expect(deltasB.has(taskB)).toBe(true);
+    // Both tabs should see both items
+    expect(deltasA.has(itemA)).toBe(true);
+    expect(deltasA.has(itemB)).toBe(true);
+    expect(deltasB.has(itemA)).toBe(true);
+    expect(deltasB.has(itemB)).toBe(true);
 
     wsA.close();
     wsB.close();
@@ -129,11 +129,11 @@ describeE2E('E2E: Multi-Tab Sync', () => {
     const promises: Promise<number>[] = [];
     for (let i = 0; i < 5; i++) {
       promises.push(batchAck(USER_ID, ORG_ID, [{
-        type: 'CREATE', model: 'task', id: uuid(),
+        type: 'CREATE', model: 'item', id: uuid(),
         input: { title: `TabA-${i}`, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]));
       promises.push(batchAck(USER_ID, ORG_ID, [{
-        type: 'CREATE', model: 'task', id: uuid(),
+        type: 'CREATE', model: 'item', id: uuid(),
         input: { title: `TabB-${i}`, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]));
     }

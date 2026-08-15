@@ -5,13 +5,13 @@ sidebar:
   icon: server
 ---
 
-A server agent is backend code — a cron job, a queue worker, an AI task — that
+A server agent is backend code — a cron job, a queue worker, an AI record — that
 reads and writes your app's records outside the browser. The hard part is doing
-it without racing whatever else is working: if two workers pick up the same task
+it without racing whatever else is working: if two workers pick up the same record
 at once, one write clobbers the other. This is what `claim()` is for.
 
 Agents hold no socket, so pass `transport: 'http'` and import the same schema the
-rest of the app uses. Below, a worker finishes a task by claiming it, writing the
+rest of the app uses. Below, a worker finishes a record by claiming it, writing the
 result, and releasing it automatically when the claim goes out of scope.
 
 `claim({ id })` takes the record for your worker and returns a disposable handle:
@@ -25,7 +25,7 @@ import Ablo from '@abloatai/ablo';
 import { defineSchema, model, z } from '@abloatai/ablo/schema';
 
 const schema = defineSchema({
-  tasks: model({
+  records: model({
     title: z.string(),
     status: z.enum(['todo', 'doing', 'done']),
     summary: z.string().optional(),
@@ -40,27 +40,27 @@ const control = Ablo({
 async function clientForWorker(workerId: string) {
   const { token } = await control.sessions.create({
     agent: { id: workerId },
-    can: { tasks: ['read', 'update'] },
+    can: { records: ['read', 'update'] },
   });
   return Ablo({ schema, apiKey: token, transport: 'http' });
 }
 
-export async function completeTask(taskId: string, workerId: string) {
+export async function completeTask(recordId: string, workerId: string) {
   // Participant identity comes from this worker-specific session. Two clients
   // made directly from the same root key are re-entrant, not contenders.
   const ablo = await clientForWorker(workerId);
   await ablo.ready();
 
-  const task = await ablo.tasks.get({ id: taskId });
-  if (!task) return { status: 'not_found' };
+  const record = await ablo.records.get({ id: recordId });
+  if (!record) return { status: 'not_found' };
 
-  const acquired = await ablo.tasks.claim({
-    id: taskId,
+  const acquired = await ablo.records.claim({
+    id: recordId,
     contention: {
       mode: 'skip',
       onStatus(event) {
         if (event.type === 'skipped') {
-          console.info('task already owned', event.error.code);
+          console.info('record already owned', event.error.code);
         }
       },
     },
@@ -69,12 +69,12 @@ export async function completeTask(taskId: string, workerId: string) {
   if (!acquired) return { status: 'already_claimed' };
 
   await using claim = acquired;
-  const updated = await ablo.tasks.update({
+  const updated = await ablo.records.update({
     id: claim.data.id,
     data: { status: 'done' },
   });
 
-  return { status: 'done', task: updated };
+  return { status: 'done', record: updated };
   // claim auto-releases as the function returns
 }
 ```
@@ -100,7 +100,7 @@ schema-backed client:
 ```ts
 await ablo.commits.create({
   operations: [
-    { action: 'update', model: 'tasks', id: 'task_123', data: { status: 'done' } },
+    { action: 'update', model: 'records', id: 'record_123', data: { status: 'done' } },
   ],
   wait: 'confirmed',
 });

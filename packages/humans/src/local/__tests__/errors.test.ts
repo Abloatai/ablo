@@ -107,7 +107,7 @@ describe('translateHttpError', () => {
       description: 'reformatting',
       declaredAt: Date.now(),
       expiresAt: Date.now() + 120_000,
-      entityType: 'Task',
+      entityType: 'Item',
       entityId: 't1',
       meta: { description: 'pricing table, about two minutes' },
     };

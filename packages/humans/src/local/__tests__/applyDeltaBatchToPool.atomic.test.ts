@@ -5,7 +5,7 @@
  * Background: the pool mutations (`addBatch` / `upsertBatch` / `removeBatch` /
  * `updateScope`) are each independently `action`-wrapped, so calling them
  * sequentially flushed reactions at EVERY action boundary. A catch-up frame
- * that added + updated + removed fired every dependent reaction (the decks
+ * that added + updated + removed fired every dependent reaction (the collections
  * gallery, each open editor) 3-4× in a row — the "deltas apply one in a row
  * and it looks horrible" jank. The fix wraps the mutations + the
  * `models:changed` emit in one outer `runInAction`.
@@ -23,9 +23,9 @@ import { ModelScope, LoadStrategy } from '@abloatai/transaction/types';
 import { SyncClient } from '../SyncClient.js';
 import type { Database } from '../Database.js';
 
-class TaskModel extends Model {
+class ItemModel extends Model {
   override getModelName(): string {
-    return 'Task';
+    return 'Item';
   }
 }
 
@@ -38,7 +38,7 @@ function setup() {
     validateOnRegister: false,
     allowLateReferences: true,
   });
-  registry.registerModel('Task', TaskModel, { loadStrategy: LoadStrategy.instant });
+  registry.registerModel('Item', ItemModel, { loadStrategy: LoadStrategy.instant });
   // Model snapshotting (markAsPersisted / resolveConflicts) reads the
   // process-global active registry.
   setActiveRegistry(registry);
@@ -50,7 +50,7 @@ function setup() {
 }
 
 function seed(pool: InstanceCache, id: string): void {
-  const model = Object.assign(new TaskModel({ id }), { title: `seed-${id}` });
+  const model = Object.assign(new ItemModel({ id }), { title: `seed-${id}` });
   model.markAsPersisted();
   pool.add(model, ModelScope.live);
 }
@@ -58,10 +58,10 @@ function seed(pool: InstanceCache, id: string): void {
 /** A frame that adds 2, updates 1, removes 1 — every op-kind in one batch. */
 function mixedFrame(): DeltaResult[] {
   return [
-    { action: 'add', modelName: 'Task', modelId: 'add-a', data: { id: 'add-a', title: 'A' } },
-    { action: 'add', modelName: 'Task', modelId: 'add-b', data: { id: 'add-b', title: 'B' } },
-    { action: 'update', modelName: 'Task', modelId: 'keep', data: { id: 'keep', title: 'updated' } },
-    { action: 'remove', modelName: 'Task', modelId: 'gone', data: null },
+    { action: 'add', modelName: 'Item', modelId: 'add-a', data: { id: 'add-a', title: 'A' } },
+    { action: 'add', modelName: 'Item', modelId: 'add-b', data: { id: 'add-b', title: 'B' } },
+    { action: 'update', modelName: 'Item', modelId: 'keep', data: { id: 'keep', title: 'updated' } },
+    { action: 'remove', modelName: 'Item', modelId: 'gone', data: null },
   ];
 }
 
@@ -117,7 +117,7 @@ describe('SyncClient.applyDeltaBatchToPool — atomic reveal', () => {
     const { pool, client } = setup();
     const frame: DeltaResult[] = Array.from({ length: 150 }, (_, index) => ({
       action: 'add',
-      modelName: 'Task',
+      modelName: 'Item',
       modelId: `bulk-${index}`,
       data: { id: `bulk-${index}`, title: `Bulk ${index}` },
     }));
@@ -133,12 +133,12 @@ describe('SyncClient.applyDeltaBatchToPool — atomic reveal', () => {
   it('does not suffix-trim an oversized frame with an active row subscriber', () => {
     const { pool, client } = setup();
     let delivered = 0;
-    const unsubscribe = pool.subscribe(TaskModel, () => {
+    const unsubscribe = pool.subscribe(ItemModel, () => {
       delivered++;
     });
     const frame: DeltaResult[] = Array.from({ length: 150 }, (_, index) => ({
       action: 'add',
-      modelName: 'Task',
+      modelName: 'Item',
       modelId: `subscribed-${index}`,
       data: { id: `subscribed-${index}`, title: `Subscribed ${index}` },
     }));
@@ -167,7 +167,7 @@ describe('SyncClient.applyDeltaBatchToPool — atomic reveal', () => {
 
     // Two separate top-level actions (what sequential *Batch calls produce
     // when NOT wrapped in a single outer action).
-    const newModel = Object.assign(new TaskModel({ id: 'add-a' }), { title: 'A' });
+    const newModel = Object.assign(new ItemModel({ id: 'add-a' }), { title: 'A' });
     newModel.markAsPersisted();
     runInAction(() => pool.addBatch([newModel], ModelScope.live));
     runInAction(() => pool.removeBatch(['gone']));

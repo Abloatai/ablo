@@ -15,10 +15,10 @@
  *
  * @example
  * ```ts
- * tasks: mutable.lazy({ title: z.string() }, {
- *   typename: 'Task', tableName: 'tasks',
+ * items: mutable.lazy({ title: z.string() }, {
+ *   typename: 'Item', tableName: 'items',
  *   relations: { ... },
- *   computed: tasksComputed,
+ *   computed: itemsComputed,
  * }),
  * ```
  */
@@ -47,13 +47,13 @@ export interface SugarOptions<
   /** Computed getters installed on the model class prototype. */
   computed?: C;
   /**
-   * Wire `__typename` (PascalCase, e.g. `'Task'`). Defaults to the schema
+   * Wire `__typename` (PascalCase, e.g. `'Item'`). Defaults to the schema
    * key via `defineSchema` — override when the wire shape differs from
    * the camelCase schema key.
    */
   typename?: string;
   /**
-   * The physical table name. Override it when the table name differs from the
+   * The database table name. Override it when the table name differs from the
    * snake_case of the typename — for example, a `Member` type stored in a table
    * named `'member'` rather than `'members'`.
    */
@@ -112,9 +112,9 @@ function build<
  * `{ mutable: true, load: X }` on `model()`.
  *
  * Pick the load suffix by data-access pattern:
- *   - `.instant`  — small, always-needed (Theme, Layout, StatusGroup)
+ *   - `.instant`  — small, always-needed control rows
  *   - `.lazy`     — large collections fetched on first query
- *     (Block, Message, Task)
+ *     (Block, Message, Item)
  */
 export const mutable = {
   instant: <

@@ -27,7 +27,7 @@ import {
   registerTestModels,
   createTestConfig,
   createTestContext,
-  createSlideLayerFixture,
+  createEntryLayerFixture,
   type TestContextResult,
 } from '../../src/local/testing';
 
@@ -65,7 +65,7 @@ describe('SyncClient no-op UPDATE guard', () => {
   });
 
   it('skips a changeless update — nothing is enqueued', () => {
-    const layer = createSlideLayerFixture({ id: 'layer-noop-1', slideId: 'slide-1' });
+    const layer = createEntryLayerFixture({ id: 'layer-noop-1', entryId: 'entry-1' });
     layer.clearChanges(); // empty dirty-set: hasChanges === false
     expect(layer.hasChanges).toBe(false);
 
@@ -75,7 +75,7 @@ describe('SyncClient no-op UPDATE guard', () => {
   });
 
   it('enqueues an update that has a real dirty field', () => {
-    const layer = createSlideLayerFixture({ id: 'layer-noop-2', slideId: 'slide-1' });
+    const layer = createEntryLayerFixture({ id: 'layer-noop-2', entryId: 'entry-1' });
     layer.clearChanges();
     // Public dirty-set entry point — deterministic, no MobX setter interception.
     layer.propertyChanged('content', 'old', 'new');
@@ -92,7 +92,7 @@ describe('SyncClient no-op UPDATE guard', () => {
     // rather than silently dropping a potentially-real write.
     const plain = {
       id: 'layer-noop-3',
-      getModelName: () => 'SlideLayer',
+      getModelName: () => 'EntryDetail',
       getChanges: () => ({ content: 'x' }),
     } as unknown as Parameters<typeof client.update>[0];
 

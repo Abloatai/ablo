@@ -17,7 +17,7 @@ import { COLUMN_ROWS } from './fixtures/db';
 const introspectionSuite: ConformanceSuite = (ctx) => {
   describe('introspection', () => {
     it('derives a camelCase field when it maps back to the column', () => {
-      const f = ctx.field('tasks', 'dueAt');
+      const f = ctx.field('records', 'dueAt');
       expect(f.column).toBe('due_at');
       expect(f.kind).toBe('date');
     });
@@ -25,11 +25,11 @@ const introspectionSuite: ConformanceSuite = (ctx) => {
     it('keeps the raw column when camelCase would not recover it', () => {
       // `step_2` → `step2` → `step2` is a different column, so the field keeps
       // the column's own name rather than pointing at one that does not exist.
-      expect(ctx.field('tasks', 'step_2').column).toBe('step_2');
+      expect(ctx.field('records', 'step_2').column).toBe('step_2');
     });
 
     it('reduces an enum to a string and says the type was not recovered', () => {
-      const f = ctx.field('tasks', 'status');
+      const f = ctx.field('records', 'status');
       expect(f.kind).toBe('string');
       expect(f.enumValues).toBeUndefined();
       expect(f.note).toMatch(/USER-DEFINED/);

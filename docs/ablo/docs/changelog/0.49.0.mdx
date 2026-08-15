@@ -15,11 +15,11 @@ write lands anyway, on top of a decision that is no longer true. Pass the rows
 the decision was based on:
 
 ```ts
-const task = await ablo.tasks.get({ id: taskId });
-await ablo.tasks.update({
-  id: task.id,
-  data: { status: 'done', result: `Completed: ${task.title}` },
-  reads: [task],
+const record = await ablo.records.get({ id: recordId });
+await ablo.records.update({
+  id: record.id,
+  data: { status: 'done', result: `Completed: ${record.title}` },
+  reads: [record],
 });
 ```
 
@@ -40,7 +40,7 @@ turn or skips, expires on its own, and keeps itself alive with a heartbeat while
 the agent works.
 
 If an agent loses its claim during a model call, its final write is refused. Two
-agents cannot both believe they own the same task and both write, and a slow
+agents cannot both believe they own the same record and both write, and a slow
 agent cannot land its answer on top of whoever picked the work up after it. Ablo
 decides who holds the claim, so an agent cannot assert one it does not have.
 
@@ -65,7 +65,7 @@ database you connected.
 
 An agent holding a key can now ask what that key permits and get the answer from
 Ablo, whether it keeps a connection open or calls over HTTP for a single turn.
-An agent that mints a narrower key for a sub-task can confirm what it handed
+An agent that mints a narrower key for a sub-record can confirm what it handed
 over.
 
 ### A refused action says which permission was missing

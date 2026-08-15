@@ -28,7 +28,7 @@ import { quoteIdent } from './connectSetup.js';
  * here instead of an `undefined` field flowing downstream.
  */
 export const ownedRelationRowSchema = z.object({
-  /** Schema-qualified relation, e.g. `public.documents`. */
+  /** Schema-qualified relation, e.g. `public.records`. */
   relation: z.string(),
   owner: z.string(),
   /**

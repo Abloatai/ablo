@@ -9,18 +9,18 @@ describe('project pin', () => {
 
   it('fails closed before startup when the key belongs to another project', () => {
     expect(() => {
-      assertExpectedProject('proj_mail', 'proj_slides');
+      assertExpectedProject('proj_mail', 'proj_records');
     }).toThrow(
-      /belongs to project proj_slides.*pinned to proj_mail/
+      /belongs to project proj_records.*pinned to proj_mail/
     );
     try {
-      assertExpectedProject('proj_mail', 'proj_slides');
+      assertExpectedProject('proj_mail', 'proj_records');
     } catch (error) {
       expect(error).toMatchObject({
         code: 'project_scope_denied',
         details: {
           expectedProjectId: 'proj_mail',
-          actualProjectId: 'proj_slides',
+          actualProjectId: 'proj_records',
         },
       });
     }

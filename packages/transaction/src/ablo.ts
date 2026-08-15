@@ -12,7 +12,7 @@
  * import { schema } from './schema';
  *
  * const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: 'http' });
- * await ablo.tasks.update({ id: taskId, data: { status: 'done' } });
+ * await ablo.items.update({ id: itemId, data: { status: 'done' } });
  * ```
  *
  * The reactive materialiser — local store, live queries, presence rendering —

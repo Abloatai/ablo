@@ -16,13 +16,13 @@ One resource mints both:
 // A logged-in person's browser session — only the operations this UI needs.
 const userSession = await ablo.sessions.create({
   user: { id: currentUser.id },
-  can: { tasks: ['read', 'update'], workspaces: ['read'] },
+  can: { records: ['read', 'update'], workspaces: ['read'] },
 });
 
 // Recommended agent path — returns a ready, scoped client.
 const agent = await ablo.agents.create({
-  name: 'task-writer',
-  can: { tasks: ['read', 'update'], workspaces: ['read'] },
+  name: 'record-writer',
+  can: { records: ['read', 'update'], workspaces: ['read'] },
 });
 ```
 
@@ -54,7 +54,7 @@ import { credentialEndpointSuccessSchema } from '@abloatai/ablo/auth';
 
 const { token, expiresAt } = await ablo.sessions.create({
   user: { id: currentUser.id },   // who the session acts as
-  can: { tasks: ['read', 'update'] },
+  can: { records: ['read', 'update'] },
   // syncGroups: [...],           // optional; defaults to the user's org + user
 });
 return Response.json(
@@ -107,18 +107,18 @@ error, not a silent over-grant:
 
 ```ts
 const agent = await ablo.agents.create({
-  name: 'task-writer',
-  can: { tasks: ['update'] },  // typed off the schema — no magic strings
+  name: 'record-writer',
+  can: { records: ['update'] },  // typed off the schema — no magic strings
   ttlSeconds: 600,
 });
 
-await agent.tasks.update({ id, data });
+await agent.records.update({ id, data });
 await agent.dispose();
 ```
 
 The returned client refreshes its own short-lived credential. A write grant
 automatically includes the corresponding read, so
-`can: { tasks: ['update'] }` is enforced as `task.update` plus `task.read`.
+`can: { records: ['update'] }` is enforced as `record.update` plus `record.read`.
 Operations are `'read' | 'create' | 'update' | 'delete'`.
 
 For a reusable grant, use TypeScript's `satisfies`. It checks the object against
@@ -129,14 +129,14 @@ second permission model:
 import type { CapabilityGrant } from '@abloatai/ablo/auth';
 import { schema } from './ablo.schema';
 
-const taskWriterCan = {
-  tasks: ['update'],
+const recordWriterCan = {
+  records: ['update'],
 } satisfies CapabilityGrant<typeof schema>;
 
-const agent = await ablo.agents.create({ can: taskWriterCan });
+const agent = await ablo.agents.create({ can: recordWriterCan });
 ```
 
-`documents` instead of `tasks`, or `'write'` instead of `'update'`, is a compile
+`documents` instead of `records`, or `'write'` instead of `'update'`, is a compile
 error. At runtime the SDK parses the same grant with the schema-bound Zod
 contract before minting, and the server validates it again against the active
 pushed schema.
@@ -157,6 +157,8 @@ for the actor.
 |---|---|---|
 | `user` / `agent` | both | The actor. `id` becomes the token's `participantId`. Pass exactly one. |
 | `can` | both | Required non-empty per-model operation allowlist, typed off the schema. |
+| `organizationId` | user | Mint into a customer organization instead of the key's own. Requires `ephemeral:mint-any-org`. |
+| `schemaProject` | user | Override the schema project for a cross-org mint. Usually omitted because the owning key's project is the default. |
 | `syncGroups` | both | Narrow the session below its default scope. Omit to inherit. |
 | `ttlSeconds` | both | Lifetime in seconds. Defaults to `900` (15m). |
 | `userMeta` | both | Opaque identity blob echoed back to the client. |
@@ -220,7 +222,7 @@ errors.
 
 A user session carries the user's **base** sync-groups (`org:`/`user:`/`team:`),
 derived from the identity you minted it for. **Dynamic, relation-driven
-membership** (e.g. a `dataroom:<id>` the user was just added to) is resolved
+membership** (e.g. a `archive:<id>` the user was just added to) is resolved
 **server-side at connect** and unioned on top — so scope stays live, not frozen
 at mint time. Pass `syncGroups` only when you want to *narrow* below the default.
 
@@ -258,6 +260,9 @@ deny reads. Do not use scope roots as a tenant security boundary unless every
 model declares the matching policy. If that invariant is difficult to audit,
 use one organization per customer.
 
+For the complete key, backend-route, browser, lifecycle, and troubleshooting
+flow, see [Customer Organizations](/customer-organizations).
+
 The problem that creates: if each customer is a separate org, a naïve setup would
 make you re-push your schema into every new customer's org. You don't have to.
 Keep **one** project as the home of your schema. When its key mints into another
@@ -269,7 +274,7 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_PLATFORM_KEY });
 const { token } = await ablo.sessions.create({
   user: { id: userId },
   organizationId, // DATA → this customer's isolated org
-  can: { tasks: ['read', 'update'] },
+  can: { records: ['read', 'update'] },
   ttlSeconds: 3600,
 });
 ```
@@ -284,8 +289,8 @@ plane (connection + row-level isolation) stays the customer's. A shared schema
 can't leak data across orgs.
 
 :::note
-This requires a platform `sk_` carrying the `ephemeral:mint-any-org` scope —
-only a trusted platform key can mint a session into another org. Omit
+This requires a dedicated `sk_` carrying the `ephemeral:mint-any-org` scope —
+only a trusted cross-organization key can mint a session into another org. Omit
 `organizationId` and you get the default above: one project, one schema, all
 your users in the key's own organization.
 :::

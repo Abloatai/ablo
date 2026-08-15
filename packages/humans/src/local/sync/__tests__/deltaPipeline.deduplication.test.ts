@@ -5,7 +5,7 @@ function delta(id: number, modelId: string, actionType: SyncDelta['actionType'] 
   return {
     id,
     actionType,
-    modelName: 'Task',
+    modelName: 'Item',
     modelId,
     data: { id: modelId, status: String(id) },
     syncGroups: [],

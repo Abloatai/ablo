@@ -59,10 +59,10 @@ describe('docs catalog', () => {
     expect(branchDevelopment?.description).toMatch(/^Understand exactly what `ablo dev` prepares/);
     expect(integrations?.title).toBe('Integrations');
     expect(integrations?.description).toMatch(/^Compose Ablo's authoritative shared-state/);
-    expect(temporal?.title).toBe('Temporal for long-running tasks');
-    expect(temporal?.description).toMatch(/^Run long-lived, retryable agent tasks/);
-    expect(inngest?.title).toBe('Inngest for long-running tasks');
-    expect(inngest?.description).toMatch(/^Run event-driven, retryable agent tasks/);
+    expect(temporal?.title).toBe('Temporal for long-running records');
+    expect(temporal?.description).toMatch(/^Run long-lived, retryable agent records/);
+    expect(inngest?.title).toBe('Inngest for long-running records');
+    expect(inngest?.description).toMatch(/^Run event-driven, retryable agent records/);
     expect(catalog.filter((e) => e.kind !== 'package').every((e) => e.description !== '')).toBe(
       true
     );

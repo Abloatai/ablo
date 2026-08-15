@@ -12,7 +12,7 @@ function observedClaim(overrides: Partial<Claim> = {}): Claim {
   return {
     object: 'claim',
     id: 'claim-1',
-    target: { type: 'Slide', id: 'slide-1' },
+    target: { type: 'Entry', id: 'entry-1' },
     description: 'editing the title',
     heldBy: 'agent:other',
     ...overrides,
@@ -24,7 +24,7 @@ function source(
 ): AgentPerceptionSource {
   return {
     get: async () => ({
-      id: 'slide-1',
+      id: 'entry-1',
       updatedAt: '2026-07-26T08:00:00.000Z',
       updatedBy: 'agent:other',
     }),
@@ -42,20 +42,20 @@ describe('Agent perception', () => {
       heldBy: 'agent:queued',
     });
     const model: TransactionPerceptionModel = {
-      get: vi.fn(async () => ({ id: 'slide-1' })),
+      get: vi.fn(async () => ({ id: 'entry-1' })),
       claim: {
         state: vi.fn(async () => active),
         queue: vi.fn(async () => ({ data: [queued] })),
       },
     };
     const adapter = transactionPerceptionSource((type) =>
-      type === 'Slide' ? model : undefined,
+      type === 'Entry' ? model : undefined,
     );
 
-    await expect(adapter.get('Slide', 'slide-1')).resolves.toEqual({
-      id: 'slide-1',
+    await expect(adapter.get('Entry', 'entry-1')).resolves.toEqual({
+      id: 'entry-1',
     });
-    await expect(adapter.claims('Slide', 'slide-1')).resolves.toEqual([
+    await expect(adapter.claims('Entry', 'entry-1')).resolves.toEqual([
       active,
       queued,
     ]);
@@ -76,8 +76,8 @@ describe('Agent perception', () => {
 
     await expect(
       perception.checkFreshness(
-        'Slide',
-        'slide-1',
+        'Entry',
+        'entry-1',
         Date.parse('2026-07-26T07:00:00.000Z'),
       ),
     ).resolves.toMatchObject({
@@ -98,7 +98,7 @@ describe('Agent perception', () => {
     });
 
     await expect(
-      perception.checkFreshness('Slide', 'slide-1', Date.now()),
+      perception.checkFreshness('Entry', 'entry-1', Date.now()),
     ).rejects.toMatchObject({
       code: 'agent_perception_unavailable',
     });
@@ -114,7 +114,7 @@ describe('Agent perception', () => {
       }),
     });
     await expect(
-      perception.checkFreshness('Slide', 'slide-1', Date.now() - 1_000),
+      perception.checkFreshness('Entry', 'entry-1', Date.now() - 1_000),
     ).rejects.toBeInstanceOf(AgentPerceptionUnavailableError);
   });
 
@@ -125,7 +125,7 @@ describe('Agent perception', () => {
     });
     const prepareStep = perception.prepareStep({
       focusFromToolCalls: (call) =>
-        call.toolName === 'updateSlide' ? ['Slide:slide-1'] : undefined,
+        call.toolName === 'updateSlide' ? ['Entry:entry-1'] : undefined,
     });
 
     await expect(
@@ -137,7 +137,7 @@ describe('Agent perception', () => {
     ).resolves.toMatchObject({
       messages: [
         { role: 'user' },
-        { role: 'system', content: expect.stringContaining('Slide:slide-1') },
+        { role: 'system', content: expect.stringContaining('Entry:entry-1') },
       ],
     });
   });
@@ -151,8 +151,8 @@ describe('Agent perception', () => {
     });
 
     await perception.announce('online', {
-      entityType: 'Slide',
-      entityId: 'slide-1',
+      entityType: 'Entry',
+      entityId: 'entry-1',
       action: 'editing',
     });
     expect(announce).toHaveBeenCalledOnce();

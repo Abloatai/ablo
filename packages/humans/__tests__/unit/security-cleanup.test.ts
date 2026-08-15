@@ -11,10 +11,10 @@ import { ModelRegistry, setActiveRegistry } from '../../src/local/ModelRegistry'
 import {
   createTestContext,
   registerTestModels,
-  TestTask,
-  TestProject,
-  createTaskFixture,
-  createProjectFixture,
+  TestItem,
+  TestWorkspace,
+  createItemFixture,
+  createWorkspaceFixture,
   resetFixtureCounter,
 } from '../../src/local/testing';
 
@@ -42,60 +42,60 @@ describe('Security: Data cleanup on access revocation', () => {
     it('should remove ALL models from pool when clear() is called', () => {
       // Simulate a pool with cached data from an active session
       pool.addBatch([
-        createTaskFixture({ title: 'Confidential task' }),
-        createTaskFixture({ title: 'Secret project info' }),
-        createProjectFixture({ name: 'Classified project' }),
+        createItemFixture({ title: 'Confidential item' }),
+        createItemFixture({ title: 'Secret workspace info' }),
+        createWorkspaceFixture({ name: 'Classified workspace' }),
       ]);
       expect(pool.size).toBe(3);
-      expect(pool.getByType(TestTask).length).toBe(2);
-      expect(pool.getByType(TestProject).length).toBe(1);
+      expect(pool.getByType(TestItem).length).toBe(2);
+      expect(pool.getByType(TestWorkspace).length).toBe(1);
 
       // Session expires → pool must be fully cleared
       pool.clear();
 
       expect(pool.size).toBe(0);
-      expect(pool.getByType(TestTask).length).toBe(0);
-      expect(pool.getByType(TestProject).length).toBe(0);
+      expect(pool.getByType(TestItem).length).toBe(0);
+      expect(pool.getByType(TestWorkspace).length).toBe(0);
     });
 
     it('should clear type indexes so no model IDs are discoverable', () => {
-      const task = createTaskFixture();
-      pool.add(task);
+      const item = createItemFixture();
+      pool.add(item);
 
-      const idsBefore = pool.getIdsByModelType('Task');
+      const idsBefore = pool.getIdsByModelType('Item');
       expect(idsBefore?.size).toBe(1);
 
       pool.clear();
 
       // After clear, type index should have no IDs
       // (it may or may not still exist as a key, but must be empty)
-      const idsAfter = pool.getIdsByModelType('Task');
+      const idsAfter = pool.getIdsByModelType('Item');
       expect(idsAfter === undefined || idsAfter.size === 0).toBe(true);
     });
 
     it('should clear FK indexes so no relationship data is discoverable', () => {
-      pool.registerForeignKey('Task', 'projectId');
+      pool.registerForeignKey('Item', 'workspaceId');
 
-      const project = createProjectFixture();
-      const task = createTaskFixture({ projectId: project.id });
-      pool.add(project);
-      pool.add(task);
+      const workspace = createWorkspaceFixture();
+      const item = createItemFixture({ workspaceId: workspace.id });
+      pool.add(workspace);
+      pool.add(item);
 
-      expect(pool.getByForeignKey('Task', 'projectId', project.id).length).toBe(1);
+      expect(pool.getByForeignKey('Item', 'workspaceId', workspace.id).length).toBe(1);
 
       pool.clear();
 
-      expect(pool.getByForeignKey('Task', 'projectId', project.id).length).toBe(0);
+      expect(pool.getByForeignKey('Item', 'workspaceId', workspace.id).length).toBe(0);
     });
 
     it('should make previously cached models unreachable via get()', () => {
-      const task = createTaskFixture({ title: 'Sensitive data' });
-      pool.add(task);
-      expect(pool.get(task.id)).toBe(task);
+      const item = createItemFixture({ title: 'Sensitive data' });
+      pool.add(item);
+      expect(pool.get(item.id)).toBe(item);
 
       pool.clear();
 
-      expect(pool.get(task.id)).toBeUndefined();
+      expect(pool.get(item.id)).toBeUndefined();
     });
   });
 
@@ -120,8 +120,8 @@ describe('Security: Data cleanup on access revocation', () => {
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction(storeName, 'readwrite');
         const store = tx.objectStore(storeName);
-        store.put({ id: 'task-1', title: 'Confidential' });
-        store.put({ id: 'task-2', title: 'Secret' });
+        store.put({ id: 'item-1', title: 'Confidential' });
+        store.put({ id: 'item-2', title: 'Secret' });
         tx.oncomplete = () => { resolve(); };
         tx.onerror = () => { reject(tx.error); };
       });

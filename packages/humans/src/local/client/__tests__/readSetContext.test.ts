@@ -19,20 +19,20 @@ import { createDefaultMutationExecutor } from '../wsMutationExecutor.js';
 import type { CommitRecord } from '@abloatai/transaction/wire/commit';
 import { EFFECTIVE_AUTHORITY_FIXTURE } from '@abloatai/transaction/testing/fixtures/httpResponses';
 
-interface TaskRow {
+interface ItemRow {
   id: string;
   title: string;
   status: string;
 }
 
-class TaskModel extends Model {
+class ItemModel extends Model {
   constructor(data?: Record<string, unknown>) {
     super(data);
     Object.assign(this, data);
   }
 
   override getModelName(): string {
-    return 'Task';
+    return 'Item';
   }
 }
 
@@ -64,7 +64,7 @@ describe('reactive/WebSocket ReadSet context', () => {
     );
 
     const identity = {};
-    capturePointRead(context, identity, 'tasks', 'task-1', { id: 'task-1' }, 54);
+    capturePointRead(context, identity, 'items', 'item-1', { id: 'item-1' }, 54);
     const prepared = prepareReadSet(
       context,
       identity,
@@ -74,7 +74,7 @@ describe('reactive/WebSocket ReadSet context', () => {
       undefined,
     );
     await executor.commit([{
-      type: 'UPDATE', model: 'tasks', id: 'task-1',
+      type: 'UPDATE', model: 'items', id: 'item-1',
       input: { status: 'done' }, readAt: 54, onStale: 'reject',
     }], {
       idempotencyKey: 'attempt-ws-record',
@@ -93,7 +93,7 @@ describe('reactive/WebSocket ReadSet context', () => {
       correlationId: 'corr-ws-record',
       lastSyncId: 55,
       operations: [expect.objectContaining({
-        action: 'update', model: 'tasks', id: 'task-1', readAt: 54,
+        action: 'update', model: 'items', id: 'item-1', readAt: 54,
       }) as CommitRecord['operations'][number]],
       readSet: expect.arrayContaining([
         expect.objectContaining({ watermark: 53 }) as CommitRecord['readSet'][number],
@@ -107,16 +107,16 @@ describe('reactive/WebSocket ReadSet context', () => {
       validateOnRegister: false,
       allowLateReferences: true,
     });
-    registry.registerModel('Task', TaskModel, { loadStrategy: LoadStrategy.instant });
+    registry.registerModel('Item', ItemModel, { loadStrategy: LoadStrategy.instant });
     for (const property of ['title', 'status']) {
-      registry.registerProperty('Task', property, {
+      registry.registerProperty('Item', property, {
         type: 'property' as never,
         indexed: false,
         optional: false,
       });
     }
     const pool = new InstanceCache({ maxSize: 100 }, registry);
-    const model = new TaskModel({ id: 'task-1', title: 'Queued', status: 'todo' });
+    const model = new ItemModel({ id: 'item-1', title: 'Queued', status: 'todo' });
     pool.add(model, ModelScope.live);
 
     let updateOptions: Record<string, unknown> | undefined;
@@ -143,13 +143,13 @@ describe('reactive/WebSocket ReadSet context', () => {
       getReadEvidence: jest.fn(() => 42),
     };
     const collaboration: ModelCollaboration = {
-      readPoint: jest.fn((_model: string, id: string) => Promise.resolve(id === 'task-2'
+      readPoint: jest.fn((_model: string, id: string) => Promise.resolve(id === 'item-2'
         ? {
-            data: { id: 'task-2', title: 'Run dependency', status: 'ready' },
+            data: { id: 'item-2', title: 'Run dependency', status: 'ready' },
             stamp: 43,
           }
         : {
-            data: { id: 'task-1', title: 'Authoritative', status: 'todo' },
+            data: { id: 'item-1', title: 'Authoritative', status: 'todo' },
             stamp: 44,
           })),
       createClaim: jest.fn(() => Promise.reject(new Error('not used'))),
@@ -168,9 +168,9 @@ describe('reactive/WebSocket ReadSet context', () => {
       selfParticipantId: 'user-1',
     };
     const context = createReadSetContext();
-    const tasks = createModelProxy<TaskRow, Omit<TaskRow, 'id'>>(
-      'tasks',
-      'Task',
+    const items = createModelProxy<ItemRow, Omit<ItemRow, 'id'>>(
+      'items',
+      'Item',
       pool,
       syncClient,
       registry,
@@ -179,40 +179,40 @@ describe('reactive/WebSocket ReadSet context', () => {
       context,
     );
 
-    const [task] = await tasks.list({ where: { status: 'todo' } });
-    if (!task) throw new Error('expected listed task');
+    const [item] = await items.list({ where: { status: 'todo' } });
+    if (!item) throw new Error('expected listed item');
     expect(collaboration.readPoint).not.toHaveBeenCalled();
-    await tasks.update({
-      id: 'task-1', data: { status: 'done' },
-      reads: [task], idempotencyKey: 'turn:task-1',
+    await items.update({
+      id: 'item-1', data: { status: 'done' },
+      reads: [item], idempotencyKey: 'turn:item-1',
     });
 
     expect(updateOptions).toMatchObject({
-      reads: [{ model: 'task', id: 'task-1', readAt: 42 }],
-      idempotencyKey: 'turn:task-1',
+      reads: [{ model: 'item', id: 'item-1', readAt: 42 }],
+      idempotencyKey: 'turn:item-1',
     });
 
     updateOptions = undefined;
-    const dependency = await tasks.get({ id: 'task-2' });
+    const dependency = await items.get({ id: 'item-2' });
     if (!dependency) throw new Error('expected cross-target dependency');
-    await tasks.update('task-1', (current) => ({
+    await items.update('item-1', (current) => ({
       ...current,
       status: 'review',
     }), { reads: [dependency] });
     expect(updateOptions).toMatchObject({
       readAt: 44,
       onStale: 'reject',
-      reads: [{ model: 'task', id: 'task-2', readAt: 43 }],
+      reads: [{ model: 'item', id: 'item-2', readAt: 43 }],
     });
     updateOptions = undefined;
-    await tasks.update({
-      id: 'task-1',
+    await items.update({
+      id: 'item-1',
       data: { status: 'archived' },
       idempotencyKey: 'after-functional',
       reads: [dependency],
     });
     expect(updateOptions).toMatchObject({
-      reads: [{ model: 'task', id: 'task-2', readAt: 43 }],
+      reads: [{ model: 'item', id: 'item-2', readAt: 43 }],
       idempotencyKey: 'after-functional',
     });
     pool.stopGC();

@@ -80,7 +80,7 @@ const lowerFirst = (s: string): string => (s ? s.charAt(0).toLowerCase() + s.sli
  * the adapter, and it reflects a real limit of the type system rather than a
  * shortcut. Writes inside `prisma.$transaction(tx => …)` must go through the
  * transactional client `tx`, and the model is known only as a runtime string.
- * Prisma keys its client by fixed property names (`{ task: TaskDelegate; … }`), so
+ * Prisma keys its client by fixed property names (`{ item: ItemDelegate; … }`), so
  * a dynamic `tx[name]` lookup is `unknown` to the compiler: there is no static key
  * to infer from a string. The cast is checked at runtime immediately afterward by
  * confirming that `findMany` is a function on the resolved delegate.
@@ -149,6 +149,11 @@ export function prismaDataSource<S extends SchemaRecord>(
   void schema; // held for typed reads and model validation
 
   const applyOperation = async (tx: PrismaRaw, op: Operation): Promise<Row> => {
+    if (op.where) {
+      throw new AbloValidationError('The Prisma adapter does not support conditional operations', {
+        code: 'source_adapter_misconfigured',
+      });
+    }
     const delegate = delegateFor(tx, delegateName(op.model));
     const id = rowId(op);
     switch (op.type) {

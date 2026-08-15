@@ -18,7 +18,7 @@ import { MutationQueue } from '../../src/local/transactions/mutations/MutationQu
 import { AbloClaimedError } from '@abloatai/transaction/errors';
 import {
   createTestContext,
-  createTaskFixture,
+  createItemFixture,
   resetFixtureCounter,
   flushMicrotasks,
 } from '../../src/local/testing';
@@ -29,7 +29,7 @@ const TEST_USER_CONTEXT = {
   organizationId: 'org-1',
 };
 
-/** Real-timer settle: microtasks + a short macrotask window so the
+/** Real-timer settle: microtasks + a short macroitem window so the
  *  (jittered, ≤2ms in this config) retry timers can fire. */
 async function settle(ms = 60): Promise<void> {
   await flushMicrotasks();
@@ -65,7 +65,7 @@ describe('MutationQueue rejected-commit confirmation', () => {
 
   it('a held-claim rejection settles after ONE send: no resend, rollback, rejected confirmation', async () => {
     executor.failAll(
-      new AbloClaimedError('task/t1 is claimed by another participant', {
+      new AbloClaimedError('item/t1 is claimed by another participant', {
         code: 'claim_conflict',
       }),
     );
@@ -75,10 +75,10 @@ describe('MutationQueue rejected-commit confirmation', () => {
     queue.on('transaction:failed', (p) => failed.push(p as { permanent?: boolean }));
     queue.on('optimistic:rollback', (p) => rollbacks.push(p));
 
-    const task = createTaskFixture({ title: 'original' });
-    task.markAsPersisted();
-    task.propertyChanged('title', 'original', 'steamroll');
-    const tx = await queue.update(task, TEST_USER_CONTEXT, { title: 'steamroll' });
+    const item = createItemFixture({ title: 'original' });
+    item.markAsPersisted();
+    item.propertyChanged('title', 'original', 'steamroll');
+    const tx = await queue.update(item, TEST_USER_CONTEXT, { title: 'steamroll' });
 
     const confirmation = queue.waitForConfirmation(tx.id);
     // Attach the rejection assertion BEFORE settling so the rejection is
@@ -101,10 +101,10 @@ describe('MutationQueue rejected-commit confirmation', () => {
     const failed: { permanent?: boolean }[] = [];
     queue.on('transaction:failed', (p) => failed.push(p as { permanent?: boolean }));
 
-    const task = createTaskFixture({ title: 'original' });
-    task.markAsPersisted();
-    task.propertyChanged('title', 'original', 'flaky');
-    queue.update(task, TEST_USER_CONTEXT, { title: 'flaky' });
+    const item = createItemFixture({ title: 'original' });
+    item.markAsPersisted();
+    item.propertyChanged('title', 'original', 'flaky');
+    queue.update(item, TEST_USER_CONTEXT, { title: 'flaky' });
 
     await settle(150);
 

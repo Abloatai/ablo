@@ -17,14 +17,14 @@ and carries exact Ablo rows into `ctx.reads` for the write that follows.
 const ctx = await context({
   ablo,
   data: {
-    task: ablo.tasks.get({ id: taskId }),
-    documents: ablo.documents.list({ where: { taskId } }),
-    memory: loadMemories(taskId),
+    record: ablo.records.get({ id: recordId }),
+    records: ablo.records.list({ where: { recordId } }),
+    memory: loadMemories(recordId),
   },
 });
 
-await ablo.tasks.update({
-  id: taskId,
+await ablo.records.update({
+  id: recordId,
   data: result,
   reads: ctx.reads,
 });

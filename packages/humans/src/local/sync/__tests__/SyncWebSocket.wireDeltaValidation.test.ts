@@ -92,9 +92,9 @@ function serverShapedDelta(overrides: Record<string, unknown> = {}): Record<stri
   return {
     id: 7,
     actionType: 'U',
-    modelName: 'tasks',
-    modelId: 'task-1',
-    data: { id: 'task-1', title: 'hello' },
+    modelName: 'items',
+    modelId: 'item-1',
+    data: { id: 'item-1', title: 'hello' },
     previousData: null,
     syncGroups: ['org:org1'],
     transactionId: null,
@@ -158,8 +158,8 @@ describe('SyncWebSocket wire delta validation (T1.2)', () => {
     const emitted = deltas[0];
     if (!emitted) throw new Error('expected an emitted delta');
     expect(emitted.id).toBe(7);
-    expect(emitted.modelName).toBe('tasks');
-    expect(emitted.modelId).toBe('task-1');
+    expect(emitted.modelName).toBe('items');
+    expect(emitted.modelId).toBe('item-1');
     // The nullable server fields normalize to absent, never reject.
     expect(emitted.transactionId).toBeUndefined();
     expect(spy.breadcrumbs.filter((b) => b.message.includes('malformed'))).toHaveLength(0);
@@ -211,7 +211,7 @@ describe('SyncWebSocket wire delta validation (T1.2)', () => {
         deltas: [
           serverShapedDelta({ id: 8 }),
           serverShapedDelta({ modelName: '' }), // invalid — dropped
-          serverShapedDelta({ id: '9', modelId: 'task-2' }),
+          serverShapedDelta({ id: '9', modelId: 'item-2' }),
         ],
       }),
     );
@@ -229,7 +229,7 @@ describe('SyncWebSocket wire delta validation (T1.2)', () => {
     deliver(
       fake,
       frame('delta', {
-        deltas: [serverShapedDelta({ id: 1 }), serverShapedDelta({ id: 2, modelId: 'task-2' })],
+        deltas: [serverShapedDelta({ id: 1 }), serverShapedDelta({ id: 2, modelId: 'item-2' })],
       }),
     );
     expect(deltas.map((d) => d.id)).toEqual([1, 2]);

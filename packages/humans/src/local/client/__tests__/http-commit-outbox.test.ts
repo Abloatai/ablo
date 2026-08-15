@@ -136,7 +136,7 @@ async function leaveAmbiguousDelete(
   });
   await expect(client.commits.create({
     idempotencyKey,
-    operations: [{ action: 'delete', model: 'tasks', id }],
+    operations: [{ action: 'delete', model: 'items', id }],
   })).rejects.toThrow();
 
   const record = [...outbox.records.values()][0];
@@ -188,7 +188,7 @@ describe('stateless HTTP commit outbox', () => {
 
     const pending = client.commits.create({
       idempotencyKey: 'http-key-1',
-      operations: [{ action: 'update', model: 'tasks', id: 'task-1', data: { title: 'safe' } }],
+      operations: [{ action: 'update', model: 'items', id: 'item-1', data: { title: 'safe' } }],
     });
     await waitFor(() => sealStarted);
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -249,7 +249,7 @@ describe('stateless HTTP commit outbox', () => {
     await expect(client.commits.create({
       idempotencyKey: 'http-forwarded-queued',
       operations: [
-        { action: 'update', model: 'tasks', id: 'task-1', data: { title: 'safe' } },
+        { action: 'update', model: 'items', id: 'item-1', data: { title: 'safe' } },
       ],
       wait: 'queued',
     })).resolves.toMatchObject({
@@ -291,7 +291,7 @@ describe('stateless HTTP commit outbox', () => {
     const request = {
       idempotencyKey: 'http-forwarded-promote',
       operations: [
-        { action: 'update' as const, model: 'tasks', id: 'task-1', data: { title: 'safe' } },
+        { action: 'update' as const, model: 'items', id: 'item-1', data: { title: 'safe' } },
       ],
     };
 
@@ -342,7 +342,7 @@ describe('stateless HTTP commit outbox', () => {
     const request = {
       idempotencyKey: 'http-forwarded-lag',
       operations: [
-        { action: 'update' as const, model: 'tasks', id: 'task-1', data: { title: 'safe' } },
+        { action: 'update' as const, model: 'items', id: 'item-1', data: { title: 'safe' } },
       ],
       wait: 'confirmed' as const,
     };
@@ -392,7 +392,7 @@ describe('stateless HTTP commit outbox', () => {
     });
     await first.commits.create({
       idempotencyKey: 'http-forwarded-startup',
-      operations: [{ action: 'delete', model: 'tasks', id: 'task-1' }],
+      operations: [{ action: 'delete', model: 'items', id: 'item-1' }],
       wait: 'queued',
     });
     expect(outbox.records.size).toBe(1);
@@ -435,7 +435,7 @@ describe('stateless HTTP commit outbox', () => {
 
     await client.commits.create({
       idempotencyKey: 'http-forwarded-flush',
-      operations: [{ action: 'delete', model: 'tasks', id: 'task-1' }],
+      operations: [{ action: 'delete', model: 'items', id: 'item-1' }],
       wait: 'queued',
     });
 
@@ -479,12 +479,12 @@ describe('stateless HTTP commit outbox', () => {
       },
     });
     const update = {
-      id: 'task-1',
+      id: 'item-1',
       data: { title: 'source owned' },
       idempotencyKey: 'http-model-forwarded',
     };
 
-    await expect(client.model('tasks').update({
+    await expect(client.model('items').update({
       ...update,
     })).resolves.toMatchObject({ status: 'confirmed', lastSyncId: 88 });
     expect(responseNumber).toBe(3);
@@ -547,7 +547,7 @@ describe('stateless HTTP commit outbox', () => {
 
     await client.commits.create({
       idempotencyKey: 'auth-scoped-write',
-      operations: [{ action: 'delete', model: 'tasks', id: 'task-identity' }],
+      operations: [{ action: 'delete', model: 'items', id: 'item-identity' }],
     });
 
     expect(requestedPaths.some((path) => path.endsWith('/auth/identity'))).toBe(true);
@@ -593,8 +593,8 @@ describe('stateless HTTP commit outbox', () => {
       first.commits.create({
         idempotencyKey: 'http-key-crash',
         operations: [
-          { action: 'update', model: 'tasks', id: 'task-a', data: { rank: 1 } },
-          { action: 'update', model: 'tasks', id: 'task-b', data: { rank: 2 } },
+          { action: 'update', model: 'items', id: 'item-a', data: { rank: 1 } },
+          { action: 'update', model: 'items', id: 'item-b', data: { rank: 2 } },
         ],
       }),
     ).rejects.toThrow();
@@ -626,7 +626,7 @@ describe('stateless HTTP commit outbox', () => {
     const current = await leaveAmbiguousDelete(
       outbox,
       'legacy-protocol-entry',
-      'legacy-task',
+      'legacy-item',
     );
     const { protocolVersion: _omitted, ...legacyEntry } = current;
     expect(durableHttpCommitEnvelopeSchema.parse(legacyEntry).protocolVersion).toBe(1);
@@ -641,7 +641,7 @@ describe('stateless HTTP commit outbox', () => {
     const current = await leaveAmbiguousDelete(
       outbox,
       'newer-protocol-entry',
-      'newer-task',
+      'newer-item',
     );
     const newerProtocolVersion = PROTOCOL_VERSION + 1;
     outbox.records.set(current.id, {
@@ -673,8 +673,8 @@ describe('stateless HTTP commit outbox', () => {
       idempotencyKey: 'http-key-immediate-retry',
       operations: [{
         action: 'update' as const,
-        model: 'tasks',
-        id: 'task-1',
+        model: 'items',
+        id: 'item-1',
         data: { title: 'same-body' },
       }],
     };
@@ -710,11 +710,11 @@ describe('stateless HTTP commit outbox', () => {
 
     await expect(client.commits.create({
       idempotencyKey: 'write-a',
-      operations: [{ action: 'update', model: 'tasks', id: 'a', data: { rank: 1 } }],
+      operations: [{ action: 'update', model: 'items', id: 'a', data: { rank: 1 } }],
     })).rejects.toThrow();
     await expect(client.commits.create({
       idempotencyKey: 'write-b',
-      operations: [{ action: 'update', model: 'tasks', id: 'b', data: { rank: 2 } }],
+      operations: [{ action: 'update', model: 'items', id: 'b', data: { rank: 2 } }],
     })).resolves.toMatchObject({ status: 'confirmed' });
 
     expect(attemptedKeys).toEqual(['write-a', 'write-a', 'write-b']);
@@ -739,7 +739,7 @@ describe('stateless HTTP commit outbox', () => {
 
     await expect(client.commits.create({
       idempotencyKey: 'flush-me',
-      operations: [{ action: 'delete', model: 'tasks', id: 'old' }],
+      operations: [{ action: 'delete', model: 'items', id: 'old' }],
     })).rejects.toThrow();
     await expect(client.waitForFlush()).resolves.toBeUndefined();
     expect(attempts).toBe(2);
@@ -757,7 +757,7 @@ describe('stateless HTTP commit outbox', () => {
     });
     await expect(client.commits.create({
       idempotencyKey: 'expired-write',
-      operations: [{ action: 'delete', model: 'tasks', id: 'old' }],
+      operations: [{ action: 'delete', model: 'items', id: 'old' }],
     })).rejects.toThrow();
     const record = [...outbox.records.values()][0];
     const parsed = durableHttpCommitEnvelopeSchema.safeParse(record);
@@ -800,7 +800,7 @@ describe('stateless HTTP commit outbox', () => {
     });
     await queued.commits.create({
       idempotencyKey: 'accepted-after-window',
-      operations: [{ action: 'delete', model: 'tasks', id: 'old' }],
+      operations: [{ action: 'delete', model: 'items', id: 'old' }],
       wait: 'queued',
     });
 
@@ -854,7 +854,7 @@ describe('stateless HTTP commit outbox', () => {
 
     await expect(client.commits.create({
       idempotencyKey: 'bad-receipt',
-      operations: [{ action: 'update', model: 'tasks', id: 'a', data: { x: 1 } }],
+      operations: [{ action: 'update', model: 'items', id: 'a', data: { x: 1 } }],
     })).rejects.toMatchObject({ code: 'commit_no_result' });
     expect(outbox.records.size).toBe(1);
   });
@@ -884,7 +884,7 @@ describe('stateless HTTP commit outbox', () => {
     await expect(client.commits.create({
       idempotencyKey: 'queued-without-correlation',
       operations: [
-        { action: 'update', model: 'tasks', id: 'a', data: { x: 1 } },
+        { action: 'update', model: 'items', id: 'a', data: { x: 1 } },
       ],
       wait: 'queued',
     })).rejects.toMatchObject({ code: 'commit_no_result' });
@@ -940,7 +940,7 @@ describe('stateless HTTP commit outbox', () => {
 
     await expect(client.commits.create({
       idempotencyKey: 'cleanup-failed',
-      operations: [{ action: 'delete', model: 'tasks', id: 'a' }],
+      operations: [{ action: 'delete', model: 'items', id: 'a' }],
     })).rejects.toMatchObject({ code: 'db_not_opened' });
     expect(outbox.records.size).toBe(1);
   });
@@ -956,7 +956,7 @@ describe('stateless HTTP commit outbox', () => {
     });
     await expect(first.commits.create({
       idempotencyKey: 'shared-actor-key',
-      operations: [{ action: 'delete', model: 'tasks', id: 'a' }],
+      operations: [{ action: 'delete', model: 'items', id: 'a' }],
     })).rejects.toThrow();
 
     const attemptedKeys: string[] = [];
@@ -974,7 +974,7 @@ describe('stateless HTTP commit outbox', () => {
     });
     await second.commits.create({
       idempotencyKey: 'shared-actor-key',
-      operations: [{ action: 'delete', model: 'tasks', id: 'b' }],
+      operations: [{ action: 'delete', model: 'items', id: 'b' }],
     });
 
     expect(attemptedKeys).toEqual(['shared-actor-key']);
@@ -1002,7 +1002,7 @@ describe('stateless HTTP commit outbox', () => {
         }
         const posted = JSON.parse(postedBodies[0] ?? '{}') as { id?: string };
         return Promise.resolve(response(modelReadResponse({
-          model: 'tasks',
+          model: 'items',
           id: posted.id ?? '',
           data: { id: posted.id, title: 'safe' },
           stamp: 4,
@@ -1014,10 +1014,10 @@ describe('stateless HTTP commit outbox', () => {
       data: { title: 'safe' },
     };
 
-    await expect(client.model<{ id: string; title: string }>('tasks').create(params)).rejects.toThrow(
+    await expect(client.model<{ id: string; title: string }>('items').create(params)).rejects.toThrow(
       'readback disconnected',
     );
-    await expect(client.model<{ id: string; title: string }>('tasks').create(params)).resolves.toMatchObject({
+    await expect(client.model<{ id: string; title: string }>('items').create(params)).resolves.toMatchObject({
       title: 'safe',
     });
     expect(postedBodies).toHaveLength(2);
@@ -1037,11 +1037,11 @@ describe('stateless HTTP commit outbox', () => {
 
     await client.commits.create({
       idempotencyKey: 'reads-on-http',
-      operations: [{ action: 'update', model: 'tasks', id: 'a', data: { x: 1 } }],
-      reads: [{ model: 'projects', id: 'p1', readAt: 42 }],
+      operations: [{ action: 'update', model: 'items', id: 'a', data: { x: 1 } }],
+      reads: [{ model: 'workspaces', id: 'p1', readAt: 42 }],
     });
     expect(posted?.reads).toEqual([
-      { model: 'projects', id: 'p1', readAt: 42 },
+      { model: 'workspaces', id: 'p1', readAt: 42 },
     ]);
   });
 
@@ -1049,7 +1049,7 @@ describe('stateless HTTP commit outbox', () => {
     const notification = {
       object: 'stale_notification' as const,
       scope: 'row' as const,
-      target: { model: 'tasks', id: 'a', fields: ['title'] },
+      target: { model: 'items', id: 'a', fields: ['title'] },
       readAt: 41,
       observedSyncId: 42,
       currentValues: { title: 'newer' },
@@ -1078,7 +1078,7 @@ describe('stateless HTTP commit outbox', () => {
       idempotencyKey: 'notify-on-http',
       operations: [{
         action: 'update',
-        model: 'tasks',
+        model: 'items',
         id: 'a',
         data: { title: 'mine' },
         readAt: 41,

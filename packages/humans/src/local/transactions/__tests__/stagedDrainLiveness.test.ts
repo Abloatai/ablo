@@ -19,7 +19,7 @@ import type { Database } from '../../Database.js';
 import { registerModelsFromSchema } from '../../client/modelRegistration.js';
 import { createTestHarness } from '../../testing/helpers/syncEngineHarness.js';
 import type { TestHarness } from '../../testing/helpers/syncEngineHarness.js';
-import { createTaskFixture } from '../../testing/fixtures/models.js';
+import { createItemFixture } from '../../testing/fixtures/models.js';
 import { defineSchema } from '@abloatai/transaction/schema/schema';
 import { model } from '@abloatai/transaction/schema/model';
 import { ModelScope } from '@abloatai/transaction/types';
@@ -153,13 +153,13 @@ describe('staged-batch drain liveness', () => {
     harness.cleanup();
   });
 
-  function makeDirtyTask(title: unknown) {
-    const task = createTaskFixture({ title: 'before' });
-    task.markAsPersisted();
-    task.clearChanges();
-    harness.pool.add(task, ModelScope.live);
-    task.applyChanges({ title });
-    return task;
+  function makeDirtyItem(title: unknown) {
+    const item = createItemFixture({ title: 'before' });
+    item.markAsPersisted();
+    item.clearChanges();
+    harness.pool.add(item, ModelScope.live);
+    item.applyChanges({ title });
+    return item;
   }
 
   it('a move survives an already-observable sibling in the full journal row', async () => {
@@ -167,12 +167,12 @@ describe('staged-batch drain liveness', () => {
     // production shape traits: camelCase plural key, distinct typename, a
     // json object field (`position`), and field-level reactivity. This pins
     // the projection contract (`projectCommitPayload` keeps schema-declared
-    // json fields) that a plain-string model like `slidedeck.title` cannot
+    // json fields) that a plain-string model like `entrycollection.title` cannot
     // exercise — the field-drop failure mode is silent and model-specific.
     const layerSchema = defineSchema({
       layerProbes: model(
         {
-          slideId: z.string(),
+          entryId: z.string(),
           type: z.enum(['text', 'shape']),
           zIndex: z.number().default(0),
           position: z.object({
@@ -201,7 +201,7 @@ describe('staged-batch drain liveness', () => {
     if (!ModelClass) throw new Error('LayerProbe was not registered');
     const layer = new ModelClass({
       id: 'layer-1',
-      slideId: 'slide-1',
+      entryId: 'entry-1',
       type: 'shape',
       position: { x: 100, y: 100, width: 200, height: 200 },
     });
@@ -243,11 +243,11 @@ describe('staged-batch drain liveness', () => {
     const { calls, executor } = scriptedExecutor(['resolve', 'resolve']);
     syncClient.getMutationQueue().setMutationExecutor(executor);
 
-    const first = makeDirtyTask('first');
+    const first = makeDirtyItem('first');
     syncClient.update(first);
     await eventually(() => calls.length >= 1, 3_000);
 
-    const second = makeDirtyTask('second');
+    const second = makeDirtyItem('second');
     syncClient.update(second);
 
     expect(await eventually(() => calls.length >= 2, 3_000)).toBe(true);
@@ -260,8 +260,8 @@ describe('staged-batch drain liveness', () => {
     const { calls, executor } = scriptedExecutor(['resolve']);
     syncClient.getMutationQueue().setMutationExecutor(executor);
 
-    const invalid = makeDirtyTask(() => 'functions are not cloneable');
-    const valid = makeDirtyTask('valid sibling');
+    const invalid = makeDirtyItem(() => 'functions are not cloneable');
+    const valid = makeDirtyItem('valid sibling');
 
     // These enter one journal flush. The shared JSON boundary rejects
     // `invalid` before IndexedDB; the client must still persist and dispatch
@@ -289,11 +289,11 @@ describe('staged-batch drain liveness', () => {
     ]);
     syncClient.getMutationQueue().setMutationExecutor(executor);
 
-    const doomed = makeDirtyTask('doomed');
+    const doomed = makeDirtyItem('doomed');
     syncClient.update(doomed);
     await eventually(() => calls.length >= 1, 3_000);
 
-    const survivor = makeDirtyTask('survivor');
+    const survivor = makeDirtyItem('survivor');
     syncClient.update(survivor);
 
     const survivorDispatched = await eventually(
@@ -341,15 +341,15 @@ describe('staged-batch drain liveness', () => {
       return originalCommit(operations, options);
     };
 
-    const task = makeDirtyTask('survives promotion');
-    syncClient.update(task);
+    const item = makeDirtyItem('survives promotion');
+    syncClient.update(item);
 
     expect(await eventually(() => calls.length >= 4, 5_000)).toBe(true);
     expect(
       await eventually(() => pendingStagesOf(syncClient).size === 0, 5_000),
     ).toBe(true);
     expect(new Set(calls.map((call) => call.idempotencyKey)).size).toBe(1);
-    expect(calls.every((call) => call.ops[0]?.id === task.id)).toBe(true);
+    expect(calls.every((call) => call.ops[0]?.id === item.id)).toBe(true);
   }, 15_000);
 
   it('a commit the transport never answers must not block writes to other rows', async () => {
@@ -360,11 +360,11 @@ describe('staged-batch drain liveness', () => {
     const config = Reflect.get(queue, 'config') as { commitDispatchTimeoutMs: number };
     config.commitDispatchTimeoutMs = 500;
 
-    const stuck = makeDirtyTask('stuck');
+    const stuck = makeDirtyItem('stuck');
     syncClient.update(stuck);
     await eventually(() => calls.length >= 1, 3_000);
 
-    const survivor = makeDirtyTask('survivor');
+    const survivor = makeDirtyItem('survivor');
     syncClient.update(survivor);
 
     // The unanswered dispatch times out as a retryable no-receipt failure; the

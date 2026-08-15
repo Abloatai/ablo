@@ -17,7 +17,7 @@ import {
 } from '../adapters/kysely.js';
 
 const schema = defineSchema({
-  task: model({
+  item: model({
     title: field.string().optional(),
     n: field.number().optional(),
   }),
@@ -31,7 +31,7 @@ interface LedgerRow extends Row {
 
 /** Stateful transaction-serial fake used to run the shared contract through direct. */
 class DirectKyselyFake implements KyselyLike {
-  private readonly tasks = new Map<string, Row>();
+  private readonly items = new Map<string, Row>();
   private readonly ledger = new Map<string, LedgerRow>();
   private transactionTail: Promise<void> = Promise.resolve();
 
@@ -42,8 +42,8 @@ class DirectKyselyFake implements KyselyLike {
   ): readonly Row[] {
     const [where] = wheres;
     let rows: Row[];
-    if (table === 'task') {
-      rows = [...this.tasks.values()];
+    if (table === 'item') {
+      rows = [...this.items.values()];
     } else if (table === 'ablo_idempotency') {
       rows = [...this.ledger.entries()].map(([client_tx_id, row]) => ({
         client_tx_id,
@@ -83,9 +83,9 @@ class DirectKyselyFake implements KyselyLike {
     return {
       values: (row) => {
         const execute = (): Promise<readonly Row[]> => {
-          if (table !== 'task') throw new Error(`unexpected insert into ${table}`);
+          if (table !== 'item') throw new Error(`unexpected insert into ${table}`);
           const id = String(row.id);
-          this.tasks.set(id, { ...row });
+          this.items.set(id, { ...row });
           return Promise.resolve([{ ...row }]);
         };
         const returning: KyselyReturningExecutable = { execute };
@@ -103,9 +103,9 @@ class DirectKyselyFake implements KyselyLike {
         let id: string | undefined;
         const returning: KyselyReturningExecutable = {
           execute: () => {
-            if (table !== 'task' || !id) return Promise.resolve([]);
-            const row = { ...(this.tasks.get(id) ?? { id }), ...patch };
-            this.tasks.set(id, row);
+            if (table !== 'item' || !id) return Promise.resolve([]);
+            const row = { ...(this.items.get(id) ?? { id }), ...patch };
+            this.items.set(id, row);
             return Promise.resolve([row]);
           },
         };
@@ -128,9 +128,9 @@ class DirectKyselyFake implements KyselyLike {
     let id: string | undefined;
     const returning: KyselyReturningExecutable = {
       execute: () => {
-        if (table !== 'task' || !id) return Promise.resolve([]);
-        const row = this.tasks.get(id);
-        this.tasks.delete(id);
+        if (table !== 'item' || !id) return Promise.resolve([]);
+        const row = this.items.get(id);
+        this.items.delete(id);
         return Promise.resolve(row ? [row] : []);
       },
     };

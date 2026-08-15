@@ -14,8 +14,8 @@ import { ModelRegistry, setActiveRegistry } from '../../src/local/ModelRegistry'
 import {
   createTestContext,
   registerTestModels,
-  TestTask,
-  TestProject,
+  TestItem,
+  TestWorkspace,
   resetFixtureCounter,
 } from '../../src/local/testing';
 
@@ -42,13 +42,13 @@ describe('Property: ObjectPool Invariants', () => {
         fc.array(fc.uuid(), { minLength: 1, maxLength: 50 }),
         (ids) => {
           const pool = new ObjectPool({ maxSize: 1000, gcInterval: 0, useWeakRefs: false }, registry);
-          const models = new Map<string, TestTask>();
+          const models = new Map<string, TestItem>();
 
           // Add all
           for (const id of ids) {
-            const task = new TestTask({ id, title: `Task ${id}` });
-            models.set(id, task);
-            pool.add(task);
+            const item = new TestItem({ id, title: `Item ${id}` });
+            models.set(id, item);
+            pool.add(item);
           }
 
           // Every added model should be retrievable
@@ -83,7 +83,7 @@ describe('Property: ObjectPool Invariants', () => {
           );
 
           for (const id of ids) {
-            pool.add(new TestTask({ id }));
+            pool.add(new TestItem({ id }));
           }
 
           // Size should be close to maxSize, not unbounded
@@ -97,7 +97,7 @@ describe('Property: ObjectPool Invariants', () => {
   });
 
   it('type index is consistent with entries after random add/remove sequences', () => {
-    // Operation: either add a Task or remove a random existing one
+    // Operation: either add a Item or remove a random existing one
     const opArb = fc.oneof(
       fc.record({ type: fc.constant('add' as const), id: fc.uuid() }),
       fc.record({ type: fc.constant('remove' as const), index: fc.nat({ max: 99 }) })
@@ -112,7 +112,7 @@ describe('Property: ObjectPool Invariants', () => {
 
           for (const op of ops) {
             if (op.type === 'add') {
-              pool.add(new TestTask({ id: op.id }));
+              pool.add(new TestItem({ id: op.id }));
               addedIds.push(op.id);
             } else if (addedIds.length > 0) {
               const idx = op.index % addedIds.length;
@@ -124,14 +124,14 @@ describe('Property: ObjectPool Invariants', () => {
           }
 
           // INVARIANT: type index IDs should match what's actually in the pool
-          const typeIds = pool.getIdsByModelType('Task');
+          const typeIds = pool.getIdsByModelType('Item');
           if (typeIds) {
             for (const id of typeIds) {
               const entry = pool.get(id);
               // Every ID in the type index should be gettable (or disposed)
               // We just verify the type index doesn't have phantom entries for removed IDs
               if (entry) {
-                expect(entry.getModelName()).toBe('Task');
+                expect(entry.getModelName()).toBe('Item');
               }
             }
           }
@@ -157,19 +157,19 @@ describe('Property: ObjectPool Invariants', () => {
         fc.array(
           fc.record({
             id: fc.uuid(),
-            projectId: fc.oneof(fc.constant('proj-1'), fc.constant('proj-2'), fc.constant('proj-3')),
+            workspaceId: fc.oneof(fc.constant('proj-1'), fc.constant('proj-2'), fc.constant('proj-3')),
           }),
           { minLength: 5, maxLength: 30 }
         ),
         fc.array(fc.nat({ max: 29 }), { minLength: 0, maxLength: 10 }),
         (models, removeIndices) => {
           const pool = new ObjectPool({ maxSize: 500, gcInterval: 0, useWeakRefs: false }, registry);
-          pool.registerForeignKey('Task', 'projectId');
+          pool.registerForeignKey('Item', 'workspaceId');
 
           // Add all models
           const addedIds: string[] = [];
           for (const m of models) {
-            pool.add(new TestTask({ id: m.id, projectId: m.projectId }));
+            pool.add(new TestItem({ id: m.id, workspaceId: m.workspaceId }));
             addedIds.push(m.id);
           }
 
@@ -186,10 +186,10 @@ describe('Property: ObjectPool Invariants', () => {
 
           // INVARIANT: FK index should only contain IDs that are actually in the pool
           for (const projId of ['proj-1', 'proj-2', 'proj-3']) {
-            const byFk = pool.getByForeignKey('Task', 'projectId', projId) as TestTask[];
+            const byFk = pool.getByForeignKey('Item', 'workspaceId', projId) as TestItem[];
             for (const model of byFk) {
               expect(pool.get(model.id)).toBeDefined();
-              expect(model.projectId).toBe(projId);
+              expect(model.workspaceId).toBe(projId);
             }
           }
 
@@ -205,38 +205,38 @@ describe('Property: ObjectPool Invariants', () => {
       fc.property(
         fc.array(
           fc.oneof(
-            fc.record({ type: fc.constant('Task' as const), id: fc.uuid() }),
-            fc.record({ type: fc.constant('Project' as const), id: fc.uuid() })
+            fc.record({ type: fc.constant('Item' as const), id: fc.uuid() }),
+            fc.record({ type: fc.constant('Workspace' as const), id: fc.uuid() })
           ),
           { minLength: 1, maxLength: 30 }
         ),
-        (items) => {
+        (generatedItems) => {
           const pool = new ObjectPool({ maxSize: 500, gcInterval: 0, useWeakRefs: false }, registry);
 
-          for (const item of items) {
-            if (item.type === 'Task') {
-              pool.add(new TestTask({ id: item.id }));
+          for (const item of generatedItems) {
+            if (item.type === 'Item') {
+              pool.add(new TestItem({ id: item.id }));
             } else {
-              pool.add(new TestProject({ id: item.id }));
+              pool.add(new TestWorkspace({ id: item.id }));
             }
           }
 
           // INVARIANT: getByType only returns the correct type
-          const tasks = pool.getByType(TestTask);
-          for (const t of tasks) {
-            expect(t.getModelName()).toBe('Task');
+          const items = pool.getByType(TestItem);
+          for (const t of items) {
+            expect(t.getModelName()).toBe('Item');
           }
 
-          const projects = pool.getByType(TestProject);
-          for (const p of projects) {
-            expect(p.getModelName()).toBe('Project');
+          const workspaces = pool.getByType(TestWorkspace);
+          for (const p of workspaces) {
+            expect(p.getModelName()).toBe('Workspace');
           }
 
           // No overlap
-          const taskIds = new Set(tasks.map((t) => t.id));
-          const projectIds = new Set(projects.map((p) => p.id));
-          for (const id of taskIds) {
-            expect(projectIds.has(id)).toBe(false);
+          const itemIds = new Set(items.map((t) => t.id));
+          const workspaceIds = new Set(workspaces.map((p) => p.id));
+          for (const id of itemIds) {
+            expect(workspaceIds.has(id)).toBe(false);
           }
 
           pool.clear();

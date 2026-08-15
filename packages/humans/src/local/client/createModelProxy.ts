@@ -159,7 +159,7 @@ type EntityHalf = Pick<ModelTarget, 'model' | 'id'>;
 // Model-agnostic by construction: every member below names a target by
 // `{ model, id }` and answers in claim/snapshot terms, so the row type never
 // appears. It carried a `<T>` that nothing in the body read, which made
-// `ModelCollaboration<Task>` and `ModelCollaboration<Invoice>` the same type
+// `ModelCollaboration<Item>` and `ModelCollaboration<Invoice>` the same type
 // while reading as though they differed.
 export interface ModelCollaboration {
   /** Exact point evidence from the HTTP read boundary (stamp captured before data). */
@@ -458,7 +458,7 @@ export function createModelProxy<T, C>(
   }
 
   // The coordination plane must speak the same wire dialect as the commit
-  // plane: the lowercased typename (`task`), not the schema key (`tasks`). The
+  // plane: the lowercased typename (`item`), not the schema key (`items`). The
   // server's commit-time claim guard probes the lease store with the commit
   // operation's model name, so a lease recorded under the schema key never
   // matches — which would silently disarm the guard for every model whose

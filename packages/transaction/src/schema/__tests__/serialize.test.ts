@@ -24,31 +24,31 @@ import {
 
 const schema = defineSchema(
   {
-    tasks: mutable.instant(
+    items: mutable.instant(
       {
         title: field.string(),
         status: field.enum(['todo', 'done']),
         priority: z.number().optional(),
-        projectId: field.string().from('project_uuid').indexed(),
+        workspaceId: field.string().from('workspace_uuid').indexed(),
       },
       {
-        typename: 'Task',
-        tableName: 'tasks',
+        typename: 'Item',
+        tableName: 'items',
         relations: {
-          project: relation.belongsTo('projects', 'projectId', { index: true }),
-          comments: relation.hasMany('comments', 'taskId', { orderBy: 'createdAt' }),
+          workspace: relation.belongsTo('workspaces', 'workspaceId', { index: true }),
+          comments: relation.hasMany('comments', 'itemId', { orderBy: 'createdAt' }),
         },
       },
     ),
-    projects: mutable.instant(
+    workspaces: mutable.instant(
       { name: field.string(), teamId: field.string() },
       {
-        typename: 'Project',
-        tableName: 'projects',
+        typename: 'Workspace',
+        tableName: 'workspaces',
         policy: { by: 'parent', fk: 'team_id', parent: 'team' },
       },
     ),
-    comments: readOnly.lazy({ taskId: field.string(), body: field.string() }),
+    comments: readOnly.lazy({ itemId: field.string(), body: field.string() }),
   },
   {
     casing: 'snake_case',
@@ -63,18 +63,18 @@ describe('serializeSchema / parseSchema', () => {
   it('round-trips model routing/scoping metadata', () => {
     const back = parseSchema(serializeSchema(schema));
 
-    expect(Object.keys(back.models).sort()).toEqual(['comments', 'projects', 'tasks']);
+    expect(Object.keys(back.models).sort()).toEqual(['comments', 'items', 'workspaces']);
 
-    const tasks = back.models.tasks;
-    if (!tasks) throw new Error('expected tasks model after round-trip');
-    expect(tasks.typename).toBe('Task');
-    expect(tasks.tableName).toBe('tasks');
-    expect(tasks.mutable).toBe(true);
-    expect(tasks.load).toBe('instant');
+    const items = back.models.items;
+    if (!items) throw new Error('expected items model after round-trip');
+    expect(items.typename).toBe('Item');
+    expect(items.tableName).toBe('items');
+    expect(items.mutable).toBe(true);
+    expect(items.load).toBe('instant');
 
-    const projects = back.models.projects;
-    if (!projects) throw new Error('expected projects model after round-trip');
-    expect(projects.tenancy).toEqual({
+    const workspaces = back.models.workspaces;
+    if (!workspaces) throw new Error('expected workspaces model after round-trip');
+    expect(workspaces.tenancy).toEqual({
       kind: 'parent',
       via: { localKey: 'team_id', parentTable: 'team' },
     });
@@ -84,35 +84,35 @@ describe('serializeSchema / parseSchema', () => {
 
   it('preserves field names and type tags', () => {
     const back = parseSchema(serializeSchema(schema));
-    const tasks = back.models.tasks;
-    if (!tasks) throw new Error('expected tasks model after round-trip');
-    const fields = tasks.fields;
-    expect(Object.keys(fields).sort()).toEqual(['priority', 'projectId', 'status', 'title']);
+    const items = back.models.items;
+    if (!items) throw new Error('expected items model after round-trip');
+    const fields = items.fields;
+    expect(Object.keys(fields).sort()).toEqual(['priority', 'status', 'title', 'workspaceId']);
     const status = fields.status;
-    if (!status) throw new Error('expected status field on tasks');
+    if (!status) throw new Error('expected status field on items');
     expect(status.type).toBe('enum');
     expect(status.enumValues).toEqual(['todo', 'done']);
-    const projectId = fields.projectId;
-    if (!projectId) throw new Error('expected projectId field on tasks');
-    expect(projectId.isIndexed).toBe(true);
-    expect(projectId.column).toBe('project_uuid');
+    const workspaceId = fields.workspaceId;
+    if (!workspaceId) throw new Error('expected workspaceId field on items');
+    expect(workspaceId.isIndexed).toBe(true);
+    expect(workspaceId.column).toBe('workspace_uuid');
     expect(fields.priority?.isOptional).toBe(true);
   });
 
   it('preserves relations including resolved foreignKeyColumn (snake_case casing)', () => {
     const back = parseSchema(serializeSchema(schema));
-    const tasks = back.models.tasks;
-    if (!tasks) throw new Error('expected tasks model after round-trip');
-    const rels = tasks.relations;
-    const project = rels.project;
-    if (!project) throw new Error('expected project relation on tasks');
-    expect(project.type).toBe('belongsTo');
-    expect(project.target).toBe('projects');
-    expect(project.foreignKey).toBe('projectId');
+    const items = back.models.items;
+    if (!items) throw new Error('expected items model after round-trip');
+    const rels = items.relations;
+    const workspace = rels.workspace;
+    if (!workspace) throw new Error('expected workspace relation on items');
+    expect(workspace.type).toBe('belongsTo');
+    expect(workspace.target).toBe('workspaces');
+    expect(workspace.foreignKey).toBe('workspaceId');
     // casing: 'snake_case' resolved this at build time; it must survive.
-    expect(project.foreignKeyColumn).toBe('project_uuid');
+    expect(workspace.foreignKeyColumn).toBe('workspace_uuid');
     const comments = rels.comments;
-    if (!comments) throw new Error('expected comments relation on tasks');
+    if (!comments) throw new Error('expected comments relation on items');
     expect(comments.type).toBe('hasMany');
     expect(comments._orderBy).toBe('createdAt');
   });
@@ -139,7 +139,7 @@ describe('serializeSchema / parseSchema', () => {
 
     // A schema WITH mappings carries them across serialize → parse intact.
     const withSettings = defineSchema(
-      { tasks: mutable.instant({ title: field.string() }, { typename: 'Task', tableName: 'tasks' }) },
+      { items: mutable.instant({ title: field.string() }, { typename: 'Item', tableName: 'items' }) },
       {
         sessionSettings: {
           'app.current_org': 'orgId',
@@ -160,15 +160,15 @@ describe('serializeSchema / parseSchema', () => {
   it('rebuilds working (permissive) validators', () => {
     const back = parseSchema(serializeSchema(schema));
     // Base fields are merged back in, and declared fields validate.
-    const tasksValidator = back.validators.tasks;
-    if (!tasksValidator) throw new Error('expected tasks validator after round-trip');
-    const parsed = tasksValidator.parse({
+    const itemsValidator = back.validators.items;
+    if (!itemsValidator) throw new Error('expected items validator after round-trip');
+    const parsed = itemsValidator.parse({
       id: 'x',
       createdAt: new Date(),
       updatedAt: new Date(),
       title: 'hi',
       status: 'todo',
-      projectId: 'p1',
+      workspaceId: 'p1',
     });
     expect(parsed.title).toBe('hi');
   });
@@ -178,7 +178,7 @@ describe('serializeSchema / parseSchema', () => {
     const h2 = schemaHash(parseSchema(serializeSchema(schema)));
     expect(h1).toBe(h2);
 
-    const different = defineSchema({ tasks: model({ title: field.string() }, { mutable: true }) });
+    const different = defineSchema({ items: model({ title: field.string() }, { mutable: true }) });
     expect(schemaHash(different)).not.toBe(h1);
   });
 });

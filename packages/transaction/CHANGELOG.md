@@ -1,5 +1,48 @@
 # @abloatai/transaction
 
+## 0.52.0
+
+### Minor Changes
+
+- Ablo models now describe application data consistently, regardless of who
+  created the database table. `id` is the only universal model field. Timestamps,
+  tenancy, and attribution values are ordinary application fields when declared;
+  Ablo does not impose them for coordination or auditing.
+
+  A model that relied on Ablo supplying `createdAt`, `updatedAt`, or `createdBy`
+  should declare those fields to keep reading and writing them. Ablo still records
+  who made every change in its own transaction log, and it still owns the tenancy
+  value on each write.
+
+  Two error codes are renamed to match that vocabulary: `task_id_missing` becomes
+  `item_id_missing`, and `task_id_required` becomes `item_id_required`. Neither
+  old code was ever returned by a request, so a caller matching on error codes has
+  nothing to change unless it names one of them directly.
+
+  Database adapters now accept database-generated identifiers and return them as
+  canonical string IDs. The adapter learns the database ID type from the database
+  connection rather than asking the model to repeat database facts.
+
+  An update operation accepts a `where` precondition. The database changes the row
+  only while its current values still match. A mismatch fails the complete commit
+  with `precondition_failed`, leaving every operation unapplied. The Kysely source
+  adapter supports these preconditions; unsupported adapters report
+  `source_adapter_misconfigured`.
+
+  Commit receipts include `operationResults`, pairing each operation's existing
+  `transactionId` with its outcome and the authoritative row returned by the
+  database transaction.
+
+  The CLI adds `ablo setup`, a read-only guided setup journey that reports the
+  decisions, actions, blockers, and postconditions required for an existing
+  application. `ablo init --plan` previews file actions using the same terms.
+
+  `ablo telemetry` controls limited CLI usage analytics. Collection is on by
+  default and stays off in continuous integration and whenever `DO_NOT_TRACK=1` or
+  `ABLO_TELEMETRY_DISABLED=1` is set. Run `ablo telemetry status` to see the
+  current state, `ablo telemetry disable` to turn collection off, and
+  `ablo telemetry reset` to rotate the local installation identity.
+
 ## 0.51.0
 
 - Default cross-organization user sessions to the platform key's schema

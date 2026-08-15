@@ -94,7 +94,7 @@ describe('createPresenceStream (transport-driven) — direct attach', () => {
   it('fires subscribers when a peer frame arrives', () => {
     const t = makeStubTransport();
     const presence = createPresenceStream(
-      { participantId: 'me', syncGroups: ['deck:X'] },
+      { participantId: 'me', syncGroups: ['collection:X'] },
       t as unknown as SyncWebSocket,
     );
 
@@ -109,10 +109,10 @@ describe('createPresenceStream (transport-driven) — direct attach', () => {
       kind: 'enter',
       userId: 'peer-1',
       status: 'online',
-      syncGroups: ['deck:X'],
+      syncGroups: ['collection:X'],
       isAgent: false,
       timestamp: Date.now(),
-      activity: { entityType: 'Slide', entityId: 's-1', action: 'editing' },
+      activity: { entityType: 'Entry', entityId: 's-1', action: 'editing' },
     });
 
     expect(fireCount).toBe(1);
@@ -123,7 +123,7 @@ describe('createPresenceStream (transport-driven) — direct attach', () => {
   it('filters out own-echo frames', () => {
     const t = makeStubTransport();
     const presence = createPresenceStream(
-      { participantId: 'me', syncGroups: ['deck:X'] },
+      { participantId: 'me', syncGroups: ['collection:X'] },
       t as unknown as SyncWebSocket,
     );
 
@@ -136,7 +136,7 @@ describe('createPresenceStream (transport-driven) — direct attach', () => {
       kind: 'enter',
       userId: 'me', // self
       status: 'online',
-      activity: { entityType: 'Slide', entityId: 's-1', action: 'editing' },
+      activity: { entityType: 'Entry', entityId: 's-1', action: 'editing' },
     });
 
     expect(fireCount).toBe(0);
@@ -146,7 +146,7 @@ describe('createPresenceStream (transport-driven) — direct attach', () => {
   it('removes peers on `leave` kind', () => {
     const t = makeStubTransport();
     const presence = createPresenceStream(
-      { participantId: 'me', syncGroups: ['deck:X'] },
+      { participantId: 'me', syncGroups: ['collection:X'] },
       t as unknown as SyncWebSocket,
     );
 
@@ -154,7 +154,7 @@ describe('createPresenceStream (transport-driven) — direct attach', () => {
       kind: 'enter',
       userId: 'peer-1',
       status: 'online',
-      activity: { entityType: 'Slide', entityId: 's-1', action: 'viewing' },
+      activity: { entityType: 'Entry', entityId: 's-1', action: 'viewing' },
     });
     expect(presence.others).toHaveLength(1);
 
@@ -165,11 +165,11 @@ describe('createPresenceStream (transport-driven) — direct attach', () => {
   it('sends presence_update frames on update()', () => {
     const t = makeStubTransport();
     const presence = createPresenceStream(
-      { participantId: 'me', syncGroups: ['deck:X'] },
+      { participantId: 'me', syncGroups: ['collection:X'] },
       t as unknown as SyncWebSocket,
     );
 
-    presence.editing({ type: 'Slide', id: 's-3' }, 'slide 3');
+    presence.editing({ type: 'Entry', id: 's-3' }, 'entry 3');
 
     expect(t.__sentFrames).toHaveLength(1);
     const frame = t.__sentFrames[0];
@@ -178,10 +178,10 @@ describe('createPresenceStream (transport-driven) — direct attach', () => {
     expect(frame.payload).toEqual({
       status: 'online',
       activity: {
-        entityType: 'Slide',
+        entityType: 'Entry',
         entityId: 's-3',
         action: 'editing',
-        detail: 'slide 3',
+        detail: 'entry 3',
       },
     });
   });
@@ -191,10 +191,10 @@ describe('createPresenceStream (transport-driven) — deferred attach', () => {
   it('does not send wire frames until attach() is called', () => {
     const presence = createPresenceStream({
       participantId: 'me',
-      syncGroups: ['deck:X'],
+      syncGroups: ['collection:X'],
     });
 
-    presence.editing({ type: 'Slide', id: 's-1' });
+    presence.editing({ type: 'Entry', id: 's-1' });
 
     // self mutated...
     expect(presence.self.activity.entityId).toBe('s-1');
@@ -204,9 +204,9 @@ describe('createPresenceStream (transport-driven) — deferred attach', () => {
   it('flushes pending self activity on attach()', () => {
     const presence = createPresenceStream({
       participantId: 'me',
-      syncGroups: ['deck:X'],
+      syncGroups: ['collection:X'],
     });
-    presence.editing({ type: 'Slide', id: 's-7' });
+    presence.editing({ type: 'Entry', id: 's-7' });
 
     const t = makeStubTransport();
     presence.attach(t as unknown as SyncWebSocket);
@@ -221,17 +221,17 @@ describe('createPresenceStream (transport-driven) — deferred attach', () => {
   it('reconnect re-broadcasts self and clears stale roster', () => {
     const t = makeStubTransport();
     const presence = createPresenceStream(
-      { participantId: 'me', syncGroups: ['deck:X'] },
+      { participantId: 'me', syncGroups: ['collection:X'] },
       t as unknown as SyncWebSocket,
     );
 
     // Set self activity + populate roster
-    presence.editing({ type: 'Slide', id: 's-9' });
+    presence.editing({ type: 'Entry', id: 's-9' });
     t.__firePresence({
       kind: 'enter',
       userId: 'peer-1',
       status: 'online',
-      activity: { entityType: 'Slide', entityId: 's-1', action: 'viewing' },
+      activity: { entityType: 'Entry', entityId: 's-1', action: 'viewing' },
     });
     expect(presence.others).toHaveLength(1);
     expect(t.__sentFrames).toHaveLength(1); // initial editing send

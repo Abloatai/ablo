@@ -1,6 +1,6 @@
-# Temporal for long-running tasks
+# Temporal for long-running records
 
-> Run long-lived, retryable agent tasks with Temporal while Ablo makes each
+> Run long-lived, retryable agent records with Temporal while Ablo makes each
 > shared-state effect typed, idempotent, and authoritative.
 
 Temporal and Ablo solve different parts of a durable agent system:
@@ -10,7 +10,7 @@ Temporal and Ablo solve different parts of a durable agent system:
 | Workflow history, replay, timers, retries, cancellation | Temporal |
 | Provider, messages, tools, approval, model loop | AI SDK |
 | Typed reads and writes, idempotency, claims, confirmation | Ablo |
-| Workflow names, task queues, retry policy, business behavior | Your application |
+| Workflow names, record queues, retry policy, business behavior | Your application |
 
 The short version is:
 

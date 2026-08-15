@@ -5,7 +5,7 @@ import {
 } from '../capability';
 
 const canSchema = capabilityCanSchemaFor({
-  tasks: { typename: 'Task' },
+  items: { typename: 'Item' },
   workspaces: { typename: 'Workspace' },
 });
 
@@ -13,11 +13,11 @@ describe('schema-bound capability contract', () => {
   it('accepts non-empty grants over declared schema models', () => {
     expect(
       canSchema.parse({
-        tasks: ['update'],
+        items: ['update'],
         workspaces: ['read'],
       }),
     ).toEqual({
-      tasks: ['update'],
+      items: ['update'],
       workspaces: ['read'],
     });
   });
@@ -26,7 +26,7 @@ describe('schema-bound capability contract', () => {
     expect(() => canSchema.parse({ documents: ['read'] })).toThrow(
       /not declared by this schema/,
     );
-    expect(() => canSchema.parse({ tasks: [] })).toThrow();
+    expect(() => canSchema.parse({ items: [] })).toThrow();
     expect(() => canSchema.parse({})).toThrow(/at least one operation/);
   });
 
@@ -37,6 +37,6 @@ describe('schema-bound capability contract', () => {
       'update',
       'delete',
     ]);
-    expect(() => canSchema.parse({ tasks: ['write'] })).toThrow();
+    expect(() => canSchema.parse({ items: ['write'] })).toThrow();
   });
 });

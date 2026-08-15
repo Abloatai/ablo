@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ablo API",
-    "version": "0.51.0",
+    "version": "0.52.0",
     "description": "Ablo collaboration infrastructure: commit, read, and claim. `{model}` is any model from your pushed schema — the routes are the same whichever it is. Authenticate every request with your API key as a Bearer token.",
     "license": {
       "name": "Apache License 2.0",
@@ -1003,6 +1003,39 @@
                   "type": "string",
                   "minLength": 1
                 }
+              },
+              "operationResults": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "transactionId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "created",
+                        "updated",
+                        "deleted",
+                        "archived",
+                        "unarchived"
+                      ]
+                    },
+                    "row": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "transactionId",
+                    "outcome",
+                    "row"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -1439,6 +1472,39 @@
                 "items": {
                   "type": "string",
                   "minLength": 1
+                }
+              },
+              "operationResults": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "transactionId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "created",
+                        "updated",
+                        "deleted",
+                        "archived",
+                        "unarchived"
+                      ]
+                    },
+                    "row": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "transactionId",
+                    "outcome",
+                    "row"
+                  ],
+                  "additionalProperties": false
                 }
               }
             },
@@ -2323,7 +2389,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A model name from your pushed schema, e.g. `task`."
+            "description": "A model name from your pushed schema, e.g. `item`."
           },
           {
             "name": "limit",
@@ -2477,7 +2543,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A model name from your pushed schema, e.g. `task`."
+            "description": "A model name from your pushed schema, e.g. `item`."
           }
         ],
         "requestBody": {
@@ -2825,7 +2891,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A model name from your pushed schema, e.g. `task`."
+            "description": "A model name from your pushed schema, e.g. `item`."
           },
           {
             "name": "id",
@@ -2954,7 +3020,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A model name from your pushed schema, e.g. `task`."
+            "description": "A model name from your pushed schema, e.g. `item`."
           },
           {
             "name": "id",
@@ -3308,7 +3374,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A model name from your pushed schema, e.g. `task`."
+            "description": "A model name from your pushed schema, e.g. `item`."
           },
           {
             "name": "id",
@@ -3664,7 +3730,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A model name from your pushed schema, e.g. `task`."
+            "description": "A model name from your pushed schema, e.g. `item`."
           },
           {
             "name": "id",
@@ -3888,7 +3954,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A model name from your pushed schema, e.g. `task`."
+            "description": "A model name from your pushed schema, e.g. `item`."
           },
           {
             "name": "id",
@@ -4018,7 +4084,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A model name from your pushed schema, e.g. `task`."
+            "description": "A model name from your pushed schema, e.g. `item`."
           },
           {
             "name": "id",
@@ -4187,7 +4253,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A model name from your pushed schema, e.g. `task`."
+            "description": "A model name from your pushed schema, e.g. `item`."
           },
           {
             "name": "id",
@@ -4341,16 +4407,6 @@
         ],
         "summary": "Mint a short-lived session credential",
         "description": "Call this first: every other route needs the key it returns. Requires a secret (`sk_`) key — a session cannot mint itself.",
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Replay-safe key; the server returns the cached credential on retry."
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -4462,10 +4518,6 @@
                       "type": "string",
                       "minLength": 1
                     },
-                    "token": {
-                      "type": "string",
-                      "minLength": 1
-                    },
                     "expiresAt": {
                       "type": "string",
                       "minLength": 1
@@ -4550,11 +4602,14 @@
                     "controlPlaneOnly": {
                       "type": "boolean",
                       "const": true
+                    },
+                    "token": {
+                      "type": "string",
+                      "minLength": 1
                     }
                   },
                   "required": [
                     "id",
-                    "token",
                     "expiresAt",
                     "organizationId",
                     "participantId",
@@ -4563,7 +4618,8 @@
                     "branchRoot",
                     "syncGroups",
                     "deliveryPartition",
-                    "operations"
+                    "operations",
+                    "token"
                   ],
                   "additionalProperties": false
                 }
@@ -11315,6 +11371,17 @@
                           "type": "string"
                         },
                         "data": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": true
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "where": {
                           "anyOf": [
                             {
                               "type": "object",

@@ -21,21 +21,21 @@ import { subTarget } from '@abloatai/transaction/coordination/locator';
 import { part } from '@abloatai/transaction/coordination/schema';
 
 const schema = defineSchema({
-  tasks: model({
+  items: model({
     title: z.string(),
     status: z.enum(['todo', 'doing', 'done']).default('todo'),
   }),
-  documents: model({
+  records: model({
     content: z.string(),
   }),
 });
 
 describe('schema.fields', () => {
   it('carries a reference for every declared field, naming its model', () => {
-    expect(schema.fields.tasks.status).toEqual({ model: 'tasks', field: 'status' });
-    expect(schema.fields.tasks.title).toEqual({ model: 'tasks', field: 'title' });
-    expect(schema.fields.documents.content).toEqual({
-      model: 'documents',
+    expect(schema.fields.items.status).toEqual({ model: 'items', field: 'status' });
+    expect(schema.fields.items.title).toEqual({ model: 'items', field: 'title' });
+    expect(schema.fields.records.content).toEqual({
+      model: 'records',
       field: 'content',
     });
   });
@@ -43,39 +43,39 @@ describe('schema.fields', () => {
   // Base fields are supplied by the SDK rather than declared, and naming one
   // means the row rather than a part of it.
   it('does not invent references for base fields', () => {
-    expect(schema.fields.tasks).not.toHaveProperty('id');
-    expect(schema.fields.tasks).not.toHaveProperty('createdAt');
+    expect(schema.fields.items).not.toHaveProperty('id');
+    expect(schema.fields.items).not.toHaveProperty('createdAt');
   });
 
   it('does not compile for a field the model does not have', () => {
-    // @ts-expect-error — `titel` is not a field of `tasks`. This is the whole
+    // @ts-expect-error — `titel` is not a field of `items`. This is the whole
     // point: the string spelling accepts it silently.
-    void schema.fields.tasks.titel;
+    void schema.fields.items.titel;
   });
 
   // All three spellings cross to the same wire name — the difference is how
   // much was known before the crossing, not what arrives.
   it('reaches the wire as the same name a string would have', () => {
-    expect(subTarget({ field: schema.fields.tasks.status })).toEqual({
+    expect(subTarget({ field: schema.fields.items.status })).toEqual({
       field: 'status',
     });
     expect(subTarget({ field: 'status' })).toEqual({ field: 'status' });
     expect(subTarget({ field: part('B2') })).toEqual({ field: 'B2' });
 
     expect(
-      subTarget({ fields: [schema.fields.tasks.title, part('B2'), 'status'] }),
+      subTarget({ fields: [schema.fields.items.title, part('B2'), 'status'] }),
     ).toEqual({ fields: ['title', 'B2', 'status'] });
   });
 
   it('turns the public model selector into wire fields at one seam', () => {
     expect(
-      subTarget({ fields: (task) => task.status }, 'tasks'),
+      subTarget({ fields: (item) => item.status }, 'items'),
     ).toEqual({ fields: ['status'] });
 
     expect(
       subTarget(
-        { fields: (task) => [task.title, task.status] },
-        'tasks',
+        { fields: (item) => [item.title, item.status] },
+        'items',
       ),
     ).toEqual({ fields: ['title', 'status'] });
   });

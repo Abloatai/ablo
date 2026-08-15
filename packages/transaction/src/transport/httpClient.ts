@@ -166,10 +166,10 @@ export interface HttpModelClient<T, C = T> {
    * duplicated.
    *
    * ```ts
-   * await ablo.tasks.track({ id: 'task_42' });
+   * await ablo.items.track({ id: 'item_42' });
    * // …minutes of other work later, on the next write…
    * const res = await ablo.commits.create({ operations: [ … ] });
-   * res.notifications; // populated if task_42 moved in the meantime
+   * res.notifications; // populated if item_42 moved in the meantime
    * ```
    *
    * The returned `notifications` are only the tracks that had ALREADY fired at
@@ -209,6 +209,10 @@ export type AbloHttpClient<S extends SchemaRecord> = {
   readonly logs: HttpLogsResource;
   /** Server-confirmed authority of the credential, populated by `ready()`. */
   readonly identity: EffectiveAuthority | null;
+  /**
+   * Waits for requests already using this client and commits already scheduled
+   * on its commit lane. Stop accepting application work before calling it.
+   */
   dispose(): Promise<void>;
   /** Resolves the bearer credential this client authenticates with, or `null` if none is set. */
   getAuthToken(): Promise<string | null>;

@@ -13,10 +13,10 @@ retry safe automatically. It cannot make a retry across a process restart safe, 
 process generates a new key — so for anything that must survive a crash, supply your own.
 
 ```ts
-await ablo.tasks.update({
-  id: taskId,
+await ablo.records.update({
+  id: recordId,
   data: { status: 'done' },
-  idempotencyKey: `task:${taskId}:mark-done:v1`,
+  idempotencyKey: `record:${recordId}:mark-done:v1`,
 });
 ```
 
@@ -25,7 +25,7 @@ await ablo.tasks.update({
 **Derive the key from the business event, not from the attempt.** A key built from
 `crypto.randomUUID()` at the call site is regenerated on every retry, so it protects nothing — each
 attempt looks like a new intention and the write lands twice. A key built from the thing that
-happened (`task:42:mark-done:v1`) is identical on every retry by construction, which is the whole
+happened (`record:42:mark-done:v1`) is identical on every retry by construction, which is the whole
 point.
 
 The same rule stated as its failure: never derive a key from a timestamp, an attempt counter, or a

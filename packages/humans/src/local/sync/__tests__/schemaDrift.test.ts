@@ -5,13 +5,13 @@
  */
 import { classifySchemaDrift, describeSchemaDrift } from '../schemaDrift.js';
 
-const CLIENT = { tasks: 'aaaa1111', slides: 'bbbb2222' };
+const CLIENT = { items: 'aaaa1111', entries: 'bbbb2222' };
 
 describe('classifySchemaDrift', () => {
   it('aligned when every declared model matches — the server knowing MORE is not drift', () => {
     const finding = classifySchemaDrift(CLIENT, [
-      { key: 'tasks', hash: 'aaaa1111' },
-      { key: 'slides', hash: 'bbbb2222' },
+      { key: 'items', hash: 'aaaa1111' },
+      { key: 'entries', hash: 'bbbb2222' },
       { key: 'mailThreads', hash: 'cccc3333' }, // additive server lead
       { key: 'mailMessages', hash: 'dddd4444' },
     ]);
@@ -19,24 +19,24 @@ describe('classifySchemaDrift', () => {
   });
 
   it('names models this build declares that the server lacks', () => {
-    const finding = classifySchemaDrift(CLIENT, [{ key: 'tasks', hash: 'aaaa1111' }]);
-    expect(finding).toEqual({ kind: 'unpushed', models: ['slides'] });
+    const finding = classifySchemaDrift(CLIENT, [{ key: 'items', hash: 'aaaa1111' }]);
+    expect(finding).toEqual({ kind: 'unpushed', models: ['entries'] });
   });
 
   it('names shared models whose content differs, carrying any unpushed alongside', () => {
-    const finding = classifySchemaDrift(CLIENT, [{ key: 'slides', hash: 'CHANGED0' }]);
-    expect(finding).toEqual({ kind: 'changed', models: ['slides'], unpushed: ['tasks'] });
+    const finding = classifySchemaDrift(CLIENT, [{ key: 'entries', hash: 'CHANGED0' }]);
+    expect(finding).toEqual({ kind: 'changed', models: ['entries'], unpushed: ['items'] });
   });
 
   it('unknown when the server surface carries no per-model hashes (older server)', () => {
-    const finding = classifySchemaDrift(CLIENT, [{ key: 'tasks' }, { key: 'slides' }]);
+    const finding = classifySchemaDrift(CLIENT, [{ key: 'items' }, { key: 'entries' }]);
     expect(finding).toEqual({ kind: 'unknown' });
   });
 
   it('an empty server surface reads as everything-unpushed, not unknown', () => {
     expect(classifySchemaDrift(CLIENT, [])).toEqual({
       kind: 'unpushed',
-      models: ['tasks', 'slides'],
+      models: ['items', 'entries'],
     });
   });
 });
@@ -54,10 +54,10 @@ describe('describeSchemaDrift', () => {
 
   it('changed: names the models and points at ablo status for the deployed shape', () => {
     const msg = describeSchemaDrift(
-      { kind: 'changed', models: ['slides'], unpushed: [] },
+      { kind: 'changed', models: ['entries'], unpushed: [] },
       'https://api-staging.example.com/api',
     );
-    expect(msg).toContain('slides');
+    expect(msg).toContain('entries');
     expect(msg).toContain('ablo status');
     expect(msg).not.toMatch(/hash/i);
   });

@@ -1,7 +1,7 @@
 /**
  * Reusable Kysely row-mutation core.
  *
- * This is the single schema-field ↔ physical-column translation used by both
+ * This is the single schema-field ↔ database-column translation used by both
  * Kysely transports. It deliberately knows nothing about outboxes, logical
  * markers, or idempotency: wrappers compose those transaction policies around
  * the same `applyOperation` implementation, so direct and endpoint DML cannot
@@ -133,6 +133,11 @@ export function kyselyOperationRowId(operation: Operation): string {
   return id;
 }
 
+function suppliedOperationRowId(operation: Operation): string | undefined {
+  const id = operation.id ?? operation.input?.id;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
 /** The transport-independent Kysely field/column mutation boundary. */
 export interface KyselyMutationCore {
   read(request: AdapterReadRequest): Promise<readonly Row[]>;
@@ -159,16 +164,23 @@ export function createKyselyMutationCore<S extends SchemaRecord>(
     columns.fieldToColumn.get(field) ?? camelToSnake(field);
   const fieldFor = (columns: ModelColumns, column: string): string =>
     columns.columnToField.get(column) ?? snakeToCamel(column);
-
   const toColumns = (columns: ModelColumns, row: Row): Row => {
     const out: Row = {};
-    for (const key of Object.keys(row)) out[columnFor(columns, key)] = row[key];
+    for (const key of Object.keys(row)) {
+      out[columnFor(columns, key)] = row[key];
+    }
     return out;
   };
 
   const toFields = (columns: ModelColumns, row: Row): Row => {
     const out: Row = {};
-    for (const key of Object.keys(row)) out[fieldFor(columns, key)] = row[key];
+    for (const key of Object.keys(row)) {
+      const field = fieldFor(columns, key);
+      const value = row[key];
+      out[field] = field === 'id' && value !== null && value !== undefined
+        ? String(value)
+        : value;
+    }
     return out;
   };
 
@@ -179,7 +191,7 @@ export function createKyselyMutationCore<S extends SchemaRecord>(
         const rows = await db
           .selectFrom(columns.table)
           .selectAll()
-          .where('id', '=', request.id)
+          .where(columnFor(columns, 'id'), '=', request.id)
           .limit(1)
           .execute();
         return rows.map((row) => toFields(columns, row));
@@ -194,13 +206,53 @@ export function createKyselyMutationCore<S extends SchemaRecord>(
 
     async applyOperation(transaction, operation): Promise<Row> {
       const columns = modelColumns(operation.model);
-      const id = kyselyOperationRowId(operation);
       const input = operation.input ?? {};
+      if (operation.where && operation.type !== 'UPDATE') {
+        throw new AbloValidationError('where is supported only for UPDATE operations', {
+          code: 'commit_operation_invalid',
+          param: 'where',
+        });
+      }
+
+      if (operation.type === 'CREATE') {
+        const suppliedId = suppliedOperationRowId(operation);
+        const createInput = operation.id == null
+          ? Object.fromEntries(Object.entries(input).filter(([field]) => field !== 'id'))
+          : input;
+        const inserted = await transaction
+          .insertInto(columns.table)
+          .values(toColumns(columns, {
+            ...createInput,
+            ...(operation.id == null
+              ? {}
+              : suppliedId
+                ? { id: suppliedId }
+                : {}),
+          }))
+          .returningAll()
+          .execute();
+        if (!inserted[0]) {
+          throw new AbloValidationError(
+            `${operation.type} on "${operation.model}" returned no source row`,
+            { code: 'source_adapter_misconfigured' },
+          );
+        }
+        const row = toFields(columns, inserted[0]);
+        if (typeof row.id !== 'string' || row.id.length === 0) {
+          throw new AbloValidationError(
+            `${operation.type} on "${operation.model}" did not return a canonical id`,
+            { code: 'source_adapter_misconfigured' },
+          );
+        }
+        return row;
+      }
+
+      const id = kyselyOperationRowId(operation);
 
       if (operation.type === 'DELETE') {
         const deleted = await transaction
           .deleteFrom(columns.table)
-          .where('id', '=', id)
+          .where(columnFor(columns, 'id'), '=', id)
           .returningAll()
           .execute();
         if (!deleted[0]) {
@@ -212,30 +264,25 @@ export function createKyselyMutationCore<S extends SchemaRecord>(
         return toFields(columns, deleted[0]);
       }
 
-      if (operation.type === 'CREATE') {
-        const inserted = await transaction
-          .insertInto(columns.table)
-          .values(toColumns(columns, { id, ...input }))
-          .returningAll()
-          .execute();
-        return inserted[0] ? toFields(columns, inserted[0]) : { id, ...input };
-      }
-
       const patch = toColumns(columns, {
         ...input,
         ...(operation.type === 'ARCHIVE' ? { archivedAt: new Date() } : {}),
         ...(operation.type === 'UNARCHIVE' ? { archivedAt: null } : {}),
       });
-      const updated = await transaction
+      let update = transaction
         .updateTable(columns.table)
         .set(patch)
-        .where('id', '=', id)
-        .returningAll()
-        .execute();
+        .where(columnFor(columns, 'id'), '=', id);
+      for (const [column, value] of Object.entries(toColumns(columns, operation.where ?? {}))) {
+        update = update.where(column, '=', value);
+      }
+      const updated = await update.returningAll().execute();
       if (!updated[0]) {
         throw new AbloValidationError(
-          `${operation.type} on "${operation.model}/${id}" matched no source row`,
-          { code: 'mutate_update_entity_not_found' },
+          operation.where
+            ? `The conditional ${operation.type} on "${operation.model}/${id}" did not match`
+            : `${operation.type} on "${operation.model}/${id}" matched no source row`,
+          { code: operation.where ? 'precondition_failed' : 'mutate_update_entity_not_found' },
         );
       }
       return toFields(columns, updated[0]);

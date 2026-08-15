@@ -197,7 +197,7 @@ function hasStoredCredential(keys: ProfileKeys | undefined): boolean {
  * the earlier `{ sandbox, production }` pair in either file, both fold into the
  * active profile, after which the two split files are rewritten.
  */
-export function readConfig(): StoredConfig | null {
+export function readConfig(options: { readonly persistMigrations?: boolean } = {}): StoredConfig | null {
   const cfgObj = readJson(configPath());
   const credObj = readJson(credentialsPath());
 
@@ -231,7 +231,7 @@ export function readConfig(): StoredConfig | null {
   // inside config.json (old combined layout), or a legacy top-level pair we
   // just folded into the profile map.
   const secretsInConfig = hasKey(legacyCfg);
-  if (secretsInConfig || migratedLegacy) writeConfig(config);
+  if ((secretsInConfig || migratedLegacy) && options.persistMigrations !== false) writeConfig(config);
   return config;
 }
 
@@ -311,6 +311,11 @@ export function getMode(): Mode {
 /** The active project, or undefined for the org-default. */
 export function getActiveProject(): ActiveProject | undefined {
   return readConfig()?.activeProject;
+}
+
+/** Read the active project without rewriting a legacy config during a dry run. */
+export function getActiveProjectReadOnly(): ActiveProject | undefined {
+  return readConfig({ persistMigrations: false })?.activeProject;
 }
 
 /** Set (or with `undefined`, clear back to org-default) the active project. */
@@ -489,9 +494,9 @@ export function resolveManagementKey(): string | undefined {
  * Unlike branch management, these routes do not target the key's project, so
  * falling back across profiles cannot redirect data or branch lifecycle work.
  */
-export function resolveOrgManagementKey(): string | undefined {
+export function resolveOrgManagementKey(options: { readonly persistConfigMigrations?: boolean } = {}): string | undefined {
   if (process.env.ABLO_MANAGEMENT_KEY) return process.env.ABLO_MANAGEMENT_KEY;
-  const cfg = readConfig();
+  const cfg = readConfig({ persistMigrations: options.persistConfigMigrations });
   if (!cfg) return undefined;
   const profiles = [...new Set([
     activeProfileName(cfg),
@@ -585,6 +590,8 @@ export interface KeyPolicy {
   scanEnvFiles?: boolean;
   /** cwd seam for the env-file lookup; commands use the process directory. */
   cwd?: string;
+  /** False for a dry run that must not rewrite a legacy credential layout. */
+  persistConfigMigrations?: boolean;
 }
 
 /**
@@ -612,7 +619,7 @@ export function resolveKey(policy: KeyPolicy): ResolvedApiKey {
   }
 
   // Phase 2 — the stored login credential, searched per the purpose policy.
-  const cfg = readConfig();
+  const cfg = readConfig({ persistMigrations: policy.persistConfigMigrations });
   if (!cfg) return { key: undefined, source: null };
   const mode = policy.mode ?? cfg.mode;
   const profiles =
@@ -635,4 +642,15 @@ export function resolveKey(policy: KeyPolicy): ResolvedApiKey {
  * use {@link resolveMutationApiKey} unless the user explicitly loads a file. */
 export function resolveRuntimeApiKey(modeOverride?: Mode, cwd?: string): ResolvedApiKey {
   return resolveKey({ purpose: 'data', mode: modeOverride, scanEnvFiles: true, cwd });
+}
+
+/** Runtime-key resolution for a dry run: reads legacy config but never migrates it. */
+export function resolveRuntimeApiKeyReadOnly(modeOverride?: Mode, cwd?: string): ResolvedApiKey {
+  return resolveKey({
+    purpose: 'data',
+    mode: modeOverride,
+    scanEnvFiles: true,
+    cwd,
+    persistConfigMigrations: false,
+  });
 }

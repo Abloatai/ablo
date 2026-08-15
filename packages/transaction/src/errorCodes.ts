@@ -604,6 +604,12 @@ export const ERROR_CODES = {
     false,
     'An earlier attempt under this idempotency key was pinned to a different source transport. Restore that route and retry the same key; Ablo will not switch a possibly committed write.'
   ),
+  precondition_failed: wire(
+    'conflict',
+    409,
+    false,
+    'A conditional operation did not match the current database row. The complete atomic commit was rejected and no operation in the batch was applied.'
+  ),
   idempotency_key_too_long: wire(
     'validation',
     400,
@@ -815,11 +821,11 @@ export const ERROR_CODES = {
     false,
     'The branch has no endpoint Data Source for this connector to serve. Run `ablo dev --local` with the current CLI, which registers the connector-only source before opening the socket.'
   ),
-  task_id_missing: wire(
+  item_id_missing: wire(
     'server',
     502,
     true,
-    'The task-create response arrived without a task id, so the result cannot be used. Retry the request.'
+    'The item-create response arrived without an item id, so the result cannot be used. Retry the request.'
   ),
 
   // ── data integrity / database constraints ──────────────────────────
@@ -918,7 +924,7 @@ export const ERROR_CODES = {
   ),
   schema_reserved_field: client(
     'schema',
-    'A model redeclared a reserved base field (id, createdAt, updatedAt, organizationId, createdBy) that the SDK provides automatically.'
+    'A model declared `id`, the one universal field Ablo supplies. Remove it from the declared application fields.'
   ),
   schema_grants_shape_invalid: wire(
     'schema',
@@ -1647,7 +1653,7 @@ export const ERROR_CODES = {
     false,
     'Uploads are not configured on this deployment: the upload storage bucket and CDN domain are unset.'
   ),
-  task_id_required: wire('validation', 400, false, 'A task id is required for this request.'),
+  item_id_required: wire('validation', 400, false, 'An item id is required for this request.'),
   claim_id_required: wire('validation', 400, false, 'A claim id is required for this request.'),
   commit_operation_action_required: wire(
     'validation',

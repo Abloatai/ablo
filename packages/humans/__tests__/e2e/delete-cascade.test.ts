@@ -80,26 +80,26 @@ describeE2E('E2E: Delete Operations', () => {
     catch (e) { clearTimeout(t); throw new Error(`Server unreachable: ${e instanceof Error ? e.message : e}`); }
   }, 10000);
 
-  it('should produce a D (delete) delta after deleting a task', async () => {
+  it('should produce a D (delete) delta after deleting a item', async () => {
     const { ws, deltas } = await connectAndCollect();
 
-    // Create a task
-    const taskId = uuid();
+    // Create a item
+    const itemId = uuid();
     await batchAck([{
-      type: 'CREATE', model: 'task', id: taskId,
+      type: 'CREATE', model: 'item', id: itemId,
       input: { title: 'Delete me', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
     }]);
 
     await new Promise((r) => setTimeout(r, 1000));
 
     // Delete it
-    await batchAck([{ type: 'DELETE', model: 'task', id: taskId }]);
+    await batchAck([{ type: 'DELETE', model: 'item', id: itemId }]);
 
     await new Promise((r) => setTimeout(r, 2000));
 
     // Should have received both I and D deltas
-    const insertDelta = deltas.find((d) => d.modelId === taskId && d.actionType === 'I');
-    const deleteDelta = deltas.find((d) => d.modelId === taskId && d.actionType === 'D');
+    const insertDelta = deltas.find((d) => d.modelId === itemId && d.actionType === 'I');
+    const deleteDelta = deltas.find((d) => d.modelId === itemId && d.actionType === 'D');
 
     expect(insertDelta).toBeDefined();
     expect(deleteDelta).toBeDefined();
@@ -109,18 +109,18 @@ describeE2E('E2E: Delete Operations', () => {
 
   it('should handle update on deleted entity gracefully', async () => {
     // Create then delete
-    const taskId = uuid();
+    const itemId = uuid();
     await batchAck([{
-      type: 'CREATE', model: 'task', id: taskId,
+      type: 'CREATE', model: 'item', id: itemId,
       input: { title: 'Ghost', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
     }]);
-    await batchAck([{ type: 'DELETE', model: 'task', id: taskId }]);
+    await batchAck([{ type: 'DELETE', model: 'item', id: itemId }]);
 
     await new Promise((r) => setTimeout(r, 500));
 
     // Try to update the deleted entity
     const result = await batchAck([{
-      type: 'UPDATE', model: 'task', id: taskId,
+      type: 'UPDATE', model: 'item', id: itemId,
       input: { title: 'Ghost update' },
     }]);
 
@@ -133,11 +133,11 @@ describeE2E('E2E: Delete Operations', () => {
     // Connect WS first to catch all deltas
     const { ws, deltas } = await connectAndCollect();
 
-    // Create 3 tasks
+    // Create 3 items
     const ids = [uuid(), uuid(), uuid()];
     for (const id of ids) {
       await batchAck([{
-        type: 'CREATE', model: 'task', id,
+        type: 'CREATE', model: 'item', id,
         input: { title: `Batch del ${id.slice(0, 8)}`, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
     }
@@ -146,7 +146,7 @@ describeE2E('E2E: Delete Operations', () => {
     await new Promise((r) => setTimeout(r, 1500));
 
     // Delete all 3 in a single batchAck
-    const result = await batchAck(ids.map((id) => ({ type: 'DELETE', model: 'task', id })));
+    const result = await batchAck(ids.map((id) => ({ type: 'DELETE', model: 'item', id })));
     expect(result.lastSyncId).toBeGreaterThan(0);
 
     // Wait for delete deltas
@@ -160,7 +160,7 @@ describeE2E('E2E: Delete Operations', () => {
 
   it('should handle delete of nonexistent entity', async () => {
     const result = await batchAck([{
-      type: 'DELETE', model: 'task', id: uuid(), // Never created
+      type: 'DELETE', model: 'item', id: uuid(), // Never created
     }]);
 
     // Server should handle gracefully — either succeed (idempotent) or error

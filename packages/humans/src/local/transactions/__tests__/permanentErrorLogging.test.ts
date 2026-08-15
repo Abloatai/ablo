@@ -18,7 +18,7 @@ import {
 } from '../mutations/MutationQueue.js';
 import { createTestContext } from '../../testing/mocks/MockSyncContext.js';
 import type { TestContextResult } from '../../testing/mocks/MockSyncContext.js';
-import { createTaskFixture } from '../../testing/fixtures/models.js';
+import { createItemFixture } from '../../testing/fixtures/models.js';
 import { waitFor } from '../../testing/helpers/wait.js';
 import { AbloIdempotencyError } from '@abloatai/transaction/errors';
 import type { Logger } from '../../interfaces/index.js';
@@ -70,8 +70,8 @@ describe('permanent-error log severity + dedup', () => {
   it('logs a benign idempotency create at info, not warn', async () => {
     ctx.mocks.mutationExecutor.failMethod('commit', idempotencyError());
 
-    const task = createTaskFixture();
-    const tx = await queue.create(task, userContext);
+    const item = createItemFixture();
+    const tx = await queue.create(item, userContext);
     await waitFor(() => tx.status === 'failed');
 
     // Authoritative line is the friendly, consumer-language info — no warn,
@@ -87,9 +87,9 @@ describe('permanent-error log severity + dedup', () => {
     ctx.mocks.mutationExecutor.failMethod('commit', idempotencyError());
 
     // Same modelId rejected twice = the offline-queue replay shape.
-    const first = await queue.create(createTaskFixture({ id: 'task-dup' }), userContext);
+    const first = await queue.create(createItemFixture({ id: 'item-dup' }), userContext);
     await waitFor(() => first.status === 'failed');
-    const second = await queue.create(createTaskFixture({ id: 'task-dup' }), userContext);
+    const second = await queue.create(createItemFixture({ id: 'item-dup' }), userContext);
     await waitFor(() => second.status === 'failed');
 
     // First occurrence: info. Repeat: debug, NOT a second info/warn.
@@ -104,18 +104,18 @@ describe('permanent-error log severity + dedup', () => {
 
     // First: a non-idempotency permanent error (validation) → warn.
     executor.failMethod('commit', idempotencyError());
-    const a = await queue.create(createTaskFixture({ id: 'task-x' }), userContext);
+    const a = await queue.create(createItemFixture({ id: 'item-x' }), userContext);
     await waitFor(() => a.status === 'failed');
 
     // A successful write clears the dedup signature.
     executor.clearFailure('commit');
-    const ok = await queue.create(createTaskFixture({ id: 'task-ok' }), userContext);
+    const ok = await queue.create(createItemFixture({ id: 'item-ok' }), userContext);
     await waitFor(() => ok.status === 'completed');
 
     // Same idempotency error again on the same id is NOT a consecutive repeat
     // (a success intervened) → logs at info again, not silently at debug.
     executor.failMethod('commit', idempotencyError());
-    const b = await queue.create(createTaskFixture({ id: 'task-x' }), userContext);
+    const b = await queue.create(createItemFixture({ id: 'item-x' }), userContext);
     await waitFor(() => b.status === 'failed');
 
     expect(logger.info.mock.calls.filter(

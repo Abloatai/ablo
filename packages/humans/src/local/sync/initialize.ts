@@ -92,7 +92,7 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
       // Bootstrap from server if needed.
       //
       // `bootstrapMode: 'none'` participants (headless workers and
-      // task runners) skip baseline replication — they read via
+      // item runners) skip baseline replication — they read via
       // `model.get()` round-trips and rely on covering deltas
       // from filtered subscriptions to populate the pool lazily. The
       // WS is already open by `setupWebSocketSync` above, so live
@@ -110,7 +110,7 @@ export function* initialize<TCollaboration extends EventMap<TCollaboration>>(
         // initiates the upgrade, but it does NOT await the 'connected'
         // event — it returns synchronously after wiring listeners.
         // For bootstrapMode='none' consumers (headless workers and
-        // task runners), this branch is the entire body of initialize()
+        // item runners), this branch is the entire body of initialize()
         // after the WS is set up, so `ready()` would otherwise resolve
         // while the WS is still in 'connecting' state. The very next
         // `commits.create` then throws "SyncWebSocket not connected".

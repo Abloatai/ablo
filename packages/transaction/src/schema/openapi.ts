@@ -208,8 +208,9 @@ const namedResp = (description: string, name: string): Json =>
  *
  * - `$schema` belongs on a standalone JSON Schema document, not every embedded
  *   OpenAPI Schema Object;
- * - `propertyNames: { type: 'string' }` is redundant for JSON objects and is
- *   unsupported by Stainless;
+ * - `propertyNames` constraining keys to strings is redundant for JSON objects,
+ *   whatever else it constrains, and is unsupported by Stainless. The key rule
+ *   still binds at runtime, where the Zod schema parses;
  * - `additionalProperties: {}` means "any JSON value", but Stainless requires
  *   the equivalent, explicit `true`.
  *
@@ -228,7 +229,6 @@ function portableSchema(value: unknown): unknown {
       key === 'propertyNames' &&
       typeof child === 'object' &&
       child !== null &&
-      Object.keys(child).length === 1 &&
       (child as Record<string, unknown>).type === 'string'
     ) {
       continue;
@@ -267,7 +267,7 @@ const modelParam = (): Json => ({
   in: 'path',
   required: true,
   schema: { type: 'string' },
-  description: 'A model name from your pushed schema, e.g. `task`.',
+  description: 'A model name from your pushed schema, e.g. `item`.',
 });
 const genericRow = (): Json => ({ type: 'object', additionalProperties: true });
 
@@ -591,9 +591,6 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         description:
           'Call this first: every other route needs the key it returns. Requires a ' +
           'secret (`sk_`) key — a session cannot mint itself.',
-        parameters: [
-          { name: 'Idempotency-Key', in: 'header', schema: { type: 'string' }, description: 'Replay-safe key; the server returns the cached credential on retry.' },
-        ],
         requestBody: jsonBody(derive(ephemeralKeyRequestSchema, 'input')),
         responses: { '201': jsonResp('The minted credential', derive(EphemeralKeyResponseSchema, 'output')) },
       },

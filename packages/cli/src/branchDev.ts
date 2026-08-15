@@ -14,6 +14,7 @@ import { branchSlugSchema } from '@abloatai/transaction/branches';
 import { AbloValidationError } from '@abloatai/transaction/errors';
 import { ensureBranchCredential } from './branches';
 import { resolveManagementKey } from './config';
+import { flushProductAnalytics, trackCliDevStarted } from './telemetry';
 import { dev, type DevRuntimeOptions } from './dev';
 import { DEFAULT_URL } from './controlPlane';
 
@@ -180,6 +181,9 @@ export async function runBranchDev(
     ttlHours: parsed.ttlHours,
     kind: 'dev',
   });
+
+  trackCliDevStarted(parsed.devArgv.includes('--no-watch') ? 'one_shot' : 'watch');
+  void flushProductAnalytics();
 
   await run(parsed.devArgv, {
     apiKey: result.credential.api_key,

@@ -129,6 +129,7 @@ export {
   sourceCommitEchoSchema,
   sourceCommitEchoOperationSchema,
   sourceCommitEchoMarkerSchema,
+  sourceCommitEchoIntentSchema,
   changeSetSchema,
   outboxEventSchema,
   eventsPageSchema,
@@ -141,6 +142,7 @@ export {
   type Migration,
   type AdapterCapabilities,
   type SourceCommitEchoMarkerWire,
+  type SourceCommitEchoIntent,
 } from './contract.js';
 export { prismaDataSource, type PrismaLike, type PrismaDataSourceOptions } from './adapters/prisma.js';
 export {

@@ -89,7 +89,7 @@ describe('claim stream — setParticipant', () => {
 
     const claim = {
       claimId: 'c1',
-      entityType: 'Task',
+      entityType: 'Item',
       entityId: 't1',
       description: 'editing',
       declaredAt: Date.now(),
@@ -116,7 +116,7 @@ describe('claim stream — setParticipant', () => {
       heldByKind: 'agent',
       heldByClaim: {
         claimId: 'claim-a',
-        entityType: 'Task',
+        entityType: 'Item',
         entityId: 't1',
         description: 'editing',
         declaredAt: now,
@@ -130,7 +130,7 @@ describe('claim stream — setParticipant', () => {
       heldBy: 'agent-a',
       participantKind: 'agent',
       status: 'active',
-      target: { type: 'Task', id: 't1' },
+      target: { type: 'Item', id: 't1' },
     });
   });
 });

@@ -19,7 +19,7 @@ import { createTestContext } from '../../src/local/testing';
 // ── Test schema ────────────────────────────────────────────────────────
 
 const testSchema = defineSchema({
-  tasks: model(
+  items: model(
     {
       title: z.string(),
       status: z.enum(['todo', 'in_progress', 'done']).default('todo'),
@@ -27,12 +27,12 @@ const testSchema = defineSchema({
       order: z.number().default(0),
       completedAt: z.date().optional(),
     },
-    { typename: 'Task' }),
+    { typename: 'Item' }),
 });
 
 // ── Test model class — registered for createFromData lookups ──────────
 
-class TestTask extends Model {
+class TestItem extends Model {
   title!: string;
   status!: 'todo' | 'in_progress' | 'done';
   priority?: string;
@@ -124,7 +124,7 @@ let cleanupCtx: () => void;
 
 beforeEach(() => {
   registry = new ModelRegistry();
-  registry.registerModel('Task', TestTask);
+  registry.registerModel('Item', TestItem);
   setActiveRegistry(registry);
   const ctx = createTestContext();
   cleanupCtx = ctx.cleanup;
@@ -141,9 +141,9 @@ afterEach(() => {
 
 describe('useMutate.create', () => {
   it('creates a model with auto-generated id, timestamps, and orgId', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
 
-    const created = await tasks.create({ title: 'Fix bug' });
+    const created = await items.create({ title: 'Fix bug' });
 
     expect(created).toBeDefined();
     expect((created as { id: string }).id).toMatch(/^[0-9a-f-]+$/);
@@ -154,27 +154,27 @@ describe('useMutate.create', () => {
   });
 
   it('respects caller-provided id', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
 
-    const created = await tasks.create({ id: 'task-custom', title: 'Task' });
+    const created = await items.create({ id: 'item-custom', title: 'Item' });
 
-    expect((created as { id: string }).id).toBe('task-custom');
-    expect(pool.get('task-custom')).toBeDefined();
+    expect((created as { id: string }).id).toBe('item-custom');
+    expect(pool.get('item-custom')).toBeDefined();
   });
 
   it('uses organizationId from context when not provided', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
 
-    const created = await tasks.create({ title: 'Task' });
+    const created = await items.create({ title: 'Item' });
 
     expect((created as { organizationId: string }).organizationId).toBe('org-1');
   });
 
   it('uses provided organizationId over context default', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
 
-    const created = await tasks.create({
-      title: 'Task',
+    const created = await items.create({
+      title: 'Item',
       organizationId: 'org-override',
     } as never);
 
@@ -184,11 +184,11 @@ describe('useMutate.create', () => {
 
 describe('useMutate.update', () => {
   it('applies partial changes and saves', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
-    const created = await tasks.create({ title: 'Original' });
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
+    const created = await items.create({ title: 'Original' });
     const id = (created as { id: string }).id;
 
-    const updated = await tasks.update({ id, title: 'Updated', status: 'done' });
+    const updated = await items.update({ id, title: 'Updated', status: 'done' });
 
     expect((updated as { title: string }).title).toBe('Updated');
     expect((updated as { status: string }).status).toBe('done');
@@ -200,33 +200,33 @@ describe('useMutate.update', () => {
   });
 
   it('updates updatedAt timestamp', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
-    const created = await tasks.create({ title: 'Task' });
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
+    const created = await items.create({ title: 'Item' });
     const id = (created as { id: string }).id;
     const originalUpdatedAt = (created as { updatedAt: Date }).updatedAt.getTime();
 
     await new Promise((r) => setTimeout(r, 5));
-    await tasks.update({ id, title: 'New' });
+    await items.update({ id, title: 'New' });
 
     const fromPool = pool.get(id) as unknown as { updatedAt: Date };
     expect(fromPool.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt);
   });
 
   it('throws if model not found in pool', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
 
-    await expect(tasks.update({ id: 'nonexistent', title: 'x' })).rejects.toThrow(
+    await expect(items.update({ id: 'nonexistent', title: 'x' })).rejects.toThrow(
       /not found in pool/,
     );
   });
 
   it('preserves model identity (same instance) across updates', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
-    const created = await tasks.create({ title: 'Task' });
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
+    const created = await items.create({ title: 'Item' });
     const id = (created as { id: string }).id;
     const beforeRef = pool.get(id);
 
-    await tasks.update({ id, title: 'Changed' });
+    await items.update({ id, title: 'Changed' });
     const afterRef = pool.get(id);
 
     expect(afterRef).toBe(beforeRef);
@@ -235,21 +235,21 @@ describe('useMutate.update', () => {
 
 describe('useMutate.delete', () => {
   it('deletes a model by id', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
-    const created = await tasks.create({ title: 'Task' });
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
+    const created = await items.create({ title: 'Item' });
     const id = (created as { id: string }).id;
     expect(pool.get(id)).toBeDefined();
 
-    await tasks.delete(id);
+    await items.delete(id);
 
     expect(store.deleteCalls).toHaveLength(1);
     expect(pool.get(id)).toBeUndefined();
   });
 
   it('no-ops silently if model is not in pool', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
 
-    await tasks.delete('nonexistent');
+    await items.delete('nonexistent');
 
     expect(store.deleteCalls).toHaveLength(0);
   });
@@ -257,30 +257,30 @@ describe('useMutate.delete', () => {
 
 describe('useMutate.archive / unarchive', () => {
   it('archives a model by id', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
-    const created = await tasks.create({ title: 'Task' });
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
+    const created = await items.create({ title: 'Item' });
     const id = (created as { id: string }).id;
 
-    await tasks.archive(id);
+    await items.archive(id);
 
     expect(store.archiveCalls).toHaveLength(1);
     expect(store.archiveCalls[0]?.id).toBe(id);
   });
 
   it('unarchives a model by id', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
-    const created = await tasks.create({ title: 'Task' });
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
+    const created = await items.create({ title: 'Item' });
     const id = (created as { id: string }).id;
 
-    await tasks.unarchive(id);
+    await items.unarchive(id);
 
     expect(store.unarchiveCalls).toHaveLength(1);
     expect(store.unarchiveCalls[0]?.id).toBe(id);
   });
 
   it('archive no-ops if not found', async () => {
-    const tasks = createMutateActions(testSchema, 'tasks', store, 'org-1');
-    await tasks.archive('nonexistent');
+    const items = createMutateActions(testSchema, 'items', store, 'org-1');
+    await items.archive('nonexistent');
     expect(store.archiveCalls).toHaveLength(0);
   });
 });

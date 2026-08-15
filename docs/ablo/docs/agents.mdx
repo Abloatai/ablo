@@ -17,8 +17,8 @@ plugin — get the live plane (WebSocket: presence, optimistic, sub-100ms).
 other*.**
 
 :::note
-Agents transact against your **pushed schema**, same as everyone — `ablo.tasks`
-exists because you defined a `task` model and ran `ablo push`. The key
+Agents transact against your **pushed schema**, same as everyone — `ablo.records`
+exists because you defined a `record` model and ran `ablo push`. The key
 authenticates; the [schema](/quickstart) defines what you can call.
 :::
 
@@ -35,13 +35,13 @@ const ablo = Ablo({ schema, apiKey: process.env.ABLO_API_KEY, transport: "http" 
 
 // Reads + writes, fully typed off your schema.
 // `get` resolves to the row, or `undefined` when none matches.
-const open = await ablo.tasks.list({ where: { status: "todo" } });
+const open = await ablo.records.list({ where: { status: "todo" } });
 
-const task = await ablo.tasks.get({ id: open[0].id });
-if (!task) throw new Error("task not found");
+const record = await ablo.records.get({ id: open[0].id });
+if (!record) throw new Error("record not found");
 
-console.log(task.title);
-await ablo.tasks.update({ id: task.id, data: { status: "done" } });
+console.log(record.title);
+await ablo.records.update({ id: record.id, data: { status: "done" } });
 ```
 
 It exposes `get` / `list` / `create` / `update` / `delete`, plus `commits`
@@ -64,27 +64,27 @@ import {
 } from '@abloatai/ablo/ai-sdk';
 
 const tools = {
-  getTask: readTool(ablo.tasks, {
-    description: 'Read the current task.',
-    inputSchema: z.object({ taskId: z.string() }),
-    id: ({ taskId }) => taskId,
+  getTask: readTool(ablo.records, {
+    description: 'Read the current record.',
+    inputSchema: z.object({ recordId: z.string() }),
+    id: ({ recordId }) => recordId,
   }),
-  createTask: createTool(ablo.tasks, {
-    description: 'Create a task.',
+  createTask: createTool(ablo.records, {
+    description: 'Create a record.',
     inputSchema: z.object({ requestId: z.string(), title: z.string() }),
     id: ({ requestId }) => requestId,
     data: ({ title }) => ({ title, status: 'todo' }),
   }),
-  updateTask: updateTool(ablo.tasks, {
-    description: 'Update a task without overwriting concurrent work.',
-    inputSchema: z.object({ taskId: z.string(), status: z.string() }),
-    id: ({ taskId }) => taskId,
+  updateTask: updateTool(ablo.records, {
+    description: 'Update a record without overwriting concurrent work.',
+    inputSchema: z.object({ recordId: z.string(), status: z.string() }),
+    id: ({ recordId }) => recordId,
     apply: (_current, { status }) => ({ status }),
   }),
-  deleteTask: deleteTool(ablo.tasks, {
-    description: 'Delete a task after taking its claim.',
-    inputSchema: z.object({ taskId: z.string() }),
-    id: ({ taskId }) => taskId,
+  deleteTask: deleteTool(ablo.records, {
+    description: 'Delete a record after taking its claim.',
+    inputSchema: z.object({ recordId: z.string() }),
+    id: ({ recordId }) => recordId,
     // Destructive tools require AI SDK approval by default.
   }),
 };
@@ -105,18 +105,18 @@ clobber the same record.
 
 ```ts
 // Acquire a lease, do work with the held row, release on scope exit:
-await using claim = await ablo.tasks.claim({ id: taskId });
-const task = claim.data;
+await using claim = await ablo.records.claim({ id: recordId });
+const record = claim.data;
 // …no one else can hold this row while you work…
-await ablo.tasks.update({
-  id: task.id,
+await ablo.records.update({
+  id: record.id,
   data: { status: "in_review" },
   claim,
 });
 
-await ablo.tasks.claim.state({ id: taskId });   // who holds it now (or null)
-await ablo.tasks.claim.queue({ id: taskId });   // the FIFO wait-line behind the holder
-await ablo.tasks.claim.reorder({ id: taskId, order: line }); // re-rank the line (privileged)
+await ablo.records.claim.state({ id: recordId });   // who holds it now (or null)
+await ablo.records.claim.queue({ id: recordId });   // the FIFO wait-line behind the holder
+await ablo.records.claim.reorder({ id: recordId, order: line }); // re-rank the line (privileged)
 ```
 
 Think of it as a queue per row — a durable, inspectable, reorderable lease

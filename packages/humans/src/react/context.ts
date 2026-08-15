@@ -19,7 +19,7 @@ export interface SyncReactContext {
   organizationId: string;
   /**
    * An optional schema. When provided, hooks that take a model by name (such as
-   * `useQuery('tasks')`) read that model's metadata from this schema, so
+   * `useQuery('items')`) read that model's metadata from this schema, so
    * callers don't pass a schema at every call site. When omitted, those hooks
    * require the schema as an argument instead.
    *
@@ -60,7 +60,7 @@ export interface SyncProviderProps {
   organizationId: string;
   /**
    * An optional schema. Provide it to enable hooks that take a model by name
-   * (such as `useQuery('tasks')`); the model types also narrow through your
+   * (such as `useQuery('items')`); the model types also narrow through your
    * `Register` augmentation. Omit it to pass the schema to those hooks directly
    * instead.
    */

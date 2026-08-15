@@ -12,7 +12,7 @@ meaning. Choose the narrowest one that matches the operation.
 |---|---|---|
 | Set an independent value | `update({ id, data })` | Last-write-wins when no claim applies. |
 | Compute a value from the current row | `update(id, current => next)` | Re-reads and retries if the row changes concurrently. |
-| Write only if earlier rows are still current | `reads: [task, policy]` | Rejects when an explicitly named dependency changed. |
+| Write only if earlier rows are still current | `reads: [record, policy]` | Rejects when an explicitly named dependency changed. |
 | Read, call a model, then write | `claim({ id })` | Other participants cannot write the claimed target by default until your claim ends. |
 
 **If a model call sits between the read and the write, take a claim.** A stale
@@ -28,16 +28,16 @@ does not carry a stale premise. It is intentionally last-write-wins.
 Pass the exact rows that produced a decision on the write:
 
 ```ts
-const task = await ablo.tasks.get({ id: taskId });
+const record = await ablo.records.get({ id: recordId });
 const policy = await ablo.policies.get({ id: policyId });
-if (!task || !policy) throw new Error('required input is missing');
+if (!record || !policy) throw new Error('required input is missing');
 
-const result = await model({ task, policy });
+const result = await model({ record, policy });
 
-await ablo.tasks.update({
-  id: task.id,
+await ablo.records.update({
+  id: record.id,
   data: result,
-  reads: [task, policy],
+  reads: [record, policy],
 });
 ```
 
@@ -60,7 +60,7 @@ When the next value is a function of the current one, pass an updater rather
 than fixed data:
 
 ```ts
-const document = await ablo.documents.update(documentId, (current) => ({
+const document = await ablo.records.update(recordId, (current) => ({
   revision: current.revision + 1,
   content: revise(current.content),
 }));
@@ -78,8 +78,8 @@ effect inside it.
 You can bound or cancel reconciliation:
 
 ```ts
-await ablo.documents.update(
-  documentId,
+await ablo.records.update(
+  recordId,
   (current) => ({ revision: current.revision + 1 }),
   { retries: 8, signal: request.signal },
 );
@@ -187,8 +187,8 @@ protect the row version rather than a participant-held claim.
 For deduplicated jobs, skip work when another participant already owns it:
 
 ```ts
-const claim = await ablo.tasks.claim({
-  id: taskId,
+const claim = await ablo.records.claim({
+  id: recordId,
   contention: { mode: 'skip' },
 });
 
@@ -204,8 +204,8 @@ try {
 To wait with limits, keep the policy together:
 
 ```ts
-const claim = await ablo.tasks.claim({
-  id: taskId,
+const claim = await ablo.records.claim({
+  id: recordId,
   contention: {
     mode: 'wait',
     maxDepth: 3,
@@ -220,9 +220,9 @@ const claim = await ablo.tasks.claim({
 Narrow a claim when independent fields may be edited concurrently:
 
 ```ts
-await using claim = await ablo.tasks.claim({
-  id: taskId,
-  fields: (task) => task.status,
+await using claim = await ablo.records.claim({
+  id: recordId,
+  fields: (record) => record.status,
 });
 ```
 
@@ -242,8 +242,8 @@ The target options are:
 Read current claim state without blocking:
 
 ```ts
-const holder = ablo.tasks.claim.state({ id: taskId });
-const queue = ablo.tasks.claim.queue({ id: taskId });
+const holder = ablo.records.claim.state({ id: recordId });
+const queue = ablo.records.claim.queue({ id: recordId });
 ```
 
 Use this state for presence and progress UI. Do not use an observed `null` as a

@@ -12,7 +12,7 @@ import type { Ablo } from '../../src/Ablo.js';
 import type { Identical } from '../../src/local/testing/typeEquality.js';
 
 const schema = defineSchema({
-  tasks: model({ title: z.string(), status: z.string() }),
+  items: model({ title: z.string(), status: z.string() }),
 });
 
 const { AbloProvider, useAblo } = createAbloReact(schema);
@@ -30,8 +30,8 @@ export function TypeProbe(): null {
   if (ablo) {
     // The schema's model keys resolve on the bound client, and the claim
     // options read the model's fields.
-    void ablo.tasks.claim({ id: 't_1', field: 'title', queue: false });
-    void ablo.tasks.claim({
+    void ablo.items.claim({ id: 't_1', field: 'title', queue: false });
+    void ablo.items.claim({
       id: 't_1',
       contention: {
         mode: 'skip',
@@ -50,7 +50,7 @@ export function TypeProbe(): null {
 
   // A selector's parameter is the typed reactive-read view: the model key
   // resolves and the row read is the snapshot shape.
-  const title = useAblo((a) => a.tasks.local.get('t_1')?.title);
+  const title = useAblo((a) => a.items.local.get('t_1')?.title);
   const selectorIsTyped: Identical<typeof title, string | undefined> = true;
   void selectorIsTyped;
 

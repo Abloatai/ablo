@@ -73,25 +73,25 @@ describeE2E('E2E: Bootstrap Data Integrity', () => {
       expect(models.SyncMetadata).toBeDefined();
     });
 
-    it('should contain tasks created via batchAck', async () => {
-      // Create a uniquely identifiable task
-      const taskId = uuid();
-      const title = `Bootstrap-verify-${taskId.slice(0, 8)}`;
+    it('should contain items created via batchAck', async () => {
+      // Create a uniquely identifiable item
+      const itemId = uuid();
+      const title = `Bootstrap-verify-${itemId.slice(0, 8)}`;
       await batchAck([{
-        type: 'CREATE', model: 'task', id: taskId,
+        type: 'CREATE', model: 'item', id: itemId,
         input: { title, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
       // Wait for persistence
       await new Promise((r) => setTimeout(r, 500));
 
-      // Bootstrap should now include this task
+      // Bootstrap should now include this item
       const data = await fetchBootstrap();
       const models = data.models as Record<string, unknown[]>;
-      const tasks = models.Task;
+      const items = models.Item;
 
-      if (tasks && Array.isArray(tasks)) {
-        const found = tasks.find((t: unknown) => (t as Record<string, unknown>).id === taskId);
+      if (items && Array.isArray(items)) {
+        const found = items.find((t: unknown) => (t as Record<string, unknown>).id === itemId);
         expect(found).toBeDefined();
         if (found) {
           expect((found as Record<string, unknown>).title).toBe(title);
@@ -106,31 +106,31 @@ describeE2E('E2E: Bootstrap Data Integrity', () => {
       const fullData = await fetchBootstrap();
       const beforeSyncId = fullData.lastSyncId as number;
 
-      // Create some tasks after the sync point
-      const taskIds: string[] = [];
+      // Create some items after the sync point
+      const itemIds: string[] = [];
       for (let i = 0; i < 3; i++) {
         const id = uuid();
-        taskIds.push(id);
+        itemIds.push(id);
         await batchAck([{
-          type: 'CREATE', model: 'task', id,
+          type: 'CREATE', model: 'item', id,
           input: { title: `Partial-${i}`, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
         }]);
       }
 
       await new Promise((r) => setTimeout(r, 500));
 
-      // Request partial bootstrap from before the new tasks
+      // Request partial bootstrap from before the new items
       const partialData = await fetchBootstrap(beforeSyncId);
 
       expect(partialData.lastSyncId).toBeDefined();
       expect((partialData.lastSyncId as number)).toBeGreaterThanOrEqual(beforeSyncId);
 
-      // The response should contain the new tasks (either as models or deltas)
+      // The response should contain the new items (either as models or deltas)
       // Depending on server implementation it may return full or partial
       if (partialData.type === 'partial' && partialData.deltas) {
-        // Check deltas contain our tasks
+        // Check deltas contain our items
         const deltas = partialData.deltas as Record<string, unknown>[];
-        for (const id of taskIds) {
+        for (const id of itemIds) {
           const found = deltas.find((d) => d.modelId === id);
           // May or may not be in delta batch depending on server delta count threshold
           if (found) {
@@ -151,41 +151,41 @@ describeE2E('E2E: Bootstrap Data Integrity', () => {
 
   describe('data integrity after mutations', () => {
     it('should not return deleted entities in bootstrap', async () => {
-      // Create and delete a task
-      const taskId = uuid();
+      // Create and delete a item
+      const itemId = uuid();
       await batchAck([{
-        type: 'CREATE', model: 'task', id: taskId,
+        type: 'CREATE', model: 'item', id: itemId,
         input: { title: 'Delete-from-bootstrap', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
-      await batchAck([{ type: 'DELETE', model: 'task', id: taskId }]);
+      await batchAck([{ type: 'DELETE', model: 'item', id: itemId }]);
 
       await new Promise((r) => setTimeout(r, 500));
 
-      // Bootstrap should NOT contain the deleted task
+      // Bootstrap should NOT contain the deleted item
       const data = await fetchBootstrap();
       const models = data.models as Record<string, unknown[]>;
-      const tasks = models.Task;
+      const items = models.Item;
 
-      if (tasks && Array.isArray(tasks)) {
-        const found = tasks.find((t: unknown) => (t as Record<string, unknown>).id === taskId);
+      if (items && Array.isArray(items)) {
+        const found = items.find((t: unknown) => (t as Record<string, unknown>).id === itemId);
         expect(found).toBeUndefined();
       }
     });
 
     it('should return updated data in bootstrap', async () => {
-      const taskId = uuid();
-      const originalTitle = `Update-bootstrap-${taskId.slice(0, 8)}`;
-      const updatedTitle = `Updated-${taskId.slice(0, 8)}`;
+      const itemId = uuid();
+      const originalTitle = `Update-bootstrap-${itemId.slice(0, 8)}`;
+      const updatedTitle = `Updated-${itemId.slice(0, 8)}`;
 
       // Create
       await batchAck([{
-        type: 'CREATE', model: 'task', id: taskId,
+        type: 'CREATE', model: 'item', id: itemId,
         input: { title: originalTitle, status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
       // Update
       await batchAck([{
-        type: 'UPDATE', model: 'task', id: taskId,
+        type: 'UPDATE', model: 'item', id: itemId,
         input: { title: updatedTitle },
       }]);
 
@@ -194,10 +194,10 @@ describeE2E('E2E: Bootstrap Data Integrity', () => {
       // Bootstrap should have the updated title
       const data = await fetchBootstrap();
       const models = data.models as Record<string, unknown[]>;
-      const tasks = models.Task;
+      const items = models.Item;
 
-      if (tasks && Array.isArray(tasks)) {
-        const found = tasks.find((t: unknown) => (t as Record<string, unknown>).id === taskId);
+      if (items && Array.isArray(items)) {
+        const found = items.find((t: unknown) => (t as Record<string, unknown>).id === itemId);
         if (found) {
           expect((found as Record<string, unknown>).title).toBe(updatedTitle);
         }

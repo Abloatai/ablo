@@ -46,7 +46,7 @@ const FIELD_NAMES = ['title', 'status', 'organizationId', 'createdBy'] as const;
  * before observability is decided, and the wire's defer marker keeps the
  * instance cold the way continuous delta ingestion does.
  */
-class BenchTaskModel extends Model {
+class BenchItemModel extends Model {
   constructor(data?: Record<string, unknown>) {
     super(data);
     const defer = Reflect.get(data ?? {}, DEFER_MODEL_OBSERVABILITY) === true;
@@ -63,7 +63,7 @@ class BenchTaskModel extends Model {
   }
 
   override getModelName(): string {
-    return 'Task';
+    return 'Item';
   }
 }
 
@@ -81,9 +81,9 @@ function setup() {
     validateOnRegister: false,
     allowLateReferences: true,
   });
-  registry.registerModel('Task', BenchTaskModel, { loadStrategy: LoadStrategy.instant });
+  registry.registerModel('Item', BenchItemModel, { loadStrategy: LoadStrategy.instant });
   for (const field of FIELD_NAMES) {
-    registry.registerProperty('Task', field, { type: PropertyType.property, optional: true });
+    registry.registerProperty('Item', field, { type: PropertyType.property, optional: true });
   }
   setActiveRegistry(registry);
   const pool = new InstanceCache({ maxSize: ROWS + 100 }, registry);
@@ -91,8 +91,8 @@ function setup() {
   return { registry, pool, client };
 }
 
-function seedRows(pool: InstanceCache): BenchTaskModel[] {
-  const seeded: BenchTaskModel[] = [];
+function seedRows(pool: InstanceCache): BenchItemModel[] {
+  const seeded: BenchItemModel[] = [];
   const createdAt = new Date().toISOString();
   for (let i = 0; i < ROWS; i++) {
     const data: Record<string, unknown> = {
@@ -109,7 +109,7 @@ function seedRows(pool: InstanceCache): BenchTaskModel[] {
       enumerable: false,
       configurable: true,
     });
-    const model = new BenchTaskModel(data);
+    const model = new BenchItemModel(data);
     model.markAsPersisted();
     seeded.push(model);
   }
@@ -124,7 +124,7 @@ function updateFrame(frameIndex: number): DeltaResult[] {
     const row = (frameIndex * FRAME_DELTAS + i) % ROWS;
     return {
       action: 'update' as const,
-      modelName: 'Task',
+      modelName: 'Item',
       modelId: `row-${row}`,
       data: {
         id: `row-${row}`,
@@ -147,7 +147,7 @@ interface ScenarioResult {
 
 function runScenario(
   scenario: string,
-  prepare: (models: BenchTaskModel[]) => void,
+  prepare: (models: BenchItemModel[]) => void,
   applyPatch?: () => () => void,
 ): ScenarioResult {
   const { pool, client } = setup();
@@ -187,7 +187,7 @@ function addFrame(frameIndex: number): DeltaResult[] {
     const id = `row-c-${frameIndex}-${i}`;
     return {
       action: 'add' as const,
-      modelName: 'Task',
+      modelName: 'Item',
       modelId: id,
       data: {
         id,
@@ -248,9 +248,9 @@ function setup2(poolConfig: { maxSize: number; useWeakRefs?: boolean }) {
     validateOnRegister: false,
     allowLateReferences: true,
   });
-  registry.registerModel('Task', BenchTaskModel, { loadStrategy: LoadStrategy.instant });
+  registry.registerModel('Item', BenchItemModel, { loadStrategy: LoadStrategy.instant });
   for (const field of FIELD_NAMES) {
-    registry.registerProperty('Task', field, { type: PropertyType.property, optional: true });
+    registry.registerProperty('Item', field, { type: PropertyType.property, optional: true });
   }
   setActiveRegistry(registry);
   const pool = new InstanceCache(poolConfig, registry);
@@ -346,7 +346,7 @@ describe('applyDeltaBatchToPool cost decomposition', () => {
     for (const frame of frames) {
       for (const delta of frame) {
         const model = pool.createFromData(
-          { ...(delta.data as Record<string, unknown>), __typename: 'Task' },
+          { ...(delta.data as Record<string, unknown>), __typename: 'Item' },
           undefined,
           { deferObservability: true },
         );

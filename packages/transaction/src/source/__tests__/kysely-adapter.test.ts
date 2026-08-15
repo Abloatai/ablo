@@ -34,7 +34,7 @@ import type { Row } from '../adapter.js';
 //   - legacyName      → display_label    (explicit `field.from()` override)
 //   - organizationId  → organization_id  (base tenancy column)
 const schema = defineSchema({
-  task: model({
+  item: model({
     title: field.string(),
     operatorId: field.string().optional(),
     legacyName: field.string().from('display_label').optional(),
@@ -189,7 +189,7 @@ describe('kyselyDataSource', () => {
       operations: [
         {
           type: 'CREATE',
-          model: 'task',
+          model: 'item',
           id: 't1',
           input: { title: 'A', operatorId: 'op1' },
           transactionId: 'op1',
@@ -202,7 +202,7 @@ describe('kyselyDataSource', () => {
     expect(db.txCount).toBe(1);
     expect(db.calls.map((c) => `${c.kind}:${c.table}`)).toEqual([
       'raw:INSERT INTO ablo_idempotency (client_tx_id, response, request_hash, expires_at)\n     VALUES ($1, $2::jsonb, $3, now() + $4::interval)\n     ON CONFLICT (client_tx_id) DO NOTHING\n     RETURNING client_tx_id',
-      'insert:task',
+      'insert:item',
       'insert:ablo_outbox',
       'raw:UPDATE ablo_idempotency\n        SET response = $2::jsonb\n      WHERE client_tx_id = $1',
     ]);
@@ -230,7 +230,7 @@ describe('kyselyDataSource', () => {
       intentHash: 'a'.repeat(64),
       echo: { kind: 'postgres-wal', payload: 'echo-payload' },
       operations: [
-        { type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } },
+        { type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } },
       ],
     });
 
@@ -242,6 +242,26 @@ describe('kyselyDataSource', () => {
     });
   });
 
+  it('keeps the marker operation id authoritative when CREATE input repeats id', async () => {
+    const db = new FakeKysely([[{ client_tx_id: 'corr_id' }], [{ id: 'trusted-id' }], [], []]);
+    const adapter = kyselyDataSource(db, schema);
+
+    await adapter.commit({
+      correlationId: 'corr_id',
+      operations: [
+        {
+          type: 'CREATE',
+          model: 'item',
+          id: 'trusted-id',
+          input: { id: 'different-input-id', title: 'A' },
+        },
+      ],
+    });
+
+    expect(db.calls.find((call) => call.kind === 'insert' && call.table === 'item')?.values)
+      .toMatchObject({ id: 'trusted-id', title: 'A' });
+  });
+
   it('writes SNAKE_CASE columns so it composes with `ablo migrate`-provisioned tables', async () => {
     const db = new FakeKysely([[{ client_tx_id: 'corr1' }], [{ id: 't1' }], [], []]);
     const adapter = kyselyDataSource(db, schema);
@@ -251,14 +271,14 @@ describe('kyselyDataSource', () => {
       operations: [
         {
           type: 'CREATE',
-          model: 'task',
+          model: 'item',
           id: 't1',
           input: { title: 'A', operatorId: 'op1', legacyName: 'L' },
         },
       ],
     });
 
-    const insert = db.calls.find((c) => c.kind === 'insert' && c.table === 'task');
+    const insert = db.calls.find((c) => c.kind === 'insert' && c.table === 'item');
     expect(insert?.values).toBeDefined();
     const cols = Object.keys(insert!.values!);
     // Default rule: operatorId → operator_id. Explicit override: legacyName → display_label.
@@ -274,10 +294,10 @@ describe('kyselyDataSource', () => {
 
     await adapter.commit({
       correlationId: 'corr2',
-      operations: [{ type: 'ARCHIVE', model: 'task', id: 't1', input: { operatorId: 'op2' } }],
+      operations: [{ type: 'ARCHIVE', model: 'item', id: 't1', input: { operatorId: 'op2' } }],
     });
 
-    const update = db.calls.find((c) => c.kind === 'update' && c.table === 'task');
+    const update = db.calls.find((c) => c.kind === 'update' && c.table === 'item');
     const cols = Object.keys(update?.set ?? {});
     expect(cols).toContain('operator_id');
     expect(cols).toContain('archived_at'); // lifecycle column, same casing as the provisioner
@@ -297,7 +317,7 @@ describe('kyselyDataSource', () => {
           operations: [
             {
               type,
-              model: 'task',
+              model: 'item',
               id: 'missing',
               ...(type === 'UPDATE' ? { input: { title: 'never written' } } : {}),
             },
@@ -327,7 +347,7 @@ describe('kyselyDataSource', () => {
     const result = await adapter.commit({
       correlationId: 'corr1',
       intentHash: 'b'.repeat(64),
-      operations: [{ type: 'CREATE', model: 'task', id: 't1', input: { title: 'A' } }],
+      operations: [{ type: 'CREATE', model: 'item', id: 't1', input: { title: 'A' } }],
     });
 
     expect(result.rows).toEqual(cachedRows);
@@ -348,7 +368,7 @@ describe('kyselyDataSource', () => {
         operations: [
           {
             type: 'UPDATE',
-            model: 'task',
+            model: 'item',
             id: 't1',
             input: { title: 'changed' },
           },
@@ -362,7 +382,7 @@ describe('kyselyDataSource', () => {
     const db = new FakeKysely([[{ id: 't1', title: 'A', display_label: 'L' }]]);
     const adapter = kyselyDataSource(db, schema);
 
-    const rows = await adapter.read({ kind: 'load', model: 'task', id: 't1' });
+    const rows = await adapter.read({ kind: 'load', model: 'item', id: 't1' });
     expect(rows).toEqual([{ id: 't1', title: 'A', legacyName: 'L' }]);
     const call = db.calls[0];
     if (!call) throw new Error('expected a recorded select call');
@@ -376,7 +396,7 @@ describe('kyselyDataSource', () => {
         {
           cursor: '7',
           id: 'tx1:0',
-          model: 'task',
+          model: 'item',
           entity_id: 't1',
           type: 'CREATE',
           data: JSON.stringify({ id: 't1', title: 'A' }),
@@ -407,7 +427,7 @@ describe('kyselyDataSource', () => {
     const core = createKyselyMutationCore(db, schema);
 
     await expect(
-      core.read({ kind: 'load', model: 'task', id: 't1' }),
+      core.read({ kind: 'load', model: 'item', id: 't1' }),
     ).resolves.toEqual([{ id: 't1', operatorId: 'op1', legacyName: 'L' }]);
   });
 
@@ -429,7 +449,7 @@ describe('kyselyDataSource', () => {
     await expect(
       direct.commit({
         correlationId: 'corr_missing_marker',
-        operations: [{ type: 'CREATE', model: 'task', id: 'missing', input: {} }],
+        operations: [{ type: 'CREATE', model: 'item', id: 'missing', input: {} }],
       }),
     ).rejects.toMatchObject({ code: 'source_adapter_misconfigured' });
 
@@ -443,7 +463,7 @@ describe('kyselyDataSource', () => {
           correlationId: 'corr_direct',
           operations: [
             {
-              model: 'task',
+              model: 'item',
               id: 't1',
               action: 'I',
               transactionId: 'op_direct',
@@ -454,7 +474,7 @@ describe('kyselyDataSource', () => {
       operations: [
         {
           type: 'CREATE',
-          model: 'task',
+          model: 'item',
           id: 't1',
           input: { operatorId: 'op1' },
           transactionId: 'op_direct',
@@ -558,5 +578,166 @@ describe('kyselyDataSource', () => {
         ],
       }),
     ).rejects.toMatchObject({ code: 'source_adapter_misconfigured' });
+  });
+
+  it('resolves a database-generated id from the returned row before emitting the marker', async () => {
+    const eventSchema = defineSchema({
+      recordEvents: model(
+        { recordId: field.string() },
+        {
+          typename: 'RecordEvent',
+          tableName: 'record_events',
+        },
+      ),
+    });
+    const db = new FakeKysely([
+      [{ client_tx_id: 'corr_generated' }],
+      [{ id: 42n, record_id: 'record-1' }],
+      [],
+      [],
+    ]);
+    const direct = kyselyDirectMutation(db, eventSchema);
+
+    const result = await direct.commit({
+      correlationId: 'corr_generated',
+      intentHash: 'f'.repeat(64),
+      echo: {
+        kind: 'postgres-wal',
+        payload: JSON.stringify({
+          version: 1,
+          correlationId: 'corr_generated',
+          operations: [
+            {
+              model: 'RecordEvent',
+              action: 'I',
+              transactionId: 'record-event',
+            },
+          ],
+        }),
+      },
+      operations: [
+        {
+          type: 'CREATE',
+          model: 'recordevents',
+          input: { id: '999', recordId: 'record-1' },
+          transactionId: 'record-event',
+        },
+      ],
+    });
+
+    expect(result.rows).toEqual([{ id: '42', recordId: 'record-1' }]);
+    const insert = db.calls.find((call) => call.table === 'record_events');
+    expect(insert?.values).toEqual({ record_id: 'record-1' });
+    const markerCall = db.calls.at(-1);
+    const markerPayload = markerCall?.values?.parameters;
+    expect(markerPayload).toEqual([
+      'ablo',
+      expect.stringContaining('"id":"42"'),
+    ]);
+  });
+
+  it('rejects an atomic commit when a database condition does not match', async () => {
+    const db = new FakeKysely([
+      [{ client_tx_id: 'corr_condition' }],
+      [],
+    ]);
+    const adapter = kyselyDataSource(db, schema);
+
+    await expect(
+      adapter.commit({
+        correlationId: 'corr_condition',
+        operations: [
+          {
+            type: 'UPDATE',
+            model: 'item',
+            id: 't1',
+            input: { title: 'Next' },
+            where: { legacyName: 'Current' },
+            transactionId: 'item-transition',
+          },
+          {
+            type: 'CREATE',
+            model: 'item',
+            id: 'event-1',
+            input: { title: 'must not run' },
+            transactionId: 'item-event',
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'precondition_failed' });
+
+    const update = db.calls.find((call) => call.kind === 'update');
+    expect(update?.wheres).toEqual([
+      ['id', '=', 't1'],
+      ['display_label', '=', 'Current'],
+    ]);
+    expect(db.calls.some((call) => call.table === 'ablo_outbox')).toBe(false);
+    expect(db.calls.some((call) => call.values?.title === 'must not run')).toBe(false);
+  });
+
+  it('preserves the QM transition and event contract in one database transaction', async () => {
+    const qmSchema = defineSchema({
+      tasks: model(
+        {
+          status: field.string(),
+          createdAt: field.number().from('created_at'),
+          updatedAt: field.number().from('updated_at'),
+        },
+        { tableName: 'tasks' },
+      ),
+      taskEvents: model(
+        {
+          taskId: field.string().from('task_id'),
+          type: field.string(),
+          createdAt: field.number().from('created_at'),
+        },
+        { tableName: 'task_events' },
+      ),
+    });
+    const at = new Date('2026-08-14T12:34:56.789Z');
+    const epoch = at.getTime();
+    const db = new FakeKysely([
+      [{ client_tx_id: 'qm-transition' }],
+      [{ id: 'task-1', status: 'running', created_at: epoch, updated_at: epoch }],
+      [],
+      [{ id: '42', task_id: 'task-1', type: 'status_changed', created_at: epoch }],
+      [],
+      [],
+    ]);
+    const adapter = kyselyDataSource(db, qmSchema);
+
+    const result = await adapter.commit({
+      correlationId: 'qm-transition',
+      operations: [
+        {
+          type: 'UPDATE',
+          model: 'tasks',
+          id: 'task-1',
+          input: { status: 'running', updatedAt: epoch },
+          where: { status: 'pending' },
+          transactionId: 'task-transition',
+        },
+        {
+          type: 'CREATE',
+          model: 'taskevents',
+          input: { taskId: 'task-1', type: 'status_changed', createdAt: epoch },
+          transactionId: 'status-event',
+        },
+      ],
+    });
+
+    expect(db.txCount).toBe(1);
+    expect(result.rows).toEqual([
+      { id: 'task-1', status: 'running', createdAt: epoch, updatedAt: epoch },
+      { id: '42', taskId: 'task-1', type: 'status_changed', createdAt: epoch },
+    ]);
+    expect(db.calls.find((call) => call.kind === 'update')).toMatchObject({
+      table: 'tasks',
+      set: { status: 'running', updated_at: epoch },
+      wheres: [['id', '=', 'task-1'], ['status', '=', 'pending']],
+    });
+    expect(db.calls.find((call) => call.kind === 'insert' && call.table === 'task_events')?.values)
+      .toEqual({ task_id: 'task-1', type: 'status_changed', created_at: epoch });
+    expect(db.calls.filter((call) => call.table === 'ablo_outbox')).toHaveLength(2);
   });
 });

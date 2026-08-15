@@ -76,8 +76,8 @@ export type NonEmptyCapabilityOperations = readonly [
 /**
  * `can`, narrowed to one schema's model names. A projection of
  * {@link capabilityCanSchema} — the value type is the operation enum, the key
- * domain is the schema's models, so `can: { tasks: ['update'] }` fails to
- * compile against a schema with no `tasks` model.
+ * domain is the schema's models, so `can: { items: ['update'] }` fails to
+ * compile against a schema with no `items` model.
  */
 export type CapabilityCan<S> = {
   [K in keyof S & string]: Readonly<Record<K, NonEmptyCapabilityOperations>> &
@@ -320,7 +320,7 @@ export const capabilityRequestSchema = z.object({
    * time, so it is rejected loudly at the boundary.
    */
   syncGroups: z.array(syncGroupInputSchema).readonly().optional(),
-  /** The VERB axis, as `model.verb` — e.g. `tasks.update`. */
+  /** The VERB axis, as `model.verb` — e.g. `items.update`. */
   operations: z.array(grantedOperationSchema).readonly().optional(),
   ttlSeconds: z.number().int().positive(),
   label: z.string().min(1).optional(),

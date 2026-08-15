@@ -8,7 +8,7 @@
  * import { defineSchema, model, relation } from '@abloatai/transaction/schema';
  *
  * export const schema = defineSchema({
- *   tasks: model({
+ *   items: model({
  *     title: z.string(),
  *     status: z.enum(['todo', 'doing', 'done']).default('todo'),
  *     projectId: z.string().optional(),
@@ -17,7 +17,7 @@
  *   }),
  * });
  *
- * type Task = Model<typeof schema, 'tasks'>;
+ * type Item = Model<typeof schema, 'items'>;
  * ```
  */
 
@@ -27,7 +27,7 @@ export { z } from 'zod';
 // Field helpers (optional convenience wrappers around Zod)
 export { field, indexed, getFieldMeta, type FieldBuilder, type FieldMeta } from './field.js';
 
-// A field as a value rather than a quoted name — `schema.fields.tasks.status`.
+// A field as a value rather than a quoted name — `schema.fields.items.status`.
 // Surfaces that name a field (claims today) take one of these so a name that
 // does not exist stops compiling.
 export {

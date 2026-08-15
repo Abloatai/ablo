@@ -100,10 +100,10 @@ export function createTestHarness(options: TestHarnessOptions = {}): TestHarness
   );
 
   // Register foreign-key indexes for the test models
-  pool.registerForeignKey('Task', 'projectId');
-  pool.registerForeignKey('Comment', 'taskId');
-  pool.registerForeignKey('Slide', 'deckId');
-  pool.registerForeignKey('SlideLayer', 'slideId');
+  pool.registerForeignKey('Item', 'workspaceId');
+  pool.registerForeignKey('Comment', 'itemId');
+  pool.registerForeignKey('Entry', 'collectionId');
+  pool.registerForeignKey('EntryDetail', 'entryId');
 
   // Create mock WebSocket
   const webSocket = new MockWebSocket();

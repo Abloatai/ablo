@@ -17,9 +17,9 @@
  * over a socket, and it joins the seam when its core carrier type exists —
  * see docs/plans/transaction-core-language.md, Tier 3.
  *
- * This is the contract, not a runtime: nothing in this package implements it
- * yet. The first explicit implementation (a headless client, a test harness)
- * gains a compile-time conformance pin against this interface.
+ * This is the contract, not a runtime. The headless HTTP client implements it
+ * as a proxy to the hosted authority; other compositions gain the same
+ * compile-time conformance pin against this interface.
  */
 
 import type { CommitMessage } from './wire/frames.js';

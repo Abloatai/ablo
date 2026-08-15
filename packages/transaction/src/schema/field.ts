@@ -9,7 +9,7 @@
  * Usage:
  *   import { field } from '@abloatai/transaction/schema';
  *
- *   const tasks = model({
+ *   const items = model({
  *     title: field.string(),
  *     projectId: field.string().indexed(),     // fluent chain
  *     priority: field.number().optional(),
@@ -19,7 +19,7 @@
  * Or use Zod directly (no metadata, but still works):
  *   import { z } from 'zod';
  *
- *   const tasks = model({
+ *   const items = model({
  *     title: z.string(),
  *   });
  */
@@ -199,7 +199,7 @@ export function resolveFieldMeta(schema: z.ZodType): FieldMeta {
 
 /** A Zod schema returned by a {@link field} builder — the underlying Zod type plus
  *  two chainable methods: `indexed()` marks the field for a database index, and
- *  `from(column)` overrides the physical column name it maps to. */
+ *  `from(column)` overrides the database column name it maps to. */
 export type FieldBuilder<T extends z.ZodType> = T & {
   indexed(): FieldBuilder<T>;
   from(column: string): FieldBuilder<T>;

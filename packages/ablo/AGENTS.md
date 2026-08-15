@@ -90,7 +90,7 @@ Claims live on a callable namespace beside `create` / `update` / `get`. Every me
 Keep admission behavior together for anything beyond the default wait:
 
 ```ts
-const claim = await ablo.tasks.claim({
+const claim = await ablo.records.claim({
   id,
   contention: {
     mode: 'skip', // use 'wait' with maxDepth / timeoutMs when waiting is useful

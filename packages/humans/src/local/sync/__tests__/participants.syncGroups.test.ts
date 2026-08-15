@@ -7,7 +7,7 @@
  * make the minted string a wire contract:
  *
  *   1. it must pass the server grammar (a camelCase schema key like
- *      `slideLayers` is rejected as malformed — the whole subscription
+ *      `entryDetails` is rejected as malformed — the whole subscription
  *      update is refused atomically), and
  *   2. every resolution path (schema-key scope object, entity ref) must
  *      produce the IDENTICAL string for the same row, or two peers pin
@@ -28,33 +28,33 @@ import {
 } from '../participants.js';
 
 const schema = defineSchema({
-  slideLayers: model(
-    { slideId: z.string(), type: z.string() },
-    { typename: 'SlideLayer', tableName: 'slide_layers' }),
-  slideDecks: model(
+  entryDetails: model(
+    { entryId: z.string(), type: z.string() },
+    { typename: 'EntryDetail', tableName: 'entry_details' }),
+  collections: model(
     { title: z.string() },
     {
-      typename: 'SlideDeck',
-      tableName: 'slide_decks',
-      groups: { root: 'deck' },
+      typename: 'Collection',
+      tableName: 'collections',
+      groups: { root: 'collection' },
     }),
 });
 
 describe('entity-scope sync-group minting', () => {
   it('mints the lowercased typename for a camelCase schema key, never the key itself', () => {
-    const groups = resolveParticipantSyncGroups({ slideLayers: 'layer-1' }, schema);
-    expect(groups).toEqual(['slidelayer:layer-1']);
+    const groups = resolveParticipantSyncGroups({ entryDetails: 'layer-1' }, schema);
+    expect(groups).toEqual(['entrydetail:layer-1']);
   });
 
   it('prefers a declared scope root over the typename', () => {
-    const groups = resolveParticipantSyncGroups({ slideDecks: 'deck-1' }, schema);
-    expect(groups).toEqual(['deck:deck-1']);
+    const groups = resolveParticipantSyncGroups({ collections: 'collection-1' }, schema);
+    expect(groups).toEqual(['collection:collection-1']);
   });
 
   it('resolves the entity-ref form to the same string as the schema-key form', () => {
-    const fromKey = resolveParticipantSyncGroups({ slideLayers: 'layer-1' }, schema);
-    const fromTypename = syncGroupFromEntityRef({ type: 'SlideLayer', id: 'layer-1' }, schema);
-    const fromKeyAsType = syncGroupFromEntityRef({ type: 'slideLayers', id: 'layer-1' }, schema);
+    const fromKey = resolveParticipantSyncGroups({ entryDetails: 'layer-1' }, schema);
+    const fromTypename = syncGroupFromEntityRef({ type: 'EntryDetail', id: 'layer-1' }, schema);
+    const fromKeyAsType = syncGroupFromEntityRef({ type: 'entryDetails', id: 'layer-1' }, schema);
     expect(fromTypename).toBe(fromKey[0]);
     expect(fromKeyAsType).toBe(fromKey[0]);
   });
@@ -66,10 +66,10 @@ describe('entity-scope sync-group minting', () => {
 
   it('every minted group passes the server-side group grammar', () => {
     const minted = [
-      ...resolveParticipantSyncGroups({ slideLayers: 'layer-1' }, schema),
-      ...resolveParticipantSyncGroups({ slideDecks: 'deck-1' }, schema),
+      ...resolveParticipantSyncGroups({ entryDetails: 'layer-1' }, schema),
+      ...resolveParticipantSyncGroups({ collections: 'collection-1' }, schema),
       ...resolveParticipantSyncGroups({ customThing: 'x-1' }, schema),
-      syncGroupFromEntityRef({ type: 'SlideLayer', id: 'layer-1' }, schema),
+      syncGroupFromEntityRef({ type: 'EntryDetail', id: 'layer-1' }, schema),
       syncGroupFromEntityRef({ type: 'unregistered', id: 'u-1' }, schema),
     ];
     for (const group of minted) {

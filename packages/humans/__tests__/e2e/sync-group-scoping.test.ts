@@ -15,7 +15,7 @@ import WebSocket from 'ws';
 import { v4 as uuid } from 'uuid';
 import { InstanceCache as ObjectPool, ModelScope } from '../../src/local/InstanceCache';
 import { ModelRegistry } from '../../src/local/ModelRegistry';
-import { registerTestModels, TestTask, resetFixtureCounter } from '../../src/local/testing';
+import { registerTestModels, TestItem, resetFixtureCounter } from '../../src/local/testing';
 import { initRuntime, resetRuntime } from '../../src/local/context.js';
 import { noopLogger, noopObservability, defaultSessionErrorDetector, emptyConfig } from '../../src/local/RuntimeContext.js';
 
@@ -89,7 +89,7 @@ describeE2E('E2E: Sync Group Scoping & Security', () => {
         ws.on('message', (data: Buffer) => {
           try {
             const msg = JSON.parse(data.toString());
-            if (msg.type === 'delta' && msg.payload?.modelName === 'Task') {
+            if (msg.type === 'delta' && msg.payload?.modelName === 'Item') {
               clearTimeout(timeout);
               resolve(msg.payload);
             }
@@ -97,18 +97,18 @@ describeE2E('E2E: Sync Group Scoping & Security', () => {
         });
       });
 
-      // Create a task — should produce a delta on the WS
-      const taskId = uuid();
+      // Create a item — should produce a delta on the WS
+      const itemId = uuid();
       await batchAck(USER_ID, ORG_ID, [{
         type: 'CREATE',
-        model: 'task',
-        id: taskId,
+        model: 'item',
+        id: itemId,
         input: { title: 'Scoping Test', status: 'todo', organizationId: ORG_ID, createdBy: USER_ID },
       }]);
 
       const delta = await deltaReceived;
       expect(delta.actionType).toBe('I');
-      expect(delta.modelName).toBe('Task');
+      expect(delta.modelName).toBe('Item');
 
       ws.close();
     }, 15000);
@@ -177,9 +177,9 @@ describeE2E('E2E: Sync Group Scoping & Security', () => {
       const pool = new ObjectPool({ maxSize: 100, gcInterval: 0, useWeakRefs: false }, registry);
 
       // Simulate cached sensitive data
-      pool.add(new TestTask({ id: 'confidential-1', title: 'Revenue forecast' }));
-      pool.add(new TestTask({ id: 'confidential-2', title: 'M&A target' }));
-      pool.add(new TestTask({ id: 'confidential-3', title: 'Layoff plan' }));
+      pool.add(new TestItem({ id: 'confidential-1', title: 'Revenue forecast' }));
+      pool.add(new TestItem({ id: 'confidential-2', title: 'M&A target' }));
+      pool.add(new TestItem({ id: 'confidential-3', title: 'Layoff plan' }));
       expect(pool.size).toBe(3);
 
       // Simulate session revocation cleanup (as BaseSyncedStore now does)
@@ -189,7 +189,7 @@ describeE2E('E2E: Sync Group Scoping & Security', () => {
       expect(pool.get('confidential-1')).toBeUndefined();
       expect(pool.get('confidential-2')).toBeUndefined();
       expect(pool.get('confidential-3')).toBeUndefined();
-      expect(pool.getByType(TestTask)).toHaveLength(0);
+      expect(pool.getByType(TestItem)).toHaveLength(0);
 
       resetRuntime();
     });
@@ -214,15 +214,15 @@ describeE2E('E2E: Sync Group Scoping & Security', () => {
       });
 
       const pool = new ObjectPool({ maxSize: 100, gcInterval: 0, useWeakRefs: false }, registry);
-      pool.registerForeignKey('Task', 'projectId');
+      pool.registerForeignKey('Item', 'workspaceId');
 
-      pool.add(new TestTask({ id: 'task-secret', title: 'Secret', projectId: 'proj-1' }));
-      expect(pool.getByForeignKey('Task', 'projectId', 'proj-1')).toHaveLength(1);
+      pool.add(new TestItem({ id: 'item-secret', title: 'Secret', workspaceId: 'proj-1' }));
+      expect(pool.getByForeignKey('Item', 'workspaceId', 'proj-1')).toHaveLength(1);
 
       pool.clear();
 
       // FK index must also be empty
-      expect(pool.getByForeignKey('Task', 'projectId', 'proj-1')).toHaveLength(0);
+      expect(pool.getByForeignKey('Item', 'workspaceId', 'proj-1')).toHaveLength(0);
 
       resetRuntime();
     });

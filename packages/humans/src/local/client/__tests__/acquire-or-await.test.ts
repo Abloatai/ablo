@@ -26,11 +26,11 @@ import type { OnDemandLoader } from '../../sync/OnDemandLoader.js';
 import type { Claim, Snapshot } from '@abloatai/transaction/types/streams';
 import { AbloClaimedError } from '@abloatai/transaction/errors';
 
-interface TaskRow { id: string; title: string }
+interface ItemRow { id: string; title: string }
 
-const TaskModel = class extends Model {
+const ItemModel = class extends Model {
   override getModelName(): string {
-    return 'Task';
+    return 'Item';
   }
 };
 
@@ -39,21 +39,21 @@ function makeProxy(collaboration: ModelCollaboration, seedId?: string) {
     validateOnRegister: false,
     allowLateReferences: true,
   });
-  registry.registerModel('Task', TaskModel, {
+  registry.registerModel('Item', ItemModel, {
     loadStrategy: LoadStrategy.instant,
   });
   const pool = new InstanceCache({ maxSize: 100 }, registry);
   if (seedId) {
     pool.add(
-      Object.assign(new TaskModel({ id: seedId }), { title: 'seed' }),
+      Object.assign(new ItemModel({ id: seedId }), { title: 'seed' }),
       ModelScope.live,
     );
   }
   const fetchSpy = jest.fn(async () => []);
   const hydration: Pick<OnDemandLoader, 'fetch'> = { fetch: fetchSpy };
-  const proxy = createModelProxy<TaskRow, Omit<TaskRow, 'id'>>(
-    'tasks',
-    'Task',
+  const proxy = createModelProxy<ItemRow, Omit<ItemRow, 'id'>>(
+    'items',
+    'Item',
     pool,
     {} as SyncClient,
     registry,
@@ -72,7 +72,7 @@ function fakeCollaboration(
       object: 'claim' as const,
       id: 'lease-1',
       description: 'editing',
-      target: { type: 'tasks', id: 't1' },
+      target: { type: 'items', id: 't1' },
       release: jest.fn(async () => undefined),
       revoke: jest.fn(),
       [Symbol.asyncDispose]: async () => undefined,
@@ -99,7 +99,7 @@ function queuedClaim(id: string, heldBy: string, position: number): Claim {
     id,
     status: 'queued',
     position,
-    target: { type: 'tasks', id: 't1' },
+    target: { type: 'items', id: 't1' },
     description: 'editing',
     heldBy,
     participantKind: 'agent',
@@ -112,7 +112,7 @@ function activeClaim(heldBy: string): Claim {
     object: 'claim',
     id: 'i1',
     status: 'active',
-    target: { type: 'tasks', id: 't1' },
+    target: { type: 'items', id: 't1' },
     description: 'editing',
     heldBy,
     participantKind: 'agent',
@@ -199,7 +199,7 @@ describe('ModelOperations.reorder', () => {
     // Coordination targets speak the WIRE dialect (lowercased typename),
     // matching the commit plane — the schema key never reaches the lease
     // store (see the claims-journey dialect fix, 2026-06-10).
-    expect(reorder).toHaveBeenCalledWith({ model: 'task', id: 't1' }, order);
+    expect(reorder).toHaveBeenCalledWith({ model: 'item', id: 't1' }, order);
   });
 });
 
@@ -274,7 +274,7 @@ describe('ModelOperations.claim — the try-claim (queue: false)', () => {
  * A row claimed in parts has several holders at once, and `claim.state`
  * answers with one of them. A UI that draws a rail per claimed block reads
  * this instead; the two must never describe the same holding differently,
- * which is why both project through one function.
+ * which is why both workspace through one function.
  */
 describe('claim.list', () => {
   const holder = (id: string, field: string, actor: string): Claim =>
@@ -282,7 +282,7 @@ describe('claim.list', () => {
       object: 'claim',
       id,
       status: 'active',
-      target: { type: 'tasks', id: 't1', field },
+      target: { type: 'items', id: 't1', field },
       description: `working on ${field}`,
       heldBy: actor,
       participantKind: 'agent',

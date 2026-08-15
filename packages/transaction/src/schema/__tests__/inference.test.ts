@@ -9,13 +9,13 @@ import type { Model, InferCreate } from '../index.js';
 // ── Define a test schema ──────────────────────────────────────────────────
 
 const schema = defineSchema({
-  tasks: model(
+  items: model(
     {
       title: z.string(),
       description: z.string().optional(),
       status: z.enum(['todo', 'in_progress', 'done']).default('todo'),
       priority: z.number().default(0),
-      projectId: z.string().optional(),
+      workspaceId: z.string().optional(),
       assigneeId: z.string().optional(),
       dueDate: z.date().optional(),
       isBlocked: z.boolean().default(false),
@@ -23,13 +23,13 @@ const schema = defineSchema({
     },
     {
       relations: {
-        project: relation.belongsTo('projects', 'projectId'),
-        comments: relation.hasMany('comments', 'taskId'),
+        workspace: relation.belongsTo('workspaces', 'workspaceId'),
+        comments: relation.hasMany('comments', 'itemId'),
       },
     }
   ),
 
-  projects: model(
+  workspaces: model(
     {
       name: z.string(),
       description: z.string().optional(),
@@ -37,14 +37,14 @@ const schema = defineSchema({
     },
     {
       relations: {
-        tasks: relation.hasMany('tasks', 'projectId'),
+        items: relation.hasMany('items', 'workspaceId'),
       },
     }
   ),
 
   comments: model({
     content: z.string(),
-    taskId: z.string(),
+    itemId: z.string(),
     authorId: z.string(),
   }),
 
@@ -56,11 +56,11 @@ const schema = defineSchema({
 
 // ── Type inference tests (compile-time) ───────────────────────────────────
 
-type Task = Model<typeof schema, 'tasks'>;
-type Project = Model<typeof schema, 'projects'>;
+type Item = Model<typeof schema, 'items'>;
+type Workspace = Model<typeof schema, 'workspaces'>;
 type Comment = Model<typeof schema, 'comments'>;
 
-type CreateTask = InferCreate<typeof schema, 'tasks'>;
+type CreateItem = InferCreate<typeof schema, 'items'>;
 
 // Compile-time assertion helper
 type Expect<T extends true> = T;
@@ -68,51 +68,51 @@ type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ?
   ? true
   : false;
 
-// Task has base fields
-type _TaskHasId = Expect<Equal<Task['id'], string>>;
-type _TaskHasCreatedAt = Expect<Equal<Task['createdAt'], Date>>;
+// Logical identity is the only universal model field.
+type _ItemHasId = Expect<Equal<Item['id'], string>>;
+type _ItemHasNoCreatedAt = Expect<Equal<'createdAt' extends keyof Item ? true : false, false>>;
 
-// Task has typed fields
-type _TaskHasTitle = Expect<Equal<Task['title'], string>>;
-type _TaskHasStatus = Expect<Equal<Task['status'], 'todo' | 'in_progress' | 'done'>>;
-type _TaskHasPriority = Expect<Equal<Task['priority'], number>>;
-type _TaskHasBlocked = Expect<Equal<Task['isBlocked'], boolean>>;
+// Item has typed fields
+type _ItemHasTitle = Expect<Equal<Item['title'], string>>;
+type _ItemHasStatus = Expect<Equal<Item['status'], 'todo' | 'in_progress' | 'done'>>;
+type _ItemHasPriority = Expect<Equal<Item['priority'], number>>;
+type _ItemHasBlocked = Expect<Equal<Item['isBlocked'], boolean>>;
 
 // Optional fields
-type _TaskDescOptional = Expect<Equal<Task['description'], string | undefined>>;
-type _TaskProjectIdOptional = Expect<Equal<Task['projectId'], string | undefined>>;
-type _TaskDueDateOptional = Expect<Equal<Task['dueDate'], Date | undefined>>;
+type _ItemDescOptional = Expect<Equal<Item['description'], string | undefined>>;
+type _ItemWorkspaceIdOptional = Expect<Equal<Item['workspaceId'], string | undefined>>;
+type _ItemDueDateOptional = Expect<Equal<Item['dueDate'], Date | undefined>>;
 
 // JSON field preserves type
-type _TaskMetadata = Expect<
-  Equal<Task['metadata'], { tags: string[]; source?: string } | undefined>
+type _ItemMetadata = Expect<
+  Equal<Item['metadata'], { tags: string[]; source?: string } | undefined>
 >;
 
 // Create input — fields with defaults are optional
-type _CreateTaskTitleRequired = Expect<Equal<CreateTask['title'], string>>;
+type _CreateItemTitleRequired = Expect<Equal<CreateItem['title'], string>>;
 
 // ── Runtime tests ─────────────────────────────────────────────────────────
 
 describe('Zod Schema DSL', () => {
   it('defineSchema returns schema with models', () => {
     expect(schema.models).toBeDefined();
-    expect(schema.models.tasks).toBeDefined();
-    expect(schema.models.projects).toBeDefined();
+    expect(schema.models.items).toBeDefined();
+    expect(schema.models.workspaces).toBeDefined();
     expect(schema.models.comments).toBeDefined();
     expect(schema.models.users).toBeDefined();
   });
 
   it('model has Zod schema that validates', () => {
-    const taskSchema = schema.models.tasks.schema;
+    const itemSchema = schema.models.items.schema;
 
-    const valid = taskSchema.safeParse({
-      title: 'Test task',
+    const valid = itemSchema.safeParse({
+      title: 'Test item',
       status: 'todo',
       priority: 1,
     });
     expect(valid.success).toBe(true);
 
-    const invalid = taskSchema.safeParse({
+    const invalid = itemSchema.safeParse({
       // missing required 'title'
       status: 'todo',
     });
@@ -120,32 +120,32 @@ describe('Zod Schema DSL', () => {
   });
 
   it('defaults are applied by Zod', () => {
-    const taskSchema = schema.models.tasks.schema;
+    const itemSchema = schema.models.items.schema;
 
-    const result = taskSchema.parse({ title: 'Test' });
+    const result = itemSchema.parse({ title: 'Test' });
     expect(result.status).toBe('todo');
     expect(result.priority).toBe(0);
     expect(result.isBlocked).toBe(false);
   });
 
   it('optional fields accept undefined', () => {
-    const taskSchema = schema.models.tasks.schema;
+    const itemSchema = schema.models.items.schema;
 
-    const result = taskSchema.parse({ title: 'Test' });
+    const result = itemSchema.parse({ title: 'Test' });
     expect(result.description).toBeUndefined();
-    expect(result.projectId).toBeUndefined();
+    expect(result.workspaceId).toBeUndefined();
     expect(result.dueDate).toBeUndefined();
   });
 
   it('enum fields reject invalid values', () => {
-    const taskSchema = schema.models.tasks.schema;
+    const itemSchema = schema.models.items.schema;
 
-    const result = taskSchema.safeParse({ title: 'Test', status: 'invalid' });
+    const result = itemSchema.safeParse({ title: 'Test', status: 'invalid' });
     expect(result.success).toBe(false);
   });
 
-  it('validators include base fields', () => {
-    const fullValidator = schema.validators.tasks;
+  it('validators add logical identity without inventing audit fields', () => {
+    const fullValidator = schema.validators.items;
 
     const result = fullValidator.safeParse({
       id: '123',
@@ -154,17 +154,20 @@ describe('Zod Schema DSL', () => {
       title: 'Test',
     });
     expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({ id: '123', title: 'Test', status: 'todo', priority: 0, isBlocked: false });
+    }
   });
 
   it('relations have correct metadata', () => {
-    const taskRelations = schema.models.tasks.relations;
-    expect(taskRelations.project.type).toBe('belongsTo');
-    expect(taskRelations.project.target).toBe('projects');
-    expect(taskRelations.project.foreignKey).toBe('projectId');
+    const itemRelations = schema.models.items.relations;
+    expect(itemRelations.workspace.type).toBe('belongsTo');
+    expect(itemRelations.workspace.target).toBe('workspaces');
+    expect(itemRelations.workspace.foreignKey).toBe('workspaceId');
 
-    expect(taskRelations.comments.type).toBe('hasMany');
-    expect(taskRelations.comments.target).toBe('comments');
-    expect(taskRelations.comments.foreignKey).toBe('taskId');
+    expect(itemRelations.comments.type).toBe('hasMany');
+    expect(itemRelations.comments.target).toBe('comments');
+    expect(itemRelations.comments.foreignKey).toBe('itemId');
   });
 
   it('foreignKeyColumn defaults to foreignKey when no casing is set', () => {
@@ -172,9 +175,9 @@ describe('Zod Schema DSL', () => {
     // columns already match their JS field names (or who handle naming
     // themselves). Client InstanceCache + server SQL compiler can both read
     // `foreignKeyColumn` safely either way.
-    const taskRelations = schema.models.tasks.relations;
-    expect(taskRelations.project.foreignKeyColumn).toBe('projectId');
-    expect(taskRelations.comments.foreignKeyColumn).toBe('taskId');
+    const itemRelations = schema.models.items.relations;
+    expect(itemRelations.workspace.foreignKeyColumn).toBe('workspaceId');
+    expect(itemRelations.comments.foreignKeyColumn).toBe('itemId');
   });
 
   it('casing: "snake_case" derives foreignKeyColumn from camelCase foreignKey', () => {
@@ -206,16 +209,16 @@ describe('Zod Schema DSL', () => {
 
   it('casing as a function lets consumers plug their own convention', () => {
     const upperSchema = defineSchema({
-      tasks: model(
-        { projectId: z.string() },
+      items: model(
+        { workspaceId: z.string() },
         {
-          relations: { project: relation.belongsTo('projects', 'projectId') },
+          relations: { workspace: relation.belongsTo('workspaces', 'workspaceId') },
         }
       ),
-      projects: model({ name: z.string() }),
+      workspaces: model({ name: z.string() }),
     }, { casing: (key) => key.toUpperCase() });
 
-    expect(upperSchema.models.tasks.relations.project.foreignKeyColumn).toBe('PROJECTID');
+    expect(upperSchema.models.items.relations.workspace.foreignKeyColumn).toBe('WORKSPACEID');
   });
 
   it('field helpers produce valid Zod schemas', () => {
@@ -266,9 +269,9 @@ type _ChatIcon = Expect<Equal<ChatRow['icon'], string>>;
 type _ChatHasAgent = Expect<Equal<ChatRow['hasAgent'], boolean>>;
 type _ChatMetadataObject = Expect<Equal<ChatRow['metadataObject'], Record<string, unknown>>>;
 
-// Compile-time: base fields present
+// Compile-time: only logical identity is universal.
 type _ChatId = Expect<Equal<ChatRow['id'], string>>;
-type _ChatCreatedAt = Expect<Equal<ChatRow['createdAt'], Date>>;
+type _ChatHasNoCreatedAt = Expect<Equal<'createdAt' extends keyof ChatRow ? true : false, false>>;
 
 describe('Computed getter inference', () => {
   it('computed getters are present in the Model type', () => {

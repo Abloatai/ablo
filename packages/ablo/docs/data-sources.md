@@ -149,8 +149,8 @@ own schema:
 ABLO_API_KEY="$MAIL_KEY" DATABASE_URL="$PRODUCTION_URL" \
   npx ablo connect apply --schema mail --yes
 
-ABLO_API_KEY="$SLIDES_KEY" DATABASE_URL="$PRODUCTION_URL" \
-  npx ablo connect apply --schema slides --yes
+ABLO_API_KEY="$ENTRIES_KEY" DATABASE_URL="$PRODUCTION_URL" \
+  npx ablo connect apply --schema entries --yes
 ```
 
 For a Neon or Supabase preview branch, use that branch's direct URL and keep the
@@ -380,7 +380,7 @@ export const ablo = Ablo({
 The API key still selects the project and branch; during `ready()` Ablo asks the
 server what the key actually targets and refuses startup when either coordinate
 differs. `ablo dev` writes all three values together, so accidentally exporting
-a slides key into the mail app—or a mail development key into production—fails
+a entries key into the mail app—or a mail development key into production—fails
 before any read, write, or subscription begins.
 
 The Ablo schema describes **only your synced, collaborative models** — the rows

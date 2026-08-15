@@ -4,15 +4,15 @@
  * {@link relation} factories; the engine reads them to index foreign keys for
  * fast child lookups, to order inserts so a parent row lands before the rows
  * that reference it, and to generate the accessor properties that let you read
- * `task.project` or `project.tasks` directly.
+ * `item.project` or `project.items` directly.
  *
  * Usage:
  *   import { relation } from '@abloatai/transaction/schema';
  *
- *   const taskRelations = {
+ *   const itemRelations = {
  *     project: relation.belongsTo('projects', 'projectId'),
  *     assignee: relation.belongsTo('users', 'assigneeId'),
- *     comments: relation.hasMany('comments', 'taskId'),
+ *     comments: relation.hasMany('comments', 'itemId'),
  *   };
  */
 
@@ -28,9 +28,9 @@
  * way often, such as a block's `sectionId`.
  *
  * `enrich: true` auto-populates the parent reference on an incoming change
- * before the child data lands. A change to `Task { teamId: 't1' }` picks up the
+ * before the child data lands. A change to `Item { teamId: 't1' }` picks up the
  * already-loaded `teams:t1` record and attaches it as `data.team`, so you can
- * read `task.team` without a second lookup. Enrichment is best-effort: if the
+ * read `item.team` without a second lookup. Enrichment is best-effort: if the
  * parent has not loaded yet it quietly does nothing, and the child data still
  * applies.
  *
@@ -71,7 +71,7 @@ export interface BelongsToOptions {
    * provenance or as a template, such as `sourceSectionId` or `templateId`; doing
    * so would leak the record into an unrelated scope. The engine also cannot
    * infer the parent from whether a field is optional — many real parent keys
-   * are optional, like a root folder or an inbox task — so you must declare the
+   * are optional, like a root folder or an inbox item — so you must declare the
    * parent edge explicitly.
    *
    * It reads naturally at the call site:
@@ -218,7 +218,7 @@ class RelationBuilder<
 export const relation = {
   /**
    * This model belongs to another model via a foreign key.
-   * e.g., Task belongs to Project via projectId
+   * e.g., Item belongs to Project via projectId
    *
    * ```ts
    * // Simple reference (no options)
@@ -252,7 +252,7 @@ export const relation = {
 
   /**
    * This model has many of another model — for example, a project has many
-   * tasks via `Task.projectId`.
+   * items via `Item.projectId`.
    *
    * At runtime the engine adds a getter to the parent model that returns every
    * child whose foreign key matches, and registers the foreign-key index on the

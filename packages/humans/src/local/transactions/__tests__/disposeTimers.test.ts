@@ -18,9 +18,9 @@ function makeTx(id: string): QueuedMutation {
   return {
     id,
     type: 'update',
-    modelName: 'Task',
+    modelName: 'Item',
     modelId: `model_${id}`,
-    modelKey: 'task',
+    modelKey: 'item',
     context: { userId: 'user_1', organizationId: 'org_1' },
     status: 'awaiting_delta',
     createdAt: Date.now(),

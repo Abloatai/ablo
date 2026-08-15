@@ -84,7 +84,7 @@ import type { CommitLatencySample } from './transactions/mutations/commitLatency
 export type ModelConstructor<T extends Model> = abstract new (...args: never[]) => T;
 
 /** Concrete constructor type for instantiation */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Constructor args vary per model (PrismaTask, Record<string, unknown>, etc.)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Constructor args vary per model (PrismaItem, Record<string, unknown>, etc.)
 export type ConcreteModelConstructor<T extends Model> = new (data?: any) => T;
 
 // ModelData is defined in a separate module to break the type cycle between

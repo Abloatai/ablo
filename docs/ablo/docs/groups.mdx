@@ -48,17 +48,17 @@ questions. Pick by the question you have.
 
 ```ts
 // A screen that stays current.
-ablo.documents.onChange((docs) => render(docs));
+ablo.records.onChange((docs) => render(docs));
 
 // Who else is in here, and what are they holding.
-await using room = await ablo.documents.join(documentIds, { ttl: '5m' });
+await using room = await ablo.records.join(documentIds, { ttl: '5m' });
 room.peers;
 
 // Stop this write if the thing I read moved while I composed it.
 await ablo.blocks.update({ id, data, reads: [{ group: 'workspace:abc', readAt, onStale: 'notify' }] });
 
 // Tell me later if this moves, even though I am not writing now.
-await ablo.documents.track({ id: 's-1' });
+await ablo.records.track({ id: 's-1' });
 ```
 
 | Question | Channel | Arrives |
@@ -142,7 +142,7 @@ reaches `C`.
 The direction matters. The signal flows forward, A to B to C, and each hop is a
 real write an actor chose to make. The engine supplies the edges (group
 membership) and a stale signal on each edge (the premise check); the actors are
-the runtime that walks them. It is closer to a spreadsheet an analyst
+the runtime that walks them. It is closer to a dataset an analyst
 recalculates cell by cell than to a reactive engine that recomputes the whole
 column for you.
 
@@ -209,7 +209,7 @@ you, arriving on the write you were going to make anyway.
 
 ```ts
 // Register interest and walk away — no write required.
-await ablo.documents.track({ id: 's-1' });
+await ablo.records.track({ id: 's-1' });
 
 // …minutes of other work later, on your next commit…
 const res = await ablo.blocks.update({ id: 'block-C', data: { text: revised } });
@@ -226,7 +226,7 @@ You can also register a track as part of a write you are already making, the
 persisted companion to `reads`:
 
 ```ts
-await ablo.documents.update({
+await ablo.records.update({
   id: 's-1',
   data: { title: revised },
   reads: [{ group: 'workspace:abc', readAt: N, onStale: 'notify' }], // guards THIS commit
@@ -245,8 +245,8 @@ A track says what a moved belief should do to your **next write**. Same enum the
 `reads` premise carries, minus the one mode that cannot apply:
 
 ```ts
-await ablo.documents.track({ id: 's-1' });                        // notify (default)
-await ablo.documents.track({ id: 's-1', onStale: 'reject' });     // gate
+await ablo.records.track({ id: 's-1' });                        // notify (default)
+await ablo.records.track({ id: 's-1', onStale: 'reject' });     // gate
 ```
 
 - **`notify`** — the change rides your next receipt and the commit proceeds. You
@@ -266,12 +266,12 @@ re-read, then re-register the track to say so:
 
 ```ts
 try {
-  await ablo.tasks.update({ id, data });
+  await ablo.records.update({ id, data });
 } catch (err) {
   if (err.code === 'stale_context') {
-    const fresh = await ablo.documents.get({ id: 's-1' });   // read
-    await ablo.documents.track({ id: 's-1', onStale: 'reject' }); // acknowledge
-    await ablo.tasks.update({ id, data: reconsider(fresh) });     // now it lands
+    const fresh = await ablo.records.get({ id: 's-1' });   // read
+    await ablo.records.track({ id: 's-1', onStale: 'reject' }); // acknowledge
+    await ablo.records.update({ id, data: reconsider(fresh) });     // now it lands
   }
 }
 ```

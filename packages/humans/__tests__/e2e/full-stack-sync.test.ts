@@ -20,7 +20,7 @@ import {
   emptyConfig,
 } from '../../src/local/RuntimeContext.js';
 import type { MutationExecutor, CommitResult, MutationOperation } from '../../src/local/interfaces/index.js';
-import { flushMicrotasks, TestTask, TestProject, registerTestModels } from '../../src/local/testing';
+import { flushMicrotasks, TestItem, TestWorkspace, registerTestModels } from '../../src/local/testing';
 import { ModelRegistry } from '../../src/local/ModelRegistry';
 
 const E2E_ENABLED = process.env.E2E_TEST === 'true';
@@ -126,7 +126,7 @@ describeE2E('Full-Stack E2E: SDK → Go Server → Delta Confirmation', () => {
       mutationExecutor: new RealMutationExecutor(),
       config: {
         ...emptyConfig,
-        modelCreatePriority: new Map([['Task', 10], ['Project', 10]]),
+        modelCreatePriority: new Map([['Item', 10], ['Workspace', 10]]),
       },
     });
 
@@ -142,26 +142,26 @@ describeE2E('Full-Stack E2E: SDK → Go Server → Delta Confirmation', () => {
     const { close } = await connectWS(queue);
 
     try {
-      const taskId = uuid();
-      const task = new TestTask({ id: taskId, title: 'Full-stack E2E', organizationId: TEST_ORG });
+      const itemId = uuid();
+      const item = new TestItem({ id: itemId, title: 'Full-stack E2E', organizationId: TEST_ORG });
 
       const confirmed = new Promise<void>((resolve, reject) => {
         const t = setTimeout(() => { reject(new Error('Confirmation timeout (10s)')); }, 10000);
         queue.on('transaction:completed', (tx) => {
-          if (tx.modelId === taskId) { clearTimeout(t); resolve(); }
+          if (tx.modelId === itemId) { clearTimeout(t); resolve(); }
         });
         queue.on('transaction:failed', ({ transaction, error }) => {
-          if (transaction.modelId === taskId) { clearTimeout(t); reject(error); }
+          if (transaction.modelId === itemId) { clearTimeout(t); reject(error); }
         });
       });
 
-      const tx = await queue.create(task, { userId: TEST_USER, organizationId: TEST_ORG });
+      const tx = await queue.create(item, { userId: TEST_USER, organizationId: TEST_ORG });
       expect(tx.type).toBe('create');
 
       await flushMicrotasks();
       await confirmed;
 
-      console.log(`[Full-Stack E2E] Task ${taskId} confirmed via real delta pipeline`);
+      console.log(`[Full-Stack E2E] Item ${itemId} confirmed via real delta pipeline`);
     } finally {
       close();
     }
@@ -172,35 +172,35 @@ describeE2E('Full-Stack E2E: SDK → Go Server → Delta Confirmation', () => {
 
     try {
       // Create first
-      const taskId = uuid();
-      const task = new TestTask({ id: taskId, title: 'Update me', organizationId: TEST_ORG });
+      const itemId = uuid();
+      const item = new TestItem({ id: itemId, title: 'Update me', organizationId: TEST_ORG });
 
       const createDone = new Promise<void>((resolve) => {
         queue.on('transaction:completed', function h(tx) {
-          if (tx.modelId === taskId && tx.type === 'create') { queue.off('transaction:completed', h); resolve(); }
+          if (tx.modelId === itemId && tx.type === 'create') { queue.off('transaction:completed', h); resolve(); }
         });
       });
 
-      await queue.create(task, { userId: TEST_USER, organizationId: TEST_ORG });
+      await queue.create(item, { userId: TEST_USER, organizationId: TEST_ORG });
       await flushMicrotasks();
       await createDone;
 
       // Now update
-      task.markAsPersisted();
-      task.propertyChanged('title', 'Update me', 'Updated via E2E');
+      item.markAsPersisted();
+      item.propertyChanged('title', 'Update me', 'Updated via E2E');
 
       const updateDone = new Promise<void>((resolve, reject) => {
         const t = setTimeout(() => { reject(new Error('Update confirmation timeout')); }, 10000);
         queue.on('transaction:completed', function h(tx) {
-          if (tx.modelId === taskId && tx.type === 'update') { clearTimeout(t); queue.off('transaction:completed', h); resolve(); }
+          if (tx.modelId === itemId && tx.type === 'update') { clearTimeout(t); queue.off('transaction:completed', h); resolve(); }
         });
       });
 
-      await queue.update(task, { userId: TEST_USER, organizationId: TEST_ORG }, { title: 'Updated via E2E' });
+      await queue.update(item, { userId: TEST_USER, organizationId: TEST_ORG }, { title: 'Updated via E2E' });
       await flushMicrotasks();
       await updateDone;
 
-      console.log(`[Full-Stack E2E] Task ${taskId} update confirmed`);
+      console.log(`[Full-Stack E2E] Item ${itemId} update confirmed`);
     } finally {
       close();
     }
@@ -210,27 +210,27 @@ describeE2E('Full-Stack E2E: SDK → Go Server → Delta Confirmation', () => {
     const { close } = await connectWS(queue);
 
     try {
-      const taskId1 = uuid();
-      const taskId2 = uuid();
-      const task1 = new TestTask({ id: taskId1, title: 'Batch 1', organizationId: TEST_ORG });
-      const task2 = new TestTask({ id: taskId2, title: 'Batch 2', organizationId: TEST_ORG });
+      const itemId1 = uuid();
+      const itemId2 = uuid();
+      const item1 = new TestItem({ id: itemId1, title: 'Batch 1', organizationId: TEST_ORG });
+      const item2 = new TestItem({ id: itemId2, title: 'Batch 2', organizationId: TEST_ORG });
 
       const confirmed = new Set<string>();
       const allDone = new Promise<void>((resolve, reject) => {
         const t = setTimeout(() => { reject(new Error('Batch confirmation timeout')); }, 15000);
         queue.on('transaction:completed', (tx) => {
           confirmed.add(tx.modelId);
-          if (confirmed.has(taskId1) && confirmed.has(taskId2)) { clearTimeout(t); resolve(); }
+          if (confirmed.has(itemId1) && confirmed.has(itemId2)) { clearTimeout(t); resolve(); }
         });
       });
 
       // Create both in same tick → batched
-      await queue.create(task1, { userId: TEST_USER, organizationId: TEST_ORG });
-      await queue.create(task2, { userId: TEST_USER, organizationId: TEST_ORG });
+      await queue.create(item1, { userId: TEST_USER, organizationId: TEST_ORG });
+      await queue.create(item2, { userId: TEST_USER, organizationId: TEST_ORG });
       await flushMicrotasks();
 
       await allDone;
-      console.log(`[Full-Stack E2E] Batch confirmed: ${taskId1} + ${taskId2}`);
+      console.log(`[Full-Stack E2E] Batch confirmed: ${itemId1} + ${itemId2}`);
     } finally {
       close();
     }

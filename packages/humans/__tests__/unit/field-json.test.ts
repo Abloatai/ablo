@@ -69,7 +69,7 @@ describe('field.json() schema', () => {
 
 describe('field.json() runtime accessor', () => {
   const schema = defineSchema({
-    decks: model({
+    collections: model({
       title: z.string(),
       metadata: field.json({
         icon: z.string().default('presentation'),
@@ -97,7 +97,7 @@ describe('field.json() runtime accessor', () => {
     const sync = createTestEngine();
     const pool = sync._pool;
     if (!pool) {
-      expect(schema.models.decks.shape.metadata).toBeDefined();
+      expect(schema.models.collections.shape.metadata).toBeDefined();
       return;
     }
   });
@@ -122,12 +122,12 @@ describe('field.json() runtime accessor', () => {
     }
 
     // Partial metadata → provided values + defaults for missing
-    const result2 = subSchema.safeParse({ icon: 'custom-icon', summary: 'A deck' });
+    const result2 = subSchema.safeParse({ icon: 'custom-icon', summary: 'A collection' });
     expect(result2.success).toBe(true);
     if (result2.success) {
       expect(result2.data.icon).toBe('custom-icon');
       expect(result2.data.color).toBe('#F59E0B'); // default
-      expect(result2.data.summary).toBe('A deck');
+      expect(result2.data.summary).toBe('A collection');
     }
 
     // JSON string round-trip (simulates DB → wire → parse)

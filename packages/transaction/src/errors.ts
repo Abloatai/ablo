@@ -67,7 +67,7 @@ export class AbloError extends Error {
   /** Opaque id of the exact private observation associated with this error. */
   readonly eventId?: string;
   /** The specific input that caused the error, as a model or field path such as
-   *  `'dataroomMember.grants.subject'`, so tooling can point at the exact
+   *  `'archiveMember.grants.subject'`, so tooling can point at the exact
    *  offending value. */
   readonly param?: string;
   /** A link to the documentation for this error's {@link code}. When not set

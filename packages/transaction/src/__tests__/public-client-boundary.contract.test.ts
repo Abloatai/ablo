@@ -13,7 +13,7 @@ type Equal<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 type Expect<T extends true> = T;
 
 const schema = defineSchema({
-  tasks: model({ title: z.string() }, { typename: 'Task' }),
+  items: model({ title: z.string() }, { typename: 'Item' }),
 });
 
 type HttpClient = AbloHttpClient<typeof schema.models>;
@@ -75,7 +75,7 @@ function compileOnlyConstruction(): void {
   // @ts-expect-error — `null` cannot opt into a schema-less client
   void Ablo({ schema: null, apiKey: 'sk_test_boundary', transport: 'http' });
   // @ts-expect-error — string-keyed model routing is private transport machinery
-  void http.model('tasks'); // eslint-disable-line @typescript-eslint/no-unsafe-call
+  void http.model('items'); // eslint-disable-line @typescript-eslint/no-unsafe-call
 }
 void compileOnlyConstruction;
 

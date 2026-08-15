@@ -16,7 +16,7 @@ describe('generateTypes', () => {
     const out = generateTypes(
       jsonOf(
         defineSchema({
-          tasks: model(
+          items: model(
             {
               title: field.string(),
               count: field.number().optional(),
@@ -24,15 +24,15 @@ describe('generateTypes', () => {
               due: field.date().optional(),
               meta: field.json().optional(),
             },
-            { typename: 'Task', tableName: 'tasks', mutable: true }),
+            { typename: 'Item', tableName: 'items', mutable: true }),
         }),
       ),
     );
 
-    expect(out).toContain('export interface Task {');
+    expect(out).toContain('export interface Item {');
     expect(out).toContain('  id: string;');
-    expect(out).toContain('  createdAt: Date;');
-    expect(out).toContain('  organizationId?: string;');
+    expect(out).not.toContain('  createdAt:');
+    expect(out).not.toContain('  organizationId:');
     expect(out).toContain('  title: string;');
     expect(out).toContain('  count?: number;');
     expect(out).toContain('  done: boolean;');
@@ -44,9 +44,9 @@ describe('generateTypes', () => {
     const out = generateTypes(
       jsonOf(
         defineSchema({
-          tasks: model(
+          items: model(
             { status: field.enum(['todo', 'doing', 'done']) },
-            { typename: 'Task', tableName: 'tasks', mutable: true }),
+            { typename: 'Item', tableName: 'items', mutable: true }),
         }),
       ),
     );
@@ -57,14 +57,14 @@ describe('generateTypes', () => {
     const out = generateTypes(
       jsonOf(
         defineSchema({
-          tasks: model({ title: field.string() }, { typename: 'Task', tableName: 'tasks', mutable: true }),
-          projects: model({ name: field.string() }, { typename: 'Project', tableName: 'projects', mutable: true }),
+          items: model({ title: field.string() }, { typename: 'Item', tableName: 'items', mutable: true }),
+          workspaces: model({ name: field.string() }, { typename: 'Workspace', tableName: 'workspaces', mutable: true }),
         }),
       ),
     );
     expect(out).toContain('export interface AbloSchema {');
-    expect(out).toContain('  "tasks": Task;');
-    expect(out).toContain('  "projects": Project;');
+    expect(out).toContain('  "items": Item;');
+    expect(out).toContain('  "workspaces": Workspace;');
   });
 
   it('does not double-emit a redeclared base column', () => {
@@ -75,14 +75,14 @@ describe('generateTypes', () => {
     const out = generateTypes({
       v: 3,
       models: {
-        tasks: {
+        items: {
           fields: {
             organizationId: { type: 'string', isOptional: false, isIndexed: false },
             title: { type: 'string', isOptional: false, isIndexed: false },
           },
           relations: {},
           load: 'instant',
-          typename: 'Task',
+          typename: 'Item',
           tenancy: { kind: 'column', column: 'organization_id' },
         },
       },

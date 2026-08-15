@@ -185,15 +185,15 @@ describe('semantic drift — per-model comparison replaces the whole-hash weld',
       logger,
       config: {
         expectedSchemaHash: 'client_66ef',
-        expectedModelHashes: { tasks: 'aaaa1111', slides: 'bbbb2222' },
+        expectedModelHashes: { items: 'aaaa1111', entries: 'bbbb2222' },
       },
     });
     mockBootstrapAndSchemaFetch(
       { type: 'full', lastSyncId: 0, models: {}, schemaHash: 'server_bea1' },
       {
         models: [
-          { key: 'tasks', hash: 'aaaa1111' },
-          { key: 'slides', hash: 'bbbb2222' },
+          { key: 'items', hash: 'aaaa1111' },
+          { key: 'entries', hash: 'bbbb2222' },
           { key: 'mailThreads', hash: 'cccc3333' }, // the additive push
         ],
       },
@@ -211,21 +211,21 @@ describe('semantic drift — per-model comparison replaces the whole-hash weld',
       logger,
       config: {
         expectedSchemaHash: 'client_66ef',
-        expectedModelHashes: { tasks: 'aaaa1111', slides: 'bbbb2222' },
+        expectedModelHashes: { items: 'aaaa1111', entries: 'bbbb2222' },
       },
     });
     mockBootstrapAndSchemaFetch(
       { type: 'full', lastSyncId: 0, models: {}, schemaHash: 'server_bea1' },
-      { models: [{ key: 'tasks', hash: 'aaaa1111' }, { key: 'slides', hash: 'CHANGED0' }] },
+      { models: [{ key: 'items', hash: 'aaaa1111' }, { key: 'entries', hash: 'CHANGED0' }] },
     );
 
     await helper().fetchBootstrap();
     await flushAsync();
 
     const [msg, meta] = logger.warn.mock.calls[0] as [string, Record<string, unknown>];
-    expect(msg).toContain('slides');
-    expect(msg).not.toContain('tasks,'); // the matching model is not implicated
-    expect(meta).toMatchObject({ changedModels: ['slides'] });
+    expect(msg).toContain('entries');
+    expect(msg).not.toContain('items,'); // the matching model is not implicated
+    expect(meta).toMatchObject({ changedModels: ['entries'] });
   });
 
   it('falls back to the whole-hash message when the server surface has no per-model hashes', async () => {
@@ -234,12 +234,12 @@ describe('semantic drift — per-model comparison replaces the whole-hash weld',
       logger,
       config: {
         expectedSchemaHash: 'client_66ef',
-        expectedModelHashes: { tasks: 'aaaa1111' },
+        expectedModelHashes: { items: 'aaaa1111' },
       },
     });
     mockBootstrapAndSchemaFetch(
       { type: 'full', lastSyncId: 0, models: {}, schemaHash: 'server_bea1' },
-      { models: [{ key: 'tasks' }] }, // older server: keys only
+      { models: [{ key: 'items' }] }, // older server: keys only
     );
 
     await helper().fetchBootstrap();

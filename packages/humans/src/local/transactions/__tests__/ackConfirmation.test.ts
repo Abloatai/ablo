@@ -21,7 +21,7 @@ import {
 } from '../mutations/MutationQueue.js';
 import { createTestContext } from '../../testing/mocks/MockSyncContext.js';
 import type { TestContextResult } from '../../testing/mocks/MockSyncContext.js';
-import { createTaskFixture } from '../../testing/fixtures/models.js';
+import { createItemFixture } from '../../testing/fixtures/models.js';
 import { waitFor } from '../../testing/helpers/wait.js';
 import type { StaleNotification } from '@abloatai/transaction/coordination/schema';
 import {
@@ -75,7 +75,7 @@ function staleNotification(id: string): StaleNotification {
   return {
     object: 'stale_notification',
     scope: 'row',
-    target: { model: 'task', id, fields: ['title'] },
+    target: { model: 'item', id, fields: ['title'] },
     readAt: 1,
     observedSyncId: 2,
     currentValues: { title: 'newer' },
@@ -99,14 +99,14 @@ describe('ack-based transaction confirmation', () => {
   });
 
   it('confirms on the server ack alone — NO delta echo required', async () => {
-    const task = createTaskFixture();
-    const tx = await queue.create(task, userContext);
+    const item = createItemFixture();
+    const tx = await queue.create(item, userContext);
 
     // The mock executor acks with lastSyncId > 0; no delta is ever injected.
     // Both the per-tx confirmation promise and the (model,id) lookup resolve.
     await expect(tx.confirmation).resolves.toBeUndefined();
     await expect(
-      queue.confirmationFor(task.getModelName(), task.id),
+      queue.confirmationFor(item.getModelName(), item.id),
     ).resolves.toBeUndefined();
     await waitFor(() => tx.status === 'completed');
   });
@@ -115,8 +115,8 @@ describe('ack-based transaction confirmation', () => {
     // lastSyncId 0 from the server = accepted but no delta emitted — keep the
     // anomaly path observable instead of silently confirming.
     ctx.mocks.mutationExecutor.setSyncId(0);
-    const task = createTaskFixture();
-    const tx = await queue.create(task, userContext);
+    const item = createItemFixture();
+    const tx = await queue.create(item, userContext);
 
     await waitFor(() => tx.status === 'awaiting_delta');
     expect(tx.status).toBe('awaiting_delta');
@@ -127,8 +127,8 @@ describe('ack-based transaction confirmation', () => {
     ctx.mocks.mutationExecutor.setStatus('queued');
     const correlationId = 'source-correlation-model';
     ctx.mocks.mutationExecutor.setCorrelationId(correlationId);
-    const task = createTaskFixture();
-    const tx = await queue.create(task, userContext);
+    const item = createItemFixture();
+    const tx = await queue.create(item, userContext);
 
     await waitFor(() => tx.status === 'awaiting_delta');
 
@@ -168,8 +168,8 @@ describe('ack-based transaction confirmation', () => {
     queue.on('transaction:failed', failed);
     queue.on('optimistic:rollback', rolledBack);
 
-    const task = createTaskFixture();
-    const tx = await queue.update(task, userContext, { title: 'accepted' });
+    const item = createItemFixture();
+    const tx = await queue.update(item, userContext, { title: 'accepted' });
     await waitFor(() => tx.status === 'awaiting_delta');
 
     await expect(tx.confirmation).rejects.toMatchObject({
@@ -184,7 +184,7 @@ describe('ack-based transaction confirmation', () => {
     if (typeof clientTxId !== 'string') throw new Error('missing commit idempotency key');
     queue.onDeltaReceived(10_003, tx.id, correlationId);
     expect(tx.status).toBe('completed');
-    await expect(queue.confirmationFor(task.getModelName(), task.id)).resolves.toBeUndefined();
+    await expect(queue.confirmationFor(item.getModelName(), item.id)).resolves.toBeUndefined();
   });
 
   it('retains a queued model envelope durably until its correlated echo', async () => {
@@ -196,8 +196,8 @@ describe('ack-based transaction confirmation', () => {
     const correlationId = 'source-correlation-durable-model';
     ctx.mocks.mutationExecutor.setCorrelationId(correlationId);
 
-    const task = createTaskFixture();
-    const tx = await queue.update(task, userContext, { title: 'durable' });
+    const item = createItemFixture();
+    const tx = await queue.update(item, userContext, { title: 'durable' });
     await waitFor(() => tx.status === 'awaiting_delta');
     const clientTxId = ctx.mocks.mutationExecutor.lastCall?.options?.idempotencyKey;
     if (typeof clientTxId !== 'string') throw new Error('missing commit idempotency key');
@@ -224,8 +224,8 @@ describe('ack-based transaction confirmation', () => {
     const correlationId = 'source-correlation-offline-model';
     ctx.mocks.mutationExecutor.setCorrelationId(correlationId);
 
-    const task = createTaskFixture();
-    const tx = await queue.update(task, userContext, { title: 'offline' });
+    const item = createItemFixture();
+    const tx = await queue.update(item, userContext, { title: 'offline' });
     await Promise.resolve();
     await queue.drainPending();
 
@@ -245,8 +245,8 @@ describe('ack-based transaction confirmation', () => {
     ctx.mocks.mutationExecutor.setSyncId(0);
     ctx.mocks.mutationExecutor.setStatus('queued');
     ctx.mocks.mutationExecutor.setCorrelationId('source-correlation-delete');
-    const task = createTaskFixture();
-    const tx = await queue.delete(task, userContext);
+    const item = createItemFixture();
+    const tx = await queue.delete(item, userContext);
 
     await waitFor(() => tx.status === 'awaiting_delta');
     queue.onDeltaReceived(
@@ -260,8 +260,8 @@ describe('ack-based transaction confirmation', () => {
 
   it('keeps the legacy zero-watermark DELETE shortcut for a confirmed receipt', async () => {
     ctx.mocks.mutationExecutor.setSyncId(0);
-    const task = createTaskFixture();
-    const tx = await queue.delete(task, userContext);
+    const item = createItemFixture();
+    const tx = await queue.delete(item, userContext);
 
     await expect(tx.confirmation).resolves.toBeUndefined();
     expect(tx.status).toBe('completed');
@@ -270,11 +270,11 @@ describe('ack-based transaction confirmation', () => {
   it('releases same-row UPDATE merging after a queued receipt', async () => {
     ctx.mocks.mutationExecutor.setStatus('queued');
     ctx.mocks.mutationExecutor.setCorrelationId('source-correlation-merge');
-    const task = createTaskFixture();
-    const first = await queue.update(task, userContext, { title: 'first' });
+    const item = createItemFixture();
+    const first = await queue.update(item, userContext, { title: 'first' });
     await waitFor(() => first.status === 'awaiting_delta');
 
-    const second = await queue.update(task, userContext, { title: 'second' });
+    const second = await queue.update(item, userContext, { title: 'second' });
     await waitFor(
       () => ctx.mocks.mutationExecutor.getCallsByMethod('commit').length === 2,
     );
@@ -285,28 +285,28 @@ describe('ack-based transaction confirmation', () => {
   it('waits for the newest same-row write when timestamps are equal', async () => {
     ctx.mocks.mutationExecutor.setStatus('queued');
     ctx.mocks.mutationExecutor.setCorrelationId('source-correlation-same-ms');
-    const task = createTaskFixture();
-    const first = await queue.update(task, userContext, { title: 'first' });
+    const item = createItemFixture();
+    const first = await queue.update(item, userContext, { title: 'first' });
     await waitFor(() => first.status === 'awaiting_delta');
 
-    const second = await queue.update(task, userContext, { title: 'second' });
+    const second = await queue.update(item, userContext, { title: 'second' });
     await waitFor(() => second.status === 'awaiting_delta');
     second.createdAt = first.createdAt;
 
-    expect(queue.confirmationFor(task.getModelName(), task.id)).toBe(second.confirmation);
+    expect(queue.confirmationFor(item.getModelName(), item.id)).toBe(second.confirmation);
   });
 
   it('completes held notify members while the forwarded members await their echo', async () => {
     ctx.mocks.mutationExecutor.setStatus('queued');
     ctx.mocks.mutationExecutor.setCorrelationId('source-correlation-notify');
-    const heldTask = createTaskFixture({ id: 'task-held' });
-    const forwardedTask = createTaskFixture({ id: 'task-forwarded' });
+    const heldItem = createItemFixture({ id: 'item-held' });
+    const forwardedItem = createItemFixture({ id: 'item-forwarded' });
     ctx.mocks.mutationExecutor.setNotifications([
-      staleNotification(heldTask.id),
+      staleNotification(heldItem.id),
     ]);
 
-    const heldPromise = queue.create(heldTask, userContext);
-    const forwardedPromise = queue.create(forwardedTask, userContext);
+    const heldPromise = queue.create(heldItem, userContext);
+    const forwardedPromise = queue.create(forwardedItem, userContext);
     const [held, forwarded] = await Promise.all([heldPromise, forwardedPromise]);
     await waitFor(
       () => held.status === 'completed' && forwarded.status === 'awaiting_delta',
@@ -319,17 +319,17 @@ describe('ack-based transaction confirmation', () => {
   it('fails missing members while the forwarded members await their echo', async () => {
     ctx.mocks.mutationExecutor.setStatus('queued');
     ctx.mocks.mutationExecutor.setCorrelationId('source-correlation-missing');
-    const missingTask = createTaskFixture({ id: 'task-missing' });
-    const forwardedTask = createTaskFixture({ id: 'task-forwarded' });
-    ctx.mocks.mutationExecutor.setMissingIds([missingTask.id]);
+    const missingItem = createItemFixture({ id: 'item-missing' });
+    const forwardedItem = createItemFixture({ id: 'item-forwarded' });
+    ctx.mocks.mutationExecutor.setMissingIds([missingItem.id]);
 
     const missingPromise = queue.update(
-      missingTask,
+      missingItem,
       userContext,
       { title: 'missing' },
     );
     const forwardedPromise = queue.update(
-      forwardedTask,
+      forwardedItem,
       userContext,
       { title: 'forwarded' },
     );
@@ -350,19 +350,19 @@ describe('ack-based transaction confirmation', () => {
     ctx.mocks.mutationExecutor.setStatus('queued');
     const correlationId = 'source-correlation-atomic';
     ctx.mocks.mutationExecutor.setCorrelationId(correlationId);
-    ctx.mocks.mutationExecutor.setMissingIds(['task-missing']);
+    ctx.mocks.mutationExecutor.setMissingIds(['item-missing']);
     const clientTxId = 'forwarded-atomic-commit';
     await queue.enqueueCommit(clientTxId, [
       {
         type: 'UPDATE',
-        model: 'task',
-        id: 'task-missing',
+        model: 'item',
+        id: 'item-missing',
         input: { title: 'missing' },
       },
       {
         type: 'UPDATE',
-        model: 'task',
-        id: 'task-1',
+        model: 'item',
+        id: 'item-1',
         input: { title: 'forwarded' },
       },
     ]);
@@ -391,7 +391,7 @@ describe('ack-based transaction confirmation', () => {
     await expect(receipt).resolves.toEqual({
       lastSyncId: 20_002,
       notifications: undefined,
-      missingIds: ['task-missing'],
+      missingIds: ['item-missing'],
     });
   });
 
@@ -413,8 +413,8 @@ describe('ack-based transaction confirmation', () => {
     await queue.enqueueCommit(clientTxId, [
       {
         type: 'UPDATE',
-        model: 'task',
-        id: 'task-1',
+        model: 'item',
+        id: 'item-1',
         input: { title: 'accepted' },
       },
     ]);
@@ -456,8 +456,8 @@ describe('ack-based transaction confirmation', () => {
     const operations = [
       {
         type: 'UPDATE' as const,
-        model: 'task',
-        id: 'task-1',
+        model: 'item',
+        id: 'item-1',
         input: { title: 'idempotent status probe' },
       },
     ];
@@ -504,8 +504,8 @@ describe('ack-based transaction confirmation', () => {
     await queue.enqueueCommit(clientTxId, [
       {
         type: 'UPDATE',
-        model: 'task',
-        id: 'task-1',
+        model: 'item',
+        id: 'item-1',
         input: { title: 'exactly once' },
       },
     ]);
@@ -542,8 +542,8 @@ describe('ack-based transaction confirmation', () => {
     await queue.enqueueCommit(clientTxId, [
       {
         type: 'UPDATE',
-        model: 'task',
-        id: 'task-1',
+        model: 'item',
+        id: 'item-1',
         input: { title: 'survives restart' },
       },
     ]);
@@ -602,8 +602,8 @@ describe('ack-based transaction confirmation', () => {
     await queue.enqueueCommit(clientTxId, [
       {
         type: 'UPDATE',
-        model: 'task',
-        id: 'task-1',
+        model: 'item',
+        id: 'item-1',
         input: { title: 'echo already checkpointed' },
       },
     ]);
@@ -647,7 +647,7 @@ describe('ack-based transaction confirmation', () => {
     await queue.enqueueCommit(clientTxId, [
       {
         type: 'UPDATE',
-        model: 'task',
+        model: 'item',
         id: 'shared-id',
         input: { title: 'held' },
       },

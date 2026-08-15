@@ -201,9 +201,9 @@ write interest in it.
 
 import { useJoin } from '@abloatai/ablo/react';
 
-export function DeckPresence({ workspaceId }: { workspaceId: string }) {
+export function CollectionPresence({ workspaceId }: { workspaceId: string }) {
   const { peers, claims, status } = useJoin({
-    scope: { slideDecks: workspaceId },
+    scope: { entryCollections: workspaceId },
     claim: true,   // I intend to write — pin the scope + let peers observe the claim
     hydrate: true, // backfill the workspace's current rows if not already loaded
   });
@@ -217,7 +217,7 @@ Options (`UseJoinOptions`):
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `scope` |: | Model-form scope (`{ slideDecks: id }`), resolved through the schema. Omit for engine-wide. |
+| `scope` |: | Model-form scope (`{ entryCollections: id }`), resolved through the schema. Omit for engine-wide. |
 | `claim` | `false` | Acquire a write-claim on the scope (sent so peers observe it; pins the scope so it never warm-drops while held). A viewer is not a claimant: leave `false` for read-only. |
 | `hydrate` | `false` | Backfill the scope's current rows into the pool once on enter, then keep them fresh via the live tail. Set `true` for deep-linked / never-opened entities. Single-flight; soft-fails. |
 | `ttlSeconds` |: | Lease TTL for the scope claim. |
@@ -241,7 +241,7 @@ connection is subscribed to.
 import { usePeers } from '@abloatai/ablo/react';
 
 export function CursorBroadcaster({ workspaceId }: { workspaceId: string }) {
-  const peers = usePeers({ slideDecks: workspaceId });
+  const peers = usePeers({ entryCollections: workspaceId });
   const alone = !peers.some((p) => p.participantKind === 'user');
   // suppress live-cursor broadcasts while alone
 }

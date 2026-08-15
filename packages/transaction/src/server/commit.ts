@@ -16,6 +16,7 @@
 import type { ParticipantKind, ConfirmationState } from '../log/syncDeltaRow.js';
 import type { ParticipantRef } from '../wire/delta.js';
 import type { CommitExecutionResultInput } from '../wire/commit.js';
+import type { CommitOperationResult } from '../wire/commit.js';
 import type { ReadDependency, TrackDependency } from '../coordination/schema.js';
 import type { EffectiveAuthority } from '../auth/capability.js';
 
@@ -99,4 +100,7 @@ export interface CommitContext {
  * lives with the HTTP/WS confirmation contract so queued correlation cannot drift
  * between cache, transport, and client.
  */
-export type CommitExecutionResult = CommitExecutionResultInput;
+export type CommitExecutionResult = CommitExecutionResultInput & {
+  /** Response-time projection from the exact writing transaction. Never persisted. */
+  readonly operationResults?: readonly CommitOperationResult[];
+};

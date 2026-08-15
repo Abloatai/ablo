@@ -63,7 +63,7 @@ describe('capability lifecycle', () => {
           scope: {
             organizationId: 'org_1',
             syncGroups: ['org:org_1'],
-            operations: ['task.read', 'task.update'],
+            operations: ['item.read', 'item.update'],
             participantKind: 'agent',
             participantId: 'agent_1',
           },

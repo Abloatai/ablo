@@ -90,7 +90,7 @@ describe('structured claim queue options', () => {
       object: 'claim' as const,
       id: 'cl_1',
       status: 'queued' as const,
-      target: { type: 'tasks', id: 't_1' },
+      target: { type: 'items', id: 't_1' },
       description: 'first',
     };
     const view = claimQueueView([first]);

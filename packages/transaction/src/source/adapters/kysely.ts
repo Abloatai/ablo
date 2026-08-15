@@ -32,6 +32,8 @@ import {
   changeSetSchema,
   outboxEventSchema,
   sourceCommitEchoMarkerSchema,
+  sourceCommitEchoIntentSchema,
+  type SourceCommitEchoIntent,
 } from '../contract.js';
 import {
   assertSourceIdempotencyIntent,
@@ -135,19 +137,17 @@ function markerAction(type: ChangeSet['operations'][number]['type']): 'I' | 'U' 
   return 'U';
 }
 
-function assertDirectLogicalMarker(
+function parseEchoIntent(
   change: ChangeSet,
   markerModelFor: (operationModel: string) => string,
-): void {
+  required: boolean,
+): SourceCommitEchoIntent | undefined {
   const payload = change.echo?.payload;
   if (!payload) {
-    throw new AbloValidationError(
-      'A direct Kysely mutation requires a transactional Postgres logical marker',
-      { code: 'source_adapter_misconfigured' },
-    );
+    return undefined;
   }
   try {
-    const marker = sourceCommitEchoMarkerSchema.parse(JSON.parse(payload) as unknown);
+    const marker = sourceCommitEchoIntentSchema.parse(JSON.parse(payload) as unknown);
     if (marker.correlationId !== change.correlationId) {
       throw new Error('marker correlation does not match the ledger key');
     }
@@ -163,20 +163,49 @@ function assertDirectLogicalMarker(
       if (
         !markerOperation ||
         markerOperation.model !== markerModelFor(operation.model) ||
-        markerOperation.id !== kyselyOperationRowId(operation) ||
+        (markerOperation.id != null && markerOperation.id !== kyselyOperationRowId(operation)) ||
+        (markerOperation.id == null && operation.type !== 'CREATE') ||
         markerOperation.action !== markerAction(operation.type) ||
         markerOperation.transactionId !== operation.transactionId
       ) {
         throw new Error(`marker operation ${index} does not match the mutation`);
       }
     }
+    return marker;
   } catch (error) {
     if (error instanceof AbloValidationError) throw error;
+    if (!required) return undefined;
     throw new AbloValidationError(
       `The direct Postgres logical marker is invalid: ${error instanceof Error ? error.message : 'unknown marker error'}`,
       { code: 'source_adapter_misconfigured' },
     );
   }
+}
+
+function resolveEchoMarker(
+  intent: SourceCommitEchoIntent,
+  rows: readonly Row[],
+) {
+  return sourceCommitEchoMarkerSchema.parse({
+    ...intent,
+    operations: intent.operations.map((operation, index) => {
+      const returnedId = rows[index]?.id;
+      const id = operation.id ?? returnedId;
+      if (typeof id !== 'string' || id.length === 0) {
+        throw new AbloValidationError(
+          `source operation ${index} did not return a canonical id for WAL correlation`,
+          { code: 'source_adapter_misconfigured' },
+        );
+      }
+      if (returnedId != null && String(returnedId) !== id) {
+        throw new AbloValidationError(
+          `source operation ${index} returned an id that does not match its WAL correlation`,
+          { code: 'source_adapter_misconfigured' },
+        );
+      }
+      return { ...operation, id };
+    }),
+  });
 }
 
 /**
@@ -226,7 +255,13 @@ export function createKyselyMutationAdapter(
 
     async commit(change: ChangeSet): Promise<AdapterCommitResult> {
       const request = changeSetSchema.parse(change);
-      if (mode === 'direct') assertDirectLogicalMarker(request, markerModelFor);
+      if (mode === 'direct' && !request.echo) {
+        throw new AbloValidationError(
+          'A direct Kysely mutation requires a transactional Postgres logical marker',
+          { code: 'source_adapter_misconfigured' },
+        );
+      }
+      const echoIntent = parseEchoIntent(request, markerModelFor, mode === 'direct');
 
       const requestHash = sourceChangeIntentHash(request);
       return db.transaction().execute(async (transaction) => {
@@ -280,8 +315,11 @@ export function createKyselyMutationAdapter(
           completeLedgerQuery(request.correlationId, rows),
         );
         if (request.echo?.kind === 'postgres-wal') {
+          const payload = echoIntent
+            ? JSON.stringify(resolveEchoMarker(echoIntent, rows))
+            : request.echo.payload;
           await transaction.executeQuery(
-            postgresLogicalMarkerQuery(request.echo.payload),
+            postgresLogicalMarkerQuery(payload),
           );
         }
         return { rows };

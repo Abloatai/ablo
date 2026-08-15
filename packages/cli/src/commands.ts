@@ -23,6 +23,7 @@ import { BRANCH_USAGE } from './branches';
 import { BRANCH_DEV_USAGE } from './branchDev';
 import { WHOAMI_USAGE } from './whoami';
 import { PUSH_USAGE } from './push';
+import { SETUP_USAGE } from './setup/run';
 
 /** Headings in the short help — the core loop, in the order you meet it. */
 export const CORE_GROUPS = ['Start', 'Every day', 'More'] as const;
@@ -61,6 +62,19 @@ export interface Command {
 
 export const COMMANDS = [
   {
+    name: 'setup',
+    usage: SETUP_USAGE,
+    core: { group: 'Start', does: 'Run the guided repository-to-verified-integration journey' },
+    full: {
+      group: 'Set up',
+      rows: [
+        { run: 'setup', does: 'Run the guided integration journey (read-only preview today)' },
+        { run: 'setup --plan', does: 'Read-only repository and Ablo setup plan' },
+        { run: 'setup --plan --json', does: 'Same evidence and blockers, machine-readable' },
+      ],
+    },
+  },
+  {
     name: 'init',
     core: { group: 'Start', does: 'Scaffold ablo/ with a starter schema (--yes runs without prompts, for agents/CI)' },
     full: {
@@ -68,6 +82,7 @@ export const COMMANDS = [
       rows: [
         { run: 'init', does: 'Scaffold ablo/ with a starter schema' },
         { run: 'init --yes [--framework nextjs]', does: 'No prompts, flag-driven (agents/CI)' },
+        { run: 'init --plan', does: 'Show every file action without changing the project' },
         { run: '     [--auth apikey] [--storage replication|endpoint] [--project <slug>] [--no-project]' },
         { run: '     [--no-agent] [--no-pull] [--no-install] [--no-login]' },
       ],
@@ -87,6 +102,16 @@ export const COMMANDS = [
   {
     name: 'logout',
     full: { group: 'Set up', rows: [{ run: 'logout', does: 'Remove the stored API key' }] },
+  },
+  {
+    name: 'telemetry',
+    full: {
+      group: "See what's happening",
+      rows: [
+        { run: 'telemetry status', does: 'Show whether limited CLI usage analytics are enabled' },
+        { run: 'telemetry enable|disable|reset', does: 'Control collection or rotate the local installation identity' },
+      ],
+    },
   },
   {
     name: 'connect',

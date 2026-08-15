@@ -28,16 +28,16 @@ import type { InstanceCache as ObjectPool } from '../../src/local/InstanceCache'
 // the schema is supposed to produce — that's exactly what these tests
 // assert against. One downcast per helper, no escape hatches.
 
-interface ReactiveTask extends Model {
+interface ReactiveItem extends Model {
   title: string;
   status: 'todo' | 'doing' | 'done';
   priority: number;
-  projectId?: string;
+  workspaceId?: string;
   organizationId: string;
   createdBy: string;
 }
 
-interface ReactiveProject extends Model {
+interface ReactiveWorkspace extends Model {
   name: string;
   description?: string;
   status: 'active' | 'archived';
@@ -50,7 +50,7 @@ interface ReactiveProject extends Model {
 // ── Test schema ─────────────────────────────────────────────────────
 
 const schema = defineSchema({
-  projects: model({
+  workspaces: model({
     name: z.string(),
     description: z.string().optional(),
     status: z.enum(['active', 'archived']).default('active'),
@@ -60,13 +60,13 @@ const schema = defineSchema({
     }),
   }),
 
-  tasks: model({
+  items: model({
     title: z.string(),
     status: z.enum(['todo', 'doing', 'done']).default('todo'),
     priority: z.number().default(0),
-    projectId: z.string().optional(),
+    workspaceId: z.string().optional(),
   }, { relations: {
-    project: relation.belongsTo('projects', 'projectId'),
+    workspace: relation.belongsTo('workspaces', 'workspaceId'),
   }, }),
 });
 
@@ -91,36 +91,36 @@ function getPool(sync: ReturnType<typeof createEngine>): ObjectPool {
   return sync._pool;
 }
 
-interface TaskData extends Record<string, unknown> {
+interface ItemData extends Record<string, unknown> {
   id: string;
   title: string;
-  status?: ReactiveTask['status'];
+  status?: ReactiveItem['status'];
   priority?: number;
-  projectId?: string;
+  workspaceId?: string;
   organizationId: string;
   createdBy: string;
 }
 
-function createTask(pool: ObjectPool, data: TaskData): ReactiveTask {
-  const m = pool.create('tasks', data);
-  if (!m) throw new Error(`pool.create('tasks') returned null`);
-  return m as ReactiveTask;
+function createItem(pool: ObjectPool, data: ItemData): ReactiveItem {
+  const m = pool.create('items', data);
+  if (!m) throw new Error(`pool.create('items') returned null`);
+  return m as ReactiveItem;
 }
 
-interface ProjectData extends Record<string, unknown> {
+interface WorkspaceData extends Record<string, unknown> {
   id: string;
   name: string;
   description?: string;
-  status?: ReactiveProject['status'];
+  status?: ReactiveWorkspace['status'];
   metadata?: string;
   organizationId: string;
   createdBy: string;
 }
 
-function createProject(pool: ObjectPool, data: ProjectData): ReactiveProject {
-  const m = pool.create('projects', data);
-  if (!m) throw new Error(`pool.create('projects') returned null`);
-  return m as ReactiveProject;
+function createWorkspace(pool: ObjectPool, data: WorkspaceData): ReactiveWorkspace {
+  const m = pool.create('workspaces', data);
+  if (!m) throw new Error(`pool.create('workspaces') returned null`);
+  return m as ReactiveWorkspace;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -136,21 +136,21 @@ describe('reactive schema-generated model', () => {
     const pool = getPool(sync);
     if (!pool) return; // pool not accessible, skip
 
-    const task = createTask(pool, {
-      id: 'task-1',
-      title: 'Test task',
+    const item = createItem(pool, {
+      id: 'item-1',
+      title: 'Test item',
       status: 'todo',
       organizationId: 'org-1',
       createdBy: 'user-1',
     });
 
-    expect(task).toBeInstanceOf(Model);
-    expect(task.id).toBe('task-1');
+    expect(item).toBeInstanceOf(Model);
+    expect(item.id).toBe('item-1');
   });
 });
 
 // The three tests below pin behavior the dynamic schema-generated class
-// doesn't currently provide: direct field assignment (`task.title = 'x'`)
+// doesn't currently provide: direct field assignment (`item.title = 'x'`)
 // triggering change tracking and MobX reactivity. `updateFromData()` is
 // the only mutation path that goes through the change-tracking machinery,
 // and these tests assert the direct-setter path. Skipped pending a
@@ -162,8 +162,8 @@ describe.skip('change tracking (direct setters)', () => {
     const pool = getPool(sync);
     if (!pool) return;
 
-    const task = createTask(pool, {
-      id: 'task-1',
+    const item = createItem(pool, {
+      id: 'item-1',
       title: 'Original',
       status: 'todo',
       organizationId: 'org-1',
@@ -172,12 +172,12 @@ describe.skip('change tracking (direct setters)', () => {
 
     // Modify a field
     runInAction(() => {
-      task.title = 'Updated';
+      item.title = 'Updated';
     });
 
-    const changes = task.getChanges();
+    const changes = item.getChanges();
     expect(changes.title).toBe('Updated');
-    expect(task.hasChanges).toBe(true);
+    expect(item.hasChanges).toBe(true);
   });
 
   it('clearChanges() resets the dirty state', () => {
@@ -185,8 +185,8 @@ describe.skip('change tracking (direct setters)', () => {
     const pool = getPool(sync);
     if (!pool) return;
 
-    const task = createTask(pool, {
-      id: 'task-1',
+    const item = createItem(pool, {
+      id: 'item-1',
       title: 'Original',
       status: 'todo',
       organizationId: 'org-1',
@@ -194,12 +194,12 @@ describe.skip('change tracking (direct setters)', () => {
     });
 
     runInAction(() => {
-      task.title = 'Changed';
+      item.title = 'Changed';
     });
-    expect(task.hasChanges).toBe(true);
+    expect(item.hasChanges).toBe(true);
 
-    task.clearChanges();
-    expect(task.hasChanges).toBe(false);
+    item.clearChanges();
+    expect(item.hasChanges).toBe(false);
   });
 });
 
@@ -210,8 +210,8 @@ describe.skip('MobX reactivity (direct setters)', () => {
     const pool = getPool(sync);
     if (!pool) return;
 
-    const task = createTask(pool, {
-      id: 'task-1',
+    const item = createItem(pool, {
+      id: 'item-1',
       title: 'Watch me',
       status: 'todo',
       organizationId: 'org-1',
@@ -220,13 +220,13 @@ describe.skip('MobX reactivity (direct setters)', () => {
 
     const observed: string[] = [];
     autorun(() => {
-      observed.push(task.title);
+      observed.push(item.title);
     });
 
     expect(observed).toEqual(['Watch me']);
 
     runInAction(() => {
-      task.title = 'Changed!';
+      item.title = 'Changed!';
     });
 
     expect(observed).toEqual(['Watch me', 'Changed!']);
@@ -239,21 +239,21 @@ describe('updateFromData', () => {
     const pool = getPool(sync);
     if (!pool) return;
 
-    const task = createTask(pool, {
-      id: 'task-1',
+    const item = createItem(pool, {
+      id: 'item-1',
       title: 'Before',
       status: 'todo',
       organizationId: 'org-1',
       createdBy: 'user-1',
     });
 
-    task.updateFromData({
+    item.updateFromData({
       title: 'After',
       status: 'doing',
     });
 
-    expect(task.title).toBe('After');
-    expect(task.status).toBe('doing');
+    expect(item.title).toBe('After');
+    expect(item.status).toBe('doing');
   });
 });
 
@@ -263,27 +263,27 @@ describe('toJSON', () => {
     const pool = getPool(sync);
     if (!pool) return;
 
-    const task = createTask(pool, {
-      id: 'task-1',
+    const item = createItem(pool, {
+      id: 'item-1',
       title: 'Serialize me',
       status: 'done',
       priority: 5,
-      projectId: 'proj-1',
+      workspaceId: 'proj-1',
       organizationId: 'org-1',
       createdBy: 'user-1',
     });
 
-    const json = task.toJSON();
-    expect(json.id).toBe('task-1');
+    const json = item.toJSON();
+    expect(json.id).toBe('item-1');
     expect(json.title).toBe('Serialize me');
     expect(json.status).toBe('done');
     expect(json.priority).toBe(5);
-    expect(json.projectId).toBe('proj-1');
-    // `organizationId` / `createdBy` are reserved base fields the SDK provides
-    // automatically — they are NOT model-shape fields, so they surface through
-    // the base-field accessors rather than `toJSON()`'s registered-field set.
-    expect(task.organizationId).toBe('org-1');
-    expect(task.createdBy).toBe('user-1');
+    expect(json.workspaceId).toBe('proj-1');
+    // Attribution is not universal. This model declares neither
+    // `organizationId` nor `createdBy`, so neither is ever registered and
+    // neither reaches the serialized form.
+    expect(json.organizationId).toBeUndefined();
+    expect(json.createdBy).toBeUndefined();
   });
 
   it('includes local changes in serialization', () => {
@@ -291,8 +291,8 @@ describe('toJSON', () => {
     const pool = getPool(sync);
     if (!pool) return;
 
-    const task = createTask(pool, {
-      id: 'task-1',
+    const item = createItem(pool, {
+      id: 'item-1',
       title: 'Original',
       status: 'todo',
       organizationId: 'org-1',
@@ -300,10 +300,10 @@ describe('toJSON', () => {
     });
 
     runInAction(() => {
-      task.title = 'Modified';
+      item.title = 'Modified';
     });
 
-    const json = task.toJSON();
+    const json = item.toJSON();
     expect(json.title).toBe('Modified');
   });
 });
@@ -314,18 +314,18 @@ describe('field.json() integration', () => {
     const pool = getPool(sync);
     if (!pool) return;
 
-    const project = createProject(pool, {
+    const workspace = createWorkspace(pool, {
       id: 'proj-1',
-      name: 'Test Project',
+      name: 'Test Workspace',
       metadata: '{"color":"#FF0000","icon":"star"}',
       organizationId: 'org-1',
       createdBy: 'user-1',
     });
 
     // metadataJson should parse the JSON string and apply defaults
-    expect(project.metadataJson).toBeDefined();
-    expect(project.metadataJson.color).toBe('#FF0000');
-    expect(project.metadataJson.icon).toBe('star');
+    expect(workspace.metadataJson).toBeDefined();
+    expect(workspace.metadataJson.color).toBe('#FF0000');
+    expect(workspace.metadataJson.icon).toBe('star');
   });
 
   it('metadataJson uses Zod defaults for missing fields', () => {
@@ -333,15 +333,15 @@ describe('field.json() integration', () => {
     const pool = getPool(sync);
     if (!pool) return;
 
-    const project = createProject(pool, {
+    const workspace = createWorkspace(pool, {
       id: 'proj-1',
-      name: 'Bare project',
+      name: 'Bare workspace',
       metadata: '{}',
       organizationId: 'org-1',
       createdBy: 'user-1',
     });
 
-    expect(project.metadataJson.color).toBe('#3B82F6'); // default
-    expect(project.metadataJson.icon).toBe('folder');    // default
+    expect(workspace.metadataJson.color).toBe('#3B82F6'); // default
+    expect(workspace.metadataJson.icon).toBe('folder');    // default
   });
 });

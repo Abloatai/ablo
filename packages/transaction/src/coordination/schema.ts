@@ -61,7 +61,7 @@ export function part(name: string): ClaimPart {
  * The wire spelling of a part name, from whichever spelling the caller used.
  *
  * Three, because they are three different promises. A {@link FieldRef} —
- * `schema.fields.tasks.status` — is a field the schema declares, so a name that
+ * `schema.fields.items.status` — is a field the schema declares, so a name that
  * does not exist never compiles. `part('B2')` is a name the schema does not
  * know and says so. A bare string is neither, and survives only because the
  * erased `SchemaRecord` view and untyped callers still need it.
@@ -330,7 +330,7 @@ const syncIdSchema = z.number().int().nonnegative();
  *
  *   • `self`       — the row that moved IS the group's scope root.
  *   • `parent`     — it sits one declared containment edge below the root.
- *   • `transitive` — the root is ≥2 hops up (`comment → task → project`).
+ *   • `transitive` — the root is ≥2 hops up (`comment → item → project`).
  */
 export const stalePropagationSchema = z
   .object({
@@ -1417,6 +1417,11 @@ export const commitOperationSchema = writeGuardSchema.extend({
   model: z.string(),
   id: z.string().nullish(),
   input: z.record(z.string(), z.unknown()).nullish(),
+  /** Equality conditions evaluated atomically by the writing database. */
+  where: z
+    .record(z.string().min(1), z.unknown())
+    .refine((value) => Object.keys(value).length > 0, 'where must name at least one field')
+    .nullish(),
   /** Per-op client tx id, echoed on the broadcast delta. */
   transactionId: z.string().nullish(),
   /**

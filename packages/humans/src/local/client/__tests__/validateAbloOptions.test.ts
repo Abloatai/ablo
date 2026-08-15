@@ -11,7 +11,7 @@
 import { validateAbloOptions } from '../validateAbloOptions.js';
 import { AbloError, AbloValidationError } from '@abloatai/transaction/errors';
 
-const validSchema = { models: { tasks: {} } };
+const validSchema = { models: { items: {} } };
 
 /**
  * Narrows away the `null` branch. Every rejection test expects an error, so a

@@ -14,7 +14,7 @@
  * import { updateTool } from '@abloatai/ablo/ai-sdk';
  * import { z } from 'zod';
  *
- * const saveSection = updateTool(ablo.documents, {
+ * const saveSection = updateTool(ablo.records, {
  *   description: 'Save your section into the shared document.',
  *   inputSchema: z.object({ text: z.string() }),
  *   id: () => DOC_ID,

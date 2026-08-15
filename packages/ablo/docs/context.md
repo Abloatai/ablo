@@ -21,13 +21,13 @@ import { generateText } from 'ai';
 const ctx = await context({
   ablo,
   data: {
-    task: ablo.tasks.get({ id: taskId }),
-    documents: ablo.documents.list({ where: { taskId } }),
-    memory: loadMemories(taskId),
+    record: ablo.records.get({ id: recordId }),
+    records: ablo.records.list({ where: { recordId } }),
+    memory: loadMemories(recordId),
   },
 });
 
-if (!ctx.data.task) throw new Error('Task not found');
+if (!ctx.data.record) throw new Error('Record not found');
 
 const result = await generateText({
   model,
@@ -35,8 +35,8 @@ const result = await generateText({
   tools,
 });
 
-await ablo.tasks.update({
-  id: ctx.data.task.id,
+await ablo.records.update({
+  id: ctx.data.record.id,
   data: parseTaskUpdate(result.text),
   reads: ctx.reads,
 });
@@ -80,7 +80,7 @@ This distinction is visible in `sources`:
 ```ts
 ctx.sources;
 // [
-//   { key: 'task', kind: 'ablo', guarantee: 'guardable', cursor: 42 },
+//   { key: 'record', kind: 'ablo', guarantee: 'guardable', cursor: 42 },
 //   { key: 'memory', kind: 'value', guarantee: 'informational', cursor: null },
 // ]
 ```
@@ -89,7 +89,7 @@ A top-level value may contain both kinds. It is then marked `mixed` and only
 its exact Ablo rows appear in `ctx.reads`:
 
 ```ts
-// data: { briefing: { task, memory } }
+// data: { briefing: { record, memory } }
 // sources: [
 //   { key: 'briefing', kind: 'mixed', guarantee: 'partial', cursor: 42 },
 // ]
@@ -108,10 +108,10 @@ Reducto, or another system behind their own interfaces.
 const ctx = await context({
   ablo,
   data: {
-    task: ablo.tasks.get({ id: taskId }),
+    record: ablo.records.get({ id: recordId }),
     memory: loadMemories({ query, userId }),
     related: findRelatedChunks({ projectId, query }),
-    evidence: extractEvidence({ documentId }),
+    evidence: extractEvidence({ recordId }),
   },
 });
 ```
@@ -141,7 +141,7 @@ await generateText({
   model,
   messages: [
     ...history,
-    contextMessage(ctx, { include: ['task', 'documents', 'memory'] }),
+    contextMessage(ctx, { include: ['record', 'documents', 'memory'] }),
   ],
   tools,
 });

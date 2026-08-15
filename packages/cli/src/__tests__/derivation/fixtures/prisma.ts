@@ -8,8 +8,8 @@
  *
  * Editing one means editing the other. The schema covers, deliberately:
  *
- *   - a model adopted because it is tenant-scoped (`tasks`), and one adopted
- *     as a relation target (`projects`)
+ *   - a model adopted because it is tenant-scoped (`records`), and one adopted
+ *     as a relation target (`workspaces`)
  *   - a model skipped because it has no tenancy column (`settings`)
  *   - every field kind the IR can carry: string, number, boolean, date, json, enum
  *   - a lossy lowering (a scalar list, which has no engine type) that must
@@ -38,7 +38,7 @@ enum Status {
   done
 }
 
-model Task {
+model Record {
   id             String    @id
   title          String
   status         Status?
@@ -48,22 +48,22 @@ model Task {
   meta           Json?
   labels         String[]
   deadline       DateTime? @map("due_at")
-  projectId      String?
-  project        Project?  @relation(fields: [projectId], references: [id])
+  workspaceId      String?
+  workspace        Workspace?  @relation(fields: [workspaceId], references: [id])
   organizationId String
   createdBy      String
   createdAt      DateTime
   updatedAt      DateTime
 
-  @@map("tasks")
+  @@map("records")
 }
 
-model Project {
+model Workspace {
   id             String @id
   name           String
   organizationId String
 
-  @@map("projects")
+  @@map("workspaces")
 }
 
 model Settings {

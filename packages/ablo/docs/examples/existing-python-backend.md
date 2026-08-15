@@ -95,7 +95,7 @@ export async function POST() {
   const userId = await currentUserId(); // your auth
   const { token, expiresAt } = await ablo.sessions.create({
     user: { id: userId },
-    can: { tasks: ['read', 'update'] },
+    can: { records: ['read', 'update'] },
   });
   return Response.json(
     credentialEndpointSuccessSchema.parse({

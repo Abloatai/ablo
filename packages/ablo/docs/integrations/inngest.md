@@ -1,6 +1,6 @@
-# Inngest for long-running tasks
+# Inngest for long-running records
 
-> Run event-driven, retryable agent tasks with Inngest while Ablo makes each
+> Run event-driven, retryable agent records with Inngest while Ablo makes each
 > shared-state effect typed, idempotent, and authoritative.
 
 Inngest and Ablo solve different parts of a durable agent system:

@@ -54,6 +54,11 @@ export function memoryDataSource(): DataSourceAdapter {
   };
 
   const applyOperation = (op: Operation): Row => {
+    if (op.where) {
+      throw new AbloValidationError('The memory adapter does not support conditional operations', {
+        code: 'source_adapter_misconfigured',
+      });
+    }
     const m = modelStore(op.model);
     const id = rowId(op);
     switch (op.type) {

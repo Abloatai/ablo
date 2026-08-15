@@ -99,8 +99,8 @@ describe('parseConnectArgs', () => {
   });
 
   it('parses --tables into a trimmed, non-empty list', () => {
-    const a = parseConnectArgs(['--tables', 'tasks, projects ,, users']);
-    expect(a.tables).toEqual(['tasks', 'projects', 'users']);
+    const a = parseConnectArgs(['--tables', 'records, projects ,, users']);
+    expect(a.tables).toEqual(['records', 'projects', 'users']);
   });
 
   it('parses --role', () => {
@@ -305,21 +305,21 @@ describe('connectSetupSql — the one prescriptive recipe (logical replication)'
   });
 
   it('scopes every grant to the named tables — no schema-wide reach — with --tables', () => {
-    const scoped = connectSetupSql({ tables: ['documents'] }).join('\n');
+    const scoped = connectSetupSql({ tables: ['records'] }).join('\n');
     // Replicator reads only the published table, and gains no default-privilege
     // grant that would reach tables added later.
-    expect(scoped).toContain(`GRANT SELECT ON TABLE "public"."documents" TO "${ABLO_REPLICATION_ROLE}";`);
+    expect(scoped).toContain(`GRANT SELECT ON TABLE "public"."records" TO "${ABLO_REPLICATION_ROLE}";`);
     expect(scoped).not.toContain('ON ALL TABLES IN SCHEMA public');
     expect(scoped).not.toContain('ALTER DEFAULT PRIVILEGES');
     // Writer DML is limited to the named table.
     expect(scoped).toContain(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "public"."documents" TO "${ABLO_WRITE_ROLE}";`
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "public"."records" TO "${ABLO_WRITE_ROLE}";`
     );
     // Sequences are the ones those tables own, resolved from the catalog — not
     // every sequence in the schema.
     expect(scoped).not.toContain('ON ALL SEQUENCES IN SCHEMA public');
     expect(scoped).toContain('FROM pg_depend');
-    expect(scoped).toContain("t.relname IN ('documents')");
+    expect(scoped).toContain("t.relname IN ('records')");
   });
 
   it('provisions the permanent direct ledger but no endpoint outbox', () => {
@@ -336,25 +336,25 @@ describe('connectSetupSql — the one prescriptive recipe (logical replication)'
   });
 
   it('scopes the publication to a subset with --tables', () => {
-    const scoped = connectSetupSql({ tables: ['tasks', 'projects'] }).join('\n');
+    const scoped = connectSetupSql({ tables: ['records', 'projects'] }).join('\n');
     expect(scoped).toContain(
-      `CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "public"."tasks", "public"."projects";`
+      `CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "public"."records", "public"."projects";`
     );
     expect(scoped).not.toContain('FOR ALL TABLES');
   });
 
   it('keeps every per-project object inside the configured schema', () => {
     const scoped = connectSetupSql({
-      schema: 'slides',
+      schema: 'content',
       publication: 'ablo_publication_branch',
-      tables: ['documents'],
+      tables: ['records'],
     }).join('\n');
     expect(scoped).toContain(
-      'CREATE PUBLICATION "ablo_publication_branch" FOR TABLE "slides"."documents";'
+      'CREATE PUBLICATION "ablo_publication_branch" FOR TABLE "content"."records";'
     );
-    expect(scoped).toContain('GRANT USAGE ON SCHEMA "slides"');
-    expect(scoped).toContain('CREATE TABLE IF NOT EXISTS "slides"."ablo_idempotency"');
-    expect(scoped).not.toContain('"public"."documents"');
+    expect(scoped).toContain('GRANT USAGE ON SCHEMA "content"');
+    expect(scoped).toContain('CREATE TABLE IF NOT EXISTS "content"."ablo_idempotency"');
+    expect(scoped).not.toContain('"public"."records"');
     expect(scoped).not.toContain('"public"."ablo_idempotency"');
   });
 
@@ -393,10 +393,10 @@ describe('reconcilePublicationPlan — keep the publication equal to --tables', 
 
   it('creates the publication when none exists (scoped)', () => {
     const r = reconcilePublicationPlan({ exists: false, allTables: false, tables: [] }, [
-      'documents',
+      'records',
     ]);
-    expect(r.sql).toEqual([`CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "public"."documents";`]);
-    expect(r.added).toEqual(['documents']);
+    expect(r.sql).toEqual([`CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "public"."records";`]);
+    expect(r.added).toEqual(['records']);
     expect(r.removed).toEqual([]);
     expect(r.recreated).toBe(false);
   });
@@ -408,7 +408,7 @@ describe('reconcilePublicationPlan — keep the publication equal to --tables', 
   });
 
   it('is a no-op when the scoped set already matches', () => {
-    const r = reconcilePublicationPlan(scoped(['documents']), ['documents']);
+    const r = reconcilePublicationPlan(scoped(['records']), ['records']);
     expect(r.sql).toEqual([]);
     expect(r.added).toEqual([]);
     expect(r.removed).toEqual([]);
@@ -422,25 +422,25 @@ describe('reconcilePublicationPlan — keep the publication equal to --tables', 
     expect(r.recreated).toBe(false);
   });
 
-  it('reproduces the adopter bug: stale cb_* publication reconciled to documents', () => {
+  it('reproduces the adopter bug: stale cb_* publication reconciled to records', () => {
     // The exact state that produced "writer not ready": a pre-existing publication
-    // publishing the CollabBench tables while `apply --tables documents` ran.
+    // publishing the CollabBench tables while `apply --tables records` ran.
     const r = reconcilePublicationPlan(scoped(['cb_agent_runs', 'cb_documents', 'cb_tasks']), [
-      'documents',
+      'records',
     ]);
-    expect(r.sql).toEqual([`ALTER PUBLICATION "${ABLO_PUBLICATION}" SET TABLE "public"."documents";`]);
-    expect(r.added).toEqual(['documents']);
+    expect(r.sql).toEqual([`ALTER PUBLICATION "${ABLO_PUBLICATION}" SET TABLE "public"."records";`]);
+    expect(r.added).toEqual(['records']);
     expect(r.removed).toEqual(['cb_agent_runs', 'cb_documents', 'cb_tasks']);
   });
 
   it('drops+recreates for a mode flip (FOR ALL TABLES → scoped)', () => {
-    const r = reconcilePublicationPlan({ exists: true, allTables: true, tables: [] }, ['documents']);
+    const r = reconcilePublicationPlan({ exists: true, allTables: true, tables: [] }, ['records']);
     expect(r.sql).toEqual([
       `DROP PUBLICATION IF EXISTS "${ABLO_PUBLICATION}";`,
-      `CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "public"."documents";`,
+      `CREATE PUBLICATION "${ABLO_PUBLICATION}" FOR TABLE "public"."records";`,
     ]);
     expect(r.recreated).toBe(true);
-    expect(r.added).toEqual(['documents']);
+    expect(r.added).toEqual(['records']);
   });
 
   it('drops+recreates for a mode flip (scoped → FOR ALL TABLES) and reports the removals', () => {

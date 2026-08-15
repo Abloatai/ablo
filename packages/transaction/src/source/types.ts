@@ -105,6 +105,7 @@ export interface SourceOperation {
   readonly model: string;
   readonly id?: string | null;
   readonly input?: Record<string, unknown> | null;
+  readonly where?: Record<string, unknown> | null;
   readonly transactionId?: string | null;
   readonly readAt?: number | null;
   readonly onStale?: OnStaleMode | null;

@@ -76,7 +76,7 @@ describe('awaitClaimGrant', () => {
     t.emit('claim_rejected', {
       claimId: 'i1',
       reason: 'conflict',
-      target: { entityType: 'Task', entityId: 't1' },
+      target: { entityType: 'Item', entityId: 't1' },
       heldBy: 'agent:writer',
       heldByClaimId: 'i0',
       heldByExpiresAt: Date.now() + 120_000,
@@ -84,7 +84,7 @@ describe('awaitClaimGrant', () => {
         claimId: 'i0',
         declaredAt: Date.now(),
         expiresAt: Date.now() + 120_000,
-        entityType: 'Task',
+        entityType: 'Item',
         entityId: 't1',
         // No explicit description — the work rides in `meta.description`, and the
         // message must resolve it from there.
@@ -114,7 +114,7 @@ describe('awaitClaimGrant', () => {
     t.emit('claim_rejected', {
       claimId: 'i1',
       reason: 'conflict',
-      target: { entityType: 'Task', entityId: 't1' },
+      target: { entityType: 'Item', entityId: 't1' },
     });
     const err = await p.then(
       () => {
@@ -125,7 +125,7 @@ describe('awaitClaimGrant', () => {
     expect(err).toBeInstanceOf(AbloClaimedError);
     expect(err.code).toBe('claim_conflict');
     expect(err.claims).toBeUndefined();
-    expect(err.message).toBe('Claim rejected for Task/t1.');
+    expect(err.message).toBe('Claim rejected for Item/t1.');
   });
 
   it('keeps waiting when position is within maxQueueDepth, then resolves on grant', async () => {
@@ -168,7 +168,7 @@ describe('awaitClaimGrant', () => {
     t.emit('claim_rejected', {
       claimId: 'i1',
       reason: 'conflict',
-      target: { entityType: 'Task', entityId: 't1' },
+      target: { entityType: 'Item', entityId: 't1' },
     });
 
     const error = await p.catch((caught: unknown) => caught);

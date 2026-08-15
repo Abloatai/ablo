@@ -5,8 +5,8 @@
 You want an agent that edits **one workspace** and pushes realtime updates to the
 participants on **that workspace only** — not a broadcast to the whole org. The
 catch most people hit: which write reaches whom is decided by how the rows
-*relate*, not by which columns the write touched. So a task edit that never sets
-`workspaceId` still reaches everyone watching the workspace, because the task already
+*relate*, not by which columns the write touched. So a record edit that never sets
+`workspaceId` still reaches everyone watching the workspace, because the record already
 belongs to it. You get this by declaring the relationship once, then narrowing the
 agent to the workspace id — you never assemble a `workspace:<id>` audience string by
 hand.
@@ -27,9 +27,9 @@ export const schema = defineSchema(
       { title: z.string() },
       { groups: { root: 'workspace' } },
     ),
-    // A task has no group of its own. It inherits its workspace's group via the
-    // `parent` edge, so a task write reaches everyone watching the workspace.
-    tasks: model(
+    // A record has no group of its own. It inherits its workspace's group via the
+    // `parent` edge, so a record write reaches everyone watching the workspace.
+    records: model(
       { workspaceId: z.string(), title: z.string() },
       { relations: { workspace: relation.belongsTo('workspaces', 'workspaceId', { parent: true }) } },
     ),
@@ -67,7 +67,7 @@ const server = Ablo({ schema, apiKey: process.env.ABLO_API_KEY });
 export async function mintProjectAgentSession(workspaceId: string, agentId: string) {
   const { token } = await server.sessions.create({
     agent: { id: agentId },
-    can: { tasks: ['read', 'update'] }, // operation allowlist for this run
+    can: { records: ['read', 'update'] }, // operation allowlist for this run
     syncGroups: [syncGroup('workspace', workspaceId)], // narrowed to just this workspace
   });
   return token;
@@ -106,13 +106,13 @@ const ablo = useAblo();
 // Other participants subscribed to workspace:<workspaceId> — a reviewer agent, a
 // person watching in the UI — receive this delta in realtime. Participants on
 // other workspaces never see it.
-await ablo.tasks.update({ id: taskId, data: { title: 'Ship the Q4 report' } });
+await ablo.records.update({ id: recordId, data: { title: 'Ship the Q4 report' } });
 ```
 
-The task's delta is stamped `workspace:<workspaceId>`, derived server-side from the
-task → workspace `parent` edge — not from `workspaceId` appearing in this particular
+The record's delta is stamped `workspace:<workspaceId>`, derived server-side from the
+record → workspace `parent` edge — not from `workspaceId` appearing in this particular
 write, and not from whatever the agent happened to subscribe to. The routing is
-decided by the data: a task belongs to its workspace, so its writes go to the
+decided by the data: a record belongs to its workspace, so its writes go to the
 workspace's group, full stop.
 
 ## See also

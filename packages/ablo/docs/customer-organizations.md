@@ -1,0 +1,215 @@
+# Customer Organizations
+
+> Serve many customer organizations from one backend and one shared schema without weakening tenant isolation.
+
+An application serving many customers has two independent choices: where
+customer data is isolated and where the schema is authored. Ablo lets every
+customer keep a hard organization boundary while all of them use the schema
+pushed once by the owning project.
+
+## Choose the customer boundary first
+
+| Customer model | Isolation guarantee | Choose it when |
+|---|---|---|
+| One Ablo organization with customer scope roots | Whatever read boundary every model declares in `policy` | Cross-customer reads are intentional, or every model is explicitly and continuously policy-partitioned |
+| One Ablo organization per customer | Structural organization filtering and RLS on every row | Customers must stay isolated even when a model has no customer-specific policy |
+
+Sync-groups decide which changes are delivered. They do not, by themselves,
+authorize HTTP reads. If you cannot audit matching policies across every model,
+use one Ablo organization per customer.
+
+The rest of this guide uses organization-per-customer: one trusted backend
+holds one dedicated mint key, every customer has an `organizationId`, and each
+user session names that customer organization.
+
+## What you need
+
+- An owning project containing the schema every customer uses.
+- The schema pushed to that project's production root.
+- A server-side `sk_` carrying only `ephemeral:mint-any-org`.
+- A customer `organizationId` resolved from your authenticated application
+  membership, never accepted unchecked from the browser.
+- A model-by-model `can` grant for the UI being opened.
+
+The cross-organization key is a minting credential, not a tenant-data
+credential. Keep it in a secret manager and expose only your own authenticated
+session endpoint.
+
+## Mint on your backend
+
+Create the Ablo client once in server-only code:
+
+```ts
+import Ablo from '@abloatai/ablo';
+import { schema } from '@/ablo/schema';
+
+export const customerSessions = Ablo({
+  schema,
+  apiKey: process.env.ABLO_API_KEY,
+});
+```
+
+After your application authenticates the user, resolve the customer from that
+trusted membership and mint the session:
+
+```ts
+import { credentialEndpointSuccessSchema } from '@abloatai/ablo/auth';
+import { customerSessions } from '@/ablo/customer-sessions';
+
+export async function POST() {
+  const member = await requireSignedInCustomerMember();
+
+  const session = await customerSessions.sessions.create({
+    user: { id: member.userId },
+    organizationId: member.abloOrganizationId,
+    can: {
+      projects: ['read'],
+      records: ['read', 'create', 'update'],
+    },
+  });
+
+  return Response.json(
+    credentialEndpointSuccessSchema.parse({
+      token: session.token,
+      expiresAt: session.expiresAt,
+      credentialKind: 'ephemeral',
+    }),
+    { headers: { 'Cache-Control': 'no-store' } },
+  );
+}
+```
+
+Do not take `organizationId` directly from request JSON. A signed-in user could
+replace it with another customer's id. Derive it from the server-side membership
+you just authenticated.
+
+## Connect the browser
+
+The browser knows only your session endpoint. It never receives the
+cross-organization key:
+
+```tsx
+'use client';
+
+import Ablo from '@abloatai/ablo';
+import { AbloProvider } from '@abloatai/ablo/react';
+import { schema } from '@/ablo/schema';
+
+const ablo = Ablo({
+  schema,
+  authEndpoint: '/api/ablo-session',
+});
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  return <AbloProvider client={ablo}>{children}</AbloProvider>;
+}
+```
+
+The client re-mints before expiry. Your endpoint should return
+`session_expired` only when the application's own login is gone; network and
+server failures are transient and must not sign the user out.
+
+## Schema and data stay on different axes
+
+For a cross-organization mint, Ablo derives the schema binding from the owning
+key automatically:
+
+```text
+owning key organization/project    -> schema shape
+customer organization              -> rows, RLS, database, sync groups
+session can                         -> allowed model operations
+model policy                        -> allowed reads inside that organization
+```
+
+Most applications should not pass a schema option. An explicit override exists for
+migrations or advanced routing:
+
+```ts
+await customerSessions.sessions.create({
+  user: { id: member.userId },
+  organizationId: member.abloOrganizationId,
+  schemaProject: {
+    organizationId: schemaOwnerOrganizationId,
+    projectId: migratingSchemaProjectId,
+  },
+  can: { records: ['read', 'update'] },
+});
+```
+
+Both schema coordinates move together; customer data does not move with them.
+
+## Customer lifecycle checklist
+
+When onboarding a customer:
+
+1. Provision or resolve its Ablo organization and store that immutable id on
+   your customer record.
+2. Connect that organization's production data source if it owns a separate
+   database.
+3. Keep the shared schema in the owning project; do not copy it into every
+   customer organization.
+4. Mint a test user session through the same backend route production uses.
+5. Verify one known read and write in the customer organization before enabling
+   the integration.
+
+When offboarding, stop minting immediately, revoke active sessions when an
+immediate cutoff is required, and retire the customer's data-source access
+through the control-plane process you use for provisioning.
+
+## Security checklist
+
+- Store the cross-organization key only in the backend secret manager.
+- Give it only `ephemeral:mint-any-org`; do not combine minting with schema or
+  data authority.
+- Resolve `organizationId` from authenticated membership server-side.
+- Keep `can` to the smallest model/verb set the UI needs.
+- Use organization-per-customer when a missing model policy must not expose
+  another customer's rows.
+- Rotate the cross-organization key on a schedule and after personnel or
+  infrastructure changes.
+- Record target organization, user, session id, and request id without logging
+  plaintext credentials.
+
+## Troubleshooting
+
+### The mint is forbidden
+
+The presenting credential must be a secret `sk_` with
+`ephemeral:mint-any-org`. A normal project key can mint users into its own
+organization but cannot name another one. Run `npx ablo whoami --json` in the
+backend environment to confirm which project and branch the configured key
+actually belongs to; the command never prints the full secret.
+
+### The session mints but bootstrap is empty
+
+Confirm that the cross-organization key belongs to the project where the schema
+was pushed, and that the customer's organization has its data source/root
+branch ready. Do not copy the schema into the customer organization. If you
+supplied `schemaProject`, remove it unless you intentionally override the
+owning-key default.
+
+### The mint reports an unknown model
+
+Every model named by `can` must exist in the active shared schema. Check the
+model key spelling against the schema used to construct `customerSessions`, then
+push that schema to the key's branch deliberately.
+
+### Data appears under the wrong customer
+
+Inspect the membership-to-`organizationId` lookup in your backend route first.
+The schema project never selects the data tenant. The `organizationId` passed to
+`sessions.create` does, and it must come from trusted server-side membership.
+
+### Realtime looks isolated but an HTTP read is too broad
+
+Sync-groups route changes; they are not a read policy. Add or correct the
+model's `policy`, or move customers to separate Ablo organizations when the
+boundary must hold structurally across every model.
+
+## Related guides
+
+- [Sessions](./sessions.md) — session lifecycle, refresh, revocation, and grants.
+- [API Keys](./api-keys.md) — credential classes, scopes, inspection, and rotation.
+- [Identity & Sync Groups](./identity.md) — participant delivery groups versus model read policy.
+- [Connect Your Database](./data-sources.md) — customer-owned database setup.
+- [Deployment](./deployment.md) — production schema and database rollout order.

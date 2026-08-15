@@ -9,7 +9,7 @@ import { abloOpenApi, schemaToOpenApi } from '@abloatai/transaction/schema/opena
 import { commitRequestSchema } from '@abloatai/transaction/wire';
 
 const schema = defineSchema({
-  tasks: model({
+  items: model({
     title: z.string(),
     status: z.enum(['todo', 'doing', 'done']),
     notes: z.string().optional(),
@@ -29,26 +29,26 @@ describe('schemaToOpenApi', () => {
   });
 
   it('emits the per-model CRUD + claim routes for each schema model', () => {
-    expect(paths['/v1/models/tasks']).toBeDefined();
-    expect(paths['/v1/models/tasks/{id}']).toBeDefined();
-    expect(paths['/v1/models/tasks/{id}/claim']).toBeDefined();
-    expect(paths['/v1/models/tasks/{id}/claim/reorder']).toBeDefined();
+    expect(paths['/v1/models/items']).toBeDefined();
+    expect(paths['/v1/models/items/{id}']).toBeDefined();
+    expect(paths['/v1/models/items/{id}/claim']).toBeDefined();
+    expect(paths['/v1/models/items/{id}/claim/reorder']).toBeDefined();
     expect(paths['/v1/commits']).toBeDefined();
     // list + create + retrieve + update + delete verbs are present
-    expect((paths['/v1/models/tasks'] as Record<string, unknown>).get).toBeDefined();
-    expect((paths['/v1/models/tasks'] as Record<string, unknown>).post).toBeDefined();
-    const byId = paths['/v1/models/tasks/{id}'] as Record<string, unknown>;
+    expect((paths['/v1/models/items'] as Record<string, unknown>).get).toBeDefined();
+    expect((paths['/v1/models/items'] as Record<string, unknown>).post).toBeDefined();
+    const byId = paths['/v1/models/items/{id}'] as Record<string, unknown>;
     expect(byId.get && byId.patch && byId.delete).toBeTruthy();
   });
 
   it('derives the component schema from FieldMeta (types, enum, optionality)', () => {
-    const tasks = components.Tasks;
-    if (!tasks) throw new Error('expected Tasks component schema');
-    const props = tasks.properties as Record<string, Record<string, unknown>>;
+    const items = components.Items;
+    if (!items) throw new Error('expected Items component schema');
+    const props = items.properties as Record<string, Record<string, unknown>>;
     expect(props.id?.type).toBe('string');
     expect(props.title?.type).toBe('string');
     expect(props.status?.enum).toEqual(['todo', 'doing', 'done']);
-    const required = tasks.required as string[];
+    const required = items.required as string[];
     expect(required).toContain('title'); // required
     expect(required).not.toContain('notes'); // .optional() → not required
   });
@@ -151,7 +151,7 @@ describe('abloOpenApi (protocol reference)', () => {
         'ModelPage',
       ]),
     );
-    expect(schemas.Tasks).toBeUndefined();
+    expect(schemas.Items).toBeUndefined();
   });
 
   it('gives every operation a stable unique operationId', () => {
@@ -181,9 +181,9 @@ describe('schemaToOpenApi operation names', () => {
       Record<string, Record<string, unknown>>
     >;
 
-    expect(paths['/v1/models/tasks']?.get?.operationId).toBe('listTasksRows');
-    expect(paths['/v1/models/tasks/{id}']?.patch?.operationId).toBe(
-      'updateTasksRow',
+    expect(paths['/v1/models/items']?.get?.operationId).toBe('listItemsRows');
+    expect(paths['/v1/models/items/{id}']?.patch?.operationId).toBe(
+      'updateItemsRow',
     );
     expect(paths['/v1/commits']?.post?.operationId).toBe('commit');
   });

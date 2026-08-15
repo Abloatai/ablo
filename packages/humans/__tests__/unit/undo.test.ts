@@ -21,8 +21,8 @@
  *   - async replay-echo suppression
  *   - serialization               — invocation-order guarantee
  *
- * The slides-facing layers (SlideUndoStack, SelectionHistory,
- * SelectionUndoController) are covered in apps/web/tests/unit/lib/slides/undo.test.ts.
+ * The entries-facing layers (EntryUndoStack, SelectionHistory,
+ * SelectionUndoController) are covered in apps/web/tests/unit/lib/entries/undo.test.ts.
  */
 
 import { z } from 'zod';
@@ -42,21 +42,21 @@ import { createTestContext } from '../../src/local/testing';
 // ── Shared schema + model ──────────────────────────────────────────────
 
 const testSchema = defineSchema({
-  tasks: model(
+  items: model(
     {
       title: z.string(),
       status: z.enum(['todo', 'in_progress', 'done']).default('todo'),
       order: z.number().default(0),
-      projectId: z.string().optional(),
+      workspaceId: z.string().optional(),
     },
-    { typename: 'Task' }),
+    { typename: 'Item' }),
 });
 
-class TestTask extends Model {
+class TestItem extends Model {
   title!: string;
   status!: 'todo' | 'in_progress' | 'done';
   order!: number;
-  projectId?: string;
+  workspaceId?: string;
   organizationId!: string;
   override archivedAt?: Date | null;
 
@@ -65,19 +65,19 @@ class TestTask extends Model {
     this.title = (data.title as string) ?? '';
     this.status = (data.status as 'todo' | 'in_progress' | 'done') ?? 'todo';
     this.order = (data.order as number) ?? 0;
-    this.projectId = data.projectId as string | undefined;
+    this.workspaceId = data.workspaceId as string | undefined;
     this.organizationId = (data.organizationId as string) ?? '';
     this.archivedAt = data.archivedAt as Date | null | undefined;
   }
 
   override toJSON(): Record<string, unknown> {
     return {
-      __typename: 'Task',
+      __typename: 'Item',
       id: this.id,
       title: this.title,
       status: this.status,
       order: this.order,
-      projectId: this.projectId,
+      workspaceId: this.workspaceId,
       organizationId: this.organizationId,
       archivedAt: this.archivedAt,
       createdAt: this.createdAt,
@@ -109,11 +109,11 @@ function createStore(): SyncStoreContract {
     queryByClass: () => ({ data: [] }),
     save: async (m) => {
       if (!pool.get(m.id)) pool.add(m);
-      emit({ type: 'update', modelName: 'Task', modelId: m.id, data: { title: (m as TestTask).title } });
+      emit({ type: 'update', modelName: 'Item', modelId: m.id, data: { title: (m as TestItem).title } });
     },
     delete: async (m) => {
       pool.remove(m.id);
-      emit({ type: 'delete', modelName: 'Task', modelId: m.id, previousData: m.toJSON() });
+      emit({ type: 'delete', modelName: 'Item', modelId: m.id, previousData: m.toJSON() });
     },
     archive: async () => {},
     unarchive: async () => {},
@@ -142,7 +142,7 @@ function createStore(): SyncStoreContract {
 
 beforeEach(() => {
   const registry = new ModelRegistry();
-  registry.registerModel('Task', TestTask);
+  registry.registerModel('Item', TestItem);
   setActiveRegistry(registry);
   const ctx = createTestContext();
   cleanup = ctx.cleanup;
@@ -155,13 +155,13 @@ afterEach(() => {
   cleanup();
 });
 
-/** Read a task from the pool (asserting it's present is the caller's job). */
-const task = (id: string): TestTask => pool.get(id) as unknown as TestTask;
+/** Read a item from the pool (asserting it's present is the caller's job). */
+const item = (id: string): TestItem => pool.get(id) as unknown as TestItem;
 /** Wait one microtask so the stream scope's per-tick flush runs. */
 const tick = (): Promise<void> => Promise.resolve();
-/** Seed a task without recording it on any undo scope. */
-async function seed(input: { title: string; status?: 'todo' | 'in_progress' | 'done'; projectId?: string }): Promise<string> {
-  const created = await createTransaction(testSchema, store, 'org-1').mutations.tasks.create(input);
+/** Seed a item without recording it on any undo scope. */
+async function seed(input: { title: string; status?: 'todo' | 'in_progress' | 'done'; workspaceId?: string }): Promise<string> {
+  const created = await createTransaction(testSchema, store, 'org-1').mutations.items.create(input);
   return (created as { id: string }).id;
 }
 
@@ -170,31 +170,31 @@ async function seed(input: { title: string; status?: 'todo' | 'in_progress' | 'd
 describe('RecordingMutation', () => {
   it('captures create → delete inverse', async () => {
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    const t = await rec.tx.mutations.tasks.create({ title: 'Hello' });
+    const t = await rec.tx.mutations.items.create({ title: 'Hello' });
     const entry = rec.getEntry();
 
     expect(entry).not.toBeNull();
     expect(entry!.inverses).toHaveLength(1);
-    expect(entry!.inverses[0]).toMatchObject({ kind: 'delete', modelKey: 'tasks', id: (t as { id: string }).id });
+    expect(entry!.inverses[0]).toMatchObject({ kind: 'delete', modelKey: 'items', id: (t as { id: string }).id });
   });
 
   it('captures update → update-back inverse with prev values', async () => {
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    const t = await rec.tx.mutations.tasks.create({ title: 'Original' });
+    const t = await rec.tx.mutations.items.create({ title: 'Original' });
     const id = (t as { id: string }).id;
 
-    await rec.tx.mutations.tasks.update({ id, title: 'Changed' });
+    await rec.tx.mutations.items.update({ id, title: 'Changed' });
     const entry = rec.getEntry();
 
-    expect(entry!.inverses[0]).toMatchObject({ kind: 'update', modelKey: 'tasks', patch: { id, title: 'Original' } });
+    expect(entry!.inverses[0]).toMatchObject({ kind: 'update', modelKey: 'items', patch: { id, title: 'Original' } });
   });
 
   it('captures delete → create inverse with full model snapshot', async () => {
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    const t = await rec.tx.mutations.tasks.create({ title: 'Doomed', status: 'in_progress' });
+    const t = await rec.tx.mutations.items.create({ title: 'Doomed', status: 'in_progress' });
     const id = (t as { id: string }).id;
 
-    await rec.tx.mutations.tasks.delete(id);
+    await rec.tx.mutations.items.delete(id);
     const restore = rec.getEntry()!.inverses[0];
     if (!restore) throw new Error('expected a restore inverse op');
     expect(restore.kind).toBe('create');
@@ -204,25 +204,25 @@ describe('RecordingMutation', () => {
 
   it('returns null entry when no writes happened', async () => {
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    rec.tx.read.tasks.list();
+    rec.tx.read.items.list();
     expect(rec.getEntry()).toBeNull();
   });
 
   it('inverses are ordered reverse-of-forward', async () => {
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    const a = await rec.tx.mutations.tasks.create({ title: 'A' });
-    const b = await rec.tx.mutations.tasks.create({ title: 'B' });
+    const a = await rec.tx.mutations.items.create({ title: 'A' });
+    const b = await rec.tx.mutations.items.create({ title: 'B' });
     const entry = rec.getEntry()!;
 
-    expect(entry.forwards[0]).toMatchObject({ kind: 'create', modelKey: 'tasks' });
-    expect(entry.forwards[1]).toMatchObject({ kind: 'create', modelKey: 'tasks' });
+    expect(entry.forwards[0]).toMatchObject({ kind: 'create', modelKey: 'items' });
+    expect(entry.forwards[1]).toMatchObject({ kind: 'create', modelKey: 'items' });
     expect(entry.inverses[0]).toMatchObject({ kind: 'delete', id: (b as { id: string }).id });
     expect(entry.inverses[1]).toMatchObject({ kind: 'delete', id: (a as { id: string }).id });
   });
 
   it('captures createMany → deleteMany inverse', async () => {
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    const created = await rec.tx.mutations.tasks.create([{ title: 'A' }, { title: 'B' }, { title: 'C' }]);
+    const created = await rec.tx.mutations.items.create([{ title: 'A' }, { title: 'B' }, { title: 'C' }]);
     const inverse = rec.getEntry()!.inverses[0];
     if (!inverse) throw new Error('expected a deleteMany inverse op');
     expect(inverse.kind).toBe('deleteMany');
@@ -232,9 +232,9 @@ describe('RecordingMutation', () => {
 
   it('captures deleteMany → createMany inverse with snapshots', async () => {
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    const a = await rec.tx.mutations.tasks.create({ title: 'A' });
-    const b = await rec.tx.mutations.tasks.create({ title: 'B' });
-    await rec.tx.mutations.tasks.delete([(a as { id: string }).id, (b as { id: string }).id]);
+    const a = await rec.tx.mutations.items.create({ title: 'A' });
+    const b = await rec.tx.mutations.items.create({ title: 'B' });
+    await rec.tx.mutations.items.delete([(a as { id: string }).id, (b as { id: string }).id]);
 
     const restore = rec.getEntry()!.inverses[0];
     if (!restore) throw new Error('expected a createMany inverse op');
@@ -249,10 +249,10 @@ describe('RecordingMutation', () => {
 // ── UndoScope undo/redo (real state reversal) ──────────────────────────
 
 describe('UndoScope.undo (real reversal)', () => {
-  it('reverses a create (task disappears from pool)', async () => {
+  it('reverses a create (item disappears from pool)', async () => {
     const scope = new UndoScope(testSchema, store, 'org-1');
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    const t = await rec.tx.mutations.tasks.create({ title: 'Temp' });
+    const t = await rec.tx.mutations.items.create({ title: 'Temp' });
     const id = (t as { id: string }).id;
     scope.record(rec.getEntry()!);
 
@@ -266,40 +266,40 @@ describe('UndoScope.undo (real reversal)', () => {
     const id = await seed({ title: 'Original' });
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.update({ id, title: 'Changed' });
+    await rec.tx.mutations.items.update({ id, title: 'Changed' });
     scope.record(rec.getEntry()!);
 
-    expect(task(id).title).toBe('Changed');
+    expect(item(id).title).toBe('Changed');
     await scope.undo();
-    expect(task(id).title).toBe('Original');
+    expect(item(id).title).toBe('Original');
   });
 
-  it('reverses a delete (task reappears in pool)', async () => {
+  it('reverses a delete (item reappears in pool)', async () => {
     const scope = new UndoScope(testSchema, store, 'org-1');
     const id = await seed({ title: 'Doomed', status: 'in_progress' });
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.delete(id);
+    await rec.tx.mutations.items.delete(id);
     scope.record(rec.getEntry()!);
 
     expect(pool.get(id)).toBeUndefined();
     await scope.undo();
-    expect(task(id)).toBeDefined();
-    expect(task(id).title).toBe('Doomed');
-    expect(task(id).status).toBe('in_progress');
+    expect(item(id)).toBeDefined();
+    expect(item(id).title).toBe('Doomed');
+    expect(item(id).status).toBe('in_progress');
   });
 
   it('reverses a multi-op mutator atomically', async () => {
     const scope = new UndoScope(testSchema, store, 'org-1');
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.create({ title: 'A' });
-    await rec.tx.mutations.tasks.create({ title: 'B' });
-    await rec.tx.mutations.tasks.create({ title: 'C' });
+    await rec.tx.mutations.items.create({ title: 'A' });
+    await rec.tx.mutations.items.create({ title: 'B' });
+    await rec.tx.mutations.items.create({ title: 'C' });
     scope.record(rec.getEntry()!);
 
-    expect(pool.getByTypeName('Task')).toHaveLength(3);
+    expect(pool.getByTypeName('Item')).toHaveLength(3);
     await scope.undo();
-    expect(pool.getByTypeName('Task')).toHaveLength(0);
+    expect(pool.getByTypeName('Item')).toHaveLength(0);
   });
 
   it('no-ops when undo stack is empty', async () => {
@@ -312,7 +312,7 @@ describe('UndoScope.undo (real reversal)', () => {
     expect(scope.canUndo()).toBe(false);
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.create({ title: 'X' });
+    await rec.tx.mutations.items.create({ title: 'X' });
     scope.record(rec.getEntry()!);
     expect(scope.canUndo()).toBe(true);
 
@@ -325,7 +325,7 @@ describe('UndoScope.redo (real reversal)', () => {
   it('re-applies a create after undo', async () => {
     const scope = new UndoScope(testSchema, store, 'org-1');
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    const t = await rec.tx.mutations.tasks.create({ title: 'Toggle me' });
+    const t = await rec.tx.mutations.items.create({ title: 'Toggle me' });
     const id = (t as { id: string }).id;
     scope.record(rec.getEntry()!);
 
@@ -344,58 +344,58 @@ describe('UndoScope.redo (real reversal)', () => {
     const id = await seed({ title: 'v1' });
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.update({ id, title: 'v2' });
+    await rec.tx.mutations.items.update({ id, title: 'v2' });
     scope.record(rec.getEntry()!);
 
     await scope.undo();
-    expect(task(id).title).toBe('v1');
+    expect(item(id).title).toBe('v1');
     await scope.redo();
-    expect(task(id).title).toBe('v2');
+    expect(item(id).title).toBe('v2');
   });
 
   it('new mutation clears the redo stack', async () => {
     const scope = new UndoScope(testSchema, store, 'org-1');
     const rec1 = createRecordingMutation(testSchema, store, 'org-1');
-    await rec1.tx.mutations.tasks.create({ title: 'A' });
+    await rec1.tx.mutations.items.create({ title: 'A' });
     scope.record(rec1.getEntry()!);
 
     await scope.undo();
     expect(scope.canRedo()).toBe(true);
 
     const rec2 = createRecordingMutation(testSchema, store, 'org-1');
-    await rec2.tx.mutations.tasks.create({ title: 'B' });
+    await rec2.tx.mutations.items.create({ title: 'B' });
     scope.record(rec2.getEntry()!);
 
     expect(scope.canRedo()).toBe(false);
   });
 });
 
-// ── Reparent (FK change) — the cross-slide layer-move analog ───────────
+// ── Reparent (FK change) — the cross-entry layer-move analog ───────────
 //
-// Moving a slide layer to another slide is a single `update({ slideId })`
-// (reparent), NOT delete+create. `projectId` here stands in for `slideId`.
+// Moving a entry layer to another entry is a single `update({ entryId })`
+// (reparent), NOT delete+create. `workspaceId` here stands in for `entryId`.
 describe('UndoScope reparent (FK change)', () => {
   it('captures the previous parent id in the inverse (reparent is reversible)', async () => {
-    const id = await seed({ title: 'movable', projectId: 'p1' });
+    const id = await seed({ title: 'movable', workspaceId: 'p1' });
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.update({ id, projectId: 'p2' });
-    expect(rec.getEntry()!.inverses[0]).toMatchObject({ kind: 'update', modelKey: 'tasks', patch: { id, projectId: 'p1' } });
+    await rec.tx.mutations.items.update({ id, workspaceId: 'p2' });
+    expect(rec.getEntry()!.inverses[0]).toMatchObject({ kind: 'update', modelKey: 'items', patch: { id, workspaceId: 'p1' } });
   });
 
   it('undo returns the row to its original parent; redo re-moves it', async () => {
     const scope = new UndoScope(testSchema, store, 'org-1');
-    const id = await seed({ title: 'movable', projectId: 'p1' });
+    const id = await seed({ title: 'movable', workspaceId: 'p1' });
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.update({ id, projectId: 'p2' });
+    await rec.tx.mutations.items.update({ id, workspaceId: 'p2' });
     scope.record(rec.getEntry()!);
 
-    expect(task(id).projectId).toBe('p2');
+    expect(item(id).workspaceId).toBe('p2');
     await scope.undo();
-    expect(task(id).projectId).toBe('p1');
+    expect(item(id).workspaceId).toBe('p1');
     await scope.redo();
-    expect(task(id).projectId).toBe('p2');
+    expect(item(id).workspaceId).toBe('p2');
   });
 });
 
@@ -412,16 +412,16 @@ describe('UndoScope conflict resolution (e2e)', () => {
     const id = await seed({ title: 'old' });
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.update({ id, title: 'mine' });
+    await rec.tx.mutations.items.update({ id, title: 'mine' });
     scope.record(rec.getEntry()!);
-    expect(task(id).title).toBe('mine');
+    expect(item(id).title).toBe('mine');
 
     // Collaborator edit arrives as a remote delta: updates the pool, not our stack.
-    task(id).title = 'theirs';
+    item(id).title = 'theirs';
 
     await scope.undo();
     // Must NOT clobber the collaborator back to 'old' — their change still stands.
-    expect(task(id).title).toBe('theirs');
+    expect(item(id).title).toBe('theirs');
   });
 
   it('skip-stale: still reverts a field the collaborator did NOT touch (partial)', async () => {
@@ -429,15 +429,15 @@ describe('UndoScope conflict resolution (e2e)', () => {
     const id = await seed({ title: 'oldTitle', status: 'todo' });
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.update({ id, title: 'myTitle', status: 'in_progress' });
+    await rec.tx.mutations.items.update({ id, title: 'myTitle', status: 'in_progress' });
     scope.record(rec.getEntry()!);
 
     // Collaborator changes ONLY status after me; title still holds my value.
-    task(id).status = 'done';
+    item(id).status = 'done';
 
     await scope.undo();
-    expect(task(id).title).toBe('oldTitle'); // still mine → reverted
-    expect(task(id).status).toBe('done'); // collaborator's → left intact
+    expect(item(id).title).toBe('oldTitle'); // still mine → reverted
+    expect(item(id).status).toBe('done'); // collaborator's → left intact
   });
 
   it('last-writer-wins: undo clobbers the collaborator change (legacy behavior)', async () => {
@@ -445,13 +445,13 @@ describe('UndoScope conflict resolution (e2e)', () => {
     const id = await seed({ title: 'old' });
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.update({ id, title: 'mine' });
+    await rec.tx.mutations.items.update({ id, title: 'mine' });
     scope.record(rec.getEntry()!);
 
-    task(id).title = 'theirs';
+    item(id).title = 'theirs';
 
     await scope.undo();
-    expect(task(id).title).toBe('old'); // inverse applied verbatim, clobbering theirs
+    expect(item(id).title).toBe('old'); // inverse applied verbatim, clobbering theirs
   });
 
   it('skip-stale: redo re-applies only where the redo value still stands', async () => {
@@ -459,17 +459,17 @@ describe('UndoScope conflict resolution (e2e)', () => {
     const id = await seed({ title: 'old' });
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.update({ id, title: 'mine' });
+    await rec.tx.mutations.items.update({ id, title: 'mine' });
     scope.record(rec.getEntry()!);
 
     await scope.undo(); // no collaborator yet → reverts to 'old'
-    expect(task(id).title).toBe('old');
+    expect(item(id).title).toBe('old');
 
     // Collaborator edits between undo and redo.
-    task(id).title = 'theirs';
+    item(id).title = 'theirs';
     await scope.redo();
     // redo wanted to set 'mine', but live is 'theirs' (not the 'old' undo established) → skip.
-    expect(task(id).title).toBe('theirs');
+    expect(item(id).title).toBe('theirs');
   });
 });
 
@@ -501,28 +501,28 @@ describe('resolveOps (unit)', () => {
 
   it('filters per-row inside updateMany', () => {
     const inv: InverseOp[] = [
-      { kind: 'updateMany', modelKey: 'tasks', patches: [{ id: 'a', title: 'oldA' }, { id: 'b', title: 'oldB' }] },
+      { kind: 'updateMany', modelKey: 'items', patches: [{ id: 'a', title: 'oldA' }, { id: 'b', title: 'oldB' }] },
     ];
     const fwd: InverseOp[] = [
-      { kind: 'updateMany', modelKey: 'tasks', patches: [{ id: 'a', title: 'mineA' }, { id: 'b', title: 'mineB' }] },
+      { kind: 'updateMany', modelKey: 'items', patches: [{ id: 'a', title: 'mineA' }, { id: 'b', title: 'mineB' }] },
     ];
     const s = storeWith({ a: { title: 'mineA' }, b: { title: 'theirsB' } }); // b superseded
     expect(resolveOps(inv, fwd, s, 'skip-stale')).toEqual([
-      { kind: 'updateMany', modelKey: 'tasks', patches: [{ id: 'a', title: 'oldA' }] },
+      { kind: 'updateMany', modelKey: 'items', patches: [{ id: 'a', title: 'oldA' }] },
     ]);
   });
 
   it('passes structural create/delete ops through unconditionally', () => {
     const ops: InverseOp[] = [
-      { kind: 'delete', modelKey: 'tasks', id: 't1' },
-      { kind: 'create', modelKey: 'tasks', data: { id: 't2', title: 'x' } },
+      { kind: 'delete', modelKey: 'items', id: 't1' },
+      { kind: 'create', modelKey: 'items', data: { id: 't2', title: 'x' } },
     ];
     expect(resolveOps(ops, [], storeWith({}), 'skip-stale')).toEqual(ops);
   });
 
   it('last-writer-wins returns the ops unchanged', () => {
-    const inverse: InverseOp[] = [{ kind: 'update', modelKey: 'tasks', patch: { id: 't1', title: 'old' } }];
-    const forward: InverseOp[] = [{ kind: 'update', modelKey: 'tasks', patch: { id: 't1', title: 'mine' } }];
+    const inverse: InverseOp[] = [{ kind: 'update', modelKey: 'items', patch: { id: 't1', title: 'old' } }];
+    const forward: InverseOp[] = [{ kind: 'update', modelKey: 'items', patch: { id: 't1', title: 'mine' } }];
     expect(resolveOps(inverse, forward, storeWith({ t1: { title: 'theirs' } }), 'last-writer-wins')).toBe(inverse);
   });
 });
@@ -538,7 +538,7 @@ describe('UndoScope reactivity & failure handling', () => {
     });
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.create({ title: 'X' });
+    await rec.tx.mutations.items.create({ title: 'X' });
     scope.record(rec.getEntry()!); // 1
     await scope.undo(); // 2
     await scope.redo(); // 3
@@ -557,7 +557,7 @@ describe('UndoScope reactivity & failure handling', () => {
     };
     const scope = new UndoScope(testSchema, throwingStore, 'org-1');
     const rec = createRecordingMutation(testSchema, throwingStore, 'org-1');
-    await rec.tx.mutations.tasks.create({ title: 'sticky' });
+    await rec.tx.mutations.items.create({ title: 'sticky' });
     scope.record(rec.getEntry()!);
 
     expect(scope.canUndo()).toBe(true);
@@ -571,7 +571,7 @@ describe('UndoScope history limits', () => {
     const scope = new UndoScope(testSchema, store, 'org-1', { maxHistory: 3 });
     for (let i = 0; i < 5; i++) {
       const rec = createRecordingMutation(testSchema, store, 'org-1');
-      await rec.tx.mutations.tasks.create({ title: `T${i}` });
+      await rec.tx.mutations.items.create({ title: `T${i}` });
       scope.record(rec.getEntry()!);
     }
     expect(scope.size().undo).toBe(3);
@@ -580,7 +580,7 @@ describe('UndoScope history limits', () => {
   it('clear() wipes both stacks', async () => {
     const scope = new UndoScope(testSchema, store, 'org-1');
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.create({ title: 'X' });
+    await rec.tx.mutations.items.create({ title: 'X' });
     scope.record(rec.getEntry()!);
     await scope.undo();
 
@@ -593,19 +593,19 @@ describe('UndoScope history limits', () => {
 describe('UndoManager (named scopes)', () => {
   it('getScope returns the same scope for a repeated name', () => {
     const manager = new UndoManager(testSchema, store, 'org-1');
-    expect(manager.getScope('deck-editor')).toBe(manager.getScope('deck-editor'));
+    expect(manager.getScope('collection-editor')).toBe(manager.getScope('collection-editor'));
   });
 
   it('different names get independent stacks', async () => {
     const manager = new UndoManager(testSchema, store, 'org-1');
-    const deck = manager.getScope('deck-editor');
-    const sheet = manager.getScope('spreadsheet');
+    const collection = manager.getScope('collection-editor');
+    const sheet = manager.getScope('dataset');
 
     const rec = createRecordingMutation(testSchema, store, 'org-1');
-    await rec.tx.mutations.tasks.create({ title: 'deck-thing' });
-    deck.record(rec.getEntry()!);
+    await rec.tx.mutations.items.create({ title: 'collection-thing' });
+    collection.record(rec.getEntry()!);
 
-    expect(deck.canUndo()).toBe(true);
+    expect(collection.canUndo()).toBe(true);
     expect(sheet.canUndo()).toBe(false);
   });
 
@@ -615,10 +615,10 @@ describe('UndoManager (named scopes)', () => {
     const b = manager.getScope('b');
 
     const rec1 = createRecordingMutation(testSchema, store, 'org-1');
-    await rec1.tx.mutations.tasks.create({ title: 'a1' });
+    await rec1.tx.mutations.items.create({ title: 'a1' });
     a.record(rec1.getEntry()!);
     const rec2 = createRecordingMutation(testSchema, store, 'org-1');
-    await rec2.tx.mutations.tasks.create({ title: 'b1' });
+    await rec2.tx.mutations.items.create({ title: 'b1' });
     b.record(rec2.getEntry()!);
 
     manager.clearAll();
@@ -635,27 +635,27 @@ function makeStreamScope(): UndoScope<typeof testSchema> {
 
 describe('UndoScope stream recording', () => {
   it('derives an update inverse from previousData and restores on undo', async () => {
-    pool.add(new TestTask({ id: 't1', title: 'new', order: 0, organizationId: 'org-1' }));
+    pool.add(new TestItem({ id: 't1', title: 'new', order: 0, organizationId: 'org-1' }));
     const scope = makeStreamScope();
 
-    emit({ type: 'update', modelName: 'Task', modelId: 't1', data: { title: 'new' }, previousData: { id: 't1', title: 'old' } });
+    emit({ type: 'update', modelName: 'Item', modelId: 't1', data: { title: 'new' }, previousData: { id: 't1', title: 'old' } });
     await tick();
 
     expect(scope.size()).toEqual({ undo: 1, redo: 0 });
     await scope.undo();
-    expect(task('t1').title).toBe('old');
+    expect(item('t1').title).toBe('old');
     expect(scope.size()).toEqual({ undo: 0, redo: 1 }); // replay did NOT re-record
   });
 
   it('coalesces multiple mutations in one tick into a single entry', async () => {
-    pool.add(new TestTask({ id: 'a', title: 'A1', organizationId: 'org-1' }));
-    pool.add(new TestTask({ id: 'b', title: 'B1', organizationId: 'org-1' }));
+    pool.add(new TestItem({ id: 'a', title: 'A1', organizationId: 'org-1' }));
+    pool.add(new TestItem({ id: 'b', title: 'B1', organizationId: 'org-1' }));
     const scope = makeStreamScope();
     const entries: number[] = [];
     scope.onRecord((e) => entries.push(e.forwards.length));
 
-    emit({ type: 'update', modelName: 'Task', modelId: 'a', data: { title: 'A2' }, previousData: { id: 'a', title: 'A1' } });
-    emit({ type: 'update', modelName: 'Task', modelId: 'b', data: { title: 'B2' }, previousData: { id: 'b', title: 'B1' } });
+    emit({ type: 'update', modelName: 'Item', modelId: 'a', data: { title: 'A2' }, previousData: { id: 'a', title: 'A1' } });
+    emit({ type: 'update', modelName: 'Item', modelId: 'b', data: { title: 'B2' }, previousData: { id: 'b', title: 'B1' } });
     await tick();
 
     expect(entries).toEqual([2]);
@@ -663,13 +663,13 @@ describe('UndoScope stream recording', () => {
   });
 
   it('groups mutations across ticks via beginGroup/endGroup (pause/resume)', async () => {
-    pool.add(new TestTask({ id: 'g', title: 'v0', organizationId: 'org-1' }));
+    pool.add(new TestItem({ id: 'g', title: 'v0', organizationId: 'org-1' }));
     const scope = makeStreamScope();
 
     scope.beginGroup('drag');
-    emit({ type: 'update', modelName: 'Task', modelId: 'g', data: { order: 1 }, previousData: { id: 'g', order: 0 } });
+    emit({ type: 'update', modelName: 'Item', modelId: 'g', data: { order: 1 }, previousData: { id: 'g', order: 0 } });
     await tick();
-    emit({ type: 'update', modelName: 'Task', modelId: 'g', data: { order: 2 }, previousData: { id: 'g', order: 1 } });
+    emit({ type: 'update', modelName: 'Item', modelId: 'g', data: { order: 2 }, previousData: { id: 'g', order: 1 } });
     await tick();
     expect(scope.size().undo).toBe(0); // nothing recorded while group open
 
@@ -679,7 +679,7 @@ describe('UndoScope stream recording', () => {
 
   it('ignores mutations for models outside tracksModel', async () => {
     const scope = new UndoScope(testSchema, store, 'org-1', { recordFromStream: true, tracksModel: (key) => key === 'somethingElse' });
-    emit({ type: 'update', modelName: 'Task', modelId: 't1', data: { title: 'x' }, previousData: { id: 't1', title: 'y' } });
+    emit({ type: 'update', modelName: 'Item', modelId: 't1', data: { title: 'x' }, previousData: { id: 't1', title: 'y' } });
     await tick();
     expect(scope.size().undo).toBe(0);
   });
@@ -688,7 +688,7 @@ describe('UndoScope stream recording', () => {
     const noStream: SyncStoreContract = { ...store };
     delete (noStream as { subscribeLocalMutations?: unknown }).subscribeLocalMutations;
     const scope = new UndoScope(testSchema, noStream, 'org-1', { recordFromStream: true });
-    emit({ type: 'update', modelName: 'Task', modelId: 't1', data: { title: 'x' }, previousData: { id: 't1', title: 'y' } });
+    emit({ type: 'update', modelName: 'Item', modelId: 't1', data: { title: 'x' }, previousData: { id: 't1', title: 'y' } });
     await tick();
     expect(scope.size().undo).toBe(0);
   });
@@ -696,7 +696,7 @@ describe('UndoScope stream recording', () => {
 
 // ── Async replay-echo suppression ──────────────────────────────────────
 //
-// A store whose writes surface on the stream a macrotask LATER — mirroring the
+// A store whose writes surface on the stream a macroitem LATER — mirroring the
 // real engine (the echo lands after undo()/redo() reset their synchronous
 // `replaying` flag). This is the timing that made every undo silently wipe its
 // own redo stack before the `pendingReplayEchoes` guard was added.
@@ -707,67 +707,67 @@ describe('UndoScope async replay-echo suppression', () => {
       ...store,
       save: async (m) => {
         if (!pool.get(m.id)) pool.add(m);
-        const title = (m as TestTask).title;
-        setTimeout(() => { emit({ type: 'update', modelName: 'Task', modelId: m.id, data: { title } }); }, 0);
+        const title = (m as TestItem).title;
+        setTimeout(() => { emit({ type: 'update', modelName: 'Item', modelId: m.id, data: { title } }); }, 0);
       },
       delete: async (m) => {
         const previousData = m.toJSON();
         pool.remove(m.id);
-        setTimeout(() => { emit({ type: 'delete', modelName: 'Task', modelId: m.id, previousData }); }, 0);
+        setTimeout(() => { emit({ type: 'delete', modelName: 'Item', modelId: m.id, previousData }); }, 0);
       },
     };
   }
-  const macrotask = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+  const macroitem = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
   it("does not let an undo's async echo wipe the redo stack", async () => {
-    pool.add(new TestTask({ id: 't1', title: 'new', order: 0, organizationId: 'org-1' }));
+    pool.add(new TestItem({ id: 't1', title: 'new', order: 0, organizationId: 'org-1' }));
     const scope = new UndoScope(testSchema, asyncEchoStore(), 'org-1', { recordFromStream: true });
 
-    emit({ type: 'update', modelName: 'Task', modelId: 't1', data: { title: 'new' }, previousData: { id: 't1', title: 'old' } });
+    emit({ type: 'update', modelName: 'Item', modelId: 't1', data: { title: 'new' }, previousData: { id: 't1', title: 'old' } });
     await tick();
     expect(scope.size()).toEqual({ undo: 1, redo: 0 });
 
     await scope.undo();
-    expect(task('t1').title).toBe('old');
+    expect(item('t1').title).toBe('old');
     expect(scope.size()).toEqual({ undo: 0, redo: 1 });
 
-    await macrotask();
+    await macroitem();
     await tick();
     expect(scope.size()).toEqual({ undo: 0, redo: 1 }); // echo did NOT record
   });
 
   it('redo restores the value after an async-echo undo', async () => {
-    pool.add(new TestTask({ id: 't2', title: 'B', order: 0, organizationId: 'org-1' }));
+    pool.add(new TestItem({ id: 't2', title: 'B', order: 0, organizationId: 'org-1' }));
     const scope = new UndoScope(testSchema, asyncEchoStore(), 'org-1', { recordFromStream: true });
 
-    emit({ type: 'update', modelName: 'Task', modelId: 't2', data: { title: 'B' }, previousData: { id: 't2', title: 'A' } });
+    emit({ type: 'update', modelName: 'Item', modelId: 't2', data: { title: 'B' }, previousData: { id: 't2', title: 'A' } });
     await tick();
 
     await scope.undo();
-    await macrotask();
+    await macroitem();
     await tick();
-    expect(task('t2').title).toBe('A');
+    expect(item('t2').title).toBe('A');
 
     await scope.redo();
-    await macrotask();
+    await macroitem();
     await tick();
-    expect(task('t2').title).toBe('B');
+    expect(item('t2').title).toBe('B');
     expect(scope.size()).toEqual({ undo: 1, redo: 0 });
   });
 
   it('still records a genuine edit to the same row after the echo settles', async () => {
-    pool.add(new TestTask({ id: 't3', title: 'v1', order: 0, organizationId: 'org-1' }));
+    pool.add(new TestItem({ id: 't3', title: 'v1', order: 0, organizationId: 'org-1' }));
     const scope = new UndoScope(testSchema, asyncEchoStore(), 'org-1', { recordFromStream: true });
 
-    emit({ type: 'update', modelName: 'Task', modelId: 't3', data: { title: 'v1' }, previousData: { id: 't3', title: 'v0' } });
+    emit({ type: 'update', modelName: 'Item', modelId: 't3', data: { title: 'v1' }, previousData: { id: 't3', title: 'v0' } });
     await tick();
 
     await scope.undo();
-    await macrotask();
+    await macroitem();
     await tick();
     expect(scope.size()).toEqual({ undo: 0, redo: 1 });
 
-    emit({ type: 'update', modelName: 'Task', modelId: 't3', data: { title: 'v2' }, previousData: { id: 't3', title: 'old' } });
+    emit({ type: 'update', modelName: 'Item', modelId: 't3', data: { title: 'v2' }, previousData: { id: 't3', title: 'old' } });
     await tick();
     expect(scope.size()).toEqual({ undo: 1, redo: 0 });
   });

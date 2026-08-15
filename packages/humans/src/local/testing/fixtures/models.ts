@@ -2,8 +2,8 @@
  * A small set of {@link Model} subclasses used across the package's tests.
  * They form two foreign-key chains and carry the creation priorities the
  * transaction queue uses to order dependent writes:
- *   TestProject (10) → TestTask (10, references Project) → TestComment (30, references Task)
- *   TestSlideDeck (10) → TestSlide (15, references SlideDeck) → TestSlideLayer (20, references Slide)
+ *   TestWorkspace (10) → TestItem (10, references Workspace) → TestComment (30, references Item)
+ *   TestEntryCollection (10) → TestEntry (15, references Collection) → TestEntryLayer (20, references Entry)
  */
 
 import { Model } from '../../Model.js';
@@ -14,12 +14,12 @@ import { PropertyType, LoadStrategy } from '@abloatai/transaction/types';
 // Test Model Classes
 // ─────────────────────────────────────────────
 
-export class TestProject extends Model {
+export class TestWorkspace extends Model {
   name = '';
   description = '';
   organizationId = 'test-org';
 
-  constructor(data: Partial<TestProject> & Record<string, unknown> = {}) {
+  constructor(data: Partial<TestWorkspace> & Record<string, unknown> = {}) {
     super(data);
     if (data.name != null) this.name = data.name;
     if (data.description != null) this.description = data.description;
@@ -27,40 +27,40 @@ export class TestProject extends Model {
   }
 
   override getModelName(): string {
-    return 'Project';
+    return 'Workspace';
   }
 }
 
-export class TestTask extends Model {
+export class TestItem extends Model {
   title = '';
   status = 'todo';
-  projectId: string | null = null;
+  workspaceId: string | null = null;
   assigneeId: string | null = null;
   organizationId = 'test-org';
 
-  constructor(data: Partial<TestTask> & Record<string, unknown> = {}) {
+  constructor(data: Partial<TestItem> & Record<string, unknown> = {}) {
     super(data);
     if (data.title != null) this.title = data.title;
     if (data.status != null) this.status = data.status;
-    if (data.projectId !== undefined) this.projectId = data.projectId;
+    if (data.workspaceId !== undefined) this.workspaceId = data.workspaceId;
     if (data.assigneeId !== undefined) this.assigneeId = data.assigneeId;
     if (data.organizationId != null) this.organizationId = data.organizationId;
   }
 
   override getModelName(): string {
-    return 'Task';
+    return 'Item';
   }
 }
 
 export class TestComment extends Model {
   body = '';
-  taskId: string | null = null;
+  itemId: string | null = null;
   organizationId = 'test-org';
 
   constructor(data: Partial<TestComment> & Record<string, unknown> = {}) {
     super(data);
     if (data.body != null) this.body = data.body;
-    if (data.taskId !== undefined) this.taskId = data.taskId;
+    if (data.itemId !== undefined) this.itemId = data.itemId;
     if (data.organizationId != null) this.organizationId = data.organizationId;
   }
 
@@ -69,48 +69,48 @@ export class TestComment extends Model {
   }
 }
 
-export class TestSlideDeck extends Model {
+export class TestEntryCollection extends Model {
   title = '';
   organizationId = 'test-org';
 
-  constructor(data: Partial<TestSlideDeck> & Record<string, unknown> = {}) {
+  constructor(data: Partial<TestEntryCollection> & Record<string, unknown> = {}) {
     super(data);
     if (data.title != null) this.title = data.title;
     if (data.organizationId != null) this.organizationId = data.organizationId;
   }
 
   override getModelName(): string {
-    return 'SlideDeck';
+    return 'Collection';
   }
 }
 
-export class TestSlide extends Model {
+export class TestEntry extends Model {
   order = 0;
-  deckId: string | null = null;
+  collectionId: string | null = null;
   organizationId = 'test-org';
 
-  constructor(data: Partial<TestSlide> & Record<string, unknown> = {}) {
+  constructor(data: Partial<TestEntry> & Record<string, unknown> = {}) {
     super(data);
     if (data.order != null) this.order = data.order;
-    if (data.deckId !== undefined) this.deckId = data.deckId;
+    if (data.collectionId !== undefined) this.collectionId = data.collectionId;
     if (data.organizationId != null) this.organizationId = data.organizationId;
   }
 
   override getModelName(): string {
-    return 'Slide';
+    return 'Entry';
   }
 }
 
-export class TestSlideLayer extends Model {
-  slideId: string | null = null;
+export class TestEntryLayer extends Model {
+  entryId: string | null = null;
   zIndex = 0;
   type = 'text';
   content = '';
   organizationId = 'test-org';
 
-  constructor(data: Partial<TestSlideLayer> & Record<string, unknown> = {}) {
+  constructor(data: Partial<TestEntryLayer> & Record<string, unknown> = {}) {
     super(data);
-    if (data.slideId !== undefined) this.slideId = data.slideId;
+    if (data.entryId !== undefined) this.entryId = data.entryId;
     if (data.zIndex != null) this.zIndex = data.zIndex;
     if (data.type != null) this.type = data.type;
     if (data.content != null) this.content = data.content;
@@ -118,7 +118,7 @@ export class TestSlideLayer extends Model {
   }
 
   override getModelName(): string {
-    return 'SlideLayer';
+    return 'EntryDetail';
   }
 }
 
@@ -131,11 +131,11 @@ export class TestSlideLayer extends Model {
  * transaction queue uses when writing dependent models.
  */
 export const TEST_MODEL_PRIORITIES = new Map<string, number>([
-  ['Project', 10],
-  ['Task', 10],
-  ['SlideDeck', 10],
-  ['Slide', 15],
-  ['SlideLayer', 20],
+  ['Workspace', 10],
+  ['Item', 10],
+  ['Collection', 10],
+  ['Entry', 15],
+  ['EntryDetail', 20],
   ['Comment', 30],
 ]);
 
@@ -147,46 +147,46 @@ export function registerTestModels(registry: ModelRegistry): void {
   registry.startBatch();
 
   // Register model classes
-  registry.registerModel('Project', TestProject, { loadStrategy: LoadStrategy.instant });
-  registry.registerModel('Task', TestTask, { loadStrategy: LoadStrategy.instant });
+  registry.registerModel('Workspace', TestWorkspace, { loadStrategy: LoadStrategy.instant });
+  registry.registerModel('Item', TestItem, { loadStrategy: LoadStrategy.instant });
   registry.registerModel('Comment', TestComment, { loadStrategy: LoadStrategy.instant });
-  registry.registerModel('SlideDeck', TestSlideDeck, { loadStrategy: LoadStrategy.instant });
-  registry.registerModel('Slide', TestSlide, { loadStrategy: LoadStrategy.instant });
-  registry.registerModel('SlideLayer', TestSlideLayer, { loadStrategy: LoadStrategy.instant });
+  registry.registerModel('Collection', TestEntryCollection, { loadStrategy: LoadStrategy.instant });
+  registry.registerModel('Entry', TestEntry, { loadStrategy: LoadStrategy.instant });
+  registry.registerModel('EntryDetail', TestEntryLayer, { loadStrategy: LoadStrategy.instant });
 
   // Register properties
-  registry.registerProperty('Project', 'name', { type: PropertyType.property });
-  registry.registerProperty('Project', 'description', { type: PropertyType.property, optional: true });
-  registry.registerProperty('Project', 'organizationId', { type: PropertyType.property });
+  registry.registerProperty('Workspace', 'name', { type: PropertyType.property });
+  registry.registerProperty('Workspace', 'description', { type: PropertyType.property, optional: true });
+  registry.registerProperty('Workspace', 'organizationId', { type: PropertyType.property });
 
-  registry.registerProperty('Task', 'title', { type: PropertyType.property });
-  registry.registerProperty('Task', 'status', { type: PropertyType.property });
-  registry.registerProperty('Task', 'projectId', { type: PropertyType.reference, nullable: true });
-  registry.registerProperty('Task', 'assigneeId', { type: PropertyType.reference, nullable: true });
-  registry.registerProperty('Task', 'organizationId', { type: PropertyType.property });
+  registry.registerProperty('Item', 'title', { type: PropertyType.property });
+  registry.registerProperty('Item', 'status', { type: PropertyType.property });
+  registry.registerProperty('Item', 'workspaceId', { type: PropertyType.reference, nullable: true });
+  registry.registerProperty('Item', 'assigneeId', { type: PropertyType.reference, nullable: true });
+  registry.registerProperty('Item', 'organizationId', { type: PropertyType.property });
 
   registry.registerProperty('Comment', 'body', { type: PropertyType.property });
-  registry.registerProperty('Comment', 'taskId', { type: PropertyType.reference, nullable: true });
+  registry.registerProperty('Comment', 'itemId', { type: PropertyType.reference, nullable: true });
   registry.registerProperty('Comment', 'organizationId', { type: PropertyType.property });
 
-  registry.registerProperty('SlideDeck', 'title', { type: PropertyType.property });
-  registry.registerProperty('SlideDeck', 'organizationId', { type: PropertyType.property });
+  registry.registerProperty('Collection', 'title', { type: PropertyType.property });
+  registry.registerProperty('Collection', 'organizationId', { type: PropertyType.property });
 
-  registry.registerProperty('Slide', 'order', { type: PropertyType.property });
-  registry.registerProperty('Slide', 'deckId', { type: PropertyType.reference, nullable: true });
-  registry.registerProperty('Slide', 'organizationId', { type: PropertyType.property });
+  registry.registerProperty('Entry', 'order', { type: PropertyType.property });
+  registry.registerProperty('Entry', 'collectionId', { type: PropertyType.reference, nullable: true });
+  registry.registerProperty('Entry', 'organizationId', { type: PropertyType.property });
 
-  registry.registerProperty('SlideLayer', 'slideId', { type: PropertyType.reference, nullable: true });
-  registry.registerProperty('SlideLayer', 'zIndex', { type: PropertyType.property });
-  registry.registerProperty('SlideLayer', 'type', { type: PropertyType.property });
-  registry.registerProperty('SlideLayer', 'content', { type: PropertyType.property });
-  registry.registerProperty('SlideLayer', 'organizationId', { type: PropertyType.property });
+  registry.registerProperty('EntryDetail', 'entryId', { type: PropertyType.reference, nullable: true });
+  registry.registerProperty('EntryDetail', 'zIndex', { type: PropertyType.property });
+  registry.registerProperty('EntryDetail', 'type', { type: PropertyType.property });
+  registry.registerProperty('EntryDetail', 'content', { type: PropertyType.property });
+  registry.registerProperty('EntryDetail', 'organizationId', { type: PropertyType.property });
 
   // Register back-references for cascade-aware transaction handling
-  registry.registerBackReference('Task', { parentModel: 'Project', foreignKey: 'projectId', cascadeDelete: true });
-  registry.registerBackReference('Comment', { parentModel: 'Task', foreignKey: 'taskId', cascadeDelete: true });
-  registry.registerBackReference('Slide', { parentModel: 'SlideDeck', foreignKey: 'deckId', cascadeDelete: true });
-  registry.registerBackReference('SlideLayer', { parentModel: 'Slide', foreignKey: 'slideId', cascadeDelete: true });
+  registry.registerBackReference('Item', { parentModel: 'Workspace', foreignKey: 'workspaceId', cascadeDelete: true });
+  registry.registerBackReference('Comment', { parentModel: 'Item', foreignKey: 'itemId', cascadeDelete: true });
+  registry.registerBackReference('Entry', { parentModel: 'Collection', foreignKey: 'collectionId', cascadeDelete: true });
+  registry.registerBackReference('EntryDetail', { parentModel: 'Entry', foreignKey: 'entryId', cascadeDelete: true });
 
   registry.endBatch();
 }
@@ -211,16 +211,16 @@ export function createTestConfig(): {
     defaultCreatePriority: 40,
     defaultNonCreatePriority: 50,
     essentialFields: {
-      Task: ['title', 'projectId'],
-      Slide: ['deckId', 'order'],
+      Item: ['title', 'workspaceId'],
+      Entry: ['collectionId', 'order'],
     },
     classNameFallbackMap: {
-      TestProject: 'Project',
-      TestTask: 'Task',
+      TestWorkspace: 'Workspace',
+      TestItem: 'Item',
       TestComment: 'Comment',
-      TestSlideDeck: 'SlideDeck',
-      TestSlide: 'Slide',
-      TestSlideLayer: 'SlideLayer',
+      TestEntryCollection: 'Collection',
+      TestEntry: 'Entry',
+      TestEntryLayer: 'EntryDetail',
     },
   };
 }
@@ -236,25 +236,25 @@ export function resetFixtureCounter(): void {
   fixtureCounter = 0;
 }
 
-export function createProjectFixture(
+export function createWorkspaceFixture(
   overrides: Partial<Record<string, unknown>> = {}
-): TestProject {
+): TestWorkspace {
   fixtureCounter++;
-  return new TestProject({
-    id: `project-${fixtureCounter}`,
-    name: `Test Project ${fixtureCounter}`,
+  return new TestWorkspace({
+    id: `workspace-${fixtureCounter}`,
+    name: `Test Workspace ${fixtureCounter}`,
     organizationId: 'test-org',
     ...overrides,
   });
 }
 
-export function createTaskFixture(
+export function createItemFixture(
   overrides: Partial<Record<string, unknown>> = {}
-): TestTask {
+): TestItem {
   fixtureCounter++;
-  return new TestTask({
-    id: `task-${fixtureCounter}`,
-    title: `Test Task ${fixtureCounter}`,
+  return new TestItem({
+    id: `item-${fixtureCounter}`,
+    title: `Test Item ${fixtureCounter}`,
     status: 'todo',
     organizationId: 'test-org',
     ...overrides,
@@ -273,35 +273,35 @@ export function createCommentFixture(
   });
 }
 
-export function createSlideDeckFixture(
+export function createEntryCollectionFixture(
   overrides: Partial<Record<string, unknown>> = {}
-): TestSlideDeck {
+): TestEntryCollection {
   fixtureCounter++;
-  return new TestSlideDeck({
-    id: `deck-${fixtureCounter}`,
-    title: `Test Deck ${fixtureCounter}`,
+  return new TestEntryCollection({
+    id: `collection-${fixtureCounter}`,
+    title: `Test Collection ${fixtureCounter}`,
     organizationId: 'test-org',
     ...overrides,
   });
 }
 
-export function createSlideFixture(
+export function createEntryFixture(
   overrides: Partial<Record<string, unknown>> = {}
-): TestSlide {
+): TestEntry {
   fixtureCounter++;
-  return new TestSlide({
-    id: `slide-${fixtureCounter}`,
+  return new TestEntry({
+    id: `entry-${fixtureCounter}`,
     order: fixtureCounter,
     organizationId: 'test-org',
     ...overrides,
   });
 }
 
-export function createSlideLayerFixture(
+export function createEntryLayerFixture(
   overrides: Partial<Record<string, unknown>> = {}
-): TestSlideLayer {
+): TestEntryLayer {
   fixtureCounter++;
-  return new TestSlideLayer({
+  return new TestEntryLayer({
     id: `layer-${fixtureCounter}`,
     zIndex: fixtureCounter,
     type: 'text',

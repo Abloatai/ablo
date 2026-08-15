@@ -3,7 +3,7 @@ import type {
   ModelUpdateParams,
 } from '../src/resources/modelOperations.js';
 
-interface TaskRow {
+interface ItemRow {
   id: string;
   createdAt: Date;
   updatedAt: Date;
@@ -13,7 +13,7 @@ interface TaskRow {
   getModelName(): string;
 }
 
-interface TaskInput {
+interface ItemInput {
   id?: string;
   createdAt?: Date;
   updatedAt?: Date;
@@ -21,49 +21,47 @@ interface TaskInput {
   status?: 'todo' | 'done';
 }
 
-export const validUpdate: ModelUpdateParams<TaskRow, TaskInput> = {
+export const validUpdate: ModelUpdateParams<ItemRow, ItemInput> = {
   id: 't_1',
   data: { title: 'Done', status: 'done' },
-  claim: { fields: (task) => task.title },
+  claim: { fields: (item) => item.title },
 };
 
-export const modelWritesHaveOneConfirmationContract: ModelUpdateParams<TaskRow, TaskInput> = {
+export const modelWritesHaveOneConfirmationContract: ModelUpdateParams<ItemRow, ItemInput> = {
   id: 't_1',
   data: { title: 'Done' },
   // @ts-expect-error — awaiting a model write always means authoritative confirmation.
   wait: 'confirmed',
 };
 
-export const computedIsNotWritable: ModelUpdateParams<TaskRow, TaskInput> = {
+export const computedIsNotWritable: ModelUpdateParams<ItemRow, ItemInput> = {
   id: 't_1',
   // @ts-expect-error — computed row values are not in the Zod input shape.
   data: { displayTitle: 'not stored' },
 };
 
-export const frameworkFieldIsNotWritable: ModelUpdateParams<TaskRow, TaskInput> = {
+export const applicationTimestampIsWritable: ModelUpdateParams<ItemRow, ItemInput> = {
   id: 't_1',
-  // @ts-expect-error — framework fields are controlled outside update.data.
   data: { createdAt: new Date() },
 };
 
-export const invalidUpdateClaim: ModelUpdateParams<TaskRow, TaskInput> = {
+export const invalidUpdateClaim: ModelUpdateParams<ItemRow, ItemInput> = {
   id: 't_1',
   data: { title: 'Done' },
   claim: {
     // @ts-expect-error — claims select only the model's Zod-declared fields.
-    fields: (task) => task.displayTitle,
+    fields: (item) => item.displayTitle,
   },
 };
 
-export const validDeleteClaim: ModelDeleteParams<TaskRow, TaskInput> = {
+export const validDeleteClaim: ModelDeleteParams<ItemRow, ItemInput> = {
   id: 't_1',
-  claim: { fields: (task) => task.status },
+  claim: { fields: (item) => item.status },
 };
 
-export const invalidDeleteClaim: ModelDeleteParams<TaskRow, TaskInput> = {
+export const timestampClaim: ModelDeleteParams<ItemRow, ItemInput> = {
   id: 't_1',
   claim: {
-    // @ts-expect-error — delete uses the same schema-derived claim selector.
-    fields: (task) => task.createdAt,
+    fields: (item) => item.createdAt,
   },
 };

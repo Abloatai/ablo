@@ -218,7 +218,7 @@ export async function POST() {
   const session = await auth(); // your own auth — returns the signed-in user
   const { token, expiresAt } = await sync.sessions.create({
     user: { id: session.userId },
-    can: { tasks: ['read', 'update'] },
+    can: { records: ['read', 'update'] },
   });
   return Response.json(
     credentialEndpointSuccessSchema.parse({

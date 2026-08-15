@@ -4,7 +4,7 @@ import { context } from '../src/context.js';
 import { defineSchema, model, z } from '../src/schema.js';
 
 const schema = defineSchema({
-  tasks: model({ status: z.string() }),
+  records: model({ status: z.string() }),
 });
 
 const http = Ablo({
@@ -22,21 +22,21 @@ const reactive = ReactiveAblo({
 async function contextReadsFitBothClients(): Promise<void> {
   const httpContext = await context({
     ablo: http,
-    data: { task: http.tasks.get({ id: 'task-1' }) },
+    data: { record: http.records.get({ id: 'record-1' }) },
   });
-  await http.tasks.update({
-    id: 'task-2',
-    data: { status: httpContext.data.task?.status ?? 'missing' },
+  await http.records.update({
+    id: 'record-2',
+    data: { status: httpContext.data.record?.status ?? 'missing' },
     reads: httpContext.reads,
   });
 
   const reactiveContext = await context({
     ablo: reactive,
-    data: { task: reactive.tasks.get({ id: 'task-1' }) },
+    data: { record: reactive.records.get({ id: 'record-1' }) },
   });
-  await reactive.tasks.update({
-    id: 'task-2',
-    data: { status: reactiveContext.data.task?.status ?? 'missing' },
+  await reactive.records.update({
+    id: 'record-2',
+    data: { status: reactiveContext.data.record?.status ?? 'missing' },
     reads: reactiveContext.reads,
   });
 }

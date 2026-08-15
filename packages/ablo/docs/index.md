@@ -155,6 +155,7 @@ default caller, not a special one.
 - [Projects](./projects.md) — one organization, many apps; each with its own schema, planes, and keys.
 - [API Keys](./api-keys.md) — the credential that carries an agent's identity and its scopes.
 - [Sessions](./sessions.md) — short-lived scoped credentials your backend mints.
+- [Customer Organizations](./customer-organizations.md) — serve many isolated customer organizations from one schema and backend.
 - [Audit Log](./audit.md) — trace any confirmed write back to the person behind it.
 - [Operating on Your Database](./operating-on-your-database.md) — which actions run freely, which to verify first, and which belong to a human.
 - [Session Settings](./session-settings.md) — point your row-level-security policies at Ablo's writes, by naming the settings they already read.
@@ -163,7 +164,7 @@ default caller, not a special one.
 
 - [Quickstart](./quickstart.md) — make your first coordinated write.
 - [Integration Guide](./integration-guide.md) — the canonical end-to-end integration.
-- [Integrations](./integrations.md) — long-running tasks, ingestion, and other application-edge runtimes.
+- [Integrations](./integrations.md) — long-running records, ingestion, and other application-edge runtimes.
 - [CLI & Migrations](./cli.md) — `init` / `connect` / `push` / `migrate` / `generate`.
 - [Connect Your Database](./data-sources.md) — where rows land when your own database is canonical.
 - [Deployment](./deployment.md) — the database, the keys, and the schema push that take an integration to production.
