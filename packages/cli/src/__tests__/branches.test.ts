@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { listEnvelope } from '@abloatai/transaction/wire';
 import { branches, ensureBranchCredential } from '../branches';
+
+// Fake list responses are built with the same helper the server wraps its own
+// with, so a change to the envelope reaches these fixtures instead of leaving
+// them asserting against a shape nothing sends. Hand-written copies of it here
+// had already drifted: they omitted `has_more` and `next_cursor`, so every one
+// of these tests failed on a response the real route returns correctly.
 
 const ROOT = {
   object: 'branch',
@@ -40,7 +47,7 @@ describe('ablo branch', () => {
 
   it('lists server-validated branches', async () => {
     global.fetch = jest.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ object: 'list', data: [ROOT] }), { status: 200 }),
+      new Response(JSON.stringify(listEnvelope([ROOT])), { status: 200 }),
     );
     await branches(['list', '--json']);
     expect(log).toHaveBeenCalledWith(expect.stringContaining('"slug": "production"'));
@@ -57,7 +64,7 @@ describe('ablo branch', () => {
       root: false,
     };
     global.fetch = jest.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ object: 'list', data: [ROOT, preview] }), {
+      new Response(JSON.stringify(listEnvelope([ROOT, preview])), {
         status: 200,
       }),
     );
@@ -79,7 +86,7 @@ describe('ablo branch', () => {
     global.fetch = jest
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ object: 'list', data: [ROOT] }), { status: 200 }),
+        new Response(JSON.stringify(listEnvelope([ROOT])), { status: 200 }),
       )
       .mockResolvedValueOnce(new Response(JSON.stringify(preview), { status: 201 }));
 
@@ -104,7 +111,7 @@ describe('ablo branch', () => {
     global.fetch = jest
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ object: 'list', data: [ROOT, preview] }), { status: 200 }),
+        new Response(JSON.stringify(listEnvelope([ROOT, preview])), { status: 200 }),
       )
       .mockResolvedValueOnce(
         new Response(
@@ -137,7 +144,7 @@ describe('ablo branch', () => {
     global.fetch = jest
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ object: 'list', data: [ROOT, preview] }), {
+        new Response(JSON.stringify(listEnvelope([ROOT, preview])), {
           status: 200,
         }),
       )
@@ -201,7 +208,7 @@ describe('ablo branch', () => {
     global.fetch = jest
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ object: 'list', data: [ROOT, preview] }), {
+        new Response(JSON.stringify(listEnvelope([ROOT, preview])), {
           status: 200,
         }),
       )
@@ -244,7 +251,7 @@ describe('ablo branch', () => {
     global.fetch = jest
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ object: 'list', data: [ROOT, preview] }), {
+        new Response(JSON.stringify(listEnvelope([ROOT, preview])), {
           status: 200,
         }),
       )

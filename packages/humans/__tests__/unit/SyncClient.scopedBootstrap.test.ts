@@ -3,7 +3,8 @@
  * apply (P4a). A scoped snapshot covers only the groups just entered, NOT the
  * whole type, so the scoped path must:
  *   - NOT ghost-remove rows of the same type that belong to other groups, and
- *   - version-guard the upsert (never clobber a newer live row).
+ *   - guard the upsert by log position (never clobber a row the pool already
+ *     knows to reflect a position beyond the snapshot's `lastSyncId`).
  *
  * The contrast tests show a FULL apply (`scoped` unset) DOES ghost-remove — so
  * the difference is intentional, not accidental.
@@ -84,12 +85,19 @@ describe('SyncClient scoped bootstrap apply (hydrate-on-enter)', () => {
     expect(titleOf('new-1')).toBe('collection-C');
   });
 
-  it('scoped apply does NOT clobber a newer live row with an older snapshot row', () => {
-    // A live delta already advanced the row.
-    pool.add(new TestItem({ id: 'x', title: 'live-edit', updatedAt: new Date('2026-01-02T00:00:00Z') }));
+  it('scoped apply does NOT clobber a row a live delta already advanced past the snapshot', () => {
+    // A live delta at position 120 already advanced the row; the scoped
+    // snapshot was taken at 100 and cannot carry it. The row's `updatedAt`
+    // says nothing here — the snapshot's is deliberately the later one.
+    const live = new TestItem({ id: 'x', title: 'live-edit', updatedAt: new Date('2026-01-01T00:00:00Z') });
+    pool.add(live);
+    pool.watermarks.advance(live, 120);
 
     const stats = client.applyBootstrapDataToPool(
-      { models: { Item: [{ id: 'x', title: 'stale-snapshot', updatedAt: '2026-01-01T00:00:00Z' }] } },
+      {
+        models: { Item: [{ id: 'x', title: 'stale-snapshot', updatedAt: '2026-01-02T00:00:00Z' }] },
+        lastSyncId: 100,
+      },
       undefined,
       { scoped: true },
     );
@@ -97,5 +105,24 @@ describe('SyncClient scoped bootstrap apply (hydrate-on-enter)', () => {
     expect(stats.updated).toBe(0);
     expect(stats.skipped).toBe(1);
     expect(titleOf('x')).toBe('live-edit'); // survived
+  });
+
+  it('scoped apply DOES apply a snapshot taken at or beyond the row\'s known position', () => {
+    const live = new TestItem({ id: 'y', title: 'at-100', updatedAt: new Date('2026-01-02T00:00:00Z') });
+    pool.add(live);
+    pool.watermarks.advance(live, 100);
+
+    const stats = client.applyBootstrapDataToPool(
+      {
+        models: { Item: [{ id: 'y', title: 'snapshot-at-100', updatedAt: '2026-01-01T00:00:00Z' }] },
+        lastSyncId: 100,
+      },
+      undefined,
+      { scoped: true },
+    );
+
+    expect(stats.skipped).toBe(0);
+    expect(titleOf('y')).toBe('snapshot-at-100');
+    expect(pool.watermarks.of(live)).toBe(100);
   });
 });

@@ -1137,3 +1137,122 @@ describe("Ablo({ transport: 'http' }) — one factory, stateless client", () => 
     expect(seen).toEqual(['DELETE /api/v1/claims/claim-q1']);
   });
 });
+
+/**
+ * A collection read is a page and a filter, and both used to be lossy on this
+ * transport: the filter was rebuilt by walking the caller's object and skipping
+ * any value that turned out to be an object, and the page state was parsed off
+ * the envelope and then dropped. Between them, a caller could ask for three
+ * statuses out of five hundred rows and receive twenty unfiltered ones with
+ * nothing in the result saying so.
+ */
+describe('collection reads carry the whole filter and say where the page ends', () => {
+  const listUrlFor = async (
+    options: Parameters<ReturnType<typeof Ablo<typeof schema>>['items']['list']>[0],
+  ): Promise<URL> => {
+    let seen: URL | undefined;
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_list_filter',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: (input) => {
+        const href =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        seen = new URL(href);
+        return Promise.resolve(jsonResponse(modelListResponse({ model: 'items', data: [] })));
+      },
+    });
+    await c.items.list(options);
+    if (!seen) throw new Error('no request was made');
+    return seen;
+  };
+
+  it('sends an IN filter instead of discarding it', async () => {
+    const url = await listUrlFor({ where: { status: ['todo', 'doing'] } });
+    expect(JSON.parse(url.searchParams.get('where') ?? 'null')).toEqual([
+      ['status', 'IN', ['todo', 'doing']],
+    ]);
+  });
+
+  it('sends tuple-form operators', async () => {
+    const url = await listUrlFor({ where: [['title', 'ILIKE', '%draft%']] });
+    expect(JSON.parse(url.searchParams.get('where') ?? 'null')).toEqual([
+      ['title', 'ILIKE', '%draft%'],
+    ]);
+  });
+
+  it('sends a plain equality filter as a clause too', async () => {
+    const url = await listUrlFor({ where: { status: 'todo' } });
+    expect(JSON.parse(url.searchParams.get('where') ?? 'null')).toEqual([['status', 'todo']]);
+  });
+
+  it('repeats equality clauses in the shorthand so an older server still filters', async () => {
+    // A server that predates the `where` parameter skips it silently, and a
+    // dropped filter reads as a wider result rather than an error. The operator
+    // clauses are the only thing such a server loses, and it could not have
+    // honoured those anyway.
+    const url = await listUrlFor({ where: { status: 'todo', title: 'Draft' } });
+    expect(url.searchParams.get('status')).toBe('todo');
+    expect(url.searchParams.get('title')).toBe('Draft');
+    expect(JSON.parse(url.searchParams.get('where') ?? 'null')).toEqual([
+      ['status', 'todo'],
+      ['title', 'Draft'],
+    ]);
+  });
+
+  it('does not put a non-equality clause in the shorthand, which cannot express it', async () => {
+    const url = await listUrlFor({ where: { status: ['todo', 'doing'] } });
+    expect(url.searchParams.get('status')).toBeNull();
+    const ilike = await listUrlFor({ where: [['title', 'ILIKE', '%draft%']] });
+    expect(ilike.searchParams.get('title')).toBeNull();
+  });
+
+  it('sends the cursor as cursor', async () => {
+    const url = await listUrlFor({ limit: 50, cursor: 'cur_abc' });
+    expect(url.searchParams.get('cursor')).toBe('cur_abc');
+    // The retired spelling is a server-side alias only; the SDK stopped sending it.
+    expect(url.searchParams.get('starting_after')).toBeNull();
+    expect(url.searchParams.get('limit')).toBe('50');
+  });
+
+  it('reports a truncated page on the result, which is still an array', async () => {
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_list_page',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: () =>
+        Promise.resolve(jsonResponse(modelListResponse({
+          model: 'items',
+          data: [{ id: 'item-1', title: 'One', status: 'todo' }],
+          hasMore: true,
+          nextCursor: 'cur_next',
+        }))),
+    });
+
+    const rows = await c.items.list();
+    expect(Array.isArray(rows)).toBe(true);
+    expect(rows).toHaveLength(1);
+    expect(rows.hasMore).toBe(true);
+    expect(rows.nextCursor).toBe('cur_next');
+    // The page state rides along without changing what the array serializes to.
+    expect(JSON.parse(JSON.stringify(rows))).toEqual([
+      { id: 'item-1', title: 'One', status: 'todo' },
+    ]);
+  });
+
+  it('reports the end of a collection', async () => {
+    const c = Ablo({
+      schema,
+      apiKey: 'sk_test_list_end',
+      baseURL: 'https://api.example.test',
+      transport: 'http',
+      fetch: () =>
+        Promise.resolve(jsonResponse(modelListResponse({ model: 'items', data: [] }))),
+    });
+    const rows = await c.items.list();
+    expect(rows.hasMore).toBe(false);
+    expect(rows.nextCursor).toBeNull();
+  });
+});

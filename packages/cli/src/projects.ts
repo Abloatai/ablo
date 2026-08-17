@@ -27,7 +27,7 @@ import {
   DEFAULT_PROFILE,
   type ProfileKeys,
 } from './config';
-import { ABLO_DEFAULT_BASE_URL } from '@abloatai/transaction/auth/hostedEndpoints';
+import { apiBaseUrl } from './controlPlane';
 import {
   projectResponseSchema,
   projectListResponseSchema,
@@ -41,9 +41,9 @@ import { brand } from './theme';
  */
 export type ProjectObject = ProjectResponse;
 
-function apiUrl(): string {
-  return (process.env.ABLO_API_URL ?? ABLO_DEFAULT_BASE_URL).replace(/\/+$/, '');
-}
+// `apiBaseUrl` is the CLI's one resolver for where a management key is sent;
+// this module reads it rather than restating the fallback chain.
+const apiUrl = apiBaseUrl;
 
 function requireKey(): string {
   const apiKey = resolveOrgManagementKey();

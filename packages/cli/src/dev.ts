@@ -31,7 +31,7 @@ import {
   DEFAULT_SCHEMA_PATH,
   DEFAULT_EXPORT,
 } from './push';
-import { apiBaseUrl, DEFAULT_URL } from './controlPlane';
+import { apiBaseUrl } from './controlPlane';
 import { resolveRuntimeApiKey } from './config';
 import { looksLikeCredentialRefusal, poolerExplanation } from './readiness';
 import { brand } from './theme';
@@ -64,7 +64,9 @@ export interface DevRuntimeOptions {
 export function parseDevArgs(argv: readonly string[]): DevArgs {
   let schemaPath = DEFAULT_SCHEMA_PATH;
   let exportName = DEFAULT_EXPORT;
-  let url = process.env.ABLO_API_URL ?? DEFAULT_URL;
+  // Left unset unless `--url` names one: `apiBaseUrl` below applies the
+  // env-then-default fallback, so the chain is written in one place.
+  let url: string | undefined;
   let watchEnabled = false;
   let local = false;
   let sourcePath = 'ablo/data-source.ts';
@@ -98,7 +100,7 @@ export function parseDevArgs(argv: readonly string[]): DevArgs {
     }
   }
 
-  url = url.replace(/\/+$/, '');
+  url = apiBaseUrl(url);
   return {
     schemaPath,
     exportName,

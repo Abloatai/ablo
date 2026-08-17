@@ -1,6 +1,6 @@
 {
   "$generated": "packages/ablo/scripts/generate-error-docs.mts",
-  "version": "2026-08-04",
+  "version": "2026-08-15",
   "envelope": [
     "type",
     "code",
@@ -404,6 +404,15 @@
       "retryable": false,
       "message": "A structured (JSON) value was written to a column whose database type cannot hold it. Ablo adapts a json field to either a jsonb column (native) or a text column (serialized) — but a scalar column (integer, boolean, uuid, timestamp, …) cannot store a JSON object or array. Use a jsonb or text column for this field. Ablo adapts to your column; it does not alter your schema.",
       "docUrl": "https://docs.abloatai.com/errors#column_type_mismatch"
+    },
+    {
+      "code": "column_value_out_of_range",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A stored value is outside the range the field was declared to hold. A number field reads back as a JavaScript number, which represents integers exactly only up to 9,007,199,254,740,991; a bigint column holding more than that would come back rounded. Declare the field as text to read those values digit for digit.",
+      "docUrl": "https://docs.abloatai.com/errors#column_value_out_of_range"
     },
     {
       "code": "commit_failed",
@@ -1049,6 +1058,24 @@
       "docUrl": "https://docs.abloatai.com/errors#issuer_register_forbidden"
     },
     {
+      "code": "item_id_missing",
+      "category": "server",
+      "surface": "wire",
+      "httpStatus": 502,
+      "retryable": true,
+      "message": "The item-create response arrived without an item id, so the result cannot be used. Retry the request.",
+      "docUrl": "https://docs.abloatai.com/errors#item_id_missing"
+    },
+    {
+      "code": "item_id_required",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "An item id is required for this request.",
+      "docUrl": "https://docs.abloatai.com/errors#item_id_required"
+    },
+    {
       "code": "jwt_audience_mismatch",
       "category": "auth",
       "surface": "wire",
@@ -1498,6 +1525,15 @@
       "docUrl": "https://docs.abloatai.com/errors#org_id_required"
     },
     {
+      "code": "organization_disabled",
+      "category": "permission",
+      "surface": "wire",
+      "httpStatus": 403,
+      "retryable": false,
+      "message": "This organization has been disabled by an operator. Contact support before retrying.",
+      "docUrl": "https://docs.abloatai.com/errors#organization_disabled"
+    },
+    {
       "code": "organization_mismatch",
       "category": "permission",
       "surface": "wire",
@@ -1556,6 +1592,15 @@
       "retryable": false,
       "message": "This row is positioned relative to another row that is not in the same parent. Check that the neighbouring row id is correct and still present.",
       "docUrl": "https://docs.abloatai.com/errors#position_unknown_sibling"
+    },
+    {
+      "code": "precondition_failed",
+      "category": "conflict",
+      "surface": "wire",
+      "httpStatus": 409,
+      "retryable": false,
+      "message": "A conditional operation did not match the current database row. The complete atomic commit was rejected and no operation in the batch was applied.",
+      "docUrl": "https://docs.abloatai.com/errors#precondition_failed"
     },
     {
       "code": "presence_identity_required",
@@ -1646,6 +1691,15 @@
       "retryable": false,
       "message": "The `LIKE` pattern must not end with an escape character.",
       "docUrl": "https://docs.abloatai.com/errors#query_invalid_like_pattern"
+    },
+    {
+      "code": "query_relation_expansion_too_large",
+      "category": "validation",
+      "surface": "wire",
+      "httpStatus": 400,
+      "retryable": false,
+      "message": "A requested relation expansion exceeds the bounded nested-row budget. Query the related model as its own paginated collection instead.",
+      "docUrl": "https://docs.abloatai.com/errors#query_relation_expansion_too_large"
     },
     {
       "code": "query_relation_target_unknown",
@@ -1929,7 +1983,7 @@
       "category": "schema",
       "surface": "client",
       "retryable": false,
-      "message": "A model redeclared a reserved base field (id, createdAt, updatedAt, organizationId, createdBy) that the SDK provides automatically.",
+      "message": "A model declared `id`, the one universal field Ablo supplies. Remove it from the declared application fields.",
       "docUrl": "https://docs.abloatai.com/errors#schema_reserved_field"
     },
     {
@@ -2282,24 +2336,6 @@
       "retryable": false,
       "message": "A sync operation ran before the client finished initializing. Wait for the client to be ready before syncing.",
       "docUrl": "https://docs.abloatai.com/errors#sync_not_ready"
-    },
-    {
-      "code": "task_id_missing",
-      "category": "server",
-      "surface": "wire",
-      "httpStatus": 502,
-      "retryable": true,
-      "message": "The task-create response arrived without a task id, so the result cannot be used. Retry the request.",
-      "docUrl": "https://docs.abloatai.com/errors#task_id_missing"
-    },
-    {
-      "code": "task_id_required",
-      "category": "validation",
-      "surface": "wire",
-      "httpStatus": 400,
-      "retryable": false,
-      "message": "A task id is required for this request.",
-      "docUrl": "https://docs.abloatai.com/errors#task_id_required"
     },
     {
       "code": "tenant_model_columns_unknown",

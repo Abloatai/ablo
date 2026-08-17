@@ -94,6 +94,13 @@ export interface AppliedChange {
    * no client transaction behind them.
    */
   transactionId?: string;
+  /**
+   * The log position of the delta this change answers — its `sync_deltas` id.
+   * The apply stage records it per row so a later snapshot can be judged
+   * against what the row already reflects. Absent when the source carried no
+   * position.
+   */
+  syncId?: number;
 }
 
 /**

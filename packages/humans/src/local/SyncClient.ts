@@ -34,7 +34,9 @@ import {
   type UnconfirmedWritesMetrics,
 } from './transactions/mutations/UnconfirmedWrites.js';
 import type { DurableWriteStore } from './transactions/mutations/durableWriteStore.js';
+import type { CommitTransaction } from './transactions/mutations/commitLane.js';
 import type { Database } from './Database.js';
+import type { BootstrapData } from './sync/BootstrapFetcher.js';
 import type { MutationPersistencePort } from './mutationPersistence.js';
 import type { WriteOptions } from './interfaces/index.js';
 import { LogPosition } from './logPosition.js';
@@ -73,30 +75,29 @@ export interface RehydrationStats {
 type EventHandler = () => void;
 
 /**
- * Reports whether an incoming snapshot record is strictly newer than the
- * model already in the pool. The comparison uses the server-stamped
- * `updatedAt` timestamp, since rows carry no numeric version and the delta
- * pipeline resolves order by arrival (last write wins). An undefined incoming
- * timestamp counts as not newer, so a known row is never clobbered; an
- * undefined existing timestamp means the pooled row is unversioned, so the
- * incoming record wins. The scoped hydrate-on-enter path uses this to drop
- * snapshot rows that a live delta has already advanced past.
+ * The slice of a bootstrap answer the pool applies: its rows, the models whose
+ * server query failed, and the log position the snapshot was taken at — the
+ * position every row in it reflects. `lastSyncId` is optional only for callers
+ * applying rows with no snapshot position to speak of; the fetcher always
+ * names one.
  */
-function rawRecordIsNewer(data: Record<string, unknown>, existing: Model): boolean {
-  const raw = data.updatedAt;
-  const inMs =
-    raw instanceof Date
-      ? raw.getTime()
-      : typeof raw === 'string'
-        ? (Number.isNaN(Date.parse(raw)) ? undefined : Date.parse(raw))
-        : typeof raw === 'number'
-          ? raw
-          : undefined;
-  const exMs = existing.updatedAt instanceof Date ? existing.updatedAt.getTime() : undefined;
-  if (inMs === undefined) return false;
-  if (exMs === undefined) return true;
-  return inMs > exMs;
-}
+export type BootstrapSnapshot = Pick<BootstrapData, 'models' | 'failedModels'> &
+  Partial<Pick<BootstrapData, 'lastSyncId'>>;
+
+/**
+ * What `transaction:completed` carries: a model mutation (one row, confirmed
+ * at `syncIdNeededForCompletion`) or an explicit commit (one row per operation,
+ * confirmed at `lastSyncId`). Each arm projects its own queue record.
+ */
+type CompletedTransaction =
+  | (Pick<QueuedMutation, 'id' | 'modelId' | 'syncIdNeededForCompletion'> & {
+      lastSyncId?: undefined;
+      operations?: undefined;
+    })
+  | (Pick<CommitTransaction, 'id' | 'lastSyncId' | 'operations'> & {
+      modelId?: undefined;
+      syncIdNeededForCompletion?: undefined;
+    });
 
 /**
  * Converts an untyped server `updatedAt` value — an ISO string, epoch number,
@@ -464,12 +465,18 @@ export class SyncClient extends EventEmitter {
       }
     );
 
-    // Clean up persisted awaiting transactions when they're finally confirmed
+    // Clean up persisted awaiting transactions when they're finally confirmed,
+    // and record the confirmed position on every row the transaction wrote.
+    // The acknowledgement is the earliest proof of where this client's own
+    // write landed in the log — earlier than its delta echo, which the pool
+    // suppresses on apply — so a snapshot read before the write cannot regress
+    // the row in the window between the two.
     this.mutationQueue.on(
       'transaction:completed',
-      (tx: { id: string; modelName: string; modelId: string }) => {
+      (tx: CompletedTransaction) => {
         // void is safe: the handler's body is fully try/catch'd.
         void this.removeAwaitingTransaction(tx.id);
+        this.noteOwnWritePositions(tx);
       }
     );
 
@@ -493,6 +500,23 @@ export class SyncClient extends EventEmitter {
         this.echoTracker.drainOnRollback(event.transaction.id);
       },
     );
+  }
+
+  /**
+   * Advance the pooled rows a completed transaction wrote to the log position
+   * its acknowledgement named. A model mutation names one row; an explicit
+   * commit names one per operation. Rows no longer pooled have nothing to
+   * advance — a fresh instance starts without evidence.
+   */
+  private noteOwnWritePositions(tx: CompletedTransaction): void {
+    const position = tx.lastSyncId ?? tx.syncIdNeededForCompletion;
+    if (position === undefined) return;
+    const rowIds =
+      tx.operations !== undefined ? tx.operations.map((op) => op.id) : [tx.modelId];
+    for (const rowId of rowIds) {
+      const row = this.objectPool.peek(rowId);
+      if (row) this.objectPool.watermarks.advance(row, position);
+    }
   }
 
   /** Persist an unconfirmed transaction to IndexedDB (never rejects — failures are captured). */
@@ -1952,7 +1976,13 @@ export class SyncClient extends EventEmitter {
     }
 
     for (const result of dbResults) {
-      const { modelName, modelId, action, transactionId } = result;
+      const { modelName, modelId, action, transactionId, syncId } = result;
+
+      // Every delta names the log position the row now reflects — recorded
+      // before echo detection, because an own echo is exactly a position the
+      // pooled row has reached even though its fields are not re-applied.
+      const resident = this.objectPool.peek(modelId);
+      if (resident) this.objectPool.watermarks.advance(resident, syncId);
 
       // Echo detection: if this delta carries a transaction id that matches
       // one already applied optimistically, the pool already reflects the
@@ -1990,7 +2020,10 @@ export class SyncClient extends EventEmitter {
             const model = this.objectPool.createFromData(data, undefined, {
               deferObservability: true,
             });
-            if (model) modelsToAdd.push(model);
+            if (model) {
+              this.objectPool.watermarks.advance(model, syncId);
+              modelsToAdd.push(model);
+            }
           }
           break;
         }
@@ -2058,17 +2091,18 @@ export class SyncClient extends EventEmitter {
    * Owns: model creation, batch upsert, ghost detection + removal.
    */
   applyBootstrapDataToPool(
-    bootstrapData: { models?: Record<string, unknown[]>; failedModels?: string[] },
+    bootstrapData: BootstrapSnapshot,
     protectedIds?: ReadonlySet<string>,
     options?: {
       /**
        * Scoped backfill for the hydrate-on-enter path: the snapshot covers only
        * the groups just entered, not the whole model type. Two behaviors change
-       * so the subset cannot corrupt the pool. First, the upsert is
-       * version-guarded ({@link InstanceCache.upsertIfNewer}) so a concurrent live
-       * delta is not clobbered back to the snapshot version. Second, ghost
-       * removal is skipped, because a subset snapshot must never evict rows of
-       * the same type that belong to other, unhydrated groups.
+       * so the subset cannot corrupt the pool. First, a row the pool already
+       * knows to reflect a position beyond the snapshot's `lastSyncId` is
+       * skipped, so a concurrent live delta is not clobbered back to the
+       * snapshot version. Second, ghost removal is skipped, because a subset
+       * snapshot must never evict rows of the same type that belong to other,
+       * unhydrated groups.
        */
       scoped?: boolean;
     },
@@ -2076,6 +2110,7 @@ export class SyncClient extends EventEmitter {
     if (!bootstrapData.models) {
       return { added: 0, updated: 0, removed: 0, skipped: 0, healed: 0 };
     }
+    const snapshotPosition = bootstrapData.lastSyncId;
 
     const allModels: Model[] = [];
     const serverIdsByType = new Map<string, Set<string>>();
@@ -2110,16 +2145,22 @@ export class SyncClient extends EventEmitter {
         // taken at a server watermark. If a concurrent live delta already
         // advanced this row past the snapshot, skip it. `createFromData`
         // mutates the pooled model in place to keep instances alive, so this
-        // version guard has to run before it; a guard at the upsert layer would
-        // be too late, because the row would already be clobbered.
+        // guard has to run before it; a guard at the upsert layer would be too
+        // late, because the row would already be clobbered.
         if (options?.scoped && recordId) {
-          const existing = this.objectPool.get(recordId);
-          if (existing && !rawRecordIsNewer(data, existing)) { skippedCount++; continue; }
+          const existing = this.objectPool.peek(recordId);
+          if (existing && this.objectPool.watermarks.isAheadOf(existing, snapshotPosition)) {
+            skippedCount++;
+            continue;
+          }
         }
 
         try {
           const model = this.objectPool.createFromData(data);
-          if (model) allModels.push(model);
+          if (model) {
+            this.objectPool.watermarks.advance(model, snapshotPosition);
+            allModels.push(model);
+          }
         } catch {
           skippedCount++;
         }

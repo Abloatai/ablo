@@ -16,7 +16,7 @@ import { ensureBranchCredential } from './branches';
 import { resolveManagementKey } from './config';
 import { flushProductAnalytics, trackCliDevStarted } from './telemetry';
 import { dev, type DevRuntimeOptions } from './dev';
-import { DEFAULT_URL } from './controlPlane';
+import { apiBaseUrl } from './controlPlane';
 
 export const BRANCH_DEV_USAGE = `Usage:
   ablo dev [--branch <slug>] [--branch-ttl-hours <1-168>]
@@ -170,10 +170,7 @@ export async function runBranchDev(
     );
   }
 
-  const baseUrl =
-    valueAfter(parsed.devArgv, '--url') ??
-    process.env.ABLO_API_URL ??
-    DEFAULT_URL;
+  const baseUrl = apiBaseUrl(valueAfter(parsed.devArgv, '--url'));
   const result = await (dependencies.bootstrap ?? ensureBranchCredential)({
     slug,
     apiKey: managementKey,

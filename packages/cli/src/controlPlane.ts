@@ -25,17 +25,24 @@ import {
   translateHttpError,
 } from '@abloatai/transaction/errors';
 import { ABLO_DEFAULT_BASE_URL } from '@abloatai/transaction/auth/hostedEndpoints';
+import { normalizeAbloBaseUrl } from '@abloatai/transaction/auth/baseUrl';
 
 /** The default base URL for the hosted service. */
 export const DEFAULT_URL = ABLO_DEFAULT_BASE_URL;
 
 /**
- * The API base URL every command dials, trimmed: `ABLO_API_URL` when set,
- * otherwise {@link DEFAULT_URL}. Defined once so a command can't disagree with
- * its neighbors about where the control plane is.
+ * The API base URL every command dials: an explicit `--url`, else
+ * `ABLO_API_URL`, else {@link DEFAULT_URL}.
+ *
+ * Every command sends a management key to whatever this returns, so the value
+ * is resolved and checked in the same place. `normalizeAbloBaseUrl` is the
+ * SDK's rule for where a credential may travel, and the CLI answers to it
+ * rather than keeping a second opinion: it makes a scheme-less host absolute,
+ * strips the trailing slash, and refuses a destination that would put the key
+ * on the wire in clear or hand it to a URL carrying its own credentials.
  */
-export function apiBaseUrl(): string {
-  return (process.env.ABLO_API_URL ?? DEFAULT_URL).replace(/\/+$/, '');
+export function apiBaseUrl(explicit?: string): string {
+  return normalizeAbloBaseUrl(explicit ?? process.env.ABLO_API_URL ?? DEFAULT_URL);
 }
 
 /**
@@ -98,7 +105,7 @@ export interface ControlPlaneRequest<S extends z.ZodType> {
 export async function requestControlPlane<S extends z.ZodType>(
   req: ControlPlaneRequest<S>
 ): Promise<z.infer<S>> {
-  const base = (req.baseUrl ?? apiBaseUrl()).replace(/\/+$/, '');
+  const base = apiBaseUrl(req.baseUrl);
   const url = `${base}/api${req.path}`;
   const doFetch: ControlPlaneFetch = req.fetchImpl ?? fetch;
   const ctrl = req.timeoutMs !== undefined ? new AbortController() : null;

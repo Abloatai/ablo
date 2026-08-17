@@ -205,7 +205,19 @@ export interface ServerReadOptions<T> {
    */
   where?: LoadWhere<T>;
   orderBy?: { [K in keyof T]?: 'asc' | 'desc' };
+  /**
+   * Rows per page. The server has its own ceiling and applies a default when
+   * this is omitted, so a collection larger than one page always comes back as
+   * a page: read `hasMore` on the result before treating it as the whole set.
+   */
   limit?: number;
+  /**
+   * Where to resume: the `nextCursor` from the previous page. Pass it back with
+   * the same `where` and `orderBy` to walk a collection; the cursor encodes the
+   * sort position it was issued for, so it is an opaque token rather than a row
+   * id, and a read that changes either starts a new walk.
+   */
+  cursor?: string;
   /**
    * `complete` waits for the server. `unknown` returns whatever is local
    * immediately and refreshes in the background.

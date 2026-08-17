@@ -22,7 +22,13 @@ export {
   INTERNAL_ERROR_PUBLIC_MESSAGE,
 } from './errorEnvelope.js';
 export type { ErrorEnvelope } from './errorEnvelope.js';
-export { listEnvelopeSchema, listEnvelope } from './listEnvelope.js';
+export {
+  listEnvelopeSchema,
+  listEnvelope,
+  CURSOR_PARAM,
+  CURSOR_PARAM_ALIAS,
+  CURSOR_PARAM_NAMES,
+} from './listEnvelope.js';
 export type { ListEnvelope } from './listEnvelope.js';
 
 // The `GET /v1/logs` feed — the two arms, their envelope, and the cursor that

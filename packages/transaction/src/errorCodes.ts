@@ -39,7 +39,7 @@ import { z } from 'zod';
  * error documentation and returned on the `Ablo-Version` response header, so a
  * consumer can detect when its expected contract has drifted from the server's.
  */
-export const ERROR_CONTRACT_VERSION = '2026-08-04';
+export const ERROR_CONTRACT_VERSION = '2026-08-15';
 
 /** A coarse grouping of error codes, used to organize metrics and documentation. */
 export type ErrorCategory =
@@ -870,6 +870,12 @@ export const ERROR_CODES = {
     false,
     'A structured (JSON) value was written to a column whose database type cannot hold it. Ablo adapts a json field to either a jsonb column (native) or a text column (serialized) — but a scalar column (integer, boolean, uuid, timestamp, …) cannot store a JSON object or array. Use a jsonb or text column for this field. Ablo adapts to your column; it does not alter your schema.'
   ),
+  column_value_out_of_range: wire(
+    'validation',
+    400,
+    false,
+    'A stored value is outside the range the field was declared to hold. A number field reads back as a JavaScript number, which represents integers exactly only up to 9,007,199,254,740,991; a bigint column holding more than that would come back rounded. Declare the field as text to read those values digit for digit.'
+  ),
 
   // ── tenant / unknown model (400) ───────────────────────────────────
   server_execute_unknown_model: wire(
@@ -1616,6 +1622,18 @@ export const ERROR_CODES = {
     400,
     false,
     'The query contained an invalid identifier.'
+  ),
+  query_relation_expansion_too_large: wire(
+    'validation',
+    400,
+    false,
+    'A requested relation expansion exceeds the bounded nested-row budget. Query the related model as its own paginated collection instead.'
+  ),
+  organization_disabled: wire(
+    'permission',
+    403,
+    false,
+    'This organization has been disabled by an operator. Contact support before retrying.'
   ),
   org_id_required: wire(
     'validation',

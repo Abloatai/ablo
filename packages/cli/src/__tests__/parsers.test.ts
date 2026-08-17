@@ -9,11 +9,19 @@ describe('parseDevArgs', () => {
     expect(a.watch).toBe(false);
   });
   it('--watch opts into the re-push loop; flags parse', () => {
-    const a = parseDevArgs(['--watch', '--schema', 's.ts', '--export', 'sch', '--url', 'http://x']);
+    const a = parseDevArgs([
+      '--watch', '--schema', 's.ts', '--export', 'sch', '--url', 'https://engine.example',
+    ]);
     expect(a.watch).toBe(true);
     expect(a.schemaPath).toBe('s.ts');
     expect(a.exportName).toBe('sch');
-    expect(a.url).toBe('http://x');
+    expect(a.url).toBe('https://engine.example');
+  });
+  it('refuses a --url that would send the key over plaintext', () => {
+    // The resolver behind `--url` is the SDK's rule for where a credential may
+    // travel, so the CLI stops at parse time rather than at the first request.
+    expect(() => parseDevArgs(['--url', 'http://engine.example'])).toThrow(/must use https/);
+    expect(parseDevArgs(['--url', 'http://localhost:8787/']).url).toBe('http://localhost:8787');
   });
   it('throws on unknown flag', () => {
     expect(() => parseDevArgs(['--bogus'])).toThrow(/unknown flag/);

@@ -32,10 +32,12 @@ import type {
   HttpTransportModel,
   ModelReadOptions,
   ModelMutationOptions,
+  ModelList,
   CreateSessionParams,
   AbloSession,
   SessionResource,
 } from '../resources/httpResources.js';
+import { modelList } from '../resources/httpResources.js';
 import type {
   ModelCreateParams,
   ModelDeleteParams,
@@ -128,7 +130,12 @@ export interface HttpModelClient<T, C = T> {
    * Reads the rows matching a filter. Same resolution as `get`, in bulk,
    * and deduplicated so concurrent identical calls share one request.
    */
-  list(options?: ServerReadOptions<T>): Promise<CapturedRow<T>[]>;
+  /**
+   * The rows are an array as before; `hasMore` and `nextCursor` on the result
+   * say whether the collection continues past this page. Pass `nextCursor`
+   * back as `cursor`, with the same `where` and `orderBy`, to walk it.
+   */
+  list(options?: ServerReadOptions<T>): Promise<ModelList<CapturedRow<T>>>;
   /**
    * Creates a row and returns it, including any framework-applied defaults.
    * Passing an id that already exists is idempotent: the existing row is
@@ -427,10 +434,16 @@ function createHttpModelClient<T, C = T>(
     return read.data as CapturedRow<T> | undefined;
   };
 
-  const list = async (options?: ServerReadOptions<T>): Promise<CapturedRow<T>[]> => {
+  const list = async (
+    options?: ServerReadOptions<T>,
+  ): Promise<ModelList<CapturedRow<T>>> => {
     const snapshot = await protocol.list(options);
+    const page = modelList<CapturedRow<T>>(
+      snapshot.data as readonly CapturedRow<T>[],
+      snapshot,
+    );
     const registry = readSetContext?.getStore();
-    if (!registry) return [...snapshot.data] as CapturedRow<T>[];
+    if (!registry) return page;
     if (!snapshot.evidence) {
       throw new AbloConnectionError(
         `${modelName}.list did not return row evidence. Upgrade the Ablo server or use get({ id }).`,
@@ -451,7 +464,7 @@ function createHttpModelClient<T, C = T>(
       }
       capturePointRead(readSetContext, clientIdentity, modelName, id, row, stamp);
     }
-    return [...snapshot.data] as CapturedRow<T>[];
+    return page;
   };
 
   // Claim acquisition performs its authoritative read only after the grant.

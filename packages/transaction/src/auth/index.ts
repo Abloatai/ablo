@@ -29,7 +29,17 @@ export {
   ABLO_HOSTED_API_DOMAIN,
   ABLO_HOSTED_HTTP_BASE_URL,
 } from './hostedEndpoints.js';
-export { normalizeAbloHostedBaseUrl } from './apiKey.js';
+export { normalizeAbloBaseUrl } from './baseUrl.js';
+// A re-export does not bind the name in this module; the alias below needs it.
+import { normalizeAbloBaseUrl } from './baseUrl.js';
+
+/**
+ * @deprecated Renamed to {@link normalizeAbloBaseUrl}. Removed in 0.54.0.
+ * The "hosted" spelling named a rewrite of retired hosted hostnames that no
+ * longer exists; both spellings resolve through the one function, so a caller
+ * on the old name gets the same refusals of unsafe credential destinations.
+ */
+export const normalizeAbloHostedBaseUrl = normalizeAbloBaseUrl;
 
 /**
  * @deprecated Use {@link CapabilityMintResponse}. This is a type-only,

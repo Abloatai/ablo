@@ -61,6 +61,8 @@ export type ReadResult =
   | {
       readonly kind: 'query';
       readonly rows: readonly Row[];
+      /** Opaque upstream cursor when a source-backed list has another page. */
+      readonly nextCursor?: string;
     };
 
 // ── sync ─────────────────────────────────────────────────────────────────────

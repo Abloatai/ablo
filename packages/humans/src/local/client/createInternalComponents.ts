@@ -121,6 +121,10 @@ export function createInternalComponents<S extends SchemaRecord>(
     baseUrl: bootstrapBaseUrl,
     getAuthToken: auth?.getAuthToken,
     runtime,
+    // The one canonical log position; the loader reads its floor when a query
+    // leaves so a late answer cannot overwrite a row the pool already knows to
+    // be further along.
+    position: syncClient.position,
   });
 
   // Drop the lazy-lane hydration ledger on reconnect. While connected, the

@@ -14,6 +14,7 @@
  */
 
 import { z } from 'zod';
+import { listEnvelopeSchema } from './listEnvelope.js';
 // Composed, never restated: these are the artifact's own shapes, and a
 // hand-written mirror here would be a second copy of the exact record this
 // response exists to stop withholding.
@@ -45,16 +46,9 @@ export type ProjectResponse = z.infer<typeof projectResponseSchema>;
 /**
  * `GET /v1/projects`.
  *
- * Note what this is NOT: the canonical {@link ListEnvelope}. An org's projects
- * are returned whole, so the route emits `data` with no `has_more`/`next_cursor`
- * beside it. That divergence is real and this schema states it rather than
- * describing a pagination the endpoint does not implement — adding the two
- * fields is an API change, not a documentation fix.
+ * Uses the canonical paginated list envelope shared by every collection.
  */
-export const projectListResponseSchema = z.object({
-  object: z.literal('list'),
-  data: z.array(projectResponseSchema).readonly(),
-});
+export const projectListResponseSchema = listEnvelopeSchema(projectResponseSchema);
 export type ProjectListResponse = z.infer<typeof projectListResponseSchema>;
 
 /** One minted key, returned exactly once — the plaintext is never readable again. */

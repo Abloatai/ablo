@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { listEnvelopeSchema } from './wire/listEnvelope.js';
 
 /**
  * A branch handle is for people and URLs. Durable routing always uses the
@@ -47,10 +48,7 @@ export const branchResponseSchema = z.object({
 });
 export type BranchResponse = z.infer<typeof branchResponseSchema>;
 
-export const branchListResponseSchema = z.object({
-  object: z.literal('list'),
-  data: z.array(branchResponseSchema).readonly(),
-});
+export const branchListResponseSchema = listEnvelopeSchema(branchResponseSchema);
 export type BranchListResponse = z.infer<typeof branchListResponseSchema>;
 
 export const createBranchRequestSchema = z.object({

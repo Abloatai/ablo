@@ -30,7 +30,11 @@ function landingPromise(): string {
  * carried on Mintlify; new generated pages must be added to their group here.
  */
 export default defineConfig({
-  title: "Ablo",
+  // The site name search engines show for docs.abloatai.com results and the
+  // suffix of every document title. "Ablo Docs", not "Ablo": the bare brand
+  // name belongs to www.abloatai.com, and a reader scanning results should be
+  // able to tell the two hosts apart.
+  title: "Ablo Docs",
   description: landingPromise(),
 
   logo: {

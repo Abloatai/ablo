@@ -121,7 +121,13 @@ export const listQuerySchema = z.object({
   limit: z.string().optional(),
   order_by: z.string().optional(),
   order: z.enum(['asc', 'desc']).optional(),
-  /** Keyset cursor: the id of the last row from the previous page. */
+  /**
+   * Keyset cursor: the opaque `next_cursor` the previous page returned. It
+   * encodes the sort position it was issued for, so it is not a row id and is
+   * refused against a different `order_by`/`order`.
+   */
+  cursor: z.string().optional(),
+  /** @deprecated The pre-0.53.0 spelling of `cursor`. Send `cursor`. */
   starting_after: z.string().optional(),
 });
 export type ListQuery = z.infer<typeof listQuerySchema>;

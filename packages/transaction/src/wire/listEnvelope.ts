@@ -11,6 +11,29 @@
 import { z } from 'zod';
 
 /**
+ * The query parameter a caller resumes a collection with, and the single alias
+ * retained for it.
+ *
+ * Declared beside the envelope that issues `next_cursor`, because the parameter
+ * and the field it consumes are one contract and both planes read them: the
+ * server to know which names are taken, the spec generator to document them,
+ * the client to send one. When the name lived in each of those separately, this
+ * spec described `starting_after` for a model list and `cursor` for a commit
+ * record list — the same concept under two names, in one document.
+ *
+ * `starting_after` is the spelling used through 0.52.0. It borrowed a name whose
+ * established meaning elsewhere is a row id, while this value has always been an
+ * opaque token bound to the sort it was issued for.
+ */
+export const CURSOR_PARAM = 'cursor';
+
+/** @deprecated The pre-0.53.0 spelling of {@link CURSOR_PARAM}. */
+export const CURSOR_PARAM_ALIAS = 'starting_after';
+
+/** Both names a cursor may arrive under, for reserving them in a query string. */
+export const CURSOR_PARAM_NAMES: readonly string[] = [CURSOR_PARAM, CURSOR_PARAM_ALIAS];
+
+/**
  * Builds the authoritative list-envelope schema for a row schema. Keeping the
  * item validator generic lets every endpoint share the same envelope contract
  * without weakening `data` to `unknown[]`.

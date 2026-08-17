@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Ablo API",
-    "version": "0.52.0",
+    "version": "0.53.0",
     "description": "Ablo collaboration infrastructure: commit, read, and claim. `{model}` is any model from your pushed schema — the routes are the same whichever it is. Authenticate every request with your API key as a Bearer token.",
     "license": {
       "name": "Apache License 2.0",
@@ -2418,16 +2418,25 @@
             }
           },
           {
-            "name": "starting_after",
+            "name": "cursor",
             "in": "query",
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "starting_after",
+            "in": "query",
+            "deprecated": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Deprecated spelling of cursor, honoured until it is removed. Send cursor."
           }
         ],
         "responses": {
           "200": {
-            "description": "A page of rows. `next_cursor` feeds `starting_after` on the next call; `stamp` is the watermark the page was read at.",
+            "description": "A page of rows. `next_cursor` feeds `cursor` on the next call; `stamp` is the watermark the page was read at.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4726,6 +4735,35 @@
           "branches"
         ],
         "summary": "List transaction branches for the credential project",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "The opaque next_cursor returned by the preceding page."
+          },
+          {
+            "name": "starting_after",
+            "in": "query",
+            "deprecated": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Deprecated spelling of cursor, honoured until it is removed. Send cursor."
+          }
+        ],
         "responses": {
           "200": {
             "description": "The root and every active child branch.",
@@ -4851,11 +4889,26 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    },
+                    "next_cursor": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
                     "object",
-                    "data"
+                    "data",
+                    "has_more",
+                    "next_cursor"
                   ],
                   "additionalProperties": false
                 }
@@ -4961,6 +5014,17 @@
         ],
         "summary": "Create an isolated child branch",
         "description": "The returned id is immutable; retain it for automation. The slug is a project-scoped human handle.",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "description": "Replay identity. Reuse the same key only for an identical request."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -11278,9 +11342,10 @@
             "name": "Idempotency-Key",
             "in": "header",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 255
             },
-            "description": "Replay-safe key; the server returns the cached receipt on retry."
+            "description": "Replay identity. Reuse the same key only for an identical request."
           }
         ],
         "requestBody": {

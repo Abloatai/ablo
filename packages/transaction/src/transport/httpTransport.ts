@@ -84,6 +84,7 @@ import type {
   ModelMutationOptions,
   ModelReadOptions,
   HttpTransportRead,
+  HttpTransportList,
   HttpLogsResource,
   ModelTarget,
   CreateSessionParams,
@@ -151,6 +152,7 @@ import { declaredMeta, wireMeta } from '../coordination/claimMeta.js';
 import type { Claim, ClaimHeartbeat, ClaimHeartbeatOptions, HeldClaim } from '../types/streams.js';
 import type { CoordinationObservability } from '../observability.js';
 import { assertWriteOptions } from '../resources/writeOptionsSchema.js';
+import { normalizeWhere } from '../resources/where.js';
 import {
   createDurableHttpCommitEnvelope,
   canonicalHttpCommitBody,
@@ -1493,9 +1495,12 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
   async function listModel<T>(
     modelName: string,
     options?: ServerReadOptions<T>,
-  ): Promise<{ readonly data: readonly T[]; readonly evidence?: readonly { id: string; stamp: number }[] }> {
+  ): Promise<HttpTransportList<T>> {
     const params = new URLSearchParams();
     if (options?.limit !== undefined) params.set('limit', String(options.limit));
+    if (options?.cursor !== undefined) {
+      params.set('cursor', options.cursor);
+    }
     if (options?.orderBy) {
       const [col, dir] = Object.entries(options.orderBy)[0] ?? [];
       if (col) {
@@ -1503,12 +1508,27 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
         if (dir === 'desc') params.set('order', 'desc');
       }
     }
-    // The collection route turns any non-reserved query param into an equality
-    // filter (`?status=todo`). The wire is AND-only equality — matches what a
-    // stateless reactor needs; richer predicates stay on the stateful path.
-    if (options?.where && typeof options.where === 'object') {
-      for (const [k, v] of Object.entries(options.where as Record<string, unknown>)) {
-        if (v !== undefined && v !== null && typeof v !== 'object') params.set(k, String(v));
+    // The whole filter travels as the canonical clause list, so every operator
+    // the grammar declares survives the trip. The previous encoding walked the
+    // object's own entries and skipped any value that was an object, which
+    // silently discarded `IN` filters and every tuple-form clause: the request
+    // went out unfiltered and the caller read the result as a filtered one.
+    const clauses = normalizeWhere(options?.where);
+    if (clauses.length > 0) {
+      params.set('where', JSON.stringify(clauses));
+      // Plain equality also goes out in the older `?column=value` shorthand.
+      // A server that predates the `where` parameter does not reserve the name
+      // and does not declare it as a column, so it skips it — and a dropped
+      // filter is not an error there, it is a wider answer than the caller
+      // asked for. Sending both means a version skew loses only the operator
+      // filters, which that server could not have honoured anyway. A current
+      // server ignores a shorthand key the clause list already carries.
+      for (const clause of clauses) {
+        const [column] = clause;
+        const value = clause.length === 2 ? clause[1] : clause[2];
+        if (clause.length === 3 && clause[1] !== '=') continue;
+        if (value === null || typeof value === 'object') continue;
+        params.set(column, String(value));
       }
     }
     const qs = params.toString();
@@ -1523,6 +1543,8 @@ export function createHttpTransport(options: HttpTransportOptions): HttpTranspor
     // the typed facade above, which holds the model's schema.
     return {
       data: res.data as T[],
+      hasMore: res.has_more,
+      nextCursor: res.next_cursor,
       ...(res.evidence ? { evidence: res.evidence } : {}),
     };
   }

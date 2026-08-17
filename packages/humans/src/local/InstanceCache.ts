@@ -16,6 +16,7 @@ import { AbloValidationError } from '@abloatai/transaction/errors';
 import { ModelScope, PropertyType } from '@abloatai/transaction/types';
 import { ViewRegistry } from './views/ViewRegistry.js';
 import { QueryView, type QueryViewOptions } from './views/QueryView.js';
+import { RowWatermarks } from './rowWatermarks.js';
 
 /** Constructor type for Model subclasses - uses abstract to handle variance */
 type ModelConstructor<T extends Model> = abstract new (...args: never[]) => T;
@@ -123,6 +124,15 @@ export class InstanceCache {
 
   // ViewRegistry — tracks active QueryViews for incremental view maintenance
   readonly viewRegistry: ViewRegistry = new ViewRegistry();
+
+  /**
+   * The log position each pooled row is known to reflect. Every door a row
+   * enters through (delta, own ack, bootstrap, server read) advances it, and
+   * every snapshot that would overwrite a resident row is judged against it —
+   * see {@link RowWatermarks}. Keyed by instance so it lives and dies with the
+   * pooled model.
+   */
+  readonly watermarks = new RowWatermarks();
 
   // Subscription registry
   private subscriptions = new Map<string, Set<(model: Model) => void>>();

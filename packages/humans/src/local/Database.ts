@@ -34,6 +34,23 @@ import {
 /** Generic record type for model data */
 type ModelData = Record<string, unknown>;
 
+/**
+ * Carry each input delta's log position onto the change that answers it.
+ * `processDeltaBatch` builds its results index-aligned with its input, so the
+ * position is stamped once here rather than at every construction site.
+ */
+function stampSyncIds(
+  results: AppliedChange[],
+  deltas: readonly { syncId?: number }[],
+): AppliedChange[] {
+  for (let index = 0; index < results.length; index++) {
+    const change = results[index];
+    const syncId = deltas[index]?.syncId;
+    if (change && typeof syncId === 'number') change.syncId = syncId;
+  }
+  return results;
+}
+
 // Re-exported, not redeclared. `@abloatai/transaction`'s `types` module owns this
 // vocabulary and documents what each mode does; this package held a byte-identical
 // second copy while its own test fixtures already imported the canonical one.
@@ -1119,7 +1136,10 @@ export class Database {
           updatedAt: new Date(),
         };
       }
-      return { results: inMemResults, persistedSyncId: inMemPersistedSyncId };
+      return {
+        results: stampSyncIds(inMemResults, deltas),
+        persistedSyncId: inMemPersistedSyncId,
+      };
     }
 
     // Prepare results aligned with input order
@@ -1540,7 +1560,7 @@ export class Database {
       });
     }
 
-    return { results, persistedSyncId: highestPersistedSyncId };
+    return { results: stampSyncIds(results, deltas), persistedSyncId: highestPersistedSyncId };
   }
 
   /** Get raw data for hydration */

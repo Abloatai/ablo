@@ -172,6 +172,33 @@ describe('abloOpenApi (protocol reference)', () => {
     expect(operationIds).toContain('updateModelRow');
     expect(operationIds).toContain('commit');
   });
+
+  it('documents retained-response replay on branch creation', () => {
+    const createBranch = obj(obj(paths['/v1/branches']).post);
+    const parameters = createBranch.parameters as Json[];
+    expect(parameters.find((parameter) => parameter.name === 'Idempotency-Key')).toMatchObject({
+      in: 'header',
+      schema: { type: 'string', maxLength: 255 },
+    });
+  });
+
+  it('documents bounded branch collection pagination', () => {
+    const listBranches = obj(obj(paths['/v1/branches']).get);
+    const parameters = listBranches.parameters as Json[];
+    expect(parameters.find((parameter) => parameter.name === 'limit')).toMatchObject({
+      in: 'query',
+      schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+    });
+    expect(parameters.find((parameter) => parameter.name === 'cursor')).toMatchObject({
+      in: 'query',
+      schema: { type: 'string' },
+    });
+    // The retired spelling stays documented so a caller on it can see it is going.
+    expect(parameters.find((parameter) => parameter.name === 'starting_after')).toMatchObject({
+      in: 'query',
+      deprecated: true,
+    });
+  });
 });
 
 describe('schemaToOpenApi operation names', () => {

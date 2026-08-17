@@ -31,7 +31,7 @@ Common options:
 |---|---|
 | `schema` | Required for typed model clients. |
 | `apiKey` | Bearer credential for trusted server runtimes. Defaults to `ABLO_API_KEY` when available. |
-| `baseURL` | Override the hosted sync endpoint for staging or private deployments. |
+| `baseURL` | Override the hosted sync endpoint for staging or private deployments. An HTTPS origin, optionally with a path prefix; plain HTTP is accepted for localhost. Your key travels here, so a URL carrying its own credentials, a query, or a fragment is refused at construction. |
 | `persistence` | `memory` by default. Use `indexeddb` for a durable browser cache that survives reloads. |
 | `durableWrites` | Optional crash recovery for unacknowledged agent/worker writes. Independent of the default memory cache; accepts `{ store, namespace? }`. |
 | `transport` | `'websocket'` (default) is the live, stateful client: a persistent socket, a local synced pool, and `onChange` subscriptions. `'http'` returns the **stateless** client for server-side actors (agents, workers, serverless): the same `ablo.<model>` read/write/claim surface, but each call is one HTTP round-trip with no socket. Under `'http'` the return type narrows to `AbloHttpClient`, so stateful-only methods (the `local` reads, `onChange`, `join`) are compile errors rather than runtime gaps. |

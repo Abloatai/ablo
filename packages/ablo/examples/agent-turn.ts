@@ -30,8 +30,8 @@ try {
     reads: [record],
     idempotencyKey: commitId,
   });
-  const record = await ablo.commits.get({ id: commitId });
-  console.log({ identity: ablo.identity, commit: record });
+  const commit = await ablo.commits.get({ id: commitId });
+  console.log({ identity: ablo.identity, commit });
 } finally {
   await ablo.dispose();
 }

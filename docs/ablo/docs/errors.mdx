@@ -5,7 +5,7 @@ sidebar:
   icon: circle-alert
 ---
 
-Error contract version: `2026-08-04` (also sent on the `Ablo-Version` response header).
+Error contract version: `2026-08-15` (also sent on the `Ablo-Version` response header).
 
 Every error — over HTTP or WebSocket — carries the same envelope:
 
@@ -273,6 +273,12 @@ The caller lacks permission for this operation.
 
 Registering a trusted issuer requires a secret (`sk_`) API key. The key presented is not a secret key.
 
+### organization_disabled
+
+`HTTP 403` · not retryable
+
+This organization has been disabled by an operator. Contact support before retrying.
+
 ### organization_mismatch
 
 `HTTP 403` · not retryable
@@ -459,6 +465,12 @@ This idempotency key belongs to an expired retained source intent and cannot be 
 
 The schema change is incompatible with the schema currently deployed and cannot be applied as-is.
 
+### precondition_failed
+
+`HTTP 409` · not retryable
+
+A conditional operation did not match the current database row. The complete atomic commit was rejected and no operation in the batch was applied.
+
 ### replication_reset_required
 
 `HTTP 409` · not retryable
@@ -534,6 +546,12 @@ The CLI was invoked with an unknown flag or a malformed flag value.
 `HTTP 400` · not retryable
 
 A structured (JSON) value was written to a column whose database type cannot hold it. Ablo adapts a json field to either a jsonb column (native) or a text column (serialized) — but a scalar column (integer, boolean, uuid, timestamp, …) cannot store a JSON object or array. Use a jsonb or text column for this field. Ablo adapts to your column; it does not alter your schema.
+
+### column_value_out_of_range
+
+`HTTP 400` · not retryable
+
+A stored value is outside the range the field was declared to hold. A number field reads back as a JavaScript number, which represents integers exactly only up to 9,007,199,254,740,991; a bigint column holding more than that would come back rounded. Declare the field as text to read those values digit for digit.
 
 ### commit_operation_action_required
 
@@ -691,6 +709,12 @@ The submitted schema could not be parsed.
 
 Sync groups must be `default` or `<namespace>:<id>`.
 
+### item_id_required
+
+`HTTP 400` · not retryable
+
+An item id is required for this request.
+
 ### malformed_claim
 
 `HTTP 400` · not retryable
@@ -805,6 +829,12 @@ The query contained an invalid identifier.
 
 The `LIKE` pattern must not end with an escape character.
 
+### query_relation_expansion_too_large
+
+`HTTP 400` · not retryable
+
+A requested relation expansion exceeds the bounded nested-row budget. Query the related model as its own paginated collection instead.
+
 ### query_unknown_relation
 
 `HTTP 400` · not retryable
@@ -870,12 +900,6 @@ A data-source event was malformed — missing or invalid id, model, entityId, ty
 `client-only` · not sent over the network
 
 A data-source operation arrived without the entity `id` it targets.
-
-### task_id_required
-
-`HTTP 400` · not retryable
-
-A task id is required for this request.
 
 ### upload_fields_required
 
@@ -1139,7 +1163,7 @@ The schema is declared mutable but is missing its required `meta` block.
 
 `client-only` · not sent over the network
 
-A model redeclared a reserved base field (id, createdAt, updatedAt, organizationId, createdBy) that the SDK provides automatically.
+A model declared `id`, the one universal field Ablo supplies. Remove it from the declared application fields.
 
 ### schema_scope_invalid
 
@@ -1451,6 +1475,12 @@ The server failed to fetch the requested entity. It is safe to retry.
 
 Something went wrong on Ablo's side — an unexpected server error. It is safe to retry.
 
+### item_id_missing
+
+`HTTP 502` · retryable
+
+The item-create response arrived without an item id, so the result cannot be used. Retry the request.
+
 ### migration_failed
 
 `HTTP 500` · not retryable
@@ -1510,12 +1540,6 @@ The local signed Data Source handler threw while processing a request. Read the 
 `HTTP 500` · retryable
 
 Ablo could not establish the Data Source reverse channel because of an internal service failure. Retry; if it persists, report the request id.
-
-### task_id_missing
-
-`HTTP 502` · retryable
-
-The task-create response arrived without a task id, so the result cannot be used. Retry the request.
 
 ### tenant_routing_failed
 

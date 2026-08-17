@@ -35,6 +35,8 @@ export type {
   HttpModelClient,
   HttpModelMutationParams,
 } from './transport/httpClient.js';
+/** What `ablo.<model>.list()` resolves to: the rows, and where the page ends. */
+export type { ModelList } from './resources/httpResources.js';
 export type {
   FunctionalUpdateOptions,
   /** @deprecated Use `FunctionalUpdateOptions`. */

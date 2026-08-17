@@ -85,6 +85,17 @@ second verb to learn — `local.` is the only difference. The query reads accept
 and `state`; state defaults to `'live'`, with `'archived'` and `'all'` to include
 retired rows.
 
+`where` takes operators, not only equality: an array value is an `IN`
+(`{ status: ['draft', 'review'] }`), and tuple form spells the rest out
+(`[['title', 'ILIKE', '%storm%'], ['createdAt', '>=', cutoff]]`). Clauses combine
+with AND; for OR, run two reads and union them.
+
+`list` returns a page, not always the whole collection. The result is an array,
+so it maps and iterates as usual, and it carries `hasMore` and `nextCursor`
+beside the rows. Pass `nextCursor` back as `cursor`, keeping `where` and
+`orderBy` the same, to walk the rest. Check `hasMore` before treating a result
+as complete.
+
 Workers import the same app schema and select `transport: 'http'`. The transport
 changes; the typed `ablo.<model>` contract does not. There is no public
 schema-less or string-keyed model client.

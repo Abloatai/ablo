@@ -19,6 +19,13 @@
  * loaded models) or the live delta stream (pushed over the WebSocket). It only
  * fills the gap for lazily loaded models read by id or filter after the engine
  * is ready.
+ *
+ * A network answer is a snapshot, unordered against that stream: it may leave
+ * before a write and return after it. Each returned row therefore meets the
+ * pool by log position — the position the row provably reflects against the
+ * position the pooled copy is already known to hold ({@link RowWatermarks}) —
+ * never by wall-clock `updatedAt`, which the server does not stamp and which
+ * orders nothing.
  */
 
 import type { InstanceCache } from '../InstanceCache.js';
@@ -30,12 +37,18 @@ import type { ModelRegistry, RegisteredModelClass } from '../ModelRegistry.js';
 import type { RuntimeContext } from '../RuntimeContext.js';
 import { postQuery } from '../query/client.js';
 import type { RecoveryClass } from '@abloatai/transaction/errorCodes';
-import type { LoadWhere, Query, WhereClause, WhereOp, WherePrimitive } from '../query/types.js';
+import type { LoadWhere, Query, WhereClause, WhereOp } from '../query/types.js';
+import { normalizeWhere } from '@abloatai/transaction/resources/where';
 import type { Schema } from '@abloatai/transaction/schema/schema';
+import type { LogPositionPort } from '../logPosition.js';
 
 export interface OnDemandLoaderOptions {
   readonly objectPool: InstanceCache;
-  readonly database: Database;
+  /**
+   * The local tier reads and writes rows through a model's store, so store
+   * lookup is the whole of the loader's dependency on the database.
+   */
+  readonly database: Pick<Database, 'getStore'>;
   readonly registry: ModelRegistry;
   readonly schema: Schema;
   /** Bootstrap base URL (without trailing slash), e.g. `https://api.example.com/api`. */
@@ -49,6 +62,13 @@ export interface OnDemandLoaderOptions {
   readonly getCapabilityToken?: () => string | null;
   /** The owning client's runtime. Defaults to the module-global bridge. */
   readonly runtime?: RuntimeContext;
+  /**
+   * The client's position in the log. Read at the moment a query is issued:
+   * the server holds at least that much when it answers, so it is the position
+   * every returned row provably reflects — the bound a resident row is judged
+   * against before a snapshot may overwrite it (see {@link RowWatermarks}).
+   */
+  readonly position: Pick<LogPositionPort, 'readFloor'>;
 }
 
 export interface FetchOptions<T> {
@@ -96,28 +116,39 @@ interface SchemaModelDef {
   >;
 }
 
-function timestampMs(value: unknown): number | undefined {
-  if (value instanceof Date) {
-    const timestamp = value.getTime();
-    return Number.isFinite(timestamp) ? timestamp : undefined;
-  }
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value !== 'string') return undefined;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? undefined : parsed;
-}
+/**
+ * Where a row being hydrated came from, and what that says about how it may
+ * meet a row already in the pool.
+ *
+ * A network snapshot is unordered against the delta stream: it may have been
+ * issued before a write and answered after it. It carries the position it
+ * provably reflects, and a resident row known to be beyond that position is
+ * left as it is. A local read (IndexedDB) exists to fill pool misses; the pool
+ * is never behind local storage for a row it already holds, so a resident row
+ * is kept untouched.
+ */
+type HydrationOrigin =
+  | { readonly kind: 'network'; readonly position: number | undefined }
+  | { readonly kind: 'local' };
+
+const LOCAL: HydrationOrigin = { kind: 'local' };
 
 /**
- * A query response is a snapshot, not an ordered delta. It may have started
- * before a local optimistic write and completed after it. Only treat the row
- * as authoritative over an existing model when its server timestamp is newer;
- * missing timestamps retain the legacy merge behavior for custom sources that
- * do not expose `updatedAt`.
+ * The position a returned row provably reflects: the greater of its own
+ * evidence stamp (the row's watermark, which lags for a row that has not
+ * changed in a while) and the client's read floor when the query was issued
+ * (which the server had already passed when it answered). Both are lower
+ * bounds; the tighter one judges. `undefined` when neither says anything.
  */
-function snapshotDoesNotAdvanceModel(data: Record<string, unknown>, model: Model): boolean {
-  const incoming = timestampMs(data.updatedAt);
-  const resident = timestampMs(model.updatedAt);
-  return incoming !== undefined && resident !== undefined && incoming <= resident;
+function snapshotPosition(
+  raw: unknown,
+  evidenceById: ReadonlyMap<string, number>,
+  readFloorAtIssue: number,
+): number | undefined {
+  const id = raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : undefined;
+  const stamp = typeof id === 'string' ? (evidenceById.get(id) ?? 0) : 0;
+  const position = Math.max(stamp, readFloorAtIssue);
+  return position > 0 ? position : undefined;
 }
 
 export class OnDemandLoader {
@@ -308,7 +339,7 @@ export class OnDemandLoader {
     if (local.length === 0) {
       const fromIdb = await scanIdb(this.opts.database, typename, clauses);
       const idbModels = fromIdb
-        .map((raw) => this.hydrateOne(raw, typename))
+        .map((raw) => this.hydrateOne(raw, LOCAL, typename))
         .filter((m): m is Model => m !== null);
       if (idbModels.length > 0) {
         this.opts.objectPool.addBatch(idbModels, ModelScope.live);
@@ -345,18 +376,29 @@ export class OnDemandLoader {
   ): Promise<Model[]> {
     const network = await this.queryNetwork(modelName, clauses, options);
     const networkRows = network.rows;
+    const evidenceById = new Map(network.evidence.map((entry) => [entry.id, entry.stamp]));
     const networkModels = networkRows
       // Strict: a row the server returned whose type name this client never
       // registered is a genuine schema collision (the pushed schema differs
       // from the local one). Throw here, naming the cause, rather than silently
       // dropping the row and failing downstream as `entity_not_found`.
-      .map((raw) => this.hydrateOne(raw, typename, { strict: true }))
+      .map((raw) =>
+        this.hydrateOne(
+          raw,
+          { kind: 'network', position: snapshotPosition(raw, evidenceById, network.position) },
+          typename,
+          { strict: true },
+        ),
+      )
       .filter((m): m is Model => m !== null);
 
-    const evidenceById = new Map(network.evidence.map((entry) => [entry.id, entry.stamp]));
     for (const model of networkModels) {
       const stamp = evidenceById.get(model.id);
-      if (stamp !== undefined) this.readEvidence.set(model, stamp);
+      if (stamp === undefined) continue;
+      // The read's evidence, kept for the premise a guarded write may cite;
+      // and the position the pooled row now reflects, for freshness.
+      this.readEvidence.set(model, stamp);
+      this.opts.objectPool.watermarks.advance(model, stamp);
     }
 
     if (networkModels.length > 0) {
@@ -437,7 +479,7 @@ export class OnDemandLoader {
 
       const rows = await this.readChildrenLocal(targetTypename, foreignKey, missing);
       const models = rows
-        .map((raw) => this.hydrateOne(this.stampTypename(raw, targetTypename), targetTypename))
+        .map((raw) => this.hydrateOne(this.stampTypename(raw, targetTypename), LOCAL, targetTypename))
         .filter((m): m is Model => m !== null);
       if (models.length > 0) {
         this.opts.objectPool.addBatch(models, ModelScope.live);
@@ -492,6 +534,7 @@ export class OnDemandLoader {
 
   private hydrateOne(
     raw: unknown,
+    origin: HydrationOrigin,
     typename?: string,
     opts?: { strict?: boolean },
   ): Model | null {
@@ -502,26 +545,27 @@ export class OnDemandLoader {
       // Keep the existing instance alive when a query refreshes it. A query
       // can carry fresher server state after a missed delta, but unlike the
       // ordered delta stream it can also finish late with an older snapshot;
-      // the reconciliation below distinguishes those cases before applying.
+      // the origin decides which before anything is applied.
       const existing = this.opts.objectPool.get(obj.id);
       if (existing) {
-        const stamped = this.stampTypename(obj, typename) as Record<string, unknown>;
-        // Network queries are unordered snapshots. A request that began before
-        // an optimistic resize can return afterward with the old row; applying
-        // it here would visibly snap the live model back, and the matching
-        // authoritative delta cannot repair it because own echoes are
-        // intentionally suppressed. Keep a newer resident row intact.
-        if (snapshotDoesNotAdvanceModel(stamped, existing)) return existing;
+        if (origin.kind === 'local') return existing;
+        // A request that began before an optimistic write can return afterward
+        // with the old row; applying it would visibly snap the live model
+        // back, and the matching authoritative delta cannot repair it because
+        // own echoes are suppressed. The pool knows the position the row
+        // already reflects; a snapshot from before it is left unapplied.
+        if (this.opts.objectPool.watermarks.isAheadOf(existing, origin.position)) return existing;
 
-        // If the source has no comparable timestamp, retain pending local
-        // fields while accepting unrelated server fields. This is the same
-        // local-first merge contract used by SyncClient's delta resolver.
+        const stamped = this.stampTypename(obj, typename) as Record<string, unknown>;
+        // Retain pending local fields while accepting the server's others —
+        // the same local-first merge contract SyncClient's delta resolver uses.
         const localChanges = existing.getChanges();
         existing.updateFromData(
           Object.keys(localChanges).length > 0
             ? { ...stamped, ...localChanges, updatedAt: existing.updatedAt }
             : stamped,
         );
+        this.opts.objectPool.watermarks.advance(existing, origin.position);
         return existing;
       }
       return null;
@@ -574,6 +618,8 @@ export class OnDemandLoader {
   ): Promise<{
     rows: unknown[];
     evidence: readonly { id: string; stamp: number }[];
+    /** The client's read floor when the query was issued — what every returned row provably reflects. */
+    position: number;
   }> {
     const typename = this.resolveTypename(modelName);
     const orderEntries = options?.orderBy ? Object.entries(options.orderBy) : [];
@@ -592,6 +638,9 @@ export class OnDemandLoader {
         ? { related: options.expand }
         : {}),
     };
+    // Read before the request leaves: the server holds at least this much of
+    // the log when it answers, so it is the position the response reflects.
+    const position = this.opts.position.readFloor;
     const result = await postQuery(
       {
         baseUrl: this.opts.baseUrl,
@@ -620,9 +669,9 @@ export class OnDemandLoader {
     // own typed pool, then leave the nested arrays in place on the
     // primary row.
     if (options?.expand && options.expand.length > 0) {
-      this.hydrateExpanded(modelName, normalized, options.expand);
+      this.hydrateExpanded(modelName, normalized, options.expand, position);
     }
-    return { rows: normalized, evidence };
+    return { rows: normalized, evidence, position };
   }
 
   /**
@@ -636,8 +685,12 @@ export class OnDemandLoader {
     parentModelName: string,
     rows: unknown[],
     relationNames: readonly string[],
+    position: number,
   ): void {
     const parentDef = this.getModelDef(parentModelName);
+    // Nested rows carry no evidence of their own; the read floor at issue
+    // time is what they provably reflect. A floor of zero says nothing.
+    const origin: HydrationOrigin = { kind: 'network', position: position > 0 ? position : undefined };
 
     for (const row of rows) {
       if (!row || typeof row !== 'object') continue;
@@ -655,7 +708,7 @@ export class OnDemandLoader {
         for (const item of items) {
           const stamped = this.stampTypename(item, targetTypename);
           stampedItems.push(stamped);
-          const m = this.hydrateOne(stamped);
+          const m = this.hydrateOne(stamped, origin);
           if (m) models.push(m);
         }
         if (models.length > 0) {
@@ -756,7 +809,7 @@ function scanPool(
 }
 
 async function scanIdb(
-  database: Database,
+  database: Pick<Database, 'getStore'>,
   modelName: string,
   clauses: readonly WhereClause[],
 ): Promise<unknown[]> {
@@ -805,34 +858,10 @@ async function scanIdb(
   }
 }
 
-/**
- * Normalize `LoadWhere<T>` input to the canonical `readonly WhereClause[]`
- * tuple form used throughout `runFetch`. Tuple inputs pass through; object
- * inputs become one `['col', '=', val]` or `['col', 'IN', vals]` per key.
- *
- * Detection: an array whose first element is itself an array is treated
- * as tuple form. Object form is the fallback.
- *
- * Exported so callers can pre-normalize (e.g., for tests, or to inspect
- * the canonical clauses before passing them to `load`/`subscribe`).
- */
-export function normalizeWhere(where: unknown): readonly WhereClause[] {
-  if (where == null) return [];
-  if (Array.isArray(where)) {
-    // Tuple form — assumed to already use server-side column names.
-    return where as readonly WhereClause[];
-  }
-  if (typeof where === 'object') {
-    const obj = where as Record<string, unknown>;
-    return Object.entries(obj).map(([key, value]) => {
-      if (Array.isArray(value)) {
-        return [key, 'IN', value as readonly WherePrimitive[]] as WhereClause;
-      }
-      return [key, value as WherePrimitive] as WhereClause;
-    });
-  }
-  return [];
-}
+// `normalizeWhere` lives with the grammar it produces, so both transports read
+// the same one; re-exported here for callers that pre-normalize (tests, or
+// inspecting the canonical clauses before `load`/`subscribe`).
+export { normalizeWhere };
 
 /** Equality-only subset of clauses, keyed by column. Used by IDB fast paths. */
 function extractEqClauses(clauses: readonly WhereClause[]): Record<string, unknown> {

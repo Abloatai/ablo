@@ -17,7 +17,7 @@ import {
   type BranchCredentialResponse,
   type BranchStatusResponse,
 } from '@abloatai/transaction/branches';
-import { ABLO_DEFAULT_BASE_URL } from '@abloatai/transaction/auth/hostedEndpoints';
+import { apiBaseUrl } from './controlPlane';
 import { resolveManagementKey } from './config';
 
 export const BRANCH_USAGE = `Usage:
@@ -37,9 +37,9 @@ interface BranchRequestContext {
   baseUrl?: string;
 }
 
-function apiUrl(baseUrl?: string): string {
-  return (baseUrl ?? process.env.ABLO_API_URL ?? ABLO_DEFAULT_BASE_URL).replace(/\/+$/, '');
-}
+// `apiBaseUrl` is the CLI's one resolver for where a management key is sent;
+// this module reads it rather than restating the fallback chain.
+const apiUrl = apiBaseUrl;
 
 function requireKey(explicit?: string): string {
   const key = explicit ?? resolveManagementKey();

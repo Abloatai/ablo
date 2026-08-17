@@ -1,5 +1,97 @@
 # @abloatai/cli
 
+## 0.53.0
+
+### Minor Changes
+
+- A collection read now reports where the collection stands, and a filtered read
+  reaches the server with its filter intact.
+
+  `list` returns a page. The result is still an array, so it maps, spreads, and
+  iterates as before, and it carries `hasMore` and `nextCursor` beside the rows.
+  Pass `nextCursor` back as `cursor`, keeping `where` and `orderBy` the same, to
+  walk the rest:
+
+  ```ts
+  let cursor: string | null = null;
+  const open = [];
+  do {
+    const page = await ablo.weatherReports.list({
+      where: { status: ['draft', 'review'] },
+      orderBy: { createdAt: 'asc' },
+      limit: 100,
+      ...(cursor ? { cursor } : {}),
+    });
+    open.push(...page);
+    cursor = page.hasMore ? page.nextCursor : null;
+  } while (cursor);
+  ```
+
+  The parameter that resumes a collection is `cursor`, in the SDK and on every HTTP
+  collection route. It was `starting_after`, a spelling whose established meaning
+  elsewhere is a row id, while this value has always been an opaque token tied to
+  the sort it was issued for. `starting_after` is still accepted on the wire and is
+  removed in a later release; sending both uses `cursor`.
+
+  A list read has always been a page: the server applies a default size and caps
+  the largest one. Until now that page state was dropped on arrival, so a read
+  returning 20 of 500 matching rows looked exactly like a complete one. Check
+  `hasMore` before treating a result as the whole set.
+
+  `where` accepts operators as well as equality, and both travel to the server. An
+  array value is an `IN`, as in `{ status: ['draft', 'review'] }`, and tuple form
+  spells the rest out, as in
+  `[['title', 'ILIKE', '%storm%'], ['createdAt', '>=', cutoff]]`. Clauses combine
+  with AND. For OR, run two reads and union the results.
+
+  On the stateless client (`transport: 'http'`) an `IN` filter and every
+  tuple-form clause were previously discarded before the request left, and the
+  read came back unfiltered. Any agent or worker that filtered a collection over
+  HTTP was reading more rows than it asked for. Every transport now encodes a
+  filter the same way.
+
+  A boolean filter could match the opposite rows rather than fail. A value that
+  arrived as the database's own text spelling bound as its negation, so a filter
+  on a boolean field is now coerced before binding and read back the same way.
+
+  A field declared as a number reads back as a number whatever integer width its
+  column uses; a wide column previously arrived as a decimal string while its
+  narrower neighbour arrived as a number. A stored value beyond the range a
+  JavaScript number represents exactly now fails with `column_value_out_of_range`
+  rather than arriving quietly rounded. Declare such a field as text to read those
+  values digit for digit.
+
+  The live client keeps a local graph and loads a working set rather than pages,
+  so it rejects `cursor` instead of returning the first page again. Narrow the
+  `where`, or construct the client with `transport: 'http'` to page. On that
+  client `hasMore` reports whether a `limit` cut the working set short, and
+  `nextCursor` is `null`.
+
+  A snapshot no longer overwrites a row the live client already knows to be newer.
+  Each row records the log position it reflects, and a bootstrap or an on-demand
+  read from an earlier position is left unapplied, so a reconnect cannot roll back
+  a write the server had already confirmed. The ordered change stream continues to
+  carry every other writer's edits. A plugin receives that position as `syncId` on
+  `AppliedChange`.
+
+  `baseURL` is checked where the credential travels. It accepts an HTTPS origin,
+  preserving a path prefix for a deployment mounted under one, and plain HTTP for
+  localhost. A URL that embeds its own credentials or carries a query or fragment
+  is refused when the client is constructed, rather than failing later as an
+  opaque request error. The CLI answers to the same rule for `ABLO_API_URL` and
+  for a new `--url`.
+
+  `normalizeAbloHostedBaseUrl` is renamed `normalizeAbloBaseUrl`. The old name
+  still resolves to the same function and is removed in 0.54.0.
+
+  `GET /v1/projects` returns the canonical list envelope, with `has_more` and
+  `next_cursor` beside `data`, matching every other collection endpoint.
+
+  Two further error codes join the registry: `organization_disabled` when an
+  operator has disabled an organization, and `query_relation_expansion_too_large`
+  when a requested relation expansion exceeds the nested-row budget. The error
+  contract version becomes `2026-08-15`.
+
 ## 0.52.0
 
 ### Minor Changes

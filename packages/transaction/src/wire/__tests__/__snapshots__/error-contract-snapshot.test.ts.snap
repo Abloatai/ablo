@@ -273,6 +273,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "column_value_out_of_range": {
+      "category": "validation",
+      "httpStatus": 400,
+      "retryable": false,
+      "surface": "wire",
+    },
     "commit_failed": {
       "category": "transport",
       "httpStatus": 500,
@@ -1035,6 +1041,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "retryable": false,
       "surface": "wire",
     },
+    "organization_disabled": {
+      "category": "permission",
+      "httpStatus": 403,
+      "retryable": false,
+      "surface": "wire",
+    },
     "organization_mismatch": {
       "category": "permission",
       "httpStatus": 403,
@@ -1138,6 +1150,12 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "surface": "wire",
     },
     "query_invalid_like_pattern": {
+      "category": "validation",
+      "httpStatus": 400,
+      "retryable": false,
+      "surface": "wire",
+    },
+    "query_relation_expansion_too_large": {
       "category": "validation",
       "httpStatus": 400,
       "retryable": false,
@@ -1714,6 +1732,6 @@ exports[`error-code wire contract snapshot the (category, surface, httpStatus, r
       "surface": "client",
     },
   },
-  "version": "2026-08-04",
+  "version": "2026-08-15",
 }
 `;

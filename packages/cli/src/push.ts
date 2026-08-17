@@ -25,7 +25,7 @@ import { resolve } from 'path';
 import { execFileSync } from 'child_process';
 import { confirm, text, isCancel, cancel } from '@clack/prompts';
 import { serializeSchema, schemaHash, type Schema } from '@abloatai/transaction/schema';
-import { apiBaseUrl, DEFAULT_URL } from './controlPlane';
+import { apiBaseUrl } from './controlPlane';
 import { ambientEnvKeyNote, resolveMutationApiKey, type ResolvedKeySource } from './config';
 import { resolveTarget, describeMismatches, type ResolvedTarget } from './target';
 import { brand } from './theme';
@@ -156,7 +156,9 @@ export async function pushSchema(
 export function parsePushArgs(argv: readonly string[]): PushArgs {
   let schemaPath = DEFAULT_SCHEMA_PATH;
   let exportName = DEFAULT_EXPORT;
-  let url = process.env.ABLO_API_URL ?? DEFAULT_URL;
+  // Left unset unless `--url` names one: `apiBaseUrl` below applies the
+  // env-then-default fallback, so the chain is written in one place.
+  let url: string | undefined;
   let force = false;
   let yes = false;
   let dryRun = false;
@@ -224,8 +226,9 @@ export function parsePushArgs(argv: readonly string[]): PushArgs {
     }
   }
 
-  // Strip a trailing slash so `${url}/api/schema` is well-formed.
-  url = url.replace(/\/+$/, '');
+  // One resolver decides where a key may be sent, and it also makes the base
+  // well-formed for `${url}/api/schema` (absolute, no trailing slash).
+  url = apiBaseUrl(url);
   return {
     schemaPath,
     exportName,

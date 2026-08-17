@@ -18,7 +18,13 @@ import { z } from 'zod';
 import { AbloValidationError } from '../errors.js';
 
 /** Primitive operand types allowed in a where clause. */
-export type WherePrimitive = string | number | boolean | null;
+export const wherePrimitiveSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]);
+export type WherePrimitive = z.infer<typeof wherePrimitiveSchema>;
 
 /**
  * The comparison operators a {@link WhereClause} may use: equality and
@@ -93,6 +99,22 @@ export const WHERE_LIKE_OPS: ReadonlySet<WhereOp> = new Set<WhereOp>([
  * Returns the classification the caller needs next, so the check and the branch
  * are the same statement rather than two that can disagree.
  */
+/**
+ * Whether an operand is the array form the set operators take.
+ *
+ * `Array.isArray` answers this at runtime but not in the type system: its
+ * signature narrows to `any[]`, which drops both the `readonly` and the element
+ * type, so a compiler that reached for it lost the operand type it had just
+ * finished validating and handed `any` to everything downstream. Declared here
+ * because operand shape is this module's vocabulary — the same reason
+ * {@link classifyWhereOperand} lives here rather than in either plane.
+ */
+export function isWhereOperandList(
+  value: WherePrimitive | readonly WherePrimitive[] | undefined,
+): value is readonly WherePrimitive[] {
+  return Array.isArray(value);
+}
+
 export function classifyWhereOperand(
   op: WhereOp,
   value: unknown,
@@ -134,10 +156,27 @@ export function classifyWhereOperand(
  *
  * The value is a single primitive for scalar operators and an array of
  * primitives for IN/NOT IN.
+ *
+ * This is a schema rather than a bare type because the grammar crosses a
+ * boundary: a filtered read arrives at the collection route as text, and the
+ * route has to decide whether what it received is a clause before compiling it
+ * to SQL. Declaring the shape twice — once to check at the edge, once to type
+ * the interior — is how the two planes came to disagree about `IN`.
  */
-export type WhereClause =
-  | readonly [col: string, value: WherePrimitive]
-  | readonly [col: string, op: WhereOp, value: WherePrimitive | readonly WherePrimitive[]];
+export const whereClauseSchema = z.union([
+  z.tuple([z.string(), wherePrimitiveSchema]).readonly(),
+  z
+    .tuple([
+      z.string(),
+      whereOpSchema,
+      z.union([wherePrimitiveSchema, z.array(wherePrimitiveSchema).readonly()]),
+    ])
+    .readonly(),
+]);
+export type WhereClause = z.infer<typeof whereClauseSchema>;
+
+/** A whole filter as it travels: the AND-combined list of conditions. */
+export const whereClausesSchema = z.array(whereClauseSchema).readonly();
 
 /**
  * Client-facing where shape for `load({where})` and `deleteMany({where})`.
@@ -158,3 +197,30 @@ export type LoadWhere<T> =
   | Partial<T>
   | { [K in keyof T]?: T[K] | readonly T[K][] }
   | readonly WhereClause[];
+
+/**
+ * Collapse either accepted {@link LoadWhere} form to the canonical clause list.
+ * Tuple input passes through; object input becomes one `['col', '=', val]` per
+ * key, or `['col', 'IN', vals]` where the value is an array.
+ *
+ * Detection: an array is tuple form, an object is object form.
+ *
+ * Every transport funnels through this. It used to live beside the WebSocket
+ * loader, which left the HTTP transport to walk `Object.entries` itself — and
+ * that copy dropped any value it found to be an object, so an `IN` filter and
+ * every tuple-form clause were discarded in silence and the read came back
+ * unfiltered.
+ */
+export function normalizeWhere(where: unknown): readonly WhereClause[] {
+  if (where == null) return [];
+  // Tuple form — assumed to already use server-side column names.
+  if (Array.isArray(where)) return where as readonly WhereClause[];
+  if (typeof where === 'object') {
+    return Object.entries(where as Record<string, unknown>).map(([key, value]) =>
+      Array.isArray(value)
+        ? ([key, 'IN', value as readonly WherePrimitive[]] as WhereClause)
+        : ([key, value as WherePrimitive] as WhereClause),
+    );
+  }
+  return [];
+}

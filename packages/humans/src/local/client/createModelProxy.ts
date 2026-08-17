@@ -38,6 +38,7 @@ import {
   startClaimHeartbeatLoop,
 } from '@abloatai/transaction/coordination/claimHeartbeatLoop';
 import { assertWriteOptions } from '@abloatai/transaction/resources/writeOptionsSchema';
+import { modelList, type ModelList } from '@abloatai/transaction/resources/httpResources';
 import { subTarget } from '@abloatai/transaction/coordination';
 // A named claim-meta crossing (see `claim-meta-crossings-are-enumerated` in
 // .dependency-cruiser.cjs): the reactive proxy's self-claim targets are
@@ -504,6 +505,18 @@ export function createModelProxy<T, C>(
   };
 
   const load = async (options?: ServerReadOptions<T>): Promise<T[]> => {
+    if (options?.cursor !== undefined) {
+      // The live client hydrates a working set into the local graph rather than
+      // handing back pages, so there is no cursor for this read to resume from.
+      // Accepting the option and ignoring it would return page one every time
+      // while the caller believed it was advancing.
+      throw new AbloValidationError(
+        '`cursor` resumes a page of the stateless read. This client keeps a ' +
+          'local graph and loads a working set instead of pages: narrow the ' +
+          '`where`, or construct the client with `transport: \'http\'` to page.',
+        { code: 'invalid_options', param: 'cursor' },
+      );
+    }
     const rows = await hydration.fetch<T>(schemaKey, options);
     return rows.map((row) => modelAsRow<T>(row));
   };
@@ -1146,10 +1159,18 @@ export function createModelProxy<T, C>(
 
   const list = guard(async (
     options?: ServerReadOptions<T>,
-  ): Promise<CapturedRow<T>[]> => {
+  ): Promise<ModelList<CapturedRow<T>>> => {
     const registry = readSetContext?.getStore();
     const rows = await load(options);
-    if (!registry) return rows as CapturedRow<T>[];
+    // This transport loads a working set rather than pages, so there is no
+    // cursor to hand back. `limit` can still cut the set short, and a full
+    // count is exactly the case where the caller cannot tell: report it rather
+    // than claim completeness this read cannot vouch for.
+    const page = modelList<CapturedRow<T>>(rows as CapturedRow<T>[], {
+      hasMore: options?.limit !== undefined && rows.length >= options.limit,
+      nextCursor: null,
+    });
+    if (!registry) return page;
     for (const row of rows) {
       const stamp = hydration.getReadEvidence?.(row as object);
       if (stamp === undefined) {
@@ -1174,7 +1195,7 @@ export function createModelProxy<T, C>(
         stamp,
       );
     }
-    return rows as CapturedRow<T>[];
+    return page;
   });
 
   const operations: ModelOperations<T, C> = {

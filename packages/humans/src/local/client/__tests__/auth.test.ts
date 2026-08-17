@@ -26,8 +26,8 @@ import {
   resolveAuthToken,
   resolveBaseURL,
   resolveBootstrapBaseUrl,
-  normalizeAbloHostedBaseUrl,
 } from '@abloatai/transaction/auth/apiKey';
+import { normalizeAbloBaseUrl } from '@abloatai/transaction/auth/baseUrl';
 
 describe('resolveApiKey', () => {
   it('prefers explicit option over env', () => {
@@ -108,58 +108,112 @@ describe('resolveBaseURL', () => {
     );
   });
 
-  it('canonicalizes legacy hosted aliases to api.abloatai.com (https canonical form)', () => {
-    expect(normalizeAbloHostedBaseUrl('wss://mesh.ablo.finance')).toBe(
-      'https://api.abloatai.com',
-    );
-    expect(normalizeAbloHostedBaseUrl('https://mesh-staging.ablo.finance')).toBe(
-      'https://api.abloatai.com',
-    );
-    expect(normalizeAbloHostedBaseUrl('https://api.ablo.finance/api')).toBe(
-      'https://api.abloatai.com/api',
-    );
-  });
-
   it('accepts all four schemes and canonicalizes to the http family (WHATWG model)', () => {
     // The socket layer derives ws/wss back from the canonical http/https form;
     // fetch consumers use it as-is. A ws:// baseURL previously wedged startup.
-    expect(normalizeAbloHostedBaseUrl('ws://localhost:8181')).toBe('http://localhost:8181');
-    expect(normalizeAbloHostedBaseUrl('wss://sync.customer.example')).toBe(
+    expect(normalizeAbloBaseUrl('ws://localhost:8181')).toBe('http://localhost:8181');
+    expect(normalizeAbloBaseUrl('wss://sync.customer.example')).toBe(
       'https://sync.customer.example',
     );
-    expect(normalizeAbloHostedBaseUrl('http://localhost:8181')).toBe('http://localhost:8181');
+    expect(normalizeAbloBaseUrl('http://localhost:8181')).toBe('http://localhost:8181');
   });
 
   it('leaves self-hosted URLs unchanged', () => {
-    expect(normalizeAbloHostedBaseUrl('https://sync.customer.example/api')).toBe(
+    expect(normalizeAbloBaseUrl('https://sync.customer.example/api')).toBe(
       'https://sync.customer.example/api',
     );
   });
 
+  it('falls back to the hosted default when the override is empty', () => {
+    // An empty env var is an unset env var. Returning '' handed the transports
+    // a base that no request could be built against.
+    expect(normalizeAbloBaseUrl('')).toBe(ABLO_DEFAULT_BASE_URL);
+    expect(normalizeAbloBaseUrl('   ')).toBe(ABLO_DEFAULT_BASE_URL);
+  });
+});
+
+// Every request carries the API key against this origin, so `baseURL` decides
+// where the credential travels. These are the values that would send it
+// somewhere it must not go, or send it in the clear.
+describe('normalizeAbloBaseUrl refuses unsafe credential destinations', () => {
+  it('refuses plaintext http to a remote host', () => {
+    expect(() => normalizeAbloBaseUrl('http://sync.customer.example')).toThrow(
+      /must use https/,
+    );
+    expect(() => normalizeAbloBaseUrl('ws://sync.customer.example')).toThrow(
+      /must use https/,
+    );
+  });
+
+  it('allows plaintext http to the local machine', () => {
+    // The whole 127.0.0.0/8 block, IPv6 loopback, and reserved `.localhost`
+    // names all reach this machine, so nothing is on the wire to read.
+    expect(normalizeAbloBaseUrl('http://127.0.0.2:8080')).toBe('http://127.0.0.2:8080');
+    expect(normalizeAbloBaseUrl('http://[::1]:8080')).toBe('http://[::1]:8080');
+    expect(normalizeAbloBaseUrl('http://ablo.localhost:3000')).toBe(
+      'http://ablo.localhost:3000',
+    );
+  });
+
+  it('refuses a URL that embeds its own credentials', () => {
+    expect(() =>
+      normalizeAbloBaseUrl('https://api.abloatai.com:tok@evil.example'),
+    ).toThrow(/must not embed a username or password/);
+  });
+
+  it('refuses a query string or fragment, which a path cannot be appended to', () => {
+    expect(() => normalizeAbloBaseUrl('https://sync.customer.example?to=evil')).toThrow(
+      /must not carry a query string or fragment/,
+    );
+    expect(() => normalizeAbloBaseUrl('https://sync.customer.example/#/x')).toThrow(
+      /must not carry a query string or fragment/,
+    );
+  });
+
+  it('refuses a trailing-dot host, which evades every host check', () => {
+    expect(() => normalizeAbloBaseUrl('https://api.abloatai.com.')).toThrow(
+      /must not end its host in a dot/,
+    );
+  });
+
+  it('refuses a scheme outside the http family', () => {
+    expect(() => normalizeAbloBaseUrl('file:///etc/passwd')).toThrow(
+      /must be an https URL/,
+    );
+  });
+
+  it('refuses an unparseable value instead of failing later at fetch time', () => {
+    expect(() => normalizeAbloBaseUrl('https://host:notaport')).toThrow(
+      /is not a valid URL/,
+    );
+  });
+});
+
+describe('resolveBootstrapBaseUrl', () => {
   it('prepends https:// to a scheme-less host (else it becomes a relative URL → 404)', () => {
     // The staging-outage root cause: NEXT_PUBLIC_SYNC_SERVER_URL=api-staging.abloatai.com
-    expect(normalizeAbloHostedBaseUrl('api-staging.abloatai.com')).toBe(
+    expect(normalizeAbloBaseUrl('api-staging.abloatai.com')).toBe(
       'https://api-staging.abloatai.com',
     );
-    expect(normalizeAbloHostedBaseUrl('api-staging.abloatai.com/api')).toBe(
+    expect(normalizeAbloBaseUrl('api-staging.abloatai.com/api')).toBe(
       'https://api-staging.abloatai.com/api',
     );
   });
 
   it('canonicalizes ws-family schemes to the http family, preserving host/port/path', () => {
-    expect(normalizeAbloHostedBaseUrl('wss://api-staging.abloatai.com')).toBe(
+    expect(normalizeAbloBaseUrl('wss://api-staging.abloatai.com')).toBe(
       'https://api-staging.abloatai.com',
     );
-    expect(normalizeAbloHostedBaseUrl('http://localhost:8080')).toBe('http://localhost:8080');
+    expect(normalizeAbloBaseUrl('http://localhost:8080')).toBe('http://localhost:8080');
   });
 
-  it('canonicalizes explicit bootstrapBaseUrl overrides for old hosted aliases', () => {
+  it('prefers an explicit bootstrapBaseUrl override over the client url', () => {
     expect(
       resolveBootstrapBaseUrl({
         url: 'wss://ignored.example',
-        bootstrapBaseUrl: 'https://mesh-staging.ablo.finance/api',
+        bootstrapBaseUrl: 'https://api-staging.abloatai.com/api',
       }),
-    ).toBe('https://api.abloatai.com/api');
+    ).toBe('https://api-staging.abloatai.com/api');
   });
 
   it('coerces a ws/wss override scheme to http/https for HTTP fetches', () => {

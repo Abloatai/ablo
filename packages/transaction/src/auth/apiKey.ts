@@ -14,7 +14,8 @@
 
 import { AbloAuthenticationError, AbloValidationError } from '../errors.js';
 import { classifyCredentialKind } from './credentialKind.js';
-import { ABLO_HOSTED_API_DOMAIN, ABLO_DEFAULT_BASE_URL } from './hostedEndpoints.js';
+import { ABLO_DEFAULT_BASE_URL } from './hostedEndpoints.js';
+import { normalizeAbloBaseUrl } from './baseUrl.js';
 import type { KeyEnvironment } from '../environment.js';
 import { isCredentialEndpoint, createEndpointCredentialResolver } from './credentialEndpoint.js';
 import {
@@ -393,55 +394,8 @@ export async function warnIfCliKeyMismatch(
 // re-exported here so existing import paths keep working.
 export { ABLO_HOSTED_API_DOMAIN, ABLO_HOSTED_HTTP_BASE_URL, ABLO_DEFAULT_BASE_URL } from './hostedEndpoints.js';
 
-const LEGACY_HOSTED_API_HOSTS = new Set([
-  'mesh.ablo.finance',
-  'mesh-staging.ablo.finance',
-  'api.ablo.finance',
-  'sync-staging.ablo.finance',
-]);
-
-/**
- * Normalizes older hosted host names to the current public API domain.
- * Self-hosted or custom URLs pass through unchanged; only the retired
- * first-party host names are rewritten.
- */
-export function normalizeAbloHostedBaseUrl(rawUrl: string): string {
-  const trimmed = rawUrl.trim();
-  if (!trimmed) return trimmed;
-
-  // A scheme-less value (e.g. `api-staging.abloatai.com`) is treated as a
-  // relative URL: `new URL()` throws on it, and a later `fetch` would resolve it
-  // against the current page — producing a 404 from the app's own origin.
-  // Prepending a scheme makes the base absolute. `https` matches
-  // {@link ABLO_HOSTED_HTTP_BASE_URL}; the socket layer derives `wss` from it.
-  // An existing scheme (ws, wss, http, or https) is preserved untouched.
-  const schemed = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-
-  try {
-    const url = new URL(schemed);
-    // Canonicalize the scheme to the HTTP family: accept all four schemes
-    // (http, https, ws, wss), normalize at this single entry point, and let
-    // each layer derive its own protocol (the socket layer maps http to ws and
-    // https to wss; fetch uses the URL as-is). Without this, a `ws://` base URL
-    // reaches HTTP consumers un-normalized and the client fails at startup
-    // instead of connecting.
-    if (url.protocol === 'ws:') url.protocol = 'http:';
-    if (url.protocol === 'wss:') url.protocol = 'https:';
-
-    if (!LEGACY_HOSTED_API_HOSTS.has(url.hostname)) {
-      return url.toString().replace(/\/+$/, '');
-    }
-
-    url.hostname = ABLO_HOSTED_API_DOMAIN;
-    if (url.protocol === 'http:') url.protocol = 'https:';
-    return url.toString().replace(/\/+$/, '');
-  } catch {
-    return schemed;
-  }
-}
-
 export function resolveBaseURL(input: AuthResolveInput): string {
-  return normalizeAbloHostedBaseUrl(input.options.baseURL ?? ABLO_DEFAULT_BASE_URL);
+  return normalizeAbloBaseUrl(input.options.baseURL ?? ABLO_DEFAULT_BASE_URL);
 }
 
 /**
@@ -499,17 +453,15 @@ export function resolveBootstrapBaseUrl(input: {
   readonly url: string;
   readonly bootstrapBaseUrl?: string;
 }): string {
-  if (input.bootstrapBaseUrl) {
-    // Coerce ws/wss to http/https on the override path as well. This base URL is
-    // used for HTTP fetches (identity resolution, credential exchange, and
-    // bootstrap), and the browser `fetch` rejects ws and wss schemes outright.
-    // The override can legitimately arrive with a WebSocket scheme when a caller
-    // derives it as `${baseUrl}/api` from a WebSocket base URL, so normalize it
-    // here rather than failing at fetch time.
-    return ensureApiSuffix(normalizeAbloHostedBaseUrl(input.bootstrapBaseUrl).replace(/^ws/, 'http'));
-  }
-  const url = normalizeAbloHostedBaseUrl(input.url);
-  return ensureApiSuffix(url.replace(/^ws/, 'http'));
+  // Both paths go through `normalizeAbloBaseUrl`, which canonicalizes ws to
+  // http and wss to https. That matters most on the override, which legitimately
+  // arrives with a WebSocket scheme when a caller derives it as `${baseUrl}/api`
+  // from a WebSocket base URL: this URL is used for HTTP fetches (identity
+  // resolution, credential exchange, and bootstrap), and `fetch` rejects ws and
+  // wss outright.
+  // `||`, not `??`: an empty override is an absent override, and should fall
+  // through to the client's own URL rather than to the hosted default.
+  return ensureApiSuffix(normalizeAbloBaseUrl(input.bootstrapBaseUrl || input.url));
 }
 
 /**
@@ -533,7 +485,7 @@ function ensureApiSuffix(httpBase: string): string {
     u.pathname = `${u.pathname.replace(/\/+$/, '')}/api`;
     return u.toString().replace(/\/+$/, '');
   } catch {
-    // Should be unreachable after `normalizeAbloHostedBaseUrl`, which yields an
+    // Should be unreachable after `normalizeAbloBaseUrl`, which yields an
     // absolute URL, but fall back to a string check rather than throwing.
     return trimmed.endsWith("/api") ? trimmed : `${trimmed}/api`;
   }

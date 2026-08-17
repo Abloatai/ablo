@@ -36,6 +36,7 @@ import {
   commitRecordListSchema,
   commitRecordWhereSchema,
 } from '../wire/commit.js';
+import { CURSOR_PARAM, CURSOR_PARAM_ALIAS } from '../wire/listEnvelope.js';
 import {
   claimRequestSchema,
   claimHeartbeatRequestSchema,
@@ -185,6 +186,43 @@ function fieldSchema(f: FieldMeta): Json {
 
 const pascal = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 const idParam = (): Json => ({ name: 'id', in: 'path', required: true, schema: { type: 'string' } });
+const idempotencyKeyParam = (): Json => ({
+  name: 'Idempotency-Key',
+  in: 'header',
+  schema: { type: 'string', maxLength: 255 },
+  description: 'Replay identity. Reuse the same key only for an identical request.',
+});
+const collectionPageParams = (): Json[] => [
+  {
+    name: 'limit',
+    in: 'query',
+    schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+  },
+  cursorParam(),
+  retiredCursorParam(),
+];
+
+/** The cursor parameter, named from the wire contract that issues its value. */
+const cursorParam = (): Json => ({
+  name: CURSOR_PARAM,
+  in: 'query',
+  schema: { type: 'string' },
+  description: 'The opaque next_cursor returned by the preceding page.',
+});
+
+/**
+ * The retired spelling, documented as deprecated so a caller still sending it
+ * can see it is going. Declared once: `queryParams` reaches for it too, and a
+ * second copy is how the model list came to document the same parameter without
+ * the deprecation the collection routes carried.
+ */
+const retiredCursorParam = (): Json => ({
+  name: CURSOR_PARAM_ALIAS,
+  in: 'query',
+  deprecated: true,
+  schema: { type: 'string' },
+  description: `Deprecated spelling of ${CURSOR_PARAM}, honoured until it is removed. Send ${CURSOR_PARAM}.`,
+});
 const jsonBody = (schema: Json): Json => ({
   required: true,
   content: { 'application/json': { schema } },
@@ -313,16 +351,22 @@ function withGenericRows(derived: Json): Json {
  */
 function queryParams(schema: z.ZodType): Json[] {
   const props = (derive(schema, 'input').properties ?? {}) as Record<string, Json>;
-  return Object.entries(props).map(([name, s]) => ({
-    name,
-    in: 'query',
-    // Query strings arrive at the server as text, but OpenAPI describes the
-    // caller-facing value before serialization. Generated clients should take
-    // an integer here and encode it, not expose a stringly typed page size.
-    schema: name === 'limit'
-      ? { type: 'integer', minimum: 1 }
-      : s,
-  }));
+  return Object.entries(props).map(([name, s]) => {
+    // The retired cursor spelling is documented the same way wherever it
+    // appears. Derived from the schema it still lives in, so the flag cannot be
+    // present on one route's copy of the parameter and absent on another's.
+    if (name === CURSOR_PARAM_ALIAS) return retiredCursorParam();
+    return {
+      name,
+      in: 'query',
+      // Query strings arrive at the server as text, but OpenAPI describes the
+      // caller-facing value before serialization. Generated clients should take
+      // an integer here and encode it, not expose a stringly typed page size.
+      schema: name === 'limit'
+        ? { type: 'integer', minimum: 1 }
+        : s,
+    };
+  });
 }
 
 const commitRecordListQuerySchema = commitRecordWhereSchema.safeExtend({
@@ -492,8 +536,8 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         parameters: [modelParam(), ...queryParams(listQuerySchema)],
         responses: {
           '200': namedResp(
-            'A page of rows. `next_cursor` feeds `starting_after` on the next ' +
-              'call; `stamp` is the watermark the page was read at.',
+            'A page of rows. `next_cursor` feeds `cursor` on the next call; ' +
+              '`stamp` is the watermark the page was read at.',
             'ModelPage',
           ),
         },
@@ -599,6 +643,7 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
       get: {
         tags: ['branches'],
         summary: 'List transaction branches for the credential project',
+        parameters: collectionPageParams(),
         responses: {
           '200': jsonResp(
             'The root and every active child branch.',
@@ -611,6 +656,7 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
         summary: 'Create an isolated child branch',
         description:
           'The returned id is immutable; retain it for automation. The slug is a project-scoped human handle.',
+        parameters: [idempotencyKeyParam()],
         requestBody: jsonBody(derive(createBranchRequestSchema, 'input')),
         responses: {
           '201': jsonResp('The ready branch.', derive(branchResponseSchema, 'output')),
@@ -866,7 +912,7 @@ export function abloOpenApi(options: SchemaToOpenApiOptions = {}): Json {
       post: {
         tags: ['commits'],
         summary: 'Commit a batch of operations atomically, and/or register durable premises',
-        parameters: [{ name: 'Idempotency-Key', in: 'header', schema: { type: 'string' }, description: 'Replay-safe key; the server returns the cached receipt on retry.' }],
+        parameters: [idempotencyKeyParam()],
         requestBody: commitBody(),
         responses: { '200': commitReceipt() },
       },
@@ -993,7 +1039,7 @@ export function schemaToOpenApi<S extends SchemaRecord>(
     post: {
       tags: ['commits'],
       summary: 'Commit a batch of operations atomically, and/or register durable premises',
-      parameters: [{ name: 'Idempotency-Key', in: 'header', schema: { type: 'string' }, description: 'Replay-safe key; the server returns the cached receipt on retry.' }],
+      parameters: [idempotencyKeyParam()],
       requestBody: commitBody(),
       responses: { '200': commitReceipt() },
     },

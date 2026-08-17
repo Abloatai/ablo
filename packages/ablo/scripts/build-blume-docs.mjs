@@ -20,6 +20,14 @@
  * (bare `<`/`{`/`}` outside code -- Blume compiles `.mdx` through Astro/MDX, which
  * reads those as JSX), and prepend frontmatter + a "do not edit" banner. Run with
  * `--check` to fail when the on-disk `.mdx` is stale (used by `lint:docs-site`).
+ *
+ * `--check --staged` is the pre-commit form: it runs only when the commit touches
+ * a source doc or a generated page, and it checks the prose pages only. The
+ * changelog is deliberately left out -- its dates come from the npm registry (see
+ * `npmPublishTimes`) and fall back to a git heuristic when that is unreachable, so
+ * a hook running offline would report a staleness that is its own network and not
+ * the tree's. `lint:docs-site` is the full check and covers the changelog; the
+ * hook covers the projection a person can hand-edit.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
@@ -236,7 +244,12 @@ function transform(md, slug) {
   const title = TITLES[slug];
   const descLine = description ? `description: ${JSON.stringify(description)}\n` : '';
   const iconLine = ICONS[slug] ? `sidebar:\n  icon: ${ICONS[slug]}\n` : '';
-  const frontmatter = `---\ntitle: ${JSON.stringify(title)}\n${descLine}${iconLine}---\n\n`;
+  // Blume composes every document title as "<page> - <site title>", and the
+  // site title is the landing page's own name ("Ablo Docs"). An empty SEO title
+  // makes the landing page's <title> and og:title the bare site title instead of
+  // "Ablo Docs - Ablo Docs"; the heading and the sidebar still use `title`.
+  const seoLine = slug === 'index' ? `seo:\n  title: ""\n` : '';
+  const frontmatter = `---\ntitle: ${JSON.stringify(title)}\n${descLine}${iconLine}${seoLine}---\n\n`;
   return frontmatter + body.replace(/^\n+/, '').replace(/\s+$/, '') + '\n';
 }
 
@@ -332,12 +345,32 @@ function releaseDates() {
   return map;
 }
 
-/** The changelog category shown next to each entry's date, derived from the
- *  highest-impact changeset heading in the section. */
-function changelogCategory(body) {
-  if (/^###\s+Major Changes/m.test(body)) return 'Breaking';
-  if (/^###\s+Minor Changes/m.test(body)) return 'Features';
-  return 'Fixes';
+/** The version a `## X.Y.Z` section opens with, as a `[major, minor]` pair. */
+function versionParts(part) {
+  const [major, minor] = part.slice(0, part.indexOf('\n')).trim().split('.').map(Number);
+  return [major ?? 0, minor ?? 0];
+}
+
+/**
+ * The changelog category shown next to each entry's date, derived from the step
+ * this version took over the one below it.
+ *
+ * It used to read the section body for Changesets' `### Minor Changes` heading.
+ * That heading is never there to find: `finalize-release-notes.mjs` replaces the
+ * generated body with the hand-written note before this generator runs, and the
+ * note's headings are sentences. So both branches were unreachable and all
+ * eighteen pages published as `Fixes`, feature releases included.
+ *
+ * The version headings are the surviving evidence of the bump, and this file
+ * already walks them, so the category is read from the same data rather than
+ * from prose that has to remember to say it.
+ */
+function changelogCategory(part, previousPart) {
+  const [major, minor] = versionParts(part);
+  // The oldest entry has nothing below it; measure it from the empty version.
+  const [previousMajor, previousMinor] = previousPart ? versionParts(previousPart) : [0, 0];
+  if (major !== previousMajor) return 'Breaking';
+  return minor !== previousMinor ? 'Features' : 'Fixes';
 }
 
 /** How many of the newest changelog entries stay in the agent-facing files
@@ -360,7 +393,7 @@ function buildChangelogPages() {
   return raw
     .split(/^## (?=\d+\.\d+\.\d+)/m)
     .slice(1)
-    .map((part, index) => {
+    .map((part, index, all) => {
       const nl = part.indexOf('\n');
       const version = part.slice(0, nl).trim().replace(/\s*\(.*\)$/, '');
       // CHANGELOG.md uses the internal package name; the public site uses the
@@ -368,7 +401,8 @@ function buildChangelogPages() {
       const sectionBody = escapeMdxBody(part.slice(nl + 1).trim())
         .replace(/@ablo\/ablo/g, '@abloatai/ablo')
         .trim();
-      const category = changelogCategory(sectionBody);
+      // Newest-first, so the preceding release is the next entry along.
+      const category = changelogCategory(part, all[index + 1]);
       const dateLine = dates[version] ? `date: ${dates[version]}\n` : '';
       // CHANGELOG.md is newest-first, so the index is the entry's age.
       const noindexLine = index >= CHANGELOG_AGENT_WINDOW ? 'noindex: true\n' : '';
@@ -458,7 +492,38 @@ function validateTagline(promise) {
   }
 }
 
+/**
+ * Whether this commit can move the projection out of step.
+ *
+ * Anything under the source docs or the generated tree can, and so can the
+ * generator itself and the two files that restate the landing page's promise
+ * line. A commit touching none of them leaves the check nothing to say, and a
+ * hook that runs anyway is a hook people learn to pass with `--no-verify`.
+ */
+function stagedTouchesTheProjection() {
+  const staged = execFileSync('git', ['diff', '--cached', '--name-only'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .filter(Boolean);
+  const watched = [
+    'packages/ablo/docs/',
+    'docs/ablo/docs/',
+    'packages/ablo/scripts/build-blume-docs.mjs',
+    'packages/ablo/README.md',
+    'packages/ablo/llms.txt',
+  ];
+  return staged.some((path) => watched.some((prefix) => path.startsWith(prefix)));
+}
+
 const check = process.argv.includes('--check');
+const stagedOnly = process.argv.includes('--staged');
+if (stagedOnly && !check) {
+  throw new Error('--staged is a mode of --check; pass both');
+}
+if (stagedOnly && !stagedTouchesTheProjection()) process.exit(0);
+
 const routes = siteRoutes();
 const stale = [];
 let landingPromise = '';
@@ -499,7 +564,9 @@ for (const slug of Object.keys(TITLES)) {
 validateTagline(landingPromise);
 
 // Changelog: one `type: changelog` page per release, assembled into the timeline.
-const changelogPages = buildChangelogPages();
+// Skipped in `--staged` mode, where its registry lookup would make the verdict
+// depend on the network; see the preamble.
+const changelogPages = stagedOnly ? [] : buildChangelogPages();
 if (!check) {
   // Rebuild the folder from scratch so removed releases don't linger.
   rmSync(CHANGELOG_DIR, { recursive: true, force: true });
@@ -530,7 +597,9 @@ if (check) {
     process.exit(1);
   }
   console.log(
-    `[docs] ${count} pages + ${changelogPages.length} changelog entries in sync with the package docs`,
+    stagedOnly
+      ? `[docs] ${count} pages in sync with the package docs (changelog not checked — run \`npm run check:docs-site\`)`
+      : `[docs] ${count} pages + ${changelogPages.length} changelog entries in sync with the package docs`,
   );
 } else {
   console.log(

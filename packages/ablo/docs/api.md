@@ -67,7 +67,7 @@ fallback removed — nothing to await, so they return a value.
 | Method | Returns | Use when |
 |---|---|---|
 | `get({ id })` | `Promise<T \| undefined>` | You need one row, hydrating from local store and server. |
-| `list({ where })` | `Promise<T[]>` | You need to hydrate a collection from local store and server. |
+| `list({ where })` | `Promise<ModelList<T>>` | You need to hydrate a collection from local store and server. |
 | `local.get(id)` | `T \| undefined` | You want a synchronous snapshot of one local row. |
 | `local.list(options?)` | `T[]` | You want a synchronous snapshot of a local collection. |
 | `local.count(options?)` | `number` | You want a synchronous count of local rows. |
@@ -78,6 +78,33 @@ fallback removed — nothing to await, so they return a value.
 `get`, `list`, `create`, `update`, and `delete` are the main path — they go
 through the server. The `local` reads work off the rows a session has already
 synced, so a cheap re-read needs no round-trip.
+
+### Paging a collection
+
+`list` returns a page. The result is an array, so it maps and iterates as
+before, and it carries `hasMore` and `nextCursor` alongside the rows:
+
+```ts
+let cursor: string | null = null;
+const open = [];
+do {
+  const page = await ablo.weatherReports.list({
+    where: { status: ['draft', 'review'] },
+    orderBy: { createdAt: 'asc' },
+    limit: 100,
+    ...(cursor ? { cursor } : {}),
+  });
+  open.push(...page);
+  cursor = page.hasMore ? page.nextCursor : null;
+} while (cursor);
+```
+
+Keep `where` and `orderBy` the same across pages: the cursor encodes the sort
+position it was issued for, and a read that changes either starts a new walk.
+
+`where` accepts operators as well as equality, and both travel to the server:
+`{ status: ['draft', 'review'] }` is an `IN`, and tuple form spells the rest
+out, as in `[['title', 'ILIKE', '%storm%'], ['createdAt', '>=', cutoff]]`.
 
 ## Protected Writes
 
@@ -193,7 +220,9 @@ receipt; the typed SDK turns single-model writes into their application result
 (the created or updated row, or nothing for delete). A rejected write carries an
 error `code` (e.g. `stale_context`, `intent_conflict`) to act on.
 `GET /api/v1/models/{model}` is cursor-paginated (`limit`, `order`, `order_by`,
-`starting_after`) and returns `{ data, has_more, next_cursor }`.
+`cursor`) and returns `{ data, has_more, next_cursor }`. The `starting_after`
+spelling this parameter used through 0.52.0 is still honoured, and is removed in
+a later release.
 
 `POST /api/v1/commits` remains the path for **atomic multi-op** writes (several
 operations across rows/models that must commit together) — the per-model routes

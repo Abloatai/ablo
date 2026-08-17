@@ -17,6 +17,7 @@
 import { globalRuntime } from '../context.js';
 import type { RuntimeContext } from '../RuntimeContext.js';
 import type { BootstrapResult } from '../Database.js';
+import type { BootstrapSnapshot } from '../SyncClient.js';
 import type { SyncDelta } from './SyncWebSocket.js';
 
 /** Counts describing what applying a bootstrap changed in the pool: entities
@@ -43,7 +44,7 @@ export interface PoolContext {
   applyDeltaBatchToPool(results: NonNullable<BootstrapResult['deltaResults']>): void;
   /** Writes bootstrap data into the pool: creates models, heals partial rows, upserts, and removes stale local copies the server no longer reports. */
   applyBootstrapDataToPool(
-    bootstrapData: { models?: Record<string, unknown[]>; failedModels?: string[] },
+    bootstrapData: BootstrapSnapshot,
     protectedIds?: ReadonlySet<string>,
   ): { added: number; updated: number; removed: number; skipped: number; healed: number };
   /** Pool size — for the completion log line. */

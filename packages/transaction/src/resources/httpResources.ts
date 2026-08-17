@@ -101,7 +101,49 @@ export interface HttpTransportRead<T = Record<string, unknown>> {
 /** @internal Exact collection envelope retained until the typed facade captures evidence. */
 export interface HttpTransportList<T = Record<string, unknown>> {
   readonly data: readonly T[];
+  /**
+   * Whether the collection continues past this page. A list read is always a
+   * page — the server applies a default size and caps the largest one — so a
+   * caller that treats `data` as the whole set is right only while this is
+   * `false`. It used to be dropped on the floor here, which made a truncated
+   * read indistinguishable from a complete one.
+   */
+  readonly hasMore: boolean;
+  /**
+   * The cursor to pass back as `cursor` for the next page, or `null` at the end
+   * of the collection.
+   */
+  readonly nextCursor: string | null;
   readonly evidence?: readonly ModelListEvidence[];
+}
+
+/**
+ * What a collection read hands back: the rows, and where the collection stands.
+ *
+ * It is an array, so it maps, filters, spreads, and iterates like the rows it
+ * always was. `hasMore` and `nextCursor` ride along as non-enumerable
+ * properties, which keeps `JSON.stringify` and a spread producing exactly the
+ * array they produced before.
+ *
+ * They ride along because a list read is a page: the server applies a default
+ * size and caps the largest one. Returning only the rows made a truncated read
+ * and a complete one the same value, so the caller with 500 matching rows got
+ * 20 and no way to find out.
+ */
+export type ModelList<T> = T[] & Pick<HttpTransportList<T>, 'hasMore' | 'nextCursor'>;
+
+/**
+ * Attach the page state to the rows. Non-enumerable so the result stays
+ * indistinguishable from a plain array everywhere the properties aren't read.
+ */
+export function modelList<T>(
+  rows: readonly T[],
+  page: Pick<HttpTransportList<unknown>, 'hasMore' | 'nextCursor'>,
+): ModelList<T> {
+  return Object.defineProperties([...rows], {
+    hasMore: { value: page.hasMore, enumerable: false },
+    nextCursor: { value: page.nextCursor, enumerable: false },
+  }) as ModelList<T>;
 }
 
 export type IfClaimedPolicy = 'return' | 'fail';
