@@ -14,6 +14,9 @@
     },
     "./privacy": {
       "default": "./src/privacy.ts"
+    },
+    "./feedback": {
+      "default": "./src/feedback.ts"
     }
   },
   "scripts": {

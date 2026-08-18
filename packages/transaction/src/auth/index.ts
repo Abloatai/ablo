@@ -30,20 +30,10 @@ export {
   ABLO_HOSTED_HTTP_BASE_URL,
 } from './hostedEndpoints.js';
 export { normalizeAbloBaseUrl } from './baseUrl.js';
-// A re-export does not bind the name in this module; the alias below needs it.
-import { normalizeAbloBaseUrl } from './baseUrl.js';
 
 /**
- * @deprecated Renamed to {@link normalizeAbloBaseUrl}. Removed in 0.54.0.
- * The "hosted" spelling named a rewrite of retired hosted hostnames that no
- * longer exists; both spellings resolve through the one function, so a caller
- * on the old name gets the same refusals of unsafe credential destinations.
- */
-export const normalizeAbloHostedBaseUrl = normalizeAbloBaseUrl;
-
-/**
- * @deprecated Use {@link CapabilityMintResponse}. This is a type-only,
- * one-release rename bridge; both names resolve to the same canonical Zod
+ * @deprecated Use {@link CapabilityMintResponse}. Removed in 0.55.0. This is a
+ * type-only rename bridge; both names resolve to the same canonical Zod
  * contract and no runtime parser or schema is duplicated.
  */
 export type CapabilityExchangeResponse = CapabilityMintResponse;
@@ -250,7 +240,7 @@ interface MintUserSessionBase {
    *  session's `participantId`. */
   readonly userId: string;
   /** The organization to mint the session into, for a platform that manages many
-   *  organizations. Requires the secret key to carry the `ephemeral:mint-any-org`
+   *  organizations. Requires the secret key to carry the `organization:act-as`
    *  capability. Omit to mint into the key's own organization. */
   readonly organizationId?: string;
   /** Points this session's schema at a shared project while its data stays scoped
@@ -258,7 +248,7 @@ interface MintUserSessionBase {
    *  they all share one schema: keep a single schema project, and every customer's
    *  session resolves its schema from it instead of pushing the schema into each
    *  organization separately. Requires the secret key to carry the
-   *  `ephemeral:mint-any-org` capability. Cross-organization mints default to
+   *  `organization:act-as` capability. Cross-organization mints default to
    *  the secret key's own project; pass this only to override that binding.
    *  Same-organization mints continue to resolve the session's own project. */
   readonly schemaProject?: {

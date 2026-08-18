@@ -28,6 +28,7 @@ import { logs } from './logs';
 import { webhooks } from './webhooks';
 import { check } from './check';
 import { docs } from './docs';
+import { feedback } from './feedback';
 import { upgrade } from './upgrade';
 import { pull } from './pull';
 import { prismaPull } from './prismaPull';
@@ -76,6 +77,7 @@ const HANDLERS: Readonly<Record<CommandName, (argv: readonly string[]) => Promis
   webhooks: (argv) => webhooks([...argv]),
   check: (argv) => check([...argv]),
   docs: (argv) => docs([...argv]),
+  feedback: (argv) => feedback([...argv]),
   connect: (argv) => connect([...argv]),
   migrate: (argv) => migrate([...argv]),
   upgrade: (argv) => upgrade([...argv]),

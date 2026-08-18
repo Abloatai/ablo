@@ -165,6 +165,8 @@ export const outboxEventSchema = z.object({
   model: z.string().min(1),
   entityId: z.string().min(1),
   type: operationTypeSchema,
+  /** The changed row, in the key shape `SourceEvent.data` defines: the model's
+   *  declared schema fields, never the table's physical column names. */
   data: jsonObject.nullish(),
   organizationId: z.string().nullish(),
   /** Legacy source transaction id. Never use this field to settle a queued commit. */

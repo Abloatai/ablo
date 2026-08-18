@@ -79,7 +79,15 @@ const SENSITIVE_KEYS = [
 const MASK = '[redacted]';
 const SECRET_PATTERNS = [
   /postgres(?:ql)?:\/\/[^\s"']+/gi,
-  /\b[a-z]{2,4}_[A-Za-z0-9]{12,}\b/g,
+  // A prefixed credential, with or without an environment segment: `sk_…` and
+  // `sk_live_…` are both keys. The long alphanumeric run stays mandatory, so an
+  // ordinary snake_case identifier is not mistaken for one.
+  /\b[a-z]{2,4}_(?:[a-z]{2,8}_)?[A-Za-z0-9]{12,}\b/g,
+  // An address identifies a person, so it is a secret everywhere an
+  // observation can land. Sinks are configured `sendDefaultPii: false`; this
+  // keeps that true for addresses a message body carries in prose, which the
+  // sink's own PII switch never sees.
+  /\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b/g,
 ];
 
 export function redactObservationString(value: string): string {

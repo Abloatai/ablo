@@ -154,7 +154,7 @@ for the actor.
 |---|---|---|
 | `user` / `agent` | both | The actor. `id` becomes the token's `participantId`. Pass exactly one. |
 | `can` | both | Required non-empty per-model operation allowlist, typed off the schema. |
-| `organizationId` | user | Mint into a customer organization instead of the key's own. Requires `ephemeral:mint-any-org`. |
+| `organizationId` | user | Mint into a customer organization instead of the key's own. Requires `organization:act-as`. |
 | `schemaProject` | user | Override the schema project for a cross-org mint. Usually omitted because the owning key's project is the default. |
 | `syncGroups` | both | Narrow the session below its default scope. Omit to inherit. |
 | `ttlSeconds` | both | Lifetime in seconds. Defaults to `900` (15m). |
@@ -286,7 +286,7 @@ plane (connection + row-level isolation) stays the customer's. A shared schema
 can't leak data across orgs.
 
 <Note>
-This requires a dedicated `sk_` carrying the `ephemeral:mint-any-org` scope —
+This requires a dedicated `sk_` carrying the `organization:act-as` scope —
 only a trusted cross-organization key can mint a session into another org. Omit
 `organizationId` and you get the default above: one project, one schema, all
 your users in the key's own organization.

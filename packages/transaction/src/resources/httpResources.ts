@@ -448,13 +448,13 @@ export interface CreateUserSessionParams<S extends SchemaRecord> {
   user: { id: string };
   /** Mint the session into this organization instead of the key's own — for a
    *  platform that serves many tenants from one backend. Requires the `sk_` key to
-   *  carry the `ephemeral:mint-any-org` scope; omit it for the normal
+   *  carry the `organization:act-as` scope; omit it for the normal
    *  single-tenant case. */
   organizationId?: string;
   /** Resolve this session's schema from a shared project while its data stays
    *  scoped to `organizationId`. Cross-organization mints default to the
    *  platform key's own project, so most platforms can omit this. Specify it
-   *  only to override that default. Requires `ephemeral:mint-any-org`. */
+   *  only to override that default. Requires `organization:act-as`. */
   schemaProject?: {
     organizationId: string;
     projectId: string;

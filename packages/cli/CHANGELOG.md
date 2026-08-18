@@ -1,5 +1,73 @@
 # @abloatai/cli
 
+## 0.54.0
+
+### Minor Changes
+
+- A scoped session is now scoped on every surface that reads it, a change reaches
+  the clients watching it whatever a column is called, and a commit costs a fixed
+  number of round trips rather than one per row.
+
+  Seven surfaces answered "which sync groups may this request see" separately, and
+  two of them read only `effectiveSyncGroups`, falling through to an
+  organization-wide anchor. `syncGroups` is the only field an `ek_` session key
+  populates, so a session scoped to one workspace was correctly narrowed on five
+  surfaces and read organization-wide on the other two. One module now owns that
+  precedence, and a declared set that is empty means nothing rather than
+  everything.
+
+  Deltas were written in two different key shapes: the commit path wrote declared
+  schema field names, while the replication echo wrote the customer's physical
+  column names undecoded. For a source whose columns are renamed, by `.from(...)`
+  or by being plain snake_case, every change reached subscribers keyed wrong and
+  carried no scope-root group, so a client joined to `workspace:<id>` was never
+  sent a change it was watching. The write landed and nothing was announced. Rows
+  are now renamed once, where they enter, and one spelling holds below that point.
+
+  Reordering a claim queue took effect for nobody. The route addressed the frame to
+  an organization group, which entity-scoped fan-out removes, so every reorder was
+  built and then dropped as having no audience. A queue change now goes to the
+  waiters in that line.
+
+  A direct write paid three round trips plus one per row to the customer's
+  database. Same-region that is a few milliseconds; across continents it dominated
+  the wait, and one engine in `eu-north-1` against a database in `us-east-2`
+  measured about four seconds per confirmed write. The session bundle is one
+  statement instead of eleven awaited settings, the ledger completion and the
+  replication marker travel together, and operations are dispatched before being
+  awaited so the driver pipelines them. Postgres still runs them in order, so a
+  later operation still sees an earlier one's write, two writes to one row stay
+  last-write-wins, and each keeps its own error.
+
+  `identityAnchor(kind, id)`, `IDENTITY_ANCHOR_KINDS`, and `IdentityAnchorKind` are
+  exported from the schema surface. They build the groups the engine reserves,
+  `org`, `user`, and `project`, so the `kind:id` convention has one home instead of
+  being spelled inline.
+
+  The scope that authorizes minting into another organization is now
+  `organization:act-as`. Keys already carrying `ephemeral:mint-any-org` keep
+  working; the old spelling resolves to the new one.
+
+  An outbox `events` handler must key its `data` by the model's declared schema
+  fields, not by the table's column names: a field named `reviewStatus` arrives as
+  `reviewStatus` even when it reads from a `review_status` column. Ablo's own
+  adapters already rename before writing the outbox. Ablo reads that spelling and
+  never falls back to the physical one, because two namespaces that can collide
+  have no safe merge.
+
+  `ablo feedback <kind> "<one line>"` reports a bug, a docs gap, a missing feature,
+  or plain friction, with `--detail` for the long version, `--command` and
+  `--error-code` to pre-group it, and `--yes` plus `--json` so a non-interactive
+  caller can send and read a receipt. Nothing sends unless the command is run and
+  nothing rides the telemetry queue, so turning telemetry off does not also turn
+  off bug reporting. The text is redacted before it leaves, by the same rule error
+  observations pass through, and shown before sending on a terminal.
+
+  `normalizeAbloHostedBaseUrl` is removed, as announced in 0.53.0. Use
+  `normalizeAbloBaseUrl`, which it has resolved to since that release.
+  `CapabilityExchangeResponse` is now announced for removal in 0.55.0; use
+  `CapabilityMintResponse`.
+
 ## 0.53.0
 
 ### Minor Changes

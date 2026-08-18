@@ -238,7 +238,7 @@ shared schema only *describes* the shape; the data plane stays the customer's an
 can't cross-leak. `schemaProject: { organizationId, projectId }` remains
 available as an explicit override for migrations or advanced routing. Omit
 `organizationId` for the single-organization default above. Requires a dedicated
-`sk_` with `ephemeral:mint-any-org`; see
+`sk_` with `organization:act-as`; see
 [Customer Organizations](./customer-organizations.md).
 
 ## The two halves of scoping

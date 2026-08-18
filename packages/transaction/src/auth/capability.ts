@@ -310,7 +310,7 @@ export const capabilityRequestSchema = z.object({
   participantId: z.string().min(1).optional(),
   /**
    * Mint into another organization. Reserved for a platform secret carrying
-   * `ephemeral:mint-any-org`; ordinary tenant keys may omit only.
+   * `organization:act-as`; ordinary tenant keys may omit only.
    */
   organizationId: z.string().min(1).optional(),
   /**

@@ -29,7 +29,7 @@ user session names that customer organization.
 
 - An owning project containing the schema every customer uses.
 - The schema pushed to that project's production root.
-- A server-side `sk_` carrying only `ephemeral:mint-any-org`.
+- A server-side `sk_` carrying only `organization:act-as`.
 - A customer `organizationId` resolved from your authenticated application
   membership, never accepted unchecked from the browser.
 - A model-by-model `can` grant for the UI being opened.
@@ -162,7 +162,7 @@ through the control-plane process you use for provisioning.
 ## Security checklist
 
 - Store the cross-organization key only in the backend secret manager.
-- Give it only `ephemeral:mint-any-org`; do not combine minting with schema or
+- Give it only `organization:act-as`; do not combine minting with schema or
   data authority.
 - Resolve `organizationId` from authenticated membership server-side.
 - Keep `can` to the smallest model/verb set the UI needs.
@@ -178,7 +178,7 @@ through the control-plane process you use for provisioning.
 ### The mint is forbidden
 
 The presenting credential must be a secret `sk_` with
-`ephemeral:mint-any-org`. A normal project key can mint users into its own
+`organization:act-as`. A normal project key can mint users into its own
 organization but cannot name another one. Run `npx ablo whoami --json` in the
 backend environment to confirm which project and branch the configured key
 actually belongs to; the command never prints the full secret.

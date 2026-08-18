@@ -160,6 +160,18 @@ class FakeKysely implements KyselyLike {
   }
 }
 
+/**
+ * The prefix + payload of the WAL echo marker, read off the commit's closing
+ * statement. The ledger completion and the marker are sent as ONE statement
+ * (`completeLedgerWithMarkerQuery`) so a cross-region write does not pay two
+ * round trips, so the marker's arguments are the statement's LAST two — reading
+ * them by position from the front would pin the test to that packing.
+ */
+function emittedMarker(call: { values?: { parameters?: unknown } } | undefined): unknown[] {
+  const parameters = (call?.values as { parameters?: unknown[] } | undefined)?.parameters ?? [];
+  return parameters.slice(-2);
+}
+
 describe('kyselyDataSource', () => {
   it('exposes endpoint capabilities and ships ledger + outbox migrations', () => {
     const adapter = kyselyDataSource(new FakeKysely(), schema);
@@ -238,8 +250,8 @@ describe('kyselyDataSource', () => {
     expect(db.calls.at(-1)).toMatchObject({
       kind: 'raw',
       table: expect.stringContaining('pg_logical_emit_message') as unknown,
-      values: { parameters: ['ablo', 'echo-payload'] },
     });
+    expect(emittedMarker(db.calls.at(-1))).toEqual(['ablo', 'echo-payload']);
   });
 
   it('keeps the marker operation id authoritative when CREATE input repeats id', async () => {
@@ -487,13 +499,11 @@ describe('kyselyDataSource', () => {
     expect(db.calls.at(-1)).toMatchObject({
       kind: 'raw',
       table: expect.stringContaining('pg_logical_emit_message') as unknown,
-      values: {
-        parameters: [
-          'ablo',
-          expect.stringContaining('"correlationId":"corr_direct"') as unknown,
-        ],
-      },
     });
+    expect(emittedMarker(db.calls.at(-1))).toEqual([
+      'ablo',
+      expect.stringContaining('"correlationId":"corr_direct"') as unknown,
+    ]);
   });
 
   it('direct marker validation speaks the schema typename when it diverges from the wire key', async () => {
@@ -628,9 +638,7 @@ describe('kyselyDataSource', () => {
     expect(result.rows).toEqual([{ id: '42', recordId: 'record-1' }]);
     const insert = db.calls.find((call) => call.table === 'record_events');
     expect(insert?.values).toEqual({ record_id: 'record-1' });
-    const markerCall = db.calls.at(-1);
-    const markerPayload = markerCall?.values?.parameters;
-    expect(markerPayload).toEqual([
+    expect(emittedMarker(db.calls.at(-1))).toEqual([
       'ablo',
       expect.stringContaining('"id":"42"'),
     ]);

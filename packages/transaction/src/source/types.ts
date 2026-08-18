@@ -120,6 +120,7 @@ export interface SourceDelta {
   readonly model: string;
   readonly id: string;
   readonly type: SourceOperation['type'];
+  /** The changed row, in the key shape {@link SourceEvent.data} defines. */
   readonly data?: Record<string, unknown> | null;
   readonly transactionId?: string | null;
 }
@@ -144,6 +145,22 @@ export interface SourceEvent {
   readonly model: string;
   readonly entityId: string;
   readonly type: SourceOperation['type'];
+  /**
+   * The row after the change, keyed by the model's DECLARED SCHEMA FIELDS.
+   *
+   * A field named `reviewStatus` arrives as `reviewStatus`, even though the
+   * column it was read from is `review_status`. Ablo's own adapters rename the
+   * row before writing the outbox, so a source built on one of them is already
+   * in this shape; a hand-written `events` handler has to do the same. Pass
+   * `null` for a delete.
+   *
+   * Ablo reads exactly this spelling and never falls back to the physical one.
+   * Two namespaces that can collide have no safe merge: a model whose field `a`
+   * maps to column `b` while another field maps to column `a` would route the
+   * change into a different scope root's group. A key Ablo does not recognise
+   * costs a subscriber an update; a key it recognises as the wrong field crosses
+   * a tenant boundary.
+   */
   readonly data?: Record<string, unknown> | null;
   /**
    * The tenant this event belongs to. Populate it from the row's organization
@@ -183,9 +200,10 @@ export interface SourceEventForOperationOptions {
    */
   readonly entityId?: string;
   /**
-   * The row's payload after the write. Pass `null` for a delete. When omitted,
-   * the event carries no payload, which is valid but leaves less for clients to
-   * hydrate from in realtime.
+   * The row after the write, in the key shape {@link SourceEvent.data} defines:
+   * the model's declared schema fields, not your table's column names. Pass
+   * `null` for a delete. When omitted, the event carries no payload, which is
+   * valid but leaves less for clients to hydrate from in realtime.
    */
   readonly data?: Record<string, unknown> | null;
   /**

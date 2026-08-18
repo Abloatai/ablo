@@ -18,6 +18,8 @@
 
 import { CONNECT_USAGE } from './connect';
 import { DOCS_USAGE } from './docs';
+import { FEEDBACK_KINDS } from '@ablo/product-analytics/feedback';
+import { FEEDBACK_USAGE } from './feedback';
 import { MIGRATE_USAGE } from './migrate';
 import { BRANCH_USAGE } from './branches';
 import { BRANCH_DEV_USAGE } from './branchDev';
@@ -213,6 +215,28 @@ export const COMMANDS = [
         { run: 'docs', does: 'List every page — these ship in the package, so they match your version' },
         { run: 'docs <page>', does: 'Print one page as markdown (no network needed)' },
         { run: 'docs --json', does: 'The page list, machine-readable' },
+      ],
+    },
+  },
+  {
+    // Sits beside `docs` on purpose. An agent that just failed to find an
+    // answer is already reading this block, and the command that reports the
+    // gap is the next line down rather than somewhere it would have to know to
+    // look. Discoverability IS the feature: a channel an agent never finds
+    // collects nothing.
+    name: 'feedback',
+    usage: FEEDBACK_USAGE,
+    core: { group: 'More', does: 'Tell us what got in your way, so the next agent does not hit it' },
+    full: {
+      group: 'Read the docs',
+      rows: [
+        // The kinds come from the taxonomy rather than being spelled out here:
+        // a help screen listing four when the schema knows five is the drift
+        // this registry exists to stop.
+        { run: `feedback <${FEEDBACK_KINDS.join('|')}> "<one line>"`, does: 'Report one wall you hit' },
+        { run: 'feedback bug "..." --detail <text>', does: 'Add what happened, at length (`-` reads stdin)' },
+        { run: '     [--command <name>] [--error-code <code>] [--from <agent>]' },
+        { run: '     [--yes] [--json]' },
       ],
     },
   },

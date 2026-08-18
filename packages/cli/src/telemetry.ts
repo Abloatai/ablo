@@ -7,13 +7,13 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { arch, platform } from 'node:os';
 import { join } from 'node:path';
 import {
   PRODUCT_EVENT_VERSION,
   productEventSchema,
   type ProductEvent,
 } from '@ablo/product-analytics';
+import { cliArchitecture, cliOs, cliVersion } from './cliEnvironment';
 import { apiBaseUrl } from './controlPlane';
 import { configDir } from './config';
 
@@ -234,22 +234,6 @@ function environmentBlocker(): string | null {
 
 function truthyEnvironmentValue(value: string | undefined): boolean {
   return value !== undefined && value !== '' && value !== '0' && value.toLowerCase() !== 'false';
-}
-
-function cliVersion(): string {
-  return (
-    process.env.ABLO_CLI_EMBEDDED_VERSION ?? process.env.npm_package_version ?? 'development'
-  );
-}
-
-function cliOs(): 'darwin' | 'linux' | 'win32' | 'other' {
-  const value = platform();
-  return value === 'darwin' || value === 'linux' || value === 'win32' ? value : 'other';
-}
-
-function cliArchitecture(): 'arm64' | 'x64' | 'ia32' | 'other' {
-  const value = arch();
-  return value === 'arm64' || value === 'x64' || value === 'ia32' ? value : 'other';
 }
 
 function durationBucket(

@@ -158,7 +158,15 @@ class DirectKyselyFake implements KyselyLike {
       });
       return Promise.resolve({ rows: [{ client_tx_id: correlationId }] });
     }
-    if (query.sql.startsWith('UPDATE ablo_idempotency')) {
+    // The ledger completion arrives either standalone or as the data-modifying
+    // CTE of the commit's combined closing statement, which also emits the WAL
+    // marker (`completeLedgerWithMarkerQuery` — one round trip instead of two,
+    // which matters when the customer's database is in another region).
+    // Postgres runs such a CTE exactly once and to completion whether or not
+    // the primary query reads it, so this applies the write in both shapes;
+    // matching on the marker first would swallow it and leave every replay
+    // reading an empty response.
+    if (query.sql.includes('UPDATE ablo_idempotency')) {
       const correlationId = String(query.parameters[0]);
       const row = this.ledger.get(correlationId);
       if (!row) throw new Error('missing ledger reservation');

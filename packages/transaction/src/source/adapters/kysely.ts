@@ -120,6 +120,44 @@ function postgresLogicalMarkerQuery(payload: string): KyselyCompiledQuery {
   );
 }
 
+/**
+ * The two closing statements of a WAL-echo commit as ONE round trip.
+ *
+ * Neither result is read: the ledger update records the response, the marker
+ * lets the replication echo correlate itself. Sending them separately costs a
+ * second full round trip to the customer's database, which is ~6ms when Ablo
+ * and that database are neighbours and ~110ms when they are on different
+ * continents — paid on every write.
+ *
+ * A data-modifying `WITH` is the right shape rather than a coincidence: Postgres
+ * runs it exactly once and to completion whether or not the primary query reads
+ * its output, so the ledger update is not conditional on the marker. Ordering is
+ * preserved too — the CTE executes before the main query, the same order the two
+ * statements had — and both remain inside the caller's transaction, so the
+ * marker is still atomic with the write it describes.
+ */
+function completeLedgerWithMarkerQuery(
+  correlationId: string,
+  rows: readonly Row[],
+  payload: string,
+): KyselyCompiledQuery {
+  return rawQuery(
+    'ablo-idempotency-complete-with-marker',
+    `WITH complete AS (
+       UPDATE ablo_idempotency
+          SET response = $2::jsonb
+        WHERE client_tx_id = $1
+     )
+     SELECT pg_logical_emit_message(true, $3::text, $4::text)`,
+    [
+      correlationId,
+      JSON.stringify(rows),
+      ABLO_POSTGRES_COMMIT_ECHO_PREFIX,
+      payload,
+    ],
+  );
+}
+
 function parseCachedRows(response: unknown): Row[] {
   const parsed = typeof response === 'string' ? (JSON.parse(response) as unknown) : response;
   if (!Array.isArray(parsed)) {
@@ -288,12 +326,37 @@ export function createKyselyMutationAdapter(
           return { rows: parseCachedRows(cachedRow.response) };
         }
 
+        // Direct mode dispatches every operation before awaiting any of them, so
+        // the driver pipelines them into one trip instead of paying a full
+        // round trip per row. Postgres still executes them IN ORDER on the
+        // connection, so nothing about their semantics moves: a later operation
+        // still sees an earlier one's write, and two operations on the same row
+        // remain well-defined last-write-wins — which a multi-CTE batch would
+        // have made undefined. Each statement also keeps its own error, so
+        // "which operation failed" survives.
+        //
+        // Endpoint mode stays sequential: its outbox row is built FROM the
+        // returned row, so operation i+1's write cannot be dispatched before
+        // operation i has answered.
         const rows: Row[] = [];
-        for (const [index, operation] of request.operations.entries()) {
-          const row = await core.applyOperation(transaction, operation);
-          rows.push(row);
+        if (mode === 'direct') {
+          const dispatched = request.operations.map((operation) =>
+            core.applyOperation(transaction, operation),
+          );
+          // Settle every dispatch before inspecting, so a later rejection is
+          // never an unhandled rejection, then surface the FIRST failure in
+          // operation order — the one the caller's request actually tripped on.
+          const settled = await Promise.allSettled(dispatched);
+          const failure = settled.find((outcome) => outcome.status === 'rejected');
+          if (failure && failure.status === 'rejected') throw failure.reason;
+          for (const outcome of settled) {
+            if (outcome.status === 'fulfilled') rows.push(outcome.value);
+          }
+        } else {
+          for (const [index, operation] of request.operations.entries()) {
+            const row = await core.applyOperation(transaction, operation);
+            rows.push(row);
 
-          if (mode === 'endpoint') {
             const entityId = String(row.id ?? kyselyOperationRowId(operation));
             await transaction
               .insertInto('ablo_outbox')
@@ -311,15 +374,17 @@ export function createKyselyMutationAdapter(
           }
         }
 
-        await transaction.executeQuery(
-          completeLedgerQuery(request.correlationId, rows),
-        );
         if (request.echo?.kind === 'postgres-wal') {
           const payload = echoIntent
             ? JSON.stringify(resolveEchoMarker(echoIntent, rows))
             : request.echo.payload;
+          // One round trip, not two — see `completeLedgerWithMarkerQuery`.
           await transaction.executeQuery(
-            postgresLogicalMarkerQuery(payload),
+            completeLedgerWithMarkerQuery(request.correlationId, rows, payload),
+          );
+        } else {
+          await transaction.executeQuery(
+            completeLedgerQuery(request.correlationId, rows),
           );
         }
         return { rows };

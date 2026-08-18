@@ -217,7 +217,7 @@ restricted to exactly those grants:
 - `project:manage` — list, create, and rename projects.
 - `branch:manage` — list, create, and delete child branches and mint their
   temporary credentials.
-- `ephemeral:mint-any-org` — cross-organization authority to mint a short-lived
+- `organization:act-as` — cross-organization authority to mint a short-lived
   user session into a customer organization. It follows the Stripe Connect shape:
   the request names the customer organization, but the resulting session is
   still bounded by its `can` grant and expiry. A key restricted to this scope
@@ -234,7 +234,7 @@ manage siblings or gain root authority.
 
 ### Cross-organization mint keys
 
-Most applications do not need `ephemeral:mint-any-org`: their backend key mints
+Most applications do not need `organization:act-as`: their backend key mints
 users into its own organization. A multi-organization backend needs it only
 when each customer is a separate Ablo organization and one trusted service
 mints sessions for all of them.
@@ -242,7 +242,7 @@ mints sessions for all of them.
 Treat that key as a dedicated minting credential:
 
 - keep it in a server-side secret manager, never a browser or repository;
-- grant only `ephemeral:mint-any-org`, with no data or schema scopes;
+- grant only `organization:act-as`, with no data or schema scopes;
 - mint short-lived sessions with the smallest typed `can` grant;
 - rotate it on a schedule and revoke it immediately after suspected exposure;
 - log the target `organizationId`, minted session id, and request id for audit.

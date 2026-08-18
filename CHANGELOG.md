@@ -1,5 +1,135 @@
 # Changelog
 
+## 0.54.0
+
+### A scoped session is scoped everywhere it is read
+
+Seven surfaces each answered "which sync groups may this request see", and two of
+them consulted only `effectiveSyncGroups` before falling back to an
+organization-wide anchor. `syncGroups` is the only field an `ek_` session key
+populates, so a session scoped to one workspace was correctly narrowed on five
+surfaces and read organization-wide on the other two. Nothing failed while they
+disagreed, because each surface's tests pinned that surface to itself.
+
+One module now owns the precedence, and a plane states its difference as an
+argument rather than as another copy of the rule. A declared set that is empty
+means nothing rather than everything, so a session minted with no groups closes
+instead of widening.
+
+### A change reaches the clients watching it, whatever the column is called
+
+Deltas were written in two key shapes. The commit path wrote declared schema
+field names; the replication echo wrote the customer's physical column names
+undecoded. Neither reader reconciled them, because the client applies a delta
+onto the model verbatim.
+
+For a source whose columns are renamed, by `.from(...)` or simply by being
+snake_case, every change reached subscribers keyed wrong, and the lookup that
+stamps a scope-root group found nothing on a physical row. Such a delta kept only
+its organization group, so a client joined to `workspace:<id>` was never sent a
+change it was watching: the write landed, and nothing was announced to anyone
+listening. Rows are renamed once now, where they enter, and one spelling holds
+below that seam.
+
+### Reordering a claim queue takes effect
+
+A reorder took effect for nobody. The route addressed the frame to an
+organization group, which entity-scoped fan-out removes, so the frame was built
+and then dropped as having no audience. A queue change now goes to the waiters in
+that line, each of which recorded what it listens on when it enqueued.
+
+### A commit costs a fixed number of round trips
+
+A direct write paid three round trips to the customer's database plus one per
+row. Sharing a region that is a few milliseconds, but across continents it
+dominated the wait: an engine in `eu-north-1` against a database in `us-east-2`
+measured about four seconds per confirmed write, most of it in trips nobody had
+counted.
+
+Three changes remove trips without altering what the database sees. The session
+bundle is one statement over parallel name and value arrays rather than eleven
+settings awaited in turn, and is still transaction-scoped. The ledger completion
+and the replication marker travel as one data-modifying statement, which Postgres
+runs to completion whether or not the primary query reads it. And a direct commit
+dispatches its operations before awaiting any of them, so the driver pipelines
+them.
+
+Ordering is unchanged: Postgres still runs those operations in order on the
+connection, so a later one still sees an earlier one's write, two writes to the
+same row stay well-defined last-write-wins, and each operation keeps its own
+error so a failure still names itself.
+
+### Engine-reserved groups have a constructor
+
+`identityAnchor` builds the sync groups the engine reserves, so the `kind:id`
+convention has one home instead of being spelled inline:
+
+```ts
+import { identityAnchor } from '@abloatai/ablo/schema';
+
+identityAnchor('org', organizationId);
+identityAnchor('user', participantId);
+identityAnchor('project', projectId);
+```
+
+`IDENTITY_ANCHOR_KINDS` and `IdentityAnchorKind` are exported alongside it.
+Schema-declared roles continue to extend this vocabulary per application; these
+three are the kinds the engine reserves.
+
+### The cross-organization scope is `organization:act-as`
+
+The scope authorizing a secret key to mint a session into another organization is
+now `organization:act-as`, and it names what it grants rather than the mechanism
+it was first attached to. Keys already carrying `ephemeral:mint-any-org` keep
+working, because the old spelling resolves to the new one.
+
+### An outbox event carries declared field names
+
+A hand-written `events` handler must key its `data` by the model's declared
+schema fields rather than by the table's columns. A field named `reviewStatus`
+arrives as `reviewStatus` even when it reads from a `review_status` column:
+
+```ts
+// the model declares reviewStatus from a review_status column
+data: { id: row.id, reviewStatus: row.review_status },
+```
+
+Ablo's own adapters rename the row before writing the outbox, so a source built
+on one of them is already in this shape. Ablo reads that spelling and never falls
+back to the physical one: two namespaces that can collide have no safe merge, and
+a key read as the wrong field would route a change into another scope root.
+
+### CLI: report what got in your way
+
+`ablo feedback` is the channel for the two things no counter can carry, because
+neither is a sentence: the doc that was missing, and the thing that worked but
+was hard.
+
+```
+ablo feedback docs "no example of paging a filtered list" --yes
+```
+
+`<kind>` is `bug`, `docs`, `feature`, or `friction`. Add `--detail <text>` for
+the long version, where `-` reads stdin, and `--command` or `--error-code` to
+pre-group the report from what you just saw. `--yes` sends without confirming
+and `--json` returns a machine-readable receipt, so a non-interactive caller
+needs no terminal.
+
+It is never automatic. Nothing sends unless the command is run, and nothing
+rides the telemetry queue, so turning telemetry off does not also turn off bug
+reporting, and leaving it on does not start sending prose. The text is redacted
+before it leaves, by the same rule error observations already pass through, and
+on a terminal you see the redacted version before it is sent. Nothing is read
+from your repository, and there is no flag to attach a file.
+
+### Removed
+
+`normalizeAbloHostedBaseUrl` is removed, as 0.53.0 announced. Use
+`normalizeAbloBaseUrl`, which the old name has resolved to since then.
+
+`CapabilityExchangeResponse` is announced for removal in 0.55.0. Use
+`CapabilityMintResponse`; both already resolve to the same contract.
+
 ## 0.53.0
 
 ### A collection read says where the collection ends

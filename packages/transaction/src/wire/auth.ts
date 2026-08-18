@@ -27,7 +27,7 @@ export type EphemeralKeyUser = z.infer<typeof ephemeralKeyUserSchema>;
  * Only a secret key (`sk_`) may call this: a session cannot mint itself. By
  * default the key mints into the caller's own organization; naming a different
  * `organizationId` is the multi-tenant case and requires the
- * `ephemeral:mint-any-org` scope, which is the same privilege that allows
+ * `organization:act-as` scope, which is the same privilege that allows
  * binding the session's schema to another organization's project.
  */
 export const ephemeralKeyRequestSchema = z.object({
@@ -35,7 +35,7 @@ export const ephemeralKeyRequestSchema = z.object({
   user: ephemeralKeyUserSchema,
   /**
    * Mint into this organization instead of the caller's own. Requires the
-   * `ephemeral:mint-any-org` scope — without it a secret key can never mint a
+   * `organization:act-as` scope — without it a secret key can never mint a
    * session into another tenant.
    */
   organizationId: z.string().min(1).optional(),
@@ -43,7 +43,7 @@ export const ephemeralKeyRequestSchema = z.object({
    * Override the shared project used to resolve this session's schema while
    * its data stays scoped to the target organization. A cross-organization
    * mint defaults both coordinates to the caller key's own project. Both
-   * fields are set together, and both require `ephemeral:mint-any-org`.
+   * fields are set together, and both require `organization:act-as`.
    */
   schemaProjectId: z.string().min(1).optional(),
   schemaOwnerOrgId: z.string().min(1).optional(),

@@ -243,4 +243,20 @@ Do not teach `/api`, `/agent`, `/core`, `/realtime`, or internal subpaths. (`/so
 
 - `npx ablo docs` lists every documentation page; `npx ablo docs <page>` prints one as markdown. These pages ship INSIDE the installed package, so they describe the version in `node_modules` and need no network. Prefer them over a docs URL whenever the project pins a version: a website always describes the newest release, so on an older pin it will hand you a call your package does not have (`retrieve`/`list` replaced `get`/`getAll`/`getCount` in 0.35.0). One-shot, safe to run unattended.
 
-Canonical docs to read before integrating: `quickstart`, `branch-development`, `schema-contract`, `integration-guide`, `deployment`, `guarantees`, `client-behavior`, `data-sources`, `examples/existing-python-backend`, `api`, `examples/ai-sdk-tool`, and `examples/server-agent` — read each with `npx ablo docs <page>`. When upgrading an existing integration, read `migration` — every breaking change, what to change, and which version introduced it. When the customer's database has row-level-security policies, read `session-settings` — the identity context Ablo sets before every write, and how to map it to the setting names those policies already read.
+## Documentation
+
+Canonical docs to read before integrating, in this order. Read each with `npx ablo docs <page>` when the project pins a version; the links describe the newest release.
+
+- [Quickstart](https://docs.abloatai.com/quickstart)
+- [Branch-first development](https://docs.abloatai.com/branch-development)
+- [Schema Contract](https://docs.abloatai.com/schema-contract)
+- [Integration Guide](https://docs.abloatai.com/integration-guide)
+- [Deployment](https://docs.abloatai.com/deployment)
+- [Guarantees](https://docs.abloatai.com/guarantees)
+- [Client Behavior](https://docs.abloatai.com/client-behavior)
+- [Connect Your Database](https://docs.abloatai.com/data-sources)
+- [API](https://docs.abloatai.com/api)
+- Examples: [Existing Python Backend](https://docs.abloatai.com/examples/existing-python-backend), [AI SDK Tool](https://docs.abloatai.com/examples/ai-sdk-tool), [Server Agent](https://docs.abloatai.com/examples/server-agent)
+- [Upgrade Guide](https://docs.abloatai.com/migration): when upgrading an existing integration; every breaking change, what to change, and which version introduced it.
+- [Session Settings](https://docs.abloatai.com/session-settings): when the customer's database has row-level-security policies; the identity context Ablo sets before every write, and how to map it to the setting names those policies read.
+- [Every page, one line each](https://docs.abloatai.com/llms.txt), or [the full docs as one file](https://docs.abloatai.com/llms-full.txt).
